@@ -11,17 +11,17 @@ Neither path activates the staged credentials.
 
 from __future__ import annotations
 
-import base64
 from http.client import HTTPException
 from pathlib import Path
 import os
 import re
 import secrets
-import subprocess
 import sys
 from urllib.error import HTTPError, URLError
+from selfhost_native_operator import (certificate_expiry, keycloak_policy, keycloak_token,
+                                      OperatorCleanupError)
 
-from selfhost_openbao_client import (Bao, RENEWAL_LEAF_ROLE,
+from selfhost_openbao_client import (Bao,
                                     certificate_public_key_der, public_key_der,
                                     require_ca_rotation_authority,
                                     require_renewal_authority)
@@ -80,77 +80,19 @@ def require_data(response: dict, field: str) -> dict:
     return data
 
 
-def scoped_token(bao: Bao, policy: str, name: str) -> str:
-    bao.request("PUT", f"sys/policies/acl/{name}", {"policy": policy})
-    return mint_token(bao, name)
-
-
-def mint_token(bao: Bao, name: str, *, renew: bool = False) -> str:
-    endpoint = f"auth/token/create/{RENEWAL_LEAF_ROLE}" if renew else "auth/token/create"
-    result = bao.request("POST", endpoint, {
-        "policies": [name], "no_default_policy": True, "ttl": SESSION_TTL,
-    }).get("auth", {})
-    token = result.get("client_token") if isinstance(result, dict) else None
-    if not isinstance(token, str) or len(token) < 20 or token == bao.token:
-        raise RuntimeError("disposable Keycloak signer token is unscoped")
-    if (type(result.get("lease_duration")) is not int
-            or result["lease_duration"] < MIN_VALIDITY_SECONDS):
-        raise RuntimeError("disposable Keycloak token expires before tester session")
-    return token
-
-
-def renewed_token(bao: Bao, policy: str, prefix: str) -> str:
-    """Reuse an exactly scoped existing policy; never widen it during renewal."""
-    names = require_data(bao.request("LIST", "sys/policies/acl"), "keys")["keys"]
-    if not isinstance(names, list) or not all(isinstance(name, str) for name in names):
-        raise RuntimeError("Keycloak renewal policy inventory is invalid")
-    matching = []
-    for name in names:
-        if name.startswith(prefix) and VERSION.fullmatch(name):
-            current = require_data(bao.request("GET", f"sys/policies/acl/{name}"), "policy")
-            if current["policy"] == policy:
-                matching.append(name)
-    if len(matching) != 1:
-        raise RuntimeError("Keycloak renewal requires one exact existing scoped policy")
-    token = mint_token(bao, matching[0], renew=True)
-    lookup = require_data(bao.request("POST", "auth/token/lookup", {"token": token}), "policies")
-    if (lookup["policies"] != [matching[0]] or type(lookup.get("ttl")) is not int
-            or not MIN_VALIDITY_SECONDS <= lookup["ttl"] <= 8 * 60 * 60
-            or lookup.get("orphan") is not True
-            or lookup.get("path") != f"auth/token/create/{RENEWAL_LEAF_ROLE}"):
-        raise RuntimeError("Keycloak renewed token has unexpected scope or lifetime")
-    return token
-
-
 def signing_policy() -> str:
-    return "".join(
-        f'path "transit/keys/keycloak-{realm}-rs256" {{ capabilities = ["read"] }}\n'
-        f'path "transit/sign/keycloak-{realm}-rs256" {{ capabilities = ["update"] }}\n'
-        f'path "transit/keys/keycloak-{realm}-hs512" {{ capabilities = ["read"] }}\n'
-        f'path "transit/hmac/keycloak-{realm}-hs512/sha2-512" {{ capabilities = ["update"] }}\n'
-        f'path "transit/verify/keycloak-{realm}-hs512/sha2-512" {{ capabilities = ["update"] }}\n'
-        for realm in REALMS
-    )
+    return keycloak_policy("signing")
 
 
 def jwe_policy(realm: str, purpose: str, version: str) -> str:
-    if realm not in REALMS or purpose not in PURPOSES or not VERSION.fullmatch(version):
-        raise ValueError("Keycloak JWE policy reference is invalid")
-    key_path = f"didcomm/keycloak/keys/{realm}/{purpose}"
-    return (f'path "{key_path}" {{ capabilities = ["read"] }}\n'
-            f'path "didcomm/keycloak/jwe/encode/{realm}/{purpose}/{version}" '
-            '{ capabilities = ["update"] }\n'
-            f'path "didcomm/keycloak/jwe/decode/{realm}/{purpose}/{version}" '
-            '{ capabilities = ["update"] }\n')
+    try:
+        return keycloak_policy("jwe", realm=realm, purpose=purpose, version=version)
+    except RuntimeError as error:
+        raise ValueError("Keycloak JWE policy reference is invalid") from error
 
 
 def require_cert_lifetime(certificate: str) -> None:
-    lifetime = subprocess.run(
-        ["openssl", "x509", "-checkend", str(MIN_VALIDITY_SECONDS), "-noout"],
-        input=certificate.encode("ascii"), capture_output=True, timeout=10,
-        check=False,
-    )
-    if lifetime.returncode:
+    if not certificate_expiry(certificate, MIN_VALIDITY_SECONDS):
         raise RuntimeError("disposable Keycloak certificate expires before tester session")
 
 
@@ -167,6 +109,19 @@ def require_mounts(bao: Bao, *, renew: bool = False,
 
 def provision(bao: Bao, *, renew: bool = False,
               pki_mount: str = "keycloak-pki") -> dict[str, str]:
+    created: list[str] = []
+    try:
+        return _provision(bao, created, renew=renew, pki_mount=pki_mount)
+    except OperatorCleanupError:
+        raise
+    except Exception as error:
+        if created:
+            raise OperatorCleanupError("Keycloak provisioning requires operator recovery") from error
+        raise
+
+
+def _provision(bao: Bao, created: list[str], *, renew: bool = False,
+               pki_mount: str = "keycloak-pki") -> dict[str, str]:
     """Return exactly seven public certificates/scoped tokens, not private keys."""
     pki_mount = selected_pki_mount(
         renew=renew, requested=pki_mount if renew or pki_mount != "keycloak-pki" else None,
@@ -233,20 +188,13 @@ def provision(bao: Bao, *, renew: bool = False,
             raise RuntimeError("disposable Keycloak RS256 certificate key differs")
         outputs[f"keycloak_{realm}_rs256_cert"] = certificate
     nonce = secrets.token_hex(6)
-    signing_token = (renewed_token(bao, signing_policy(), "selfhost-keycloak-sign-") if renew
-                     else scoped_token(bao, signing_policy(), f"selfhost-keycloak-sign-{nonce}"))
-    for realm in REALMS:
-        signed = bao.request("POST", f"transit/sign/keycloak-{realm}-rs256", {
-            "input": base64.b64encode(b"selfhost-keycloak-probe").decode("ascii"),
-            "hash_algorithm": "sha2-256", "signature_algorithm": "pkcs1v15",
-        }, token=signing_token)
-        if not require_data(signed, "signature").get("signature"):
-            raise RuntimeError("disposable Keycloak RS256 token cannot sign")
-    outputs["keycloak_signing_kms_token"] = signing_token
     if not renew:
         bao.request("POST", "transit/keys/foreign-keycloak-selfhost", {
             "type": "rsa-2048", "exportable": False, "allow_plaintext_backup": False,
         })
+    signing_token = keycloak_token(bao, "signing", renew=renew, nonce=nonce)
+    created.append(signing_token)
+    outputs["keycloak_signing_kms_token"] = signing_token
     for realm in REALMS:
         for purpose in PURPOSES:
             key_path = f"didcomm/keycloak/keys/{realm}/{purpose}"
@@ -256,25 +204,12 @@ def provision(bao: Bao, *, renew: bool = False,
             version = current["version"]
             if not isinstance(version, str) or not VERSION.fullmatch(version):
                 raise RuntimeError("disposable Keycloak JWE version is invalid")
-            policy = jwe_policy(realm, purpose, version)
-            prefix = f"selfhost-keycloak-{realm}-{purpose}-"
-            token = (renewed_token(bao, policy, prefix) if renew
-                     else scoped_token(bao, policy, f"{prefix}{nonce}"))
-            if require_data(bao.request("GET", key_path, token=token), "version")["version"] != version:
-                raise RuntimeError("disposable Keycloak JWE token cannot read its key")
+            token = keycloak_token(bao, "jwe", renew=renew, nonce=nonce,
+                                   realm=realm, purpose=purpose, version=version)
+            created.append(token)
             outputs[f"keycloak_{realm}_{purpose}_token"] = token
     if set(outputs) != OUTPUTS or len(set(outputs[name] for name in outputs if name.endswith("_token"))) != 5:
         raise RuntimeError("disposable Keycloak output contract is incomplete")
-    for token_name in sorted(name for name in outputs if name.endswith("_token")):
-        token = outputs[token_name]
-        for forbidden in ("transit/keys/foreign-keycloak-selfhost",):
-            try:
-                bao.request("GET", forbidden, token=token)
-            except HTTPError as error:
-                if error.code != 403:
-                    raise RuntimeError("disposable Keycloak foreign-key denial changed") from error
-            else:
-                raise RuntimeError("disposable Keycloak token crossed its scope")
     return outputs
 
 
@@ -343,9 +278,15 @@ def main() -> int:
             raise RuntimeError("Keycloak OpenBao authority token is absent")
         require_available_private_root(root)
         renewing = mode == "renew"
-        write_outputs(root, provision(KeycloakBao(endpoint, ca, token), renew=renewing,
-                                      pki_mount=selected_mount),
-                      staged=renewing)
+        outputs = provision(KeycloakBao(endpoint, ca, token), renew=renewing,
+                            pki_mount=selected_mount)
+        try:
+            write_outputs(root, outputs, staged=renewing)
+        except Exception as error:
+            raise OperatorCleanupError("Keycloak provisioning requires operator recovery") from error
+    except OperatorCleanupError as error:
+        print(str(error), file=sys.stderr)
+        return 3
     except (KeyError, OSError, ValueError, RuntimeError, HTTPError, URLError,
             HTTPException) as error:
         detail = str(error) if isinstance(error, RuntimeError) else type(error).__name__

@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-import subprocess
 import sys
 
 import pytest
@@ -14,8 +13,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 from provision_selfhost_keycloak_kms import (  # noqa: E402
-    MIN_VALIDITY_SECONDS, OUTPUTS, SESSION_TTL, require_cert_lifetime,
-    renewed_token, require_mounts, scoped_token, selected_pki_mount, write_outputs,
+    OUTPUTS, require_cert_lifetime, require_mounts, selected_pki_mount, write_outputs,
 )
 from with_disposable_event_stream_kms import PLUGIN_IMAGE  # noqa: E402
 
@@ -197,75 +195,47 @@ def test_replacement_keycloak_issuer_is_explicit_and_bounded() -> None:
                        renew=True, pki_mount="keycloak-pki-v2")
 
 
-def test_keycloak_token_requires_a_real_session_length() -> None:
-    class TokenBao:
-        token = "disposable-root-token-long-enough"
-
-        def __init__(self, duration: int) -> None:
-            self.duration = duration
-
-        def request(self, method: str, path: str, body: dict) -> dict:
-            if path.startswith("sys/policies/acl/"):
-                assert method == "PUT"
-                return {}
-            assert (method, path) == ("POST", "auth/token/create")
-            assert body["ttl"] == SESSION_TTL == "8h"
-            assert body["no_default_policy"] is True
-            return {"auth": {"client_token": "disposable-scoped-token-long-enough",
-                             "lease_duration": self.duration}}
-
-    assert scoped_token(TokenBao(MIN_VALIDITY_SECONDS), "policy", "scope")
-    with pytest.raises(RuntimeError, match="expires before tester session"):
-        scoped_token(TokenBao(MIN_VALIDITY_SECONDS - 1), "policy", "scope")
-
-
-def test_renewal_reuses_only_exact_existing_policy_and_checks_new_token() -> None:
-    class PolicyBao:
-        token = "operator-token-long-enough"
-
-        def __init__(self, policy: str, *, orphan: bool = True) -> None:
-            self.policy = policy
-            self.orphan = orphan
-            self.created = False
-
-        def request(self, method: str, path: str, body: dict | None = None) -> dict:
-            if (method, path) == ("LIST", "sys/policies/acl"):
-                return {"data": {"keys": ["selfhost-keycloak-sign-old", "unrelated"]}}
-            if (method, path) == ("GET", "sys/policies/acl/selfhost-keycloak-sign-old"):
-                return {"data": {"policy": self.policy}}
-            if (method, path) == ("POST", "auth/token/create/selfhost-renew-leaf"):
-                self.created = True
-                assert body == {"policies": ["selfhost-keycloak-sign-old"],
-                                "no_default_policy": True, "ttl": SESSION_TTL}
-                return {"auth": {"client_token": "scoped-token-long-enough",
-                                 "lease_duration": 8 * 60 * 60}}
-            if (method, path) == ("POST", "auth/token/lookup"):
-                assert body == {"token": "scoped-token-long-enough"}
-                return {"data": {"policies": ["selfhost-keycloak-sign-old"],
-                                 "ttl": 8 * 60 * 60, "orphan": self.orphan,
-                                 "path": "auth/token/create/selfhost-renew-leaf"}}
-            raise AssertionError((method, path))
-
-    bao = PolicyBao("exact-scope")
-    assert renewed_token(bao, "exact-scope", "selfhost-keycloak-sign-")
-    assert bao.created
-    changed = PolicyBao("wider-scope")
-    with pytest.raises(RuntimeError, match="one exact existing scoped policy"):
-        renewed_token(changed, "exact-scope", "selfhost-keycloak-sign-")
-    assert not changed.created
-    with pytest.raises(RuntimeError, match="unexpected scope"):
-        renewed_token(PolicyBao("exact-scope", orphan=False),
-                      "exact-scope", "selfhost-keycloak-sign-")
-
-
-def test_keycloak_certificate_requires_a_real_session_length(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    def short_cert(command: list[str], **kwargs: object) -> subprocess.CompletedProcess:
-        assert command == ["openssl", "x509", "-checkend", str(MIN_VALIDITY_SECONDS), "-noout"]
-        assert kwargs["input"] == b"public certificate"
-        return subprocess.CompletedProcess(command, 1)
-
-    monkeypatch.setattr("provision_selfhost_keycloak_kms.subprocess.run", short_cert)
+def test_keycloak_certificate_requires_a_real_session_length() -> None:
+    from tests.test_selfhost_native_certificates import certificate, key, pem
+    signer = key()
+    short = certificate("short", signer.public_key(), signer=signer, after=1800)
     with pytest.raises(RuntimeError, match="certificate expires before tester session"):
-        require_cert_lifetime("public certificate")
+        require_cert_lifetime(pem(short).decode())
+
+
+@pytest.mark.parametrize("minted", [False, True])
+def test_provision_reports_recovery_only_after_leaf_creation(monkeypatch, minted):
+    import provision_selfhost_keycloak_kms as keycloak
+    from selfhost_native_operator import OperatorCleanupError
+
+    def fail(bao, created, **context):
+        if minted:
+            created.append("sensitive-leaf-token-not-for-diagnostics")
+        raise RuntimeError("synthetic preflight failure")
+
+    monkeypatch.setattr(keycloak, "_provision", fail)
+    error = OperatorCleanupError if minted else RuntimeError
+    message = "Keycloak provisioning requires operator recovery" if minted else "synthetic preflight failure"
+    with pytest.raises(error, match="^" + message + "$"):
+        keycloak.provision(object())
+
+
+def test_cli_staging_failure_after_qualified_mint_is_exit_three(tmp_path, monkeypatch, capsys):
+    import provision_selfhost_keycloak_kms as keycloak
+    ca, token = tmp_path / "ca.crt", tmp_path / "token"
+    ca.write_text("public CA")
+    token.write_text("synthetic-operator-token-long-enough")
+    for name, value in {"BAO_ADDR": "https://synthetic.invalid", "BAO_CACERT": str(ca),
+                        "SELFHOST_KEYCLOAK_MODE": "initial", "BAO_ROOT_TOKEN_FILE": str(token),
+                        "SELFHOST_KEYCLOAK_OUTPUT_DIR": str(tmp_path)}.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.delenv("SELFHOST_KEYCLOAK_PKI_MOUNT", raising=False)
+    monkeypatch.setattr(keycloak, "require_available_private_root", lambda *_: None)
+    monkeypatch.setattr(keycloak, "KeycloakBao", lambda *_: object())
+    monkeypatch.setattr(keycloak, "provision", lambda *_, **kwargs: {"minted": "sensitive-token"})
+
+    def failed_write(*args, **kwargs):
+        raise OSError("sensitive-local-path")
+    monkeypatch.setattr(keycloak, "write_outputs", failed_write)
+    assert keycloak.main() == 3
+    assert capsys.readouterr().err.strip() == "Keycloak provisioning requires operator recovery"

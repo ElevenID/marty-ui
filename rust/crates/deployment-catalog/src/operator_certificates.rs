@@ -43,6 +43,150 @@ pub fn check_lifetime(pem: &[u8], minimum_ttl: u64) -> Result<bool> {
     .is_ok())
 }
 
+/// Expiry-only, whole-second OpenSSL -checkend semantics, including future notBefore.
+pub fn check_expiry(pem: &[u8], minimum_ttl: u64) -> Result<bool> {
+    let cert = first_certificate(pem)?;
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| REFUSAL)?
+        .as_secs();
+    expires_after(&cert, now, minimum_ttl)
+}
+
+fn expires_after(cert: &Certificate, now: u64, minimum_ttl: u64) -> Result<bool> {
+    Ok(cert
+        .tbs_certificate
+        .validity
+        .not_after
+        .to_unix_duration()
+        .as_secs()
+        > now.checked_add(minimum_ttl).ok_or(REFUSAL)?)
+}
+
+/// Strict replacement-root profile: single PEM, exact identity, P-256 custody,
+/// critical CA constraints and a self-signature; deliberately no time check.
+pub fn check_replacement_ca(pem: &[u8], kind: &str, version: u64) -> Result<()> {
+    use x509_cert::ext::pkix::{
+        CertificatePolicies, CrlDistributionPoints, InhibitAnyPolicy, NameConstraints,
+        PolicyConstraints, SubjectAltName,
+    };
+    if !["workload", "keycloak"].contains(&kind) || !(2..=8).contains(&version) {
+        return Err(REFUSAL);
+    }
+    let cert = first_certificate(pem)?;
+    let text = std::str::from_utf8(pem).map_err(|_| REFUSAL)?;
+    let lines = text
+        .strip_suffix('\n')
+        .unwrap_or(text)
+        .split('\n')
+        .collect::<Vec<_>>();
+    if lines.len() < 3
+        || lines[0] != "-----BEGIN CERTIFICATE-----"
+        || lines.last() != Some(&"-----END CERTIFICATE-----")
+        || lines[1..lines.len() - 1].iter().any(|line| {
+            line.is_empty()
+                || !line
+                    .bytes()
+                    .all(|c| c.is_ascii_alphanumeric() || b"+/=".contains(&c))
+        })
+    {
+        return Err(REFUSAL);
+    }
+    let tbs = &cert.tbs_certificate;
+    let name = format!("CN=Marty self-host {kind} CA v{version}");
+    let constraints = tbs
+        .get::<BasicConstraints>()
+        .map_err(|_| REFUSAL)?
+        .ok_or(REFUSAL)?;
+    let usage = tbs.get::<KeyUsage>().map_err(|_| REFUSAL)?;
+    if tbs.subject.to_string() != name
+        || tbs.issuer.to_string() != name
+        || constraints
+            != (
+                true,
+                BasicConstraints {
+                    ca: true,
+                    path_len_constraint: None,
+                },
+            )
+        || usage.is_some_and(|(_, usage)| !usage.key_cert_sign())
+        || cert.signature_algorithm != tbs.signature
+    {
+        return Err(REFUSAL);
+    }
+    let spki = tbs.subject_public_key_info.to_der().map_err(|_| REFUSAL)?;
+    let key = marty_crypto::jwk::public_key_der_to_jwk(&spki).map_err(|_| REFUSAL)?;
+    if key.kty != "EC" || key.crv.as_deref() != Some("P-256") {
+        return Err(REFUSAL);
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    for extension in tbs.extensions.iter().flatten() {
+        if !seen.insert(extension.extn_id) {
+            return Err(REFUSAL);
+        }
+        // Root-only validation has no subordinate names or policy tree.
+        if extension.critical {
+            match extension.extn_id.to_string().as_str() {
+                "2.5.29.19" | "2.5.29.15" => {}
+                "2.5.29.17" => {
+                    tbs.get::<SubjectAltName>().map_err(|_| REFUSAL)?;
+                }
+                "2.5.29.30" => {
+                    tbs.get::<NameConstraints>().map_err(|_| REFUSAL)?;
+                }
+                "2.5.29.31" => {
+                    tbs.get::<CrlDistributionPoints>().map_err(|_| REFUSAL)?;
+                }
+                "2.5.29.32" => {
+                    tbs.get::<CertificatePolicies>().map_err(|_| REFUSAL)?;
+                }
+                "2.5.29.36" => {
+                    tbs.get::<PolicyConstraints>().map_err(|_| REFUSAL)?;
+                }
+                "2.5.29.37" => {
+                    tbs.get::<ExtendedKeyUsage>().map_err(|_| REFUSAL)?;
+                }
+                "2.5.29.54" => {
+                    tbs.get::<InhibitAnyPolicy>().map_err(|_| REFUSAL)?;
+                }
+                _ => return Err(REFUSAL),
+            }
+        }
+    }
+    tbs.get::<ExtendedKeyUsage>().map_err(|_| REFUSAL)?;
+    tbs.get::<SubjectKeyIdentifier>().map_err(|_| REFUSAL)?;
+    issuer_matches(&cert, &cert)?;
+    // Reuse webpki's existing verification algorithms, including P-256 with
+    // SHA-384/512. Match both AlgorithmIdentifiers, including parameters.
+    let public_algorithm = tbs
+        .subject_public_key_info
+        .algorithm
+        .to_der()
+        .map_err(|_| REFUSAL)?;
+    let signature_algorithm = cert.signature_algorithm.to_der().map_err(|_| REFUSAL)?;
+    let public_algorithm =
+        spki::der::asn1::AnyRef::from_der(&public_algorithm).map_err(|_| REFUSAL)?;
+    let signature_algorithm =
+        spki::der::asn1::AnyRef::from_der(&signature_algorithm).map_err(|_| REFUSAL)?;
+    let message = tbs.to_der().map_err(|_| REFUSAL)?;
+    let public = tbs
+        .subject_public_key_info
+        .subject_public_key
+        .as_bytes()
+        .ok_or(REFUSAL)?;
+    let signature = cert.signature.as_bytes().ok_or(REFUSAL)?;
+    if !webpki::ALL_VERIFICATION_ALGS.iter().any(|algorithm| {
+        algorithm.public_key_alg_id().as_ref() == public_algorithm.value()
+            && algorithm.signature_alg_id().as_ref() == signature_algorithm.value()
+            && algorithm
+                .verify_signature(public, &message, signature)
+                .is_ok()
+    }) {
+        return Err(REFUSAL);
+    }
+    Ok(())
+}
+
 // The old `openssl verify` invocation had no purpose or hostname option. Parse
 // every EKU OID, including trailing values, without imposing TLS server/client use.
 struct AnyPurpose;
@@ -214,5 +358,12 @@ mod tests {
         )
         .is_err());
         assert!(lifetime(&cert, now, Duration::MAX).is_err());
+        cert.tbs_certificate.validity.not_before = (UNIX_EPOCH + now + Duration::from_secs(60))
+            .try_into()
+            .unwrap();
+        // Expiry-only checks ignore notBefore and reject exact expiry equality.
+        assert!(!expires_after(&cert, now.as_secs(), 3600).unwrap());
+        assert!(expires_after(&cert, now.as_secs(), 3599).unwrap());
+        assert!(expires_after(&cert, now.as_secs(), u64::MAX).is_err());
     }
 }

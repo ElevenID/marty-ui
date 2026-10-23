@@ -72,6 +72,37 @@ candidate directory must be empty and private. The assembly verifies the
 same file inventory and modes, unchanged static inputs and public CA, and
 changed certificates and scoped tokens. Its default mode refuses CA rollover.
 
+The signed Rust operator owns Keycloak's five closed policy scopes, token
+creation, exact existing-policy selection during renewal, scoped signing/JWE
+probes, and actual foreign-key 403 checks. Native Keycloak and AppRole operations
+share bounded HTTPS request mechanics; Keycloak retains its own policy profile.
+The Python command still owns PKI/Transit CSR orchestration and the seven-file
+staging contract: two certificates and five distinct tokens, no overwrite,
+initial 0444 files under an owner-private root, and renewal 0600 files. Renewal
+does not create or widen policies. Its leaves retain the exact single policy,
+7–8 hour remaining lifetime, orphan status, and renewal-role creation path.
+
+Keycloak certificate expiry and the replacement CA's 300-day check use native
+expiry-only semantics matching `openssl x509 -checkend`; they do not reject a
+future notBefore value. Activation's separate lifetime and chain checks still
+enforce current validity. Strict replacement-root validation verifies the exact
+kind/version identity, single canonical PEM, critical CA constraints, P-256
+public key and self-signature without checking time. Issuer validity is checked
+separately. OpenSSL remains the differential test and Windows release oracle.
+
+Failures before token minting remain validation failures. A mint response lost
+in transit, failed post-mint qualification, failed token delivery, abnormal
+native process exit, or subsequent staging failure returns fixed exit 3:
+`Keycloak provisioning requires operator recovery`. No token values appear in
+the diagnostic. Existing renewal authority cannot revoke these leaves, so this
+refactor does not grant it additional revocation permissions or claim that the
+remote changes were rolled back. An operator must reconcile issued tokens and
+the partial disposable setup before retrying; preserve the active generation.
+Initial provisioning creates its non-exportable foreign test key before minting
+so every returned token has already proved denial; that test key may remain if
+later provisioning fails. Local file-write cleanup still removes only files
+created by that attempt. This stage does not activate a generation.
+
 Replacement-issuer preparation is a separate rootless source stage, not an
 activation shortcut. After provisioning the CA-rotation AppRole while the
 bootstrap root still exists, use

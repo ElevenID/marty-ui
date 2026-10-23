@@ -263,16 +263,70 @@ fn run() -> Result<(), String> {
         use marty_deployment_catalog::operator::{self, REFUSAL};
         use std::io::{Read, Write};
         let result = match args.get(1).map(String::as_str) {
-            Some("certificate-lifetime") if args.len() == 3 => {
+            Some("keycloak-policy" | "keycloak-token") => {
+                use marty_deployment_catalog::keycloak;
+                use std::{io::IsTerminal, path::Path, time::Duration};
+                let mint = args[1] == "keycloak-token";
+                if args.len() != if mint { 4 } else { 2 }
+                    || (mint && std::io::stdout().is_terminal())
+                {
+                    return Err(REFUSAL.into());
+                }
+                let mut input = Vec::new();
+                std::io::stdin()
+                    .take(64 * 1024 + 1)
+                    .read_to_end(&mut input)
+                    .map_err(|_| REFUSAL)?;
+                if input.len() > 64 * 1024 {
+                    return Err(REFUSAL.into());
+                }
+                let context: Value = serde_json::from_slice(&input).map_err(|_| REFUSAL)?;
+                let value = if mint {
+                    let bao = marty_openbao_http::OpenBaoHttp::connect(
+                        &args[2],
+                        Some(Path::new(&args[3])),
+                        Duration::from_secs(10),
+                    )
+                    .map_err(|_| REFUSAL)?;
+                    tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                        .map_err(|_| REFUSAL)?
+                        .block_on(keycloak::mint(&bao, &context))
+                        .map_err(str::to_owned)?
+                } else {
+                    keycloak::policy(&context)?
+                };
+                let refusal = if mint { keycloak::RECOVERY } else { REFUSAL };
+                let mut output = std::io::stdout().lock();
+                serde_json::to_writer(&mut output, &value).map_err(|_| refusal)?;
+                output.flush().map_err(|_| refusal)
+            }
+            Some("certificate-lifetime" | "certificate-expiry") if args.len() == 3 => {
                 let ttl: u64 = args[2].parse().map_err(|_| REFUSAL)?;
                 let mut input = Vec::new();
                 std::io::stdin()
                     .take(64 * 1024 + 1)
                     .read_to_end(&mut input)
                     .map_err(|_| REFUSAL)?;
-                let valid =
-                    marty_deployment_catalog::operator_certificates::check_lifetime(&input, ttl)?;
+                let check = if args[1] == "certificate-expiry" {
+                    marty_deployment_catalog::operator_certificates::check_expiry
+                } else {
+                    marty_deployment_catalog::operator_certificates::check_lifetime
+                };
+                let valid = check(&input, ttl)?;
                 serde_json::to_writer(std::io::stdout().lock(), &valid).map_err(|_| REFUSAL)
+            }
+            Some("replacement-ca") if args.len() == 4 => {
+                let version = args[3].parse().map_err(|_| REFUSAL)?;
+                let mut input = Vec::new();
+                std::io::stdin()
+                    .take(64 * 1024 + 1)
+                    .read_to_end(&mut input)
+                    .map_err(|_| REFUSAL)?;
+                marty_deployment_catalog::operator_certificates::check_replacement_ca(
+                    &input, &args[2], version,
+                )
             }
             Some("certificate-chain") if args.len() == 2 => {
                 let mut input = Vec::new();
@@ -577,6 +631,7 @@ fn main() {
             marty_deployment_catalog::approle::CLEANUP_LEAF,
             marty_deployment_catalog::approle::CLEANUP_ROTATION,
             marty_deployment_catalog::approle::CLEANUP_REFRESH,
+            marty_deployment_catalog::keycloak::RECOVERY,
         ]
         .contains(&error.as_str())
         {

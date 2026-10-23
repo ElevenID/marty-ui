@@ -12,14 +12,12 @@ from __future__ import annotations
 import argparse
 import os
 from pathlib import Path
-import re
 import subprocess
 import sys
-import tempfile
 from urllib.error import HTTPError
 
 sys.dont_write_bytecode = True
-from selfhost_native_operator import OperatorCleanupError, approle_operation, approle_policy  # noqa: E402
+from selfhost_native_operator import OperatorCleanupError, approle_operation, approle_policy, operator_bytes, certificate_expiry  # noqa: E402
 from selfhost_operator_inputs import private_file, write_private, snapshot_origin, private_empty_or_source  # noqa: E402
 from provision_selfhost_renewal_identity import existing_policy_names  # noqa: E402
 from selfhost_openbao_client import Bao  # noqa: E402
@@ -37,40 +35,12 @@ VERSIONS = range(2, 9)
 
 
 def checked_issuer_certificate(certificate: str, kind: str, version: int) -> None:
-    """Verify the public CA response with OpenSSL before accepting its issuer."""
-    encoded = certificate.encode("ascii")
-    if not re.fullmatch(
-            r"-----BEGIN CERTIFICATE-----\n(?:[A-Za-z0-9+/=]+\n)+"
-            r"-----END CERTIFICATE-----\n?", certificate):
-        raise RuntimeError("CA replacement certificate is not one PEM certificate")
-
-    def openssl(*arguments: str, input_bytes: bytes | None = encoded) -> str:
-        result = subprocess.run(
-            ["openssl", *arguments], input=input_bytes, capture_output=True,
-            timeout=10, check=False,
-        )
-        if result.returncode:
-            raise RuntimeError("CA replacement certificate failed OpenSSL validation")
-        return result.stdout.decode("ascii")
-
-    name = f"CN=Marty self-host {kind} CA v{version}"
-    names = openssl("x509", "-noout", "-subject", "-issuer", "-nameopt", "RFC2253")
-    if names.splitlines() != [f"subject={name}", f"issuer={name}"]:
-        raise RuntimeError("CA replacement certificate differs from reviewed issuer")
-    constraints = openssl("x509", "-noout", "-ext", "basicConstraints")
-    if [line.strip() for line in constraints.splitlines()] != [
-            "X509v3 Basic Constraints: critical", "CA:TRUE"]:
-        raise RuntimeError("CA replacement lacks CA basic constraints")
-    public = openssl("x509", "-pubkey", "-noout")
-    key = openssl("pkey", "-pubin", "-text", "-noout", input_bytes=public.encode("ascii"))
-    if "Public-Key: (256 bit)" not in key or "ASN1 OID: prime256v1" not in key:
-        raise RuntimeError("CA replacement certificate has an unexpected public key")
-    with tempfile.TemporaryDirectory(prefix="selfhost-ca-verify-") as directory:
-        path = Path(directory) / "issuer.pem"
-        path.write_bytes(encoded)
-        openssl("verify", "-x509_strict", "-check_ss_sig", "-no_check_time",
-                "-purpose", "any",
-                "-CAfile", str(path), str(path), input_bytes=None)
+    """Verify the strict public replacement-root profile in the signed operator."""
+    try:
+        operator_bytes(Path(__file__).resolve().parents[1], "operator", "replacement-ca",
+                       kind, str(version), input=certificate.encode("ascii"))
+    except RuntimeError as error:
+        raise RuntimeError("CA replacement certificate failed native validation") from error
 
 
 def rotation_acl(names: list[str]) -> str:
@@ -131,11 +101,7 @@ def stage_issuer(bao: Bao, identity: Path, output: Path,
     live = bao.request("GET", f"{mount}/cert/ca", token=token).get("data", {})
     if live.get("certificate") != certificate:
         raise RuntimeError("CA replacement differs from its mounted issuer")
-    validity = subprocess.run(
-        ["openssl", "x509", "-checkend", str(300 * 24 * 60 * 60), "-noout"],
-        input=certificate.encode("ascii"), capture_output=True, timeout=10, check=False,
-    )
-    if validity.returncode:
+    if not certificate_expiry(certificate, 300 * 24 * 60 * 60):
         raise RuntimeError("CA replacement expires before the overlap window")
     destination = output / f"{kind}-ca-v{version}.crt"
     descriptor = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL |
