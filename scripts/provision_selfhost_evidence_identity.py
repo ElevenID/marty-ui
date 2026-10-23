@@ -19,7 +19,6 @@ from selfhost_native_operator import OperatorCleanupError, approle_operation  # 
 from selfhost_operator_inputs import private_file, write_private, snapshot_origin, private_empty_or_source  # noqa: E402
 from selfhost_approle_rotation import (  # noqa: E402
     RotationSpec, require_revoked as require_secret_revoked,
-    retire as retire_secret_id, rotate as rotate_secret_id,
 )
 from selfhost_openbao_client import (  # noqa: E402
     Bao, CUSTODY_SIGNER, CUSTODY_SIGNER_POLICY,
@@ -63,13 +62,11 @@ def require_revoked(bao: Bao, role_id: str, secret_id: str) -> None:
 
 
 def rotate(bao: Bao, identity: Path, output: Path) -> None:
-    rotate_secret_id(bao, identity, output, ROTATION, checked_login,
-                     private_empty_or_source, private_file, write_private)
+    approle_operation(bao, "rotate", "evidence", identity, output=str(output))
 
 
 def retire(bao: Bao, identity: Path, retired: Path) -> None:
-    retire_secret_id(bao, identity, retired, ROTATION, checked_login,
-                     private_empty_or_source, private_file)
+    approle_operation(bao, "retire", "evidence", identity, retired=str(retired))
 
 
 def main() -> int:

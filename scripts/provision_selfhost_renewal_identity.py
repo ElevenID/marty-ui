@@ -9,7 +9,6 @@ operator token for staging and activation. No key material is exported.
 from __future__ import annotations
 
 import argparse
-import json
 import os
 from pathlib import Path
 import re
@@ -24,7 +23,7 @@ from activate_selfhost_renewed_secrets import checked_certificates, checked_toke
 from selfhost_openbao_client import (Bao, RENEWAL_LEAF_ROLE, RENEWAL_OPERATOR_POLICY)  # noqa: E402
 from stage_selfhost_renewed_secrets import RENEWED_TOKEN_FILES, entries  # noqa: E402
 from selfhost_approle_rotation import (  # noqa: E402
-    RotationSpec, rotate_credentials, retire_credentials,
+    RotationSpec,
 )
 
 
@@ -113,48 +112,11 @@ def login(bao: Bao, identity: Path, output: Path) -> None:
 
 
 def rotate(bao: Bao, identity: Path, output: Path) -> None:
-    """Stage a validated replacement, then revoke the old SecretID."""
-    identity = private_empty_or_source(identity, empty=False)
-    output = private_empty_or_source(output, empty=True)
-    if identity == output:
-        raise ValueError("replacement identity must be separate")
-    role_id, old_secret, names, old_token = checked_login(bao, identity)
-
-    def stage(new_secret: str) -> str:
-        response = bao.request("POST", f"auth/{AUTH_MOUNT}/login", {
-            "role_id": role_id, "secret_id": new_secret,
-        }, authenticate=False)
-        auth = response.get("auth", {})
-        new_token = auth.get("client_token")
-        if (not isinstance(new_token, str) or len(new_token) < 20
-                or auth.get("policies") != [OPERATOR_POLICY]
-                or type(auth.get("lease_duration")) is not int
-                or not 3600 <= auth["lease_duration"] <= 8 * 60 * 60):
-            raise ValueError("replacement AppRole login is invalid")
-        verify_denials(bao, new_token)
-        write_private(output / ROLE_ID_FILE, role_id)
-        write_private(output / SECRET_ID_FILE, new_secret)
-        write_private(output / POLICY_NAMES_FILE,
-                      json.dumps(names, separators=(",", ":")), max_bytes=4096)
-        return new_token
-
-    def cleanup() -> None:
-        for name in (ROLE_ID_FILE, SECRET_ID_FILE, POLICY_NAMES_FILE):
-            (output / name).unlink(missing_ok=True)
-
-    rotate_credentials(bao, ROTATION, role_id, old_secret, old_token, stage, cleanup)
+    approle_operation(bao, "rotate", "renewal", identity, output=str(output))
 
 
 def retire(bao: Bao, identity: Path, retired: Path) -> None:
-    """Finish an interrupted rotation using the validated replacement identity."""
-    identity = private_empty_or_source(identity, empty=False)
-    retired = private_empty_or_source(retired, empty=False)
-    if identity == retired:
-        raise ValueError("retired identity must be separate")
-    role_id, new_secret, _, token = checked_login(bao, identity)
-    old_role = private_file(retired / ROLE_ID_FILE).strip()
-    old_secret = private_file(retired / SECRET_ID_FILE).strip()
-    retire_credentials(bao, ROTATION, role_id, new_secret, old_role, old_secret, token)
+    approle_operation(bao, "retire", "renewal", identity, retired=str(retired))
 
 
 def main() -> int:
