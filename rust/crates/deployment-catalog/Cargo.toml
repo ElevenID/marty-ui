@@ -9,6 +9,12 @@ publish = false
 
 [dependencies]
 serde_json.workspace = true
+sha2.workspace = true
+zip.workspace = true
+flate2.workspace = true
+spki = { workspace = true, features = ["pem"] }
+x509-cert.workspace = true
+marty-crypto.workspace = true
 
 [[bin]]
 name = "marty-deploy"

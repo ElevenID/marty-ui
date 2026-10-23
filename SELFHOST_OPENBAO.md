@@ -1,5 +1,23 @@
 # Self-Host OpenBao Setup
 
+KMS operator public-key checks and root-retirement snapshot validation run in
+Rust through the existing `marty-deploy` executable. In an extracted bundle,
+install the operator from the **same release tag and source commit** as the bundle
+and source its verified environment before running Python operator entrypoints:
+
+```sh
+bash scripts/install-marty-deploy.sh "$RELEASE_TAG" "$SOURCE_SHA" "$HOME/.local/lib/marty-operator"
+. "$HOME/.local/lib/marty-operator/marty-deploy.lock"
+```
+
+The installer requires `gh`, `jq`, `cosign`, and `sha256sum`, verifies signatures
+and source provenance, and supports Linux amd64/arm64. A source checkout can use
+Cargo 1.95 instead. Python entrypoints retain their arguments. Rust conversion
+accepts supported public SPKI/certificate keys; it does not establish certificate
+trust or replace the existing issuer, key-version, or non-exportability checks.
+The snapshot validator reads the existing v2 archive without extraction. Snapshot
+creation and actual restore qualification remain separate requirements.
+
 This is the standalone external OpenBao setup for the workstation-local self-host production stack. It stays outside the main application compose project, keeps its state on durable host storage, and writes the scoped `openbao_service_token` into the shared self-host secret directory.
 
 ## Paths

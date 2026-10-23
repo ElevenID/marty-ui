@@ -258,6 +258,29 @@ fn run() -> Result<(), String> {
         println!("{}", env!("MARTY_DEPLOY_BUILD_IDENTITY"));
         return Ok(());
     }
+    // KMS validation commands do not read the catalog or require a source checkout.
+    if args.first().is_some_and(|a| a == "operator") {
+        use marty_deployment_catalog::operator::{self, REFUSAL};
+        use std::io::{Read, Write};
+        let result = match args.get(1).map(String::as_str) {
+            Some("public-spki" | "certificate-spki") if args.len() == 2 => {
+                let mut input = Vec::new();
+                std::io::stdin()
+                    .take(64 * 1024 + 1)
+                    .read_to_end(&mut input)
+                    .map_err(|_| REFUSAL.to_owned())?;
+                let der = operator::public_spki(&input, args[1] == "certificate-spki")
+                    .map_err(str::to_owned)?;
+                std::io::stdout().write_all(&der).map_err(|_| REFUSAL)
+            }
+            Some("check-snapshot") if args.len() == 3 => {
+                let source = std::fs::File::open(&args[2]).map_err(|_| REFUSAL.to_owned())?;
+                operator::check_snapshot(source)
+            }
+            _ => Err(REFUSAL),
+        };
+        return result.map_err(str::to_owned);
+    }
     let root = if let Some(index) = args.iter().position(|arg| arg == "--repo-root") {
         if index + 1 >= args.len() {
             return Err("--repo-root requires a path".to_owned());

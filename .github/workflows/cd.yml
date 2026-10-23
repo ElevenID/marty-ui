@@ -1391,6 +1391,8 @@ jobs:
       attestations: read
       contents: read
       packages: read
+    env:
+      CARGO_PROFILE_DEV_DEBUG: 0
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -1403,6 +1405,11 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ github.token }}
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+        with:
+          toolchain: 1.95.0
+      - name: Prepare source-matched Rust KMS operator for image qualification
+        run: cargo build --locked --manifest-path rust/Cargo.toml -p marty-deployment-catalog --bin marty-deploy
       - name: Verify and exercise the exact published OpenBao DIDComm image
         env:
           GH_TOKEN: ${{ github.token }}
