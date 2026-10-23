@@ -827,6 +827,7 @@ async fn foreign_key_resolution_rejects_tampering_private_and_ambiguous_keys() {
             ForeignPublicKeyResolver { keys },
         ));
         let context = CredentialVerificationContext {
+            presentation_only: false,
             resolved_issuer_public_jwk: Some(key.clone()),
             format: DetectedCredentialFormat::OpenbadgeV3,
             token: fixture["token"].clone(),
@@ -851,6 +852,7 @@ async fn foreign_key_resolution_rejects_tampering_private_and_ambiguous_keys() {
         },
     );
     let context = CredentialVerificationContext {
+        presentation_only: false,
         resolved_issuer_public_jwk: None,
         format: DetectedCredentialFormat::OpenbadgeV3,
         token: json!(token),
@@ -881,6 +883,7 @@ async fn existing_governed_key_remains_authoritative_without_resolution() {
     let fixture: Value =
         serde_json::from_str(include_str!("fixtures/foreign_ob3_jwt.json")).unwrap();
     let context = CredentialVerificationContext {
+        presentation_only: false,
         resolved_issuer_public_jwk: None,
         format: DetectedCredentialFormat::OpenbadgeV3,
         token: fixture["token"].clone(),

@@ -929,6 +929,7 @@ fn service_policy(policy: &PresentationPolicy) -> Value {
             "min_satisfied": alternative.min_satisfied
         })).collect::<Vec<_>>(),
         "trust_profile_id": policy.trust_profile_id.map(|id| id.to_string()),
+        "presentation_proof_required": policy.presentation_proof_required,
         "holder_binding": {
             "required": policy.holder_binding.required,
             "binding_methods": policy.holder_binding.binding_methods,
@@ -1360,6 +1361,32 @@ fn service_unavailable(detail: &str) -> PresentationPolicyHttpError {
 #[cfg(test)]
 mod error_code_projection_tests {
     use super::*;
+
+    #[test]
+    fn presentation_only_policy_keeps_its_proof_obligation_in_the_canonical_kernel() {
+        let policy = build_policy(serde_json::from_value(json!({
+            "organization_id": Uuid::from_u128(1).to_string(),
+            "name": "Holder presentation proof",
+            "holder_binding": {
+                "required": true,
+                "binding_methods": ["DEVICE_KEY"],
+                "proof_profiles": ["OID4VP_VERIFIABLE_PRESENTATION"],
+                "proof_freshness": {"challenge_required": false, "audience_binding_required": false, "replay_detection_required": false}
+            }
+        })).unwrap(), Utc::now()).unwrap();
+        let request: EvaluatePresentationRequest =
+            serde_json::from_value(json!({"vp_token": {}})).unwrap();
+        for verified in [true, false] {
+            let result = evaluate_verified_facts_for_policy(json!({
+                "credentials": [], "evaluation_time_epoch_seconds": 1_787_240_300_u64,
+                "presentation_verified": verified, "holder_binding_verified": verified,
+                "holder_binding_method": "DEVICE_KEY", "proof_profile": "OID4VP_VERIFIABLE_PRESENTATION",
+                "challenge_verified": false, "audience_verified": false, "replay_check_verified": false,
+                "proof_epoch_seconds": null, "external_authorization": null, "presentation_count": 1
+            }), &policy, &request).unwrap();
+            assert_eq!(result["decision"], if verified { "allow" } else { "deny" });
+        }
+    }
 
     #[test]
     fn language_neutral_error_code_forms_drive_the_same_projection_flags() {
