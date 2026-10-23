@@ -205,7 +205,7 @@ jobs:
           jq -e '.schema == "marty.selfhost-installed-migrations-probe/v1" and .qualification == "unqualified" and .runs == 2 and .runtime.schema == "marty.selfhost-organization-runtime-probe/v1" and .runtime.qualification == "unqualified" and .runtime.service == "organization" and .runtime.seeded_organization_id == "00000000-0000-0000-0000-000000000001" and .runtime.organization_count >= 1 and .runtime.missing_token_status == 401 and .runtime.wrong_token_status == 401' \
             "$RUNNER_TEMP/selfhost-installed-organization.json" >/dev/null
           cp "$RUNNER_TEMP/selfhost-installed-organization.json" ./selfhost-installed-organization.json
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: steps.select.outputs.present == 'true'
         with:
           name: selfhost-installed-signing-unqualified-${{ github.run_id }}
