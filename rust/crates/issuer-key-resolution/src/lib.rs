@@ -304,11 +304,14 @@ mod tests {
     #[tokio::test]
     async fn native_resolver_uses_the_configured_internal_did_web_route() {
         let document = serde_json::to_value(document()).unwrap();
+        let requests = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let observed_requests = requests.clone();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let application = Router::new().route(
             "/orgs/acme/did.json",
             get(move || {
+                observed_requests.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 let document = document.clone();
                 async move { Json(document) }
             }),
@@ -352,6 +355,9 @@ mod tests {
                 .await,
             Err(IssuerKeyResolutionError::Invalid)
         );
+        // Each call fetches fresh public material, including repeated requests
+        // for the same DID. No local cache can exceed a source TTL of zero.
+        assert_eq!(requests.load(std::sync::atomic::Ordering::SeqCst), 3);
         server.abort();
     }
 }
