@@ -1253,6 +1253,19 @@ mod tests {
         assert_eq!(selected["kid"], kid);
         assert!(selected.get("d").is_none());
 
+        let mut unnamed = profile.clone();
+        unnamed["issuer_relationships"][0]["verification_keys"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("kid");
+        assert!(governed_public_jwk(&context(unnamed.clone()), &token).is_some());
+        let second_key = unnamed["issuer_relationships"][0]["verification_keys"][0].clone();
+        unnamed["issuer_relationships"][0]["verification_keys"]
+            .as_array_mut()
+            .unwrap()
+            .push(second_key);
+        assert!(governed_public_jwk(&context(unnamed), &token).is_none());
+
         let mut ambiguous = profile.clone();
         let relationship = ambiguous["issuer_relationships"][0].clone();
         ambiguous["issuer_relationships"]
