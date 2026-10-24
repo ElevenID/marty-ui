@@ -2,6 +2,14 @@
 
 from __future__ import annotations
 
+if __package__:
+    from .passport_model_policy import evaluate as evaluate_passport_policy
+else:
+    try:
+        from passport_model_policy import evaluate as evaluate_passport_policy
+    except ModuleNotFoundError:
+        from scripts.passport_model_policy import evaluate as evaluate_passport_policy
+
 import argparse
 import ipaddress
 import json
@@ -114,30 +122,13 @@ def has_readonly_volume(service, source, target):
 
 
 def contains_credential(value, credential):
-    if isinstance(value, str):
-        return credential in value
-    if isinstance(value, (list, tuple)):
-        return any(contains_credential(item, credential) for item in value)
-    if isinstance(value, dict):
-        return any(
-            contains_credential(item, credential)
-            for pair in value.items()
-            for item in pair
-        )
-    return False
+    return evaluate_passport_policy("contains-credential", error_type=PassportConfigurationError, value=value, credential=credential)
 
 
 def service_reuses_credential(service_name, service, credential, dedicated_name):
-    for field, value in service.items():
-        if field == "environment" and service_name in {"gateway", "signing-keys"}:
-            value = {
-                name: entry
-                for name, entry in environment(service).items()
-                if name != dedicated_name
-            }
-        if contains_credential(value, credential):
-            return True
-    return False
+    return evaluate_passport_policy("service-reuses-credential", error_type=PassportConfigurationError,
+                                    name=service_name, service=service, credential=credential,
+                                    dedicated=dedicated_name)
 
 
 def valid_operator_credential(value):
@@ -885,10 +876,9 @@ def validate_model(model, *, passport_enabled, files, physical_provider=False,
             or not valid_operator_credential(operator_token)
             or operator_token == native.get("GRPC_SERVICE_TOKEN")
             or operator_token == native.get("SIGNING_KEYS_INTERNAL_API_KEY")
-            or any(
-                contains_credential(service, operator_token)
-                for name, service in services.items()
-                if name != "issuance-native"
+            or contains_credential(
+                [service for name, service in services.items() if name != "issuance-native"],
+                operator_token,
             )
         ):
             raise PassportConfigurationError(

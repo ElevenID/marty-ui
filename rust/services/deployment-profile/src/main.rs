@@ -1,3 +1,4 @@
+use marty_service_runtime::shutdown_signal_best_effort as shutdown_signal;
 use std::{error::Error, sync::Arc, time::Duration};
 
 use marty_deployment_profile::{
@@ -60,21 +61,4 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let _ = shutdown_tx.send(true);
     runtime.stop()?;
     Ok(())
-}
-
-async fn shutdown_signal() {
-    let ctrl_c = async {
-        let _ = tokio::signal::ctrl_c().await;
-    };
-    #[cfg(unix)]
-    let terminate = async {
-        if let Ok(mut signal) =
-            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-        {
-            signal.recv().await;
-        }
-    };
-    #[cfg(not(unix))]
-    let terminate = std::future::pending::<()>();
-    tokio::select! { () = ctrl_c => {}, () = terminate => {} }
 }

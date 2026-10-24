@@ -1,3 +1,4 @@
+use marty_service_runtime::{shutdown_signal_best_effort as shutdown_signal, wait_for_shutdown};
 use marty_signing_grant::SigningOrigin;
 use std::{error::Error, future::Future, path::PathBuf, pin::Pin, sync::Arc, time::Duration};
 
@@ -1039,25 +1040,4 @@ async fn main() -> Result<(), Box<dyn Error>> {
     runtime.stop()?;
     result?;
     Ok(())
-}
-
-async fn wait_for_shutdown(shutdown: &mut watch::Receiver<bool>) {
-    while !*shutdown.borrow() && shutdown.changed().await.is_ok() {}
-}
-
-async fn shutdown_signal() {
-    let ctrl_c = async {
-        let _ = tokio::signal::ctrl_c().await;
-    };
-    #[cfg(unix)]
-    let terminate = async {
-        if let Ok(mut signal) =
-            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-        {
-            signal.recv().await;
-        }
-    };
-    #[cfg(not(unix))]
-    let terminate = std::future::pending::<()>();
-    tokio::select! { () = ctrl_c => {}, () = terminate => {} }
 }

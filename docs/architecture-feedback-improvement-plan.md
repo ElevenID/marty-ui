@@ -735,3 +735,32 @@ report and its dedicated feedback mode rather than keep expanding witness tables
 Existing conservative Rust, release, security and protected merge-group checks
 remain authoritative. Earlier A3 observations below/above are historical research,
 not a remaining implementation commitment. A0 run-bound execution checks remain.
+
+### October 24: shared Rust startup and Passport model policy
+
+Nine services share signal installation and the unchanged watch-channel shutdown
+loop through `marty-service-runtime`. Strict and best-effort installation policies
+remain distinct. Organization and Credential Template additionally share their
+server-only OpenBao TLS configuration and sequential incoming stream adapter;
+MMF still owns TLS and KMS signing. Workload mTLS, service authorization, health
+rosters, outbox draining and public diagnostics retain their service owners.
+
+Passport tooling delegates the common read-only custody, beta origin/loopback,
+runtime selector and credential-isolation scans to `marty-deploy operator
+passport-model`. The four Python entrypoints retain their public functions and
+error types. They use the existing source-matched native operator launcher; no
+Python policy fallback or production resource mutation is added. Model input is
+bounded and credential values stay on stdin, absent from policy results.
+
+Surface-specific filesystem safety, Docker/Kubernetes identity observations,
+attestation verification, provisioning, recovery and receipt collection remain
+necessary features, not obsolete proof artifacts. Their migration is deliberately
+separate from sharing these deterministic validation rules. This change does not
+claim installed-release or live supported-Passport acceptance.
+
+Local beta configuration checks now need the matching Rust operator: source
+checkouts use Cargo/toolchain 1.95.0 with the locked workspace; installed use must
+supply the signed source-matched `MARTY_DEPLOY_BIN` and its existing digest/source/
+release identity variables. A missing or outdated operator fails closed. The
+supported-consumer workflow installs that toolchain and builds the operator before
+collection. No previous-release binary without `passport-model` is accepted.

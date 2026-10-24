@@ -1,3 +1,4 @@
+use marty_service_runtime::{shutdown_signal, wait_for_shutdown};
 use std::{error::Error, future::Future, pin::Pin, sync::Arc};
 
 use marty_flow::{
@@ -179,29 +180,4 @@ async fn main() -> Result<(), Box<dyn Error>> {
     runtime.stop()?;
     result?;
     Ok(())
-}
-
-async fn wait_for_shutdown(shutdown: &mut watch::Receiver<bool>) {
-    while !*shutdown.borrow() && shutdown.changed().await.is_ok() {}
-}
-
-async fn shutdown_signal() {
-    let ctrl_c = async {
-        tokio::signal::ctrl_c()
-            .await
-            .expect("failed to install Ctrl+C handler");
-    };
-    #[cfg(unix)]
-    let terminate = async {
-        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-            .expect("failed to install SIGTERM handler")
-            .recv()
-            .await;
-    };
-    #[cfg(not(unix))]
-    let terminate = std::future::pending::<()>();
-    tokio::select! {
-        () = ctrl_c => {}
-        () = terminate => {}
-    }
 }
