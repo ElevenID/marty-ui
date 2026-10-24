@@ -171,6 +171,18 @@ describe('FlowInstancesPage', () => {
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Cancel execution' })).not.toBeInTheDocument());
   });
 
+  it('cancels an unchanged graphless execution whose optional current step is absent', async () => {
+    const { current_step: _step, ...graphless } = active;
+    mockGetFlowInstance.mockResolvedValueOnce(graphless).mockResolvedValueOnce(graphless).mockResolvedValue({ ...graphless, status: 'CANCELLED' });
+    mockCancel.mockResolvedValue({ ...graphless, status: 'CANCELLED' });
+    const user = userEvent.setup();
+    renderWithRouter(<FlowInstancesPage />, { initialEntries: ['/console/org/operate/flow-instances/exec_1'] });
+    await user.click(await screen.findByRole('button', { name: 'Cancel execution' }));
+    await user.click(screen.getByRole('button', { name: 'Confirm cancellation' }));
+    await waitFor(() => expect(mockCancel).toHaveBeenCalledWith('flow_1', 'exec_1'));
+    expect(screen.queryByText(/Execution changed/)).not.toBeInTheDocument();
+  });
+
   it('lets a viewer inspect an execution without mutation controls', async () => {
     scope.advance = false; scope.cancel = false; mockGetFlowInstance.mockResolvedValue(active);
     renderWithRouter(<FlowInstancesPage />, { initialEntries: ['/console/org/operate/flow-instances/exec_1'] });

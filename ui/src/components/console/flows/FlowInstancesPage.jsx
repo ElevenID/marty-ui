@@ -73,8 +73,9 @@ function ExecutionActions({ instance, organizationId, loading, reload }) {
     try {
       const fresh = requireInstanceScope(await getFlowInstance(instance.id, { organizationId }), organizationId, instance.id);
       if (!mounted.current) return;
-      if (String(fresh.status).toLowerCase() !== instance.status || fresh.current_step !== instance.currentStep
-        || fresh.updated_at !== instance.updated_at) throw new Error('Execution changed. Refresh and review its current step.');
+      const latest = normalizeInstance(fresh);
+      if (latest.status !== instance.status || latest.currentStep !== instance.currentStep
+        || latest.updated_at !== instance.updated_at) throw new Error('Execution changed. Refresh and review its current step.');
       const result = action === 'cancel'
         ? await cancelFlowExecution(instance.flowId, instance.id)
         : await advanceFlowInstance(instance.id, action);

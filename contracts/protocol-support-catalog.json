@@ -236,12 +236,12 @@
       "kind": "execution",
       "display_name": "Flow Execution",
       "support_level": "implemented",
-      "qualification": "implementation_present",
+      "qualification": "focused_source",
       "owner_service": "flows",
       "api_paths": ["/v1/flows/instances", "/v1/flows/instances/{instance_id}"],
       "ui_paths": ["/console/org/operate/flow-instances"],
       "schema_refs": ["#/components/schemas/schemas__flow_execution"],
-      "limitations": ["Exact public recovery behavior remains part of integrated qualification."]
+      "limitations": ["Authorized actors explicitly record step outcomes or cancel executions. Wallet acceptance alone does not advance a flow; credential offers, verification and revocation retain separate lifecycles. Runtime instance APIs require an execution scope, beyond metadata-only flows:read."]
     },
     {
       "id": "issued-credential",
