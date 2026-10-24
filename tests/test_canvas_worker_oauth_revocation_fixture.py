@@ -562,6 +562,8 @@ def test_retry_parent_checks_real_deadline_record_and_closes_fixture(
         {
             "available_at": (updated + timedelta(seconds=delay)).isoformat(),
             "updated_at": updated.isoformat(),
+            "decision_window_start": updated.isoformat(),
+            "decision_window_end": updated.isoformat(),
         }
     )
     if case_name == "missing":
