@@ -102,7 +102,7 @@ if __name__ == "__main__":
         metadata = json.load(sys.stdin)
         check(metadata)
         root = Path(__file__).resolve().parents[2]
-        command = ["cargo", "tree", "--locked", "--manifest-path", str(root / "rust/Cargo.toml"),
+        command = ["cargo", "tree", "--color", "never", "--locked", "--manifest-path", str(root / "rust/Cargo.toml"),
                    "-e", "features,no-dev"]
         services = root / "rust/services"
         packages = sorted(package["name"] for package in metadata["packages"]
