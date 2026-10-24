@@ -298,7 +298,9 @@ pub(super) async fn run(pool: &PgPool, gateway: &GatewayFixture, peers: &PeerSta
         replay.status().as_u16(),
         refused["status_code"].as_u64().unwrap() as u16
     );
-    assert_mip(replay.json().await.unwrap(), &refused["body"]);
+    // This is the wallet-facing OAuth endpoint. Its frozen protocol error
+    // body must remain exact; MIP-only message_id belongs to management APIs.
+    assert_eq!(replay.json::<Value>().await.unwrap(), refused["body"]);
     assert_eq!(stored(pool, id).await, authorized);
 
     let nonce_contract: Value = serde_json::from_str(include_str!(

@@ -2,17 +2,15 @@
 from __future__ import annotations
 
 import base64
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
 from pathlib import Path
-import ssl
-import subprocess
 import sys
-import threading
 from types import SimpleNamespace
 
 import pytest
+
+from tests.native_operator_https import https_json_server
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from selfhost_native_operator import approle_operation, approle_policy  # noqa: E402
@@ -38,11 +36,6 @@ CONTEXT = {"policy": AUDIT_ACL, "names": NAMES, "paths": ["transit/keys/test"]}
 def approle_server(tmp_path):
     if os.name != "posix":
         pytest.skip("native AppRole requires POSIX private identities")
-    key, ca = tmp_path / "listener.key", tmp_path / "ca.crt"
-    subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
-                    "-keyout", str(key), "-out", str(ca), "-days", "1", "-subj", "/CN=localhost",
-                    "-addext", "subjectAltName=IP:127.0.0.1", "-addext", "basicConstraints=critical,CA:FALSE"],
-                   check=True, capture_output=True)
     state = SimpleNamespace(role="audit", seen=[], overrides={}, deleted=[], boot=False,
                             policies={}, leaf_roles={}, role_records={}, mount_exists=False,
                             denial=403, cleanup=204, fail_path=None, minted=False)
@@ -138,65 +131,30 @@ def approle_server(tmp_path):
         assert token in (TOKEN, LEAF), (method, path, token)
         return state.denial, {}
 
-    class Handler(BaseHTTPRequestHandler):
-        def handle_request(self):
-            length = int(self.headers.get("Content-Length", "0"))
-            body = json.loads(self.rfile.read(length)) if length else None
-            try:
-                code, response = dispatch(self.command, self.path.removeprefix("/v1/"), body,
-                                          self.headers.get("X-Vault-Token"))
-                if code == 0:
-                    self.close_connection = True
-                    return
-                data = json.dumps(response).encode() if code != 204 else b""
-            except Exception as error:
-                state.errors.append(error)
-                code, data = 500, b"{}"
-            self.send_response(code)
-            self.send_header("Content-Length", str(len(data)))
-            self.end_headers()
-            self.wfile.write(data)
-
-        do_GET = do_POST = do_PUT = do_DELETE = handle_request
-
-        def log_message(self, *_):
-            pass
-
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    tls.load_cert_chain(ca, key)
-    server.socket = tls.wrap_socket(server.socket, server_side=True)
-    state.bao = SimpleNamespace(endpoint=f"https://127.0.0.1:{server.server_port}", ca=ca,
-                                token="synthetic-bootstrap-root-0123456789")
     state.errors = []
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    state.identity = tmp_path / "identity"
-    state.identity.mkdir(mode=0o700)
+    with https_json_server(tmp_path, dispatch, state.errors) as transport:
+        state.bao = SimpleNamespace(endpoint=transport.endpoint, ca=transport.ca,
+                                    token="synthetic-bootstrap-root-0123456789")
+        state.identity = tmp_path / "identity"
+        state.identity.mkdir(mode=0o700)
 
-    def prepare(role, *, bootstrap=False):
-        state.role, state.boot = role, bootstrap
-        state.mount_exists = role == "snapshot-rotator"
-        state.policies = {} if bootstrap else {ROLES[role][2]: approle_policy(role, **CONTEXT)}
-        if not bootstrap:
-            for suffix in ("role-id", "secret-id"):
-                path = state.identity / f"{role}-{suffix}"
-                path.write_text(CREDENTIAL)
-                path.chmod(0o600)
-            if role in ("renewal", "ca-rotation"):
-                path = state.identity / f"{role}-leaf-policies.json"
-                path.write_text(json.dumps(NAMES))
-                path.chmod(0o600)
-        return state.bao, state.identity
+        def prepare(role, *, bootstrap=False):
+            state.role, state.boot = role, bootstrap
+            state.mount_exists = role == "snapshot-rotator"
+            state.policies = {} if bootstrap else {ROLES[role][2]: approle_policy(role, **CONTEXT)}
+            if not bootstrap:
+                for suffix in ("role-id", "secret-id"):
+                    path = state.identity / f"{role}-{suffix}"
+                    path.write_text(CREDENTIAL)
+                    path.chmod(0o600)
+                if role in ("renewal", "ca-rotation"):
+                    path = state.identity / f"{role}-leaf-policies.json"
+                    path.write_text(json.dumps(NAMES))
+                    path.chmod(0o600)
+            return state.bao, state.identity
 
-    state.prepare = prepare
-    try:
+        state.prepare = prepare
         yield state
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=5)
-        assert not state.errors
 
 
 @pytest.mark.parametrize("role", ROLES)

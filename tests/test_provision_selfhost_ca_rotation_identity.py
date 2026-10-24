@@ -66,9 +66,9 @@ def test_public_ca_certificate_verification_rejects_wrong_or_tampered_issuer() -
     certificate = (Path(__file__).parent / "fixtures" /
                    "selfhost_ca_issuer_public.pem").read_text(encoding="ascii")
     rotation.checked_issuer_certificate(certificate, "workload", 2)
-    with pytest.raises(RuntimeError, match="reviewed issuer"):
+    with pytest.raises(RuntimeError, match="native validation"):
         rotation.checked_issuer_certificate(certificate, "keycloak", 2)
-    with pytest.raises(RuntimeError, match="one PEM"):
+    with pytest.raises(RuntimeError, match="native validation"):
         rotation.checked_issuer_certificate(certificate + certificate, "workload", 2)
 
     header, encoded = certificate.split("\n", 1)
@@ -77,5 +77,5 @@ def test_public_ca_certificate_verification_rejects_wrong_or_tampered_issuer() -
     der[-1] ^= 1  # Keep the certificate parseable while invalidating its signature.
     tampered = (header + "\n" + base64.encodebytes(der).decode("ascii") +
                 "-----END CERTIFICATE-----" + footer)
-    with pytest.raises(RuntimeError, match="OpenSSL validation"):
+    with pytest.raises(RuntimeError, match="native validation"):
         rotation.checked_issuer_certificate(tampered, "workload", 2)

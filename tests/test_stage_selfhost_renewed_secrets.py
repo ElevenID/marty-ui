@@ -158,3 +158,29 @@ def test_activation_pair_rejects_static_value_and_mode_changes(generation) -> No
     static.chmod(0o600)
     with pytest.raises(ValueError, match="file mode"):
         verify_generations(current, output)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX secret generation contract")
+@pytest.mark.parametrize("fault", ["duplicate-field", "duplicate-role", "wrong-version", "extra-file", "bad-mode"])
+def test_native_generation_rejects_metadata_inventory_and_rolls_back(generation, fault):
+    current, tls, keycloak, output = generation
+    metadata = tls / KEY_METADATA_FILE
+    document = json.loads(metadata.read_text())
+    if fault == "duplicate-field":
+        metadata.write_text(metadata.read_text().replace('"schema":', '"schema": "ignored", "schema":', 1))
+    elif fault == "duplicate-role":
+        document["roles"][1] = document["roles"][0]
+        metadata.write_text(json.dumps(document))
+    elif fault == "wrong-version":
+        document["roles"][0]["version"] = 1.0
+        metadata.write_text(json.dumps(document))
+    elif fault == "extra-file":
+        (keycloak / "unexpected").write_bytes(b"public")
+    else:
+        # Sorts last, so native rollback must remove every earlier staged file.
+        (current / "zz_operator_static").write_bytes(b"keep")
+        (current / "zz_operator_static").chmod(0o777)
+    with pytest.raises(ValueError):
+        stage(current, tls, keycloak, output)
+    assert not list(output.iterdir())
+    assert (current / "optional_empty_secret").read_bytes() == b""

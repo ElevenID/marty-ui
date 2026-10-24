@@ -561,11 +561,6 @@ function VerificationSessionManager({ organizationId }) {
       >
         <DialogTitle>
           Session Details
-          {detailSession && (
-            <Typography variant="caption" display="block" color="text.secondary">
-              {detailSession.session_id}
-            </Typography>
-          )}
         </DialogTitle>
         <DialogContent>
           {detailSession && (
@@ -601,6 +596,14 @@ function VerificationSessionManager({ organizationId }) {
                 <br />
                 <Typography variant="caption" color="text.secondary">
                   Updated: {formatDate(detailSession.updated_at)}
+                </Typography>
+              </Box>
+              <Box component="details">
+                <Box component="summary" sx={{ cursor: 'pointer', typography: 'body2', color: 'text.secondary' }}>
+                  Session reference
+                </Box>
+                <Typography component="p" variant="caption" color="text.secondary" sx={{ mt: 1, overflowWrap: 'anywhere' }}>
+                  Session ID: {detailSession.session_id}
                 </Typography>
               </Box>
             </Box>

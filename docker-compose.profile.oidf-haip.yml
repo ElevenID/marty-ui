@@ -3,6 +3,11 @@
 # The certificate is public material for the issuer profile's KMS-backed key.
 # No private signing key is accepted by this overlay or the flow service.
 services:
+  signing-keys:
+    environment:
+      HAIP_KMS_TOKEN_FILE: /bao/haip-token/token
+    volumes:
+      - openbao_haip_token:/bao/haip-token:ro
   flow:
     environment:
       OID4VP_HAIP_ENABLED: "1"

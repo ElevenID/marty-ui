@@ -3282,7 +3282,7 @@ async fn issuance_create_handler(state: Arc<GatewayRuntimeState>, request: Reque
             HttpMethod::Put,
             &registration_path,
             registration,
-            BTreeMap::from([("x-api-key".into(), state.issuance_service_api_key.clone())]),
+            BTreeMap::new(),
         )
         .await
         {
@@ -6472,6 +6472,12 @@ mod tests {
                         "issuer_profile_id":"must-not-leak"
                     }))
                     .expect("presentation policy response")
+                }
+                "/v1/issuance/oid4vci-clients" => {
+                    assert_eq!(instance.service_name, issuance_native::NATIVE_SERVICE);
+                    assert_eq!(request.header("x-api-key"), Some("issuance-service-key"));
+                    serde_json::to_vec(&json!({"client_id": "official-wallet"}))
+                        .expect("client registration")
                 }
                 "/v1/issuance/initiate" => {
                     assert_eq!(request.header("x-api-key"), Some("issuance-service-key"));
@@ -9686,6 +9692,14 @@ mod tests {
                         serde_json::to_vec(&json!({
                             "organization_id": "org-1",
                             "credential_template_id": "template-1",
+                            "authorized_client": {
+                                "client_id": "official-wallet",
+                                "jwks": {"keys": [{
+                                    "kty": "EC", "crv": "P-256", "kid": "wallet-key",
+                                    "x": "f83OJ3D2xF4A9O2jZ8M7VJQYxqvR8K0K8qZ8K0K8qZ8",
+                                    "y": "x_FEzRu9G8K0K8qZ8K0K8qZ8K0K8qZ8K0K8qZ8K0K8q"
+                                }]}
+                            },
                             "claims": {"employee_id": "123"}
                         }))
                         .expect("request JSON"),

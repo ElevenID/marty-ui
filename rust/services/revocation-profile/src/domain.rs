@@ -128,6 +128,7 @@ pub enum CredentialFormat {
     SdJwtVc,
     Mdoc,
     VcJwt,
+    JsonLd,
 }
 
 impl CredentialFormat {
@@ -136,6 +137,7 @@ impl CredentialFormat {
             Self::SdJwtVc => "SD_JWT_VC",
             Self::Mdoc => "MDOC",
             Self::VcJwt => "VC_JWT",
+            Self::JsonLd => "JSON_LD",
         }
     }
 }

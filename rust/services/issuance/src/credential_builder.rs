@@ -669,31 +669,15 @@ fn data_integrity_document(
                 "credential_document cannot be combined with subject claims",
             ));
         }
+        marty_verification::vcdm::validate_vcdm_issuance_document_json(
+            &json!({"credential": document, "issuer_did": request.issuer.issuer_did}).to_string(),
+        )
+        .map_err(|code| signing_error(&code))?;
         let mut document = document
             .as_object()
             .filter(|document| !document.is_empty())
             .cloned()
             .ok_or_else(|| signing_error("credential_document must be a non-empty object"))?;
-        if document.contains_key("proof") {
-            return Err(signing_error("credential_document must be unsigned"));
-        }
-        let valid_context = document
-            .get("@context")
-            .and_then(Value::as_array)
-            .and_then(|context| context.first())
-            .and_then(Value::as_str)
-            == Some(VCDM_CONTEXT);
-        if !valid_context {
-            return Err(signing_error(
-                "credential_document must use the VCDM v2 base context first",
-            ));
-        }
-        if !has_type(&document, "VerifiableCredential") {
-            return Err(signing_error(
-                "credential_document type must include VerifiableCredential",
-            ));
-        }
-        validate_subject(document.get("credentialSubject"))?;
         match document.get("issuer").and_then(identifier) {
             None => {
                 document.insert("issuer".to_owned(), json!(request.issuer.issuer_did));
@@ -905,14 +889,6 @@ fn identifier(value: &Value) -> Option<&str> {
     value
         .as_str()
         .or_else(|| value.as_object()?.get("id")?.as_str())
-}
-
-fn has_type(document: &Map<String, Value>, expected: &str) -> bool {
-    match document.get("type") {
-        Some(Value::String(value)) => value == expected,
-        Some(Value::Array(values)) => values.iter().any(|value| value.as_str() == Some(expected)),
-        _ => false,
-    }
 }
 
 fn validate_subject(subject: Option<&Value>) -> Result<(), CredentialIssuanceError> {
@@ -1274,6 +1250,31 @@ mod tests {
                 "index": 7,
                 "status_list_uri": "https://issuer.example/status/1",
             })],
+        }
+    }
+
+    #[test]
+    fn unsigned_document_builder_preserves_shared_vcdm_rejections() {
+        let fixtures: Value =
+            serde_json::from_str(marty_verification::vcdm::issuance_behavior_fixture_json())
+                .unwrap();
+        for case in fixtures["document_cases"].as_array().unwrap() {
+            let mut request = request(CredentialBuilderKind::DataIntegrity);
+            request.issuer.issuer_did = case["issuer_did"]
+                .as_str()
+                .unwrap_or("did:web:issuer.example.test")
+                .to_owned();
+            request.credential_document = Some(case["credential"].clone());
+            if let Some(id) = case["credential"].get("id").and_then(Value::as_str) {
+                request.credential_id = id.to_owned();
+            }
+            let result = data_integrity_document(&request, Map::new(), None);
+            assert_eq!(
+                result.is_ok(),
+                case["expected_error"].is_null(),
+                "{}",
+                case["name"]
+            );
         }
     }
 
