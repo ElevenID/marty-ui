@@ -12,7 +12,6 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import provision_selfhost_ca_rotation_identity as rotation  # noqa: E402
-from selfhost_openbao_client import require_ca_rotation_authority  # noqa: E402
 
 
 def test_ca_policy_uses_exact_versioned_mounts_and_denies_other_authority() -> None:
@@ -39,27 +38,6 @@ def test_ca_policy_uses_exact_versioned_mounts_and_denies_other_authority() -> N
     bundle = json.loads((Path(__file__).resolve().parents[1] /
                          "deploy-config/bundles/selfhost.json").read_text(encoding="utf-8"))
     assert "scripts/provision_selfhost_ca_rotation_identity.py" in bundle["assets"]
-
-
-def test_replacement_issuer_rejects_ordinary_renewal_or_root_authority() -> None:
-    class Authority:
-        token = "scoped-token"
-
-        def __init__(self, policy: str, path: str) -> None:
-            self.policy, self.path = policy, path
-
-        def request(self, method: str, path: str, body: dict) -> dict:
-            assert (method, path, body) == (
-                "POST", "auth/token/lookup", {"token": self.token})
-            return {"data": {"policies": [self.policy], "path": self.path,
-                             "ttl": 7200}}
-
-    require_ca_rotation_authority(Authority("selfhost-kms-ca-rotation",
-                                            "auth/selfhost-ca-rotation/login"))
-    for policy, path in (("root", "auth/token/root"),
-                         ("selfhost-kms-renewal", "auth/selfhost-renew/login")):
-        with pytest.raises(ValueError, match="scoped AppRole"):
-            require_ca_rotation_authority(Authority(policy, path))
 
 
 def test_public_ca_certificate_verification_rejects_wrong_or_tampered_issuer() -> None:

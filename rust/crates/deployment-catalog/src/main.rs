@@ -263,6 +263,65 @@ fn run() -> Result<(), String> {
         use marty_deployment_catalog::operator::{self, REFUSAL};
         use std::io::{Read, Write};
         let result = match args.get(1).map(String::as_str) {
+            Some(
+                "ca-issuer" | "activation-certificates" | "activation-tokens" | "authority-check",
+            ) if args.len() == 4 => {
+                use marty_deployment_catalog::{activation_preflight as preflight, ca_issuer};
+                use std::{io::IsTerminal, path::Path, time::Duration};
+                if std::io::stdout().is_terminal() {
+                    return Err(REFUSAL.into());
+                }
+                let mut input = Vec::new();
+                std::io::stdin()
+                    .take(64 * 1024 + 1)
+                    .read_to_end(&mut input)
+                    .map_err(|_| REFUSAL)?;
+                if input.len() > 64 * 1024 {
+                    return Err(REFUSAL.into());
+                }
+                let context: Value = serde_json::from_slice(&input).map_err(|_| REFUSAL)?;
+                let bao = marty_openbao_http::OpenBaoHttp::connect(
+                    &args[2],
+                    Some(Path::new(&args[3])),
+                    Duration::from_secs(10),
+                )
+                .map_err(|_| REFUSAL)?;
+                let result = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .map_err(|_| REFUSAL)?
+                    .block_on(async {
+                        match args[1].as_str() {
+                            "ca-issuer" => ca_issuer::stage(&bao, &context).await,
+                            "activation-certificates" => preflight::certificates(&bao, &context)
+                                .await
+                                .map(|_| Value::Null),
+                            "activation-tokens" => {
+                                preflight::tokens(&bao, &context).await.map(|_| Value::Null)
+                            }
+                            _ => preflight::authority(
+                                &bao,
+                                context["token"].as_str().ok_or(REFUSAL)?,
+                                context["rotation"].as_bool().ok_or(REFUSAL)?,
+                            )
+                            .await
+                            .map(|_| Value::Null),
+                        }
+                    });
+                let value = match result {
+                    Ok(value) => serde_json::json!({"value":value}),
+                    Err(error) if error == ca_issuer::RECOVERY => return Err(error.into()),
+                    Err(error) => serde_json::json!({"error":error}),
+                };
+                let refusal = if args[1] == "ca-issuer" {
+                    ca_issuer::RECOVERY
+                } else {
+                    REFUSAL
+                };
+                let mut output = std::io::stdout().lock();
+                serde_json::to_writer(&mut output, &value).map_err(|_| refusal)?;
+                output.flush().map_err(|_| refusal)
+            }
             Some("generation") if args.len() == 2 => {
                 use marty_deployment_catalog::generation;
                 use std::io::IsTerminal;
@@ -664,6 +723,7 @@ fn main() {
             marty_deployment_catalog::approle::CLEANUP_ROTATION,
             marty_deployment_catalog::approle::CLEANUP_REFRESH,
             marty_deployment_catalog::keycloak::RECOVERY,
+            marty_deployment_catalog::ca_issuer::RECOVERY,
         ]
         .contains(&error.as_str())
         {

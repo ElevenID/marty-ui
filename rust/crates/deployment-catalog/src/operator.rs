@@ -6,6 +6,18 @@ use std::io::{Read, Seek};
 pub const REFUSAL: &str = "KMS operator input refused";
 pub type Result<T> = std::result::Result<T, &'static str>;
 
+/// Fixed-version remote signers must not acquire export/backup authority.
+pub(crate) fn version_one_custody(metadata: &serde_json::Value, kind: &str) -> Result<()> {
+    if metadata["type"] != kind
+        || metadata["exportable"] != false
+        || metadata["allow_plaintext_backup"] != false
+        || metadata["latest_version"].as_u64() != Some(1)
+    {
+        return Err(REFUSAL);
+    }
+    Ok(())
+}
+
 /// Decode OpenBao's canonical, public-only Ed25519 value as standard SPKI.
 pub fn ed25519_spki(encoded: &str) -> Result<Vec<u8>> {
     use base64::{engine::general_purpose::STANDARD, Engine};

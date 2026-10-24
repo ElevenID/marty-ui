@@ -25,6 +25,31 @@ and the separate overlap/retirement ceremonies. Failure removes only files
 created by that attempt; an unconfirmed rollback is reported for recovery.
 Assembly does not activate a generation or retire the independent release checks.
 
+Replacement-issuer staging and the live authority/token/certificate preflight
+also run in Rust. The Python activation, renewal-bootstrap and root-retirement
+entrypoints retain their arguments and consume the same closed native checks.
+The deployed Python inventory is checked against the compiled operator's actual
+preflight traversal in HTTPS acceptance tests; adding a workload or token must
+extend both inventories before qualification passes.
+
+`stage-issuer` retains its create-or-resume behavior for workload/Keycloak PKI
+versions 2 through 8. It authenticates the scoped CA-rotation identity, verifies
+the exact mount lifetime, internal P-256 root profile, mounted-certificate bytes
+and 300-day expiry, and writes one exclusively created 0600 public certificate.
+Only reviewed 400/404 CA-read responses permit creating a missing issuer;
+malformed existing issuer metadata is refused. A post-login failure or uncertain
+delivery returns exit 3. Inspect the named mount and output before retrying;
+after a lost generation response a validated existing issuer is resumed rather
+than regenerated. Remote state is not claimed to be rolled back.
+
+Activation still requires actual version-one signing or JWE-read proofs under
+each scoped leaf token, exact policy text and the requested orphan lineage.
+It binds both generations' certificates to non-exportable remote keys and the
+correct issuer for ordinary renewal, overlap or retirement. Retirement can omit
+old-issuer validity checks only while both generations use the replacement
+issuer. Compose recreation, deployment ownership checks, rollback and reports
+remain in the existing Python owner; no preflight command performs cutover.
+
 After the initial KMS-only installation, use
 `scripts/provision_selfhost_renewal_identity.py --mode bootstrap` once with
 the existing private generation, HTTPS OpenBao CA, and the bootstrap root

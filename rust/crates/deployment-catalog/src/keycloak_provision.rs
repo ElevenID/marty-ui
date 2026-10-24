@@ -53,34 +53,7 @@ pub async fn provision(bao: &OpenBaoHttp, context: &Value) -> Result<Value> {
         return Err(REFUSAL);
     }
     if renew {
-        let authority = request(
-            bao,
-            Method::POST,
-            "auth/token/lookup",
-            Some(&json!({"token":token})),
-            Some(token),
-        )
-        .await?;
-        let data = &authority["data"];
-        let rotation = mount != "keycloak-pki";
-        let policy = if rotation {
-            "selfhost-kms-ca-rotation"
-        } else {
-            "selfhost-kms-renewal"
-        };
-        let path = if rotation {
-            "auth/selfhost-ca-rotation/login"
-        } else {
-            "auth/selfhost-renew/login"
-        };
-        if data["policies"] != json!([policy])
-            || data["path"] != path
-            || !data["ttl"]
-                .as_u64()
-                .is_some_and(|ttl| (3600..=28800).contains(&ttl))
-        {
-            return Err(REFUSAL);
-        }
+        crate::activation_preflight::authority(bao, token, mount != "keycloak-pki").await?;
     }
     let mounts = request(bao, Method::GET, "sys/mounts", None, Some(token)).await?;
     let mounts = mounts["data"].as_object().ok_or(REFUSAL)?;
@@ -187,13 +160,7 @@ pub async fn provision(bao: &OpenBaoHttp, context: &Value) -> Result<Value> {
             )
             .await?;
             let data = &metadata["data"];
-            if data["type"] != kind
-                || data["exportable"] != false
-                || data["allow_plaintext_backup"] != false
-                || data["latest_version"].as_u64() != Some(1)
-            {
-                return Err(REFUSAL);
-            }
+            crate::operator::version_one_custody(data, kind)?;
         }
         let csr = request(
             bao,

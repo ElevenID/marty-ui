@@ -31,10 +31,30 @@ pub(crate) async fn request(
     body: Option<&Value>,
     token: Option<&str>,
 ) -> Result<Value> {
-    let mut response = builder(bao, method, path, body, token)
+    let response = builder(bao, method, path, body, token)
         .send()
         .await
         .map_err(|_| REFUSAL)?;
+    json_response(response).await
+}
+
+/// A CA may be absent only for OpenBao's reviewed 400/404 read responses.
+pub(crate) async fn optional_ca(
+    bao: &OpenBaoHttp,
+    path: &str,
+    token: &str,
+) -> Result<Option<Value>> {
+    let response = builder(bao, Method::GET, path, None, Some(token))
+        .send()
+        .await
+        .map_err(|_| REFUSAL)?;
+    if [StatusCode::BAD_REQUEST, StatusCode::NOT_FOUND].contains(&response.status()) {
+        return Ok(None);
+    }
+    json_response(response).await.map(Some)
+}
+
+async fn json_response(mut response: reqwest::Response) -> Result<Value> {
     if !response.status().is_success() {
         return Err(REFUSAL);
     }

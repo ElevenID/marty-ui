@@ -75,31 +75,6 @@ def bootstrap(bao: Bao, current: Path, output: Path) -> None:
     approle_operation(bao, "bootstrap", "renewal", output, names=names)
 
 
-def verify_denials(bao: Bao, token: str) -> None:
-    probes = (
-        ("GET", "transit/keys/foreign-keycloak-selfhost", None),
-        ("POST", "auth/token/create", {"ttl": "invalid"}),
-        ("PUT", "sys/policies/acl/selfhost-renewal-forbidden-probe",
-         {"policy": "invalid policy"}),
-        ("POST", "sys/mounts/selfhost-renewal-forbidden-probe",
-         {"type": "not-an-engine"}),
-    )
-    for method, path, body in probes:
-        try:
-            bao.request(method, path, body, token=token)
-        except HTTPError as error:
-            if error.code == 403:
-                continue
-        raise ValueError("renewal operator exceeded its reviewed authority")
-
-
-def verified_operator_policy(bao: Bao, token: str, names: list[str]) -> None:
-    actual = bao.request("GET", f"sys/policies/acl/{OPERATOR_POLICY}",
-                         token=token).get("data", {}).get("policy")
-    if actual != operator_acl(names):
-        raise ValueError("renewal operator policy drifted from reviewed authority")
-
-
 def checked_login(bao: Bao, identity: Path) -> tuple[str, str, list[str], str]:
     result = approle_operation(bao, "login", "renewal", identity)
     return result["role_id"], result["secret_id"], result["names"], result["token"]

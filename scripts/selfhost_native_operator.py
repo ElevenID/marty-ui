@@ -16,7 +16,8 @@ class OperatorCleanupError(RuntimeError):
         if message not in {"AppRole bootstrap cleanup is incomplete", "AppRole leaf cleanup is unconfirmed",
                            "AppRole rotation requires operator recovery",
                            "Scoped token refresh requires operator recovery",
-                           "Keycloak provisioning requires operator recovery"}:
+                           "Keycloak provisioning requires operator recovery",
+                           "CA issuer staging requires operator recovery"}:
             message = "Rust operator cleanup is unconfirmed"
         super().__init__(message)
 
@@ -73,13 +74,15 @@ def operator_bytes(root: Path, *args: str, input: bytes | None = None) -> bytes:
     # Native requests remain individually bounded. Do not kill a mutating
     # transaction while it is revoking a leaf or rolling back remote authority.
     timeout = None if args[1:2] in (("export-snapshot",), ("approle-bootstrap",), ("approle-mint",),
-                                  ("approle-rotate",), ("approle-retire",), ("leaf-refresh",), ("keycloak-token",), ("keycloak-provision",)) else 300
+                                  ("approle-rotate",), ("approle-retire",), ("leaf-refresh",), ("keycloak-token",), ("keycloak-provision",), ("ca-issuer",)) else 300
     if os.environ.get("MARTY_DEPLOY_BIN", "").strip() and args[1:2] in (("public-spki",), ("certificate-spki",), ("ed25519-spki",),
                                                                  ("certificate-lifetime",), ("certificate-chain",),
                                                                  ("certificate-expiry",), ("replacement-ca",)):
         timeout = 10
     result = subprocess.run(operator_command(root, *args), input=input,
                             capture_output=True, check=False, timeout=timeout)
+    if args[1:2] == ("ca-issuer",) and result.returncode not in (0, 1, 3):
+        raise OperatorCleanupError("CA issuer staging requires operator recovery")
     if args[1:2] in (("keycloak-token",), ("keycloak-provision",)) and result.returncode not in (0, 1, 3):
         # Native exit 1 is an intentional pre-mint refusal. A crash, signal or
         # unexpected exit cannot prove that token creation did not happen.
@@ -131,6 +134,25 @@ def generation_operation(operation: str, **context):
                                       input=json.dumps({"operation": operation, **context}).encode()))
     if not isinstance(result, dict) or set(result) not in ({"value"}, {"error"}):
         raise ValueError("Rust generation response is invalid")
+    if "error" in result:
+        raise ValueError(result["error"])
+    return result["value"]
+
+
+def network_operation(bao, operation: str, **context):
+    try:
+        result = json.loads(operator_bytes(
+            Path(__file__).resolve().parents[1], "operator", operation, bao.endpoint, str(bao.ca),
+            input=json.dumps({"token": bao.token, **context}).encode(),
+        ))
+    except (ValueError, UnicodeError) as error:
+        if operation == "ca-issuer":
+            raise OperatorCleanupError("CA issuer staging requires operator recovery") from error
+        raise ValueError("native preflight response is invalid") from error
+    if not isinstance(result, dict) or set(result) not in ({"value"}, {"error"}):
+        if operation == "ca-issuer":
+            raise OperatorCleanupError("CA issuer staging requires operator recovery")
+        raise ValueError("native preflight response is invalid")
     if "error" in result:
         raise ValueError(result["error"])
     return result["value"]
