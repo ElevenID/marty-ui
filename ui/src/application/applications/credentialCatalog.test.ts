@@ -68,6 +68,8 @@ describe('credentialCatalog helpers', () => {
       description: 'Open Badge 3.0 membership badge for passwordless login/sign-in with your wallet.',
       claims: [{ name: 'email', required: true }, { name: 'role', required: true }],
       status: 'ACTIVE',
+      credential_payload_format: 'SD_JWT_VC',
+      issuance_protocol: 'OID4VCI_PRE_AUTH',
     }, 'Acme');
 
     expect(catalogItem).toMatchObject({
@@ -76,9 +78,9 @@ describe('credentialCatalog helpers', () => {
       credentialType: 'open_badge',
       category: 'identity',
       requirements: ['email', 'role'],
-      format: 'vc+sd-jwt',
-      standard: '1EdTech Open Badges 3.0',
-      worksWithLabel: 'Web & VC wallets',
+      format: 'SD-JWT VC',
+      issuanceProtocol: 'OID4VCI_PRE_AUTH',
+      walletRequirements: 'Wallet support required: SD-JWT VC with OID4VCI_PRE_AUTH.',
       available: true,
       searchAliases: expect.arrayContaining(['open badge login', 'achievement credential']),
     });
@@ -87,6 +89,35 @@ describe('credentialCatalog helpers', () => {
       searchTerm: 'open badge login',
       categoryFilter: 'all',
     })).toEqual([catalogItem]);
+  });
+
+  it('uses the API format, required claims and actual lifetime even when the type suggests another wallet', () => {
+    const item = mapCredentialTemplateToCatalogItem({ id: 'actual', name: 'Tenant membership',
+      credential_type: 'org.iso.18013.5.1.mDL', credential_payload_format: 'SD_JWT_VC',
+      issuance_protocol: 'OID4VCI_PRE_AUTH', claims: [{ name: 'member_id', required: true, display: { label: 'Member ID' } }],
+      validity_rules: { ttl_seconds: 86400, default_validity_days: 999 }, status: 'ACTIVE' });
+    expect(item).toMatchObject({ description: 'Tenant membership', format: 'SD-JWT VC',
+      requirements: ['Member ID'], validityLabel: '1 day', issuanceProtocol: 'OID4VCI_PRE_AUTH' });
+    expect(item.standard).toBeNull();
+    expect(item.worksWithLabel).toBeUndefined();
+    expect(item.processingTime).toBeUndefined();
+    expect(JSON.stringify(item)).not.toMatch(/Apple|Google|Instant|business days/);
+  });
+
+  it.each([undefined, 0, -1, '86400', NaN])('does not invent missing requirements or lifetime for ttl_seconds=%s', (ttl_seconds) => {
+    const item = mapCredentialTemplateToCatalogItem({ id: 'sparse', name: 'Passport', credential_type: 'passport',
+      claims: [], validity_rules: { ttl_seconds }, status: 'ACTIVE' });
+    expect(item).toMatchObject({ description: 'Passport', requirements: [], format: null,
+      standard: null, issuanceProtocol: null, walletRequirements: null, validityLabel: null });
+    expect(item.processingTime).toBeUndefined();
+  });
+
+  it('keeps physical document configuration distinct from wallet requirements', () => {
+    expect(mapCredentialTemplateToCatalogItem({ id: 'physical', name: 'Passport',
+      credential_type: 'passport', credential_payload_format: 'ICAO_EMRTD', issuance_protocol: 'PHYSICAL_DOCUMENT',
+      validity_rules: { ttl_seconds: 3600 }, claims: [] })).toMatchObject({
+      format: 'ICAO_EMRTD', issuanceProtocol: 'PHYSICAL_DOCUMENT', walletRequirements: null, validityLabel: '3600 seconds',
+    });
   });
 
   it('extracts existing application ids and filters credentials', () => {
