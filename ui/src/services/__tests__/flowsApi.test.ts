@@ -4,6 +4,7 @@ import { server } from '@test/mocks/server'
 
 import {
   createFlow,
+  advanceFlowInstance,
   getFlowInstance,
   listFlowInstances,
   listFlows,
@@ -12,6 +13,24 @@ import {
 } from '../flowsApi'
 
 describe('flowsApi', () => {
+  it('records only the native step outcome and scopes detail requests explicitly', async () => {
+    let payload: any; let organization: string | null = null;
+    server.use(
+      http.get('http://localhost:8000/v1/flows/instances/exec-1', ({ request }) => {
+        organization = new URL(request.url).searchParams.get('organization_id');
+        return HttpResponse.json({ id: 'exec-1', organization_id: 'org-1' });
+      }),
+      http.post('http://localhost:8000/v1/flows/instances/exec-1/advance', async ({ request }) => {
+        payload = await request.json(); return HttpResponse.json({ id: 'exec-1', status: 'COMPLETED' });
+      }),
+    );
+    await getFlowInstance('exec-1', { organizationId: 'org-1' });
+    expect(organization).toBe('org-1');
+    await advanceFlowInstance('exec-1', 'success');
+    expect(payload).toEqual({ step_result: 'success', data: {} });
+    await expect(advanceFlowInstance('exec-1', 'invented')).rejects.toThrow();
+    await expect(getFlowInstance('exec-1', { organizationId: '' })).rejects.toThrow();
+  });
   it('creates flows with organization context and an idempotency key', async () => {
     let requestBody: any
     let idempotencyKey: string | null = null

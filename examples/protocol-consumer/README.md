@@ -46,6 +46,10 @@ This command first reads the public `/v1/protocol-support` catalog without crede
 
 For API-key composition checks, grant `trust:read` (trust, presentation policy and revocation profile), `templates:read`, `compliance:read`, `deployment:read`, `flows:read`, and `users:read` (organization runtime status) in the selected organization. Corresponding writer scopes can also authorize reads. Revocation-profile discovery does not grant credential-revocation authority. Bearer sessions need the corresponding organization read permissions.
 
+`flows:read` authorizes Flow Definition metadata used by composition. Native Flow Instance reads, results, artifacts and controls require `flows:execute` or `flows:write`; artifacts can include wallet invitations. A metadata-only composition key therefore cannot inspect or change runtime executions.
+
+The console exposes confirmed step-outcome recording with `flow-instance:advance` and execution cancellation with `flow-instance:cancel`. It re-reads the selected organization's current execution before posting the native outcome and requires refresh after an error or changed step. An operator-recorded step result is separate from credential verification. Wallet acceptance notifications do not automatically advance the flow. Cancelling an execution leaves credential offers and issued credentials under their separate native lifecycles.
+
 The `issue` command uses the VC-API Data Integrity adapter. Select an active `JSON_LD` (VCDM v2 Data Integrity) template and compatible public issuer DID. Save an unsigned VCDM v2 credential object matching that template's claims to `credential.json`, then issue it:
 
 ```powershell
