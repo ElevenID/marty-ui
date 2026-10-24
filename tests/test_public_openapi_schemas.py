@@ -196,3 +196,33 @@ def test_native_compliance_schemas_match_http_bound_examples_and_reject_nested_d
     value["api_surface"][0]["standard_ref"] = {"private_key": "secret"}
     with pytest.raises(jsonschema.ValidationError):
         response.validate(value)
+
+
+def test_derived_wallet_schema_matches_owner_example_and_rejects_nested_drift():
+    schema = json.loads((ROOT / "contracts/wallet-compatibility-response.json").read_text())
+    value = json.loads((ROOT / "contracts/wallet-compatibility-example.json").read_text())
+    validator = jsonschema.Draft202012Validator(schema, format_checker=jsonschema.FormatChecker())
+    validator.validate(value)
+    override = {
+        **value, "id": "override-1", "organization_id": "org-1", "is_override": True,
+        "override_precedence": 85, "merge_strategy": "REPLACE", "applied_override_ids": ["override-1"],
+        "template_wallet_configs": [{"wallet_id": "wallet-1", "deep_link_scheme": "campus://", "format_variant": "dc+sd-jwt"}],
+    }
+    validator.validate(override)
+    for path, field, invalid in [
+        ([], "verified", True),
+        ([], "wallet_apps", [17]),
+        ([], "merge_strategy", "MERGE"),
+        ([], "organization_id", None),
+        ([], "updated_at", "not-a-time"),
+        (["derived_from"], "key_reference", "private"),
+        (["template_wallet_configs", 0], "signing_service_id", "private"),
+        (["template_wallet_configs", 0], "deep_link_scheme", None),
+    ]:
+        mutated = deepcopy(override)
+        target = mutated
+        for segment in path:
+            target = target[segment]
+        target[field] = invalid
+        with pytest.raises(jsonschema.ValidationError):
+            validator.validate(mutated)

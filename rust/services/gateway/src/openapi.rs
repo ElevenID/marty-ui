@@ -29,6 +29,10 @@ pub fn schemas() -> Value {
         "../../../../contracts/issuer-identity-inspection-response.json"
     ))
     .expect("public identity inspection schema");
+    schemas["runtime__wallet_compatibility"] = serde_json::from_str(include_str!(
+        "../../../../contracts/wallet-compatibility-response.json"
+    ))
+    .expect("native derived wallet compatibility schema");
     let compliance: Value = serde_json::from_str(include_str!(
         "../../../../contracts/compliance-profile-http-schemas.json"
     ))
@@ -54,6 +58,65 @@ fn schema(name: &str) -> Value {
 
 pub fn describe_operation(operation: &mut Value, method: HttpMethod, path: &str, status: u16) {
     use HttpMethod::{Get, Patch, Post};
+    if method == Get
+        && matches!(
+            path,
+            "/v1/credential-templates/{template_id}/wallet-compatibility"
+                | "/v1/wallet-registry/resolve/profile"
+        )
+    {
+        let template = path.ends_with("/wallet-compatibility");
+        operation["summary"] = json!("Read derived wallet requirements and applied overrides");
+        operation["description"] = json!(if template {
+            "Requires credential-template:view in the owning template's organization. Resolves only the primary credential format, issuance protocol and compliance key, plus matching registry overrides. Additional declared formats are not covered by this response. Physical documents have no wallet profile. Configuration only: wallet applications, platforms and specifications are not independently verified interoperability or delivery evidence."
+        } else {
+            "Requires wallet:view in the selected organization. Derives configuration from the supplied tuple plus matching organization registry overrides; it does not load or validate a credential template. Unknown tuples may return generic fallback requirements. Physical documents have no wallet profile. Registry entries and derived wallet names do not prove interoperability or successful delivery."
+        });
+        if !template {
+            let mut parameters: Vec<Value> =
+                ["organization_id", "credential_format", "issuance_protocol"]
+                    .map(|name| {
+                        query_parameter(
+                            name,
+                            "Derivation input in the selected authorized organization.",
+                        )
+                    })
+                    .into();
+            let mut code = query_parameter(
+                "compliance_profile_code",
+                "Optional compliance derivation key; not a template ID.",
+            );
+            code["required"] = json!(false);
+            parameters.push(code);
+            operation["parameters"] = json!(parameters);
+        }
+        for (code, description) in [
+            (400, "Malformed or missing query parameters."),
+            (401, "Authentication required."),
+            (
+                403,
+                "Selected organization membership and route permission required.",
+            ),
+            (404, "Credential template or resource owner not found."),
+            (
+                422,
+                "Invalid template configuration or physical document; no wallet profile applies.",
+            ),
+            (502, "Required upstream returned an invalid response."),
+            (
+                503,
+                "Template, registry or authorization dependency unavailable.",
+            ),
+        ] {
+            operation["responses"][code.to_string()] = json!({"description":description});
+        }
+        operation["responses"]["200"]["content"] = json!({"application/json":{"schema":{"$ref":"#/components/schemas/runtime__wallet_compatibility"},"example":serde_json::from_str::<Value>(include_str!("../../../../contracts/wallet-compatibility-example.json")).expect("wallet example")}});
+        operation["x-marty-protocol-support"] = json!("derived");
+        operation["x-marty-protocol-schema"] = schema("wallet-profile");
+        operation["x-marty-request-schema-documented"] = json!(true);
+        operation["x-marty-response-schema-documented"] = json!(true);
+        return;
+    }
     if matches!(
         path,
         "/v1/compliance-profiles"
@@ -451,6 +514,51 @@ mod tests {
             }
         }
     }
+    #[test]
+    fn wallet_requirements_document_native_projection_and_derived_scope() {
+        let document = crate::contract::GatewayContract::load()
+            .unwrap()
+            .openapi_document("test");
+        for path in [
+            "/v1/credential-templates/{template_id}/wallet-compatibility",
+            "/v1/wallet-registry/resolve/profile",
+        ] {
+            let operation = &document["paths"][path]["get"];
+            assert_eq!(operation["x-marty-protocol-support"], "derived");
+            assert_eq!(
+                operation["responses"]["200"]["content"]["application/json"]["schema"]["$ref"],
+                "#/components/schemas/runtime__wallet_compatibility"
+            );
+            assert!(operation.get("requestBody").is_none());
+            assert!(operation["responses"]["403"].is_object());
+            assert!(operation["responses"]["422"].is_object());
+        }
+        let parameters = document["paths"]["/v1/wallet-registry/resolve/profile"]["get"]
+            ["parameters"]
+            .as_array()
+            .unwrap();
+        for name in ["organization_id", "credential_format", "issuance_protocol"] {
+            assert!(parameters
+                .iter()
+                .any(|parameter| parameter["name"] == name && parameter["required"] == true));
+        }
+        assert!(parameters
+            .iter()
+            .any(|parameter| parameter["name"] == "compliance_profile_code"
+                && parameter["required"] == false));
+        let response = &document["components"]["schemas"]["runtime__wallet_compatibility"];
+        assert_eq!(response["additionalProperties"], false);
+        assert_eq!(
+            response["properties"]["derived_from"]["additionalProperties"],
+            false
+        );
+        assert_eq!(
+            response["properties"]["template_wallet_configs"]["items"]["additionalProperties"],
+            false
+        );
+        assert!(response["properties"].get("verified").is_none());
+    }
+
     #[test]
     fn compliance_http_operations_use_actual_owner_schemas_and_explicit_partial_support() {
         let document = crate::contract::GatewayContract::load()

@@ -8333,9 +8333,9 @@ mod tests {
         );
     }
 
-    struct ComplianceMembership(&'static str);
+    struct SingleGrantMembership(&'static str);
     #[async_trait]
-    impl OrganizationMembershipProvider for ComplianceMembership {
+    impl OrganizationMembershipProvider for SingleGrantMembership {
         async fn get_membership(
             &self,
             user_id: &str,
@@ -8432,7 +8432,7 @@ mod tests {
             let recorder = Arc::new(ActorRecordingUpstream::default());
             let mut state = runtime_state_with_upstream(Arc::new(NoOwner), recorder.clone());
             let owned = Arc::get_mut(&mut state).unwrap();
-            owned.memberships = Arc::new(ComplianceMembership(permission));
+            owned.memberships = Arc::new(SingleGrantMembership(permission));
             owned.owners = Arc::new(ScriptedOwner(Some(owner.into())));
             let mut request = Request::builder()
                 .method(method)
@@ -8455,6 +8455,141 @@ mod tests {
             if expected == StatusCode::OK {
                 assert_eq!(calls[0].0, "compliance-profiles");
                 assert_eq!(calls[0].1.header("x-user-id"), Some("user-1"));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn delivery_destinations_enforce_integration_grants_and_resource_owner_before_proxy() {
+        for (method, path, permission, owner, authenticated, expected) in [
+            (
+                "GET",
+                "/v1/delivery-destinations?organization_id=org-1",
+                "wallet:view",
+                "org-1",
+                false,
+                StatusCode::UNAUTHORIZED,
+            ),
+            (
+                "GET",
+                "/v1/delivery-destinations?organization_id=org-other",
+                "wallet:view",
+                "org-1",
+                true,
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                "GET",
+                "/v1/delivery-destinations?organization_id=org-1",
+                "integration-connector:view",
+                "org-1",
+                true,
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                "GET",
+                "/v1/delivery-destinations?organization_id=org-1",
+                "wallet:view",
+                "org-1",
+                true,
+                StatusCode::OK,
+            ),
+            (
+                "POST",
+                "/v1/delivery-destinations",
+                "wallet:view",
+                "org-1",
+                true,
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                "POST",
+                "/v1/delivery-destinations",
+                "integration-connector:create",
+                "org-1",
+                true,
+                StatusCode::OK,
+            ),
+            (
+                "PATCH",
+                "/v1/delivery-destinations/destination-one",
+                "wallet:view",
+                "org-1",
+                true,
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                "PATCH",
+                "/v1/delivery-destinations/destination-one",
+                "integration-connector:create",
+                "org-1",
+                true,
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                "PATCH",
+                "/v1/delivery-destinations/destination-one",
+                "integration-connector:edit",
+                "org-other",
+                true,
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                "PATCH",
+                "/v1/delivery-destinations/destination-one",
+                "integration-connector:edit",
+                "org-1",
+                true,
+                StatusCode::OK,
+            ),
+            (
+                "DELETE",
+                "/v1/delivery-destinations/destination-one",
+                "integration-connector:edit",
+                "org-1",
+                true,
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                "DELETE",
+                "/v1/delivery-destinations/destination-one",
+                "integration-connector:delete",
+                "org-1",
+                true,
+                StatusCode::OK,
+            ),
+        ] {
+            let recorder = Arc::new(ActorRecordingUpstream::default());
+            let mut state = runtime_state_with_upstream(Arc::new(NoOwner), recorder.clone());
+            let owned = Arc::get_mut(&mut state).unwrap();
+            owned.memberships = Arc::new(SingleGrantMembership(permission));
+            owned.owners = Arc::new(ScriptedOwner(Some(owner.into())));
+            let mut request = Request::builder()
+                .method(method)
+                .uri(path)
+                .header("content-type", "application/json");
+            if authenticated {
+                request = request.header("cookie", "sessionId=valid");
+            }
+            let response = gateway_router(state)
+                .oneshot(
+                    request
+                        .body(Body::from(r#"{"organization_id":"org-1"}"#))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                expected,
+                "{method} {path} {permission} {owner}"
+            );
+            let calls = recorder.0.lock().unwrap();
+            assert_eq!(calls.len(), usize::from(expected == StatusCode::OK));
+            if expected == StatusCode::OK {
+                assert_eq!(calls[0].0, "credential-templates");
+                assert_eq!(calls[0].1.header("x-user-id"), Some("user-1"));
+                assert_eq!(calls[0].1.header("x-organization-id"), Some("org-1"));
             }
         }
     }

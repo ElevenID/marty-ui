@@ -1,4 +1,4 @@
-"""Executable public Marty DID inspection and VC-API examples; standard library only."""
+"""Executable public Marty profile, DID inspection and VC-API examples; standard library only."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 import sys
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode, urlsplit
+from urllib.parse import quote, urlencode, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 
@@ -29,6 +29,10 @@ def main() -> int:
     parser.add_argument("--output", type=Path, help="Write response JSON as UTF-8")
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("schema", help="Fetch the canonical gateway OpenAPI document")
+    wallet = commands.add_parser(
+        "wallet-profile", help="Read a template's derived wallet requirements and overrides"
+    )
+    wallet.add_argument("--template-id", required=True)
     issue = commands.add_parser(
         "issue", help="Issue through an authorized template and public DID"
     )
@@ -73,13 +77,17 @@ def main() -> int:
         headers.update(
             {"X-API-Key": key} if key else {"Authorization": f"Bearer {bearer}"}
         )
-        if args.command != "inspect":
+        if args.command in {"issue", "verify"}:
             try:
                 credential = json.loads(args.credential.read_text(encoding="utf-8"))
             except (OSError, ValueError):
                 parser.error("credential must be a readable JSON file")
         query = {"organization_id": args.organization_id}
-        if args.command == "inspect":
+        if args.command == "wallet-profile":
+            if not args.template_id.strip():
+                parser.error("a credential template ID is required")
+            path = f"/v1/credential-templates/{quote(args.template_id, safe='')}/wallet-compatibility"
+        elif args.command == "inspect":
             if not args.issuer_did.startswith("did:"):
                 parser.error("inspection requires a public issuer DID")
             query.update(

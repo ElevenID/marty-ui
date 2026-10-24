@@ -19,7 +19,6 @@ import FolderSharedIcon from '@mui/icons-material/FolderShared';
 import StorefrontIcon from '@mui/icons-material/Storefront';
 import SettingsIcon from '@mui/icons-material/Settings';
 import DesignServicesIcon from '@mui/icons-material/DesignServices';
-import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutlined';
 import IntegrationInstructionsIcon from '@mui/icons-material/IntegrationInstructions';
 
 /**
@@ -124,7 +123,7 @@ export const ADMIN_VENDOR_NAV = [
       { id: 'canvas-integrations', label: 'Canvas', path: '/console/org/deploy/canvas' },
       { id: 'api-keys', label: 'API Keys', path: '/console/org/api-keys', requiredPermission: { resource: 'api-key', action: 'view' } },
       { id: 'webhooks', label: 'Webhooks', path: '/console/org/webhooks', requiredPermission: { resource: 'webhook', action: 'view' } },
-      { id: 'delivery-destinations', label: 'Delivery Destinations', path: '/console/org/connect/delivery-destinations', requiredPermission: { resource: 'delivery-destination', action: 'view' } },
+      { id: 'delivery-destinations', label: 'Delivery Destinations', path: '/console/org/connect/delivery-destinations', requiredPermission: { resource: 'wallet', action: 'view' } },
     ],
   },
   {

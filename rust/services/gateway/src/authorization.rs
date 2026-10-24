@@ -216,6 +216,18 @@ static SPECIAL_RULES: LazyLock<Vec<RouteRule>> = LazyLock::new(|| {
             "verification",
         ),
         rule(
+            r"^/v1/delivery-destinations(?:/[^/]+)?$",
+            &[
+                ("GET", "wallet:view"),
+                ("HEAD", "wallet:view"),
+                ("OPTIONS", "wallet:view"),
+                ("POST", "integration-connector:create"),
+                ("PATCH", "integration-connector:edit"),
+                ("DELETE", "integration-connector:delete"),
+            ],
+            "delivery-destination",
+        ),
+        rule(
             r"^/v1/wallet-registry(?:/|$)",
             &[
                 ("GET", "wallet:view"),
@@ -860,6 +872,11 @@ pub fn resolve_resource_lookup(path: &str) -> Option<ResourceLookup> {
             "/v1/wallet-registry/{id}",
             &["resolve"],
         ),
+        "delivery-destinations" => (
+            "credential-templates",
+            "/v1/delivery-destinations/{id}",
+            &[],
+        ),
         // Notification resources deliberately require an explicit authorized
         // organization selector; unscoped owner lookup is unsafe here.
         "webhooks" | "subscriptions" | "notifications" => return None,
@@ -976,6 +993,40 @@ mod tests {
             "../../../../contracts/gateway-authorization-behavior.json"
         ))
         .expect("valid gateway authorization contract")
+    }
+
+    #[test]
+    fn delivery_grants_exist_in_the_organization_catalog_and_keep_api_key_reads_separate() {
+        let catalog: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../contracts/organization-permission-catalog.json"
+        ))
+        .unwrap();
+        for (method, permission) in [
+            ("GET", "wallet:view"),
+            ("POST", "integration-connector:create"),
+            ("PATCH", "integration-connector:edit"),
+            ("DELETE", "integration-connector:delete"),
+        ] {
+            let required =
+                resolve_action(method, "/v1/delivery-destinations/destination-one").unwrap();
+            assert_eq!(required.permission, permission);
+            assert!(catalog["permissions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|item| format!(
+                    "{}:{}",
+                    item["resource"].as_str().unwrap(),
+                    item["action"].as_str().unwrap()
+                ) == permission));
+        }
+        assert!(api_key_allowed("wallet:view", &["wallet:read".into()]));
+        for action in ["create", "edit", "delete"] {
+            let permission = format!("integration-connector:{action}");
+            assert!(!api_key_allowed(&permission, &["wallet:read".into()]));
+            assert!(!api_key_allowed(&permission, &["integrations:read".into()]));
+            assert!(api_key_allowed(&permission, &["integrations:write".into()]));
+        }
     }
 
     #[test]

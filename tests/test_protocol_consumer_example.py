@@ -30,6 +30,8 @@ def api():
                     / "contracts/issuer-identity-inspection-example.json"
                 )
                 self.wfile.write(example.read_bytes())
+            elif urlsplit(self.path).path.endswith("/wallet-compatibility"):
+                self.wfile.write((SCRIPT.parents[2] / "contracts/wallet-compatibility-example.json").read_bytes())
             else:
                 self.wfile.write(b'{"openapi":"3.1.0"}')
 
@@ -104,6 +106,18 @@ def test_example_inspects_an_exact_public_tuple_with_read_authority(api):
         json.loads(result.stdout)["canonical_document_url"]
         == "https://issuer.example/orgs/acme/did.json"
     )
+
+
+def test_example_reads_a_scoped_template_wallet_profile_without_a_credential_file(api):
+    base, requests = api
+    result = run(base, "--organization-id", "org-1", "wallet-profile", "--template-id", "template/with space")
+    assert result.returncode == 0, result.stderr
+    path, headers, body = requests[-1]
+    assert urlsplit(path).path == "/v1/credential-templates/template%2Fwith%20space/wallet-compatibility"
+    assert parse_qs(urlsplit(path).query) == {"organization_id": ["org-1"]}
+    assert headers["X-Api-Key"] == "example-test-credential"
+    assert body is None
+    assert json.loads(result.stdout)["derived_from"]["credential_format"] == "SD_JWT_VC"
 
 
 def test_example_issues_by_did_and_verifies_with_tenant_policy(api, tmp_path):
