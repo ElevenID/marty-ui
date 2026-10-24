@@ -12,7 +12,50 @@ static BUNDLE: LazyLock<Value> = LazyLock::new(|| {
 });
 
 pub fn schemas() -> Value {
-    BUNDLE["schemas"].clone()
+    let mut schemas = BUNDLE["schemas"].clone();
+    schemas["runtime__issuer_identity_capabilities"] = serde_json::from_str(include_str!(
+        "../../../../contracts/issuer-identity-capabilities-response.json"
+    ))
+    .expect("public identity capabilities schema");
+    schemas["runtime__template_issuer_options_request"] = serde_json::from_str(include_str!(
+        "../../../../contracts/template-issuer-options-request.json"
+    ))
+    .expect("template issuer options request schema");
+    schemas["runtime__template_issuer_options_response"] = serde_json::from_str(include_str!(
+        "../../../../contracts/template-issuer-options-response.json"
+    ))
+    .expect("template issuer options response schema");
+    schemas["runtime__issuer_identity_inspection"] = serde_json::from_str(include_str!(
+        "../../../../contracts/issuer-identity-inspection-response.json"
+    ))
+    .expect("public identity inspection schema");
+    schemas["runtime__wallet_compatibility"] = serde_json::from_str(include_str!(
+        "../../../../contracts/wallet-compatibility-response.json"
+    ))
+    .expect("native derived wallet compatibility schema");
+    schemas["runtime__protocol_support_catalog"] = serde_json::from_str(include_str!(
+        "../../../../contracts/protocol-support-catalog-schema.json"
+    ))
+    .expect("protocol support catalog schema");
+    let compliance: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/compliance-profile-http-schemas.json"
+    ))
+    .expect("native compliance HTTP schemas");
+    schemas
+        .as_object_mut()
+        .expect("schemas")
+        .extend(compliance.as_object().expect("compliance schemas").clone());
+    let notification: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/notification-http-schemas.json"
+    ))
+    .expect("native notification HTTP schemas");
+    schemas.as_object_mut().expect("schemas").extend(
+        notification
+            .as_object()
+            .expect("notification schemas")
+            .clone(),
+    );
+    schemas
 }
 pub fn protocol_revision() -> &'static str {
     BUNDLE["protocol_revision"].as_str().expect("protocol pin")
@@ -29,6 +72,161 @@ fn schema(name: &str) -> Value {
 
 pub fn describe_operation(operation: &mut Value, method: HttpMethod, path: &str, status: u16) {
     use HttpMethod::{Get, Patch, Post};
+    if method == Get && path == "/v1/protocol-support" {
+        operation["summary"] = json!("Discover product support for protocol abstractions");
+        operation["description"] = json!("Public gateway-owned catalog of product consumer surfaces. Implemented, derived, partial and unsupported are distinct; qualification state and limitations prevent route presence or protocol vocabulary from being presented as end-to-end support.");
+        operation["responses"][status.to_string()]["content"] = json!({
+            "application/json": {
+                "schema": {"$ref":"#/components/schemas/runtime__protocol_support_catalog"},
+                "example": serde_json::from_str::<Value>(include_str!("../../../../contracts/protocol-support-catalog.json")).expect("support catalog example")
+            }
+        });
+        operation["x-marty-protocol-support"] = json!("implemented");
+        operation["x-marty-request-schema-documented"] = json!(true);
+        operation["x-marty-response-schema-documented"] = json!(true);
+        return;
+    }
+    if path.starts_with("/v1/notifications") && path != "/v1/notifications/events/push" {
+        describe_notification(operation, method, path, status);
+        return;
+    }
+    if method == Get
+        && matches!(
+            path,
+            "/v1/credential-templates/{template_id}/wallet-compatibility"
+                | "/v1/wallet-registry/resolve/profile"
+        )
+    {
+        let template = path.ends_with("/wallet-compatibility");
+        operation["summary"] = json!("Read derived wallet requirements and applied overrides");
+        operation["description"] = json!(if template {
+            "Requires credential-template:view in the owning template's organization. Resolves only the primary credential format, issuance protocol and compliance key, plus matching registry overrides. Additional declared formats are not covered by this response. Physical documents have no wallet profile. Configuration only: wallet applications, platforms and specifications are not independently verified interoperability or delivery evidence."
+        } else {
+            "Requires wallet:view in the selected organization. Derives configuration from the supplied tuple plus matching organization registry overrides; it does not load or validate a credential template. Unknown tuples may return generic fallback requirements. Physical documents have no wallet profile. Registry entries and derived wallet names do not prove interoperability or successful delivery."
+        });
+        if !template {
+            let mut parameters: Vec<Value> =
+                ["organization_id", "credential_format", "issuance_protocol"]
+                    .map(|name| {
+                        query_parameter(
+                            name,
+                            "Derivation input in the selected authorized organization.",
+                        )
+                    })
+                    .into();
+            let mut code = query_parameter(
+                "compliance_profile_code",
+                "Optional compliance derivation key; not a template ID.",
+            );
+            code["required"] = json!(false);
+            parameters.push(code);
+            operation["parameters"] = json!(parameters);
+        }
+        for (code, description) in [
+            (400, "Malformed or missing query parameters."),
+            (401, "Authentication required."),
+            (
+                403,
+                "Selected organization membership and route permission required.",
+            ),
+            (404, "Credential template or resource owner not found."),
+            (
+                422,
+                "Invalid template configuration or physical document; no wallet profile applies.",
+            ),
+            (502, "Required upstream returned an invalid response."),
+            (
+                503,
+                "Template, registry or authorization dependency unavailable.",
+            ),
+        ] {
+            operation["responses"][code.to_string()] = json!({"description":description});
+        }
+        operation["responses"]["200"]["content"] = json!({"application/json":{"schema":{"$ref":"#/components/schemas/runtime__wallet_compatibility"},"example":serde_json::from_str::<Value>(include_str!("../../../../contracts/wallet-compatibility-example.json")).expect("wallet example")}});
+        operation["x-marty-protocol-support"] = json!("derived");
+        operation["x-marty-protocol-schema"] = schema("wallet-profile");
+        operation["x-marty-request-schema-documented"] = json!(true);
+        operation["x-marty-response-schema-documented"] = json!(true);
+        return;
+    }
+    if matches!(
+        path,
+        "/v1/compliance-profiles"
+            | "/v1/compliance-profiles/{profile_id}"
+            | "/v1/compliance-profiles/{profile_id}/activate"
+            | "/v1/compliance-profiles/{profile_id}/suspend"
+            | "/v1/compliance-profiles/system/discoverable"
+    ) {
+        describe_compliance(operation, method, path, status);
+        return;
+    }
+    if method == Get && path == "/v1/signing-keys/issuer-identities/inspection" {
+        operation["summary"] = json!("Inspect DID publication and managed signer matching");
+        operation["description"] = json!("Requires signing-key:view in the selected organization. Read-only current registry, managed signer and public HTTPS observations, including assertion authorization. Public resolution uses the deployment authority and no internal fallback. Assertion readiness does not qualify credential issuance, certificate trust or interoperability.");
+        operation["parameters"] = json!(["organization_id", "issuer_did", "key_purpose", "credential_format", "algorithm"].map(|name| query_parameter(name, "Exact public identity tuple in the authorized organization; no private custody selector.")));
+        for (code, description) in [
+            (400, "Missing, malformed or unsupported query fields."),
+            (401, "Authentication required."),
+            (
+                403,
+                "Organization membership and signing-key:view permission required.",
+            ),
+            (404, "No active identity matches this public tuple."),
+            (409, "Identity tuple is ambiguous."),
+            (422, "Invalid public identity tuple."),
+            (502, "Stored DID document is malformed."),
+            (503, "Identity registry or document storage is unavailable."),
+        ] {
+            operation["responses"][code.to_string()] = json!({"description":description});
+        }
+        operation["responses"]["200"]["content"] = json!({"application/json":{"schema":{"$ref":"#/components/schemas/runtime__issuer_identity_inspection"}}});
+        operation["x-marty-request-schema-documented"] = json!(true);
+        operation["x-marty-response-schema-documented"] = json!(true);
+        return;
+    }
+    if method == Post && path == "/v1/credential-templates/issuer-options" {
+        operation["summary"] = json!("Discover compatible, unambiguous template issuer DIDs");
+        operation["description"] = json!("Requires credential-template:create in the selected organization. Validates an active compliance profile and every declared credential format; no algorithm or private binding selector is accepted. Template creation repeats these checks.");
+        operation["requestBody"] = json!({"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/runtime__template_issuer_options_request"}}}});
+        for (status, description) in [
+            (401, "Authentication required."),
+            (403, "Organization or permission is not authorized."),
+            (409, "Issuer inventory is ambiguous."),
+            (
+                422,
+                "Invalid, inactive or incompatible template dependencies.",
+            ),
+            (502, "A dependency returned an invalid binding."),
+            (
+                503,
+                "A required dependency is unavailable; no cached or default choices are returned.",
+            ),
+        ] {
+            operation["responses"][status.to_string()] = json!({"description":description});
+        }
+        operation["responses"]["200"]["content"] = json!({"application/json":{"schema":{"$ref":"#/components/schemas/runtime__template_issuer_options_response"}}});
+        operation["x-marty-request-schema-documented"] = json!(true);
+        operation["x-marty-response-schema-documented"] = json!(true);
+        return;
+    }
+    if method == Get && path == "/v1/signing-keys/issuer-identities/capabilities" {
+        operation["summary"] = json!("Discover organization issuer identity creation options");
+        operation["parameters"] = json!([query_parameter(
+            "organization_id",
+            "Organization authorized by the gateway; no provider or key selector is accepted."
+        )]);
+        operation["responses"]["200"]["content"] = json!({"application/json":{"schema":{"$ref":"#/components/schemas/runtime__issuer_identity_capabilities"}}});
+        operation["responses"]["401"] = json!({"description":"Authentication required."});
+        operation["responses"]["400"] =
+            json!({"description":"Malformed or unsupported query parameters."});
+        operation["responses"]["403"] = json!({"description":"Organization membership and signing-key:view permission required."});
+        operation["responses"]["422"] =
+            json!({"description":"Organization scope is blank or invalid."});
+        operation["responses"]["503"] = json!({"description":"Issuer capability discovery is unavailable; do not assume a default set."});
+        operation["x-marty-request-schema-documented"] = json!(true);
+        operation["x-marty-response-schema-documented"] = json!(true);
+        return;
+    }
     if method == Post
         && matches!(
             path,
@@ -98,6 +296,170 @@ pub fn describe_operation(operation: &mut Value, method: HttpMethod, path: &str,
     // Coverage is explicit while remaining service-owned shapes are reconciled.
     operation["x-marty-request-schema-documented"] = json!(request.is_some());
     operation["x-marty-response-schema-documented"] = json!(response.is_some());
+}
+
+fn describe_compliance(operation: &mut Value, method: HttpMethod, path: &str, status: u16) {
+    use HttpMethod::{Delete, Get, Patch, Post};
+    let collection = path == "/v1/compliance-profiles";
+    let catalog = path == "/v1/compliance-profiles/system/discoverable";
+    let action = match method {
+        Get => "view",
+        Post if path.ends_with("/activate") => "activate",
+        Post if path.ends_with("/suspend") => "suspend",
+        Post => "create",
+        Patch => "edit",
+        Delete => "delete",
+        _ => return,
+    };
+    operation["description"] = json!(format!("Requires compliance-profile:{action} in the resource's organization. System presets are migration-owned and immutable. Public metadata is a partial projection of the protocol entity; internal privacy enforcement sections are not returned."));
+    operation["x-marty-protocol-schema-ref"] = schema("compliance-profile");
+    operation["x-marty-protocol-support"] = json!("partial");
+    operation["x-marty-request-schema-documented"] = json!(true);
+    operation["x-marty-response-schema-documented"] = json!(true);
+    if method == Get && (collection || catalog) {
+        operation["parameters"] = json!([query_parameter("organization_id", "Selected authorized organization; even the shared catalog requires this view grant at the gateway.")]);
+        if catalog {
+            operation["parameters"][0]["required"] = json!(false);
+        }
+        if collection {
+            operation["parameters"].as_array_mut().expect("parameters").extend([
+                json!({"name":"limit","in":"query","schema":{"type":"integer","minimum":1,"maximum":500,"default":100}}),
+                json!({"name":"offset","in":"query","schema":{"type":"integer","minimum":0,"default":0}}),
+            ]);
+        }
+    }
+    if (method == Post && collection) || method == Patch {
+        let request = if method == Patch {
+            "runtime__compliance_profile_update_request"
+        } else {
+            "runtime__compliance_profile_create_request"
+        };
+        operation["requestBody"] = json!({"required":true,"content":{"application/json":{"schema":{"$ref":format!("#/components/schemas/{request}")}}}});
+    }
+    let response = if method == Delete {
+        json!({"type":"object","additionalProperties":false,"required":["success"],"properties":{"success":{"const":true}}})
+    } else if method == Get && (collection || catalog) {
+        json!({"type":"array","items":{"$ref":"#/components/schemas/runtime__compliance_profile_response"}})
+    } else {
+        json!({"$ref":"#/components/schemas/runtime__compliance_profile_response"})
+    };
+    operation["responses"][status.to_string()]["content"] =
+        json!({"application/json":{"schema":response}});
+    for (code, description) in [
+        (
+            400,
+            "Profile constraints or query values are invalid; no partial mutation is saved.",
+        ),
+        (401, "Authentication required."),
+        (
+            403,
+            "Organization or action is not authorized, or a system preset cannot be mutated.",
+        ),
+        (404, "Profile not found."),
+        (409, "The native owner reports a resource conflict."),
+        (
+            422,
+            "JSON fields or enum values do not match the native request DTO.",
+        ),
+        (
+            500,
+            "The native profile storage is unavailable; backend details are not returned.",
+        ),
+        (502, "The native organization dependency is unavailable."),
+        (
+            503,
+            "The gateway cannot reach or authorize a required service.",
+        ),
+    ] {
+        operation["responses"][code.to_string()] = json!({"description":description});
+    }
+    if method == Post && !collection {
+        operation["description"] = json!(format!("{} The operation has no request body; the native owner changes only status and updated_at.",operation["description"].as_str().expect("description")));
+    }
+}
+
+fn describe_notification(operation: &mut Value, method: HttpMethod, path: &str, status: u16) {
+    use HttpMethod::{Delete, Post};
+    let send = method == Post && path == "/v1/notifications/send";
+    let collection = path == "/v1/notifications";
+    let count = matches!(
+        path,
+        "/v1/notifications/unread/count" | "/v1/notifications/unread-count"
+    );
+    let read_all = path == "/v1/notifications/read-all";
+    let templates = path == "/v1/notifications/templates";
+    let deliveries = path.ends_with("/delivery-results");
+    operation["summary"] = json!(if send {
+        "Send a notification with an embedded target"
+    } else {
+        "Read or update organization-scoped notifications"
+    });
+    operation["description"] = json!(if send {
+        "Requires notification:send in the request organization. NotificationTarget is embedded, not a standalone saved profile. An explicit target organization must match the request organization. Channel and destination configuration determine delivery; acceptance does not prove delivery. Protected credential material and unknown root/target fields are rejected."
+    } else {
+        "Requires notification:view. An organization query selector is required even for stored IDs. Lists are arrays without total counts. List recipient filtering is explicit; unread count and mark-all-read default to the trusted authenticated user when recipient_id is omitted. Alert-rule and preference operations do not exist."
+    });
+    if send {
+        operation["requestBody"] = json!({"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/runtime__notification_send_request"}}}});
+    } else {
+        let mut parameters = operation["parameters"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        parameters.push(query_parameter(
+            "organization_id",
+            "Selected organization authorized by the gateway and native owner.",
+        ));
+        if collection || count || read_all {
+            let mut recipient = query_parameter("recipient_id", "Recipient filter. Count and mark-all-read use the trusted authenticated user if omitted.");
+            recipient["required"] = json!(false);
+            parameters.push(recipient);
+        }
+        if collection || templates || deliveries {
+            for (name, default) in [("limit", 100), ("offset", 0)] {
+                parameters.push(json!({"name":name,"in":"query","required":false,"description":"Array pagination; limits above 500 are clamped. No total count is returned.","schema":{"type":"integer","minimum":0,"default":default}}));
+            }
+        }
+        if collection {
+            parameters.push(json!({"name":"unread_only","in":"query","required":false,"schema":{"type":"boolean","default":false}}));
+            parameters.push(json!({"name":"status","in":"query","required":false,"description":"Case-insensitive pending, sent, delivered or failed state filter.","schema":{"type":"string"}}));
+        }
+        operation["parameters"] = json!(parameters);
+    }
+    let response_ref = json!({"$ref":"#/components/schemas/runtime__notification_response"});
+    let response = if collection {
+        json!({"type":"array","items":response_ref})
+    } else if deliveries {
+        json!({"type":"array","items":{"$ref":"#/components/schemas/runtime__notification_delivery_result"}})
+    } else if count || read_all {
+        let field = if count { "count" } else { "marked_read" };
+        json!({"type":"object","additionalProperties":false,"required":[field],"properties":{field:{"type":"integer","minimum":0}}})
+    } else if templates {
+        json!({"type":"array","items":{"type":"object","additionalProperties":false,"required":["id","name","notification_type","subject_template","active"],"properties":{"id":{"type":"string"},"name":{"type":"string"},"notification_type":{"type":"string"},"subject_template":{"type":"string"},"active":{"type":"boolean"}}}})
+    } else if method == Delete && !path.ends_with("/read") {
+        json!({"type":"object","additionalProperties":false,"required":["success"],"properties":{"success":{"type":"boolean"}}})
+    } else {
+        response_ref
+    };
+    operation["responses"][status.to_string()]["content"] =
+        json!({"application/json":{"schema":response}});
+    for (code, description) in [
+        (400, "Required organization query or recipient selector is missing or malformed."),
+        (401, "Authentication required."), (403, "Organization membership or route permission is not authorized."),
+        (404, "Notification does not exist in the selected organization."),
+        (422, "Invalid request fields, target organization, channel, destination, TTL or protected credential payload."),
+        (502, "Upstream returned an invalid response."), (503, "Notification or authorization dependency is unavailable."),
+    ] {
+        operation["responses"][code.to_string()] = json!({"description":description});
+    }
+    operation["x-marty-protocol-support"] = json!("partial");
+    operation["x-marty-protocol-schemas"] = json!([
+        schema("notification-payload"),
+        schema("notification-target"),
+        schema("notification-delivery-result")
+    ]);
+    operation["x-marty-request-schema-documented"] = json!(true);
+    operation["x-marty-response-schema-documented"] = json!(true);
 }
 
 fn query_parameter(name: &str, description: &str) -> Value {
@@ -267,5 +629,160 @@ mod tests {
                 );
             }
         }
+    }
+    #[test]
+    fn notification_operations_document_real_scope_arrays_embedded_targets_and_delivery_evidence() {
+        let document = crate::contract::GatewayContract::load()
+            .unwrap()
+            .openapi_document("test");
+        for (path, method) in [
+            ("/v1/notifications", "get"),
+            ("/v1/notifications/send", "post"),
+            ("/v1/notifications/unread/count", "get"),
+            ("/v1/notifications/read-all", "post"),
+            ("/v1/notifications/{notification_id}/read", "patch"),
+            ("/v1/notifications/{notification_id}/read", "delete"),
+            (
+                "/v1/notifications/{notification_id}/delivery-results",
+                "get",
+            ),
+        ] {
+            let operation = &document["paths"][path][method];
+            assert_eq!(operation["x-marty-protocol-support"], "partial");
+            assert_eq!(operation["x-marty-request-schema-documented"], true);
+            assert_eq!(operation["x-marty-response-schema-documented"], true);
+            assert!(operation["responses"]["403"].is_object());
+            if path != "/v1/notifications/send" {
+                assert!(operation["parameters"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|parameter| parameter["name"] == "organization_id"
+                        && parameter["required"] == true));
+            }
+        }
+        let send = &document["paths"]["/v1/notifications/send"]["post"];
+        assert_eq!(
+            send["requestBody"]["content"]["application/json"]["schema"]["$ref"],
+            "#/components/schemas/runtime__notification_send_request"
+        );
+        assert_eq!(
+            document["paths"]["/v1/notifications"]["get"]["responses"]["200"]["content"]
+                ["application/json"]["schema"]["type"],
+            "array"
+        );
+        assert_eq!(
+            document["paths"]["/v1/notifications/unread/count"]["get"]["responses"]["200"]
+                ["content"]["application/json"]["schema"]["properties"]["count"]["type"],
+            "integer"
+        );
+        assert_eq!(
+            document["paths"]["/v1/notifications/read-all"]["post"]["responses"]["200"]["content"]
+                ["application/json"]["schema"]["properties"]["marked_read"]["type"],
+            "integer"
+        );
+        assert!(document["components"]["schemas"]["schemas__notification_target"].is_object());
+        assert_eq!(
+            document["components"]["schemas"]["runtime__notification_response"]["properties"]
+                ["read"]["type"],
+            "boolean"
+        );
+        assert!(document["paths"]
+            .get("/v1/notifications/{subpath:path}")
+            .is_none());
+        assert!(document["paths"]
+            .get("/v1/notifications/preferences")
+            .is_none());
+    }
+
+    #[test]
+    fn wallet_requirements_document_native_projection_and_derived_scope() {
+        let document = crate::contract::GatewayContract::load()
+            .unwrap()
+            .openapi_document("test");
+        for path in [
+            "/v1/credential-templates/{template_id}/wallet-compatibility",
+            "/v1/wallet-registry/resolve/profile",
+        ] {
+            let operation = &document["paths"][path]["get"];
+            assert_eq!(operation["x-marty-protocol-support"], "derived");
+            assert_eq!(
+                operation["responses"]["200"]["content"]["application/json"]["schema"]["$ref"],
+                "#/components/schemas/runtime__wallet_compatibility"
+            );
+            assert!(operation.get("requestBody").is_none());
+            assert!(operation["responses"]["403"].is_object());
+            assert!(operation["responses"]["422"].is_object());
+        }
+        let parameters = document["paths"]["/v1/wallet-registry/resolve/profile"]["get"]
+            ["parameters"]
+            .as_array()
+            .unwrap();
+        for name in ["organization_id", "credential_format", "issuance_protocol"] {
+            assert!(parameters
+                .iter()
+                .any(|parameter| parameter["name"] == name && parameter["required"] == true));
+        }
+        assert!(parameters
+            .iter()
+            .any(|parameter| parameter["name"] == "compliance_profile_code"
+                && parameter["required"] == false));
+        let response = &document["components"]["schemas"]["runtime__wallet_compatibility"];
+        assert_eq!(response["additionalProperties"], false);
+        assert_eq!(
+            response["properties"]["derived_from"]["additionalProperties"],
+            false
+        );
+        assert_eq!(
+            response["properties"]["template_wallet_configs"]["items"]["additionalProperties"],
+            false
+        );
+        assert!(response["properties"].get("verified").is_none());
+    }
+
+    #[test]
+    fn compliance_http_operations_use_actual_owner_schemas_and_explicit_partial_support() {
+        let document = crate::contract::GatewayContract::load()
+            .unwrap()
+            .openapi_document("test");
+        for (path, methods) in [
+            ("/v1/compliance-profiles", vec!["get", "post"]),
+            (
+                "/v1/compliance-profiles/{profile_id}",
+                vec!["get", "patch", "delete"],
+            ),
+            (
+                "/v1/compliance-profiles/{profile_id}/activate",
+                vec!["post"],
+            ),
+            ("/v1/compliance-profiles/{profile_id}/suspend", vec!["post"]),
+            ("/v1/compliance-profiles/system/discoverable", vec!["get"]),
+        ] {
+            for method in methods {
+                let operation = &document["paths"][path][method];
+                assert_eq!(operation["x-marty-protocol-support"], "partial");
+                assert_eq!(operation["x-marty-response-schema-documented"], true);
+                assert!(operation["security"][0].is_object());
+                assert!(operation["responses"]["403"].is_object());
+                assert!(operation["responses"]["422"].is_object());
+            }
+        }
+        assert_eq!(
+            document["paths"]["/v1/compliance-profiles"]["post"]["requestBody"]["content"]
+                ["application/json"]["schema"]["$ref"],
+            "#/components/schemas/runtime__compliance_profile_create_request"
+        );
+        assert_eq!(
+            document["paths"]["/v1/compliance-profiles/{profile_id}"]["patch"]["requestBody"]
+                ["content"]["application/json"]["schema"]["$ref"],
+            "#/components/schemas/runtime__compliance_profile_update_request"
+        );
+        let response = &document["components"]["schemas"]["runtime__compliance_profile_response"];
+        assert_eq!(response["additionalProperties"], false);
+        assert!(response["properties"].get("data_retention").is_none());
+        assert_eq!(
+            response["properties"]["api_surface"]["items"]["additionalProperties"],
+            false
+        );
     }
 }

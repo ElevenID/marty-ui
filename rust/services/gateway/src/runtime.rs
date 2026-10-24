@@ -958,6 +958,9 @@ async fn proxy_handler(
             )
             .into_response();
         }
+        "/v1/protocol-support" => {
+            return Json(discovery::protocol_support_catalog()).into_response();
+        }
         "/docs" | "/redoc" => return api_documentation_handler(),
         "/ready" | "/health/ready" => return readiness_handler(state).await,
         "/health/services" => return services_health_handler(state).await,
@@ -1017,6 +1020,11 @@ async fn proxy_handler(
     }
     if request.method() == "POST" && request.uri().path() == "/v1/issuance" {
         return issuance_create_handler(state, request).await;
+    }
+    if request.method() == "POST"
+        && request.uri().path() == "/v1/credential-templates/issuer-options"
+    {
+        return template_issuer_options_handler(state, request).await;
     }
     if request.method() == "POST" && request.uri().path() == "/v1/credential-templates" {
         return credential_template_create_handler(state, request).await;
@@ -2484,6 +2492,186 @@ async fn deployment_profile_create_handler(
     upstream_response(response)
 }
 
+async fn load_template_issuer_context(
+    state: &Arc<GatewayRuntimeState>,
+    identity: &TrustedIdentityContext,
+    input: &crate::template_issuer_options::OptionsRequest,
+) -> Result<crate::template_issuer_options::TemplateIssuerContext, Response> {
+    input
+        .validate()
+        .map_err(|error| detail_response(error.0, error.1))?;
+    if identity.organization_id.as_deref() != Some(&input.organization_id) {
+        return Err(detail_response(
+            403,
+            "Request is not authorized for this organization",
+        ));
+    }
+    let path = format!(
+        "/v1/compliance-profiles/{}",
+        utf8_percent_encode(&input.compliance_profile_id, NON_ALPHANUMERIC)
+    );
+    let response = execute_proxy_request(
+        state,
+        identity,
+        HttpMethod::Get,
+        &path,
+        Vec::new(),
+        BTreeMap::new(),
+    )
+    .await
+    .map_err(|response| {
+        detail_response(
+            if matches!(response.status().as_u16(), 403 | 404 | 422) {
+                response.status().as_u16()
+            } else {
+                503
+            },
+            "Compliance profile could not be loaded.",
+        )
+    })?;
+    let profile = response_json(&response)
+        .ok_or_else(|| detail_response(502, "Compliance profile returned invalid data."))?;
+    crate::template_issuer_options::TemplateIssuerContext::from_profile(input, &profile)
+        .map_err(|error| detail_response(error.0, error.1))
+}
+
+async fn resolve_template_issuer_binding(
+    state: &Arc<GatewayRuntimeState>,
+    context: &crate::template_issuer_options::TemplateIssuerContext,
+    issuer_did: &str,
+) -> Result<Vec<Value>, crate::template_issuer_options::OptionsError> {
+    use crate::template_issuer_options::OptionsError;
+    let mut bindings = Vec::new();
+    for format in &context.formats {
+        let response = signing_service_request(state, HttpMethod::Post, "/internal/compat/resolve-issuer-did", Some(serde_json::to_vec(&json!({
+            "organization_id":context.organization_id, "issuer_did":issuer_did,
+            "credential_format":format.signing_wire(), "key_purpose":format.issuer_key_purpose()
+        })).expect("public issuer resolution"))).await
+            .map_err(|_| OptionsError(503, "Issuer registry is unavailable."))?;
+        match response.status_code {
+            409 => {
+                return Err(OptionsError(
+                    409,
+                    "Issuer DID is ambiguous for the template. Repair its registry bindings.",
+                ))
+            }
+            400 | 404 | 422 => {
+                return Err(OptionsError(
+                    422,
+                    "Issuer DID is incompatible with the template.",
+                ))
+            }
+            status if status >= 400 => {
+                return Err(OptionsError(503, "Issuer registry is unavailable."))
+            }
+            _ => {}
+        }
+        let resolved = response_json(&response)
+            .ok_or(OptionsError(502, "Issuer registry returned invalid data."))?;
+        bindings.push(context.binding(issuer_did, *format, &resolved)?);
+    }
+    Ok(bindings)
+}
+
+async fn template_issuer_options_handler(
+    state: Arc<GatewayRuntimeState>,
+    request: Request,
+) -> Response {
+    let identity = request
+        .extensions()
+        .get::<TrustedIdentityContext>()
+        .cloned()
+        .unwrap_or_default();
+    let bytes = match to_bytes(request.into_body(), state.maximum_body_bytes).await {
+        Ok(bytes) => bytes,
+        Err(_) => return detail_response(413, "Request body too large"),
+    };
+    let input: crate::template_issuer_options::OptionsRequest = match serde_json::from_slice(&bytes)
+    {
+        Ok(input) => input,
+        Err(_) => {
+            return detail_response(422, "Issuer option request is outside the public contract.")
+        }
+    };
+    let context = match load_template_issuer_context(&state, &identity, &input).await {
+        Ok(context) => context,
+        Err(response) => return response,
+    };
+    let mut list = GatewayRequest::new(
+        HttpMethod::Get,
+        "/v1/signing-keys/issuer-identities",
+        now_ms(),
+    );
+    list.query = BTreeMap::from([
+        (
+            "organization_id".into(),
+            vec![context.organization_id.clone()],
+        ),
+        (
+            "credential_format".into(),
+            vec![context.primary.canonical().into()],
+        ),
+        (
+            "key_purpose".into(),
+            vec![context.primary.issuer_key_purpose().into()],
+        ),
+    ]);
+    let response = match state
+        .proxy
+        .execute(
+            list,
+            &identity,
+            &proxy_overrides(&state, "/v1/signing-keys/issuer-identities", &identity),
+        )
+        .await
+    {
+        Ok(response) if response.status_code < 400 => response,
+        Ok(response) if response.status_code == 409 => {
+            return detail_response(
+                409,
+                "Issuer inventory is ambiguous. Repair its registry bindings.",
+            )
+        }
+        _ => return detail_response(503, "Issuer inventory is unavailable."),
+    };
+    let body = response_json(&response);
+    let Some(identities) = body.as_ref().and_then(|body| body["identities"].as_array()) else {
+        return detail_response(502, "Issuer inventory returned invalid data.");
+    };
+    let mut dids = BTreeSet::new();
+    for identity in identities {
+        let Some(did) = identity["issuer_did"]
+            .as_str()
+            .filter(|did| did.starts_with("did:") && did.len() <= 2048)
+        else {
+            return detail_response(502, "Issuer inventory returned an invalid identity.");
+        };
+        if identity["status"] != "active"
+            || identity["key_purpose"] != context.primary.issuer_key_purpose()
+            || identity["credential_format"]
+                .as_str()
+                .and_then(|format| marty_credential_template::CredentialFormat::parse(format).ok())
+                != Some(context.primary)
+        {
+            return detail_response(502, "Issuer inventory returned an incompatible identity.");
+        }
+        dids.insert(did.to_owned());
+    }
+    let mut available = Vec::new();
+    let mut rejected = Vec::new();
+    for did in dids {
+        match resolve_template_issuer_binding(&state, &context, &did).await {
+            Ok(bindings) => available.push(json!({"issuer_did":did, "bindings":bindings})),
+            Err(error) if matches!(error.0,409|422) => rejected.push(json!({"issuer_did":did, "reason":if error.0==409 {"ambiguous_identity"} else {"incompatible_identity"}})),
+            Err(error) => return detail_response(error.0, error.1),
+        }
+    }
+    let mut result = context.describe();
+    result["identities"] = json!(available);
+    result["rejected_issuers"] = json!(rejected);
+    ([("cache-control", "no-store")], Json(result)).into_response()
+}
+
 async fn credential_template_create_handler(
     state: Arc<GatewayRuntimeState>,
     request: Request,
@@ -2531,81 +2719,39 @@ async fn credential_template_create_handler(
             return response;
         }
     }
-    let compliance_profile_id = body["compliance_profile_id"]
-        .as_str()
-        .expect("validated compliance profile");
-    let compliance_path = format!(
-        "/v1/compliance-profiles/{}",
-        utf8_percent_encode(compliance_profile_id, NON_ALPHANUMERIC)
-    );
-    let compliance = match execute_proxy_request(
-        &state,
-        &identity,
-        HttpMethod::Get,
-        &compliance_path,
-        Vec::new(),
-        BTreeMap::new(),
-    )
-    .await
-    {
-        Ok(response) => response,
+    let input: crate::template_issuer_options::OptionsRequest = match serde_json::from_value(
+        json!({
+            "organization_id":organization_id,
+            "compliance_profile_id":body["compliance_profile_id"],
+            "credential_payload_format":body.get("credential_payload_format").filter(|value| !value.is_null())
+                .or_else(|| body["supported_formats"].as_array().and_then(|values| values.first())),
+            "supported_formats":body["supported_formats"]
+        }),
+    ) {
+        Ok(input) => input,
+        Err(_) => return detail_response(422, "Template format selection is invalid."),
+    };
+    let context = match load_template_issuer_context(&state, &identity, &input).await {
+        Ok(context) => context,
         Err(response) => return response,
     };
-    let Some(compliance) = response_json(&compliance) else {
-        return detail_response(502, "Compliance profile service returned invalid data");
-    };
-    if compliance
-        .get("organization_id")
-        .and_then(Value::as_str)
-        .is_some_and(|owner| owner != organization_id)
-    {
-        return detail_response(
-            403,
-            "Access denied: compliance profile belongs to another organization",
-        );
+    if let Err(error) = context.validate_template(&body) {
+        return detail_response(error.0, error.1);
     }
     let issuer_did = body["issuer_did"]
         .as_str()
         .expect("validated DID")
         .to_owned();
-    let credential_format = credential_template_issuer_format(&body);
-    let key_purpose = issuer_key_purpose(credential_format.as_deref());
-    let resolved = match signing_service_request(
-        &state,
-        HttpMethod::Post,
-        "/internal/compat/resolve-issuer-did",
-        Some(
-            serde_json::to_vec(&json!({
-                "organization_id": organization_id, "issuer_did": issuer_did,
-                "credential_format": credential_format, "key_purpose": key_purpose
-            }))
-            .expect("resolution request"),
-        ),
-    )
-    .await
-    {
-        Ok(response) if response.status_code < 400 => response,
-        Ok(response) => return upstream_response(response),
-        Err(response) => return response,
-    };
-    let valid_identity = response_json(&resolved).is_some_and(|resolved| {
-        resolved.get("ok") == Some(&Value::Bool(true))
-            && resolved.get("organization_id").and_then(Value::as_str)
-                == Some(organization_id.as_str())
-            && resolved.get("issuer_did").and_then(Value::as_str) == Some(issuer_did.as_str())
-            && resolved.get("key_purpose").and_then(Value::as_str) == Some(key_purpose)
-            && resolved
-                .get("public_jwk")
-                .and_then(Value::as_object)
-                .is_some_and(|jwk| {
-                    !["d", "p", "q", "k"]
-                        .iter()
-                        .any(|field| jwk.contains_key(*field))
-                })
-    });
-    if !valid_identity {
-        return detail_response(422, "issuer_did must resolve to exactly one active organization-owned signing identity for this template.");
+    if let Err(error) = resolve_template_issuer_binding(&state, &context, &issuer_did).await {
+        return detail_response(error.0, error.1);
     }
+    body["credential_payload_format"] = json!(context.primary.canonical());
+    body["supported_formats"] = json!(context
+        .formats
+        .iter()
+        .map(|format| format.canonical())
+        .collect::<Vec<_>>());
+    body["issuance_protocol"] = json!(context.protocol.wire());
     body["issuer_did"] = Value::String(issuer_did);
     let response = match execute_json_proxy(
         &state,
@@ -2635,17 +2781,6 @@ async fn credential_template_create_handler(
     response.body = serde_json::to_vec(&projected).ok();
     response.headers.remove("content-length");
     upstream_response(response)
-}
-
-fn credential_template_issuer_format(body: &Value) -> Option<String> {
-    body.get("credential_payload_format")
-        .and_then(Value::as_str)
-        .or_else(|| {
-            body.get("supported_formats")
-                .and_then(Value::as_array)
-                .and_then(|values| (values.len() == 1).then(|| values[0].as_str()).flatten())
-        })
-        .and_then(crate::issuance_create::public_format)
 }
 
 fn issuer_key_purpose(credential_format: Option<&str>) -> &'static str {
@@ -3606,7 +3741,14 @@ fn compatibility_upstream_path(
 fn requires_gateway_service_token(service: &str) -> bool {
     matches!(
         service,
-        "organizations" | "credential-templates" | "trust-profiles" | "presentation-policies"
+        "organizations"
+            | "credential-templates"
+            | "trust-profiles"
+            | "presentation-policies"
+            | "compliance-profiles"
+            | "deployment-profiles"
+            | "revocation-profiles"
+            | "flows"
     )
 }
 
@@ -5162,6 +5304,7 @@ fn map_failure(
 #[cfg(test)]
 mod tests {
     use super::*;
+    include!("../tests/support/template_issuer_options_behavior.rs");
     use marty_signing_grant::{GrantClaims, GrantEnvelope};
     use std::{
         collections::BTreeSet,
@@ -5710,7 +5853,7 @@ mod tests {
                 }))
                 .expect("profiles"),
                 "/v1/compliance-profiles/profile%2D1" => {
-                    br#"{"id":"profile-1","organization_id":"org-1"}"#.to_vec()
+                    br#"{"id":"profile-1","organization_id":"org-1","status":"ACTIVE","credential_format":"SD_JWT_VC","issuance_protocol":"OID4VCI_PRE_AUTH"}"#.to_vec()
                 }
                 path if path.starts_with("/.well-known/openid-credential-issuer") => {
                     serde_json::to_vec(&json!({
@@ -5849,6 +5992,7 @@ mod tests {
                         "verification_method_id": "did:web:issuer.example#issuer-key",
                         "key_purpose": "vc_jwt_issuer",
                         "algorithm": "ES256",
+                        "issuer_profile":{"organization_id":"org-1","issuer_did":"did:web:issuer.example","key_purpose":"vc_jwt_issuer","credential_format":"SD_JWT_VC","algorithm":"ES256","status":"active"},
                         "public_jwk": {"kty": "EC", "crv": "P-256", "x": "x", "y": "y"}
                     }))
                     .expect("issuer DID response")
@@ -6502,6 +6646,27 @@ mod tests {
             .into_response()
     }
 
+    async fn ownerless_system_delivery_destination(request: Request) -> Response {
+        assert_eq!(
+            request.uri().path(),
+            "/v1/delivery-destinations/dd-elevenid-wallet"
+        );
+        assert_eq!(request.headers().get("x-user-id").unwrap(), "user-1");
+        assert_eq!(
+            request.headers().get("x-service-token").unwrap(),
+            "service-secret"
+        );
+        (
+            StatusCode::OK,
+            Json(json!({
+                "id": "dd-elevenid-wallet",
+                "is_system": true,
+                "organization_id": null
+            })),
+        )
+            .into_response()
+    }
+
     #[tokio::test]
     async fn native_owner_failure_is_opaque_and_stops_before_proxy() {
         let contract: Value = serde_json::from_str(include_str!(
@@ -6683,6 +6848,7 @@ mod tests {
             ("issuance".into(), "http://issuance:8000".into()),
             ("issuance-native".into(), "http://issuance:8000".into()),
             ("organizations".into(), "http://organizations:8000".into()),
+            ("notifications".into(), "http://notifications:8000".into()),
             (
                 "presentation-policies".into(),
                 "http://presentation-policies:8080".into(),
@@ -6755,6 +6921,27 @@ mod tests {
             request: GatewayRequest,
         ) -> Result<GatewayResponse, PlatformError> {
             let issued_credential = request.path.starts_with("/v1/issued-credentials/");
+            let notification = (instance.service_name == "notifications").then(|| {
+                if request.path.ends_with("/delivery-results") {
+                    return json!([]);
+                }
+                let mut example: Value = serde_json::from_str(include_str!(
+                    "../../../../contracts/notification-http-examples.json"
+                ))
+                .unwrap();
+                let value = &mut example["response"];
+                value["organization_id"] = json!("org-1");
+                value["target"]["organization_id"] = json!("org-1");
+                value["id"] = json!("notification-one");
+                if request.path.ends_with("/read") {
+                    value["read"] = json!(true);
+                }
+                if request.path == "/v1/notifications" {
+                    json!([value])
+                } else {
+                    value.clone()
+                }
+            });
             self.0
                 .lock()
                 .expect("owned request recorder")
@@ -6763,7 +6950,9 @@ mod tests {
                 status_code: 200,
                 set_cookies: Vec::new(),
                 headers: BTreeMap::from([("content-type".into(), "application/json".into())]),
-                body: Some(if issued_credential {
+                body: Some(if let Some(notification) = notification {
+                    serde_json::to_vec(&notification).unwrap()
+                } else if issued_credential {
                     serde_json::to_vec(&json!({
                         "id":"credential-1","organization_id":"org-1",
                         "credential_id":"credential-1","credential_type":"EmployeeCredential",
@@ -8094,6 +8283,517 @@ mod tests {
                 overrides.trusted_query["organization_id"],
                 vec!["trusted-org"]
             );
+        }
+    }
+
+    #[tokio::test]
+    async fn issuer_capabilities_require_membership_permission_and_trusted_proxy_scope() {
+        struct NoKeyView;
+        #[async_trait]
+        impl OrganizationMembershipProvider for NoKeyView {
+            async fn get_membership(
+                &self,
+                user: &str,
+                org: &str,
+            ) -> Result<Option<OrganizationMembership>, SecurityError> {
+                let mut membership = RuntimeProvider.get_membership(user, org).await?;
+                if let Some(value) = membership.as_mut() {
+                    value.permissions.remove("signing-key:view");
+                }
+                Ok(membership)
+            }
+        }
+        let recorder = Arc::new(ActorRecordingUpstream::default());
+        for (organization, authenticated, permitted, expected) in [
+            ("org-1", false, true, StatusCode::UNAUTHORIZED),
+            ("org-other", true, true, StatusCode::FORBIDDEN),
+            ("org-1", true, false, StatusCode::FORBIDDEN),
+            ("org-1", true, true, StatusCode::OK),
+        ] {
+            let mut state = runtime_state_with_upstream(Arc::new(NoOwner), recorder.clone());
+            if !permitted {
+                Arc::get_mut(&mut state).unwrap().memberships = Arc::new(NoKeyView);
+            }
+            let mut request = Request::builder().uri(format!(
+                "/v1/signing-keys/issuer-identities/capabilities?organization_id={organization}"
+            ));
+            if authenticated {
+                request = request.header("cookie", "sessionId=valid");
+            }
+            let response = gateway_router(state)
+                .oneshot(request.body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), expected);
+        }
+        let requests = recorder.0.lock().unwrap();
+        assert_eq!(
+            requests.len(),
+            1,
+            "unauthorized requests must never reach the service"
+        );
+        assert_eq!(requests[0].0, "signing-keys");
+        assert_eq!(
+            requests[0].1.path,
+            "/v1/signing-keys/issuer-identities/capabilities"
+        );
+        assert_eq!(requests[0].1.query["organization_id"], vec!["org-1"]);
+        let document = GatewayContract::load().unwrap().openapi_document("test");
+        assert_eq!(
+            document["paths"]["/v1/signing-keys/issuer-identities/capabilities"]["get"]
+                ["responses"]["200"]["content"]["application/json"]["schema"]["$ref"],
+            "#/components/schemas/runtime__issuer_identity_capabilities"
+        );
+    }
+
+    #[tokio::test]
+    async fn issuer_inspection_is_read_only_and_requires_tenant_view_authority() {
+        let recorder = Arc::new(ActorRecordingUpstream::default());
+        for (org, authenticated, allowed, expected) in [
+            ("org-1", false, true, StatusCode::UNAUTHORIZED),
+            ("org-other", true, true, StatusCode::FORBIDDEN),
+            ("org-1", true, false, StatusCode::FORBIDDEN),
+            ("org-1", true, true, StatusCode::OK),
+        ] {
+            let mut state = runtime_state_with_upstream(Arc::new(NoOwner), recorder.clone());
+            if allowed && org == "org-1" {
+                Arc::get_mut(&mut state).unwrap().memberships =
+                    Arc::new(ScriptedMembership("allowed"));
+            }
+            if !allowed {
+                Arc::get_mut(&mut state).unwrap().memberships = Arc::new(ActorIdentityProvider);
+            }
+            let mut request = Request::builder().uri(format!("/v1/signing-keys/issuer-identities/inspection?organization_id={org}&issuer_did=did%3Aweb%3Aissuer.example%3Aorgs%3Aacme&key_purpose=vc_jwt_issuer&credential_format=SD_JWT_VC&algorithm=ES256"));
+            if authenticated {
+                request = request.header("cookie", "sessionId=valid");
+            }
+            let response = gateway_router(state)
+                .oneshot(request.body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), expected);
+        }
+        let requests = recorder.0.lock().unwrap();
+        assert_eq!(
+            requests.len(),
+            1,
+            "Denied inspection must not reach the signer"
+        );
+        assert_eq!(requests[0].0, "signing-keys");
+        assert_eq!(requests[0].1.method, HttpMethod::Get);
+        assert_eq!(requests[0].1.query["organization_id"], vec!["org-1"]);
+        assert_eq!(
+            requests[0].1.query["issuer_did"],
+            vec!["did:web:issuer.example:orgs:acme"]
+        );
+        let openapi = GatewayContract::load().unwrap().openapi_document("test");
+        assert_eq!(
+            openapi["paths"]["/v1/signing-keys/issuer-identities/inspection"]["get"]["responses"]
+                ["200"]["content"]["application/json"]["schema"]["$ref"],
+            "#/components/schemas/runtime__issuer_identity_inspection"
+        );
+    }
+
+    struct SingleGrantMembership(&'static str);
+    #[async_trait]
+    impl OrganizationMembershipProvider for SingleGrantMembership {
+        async fn get_membership(
+            &self,
+            user_id: &str,
+            organization_id: &str,
+        ) -> Result<Option<OrganizationMembership>, SecurityError> {
+            Ok(
+                (organization_id == "org-1").then(|| OrganizationMembership {
+                    user_id: user_id.into(),
+                    organization_id: organization_id.into(),
+                    status: "active".into(),
+                    role_names: BTreeSet::new(),
+                    permissions: BTreeSet::from([self.0.into()]),
+                    is_owner: false,
+                }),
+            )
+        }
+    }
+    #[tokio::test]
+    async fn compliance_public_catalog_and_lifecycle_enforce_exact_tenant_action_before_proxy() {
+        for (method, path, permission, owner, authenticated, expected) in [
+            (
+                "GET",
+                "/v1/compliance-profiles/system/discoverable?organization_id=org-1",
+                "compliance-profile:view",
+                "org-1",
+                false,
+                StatusCode::UNAUTHORIZED,
+            ),
+            (
+                "GET",
+                "/v1/compliance-profiles/system/discoverable?organization_id=org-other",
+                "compliance-profile:view",
+                "org-1",
+                true,
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                "GET",
+                "/v1/compliance-profiles/system/discoverable?organization_id=org-1",
+                "compliance-profile:create",
+                "org-1",
+                true,
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                "GET",
+                "/v1/compliance-profiles/system/discoverable?organization_id=org-1",
+                "compliance-profile:view",
+                "org-1",
+                true,
+                StatusCode::OK,
+            ),
+            (
+                "POST",
+                "/v1/compliance-profiles/profile-one/activate",
+                "compliance-profile:create",
+                "org-1",
+                true,
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                "POST",
+                "/v1/compliance-profiles/profile-one/activate",
+                "compliance-profile:activate",
+                "org-1",
+                true,
+                StatusCode::OK,
+            ),
+            (
+                "POST",
+                "/v1/compliance-profiles/profile-one/suspend",
+                "compliance-profile:view",
+                "org-1",
+                true,
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                "POST",
+                "/v1/compliance-profiles/profile-one/suspend",
+                "compliance-profile:suspend",
+                "org-other",
+                true,
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                "POST",
+                "/v1/compliance-profiles/profile-one/suspend",
+                "compliance-profile:suspend",
+                "org-1",
+                true,
+                StatusCode::OK,
+            ),
+        ] {
+            let recorder = Arc::new(ActorRecordingUpstream::default());
+            let mut state = runtime_state_with_upstream(Arc::new(NoOwner), recorder.clone());
+            let owned = Arc::get_mut(&mut state).unwrap();
+            owned.memberships = Arc::new(SingleGrantMembership(permission));
+            owned.owners = Arc::new(ScriptedOwner(Some(owner.into())));
+            let mut request = Request::builder()
+                .method(method)
+                .uri(path)
+                .header("content-type", "application/json");
+            if authenticated {
+                request = request.header("cookie", "sessionId=valid");
+            }
+            let response = gateway_router(state)
+                .oneshot(request.body(Body::from("{}")).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                expected,
+                "{method} {path} {permission} {owner}"
+            );
+            let calls = recorder.0.lock().unwrap();
+            assert_eq!(calls.len(), usize::from(expected == StatusCode::OK));
+            if expected == StatusCode::OK {
+                assert_eq!(calls[0].0, "compliance-profiles");
+                assert_eq!(calls[0].1.header("x-user-id"), Some("user-1"));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn delivery_destinations_enforce_integration_grants_and_resource_owner_before_proxy() {
+        for (method, path, permission, owner, authenticated, expected) in [
+            (
+                "GET",
+                "/v1/delivery-destinations?organization_id=org-1",
+                "wallet:view",
+                "org-1",
+                false,
+                StatusCode::UNAUTHORIZED,
+            ),
+            (
+                "GET",
+                "/v1/delivery-destinations?organization_id=org-other",
+                "wallet:view",
+                "org-1",
+                true,
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                "GET",
+                "/v1/delivery-destinations?organization_id=org-1",
+                "integration-connector:view",
+                "org-1",
+                true,
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                "GET",
+                "/v1/delivery-destinations?organization_id=org-1",
+                "wallet:view",
+                "org-1",
+                true,
+                StatusCode::OK,
+            ),
+            (
+                "POST",
+                "/v1/delivery-destinations",
+                "wallet:view",
+                "org-1",
+                true,
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                "POST",
+                "/v1/delivery-destinations",
+                "integration-connector:create",
+                "org-1",
+                true,
+                StatusCode::OK,
+            ),
+            (
+                "PATCH",
+                "/v1/delivery-destinations/destination-one",
+                "wallet:view",
+                "org-1",
+                true,
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                "PATCH",
+                "/v1/delivery-destinations/destination-one",
+                "integration-connector:create",
+                "org-1",
+                true,
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                "PATCH",
+                "/v1/delivery-destinations/destination-one",
+                "integration-connector:edit",
+                "org-other",
+                true,
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                "PATCH",
+                "/v1/delivery-destinations/destination-one",
+                "integration-connector:edit",
+                "org-1",
+                true,
+                StatusCode::OK,
+            ),
+            (
+                "DELETE",
+                "/v1/delivery-destinations/destination-one",
+                "integration-connector:edit",
+                "org-1",
+                true,
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                "DELETE",
+                "/v1/delivery-destinations/destination-one",
+                "integration-connector:delete",
+                "org-1",
+                true,
+                StatusCode::OK,
+            ),
+        ] {
+            let recorder = Arc::new(ActorRecordingUpstream::default());
+            let mut state = runtime_state_with_upstream(Arc::new(NoOwner), recorder.clone());
+            let owned = Arc::get_mut(&mut state).unwrap();
+            owned.memberships = Arc::new(SingleGrantMembership(permission));
+            owned.owners = Arc::new(ScriptedOwner(Some(owner.into())));
+            let mut request = Request::builder()
+                .method(method)
+                .uri(path)
+                .header("content-type", "application/json");
+            if authenticated {
+                request = request.header("cookie", "sessionId=valid");
+            }
+            let response = gateway_router(state)
+                .oneshot(
+                    request
+                        .body(Body::from(r#"{"organization_id":"org-1"}"#))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                expected,
+                "{method} {path} {permission} {owner}"
+            );
+            let calls = recorder.0.lock().unwrap();
+            assert_eq!(calls.len(), usize::from(expected == StatusCode::OK));
+            if expected == StatusCode::OK {
+                assert_eq!(calls[0].0, "credential-templates");
+                assert_eq!(calls[0].1.header("x-user-id"), Some("user-1"));
+                assert_eq!(calls[0].1.header("x-organization-id"), Some("org-1"));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn authorized_system_delivery_destination_read_uses_the_selected_organization() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("owner fixture listener");
+        let origin = format!("http://{}", listener.local_addr().expect("fixture address"));
+        tokio::spawn(async move {
+            axum::serve(
+                listener,
+                Router::new().fallback(axum::routing::any(ownerless_system_delivery_destination)),
+            )
+            .await
+            .expect("owner fixture server");
+        });
+        let owners = HttpGatewayProvider::new(
+            BTreeMap::from([("credential-templates".into(), origin)]),
+            "internal-signing-key",
+            None,
+            Some("service-secret".into()),
+            Some(4_096),
+        )
+        .expect("HTTP owner provider");
+        let recorder = Arc::new(ActorRecordingUpstream::default());
+        let mut state = runtime_state_with_upstream(Arc::new(NoOwner), recorder.clone());
+        let owned = Arc::get_mut(&mut state).expect("unique runtime state");
+        owned.memberships = Arc::new(SingleGrantMembership("wallet:view"));
+        owned.owners = Arc::new(owners);
+
+        let response = gateway_router(state)
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/delivery-destinations/dd-elevenid-wallet?organization_id=org-1")
+                    .header("cookie", "sessionId=valid")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("gateway response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let calls = recorder.0.lock().expect("upstream calls");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, "credential-templates");
+        assert_eq!(calls[0].1.header("x-organization-id"), Some("org-1"));
+    }
+
+    #[tokio::test]
+    async fn explicit_notification_routes_keep_tenant_read_send_boundaries_before_proxy() {
+        for (method, path, permission, authenticated, expected) in [
+            (
+                "GET",
+                "/v1/notifications?organization_id=org-1",
+                "notification:view",
+                false,
+                StatusCode::UNAUTHORIZED,
+            ),
+            (
+                "GET",
+                "/v1/notifications?organization_id=org-other",
+                "notification:view",
+                true,
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                "GET",
+                "/v1/notifications?organization_id=org-1",
+                "notification:send",
+                true,
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                "GET",
+                "/v1/notifications?organization_id=org-1",
+                "notification:view",
+                true,
+                StatusCode::OK,
+            ),
+            (
+                "POST",
+                "/v1/notifications/send",
+                "notification:view",
+                true,
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                "POST",
+                "/v1/notifications/send",
+                "notification:send",
+                true,
+                StatusCode::OK,
+            ),
+            (
+                "GET",
+                "/v1/notifications/notification-one/delivery-results?organization_id=org-1",
+                "notification:view",
+                true,
+                StatusCode::OK,
+            ),
+            (
+                "PATCH",
+                "/v1/notifications/notification-one/read?organization_id=org-other",
+                "notification:view",
+                true,
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                "PATCH",
+                "/v1/notifications/notification-one/read?organization_id=org-1",
+                "notification:view",
+                true,
+                StatusCode::OK,
+            ),
+        ] {
+            let recorder = Arc::new(ActorRecordingUpstream::default());
+            let mut state = runtime_state_with_upstream(Arc::new(NoOwner), recorder.clone());
+            Arc::get_mut(&mut state).unwrap().memberships =
+                Arc::new(SingleGrantMembership(permission));
+            let mut request = Request::builder()
+                .method(method)
+                .uri(path)
+                .header("content-type", "application/json");
+            if authenticated {
+                request = request.header("cookie", "sessionId=valid");
+            }
+            let response = gateway_router(state).oneshot(request.body(Body::from(r#"{"organization_id":"org-1","title":"Local fixture","target":{"channels":["SSE"]}}"#)).unwrap()).await.unwrap();
+            let actual = response.status();
+            let body = to_bytes(response.into_body(), 65536).await.unwrap();
+            assert_eq!(
+                actual,
+                expected,
+                "{method} {path} {permission}: {}",
+                String::from_utf8_lossy(&body)
+            );
+            let calls = recorder.0.lock().unwrap();
+            assert_eq!(calls.len(), usize::from(expected == StatusCode::OK));
+            if expected == StatusCode::OK {
+                assert_eq!(calls[0].0, "notifications");
+                assert_eq!(calls[0].1.header("x-user-id"), Some("user-1"));
+                assert_eq!(calls[0].1.header("x-organization-id"), Some("org-1"));
+            }
         }
     }
 
@@ -9750,7 +10450,7 @@ mod tests {
                     .uri("/v1/credential-templates")
                     .header("cookie", "sessionId=valid")
                     .header("content-type", "application/json")
-                    .body(Body::from(br#"{"organization_id":"org-1","name":"employee","credential_type":"EmployeeCredential","vct":"EmployeeCredential","claims":[{"name":"birth_date","claim_type":"date","required":true,"selectively_disclosable":true,"namespace":"org.iso.18013.5.1"}],"supported_formats":["sd_jwt_vc"],"compliance_profile_id":"profile-1","issuer_did":"did:web:issuer.example"}"#.as_slice()))
+                    .body(Body::from(br#"{"organization_id":"org-1","name":"employee","credential_type":"EmployeeCredential","vct":"https://issuer.example/credentials/EmployeeCredential","claims":[{"name":"birth_date","claim_type":"date","required":true,"selectively_disclosable":true,"namespace":"org.iso.18013.5.1"}],"supported_formats":["sd_jwt_vc"],"compliance_profile_id":"profile-1","issuer_did":"did:web:issuer.example"}"#.as_slice()))
                     .expect("request"),
             )
             .await
@@ -9767,20 +10467,41 @@ mod tests {
     }
 
     #[test]
-    fn credential_template_issuer_format_normalizes_legacy_payload_aliases() {
+    fn template_issuer_context_normalizes_aliases_and_resolves_every_declared_format() {
         let contract: Value = serde_json::from_str(include_str!(
             "../../../../contracts/gateway-credential-template-behavior.json"
         ))
-        .expect("credential-template contract");
+        .unwrap();
         for case in contract["issuer_resolution_format_aliases"]
             .as_array()
-            .expect("format alias cases")
+            .unwrap()
         {
-            assert_eq!(
-                credential_template_issuer_format(case).as_deref(),
-                case["expected"].as_str(),
-                "{case}"
-            );
+            let input = crate::template_issuer_options::OptionsRequest {
+                organization_id: "org-1".into(),
+                compliance_profile_id: "profile-1".into(),
+                credential_payload_format: case["credential_payload_format"]
+                    .as_str()
+                    .map(str::to_owned),
+                supported_formats: case
+                    .get("supported_formats")
+                    .map(|value| serde_json::from_value(value.clone()).unwrap()),
+            };
+            let primary = marty_credential_template::CredentialFormat::parse(
+                case["expected_formats"][0].as_str().unwrap(),
+            )
+            .unwrap();
+            let profile = json!({"id":"profile-1", "organization_id":"org-1", "status":"ACTIVE",
+                "credential_format":primary.canonical(), "issuance_protocol":"OID4VCI_PRE_AUTH"});
+            let context = crate::template_issuer_options::TemplateIssuerContext::from_profile(
+                &input, &profile,
+            )
+            .unwrap();
+            let wire: Vec<_> = context
+                .formats
+                .iter()
+                .map(|format| format.signing_wire())
+                .collect();
+            assert_eq!(json!(wire), case["expected_formats"], "{case}");
         }
     }
 
@@ -9990,6 +10711,25 @@ mod tests {
             json!(["OPEN_BADGES_3"])
         );
 
+        let support = runtime_router()
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/protocol-support")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(support.status(), StatusCode::OK);
+        let support: Value = serde_json::from_slice(
+            &to_bytes(support.into_body(), DEFAULT_MAXIMUM_BODY_BYTES)
+                .await
+                .expect("body"),
+        )
+        .expect("json");
+        assert_eq!(support, discovery::protocol_support_catalog());
+        assert_eq!(support["entities"].as_array().map(Vec::len), Some(33));
+
         let health = runtime_router()
             .oneshot(
                 Request::builder()
@@ -10030,6 +10770,11 @@ mod tests {
         assert_eq!(openapi["openapi"], "3.1.0");
         assert_eq!(openapi["info"]["version"], "development");
         assert!(openapi["paths"]["/v1/flows/definitions"]["get"].is_object());
+        assert_eq!(
+            openapi["paths"]["/v1/protocol-support"]["get"]["responses"]["200"]["content"]
+                ["application/json"]["schema"]["$ref"],
+            "#/components/schemas/runtime__protocol_support_catalog"
+        );
 
         for path in ["/docs", "/redoc"] {
             let docs = runtime_router()

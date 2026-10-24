@@ -67,6 +67,7 @@ async fn expired_and_cancelled_legacy_haip_http_submissions_need_no_private_key(
         .await?;
     }
     let state = FlowHttpState {
+        service_authenticator: None,
         repository: PostgresFlowRepository::new(pool.clone()),
         providers: Arc::new(FlowProviderRegistry::default()),
         public_base_url: "https://verifier.example".into(),

@@ -36,6 +36,33 @@ describe('presentationPolicyApi', () => {
   })
 
   describe('Trust Profile sparse updates', () => {
+    it('retains DID controls when converting trusted issuer selections to sources', async () => {
+      const controls = { organization_id: 'org-1', verification_method_ids: ['did:web:issuer.example#key'],
+        did_resolution: { resolver_type: 'ORGANIZATION_REGISTRY', allow_public_fallback: false, cache_ttl_seconds: 0 } }
+      let received: any
+      server.use(http.patch('*/v1/trust-profiles/profile-1', async ({ request }) => {
+        received = await request.json()
+        return HttpResponse.json({ id: 'profile-1', ...received })
+      }))
+      await updateTrustProfile('profile-1', { trusted_issuers: [{ did: 'did:web:issuer.example', ...controls }] })
+      expect(received.trust_sources).toEqual([{ source_type: 'PINNED_ISSUER', issuer_did: 'did:web:issuer.example', description: null, ...controls }])
+    })
+
+    it('preserves explicit DID resolution controls without custody fields', async () => {
+      const source = {
+        source_type: 'PINNED_ISSUER', issuer_did: 'did:web:issuer.example', organization_id: 'org-1',
+        verification_method_ids: ['did:web:issuer.example#key'],
+        did_resolution: { resolver_type: 'ORGANIZATION_REGISTRY', allow_public_fallback: false, cache_ttl_seconds: 0 },
+      }
+      let received: unknown
+      server.use(http.patch('*/v1/trust-profiles/profile-1', async ({ request }) => {
+        received = await request.json()
+        return HttpResponse.json({ id: 'profile-1', trust_sources: [source] })
+      }))
+      await updateTrustProfile('profile-1', { trust_sources: [{ ...source, kms_provider: 'private' }] })
+      expect(received).toEqual({ trust_sources: [source] })
+    })
+
     it.each([
       [{ name: 'Renamed' }, { name: 'Renamed' }],
       [{ description: '' }, { description: '' }],
@@ -248,13 +275,42 @@ describe('presentationPolicyApi', () => {
 
       const result = await updatePresentationPolicy(1, updates)
 
-      expect(receivedData).toMatchObject({
+      expect(receivedData).toEqual({
         organization_id: 'org-1',
         name: 'Updated Policy Name',
-        required_claims: [],
-        accepted_credential_types: [],
       })
       expect(result.name).toBe(updates.name)
+    })
+
+    it('preserves omitted security sections in a scoped metadata PATCH', async () => {
+      const initial = {
+        id: 'policy', organization_id: 'org-1', name: 'Protected policy', description: 'Previous',
+        required_claims: [{ claim_name: 'member_id' }], accepted_credential_types: ['Membership'],
+        credential_requirements: [{ credential_template_id: 'template', trust_profile_id: 'trust' }],
+        holder_binding: { required: true, binding_methods: ['CREDENTIAL_KEY'] },
+        freshness: { require_not_revoked: true, max_age_seconds: 300 },
+      }
+      let current = structuredClone(initial)
+      server.use(http.patch('http://localhost:8000/v1/presentation-policies/:id', async ({ request }) => {
+        const body = await request.json()
+        expect(body).toEqual({ organization_id: 'org-1', description: '' })
+        current = { ...current, ...body as object }
+        return HttpResponse.json(current)
+      }))
+      await updatePresentationPolicy('policy', { organization_id: 'org-1', description: '' })
+      expect(current).toEqual({ ...initial, description: '' })
+    })
+
+    it('retains explicitly supplied false, zero and empty canonical update fields', async () => {
+      const changes = {
+        holder_binding: { required: false }, required_claims: [],
+        freshness: { require_not_revoked: true, max_age_seconds: 0 },
+      }
+      server.use(http.patch('http://localhost:8000/v1/presentation-policies/:id', async ({ request }) => {
+        expect(await request.json()).toEqual({ organization_id: 'org-1', ...changes })
+        return HttpResponse.json({ id: 'policy', ...changes })
+      }))
+      await updatePresentationPolicy('policy', { organization_id: 'org-1', ...changes })
     })
 
     it('should delete policy', async () => {
@@ -732,6 +788,7 @@ describe('presentationPolicyApi', () => {
         compliance_profile_id: '123e4567-e89b-12d3-a456-426614174000',
         supported_wallet_ids: ['removed-wallet-selection'],
         issuance_protocol: 'oid4vci',
+        _issuer_selection: { organization_id: 'org-1', issuer_did: 'did:web:issuer.example.com' },
         wallet_configs: [{ wallet_id: 'removed-wallet-config' }],
         claims: [],
         validity_rules: {
@@ -749,7 +806,8 @@ describe('presentationPolicyApi', () => {
         not_before_offset_seconds: 900,
       })
       expect(receivedData).not.toHaveProperty('supported_wallet_ids')
-      expect(receivedData).not.toHaveProperty('issuance_protocol')
+      expect(receivedData.issuance_protocol).toBe('oid4vci')
+      expect(receivedData).not.toHaveProperty('_issuer_selection')
       expect(receivedData).not.toHaveProperty('wallet_configs')
     })
 

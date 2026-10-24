@@ -19,6 +19,94 @@ use uuid::Uuid;
 #[derive(Debug)]
 struct AllowControlPlane;
 
+struct RejectKeyMembership;
+
+#[async_trait]
+impl TrustProfileControlPlane for RejectKeyMembership {
+    async fn require_permission(
+        &self,
+        _user_id: &str,
+        _organization_id: &str,
+        _resource: &'static str,
+        _action: &'static str,
+    ) -> Result<(), TrustAuthorizationError> {
+        Err(TrustAuthorizationError::MembershipRequired)
+    }
+}
+
+#[tokio::test]
+async fn delegated_profile_read_authenticates_actor_without_human_membership() {
+    const ORG: &str = "20000000-0000-4000-8000-000000000001";
+    const OTHER: &str = "20000000-0000-4000-8000-000000000002";
+    const KEY: &str = "10000000-0000-4000-8000-000000000001";
+    let token = "s".repeat(32);
+    let repository = Arc::new(MemoryTrustProfileRepository::default());
+    let mut selected = profile("Delegated trust");
+    selected.organization_id = ORG.into();
+    repository.save_profile(&selected, None).await.unwrap();
+    for configured in [true, false] {
+        let application = Arc::new(TrustProfileApplication::new(
+            repository.clone(),
+            Arc::new(RejectKeyMembership),
+        ));
+        let app = trust_profile_router(TrustProfileHttpState {
+            application,
+            repository: repository.clone(),
+            service_authenticator: Arc::new(
+                ServiceTokenAuthenticator::new(configured.then(|| token.clone()), configured)
+                    .unwrap(),
+            ),
+            internal_api_key: None,
+            registry_synchronizer: Arc::new(EchoSynchronizer),
+        });
+        for (credential, key, organization, scopes, expected) in [
+            (Some(token.as_str()), KEY, ORG, "trust:read", 200),
+            (Some(token.as_str()), KEY, ORG, "trust:write", 200),
+            (None, KEY, ORG, "trust:read", 401),
+            (Some("incorrect"), KEY, ORG, "trust:read", 401),
+            (Some(token.as_str()), "malformed", ORG, "trust:read", 401),
+            (Some(token.as_str()), KEY, "invalid", "trust:read", 401),
+            (Some(token.as_str()), KEY, OTHER, "admin:full", 403),
+            (Some(token.as_str()), KEY, ORG, "templates:read", 403),
+            (Some(token.as_str()), KEY, ORG, "", 403),
+        ] {
+            let mut request = Request::builder()
+                .uri(format!("/v1/trust-profiles/{}", selected.id))
+                .header("x-api-key-id", key)
+                .header("x-organization-id", organization)
+                .header("x-api-key-scopes", scopes)
+                .header("x-user-id", "user-1");
+            if let Some(credential) = credential {
+                request = request.header("x-service-token", credential);
+            }
+            let response = app
+                .clone()
+                .oneshot(request.body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status().as_u16(),
+                if configured { expected } else { 401 }
+            );
+            if response.status().is_success() {
+                assert_eq!(body(response).await["id"], selected.id.to_string());
+            }
+        }
+        // A subsequent human request still takes the original membership path.
+        let response = request(
+            app,
+            "GET",
+            &format!("/v1/trust-profiles/{}", selected.id),
+            None,
+        )
+        .await;
+        assert_eq!(
+            response.status().as_u16(),
+            if configured { 401 } else { 403 }
+        );
+    }
+}
+
 #[async_trait]
 impl TrustProfileControlPlane for AllowControlPlane {
     async fn require_permission(
@@ -202,6 +290,58 @@ async fn sparse_profile_edits_preserve_security_settings_and_reject_invalid_chan
     assert_eq!(
         body(request(service, "GET", &uri, None).await).await,
         before
+    );
+}
+
+#[tokio::test]
+async fn did_source_controls_survive_storage_and_reject_cross_did_method_pins() {
+    let service = service();
+    let source = json!({
+        "source_type": "PINNED_ISSUER", "issuer_did": "did:web:issuer.example",
+        "organization_id": "org-1", "verification_method_ids": ["did:web:issuer.example#signing"],
+        "did_resolution": {"resolver_type": "ORGANIZATION_REGISTRY", "allow_public_fallback": false, "cache_ttl_seconds": 0}
+    });
+    let payload =
+        json!({"organization_id":"org-1", "name":"Scoped issuer", "trust_sources":[source]});
+    let created = request(
+        service.clone(),
+        "POST",
+        "/v1/trust-profiles",
+        Some(payload.clone()),
+    )
+    .await;
+    assert_eq!(created.status(), 200);
+    let created = body(created).await;
+    let uri = format!("/v1/trust-profiles/{}", created["id"].as_str().unwrap());
+    let stored = body(request(service.clone(), "GET", &uri, None).await).await;
+    for field in [
+        "organization_id",
+        "verification_method_ids",
+        "did_resolution",
+    ] {
+        assert_eq!(stored["trust_sources"][0][field], source[field]);
+    }
+    let mut invalid = payload;
+    invalid["trust_sources"][0]["verification_method_ids"] =
+        json!(["did:web:other.example#signing"]);
+    assert_eq!(
+        request(service.clone(), "POST", "/v1/trust-profiles", Some(invalid))
+            .await
+            .status(),
+        422
+    );
+    let mut invalid = source;
+    invalid["did_resolution"]["resolver_url"] = json!("https://untrusted.example");
+    assert_eq!(
+        request(
+            service,
+            "PATCH",
+            &uri,
+            Some(json!({"trust_sources":[invalid]}))
+        )
+        .await
+        .status(),
+        422
     );
 }
 

@@ -11,7 +11,7 @@ import {
   createDefaultTrustProfile,
   createDefaultHealthStatus,
 } from '../../ports/types';
-import { storeIssuerIdentityCertificate } from '../../../../services/signingKeysApi';
+import { storeIssuerIdentityCertificate } from '../../../../services/issuerIdentitiesApi';
 import { managedIssuerCertificateRequest } from '../../ports/managedIssuerCertificate';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || '';

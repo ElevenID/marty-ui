@@ -1,5 +1,6 @@
+use crate::http_read::FlowRequestState;
 use axum::{
-    extract::{Form, Path, Query, State},
+    extract::{Form, Path, Query},
     http::{header, HeaderMap, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -99,7 +100,7 @@ pub(crate) fn flow_verification_routes() -> Router<FlowHttpState> {
 }
 
 async fn oid4vp_did_document(
-    State(state): State<FlowHttpState>,
+    FlowRequestState(state): FlowRequestState,
 ) -> Result<Response, FlowHttpError> {
     let options = &state.verification;
     let signing =
@@ -147,7 +148,7 @@ async fn oid4vp_did_document(
 }
 
 async fn start_verification(
-    State(state): State<FlowHttpState>,
+    FlowRequestState(state): FlowRequestState,
     headers: HeaderMap,
     Json(payload): Json<Value>,
 ) -> Result<Json<Value>, FlowHttpError> {
@@ -171,7 +172,7 @@ async fn start_verification(
 }
 
 async fn start_siop(
-    State(state): State<FlowHttpState>,
+    FlowRequestState(state): FlowRequestState,
     headers: HeaderMap,
     Json(payload): Json<Value>,
 ) -> Result<Json<Value>, FlowHttpError> {
@@ -252,7 +253,7 @@ struct RequestObjectForm {
 }
 
 async fn get_request_object(
-    State(state): State<FlowHttpState>,
+    FlowRequestState(state): FlowRequestState,
     Path(instance_id): Path<String>,
     Query(query): Query<RequestObjectQuery>,
 ) -> Result<Response, FlowHttpError> {
@@ -267,7 +268,7 @@ async fn get_request_object(
 }
 
 async fn post_request_object(
-    State(state): State<FlowHttpState>,
+    FlowRequestState(state): FlowRequestState,
     Path(instance_id): Path<String>,
     Query(query): Query<RequestObjectQuery>,
     Form(form): Form<RequestObjectForm>,
@@ -374,7 +375,7 @@ struct DirectPostForm {
 }
 
 async fn submit_direct_post(
-    State(state): State<FlowHttpState>,
+    FlowRequestState(state): FlowRequestState,
     Path(instance_id): Path<String>,
     Form(form): Form<DirectPostForm>,
 ) -> Result<Json<Value>, FlowHttpError> {
@@ -458,7 +459,7 @@ async fn direct_post_input(
 }
 
 async fn submit_dc_api(
-    State(state): State<FlowHttpState>,
+    FlowRequestState(state): FlowRequestState,
     Path(instance_id): Path<String>,
     headers: HeaderMap,
     Json(payload): Json<Value>,
@@ -635,7 +636,7 @@ async fn commit_verification(
 }
 
 async fn submit_siop(
-    State(state): State<FlowHttpState>,
+    FlowRequestState(state): FlowRequestState,
     Json(payload): Json<Value>,
 ) -> Result<Json<Value>, FlowHttpError> {
     let request: SiopSubmitRequest = parse_request(payload)?;

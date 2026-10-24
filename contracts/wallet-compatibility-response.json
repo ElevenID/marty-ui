@@ -1,0 +1,137 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "organization_id": {
+      "type": "string"
+    },
+    "name": {
+      "type": "string"
+    },
+    "description": {
+      "type": "string"
+    },
+    "credential_format": {
+      "type": "string"
+    },
+    "issuance_protocol": {
+      "type": "string"
+    },
+    "compliance_profile_code": {
+      "type": "string"
+    },
+    "deep_link_pattern": {
+      "type": "string"
+    },
+    "wallet_apps": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "specifications": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "supported_platforms": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "applied_override_ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "derived_from": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "credential_format": {
+          "type": "string"
+        },
+        "issuance_protocol": {
+          "type": "string"
+        },
+        "compliance_profile_code": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "credential_format",
+        "issuance_protocol"
+      ]
+    },
+    "is_override": {
+      "type": "boolean"
+    },
+    "override_precedence": {
+      "type": "integer",
+      "minimum": -2147483648,
+      "maximum": 2147483647
+    },
+    "merge_strategy": {
+      "enum": [
+        "APPEND",
+        "REPLACE"
+      ]
+    },
+    "template_wallet_configs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "wallet_id": {
+            "type": "string"
+          },
+          "deep_link_scheme": {
+            "type": "string"
+          },
+          "format_variant": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "wallet_id",
+          "deep_link_scheme"
+        ]
+      }
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "name",
+    "description",
+    "credential_format",
+    "issuance_protocol",
+    "deep_link_pattern",
+    "wallet_apps",
+    "specifications",
+    "supported_platforms",
+    "applied_override_ids",
+    "derived_from",
+    "is_override",
+    "override_precedence",
+    "merge_strategy",
+    "template_wallet_configs",
+    "created_at",
+    "updated_at"
+  ],
+  "description": "Actual native derived primary-format wallet requirements and applied registry overrides. Configuration only; wallet names, platforms, specifications and deep-link patterns are not verified interoperability or delivery evidence. Null optional fields are omitted. The richer runtime projection differs from the pinned WalletProfile schema.",
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
+}

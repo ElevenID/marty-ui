@@ -102,12 +102,12 @@ pub fn derive_wallet_profile(
         .filter(|value| !value.is_empty())
         .map(str::to_ascii_uppercase);
     let exact = profile(&format, &protocol, compliance.as_deref());
-    exact
+    let mut derived = exact
         .or_else(|| profile(&format, &protocol, None))
         .unwrap_or_else(|| DerivedWalletProfile {
             credential_format: format.clone(),
             issuance_protocol: protocol.clone(),
-            compliance_profile_code: compliance,
+            compliance_profile_code: compliance.clone(),
             name: format!("{format} Wallet Compatibility"),
             description: "Derived fallback compatibility profile for this credential format and issuance protocol.".to_owned(),
             wallet_apps: strings(&["OID4VCI-compatible wallets"]),
@@ -115,7 +115,11 @@ pub fn derive_wallet_profile(
             supported_platforms: strings(&["ios", "android", "web"]),
             deep_link_pattern:
                 "openid-credential-offer://?credential_offer_uri={offer_uri}".to_owned(),
-        })
+        });
+    // Falling back to generic display requirements must not change the
+    // derivation key used to select organization-specific overrides.
+    derived.compliance_profile_code = compliance;
+    derived
 }
 
 #[must_use]

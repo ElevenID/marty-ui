@@ -37,7 +37,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     runtime.mark_healthy(ComplianceDependency::HttpListener)?;
     let app = runtime
         .router()
-        .merge(compliance_router(ComplianceHttpState { service }))
+        .merge(compliance_router(
+            ComplianceHttpState::new(service).with_service_token(c.service_token.clone())?,
+        ))
         .layer(TraceLayer::new_for_http());
     let (tx, mut rx) = watch::channel(false);
     let server = axum::serve(listener, app).with_graceful_shutdown(async move {

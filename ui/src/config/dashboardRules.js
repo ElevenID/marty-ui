@@ -52,7 +52,7 @@ export const ReadinessState = {
   MISSING: 'missing',   // ○ Does not exist
 };
 
-const TRUST_KEY_MANAGEMENT_PATH = '/console/org/deploy/key-management';
+const TRUST_KEY_MANAGEMENT_PATH = '/console/org/operator/key-management';
 const TRUST_ISSUER_IDENTITY_PATH = '/console/org/deploy/issuer-identity';
 const COMPLIANCE_PROFILES_PATH = '/console/org/policies/compliance';
 const APPLICATION_TEMPLATES_PATH = '/console/org/templates/applications';
@@ -101,26 +101,9 @@ function firstResourceError(resourceErrors, keys) {
   return null;
 }
 
-function getDefaultKeyManagementService(config) {
-  const services = Array.isArray(config?.services)
-    ? config.services.filter((service) => service && typeof service === 'object')
-    : [];
-
-  if (services.length === 0) {
-    return null;
-  }
-
-  if (typeof config?.default_service_id === 'string') {
-    return services.find((service) => service.id === config.default_service_id) || null;
-  }
-
-  return services[0] || null;
-}
-
-function hasManagedIssuerInput(signingKeys, issuerIdentities) {
-  const safeSigningKeys = Array.isArray(signingKeys) ? signingKeys : [];
-  const safeIssuerIdentities = Array.isArray(issuerIdentities) ? issuerIdentities : [];
-  return safeSigningKeys.length > 0 || safeIssuerIdentities.length > 0;
+function hasActivePublicIssuer(issuerIdentities) {
+  return safeArray(issuerIdentities).some((identity) => identity?.status === 'active'
+    && typeof identity?.issuer_did === 'string' && identity.issuer_did.startsWith('did:'));
 }
 
 function safeArray(value) {
@@ -250,48 +233,21 @@ function evaluateComplianceReadiness(lifecycle, dashboardErrors = {}) {
 }
 
 function evaluateIssuerReadiness(dependencies = {}) {
-  const { signingKeys = [], issuerIdentities = [], keyManagementConfig = null, resourceErrors = {} } = dependencies || {};
-  const loadError = firstResourceError(resourceErrors, [
-    'keyManagementConfig',
-    'signingKeys',
-    'issuerIdentities',
-  ]);
-
-  if (loadError) {
-    const labels = {
-      keyManagementConfig: 'Key management configuration',
-      signingKeys: 'Signing keys',
-      issuerIdentities: 'Issuer identities',
-    };
-    return buildLoadErrorReadiness(labels[loadError.key] || 'Issuer identity', loadError.error);
-  }
-
-  if (!getDefaultKeyManagementService(keyManagementConfig)) {
+  const { issuerIdentities = [], resourceErrors = {} } = dependencies || {};
+  if (resourceErrors.issuerIdentities) return buildLoadErrorReadiness('Issuer identities', resourceErrors.issuerIdentities);
+  if (!hasActivePublicIssuer(issuerIdentities)) {
     return {
       state: ReadinessState.BLOCKED,
-      message: 'Blocked: configure key management before production issuance',
-      action: 'Configure KMS',
-      path: TRUST_KEY_MANAGEMENT_PATH,
-      blockReason: 'Production issuance requires a configured key management service',
-    };
-  }
-
-  if (!hasManagedIssuerInput(signingKeys, issuerIdentities)) {
-    return {
-      state: ReadinessState.BLOCKED,
-      message: 'Blocked: add an issuer identity or signing key before production issuance',
+      message: 'Add an active issuer DID before issuance setup can continue',
       action: 'Set Up Issuer Identity',
       path: TRUST_ISSUER_IDENTITY_PATH,
-      blockReason: 'Production issuance requires an issuer identity or available signing key',
+      blockReason: 'Issuance setup requires an active public issuer identity',
     };
   }
-
   return {
     state: ReadinessState.READY,
-    message: 'Issuer identity and signing input ready',
-    action: null,
-    path: null,
-    blockReason: null,
+    message: 'Active issuer DID configured; inspect publication and signer state before issuance',
+    action: null, path: null, blockReason: null,
   };
 }
 
@@ -300,51 +256,10 @@ function evaluateIssuerReadiness(dependencies = {}) {
  */
 function evaluateTrustReadiness(trustProfiles, dependencies = {}) {
   const safeTrustProfiles = Array.isArray(trustProfiles) ? trustProfiles : [];
-  const {
-    signingKeys = [],
-    issuerIdentities = [],
-    keyManagementConfig = null,
-    resourceErrors = {},
-    requiresIssuerIdentity = true,
-  } = dependencies || {};
-  const loadError = firstResourceError(resourceErrors, [
-    'trustProfiles',
-    'keyManagementConfig',
-    'signingKeys',
-    'issuerIdentities',
-  ]);
-
-  if (loadError) {
-    const labels = {
-      trustProfiles: 'Trust profiles',
-      keyManagementConfig: 'Key management configuration',
-      signingKeys: 'Signing keys',
-      issuerIdentities: 'Issuer identities',
-    };
-    return buildLoadErrorReadiness(labels[loadError.key] || 'Setup data', loadError.error);
-  }
-
+  // Trusting external issuers does not require a local KMS or issuer DID.
+  const { resourceErrors = {} } = dependencies || {};
+  if (resourceErrors.trustProfiles) return buildLoadErrorReadiness('Trust profiles', resourceErrors.trustProfiles);
   if (safeTrustProfiles.length === 0) {
-    if (requiresIssuerIdentity && !getDefaultKeyManagementService(keyManagementConfig)) {
-      return {
-        state: ReadinessState.BLOCKED,
-        message: 'Blocked: configure key management before creating Trust Profiles',
-        action: 'Configure KMS',
-        path: TRUST_KEY_MANAGEMENT_PATH,
-        blockReason: 'Trust Profile setup requires a configured key management service',
-      };
-    }
-
-    if (requiresIssuerIdentity && !hasManagedIssuerInput(signingKeys, issuerIdentities)) {
-      return {
-        state: ReadinessState.BLOCKED,
-        message: 'Blocked: add an issuer identity or signing key before creating Trust Profiles',
-        action: 'Set Up Issuer Identity',
-        path: TRUST_ISSUER_IDENTITY_PATH,
-        blockReason: 'Trust Profile setup requires an issuer identity or available signing key',
-      };
-    }
-
     return {
       state: ReadinessState.MISSING,
       message: 'No Trust Profiles configured',
@@ -505,7 +420,6 @@ function evaluatePolicyReadiness(policies, templates, trustProfiles, trustDepend
 function evaluateVerificationPolicyReadiness(policies, trustProfiles, trustDependencies = {}) {
   const trustReady = evaluateTrustReadiness(trustProfiles, {
     ...trustDependencies,
-    requiresIssuerIdentity: false,
   });
   if (trustReady.state !== ReadinessState.READY) {
     return {
@@ -1031,9 +945,7 @@ function evaluateRevocationReadiness(revocationProfiles, templates, trustDepende
 export function computeSetupReadiness(data) {
   const {
     trustProfiles,
-    signingKeys,
     issuerIdentities,
-    keyManagementConfig,
     templates,
     policies,
     deployments,
@@ -1050,9 +962,7 @@ export function computeSetupReadiness(data) {
   } = data;
 
   const trustDependencies = {
-    signingKeys,
     issuerIdentities,
-    keyManagementConfig,
     resourceErrors,
   };
 
@@ -1067,7 +977,6 @@ export function computeSetupReadiness(data) {
 
   const verifierTrust = evaluateTrustReadiness(trustProfiles, {
     ...trustDependencies,
-    requiresIssuerIdentity: false,
   });
   const verifierPolicy = evaluateVerificationPolicyReadiness(policies, trustProfiles, trustDependencies);
   const verifierFlow = evaluateIntentFlowReadiness(safeArray(flows), verifierPolicy, trustDependencies, {

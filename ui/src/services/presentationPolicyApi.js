@@ -164,6 +164,8 @@ function trustSourcesFromTrustedIssuers(trustedIssuers = []) {
       description: issuer.description || null,
       issuer_did: issuer.issuer_did,
       source_type: 'PINNED_ISSUER',
+      ...Object.fromEntries(['organization_id', 'verification_method_ids', 'did_resolution']
+        .filter((field) => issuer[field] !== undefined).map((field) => [field, issuer[field]])),
     }));
 }
 
@@ -174,6 +176,16 @@ function normalizePublicTrustSource(source = {}) {
   if (source.url) normalized.url = String(source.url).trim();
   if (source.certificate_pem) normalized.certificate_pem = String(source.certificate_pem).trim();
   if (source.issuer_did) normalized.issuer_did = String(source.issuer_did).trim();
+  for (const field of ['organization_id', 'verification_method_ids']) {
+    if (source[field] !== undefined) normalized[field] = source[field];
+  }
+  if (source.did_resolution !== undefined) {
+    normalized.did_resolution = source.did_resolution === null ? null : Object.fromEntries(
+      ['resolver_type', 'allow_public_fallback', 'cache_ttl_seconds']
+        .filter((field) => source.did_resolution[field] !== undefined)
+        .map((field) => [field, source.did_resolution[field]])
+    );
+  }
   if (Array.isArray(source.purposes)) normalized.purposes = [...source.purposes];
   if (source.description) normalized.description = String(source.description).trim();
   if (source.registry_sync) {
@@ -589,7 +601,7 @@ export function buildCredentialTemplatePayload(data = {}) {
     generate_artifacts_automatically: _generateArtifactsAutomatically,
     auto_generate_artifacts: _autoGenerateArtifacts,
     supported_wallet_ids: _supportedWalletIds,
-    issuance_protocol: _issuanceProtocol,
+    _issuer_selection: _issuerSelection,
     wallet_configs: _walletConfigs,
     compliance_profile: _embeddedComplianceProfile,
     issuer_profile_id: _issuerProfileId,
@@ -689,8 +701,9 @@ export async function listPresentationPolicies(params = {}) {
 /**
  * Get a specific presentation policy by ID
  */
-export async function getPresentationPolicy(id) {
-  const result = await get(`${PRESENTATION_POLICY_BASE}/${id}`);
+export async function getPresentationPolicy(id, scope = null) {
+  const query = scope ? `?${new URLSearchParams({ organization_id: requireOrganizationId(scope) })}` : '';
+  const result = await get(`${PRESENTATION_POLICY_BASE}/${encodeURIComponent(id)}${query}`);
   return normalizePresentationPolicy(result);
 }
 
@@ -698,7 +711,21 @@ export async function getPresentationPolicy(id) {
  * Update a presentation policy
  */
 export async function updatePresentationPolicy(id, data) {
-  const result = await patch(`${PRESENTATION_POLICY_BASE}/${id}`, buildPresentationPolicyPayload(data));
+  const organizationId = requireOrganizationId(data);
+  const { organization_id: _organizationId, freshness_requirements, ...payload } = data;
+  // PATCH is a sparse update, not a new policy. Never manufacture
+  // requirements or binding defaults for an unrelated metadata edit.
+  if (typeof payload.holder_binding === 'string') {
+    payload.holder_binding = normalizeHolderBindingPayload(payload.holder_binding);
+  }
+  if (freshness_requirements !== undefined && payload.freshness === undefined) {
+    payload.freshness = normalizeFreshnessPayload({ freshness_requirements });
+  }
+  // The public gateway authenticates body scope, then removes it before
+  // forwarding to the native update contract.
+  const result = await patch(`${PRESENTATION_POLICY_BASE}/${encodeURIComponent(id)}`, {
+    organization_id: organizationId, ...payload,
+  });
   return normalizePresentationPolicy(result);
 }
 
@@ -707,6 +734,10 @@ export async function updatePresentationPolicy(id, data) {
  */
 export async function deletePresentationPolicy(id) {
   return del(`${PRESENTATION_POLICY_BASE}/${id}`);
+}
+
+export async function suspendPresentationPolicy(id) {
+  return normalizePresentationPolicy(await post(`${PRESENTATION_POLICY_BASE}/${encodeURIComponent(id)}/suspend`, {}));
 }
 
 /**

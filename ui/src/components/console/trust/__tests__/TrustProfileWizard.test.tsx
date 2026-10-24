@@ -260,6 +260,42 @@ describe('TrustProfileWizard', () => {
   }
 
   describe('initial render', () => {
+    it('preserves scoped DID controls through the complete wizard and API serializer', async () => {
+      const { user } = render(<TrustProfileWizard />)
+      await user.type(screen.getByTestId('wizard.trustProfile.name'), 'Scoped DID Trust')
+      await user.click(screen.getByTestId('wizard.trustProfile.next'))
+      await user.type(await screen.findByTestId('wizard.trustProfile.issuerDid'), 'did:web:issuer.example.com')
+      await user.click(screen.getByLabelText('Configure DID resolution'))
+      await user.type(screen.getByLabelText('Issuer organization scope'), 'org-1')
+      await user.type(screen.getByLabelText('Pinned verification method IDs'), 'did:web:issuer.example.com#assertion')
+      fireEvent.change(screen.getByLabelText('Maximum cache age (seconds)'), { target: { value: '0' } })
+      await user.click(screen.getByTestId('wizard.trustProfile.addIssuer'))
+      await user.click(screen.getByTestId('wizard.trustProfile.next'))
+      await user.click(await screen.findByTestId('wizard.trustProfile.skip'))
+      expect(await screen.findByText(/Scope: org-1; resolver: ORGANIZATION_REGISTRY; cache: 0s/)).toBeInTheDocument()
+      await user.click(await screen.findByTestId('wizard.trustProfile.submit'))
+      await waitFor(() => expect(lastTrustProfileRequestBody).toBeTruthy())
+      expect(lastTrustProfileRequestBody.trust_sources).toEqual([{
+        source_type: 'PINNED_ISSUER', issuer_did: 'did:web:issuer.example.com', organization_id: 'org-1',
+        verification_method_ids: ['did:web:issuer.example.com#assertion'],
+        did_resolution: { resolver_type: 'ORGANIZATION_REGISTRY', allow_public_fallback: false, cache_ttl_seconds: 0 },
+      }])
+    })
+
+    it('rejects method pins belonging to another DID before adding a source', async () => {
+      const { user } = render(<TrustProfileWizard />)
+      await user.type(screen.getByTestId('wizard.trustProfile.name'), 'Invalid DID Trust')
+      await user.click(screen.getByTestId('wizard.trustProfile.next'))
+      await user.type(await screen.findByTestId('wizard.trustProfile.issuerDid'), 'did:web:issuer.example.com')
+      await user.click(screen.getByLabelText('Configure DID resolution'))
+      await user.type(screen.getByLabelText('Issuer organization scope'), 'org-1')
+      await user.type(screen.getByLabelText('Pinned verification method IDs'), 'did:web:other.example#assertion')
+      await user.click(screen.getByTestId('wizard.trustProfile.addIssuer'))
+      expect(screen.getByText(/unique method IDs belonging to this DID/)).toBeInTheDocument()
+      expect(screen.getByTestId('wizard.trustProfile.issuerDid')).toHaveValue('did:web:issuer.example.com')
+      expect(lastTrustProfileRequestBody).toBeNull()
+    })
+
     it('should render wizard with correct initial state', () => {
       render(<TrustProfileWizard />)
 

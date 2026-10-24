@@ -1,7 +1,7 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use axum::{
-    extract::{Path, Query, State},
+    extract::{FromRequestParts, Path, Query},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -27,6 +27,7 @@ const MAXIMUM_PAGE_SIZE: usize = 500;
 
 #[derive(Clone)]
 pub struct FlowHttpState {
+    pub service_authenticator: Option<Arc<mmf_security::ServiceTokenAuthenticator>>,
     pub repository: PostgresFlowRepository,
     pub providers: Arc<FlowProviderRegistry>,
     pub public_base_url: String,
@@ -34,8 +35,83 @@ pub struct FlowHttpState {
     pub application_approval: crate::FlowHttpApplicationApprovalOptions,
 }
 
+pub(crate) struct FlowRequestState(pub FlowHttpState);
+
+impl FromRequestParts<FlowHttpState> for FlowRequestState {
+    type Rejection = FlowHttpError;
+    async fn from_request_parts(
+        parts: &mut axum::http::request::Parts,
+        state: &FlowHttpState,
+    ) -> Result<Self, Self::Rejection> {
+        let mut scoped = state.clone();
+        if parts.headers.contains_key("x-api-key-id")
+            || parts.headers.contains_key("x-api-key-scopes")
+        {
+            authenticate_gateway_service(state, &parts.headers)?;
+            let header = |name: &str| {
+                parts
+                    .headers
+                    .get(name)
+                    .and_then(|value| value.to_str().ok())
+                    .map(str::trim)
+                    .unwrap_or_default()
+            };
+            let actor = marty_api_key_policy::GatewayApiKeyActor::parse(
+                header("x-api-key-id"),
+                header("x-organization-id"),
+                header("x-api-key-scopes"),
+            )
+            .map_err(|_| {
+                FlowHttpError::new(
+                    StatusCode::UNAUTHORIZED,
+                    "authentication_required",
+                    "Invalid gateway principal",
+                )
+            })?;
+            let mut providers = state.providers.as_ref().clone();
+            providers.gateway_api_key_actor = Some(actor);
+            scoped.providers = Arc::new(providers);
+        }
+        Ok(Self(scoped))
+    }
+}
+
+fn authenticate_gateway_service(
+    state: &FlowHttpState,
+    headers: &HeaderMap,
+) -> Result<(), FlowHttpError> {
+    let authenticator = state.service_authenticator.as_ref().ok_or_else(|| {
+        FlowHttpError::new(
+            StatusCode::UNAUTHORIZED,
+            "service_authentication_required",
+            "Gateway service authentication required",
+        )
+    })?;
+    authenticator
+        .authenticate(
+            headers
+                .get("x-service-token")
+                .and_then(|value| value.to_str().ok()),
+        )
+        .map_err(|_| {
+            FlowHttpError::new(
+                StatusCode::UNAUTHORIZED,
+                "service_authentication_required",
+                "Gateway service authentication required",
+            )
+        })
+}
+
 pub fn flow_read_router(state: FlowHttpState) -> Router {
     Router::new()
+        .route(
+            "/internal/v1/resource-owners/flows/definitions/{flow_id}",
+            get(definition_owner),
+        )
+        .route(
+            "/internal/v1/resource-owners/flows/instances/{instance_id}",
+            get(instance_owner),
+        )
         .route("/v1/flows/capabilities", get(capabilities))
         .route(
             "/v1/flows/definitions",
@@ -88,6 +164,34 @@ pub fn flow_read_router(state: FlowHttpState) -> Router {
         .merge(flow_application_routes())
         .merge(flow_verification_routes())
         .with_state(state)
+}
+
+async fn definition_owner(
+    FlowRequestState(state): FlowRequestState,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, FlowHttpError> {
+    authenticate_gateway_service(&state, &headers)?;
+    let definition = state
+        .repository
+        .definition(&id)
+        .await?
+        .ok_or_else(|| not_found("Flow Definition not found"))?;
+    Ok(Json(
+        json!({"id": definition.id, "organization_id": definition.organization_id}),
+    ))
+}
+
+async fn instance_owner(
+    FlowRequestState(state): FlowRequestState,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, FlowHttpError> {
+    authenticate_gateway_service(&state, &headers)?;
+    let instance = required_instance(&state, &id).await?;
+    Ok(Json(
+        json!({"id": instance.id, "organization_id": instance.organization_id}),
+    ))
 }
 
 #[derive(Debug, Serialize)]
@@ -177,7 +281,7 @@ struct DefinitionListQuery {
 }
 
 async fn list_definitions(
-    State(state): State<FlowHttpState>,
+    FlowRequestState(state): FlowRequestState,
     headers: HeaderMap,
     Query(query): Query<DefinitionListQuery>,
 ) -> Result<Json<Value>, FlowHttpError> {
@@ -202,7 +306,7 @@ async fn list_definitions(
 }
 
 async fn create_definition(
-    State(state): State<FlowHttpState>,
+    FlowRequestState(state): FlowRequestState,
     headers: HeaderMap,
     Json(payload): Json<Value>,
 ) -> Result<Json<Value>, FlowHttpError> {
@@ -228,7 +332,7 @@ async fn create_definition(
 }
 
 async fn get_definition(
-    State(state): State<FlowHttpState>,
+    FlowRequestState(state): FlowRequestState,
     headers: HeaderMap,
     Path(flow_id): Path<String>,
 ) -> Result<Json<Value>, FlowHttpError> {
@@ -248,7 +352,7 @@ async fn get_definition(
 }
 
 async fn update_definition(
-    State(state): State<FlowHttpState>,
+    FlowRequestState(state): FlowRequestState,
     headers: HeaderMap,
     Path(flow_id): Path<String>,
     Json(payload): Json<Value>,
@@ -287,7 +391,7 @@ async fn update_definition(
 }
 
 async fn validate_definition(
-    State(state): State<FlowHttpState>,
+    FlowRequestState(state): FlowRequestState,
     headers: HeaderMap,
     Path(flow_id): Path<String>,
 ) -> Result<Json<Value>, FlowHttpError> {
@@ -309,7 +413,7 @@ async fn validate_definition(
 }
 
 async fn test_definition(
-    State(state): State<FlowHttpState>,
+    FlowRequestState(state): FlowRequestState,
     headers: HeaderMap,
     Path(flow_id): Path<String>,
 ) -> Result<Json<Value>, FlowHttpError> {
@@ -352,7 +456,7 @@ async fn test_definition(
 }
 
 async fn activate_definition(
-    State(state): State<FlowHttpState>,
+    FlowRequestState(state): FlowRequestState,
     headers: HeaderMap,
     Path(flow_id): Path<String>,
 ) -> Result<Json<Value>, FlowHttpError> {
@@ -390,7 +494,7 @@ async fn activate_definition(
 }
 
 async fn delete_definition(
-    State(state): State<FlowHttpState>,
+    FlowRequestState(state): FlowRequestState,
     headers: HeaderMap,
     Path(flow_id): Path<String>,
 ) -> Result<Json<Value>, FlowHttpError> {
@@ -433,7 +537,7 @@ struct InstanceListQuery {
 }
 
 async fn list_instances(
-    State(state): State<FlowHttpState>,
+    FlowRequestState(state): FlowRequestState,
     headers: HeaderMap,
     Query(query): Query<InstanceListQuery>,
 ) -> Result<Json<Value>, FlowHttpError> {
@@ -463,7 +567,7 @@ async fn list_instances(
 }
 
 async fn start_instance(
-    State(state): State<FlowHttpState>,
+    FlowRequestState(state): FlowRequestState,
     headers: HeaderMap,
     Json(payload): Json<Value>,
 ) -> Result<Json<Value>, FlowHttpError> {
@@ -506,7 +610,7 @@ async fn start_instance(
 }
 
 async fn get_instance(
-    State(state): State<FlowHttpState>,
+    FlowRequestState(state): FlowRequestState,
     headers: HeaderMap,
     Path(instance_id): Path<String>,
 ) -> Result<Json<Value>, FlowHttpError> {
@@ -522,7 +626,7 @@ async fn get_instance(
 }
 
 async fn advance_instance(
-    State(state): State<FlowHttpState>,
+    FlowRequestState(state): FlowRequestState,
     headers: HeaderMap,
     Path(instance_id): Path<String>,
     Json(payload): Json<Value>,
@@ -578,7 +682,7 @@ async fn advance_instance(
 }
 
 async fn cancel_instance(
-    State(state): State<FlowHttpState>,
+    FlowRequestState(state): FlowRequestState,
     headers: HeaderMap,
     Path(instance_id): Path<String>,
 ) -> Result<Json<Value>, FlowHttpError> {
@@ -627,7 +731,7 @@ async fn cancel_instance(
 }
 
 async fn get_result(
-    State(state): State<FlowHttpState>,
+    FlowRequestState(state): FlowRequestState,
     headers: HeaderMap,
     Path(instance_id): Path<String>,
 ) -> Result<Json<Value>, FlowHttpError> {
@@ -661,7 +765,7 @@ struct ArtifactListQuery {
 }
 
 async fn list_artifacts(
-    State(state): State<FlowHttpState>,
+    FlowRequestState(state): FlowRequestState,
     headers: HeaderMap,
     Path(instance_id): Path<String>,
     Query(query): Query<ArtifactListQuery>,
@@ -688,7 +792,7 @@ async fn list_artifacts(
 }
 
 async fn get_artifact(
-    State(state): State<FlowHttpState>,
+    FlowRequestState(state): FlowRequestState,
     headers: HeaderMap,
     Path((instance_id, artifact_id)): Path<(String, String)>,
 ) -> Result<Json<Value>, FlowHttpError> {
@@ -710,7 +814,7 @@ async fn get_artifact(
 }
 
 async fn generate_qr(
-    State(state): State<FlowHttpState>,
+    FlowRequestState(state): FlowRequestState,
     headers: HeaderMap,
     Path(instance_id): Path<String>,
 ) -> Result<Json<Value>, FlowHttpError> {
@@ -793,6 +897,14 @@ pub(crate) async fn authorize(
     organization_id: &str,
     permission: &str,
 ) -> Result<String, FlowHttpError> {
+    if let Some(actor) = &state.providers.gateway_api_key_actor {
+        let principal = actor.principal_id();
+        state
+            .providers
+            .authorize(&principal, organization_id, permission, false)
+            .await?;
+        return Ok(principal);
+    }
     let principal = headers
         .get("x-user-id")
         .and_then(|value| value.to_str().ok())
@@ -985,17 +1097,130 @@ mod tests {
 
     use super::*;
 
-    fn router() -> Router {
+    fn state() -> FlowHttpState {
         let pool = PgPoolOptions::new()
             .connect_lazy("postgresql://localhost/flow")
             .unwrap();
-        flow_read_router(FlowHttpState {
+        FlowHttpState {
+            service_authenticator: None,
             repository: PostgresFlowRepository::new(pool),
             providers: Arc::new(FlowProviderRegistry::default()),
             public_base_url: "http://localhost:8000".into(),
             verification: crate::FlowHttpVerificationOptions::default(),
             application_approval: crate::FlowHttpApplicationApprovalOptions::default(),
-        })
+        }
+    }
+
+    fn router() -> Router {
+        flow_read_router(state())
+    }
+
+    #[tokio::test]
+    async fn owner_projections_require_service_identity_before_storage_access() {
+        let mut configured = state();
+        configured.service_authenticator = Some(Arc::new(
+            mmf_security::ServiceTokenAuthenticator::new(Some("s".repeat(32)), true).unwrap(),
+        ));
+        let app = flow_read_router(configured);
+        for kind in ["definitions", "instances"] {
+            for token in ["", "wrong"] {
+                let response = app
+                    .clone()
+                    .oneshot(
+                        Request::builder()
+                            .uri(format!(
+                                "/internal/v1/resource-owners/flows/{kind}/never-query-storage"
+                            ))
+                            .header("x-service-token", token)
+                            .body(Body::empty())
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn gateway_key_context_is_service_authenticated_request_local_and_scope_bound() {
+        const KEY: &str = "10000000-0000-4000-8000-000000000001";
+        const ORG: &str = "20000000-0000-4000-8000-000000000001";
+        let mut original = state();
+        let token = "s".repeat(32);
+        original.service_authenticator = Some(Arc::new(
+            mmf_security::ServiceTokenAuthenticator::new(Some(token.clone()), true).unwrap(),
+        ));
+        for (supplied, key, expected) in [
+            ("", KEY, false),
+            ("wrong", KEY, false),
+            (token.as_str(), "malformed", false),
+            (token.as_str(), KEY, true),
+        ] {
+            let (mut parts, _) = Request::builder()
+                .header("x-service-token", supplied)
+                .header("x-api-key-id", key)
+                .header("x-api-key-scopes", "flows:read")
+                .header("x-organization-id", ORG)
+                .body(Body::empty())
+                .unwrap()
+                .into_parts();
+            let scoped = FlowRequestState::from_request_parts(&mut parts, &original).await;
+            if !expected {
+                assert_eq!(scoped.err().unwrap().status, StatusCode::UNAUTHORIZED);
+                continue;
+            }
+            let FlowRequestState(scoped) = scoped.unwrap();
+            assert!(original.providers.gateway_api_key_actor.is_none());
+            assert!(!Arc::ptr_eq(&scoped.providers, &original.providers));
+            assert_eq!(
+                authorize(&scoped, &parts.headers, ORG, "flow-definition:view")
+                    .await
+                    .unwrap(),
+                KEY
+            );
+            assert_eq!(
+                authorize(&scoped, &parts.headers, ORG, "flow-definition:create")
+                    .await
+                    .unwrap_err()
+                    .status,
+                StatusCode::FORBIDDEN
+            );
+            assert_eq!(
+                authorize(
+                    &scoped,
+                    &parts.headers,
+                    "20000000-0000-4000-8000-000000000002",
+                    "flow-definition:view"
+                )
+                .await
+                .unwrap_err()
+                .status,
+                StatusCode::FORBIDDEN
+            );
+            assert!(scoped
+                .providers
+                .authorize(KEY, ORG, "flow-definition:view", true)
+                .await
+                .is_err());
+        }
+        // No configured service credential means no key-actor assertions are accepted.
+        original.service_authenticator = None;
+        let (mut parts, _) = Request::builder()
+            .header("x-api-key-id", KEY)
+            .header("x-api-key-scopes", "admin:full")
+            .header("x-organization-id", ORG)
+            .body(Body::empty())
+            .unwrap()
+            .into_parts();
+        assert_eq!(
+            FlowRequestState::from_request_parts(&mut parts, &original)
+                .await
+                .err()
+                .unwrap()
+                .status,
+            StatusCode::UNAUTHORIZED
+        );
     }
 
     #[tokio::test]

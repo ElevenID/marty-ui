@@ -122,7 +122,7 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
               {data.enabled_flows && data.enabled_flows.length > 0 ? (
                 <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
                   {data.enabled_flows.map((flow) => (
-                    <Chip key={flow} label={flow} color="primary" variant="outlined" />
+                    <Chip key={flow} label={data.runtime_catalog?.flows.find((item) => item.id === flow)?.name || flow} color="primary" variant="outlined" />
                   ))}
                 </Box>
               ) : (
@@ -130,6 +130,10 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
                   {t('wizards.deploymentProfile.reviewStep.values.noFlowsEnabled')}
                 </Typography>
               )}
+            </Grid>
+            <Grid size={12}><Typography variant="subtitle2">Credential templates</Typography>
+              {(data.credential_template_ids || []).map((id) => <Chip key={id} label={data.runtime_catalog?.templates.find((item) => item.id === id)?.name || id} sx={{ mr: 1 }} />)}
+              {!data.credential_template_ids?.length && <Typography variant="body2">No credential templates selected</Typography>}
             </Grid>
           </Grid>
       </ReviewSectionCard>

@@ -6,7 +6,7 @@ const { storeIssuerIdentityCertificate } = vi.hoisted(() => ({
   storeIssuerIdentityCertificate: vi.fn(),
 }));
 
-vi.mock('../../../../services/signingKeysApi', () => ({ storeIssuerIdentityCertificate }));
+vi.mock('../../../../services/issuerIdentitiesApi', () => ({ storeIssuerIdentityCertificate }));
 
 const attachment = {
   issuerDid: 'did:web:issuer.example:org',

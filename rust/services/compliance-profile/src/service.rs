@@ -12,6 +12,7 @@ use std::sync::Arc;
 pub struct ComplianceService {
     repository: Arc<dyn ComplianceRepository>,
     memberships: Arc<dyn TenantMembershipProvider>,
+    gateway_actor: Option<marty_api_key_policy::GatewayApiKeyActor>,
 }
 impl ComplianceService {
     pub fn new(
@@ -21,7 +22,26 @@ impl ComplianceService {
         Self {
             repository,
             memberships,
+            gateway_actor: None,
         }
+    }
+
+    pub(crate) fn for_gateway_api_key(
+        &self,
+        actor: marty_api_key_policy::GatewayApiKeyActor,
+    ) -> Self {
+        Self {
+            gateway_actor: Some(actor),
+            ..self.clone()
+        }
+    }
+
+    pub(crate) async fn internal_owner(
+        &self,
+        id: &str,
+    ) -> Result<(String, Option<String>, bool), ComplianceError> {
+        let profile = self.profile(id).await?;
+        Ok((profile.id, profile.organization_id, profile.is_system))
     }
     pub async fn create(
         &self,
@@ -156,6 +176,13 @@ impl ComplianceService {
         org: &str,
         permission: &str,
     ) -> Result<(), ComplianceError> {
+        if let Some(actor) = &self.gateway_actor {
+            return if actor.authorizes(user, org, permission) {
+                Ok(())
+            } else {
+                Err(ComplianceError::Forbidden("Permission denied".into()))
+            };
+        }
         if user.trim().is_empty() {
             return Err(ComplianceError::Unauthorized(
                 "Authentication required".into(),

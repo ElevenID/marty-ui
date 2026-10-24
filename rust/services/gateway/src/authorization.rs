@@ -216,6 +216,18 @@ static SPECIAL_RULES: LazyLock<Vec<RouteRule>> = LazyLock::new(|| {
             "verification",
         ),
         rule(
+            r"^/v1/delivery-destinations(?:/[^/]+)?$",
+            &[
+                ("GET", "wallet:view"),
+                ("HEAD", "wallet:view"),
+                ("OPTIONS", "wallet:view"),
+                ("POST", "integration-connector:create"),
+                ("PATCH", "integration-connector:edit"),
+                ("DELETE", "integration-connector:delete"),
+            ],
+            "delivery-destination",
+        ),
+        rule(
             r"^/v1/wallet-registry(?:/|$)",
             &[
                 ("GET", "wallet:view"),
@@ -302,6 +314,16 @@ static SPECIAL_RULES: LazyLock<Vec<RouteRule>> = LazyLock::new(|| {
             r"^/v1/integrations/canvas/canvas-credentials/validate$",
             &[("POST", "integration-connector:view")],
             "integration-connector",
+        ),
+        rule(
+            r"^/v1/compliance-profiles/[^/]+/activate$",
+            &[("POST", "compliance-profile:activate")],
+            "compliance-profile",
+        ),
+        rule(
+            r"^/v1/compliance-profiles/[^/]+/suspend$",
+            &[("POST", "compliance-profile:suspend")],
+            "compliance-profile",
         ),
         rule(
             r"^/v1/credential-templates/[^/]+/activate$",
@@ -767,7 +789,10 @@ pub fn resolve_resource_lookup(path: &str) -> Option<ResourceLookup> {
     if let Some(captures) = FLOW_RESOURCE.captures(path) {
         return Some(ResourceLookup {
             service: "flows",
-            path: format!("/v1/flows/{}/{}", &captures[1], &captures[2]),
+            path: format!(
+                "/internal/v1/resource-owners/flows/{}/{}",
+                &captures[1], &captures[2]
+            ),
         });
     }
 
@@ -775,7 +800,11 @@ pub fn resolve_resource_lookup(path: &str) -> Option<ResourceLookup> {
     let segment = &captures[1];
     let id = &captures[2];
     let (service, template, reserved): (&str, &str, &[&str]) = match segment {
-        "credential-templates" => ("credential-templates", "/v1/credential-templates/{id}", &[]),
+        "credential-templates" => (
+            "credential-templates",
+            "/v1/credential-templates/{id}",
+            &["issuer-options"],
+        ),
         "trust-profiles" => (
             "trust-profiles",
             "/internal/v1/resource-owners/trust-profiles/{id}",
@@ -788,7 +817,7 @@ pub fn resolve_resource_lookup(path: &str) -> Option<ResourceLookup> {
         ),
         "compliance-profiles" => (
             "compliance-profiles",
-            "/v1/compliance-profiles/{id}",
+            "/internal/v1/resource-owners/compliance-profiles/{id}",
             &["system"],
         ),
         "presentation-policies" => (
@@ -796,8 +825,16 @@ pub fn resolve_resource_lookup(path: &str) -> Option<ResourceLookup> {
             "/internal/v1/resource-owners/presentation-policies/{id}",
             &["evaluate"],
         ),
-        "deployment-profiles" => ("deployment-profiles", "/v1/deployment-profiles/{id}", &[]),
-        "revocation-profiles" => ("revocation-profiles", "/v1/revocation-profiles/{id}", &[]),
+        "deployment-profiles" => (
+            "deployment-profiles",
+            "/internal/v1/resource-owners/deployment-profiles/{id}",
+            &[],
+        ),
+        "revocation-profiles" => (
+            "revocation-profiles",
+            "/internal/v1/resource-owners/revocation-profiles/{id}",
+            &[],
+        ),
         "flows" => (
             "flows",
             "/v1/flows/{id}",
@@ -845,6 +882,11 @@ pub fn resolve_resource_lookup(path: &str) -> Option<ResourceLookup> {
             "credential-templates",
             "/v1/wallet-registry/{id}",
             &["resolve"],
+        ),
+        "delivery-destinations" => (
+            "credential-templates",
+            "/v1/delivery-destinations/{id}",
+            &[],
         ),
         // Notification resources deliberately require an explicit authorized
         // organization selector; unscoped owner lookup is unsafe here.
@@ -965,6 +1007,40 @@ mod tests {
     }
 
     #[test]
+    fn delivery_grants_exist_in_the_organization_catalog_and_keep_api_key_reads_separate() {
+        let catalog: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../contracts/organization-permission-catalog.json"
+        ))
+        .unwrap();
+        for (method, permission) in [
+            ("GET", "wallet:view"),
+            ("POST", "integration-connector:create"),
+            ("PATCH", "integration-connector:edit"),
+            ("DELETE", "integration-connector:delete"),
+        ] {
+            let required =
+                resolve_action(method, "/v1/delivery-destinations/destination-one").unwrap();
+            assert_eq!(required.permission, permission);
+            assert!(catalog["permissions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|item| format!(
+                    "{}:{}",
+                    item["resource"].as_str().unwrap(),
+                    item["action"].as_str().unwrap()
+                ) == permission));
+        }
+        assert!(api_key_allowed("wallet:view", &["wallet:read".into()]));
+        for action in ["create", "edit", "delete"] {
+            let permission = format!("integration-connector:{action}");
+            assert!(!api_key_allowed(&permission, &["wallet:read".into()]));
+            assert!(!api_key_allowed(&permission, &["integrations:read".into()]));
+            assert!(api_key_allowed(&permission, &["integrations:write".into()]));
+        }
+    }
+
+    #[test]
     fn language_neutral_authorization_contract() {
         let contract = contract();
         assert_eq!(contract.schema_version, 1);
@@ -1074,6 +1150,30 @@ mod tests {
     }
 
     #[test]
+    fn consumer_profile_ownership_uses_service_only_projections_instead_of_human_reads() {
+        for resource in [
+            "compliance-profiles",
+            "deployment-profiles",
+            "revocation-profiles",
+            "flows/definitions",
+            "flows/instances",
+        ] {
+            let lookup = resolve_resource_lookup(&format!(
+                "/v1/{resource}/11111111-1111-4111-8111-111111111111"
+            ))
+            .unwrap();
+            assert_eq!(
+                lookup.path,
+                format!(
+                    "/internal/v1/resource-owners/{resource}/11111111-1111-4111-8111-111111111111"
+                )
+            );
+        }
+        assert!(resolve_resource_lookup("/v1/flows/capabilities").is_none());
+        assert!(resolve_resource_lookup("/v1/compliance-profiles/system/discoverable").is_none());
+    }
+
+    #[test]
     fn organization_id_matches_published_lowercase_shape() {
         let id = "11111111-1111-1111-1111-111111111111";
         assert_eq!(
@@ -1163,5 +1263,32 @@ mod tests {
                 .permission,
             "compliance-profile:view"
         );
+    }
+    #[test]
+    fn compliance_lifecycle_uses_native_actions_and_readers_never_gain_writes() {
+        for action in ["activate", "suspend"] {
+            let path = format!("/v1/compliance-profiles/profile-one/{action}");
+            let requirement = resolve_action("POST", &path).unwrap();
+            assert_eq!(
+                requirement.permission,
+                format!("compliance-profile:{action}")
+            );
+            assert_eq!(
+                resolve_resource_lookup(&path).unwrap().path,
+                "/internal/v1/resource-owners/compliance-profiles/profile-one"
+            );
+            assert!(!api_key_allowed(
+                requirement.permission,
+                &["compliance:read".into()]
+            ));
+            assert!(!api_key_allowed(
+                requirement.permission,
+                &["templates:write".into()]
+            ));
+            assert!(api_key_allowed(
+                requirement.permission,
+                &["compliance:write".into()]
+            ));
+        }
     }
 }

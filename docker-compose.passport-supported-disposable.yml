@@ -467,6 +467,8 @@ services:
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
       GRPC_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
       ISSUANCE_API_KEY_FILE: /run/secrets/issuance_api_key
+      SIGNING_KEYS_SERVICE_URL: http://signing-keys:8017
+      SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/secrets/signing_keys_internal_api_key
       ORG_GRPC_TARGET: https://organization:9002
       ORG_GRPC_CA_CERT: /run/secrets/workload_identity_ca_cert
       GRPC_WORKLOAD_TLS_SERVER_CERT: /run/secrets/pp_workload_server_cert
@@ -483,7 +485,7 @@ services:
       PUBLIC_BASE_URL: https://localhost:${PASSPORT_ACCEPTANCE_GATEWAY_PORT:?reserve disposable loopback port}
       ISSUER_BASE_URL: https://localhost:${PASSPORT_ACCEPTANCE_GATEWAY_PORT:?reserve disposable loopback port}
       MARTY_ORG_SLUG: marty
-    secrets: [marty_db_password, grpc_service_token, issuance_api_key, workload_identity_ca_cert, pp_workload_server_cert, pp_workload_server_kms_token]
+    secrets: [marty_db_password, grpc_service_token, issuance_api_key, signing_keys_internal_api_key, workload_identity_ca_cert, pp_workload_server_cert, pp_workload_server_kms_token]
     volumes: [openbao_public_ca:/bao/public-ca:ro]
     depends_on:
       db-migrate:

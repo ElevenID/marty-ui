@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import ssl
 import subprocess
 import sys
@@ -57,6 +58,43 @@ from selfhost_openbao_client import (Bao, CUSTODY_SIGNER, CUSTODY_SIGNER_LEAF_AC
                                    CUSTODY_SIGNER_POLICY)
 
 DOCKER_ROOT = Path(os.environ.get("MARTY_OPENBAO_PROBE_HOST_ROOT", str(ROOT)))
+
+
+def bootstrap_failure_diagnostic(result: subprocess.CompletedProcess[str]) -> dict[str, object]:
+    """Keep actionable failure facts after cleanup without echoing custody data."""
+    stages = {
+        "Waiting for OpenBao": "listener",
+        "Initializing OpenBao": "initialization",
+        "Unsealing OpenBao": "unseal",
+        "Registering DIDComm": "plugin-registration",
+        "Minting Notification webhook OpenBao token": "notification-authority",
+        "Minting HAIP workload token": "haip-authority",
+        "OpenBao self-host bootstrap complete": "complete",
+    }
+    stdout, stderr = result.stdout or "", result.stderr or ""
+    observed = [(stdout.rfind(message), stage) for message, stage in stages.items() if message in stdout]
+    stage = max(observed, default=(-1, "unknown"))[1]
+    statuses = sorted({int(value) for value in re.findall(r"\bCode:\s*([1-5][0-9]{2})\b", stderr)})
+    patterns = {
+        "leader-unavailable": ("not the leader", "no active leader", "failed to contact leader"),
+        "sealed": ("vault is sealed", "openbao is sealed"),
+        "tls": ("x509:", "tls handshake", "certificate verify failed"),
+        "connectivity": ("connection refused", "connection reset", "no such host"),
+        "timeout": ("context deadline exceeded", "i/o timeout", "timed out"),
+        "authorization": ("permission denied", "invalid token", "missing client token"),
+        "plugin-startup": ("error starting plugin", "failed to start plugin", "fork/exec"),
+        "resource-exhaustion": ("out of memory", "no space left on device", "resource temporarily unavailable"),
+        "file-custody": ("read-only file system", "no such file or directory"),
+    }
+    lower = stderr.lower()
+    classes = sorted(name for name, phrases in patterns.items() if any(phrase in lower for phrase in phrases))
+    routes = {"plugin-catalog": "/v1/sys/plugins/catalog", "secret-mount": "/v1/sys/mounts/",
+              "acl-policy": "/v1/sys/policies/acl/", "token-create": "/v1/auth/token/create",
+              "transit": "/v1/transit/", "didcomm": "/v1/didcomm/"}
+    operations = sorted(name for name, prefix in routes.items() if prefix in lower)
+    return {"schema": "marty.selfhost-bootstrap-failure/v1", "exit_code": result.returncode,
+            "last_observed_stage": stage, "http_statuses": statuses, "error_classes": classes or ["unclassified"],
+            "request_categories": operations or ["unclassified"]}
 
 
 def volume_file(volume: str, path: str) -> str:
@@ -194,7 +232,8 @@ def run() -> None:
             ]
         result = docker_process(bootstrap_command, timeout=300)
         if result.returncode:
-            raise RuntimeError("Disposable self-host Raft bootstrap failed")
+            diagnostic = json.dumps(bootstrap_failure_diagnostic(result), sort_keys=True)
+            raise RuntimeError(f"Disposable self-host Raft bootstrap failed: {diagnostic}")
         docker(
             "run", "--rm", "-v", f"{state}:/bao/data:ro",
             "--entrypoint", "/bin/sh", IMAGE, "-c",

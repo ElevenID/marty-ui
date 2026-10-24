@@ -23,6 +23,7 @@ const {
   mockWalletPreferenceState,
   mockAuthState,
   mockLocationState,
+  mockPreview,
 } = vi.hoisted(() => ({
   mockNavigate: vi.fn(),
   mockGet: vi.fn(),
@@ -41,6 +42,7 @@ const {
   mockSupersedeApplication: vi.fn(),
   mockWalletPreferenceState: { walletIds: ['wallet-1'] as string[] },
   mockAuthState: { organizationId: 'org-1' },
+  mockPreview: { isPreview: false },
   mockLocationState: {
     params: { credentialType: undefined as string | undefined },
     location: {
@@ -99,7 +101,7 @@ vi.mock('../../hooks/useAuth', () => ({
 }));
 
 vi.mock('../../contexts/PreviewContext', () => ({
-  usePreview: () => ({ isPreview: false }),
+  usePreview: () => mockPreview,
 }));
 
 vi.mock('../../services/api', () => ({
@@ -203,6 +205,7 @@ function canvasClaimStatus(claimed = false) {
 describe('ApplicationForm', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockPreview.isPreview = false;
     sessionStorage.clear();
     storeCanvasLtiSession({
       session_token: 'canvas-session-token',
@@ -252,6 +255,51 @@ describe('ApplicationForm', () => {
     });
     mockWalletPreferenceState.walletIds = ['wallet-1'];
     mockAuthState.organizationId = 'org-1';
+  });
+
+  it.each([false, true])('simulates preview submission without applicant, credential or evidence writes (one click=%s)', async (oneClick) => {
+    mockPreview.isPreview = true;
+    mockLocationState.location.search = '?canvas_lti_state=stale-launch&application_template_id=stale-template';
+    const { user } = render(<ApplicationForm previewContext={{
+      credential: { id: 'preview-credential', credential_type: oneClick ? 'MemberCredential' : 'EmployeeCredential',
+        required_fields: [], optional_fields: [], custom_fields: [], field_validation_rules: {} },
+      applicationTemplate: { id: 'preview-template', name: 'Actual preview template', credential_template_id: 'preview-credential',
+        status: 'DRAFT', form_fields: oneClick ? [{ field_id: 'email', field_type: 'EMAIL', required: true }] : [], evidence_requirements: [] },
+    }} />);
+    expect(screen.getByText('Actual preview template')).toBeInTheDocument();
+    expect(screen.queryByText('ElevenID Login Credential')).not.toBeInTheDocument();
+    expect(mockGet).not.toHaveBeenCalled();
+    if (oneClick) {
+      expect(screen.queryByText(/^Instant/)).not.toBeInTheDocument();
+      await user.click(screen.getByRole('button', { name: 'Add to Wallet' }));
+    } else {
+      if (screen.queryByTestId('next-step-btn')) await user.click(screen.getByTestId('next-step-btn'));
+      await user.click(screen.getByTestId('accept-terms-checkbox'));
+      await user.click(screen.getByTestId('submit-application-btn'));
+    }
+    expect(await screen.findByTestId('application-submitted')).toHaveTextContent('applicationForm.success.previewTitle');
+    for (const mutation of [mockCreateApplicant, mockCreateApplication, mockSubmitApplication,
+      mockSubmitApplicationEvidence, mockUpdateApplicantProfile, mockEnrollBiometric, mockGenerateIssuanceOffer, mockPost]) {
+      expect(mutation).not.toHaveBeenCalled();
+    }
+  });
+
+  it('submits a live application to its API-provided issuer organization rather than the user home organization', async () => {
+    mockAuthState.organizationId = 'home-org';
+    mockLocationState.location.state = {
+      credential: { id: 'issuer-credential', credential_type: 'EmployeeCredential', required_fields: [], optional_fields: [], custom_fields: [] },
+      applicationTemplate: { id: 'issuer-application', organization_id: 'issuer-org', credential_template_id: 'issuer-credential',
+        name: 'Issuer application', status: 'ACTIVE', form_fields: [{ field_id: 'member_id', label: 'Member ID', field_type: 'TEXT', required: true }], evidence_requirements: [] },
+    };
+    const { user } = render(<ApplicationForm />);
+    await user.type(screen.getByRole('textbox', { name: /member id/i }), 'SYNTHETIC-ISSUER-MEMBER');
+    if (screen.queryByTestId('next-step-btn')) await user.click(screen.getByTestId('next-step-btn'));
+    await user.click(screen.getByTestId('accept-terms-checkbox'));
+    await user.click(screen.getByTestId('submit-application-btn'));
+    await waitFor(() => expect(mockCreateApplication).toHaveBeenCalledWith(expect.objectContaining({
+      organization_id: 'issuer-org', application_template_id: 'issuer-application',
+      form_data: { member_id: 'SYNTHETIC-ISSUER-MEMBER' },
+    })));
   });
 
   it('explains Canvas-only credential applications with launch context and completion checks', async () => {

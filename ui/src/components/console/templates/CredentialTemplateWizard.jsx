@@ -6,7 +6,7 @@
  */
 
 import { useNavigate } from 'react-router';
-import { useCallback } from 'react';
+import { useCallback, useLayoutEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   Box,
@@ -32,6 +32,8 @@ import ClaimsStep from './steps/ClaimsStep';
 import TrustComplianceStep from './steps/TrustComplianceStep';
 import CryptoValidityStep from './steps/CryptoValidityStep';
 import ReviewStep from './steps/ReviewStep';
+import issuerIdentitiesApi from '../../../services/issuerIdentitiesApi';
+import { templateIssuerRequest, templateIssuerRequirementsSatisfied, validTemplateIssuerSelection } from './templateIssuerSelection';
 
 const getSteps = (t) => [
   t('wizards.credentialTemplate.steps.basics'),
@@ -46,27 +48,29 @@ const CredentialTemplateWizard = () => {
   const { t } = useTranslation('console');
   const { activeOrgId } = useConsole();
   const effectiveOrganizationId = activeOrgId;
+  const organizationEpoch = useRef(0);
 
   const validateStep = useCallback((stepIndex, data) => {
     switch (stepIndex) {
       case 0: // Basics
         return (
           data.name?.trim().length > 0 &&
-          data.credential_type?.trim().length > 0 &&
-          data.vct?.trim().length > 0
+          data.credential_type?.trim().length > 0
         );
       case 1: // Claims
         return data.claims && data.claims.length > 0;
       case 2: // Trust & Compliance
-        return Boolean(data.trust_profile_id && data.issuer_did && data.compliance_profile_id);
+        return validTemplateIssuerSelection(data, effectiveOrganizationId);
       case 3: // Crypto & Validity (optional)
-        return Boolean(data.revocation_profile_id);
+        return data._issuer_selection?.requirements?.revocation_profile === false
+          ? !data.revocation_profile_id : Boolean(data.revocation_profile_id);
       case 4: // Review
-        return true;
+        return validTemplateIssuerSelection(data, effectiveOrganizationId)
+          && (data._issuer_selection?.requirements?.revocation_profile === false ? !data.revocation_profile_id : Boolean(data.revocation_profile_id));
       default:
         return false;
     }
-  }, []);
+  }, [effectiveOrganizationId]);
 
   const handleSubmit = useCallback(async (data) => {
     if (!effectiveOrganizationId) {
@@ -79,8 +83,16 @@ const CredentialTemplateWizard = () => {
       ...data,
       organization_id: effectiveOrganizationId,
     };
-    
+    const epoch = organizationEpoch.current;
+    const options = await issuerIdentitiesApi.getTemplateIssuerOptions(templateIssuerRequest(data, effectiveOrganizationId));
+    if (epoch !== organizationEpoch.current) throw new Error('Organization changed. Review issuer compatibility before submitting.');
+    if (!options.identities.some((identity) => identity.issuer_did === data.issuer_did)
+      || options.issuance_protocol !== data.issuance_protocol
+      || !templateIssuerRequirementsSatisfied(data, options.requirements)) {
+      throw new Error('Issuer compatibility changed. Return to Trust & Compliance and refresh the available options.');
+    }
     const result = await createCredentialTemplate(payload);
+    if (epoch !== organizationEpoch.current) throw new Error('The request completed for the previous organization. Check its templates before retrying.');
     return result;
   }, [effectiveOrganizationId, t]);
 
@@ -113,6 +125,15 @@ const CredentialTemplateWizard = () => {
       navigate('/console/org/templates/credentials');
     },
   });
+
+  const updateWizardData = wizard.updateData;
+  useLayoutEffect(() => {
+    organizationEpoch.current += 1;
+    updateWizardData({ trust_profile_id: null, compliance_profile_id: null, issuer_did: null,
+      revocation_profile_id: null, credential_payload_format: undefined, supported_formats: undefined,
+      issuance_protocol: undefined, _issuer_selection: null });
+    return () => { organizationEpoch.current += 1; };
+  }, [activeOrgId, updateWizardData]);
 
   const renderStepContent = () => {
     switch (wizard.activeStep) {

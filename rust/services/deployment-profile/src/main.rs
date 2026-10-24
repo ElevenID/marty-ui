@@ -42,7 +42,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     runtime.mark_healthy(DeploymentDependency::HttpListener)?;
     let app = runtime
         .operational_router()
-        .merge(deployment_router(DeploymentHttpState { service }))
+        .merge(deployment_router(
+            DeploymentHttpState::new(service).with_service_token(config.service_token.clone())?,
+        ))
         .layer(TraceLayer::new_for_http());
     let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
     let server = axum::serve(listener, app).with_graceful_shutdown(async move {

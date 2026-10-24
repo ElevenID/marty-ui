@@ -35,7 +35,7 @@ vi.mock('../../../../services/presentationPolicyApi', () => ({
   listRevocationProfiles: (...args: unknown[]) => listRevocationProfiles(...args),
 }));
 
-vi.mock('../../../../services/signingKeysApi', () => ({
+vi.mock('../../../../services/issuerIdentitiesApi', () => ({
   listPublicIssuerIdentities: (...args: unknown[]) => listPublicIssuerIdentities(...args),
 }));
 

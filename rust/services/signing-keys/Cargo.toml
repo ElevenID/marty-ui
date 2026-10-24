@@ -42,6 +42,7 @@ const-oid.workspace = true
 der.workspace = true
 hex.workspace = true
 marty-crypto = { workspace = true, features = ["x509"] }
+marty-didcomm = { workspace = true, features = ["did_web"] }
 marty-key-material-policy = { path = "../../crates/key-material-policy" }
 marty-openbao-http = { path = "../../crates/openbao-http" }
 marty-holder-key-reference = { path = "../../crates/holder-key-reference" }

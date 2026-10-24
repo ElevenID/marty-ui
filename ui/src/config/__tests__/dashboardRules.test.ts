@@ -136,7 +136,7 @@ describe('dashboardRules', () => {
       expect(actions['register-signing-service'].visible).toBe(false)
     })
 
-    it('should keep issuer identity and KMS as blockers for issue setup', () => {
+    it('requires a public issuer DID for issue setup without sending the consumer to KMS configuration', () => {
       const data = {
         setupIntent: 'issue',
         trustProfiles: [],
@@ -158,8 +158,9 @@ describe('dashboardRules', () => {
 
       expect(result.activeIntent).toBe('issue')
       expect(result.intents.issue.steps.issuer.state).toBe(ReadinessState.BLOCKED)
-      expect(result.intents.issue.steps.issuer.path).toBe('/console/org/deploy/key-management')
-      expect(actions['register-signing-service'].visible).toBe(true)
+      expect(result.intents.issue.steps.issuer.path).toBe('/console/org/deploy/issuer-identity')
+      expect(actions['register-signing-service'].visible).toBe(false)
+      expect(actions['create-issuer-identity'].visible).toBe(true)
       expect(actions['create-trust-profile'].visible).toBe(false)
     })
 
@@ -299,7 +300,7 @@ describe('dashboardRules', () => {
       })
     })
 
-    it('should block trust when key management is missing and no trust profile exists', () => {
+    it('allows trust configuration without local KMS configuration', () => {
       const data = {
         trustProfiles: [],
         signingKeys: [],
@@ -317,13 +318,13 @@ describe('dashboardRules', () => {
 
       const result = computeSetupReadiness(data)
 
-      expect(result.trust.state).toBe(ReadinessState.BLOCKED)
-      expect(result.trust.action).toBe('Configure KMS')
-      expect(result.trust.path).toBe('/console/org/deploy/key-management')
+      expect(result.trust.state).toBe(ReadinessState.MISSING)
+      expect(result.trust.action).toBe('Create')
+      expect(result.trust.path).toBe('/console/org/trust/profiles/new')
       expect(result.template.dependencyBlocked).toBe(true)
     })
 
-    it('should block trust when issuer input is missing and no trust profile exists', () => {
+    it('allows trust configuration for external issuers without a local issuer DID', () => {
       const data = {
         trustProfiles: [],
         signingKeys: [],
@@ -341,9 +342,9 @@ describe('dashboardRules', () => {
 
       const result = computeSetupReadiness(data)
 
-      expect(result.trust.state).toBe(ReadinessState.BLOCKED)
-      expect(result.trust.action).toBe('Set Up Issuer Identity')
-      expect(result.trust.path).toBe('/console/org/deploy/issuer-identity')
+      expect(result.trust.state).toBe(ReadinessState.MISSING)
+      expect(result.trust.action).toBe('Create')
+      expect(result.trust.path).toBe('/console/org/trust/profiles/new')
       expect(result.template.dependencyBlocked).toBe(true)
     })
 
@@ -797,7 +798,7 @@ describe('dashboardRules', () => {
   describe('computeQuickActionVisibility', () => {
     it('should show register-signing-service when trust is blocked on key management', () => {
       const readiness = {
-        trust: { state: ReadinessState.BLOCKED, path: '/console/org/deploy/key-management' },
+        trust: { state: ReadinessState.BLOCKED, path: '/console/org/operator/key-management' },
         template: { state: ReadinessState.MISSING, dependencyBlocked: true },
         policy: { state: ReadinessState.MISSING, dependencyBlocked: true },
         deployment: { state: ReadinessState.MISSING, dependencyBlocked: true },

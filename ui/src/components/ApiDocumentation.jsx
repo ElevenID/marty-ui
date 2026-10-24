@@ -124,7 +124,7 @@ function ApiDocumentation() {
       if (!mounted) return;
 
       if (!reachableSpec) {
-        setRedocError('OpenAPI schema is not publicly reachable in this environment (expected endpoint returned 403/404).');
+        setRedocError('The API schema could not be reached. Try again shortly or open the schema directly.');
         return;
       }
 
@@ -170,7 +170,7 @@ function ApiDocumentation() {
         <Typography variant="h3" component="h1" fontWeight="bold" gutterBottom>
           Verifiable Credential API Documentation
         </Typography>
-        <Typography variant="body1" color="text.secondary" paragraph sx={{ maxWidth: 900 }}>
+        <Typography component="p" variant="body1" color="text.secondary" sx={{ maxWidth: 900, mb: 2 }}>
           <strong>ElevenID LLC implements digital identity as governed configuration.</strong>{' '}
           Instead of hard-coding trust, disclosure, and verification logic into applications, 
           ElevenID LLC models identity using five composable primitives—then executes them consistently 
@@ -211,7 +211,7 @@ function ApiDocumentation() {
             Choose Your Path
           </Typography>
           <Grid container spacing={2} sx={{ mb: 3 }}>
-            <Grid item xs={12} md={4}>
+            <Grid size={{ xs: 12, md: 4 }}>
               <Card elevation={1} sx={{ height: '100%' }}>
                 <CardContent>
                   <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
@@ -230,7 +230,7 @@ function ApiDocumentation() {
                 </CardContent>
               </Card>
             </Grid>
-            <Grid item xs={12} md={4}>
+            <Grid size={{ xs: 12, md: 4 }}>
               <Card elevation={1} sx={{ height: '100%' }}>
                 <CardContent>
                   <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
@@ -248,7 +248,7 @@ function ApiDocumentation() {
                 </CardContent>
               </Card>
             </Grid>
-            <Grid item xs={12} md={4}>
+            <Grid size={{ xs: 12, md: 4 }}>
               <Card elevation={1} sx={{ height: '100%' }}>
                 <CardContent>
                   <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
@@ -330,15 +330,17 @@ function ApiDocumentation() {
               {redocError}
             </Alert>
             <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
-              This beta environment is currently running in tunnel/dev mode. If the gateway blocks
-              the schema endpoint or external script CDNs, the embedded viewer cannot render.
+              You can open the API schema directly using the link below, or try loading this page again later.
             </Typography>
             <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5}>
               <Button variant="outlined" size="small" component="a" href="/openapi.json" target="_blank" rel="noopener noreferrer">
                 Try /openapi.json
               </Button>
-              <Button variant="outlined" size="small" component="a" href="http://localhost:8000/docs" target="_blank" rel="noopener noreferrer">
-                Local gateway docs
+              <Button variant="outlined" size="small" component="a" href="/v1/protocol-support" target="_blank" rel="noopener noreferrer">
+                Protocol support catalog
+              </Button>
+              <Button variant="outlined" size="small" component="a" href="/redoc" target="_blank" rel="noopener noreferrer">
+                Gateway ReDoc
               </Button>
             </Stack>
             {specUrlInUse && (
