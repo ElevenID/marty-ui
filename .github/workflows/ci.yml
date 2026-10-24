@@ -45,7 +45,6 @@ jobs:
       rust_runtime: ${{ steps.classify.outputs.rust_runtime }}
       rust_matrix: ${{ steps.classify.outputs.rust_matrix }}
       openbao: ${{ steps.classify.outputs.openbao }}
-      planner_only: ${{ steps.classify.outputs.planner_only }}
       rollback_test_only: ${{ steps.classify.outputs.rollback_test_only }}
       didcomm_release_test_only: ${{ steps.classify.outputs.didcomm_release_test_only }}
       k8s_policy_test_only: ${{ steps.classify.outputs.k8s_policy_test_only }}
@@ -73,7 +72,6 @@ jobs:
           rust_runtime=false
           rust_matrix='["canvas","contracts","selfhost"]'
           openbao=false
-          planner_only=false
           rollback_test_only=false
           didcomm_release_test_only=false
           k8s_policy_test_only=false
@@ -123,32 +121,6 @@ jobs:
             git diff --name-only -z --no-renames "$BASE_SHA" HEAD > "$changed_paths_file"
             mapfile -d '' -t changed_files < "$changed_paths_file"
             report_historical_input_shadow pull_request proved "${changed_files[@]}"
-            # Planner-only PRs get bounded feedback; merge groups remain full.
-            planner_candidate=false
-            planner_source=false
-            if (( ${#changed_files[@]} > 0 )); then
-              planner_candidate=true
-            fi
-            for path in "${changed_files[@]}"; do
-              case "$path" in
-                scripts/ci/plan_affected_rust.py|tests/test_plan_affected_rust.py)
-                  planner_source=true
-                  ;;
-                docs/architecture-feedback-improvement-plan.md|docs/architecture-test-obligations.md)
-                  if [[ ! -f "$path" || -L "$path" ]]; then
-                    planner_candidate=false
-                  fi
-                  ;;
-                *) planner_candidate=false ;;
-              esac
-            done
-            if [[ "$planner_candidate" == true && "$planner_source" == true &&
-                  -f scripts/ci/plan_affected_rust.py &&
-                  ! -L scripts/ci/plan_affected_rust.py &&
-                  -f tests/test_plan_affected_rust.py &&
-                  ! -L tests/test_plan_affected_rust.py ]]; then
-              planner_only=true
-            fi
             # Only the regular rollback test leaf gets root-pytest feedback.
             if [[ "${{ github.event_name }}" == pull_request &&
                   ${#changed_files[@]} -eq 1 &&
@@ -421,12 +393,6 @@ jobs:
                     all=true
                   fi
                   ;;
-                scripts/ci/plan_affected_rust.py|tests/test_plan_affected_rust.py)
-                  # The shadow planner has no runtime/image consumer. Release
-                  # pytest owns its unit tests and the report below; real Rust
-                  # sources, manifests, and unknown siblings retain Rust CI.
-                  release=true
-                  ;;
                 scripts/ci/canvas_oracle_current_inputs.py)
                   # Only root release-pytest Canvas input guards import this
                   # helper. Capture scripts, manifest inputs, and unknown
@@ -501,7 +467,6 @@ jobs:
             printf 'rust_runtime=%s\n' "$rust_runtime"
             printf 'rust_matrix=%s\n' "$rust_matrix"
             printf 'openbao=%s\n' "$openbao"
-            printf 'planner_only=%s\n' "$planner_only"
             printf 'rollback_test_only=%s\n' "$rollback_test_only"
             printf 'didcomm_release_test_only=%s\n' "$didcomm_release_test_only"
             printf 'k8s_policy_test_only=%s\n' "$k8s_policy_test_only"
@@ -2907,7 +2872,7 @@ jobs:
           # Actual database execution remains in the isolated Rust/Docker gate.
           uv pip install --system pytest pytest-xdist==3.8.0 pytest-asyncio pyyaml 'jsonschema[format]>=4.23' cryptography playwright sqlalchemy httpx -r requirements-proto.txt "$marty_rs_wheel" "$verification_wheel" "$iso18013_wheel"
       - name: Install Python browser transport runtime
-        if: needs.changes.outputs.planner_only != 'true' && needs.changes.outputs.rollback_test_only != 'true' && needs.changes.outputs.k8s_policy_test_only != 'true' && needs.changes.outputs.didcomm_release_test_only != 'true'
+        if: needs.changes.outputs.rollback_test_only != 'true' && needs.changes.outputs.k8s_policy_test_only != 'true' && needs.changes.outputs.didcomm_release_test_only != 'true'
         run: python -m playwright install --with-deps --only-shell chromium
       - name: Verify released mdoc binding evidence contract
         shell: bash
@@ -2954,7 +2919,7 @@ jobs:
         with:
           toolchain: 1.95.0
       - name: Prepare Rust KMS operator for release contracts
-        if: needs.changes.outputs.planner_only != 'true' && needs.changes.outputs.rollback_test_only != 'true' && needs.changes.outputs.k8s_policy_test_only != 'true' && needs.changes.outputs.didcomm_release_test_only != 'true'
+        if: needs.changes.outputs.rollback_test_only != 'true' && needs.changes.outputs.k8s_policy_test_only != 'true' && needs.changes.outputs.didcomm_release_test_only != 'true'
         run: cargo build --locked --manifest-path rust/Cargo.toml -p marty-deployment-catalog --bin marty-deploy
       - name: Enforce OSS commerce boundary
         run: python scripts/check_oss_boundary.py
@@ -2967,11 +2932,6 @@ jobs:
           tests/test_didcomm_native_consumer_ownership.py
           tests/test_ci_workflow_performance.py::test_didcomm_policy_test_sources_have_exact_release_owner
           -v --tb=short
-      - name: Run planner-owned PR checks
-        if: needs.changes.outputs.planner_only == 'true'
-        run: >-
-          python -m pytest tests/test_plan_affected_rust.py
-          tests/test_ci_workflow_performance.py -v --tb=short
       - name: Run rollback-test-owned PR checks
         if: needs.changes.outputs.rollback_test_only == 'true'
         run: >-
@@ -2989,15 +2949,15 @@ jobs:
           tests/test_passport_supported_consumer_routing.py
           tests/test_ci_workflow_performance.py -v --tb=short
       - name: Prepare source-only deployment registry renderer
-        if: needs.changes.outputs.planner_only != 'true' && needs.changes.outputs.rollback_test_only != 'true' && needs.changes.outputs.k8s_policy_test_only != 'true' && needs.changes.outputs.didcomm_release_test_only != 'true'
+        if: needs.changes.outputs.rollback_test_only != 'true' && needs.changes.outputs.k8s_policy_test_only != 'true' && needs.changes.outputs.didcomm_release_test_only != 'true'
         run: bash scripts/ci/install-compose-renderer.sh
       - name: Run repository release checks
-        if: needs.changes.outputs.planner_only != 'true' && needs.changes.outputs.rollback_test_only != 'true' && needs.changes.outputs.k8s_policy_test_only != 'true' && needs.changes.outputs.didcomm_release_test_only != 'true'
+        if: needs.changes.outputs.rollback_test_only != 'true' && needs.changes.outputs.k8s_policy_test_only != 'true' && needs.changes.outputs.didcomm_release_test_only != 'true'
         env:
           MARTY_COMPOSE_RENDERER: ${{ runner.temp }}/compose-render-v5.4.0
         run: python -m pytest tests -n 2 -v --tb=short --durations=20
       - name: Exercise root-owned disposable TLS staging contracts
-        if: needs.changes.outputs.planner_only != 'true' && needs.changes.outputs.rollback_test_only != 'true' && needs.changes.outputs.k8s_policy_test_only != 'true' && needs.changes.outputs.didcomm_release_test_only != 'true'
+        if: needs.changes.outputs.rollback_test_only != 'true' && needs.changes.outputs.k8s_policy_test_only != 'true' && needs.changes.outputs.didcomm_release_test_only != 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -3026,14 +2986,8 @@ jobs:
           )):
               raise SystemExit("root-owned TLS cases did not all execute and pass")
           PY
-      - name: Report affected Rust packages in shadow mode
-        if: github.event_name == 'pull_request'
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.sha }}
-        run: python3 scripts/ci/plan_affected_rust.py
       - name: Configure the pinned containerd image store
-        if: needs.changes.outputs.planner_only != 'true' && needs.changes.outputs.rollback_test_only != 'true' && needs.changes.outputs.k8s_policy_test_only != 'true' && needs.changes.outputs.didcomm_release_test_only != 'true'
+        if: needs.changes.outputs.rollback_test_only != 'true' && needs.changes.outputs.k8s_policy_test_only != 'true' && needs.changes.outputs.didcomm_release_test_only != 'true'
         uses: docker/setup-docker-action@2bf61fb9464cc67f0cbdeabed6aa0380accd1c70 # v5.5.0
         with:
           version: v29.7.2
@@ -3045,7 +2999,7 @@ jobs:
               }
             }
       - name: Configure the pinned OCI exporter
-        if: needs.changes.outputs.planner_only != 'true' && needs.changes.outputs.rollback_test_only != 'true' && needs.changes.outputs.k8s_policy_test_only != 'true' && needs.changes.outputs.didcomm_release_test_only != 'true'
+        if: needs.changes.outputs.rollback_test_only != 'true' && needs.changes.outputs.k8s_policy_test_only != 'true' && needs.changes.outputs.didcomm_release_test_only != 'true'
         id: buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v6.2.0
         with:
@@ -3054,13 +3008,13 @@ jobs:
           driver-opts: image=moby/buildkit@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8
           buildkitd-config: .github/buildkit-ci-mirror.toml
       - name: Require the exact supported OCI backend
-        if: needs.changes.outputs.planner_only != 'true' && needs.changes.outputs.rollback_test_only != 'true' && needs.changes.outputs.k8s_policy_test_only != 'true' && needs.changes.outputs.didcomm_release_test_only != 'true'
+        if: needs.changes.outputs.rollback_test_only != 'true' && needs.changes.outputs.k8s_policy_test_only != 'true' && needs.changes.outputs.didcomm_release_test_only != 'true'
         env:
           MARTY_BUILDX_DRIVER: ${{ steps.buildx.outputs.driver }}
           MARTY_BUILDX_NODES_JSON: ${{ steps.buildx.outputs.nodes }}
         run: python scripts/check_verification_candidate_backend.py
       - name: Prove the same OCI archive through the future consumer path
-        if: needs.changes.outputs.planner_only != 'true' && needs.changes.outputs.rollback_test_only != 'true' && needs.changes.outputs.k8s_policy_test_only != 'true' && needs.changes.outputs.didcomm_release_test_only != 'true'
+        if: needs.changes.outputs.rollback_test_only != 'true' && needs.changes.outputs.k8s_policy_test_only != 'true' && needs.changes.outputs.didcomm_release_test_only != 'true'
         env:
           MARTY_RUN_VERIFICATION_CANDIDATE_DOCKER_TESTS: "1"
         run: >-

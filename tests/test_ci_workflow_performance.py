@@ -567,7 +567,6 @@ def _classify_changed_paths(
     combined: bool = False,
     event: str = "pull_request",
     include_rust_plan: bool = False,
-    include_planner_plan: bool = False,
     include_rollback_plan: bool = False,
     include_k8s_plan: bool = False,
     include_didcomm_plan: bool = False,
@@ -698,7 +697,6 @@ done < "$SYNTHETIC_PATHS_FILE"
             )
             if (
                 (include_rust_plan or key not in {"rust_runtime", "rust_matrix"})
-                and (include_planner_plan or key != "planner_only")
                 and (include_rollback_plan or key != "rollback_test_only")
                 and (include_k8s_plan or key != "k8s_policy_test_only")
                 and (include_didcomm_plan or key != "didcomm_release_test_only")
@@ -1457,7 +1455,6 @@ def test_pull_request_classifier_is_conservative_and_merge_queue_is_complete() -
         "rust_runtime",
         "rust_matrix",
         "openbao",
-        "planner_only",
         "rollback_test_only",
         "didcomm_release_test_only",
         "k8s_policy_test_only",
@@ -2765,8 +2762,8 @@ def test_release_owned_policy_test_sources_have_no_second_execution_owner(
     for path in candidates:
         assert (ROOT / path).is_file(), f"stale release-only selector: {path}"
         # The policy owner has one classifier reference, one collection
-        # command, and four mutually exclusive test-source-only PR invocations.
-        expected_refs = 6 if path == "tests/test_ci_workflow_performance.py" else 1
+        # command, and three mutually exclusive test-source-only PR invocations.
+        expected_refs = 5 if path == "tests/test_ci_workflow_performance.py" else 1
         assert ci_source.count(path) == expected_refs, (
             f"other direct CI consumer: {path}"
         )
@@ -2975,79 +2972,6 @@ def test_model_and_compose_policy_sources_select_only_their_release_owner(
     assert protected["all"] == protected["rust"] == "true"
 
 
-def test_shadow_planner_sources_use_existing_release_owner_on_prs(
-    tmp_path: Path,
-) -> None:
-    _, workflow = _workflow(CI_PATH)
-    release = workflow["jobs"]["test-release-contracts"]
-    assert "needs.changes.outputs.rust == 'true'" in release["if"]
-    assert "needs.changes.outputs.release == 'true'" in release["if"]
-    release_steps = {step.get("name"): step for step in release["steps"]}
-    assert release_steps["Run repository release checks"]["run"] == (
-        RELEASE_TEST_COMMAND
-    )
-    shadow = release_steps["Report affected Rust packages in shadow mode"]
-    assert shadow["if"] == "github.event_name == 'pull_request'"
-    assert shadow["run"] == "python3 scripts/ci/plan_affected_rust.py"
-    assert shadow["env"] == {
-        "BASE_SHA": "${{ github.event.pull_request.base.sha }}",
-        "HEAD_SHA": "${{ github.sha }}",
-    }
-    assert not any(
-        step.get("name") == "Report affected Rust packages in shadow mode"
-        for step in workflow["jobs"]["rust-lint-policy"]["steps"]
-    )
-
-    paths = ("scripts/ci/plan_affected_rust.py", "tests/test_plan_affected_rust.py")
-    for path in paths:
-        assert (ROOT / path).is_file()
-        selected = _classify_changed_path(path, tmp_path)
-        assert selected == {
-            "all": "false",
-            "ui": "false",
-            "python": "false",
-            "rust": "false",
-            "openbao": "false",
-            "release": "true",
-            "verification": "false",
-            "security": "false",
-        }
-        for other_workflow in (ROOT / ".github/workflows").glob("*.yml"):
-            if other_workflow != CI_PATH:
-                assert path not in other_workflow.read_text(encoding="utf-8")
-
-    docker_context = (ROOT / "services/Dockerfile.dockerignore").read_text(
-        encoding="utf-8"
-    )
-    assert docker_context.startswith("# Only public service build and runtime inputs.")
-    assert "\n**\n" in docker_context
-    assert "!scripts/ci/run-public-rust-build.sh" in docker_context
-    assert "!scripts/ci/plan_affected_rust.py" not in docker_context
-    assert "plan_affected_rust.py" not in (ROOT / "services/Dockerfile").read_text(
-        encoding="utf-8"
-    )
-
-    assert _classify_changed_paths(paths, tmp_path, combined=True)[0]["rust"] == "false"
-    assert (
-        _classify_changed_paths(
-            [paths[0], "rust/services/flow/src/lib.rs"], tmp_path, combined=True
-        )[0]["rust"]
-        == "true"
-    )
-    assert (
-        _classify_changed_path("scripts/ci/unknown_planner.py", tmp_path)["all"]
-        == "true"
-    )
-    assert (
-        _classify_changed_path("tests/test_plan_affected_rust_helper.py", tmp_path)[
-            "all"
-        ]
-        == "true"
-    )
-    assert (
-        _classify_changed_paths([paths[0]], tmp_path, event="merge_group")[0]["all"]
-        == "true"
-    )
 
 
 def test_kubernetes_policy_test_source_pr_keeps_full_protected_checks(
@@ -3072,7 +2996,6 @@ def test_kubernetes_policy_test_source_pr_keeps_full_protected_checks(
             tmp_path,
             combined=True,
             include_rust_plan=True,
-            include_planner_plan=True,
             include_rollback_plan=True,
             include_k8s_plan=True,
             **kwargs,
@@ -3086,7 +3009,6 @@ def test_kubernetes_policy_test_source_pr_keeps_full_protected_checks(
         "rust_runtime": "false",
         "rust_matrix": '["canvas","contracts","selfhost"]',
         "openbao": "false",
-        "planner_only": "false",
         "rollback_test_only": "false",
         "k8s_policy_test_only": "true",
         "release": "true",
@@ -3143,7 +3065,6 @@ def test_kubernetes_policy_test_source_pr_keeps_full_protected_checks(
         "tests/test_ci_workflow_performance.py", "-v", "--tb=short",
     ]
     full_only = (
-        "needs.changes.outputs.planner_only != 'true' && "
         "needs.changes.outputs.rollback_test_only != 'true' && "
         "needs.changes.outputs.k8s_policy_test_only != 'true' && "
         "needs.changes.outputs.didcomm_release_test_only != 'true'"
@@ -3307,7 +3228,6 @@ def test_exact_didcomm_release_pr_path_preserves_full_release_fallback(
     # Missing or malformed output must run the existing full path, not the
     # focused one. The other bounded PR modes retain their own exclusions.
     full_only = (
-        "needs.changes.outputs.planner_only != 'true' && "
         "needs.changes.outputs.rollback_test_only != 'true' && "
         "needs.changes.outputs.k8s_policy_test_only != 'true' && "
         f"{focused_flag} != 'true'"
@@ -3334,132 +3254,6 @@ def test_exact_didcomm_release_pr_path_preserves_full_release_fallback(
     )
 
 
-def test_planner_only_pr_feedback_retains_full_protected_release_checks(
-    tmp_path: Path,
-) -> None:
-    _, workflow = _workflow(CI_PATH)
-    changes = workflow["jobs"]["changes"]["outputs"]
-    assert changes["planner_only"] == "${{ steps.classify.outputs.planner_only }}"
-    planner_paths = [
-        "scripts/ci/plan_affected_rust.py",
-        "tests/test_plan_affected_rust.py",
-        "docs/architecture-feedback-improvement-plan.md",
-        "docs/architecture-test-obligations.md",
-    ]
-    exact = _classify_changed_paths(
-        planner_paths, tmp_path, combined=True, include_planner_plan=True
-    )[0]
-    assert exact["planner_only"] == exact["release"] == "true"
-    assert exact["all"] == exact["rust"] == "false"
-    for source in planner_paths[:2]:
-        selected = _classify_changed_paths(
-            [source], tmp_path, include_planner_plan=True
-        )[0]
-        assert selected["planner_only"] == selected["release"] == "true"
-    for document in planner_paths[2:]:
-        document_only = _classify_changed_paths(
-            [document], tmp_path, include_planner_plan=True
-        )[0]
-        assert document_only["planner_only"] == "false"
-        bounded = _classify_changed_paths(
-            [planner_paths[0], document],
-            tmp_path,
-            combined=True,
-            include_planner_plan=True,
-        )[0]
-        assert bounded["planner_only"] == bounded["release"] == "true"
-        assert bounded["all"] == bounded["rust"] == "false"
-        absent = tmp_path / ("absent-" + Path(document).stem)
-        for source in planner_paths[:2]:
-            target = absent / source
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text("synthetic planner source", encoding="utf-8")
-        missing_document = _classify_changed_paths(
-            [planner_paths[0], document],
-            tmp_path,
-            combined=True,
-            include_planner_plan=True,
-            working_directory=absent,
-        )[0]
-        assert missing_document["planner_only"] == "false"
-        linked_document = absent / document
-        linked_document.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            linked_document.symlink_to(ROOT / document)
-        except (OSError, NotImplementedError):
-            pass  # Windows without symlink privilege; protected Linux checks it.
-        else:
-            linked = _classify_changed_paths(
-                [planner_paths[0], document],
-                tmp_path,
-                combined=True,
-                include_planner_plan=True,
-                working_directory=absent,
-            )[0]
-            assert linked["planner_only"] == "false"
-    empty_diff = _classify_changed_paths(
-        [], tmp_path, combined=True, include_planner_plan=True
-    )[0]
-    assert empty_diff["planner_only"] == "false"
-    for other in (
-        "SELFHOST_BUNDLE.md",
-        "rust/crates/selfhost-bundle/src/lib.rs",
-        ".github/workflows/ci.yml",
-        "tests/test_plan_affected_rust_helper.py",
-    ):
-        mixed = _classify_changed_paths(
-            [planner_paths[0], other],
-            tmp_path,
-            combined=True,
-            include_planner_plan=True,
-        )[0]
-        assert mixed["planner_only"] == "false", other
-    protected = _classify_changed_paths(
-        planner_paths,
-        tmp_path,
-        combined=True,
-        event="merge_group",
-        include_planner_plan=True,
-    )[0]
-    assert protected["planner_only"] == "false"
-    assert protected["all"] == protected["release"] == "true"
-    no_base = _classify_changed_paths(
-        [planner_paths[0]],
-        tmp_path,
-        missing_base=True,
-        include_planner_plan=True,
-    )[0]
-    assert no_base["planner_only"] == "false"
-    assert no_base["all"] == "true"
-
-    release = workflow["jobs"]["test-release-contracts"]
-    steps = {step.get("name"): step for step in release["steps"]}
-    assert steps["Run planner-owned PR checks"]["if"] == (
-        "needs.changes.outputs.planner_only == 'true'"
-    )
-    planner_command = steps["Run planner-owned PR checks"]["run"]
-    assert "tests/test_plan_affected_rust.py" in planner_command
-    assert "tests/test_ci_workflow_performance.py" in planner_command
-    complete_only = (
-        "needs.changes.outputs.planner_only != 'true' && "
-        "needs.changes.outputs.rollback_test_only != 'true' && "
-        "needs.changes.outputs.k8s_policy_test_only != 'true' && "
-        "needs.changes.outputs.didcomm_release_test_only != 'true'"
-    )
-    assert steps["Run repository release checks"]["if"] == complete_only
-    assert steps["Run repository release checks"]["run"] == (
-        RELEASE_TEST_COMMAND
-    )
-    for name in (
-        "Configure the pinned containerd image store",
-        "Configure the pinned OCI exporter",
-        "Require the exact supported OCI backend",
-        "Prove the same OCI archive through the future consumer path",
-    ):
-        assert steps[name]["if"] == complete_only
-    assert steps["Report affected Rust packages in shadow mode"]["if"] == (
-        "github.event_name == 'pull_request'"
-    )
 
 
 def test_rollback_test_only_pr_keeps_full_mixed_and_protected_validation(
@@ -3477,7 +3271,6 @@ def test_rollback_test_only_pr_keeps_full_mixed_and_protected_validation(
             tmp_path,
             combined=True,
             include_rust_plan=True,
-            include_planner_plan=True,
             include_rollback_plan=True,
             **kwargs,
         )[0]
@@ -3491,7 +3284,6 @@ def test_rollback_test_only_pr_keeps_full_mixed_and_protected_validation(
         "rust_runtime": "false",
         "rust_matrix": '["canvas","contracts","selfhost"]',
         "openbao": "false",
-        "planner_only": "false",
         "rollback_test_only": "true",
         "release": "true",
         "verification": "false",
@@ -3554,7 +3346,6 @@ def test_rollback_test_only_pr_keeps_full_mixed_and_protected_validation(
         RELEASE_TEST_COMMAND
     )
     full_only = (
-        "needs.changes.outputs.planner_only != 'true' && "
         "needs.changes.outputs.rollback_test_only != 'true' && "
         "needs.changes.outputs.k8s_policy_test_only != 'true' && "
         "needs.changes.outputs.didcomm_release_test_only != 'true'"
@@ -3575,9 +3366,6 @@ def test_rollback_test_only_pr_keeps_full_mixed_and_protected_validation(
         "Require workflow policy test collection",
     ):
         assert "if" not in steps[name]
-    assert steps["Report affected Rust packages in shadow mode"]["if"] == (
-        "github.event_name == 'pull_request'"
-    )
     assert workflow["jobs"]["security"]["if"] == (
         "needs.changes.outputs.security == 'true'"
     )
@@ -5944,3 +5732,15 @@ def test_registry_source_render_uses_pinned_renderer_without_changing_docker_plu
     assert release["env"]["MARTY_COMPOSE_RENDERER"] == "${{ runner.temp }}/compose-render-v5.4.0"
     assert release["run"] == "python -m pytest tests -n 2 -v --tb=short --durations=20"
     assert not prepare.get("continue-on-error", False)
+
+
+def test_retired_shadow_planner_paths_cannot_bypass_full_validation(tmp_path: Path) -> None:
+    # Deleted source paths and any later reintroduction use conservative CI.
+    for path in ("scripts/ci/plan_affected_rust.py", "tests/test_plan_affected_rust.py"):
+        for event in ("pull_request", "merge_group"):
+            selected = _classify_changed_paths([path], tmp_path, event=event)[0]
+            assert selected["all"] == selected["rust"] == selected["release"] == "true"
+    _, workflow = _workflow(CI_PATH)
+    assert "planner_only" not in workflow["jobs"]["changes"]["outputs"]
+    assert not any("shadow mode" in step.get("name", "")
+                   for step in workflow["jobs"]["test-release-contracts"]["steps"])
