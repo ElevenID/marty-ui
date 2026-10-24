@@ -13,7 +13,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 from provision_selfhost_keycloak_kms import (  # noqa: E402
-    OUTPUTS, require_cert_lifetime, require_mounts, selected_pki_mount, write_outputs,
+    OUTPUTS, selected_pki_mount, write_outputs,
 )
 from with_disposable_event_stream_kms import PLUGIN_IMAGE  # noqa: E402
 
@@ -146,26 +146,7 @@ def test_keycloak_output_rejects_native_windows(tmp_path: Path) -> None:
     assert list(tmp_path.iterdir()) == []
 
 
-class Mounts:
-    def __init__(self, didcomm: str, *, keycloak: bool = False) -> None:
-        self.didcomm = didcomm
-        self.keycloak = keycloak
-
-    def request(self, method: str, path: str) -> dict:
-        assert (method, path) == ("GET", "sys/mounts")
-        mounts = {"transit/": {"type": "transit"}, "didcomm/": {"type": self.didcomm}}
-        if self.keycloak:
-            mounts["keycloak-pki/"] = {"type": "pki"}
-        return {"data": mounts}
-
-
-def test_keycloak_provisioning_requires_current_didcomm_plugin() -> None:
-    require_mounts(Mounts("openbao-didcomm-authcrypt"))
-    with pytest.raises(RuntimeError, match="reviewed Keycloak mounts"):
-        require_mounts(Mounts("kv"))
-    require_mounts(Mounts("openbao-didcomm-authcrypt", keycloak=True), renew=True)
-    with pytest.raises(RuntimeError, match="reviewed Keycloak mounts"):
-        require_mounts(Mounts("openbao-didcomm-authcrypt"), renew=True)
+def test_keycloak_provisioning_requires_pinned_didcomm_plugin() -> None:
     assert PLUGIN_IMAGE.fullmatch("marty-openbao-didcomm:ci")
     assert PLUGIN_IMAGE.fullmatch("marty-openbao-didcomm:local")
     assert not PLUGIN_IMAGE.fullmatch("ghcr.io/elevenid/marty-ui-oss/openbao-didcomm:latest")
@@ -181,43 +162,6 @@ def test_replacement_keycloak_issuer_is_explicit_and_bounded() -> None:
             selected_pki_mount(renew=True, requested=value)
     with pytest.raises(ValueError, match="renewal-only"):
         selected_pki_mount(renew=False, requested="keycloak-pki-v2")
-
-    class ReplacementMounts(Mounts):
-        def request(self, method: str, path: str) -> dict:
-            response = super().request(method, path)
-            response["data"]["keycloak-pki-v2/"] = {"type": "pki"}
-            return response
-
-    require_mounts(ReplacementMounts("openbao-didcomm-authcrypt", keycloak=True),
-                   renew=True, pki_mount="keycloak-pki-v2")
-    with pytest.raises(RuntimeError, match="reviewed Keycloak mounts"):
-        require_mounts(Mounts("openbao-didcomm-authcrypt", keycloak=True),
-                       renew=True, pki_mount="keycloak-pki-v2")
-
-
-def test_keycloak_certificate_requires_a_real_session_length() -> None:
-    from tests.test_selfhost_native_certificates import certificate, key, pem
-    signer = key()
-    short = certificate("short", signer.public_key(), signer=signer, after=1800)
-    with pytest.raises(RuntimeError, match="certificate expires before tester session"):
-        require_cert_lifetime(pem(short).decode())
-
-
-@pytest.mark.parametrize("minted", [False, True])
-def test_provision_reports_recovery_only_after_leaf_creation(monkeypatch, minted):
-    import provision_selfhost_keycloak_kms as keycloak
-    from selfhost_native_operator import OperatorCleanupError
-
-    def fail(bao, created, **context):
-        if minted:
-            created.append("sensitive-leaf-token-not-for-diagnostics")
-        raise RuntimeError("synthetic preflight failure")
-
-    monkeypatch.setattr(keycloak, "_provision", fail)
-    error = OperatorCleanupError if minted else RuntimeError
-    message = "Keycloak provisioning requires operator recovery" if minted else "synthetic preflight failure"
-    with pytest.raises(error, match="^" + message + "$"):
-        keycloak.provision(object())
 
 
 def test_cli_staging_failure_after_qualified_mint_is_exit_three(tmp_path, monkeypatch, capsys):

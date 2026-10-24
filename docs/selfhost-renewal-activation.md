@@ -9,6 +9,22 @@ Keep the old generation until
 the renewed installation passes its business and custody journeys. Neither
 generation may contain local private keys.
 
+Keycloak remote provisioning and renewed-generation assembly run in the matching
+Rust `marty-deploy` operator. Python entrypoints retain their arguments and the
+separate privileged root-to-operator file handoff. Install and source the signed
+operator receipt first; sudo staging preserves only the four public
+`MARTY_DEPLOY_*` identity variables shown in the disposable qualification runbook.
+The bridge validates binary digest/source/tag before provisioning and does not
+use a source-build fallback under sudo. Mutating provisioning has no overall
+kill timeout; individual HTTPS operations remain bounded. Exit 3 requires
+operator reconciliation of potentially live authority before retrying.
+
+Generation assembly reuses the Rust workload identity inventory. It preserves
+exact static bytes, active file modes, exclusive creation, distinct scoped tokens
+and the separate overlap/retirement ceremonies. Failure removes only files
+created by that attempt; an unconfirmed rollback is reported for recovery.
+Assembly does not activate a generation or retire the independent release checks.
+
 After the initial KMS-only installation, use
 `scripts/provision_selfhost_renewal_identity.py --mode bootstrap` once with
 the existing private generation, HTTPS OpenBao CA, and the bootstrap root

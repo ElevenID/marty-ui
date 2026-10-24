@@ -15,7 +15,8 @@ ROOT = Path(__file__).resolve().parents[1]
 @pytest.mark.parametrize("operation,timeout", [("approle-bootstrap", None), ("approle-mint", None),
                                             ("approle-login", 300), ("approle-policy", 300),
                                             ("approle-rotate", None), ("approle-retire", None),
-                                            ("leaf-refresh", None), ("keycloak-token", None)])
+                                            ("leaf-refresh", None), ("keycloak-token", None),
+                                            ("keycloak-provision", None)])
 def test_native_transactions_cannot_be_killed_during_cleanup(monkeypatch, operation, timeout):
     from types import SimpleNamespace
     from scripts import selfhost_native_operator as native
@@ -33,14 +34,15 @@ def test_native_transactions_cannot_be_killed_during_cleanup(monkeypatch, operat
 
 
 @pytest.mark.parametrize("code", [-15, 101, 3221225477])
-def test_keycloak_abnormal_exit_is_sanitized_recovery(monkeypatch, code):
+@pytest.mark.parametrize("operation", ["keycloak-token", "keycloak-provision"])
+def test_keycloak_abnormal_exit_is_sanitized_recovery(monkeypatch, code, operation):
     from types import SimpleNamespace
     from scripts import selfhost_native_operator as native
     monkeypatch.setattr(native, "operator_command", lambda *_: ["native-operator"])
     monkeypatch.setattr(native.subprocess, "run", lambda *_, **kwargs: SimpleNamespace(
         returncode=code, stdout=b"", stderr=b"sensitive-crash-detail"))
     with pytest.raises(native.OperatorCleanupError, match="^Keycloak provisioning requires operator recovery$"):
-        native.operator_bytes(ROOT, "operator", "keycloak-token", input=b"{}")
+        native.operator_bytes(ROOT, "operator", operation, input=b"{}")
 
 
 @pytest.mark.parametrize("kind", ["RSA", "EC", "ED25519"])

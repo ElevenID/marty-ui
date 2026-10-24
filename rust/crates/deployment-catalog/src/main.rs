@@ -263,10 +263,33 @@ fn run() -> Result<(), String> {
         use marty_deployment_catalog::operator::{self, REFUSAL};
         use std::io::{Read, Write};
         let result = match args.get(1).map(String::as_str) {
-            Some("keycloak-policy" | "keycloak-token") => {
+            Some("generation") if args.len() == 2 => {
+                use marty_deployment_catalog::generation;
+                use std::io::IsTerminal;
+                if std::io::stdout().is_terminal() {
+                    return Err(REFUSAL.into());
+                }
+                let mut input = Vec::new();
+                std::io::stdin()
+                    .take(512 * 1024 + 1)
+                    .read_to_end(&mut input)
+                    .map_err(|_| REFUSAL)?;
+                if input.len() > 512 * 1024 {
+                    return Err(REFUSAL.into());
+                }
+                let context: Value = serde_json::from_slice(&input).map_err(|_| REFUSAL)?;
+                let value = match generation::operation(&context) {
+                    Ok(value) => serde_json::json!({"value":value}),
+                    Err(error) => serde_json::json!({"error":error}),
+                };
+                let mut output = std::io::stdout().lock();
+                serde_json::to_writer(&mut output, &value).map_err(|_| REFUSAL)?;
+                output.flush().map_err(|_| REFUSAL)
+            }
+            Some("keycloak-policy" | "keycloak-token" | "keycloak-provision") => {
                 use marty_deployment_catalog::keycloak;
                 use std::{io::IsTerminal, path::Path, time::Duration};
-                let mint = args[1] == "keycloak-token";
+                let mint = args[1] != "keycloak-policy";
                 if args.len() != if mint { 4 } else { 2 }
                     || (mint && std::io::stdout().is_terminal())
                 {
@@ -292,10 +315,19 @@ fn run() -> Result<(), String> {
                         .enable_all()
                         .build()
                         .map_err(|_| REFUSAL)?
-                        .block_on(keycloak::mint(&bao, &context))
+                        .block_on(async {
+                            if args[1] == "keycloak-provision" {
+                                marty_deployment_catalog::keycloak_provision::provision(
+                                    &bao, &context,
+                                )
+                                .await
+                            } else {
+                                keycloak::mint(&bao, &context).await.map(Value::String)
+                            }
+                        })
                         .map_err(str::to_owned)?
                 } else {
-                    keycloak::policy(&context)?
+                    Value::String(keycloak::policy(&context)?)
                 };
                 let refusal = if mint { keycloak::RECOVERY } else { REFUSAL };
                 let mut output = std::io::stdout().lock();

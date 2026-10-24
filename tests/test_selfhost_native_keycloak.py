@@ -9,6 +9,8 @@ import pytest
 from scripts.selfhost_native_operator import keycloak_policy, keycloak_token, OperatorCleanupError
 from tests.native_operator_https import https_json_server
 
+ROLE_CONFIG = {"allow_any_name": True, "key_type": "rsa", "key_bits": 2048,
+               "max_ttl": "8h", "use_csr_common_name": False, "use_csr_sans": False}
 OPERATOR = "synthetic-keycloak-operator-0123456789"
 LEAF = "synthetic-keycloak-leaf-01234567890123"
 SCOPES = [{"scope": "signing"}, *({"scope": "jwe", "realm": realm, "purpose": purpose,
@@ -179,8 +181,11 @@ def test_truncated_or_invalid_successful_token_response_is_recovery(monkeypatch,
 
 
 @pytest.mark.parametrize("mode", ["initial", "renew", "ca-renew"])
-@pytest.mark.parametrize("duplicate", [False, True])
-def test_complete_producer_keeps_seven_outputs_and_all_remote_proofs(keycloak_server, monkeypatch, mode, duplicate):
+@pytest.mark.parametrize("fault", [None, "duplicate", "mount", "missing-base-mount", "role", "authority-policy",
+                                  "authority-ttl-float", "exportable", "backup", "version-float",
+                                  "leaf-private", "leaf-short", "spki", "jwe-version", "late-jwe-loss",
+                                  "first-policy-missing", "first-mint-lost"])
+def test_complete_producer_keeps_seven_outputs_and_all_remote_proofs(keycloak_server, monkeypatch, mode, fault):
     monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / "scripts"))
     import provision_selfhost_keycloak_kms as producer
     from scripts.selfhost_openbao_client import Bao
@@ -191,7 +196,7 @@ def test_complete_producer_keeps_seven_outputs_and_all_remote_proofs(keycloak_se
 
     state = keycloak_server
     state.batch, state.renew = True, mode != "initial"
-    state.duplicate_tokens = duplicate
+    state.duplicate_tokens = fault == "duplicate"
     mount = "keycloak-pki-v2" if mode == "ca-renew" else "keycloak-pki"
     signer = key()
     issuer = certificate("root", signer.public_key(), signer=signer, ca=True, after=8760 * 3600)
@@ -221,9 +226,9 @@ def test_complete_producer_keeps_seven_outputs_and_all_remote_proofs(keycloak_se
             return 200, {"data": {"certificate": pem(issuer).decode()}}
         if path == mount + "/roles/rs256":
             if method == "POST":
-                assert mode != "renew" and body == producer.ROLE_CONFIG
+                assert mode != "renew" and body == ROLE_CONFIG
                 return 204, {}
-            return 200, {"data": {**producer.ROLE_CONFIG, "max_ttl": 28800}}
+            return 200, {"data": {**ROLE_CONFIG, "max_ttl": 28800}}
         if path.startswith("transit/keys/"):
             if method == "POST" and not path.endswith("/csr"):
                 assert mode == "initial" and body["exportable"] is False and body["allow_plaintext_backup"] is False
@@ -253,11 +258,64 @@ def test_complete_producer_keeps_seven_outputs_and_all_remote_proofs(keycloak_se
             return 200, {"data": {"version": "v1-synthetic"}}
         return None
 
-    state.producer = owned_producer
+    def faulted_producer(method, path, body, token):
+        if fault == "first-policy-missing" and path == "sys/policies/acl":
+            return 200, {"data": {"keys": []}}
+        if fault == "first-mint-lost" and path in ("auth/token/create", "auth/token/create/selfhost-renew-leaf"):
+            return 0, {}
+        if fault == "late-jwe-loss" and path == "didcomm/keycloak/keys/master/cookie" and token == OPERATOR:
+            return 0, {}
+        result = owned_producer(method, path, body, token)
+        if result is None or token != OPERATOR:
+            return result
+        status, response = result
+        data = response.get("data", {})
+        if path == "sys/mounts":
+            if fault == "mount":
+                data["didcomm/"]["type"] = "kv"
+            if fault == "missing-base-mount":
+                data.pop("keycloak-pki/", None)
+                if mode == "initial":
+                    data["keycloak-pki/"] = {"type": "pki"}
+        if path == mount + "/roles/rs256" and method == "GET" and fault == "role":
+            data["key_bits"] = 4096
+        if path == "auth/token/lookup" and body == {"token": OPERATOR}:
+            if fault == "authority-policy":
+                data["policies"].append("root")
+            if fault == "authority-ttl-float":
+                data["ttl"] = 7200.0
+        if path.startswith("transit/keys/keycloak-") and method == "GET":
+            if fault == "exportable":
+                data["exportable"] = True
+            if fault == "backup":
+                data["allow_plaintext_backup"] = True
+            if fault == "version-float":
+                data["latest_version"] = 1.0
+            if fault == "spki":
+                data["keys"]["1"]["public_key"] = signer.public_key().public_bytes(
+                    serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo).decode()
+        if path == mount + "/sign/rs256":
+            if fault == "leaf-private":
+                data["private_key"] = "synthetic forbidden key"
+            if fault == "leaf-short":
+                data["certificate"] = pem(certificate("short", keys["master"].public_key(), issuer, signer, after=1800)).decode()
+        if path.startswith("didcomm/keycloak/keys/") and method == "GET" and fault == "jwe-version":
+            data["version"] = "bad/version"
+        return status, response
+
+    state.producer = faulted_producer
     bao = Bao(state.bao.endpoint, state.bao.ca, OPERATOR)
-    if duplicate:
-        with pytest.raises(producer.OperatorCleanupError, match="^Keycloak provisioning requires operator recovery$"):
+    applicable = fault is not None
+    if mode == "initial" and fault in ("role", "authority-policy", "authority-ttl-float", "first-policy-missing"):
+        applicable = False
+    if applicable:
+        recovery = fault in ("duplicate", "jwe-version", "late-jwe-loss", "first-mint-lost")
+        expected_error = producer.OperatorCleanupError if recovery else RuntimeError
+        message = "^Keycloak provisioning requires operator recovery$" if recovery else "Rust operator validation failed"
+        with pytest.raises(expected_error, match=message):
             producer.provision(bao, renew=state.renew, pki_mount=mount)
+        if not recovery:
+            assert not any(path in ("auth/token/create", "auth/token/create/selfhost-renew-leaf") for _, path, *_ in state.seen)
         return
     outputs = producer.provision(bao, renew=state.renew, pki_mount=mount)
     assert set(outputs) == producer.OUTPUTS and len(outputs) == 7

@@ -9,7 +9,8 @@ use reqwest::Method;
 use serde_json::{json, Value};
 
 pub const RECOVERY: &str = "Keycloak provisioning requires operator recovery";
-const REALMS: [&str; 2] = ["master", "11id"];
+pub(crate) const REALMS: [&str; 2] = ["master", "11id"];
+pub(crate) const PURPOSES: [&str; 2] = ["cookie", "ciba"];
 const MIN_TTL: u64 = 7 * 3600;
 const MAX_TTL: u64 = 8 * 3600;
 fn reference(value: &str) -> bool {
@@ -44,7 +45,7 @@ fn scope(context: &Value) -> Result<Scope> {
             let realm = field(context, "realm")?;
             let purpose = field(context, "purpose")?;
             let version = field(context, "version")?;
-            if !REALMS.contains(&realm) || !["cookie", "ciba"].contains(&purpose) || !reference(version) {
+            if !REALMS.contains(&realm) || !PURPOSES.contains(&purpose) || !reference(version) {
                 return Err(REFUSAL);
             }
             let path = format!("didcomm/keycloak/keys/{realm}/{purpose}");
