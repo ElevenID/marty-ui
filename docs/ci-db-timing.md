@@ -95,13 +95,18 @@ under the same toolchain, target, features, runner class, and qualification
 tier; record cache state and required-case completion alongside elapsed time.
 The new JSONL explains the DB aggregate but does not by itself shorten it.
 
-## Canvas immutable-base reuse (qualified 2026-10-20)
+## Canvas immutable-base reuse
 
 `MARTY_CANVAS_REUSE_PUBLISHED_BASE=1` is enabled only in the Canvas database
 step for PR, merge-group, scheduled, and manual CI; every other matrix lane
 keeps it off. The existing `canvas_migrated_base_pilot` manual input now runs
 additional exact parity, isolation, and failed-restore diagnostics after the
-normal full Canvas suite. It is not a release or test-selection switch.
+normal full Canvas suite. It is not a release or test-selection switch. The pinned migration/seed probe
+runs once per test process; later default-constructor cases restore that base
+into fresh owned containers. Case assertions still run against isolated
+databases, but repeated per-case execution of the migration producer is
+intentionally consolidated. Scoped recovery and oracle-overlay constructors
+retain their original setup paths.
 Those diagnostics run the eight-case pinned-probe baseline with reuse
 explicitly off, then compare complete pre-restore schema/data dumps from the captured base
 and an independently fresh pinned probe, excluding only their validated
