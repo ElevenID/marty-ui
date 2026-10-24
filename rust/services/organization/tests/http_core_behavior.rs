@@ -250,14 +250,9 @@ async fn core_http_round_trip_is_behaviorally_complete_when_postgres_is_configur
         Arc::new(MemoryCache::default()),
         Arc::new(MemoryCache::default()),
     );
-    let policy_fixture: Value = serde_json::from_str(include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../../contracts/organization-policy-audit-behavior.json"
-    )))
-    .expect("policy behavior fixture");
     let policy_validator = Arc::new(
         CedarPolicyValidator::from_human_schema(
-            policy_fixture["cedar_schema"].as_str().unwrap(),
+            marty_organization::policy_sets::ORGANIZATION_CEDAR_SCHEMA,
             CedarConfig::default(),
         )
         .expect("native Cedar validator"),
@@ -553,6 +548,76 @@ async fn core_http_round_trip_is_behaviorally_complete_when_postgres_is_configur
         .unwrap()
         .iter()
         .any(|permission| permission == "role:assign"));
+
+    let templates = request_json(
+        &router,
+        "GET",
+        &format!("/v1/organizations/{organization_id}/policy-sets/templates"),
+        Some(&user_id),
+        None,
+    )
+    .await;
+    assert_eq!(templates.0, StatusCode::OK);
+    assert_eq!(templates.1.as_array().unwrap().len(), 3);
+    for template in templates.1.as_array().unwrap() {
+        let validation = request_json(
+            &router,
+            "POST",
+            &format!("/v1/organizations/{organization_id}/policy-sets/validate"),
+            Some(&user_id),
+            Some(serde_json::json!({"cedar_policies": template["cedar_policies"]})),
+        )
+        .await;
+        assert_eq!(validation.0, StatusCode::OK);
+        assert_eq!(
+            validation.1["valid"], true,
+            "{template}: {:?}",
+            validation.1
+        );
+        let draft = request_json(
+            &router,
+            "POST",
+            &format!("/v1/organizations/{organization_id}/policy-sets"),
+            Some(&user_id),
+            Some(serde_json::json!({
+                "name": template["name"], "policy_type": template["policy_type"],
+                "cedar_policies": template["cedar_policies"], "description": "HTTP template fixture"
+            })),
+        )
+        .await;
+        assert_eq!(draft.0, StatusCode::CREATED, "{:?}", draft.1);
+        let path = format!(
+            "/v1/organizations/{organization_id}/policy-sets/{}",
+            draft.1["id"].as_str().unwrap()
+        );
+        let patched = request_json(
+            &router,
+            "PATCH",
+            &path,
+            Some(&user_id),
+            Some(serde_json::json!({"description": null})),
+        )
+        .await;
+        assert_eq!(patched.0, StatusCode::OK);
+        assert_eq!(patched.1["description"], Value::Null);
+        for field in [
+            "id",
+            "organization_id",
+            "name",
+            "policy_type",
+            "cedar_schema_version",
+            "cedar_policies",
+            "status",
+        ] {
+            assert_eq!(patched.1[field], draft.1[field], "{field}");
+        }
+        assert_eq!(
+            request_json(&router, "DELETE", &path, Some(&user_id), None)
+                .await
+                .0,
+            StatusCode::NO_CONTENT
+        );
+    }
 
     let policy = request_json(
         &router,

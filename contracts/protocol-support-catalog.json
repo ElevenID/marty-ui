@@ -356,12 +356,12 @@
       "kind": "policy",
       "display_name": "Policy Set",
       "support_level": "implemented",
-      "qualification": "implementation_present",
+      "qualification": "focused_source",
       "owner_service": "organizations",
       "api_paths": ["/v1/policy-sets", "/v1/policy-sets/{subpath:path}"],
       "ui_paths": ["/console/org/policies/sets"],
       "schema_refs": [],
-      "limitations": ["Final authorization-boundary qualification remains pending."]
+      "limitations": ["Organization-scoped Cedar configuration and lifecycle are exposed. Activation archives the previous active set of the same type; runtime enforcement depends on the consuming workflow.", "The console edits draft metadata only; native PATCH retains broader update semantics. Policy Sets are not cryptographic verification or authorization decision receipts."]
     },
     {
       "id": "didcomm-delivery",

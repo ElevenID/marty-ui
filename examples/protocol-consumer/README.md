@@ -76,6 +76,39 @@ Equivalent API operations are `GET /v1/compliance-profiles?organization_id=ORG_I
 Canonical OpenAPI uses service-owned `runtime__compliance_profile_*` schemas and marks this resource's protocol coverage `partial`. The native metadata projection implements format, protocol, artifact/trust requirements, public API surface and lifecycle, rather than the protocol entity's full feature vocabulary. Seven internal privacy-policy sections are accepted by the native request contract but intentionally absent from public responses. A public metadata editor must preserve them by omitting unchanged fields; it cannot infer them from an output model. New organization profiles use service privacy defaults. In sparse PATCH, omission/null preserves stored fields, while explicit false, empty strings, arrays and objects are changes subject to validation. System presets remain immutable. The old client-only `validateIssuerArtifacts` operation is explicitly unsupported; there is no corresponding compliance API route.
 
 
+### Authorization Policy Sets
+
+At **Govern > Policy Sets**, select a provider template, inspect or edit its
+Cedar statements, validate them, and create an organization-owned draft. The
+template catalog contains global presets; the resulting Policy Set has an
+explicit organization owner. Draft metadata editing sends only changed name
+or description fields; clearing the description sends `null` and preserves
+Cedar statements, type and schema settings. The console limits this editor to
+drafts; the native PATCH API's broader update semantics remain unchanged.
+
+The public gateway accepts `GET /v1/policy-sets`, `GET .../templates`,
+`GET .../POLICY_SET_ID`, `POST /v1/policy-sets`, `POST .../validate`,
+`PATCH .../POLICY_SET_ID`, and `POST .../POLICY_SET_ID/activate` or
+`POST .../POLICY_SET_ID/archive`, each with `organization_id=ORG_ID`.
+Reads require `policy-set:view`, metadata PATCH requires `policy-set:edit`,
+and draft creation requires `policy-set:create`. The existing gateway uses
+separate `policy-set:validate`, `policy-set:activate` and `policy-set:archive`
+grants for those operations. The wizard validates before creating and therefore
+requires both create and validate permission.
+Activation archives the previously active Policy Set of the same type in that
+organization. A workflow must consume the selected Policy Set to evaluate its
+Cedar statements; activation alone does not demonstrate a runtime decision or
+replace the gateway's membership grants.
+Activation and archive require explicit confirmation in the console. Their
+fresh scoped read prevents acting on an already changed snapshot; it is not
+an atomic version precondition. The server remains the authorization and
+mutation authority. Policy Sets are Cedar authorization configuration, not
+presentation policies or cryptographic verification receipts.
+
+See [environment addresses and DID resolution](../../docs/did-resolution.md)
+for the distinction between Docker service routing, beta/public origins and
+actual publication readiness.
+
 ### Derived wallet requirements
 
 Open a credential template and choose **Wallet profile** to read `GET /v1/credential-templates/TEMPLATE_ID/wallet-compatibility`. The native service authorizes the template's owning organization and derives the primary credential format, issuance protocol and compliance key, then applies organization registry overrides. The view shows the derivation tuple, configured applications, specifications, platforms, applied override IDs, merge metadata and template wallet configuration. Other declared formats need separate qualification. Physical documents have no wallet profile.
