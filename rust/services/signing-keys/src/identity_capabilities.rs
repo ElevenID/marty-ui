@@ -20,12 +20,21 @@ struct IdentityOption {
     algorithm: &'static str,
 }
 
+fn requested_wire_format(purpose: &str, format: &str) -> Option<String> {
+    profiles::custody_format(&profiles::CustodyFormatRequest {
+        key_purpose: purpose.into(),
+        credential_format: format.into(),
+    })
+    .ok()
+    .map(|selection| selection.wire_format)
+}
+
 pub(crate) fn supports_tuple(purpose: &str, format: &str, algorithm: &str) -> bool {
     let format = format.to_ascii_uppercase();
     if !profiles::PROTOCOL_FORMATS.contains(&format.as_str()) {
         return false;
     }
-    let Some(wire_format) = profiles::protocol_wire_format(&format) else {
+    let Some(wire_format) = requested_wire_format(purpose, &format) else {
         return false;
     };
     key_purposes().iter().any(|entry| {
@@ -69,7 +78,7 @@ pub(crate) fn project(
     if prefix.is_some() {
         for purpose in key_purposes() {
             for &format in profiles::PROTOCOL_FORMATS {
-                let Some(wire_format) = profiles::protocol_wire_format(format) else {
+                let Some(wire_format) = requested_wire_format(purpose.id, format) else {
                     continue;
                 };
                 if !purpose.credential_formats.contains(&wire_format.as_str()) {
@@ -155,6 +164,38 @@ mod tests {
         assert!(project("org-a", &registry, Some("issuer.example"))
             .creation_options
             .is_empty());
+    }
+
+    #[test]
+    fn request_identity_uses_canonical_purpose_format_with_protocol_and_algorithm_guards() {
+        for format in ["SD_JWT_VC", "MDOC"] {
+            assert!(supports_tuple("oid4vp_request_signing", format, "ES256"));
+            assert!(!supports_tuple("oid4vp_request_signing", format, "EdDSA"));
+        }
+        assert!(!supports_tuple(
+            "oid4vp_request_signing",
+            "oauth-authz-req+jwt",
+            "ES256"
+        ));
+        assert!(!supports_tuple("unknown-purpose", "SD_JWT_VC", "ES256"));
+    }
+
+    #[test]
+    fn request_creation_options_use_the_same_custody_mapping_as_creation() {
+        let mut registry = registry();
+        registry["services"][0]["credential_formats"] = json!(["oauth-authz-req+jwt"]);
+        registry["services"][0]["key_purposes"] = json!(["oid4vp_request_signing"]);
+        let choices = project("org-a", &registry, Some("issuer.example"));
+        for format in ["SD_JWT_VC", "MDOC"] {
+            assert!(choices.creation_options.iter().any(|choice| {
+                choice.key_purpose == "oid4vp_request_signing"
+                    && choice.credential_format == format
+                    && choice.algorithm == "ES256"
+            }));
+        }
+        assert!(choices.creation_options.iter().all(|choice| {
+            choice.key_purpose == "oid4vp_request_signing" && choice.algorithm == "ES256"
+        }));
     }
 
     #[test]
