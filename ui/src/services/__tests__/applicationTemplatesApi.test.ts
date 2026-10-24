@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { createApplicationTemplate, listApplicationTemplates, updateApplicationTemplate } from '../applicationTemplatesApi';
+import { createApplicationTemplate, getApplicationTemplate, listApplicationTemplates, updateApplicationTemplate } from '../applicationTemplatesApi';
 import { get, patch, post } from '../api';
 
 vi.mock('../api', () => ({
@@ -54,5 +54,10 @@ describe('applicationTemplatesApi', () => {
     await updateApplicationTemplate('template-1', { name: 'Updated' });
 
     expect(patch).toHaveBeenCalledWith('/v1/application-templates/template-1', { name: 'Updated' });
+  });
+
+  it('binds template reads to an explicit selected organization', async () => {
+    await getApplicationTemplate('template-1', 'org-1');
+    expect(get).toHaveBeenCalledWith('/v1/application-templates/template-1?organization_id=org-1');
   });
 });

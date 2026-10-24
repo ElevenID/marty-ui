@@ -9,14 +9,20 @@ import {
   updateApplicationTemplate,
 } from '../../../services/applicationTemplatesApi'
 
+const { scope } = vi.hoisted(() => ({ scope: { activeOrgId: 'org-1' } }))
 vi.mock('../../../contexts/ConsoleContext', () => ({
-  useConsole: () => ({ activeOrgId: 'org-1' }),
+  useConsole: () => scope,
+}))
+
+vi.mock('../../../hooks/usePermissions', () => ({
+  usePermissions: () => ({ can: () => true, isLoading: false }),
 }))
 
 vi.mock('../../../services/presentationPolicyApi', () => ({
   listCredentialTemplates: vi.fn().mockResolvedValue([
     {
       id: 'credential-1',
+      organization_id: 'org-1',
       name: 'Membership Badge',
       status: 'ACTIVE',
       revocation_profile_id: 'revocation-1',
@@ -43,7 +49,26 @@ vi.mock('../../../services/applicationTemplatesApi', () => ({
 }))
 
 describe('ApplicationTemplateEditorPage', () => {
-  beforeEach(() => vi.clearAllMocks())
+  beforeEach(() => { vi.clearAllMocks(); scope.activeOrgId = 'org-1' })
+
+  it('rejects an existing foreign template before showing editable values', async () => {
+    vi.mocked(getApplicationTemplate).mockResolvedValueOnce({ id: 'application-template-1', organization_id: 'org-2', name: 'Foreign draft', status: 'DRAFT' })
+    renderWithRouter(<Routes><Route path="/applications/:templateId/edit" element={<ApplicationTemplateEditorPage />} /></Routes>,
+      { initialEntries: ['/applications/application-template-1/edit'] })
+    expect(await screen.findByRole('alert')).toHaveTextContent(/selected organization/i)
+    expect(screen.queryByDisplayValue('Foreign draft')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /save draft/i })).not.toBeInTheDocument()
+    expect(updateApplicationTemplate).not.toHaveBeenCalled()
+  })
+
+  it('clears an unsaved draft when the selected organization changes', async () => {
+    const { user, rerender } = renderWithRouter(<ApplicationTemplateEditorPage />)
+    await user.type(screen.getByRole('textbox', { name: /^name/i }), 'Old organization draft')
+    scope.activeOrgId = 'org-2'
+    rerender(<ApplicationTemplateEditorPage />)
+    expect(screen.getByRole('textbox', { name: /^name/i })).toHaveValue('')
+    expect(screen.queryByDisplayValue('Old organization draft')).not.toBeInTheDocument()
+  })
 
   it('round trips structured and legacy select options without losing stable values', () => {
     const options = [
@@ -64,6 +89,7 @@ describe('ApplicationTemplateEditorPage', () => {
   it('edits and saves structured select options without collapsing typed separators', async () => {
     vi.mocked(getApplicationTemplate).mockResolvedValueOnce({
       id: 'application-template-1',
+      organization_id: 'org-1',
       name: 'Pre-boarding clearance',
       description: '',
       status: 'DRAFT',
@@ -137,6 +163,7 @@ describe('ApplicationTemplateEditorPage', () => {
   it.each([true, false])('saves evidence selectors and removes an unused date format (date=%s)', async (date) => {
     vi.mocked(getApplicationTemplate).mockResolvedValueOnce({
       id: 'application-template-1', name: 'Canvas achievement', status: 'DRAFT',
+      organization_id: 'org-1',
       credential_template_id: 'credential-1',
       form_fields: [{ field_id: 'email', label: 'Email', field_type: 'EMAIL' }],
       evidence_requirements: [], required_checks: [], approval_strategy: 'MANUAL',

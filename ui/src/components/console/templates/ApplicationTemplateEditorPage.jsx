@@ -11,6 +11,7 @@ import DeleteIcon from '@mui/icons-material/Delete';
 import SaveIcon from '@mui/icons-material/Save';
 
 import { useConsole } from '../../../contexts/ConsoleContext';
+import { usePermissions } from '../../../hooks/usePermissions';
 import { listCredentialTemplates } from '../../../services/presentationPolicyApi';
 import { listPolicySets } from '../../../services/policySetsApi';
 import {
@@ -87,12 +88,8 @@ function FieldOptionsEditor({ options, onChange }) {
   );
 }
 
-export default function ApplicationTemplateEditorPage() {
+function ApplicationTemplateEditorContent({ organizationId, templateId, advanced }) {
   const navigate = useNavigate();
-  const { templateId } = useParams();
-  const [searchParams] = useSearchParams();
-  const advanced = searchParams.get('mode') === 'advanced';
-  const { activeOrgId: organizationId } = useConsole();
   const [data, setData] = useState(EMPTY);
   const [credentialTemplates, setCredentialTemplates] = useState([]);
   const [approvalPolicySets, setApprovalPolicySets] = useState([]);
@@ -100,6 +97,7 @@ export default function ApplicationTemplateEditorPage() {
   const [loading, setLoading] = useState(Boolean(templateId));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [resourceReady, setResourceReady] = useState(!templateId);
 
   useEffect(() => {
     let active = true;
@@ -111,15 +109,22 @@ export default function ApplicationTemplateEditorPage() {
     }
     Promise.all([
       listCredentialTemplates({ organization_id: organizationId }),
-      templateId ? getApplicationTemplate(templateId) : Promise.resolve(null),
+      templateId ? getApplicationTemplate(templateId, organizationId) : Promise.resolve(null),
     ]).then(([templates, existing]) => {
       if (!active) return;
+      if (!Array.isArray(templates) || templates.some((item) => item.organization_id !== organizationId)) {
+        throw new Error('Credential Templates are not available in the selected organization.');
+      }
       setCredentialTemplates(templates.filter((item) => (
         String(item.status || '').toUpperCase() === 'ACTIVE'
         && Boolean(item.revocation_profile_id)
       )));
       if (existing) {
+        if (existing.id !== templateId || existing.organization_id !== organizationId) {
+          throw new Error('This Application Template is not available in the selected organization.');
+        }
         setData({ ...EMPTY, ...existing });
+        setResourceReady(true);
         if (String(existing.status || '').toUpperCase() !== 'DRAFT') {
           setError('Only draft Application Templates can be edited.');
         }
@@ -182,7 +187,7 @@ export default function ApplicationTemplateEditorPage() {
       || (['EXTERNAL_FACT', 'EXTERNAL_API'].includes(item.evidence_type) && (!item.provider || !item.fact_type))
       || (item.evidence_type === 'EXTERNAL_API' && !item.api?.url)
     ));
-    if (!organizationId || !data.name.trim() || !data.credential_template_id || data.form_fields.length === 0) {
+    if (!resourceReady || !organizationId || !data.name.trim() || !data.credential_template_id || data.form_fields.length === 0) {
       setError('Name, active Credential Template, and at least one form field are required.');
       return;
     }
@@ -223,6 +228,7 @@ export default function ApplicationTemplateEditorPage() {
   };
 
   if (loading) return <Box sx={{ display: 'flex', justifyContent: 'center', py: 10 }}><CircularProgress /></Box>;
+  if (!resourceReady) return <Alert severity="error">{error || 'Application Template unavailable.'}</Alert>;
 
   return (
     <Container maxWidth="md" sx={{ py: 4 }}>
@@ -404,4 +410,16 @@ export default function ApplicationTemplateEditorPage() {
       </Box>
     </Container>
   );
+}
+
+export default function ApplicationTemplateEditorPage() {
+  const { activeOrgId } = useConsole();
+  const { templateId } = useParams();
+  const [searchParams] = useSearchParams();
+  const { can, isLoading } = usePermissions();
+  if (!activeOrgId) return <Alert severity="error">Select an organization before editing Application Templates.</Alert>;
+  if (isLoading) return <CircularProgress />;
+  const action = templateId ? 'edit' : 'create';
+  if (!can('application-template', action)) return <Alert severity="error">You do not have permission to {action} Application Templates.</Alert>;
+  return <ApplicationTemplateEditorContent key={`${activeOrgId}:${templateId || 'new'}`} organizationId={activeOrgId} templateId={templateId} advanced={searchParams.get('mode') === 'advanced'} />;
 }
