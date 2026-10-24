@@ -100,21 +100,21 @@ async fn executable_serves_http_grpc_and_operational_contracts() {
                     stderr.seek(SeekFrom::Start(0)).unwrap();
                     let mut diagnostic = String::new();
                     stderr.read_to_string(&mut diagnostic).unwrap();
+                    eprintln!(
+                        "revocation-profile startup attempt {attempt}/{MAX_BIND_ATTEMPTS} on HTTP port {http_port} and gRPC port {grpc_port}:\n{diagnostic}"
+                    );
                     match failure {
                         ListenerWaitFailure::Timeout => {
-                            eprintln!("{diagnostic}");
-                            panic!("revocation-profile listeners did not become healthy");
+                            panic!("revocation-profile listeners did not become healthy on HTTP port {http_port} and gRPC port {grpc_port}");
                         }
                         ListenerWaitFailure::Exit(status) => {
                             match bind_retry_disposition(&diagnostic, attempt) {
                                 BindRetryDisposition::Retry => {}
                                 BindRetryDisposition::Fatal => {
-                                    eprintln!("{diagnostic}");
-                                    panic!("revocation-profile exited before both listeners became healthy: {status}");
+                                    panic!("revocation-profile exited before both listeners became healthy on HTTP port {http_port} and gRPC port {grpc_port}: {status}");
                                 }
                                 BindRetryDisposition::Exhausted => {
-                                    eprintln!("{diagnostic}");
-                                    panic!("revocation-profile could not bind after {MAX_BIND_ATTEMPTS} attempts");
+                                    panic!("revocation-profile could not bind HTTP port {http_port} and gRPC port {grpc_port} after {MAX_BIND_ATTEMPTS} attempts: {status}");
                                 }
                             }
                         }
@@ -231,8 +231,10 @@ fn bind_retry_disposition(diagnostic: &str, attempt: usize) -> BindRetryDisposit
 
 #[test]
 fn runtime_listener_ports_are_distinct() {
-    let (http_port, grpc_port) = available_ports();
-    assert_ne!(http_port, grpc_port);
+    for _ in 0..32 {
+        let (http_port, grpc_port) = available_ports();
+        assert_ne!(http_port, grpc_port);
+    }
 }
 
 #[test]
@@ -251,6 +253,18 @@ fn bind_collision_retry_is_specific_and_bounded() {
     );
     assert_eq!(
         bind_retry_disposition("database migration failed", 1),
+        BindRetryDisposition::Fatal
+    );
+    assert_eq!(
+        bind_retry_disposition("Os { code: 10048, kind: AddrInUse }", 3),
+        BindRetryDisposition::Exhausted
+    );
+    assert_eq!(
+        bind_retry_disposition("AddrInUse", 4),
+        BindRetryDisposition::Exhausted
+    );
+    assert_eq!(
+        bind_retry_disposition("database migration failed", 3),
         BindRetryDisposition::Fatal
     );
 }
