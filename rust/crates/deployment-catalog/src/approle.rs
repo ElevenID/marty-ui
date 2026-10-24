@@ -948,18 +948,7 @@ fn leaf_policy(role: Role) -> &'static str {
     }
 }
 fn signer_metadata(metadata: &Value) -> Result<()> {
-    if metadata["type"] != "ed25519"
-        || metadata["exportable"] != false
-        || metadata["allow_plaintext_backup"] != false
-        || metadata["latest_version"].as_u64() != Some(1)
-    {
-        return Err(REFUSAL);
-    }
-    let encoded = metadata["keys"]["1"]["public_key"]
-        .as_str()
-        .ok_or(REFUSAL)?;
-    crate::operator::ed25519_spki(encoded)?;
-    Ok(())
+    crate::operator::custody_signer(metadata, true).map(|_| ())
 }
 /// Current-generation validation stays at its existing owner before entering this
 /// shared transaction. Context names are that owner's reviewed 21-policy receipt.

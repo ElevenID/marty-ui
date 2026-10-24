@@ -16,7 +16,8 @@ ROOT = Path(__file__).resolve().parents[1]
                                             ("approle-login", 300), ("approle-policy", 300),
                                             ("approle-rotate", None), ("approle-retire", None),
                                             ("leaf-refresh", None), ("keycloak-token", None),
-                                            ("keycloak-provision", None)])
+                                            ("keycloak-provision", None), ("ca-issuer", None),
+                                            ("renewal-inventory", 600)])
 def test_native_transactions_cannot_be_killed_during_cleanup(monkeypatch, operation, timeout):
     from types import SimpleNamespace
     from scripts import selfhost_native_operator as native
@@ -43,6 +44,32 @@ def test_keycloak_abnormal_exit_is_sanitized_recovery(monkeypatch, code, operati
         returncode=code, stdout=b"", stderr=b"sensitive-crash-detail"))
     with pytest.raises(native.OperatorCleanupError, match="^Keycloak provisioning requires operator recovery$"):
         native.operator_bytes(ROOT, "operator", operation, input=b"{}")
+
+
+@pytest.mark.parametrize("code", [-15, 101, 3221225477])
+def test_ca_issuer_abnormal_exit_is_sanitized_recovery(monkeypatch, code):
+    from types import SimpleNamespace
+    from scripts import selfhost_native_operator as native
+    monkeypatch.setattr(native, "operator_command", lambda *_: ["native-operator"])
+    monkeypatch.setattr(native.subprocess, "run", lambda *_, **kwargs: SimpleNamespace(
+        returncode=code, stdout=b"", stderr=b"sensitive-crash-detail"))
+    with pytest.raises(native.OperatorCleanupError, match="^CA issuer staging requires operator recovery$"):
+        native.operator_bytes(ROOT, "operator", "ca-issuer", input=b"{}")
+
+
+@pytest.mark.parametrize("payload", [b'{"value":', b'null', b'{"value":null}', b'{"value":"wrong-pki-v9"}'])
+def test_ca_issuer_malformed_delivery_requires_recovery(monkeypatch, payload, tmp_path):
+    from importlib import import_module
+    from types import SimpleNamespace
+    monkeypatch.syspath_prepend(str(ROOT / "scripts"))
+    import provision_selfhost_ca_rotation_identity as rotation
+    # Exercise the adapter module actually imported by the sibling CLI. Mixing
+    # package and sibling imports would create two distinct exception classes.
+    native = import_module(rotation.network_operation.__module__)
+    monkeypatch.setattr(native, "operator_bytes", lambda *args, **kwargs: payload)
+    bao = SimpleNamespace(endpoint="https://unused", ca=tmp_path, token="")
+    with pytest.raises(rotation.OperatorCleanupError, match="^CA issuer staging requires operator recovery$"):
+        rotation.stage_issuer(bao, tmp_path, tmp_path, "workload", 2)
 
 
 @pytest.mark.parametrize("kind", ["RSA", "EC", "ED25519"])
@@ -96,3 +123,47 @@ def test_installed_bundle_uses_verified_native_operator_without_source(tmp_path:
     monkeypatch.setenv("MARTY_DEPLOY_BIN_SHA256", "0" * 64)
     with pytest.raises(RuntimeError, match="digest mismatch"):
         operator_bytes(tmp_path, "operator", "certificate-spki", input=certificate)
+
+
+@pytest.mark.parametrize("version,pinned,valid", [(1, False, True), (2, False, True), (1, True, True),
+                                                 (2, True, False), (True, False, False),
+                                                 (1.0, False, False), (0, False, False), (-1, False, False)])
+def test_native_custody_signer_preserves_latest_and_provisioning_modes(version, pinned, valid):
+    from scripts.selfhost_openbao_client import custody_signer_public
+    raw = "V4R5DrcNEOahL046jfk/QYO+hD44DCZ/LMzSHqcMIrM="
+    metadata = {"type": "ed25519", "exportable": False, "allow_plaintext_backup": False,
+                "latest_version": version, "keys": {str(version): {"public_key": raw}}}
+    if not valid:
+        with pytest.raises(ValueError):
+            custody_signer_public(metadata, version_one=pinned)
+        return
+    result_version, pem = custody_signer_public(metadata, version_one=pinned)
+    assert result_version == version
+    assert operator_bytes(ROOT, "operator", "public-spki", input=pem.encode()) == operator_bytes(
+        ROOT, "operator", "ed25519-spki", input=raw.encode())
+
+
+@pytest.mark.parametrize("fault", ["exportable", "backup", "type", "missing-current", "noncanonical", "oversized"])
+def test_native_custody_signer_refuses_custody_and_current_key_drift(fault):
+    import json
+    from scripts.selfhost_openbao_client import custody_signer_public
+    raw = "V4R5DrcNEOahL046jfk/QYO+hD44DCZ/LMzSHqcMIrM="
+    metadata = {"type": "ed25519", "exportable": False, "allow_plaintext_backup": False,
+                "latest_version": 2, "keys": {"1": {"public_key": raw}, "2": {"public_key": raw}}}
+    if fault == "exportable":
+        metadata["exportable"] = True
+    elif fault == "backup":
+        metadata["allow_plaintext_backup"] = True
+    elif fault == "type":
+        metadata["type"] = "rsa-2048"
+    elif fault == "missing-current":
+        del metadata["keys"]["2"]
+    elif fault == "noncanonical":
+        metadata["keys"]["2"]["public_key"] += "\n"
+    else:
+        metadata["extra"] = "x" * 65536
+    with pytest.raises(ValueError):
+        custody_signer_public(metadata)
+    with pytest.raises(RuntimeError, match="^Rust operator validation failed$"):
+        operator_bytes(ROOT, "operator", "custody-signer", input=json.dumps(
+            {"metadata": metadata, "version_one": False}).encode())

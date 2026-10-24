@@ -662,7 +662,9 @@ mod tests {
     }
 }
 
+pub mod activation_preflight;
 pub mod approle;
+pub mod ca_issuer;
 pub mod generation;
 pub mod keycloak;
 pub mod keycloak_provision;

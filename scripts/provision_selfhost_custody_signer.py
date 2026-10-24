@@ -23,7 +23,7 @@ from selfhost_openbao_client import (
     CUSTODY_SIGNER_LEAF_ACL,
     CUSTODY_SIGNER_POLICY,
     Bao,
-    ed25519_public_pem,
+    custody_signer_public,
 )
 
 SOURCE_ROOT = Path(__file__).resolve().parents[1]
@@ -120,11 +120,7 @@ def provision(endpoint: str, state_root: Path, output_root: Path, project: str,
             "type": "ed25519", "exportable": False, "allow_plaintext_backup": False,
         })
     metadata = bao.request("GET", f"transit/keys/{CUSTODY_SIGNER}").get("data", {})
-    if (metadata.get("type") != "ed25519" or metadata.get("exportable") is not False
-            or metadata.get("allow_plaintext_backup") is not False
-            or metadata.get("latest_version") != 1):
-        raise ValueError("OpenBao custody key is not non-exportable Ed25519")
-    pem = ed25519_public_pem(metadata.get("keys", {}).get("1", {}).get("public_key"))
+    _, pem = custody_signer_public(metadata, version_one=True)
     if refresh_token and public_file.read_text(encoding="ascii") != pem:
         raise ValueError("OpenBao custody public key changed before token refresh")
     if identity_root is None:

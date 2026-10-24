@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import base64
 import json
 import ssl
 from pathlib import Path
@@ -39,35 +38,23 @@ class NoRedirect(HTTPRedirectHandler):
 
 def ed25519_public_pem(raw_base64: str) -> str:
     """Encode OpenBao's raw public Ed25519 bytes as a standard SPKI PEM."""
-    if not isinstance(raw_base64, str):
-        raise ValueError("OpenBao Ed25519 public key is invalid")
     try:
-        raw = base64.b64decode(raw_base64, validate=True)
-    except ValueError as error:
+        return operator_bytes(Path(__file__).resolve().parents[1], "operator",
+                              "ed25519-pem", input=raw_base64.encode("ascii")).decode("ascii")
+    except (AttributeError, UnicodeError, RuntimeError) as error:
         raise ValueError("OpenBao Ed25519 public key is invalid") from error
-    if len(raw) != 32 or base64.b64encode(raw).decode("ascii") != raw_base64:
-        raise ValueError("OpenBao Ed25519 public key is invalid")
-    der = operator_bytes(Path(__file__).resolve().parents[1], "operator",
-                         "ed25519-spki", input=raw_base64.encode("ascii"))
-    pem = "-----BEGIN PUBLIC KEY-----\n"
-    pem += base64.b64encode(der).decode("ascii") + "\n"
-    pem += "-----END PUBLIC KEY-----\n"
-    return pem
 
 
-def custody_signer_public(metadata: dict) -> tuple[int, str]:
-    """Read the current non-exportable Transit signer version and public key."""
-    if (not isinstance(metadata, dict) or metadata.get("type") != "ed25519"
-            or metadata.get("exportable") is not False
-            or metadata.get("allow_plaintext_backup") is not False
-            or type(metadata.get("latest_version")) is not int
-            or metadata["latest_version"] <= 0):
-        raise ValueError("OpenBao custody signer is not non-exportable Ed25519")
-    version = metadata["latest_version"]
-    entry = metadata.get("keys", {}).get(str(version), {})
-    if not isinstance(entry, dict):
-        raise ValueError("OpenBao custody signer public key is absent")
-    return version, ed25519_public_pem(entry.get("public_key"))
+def custody_signer_public(metadata: dict, *, version_one: bool = False) -> tuple[int, str]:
+    """Read a non-exportable current signer; provisioning requires version one."""
+    try:
+        result = json.loads(operator_bytes(
+            Path(__file__).resolve().parents[1], "operator", "custody-signer",
+            input=json.dumps({"metadata": metadata, "version_one": version_one}).encode("utf-8"),
+        ))
+        return result["version"], result["public_pem"]
+    except (TypeError, UnicodeError, RuntimeError, ValueError, KeyError) as error:
+        raise ValueError("OpenBao custody signer is not non-exportable Ed25519 or its public key is invalid") from error
 
 
 def public_key_der(pem: str) -> bytes:
@@ -112,17 +99,16 @@ class Bao:
 
 
 def require_renewal_authority(bao: Bao) -> None:
-    data = bao.request("POST", "auth/token/lookup", {"token": bao.token}).get("data", {})
-    if (not isinstance(data, dict) or data.get("policies") != [RENEWAL_OPERATOR_POLICY]
-            or data.get("path") != "auth/selfhost-renew/login"
-            or type(data.get("ttl")) is not int or not 3600 <= data["ttl"] <= 8 * 60 * 60):
-        raise ValueError("OpenBao renewal authority is not the scoped AppRole token")
+    if __package__:
+        from .selfhost_native_operator import network_operation
+    else:
+        from selfhost_native_operator import network_operation
+    network_operation(bao, "authority-check", rotation=False)
 
 
 def require_ca_rotation_authority(bao: Bao) -> None:
-    data = bao.request("POST", "auth/token/lookup", {"token": bao.token}).get("data", {})
-    if (not isinstance(data, dict) or data.get("policies") != ["selfhost-kms-ca-rotation"]
-            or data.get("path") != "auth/selfhost-ca-rotation/login"
-            or type(data.get("ttl")) is not int
-            or not 3600 <= data["ttl"] <= 8 * 60 * 60):
-        raise ValueError("OpenBao CA-rotation authority is not the scoped AppRole token")
+    if __package__:
+        from .selfhost_native_operator import network_operation
+    else:
+        from selfhost_native_operator import network_operation
+    network_operation(bao, "authority-check", rotation=True)
