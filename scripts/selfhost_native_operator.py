@@ -15,7 +15,8 @@ class OperatorCleanupError(RuntimeError):
     def __init__(self, message: str):
         if message not in {"AppRole bootstrap cleanup is incomplete", "AppRole leaf cleanup is unconfirmed",
                            "AppRole rotation requires operator recovery",
-                           "Scoped token refresh requires operator recovery"}:
+                           "Scoped token refresh requires operator recovery",
+                           "Keycloak provisioning requires operator recovery"}:
             message = "Rust operator cleanup is unconfirmed"
         super().__init__(message)
 
@@ -72,12 +73,17 @@ def operator_bytes(root: Path, *args: str, input: bytes | None = None) -> bytes:
     # Native requests remain individually bounded. Do not kill a mutating
     # transaction while it is revoking a leaf or rolling back remote authority.
     timeout = None if args[1:2] in (("export-snapshot",), ("approle-bootstrap",), ("approle-mint",),
-                                  ("approle-rotate",), ("approle-retire",), ("leaf-refresh",)) else 300
+                                  ("approle-rotate",), ("approle-retire",), ("leaf-refresh",), ("keycloak-token",), ("keycloak-provision",)) else 300
     if os.environ.get("MARTY_DEPLOY_BIN", "").strip() and args[1:2] in (("public-spki",), ("certificate-spki",), ("ed25519-spki",),
-                                                                 ("certificate-lifetime",), ("certificate-chain",)):
+                                                                 ("certificate-lifetime",), ("certificate-chain",),
+                                                                 ("certificate-expiry",), ("replacement-ca",)):
         timeout = 10
     result = subprocess.run(operator_command(root, *args), input=input,
                             capture_output=True, check=False, timeout=timeout)
+    if args[1:2] in (("keycloak-token",), ("keycloak-provision",)) and result.returncode not in (0, 1, 3):
+        # Native exit 1 is an intentional pre-mint refusal. A crash, signal or
+        # unexpected exit cannot prove that token creation did not happen.
+        raise OperatorCleanupError("Keycloak provisioning requires operator recovery")
     if result.returncode == 3:
         message = result.stderr.decode("utf-8", errors="replace").strip()
         raise OperatorCleanupError(message)
@@ -100,3 +106,61 @@ def approle_policy(role: str, **context) -> str:
     return json.loads(operator_bytes(Path(__file__).resolve().parents[1], "operator",
                                     "approle-policy", role,
                                     input=json.dumps(context).encode("utf-8")))
+
+
+def certificate_expiry(certificate: str, seconds: int) -> bool:
+    """Preserve expiry-only OpenSSL -checkend semantics for public certificates."""
+    try:
+        result = json.loads(operator_bytes(Path(__file__).resolve().parents[1], "operator",
+                                          "certificate-expiry", str(seconds),
+                                          input=certificate.encode("ascii")))
+    except RuntimeError:
+        return False
+    if type(result) is not bool:
+        raise RuntimeError("Rust certificate expiry response is invalid")
+    return result
+
+
+def keycloak_policy(scope: str, **context) -> str:
+    return json.loads(operator_bytes(Path(__file__).resolve().parents[1], "operator",
+                                    "keycloak-policy", input=json.dumps({"scope": scope, **context}).encode()))
+
+
+def generation_operation(operation: str, **context):
+    result = json.loads(operator_bytes(Path(__file__).resolve().parents[1], "operator", "generation",
+                                      input=json.dumps({"operation": operation, **context}).encode()))
+    if not isinstance(result, dict) or set(result) not in ({"value"}, {"error"}):
+        raise ValueError("Rust generation response is invalid")
+    if "error" in result:
+        raise ValueError(result["error"])
+    return result["value"]
+
+
+def keycloak_provision(bao, **context) -> dict[str, str]:
+    try:
+        value = json.loads(operator_bytes(
+            Path(__file__).resolve().parents[1], "operator", "keycloak-provision",
+            bao.endpoint, str(bao.ca), input=json.dumps({"token": bao.token, **context}).encode(),
+        ))
+        expected = {"keycloak_signing_kms_token", "keycloak_master_rs256_cert", "keycloak_11id_rs256_cert",
+                    *(f"keycloak_{realm}_{purpose}_token" for realm in ("master", "11id")
+                      for purpose in ("cookie", "ciba"))}
+        if (not isinstance(value, dict) or set(value) != expected
+                or any(not isinstance(v, str) or not v or "PRIVATE KEY" in v for v in value.values())
+                or len({v for k, v in value.items() if k.endswith("_token")}) != 5):
+            raise ValueError("invalid native producer response")
+        return value
+    except (ValueError, UnicodeError) as error:
+        raise OperatorCleanupError("Keycloak provisioning requires operator recovery") from error
+
+
+def keycloak_token(bao, scope: str, **context) -> str:
+    try:
+        value = json.loads(operator_bytes(Path(__file__).resolve().parents[1], "operator",
+                                         "keycloak-token", bao.endpoint, str(bao.ca),
+                                         input=json.dumps({"token": bao.token, "scope": scope, **context}).encode()))
+    except (ValueError, UnicodeError, OSError) as error:
+        raise OperatorCleanupError("Keycloak provisioning requires operator recovery") from error
+    if not isinstance(value, str) or len(value) < 20:
+        raise OperatorCleanupError("Keycloak provisioning requires operator recovery")
+    return value

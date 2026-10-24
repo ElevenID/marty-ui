@@ -9,6 +9,22 @@ Keep the old generation until
 the renewed installation passes its business and custody journeys. Neither
 generation may contain local private keys.
 
+Keycloak remote provisioning and renewed-generation assembly run in the matching
+Rust `marty-deploy` operator. Python entrypoints retain their arguments and the
+separate privileged root-to-operator file handoff. Install and source the signed
+operator receipt first; sudo staging preserves only the four public
+`MARTY_DEPLOY_*` identity variables shown in the disposable qualification runbook.
+The bridge validates binary digest/source/tag before provisioning and does not
+use a source-build fallback under sudo. Mutating provisioning has no overall
+kill timeout; individual HTTPS operations remain bounded. Exit 3 requires
+operator reconciliation of potentially live authority before retrying.
+
+Generation assembly reuses the Rust workload identity inventory. It preserves
+exact static bytes, active file modes, exclusive creation, distinct scoped tokens
+and the separate overlap/retirement ceremonies. Failure removes only files
+created by that attempt; an unconfirmed rollback is reported for recovery.
+Assembly does not activate a generation or retire the independent release checks.
+
 After the initial KMS-only installation, use
 `scripts/provision_selfhost_renewal_identity.py --mode bootstrap` once with
 the existing private generation, HTTPS OpenBao CA, and the bootstrap root
@@ -71,6 +87,37 @@ complete generation with `scripts/stage_selfhost_renewed_secrets.py`. Each
 candidate directory must be empty and private. The assembly verifies the
 same file inventory and modes, unchanged static inputs and public CA, and
 changed certificates and scoped tokens. Its default mode refuses CA rollover.
+
+The signed Rust operator owns Keycloak's five closed policy scopes, token
+creation, exact existing-policy selection during renewal, scoped signing/JWE
+probes, and actual foreign-key 403 checks. Native Keycloak and AppRole operations
+share bounded HTTPS request mechanics; Keycloak retains its own policy profile.
+The Python command still owns PKI/Transit CSR orchestration and the seven-file
+staging contract: two certificates and five distinct tokens, no overwrite,
+initial 0444 files under an owner-private root, and renewal 0600 files. Renewal
+does not create or widen policies. Its leaves retain the exact single policy,
+7–8 hour remaining lifetime, orphan status, and renewal-role creation path.
+
+Keycloak certificate expiry and the replacement CA's 300-day check use native
+expiry-only semantics matching `openssl x509 -checkend`; they do not reject a
+future notBefore value. Activation's separate lifetime and chain checks still
+enforce current validity. Strict replacement-root validation verifies the exact
+kind/version identity, single canonical PEM, critical CA constraints, P-256
+public key and self-signature without checking time. Issuer validity is checked
+separately. OpenSSL remains the differential test and Windows release oracle.
+
+Failures before token minting remain validation failures. A mint response lost
+in transit, failed post-mint qualification, failed token delivery, abnormal
+native process exit, or subsequent staging failure returns fixed exit 3:
+`Keycloak provisioning requires operator recovery`. No token values appear in
+the diagnostic. Existing renewal authority cannot revoke these leaves, so this
+refactor does not grant it additional revocation permissions or claim that the
+remote changes were rolled back. An operator must reconcile issued tokens and
+the partial disposable setup before retrying; preserve the active generation.
+Initial provisioning creates its non-exportable foreign test key before minting
+so every returned token has already proved denial; that test key may remain if
+later provisioning fails. Local file-write cleanup still removes only files
+created by that attempt. This stage does not activate a generation.
 
 Replacement-issuer preparation is a separate rootless source stage, not an
 activation shortcut. After provisioning the CA-rotation AppRole while the
