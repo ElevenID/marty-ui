@@ -283,6 +283,22 @@ describe('ApplicationForm', () => {
     }
   });
 
+  it('submits a live application to its API-provided issuer organization rather than the user home organization', async () => {
+    mockAuthState.organizationId = 'home-org';
+    mockLocationState.location.state = {
+      credential: { id: 'issuer-credential', credential_type: 'EmployeeCredential', required_fields: [], optional_fields: [], custom_fields: [] },
+      applicationTemplate: { id: 'issuer-application', organization_id: 'issuer-org', credential_template_id: 'issuer-credential',
+        name: 'Issuer application', status: 'ACTIVE', form_fields: [], evidence_requirements: [] },
+    };
+    const { user } = render(<ApplicationForm />);
+    if (screen.queryByTestId('next-step-btn')) await user.click(screen.getByTestId('next-step-btn'));
+    await user.click(screen.getByTestId('accept-terms-checkbox'));
+    await user.click(screen.getByTestId('submit-application-btn'));
+    await waitFor(() => expect(mockCreateApplication).toHaveBeenCalledWith(expect.objectContaining({
+      organization_id: 'issuer-org', application_template_id: 'issuer-application',
+    })));
+  });
+
   it('explains Canvas-only credential applications with launch context and completion checks', async () => {
     mockLocationState.location = {
       search: '?canvas_lti_state=state-1',

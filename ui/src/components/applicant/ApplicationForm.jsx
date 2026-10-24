@@ -313,7 +313,7 @@ export default function ApplicationForm({ previewContext = null } = {}) {
   );
   const applicationOrganizationId = isCanvasLtiApplication
     ? (canvasIssuerOrganizationId || organizationId)
-    : organizationId;
+    : (applicationTemplate?.organization_id || organizationId);
 
   const getCredentialTemplate = async (templateId) => get(`/v1/credential-templates/${templateId}`);
   const getApplicationTemplate = async (templateId) => get(`/v1/application-templates/${templateId}`);
