@@ -2,6 +2,16 @@
 
 Status: active requirements and queue, 2026-10-20.
 
+October 24 nightly publication: `feat/nightly-publication`, owned by the primary
+release worker, starts at protected main
+`6f63c66915bfa265f0683e2451dabb4e9503fab7`. The user authorized completing
+nightly publication for installation testing. Claim run `40114393354` passed,
+but existing intake emits evidence only. The next action is to connect a
+validated nightly claim to shared image builds and prerelease publication,
+retaining stable official qualification. The isolated
+`worktrees/nightly-publication` checkout is removed after verified merge or
+parked after a published checkpoint if an external gate blocks delivery.
+
 October 21 maintenance reconciliation: Adam Burdett's integration writer is
 resuming the existing `selfhost-log-boundary-20261004` checkout on
 `reconcile/selfhost-log-boundary-20261021`, based on published main

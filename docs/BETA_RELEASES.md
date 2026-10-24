@@ -4,6 +4,29 @@ Marty beta delivery is an aggregate, immutable Rust stack release. The former
 per-repository Python-wheel beta process is retired. Do not publish or install
 Python MMF beta packages and do not recreate `release-beta.yml` workflows.
 
+## Installation-test nightlies
+
+The separate `nightly-release.yml` workflow publishes experimental Linux amd64
+prereleases, not stable releases or supported self-host qualification. First run
+`prepare-nightly-claim.yml` on current protected `main`, then dispatch
+`nightly-release.yml` on that same source with its successful `claim_run_id`.
+The identity is `vMAJOR.MINOR.PATCH-nightly.YYYYMMDD.CLAIM_RUN_ID`; neither the
+stable source lock nor an existing release is rewritten.
+
+Publication requires seven exact-source image builds and provenance, an
+image-locked ZIP and unqualified descriptor, anonymous Linux amd64 image pulls,
+all five pinned public-runtime happy paths, owned cleanup, signed assets, and
+exact-source GitHub provenance. These public-runtime checks do **not** establish
+that the self-host ZIP has passed installed qualification. The preview README
+states that limitation and directs disposable installation tests to the matching
+source runbook. Official releases still require their complete existing gates.
+No recordings or YouTube publication run for nightlies.
+
+`scripts/install-marty-deploy.sh TAG SOURCE_SHA DESTINATION` accepts a nightly only on Linux
+amd64 and verifies its nightly-workflow signatures, provenance, source, and
+build identity. The release's `RELEASE-SHA256SUMS` covers the full signed release;
+the original six-asset `SHA256SUMS` remains the preview-staging inventory.
+
 ## Developer validation
 
 Use isolated working branches and local builds for developer testing. Do not
