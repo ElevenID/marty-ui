@@ -9,9 +9,10 @@ ROOT = Path(__file__).resolve().parents[1]
 SECURITY_OVERRIDES = {
     "brace-expansion": "5.0.12",
     "browserslist": "4.28.9",
-    "fast-uri": "4.1.5",
+    "fast-uri": "4.2.3",
     "follow-redirects": "1.16.1",
     "qs": "6.16.0",
+    "undici": "8.12.2",
 }
 
 
