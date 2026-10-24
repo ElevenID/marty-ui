@@ -44,10 +44,18 @@ const getBreadcrumbs = (t) => [
   { label: t('policies.breadcrumbs.presentationPolicies'), path: '/console/org/policies/presentation' },
 ];
 
+function policyTrustProfileIds(policy) {
+  const requirements = [
+    ...(policy.credential_requirements || []),
+    ...(policy.alternative_requirements || []).flatMap((group) => group.credential_requirements || []),
+  ];
+  return [...new Set([policy.trust_profile_id, ...requirements.map((requirement) => requirement.trust_profile_id)].filter(Boolean))];
+}
+
 function PresentationPoliciesPage() {
   const { t } = useTranslation('console');
   const { activeOrgId: organizationId } = useConsole();
-  const { data: policies = [], loading, error } = useAsyncData(
+  const { data: policies = [], loading, error, reload } = useAsyncData(
     () => listPresentationPolicies({ organization_id: organizationId }),
     [organizationId]
   );
@@ -119,7 +127,11 @@ function PresentationPoliciesPage() {
       actions={<TestActions />}
     >
       {error && (
-        <Alert severity="error" sx={{ mb: 3 }}>
+        <Alert
+          severity="error"
+          sx={{ mb: 3 }}
+          action={<Button color="inherit" size="small" onClick={reload}>{t('common.retry', { defaultValue: 'Retry' })}</Button>}
+        >
           {error?.message || String(error)}
         </Alert>
       )}
@@ -132,7 +144,7 @@ function PresentationPoliciesPage() {
 
       {loading ? (
         <LinearProgress />
-      ) : policies.length === 0 ? (
+      ) : error ? null : policies.length === 0 ? (
         <EmptyState
           {...EmptyStates.policies}
           prerequisites={policyPrerequisites}
@@ -148,43 +160,52 @@ function PresentationPoliciesPage() {
               <TableRow>
                 <TableCell>{t('policies.tableHeaders.name')}</TableCell>
                 <TableCell>{t('policies.tableHeaders.trustProfile')}</TableCell>
-                <TableCell>{t('policies.tableHeaders.requiredClaims')}</TableCell>
+                <TableCell>{t('policies.tableHeaders.claimRequirements', { defaultValue: 'Claims and requirements' })}</TableCell>
                 <TableCell>{t('policies.tableHeaders.freshness')}</TableCell>
                 <TableCell>{t('policies.tableHeaders.holderBinding')}</TableCell>
-                <TableCell align="right">{t('policies.tableHeaders.usage')}</TableCell>
                 <TableCell>{t('policies.tableHeaders.status')}</TableCell>
                 <TableCell align="right">{t('policies.tableHeaders.actions')}</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
-              {policies.map((policy) => (
+              {policies.map((policy) => {
+                const claims = policy.required_claims || [];
+                const requirements = policy.credential_requirements || [];
+                const alternatives = policy.alternative_requirements || [];
+                return (
                   <TableRow key={policy.id} hover>
                     <TableCell>
                       <Typography variant="body2" fontWeight={500}>
                         {policy.name}
                       </Typography>
                     </TableCell>
-                    <TableCell>{policy.trustProfile}</TableCell>
+                    <TableCell>{policyTrustProfileIds(policy).join(', ') || '—'}</TableCell>
                     <TableCell>
                       <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
-                        {policy.requiredClaims.slice(0, 2).map((claim) => (
-                          <Chip key={claim} label={claim} size="small" variant="outlined" />
+                        {claims.slice(0, 2).map((claim) => (
+                          <Chip key={claim.claim_name} label={claim.display_name || claim.claim_name} size="small" variant="outlined" />
                         ))}
-                        {policy.requiredClaims.length > 2 && (
-                          <Chip label={`+${policy.requiredClaims.length - 2}`} size="small" />
+                        {claims.length > 2 && (
+                          <Chip label={`+${claims.length - 2}`} size="small" />
                         )}
+                        {requirements.length > 0 && <Chip size="small" variant="outlined" label={t('policies.credentialRequirementCount', {
+                          count: requirements.length,
+                          defaultValue: requirements.length === 1 ? '1 credential requirement' : `${requirements.length} credential requirements`,
+                        })} />}
+                        {alternatives.length > 0 && <Chip size="small" variant="outlined" label={t('policies.alternativeGroupCount', {
+                          count: alternatives.length,
+                          defaultValue: alternatives.length === 1 ? '1 alternative group' : `${alternatives.length} alternative groups`,
+                        })} />}
+                        {claims.length === 0 && requirements.length === 0 && alternatives.length === 0 && '—'}
                       </Box>
                     </TableCell>
-                    <TableCell>{policy.freshness}</TableCell>
+                    <TableCell>{policy.freshness?.max_age_seconds == null ? '—' : `${policy.freshness.max_age_seconds.toLocaleString()} s`}</TableCell>
                     <TableCell>
-                      {policy.holderBinding ? (
+                      {policy.holder_binding?.required ? (
                         <Chip label={t('policies.holderBinding.required')} size="small" color="info" />
                       ) : (
                         <Chip label={t('policies.holderBinding.optional')} size="small" variant="outlined" />
                       )}
-                    </TableCell>
-                    <TableCell align="right">
-                      {policy.usageCount.toLocaleString()}
                     </TableCell>
                     <TableCell>
                       <StatusChip status={policy.status} />
@@ -210,7 +231,8 @@ function PresentationPoliciesPage() {
                       </Tooltip>
                     </TableCell>
                   </TableRow>
-                ))}
+                );
+              })}
             </TableBody>
           </Table>
         </TableContainer>
