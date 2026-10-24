@@ -549,25 +549,22 @@ async fn lock_manual_approval_dependencies(
         .fetch_all(&mut **database)
         .await
         .map_err(manual_approval_repository_error)?;
-    if fact_identities(&current) != fact_identities(&snapshot.evidence_facts) {
+    if ordered_facts(&current) != ordered_facts(&snapshot.evidence_facts) {
         return Err(CanvasApplicationApprovalError::NotReady);
     }
     Ok(())
 }
 
-fn fact_identities(facts: &[Value]) -> Vec<(String, String, String)> {
-    let mut identities = facts
-        .iter()
-        .map(|fact| {
-            (
-                text(fact.get("id")),
-                text(fact.get("payload_hash")),
-                text(fact.get("source_revision")),
-            )
-        })
-        .collect::<Vec<_>>();
-    identities.sort();
-    identities
+fn ordered_facts(facts: &[Value]) -> Vec<&Value> {
+    // Policy consumes the complete fact, including verification and assertion
+    // contents. Stable identifiers do not prove that a row stayed unchanged.
+    let mut ordered = facts.iter().collect::<Vec<_>>();
+    ordered.sort_by(|left, right| {
+        left.get("id")
+            .and_then(Value::as_str)
+            .cmp(&right.get("id").and_then(Value::as_str))
+    });
+    ordered
 }
 
 fn application_approval_snapshot_is_current(

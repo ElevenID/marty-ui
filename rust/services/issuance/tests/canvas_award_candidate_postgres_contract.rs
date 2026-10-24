@@ -516,6 +516,66 @@ async fn candidate_materialization_matches_production_json_and_revision_contract
     .unwrap();
     prepared.issuer_profile_id = Some("issuer-profile-1".into());
     prepared.signing_service_id = Some("kms-service-1".into());
+    // In-place policy changes must reject the evaluated snapshot even when
+    // the fact ID, payload hash, source revision and selected head stay stable.
+    for (column, select, update, changed) in [
+        (
+            "verification",
+            "SELECT verification FROM issuance_service.evidence_facts WHERE id='manual-check-high'",
+            "UPDATE issuance_service.evidence_facts SET verification=$1 WHERE id='manual-check-high'",
+            json!({"status":"UNVERIFIED"}),
+        ),
+        (
+            "assertion",
+            "SELECT assertion FROM issuance_service.evidence_facts WHERE id='manual-check-high'",
+            "UPDATE issuance_service.evidence_facts SET assertion=$1 WHERE id='manual-check-high'",
+            json!({"completed":true,"score_percent":40}),
+        ),
+    ] {
+        let original: Value = sqlx::query_scalar(select)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sqlx::query(update)
+            .bind(changed)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let changed_snapshot = management_repository
+            .load_application_approval_snapshot(
+                "98ab252b-2af9-47a4-b66e-c31e269746d2",
+                "application-manual-1",
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        for field in ["id", "payload_hash", "source_revision"] {
+            assert_eq!(
+                changed_snapshot.evidence_facts[0][field],
+                eligible.evidence_facts[0][field]
+            );
+        }
+        assert_eq!(
+            management_repository
+                .reserve_application_issuance(
+                    &prepared,
+                    &eligible,
+                    "canvas-integration-management-api",
+                    None,
+                    now()
+                )
+                .await,
+            Err(CanvasApplicationApprovalError::NotReady),
+            "in-place {column} mutation must not reserve a transaction"
+        );
+        assert_eq!(sqlx::query_scalar::<_, i64>("SELECT count(*) FROM issuance_service.issuance_transactions WHERE application_id='application-manual-1'")
+            .fetch_one(&pool).await.unwrap(), 0);
+        sqlx::query(update)
+            .bind(original)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
     manual_contract_head(&pool, "application-manual-1", "manual-check-raced", 40).await;
     assert_eq!(
         management_repository
