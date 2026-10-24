@@ -29,6 +29,14 @@ pub fn schemas() -> Value {
         "../../../../contracts/issuer-identity-inspection-response.json"
     ))
     .expect("public identity inspection schema");
+    let compliance: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/compliance-profile-http-schemas.json"
+    ))
+    .expect("native compliance HTTP schemas");
+    schemas
+        .as_object_mut()
+        .expect("schemas")
+        .extend(compliance.as_object().expect("compliance schemas").clone());
     schemas
 }
 pub fn protocol_revision() -> &'static str {
@@ -46,6 +54,17 @@ fn schema(name: &str) -> Value {
 
 pub fn describe_operation(operation: &mut Value, method: HttpMethod, path: &str, status: u16) {
     use HttpMethod::{Get, Patch, Post};
+    if matches!(
+        path,
+        "/v1/compliance-profiles"
+            | "/v1/compliance-profiles/{profile_id}"
+            | "/v1/compliance-profiles/{profile_id}/activate"
+            | "/v1/compliance-profiles/{profile_id}/suspend"
+            | "/v1/compliance-profiles/system/discoverable"
+    ) {
+        describe_compliance(operation, method, path, status);
+        return;
+    }
     if method == Get && path == "/v1/signing-keys/issuer-identities/inspection" {
         operation["summary"] = json!("Inspect DID publication and managed signer matching");
         operation["description"] = json!("Requires signing-key:view in the selected organization. Read-only current registry, managed signer and public HTTPS observations, including assertion authorization. Public resolution uses the deployment authority and no internal fallback. Assertion readiness does not qualify credential issuance, certificate trust or interoperability.");
@@ -182,6 +201,86 @@ pub fn describe_operation(operation: &mut Value, method: HttpMethod, path: &str,
     // Coverage is explicit while remaining service-owned shapes are reconciled.
     operation["x-marty-request-schema-documented"] = json!(request.is_some());
     operation["x-marty-response-schema-documented"] = json!(response.is_some());
+}
+
+fn describe_compliance(operation: &mut Value, method: HttpMethod, path: &str, status: u16) {
+    use HttpMethod::{Delete, Get, Patch, Post};
+    let collection = path == "/v1/compliance-profiles";
+    let catalog = path == "/v1/compliance-profiles/system/discoverable";
+    let action = match method {
+        Get => "view",
+        Post if path.ends_with("/activate") => "activate",
+        Post if path.ends_with("/suspend") => "suspend",
+        Post => "create",
+        Patch => "edit",
+        Delete => "delete",
+        _ => return,
+    };
+    operation["description"] = json!(format!("Requires compliance-profile:{action} in the resource's organization. System presets are migration-owned and immutable. Public metadata is a partial projection of the protocol entity; internal privacy enforcement sections are not returned."));
+    operation["x-marty-protocol-schema-ref"] = schema("compliance-profile");
+    operation["x-marty-protocol-support"] = json!("partial");
+    operation["x-marty-request-schema-documented"] = json!(true);
+    operation["x-marty-response-schema-documented"] = json!(true);
+    if method == Get && (collection || catalog) {
+        operation["parameters"] = json!([query_parameter("organization_id", "Selected authorized organization; even the shared catalog requires this view grant at the gateway.")]);
+        if catalog {
+            operation["parameters"][0]["required"] = json!(false);
+        }
+        if collection {
+            operation["parameters"].as_array_mut().expect("parameters").extend([
+                json!({"name":"limit","in":"query","schema":{"type":"integer","minimum":1,"maximum":500,"default":100}}),
+                json!({"name":"offset","in":"query","schema":{"type":"integer","minimum":0,"default":0}}),
+            ]);
+        }
+    }
+    if (method == Post && collection) || method == Patch {
+        let request = if method == Patch {
+            "runtime__compliance_profile_update_request"
+        } else {
+            "runtime__compliance_profile_create_request"
+        };
+        operation["requestBody"] = json!({"required":true,"content":{"application/json":{"schema":{"$ref":format!("#/components/schemas/{request}")}}}});
+    }
+    let response = if method == Delete {
+        json!({"type":"object","additionalProperties":false,"required":["success"],"properties":{"success":{"const":true}}})
+    } else if method == Get && (collection || catalog) {
+        json!({"type":"array","items":{"$ref":"#/components/schemas/runtime__compliance_profile_response"}})
+    } else {
+        json!({"$ref":"#/components/schemas/runtime__compliance_profile_response"})
+    };
+    operation["responses"][status.to_string()]["content"] =
+        json!({"application/json":{"schema":response}});
+    for (code, description) in [
+        (
+            400,
+            "Profile constraints or query values are invalid; no partial mutation is saved.",
+        ),
+        (401, "Authentication required."),
+        (
+            403,
+            "Organization or action is not authorized, or a system preset cannot be mutated.",
+        ),
+        (404, "Profile not found."),
+        (409, "The native owner reports a resource conflict."),
+        (
+            422,
+            "JSON fields or enum values do not match the native request DTO.",
+        ),
+        (
+            500,
+            "The native profile storage is unavailable; backend details are not returned.",
+        ),
+        (502, "The native organization dependency is unavailable."),
+        (
+            503,
+            "The gateway cannot reach or authorize a required service.",
+        ),
+    ] {
+        operation["responses"][code.to_string()] = json!({"description":description});
+    }
+    if method == Post && !collection {
+        operation["description"] = json!(format!("{} The operation has no request body; the native owner changes only status and updated_at.",operation["description"].as_str().expect("description")));
+    }
 }
 
 fn query_parameter(name: &str, description: &str) -> Value {
@@ -351,5 +450,50 @@ mod tests {
                 );
             }
         }
+    }
+    #[test]
+    fn compliance_http_operations_use_actual_owner_schemas_and_explicit_partial_support() {
+        let document = crate::contract::GatewayContract::load()
+            .unwrap()
+            .openapi_document("test");
+        for (path, methods) in [
+            ("/v1/compliance-profiles", vec!["get", "post"]),
+            (
+                "/v1/compliance-profiles/{profile_id}",
+                vec!["get", "patch", "delete"],
+            ),
+            (
+                "/v1/compliance-profiles/{profile_id}/activate",
+                vec!["post"],
+            ),
+            ("/v1/compliance-profiles/{profile_id}/suspend", vec!["post"]),
+            ("/v1/compliance-profiles/system/discoverable", vec!["get"]),
+        ] {
+            for method in methods {
+                let operation = &document["paths"][path][method];
+                assert_eq!(operation["x-marty-protocol-support"], "partial");
+                assert_eq!(operation["x-marty-response-schema-documented"], true);
+                assert!(operation["security"][0].is_object());
+                assert!(operation["responses"]["403"].is_object());
+                assert!(operation["responses"]["422"].is_object());
+            }
+        }
+        assert_eq!(
+            document["paths"]["/v1/compliance-profiles"]["post"]["requestBody"]["content"]
+                ["application/json"]["schema"]["$ref"],
+            "#/components/schemas/runtime__compliance_profile_create_request"
+        );
+        assert_eq!(
+            document["paths"]["/v1/compliance-profiles/{profile_id}"]["patch"]["requestBody"]
+                ["content"]["application/json"]["schema"]["$ref"],
+            "#/components/schemas/runtime__compliance_profile_update_request"
+        );
+        let response = &document["components"]["schemas"]["runtime__compliance_profile_response"];
+        assert_eq!(response["additionalProperties"], false);
+        assert!(response["properties"].get("data_retention").is_none());
+        assert_eq!(
+            response["properties"]["api_surface"]["items"]["additionalProperties"],
+            false
+        );
     }
 }

@@ -13,7 +13,7 @@ use serde_json::{json, Map, Value};
 
 use crate::issuance_native;
 
-pub const EXPECTED_ROUTE_COUNT: usize = 457;
+pub const EXPECTED_ROUTE_COUNT: usize = 459;
 
 #[derive(Debug, Deserialize)]
 pub struct GatewayContract {

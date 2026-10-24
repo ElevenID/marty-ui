@@ -8333,6 +8333,132 @@ mod tests {
         );
     }
 
+    struct ComplianceMembership(&'static str);
+    #[async_trait]
+    impl OrganizationMembershipProvider for ComplianceMembership {
+        async fn get_membership(
+            &self,
+            user_id: &str,
+            organization_id: &str,
+        ) -> Result<Option<OrganizationMembership>, SecurityError> {
+            Ok(
+                (organization_id == "org-1").then(|| OrganizationMembership {
+                    user_id: user_id.into(),
+                    organization_id: organization_id.into(),
+                    status: "active".into(),
+                    role_names: BTreeSet::new(),
+                    permissions: BTreeSet::from([self.0.into()]),
+                    is_owner: false,
+                }),
+            )
+        }
+    }
+    #[tokio::test]
+    async fn compliance_public_catalog_and_lifecycle_enforce_exact_tenant_action_before_proxy() {
+        for (method, path, permission, owner, authenticated, expected) in [
+            (
+                "GET",
+                "/v1/compliance-profiles/system/discoverable?organization_id=org-1",
+                "compliance-profile:view",
+                "org-1",
+                false,
+                StatusCode::UNAUTHORIZED,
+            ),
+            (
+                "GET",
+                "/v1/compliance-profiles/system/discoverable?organization_id=org-other",
+                "compliance-profile:view",
+                "org-1",
+                true,
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                "GET",
+                "/v1/compliance-profiles/system/discoverable?organization_id=org-1",
+                "compliance-profile:create",
+                "org-1",
+                true,
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                "GET",
+                "/v1/compliance-profiles/system/discoverable?organization_id=org-1",
+                "compliance-profile:view",
+                "org-1",
+                true,
+                StatusCode::OK,
+            ),
+            (
+                "POST",
+                "/v1/compliance-profiles/profile-one/activate",
+                "compliance-profile:create",
+                "org-1",
+                true,
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                "POST",
+                "/v1/compliance-profiles/profile-one/activate",
+                "compliance-profile:activate",
+                "org-1",
+                true,
+                StatusCode::OK,
+            ),
+            (
+                "POST",
+                "/v1/compliance-profiles/profile-one/suspend",
+                "compliance-profile:view",
+                "org-1",
+                true,
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                "POST",
+                "/v1/compliance-profiles/profile-one/suspend",
+                "compliance-profile:suspend",
+                "org-other",
+                true,
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                "POST",
+                "/v1/compliance-profiles/profile-one/suspend",
+                "compliance-profile:suspend",
+                "org-1",
+                true,
+                StatusCode::OK,
+            ),
+        ] {
+            let recorder = Arc::new(ActorRecordingUpstream::default());
+            let mut state = runtime_state_with_upstream(Arc::new(NoOwner), recorder.clone());
+            let owned = Arc::get_mut(&mut state).unwrap();
+            owned.memberships = Arc::new(ComplianceMembership(permission));
+            owned.owners = Arc::new(ScriptedOwner(Some(owner.into())));
+            let mut request = Request::builder()
+                .method(method)
+                .uri(path)
+                .header("content-type", "application/json");
+            if authenticated {
+                request = request.header("cookie", "sessionId=valid");
+            }
+            let response = gateway_router(state)
+                .oneshot(request.body(Body::from("{}")).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                expected,
+                "{method} {path} {permission} {owner}"
+            );
+            let calls = recorder.0.lock().unwrap();
+            assert_eq!(calls.len(), usize::from(expected == StatusCode::OK));
+            if expected == StatusCode::OK {
+                assert_eq!(calls[0].0, "compliance-profiles");
+                assert_eq!(calls[0].1.header("x-user-id"), Some("user-1"));
+            }
+        }
+    }
+
     #[test]
     fn public_service_signing_receives_dedicated_key_only_after_gateway_authorization() {
         let state = runtime_state();

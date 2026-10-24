@@ -173,3 +173,26 @@ def test_inspection_component_example_and_recursive_public_document_boundaries()
         target[field] = invalid
         with pytest.raises(jsonschema.ValidationError):
             validator.validate(mutated)
+
+
+def test_native_compliance_schemas_match_http_bound_examples_and_reject_nested_drift():
+    schemas = json.loads((ROOT / "contracts/compliance-profile-http-schemas.json").read_text())
+    examples = json.loads((ROOT / "contracts/compliance-profile-http-examples.json").read_text())
+    for value, key in ((examples["create"], "create_request"), (examples["response"], "response")):
+        jsonschema.Draft202012Validator(schemas["runtime__compliance_profile_" + key]).validate(value)
+    patch = jsonschema.Draft202012Validator(schemas["runtime__compliance_profile_update_request"])
+    for value in ({"name": "Renamed"}, {"description": ""}, {"discoverable": False}, {"age_verification": None}):
+        patch.validate(value)
+    response = jsonschema.Draft202012Validator(schemas["runtime__compliance_profile_response"])
+    for value in ({"status": "ACTIVE"}, {"organization_id": "foreign"}, {"issuer_artifact_requirements": {"kms_key_id": "private"}}, {"trust_profile_constraints": {"required_formats": [9]}}):
+        with pytest.raises(jsonschema.ValidationError):
+            patch.validate(value)
+    for field in ("frameworks", "data_retention", "consent_requirement", "audit_configuration", "data_minimization_rules", "jurisdictional_constraints", "age_verification"):
+        value = deepcopy(examples["response"])
+        value[field] = {}
+        with pytest.raises(jsonschema.ValidationError):
+            response.validate(value)
+    value = deepcopy(examples["response"])
+    value["api_surface"][0]["standard_ref"] = {"private_key": "secret"}
+    with pytest.raises(jsonschema.ValidationError):
+        response.validate(value)

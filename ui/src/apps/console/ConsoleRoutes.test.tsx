@@ -92,6 +92,7 @@ vi.mock('../../components/console', () => ({
   CredentialTemplateWizard: () => <div data-testid="credential-template-wizard" />,
   PoliciesPage: () => <div data-testid="policies-page" />,
   PresentationPoliciesPage: () => <div data-testid="presentation-policies-page" />,
+  ComplianceProfilePage: ({ mode = "view" }: { mode?: string }) => <div data-testid={`compliance-profile-${mode}`} />,
   ComplianceProfilesPage: () => <div data-testid="compliance-profiles-page" />,
   PresentationPolicyWizard: () => <div data-testid="presentation-policy-wizard" />,
   DeployPage: () => <div data-testid="deploy-page" />,
@@ -315,5 +316,13 @@ describe('operator key management authorization', () => {
     mockUsePermissions.mockReturnValue({ can: () => false, isLoading: false });
     renderConsoleRoutes('/console/org/deploy/issuer-identity');
     expect(screen.getByTestId('did-identities-page')).toBeInTheDocument();
+  });
+});
+
+
+describe('canonical compliance profile routes', () => {
+  it.each([['/new', 'create'], ['/profile-one', 'view'], ['/profile-one/edit', 'edit']])('routes %s to the owned consumer page', (suffix, mode) => {
+    renderConsoleRoutes('/console/org/policies/compliance' + suffix);
+    expect(screen.getByTestId('compliance-profile-' + mode)).toBeInTheDocument();
   });
 });

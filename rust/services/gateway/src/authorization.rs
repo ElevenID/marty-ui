@@ -304,6 +304,16 @@ static SPECIAL_RULES: LazyLock<Vec<RouteRule>> = LazyLock::new(|| {
             "integration-connector",
         ),
         rule(
+            r"^/v1/compliance-profiles/[^/]+/activate$",
+            &[("POST", "compliance-profile:activate")],
+            "compliance-profile",
+        ),
+        rule(
+            r"^/v1/compliance-profiles/[^/]+/suspend$",
+            &[("POST", "compliance-profile:suspend")],
+            "compliance-profile",
+        ),
+        rule(
             r"^/v1/credential-templates/[^/]+/activate$",
             &[("POST", "credential-template:activate")],
             "credential-template",
@@ -1167,5 +1177,32 @@ mod tests {
                 .permission,
             "compliance-profile:view"
         );
+    }
+    #[test]
+    fn compliance_lifecycle_uses_native_actions_and_readers_never_gain_writes() {
+        for action in ["activate", "suspend"] {
+            let path = format!("/v1/compliance-profiles/profile-one/{action}");
+            let requirement = resolve_action("POST", &path).unwrap();
+            assert_eq!(
+                requirement.permission,
+                format!("compliance-profile:{action}")
+            );
+            assert_eq!(
+                resolve_resource_lookup(&path).unwrap().path,
+                "/v1/compliance-profiles/profile-one"
+            );
+            assert!(!api_key_allowed(
+                requirement.permission,
+                &["compliance:read".into()]
+            ));
+            assert!(!api_key_allowed(
+                requirement.permission,
+                &["templates:write".into()]
+            ));
+            assert!(api_key_allowed(
+                requirement.permission,
+                &["compliance:write".into()]
+            ));
+        }
     }
 }

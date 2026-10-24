@@ -37,6 +37,7 @@ import {
   PoliciesPage,
   PresentationPoliciesPage,
   ComplianceProfilesPage,
+  ComplianceProfilePage,
   PresentationPolicyWizard,
   DeployPage,
   DeploymentProfilesPage,
@@ -187,6 +188,9 @@ function ConsoleRoutes() {
         <Route path="policies/presentation" element={<PresentationPoliciesPage />} />
         <Route path="policies/presentation/new" element={<PresentationPolicyWizard />} />
         <Route path="policies/compliance" element={<ComplianceProfilesPage />} />
+        <Route path="policies/compliance/new" element={<ComplianceProfilePage mode="create" />} />
+        <Route path="policies/compliance/:profileId" element={<ComplianceProfilePage />} />
+        <Route path="policies/compliance/:profileId/edit" element={<ComplianceProfilePage mode="edit" />} />
         <Route path="deploy" element={<DeployPage />} />
         <Route path="deploy/profiles" element={<DeploymentProfilesPage />} />
         <Route path="deploy/profiles/new" element={<DeploymentProfileWizard />} />

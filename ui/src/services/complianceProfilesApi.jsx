@@ -28,19 +28,7 @@ export function requireOrganizationId(params = {}) {
   return String(organizationId).trim();
 }
 
-/**
- * Create a new compliance profile
- * @param {Object} profileData - Profile configuration
- * @param {string} profileData.name - Profile name
- * @param {string} profileData.code - Compliance code (ICAO_DTC, AAMVA_MDL, EUDI_PID, ENTERPRISE_VC)
- * @param {string} profileData.description - Optional description
- * @param {Object} profileData.credential_format_mapping - Format mappings (mdoc, sd_jwt_vc, jwt_vc, ldp_vc)
- * @param {Object} profileData.issuer_artifact_requirements - Required artifacts per format
- * @param {Object} profileData.default_claim_verification_rules - Default verification rules
- * @param {Object} profileData.trust_profile_constraints - Trust profile requirements
- * @param {boolean} profileData.is_system_profile - Whether this is an immutable system preset
- * @returns {Promise<Object>} Created compliance profile
- */
+/** Create an organization-owned profile using the native compliance contract. */
 export const createComplianceProfile = async (profileData) => {
   return postWithIdempotency(BASE_PATH, {
     ...profileData,
@@ -81,7 +69,7 @@ export const listComplianceProfiles = async (filters = {}) => {
  */
 export const getComplianceProfile = async (profileId) => {
   try {
-    const response = await apiClient.get(`${BASE_PATH}/${profileId}`);
+    const response = await apiClient.get(`${BASE_PATH}/${encodeURIComponent(profileId)}`);
     return response.data;
   } catch (error) {
     throw handleApiError(error);
@@ -96,7 +84,7 @@ export const getComplianceProfile = async (profileId) => {
  */
 export const updateComplianceProfile = async (profileId, updates) => {
   try {
-    const response = await apiClient.patch(`${BASE_PATH}/${profileId}`, updates);
+    const response = await apiClient.patch(`${BASE_PATH}/${encodeURIComponent(profileId)}`, updates);
     return response.data;
   } catch (error) {
     throw handleApiError(error);
@@ -110,52 +98,48 @@ export const updateComplianceProfile = async (profileId, updates) => {
  */
 export const deleteComplianceProfile = async (profileId) => {
   try {
-    await apiClient.delete(`${BASE_PATH}/${profileId}`);
+    await apiClient.delete(`${BASE_PATH}/${encodeURIComponent(profileId)}`);
   } catch (error) {
     throw handleApiError(error);
   }
 };
 
-/**
- * Get system compliance profile presets
- * @returns {Promise<Array>} List of system presets (ICAO_DTC, AAMVA_MDL, EUDI_PID, ENTERPRISE_VC)
- */
+/** Active discoverable migration-owned presets; never infer presets from org rows. */
 export const getSystemPresets = async (filters = {}) => {
   const organizationId = requireOrganizationId(filters);
   try {
-    const params = new URLSearchParams({
-      organization_id: organizationId,
-      system_profiles_only: 'true',
-    });
-    const response = await apiClient.get(`${BASE_PATH}?${params.toString()}`);
+    const response = await apiClient.get(`${BASE_PATH}/system/discoverable?${new URLSearchParams({ organization_id: organizationId })}`);
+    if (!Array.isArray(response.data) || !response.data.every((profile) => profile?.is_system === true
+      && profile.organization_id == null && profile.status === 'ACTIVE' && profile.discoverable === true)) {
+      throw new Error('Compliance catalog returned invalid system profile data.');
+    }
     return response.data;
-  } catch (error) {
-    throw handleApiError(error);
-  }
+  } catch (error) { throw handleApiError(error); }
+};
+
+export const activateComplianceProfile = async (profileId) => {
+  try { return (await apiClient.post(`${BASE_PATH}/${encodeURIComponent(profileId)}/activate`, {})).data; }
+  catch (error) { throw handleApiError(error); }
+};
+export const suspendComplianceProfile = async (profileId) => {
+  try { return (await apiClient.post(`${BASE_PATH}/${encodeURIComponent(profileId)}/suspend`, {})).data; }
+  catch (error) { throw handleApiError(error); }
 };
 
 export const listSystemPresets = getSystemPresets;
 
-/**
- * Validate issuer artifacts against compliance profile requirements
- * @param {string} profileId - Compliance profile ID
- * @param {Object} artifacts - Issuer artifacts to validate
- * @param {string} artifacts.issuer_did - Issuer DID
- * @param {string} artifacts.issuer_key_id - Key ID
- * @param {string} artifacts.issuer_certificate_chain_pem - X.509 certificate chain
- * @returns {Promise<Object>} Validation result with errors if any
- */
-export const validateIssuerArtifacts = async (profileId, artifacts) => {
-  try {
-    const response = await apiClient.post(`${BASE_PATH}/${profileId}/validate-artifacts`, artifacts);
-    return response.data;
-  } catch (error) {
-    throw handleApiError(error);
-  }
+/** @deprecated No compliance-profile artifact-validation operation is exposed. */
+export const validateIssuerArtifacts = async () => {
+  const error = new Error('Compliance artifact validation is not exposed. Use template issuer options for compatibility and the issuance or verification workflow to validate artifacts.');
+  error.code = 'UNSUPPORTED_OPERATION';
+  error.status = 501;
+  throw error;
 };
 
 export default {
   createComplianceProfile,
+  activateComplianceProfile,
+  suspendComplianceProfile,
   listComplianceProfiles,
   getComplianceProfile,
   updateComplianceProfile,

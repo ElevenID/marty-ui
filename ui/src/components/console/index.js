@@ -29,6 +29,7 @@ export { default as CredentialTemplateWizard } from './templates/CredentialTempl
 // Policies
 export { default as PoliciesPage } from './policies/PoliciesPage';
 export { default as PresentationPoliciesPage } from './policies/PresentationPoliciesPage';
+export { default as ComplianceProfilePage } from './policies/ComplianceProfilePage';
 export { default as ComplianceProfilesPage } from './policies/ComplianceProfilesPage';
 export { default as PresentationPolicyWizard } from './policies/PresentationPolicyWizard';
 
