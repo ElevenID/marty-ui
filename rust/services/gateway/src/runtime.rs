@@ -3147,7 +3147,7 @@ async fn issuance_create_handler(state: Arc<GatewayRuntimeState>, request: Reque
             HttpMethod::Put,
             &registration_path,
             registration,
-            BTreeMap::from([("x-api-key".into(), state.issuance_service_api_key.clone())]),
+            BTreeMap::new(),
         )
         .await
         {
@@ -6336,6 +6336,12 @@ mod tests {
                     }))
                     .expect("presentation policy response")
                 }
+                "/v1/issuance/oid4vci-clients" => {
+                    assert_eq!(instance.service_name, issuance_native::NATIVE_SERVICE);
+                    assert_eq!(request.header("x-api-key"), Some("issuance-service-key"));
+                    serde_json::to_vec(&json!({"client_id": "official-wallet"}))
+                        .expect("client registration")
+                }
                 "/v1/issuance/initiate" => {
                     assert_eq!(request.header("x-api-key"), Some("issuance-service-key"));
                     let body: Value =
@@ -9059,6 +9065,14 @@ mod tests {
                         serde_json::to_vec(&json!({
                             "organization_id": "org-1",
                             "credential_template_id": "template-1",
+                            "authorized_client": {
+                                "client_id": "official-wallet",
+                                "jwks": {"keys": [{
+                                    "kty": "EC", "crv": "P-256", "kid": "wallet-key",
+                                    "x": "f83OJ3D2xF4A9O2jZ8M7VJQYxqvR8K0K8qZ8K0K8qZ8",
+                                    "y": "x_FEzRu9G8K0K8qZ8K0K8qZ8K0K8qZ8K0K8qZ8K0K8q"
+                                }]}
+                            },
                             "claims": {"employee_id": "123"}
                         }))
                         .expect("request JSON"),
@@ -9828,6 +9842,57 @@ mod tests {
             overrides.headers.get("x-service-token"),
             state.service_token.as_ref()
         );
+    }
+
+    #[tokio::test]
+    async fn vc_api_documented_scope_and_input_failures_match_handlers() {
+        let document = GatewayContract::load()
+            .expect("gateway contract")
+            .openapi_document("test");
+        for (path, selection) in [
+            (
+                "/v1/vc-api/credentials/issue",
+                "credential_template_id=template-1&issuer_did=did%3Aweb%3Aissuer.example",
+            ),
+            (
+                "/v1/vc-api/credentials/verify",
+                "presentation_policy_id=policy-1",
+            ),
+            (
+                "/v1/vc-api/presentations/verify",
+                "presentation_policy_id=policy-1",
+            ),
+        ] {
+            for (query, expected) in [
+                (String::new(), StatusCode::UNPROCESSABLE_ENTITY),
+                (
+                    format!("?organization_id=org-other&{selection}"),
+                    StatusCode::FORBIDDEN,
+                ),
+                (
+                    format!("?organization_id=org-1&{selection}"),
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                ),
+            ] {
+                let response = runtime_router()
+                    .oneshot(
+                        Request::builder()
+                            .method("POST")
+                            .uri(format!("{path}{query}"))
+                            .header("cookie", "sessionId=valid")
+                            .header("content-type", "application/json")
+                            .body(Body::from("{}"))
+                            .expect("request"),
+                    )
+                    .await
+                    .expect("response");
+                assert_eq!(response.status(), expected, "{path}{query}");
+                assert!(
+                    document["paths"][path]["post"]["responses"][expected.as_str()].is_object(),
+                    "runtime status must be documented for {path}"
+                );
+            }
+        }
     }
 
     #[tokio::test]

@@ -481,7 +481,8 @@ def assert_consumer_matrix(renderer=None):
         )
         shared_image = consumer_shared_image(case["files"], model)
         assert_consumer_worker(
-            base, model, case["name"], isolated=True, shared_image=shared_image
+            base, model, case["name"], isolated=True,
+            beta="docker-compose.beta.yml" in case["files"], shared_image=shared_image
         )
         assert_conformance_isolation(model)
         checked.append(case["name"])

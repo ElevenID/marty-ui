@@ -2852,6 +2852,10 @@ jobs:
         run: uv pip install --system -r requirements-services.txt jsonschema
       - name: Enforce public response contract
         run: python scripts/check_gateway_public_protocol_contract.py --protocol-root marty-protocol
+      - name: Enforce pinned public OpenAPI schemas
+        run: python scripts/generate_public_openapi_schemas.py --protocol-root marty-protocol --check
+      - name: Test public schemas and executable examples
+        run: python -m pytest tests/test_public_openapi_schemas.py tests/test_protocol_consumer_example.py -q
 
   test-release-contracts:
     name: Release Contract Tests

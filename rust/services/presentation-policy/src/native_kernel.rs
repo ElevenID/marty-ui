@@ -413,11 +413,16 @@ async fn verify_data_integrity(
     let raw =
         marty_verification::vcdm::verify_vcdm_data_integrity_json_async(&request.to_string()).await;
     let result = internal_json(&raw, "VCDM Data Integrity")?;
+    data_integrity_evidence(context, document, &result)
+}
+
+fn data_integrity_evidence(
+    context: &CredentialVerificationContext,
+    document: &Map<String, Value>,
+    result: &Value,
+) -> Result<CredentialVerificationEvidence, PresentationVerificationError> {
     if result.get("valid").and_then(Value::as_bool) != Some(true) {
-        return Ok(rejected_counted(
-            "VCDM Data Integrity",
-            error_count(&result),
-        ));
+        return Ok(rejected_counted("VCDM Data Integrity", error_count(result)));
     }
     let is_presentation = result.get("kind").and_then(Value::as_str) == Some("presentation");
     let credential_count = result
@@ -425,11 +430,32 @@ async fn verify_data_integrity(
         .and_then(Value::as_u64)
         .and_then(|value| usize::try_from(value).ok())
         .unwrap_or(1);
+    if is_presentation && context.presentation_only {
+        // The native VCDM kernel has verified the holder proof and every
+        // embedded credential. A presentation-only policy does not invent a
+        // credential, issuer, claims, or a trust relationship when none exists.
+        return Ok(CredentialVerificationEvidence {
+            verified: true,
+            presentation_verified: true,
+            presentation_count: Some(1),
+            holder_binding_verified: true,
+            holder_binding_method: Some("DEVICE_KEY".into()),
+            proof_profile: Some("OID4VP_VERIFIABLE_PRESENTATION".into()),
+            challenge_verified: context.nonce.is_some(),
+            audience_verified: context.audience.is_some(),
+            algorithm: result
+                .get("algorithm")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            ..Default::default()
+        });
+    }
     let credential = if is_presentation {
-        let credentials = document
-            .get("verifiableCredential")
-            .and_then(Value::as_array)
-            .ok_or_else(|| invalid_native("Verified presentation omitted credentials"))?;
+        let credentials: Vec<&Value> = match document.get("verifiableCredential") {
+            Some(Value::Array(values)) => values.iter().collect(),
+            Some(value @ Value::Object(_)) => vec![value],
+            _ => Vec::new(),
+        };
         if credentials.len() != 1 {
             return Ok(rejected(
                 "Presentation must contain exactly one independently verified credential",
@@ -1197,6 +1223,7 @@ mod tests {
 
     fn context(document: Value) -> CredentialVerificationContext {
         CredentialVerificationContext {
+            presentation_only: false,
             resolved_issuer_public_jwk: None,
             format: DetectedCredentialFormat::SdJwt,
             token: Value::Null,
@@ -1208,6 +1235,46 @@ mod tests {
                 organization_id: Uuid::from_u128(2),
                 document,
             }),
+        }
+    }
+
+    #[test]
+    fn data_integrity_evidence_keeps_presentation_and_credential_obligations_separate() {
+        let document = json!({
+            "@context": ["https://www.w3.org/ns/credentials/v2"],
+            "type": ["VerifiablePresentation"]
+        });
+        let mut context = context(json!({}));
+        context.format = DetectedCredentialFormat::W3cVcdmDi;
+        let verified = json!({"valid": true, "kind": "presentation", "verified_credentials": 0});
+        for with_empty_array in [false, true] {
+            let mut document = document.clone();
+            if with_empty_array {
+                document["verifiableCredential"] = json!([]);
+            }
+            let document = document.as_object().unwrap();
+            context.presentation_only = false;
+            assert!(
+                !data_integrity_evidence(&context, document, &verified)
+                    .unwrap()
+                    .verified
+            );
+            context.presentation_only = true;
+            let evidence = data_integrity_evidence(&context, document, &verified).unwrap();
+            assert!(evidence.verified);
+            assert!(evidence.presentation_verified);
+            assert!(evidence.holder_binding_verified);
+            assert_eq!(evidence.presentation_count, Some(1));
+            assert!(evidence.issuer_id.is_none());
+            assert!(evidence.credential_id.is_none());
+            assert!(evidence.claims.is_empty());
+            let invalid =
+                json!({"valid": false, "kind": "presentation", "errors": ["invalid proof"]});
+            assert!(
+                !data_integrity_evidence(&context, document, &invalid)
+                    .unwrap()
+                    .verified
+            );
         }
     }
 
@@ -1252,6 +1319,19 @@ mod tests {
         let selected = governed_public_jwk(&context(profile.clone()), &token).unwrap();
         assert_eq!(selected["kid"], kid);
         assert!(selected.get("d").is_none());
+
+        let mut unnamed = profile.clone();
+        unnamed["issuer_relationships"][0]["verification_keys"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("kid");
+        assert!(governed_public_jwk(&context(unnamed.clone()), &token).is_some());
+        let second_key = unnamed["issuer_relationships"][0]["verification_keys"][0].clone();
+        unnamed["issuer_relationships"][0]["verification_keys"]
+            .as_array_mut()
+            .unwrap()
+            .push(second_key);
+        assert!(governed_public_jwk(&context(unnamed), &token).is_none());
 
         let mut ambiguous = profile.clone();
         let relationship = ambiguous["issuer_relationships"][0].clone();

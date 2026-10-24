@@ -120,6 +120,7 @@ def synthetic_values(model, directory):
         OIDF_TLS_INTERNAL_PORT="9443",
         PUBLIC_API_URL="https://conformance.example:9443",
         CORS_ORIGINS="https://conformance.example:9443",
+        VERIFICATION_GOVERNANCE_JSON="{}",
         OIDF_TLS_CERT_DIR=(directory / "tls").as_posix(),
         OIDF_TLS_KMS_ADDR="https://127.0.0.1:18200",
         OIDF_TLS_KMS_CA_CERT_FILE=(directory / "openbao-ca.pem").as_posix(),
@@ -269,13 +270,13 @@ def run(command):
         "issuance-native"
     }
     assert common["services"]["issuance-native"]["build"]["context"] == "."
-    for path in (
-        "docker-compose.beta.yml",
-        "docker-compose.profile.conformance-native.yml",
+    for path, expected in (
+        ("docker-compose.beta.yml", COMMON),
+        ("docker-compose.profile.conformance-native.yml", RUNTIME),
     ):
         source = yaml.safe_load((ROOT / path).read_text(encoding="utf-8"))
         assert source["services"]["issuance-native"]["extends"] == {
-            "file": COMMON,
+            "file": expected,
             "service": "issuance-native",
         }
         assert (ROOT / path).parent / COMMON == ROOT / COMMON

@@ -8,7 +8,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from email.utils import parsedate_to_datetime
 from http.server import ThreadingHTTPServer
 from pathlib import Path
@@ -280,10 +280,17 @@ def assert_retry_timing(output, case, dates, expected):
     ]
     assert len(records) == 1, "Expected one actual durable retry timing observation"
     timing = json.loads(records[0])
-    assert set(timing) == {"available_at", "updated_at"}
+    assert set(timing) == {
+        "available_at", "updated_at", "decision_window_start", "decision_window_end"
+    }
     available_at = datetime.fromisoformat(timing["available_at"])
     updated_at = datetime.fromisoformat(timing["updated_at"])
-    assert available_at.utcoffset() is not None and updated_at.utcoffset() is not None
+    window_start = datetime.fromisoformat(timing["decision_window_start"])
+    window_end = datetime.fromisoformat(timing["decision_window_end"])
+    assert all(value.utcoffset() is not None for value in (
+        available_at, updated_at, window_start, window_end
+    ))
+    assert window_start <= updated_at <= window_end, "Retry write outside observed decision window"
     if case["timing"] == "http_date":
         assert len(dates) == 1
         matches = (
@@ -294,10 +301,15 @@ def assert_retry_timing(output, case, dates, expected):
         minimum, maximum = case["delay_bounds"]
         assert type(minimum) is int and type(maximum) is int
         assert 0 <= minimum <= maximum <= 86400
-        delay = (available_at - updated_at).total_seconds()
-        matches = minimum - 0.1 <= delay <= maximum + 0.1
+        # The worker chooses its deadline before the later repository write.
+        # Check the actual database-clock decision interval, not the delay
+        # measured from updated_at; a slow write must not shorten that delay.
+        matches = (
+            window_start + timedelta(seconds=minimum) <= available_at
+            <= window_end + timedelta(seconds=maximum)
+        )
     assert {"kind": case["timing"], "matches": matches} == expected, (
-        f"Native persisted Retry-After timing differs: {case['name']}"
+        f"Native persisted Retry-After timing differs: {case['name']}; {timing}"
     )
 
 

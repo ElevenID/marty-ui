@@ -109,57 +109,77 @@ def test_conformance_overlay_resets_every_base_global_resource() -> None:
                 assert isinstance(reset, SequenceNode) and not reset.value
 
 
-def test_issuer_did_identity_returns_only_public_did_material(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    payload = {
+def _identity_query(monkeypatch, payload, *, project="marty-conformance-test1", service="gateway", running=True, selected=None, curl_code=0):
+    calls = []
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        if "ps" in command:
+            output = selected if selected is not None else "a" * 64
+        elif command[:3] == ["docker", "container", "inspect"]:
+            output = json.dumps([{"Config": {
+                "Labels": {"com.docker.compose.project": project, "com.docker.compose.service": service},
+                "Env": ["MARTY_ISSUER_DID=did:web:marty.example", "SIGNING_KEYS_INTERNAL_API_KEY=private-test-key"],
+            }, "State": {"Running": running}}])
+        else:
+            output = json.dumps(payload)
+        return type("Result", (), {"returncode": curl_code if "curl" in command else 0,
+                                   "stdout": output, "stderr": "private-test-key" if curl_code else ""})()
+    monkeypatch.setattr(stack.subprocess, "run", fake_run)
+    return calls
+
+
+def _public_identity():
+    return {
         "issuer_did": "did:web:marty.example",
         "verification_method_id": "did:web:marty.example#oid4vp",
         "public_jwk": {"kty": "EC", "crv": "P-256", "x": "x", "y": "y"},
-        "key_purpose": "oid4vp_request_signing",
-        "algorithm": "ES256",
+        "did_document": None,
+        "key_purpose": "oid4vp_request_signing", "algorithm": "ES256",
     }
-    captured: list[str] = []
-
-    def fake_run(command: list[str], **_kwargs: object) -> object:
-        captured.extend(command)
-        return type(
-            "Result",
-            (),
-            {"returncode": 0, "stdout": json.dumps(payload), "stderr": ""},
-        )()
-
-    monkeypatch.setattr(stack.subprocess, "run", fake_run)
-    assert stack.issuer_did_identity(["docker", "compose"]) == payload
-    rendered = " ".join(captured)
-    assert "exec -T gateway python -c" in rendered
-    assert "SIGNING_KEYS_INTERNAL_API_KEY" in rendered
-    assert "dev-signing-keys-internal-api-key" not in rendered
-    assert "OID4VP_ISSUER_PROFILE_ID" not in rendered
-    assert "/resolve-issuer-did" in rendered
 
 
-def test_issuer_did_identity_rejects_private_jwk_material(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    payload = {
-        "issuer_did": "did:web:marty.example",
-        "verification_method_id": "did:web:marty.example#oid4vp",
-        "public_jwk": {"kty": "EC", "crv": "P-256", "x": "x", "y": "y", "d": "private"},
-        "key_purpose": "oid4vp_request_signing",
-        "algorithm": "ES256",
-    }
-    monkeypatch.setattr(
-        stack.subprocess,
-        "run",
-        lambda *_args, **_kwargs: type(
-            "Result",
-            (),
-            {"returncode": 0, "stdout": json.dumps(payload), "stderr": ""},
-        )(),
-    )
+IDENTITY_COMMAND = ["docker", "compose", "--project-name", "marty-conformance-test1"]
+
+
+def test_issuer_did_identity_returns_only_public_did_material(monkeypatch):
+    payload = _public_identity()
+    calls = _identity_query(monkeypatch, {**payload, "issuer_profile": {"signing_key_reference": "private-ref"}})
+    assert stack.issuer_did_identity(IDENTITY_COMMAND) == payload
+    rendered = " ".join(" ".join(command) for command, _ in calls)
+    assert "exec -T gateway curl --config -" in rendered
+    assert "python" not in rendered and "private-test-key" not in rendered
+    assert "X-Api-Key: private-test-key" in calls[-1][1]["input"]
+    assert "/resolve-issuer-did" in calls[-1][1]["input"]
+
+
+def test_issuer_did_identity_rejects_private_jwk_material(monkeypatch):
+    payload = _public_identity()
+    payload["public_jwk"]["d"] = "private"
+    _identity_query(monkeypatch, payload)
     with pytest.raises(ValueError, match="public ES256 identity"):
-        stack.issuer_did_identity(["docker", "compose"])
+        stack.issuer_did_identity(IDENTITY_COMMAND)
+
+
+@pytest.mark.parametrize("fault", [{"project": "foreign"}, {"service": "auth"}, {"running": False}])
+def test_issuer_identity_refuses_foreign_or_inactive_containers(monkeypatch, fault):
+    calls = _identity_query(monkeypatch, _public_identity(), **fault)
+    with pytest.raises(ValueError, match="owned running container"):
+        stack.issuer_did_identity(IDENTITY_COMMAND)
+    assert len(calls) == 2 and all("curl" not in command for command, _ in calls)
+
+
+def test_issuer_identity_refuses_ambiguous_container_selection(monkeypatch):
+    calls = _identity_query(monkeypatch, _public_identity(), selected="a" * 64 + "\n" + "b" * 64)
+    with pytest.raises(ValueError, match="exactly one"):
+        stack.issuer_did_identity(IDENTITY_COMMAND)
+    assert len(calls) == 1
+
+
+def test_issuer_identity_query_failure_does_not_expose_credentials(monkeypatch):
+    _identity_query(monkeypatch, _public_identity(), curl_code=22)
+    with pytest.raises(ValueError) as failure:
+        stack.issuer_did_identity(IDENTITY_COMMAND)
+    assert "private-test-key" not in str(failure.value)
 
 
 def test_project_name_is_narrowly_scoped() -> None:

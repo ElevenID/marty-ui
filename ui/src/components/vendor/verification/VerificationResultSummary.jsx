@@ -246,12 +246,13 @@ export function extractVerificationSummary(session = {}) {
   };
 }
 
-function CheckLine({ label, value }) {
+function CheckLine({ label, value, uncheckedLabel }) {
   const known = value !== undefined && value !== null;
   const ok = Boolean(value);
+  const unchecked = known && !ok && Boolean(uncheckedLabel);
   return (
     <Stack direction="row" spacing={1} alignItems="center">
-      {known ? (
+      {known && !unchecked ? (
         ok ? <CheckCircleIcon color="success" fontSize="small" /> : <ErrorIcon color="error" fontSize="small" />
       ) : (
         <HelpOutlineIcon color="disabled" fontSize="small" />
@@ -259,8 +260,8 @@ function CheckLine({ label, value }) {
       <Typography variant="body2">{label}</Typography>
       <Chip
         size="small"
-        label={known ? (ok ? 'Passed' : 'Failed') : 'Not reported'}
-        color={known ? (ok ? 'success' : 'error') : 'default'}
+        label={unchecked ? uncheckedLabel : known ? (ok ? 'Passed' : 'Failed') : 'Not reported'}
+        color={known && !unchecked ? (ok ? 'success' : 'error') : 'default'}
         variant="outlined"
         sx={{ ml: 'auto' }}
       />
@@ -357,9 +358,11 @@ function VerificationResultSummary({ session }) {
                 {summary.description}
               </Typography>
             ) : null}
-            <Typography variant="caption" color="text.secondary" sx={{ overflowWrap: 'anywhere', display: 'block', mt: 0.5 }}>
-              {summary.issuerName ? `${summary.issuerName} - ` : ''}{summary.issuerDid || 'Issuer not disclosed'}
-            </Typography>
+            {summary.issuerName ? (
+              <Typography component="p" variant="caption" color="text.secondary" sx={{ mt: 0.5 }}>
+                {summary.issuerName}
+              </Typography>
+            ) : null}
           </Box>
         </Stack>
 
@@ -369,25 +372,12 @@ function VerificationResultSummary({ session }) {
 
         <Divider />
 
-        {summary.authenticatedDisclosedClaimNames ? (
-          <Box>
-            <Typography variant="subtitle2" sx={{ fontWeight: 800 }}>
-              Authenticated disclosures
-            </Typography>
-            {Object.entries(summary.authenticatedDisclosureNamespaces).map(([namespace, names]) => (
-              <Typography key={namespace} variant="body2" sx={{ overflowWrap: 'anywhere' }}>
-                {namespace}: {names.length ? names.join(', ') : 'No elements disclosed'}
-              </Typography>
-            ))}
-          </Box>
-        ) : null}
-
         <Stack spacing={1}>
           <Typography variant="subtitle2" sx={{ fontWeight: 800 }}>
             Verification checks
           </Typography>
           <CheckLine label="Trust profile accepted the issuer" value={summary.trustValidated} />
-          <CheckLine label="Revocation/status was checked" value={summary.revocationChecked} />
+          <CheckLine label="Revocation/status was checked" value={summary.revocationChecked} uncheckedLabel="Not checked" />
           <CheckLine label="Credential signature was valid" value={summary.signatureValid} />
         </Stack>
 
@@ -396,6 +386,34 @@ function VerificationResultSummary({ session }) {
           claimsSatisfied={summary.claimsSatisfied}
           claimsMissing={summary.claimsMissing}
         />
+
+        {summary.issuerDid || summary.authenticatedDisclosedClaimNames ? (
+          <Box component="details">
+            <Box component="summary" sx={{ cursor: 'pointer', typography: 'body2', color: 'text.secondary' }}>
+              Credential details
+            </Box>
+            <Stack spacing={1} sx={{ mt: 1 }}>
+              {summary.issuerDid ? (
+                <Box>
+                  <Typography component="p" variant="subtitle2">Issuer identifier</Typography>
+                  <Typography component="p" variant="caption" color="text.secondary" sx={{ overflowWrap: 'anywhere' }}>
+                    {summary.issuerDid}
+                  </Typography>
+                </Box>
+              ) : null}
+              {summary.authenticatedDisclosedClaimNames ? (
+                <Box>
+                  <Typography component="p" variant="subtitle2">Authenticated disclosures</Typography>
+                  {Object.entries(summary.authenticatedDisclosureNamespaces).map(([namespace, names]) => (
+                    <Typography component="p" key={namespace} variant="body2" sx={{ overflowWrap: 'anywhere' }}>
+                      {namespace}: {names.length ? names.join(', ') : 'No elements disclosed'}
+                    </Typography>
+                  ))}
+                </Box>
+              ) : null}
+            </Stack>
+          </Box>
+        ) : null}
 
         {hasCanvasMirror ? (
           <>

@@ -115,6 +115,7 @@ pub fn build_unsigned_url_query(
     mut instance: FlowInstanceRecord,
     artifacts: &PresentationRequestArtifacts,
     public_base_url: &str,
+    options: &RequestObjectOptions,
     maximum_length: usize,
     now: DateTime<Utc>,
 ) -> Result<UnsignedAuthorizationRequest, FlowRequestObjectError> {
@@ -146,7 +147,7 @@ pub fn build_unsigned_url_query(
     let base = public_base_url.trim_end_matches('/');
     let response_uri = format!("{base}/v1/flows/instances/{}/submit", instance.id);
     let client_id = format!("redirect_uri:{response_uri}");
-    let metadata = standard_client_metadata(base);
+    let metadata = client_metadata(base, options);
     let mut serializer = url::form_urlencoded::Serializer::new(String::new());
     for (name, value) in [
         ("response_type", "vp_token".to_owned()),
@@ -404,11 +405,8 @@ pub async fn build_profiled_request_object(
         } else {
             "direct_post.jwt"
         });
-        payload["client_metadata"]["encrypted_response_enc_values_supported"] = if dc_api {
-            json!(["A128GCM", "A256GCM"])
-        } else {
-            json!(["A256GCM"])
-        };
+        payload["client_metadata"]["encrypted_response_enc_values_supported"] =
+            json!(["A128GCM", "A256GCM"]);
         payload["client_metadata"]["jwks"] = json!({"keys": [public_jwk]});
     }
     if let Some(wallet_nonce) = options
@@ -709,10 +707,6 @@ async fn sign_payload(
     let result = provider.sign(&request).await?;
     result.validate_binding(&request)?;
     Ok(format!("{signing_input}.{}", result.signature_raw_b64url))
-}
-
-fn standard_client_metadata(base_url: &str) -> Value {
-    client_metadata(base_url, &RequestObjectOptions::default())
 }
 
 fn client_metadata(base_url: &str, options: &RequestObjectOptions) -> Value {

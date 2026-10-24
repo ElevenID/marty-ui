@@ -45,6 +45,9 @@ pub struct CredentialStatusEvidence {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct CredentialVerificationContext {
+    /// Derived from the saved policy, never from caller-supplied context.
+    /// A verified presentation need not carry a credential for this obligation.
+    pub presentation_only: bool,
     /// Verifier-owned assertion key, separate from trust acceptance. Never copied from request context.
     pub resolved_issuer_public_jwk: Option<Value>,
     pub format: DetectedCredentialFormat,
@@ -203,6 +206,7 @@ impl VerifiedFactsOrchestrator {
         let audience_required = freshness_flag(policy, "audience_binding_required");
 
         let context = CredentialVerificationContext {
+            presentation_only,
             resolved_issuer_public_jwk: None,
             format,
             token: request.vp_token.clone(),

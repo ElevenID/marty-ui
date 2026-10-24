@@ -165,6 +165,47 @@ async fn profile_http_contract_preserves_defaults_and_response_projection() {
 }
 
 #[tokio::test]
+async fn sparse_profile_edits_preserve_security_settings_and_reject_invalid_changes_atomically() {
+    let service = service();
+    let created = request(service.clone(), "POST", "/v1/trust-profiles", Some(json!({
+        "organization_id": "org-1", "name": "Original", "description": "Original description",
+        "supported_formats": ["SD_JWT_VC"], "allowed_algorithms": ["ES384"],
+        "min_key_size_rsa": 4096, "min_key_size_ec": 384, "max_chain_depth": 3,
+        "trust_sources": [{"source_type": "PINNED_ISSUER", "issuer_did": "did:web:issuer.example"}],
+        "compatible_compliance_codes": ["ENTERPRISE_VC"], "auto_generated": true
+    }))).await;
+    assert_eq!(created.status(), 200);
+    let original = body(created).await;
+    let uri = format!("/v1/trust-profiles/{}", original["id"].as_str().unwrap());
+    for changes in [
+        json!({"name": "Renamed"}),
+        json!({"description": "Changed description"}),
+    ] {
+        let before = body(request(service.clone(), "GET", &uri, None).await).await;
+        let response = request(service.clone(), "PATCH", &uri, Some(changes.clone())).await;
+        assert_eq!(response.status(), 200);
+        let mut expected = before.as_object().unwrap().clone();
+        expected.extend(changes.as_object().unwrap().clone());
+        let after = body(request(service.clone(), "GET", &uri, None).await).await;
+        expected.insert("updated_at".into(), after["updated_at"].clone());
+        assert_eq!(after, Value::Object(expected));
+    }
+    let before = body(request(service.clone(), "GET", &uri, None).await).await;
+    let rejected = request(
+        service.clone(),
+        "PATCH",
+        &uri,
+        Some(json!({"name": "Must not persist", "allowed_algorithms": []})),
+    )
+    .await;
+    assert_eq!(rejected.status(), 422);
+    assert_eq!(
+        body(request(service, "GET", &uri, None).await).await,
+        before
+    );
+}
+
+#[tokio::test]
 async fn machine_identity_profile_round_trips_without_credential_defaults() {
     let response = request(
         service(),
