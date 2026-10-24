@@ -7840,6 +7840,58 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn canvas_review_recovery_authenticates_and_authorizes_before_upstream_access() {
+        let path = "/v1/integrations/canvas/evidence-policy-reviews/review-1/reconcile-revocation";
+        for (authentication, expected) in [
+            (None, StatusCode::UNAUTHORIZED),
+            (
+                Some(("x-api-key", "actor-key-no-scope")),
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                Some(("cookie", "sessionId=actor-denied")),
+                StatusCode::FORBIDDEN,
+            ),
+            (Some(("x-api-key", "actor-key")), StatusCode::OK),
+            (Some(("cookie", "sessionId=actor-session")), StatusCode::OK),
+        ] {
+            let (router, recorder) = actor_test_router();
+            let mut builder = Request::builder()
+                .method("POST")
+                .uri(path)
+                .header("x-user-id", "forged-user")
+                .header("x-authenticated-user-id", "forged-user")
+                .header("x-organization-id", "org-attacker")
+                .header("content-type", "application/json");
+            if let Some((name, value)) = authentication {
+                builder = builder.header(name, value);
+            }
+            let response = router
+                .oneshot(builder.body(Body::from(r#"{"action":"revoke"}"#)).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), expected, "{authentication:?}");
+            let calls = recorder.0.lock().unwrap();
+            if expected == StatusCode::OK {
+                assert_eq!(calls.len(), 1);
+                let (service, request) = &calls[0];
+                assert_eq!(service, issuance_native::NATIVE_SERVICE);
+                assert_eq!(request.header("x-organization-id"), Some("org-1"));
+                assert_ne!(request.header("x-user-id"), Some("forged-user"));
+                assert_ne!(
+                    request.header("x-authenticated-user-id"),
+                    Some("forged-user")
+                );
+            } else {
+                assert!(
+                    calls.is_empty(),
+                    "denial must precede privileged upstream credential injection"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn canvas_public_batches_replace_every_client_tenant_shape_or_fail_closed() {
         let paths = [
             "/v1/issuance/delivery-records/canvas-credentials/process-pending",

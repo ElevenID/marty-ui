@@ -692,6 +692,7 @@ mod tests {
 
     fn stale_canvas_snapshot() -> CanvasApplicationApprovalSnapshot {
         CanvasApplicationApprovalSnapshot {
+            policy_set: None,
             evidence_facts: Vec::new(),
             application: object(json!({
                 "id": "application-1",

@@ -1706,10 +1706,10 @@ function escapeHtml(value) {
 function contractFailureLocation(error, activeCase) {
   // Retain actionable driver location without request bodies, URLs, credentials
   // or Playwright action arguments from the original exception message.
-  const frame = String(error?.stack || '').match(/run-canvas-oss-standard-contract\.js:(\d+):(\d+)/);
+  const frame = String(error?.stack || '').match(/\b(run-canvas-oss-standard-contract|canvas-capture-sequence|audit-beta-canvas-capture)\.js:(\d+):(\d+)/);
   const name = /^[A-Za-z][A-Za-z0-9]{0,50}$/.test(String(error?.name || '')) ? error.name : 'Error';
   const result = { activeCase, errorType: name,
-    sourceLocation: frame ? { file: 'run-canvas-oss-standard-contract.js', line: Number(frame[1]), column: Number(frame[2]) } : null };
+    sourceLocation: frame ? { file: frame[1]+'.js', line: Number(frame[2]), column: Number(frame[3]) } : null };
   if (error?.canvasResourceDiagnostic) result.canvasResource = error.canvasResourceDiagnostic;
   return result;
 }
@@ -2245,8 +2245,9 @@ async function main() {
     adminContext ||= preparationState.adminContext;
     learnerContext ||= preparationState.learnerContext;
     try {
-      await retireCanvasApplication({ marty, organizationId: preparationState.organizationId,
+      const issuanceRetirement = await retireCanvasApplication({ marty, organizationId: preparationState.organizationId,
         applicationId: preparationState.applicationId, credentialTemplateId: preparationState.templates?.credential?.id,
+        bindingId: preparationState.binding?.id,
         transactionId: preparationState.transactionId, reconcile() {
           assert.ok(!preparationState.approvalInFlight, 'Unknown Canvas approval requires reconciliation');
         } });
@@ -2259,6 +2260,7 @@ async function main() {
       if (marty && platformId) await marty.delete(`/v1/integrations/canvas/platforms/${encodeURIComponent(platformId)}`, [204]);
       if (marty && integrationSecretId) await marty.delete(`/v1/integrations/canvas/integration-secrets/${encodeURIComponent(integrationSecretId)}`, [204]);
       const retired = await retireCanvasSetupFixtures(preparationState, true, !preparationState.oauthConnected);
+      retired.issuanceRetirement = issuanceRetirement;
       fs.writeFileSync(path.join(path.dirname(args.observations), 'owned-canvas-cleanup.json'),
         JSON.stringify(retired, null, 2) + '\n', { flag: 'wx' });
     } catch (error) {

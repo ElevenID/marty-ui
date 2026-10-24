@@ -301,7 +301,7 @@ static SPECIAL_RULES: LazyLock<Vec<RouteRule>> = LazyLock::new(|| {
             "integration-connector",
         ),
         rule(
-            r"^/v1/integrations/canvas/evidence-policy-reviews/[^/]+/resolve$",
+            r"^/v1/integrations/canvas/evidence-policy-reviews/[^/]+/(?:resolve|reconcile-revocation)$",
             &[("POST", "integration-connector:edit")],
             "integration-connector",
         ),
@@ -1107,6 +1107,22 @@ mod tests {
         for case in contract.skip_cases {
             assert_eq!(skips_tenant_authorization(&case.path), case.skipped);
         }
+    }
+
+    #[test]
+    fn canvas_review_recovery_requires_the_existing_integration_edit_permission() {
+        let path = "/v1/integrations/canvas/evidence-policy-reviews/review-1/reconcile-revocation";
+        let required = resolve_action("POST", path).unwrap();
+        assert_eq!(required.permission, "integration-connector:edit");
+        assert_eq!(required.resource, "integration-connector");
+        assert!(!api_key_allowed(
+            required.permission,
+            &["integrations:read".into()]
+        ));
+        assert!(api_key_allowed(
+            required.permission,
+            &["integrations:write".into()]
+        ));
     }
 
     #[test]

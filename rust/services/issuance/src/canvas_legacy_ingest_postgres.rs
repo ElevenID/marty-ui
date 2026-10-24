@@ -10,6 +10,7 @@ use crate::{
     canvas_award_candidate_approval::CanvasApplicationApprovalSnapshot,
     canvas_award_candidate_approval_postgres::reserve_management_canvas_issuance_in_transaction,
     canvas_award_candidate_postgres::record_fact_and_policy_in_transaction,
+    canvas_issuance_guard::LIST_CURRENT_FACTS,
     canvas_legacy_ingest::{
         CanvasEvidenceEvent, CanvasEvidenceEventResponse, CanvasLegacyApplicationSnapshot,
         CanvasLegacyCommit, CanvasLegacyCommitOutcome, CanvasLegacyIngestError,
@@ -553,7 +554,13 @@ async fn commit_atomic(
             let mut approval_application = commit.application.clone();
             approval_application.insert("status".to_owned(), Value::String("pending".to_owned()));
             let approval_snapshot = CanvasApplicationApprovalSnapshot {
-                evidence_facts: Vec::new(),
+                policy_set: snapshot.policy_set.clone(),
+                evidence_facts: sqlx::query_scalar::<_, Value>(LIST_CURRENT_FACTS)
+                    .bind(organization_id)
+                    .bind(&commit.event.application_id)
+                    .fetch_all(&mut *database)
+                    .await
+                    .map_err(legacy_repository_error)?,
                 application: approval_application,
                 application_template: approval_template(template),
                 platform: snapshot.platform.clone(),

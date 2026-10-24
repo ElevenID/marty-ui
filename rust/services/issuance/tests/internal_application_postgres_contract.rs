@@ -1421,7 +1421,9 @@ fn reconciliation_approval_snapshot(
     let template = snapshot.template.as_ref().expect("reconciliation template");
     let binding = snapshot.binding.as_ref().expect("reconciliation binding");
     CanvasApplicationApprovalSnapshot {
-        evidence_facts: Vec::new(),
+        policy_set: snapshot.policy_set.clone().map(Value::Object),
+        evidence_facts: snapshot.facts.iter().map(|fact| serde_json::to_value(
+            marty_issuance_service::internal_application_domain::EvidenceFactResponse::from(fact)).unwrap()).collect(),
         application: json!({
             "id": application.id,
             "organization_id": application.organization_id,

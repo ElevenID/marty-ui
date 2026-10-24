@@ -55,7 +55,7 @@ fn database_url() -> Option<String> {
 fn approval_guard_config() -> CanvasGuardConfig {
     CanvasGuardConfig {
         enabled: true,
-        pilot_organizations: BTreeSet::from(["org-1".into()]),
+        pilot_organizations: BTreeSet::from(["98ab252b-2af9-47a4-b66e-c31e269746d2".into()]),
         evidence_max_age: Duration::from_secs(900),
         readiness_max_age: Duration::from_secs(900),
     }
@@ -71,7 +71,7 @@ fn context() -> CanvasLtiExperienceSessionContext {
     canvas_lti_experience_session_context(CanvasLtiStoredLaunchState {
         id: "candidate-session-id".to_owned(),
         platform_id: "platform-1".to_owned(),
-        organization_id: "org-1".to_owned(),
+        organization_id: "98ab252b-2af9-47a4-b66e-c31e269746d2".to_owned(),
         canvas_account_id: "account-1".to_owned(),
         state: "private-session-digest".to_owned(),
         nonce: "private-session-nonce".to_owned(),
@@ -107,7 +107,7 @@ fn context() -> CanvasLtiExperienceSessionContext {
 fn application() -> CanvasLtiBootstrapApplication {
     CanvasLtiBootstrapApplication {
         id: "application-1".to_owned(),
-        organization_id: "org-1".to_owned(),
+        organization_id: "98ab252b-2af9-47a4-b66e-c31e269746d2".to_owned(),
         application_template_id: "application-template-1".to_owned(),
         applicant_identifier: "canvas_lti:learner-subject-1".to_owned(),
         form_data: json!({}),
@@ -172,11 +172,11 @@ impl IssuerContextResolver for ApprovalIssuer {
     ) -> Result<IssuerContext, CredentialIssuanceError> {
         assert_eq!(
             transaction.issuer_did.as_deref(),
-            Some("did:web:issuer.example:orgs:org-1")
+            Some("did:web:issuer.example:orgs:98ab252b-2af9-47a4-b66e-c31e269746d2")
         );
         assert_eq!(credential_format, "dc+sd-jwt");
         assert!(force);
-        let issuer_did = "did:web:issuer.example:orgs:org-1";
+        let issuer_did = "did:web:issuer.example:orgs:98ab252b-2af9-47a4-b66e-c31e269746d2";
         Ok(IssuerContext {
             issuer_profile_id: "issuer-profile-1".to_owned(),
             issuer_did: issuer_did.to_owned(),
@@ -186,17 +186,17 @@ impl IssuerContextResolver for ApprovalIssuer {
             public_jwk: Some(json!({"kty":"EC","crv":"P-256","x":"x","y":"y"})),
             certificate_chain: Vec::new(),
             raw_context: json!({
-                "organization_id":"org-1",
+                "organization_id":"98ab252b-2af9-47a4-b66e-c31e269746d2",
                 "issuer_did":issuer_did,
                 "algorithm":"ES256",
                 "issuer_profile_id":"issuer-profile-1",
                 "signing_service_id":"kms-service-1",
-                "signing_key_reference":"org_secret://org-1/badge-key",
+                "signing_key_reference":"org_secret://98ab252b-2af9-47a4-b66e-c31e269746d2/badge-key",
                 "verification_method_id":format!("{issuer_did}#badge-key-1"),
                 "key_purpose":"vc_jwt_issuer",
                 "public_jwk":{"kty":"EC","crv":"P-256","x":"x","y":"y"},
                 "issuer_profile":{
-                    "id":"issuer-profile-1","status":"active","organization_id":"org-1",
+                    "id":"issuer-profile-1","status":"active","organization_id":"98ab252b-2af9-47a4-b66e-c31e269746d2",
                     "issuer_did":issuer_did,
                     "verification_method_id":format!("{issuer_did}#badge-key-1"),
                     "key_purpose":"vc_jwt_issuer"
@@ -240,7 +240,7 @@ async fn candidate_materialization_matches_production_json_and_revision_contract
     )
     .expect("exact linked candidate");
     let observations = repository
-        .current_observations("org-1", "candidate-1")
+        .current_observations("98ab252b-2af9-47a4-b66e-c31e269746d2", "candidate-1")
         .await
         .unwrap();
     let plan = plan_selected_canvas_award_candidate_materialization(
@@ -441,7 +441,7 @@ async fn candidate_materialization_matches_production_json_and_revision_contract
         "INSERT INTO issuance_service.applications
          (id, organization_id, application_template_id, applicant_identifier,
           form_data, integration_context, status, updated_at)
-         VALUES ('application-manual-1', 'org-1', 'application-template-1',
+         VALUES ('application-manual-1', '98ab252b-2af9-47a4-b66e-c31e269746d2', 'application-template-1',
                  'canvas_lti:manual-subject',
                  '{\"achievement\":\"Manual Canvas\"}'::json,
                  '{\"delivery_mode\":\"wallet_only\",\"canvas\":{
@@ -465,19 +465,193 @@ async fn candidate_materialization_matches_production_json_and_revision_contract
         Arc::new(ApprovalClock),
         CanvasGuardConfig {
             enabled: true,
-            pilot_organizations: BTreeSet::from(["org-1".to_owned()]),
+            pilot_organizations: BTreeSet::from(
+                ["98ab252b-2af9-47a4-b66e-c31e269746d2".to_owned()],
+            ),
             evidence_max_age: Duration::from_secs(900),
             readiness_max_age: Duration::from_secs(900),
         },
     );
+    // A reviewer cannot reserve an offer from missing or currently failing
+    // authoritative evidence, even with a ready binding and valid KMS issuer.
+    assert_eq!(
+        manual_approval
+            .approve(
+                "98ab252b-2af9-47a4-b66e-c31e269746d2",
+                "application-manual-1",
+                None
+            )
+            .await,
+        Err(CanvasApplicationApprovalError::NotReady)
+    );
+    manual_contract_head(&pool, "application-manual-1", "manual-check-low", 40).await;
+    assert_eq!(
+        manual_approval
+            .approve(
+                "98ab252b-2af9-47a4-b66e-c31e269746d2",
+                "application-manual-1",
+                None
+            )
+            .await,
+        Err(CanvasApplicationApprovalError::NotReady)
+    );
+    manual_contract_head(&pool, "application-manual-1", "manual-check-high", 95).await;
+    let eligible = management_repository
+        .load_application_approval_snapshot(
+            "98ab252b-2af9-47a4-b66e-c31e269746d2",
+            "application-manual-1",
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    let mut prepared = plan_canvas_approval_transaction(
+        &eligible.application,
+        &eligible.binding,
+        &CanvasAwardApprovalSeed {
+            transaction_id: "must-not-reserve".into(),
+            pre_authorized_code: "private-test-code".into(),
+        },
+        now(),
+    )
+    .unwrap();
+    prepared.issuer_profile_id = Some("issuer-profile-1".into());
+    prepared.signing_service_id = Some("kms-service-1".into());
+    // In-place policy changes must reject the evaluated snapshot even when
+    // the fact ID, payload hash, source revision and selected head stay stable.
+    for (column, select, update, changed) in [
+        (
+            "verification",
+            "SELECT verification FROM issuance_service.evidence_facts WHERE id='manual-check-high'",
+            "UPDATE issuance_service.evidence_facts SET verification=$1 WHERE id='manual-check-high'",
+            json!({"status":"UNVERIFIED"}),
+        ),
+        (
+            "assertion",
+            "SELECT assertion FROM issuance_service.evidence_facts WHERE id='manual-check-high'",
+            "UPDATE issuance_service.evidence_facts SET assertion=$1 WHERE id='manual-check-high'",
+            json!({"completed":true,"score_percent":40}),
+        ),
+    ] {
+        let original: Value = sqlx::query_scalar(select)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sqlx::query(update)
+            .bind(changed)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let changed_snapshot = management_repository
+            .load_application_approval_snapshot(
+                "98ab252b-2af9-47a4-b66e-c31e269746d2",
+                "application-manual-1",
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        for field in ["id", "payload_hash", "source_revision"] {
+            assert_eq!(
+                changed_snapshot.evidence_facts[0][field],
+                eligible.evidence_facts[0][field]
+            );
+        }
+        assert_eq!(
+            management_repository
+                .reserve_application_issuance(
+                    &prepared,
+                    &eligible,
+                    "canvas-integration-management-api",
+                    None,
+                    now()
+                )
+                .await,
+            Err(CanvasApplicationApprovalError::NotReady),
+            "in-place {column} mutation must not reserve a transaction"
+        );
+        assert_eq!(sqlx::query_scalar::<_, i64>("SELECT count(*) FROM issuance_service.issuance_transactions WHERE application_id='application-manual-1'")
+            .fetch_one(&pool).await.unwrap(), 0);
+        sqlx::query(update)
+            .bind(original)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+    manual_contract_head(&pool, "application-manual-1", "manual-check-raced", 40).await;
+    assert_eq!(
+        management_repository
+            .reserve_application_issuance(
+                &prepared,
+                &eligible,
+                "canvas-integration-management-api",
+                None,
+                now()
+            )
+            .await,
+        Err(CanvasApplicationApprovalError::NotReady)
+    );
+    manual_contract_head(&pool, "application-manual-1", "manual-check-recovered", 95).await;
+
+    // A null binding policy falls back to the template's actual PolicySet;
+    // policy edits after evaluation must roll back reservation as well.
+    sqlx::query("INSERT INTO organization_service.policy_sets (id,organization_id,name,status,policy_type,cedar_policies,created_at,updated_at)
+        VALUES ('cfb20656-6b80-4dad-a188-e166d136dc2d','98ab252b-2af9-47a4-b66e-c31e269746d2','Manual approval contract','active','CUSTOM','permit(principal, action, resource);',clock_timestamp(),clock_timestamp())")
+        .execute(&pool).await.unwrap();
+    sqlx::query("UPDATE issuance_service.application_templates SET approval_policy_set_id='cfb20656-6b80-4dad-a188-e166d136dc2d' WHERE id='application-template-1'")
+        .execute(&pool).await.unwrap();
+    let policy_snapshot = management_repository
+        .load_application_approval_snapshot(
+            "98ab252b-2af9-47a4-b66e-c31e269746d2",
+            "application-manual-1",
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        policy_snapshot.policy_set.as_ref().unwrap()["id"],
+        "cfb20656-6b80-4dad-a188-e166d136dc2d"
+    );
+    sqlx::query("UPDATE organization_service.policy_sets SET cedar_policies='forbid(principal, action, resource);' WHERE id='cfb20656-6b80-4dad-a188-e166d136dc2d'")
+        .execute(&pool).await.unwrap();
+    assert_eq!(
+        management_repository
+            .reserve_application_issuance(
+                &prepared,
+                &policy_snapshot,
+                "canvas-integration-management-api",
+                None,
+                now()
+            )
+            .await,
+        Err(CanvasApplicationApprovalError::NotReady)
+    );
+    assert_eq!(
+        manual_approval
+            .approve(
+                "98ab252b-2af9-47a4-b66e-c31e269746d2",
+                "application-manual-1",
+                None
+            )
+            .await,
+        Err(CanvasApplicationApprovalError::NotReady)
+    );
+    assert_eq!(sqlx::query_scalar::<_, i64>("SELECT count(*) FROM issuance_service.issuance_transactions WHERE application_id='application-manual-1'")
+        .fetch_one(&pool).await.unwrap(), 0);
+    sqlx::query("UPDATE organization_service.policy_sets SET cedar_policies='permit(principal, action, resource);' WHERE id='cfb20656-6b80-4dad-a188-e166d136dc2d'")
+        .execute(&pool).await.unwrap();
     let manual_result = manual_approval
-        .approve("org-1", "application-manual-1", Some(""))
+        .approve(
+            "98ab252b-2af9-47a4-b66e-c31e269746d2",
+            "application-manual-1",
+            Some(""),
+        )
         .await
         .unwrap();
     assert_eq!(
         manual_result.issuance_transaction_id,
         "transaction-manual-1"
     );
+    sqlx::query("UPDATE issuance_service.application_templates SET approval_policy_set_id=NULL WHERE id='application-template-1'")
+        .execute(&pool).await.unwrap();
     let manual_application = sqlx::query(
         "SELECT status, reviewer_id, review_notes, issuance_transaction_id
          FROM issuance_service.applications WHERE id = 'application-manual-1'",
@@ -560,8 +734,19 @@ async fn candidate_materialization_matches_production_json_and_revision_contract
     .fetch_one(&pool)
     .await
     .unwrap();
+    manual_contract_head(
+        &pool,
+        "application-manual-existing",
+        "manual-check-existing",
+        95,
+    )
+    .await;
     let existing_result = manual_approval
-        .approve("org-1", "application-manual-existing", Some("existing"))
+        .approve(
+            "98ab252b-2af9-47a4-b66e-c31e269746d2",
+            "application-manual-existing",
+            Some("existing"),
+        )
         .await
         .unwrap();
     assert_eq!(
@@ -636,6 +821,11 @@ async fn candidate_materialization_matches_production_json_and_revision_contract
         Some("kms-service-1")
     );
 
+    for query in [
+        "DELETE FROM issuance_service.evidence_fact_heads WHERE application_id IN ('application-manual-1','application-manual-existing')",
+        "DELETE FROM issuance_service.evidence_facts WHERE application_id IN ('application-manual-1','application-manual-existing') AND id LIKE 'manual-check-%'",
+    ] { sqlx::query(query).execute(&pool).await.unwrap(); }
+
     // Mapped templates exercise the same SQL snapshot/locking path while
     // replacing an applicant form fallback with the template-owned value.
     sqlx::query("UPDATE issuance_service.application_templates SET claim_collection_rules = $1 WHERE id = 'application-template-1'")
@@ -654,7 +844,7 @@ async fn candidate_materialization_matches_production_json_and_revision_contract
         WHERE fact.application_id='application-1' AND fact.requirement_id='score-1' LIMIT 1")
         .execute(&pool).await.unwrap();
     sqlx::query("INSERT INTO issuance_service.evidence_fact_heads
-        VALUES ('org-1','application-manual-mapped','mapped-score-key','fact-manual-mapped',clock_timestamp())")
+        VALUES ('98ab252b-2af9-47a4-b66e-c31e269746d2','application-manual-mapped','mapped-score-key','fact-manual-mapped',clock_timestamp())")
         .execute(&pool).await.unwrap();
     sqlx::query("INSERT INTO issuance_service.applications
         (id,organization_id,application_template_id,applicant_identifier,form_data,integration_context,status,updated_at)
@@ -664,10 +854,14 @@ async fn candidate_materialization_matches_production_json_and_revision_contract
     let mapped_service = CanvasApplicationApprovalService::new(
         management_repository.clone(), Arc::new(ApprovalIssuer),
         Arc::new(marty_issuance_service::canvas_award_candidate_approval::SecureCanvasAwardApprovalSeedGenerator),
-        Arc::new(ApprovalClock), CanvasGuardConfig { enabled:true, pilot_organizations:BTreeSet::from(["org-1".into()]),
+        Arc::new(ApprovalClock), CanvasGuardConfig { enabled:true, pilot_organizations:BTreeSet::from(["98ab252b-2af9-47a4-b66e-c31e269746d2".into()]),
             evidence_max_age:Duration::from_secs(900), readiness_max_age:Duration::from_secs(900) });
     let mapped = mapped_service
-        .approve("org-1", "application-manual-mapped", None)
+        .approve(
+            "98ab252b-2af9-47a4-b66e-c31e269746d2",
+            "application-manual-mapped",
+            None,
+        )
         .await
         .unwrap();
     let mapped_claims: Value =
@@ -689,7 +883,7 @@ async fn candidate_materialization_matches_production_json_and_revision_contract
         "DELETE FROM issuance_service.evidence_facts WHERE id='fact-manual-mapped' AND application_id='application-manual-mapped'",
         "DELETE FROM issuance_service.issuance_events WHERE application_id='application-manual-mapped'",
         "DELETE FROM issuance_service.issuance_transactions WHERE application_id='application-manual-mapped'",
-        "DELETE FROM issuance_service.applications WHERE id='application-manual-mapped' AND organization_id='org-1'",
+        "DELETE FROM issuance_service.applications WHERE id='application-manual-mapped' AND organization_id='98ab252b-2af9-47a4-b66e-c31e269746d2'",
     ] { sqlx::query(query).execute(&pool).await.unwrap(); }
     sqlx::query("UPDATE issuance_service.application_templates SET claim_collection_rules='[]'::json WHERE id='application-template-1'")
         .execute(&pool).await.unwrap();
@@ -711,7 +905,10 @@ async fn candidate_materialization_matches_production_json_and_revision_contract
     .await
     .unwrap();
     let race_snapshot = management_repository
-        .load_application_approval_snapshot("org-1", "application-manual-race")
+        .load_application_approval_snapshot(
+            "98ab252b-2af9-47a4-b66e-c31e269746d2",
+            "application-manual-race",
+        )
         .await
         .unwrap()
         .unwrap();
@@ -797,7 +994,10 @@ async fn candidate_materialization_matches_production_json_and_revision_contract
     .await
     .unwrap();
     let drift_snapshot = management_repository
-        .load_application_approval_snapshot("org-1", "application-manual-drift")
+        .load_application_approval_snapshot(
+            "98ab252b-2af9-47a4-b66e-c31e269746d2",
+            "application-manual-drift",
+        )
         .await
         .unwrap()
         .unwrap();
@@ -998,7 +1198,7 @@ async fn candidate_materialization_matches_production_json_and_revision_contract
     // Approval locks and rechecks the exact identity; drift after planning cannot reserve.
     sqlx::query(
         "INSERT INTO issuance_service.applications
-         VALUES ('application-approval-race', 'org-1', 'application-template-1',
+         VALUES ('application-approval-race', '98ab252b-2af9-47a4-b66e-c31e269746d2', 'application-template-1',
                  'canvas_lti:learner-subject-1',
                  '{\"achievement\":\"Portable Canvas\"}'::json,
                  '{\"canvas\":{\"source\":\"canvas_lti_bootstrap\"}}'::json,
@@ -1012,7 +1212,7 @@ async fn candidate_materialization_matches_production_json_and_revision_contract
          (id, organization_id, platform_id, binding_id, learner_identity_id,
           candidate_key, canvas_user_id, lti_subject, state, application_id,
           observed_at, created_at, updated_at)
-         VALUES ('candidate-approval-race', 'org-1', 'platform-1', 'binding-1',
+         VALUES ('candidate-approval-race', '98ab252b-2af9-47a4-b66e-c31e269746d2', 'platform-1', 'binding-1',
                  'identity-1', 'approval-race', '42', 'learner-subject-1', 'eligible',
                  'application-approval-race', clock_timestamp(), clock_timestamp(),
                  clock_timestamp())",
@@ -1089,7 +1289,7 @@ async fn candidate_materialization_matches_production_json_and_revision_contract
         "INSERT INTO issuance_service.canvas_award_candidates
          (id, organization_id, platform_id, binding_id, candidate_key, lti_subject, state,
           observed_at, created_at, updated_at)
-         VALUES ('candidate-race', 'org-1', 'platform-1', 'binding-1', 'race',
+         VALUES ('candidate-race', '98ab252b-2af9-47a4-b66e-c31e269746d2', 'platform-1', 'binding-1', 'race',
                  'learner-subject-1', 'dismissed', clock_timestamp(), clock_timestamp(),
                  clock_timestamp())",
     )
@@ -1194,7 +1394,7 @@ async fn insert_legacy_application(
             id, organization_id, application_template_id, applicant_identifier,
             form_data, submitted_evidence, integration_context, status,
             issuance_transaction_id, credential_id, created_at, updated_at)
-         VALUES ($1, 'org-1', 'application-template-1', 'learner@example.test',
+         VALUES ($1, '98ab252b-2af9-47a4-b66e-c31e269746d2', 'application-template-1', 'learner@example.test',
                  '{\"achievement\":\"Portable Canvas\"}'::json, '[]'::json,
                  '{\"canvas\":{\"source\":\"canvas_lti_bootstrap\",
                     \"canvas_platform_id\":\"platform-1\",
@@ -1243,7 +1443,7 @@ async fn exercise_legacy_ingest_postgres_contract(pool: &sqlx::PgPool) {
              feature_flags, enabled, config_version, validated_config_version,
              readiness_checks, readiness_validated_at, credential_template_snapshot,
              activated_at, archived_at, created_at)
-         VALUES ('binding-legacy', 'org-1', 'platform-1', 'application-template-1',
+         VALUES ('binding-legacy', '98ab252b-2af9-47a4-b66e-c31e269746d2', 'platform-1', 'application-template-1',
              'credential-template-1', NULL, false,
              '[{\"requirement_id\":\"legacy-completion\",\"provider\":\"canvas\",
                 \"fact_type\":\"canvas.course_completion\",\"scope\":{},
@@ -1252,11 +1452,11 @@ async fn exercise_legacy_ingest_postgres_contract(pool: &sqlx::PgPool) {
              '{\"enable_canvas_evidence\":true}'::json, true, 3, 3,
              '[{\"code\":\"kms\",\"status\":\"ready\",\"blocking\":true}]'::json,
              '2026-08-29T15:59:00Z',
-             '{\"id\":\"credential-template-1\",\"organization_id\":\"org-1\",
+             '{\"id\":\"credential-template-1\",\"organization_id\":\"98ab252b-2af9-47a4-b66e-c31e269746d2\",
                \"status\":\"active\",\"credential_type\":\"OpenBadgeCredential\",
                \"credential_payload_format\":\"w3c_vcdm_v2_sd_jwt\",
                \"revocation_profile_id\":\"revocation-profile-1\",
-               \"issuer_did\":\"did:web:issuer.example:orgs:org-1\",
+               \"issuer_did\":\"did:web:issuer.example:orgs:98ab252b-2af9-47a4-b66e-c31e269746d2\",
                \"issuer_algorithm\":\"ES256\",\"claims\":[],\"wallet_configs\":[],
                \"selective_disclosure_fields\":[],\"zk_predicate_claims\":[],
                \"validity_rules\":{\"default_validity_days\":365,
@@ -1738,6 +1938,23 @@ async fn exercise_legacy_ingest_postgres_contract(pool: &sqlx::PgPool) {
     );
 }
 
+async fn manual_contract_head(pool: &sqlx::PgPool, application_id: &str, id: &str, score: i64) {
+    sqlx::query("INSERT INTO issuance_service.evidence_facts
+        (id,organization_id,application_id,subject_id,provider,fact_type,scope,assertion,verification,source,
+         requirement_id,logical_key,source_revision,payload_hash,observed_at,effective_at,created_at)
+        SELECT $1,fact.organization_id,$2,app.integration_context::jsonb #>> '{canvas,lti_subject}',
+            provider,fact_type,scope,json_build_object('completed',true,'score_percent',$3::bigint),verification,source,
+            requirement_id,'manual-score', $1,$1,observed_at,effective_at,created_at
+        FROM issuance_service.evidence_facts fact JOIN issuance_service.applications app ON app.id=$2
+        WHERE fact.id='fact-1'")
+        .bind(id).bind(application_id).bind(score).execute(pool).await.unwrap();
+    sqlx::query("INSERT INTO issuance_service.evidence_fact_heads
+        (organization_id,application_id,logical_key,fact_id,updated_at)
+        VALUES ('98ab252b-2af9-47a4-b66e-c31e269746d2',$1,'manual-score',$2,clock_timestamp())
+        ON CONFLICT(application_id,logical_key) DO UPDATE SET fact_id=excluded.fact_id,updated_at=excluded.updated_at")
+        .bind(application_id).bind(id).execute(pool).await.unwrap();
+}
+
 async fn table_count(pool: &sqlx::PgPool, table: &str) -> i64 {
     let query = match table {
         "evidence_facts" => "SELECT count(*) FROM issuance_service.evidence_facts",
@@ -1757,7 +1974,281 @@ async fn head_id(pool: &sqlx::PgPool) -> String {
     .unwrap()
 }
 
+// Real database recovery proof; external status publication is deliberately
+// controlled here and must not be reported as KMS or demo qualification.
+#[derive(Default)]
+struct ReviewRecoveryPublication {
+    fail: std::sync::atomic::AtomicBool,
+    calls: AtomicUsize,
+}
+
+#[async_trait]
+impl marty_issuance_service::credential_management::CredentialStatusPublisher
+    for ReviewRecoveryPublication
+{
+    async fn publish(
+        &self,
+        credential: &marty_issuance_service::credential_management::ManagedCredential,
+        action: marty_issuance_service::credential_management::CredentialLifecycleAction,
+        reason: Option<&str>,
+    ) -> Result<(), marty_issuance_service::credential_management::CredentialManagementPortError>
+    {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        assert_eq!(credential.id, "review-recovery-credential");
+        assert_eq!(action.as_str(), "revoke");
+        assert_eq!(reason, Some("original revocation reason"));
+        if self.fail.load(Ordering::SeqCst) {
+            return Err(
+                marty_issuance_service::credential_management::CredentialManagementPortError(
+                    "controlled publication failure".into(),
+                ),
+            );
+        }
+        Ok(())
+    }
+}
+
+#[derive(Default)]
+struct ReviewRecoveryEvents(AtomicUsize);
+
+#[async_trait]
+impl marty_issuance_service::credential_management::CredentialLifecycleEventSink
+    for ReviewRecoveryEvents
+{
+    async fn emit(
+        &self,
+        _: marty_issuance_service::credential_management::CredentialLifecycleEvent,
+    ) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+#[tokio::test]
+async fn revoked_canvas_review_recovery_is_scoped_durable_and_retries_publication() {
+    use marty_issuance_service::{
+        canvas_operations::{candidate_router, CanvasOperationsService},
+        canvas_review_resolution::CanvasReviewResolver,
+        credential_management::CredentialManagementService,
+        credential_management_postgres::PostgresCredentialManagementRepository,
+    };
+    let Some(url) = database_url() else {
+        return;
+    };
+    let pool = PgPoolOptions::new()
+        .max_connections(3)
+        .connect(&url)
+        .await
+        .unwrap();
+    setup_schema(&pool).await;
+    for statement in [
+        "CREATE TABLE issuance_service.issued_credentials (
+            id text PRIMARY KEY, transaction_id text NOT NULL, organization_id text NOT NULL,
+            credential_template_id text NOT NULL, issuer_did text, status text NOT NULL,
+            status_updated_at timestamptz NOT NULL, revoked boolean NOT NULL,
+            revoked_at timestamptz, revocation_reason text, revocation_profile_id text,
+            status_list_entries json NOT NULL)",
+        "CREATE TABLE issuance_service.credential_delivery_records (
+            credential_id text, organization_id text, delivery_target text,
+            metadata jsonb, updated_at timestamptz)",
+        "INSERT INTO issuance_service.applications
+            (id,organization_id,application_template_id,applicant_identifier,form_data,integration_context,status)
+            VALUES ('review-recovery-application','review-recovery-org','template','learner','{}','{}','credentialed')",
+        "INSERT INTO issuance_service.issued_credentials VALUES
+            ('review-recovery-credential','transaction','review-recovery-org','template',NULL,'revoked',
+             clock_timestamp(),true,clock_timestamp(),'original revocation reason',NULL,'[]')",
+        "INSERT INTO issuance_service.evidence_policy_reviews
+            (id,organization_id,application_id,credential_id,binding_id,status,prior_decision,current_decision,created_at,updated_at)
+            VALUES ('review-recovery','review-recovery-org','review-recovery-application','review-recovery-credential',
+                    'binding','open','{}','{}',clock_timestamp(),clock_timestamp()),
+                   ('unrelated-review','foreign-org','unrelated-application','unrelated-credential',
+                    'foreign-binding','open','{}','{}',clock_timestamp(),clock_timestamp())",
+    ] { sqlx::query(statement).execute(&pool).await.unwrap(); }
+    let publication = Arc::new(ReviewRecoveryPublication::default());
+    let events = Arc::new(ReviewRecoveryEvents::default());
+    let lifecycle = CredentialManagementService::new(
+        Arc::new(PostgresCredentialManagementRepository::new(pool.clone())),
+        publication.clone(),
+        events.clone(),
+    );
+    let lifecycle = Arc::new(lifecycle);
+    let resolver = CanvasReviewResolver::new(pool.clone(), Some(lifecycle.clone()));
+    let router = candidate_router(
+        CanvasOperationsService::new(pool.clone(), Some("recovery-test-key"))
+            .with_review_operations(Some(lifecycle)),
+    );
+    async fn request(
+        router: &axum::Router,
+        organization: &str,
+        key: &str,
+        operation: &str,
+        body: &str,
+    ) -> (axum::http::StatusCode, Value) {
+        use tower::ServiceExt;
+        let response = router.clone().oneshot(axum::http::Request::builder()
+            .method("POST")
+            .uri(format!("/v1/integrations/canvas/evidence-policy-reviews/review-recovery/{operation}"))
+            .header("x-api-key", key).header("x-organization-id", organization)
+            .header("x-user-id", "actor").header("content-type", "application/json")
+            .body(axum::body::Body::from(body.to_owned())).unwrap()).await.unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        (status, serde_json::from_slice(&bytes).unwrap())
+    }
+    for (organization, key, operation, body, expected) in [
+        (
+            "review-recovery-org",
+            "wrong-key",
+            "reconcile-revocation",
+            r#"{"action":"revoke"}"#,
+            401,
+        ),
+        (
+            "foreign-org",
+            "recovery-test-key",
+            "reconcile-revocation",
+            r#"{"action":"revoke"}"#,
+            404,
+        ),
+        (
+            "review-recovery-org",
+            "recovery-test-key",
+            "reconcile-revocation",
+            r#"{"action":"dismiss"}"#,
+            422,
+        ),
+        (
+            "review-recovery-org",
+            "recovery-test-key",
+            "resolve",
+            r#"{"action":"revoke"}"#,
+            400,
+        ),
+    ] {
+        assert_eq!(
+            request(&router, organization, key, operation, body)
+                .await
+                .0
+                .as_u16(),
+            expected
+        );
+        assert_eq!(publication.calls.load(Ordering::SeqCst), 0);
+    }
+    for status in ["active", "suspended"] {
+        sqlx::query("UPDATE issuance_service.issued_credentials SET status=$1, revoked=false WHERE id='review-recovery-credential'")
+            .bind(status).execute(&pool).await.unwrap();
+        assert_eq!(
+            request(
+                &router,
+                "review-recovery-org",
+                "recovery-test-key",
+                "reconcile-revocation",
+                r#"{"action":"revoke"}"#
+            )
+            .await
+            .0
+            .as_u16(),
+            409
+        );
+        assert_eq!(publication.calls.load(Ordering::SeqCst), 0);
+        assert_eq!(table_count(&pool, "issuance_events").await, 0);
+    }
+    sqlx::query("UPDATE issuance_service.issued_credentials SET status='revoked', revoked=true WHERE id='review-recovery-credential'")
+        .execute(&pool).await.unwrap();
+    assert!(resolver
+        .reconcile_revocation(
+            "foreign-org",
+            "review-recovery",
+            Some("cleanup"),
+            Some("actor")
+        )
+        .await
+        .is_err());
+    assert_eq!(publication.calls.load(Ordering::SeqCst), 0);
+    publication.fail.store(true, Ordering::SeqCst);
+    assert!(resolver
+        .reconcile_revocation(
+            "review-recovery-org",
+            "review-recovery",
+            Some("cleanup"),
+            Some("actor")
+        )
+        .await
+        .is_err());
+    let current: Value = sqlx::query_scalar("SELECT to_jsonb(r) FROM issuance_service.evidence_policy_reviews r WHERE id='review-recovery'")
+        .fetch_one(&pool).await.unwrap();
+    assert_eq!(current["status"], "open");
+    assert!(
+        current["resolution_claim_token"].is_null(),
+        "failed publication releases the exact claim for retry"
+    );
+    assert_eq!(table_count(&pool, "issuance_events").await, 0);
+    publication.fail.store(false, Ordering::SeqCst);
+    let (status, response) = request(
+        &router,
+        "review-recovery-org",
+        "recovery-test-key",
+        "reconcile-revocation",
+        r#"{"action":"revoke","note":"cleanup"}"#,
+    )
+    .await;
+    assert_eq!(status.as_u16(), 200, "{response}");
+    let resolved: Value = sqlx::query_scalar("SELECT to_jsonb(r) FROM issuance_service.evidence_policy_reviews r WHERE id='review-recovery'")
+        .fetch_one(&pool).await.unwrap();
+    assert_eq!(response["status"], "revoked");
+    assert_eq!(resolved["status"], "revoked");
+    assert_eq!(resolved["resolution_action"], "revoke");
+    assert_eq!(resolved["resolved_by"], "actor");
+    assert!(resolved["resolution_claim_token"].is_null());
+    assert_eq!(table_count(&pool, "issuance_events").await, 1);
+    assert_eq!(publication.calls.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        events.0.load(Ordering::SeqCst),
+        0,
+        "no duplicate credential event"
+    );
+    assert!(resolver
+        .reconcile_revocation(
+            "review-recovery-org",
+            "review-recovery",
+            Some("cleanup"),
+            Some("actor")
+        )
+        .await
+        .is_err());
+    assert_eq!(publication.calls.load(Ordering::SeqCst), 2);
+    let unrelated: String = sqlx::query_scalar(
+        "SELECT status FROM issuance_service.evidence_policy_reviews WHERE id='unrelated-review'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(unrelated, "open");
+}
+
 async fn setup_schema(pool: &sqlx::PgPool) {
+    // Reuse the owner's actual DDL without adding a cross-service Rust edge.
+    // The Organization migration contract runs afterward on this database.
+    for migration in [
+        include_str!("../../organization/migrations/0001_organization_schema.sql"),
+        include_str!("../../organization/migrations/0002_offline_audit_receipts.sql"),
+    ] {
+        sqlx::raw_sql(migration)
+            .execute(pool)
+            .await
+            .expect("Canvas approval contract must use the production Organization schema");
+    }
+    sqlx::query(
+        "INSERT INTO organization_service.organizations
+            (id,name,status,created_at,updated_at)
+         VALUES ('98ab252b-2af9-47a4-b66e-c31e269746d2','Canvas contract','ACTIVE',$1,$1)
+         ON CONFLICT (id) DO NOTHING",
+    )
+    .bind(now())
+    .execute(pool)
+    .await
+    .unwrap();
     sqlx::query("DROP SCHEMA IF EXISTS issuance_service CASCADE")
         .execute(pool)
         .await
@@ -1858,35 +2349,35 @@ async fn seed_candidate(pool: &sqlx::PgPool) {
         "INSERT INTO issuance_service.canvas_platforms
          (id, organization_id, lti_deployment_id, canvas_account_id,
           registration_status, enabled, archived_at)
-         VALUES ('platform-1', 'org-1', 'deployment-123', 'account-1',
+         VALUES ('platform-1', '98ab252b-2af9-47a4-b66e-c31e269746d2', 'deployment-123', 'account-1',
                  'verified', true, NULL)",
         "INSERT INTO issuance_service.application_templates
-         VALUES ('application-template-1', 'org-1', 'credential-template-1', NULL, 'active')",
+         VALUES ('application-template-1', '98ab252b-2af9-47a4-b66e-c31e269746d2', 'credential-template-1', NULL, 'active')",
         "INSERT INTO issuance_service.canvas_program_bindings
          VALUES (
-            'binding-1', 'org-1', 'platform-1', 'application-template-1',
+            'binding-1', '98ab252b-2af9-47a4-b66e-c31e269746d2', 'platform-1', 'application-template-1',
             'credential-template-1', NULL, true,
             '[{\"requirement_id\":\"score-1\",\"source\":\"ags_result\",\"fact_type\":\"canvas.assignment_score\",\"scope\":{\"course_id\":\"course-1\",\"resource_id\":\"marty:score\",\"line_item_url\":\"https://canvas.example.edu/api/lti/courses/1/line_items/1\"},\"pass_rule\":{\"min_score_percent\":80},\"required\":true}]'::json,
             '{\"enable_canvas_evidence\":true}'::json, true, 3, 3,
             '[{\"code\":\"kms\",\"status\":\"ready\",\"blocking\":true}]'::json,
             '2026-08-29T15:59:00Z',
-            '{\"id\":\"credential-template-1\",\"organization_id\":\"org-1\",\"status\":\"active\",\"credential_type\":\"OpenBadgeCredential\",\"credential_payload_format\":\"w3c_vcdm_v2_sd_jwt\",\"revocation_profile_id\":\"revocation-profile-1\",\"issuer_did\":\"did:web:issuer.example:orgs:org-1\",\"issuer_algorithm\":\"ES256\",\"claims\":[],\"wallet_configs\":[],\"selective_disclosure_fields\":[],\"zk_predicate_claims\":[],\"validity_rules\":{\"default_validity_days\":365,\"renewable\":false,\"renewal_window_days\":30}}'::json,
+            '{\"id\":\"credential-template-1\",\"organization_id\":\"98ab252b-2af9-47a4-b66e-c31e269746d2\",\"status\":\"active\",\"credential_type\":\"OpenBadgeCredential\",\"credential_payload_format\":\"w3c_vcdm_v2_sd_jwt\",\"revocation_profile_id\":\"revocation-profile-1\",\"issuer_did\":\"did:web:issuer.example:orgs:98ab252b-2af9-47a4-b66e-c31e269746d2\",\"issuer_algorithm\":\"ES256\",\"claims\":[],\"wallet_configs\":[],\"selective_disclosure_fields\":[],\"zk_predicate_claims\":[],\"validity_rules\":{\"default_validity_days\":365,\"renewable\":false,\"renewal_window_days\":30}}'::json,
             '2026-08-29T15:00:00Z', NULL)",
         "INSERT INTO issuance_service.applications
-         VALUES ('application-1', 'org-1', 'application-template-1',
+         VALUES ('application-1', '98ab252b-2af9-47a4-b66e-c31e269746d2', 'application-template-1',
                  'canvas_lti:learner-subject-1',
                  '{\"achievement\":\"Portable Canvas\"}'::json,
                  '{\"canvas\":{\"source\":\"canvas_lti_bootstrap\"}}'::json,
                  'pending', NULL, NULL, NULL, NULL, NULL, clock_timestamp())",
         "INSERT INTO issuance_service.canvas_learner_identities
-         VALUES ('identity-1', 'org-1', 'platform-1', 'deployment-123',
+         VALUES ('identity-1', '98ab252b-2af9-47a4-b66e-c31e269746d2', 'platform-1', 'deployment-123',
                  'learner-subject-1', '42', 'linked')",
         "INSERT INTO issuance_service.canvas_award_candidates
-         VALUES ('candidate-1', 'org-1', 'platform-1', 'binding-1', NULL,
+         VALUES ('candidate-1', '98ab252b-2af9-47a4-b66e-c31e269746d2', 'platform-1', 'binding-1', NULL,
                  'candidate-key-1', NULL, 'learner-subject-1', 'pending_claim', NULL,
                  '2026-08-29T15:59:00Z', clock_timestamp(), clock_timestamp())",
         "INSERT INTO issuance_service.canvas_candidate_observations
-         VALUES ('observation-1', 'org-1', 'candidate-1', 'score-1', 'score-key-1',
+         VALUES ('observation-1', '98ab252b-2af9-47a4-b66e-c31e269746d2', 'candidate-1', 'score-1', 'score-key-1',
                  '{\"completed\":true,\"score_percent\":95}'::json,
                  '{\"status\":\"VERIFIED\",\"method\":\"LTI_AGS_RESULT_READ\"}'::json,
                  'candidate-score-95', true, '2026-08-29T15:59:30Z', clock_timestamp())",

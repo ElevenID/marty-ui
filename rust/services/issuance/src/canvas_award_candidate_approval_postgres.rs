@@ -14,7 +14,10 @@ use crate::{
         LOAD_APPLICATION_TEMPLATE, LOAD_BINDING, LOAD_PLATFORM_DEPLOYMENT,
     },
     canvas_award_candidate_service::CanvasAwardCandidateApprovalError,
-    canvas_issuance_guard::LIST_CURRENT_FACTS,
+    canvas_issuance_guard::{
+        canvas_approval_policy_set_id, evidence_fact_snapshots_match, LIST_CURRENT_FACTS,
+        LOAD_CANVAS_POLICY_SET,
+    },
     canvas_lti_bootstrap::CanvasLtiBootstrapApplication,
     canvas_lti_experience::CanvasLtiExperienceSessionContext,
     credential::{CredentialTransaction, CredentialTransactionStatus},
@@ -247,6 +250,7 @@ impl CanvasApplicationApprovalRepository for PostgresCanvasAwardApprovalReposito
         let template_id = text(application.get("application_template_id"));
         if platform_id.is_empty() || binding_id.is_empty() {
             return Ok(Some(CanvasApplicationApprovalSnapshot {
+                policy_set: None,
                 evidence_facts: Vec::new(),
                 application,
                 application_template: serde_json::Map::new(),
@@ -290,9 +294,21 @@ impl CanvasApplicationApprovalRepository for PostgresCanvasAwardApprovalReposito
         {
             return Ok(None);
         }
+        let policy_set =
+            if let Some(id) = canvas_approval_policy_set_id(&binding, &application_template) {
+                sqlx::query_scalar::<_, Value>(LOAD_CANVAS_POLICY_SET)
+                    .bind(organization_id)
+                    .bind(id)
+                    .fetch_optional(&self.pool)
+                    .await
+                    .map_err(manual_approval_repository_error)?
+            } else {
+                None
+            };
         let existing_transaction =
             load_current_pending_transaction(&self.pool, &application).await?;
         Ok(Some(CanvasApplicationApprovalSnapshot {
+            policy_set,
             evidence_facts: sqlx::query_scalar::<_, Value>(LIST_CURRENT_FACTS)
                 .bind(organization_id)
                 .bind(application_id)
@@ -509,41 +525,35 @@ async fn lock_manual_approval_dependencies(
     {
         return Err(CanvasApplicationApprovalError::NotReady);
     }
-    if snapshot
-        .application_template
-        .get("claim_collection_rules")
-        .and_then(Value::as_array)
-        .is_some_and(|rules| !rules.is_empty())
+    if let Some(id) =
+        canvas_approval_policy_set_id(&snapshot.binding, &snapshot.application_template)
     {
-        let mut query = sqlx::QueryBuilder::<sqlx::Postgres>::new(LIST_CURRENT_FACTS);
-        query.push(" FOR SHARE OF head, fact");
+        let mut query = sqlx::QueryBuilder::<sqlx::Postgres>::new(LOAD_CANVAS_POLICY_SET);
+        query.push(" FOR SHARE");
         let current = query
             .build_query_scalar::<Value>()
             .bind(&prepared.organization_id)
-            .bind(prepared.application_id.as_deref().unwrap_or_default())
-            .fetch_all(&mut **database)
+            .bind(id)
+            .fetch_optional(&mut **database)
             .await
             .map_err(manual_approval_repository_error)?;
-        if fact_identities(&current) != fact_identities(&snapshot.evidence_facts) {
+        if current != snapshot.policy_set {
             return Err(CanvasApplicationApprovalError::NotReady);
         }
     }
+    let mut query = sqlx::QueryBuilder::<sqlx::Postgres>::new(LIST_CURRENT_FACTS);
+    query.push(" FOR SHARE OF head, fact");
+    let current = query
+        .build_query_scalar::<Value>()
+        .bind(&prepared.organization_id)
+        .bind(prepared.application_id.as_deref().unwrap_or_default())
+        .fetch_all(&mut **database)
+        .await
+        .map_err(manual_approval_repository_error)?;
+    if !evidence_fact_snapshots_match(&current, &snapshot.evidence_facts) {
+        return Err(CanvasApplicationApprovalError::NotReady);
+    }
     Ok(())
-}
-
-fn fact_identities(facts: &[Value]) -> Vec<(String, String, String)> {
-    let mut identities = facts
-        .iter()
-        .map(|fact| {
-            (
-                text(fact.get("id")),
-                text(fact.get("payload_hash")),
-                text(fact.get("source_revision")),
-            )
-        })
-        .collect::<Vec<_>>();
-    identities.sort();
-    identities
 }
 
 fn application_approval_snapshot_is_current(

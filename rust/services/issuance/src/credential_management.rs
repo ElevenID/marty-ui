@@ -416,6 +416,26 @@ impl CredentialManagementService {
         self.reconcile_persisted_revocation(&credential).await
     }
 
+    /// Recover only an existing revocation. Unlike transaction reconciliation,
+    /// this never changes an active or suspended credential's status. `None`
+    /// lets the caller report its operation-specific precondition conflict.
+    pub async fn reconcile_existing_revocation(
+        &self,
+        credential_id: &str,
+        trusted_organization_id: Option<&str>,
+        reason: Option<&str>,
+    ) -> Result<Option<CredentialStatusView>, CredentialManagementError> {
+        let credential = self.load(credential_id).await?;
+        enforce_organization(&credential, trusted_organization_id)?;
+        validate_reason(reason)?;
+        if credential.status != ManagedCredentialStatus::Revoked {
+            return Ok(None);
+        }
+        self.reconcile_persisted_revocation(&credential)
+            .await
+            .map(Some)
+    }
+
     async fn reconcile_persisted_revocation(
         &self,
         credential: &ManagedCredential,
@@ -767,6 +787,111 @@ mod tests {
         async fn emit(&self, event: CredentialLifecycleEvent) {
             self.calls.lock().expect("calls").push("event".to_owned());
             self.events.lock().expect("events").push(event);
+        }
+    }
+
+    #[tokio::test]
+    async fn canvas_review_reconciles_previously_revoked_credentials_without_duplicate_events() {
+        use crate::canvas_review_resolution::CanvasReviewLifecycle;
+
+        let harness = Harness::new(ManagedCredentialStatus::Revoked);
+        let result = CanvasReviewLifecycle::reconcile_revocation(
+            &harness.service(),
+            "org-a",
+            "credential-a",
+            "Run-owned Canvas capture cleanup",
+        )
+        .await;
+        assert!(
+            result.is_ok(),
+            "an open review can finish after prior credential revocation"
+        );
+        assert_eq!(
+            *harness.calls.lock().expect("calls"),
+            ["load", "publish:revoke", "canvas:revoke"]
+        );
+        assert!(harness.events.lock().expect("events").is_empty());
+        assert!(harness.audits.lock().expect("audits").is_empty());
+    }
+
+    #[tokio::test]
+    async fn canvas_review_revocation_recovery_keeps_tenant_reason_and_publication_fences() {
+        use crate::canvas_review_resolution::CanvasReviewLifecycle;
+
+        for (organization, reason, publication_failure) in [
+            ("foreign-org", "cleanup".to_owned(), false),
+            ("org-a", "x".repeat(MAX_REASON_CHARACTERS + 1), false),
+            ("org-a", "cleanup".to_owned(), true),
+        ] {
+            let harness = Harness::new(ManagedCredentialStatus::Revoked);
+            if publication_failure {
+                *harness
+                    .publication_failure
+                    .lock()
+                    .expect("publication failure") = Some("offline".to_owned());
+            }
+            assert!(CanvasReviewLifecycle::reconcile_revocation(
+                &harness.service(),
+                organization,
+                "credential-a",
+                &reason,
+            )
+            .await
+            .is_err());
+            let expected = if publication_failure {
+                vec!["load", "publish:revoke"]
+            } else {
+                vec!["load"]
+            };
+            assert_eq!(*harness.calls.lock().expect("calls"), expected);
+            assert!(harness.events.lock().expect("events").is_empty());
+        }
+        // The public lifecycle endpoint continues to reject repeated revocation.
+        let harness = Harness::new(ManagedCredentialStatus::Revoked);
+        assert_eq!(
+            harness
+                .service()
+                .transition(
+                    "credential-a",
+                    Some("org-a"),
+                    CredentialLifecycleAction::Revoke,
+                    Some("cleanup")
+                )
+                .await
+                .expect_err("public repeated revoke"),
+            CredentialManagementError::AlreadyRevoked
+        );
+        // The review resolve adapter also preserves the published error;
+        // callers must opt into the separately scoped recovery operation.
+        assert!(matches!(
+            CanvasReviewLifecycle::transition(
+                &harness.service(),
+                "org-a",
+                "credential-a",
+                CredentialLifecycleAction::Revoke,
+                "cleanup"
+            )
+            .await,
+            Err(crate::canvas_operations::OperationsError::Lifecycle(
+                CredentialManagementError::AlreadyRevoked
+            ))
+        ));
+        for status in [
+            ManagedCredentialStatus::Active,
+            ManagedCredentialStatus::Suspended,
+        ] {
+            let harness = Harness::new(status);
+            assert!(CanvasReviewLifecycle::reconcile_revocation(
+                &harness.service(),
+                "org-a",
+                "credential-a",
+                "cleanup"
+            )
+            .await
+            .is_err());
+            assert_eq!(*harness.calls.lock().expect("calls"), ["load"]);
+            assert!(harness.events.lock().expect("events").is_empty());
+            assert!(harness.audits.lock().expect("audits").is_empty());
         }
     }
 
