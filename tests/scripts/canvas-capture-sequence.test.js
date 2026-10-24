@@ -65,7 +65,12 @@ function harness({ scenario = 'external-evidence-to-credential', fail = '' } = {
           if (fail === 'denied-approval-reserved') state.reserved = true;
           if (fail === 'denied-approval-issued') state.issued = true;
           if (fail === 'denied-approval-claimable') state.approved = true;
-          return { detail: fail === 'denied-approval-wrong-reason' ? 'Unrelated conflict' : 'Canvas application is not ready for approval' };
+          if (['mip-denied-reason','mip-wrong-reason','mip-foreign-error-code'].includes(fail)) return {
+            error: fail === 'mip-foreign-error-code' ? 'unrelated_error' : 'service_error',
+            error_description: fail === 'mip-wrong-reason' ? 'Unrelated conflict'
+              : 'Canvas application is not ready for approval', message_id:'private-correlation' };
+          return { detail: ['denied-approval-wrong-reason','denial-and-grade-restoration'].includes(fail)
+            ? 'Unrelated conflict' : 'Canvas application is not ready for approval' };
         }
         assert.equal(state.grade, 95); assert.equal(state.issued, false); state.approved = true;
         state.reserved = true;
@@ -123,7 +128,8 @@ function harness({ scenario = 'external-evidence-to-credential', fail = '' } = {
       state.grade = body['submission[posted_grade]']; state.revision++;
       state.mutations.push(state.grade);
       if (state.issued && state.grade === 40) state.review = true;
-      return { assignment_id: 2, user_id: 3, score: state.grade };
+      return { assignment_id: 2, user_id: 3,
+        score: fail === 'denial-and-grade-restoration' && state.grade === 95 ? 40 : state.grade };
     } },
   };
   const operations = { ...stock,
@@ -192,6 +198,26 @@ test('D07 runs fresh pre-issuance denial/recovery and retired-ingest operation w
   assert.equal(h.report.behaviorAssertions.invalid_evidence_provenance_denied, true);
 });
 
+test('the production MIP service-error envelope preserves the exact denied-approval reason', async () => {
+  const h = harness({scenario:'canvas-learning-achievement',fail:'mip-denied-reason'});
+  await h.run();
+  assert.equal(h.report.deniedApproval.httpStatus,409);
+  assert.equal(h.report.deniedApproval.transactionCount,0);
+  assert.equal(h.report.behaviorAssertions.invalid_evidence_provenance_denied,true);
+});
+
+test('a failing grade restoration preserves the original negative-operation failure without response bodies', async () => {
+  const h = harness({scenario:'canvas-learning-achievement',fail:'denial-and-grade-restoration'});
+  await assert.rejects(h.run(), error => error instanceof AggregateError && error.errors.length===2);
+  assert.equal(h.report.operationFailures.length,2);
+  assert.equal(h.report.operationFailures[0].activeCase,'pre-issuance-denied-approval-detail');
+  assert.equal(h.report.operationFailures[1].activeCase,'grade-score-binding');
+  assert(h.report.operationFailures.every(x=>x.sourceLocation?.file==='canvas-capture-sequence.js'));
+  assert(!JSON.stringify(h.report.operationFailures).includes('Unrelated conflict'));
+  assert.deepEqual(h.report.behaviorAssertions,{});
+  assert(h.report.pendingOperations.includes('scoped-approval'));
+});
+
 test('recovery requires a new permitting job after transient course recalculation', async () => {
   const h = harness({ scenario: 'canvas-learning-achievement', fail: 'recovery-transient-course' });
   await h.run();
@@ -221,7 +247,8 @@ for (const fail of ['foreign-claim-application', 'foreign-claim-organization', '
 }
 
 for (const fail of ['denied-transaction-reserved', 'denied-credential-issued', 'denied-claimable',
-  'denied-approval-reserved', 'denied-approval-issued', 'denied-approval-claimable', 'denied-approval-wrong-reason']) {
+  'denied-approval-reserved', 'denied-approval-issued', 'denied-approval-claimable', 'denied-approval-wrong-reason',
+  'mip-wrong-reason','mip-foreign-error-code']) {
   test(`${fail} cannot qualify the denied evidence path`, async () => {
     const h = harness({ fail }); await assert.rejects(h.run());
     assert.equal(h.state.grade, 95);

@@ -199,14 +199,16 @@ async function main() {
     complete = true;
   } catch (error) {
     // Do not put response bodies, bearer offers or credentials in reports.
-    report.failures.push({ stage: 'execution', phase, type: error.name, code: error.code || 'CANVAS_CAPTURE_FAILED' });
+    report.failures.push({ stage: 'execution', phase, type: error.name, code: error.code || 'CANVAS_CAPTURE_FAILED',
+      diagnostic: stock.contractFailureLocation(error, report.currentOperation || phase) });
   } finally {
     let cleanupComplete = true;
     async function cleanup(operation, fn) {
       try { await fn(); return true; } catch (error) {
         complete = false;
         cleanupComplete = false;
-        report.failures.push({ stage: 'cleanup', operation, type: error.name });
+        report.failures.push({ stage: 'cleanup', operation, type: error.name,
+          diagnostic: stock.contractFailureLocation(error, operation) });
         return false;
       }
     }

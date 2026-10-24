@@ -1706,10 +1706,10 @@ function escapeHtml(value) {
 function contractFailureLocation(error, activeCase) {
   // Retain actionable driver location without request bodies, URLs, credentials
   // or Playwright action arguments from the original exception message.
-  const frame = String(error?.stack || '').match(/run-canvas-oss-standard-contract\.js:(\d+):(\d+)/);
+  const frame = String(error?.stack || '').match(/\b(run-canvas-oss-standard-contract|canvas-capture-sequence|audit-beta-canvas-capture)\.js:(\d+):(\d+)/);
   const name = /^[A-Za-z][A-Za-z0-9]{0,50}$/.test(String(error?.name || '')) ? error.name : 'Error';
   const result = { activeCase, errorType: name,
-    sourceLocation: frame ? { file: 'run-canvas-oss-standard-contract.js', line: Number(frame[1]), column: Number(frame[2]) } : null };
+    sourceLocation: frame ? { file: frame[1]+'.js', line: Number(frame[2]), column: Number(frame[3]) } : null };
   if (error?.canvasResourceDiagnostic) result.canvasResource = error.canvasResourceDiagnostic;
   return result;
 }
