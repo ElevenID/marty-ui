@@ -1048,6 +1048,8 @@ services:
       ORG_GRPC_TARGET: https://organization:9002
       ORG_GRPC_CA_CERT: /run/secrets/workload_identity_ca_cert
       PP_GRPC_PORT: "9009"
+      SIGNING_KEYS_SERVICE_URL: http://signing-keys:8017
+      SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/secrets/issuance_api_key
       DID_RESOLUTION_BASE_URL: http://gateway:8000
       DID_PUBLIC_FALLBACK_ENABLED: ${DID_PUBLIC_FALLBACK_ENABLED:-false}
       DID_WEB_ALLOWED_HOSTS: ${DID_WEB_ALLOWED_HOSTS:-}

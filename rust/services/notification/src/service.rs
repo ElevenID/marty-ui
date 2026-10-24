@@ -52,7 +52,8 @@ impl From<RepositoryError> for ServiceError {
     }
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct SendNotificationRequest {
     pub organization_id: String,
     pub recipient_id: Option<String>,
@@ -96,7 +97,8 @@ const fn default_ttl() -> i64 {
     86_400
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct NotificationTargetRequest {
     pub organization_id: Option<String>,
     pub user_id: Option<String>,
@@ -113,8 +115,15 @@ pub struct NotificationTargetRequest {
 #[derive(Debug, Clone, Serialize)]
 pub struct NotificationResponse {
     pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub organization_id: Option<String>,
     pub title: String,
     pub body: String,
+    pub read: bool,
+    pub severity: String,
+    pub status: NotificationStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub link: Option<String>,
     pub data: Map<String, Value>,
     pub event_type: String,
     pub priority: String,
@@ -131,8 +140,13 @@ impl From<&Notification> for NotificationResponse {
     fn from(value: &Notification) -> Self {
         Self {
             id: value.id.clone(),
+            organization_id: value.organization_id.clone(),
             title: value.subject.clone(),
             body: value.body.clone(),
+            read: value.is_read(),
+            severity: value.severity.clone(),
+            status: value.status,
+            link: value.link.clone(),
             data: value.data.clone(),
             event_type: value.event_type.clone(),
             priority: format!("{:?}", value.priority).to_ascii_uppercase(),

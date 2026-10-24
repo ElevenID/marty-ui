@@ -241,11 +241,13 @@ def test_actual_openbao_transit_csr_producers(tmp_path):
     image = json.loads((ROOT / "deploy-config/passport-supported-disposable-infra-images.json")
                        .read_text())["images"]["openbao"]["reference"]
     name = "codex-certificate-test-" + uuid.uuid4().hex
-    subprocess.run(["docker", "run", "--detach", "--name", name, "--platform", "linux/amd64",
-                    "-p", "127.0.0.1::8200", "-e", "BAO_DEV_ROOT_TOKEN_ID=synthetic-test-root",
-                    image, "server", "-dev", "-dev-listen-address=0.0.0.0:8200"],
-                   check=True, capture_output=True, timeout=180)
     try:
+        started = subprocess.run(
+            ["docker", "run", "--detach", "--name", name, "--platform", "linux/amd64",
+             "-p", "127.0.0.1::8200", "-e", "BAO_DEV_ROOT_TOKEN_ID=synthetic-test-root",
+             image, "server", "-dev", "-dev-listen-address", "0.0.0.0:8200"],
+            capture_output=True, timeout=180)
+        assert started.returncode == 0, started.stderr.decode(errors="replace")
         port = json.loads(subprocess.check_output(["docker", "inspect", name]))[0][
             "NetworkSettings"]["Ports"]["8200/tcp"][0]["HostPort"]
         endpoint = f"http://127.0.0.1:{port}/v1/"
@@ -304,6 +306,9 @@ def test_actual_openbao_transit_csr_producers(tmp_path):
                 ROOT, "operator", "public-spki", input=public)
     finally:
         # This UUID-named container belongs solely to this test. Remove it even
-        # if the server no longer responds to a graceful stop.
-        subprocess.run(["docker", "rm", "--force", "--volumes", name],
-                       check=True, capture_output=True, timeout=30)
+        # if startup failed or the server no longer responds to a graceful stop.
+        cleanup = subprocess.run(["docker", "rm", "--force", "--volumes", name],
+                                 check=False, capture_output=True, timeout=30)
+        assert cleanup.returncode == 0 or b"No such container" in cleanup.stderr, (
+            cleanup.stderr.decode(errors="replace")
+        )

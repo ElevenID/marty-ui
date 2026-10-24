@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router';
 import {
   Alert,
@@ -17,34 +17,21 @@ import {
 } from '@mui/material';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 
-import signingKeysApi from '../../../services/signingKeysApi';
+import issuerIdentitiesApi from '../../../services/issuerIdentitiesApi';
 import { useAuth } from '../../../hooks/useAuth';
 import { useConsole } from '../../../contexts/ConsoleContext';
 import { useNotifications } from '../../../hooks/useNotifications';
 
-const PURPOSES = [
-  { value: 'vc_jwt_issuer', label: 'Credential issuance' },
-  { value: 'mdoc_dsc', label: 'mdoc document signing' },
-  { value: 'x509_doc_signer', label: 'X.509 document signing' },
-  { value: 'csca', label: 'CSCA / IACA root authority' },
-  { value: 'jwks_signing', label: 'JWKS signing' },
-];
-
-const FORMATS_BY_PURPOSE = {
-  vc_jwt_issuer: ['SD_JWT_VC', 'VC_JWT', 'JSON_LD'],
-  mdoc_dsc: ['MDOC', 'ZK_MDOC'],
-  x509_doc_signer: ['MDOC', 'ZK_MDOC', 'ICAO_EMRTD'],
-  csca: ['MDOC', 'ZK_MDOC', 'ICAO_EMRTD'],
-  jwks_signing: ['VC_JWT', 'SD_JWT_VC'],
+const PURPOSE_LABELS = {
+  vc_jwt_issuer: 'Credential issuance',
+  mdoc_dsc: 'mdoc document signing',
+  x509_doc_signer: 'X.509 document signing',
+  csca: 'CSCA / IACA root authority',
+  jwks_signing: 'JWKS signing',
 };
 
-const ALGORITHMS_BY_PURPOSE = {
-  vc_jwt_issuer: ['ES256', 'ES384', 'RS256', 'EdDSA'],
-  mdoc_dsc: ['ES256', 'ES384', 'EdDSA'],
-  x509_doc_signer: ['ES256', 'ES384', 'RS256', 'EdDSA'],
-  csca: ['ES256', 'ES384', 'ES512', 'RS256', 'EdDSA'],
-  jwks_signing: ['ES256', 'ES384', 'RS256', 'EdDSA'],
-};
+const sameTuple = (left, right) => left && right && ['key_purpose', 'credential_format', 'algorithm']
+  .every((field) => left[field] === right[field]);
 
 const organizationSlug = (name, organizationId) => (
   String(name || organizationId || '')
@@ -54,13 +41,6 @@ const organizationSlug = (name, organizationId) => (
     .replace(/^-+|-+$/g, '')
     .slice(0, 64)
 );
-
-const defaultIssuerDid = (name, organizationId) => {
-  const host = typeof window !== 'undefined' ? window.location.host : '';
-  const didHost = host.replace(/:/g, '%3A');
-  const slug = organizationSlug(name, organizationId);
-  return didHost && slug ? `did:web:${didHost}:orgs:${slug}` : '';
-};
 
 export default function IssuerIdentityWizard() {
   const navigate = useNavigate();
@@ -73,25 +53,59 @@ export default function IssuerIdentityWizard() {
   );
   const displayName = activeOrganization?.display_name || activeOrganization?.name || organizationName;
   const [issuerDid, setIssuerDid] = useState('');
-  const [keyPurpose, setKeyPurpose] = useState('vc_jwt_issuer');
-  const [credentialFormat, setCredentialFormat] = useState('SD_JWT_VC');
-  const [algorithm, setAlgorithm] = useState('ES256');
+  const [selection, setSelection] = useState(null);
+  const [snapshot, setSnapshot] = useState(null);
+  const [refresh, setRefresh] = useState(0);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
+  const epochRef = useRef(0);
+
+  useLayoutEffect(() => {
+    epochRef.current += 1;
+    setIssuerDid('');
+    setSelection(null);
+    setError('');
+    setSubmitting(false);
+    return () => { epochRef.current += 1; };
+  }, [activeOrgId]);
 
   useEffect(() => {
-    setIssuerDid(defaultIssuerDid(displayName, activeOrgId));
-  }, [activeOrgId, displayName]);
+    let current = true;
+    setSnapshot(null);
+    if (activeOrgId) {
+      issuerIdentitiesApi.getIssuerIdentityCapabilities({ organization_id: activeOrgId })
+        .then((data) => {
+          if (!current) return;
+          setSnapshot({ organizationId: activeOrgId, data });
+          setSelection((previous) => (previous
+            ? data.creation_options.find((option) => sameTuple(option, previous)) || null
+            : data.creation_options[0] || null));
+          setIssuerDid((previous) => previous || (data.managed_issuer_did_prefix
+            ? `${data.managed_issuer_did_prefix}${organizationSlug(displayName, activeOrgId)}` : ''));
+        })
+        .catch((loadError) => {
+          if (current) setSnapshot({ organizationId: activeOrgId, error: loadError });
+        });
+    }
+    return () => { current = false; };
+  }, [activeOrgId, displayName, refresh]);
 
-  const formats = FORMATS_BY_PURPOSE[keyPurpose] || [];
-  const algorithms = ALGORITHMS_BY_PURPOSE[keyPurpose] || [];
+  const capabilities = snapshot?.organizationId === activeOrgId ? snapshot.data : null;
+  const options = capabilities?.creation_options || [];
+  const selected = options.find((option) => sameTuple(option, selection));
+  const keyPurpose = selected?.key_purpose || '';
+  const credentialFormat = selected?.credential_format || '';
+  const algorithm = selected?.algorithm || '';
+  const purposes = [...new Set(options.map((option) => option.key_purpose))];
+  const formats = [...new Set(options.filter((option) => option.key_purpose === keyPurpose)
+    .map((option) => option.credential_format))];
+  const algorithms = options.filter((option) => option.key_purpose === keyPurpose
+    && option.credential_format === credentialFormat).map((option) => option.algorithm);
 
   const changePurpose = (nextPurpose) => {
-    const nextFormats = FORMATS_BY_PURPOSE[nextPurpose] || [];
-    const nextAlgorithms = ALGORITHMS_BY_PURPOSE[nextPurpose] || [];
-    setKeyPurpose(nextPurpose);
-    setCredentialFormat(nextFormats.includes(credentialFormat) ? credentialFormat : nextFormats[0]);
-    setAlgorithm(nextAlgorithms.includes(algorithm) ? algorithm : nextAlgorithms[0]);
+    setSelection(options.find((option) => option.key_purpose === nextPurpose
+      && option.credential_format === credentialFormat && option.algorithm === algorithm)
+      || options.find((option) => option.key_purpose === nextPurpose) || null);
   };
 
   const submit = async (event) => {
@@ -100,26 +114,45 @@ export default function IssuerIdentityWizard() {
       setError('Select an organization before creating an issuer identity.');
       return;
     }
+    if (!selected || !capabilities?.managed_issuer_did_prefix) {
+      setError('Load available issuer capabilities and select a supported identity.');
+      return;
+    }
     if (!issuerDid.trim().startsWith('did:')) {
       setError('Enter a valid DID. New managed identities currently use a local path-scoped did:web.');
       return;
     }
     setSubmitting(true);
     setError('');
+    const epoch = epochRef.current;
     try {
-      const result = await signingKeysApi.createIssuerIdentity({
+      const current = await issuerIdentitiesApi.getIssuerIdentityCapabilities({ organization_id: activeOrgId });
+      if (epoch !== epochRef.current) return;
+      if (!current.creation_options.some((option) => sameTuple(option, selected))) {
+        setSnapshot({ organizationId: activeOrgId, data: current });
+        setSelection(null);
+        setError('Issuer capabilities changed. Choose an available identity before submitting.');
+        return;
+      }
+      if (!current.managed_issuer_did_prefix || !issuerDid.trim().startsWith(current.managed_issuer_did_prefix)) {
+        setError('Use the deployment DID prefix shown by the issuer service. Refresh capabilities if publication settings changed.');
+        return;
+      }
+      const result = await issuerIdentitiesApi.createIssuerIdentity({
         organization_id: activeOrgId,
         issuer_did: issuerDid.trim(),
         key_purpose: keyPurpose,
         credential_format: credentialFormat,
         algorithm,
       });
+      if (epoch !== epochRef.current) return;
       showNotification?.(
         result?.created ? 'Issuer identity created.' : 'Issuer identity already exists.',
         'success',
       );
       navigate('/console/org/deploy/issuer-identity');
     } catch (requestError) {
+      if (epoch !== epochRef.current) return;
       setError(
         requestError?.response?.error?.message
         || requestError?.response?.data?.detail
@@ -128,7 +161,7 @@ export default function IssuerIdentityWizard() {
         || 'Issuer identity creation failed.',
       );
     } finally {
-      setSubmitting(false);
+      if (epoch === epochRef.current) setSubmitting(false);
     }
   };
 
@@ -146,26 +179,37 @@ export default function IssuerIdentityWizard() {
           <Box>
             <Typography variant="h4" gutterBottom>Create issuer identity</Typography>
             <Typography color="text.secondary">
-              Choose the public DID and signing compatibility. Marty resolves and provisions the authorized
-              issuer profile and managed custody internally.
+              Choose a public DID and a signing option available to your organization.
             </Typography>
           </Box>
 
           <Alert severity="info">
-            No profile ID, signing service, key reference, KMS provider, or key material crosses this API.
-            Private keys remain in managed custody and every signature is made through the resolved issuer profile.
+            Private keys remain in managed custody. You can share the public identity after creation.
           </Alert>
 
           {!activeOrgId && <Alert severity="warning">Select an organization to continue.</Alert>}
           {error && <Alert severity="error">{error}</Alert>}
+          {activeOrgId && !snapshot && <Alert severity="info">Loading available issuer identities...</Alert>}
+          {snapshot?.organizationId === activeOrgId && snapshot.error && (
+            <Alert severity="error">Issuer capabilities could not be loaded. {snapshot.error.message}</Alert>
+          )}
+          {capabilities && options.length === 0 && (
+            <Alert severity="warning">No compatible issuer creation options are available for this organization. Ask an operator to check issuer configuration and publication settings.</Alert>
+          )}
+          <Button onClick={() => setRefresh((value) => value + 1)} disabled={!activeOrgId || submitting}>
+            Refresh issuer capabilities
+          </Button>
 
           <TextField
             required
             fullWidth
             label="Issuer DID"
-            value={issuerDid}
+            value={capabilities ? issuerDid : ''}
+            disabled={!capabilities || submitting}
             onChange={(event) => setIssuerDid(event.target.value)}
-            helperText="Use this deployment's path-scoped did:web identifier. External DIDs require resolver-backed proof of control."
+            helperText={capabilities?.managed_issuer_did_prefix
+              ? `Deployment DID prefix: ${capabilities.managed_issuer_did_prefix}`
+              : 'The issuer service supplies the deployment DID prefix.'}
             slotProps={{ htmlInput: { spellCheck: false } }}
           />
 
@@ -176,10 +220,11 @@ export default function IssuerIdentityWizard() {
               labelId="issuer-purpose-label"
               label="Signing purpose"
               value={keyPurpose}
+              disabled={!capabilities || submitting}
               onChange={(event) => changePurpose(event.target.value)}
             >
-              {PURPOSES.map((purpose) => (
-                <MenuItem key={purpose.value} value={purpose.value}>{purpose.label}</MenuItem>
+              {purposes.map((purpose) => (
+                <MenuItem key={purpose} value={purpose}>{PURPOSE_LABELS[purpose] || purpose.replaceAll('_', ' ')}</MenuItem>
               ))}
             </Select>
           </FormControl>
@@ -191,7 +236,11 @@ export default function IssuerIdentityWizard() {
               labelId="issuer-format-label"
               label="Credential format"
               value={credentialFormat}
-              onChange={(event) => setCredentialFormat(event.target.value)}
+              disabled={!selected || submitting}
+              onChange={(event) => setSelection(options.find((option) => option.key_purpose === keyPurpose
+                && option.credential_format === event.target.value && option.algorithm === algorithm)
+                || options.find((option) => option.key_purpose === keyPurpose
+                  && option.credential_format === event.target.value) || null)}
             >
               {formats.map((format) => <MenuItem key={format} value={format}>{format}</MenuItem>)}
             </Select>
@@ -204,7 +253,9 @@ export default function IssuerIdentityWizard() {
               labelId="issuer-algorithm-label"
               label="Algorithm"
               value={algorithm}
-              onChange={(event) => setAlgorithm(event.target.value)}
+              disabled={!selected || submitting}
+              onChange={(event) => setSelection(options.find((option) => option.key_purpose === keyPurpose
+                && option.credential_format === credentialFormat && option.algorithm === event.target.value) || null)}
             >
               {algorithms.map((value) => <MenuItem key={value} value={value}>{value}</MenuItem>)}
             </Select>
@@ -214,7 +265,7 @@ export default function IssuerIdentityWizard() {
             <Button onClick={() => navigate('/console/org/deploy/issuer-identity')} disabled={submitting}>
               Cancel
             </Button>
-            <Button type="submit" variant="contained" disabled={submitting || !activeOrgId}>
+            <Button type="submit" variant="contained" disabled={submitting || !activeOrgId || !selected || !capabilities?.managed_issuer_did_prefix}>
               {submitting ? <CircularProgress size={22} /> : 'Create managed identity'}
             </Button>
           </Stack>

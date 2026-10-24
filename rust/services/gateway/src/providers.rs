@@ -173,10 +173,18 @@ impl ResourceOwnerProvider for HttpGatewayProvider {
         let body = self.bounded_body(response).await?;
         let value: serde_json::Value = serde_json::from_slice(&body)
             .map_err(|_| SecurityError::InvalidAuthenticationResult)?;
-        // System compliance profiles deliberately have no tenant owner. Keep
-        // normal gateway membership/scope authorization and native immutability;
-        // do not mistake this explicit catalog shape for a failed owner lookup.
-        if service == "compliance-profiles"
+        // System catalog entries deliberately have no tenant owner. Keep normal
+        // gateway membership/scope authorization and native immutability; do not
+        // mistake these explicit catalog shapes for failed owner lookups.
+        let ownerless_system_catalog_entry = service == "compliance-profiles"
+            || (service == "credential-templates"
+                && path
+                    .strip_prefix("/v1/delivery-destinations/")
+                    .filter(|id| !id.is_empty() && !id.contains('/'))
+                    .is_some_and(|id| {
+                        value.get("id").and_then(serde_json::Value::as_str) == Some(id)
+                    }));
+        if ownerless_system_catalog_entry
             && value.get("is_system").and_then(serde_json::Value::as_bool) == Some(true)
             && value
                 .get("organization_id")
@@ -722,6 +730,33 @@ mod tests {
             {
                 (StatusCode::OK, Json(json!({"organization_id": "org-2"})))
             }
+            "/v1/delivery-destinations/dd-elevenid-wallet" => (
+                StatusCode::OK,
+                Json(json!({
+                    "id": "dd-elevenid-wallet",
+                    "is_system": true,
+                    "organization_id": null
+                })),
+            ),
+            "/v1/delivery-destinations/tenant-ownerless" => (
+                StatusCode::OK,
+                Json(json!({
+                    "id": "tenant-ownerless",
+                    "is_system": false,
+                    "organization_id": null
+                })),
+            ),
+            "/v1/delivery-destinations/malformed" => {
+                (StatusCode::OK, Json(json!({"unexpected": true})))
+            }
+            "/v1/delivery-destinations/mismatched" => (
+                StatusCode::OK,
+                Json(json!({
+                    "id": "dd-elevenid-wallet",
+                    "is_system": true,
+                    "organization_id": null
+                })),
+            ),
             "/malformed" => (StatusCode::OK, Json(json!({"unexpected": true}))),
             "/system-profile" => (StatusCode::OK, Json(json!({"is_system": true}))),
             "/system-profile-null" => (
@@ -823,6 +858,57 @@ mod tests {
             assert!(provider
                 .resolve_organization(
                     "compliance-profiles",
+                    path,
+                    &ResourceOwnerContext::default()
+                )
+                .await
+                .is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn system_delivery_destination_is_ownerless_without_relaxing_other_catalog_entries() {
+        let url = fixture_url().await;
+        let provider = HttpGatewayProvider::new(
+            BTreeMap::from([
+                ("credential-templates".into(), url.clone()),
+                ("trust-profiles".into(), url),
+            ]),
+            "internal-secret",
+            None,
+            None,
+            Some(4096),
+        )
+        .unwrap();
+        let system_path = "/v1/delivery-destinations/dd-elevenid-wallet";
+        assert_eq!(
+            provider
+                .resolve_organization(
+                    "credential-templates",
+                    system_path,
+                    &ResourceOwnerContext::default()
+                )
+                .await
+                .unwrap(),
+            None
+        );
+        assert!(provider
+            .resolve_organization(
+                "trust-profiles",
+                system_path,
+                &ResourceOwnerContext::default()
+            )
+            .await
+            .is_err());
+        for path in [
+            "/v1/delivery-destinations/tenant-ownerless",
+            "/v1/delivery-destinations/malformed",
+            "/v1/delivery-destinations/mismatched",
+            "/system-profile-null",
+        ] {
+            assert!(provider
+                .resolve_organization(
+                    "credential-templates",
                     path,
                     &ResourceOwnerContext::default()
                 )

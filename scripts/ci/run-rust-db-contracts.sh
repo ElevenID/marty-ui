@@ -67,6 +67,7 @@ fi
 MARTY_TEST_REDIS_URL="$signing_disposable_redis_url" \
   run_timed issuer_profile "${issuer_profile_contracts[0]}" \
     redis_round_trip_preserves_profile_crud_selection_and_tenant_scope \
+    issuer_capabilities::issuer_capabilities_follow_live_tenant_registry_updates \
     --ignored --exact --test-threads=1
 test -x target/debug/credential-template-postgres-contract
 test -x target/debug/presentation-policy-postgres-contract
