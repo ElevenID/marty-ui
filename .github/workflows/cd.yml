@@ -794,24 +794,30 @@ jobs:
           retention-days: 90
 
   official-interoperability:
+    name: Collect seven official candidate lanes
     needs: [resolve-transaction, prepare-official-candidate]
     permissions:
       contents: read
       packages: read
       attestations: read
-    uses: ElevenID/marty-integration-tests/.github/workflows/official-interoperability.yml@dc03eeb086cc9b316acfc59bab9a6a4cb5eae1d3
+    uses: ElevenID/marty-integration-tests/.github/workflows/official-interoperability.yml@f35d78f453bac324ac82d40ea4520f1771b83efe
     with:
       lane: all
+      collect_only: true
       candidate_artifact: stack-release-official-candidate-${{ github.run_id }}
       candidate_manifest_sha256: ${{ needs.prepare-official-candidate.outputs.manifest_sha256 }}
       candidate_tag: ${{ needs.resolve-transaction.outputs.tag }}
-      harness_revision: dc03eeb086cc9b316acfc59bab9a6a4cb5eae1d3
+      harness_revision: f35d78f453bac324ac82d40ea4520f1771b83efe
 
   official-gate-evidence:
     needs: [resolve-transaction, prepare-official-candidate, official-interoperability]
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      actions: read
+    env:
+      SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
+      HARNESS_SHA: f35d78f453bac324ac82d40ea4520f1771b83efe
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -823,26 +829,47 @@ jobs:
         with:
           name: stack-release-official-candidate-${{ github.run_id }}
           path: candidate
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
-        with:
-          pattern: official-*-${{ github.run_id }}-${{ github.run_attempt }}
-          path: official-summaries
-      - name: Require seven passing candidate-bound official lanes
-        env:
-          SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
+      - name: Build the shared official evidence validator
         shell: bash
-        run: |
-          set -euo pipefail
-          cargo run --locked --manifest-path rust/Cargo.toml -p marty-release-evidence \
-            --bin validate-official-suite -- candidate/stack-manifest.json "$SOURCE_SHA" \
-            dc03eeb086cc9b316acfc59bab9a6a4cb5eae1d3 "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" \
-            official-summaries > official-interoperability.json
+        run: >-
+          cargo build --locked --manifest-path rust/Cargo.toml -p marty-release-evidence
+          --bin validate-official-suite --target-dir official-gate-tools
+      - name: Freeze or revalidate the complete same-run official evidence
+        id: freeze
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: >-
+          python scripts/official_review_gate.py snapshot
+          --validator official-gate-tools/debug/validate-official-suite
+          --manifest candidate/stack-manifest.json
+          --source "$SOURCE_SHA" --harness "$HARNESS_SHA"
+          --run-id "$GITHUB_RUN_ID" --current-attempt "$GITHUB_RUN_ATTEMPT"
+      - name: Preserve immutable review inputs before requiring approval
+        if: steps.freeze.outputs.frozen_new == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: official-review-input-${{ github.run_id }}
+          path: official-review-input/
+          if-no-files-found: error
+          retention-days: 90
+      - name: Qualify raw suite results and exact protected-main reviews
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: >-
+          python scripts/official_review_gate.py qualify
+          --validator official-gate-tools/debug/validate-official-suite
+          --manifest candidate/stack-manifest.json
+          --source "$SOURCE_SHA" --harness "$HARNESS_SHA"
+          --run-id "$GITHUB_RUN_ID" --current-attempt "$GITHUB_RUN_ATTEMPT"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: stack-release-official-gate-${{ github.run_id }}
           path: |
             official-interoperability.json
-            official-summaries/
+            official-review-input/
+            official-review-authorization/
           if-no-files-found: error
           retention-days: 90
 
