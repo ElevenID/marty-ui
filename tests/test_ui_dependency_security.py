@@ -6,12 +6,16 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SECURITY_OVERRIDES = {
-    "brace-expansion": "5.0.12",
-    "browserslist": "4.28.9",
-    "fast-uri": "4.1.5",
-    "follow-redirects": "1.16.1",
-    "qs": "6.16.0",
+SECURITY_FLOORS = {
+    "body-parser": (1, 20, 9),
+    "brace-expansion": (5, 0, 12),
+    "browserslist": (4, 28, 9),
+    # Match Ajv's major-3 API rather than forcing an incompatible major 4.
+    "fast-uri": (3, 1, 9),
+    "follow-redirects": (1, 16, 1),
+    "qs": (6, 16, 0),
+    "undici": (8, 12, 2),
+    "zod": (4, 6, 7),
 }
 
 
@@ -27,16 +31,25 @@ def test_ui_security_overrides_are_pinned_in_both_lockfiles() -> None:
         '  "packages": {', 1
     )[0]
 
-    for dependency, version in SECURITY_OVERRIDES.items():
-        assert package["overrides"][dependency] == version
-        assert npm_lock["packages"][f"node_modules/{dependency}"]["version"] == version
+    for dependency, floor in SECURITY_FLOORS.items():
+        version = package["overrides"][dependency]
+        assert re.fullmatch(r"\d+\.\d+\.\d+", version)
+        resolved = tuple(map(int, version.split(".")))
+        assert resolved[0] == floor[0] and resolved >= floor
+        # npm can correctly nest a compatible dependency under its consumer.
+        # Check every resolved copy, so nesting cannot hide an old version.
+        npm_versions = [
+            metadata["version"] for path, metadata in npm_lock["packages"].items()
+            if path.endswith(f"node_modules/{dependency}")
+        ]
+        assert npm_versions and set(npm_versions) == {version}
         assert f'"{dependency}": "{version}"' in bun_overrides
-        assert re.search(
-            rf'^    "{re.escape(dependency)}": '
-            rf'\["{re.escape(dependency)}@{re.escape(version)}"',
+        bun_versions = re.findall(
+            rf'^    "[^"]+": \["{re.escape(dependency)}@([^"]+)"',
             bun_lock,
             re.MULTILINE,
         )
+        assert bun_versions and set(bun_versions) == {version}
 
 
 def test_security_job_rejects_a_stale_bun_lock_before_auditing() -> None:
