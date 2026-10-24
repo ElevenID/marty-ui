@@ -22,11 +22,13 @@ import uuid
 from pathlib import Path
 
 if __package__:
+    from .pinned_openbao_image import require_pinned_openbao
     from .qualify_selfhost_migrations import (
         PRIVATE_KEY_CONTENT_QUERY,
         PRIVATE_KEY_SCHEMA_QUERY,
     )
 else:
+    from pinned_openbao_image import require_pinned_openbao
     from qualify_selfhost_migrations import (
         PRIVATE_KEY_CONTENT_QUERY,
         PRIVATE_KEY_SCHEMA_QUERY,
@@ -66,18 +68,7 @@ def require_docker(*args: str, timeout: int = 120) -> str:
 
 def pull_pinned_openbao() -> None:
     """Retry only the public, immutable image fetch; never replay a policy operation."""
-    if docker("image", "inspect", IMAGE).returncode == 0:
-        return
-    for attempt in range(3):
-        try:
-            fetched = docker("pull", IMAGE).returncode == 0
-        except subprocess.TimeoutExpired:
-            fetched = False
-        if fetched:
-            return
-        if attempt < 2:
-            time.sleep(2 ** attempt)
-    raise RuntimeError("Pinned disposable OpenBao image is unavailable")
+    require_pinned_openbao(IMAGE, runner=docker, pause=time.sleep)
 
 
 def ensure(condition: bool, operation: str) -> None:

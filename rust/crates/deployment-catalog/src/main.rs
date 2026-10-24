@@ -443,6 +443,37 @@ fn run() -> Result<(), String> {
                     issuer.as_bytes(),
                 )
             }
+            Some("custody-signer") if args.len() == 2 => {
+                let mut input = Vec::new();
+                std::io::stdin()
+                    .take(64 * 1024 + 1)
+                    .read_to_end(&mut input)
+                    .map_err(|_| REFUSAL)?;
+                if input.len() > 64 * 1024 {
+                    return Err(REFUSAL.into());
+                }
+                let context: Value = serde_json::from_slice(&input).map_err(|_| REFUSAL)?;
+                let (version, public_pem) = operator::custody_signer(
+                    &context["metadata"],
+                    context["version_one"].as_bool().ok_or(REFUSAL)?,
+                )?;
+                serde_json::to_writer(
+                    std::io::stdout(),
+                    &serde_json::json!({"version":version,"public_pem":public_pem}),
+                )
+                .map_err(|_| REFUSAL)
+            }
+            Some("ed25519-pem") if args.len() == 2 => {
+                let mut input = Vec::new();
+                std::io::stdin()
+                    .take(64 * 1024 + 1)
+                    .read_to_end(&mut input)
+                    .map_err(|_| REFUSAL)?;
+                let pem = operator::ed25519_pem(std::str::from_utf8(&input).map_err(|_| REFUSAL)?)?;
+                std::io::stdout()
+                    .write_all(pem.as_bytes())
+                    .map_err(|_| REFUSAL)
+            }
             Some("public-spki" | "certificate-spki" | "ed25519-spki") if args.len() == 2 => {
                 let mut input = Vec::new();
                 std::io::stdin()

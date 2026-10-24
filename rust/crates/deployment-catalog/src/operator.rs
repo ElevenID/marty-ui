@@ -6,16 +6,45 @@ use std::io::{Read, Seek};
 pub const REFUSAL: &str = "KMS operator input refused";
 pub type Result<T> = std::result::Result<T, &'static str>;
 
-/// Fixed-version remote signers must not acquire export/backup authority.
-pub(crate) fn version_one_custody(metadata: &serde_json::Value, kind: &str) -> Result<()> {
+fn custody_version(metadata: &serde_json::Value, kind: &str) -> Result<u64> {
     if metadata["type"] != kind
         || metadata["exportable"] != false
         || metadata["allow_plaintext_backup"] != false
-        || metadata["latest_version"].as_u64() != Some(1)
     {
         return Err(REFUSAL);
     }
+    metadata["latest_version"]
+        .as_u64()
+        .filter(|v| *v > 0)
+        .ok_or(REFUSAL)
+}
+
+/// Fixed-version remote signers must not acquire export/backup authority.
+pub(crate) fn version_one_custody(metadata: &serde_json::Value, kind: &str) -> Result<()> {
+    if custody_version(metadata, kind)? != 1 {
+        return Err(REFUSAL);
+    }
     Ok(())
+}
+
+/// Read only the current public key, optionally enforcing provisioning's version-one contract.
+pub fn custody_signer(metadata: &serde_json::Value, version_one: bool) -> Result<(u64, String)> {
+    let version = custody_version(metadata, "ed25519")?;
+    if version_one && version != 1 {
+        return Err(REFUSAL);
+    }
+    let encoded = metadata["keys"][version.to_string()]["public_key"]
+        .as_str()
+        .ok_or(REFUSAL)?;
+    Ok((version, ed25519_pem(encoded)?))
+}
+
+pub fn ed25519_pem(encoded: &str) -> Result<String> {
+    use base64::{engine::general_purpose::STANDARD, Engine};
+    Ok(format!(
+        "-----BEGIN PUBLIC KEY-----\n{}\n-----END PUBLIC KEY-----\n",
+        STANDARD.encode(ed25519_spki(encoded)?)
+    ))
 }
 
 /// Decode OpenBao's canonical, public-only Ed25519 value as standard SPKI.

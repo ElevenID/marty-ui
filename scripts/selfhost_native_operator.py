@@ -78,7 +78,7 @@ def operator_bytes(root: Path, *args: str, input: bytes | None = None) -> bytes:
     # Inventory combines the former token and certificate read-only phases.
     if args[1:2] == ("renewal-inventory",):
         timeout = 600
-    if os.environ.get("MARTY_DEPLOY_BIN", "").strip() and args[1:2] in (("public-spki",), ("certificate-spki",), ("ed25519-spki",),
+    if os.environ.get("MARTY_DEPLOY_BIN", "").strip() and args[1:2] in (("public-spki",), ("certificate-spki",), ("ed25519-spki",), ("ed25519-pem",), ("custody-signer",),
                                                                  ("certificate-lifetime",), ("certificate-chain",),
                                                                  ("certificate-expiry",), ("replacement-ca",)):
         timeout = 10

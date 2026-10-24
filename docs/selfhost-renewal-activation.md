@@ -19,6 +19,13 @@ use a source-build fallback under sudo. Mutating provisioning has no overall
 kill timeout; individual HTTPS operations remain bounded. Exit 3 requires
 operator reconciliation of potentially live authority before retrying.
 
+Custody evidence uses the same native public-key and non-exportability checks.
+Read-only journey/fixture consumers may inspect the current positive signer
+version; initial provisioning, refresh and evidence bootstrap still require
+version one. Native conversion accepts only canonical 32-byte Ed25519 public
+values. Root/operator file ownership, pending-token preservation and revocation
+recovery remain with their existing owners.
+
 Generation assembly reuses the Rust workload identity inventory. It preserves
 exact static bytes, active file modes, exclusive creation, distinct scoped tokens
 and the separate overlap/retirement ceremonies. Failure removes only files

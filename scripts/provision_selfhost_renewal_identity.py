@@ -19,9 +19,6 @@ from selfhost_native_operator import OperatorCleanupError, approle_operation, ap
 from selfhost_operator_inputs import private_file, private_empty_or_source  # noqa: E402
 from selfhost_operator_inputs import write_private as write_private  # noqa: E402
 from selfhost_openbao_client import (Bao, RENEWAL_LEAF_ROLE, RENEWAL_OPERATOR_POLICY)  # noqa: E402
-from selfhost_approle_rotation import (  # noqa: E402
-    RotationSpec,
-)
 
 
 AUTH_MOUNT = "selfhost-renew"
@@ -32,8 +29,6 @@ ROLE_ID_FILE = "renewal-role-id"
 SECRET_ID_FILE = "renewal-secret-id"
 TOKEN_FILE = "renewal-operator-token"
 POLICY_NAMES_FILE = "renewal-leaf-policies.json"
-ROTATION = RotationSpec(AUTH_MOUNT, APPROLE, ROLE_ID_FILE, SECRET_ID_FILE,
-                        "", "renewal")
 
 
 def existing_policy_names(bao: Bao, current: Path) -> list[str]:
