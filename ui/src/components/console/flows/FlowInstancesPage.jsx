@@ -63,9 +63,11 @@ function ExecutionActions({ instance, organizationId, loading, reload }) {
   const [requiresRefresh, setRequiresRefresh] = useState(false);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   useEffect(() => { setAction(null); setError(''); setRequiresRefresh(false); }, [instance]);
-  const advance = !grantsLoading && can('flow-instance', 'advance');
-  const cancel = !grantsLoading && can('flow-instance', 'cancel');
-  if (!['in_progress', 'awaiting_wallet'].includes(instance.status) || (!advance && !cancel)) return null;
+  const advance = ['in_progress', 'awaiting_wallet'].includes(instance.status)
+    && !grantsLoading && can('flow-instance', 'advance');
+  const cancel = ['pending', 'in_progress', 'awaiting_wallet', 'awaiting_approval', 'awaiting_evidence'].includes(instance.status)
+    && !grantsLoading && can('flow-instance', 'cancel');
+  if (!advance && !cancel) return null;
   const disabled = loading || busy || requiresRefresh;
   const confirm = async () => {
     if (disabled || !action || (action === 'cancel' ? !cancel : !advance)) return;

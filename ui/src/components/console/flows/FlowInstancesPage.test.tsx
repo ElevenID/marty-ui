@@ -192,6 +192,28 @@ describe('FlowInstancesPage', () => {
     expect(mockAdvance).not.toHaveBeenCalled(); expect(mockCancel).not.toHaveBeenCalled();
   });
 
+  it.each(['PENDING', 'AWAITING_APPROVAL', 'AWAITING_EVIDENCE'])('allows confirmed cancellation of %s without offering step advancement', async (status) => {
+    const waiting = { ...active, status };
+    mockGetFlowInstance.mockResolvedValueOnce(waiting).mockResolvedValueOnce(waiting).mockResolvedValue({ ...waiting, status: 'CANCELLED' });
+    mockCancel.mockResolvedValue({ ...waiting, status: 'CANCELLED' });
+    const user = userEvent.setup();
+    renderWithRouter(<FlowInstancesPage />, { initialEntries: ['/console/org/operate/flow-instances/exec_1'] });
+    await user.click(await screen.findByRole('button', { name: 'Cancel execution' }));
+    expect(screen.queryByRole('button', { name: 'Record successful step' })).not.toBeInTheDocument();
+    expect(mockCancel).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: 'Confirm cancellation' }));
+    await waitFor(() => expect(mockCancel).toHaveBeenCalledWith('flow_1', 'exec_1'));
+    expect(mockAdvance).not.toHaveBeenCalled();
+  });
+
+  it.each(['COMPLETED', 'FAILED', 'CANCELLED', 'EXPIRED', 'UNKNOWN'])('offers no execution mutations for %s', async (status) => {
+    mockGetFlowInstance.mockResolvedValue({ ...active, status });
+    renderWithRouter(<FlowInstancesPage />, { initialEntries: ['/console/org/operate/flow-instances/exec_1'] });
+    expect(await screen.findByText('Runtime timeline')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Cancel execution' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Record successful step' })).not.toBeInTheDocument();
+  });
+
   it('checks the independent cancellation grant without offering unauthorized advancement', async () => {
     scope.advance = false; mockGetFlowInstance.mockResolvedValue(active);
     renderWithRouter(<FlowInstancesPage />, { initialEntries: ['/console/org/operate/flow-instances/exec_1'] });
