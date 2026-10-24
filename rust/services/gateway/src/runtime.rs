@@ -6639,6 +6639,27 @@ mod tests {
             .into_response()
     }
 
+    async fn ownerless_system_delivery_destination(request: Request) -> Response {
+        assert_eq!(
+            request.uri().path(),
+            "/v1/delivery-destinations/dd-elevenid-wallet"
+        );
+        assert_eq!(request.headers().get("x-user-id").unwrap(), "user-1");
+        assert_eq!(
+            request.headers().get("x-service-token").unwrap(),
+            "service-secret"
+        );
+        (
+            StatusCode::OK,
+            Json(json!({
+                "id": "dd-elevenid-wallet",
+                "is_system": true,
+                "organization_id": null
+            })),
+        )
+            .into_response()
+    }
+
     #[tokio::test]
     async fn native_owner_failure_is_opaque_and_stops_before_proxy() {
         let contract: Value = serde_json::from_str(include_str!(
@@ -8625,6 +8646,51 @@ mod tests {
                 assert_eq!(calls[0].1.header("x-organization-id"), Some("org-1"));
             }
         }
+    }
+
+    #[tokio::test]
+    async fn authorized_system_delivery_destination_read_uses_the_selected_organization() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("owner fixture listener");
+        let origin = format!("http://{}", listener.local_addr().expect("fixture address"));
+        tokio::spawn(async move {
+            axum::serve(
+                listener,
+                Router::new().fallback(axum::routing::any(ownerless_system_delivery_destination)),
+            )
+            .await
+            .expect("owner fixture server");
+        });
+        let owners = HttpGatewayProvider::new(
+            BTreeMap::from([("credential-templates".into(), origin)]),
+            "internal-signing-key",
+            None,
+            Some("service-secret".into()),
+            Some(4_096),
+        )
+        .expect("HTTP owner provider");
+        let recorder = Arc::new(ActorRecordingUpstream::default());
+        let mut state = runtime_state_with_upstream(Arc::new(NoOwner), recorder.clone());
+        let owned = Arc::get_mut(&mut state).expect("unique runtime state");
+        owned.memberships = Arc::new(SingleGrantMembership("wallet:view"));
+        owned.owners = Arc::new(owners);
+
+        let response = gateway_router(state)
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/delivery-destinations/dd-elevenid-wallet?organization_id=org-1")
+                    .header("cookie", "sessionId=valid")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("gateway response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let calls = recorder.0.lock().expect("upstream calls");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, "credential-templates");
+        assert_eq!(calls[0].1.header("x-organization-id"), Some("org-1"));
     }
 
     #[tokio::test]
