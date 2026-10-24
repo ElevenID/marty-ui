@@ -136,3 +136,20 @@ def test_private_operator_directory_retains_source_and_permission_boundaries(tmp
     link.symlink_to(source, target_is_directory=True)
     with pytest.raises(ValueError):
         handoff.private_operator_directory(link, source)
+
+
+
+def test_writer_failure_preserves_a_competing_replacement(tmp_path, monkeypatch):
+    output = tmp_path / "output"
+    displaced = tmp_path / "our-file"
+    victim = tmp_path / "competing"
+    victim.write_text("preserve")
+    def replace_then_fail(*_):
+        output.rename(displaced)
+        output.symlink_to(victim)
+        raise OSError("synthetic concurrent replacement")
+    monkeypatch.setattr(handoff.os, "fchmod", replace_then_fail)
+    with pytest.raises(OSError):
+        handoff.write_owned(output, "new", 0o400, tmp_path.stat())
+    assert output.is_symlink() and victim.read_text() == "preserve"
+    assert displaced.read_text() == "new"

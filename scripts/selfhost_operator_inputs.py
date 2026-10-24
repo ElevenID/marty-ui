@@ -71,6 +71,7 @@ def private_operator_directory(path: Path, source_root: Path) -> Path:
 def write_owned(path: Path, value: str, mode: int, owner: os.stat_result) -> None:
     """Create only our file, preserving its install owner and role-specific mode."""
     descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    created = os.fstat(descriptor)
     try:
         with os.fdopen(descriptor, "w", encoding="ascii") as stream:
             stream.write(value)
@@ -79,7 +80,11 @@ def write_owned(path: Path, value: str, mode: int, owner: os.stat_result) -> Non
             stream.flush()
             os.fsync(stream.fileno())
     except Exception:
-        path.unlink(missing_ok=True)
+        try:
+            if os.path.samestat(created, path.lstat()):
+                path.unlink()
+        except FileNotFoundError:
+            pass
         raise
 
 
