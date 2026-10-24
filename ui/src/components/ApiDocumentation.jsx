@@ -124,7 +124,7 @@ function ApiDocumentation() {
       if (!mounted) return;
 
       if (!reachableSpec) {
-        setRedocError('OpenAPI schema is not publicly reachable in this environment (expected endpoint returned 403/404).');
+        setRedocError('The API schema could not be reached. Try again shortly or open the schema directly.');
         return;
       }
 
@@ -330,8 +330,7 @@ function ApiDocumentation() {
               {redocError}
             </Alert>
             <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
-              This beta environment is currently running in tunnel/dev mode. If the gateway blocks
-              the schema endpoint or external script CDNs, the embedded viewer cannot render.
+              You can open the API schema directly using the link below, or try loading this page again later.
             </Typography>
             <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5}>
               <Button variant="outlined" size="small" component="a" href="/openapi.json" target="_blank" rel="noopener noreferrer">
