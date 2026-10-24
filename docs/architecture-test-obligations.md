@@ -117,8 +117,9 @@ complete source/mount/fixture closure, and authorizes no additional skipped
 tests or historical qualification reuse. Any timing cost or later CI speedup
 must be measured rather than inferred from the new records.
 
-The next A0 input slice records the published PostgreSQL and probe image
-references from the existing pinned consumer-range contract with every Canvas
+The merged [A0 image-input slice #1429](https://github.com/ElevenID/marty-ui/pull/1429)
+records the published PostgreSQL and probe image references from the existing
+pinned consumer-range contract with every Canvas
 composition/worker result. It records the contract's byte hash and whether the
 runner exported the canonical PostgreSQL digest or its digest-preserving public
 mirror. CI refuses an unapproved or missing selection before running the test;
