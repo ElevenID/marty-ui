@@ -1177,6 +1177,7 @@ def test_obligation_wrapper_reaps_owned_harness_and_descendant(
     environment.update(
         TMPDIR=str(temporary),
         MARTY_TEST_REDIS_URL="redis://owned-test-only",
+        MARTY_TEST_REDIS_DISPOSABLE_NONCE="owned-test-sentinel",
         MARTY_SIGNAL_PID_DIR=str(tmp_path),
         MARTY_SIGNAL_PYTHON=sys.executable,
     )
