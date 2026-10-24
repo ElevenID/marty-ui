@@ -47,7 +47,7 @@ const getBreadcrumbs = (t) => [
 function PresentationPoliciesPage() {
   const { t } = useTranslation('console');
   const { activeOrgId: organizationId } = useConsole();
-  const { data: policies = [], loading, error } = useAsyncData(
+  const { data: policies = [], loading, error, reload } = useAsyncData(
     () => listPresentationPolicies({ organization_id: organizationId }),
     [organizationId]
   );
@@ -119,7 +119,11 @@ function PresentationPoliciesPage() {
       actions={<TestActions />}
     >
       {error && (
-        <Alert severity="error" sx={{ mb: 3 }}>
+        <Alert
+          severity="error"
+          sx={{ mb: 3 }}
+          action={<Button color="inherit" size="small" onClick={reload}>{t('common.retry', { defaultValue: 'Retry' })}</Button>}
+        >
           {error?.message || String(error)}
         </Alert>
       )}
@@ -132,7 +136,7 @@ function PresentationPoliciesPage() {
 
       {loading ? (
         <LinearProgress />
-      ) : policies.length === 0 ? (
+      ) : error ? null : policies.length === 0 ? (
         <EmptyState
           {...EmptyStates.policies}
           prerequisites={policyPrerequisites}
