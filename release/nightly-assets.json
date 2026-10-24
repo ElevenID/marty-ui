@@ -1,0 +1,24 @@
+{
+  "schema": "elevenid.nightly-installation-assets/v1",
+  "platform": "linux/amd64",
+  "signer_workflow": ".github/workflows/nightly-release.yml",
+  "signed_inputs": [
+    "prepared-selfhost-bundle.zip",
+    "prepared-selfhost-images.json",
+    "prepared-selfhost-bundle.json",
+    "prepared-selfhost-product-descriptor.json",
+    "selfhost-preparation-transaction.json",
+    "SELFHOST-PREVIEW-README.md",
+    "SHA256SUMS",
+    "stack-manifest.json",
+    "nightly-runtime.json",
+    "marty-deploy-linux-amd64",
+    "ui.sbom.cdx.json",
+    "services.sbom.cdx.json",
+    "migrations.sbom.cdx.json",
+    "openbao_didcomm.sbom.cdx.json",
+    "keycloak.sbom.cdx.json",
+    "ui_selfhost.sbom.cdx.json",
+    "cloudflared_wrapper.sbom.cdx.json"
+  ]
+}

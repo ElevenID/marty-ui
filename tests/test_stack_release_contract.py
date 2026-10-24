@@ -358,7 +358,8 @@ def test_operator_release_builds_native_arches_and_verifies_provenance() -> None
         "operator_release_require_remote_allowlist",
         "operator_release_require_checksum_names",
         "cosign verify-blob",
-        '--certificate-identity "https://github.com/$repo/.github/workflows/cd.yml@refs/heads/main"',
+        'signer_workflow=cd.yml',
+        '--certificate-identity "https://github.com/$repo/.github/workflows/$signer_workflow@refs/heads/main"',
         '--source-digest "$source_sha" --source-ref refs/heads/main',
         'test "$("$stage/$asset" --build-identity)" = "$source_sha:$tag"',
     ):

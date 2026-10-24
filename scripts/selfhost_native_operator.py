@@ -33,7 +33,7 @@ def operator_command(root: Path, *args: str) -> list[str]:
             raise RuntimeError("MARTY_DEPLOY_BIN_SHA256 is invalid")
         if not re.fullmatch(r"[0-9a-f]{40}", source_sha):
             raise RuntimeError("MARTY_DEPLOY_SOURCE_SHA is required and must be valid")
-        if not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", release_tag):
+        if not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+(?:-nightly\.20[0-9]{6}\.[1-9][0-9]*)?", release_tag):
             raise RuntimeError("MARTY_DEPLOY_RELEASE_TAG is required and must be valid")
         binary_path = Path(binary)
         if not binary_path.is_file():
