@@ -77,6 +77,7 @@ export function mapCredentialTemplateToCatalogItem(template, organizationName) {
   const apiFormat = typeof template.credential_payload_format === 'string' ? template.credential_payload_format.trim() : '';
   const format = apiFormat ? (formatLabels[apiFormat] || apiFormat) : null;
   const issuanceProtocol = typeof template.issuance_protocol === 'string' ? template.issuance_protocol.trim() || null : null;
+  const walletIssuance = issuanceProtocol === 'OID4VCI_PRE_AUTH' || issuanceProtocol === 'OID4VCI_AUTH_CODE';
 
   return {
     id: template.id,
@@ -99,7 +100,7 @@ export function mapCredentialTemplateToCatalogItem(template, organizationName) {
     format,
     issuanceProtocol,
     standard: null,
-    walletRequirements: format && issuanceProtocol ? `Wallet support required: ${format} with ${issuanceProtocol}.` : null,
+    walletRequirements: format && walletIssuance ? `Wallet support required: ${format} with ${issuanceProtocol}.` : null,
     searchAliases: meta.searchAliases || [],
   };
 }

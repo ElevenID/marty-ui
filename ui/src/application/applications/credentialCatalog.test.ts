@@ -112,6 +112,14 @@ describe('credentialCatalog helpers', () => {
     expect(item.processingTime).toBeUndefined();
   });
 
+  it('keeps physical document configuration distinct from wallet requirements', () => {
+    expect(mapCredentialTemplateToCatalogItem({ id: 'physical', name: 'Passport',
+      credential_type: 'passport', credential_payload_format: 'ICAO_EMRTD', issuance_protocol: 'PHYSICAL_DOCUMENT',
+      validity_rules: { ttl_seconds: 3600 }, claims: [] })).toMatchObject({
+      format: 'ICAO_EMRTD', issuanceProtocol: 'PHYSICAL_DOCUMENT', walletRequirements: null, validityLabel: '3600 seconds',
+    });
+  });
+
   it('extracts existing application ids and filters credentials', () => {
     expect(extractExistingApplicationIds([
       { credential_template_id: 'cfg-1' },
