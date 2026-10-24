@@ -19,13 +19,13 @@
       "id": "trust-profile",
       "kind": "profile",
       "display_name": "Trust Profile",
-      "support_level": "partial",
+      "support_level": "implemented",
       "qualification": "focused_source",
       "owner_service": "trust-profiles",
       "api_paths": ["/v1/trust-profiles", "/v1/trust-profiles/{profile_id}"],
       "ui_paths": ["/console/org/trust/profiles"],
       "schema_refs": ["#/components/schemas/schemas__trust_profile"],
-      "limitations": ["Scoped DID resolution controls are implemented on a separate integration branch and are not yet integrated into this dependent candidate."]
+      "limitations": ["Organization-scoped registry resolution and pinned assertion methods are exposed. Independent public-network DID resolution still depends on the issuer hostname and HTTPS publication."]
     },
     {
       "id": "organization-trust-profile",
@@ -92,12 +92,12 @@
       "kind": "template",
       "display_name": "Application Template",
       "support_level": "implemented",
-      "qualification": "implementation_present",
+      "qualification": "focused_source",
       "owner_service": "issuance",
       "api_paths": ["/v1/application-templates", "/v1/application-templates/{template_id}", "/v1/application-templates/{template_id}/validate"],
       "ui_paths": ["/console/org/templates/applications"],
       "schema_refs": ["#/components/schemas/schemas__application_template"],
-      "limitations": ["Full exact-candidate create-to-use browser qualification remains pending."]
+      "limitations": ["Approval-triggered issuance requires an explicitly configured custom OID4VCI flow. Template lifecycle and synthetic application issuance have been exercised in an isolated runtime; independent-wallet interoperability is not asserted."]
     },
     {
       "id": "presentation-policy",
@@ -109,19 +109,19 @@
       "api_paths": ["/v1/presentation-policies", "/v1/presentation-policies/{policy_id}", "/v1/presentation-policies/{policy_id}/evaluate"],
       "ui_paths": ["/console/org/policies/presentation"],
       "schema_refs": ["#/components/schemas/schemas__presentation_policy"],
-      "limitations": ["Live policy-bound verification with public DID publication remains an integrated qualification gate."]
+      "limitations": ["Policy-bound signature, trust, required-claim and revocation checks have been exercised in an isolated runtime. This does not establish holder authentication or independent public-DID reachability."]
     },
     {
       "id": "deployment-profile",
       "kind": "profile",
       "display_name": "Deployment Profile",
       "support_level": "implemented",
-      "qualification": "implementation_present",
+      "qualification": "focused_source",
       "owner_service": "deployment-profiles",
       "api_paths": ["/v1/deployment-profiles", "/v1/deployment-profiles/{profile_id}"],
       "ui_paths": ["/console/org/deploy/profiles"],
       "schema_refs": ["#/components/schemas/schemas__deployment_profile"],
-      "limitations": ["Dependency consistency and an exact-candidate runtime journey remain to be qualified."]
+      "limitations": ["Profiles bind trust, credential templates, presentation policies and flows. Consistent configuration does not by itself establish that an external deployment is operational."]
     },
     {
       "id": "wallet-profile",
@@ -169,7 +169,7 @@
       "api_paths": ["/v1/signing-keys/issuer-identities", "/v1/signing-keys/issuer-identities/inspection"],
       "ui_paths": ["/console/org/deploy/issuer-identity", "/console/org/deploy/issuer-identity/inspect"],
       "schema_refs": ["#/components/schemas/schemas__issuer_identity"],
-      "limitations": ["Provisioned and publicly resolvable states are distinct; public HTTPS publication and browser qualification remain pending."]
+      "limitations": ["Provisioned and publicly resolvable states are distinct. Managed-signer public material has been checked in an isolated runtime; independent public HTTPS resolution remains a deployment prerequisite."]
     },
     {
       "id": "key-attestation-policy",
@@ -224,12 +224,12 @@
       "kind": "flow",
       "display_name": "Flow Definition",
       "support_level": "implemented",
-      "qualification": "implementation_present",
+      "qualification": "focused_source",
       "owner_service": "flows",
       "api_paths": ["/v1/flows/definitions", "/v1/flows/definitions/{flow_id}"],
       "ui_paths": ["/console/org/flows/definitions"],
       "schema_refs": ["#/components/schemas/schemas__flow"],
-      "limitations": ["Executable profile-composition examples and final browser qualification remain pending."]
+      "limitations": ["Standard flows and custom extensions have distinct execution rules. Approved-application issuance uses a custom OID4VCI extension with a trusted APPLICATION_APPROVED webhook."]
     },
     {
       "id": "flow-execution",
@@ -253,7 +253,7 @@
       "api_paths": ["/v1/issued-credentials", "/v1/issued-credentials/{credential_id}"],
       "ui_paths": ["/console/org/operate/issuance"],
       "schema_refs": [],
-      "limitations": ["Final public DID and non-exportable-KMS issuance/verification browser evidence remains pending."]
+      "limitations": ["Non-exportable KMS SD-JWT issuance and policy verification have been exercised in an isolated runtime. Issued-record browser recovery and independent public-network or wallet qualification remain separate."]
     },
     {
       "id": "verification-decision-result",
