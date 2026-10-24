@@ -13,6 +13,17 @@ const headFingerprint = event => hash(event.headRevisions.map(({ requirementId, 
 const same = (actual, expected, label) => assert.equal(String(actual || ''), String(expected), label);
 const enc = encodeURIComponent;
 
+function requireCaptureWindow(page, phase, { canvasPage, walletPage, popups }) {
+  const observation = { popupCount: popups.length, initialPage: page === canvasPage,
+    observedPopup: popups.includes(page), walletPage: page === walletPage };
+  const expectedPage = phase === 'wallet-receipt-and-verification'
+    ? Boolean(walletPage) && page === walletPage
+    : Boolean(canvasPage) && (page === canvasPage || popups.includes(page));
+  assert.ok(page && popups.length <= 2 && expectedPage,
+    'Uncaptured or unexpected Canvas launch window');
+  return observation;
+}
+
 function requireJobBinding(sync, scope, seen, after) {
   const job = sync?.job;
   same(job?.id, sync?.body?.sync?.job_id, 'Enqueued and completed jobs must match');
@@ -162,7 +173,7 @@ async function runCanvasCapture({ setup, page, adminPage, walletPage, scenario,
     assert.equal(Number(changed.score), value);
   }
   async function correction(prefix) {
-    let denied;
+    let denied, primaryFailure;
     try {
       await grade(40);
       denied = await sync(`${prefix}-deny`, false);
@@ -170,10 +181,17 @@ async function runCanvasCapture({ setup, page, adminPage, walletPage, scenario,
       // Exercise the management boundary while denied, then prove that it
       // neither reserved an offer nor exposed a wallet claim or credential.
       report.pendingOperations.push('scoped-approval');
+      report.currentOperation = `${prefix}-denied-approval-inventory-before`;
       assert.equal((await transactions()).length, 0, 'Unexpected issuance reservation before denied approval');
+      report.currentOperation = `${prefix}-denied-approval-request`;
       const rejection = await marty.post(approvalPath, { review_notes: `Denied Canvas capture ${scenario}` }, [409]);
-      assert.equal(rejection?.detail, 'Canvas application is not ready for approval');
+      report.currentOperation = `${prefix}-denied-approval-detail`;
+      const detail = rejection?.detail ?? (rejection?.error === 'service_error'
+        ? rejection.error_description : undefined);
+      assert.equal(detail, 'Canvas application is not ready for approval');
+      report.currentOperation = `${prefix}-denied-approval-inventory-after`;
       assert.equal((await transactions()).length, 0, 'Denied approval reserved an issuance transaction');
+      report.currentOperation = `${prefix}-denied-claim-state`;
       const state = await unsigned();
       assert.equal(state.claim.available, false, 'Denied approval enabled the wallet claim');
       assert.equal(await page.getByTestId('canvas-claim-action').count(), 0,
@@ -182,9 +200,22 @@ async function runCanvasCapture({ setup, page, adminPage, walletPage, scenario,
         transactionCount: 0, credentialCount: 0, claimAvailable: false };
       report.pendingOperations = report.pendingOperations.filter(operation => operation !== 'scoped-approval');
       await checkpoint(page, 'approval-denied-on-current-evidence', report.deniedApproval);
+    } catch (error) {
+      primaryFailure = error;
+      report.operationFailures ||= [];
+      report.operationFailures.push(stock.contractFailureLocation(error, report.currentOperation));
+      throw error;
     } finally {
       // Always restore the exact synthetic grade, including when denial/readback fails.
-      await grade(95);
+      try {
+        await grade(95);
+      } catch (error) {
+        report.operationFailures ||= [];
+        report.operationFailures.push(stock.contractFailureLocation(error, report.currentOperation));
+        if (primaryFailure) throw new AggregateError([primaryFailure, error],
+          'Canvas negative operation and grade restoration both failed');
+        throw error;
+      }
     }
     let recovered = null;
     for (let attempt = 0; attempt < 4 && !recovered; attempt++) {
@@ -345,4 +376,5 @@ async function runCanvasCapture({ setup, page, adminPage, walletPage, scenario,
   return { page, applicationId, transactionId, credentialId };
 }
 
-module.exports = { requireJobBinding, requireIssuedBinding, requireCaptureMutationReconciliation, runCanvasCapture, readLearnerStatus };
+module.exports = { requireJobBinding, requireIssuedBinding, requireCaptureMutationReconciliation,
+  requireCaptureWindow, runCanvasCapture, readLearnerStatus };

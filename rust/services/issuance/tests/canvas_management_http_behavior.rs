@@ -247,7 +247,18 @@ fn approval_object(value: Value) -> Map<String, Value> {
 
 fn approval_snapshot() -> CanvasApplicationApprovalSnapshot {
     CanvasApplicationApprovalSnapshot {
-        evidence_facts: Vec::new(),
+        policy_set: None,
+        evidence_facts: vec![json!({
+            "id":"fact-course-1", "organization_id":"org-1",
+            "application_id":"application-approval-1", "subject_id":"opaque-learner-subject",
+            "provider":"canvas", "fact_type":"canvas.course_completion",
+            "scope":{"course_id":"course-1"}, "assertion":{"completed":true},
+            "verification":{"status":"VERIFIED","method":"CANVAS_OAUTH_API_READ"},
+            "source":{"source":"canvas_rest"}, "requirement_id":"canvas_req_1",
+            "logical_key":"course-completion-1", "source_revision":"revision-1",
+            "payload_hash":"hash-1", "effective_at":"2026-08-30T22:59:00Z",
+            "observed_at":"2026-08-30T22:59:00Z", "created_at":"2026-08-30T22:59:00Z"
+        })],
         application: approval_object(json!({
             "id": "application-approval-1",
             "organization_id": "org-1",
@@ -3582,6 +3593,70 @@ async fn application_approval_hides_tenants_rejects_invalid_input_and_preserves_
         .lock()
         .expect("reservations")
         .is_empty());
+}
+
+#[tokio::test]
+async fn application_approval_denies_ineligible_current_heads_without_reservation_then_recovers() {
+    let repository = Arc::new(ApprovalRepository {
+        snapshot: Mutex::new(Some(approval_snapshot())),
+        reservations: Mutex::new(Vec::new()),
+        result: Mutex::new(Ok("transaction-approval-1".to_owned())),
+    });
+    let app = app_with_approval(repository.clone(), Ok(approval_issuer()), true);
+    let path = "/v1/integrations/canvas/applications/application-approval-1/approve";
+    for fault in [
+        "missing",
+        "failed-course",
+        "stale",
+        "unverified",
+        "policy-denied",
+    ] {
+        let mut state = approval_snapshot();
+        match fault {
+            "missing" => state.evidence_facts.clear(),
+            "failed-course" => state.evidence_facts[0]["assertion"]["completed"] = json!(false),
+            "stale" => state.evidence_facts[0]["observed_at"] = json!("2026-08-30T20:00:00Z"),
+            "unverified" => state.evidence_facts[0]["verification"]["status"] = json!("UNVERIFIED"),
+            "policy-denied" => {
+                state
+                    .application_template
+                    .insert("approval_policy_set_id".into(), json!("selected-policy"));
+                state.policy_set = Some(
+                    json!({"id":"selected-policy", "status":"active", "policy_type":"CUSTOM", "cedar_policies":"forbid(principal, action, resource);"}),
+                );
+            }
+            _ => unreachable!(),
+        }
+        *repository.snapshot.lock().expect("snapshot") = Some(state);
+        let response = app
+            .clone()
+            .oneshot(management_request(Request::post(path), json!({})))
+            .await
+            .expect("negative response");
+        assert_eq!(response.status(), StatusCode::CONFLICT, "{fault}");
+        assert_eq!(
+            response_json(response).await,
+            json!({"detail":"Canvas application is not ready for approval"})
+        );
+        assert!(
+            repository
+                .reservations
+                .lock()
+                .expect("reservations")
+                .is_empty(),
+            "{fault}"
+        );
+    }
+    *repository.snapshot.lock().expect("snapshot") = Some(approval_snapshot());
+    let response = app
+        .oneshot(management_request(Request::post(path), json!({})))
+        .await
+        .expect("recovered response");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        repository.reservations.lock().expect("reservations").len(),
+        1
+    );
 }
 
 #[tokio::test]

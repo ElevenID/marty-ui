@@ -1,11 +1,29 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { runCanvasCapture, requireJobBinding, requireIssuedBinding, requireCaptureMutationReconciliation } = require('./canvas-capture-sequence');
+const { runCanvasCapture, requireJobBinding, requireIssuedBinding, requireCaptureMutationReconciliation,
+  requireCaptureWindow } = require('./canvas-capture-sequence');
 const stock = require('./run-canvas-oss-standard-contract');
 const APP = '10000000-0000-4000-8000-000000000001';
 const scope = { application_id: APP, organization_id: 'org', binding_id: 'binding',
   platform_id: 'platform', credential_template_id: 'template' };
+
+test('capture landmarks bind the owned wallet only to receipt/verification and reject foreign windows', () => {
+  const canvasPage = {}, walletPage = {}, popup = {}, foreign = {};
+  const owned = { canvasPage, walletPage, popups: [popup] };
+  assert.equal(requireCaptureWindow(walletPage, 'wallet-receipt-and-verification', owned).walletPage, true);
+  assert.equal(requireCaptureWindow(canvasPage, 'approved-still-unsigned', owned).initialPage, true);
+  assert.equal(requireCaptureWindow(popup, 'correction-review-open', owned).observedPopup, true);
+  assert.throws(() => requireCaptureWindow(walletPage, 'approved-still-unsigned', owned));
+  for (const page of [canvasPage, popup, foreign, undefined]) {
+    assert.throws(() => requireCaptureWindow(page, 'wallet-receipt-and-verification', owned));
+  }
+  assert.throws(() => requireCaptureWindow(foreign, 'approved-still-unsigned', owned));
+  assert.throws(() => requireCaptureWindow(walletPage, 'wallet-receipt-and-verification',
+    { ...owned, popups: [popup, {}, {}] }));
+  assert.throws(() => requireCaptureWindow(undefined, 'wallet-receipt-and-verification',
+    { ...owned, walletPage: undefined }));
+});
 
 test('foreign, stale, replayed and unsuccessful terminal jobs cannot bind a capture', () => {
   const job = { ...scope, id: 'job', status: 'succeeded', created_at: new Date(10000).toISOString() };
@@ -65,7 +83,12 @@ function harness({ scenario = 'external-evidence-to-credential', fail = '' } = {
           if (fail === 'denied-approval-reserved') state.reserved = true;
           if (fail === 'denied-approval-issued') state.issued = true;
           if (fail === 'denied-approval-claimable') state.approved = true;
-          return { detail: fail === 'denied-approval-wrong-reason' ? 'Unrelated conflict' : 'Canvas application is not ready for approval' };
+          if (['mip-denied-reason','mip-wrong-reason','mip-foreign-error-code'].includes(fail)) return {
+            error: fail === 'mip-foreign-error-code' ? 'unrelated_error' : 'service_error',
+            error_description: fail === 'mip-wrong-reason' ? 'Unrelated conflict'
+              : 'Canvas application is not ready for approval', message_id:'private-correlation' };
+          return { detail: ['denied-approval-wrong-reason','denial-and-grade-restoration'].includes(fail)
+            ? 'Unrelated conflict' : 'Canvas application is not ready for approval' };
         }
         assert.equal(state.grade, 95); assert.equal(state.issued, false); state.approved = true;
         state.reserved = true;
@@ -123,7 +146,8 @@ function harness({ scenario = 'external-evidence-to-credential', fail = '' } = {
       state.grade = body['submission[posted_grade]']; state.revision++;
       state.mutations.push(state.grade);
       if (state.issued && state.grade === 40) state.review = true;
-      return { assignment_id: 2, user_id: 3, score: state.grade };
+      return { assignment_id: 2, user_id: 3,
+        score: fail === 'denial-and-grade-restoration' && state.grade === 95 ? 40 : state.grade };
     } },
   };
   const operations = { ...stock,
@@ -192,6 +216,26 @@ test('D07 runs fresh pre-issuance denial/recovery and retired-ingest operation w
   assert.equal(h.report.behaviorAssertions.invalid_evidence_provenance_denied, true);
 });
 
+test('the production MIP service-error envelope preserves the exact denied-approval reason', async () => {
+  const h = harness({scenario:'canvas-learning-achievement',fail:'mip-denied-reason'});
+  await h.run();
+  assert.equal(h.report.deniedApproval.httpStatus,409);
+  assert.equal(h.report.deniedApproval.transactionCount,0);
+  assert.equal(h.report.behaviorAssertions.invalid_evidence_provenance_denied,true);
+});
+
+test('a failing grade restoration preserves the original negative-operation failure without response bodies', async () => {
+  const h = harness({scenario:'canvas-learning-achievement',fail:'denial-and-grade-restoration'});
+  await assert.rejects(h.run(), error => error instanceof AggregateError && error.errors.length===2);
+  assert.equal(h.report.operationFailures.length,2);
+  assert.equal(h.report.operationFailures[0].activeCase,'pre-issuance-denied-approval-detail');
+  assert.equal(h.report.operationFailures[1].activeCase,'grade-score-binding');
+  assert(h.report.operationFailures.every(x=>x.sourceLocation?.file==='canvas-capture-sequence.js'));
+  assert(!JSON.stringify(h.report.operationFailures).includes('Unrelated conflict'));
+  assert.deepEqual(h.report.behaviorAssertions,{});
+  assert(h.report.pendingOperations.includes('scoped-approval'));
+});
+
 test('recovery requires a new permitting job after transient course recalculation', async () => {
   const h = harness({ scenario: 'canvas-learning-achievement', fail: 'recovery-transient-course' });
   await h.run();
@@ -221,7 +265,8 @@ for (const fail of ['foreign-claim-application', 'foreign-claim-organization', '
 }
 
 for (const fail of ['denied-transaction-reserved', 'denied-credential-issued', 'denied-claimable',
-  'denied-approval-reserved', 'denied-approval-issued', 'denied-approval-claimable', 'denied-approval-wrong-reason']) {
+  'denied-approval-reserved', 'denied-approval-issued', 'denied-approval-claimable', 'denied-approval-wrong-reason',
+  'mip-wrong-reason','mip-foreign-error-code']) {
   test(`${fail} cannot qualify the denied evidence path`, async () => {
     const h = harness({ fail }); await assert.rejects(h.run());
     assert.equal(h.state.grade, 95);

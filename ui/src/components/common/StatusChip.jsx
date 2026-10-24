@@ -24,6 +24,19 @@ const getStatusConfigs = (t) => ({
   draft: { label: t('status.draft'), color: 'default', icon: DraftsIcon },
   disabled: { label: t('status.disabled'), color: 'error', icon: BlockIcon },
   pending: { label: t('status.pending'), color: 'warning', icon: PendingIcon },
+  // Canvas award candidates and evidence synchronization jobs.
+  observed: { label: t('status.observed', 'Observed'), color: 'default', icon: PendingIcon },
+  identity_link_required: { label: t('status.identityLinkRequired', 'Identity Link Required'), color: 'warning', icon: WarningIcon },
+  eligible: { label: t('status.eligible', 'Eligible'), color: 'info', icon: CheckCircleIcon },
+  pending_claim: { label: t('status.pendingClaim', 'Awaiting Wallet Claim'), color: 'info', icon: PendingIcon },
+  claimed: { label: t('status.claimed', 'Claimed'), color: 'success', icon: CheckCircleIcon },
+  dismissed: { label: t('status.dismissed', 'Dismissed'), color: 'default', icon: BlockIcon },
+  queued: { label: t('status.queued', 'Queued'), color: 'info', icon: PendingIcon },
+  leased: { label: t('status.leased', 'Processing'), color: 'info', icon: PendingIcon },
+  retry: { label: t('status.retry', 'Retry Scheduled'), color: 'warning', icon: PendingIcon },
+  succeeded: { label: t('status.succeeded', 'Succeeded'), color: 'success', icon: CheckCircleIcon },
+  dead_letter: { label: t('status.deadLetter', 'Needs Intervention'), color: 'error', icon: ErrorIcon },
+  cancelled: { label: t('status.cancelled', 'Cancelled'), color: 'default', icon: BlockIcon },
   
   // Application-specific statuses
   submitted: { label: t('status.submitted'), color: 'info', icon: PendingIcon },

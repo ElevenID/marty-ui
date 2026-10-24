@@ -1061,6 +1061,7 @@ fn approval_snapshot(
     binding: &Map<String, Value>,
 ) -> CanvasApplicationApprovalSnapshot {
     CanvasApplicationApprovalSnapshot {
+        policy_set: snapshot.policy_set.clone().map(Value::Object),
         evidence_facts: snapshot
             .facts
             .iter()

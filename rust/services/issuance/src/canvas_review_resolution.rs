@@ -58,6 +58,16 @@ pub trait CanvasReviewLifecycle: Send + Sync {
         action: CredentialLifecycleAction,
         reason: &str,
     ) -> Result<(), OperationsError>;
+
+    /// Explicit recovery is fail-closed unless the lifecycle owner supports it.
+    async fn reconcile_revocation(
+        &self,
+        _organization: &str,
+        _credential: &str,
+        _reason: &str,
+    ) -> Result<(), OperationsError> {
+        Err(conflict("Credential revocation recovery is unavailable"))
+    }
 }
 
 #[async_trait]
@@ -79,6 +89,34 @@ impl CanvasReviewLifecycle for CredentialManagementService {
         .await
         .map(|_| ())
         .map_err(OperationsError::Lifecycle)
+    }
+
+    async fn reconcile_revocation(
+        &self,
+        organization: &str,
+        credential: &str,
+        reason: &str,
+    ) -> Result<(), OperationsError> {
+        self.reconcile_existing_revocation(credential, Some(organization), Some(reason))
+            .await
+            .map_err(OperationsError::Lifecycle)?
+            .ok_or_else(|| conflict("Credential must already be revoked for review recovery"))?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy)]
+enum ReviewOperation {
+    Resolve(ReviewAction),
+    ReconcileRevocation,
+}
+
+impl ReviewOperation {
+    const fn action(self) -> ReviewAction {
+        match self {
+            Self::Resolve(action) => action,
+            Self::ReconcileRevocation => ReviewAction::Revoke,
+        }
     }
 }
 
@@ -104,6 +142,44 @@ impl CanvasReviewResolver {
         notes: Option<&str>,
         actor: Option<&str>,
     ) -> Result<Value, OperationsError> {
+        self.resolve_operation(
+            organization,
+            review_id,
+            ReviewOperation::Resolve(action),
+            notes,
+            actor,
+        )
+        .await
+    }
+
+    /// Reconcile publication before closing an open review for an already
+    /// revoked credential, without changing the public resolve contract.
+    pub async fn reconcile_revocation(
+        &self,
+        organization: &str,
+        review_id: &str,
+        notes: Option<&str>,
+        actor: Option<&str>,
+    ) -> Result<Value, OperationsError> {
+        self.resolve_operation(
+            organization,
+            review_id,
+            ReviewOperation::ReconcileRevocation,
+            notes,
+            actor,
+        )
+        .await
+    }
+
+    async fn resolve_operation(
+        &self,
+        organization: &str,
+        review_id: &str,
+        operation: ReviewOperation,
+        notes: Option<&str>,
+        actor: Option<&str>,
+    ) -> Result<Value, OperationsError> {
+        let action = operation.action();
         let review = self.load(organization, review_id).await?.ok_or_else(|| {
             public(
                 StatusCode::NOT_FOUND,
@@ -146,17 +222,20 @@ impl CanvasReviewResolver {
             let reason = notes
                 .filter(|value| !value.is_empty())
                 .unwrap_or("Canvas evidence correction review");
-            let outcome = self
-                .lifecycle
-                .as_ref()
-                .ok_or(OperationsError::Internal)?
-                .transition(
-                    organization,
-                    field(&claimed, "credential_id")?,
-                    lifecycle_action,
-                    reason,
-                )
-                .await;
+            let lifecycle = self.lifecycle.as_ref().ok_or(OperationsError::Internal)?;
+            let credential = field(&claimed, "credential_id")?;
+            let outcome = match operation {
+                ReviewOperation::Resolve(_) => {
+                    lifecycle
+                        .transition(organization, credential, lifecycle_action, reason)
+                        .await
+                }
+                ReviewOperation::ReconcileRevocation => {
+                    lifecycle
+                        .reconcile_revocation(organization, credential, reason)
+                        .await
+                }
+            };
             if let Err(error) = outcome {
                 if self.release(organization, review_id, &token).await?
                     && self.recover(organization, review_id).await.is_err()

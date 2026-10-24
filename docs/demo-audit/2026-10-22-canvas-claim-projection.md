@@ -10,8 +10,15 @@ removes the mapped claim, including any forged form fallback.
 
 Canvas supplies only current-head facts with matching tenant, application,
 subject, requirement, source and scope, verified status and bounded freshness.
-One shared PostgreSQL query supplies those heads. Mapped manual approval also
-checks their identities under row locks before committing. Signing reprojects
+One shared PostgreSQL query supplies those heads. Manual approval now requires
+all required heads and the selected PolicySet to permit the operation before it
+reserves a transaction, using the same evidence/policy kernel as signing. This
+deliberately tightens the previous behavior, which allowed an unsigned reservation
+and deferred the policy decision to signing. Approval locks and checks current
+head identities and the selected PolicySet before committing, including templates
+without evidence claim mappings. A null binding policy falls back to the template
+policy. Reconciliation and legacy atomic writes retain the same snapshot custody.
+The final signing check remains mandatory after approval. Signing reprojects
 against current facts and rejects changed or injected claim values. System
 dates retain the reservation clock while evidence freshness uses the actual
 signing clock. Mapped transaction reuse and offer refresh update authoritative
@@ -30,10 +37,11 @@ mapper's ambiguous/fallback/timestamp controls, the native template mapping,
 existing approval/KMS-boundary behavior, applicant claim assembly, and an actual
 disposable PostgreSQL approval contract including mapped row-lock execution.
 
-This source is not deployed or qualified as D07/D08. Next, update the existing
-template through its production API, deploy a provenance-bound local source
-runtime, and run fresh wallet receipt, verification, negative/recovery and cleanup
-operations. AGS activity labels are read from the selected standard line item
+The earlier projection source and an eighteen-rule template have been exercised
+on beta's explicitly local 68da runtime. The manual-approval tightening described
+above is not yet deployed or qualified as D07/D08. Deploy the new guard with exact
+local source binding, then run fresh wallet receipt, verification, negative/recovery
+and cleanup operations. AGS activity labels are read from the selected standard line item
 when configured claim rules request that field. Missing result event timestamps
 already use the fact processor's real observation time; no provider event time is
 invented. This source support still needs fresh deployed AGS qualification.
@@ -104,3 +112,28 @@ scratch database was removed by exact inspected container identity after the
 contract passed. Library Clippy and formatting passed. Production tool
 registration already advertises lineitem.readonly together with result.readonly
 when AGS capability is selected. Fresh stock Canvas execution remains required.
+
+The latest recorder D07 attempt (660a1ec2) exposed an unsigned reservation while
+current authoritative evidence denied eligibility. It remains failed; its pending
+transaction was revoked and owned Canvas resources retired. No signing bypass was
+established. Focused controls cover HTTP409 with zero reservation for missing,
+failing, stale, unverified or policy-denied evidence and successful recovery. A real
+disposable PostgreSQL contract exercises changed heads and PolicySet edits between
+snapshot and reservation, template-policy fallback, successful recovery, and the
+existing automatic/legacy paths. These checks do not qualify a demo recording.
+
+Current-main reconciliation replaces the shortened policy table in the approval
+contract with the production Organization DDL, valid UUID identifiers,
+foreign keys and required timestamps. That stronger fixture exposed a production
+query binding defect: the shared policy lookup bound text parameters directly to
+UUID columns. Its parameter casts now preserve indexed UUID comparisons for both
+approval/reservation locking and the signing-time guard. The original failed
+control remains recorded. Fresh native verification passes the approval PostgreSQL
+contract, both Organization migration controls on the same database afterward, and
+five manual-approval HTTP cases. Stock D07/D08 execution remains required; these
+source controls do not qualify a demo recording or official conformance.
+
+The fixture includes the owning service's SQL directly; it does not introduce an
+Issuance-to-Organization dev dependency or change the affected-service planner.
+Existing Organization migration tests run separately on that same database to
+prove the fixture preserves the real owner schema and migration idempotency.

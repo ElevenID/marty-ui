@@ -14,4 +14,23 @@ describe('StatusChip', () => {
     expect(screen.getByText(label)).toBeInTheDocument();
     expect(screen.queryByText('Unknown')).not.toBeInTheDocument();
   });
+
+  it.each([
+    ['observed', 'Observed'],
+    ['identity_link_required', 'Identity Link Required'],
+    ['eligible', 'Eligible'],
+    ['pending_claim', 'Awaiting Wallet Claim'],
+    ['claimed', 'Claimed'],
+    ['dismissed', 'Dismissed'],
+    ['queued', 'Queued'],
+    ['leased', 'Processing'],
+    ['retry', 'Retry Scheduled'],
+    ['succeeded', 'Succeeded'],
+    ['dead_letter', 'Needs Intervention'],
+    ['cancelled', 'Cancelled'],
+  ])('renders the Canvas state %s without implying issuance or success', (status, label) => {
+    renderWithoutRouter(<StatusChip status={status} showIcon />);
+    expect(screen.getByText(label)).toBeInTheDocument();
+    expect(screen.queryByText('Unknown')).not.toBeInTheDocument();
+  });
 });

@@ -7,7 +7,7 @@ const assert = require('node:assert/strict');
 const { randomUUID, createHash } = require('node:crypto');
 const { chromium } = require('@playwright/test');
 const stock = require('./run-canvas-oss-standard-contract');
-const { runCanvasCapture, requireCaptureMutationReconciliation } = require('./canvas-capture-sequence');
+const { runCanvasCapture, requireCaptureMutationReconciliation, requireCaptureWindow } = require('./canvas-capture-sequence');
 const { acquireWalletSession } = require('./demo-wallet-session');
 const { login, selectOrg } = require('./audit-beta-credential-lifecycle');
 const { VIDEO_SIZE, finalizeVideo, showStep, showVerificationResult } = require('./demo-recording');
@@ -153,7 +153,10 @@ async function main() {
     await login(adminPage, stock.requireSecretFile('CANVAS_CAPTURE_ADMIN_EMAIL'),
       stock.requireSecretFile('CANVAS_CAPTURE_ADMIN_PASSWORD'));
     phase = 'admin-org-selection';
-    await selectOrg(adminPage);
+    const adminSelection = await selectOrg(adminPage);
+    assert.equal(adminSelection.ok, true, 'Canvas admin must be a console member of the capture organization');
+    assert.equal(adminSelection.activeOrgId, process.env.CANVAS_OSS_ORGANIZATION_ID,
+      'Canvas admin must select the capture organization');
     phase = 'wallet-session';
     const walletContext = await recordContext();
     session = await acquireWalletSession(walletContext, { origin: 'http://127.0.0.1:8787', runId: actual.runId });
@@ -162,10 +165,7 @@ async function main() {
     evidence.bindPage(walletPage);
     if (recording) videos.set(`${scenario}-wallet.webm`, walletPage.video());
     const checkpoint = async (page, phase, facts) => {
-      report.windowObservation = { popupCount: popups.length,
-        initialPage: page === canvasPage, observedPopup: popups.includes(page) };
-      assert.ok(popups.length <= 2 && (page === canvasPage || popups.includes(page)),
-        'Uncaptured or unexpected Canvas launch window');
+      report.windowObservation = requireCaptureWindow(page, phase, { canvasPage, walletPage, popups });
       report.landmarks ||= [];
       report.landmarks.push({ phase, observedAt: new Date().toISOString(), facts,
         alignment: 'DRIVER_LANDMARK_ONLY_REQUIRES_MEASURED_SOURCE_FRAMES' });
@@ -199,24 +199,29 @@ async function main() {
     complete = true;
   } catch (error) {
     // Do not put response bodies, bearer offers or credentials in reports.
-    report.failures.push({ stage: 'execution', phase, type: error.name, code: error.code || 'CANVAS_CAPTURE_FAILED' });
+    report.failures.push({ stage: 'execution', phase, type: error.name, code: error.code || 'CANVAS_CAPTURE_FAILED',
+      diagnostic: stock.contractFailureLocation(error, report.currentOperation || phase) });
   } finally {
     let cleanupComplete = true;
     async function cleanup(operation, fn) {
       try { await fn(); return true; } catch (error) {
         complete = false;
         cleanupComplete = false;
-        report.failures.push({ stage: 'cleanup', operation, type: error.name });
+        report.failures.push({ stage: 'cleanup', operation, type: error.name,
+          diagnostic: stock.contractFailureLocation(error, operation) });
         return false;
       }
     }
     if (session) await cleanup('wallet-session', () => session.close());
     const state = setup || setupState;
-    const retired = await cleanup('owned-issuance-retirement', () => stock.retireCanvasApplication({
-      marty: state.marty, applicationId, organizationId: state.organizationId,
-      credentialTemplateId: state.templates?.credential?.id, transactionId: report.transactionId,
-      reconcile: () => requireCaptureMutationReconciliation(report),
-    }));
+    const retired = await cleanup('owned-issuance-retirement', async () => {
+      report.issuanceRetirement = await stock.retireCanvasApplication({
+        marty: state.marty, applicationId, organizationId: state.organizationId,
+        credentialTemplateId: state.templates?.credential?.id, transactionId: report.transactionId,
+        bindingId: state.binding?.id,
+        reconcile: () => requireCaptureMutationReconciliation(report),
+      });
+    });
     report.resourceRetirementConfirmed = retired;
     let disconnected = retired;
     if (retired && state.marty && state.platformId && state.oauthConnected) disconnected = await cleanup('oauth-disconnect', async () => {
@@ -235,12 +240,11 @@ async function main() {
     for (const context of contexts) await cleanup('recording-context', () => context.close());
     for (const [file, video] of videos) await cleanup('recording-finalization', () => finalizeVideo(video, dir, file));
     if (browser) await cleanup('browser', () => browser.close());
-    report.cleanup = { complete: cleanupComplete };
     report.completedAt = new Date().toISOString();
     report.status = complete ? 'PASS' : 'FAIL';
     report.functionalReady = complete;
     report.operations_verified = complete;
-    report.cleanup = {complete:complete && report.resourceRetirementConfirmed === true};
+    report.cleanup = { complete: cleanupComplete && report.resourceRetirementConfirmed === true };
     report.releaseReady = complete && !overlay;
     if (overlay) {
       report.qualification = 'LOCAL_MIXED_RUNTIME_FUNCTIONAL_OPERATIONS';

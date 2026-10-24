@@ -22,6 +22,7 @@ describe('organization-scoped permissions', () => {
   beforeEach(() => {
     vi.clearAllMocks(); auth.isAuthenticated = true; auth.user = { sub: 'alice' };
     consoleState.activeOrgId = 'org-a'; consoleState.membershipsLoaded = true;
+    consoleState.memberships = [{ id: 'org-a' }, { id: 'org-b' }];
     consoleState.mode = 'org'; getMyPermissions.mockResolvedValue(grants);
   });
   it('denies synchronously on organization switch and ignores a late prior organization grant', async () => {
@@ -72,8 +73,36 @@ describe('organization-scoped permissions', () => {
     await act(async () => { old.resolve(grants); });
     expect(result.current.can('signing-key', 'create')).toBe(false);
   });
-  it.each(['00000000-0000-0000-0000-000000000001', 'not-a-member'])('never requests blocked organization %s', (org) => {
+  it.each(['00000000-0000-0000-0000-000000000001', 'not-a-member'])('never requests organization %s without membership', (org) => {
     consoleState.activeOrgId = org;
+    const { result } = renderHook(() => usePermissions());
+    expect(getMyPermissions).not.toHaveBeenCalled();
+    expect(result.current.can('signing-key', 'view')).toBe(false);
+  });
+  it('uses backend Canvas grants for a real member of the default organization and withdraws them on membership loss', async () => {
+    const organizationId = '00000000-0000-0000-0000-000000000001';
+    consoleState.activeOrgId = organizationId;
+    consoleState.memberships = [{ id: organizationId }];
+    getMyPermissions.mockResolvedValue({ permissions: ['integration-connector:view'], roles: [{ name: 'admin' }] });
+    const { result, rerender } = renderHook(() => usePermissions());
+    await waitFor(() => expect(result.current.can('integration-connector', 'view')).toBe(true));
+    expect(getMyPermissions).toHaveBeenCalledWith(organizationId);
+    expect(result.current.can('integration-connector', 'edit')).toBe(false);
+    consoleState.memberships = []; rerender();
+    expect(result.current.can('integration-connector', 'view')).toBe(false);
+    expect(result.current.roles).toEqual([]);
+  });
+  it('keeps a default organization member denied when the backend refuses permissions', async () => {
+    consoleState.activeOrgId = '00000000-0000-0000-0000-000000000001';
+    consoleState.memberships = [{ id: consoleState.activeOrgId }];
+    getMyPermissions.mockRejectedValue({ status: 403 });
+    const { result } = renderHook(() => usePermissions());
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    expect(result.current.can('integration-connector', 'view')).toBe(false);
+    expect(result.current.roles).toEqual([]);
+  });
+  it('does not request organization grants in applicant mode despite a selected membership', () => {
+    consoleState.mode = 'applicant';
     const { result } = renderHook(() => usePermissions());
     expect(getMyPermissions).not.toHaveBeenCalled();
     expect(result.current.can('signing-key', 'view')).toBe(false);
