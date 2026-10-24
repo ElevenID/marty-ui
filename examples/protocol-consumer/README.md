@@ -44,11 +44,13 @@ python examples/protocol-consumer/client.py --base-url https://your-api.example 
 
 This command first reads the public `/v1/protocol-support` catalog without credentials. It then loads the selected trust profile, credential template, presentation policy, deployment profile, issuance flow and verification flow; follows the template's compliance and optional revocation profile references; rejects any resource outside the chosen organization; and checks every cross-resource link. A system compliance profile is accepted only when the response explicitly marks it as a system profile with no organization owner. Finally, it requires the gateway-composed organization runtime status to report both `can_issue` and `can_verify`. The output contains public IDs, lifecycle states and runtime readiness only. It never accepts or returns a provider, signing-service ID, KMS key reference or private key. A successful composition check establishes reference consistency and gateway readiness at that moment; issuance and policy-bound cryptographic verification below remain separate operations.
 
-Save a VCDM v2 credential object matching your template's claims to `credential.json`, then issue it:
+The `issue` command uses the VC-API Data Integrity adapter. Select an active `JSON_LD` (VCDM v2 Data Integrity) template and compatible public issuer DID. Save an unsigned VCDM v2 credential object matching that template's claims to `credential.json`, then issue it:
 
 ```powershell
 python examples/protocol-consumer/client.py --base-url https://your-api.example --organization-id ORG_ID --output issued-response.json issue --template-id TEMPLATE_ID --issuer-did did:web:your-issuer.example --credential credential.json
 ```
+
+SD-JWT, JWT VC and mdoc templates use the native issuance workflow: initiate `POST /v1/issuance` with the organization, credential template, public issuer DID and format-appropriate claims; redeem the resulting credential offer through the advertised OID4VCI token, nonce and credential endpoints using the wallet's holder proof. Sending a complete `credential_document` through the VC-API adapter for these formats is rejected. Capability discovery describes supported signing tuples; it does not make every format compatible with this Data Integrity command.
 
 Verify the returned credential using a presentation policy. The example extracts `verifiableCredential` from the issuance response automatically:
 
