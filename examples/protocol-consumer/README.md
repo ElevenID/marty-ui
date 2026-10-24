@@ -36,6 +36,14 @@ The console keeps these public identity operations under **Deploy > Issuer Ident
 
 Browser integrations use `issuerIdentitiesApi` for DID discovery, inspection, certificate/CSR operations and retirement. `signingKeysApi` owns operator configuration and retains compatibility exports for older integrations. Public requests use the organization and DID tuple; they do not select a signing-service ID or provider key reference. Trusting external issuers does not require local KMS setup. The dashboard's active-DID setup state does not establish live signer health or public publication.
 
+Validate the complete read-only composition before issuing or verifying:
+
+```powershell
+python examples/protocol-consumer/client.py --base-url https://your-api.example --organization-id ORG_ID composition --trust-profile-id TRUST_PROFILE_ID --template-id TEMPLATE_ID --policy-id POLICY_ID --deployment-profile-id DEPLOYMENT_PROFILE_ID --issuance-flow-id ISSUANCE_FLOW_ID --verification-flow-id VERIFICATION_FLOW_ID
+```
+
+This command first reads the public `/v1/protocol-support` catalog without credentials. It then loads the selected trust profile, credential template, presentation policy, deployment profile, issuance flow and verification flow; follows the template's compliance and optional revocation profile references; rejects any resource outside the chosen organization; and checks every cross-resource link. A system compliance profile is accepted only when the response explicitly marks it as a system profile with no organization owner. Finally, it requires the gateway-composed organization runtime status to report both `can_issue` and `can_verify`. The output contains public IDs, lifecycle states and runtime readiness only. It never accepts or returns a provider, signing-service ID, KMS key reference or private key. A successful composition check establishes reference consistency and gateway readiness at that moment; issuance and policy-bound cryptographic verification below remain separate operations.
+
 Save a VCDM v2 credential object matching your template's claims to `credential.json`, then issue it:
 
 ```powershell

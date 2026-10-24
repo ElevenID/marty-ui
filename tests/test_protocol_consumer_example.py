@@ -22,16 +22,101 @@ def api():
 
         def do_GET(self):
             requests.append((self.path, dict(self.headers), None))
+            path = urlsplit(self.path).path
+            composition = {
+                "/v1/trust-profiles/trust-1": {
+                    "id": "trust-1",
+                    "organization_id": "org-a",
+                    "status": "ACTIVE",
+                },
+                "/v1/credential-templates/template-1": {
+                    "id": "template-1",
+                    "organization_id": "org-a",
+                    "status": "ACTIVE",
+                    "trust_profile_id": "trust-1",
+                    "compliance_profile_id": "compliance-1",
+                    "revocation_profile_id": "revocation-1",
+                },
+                "/v1/presentation-policies/policy-1": {
+                    "id": "policy-1",
+                    "organization_id": "org-a",
+                    "status": "ACTIVE",
+                    "trust_profile_id": "trust-1",
+                },
+                "/v1/deployment-profiles/deployment-1": {
+                    "id": "deployment-1",
+                    "organization_id": "org-a",
+                    "status": "ACTIVE",
+                    "trust_profile_id": "trust-1",
+                    "credential_template_ids": ["template-1"],
+                    "presentation_policy_ids": ["policy-1"],
+                    "enabled_flow_ids": [
+                        "issue-flow-1",
+                        "verify-flow-1",
+                        "verify-foreign",
+                    ],
+                },
+                "/v1/flows/definitions/issue-flow-1": {
+                    "id": "issue-flow-1",
+                    "organization_id": "org-a",
+                    "status": "ACTIVE",
+                    "trust_profile_id": "trust-1",
+                    "credential_template_id": "template-1",
+                    "deployment_profile_ids": ["deployment-1"],
+                },
+                "/v1/flows/definitions/verify-flow-1": {
+                    "id": "verify-flow-1",
+                    "organization_id": "org-a",
+                    "status": "ACTIVE",
+                    "trust_profile_id": "trust-1",
+                    "presentation_policy_id": "policy-1",
+                    "deployment_profile_ids": ["deployment-1"],
+                },
+                "/v1/flows/definitions/verify-foreign": {
+                    "id": "verify-foreign",
+                    "organization_id": "org-b",
+                    "status": "ACTIVE",
+                    "trust_profile_id": "trust-1",
+                    "presentation_policy_id": "policy-1",
+                    "deployment_profile_ids": ["deployment-1"],
+                },
+                "/v1/compliance-profiles/compliance-1": {
+                    "id": "compliance-1",
+                    "organization_id": "org-a",
+                    "status": "ACTIVE",
+                },
+                "/v1/revocation-profiles/revocation-1": {
+                    "id": "revocation-1",
+                    "organization_id": "org-a",
+                    "status": "ACTIVE",
+                },
+                "/v1/organizations/org-a/runtime/status": {
+                    "can_issue": True,
+                    "can_verify": True,
+                    "issuer_keys_valid": True,
+                    "deployment_active": True,
+                },
+            }
             self.send_response(200)
             self.end_headers()
-            if urlsplit(self.path).path.endswith("/issuer-identities/inspection"):
+            if path == "/v1/protocol-support":
+                example = SCRIPT.parents[2] / "contracts/protocol-support-catalog.json"
+                self.wfile.write(example.read_bytes())
+            elif path in composition:
+                self.wfile.write(json.dumps(composition[path]).encode())
+            elif path.endswith("/issuer-identities/inspection"):
                 example = (
                     SCRIPT.parents[2]
                     / "contracts/issuer-identity-inspection-example.json"
                 )
                 self.wfile.write(example.read_bytes())
-            elif urlsplit(self.path).path.endswith("/wallet-compatibility"):
-                self.wfile.write((SCRIPT.parents[2] / "contracts/wallet-compatibility-example.json").read_bytes())
+            elif path.endswith("/wallet-compatibility"):
+                self.wfile.write(
+                    (
+                        SCRIPT.parents[2]
+                        / "contracts/wallet-compatibility-example.json"
+                    ).read_bytes()
+                )
             else:
                 self.wfile.write(b'{"openapi":"3.1.0"}')
 
@@ -110,14 +195,98 @@ def test_example_inspects_an_exact_public_tuple_with_read_authority(api):
 
 def test_example_reads_a_scoped_template_wallet_profile_without_a_credential_file(api):
     base, requests = api
-    result = run(base, "--organization-id", "org-1", "wallet-profile", "--template-id", "template/with space")
+    result = run(
+        base,
+        "--organization-id",
+        "org-1",
+        "wallet-profile",
+        "--template-id",
+        "template/with space",
+    )
     assert result.returncode == 0, result.stderr
     path, headers, body = requests[-1]
-    assert urlsplit(path).path == "/v1/credential-templates/template%2Fwith%20space/wallet-compatibility"
+    assert (
+        urlsplit(path).path
+        == "/v1/credential-templates/template%2Fwith%20space/wallet-compatibility"
+    )
     assert parse_qs(urlsplit(path).query) == {"organization_id": ["org-1"]}
     assert headers["X-Api-Key"] == "example-test-credential"
     assert body is None
     assert json.loads(result.stdout)["derived_from"]["credential_format"] == "SD_JWT_VC"
+
+
+def test_example_validates_a_complete_scoped_profile_composition(api):
+    base, requests = api
+    result = run(
+        base,
+        "--organization-id",
+        "org-a",
+        "composition",
+        "--trust-profile-id",
+        "trust-1",
+        "--template-id",
+        "template-1",
+        "--policy-id",
+        "policy-1",
+        "--deployment-profile-id",
+        "deployment-1",
+        "--issuance-flow-id",
+        "issue-flow-1",
+        "--verification-flow-id",
+        "verify-flow-1",
+    )
+    assert result.returncode == 0, result.stderr
+    value = json.loads(result.stdout)
+    assert value["consistent"] is True
+    assert value["runtime_status"]["can_issue"] is True
+    assert value["runtime_status"]["can_verify"] is True
+    assert value["resources"]["revocation_profile"]["id"] == "revocation-1"
+    paths = [urlsplit(request[0]).path for request in requests]
+    assert paths == [
+        "/v1/protocol-support",
+        "/v1/trust-profiles/trust-1",
+        "/v1/credential-templates/template-1",
+        "/v1/presentation-policies/policy-1",
+        "/v1/deployment-profiles/deployment-1",
+        "/v1/flows/definitions/issue-flow-1",
+        "/v1/flows/definitions/verify-flow-1",
+        "/v1/compliance-profiles/compliance-1",
+        "/v1/revocation-profiles/revocation-1",
+        "/v1/organizations/org-a/runtime/status",
+    ]
+    assert not any(
+        key.lower() in {"authorization", "x-api-key"} for key in requests[0][1]
+    )
+    assert all(
+        request[1]["X-Api-Key"] == "example-test-credential" for request in requests[1:]
+    )
+    for path, _, _ in requests[1:-1]:
+        assert parse_qs(urlsplit(path).query) == {"organization_id": ["org-a"]}
+
+
+def test_example_rejects_a_foreign_resource_in_profile_composition(api):
+    base, _ = api
+    result = run(
+        base,
+        "--organization-id",
+        "org-a",
+        "composition",
+        "--trust-profile-id",
+        "trust-1",
+        "--template-id",
+        "template-1",
+        "--policy-id",
+        "policy-1",
+        "--deployment-profile-id",
+        "deployment-1",
+        "--issuance-flow-id",
+        "issue-flow-1",
+        "--verification-flow-id",
+        "verify-foreign",
+    )
+    assert result.returncode == 1
+    assert "verification flow is outside the requested organization" in result.stderr
+    assert result.stdout == ""
 
 
 def test_example_issues_by_did_and_verifies_with_tenant_policy(api, tmp_path):
