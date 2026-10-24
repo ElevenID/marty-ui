@@ -5,7 +5,10 @@ from pathlib import Path
 
 import pytest
 
-from scripts.ci.canvas_oracle_current_inputs import normalized_sha256
+from scripts.ci.canvas_oracle_current_inputs import (
+    assert_current_input_pins,
+    normalized_sha256,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 EVIDENCE = ROOT / "contracts/canvas-worker-rest-current-inputs.json"
@@ -26,16 +29,14 @@ INPUTS = frozenset(
 
 
 def _assert_native_rest_inputs(evidence: dict, root: Path) -> None:
-    assert evidence["schema"] == "marty.canvas-worker-rest-current-inputs/v2"
-    assert set(evidence) == {"schema", "purpose", "normalization", "sha256"}
-    assert "native REST replay" in evidence["purpose"]
-    assert evidence["normalization"] == (
-        "UTF-8 text with CRLF and CR converted to LF before SHA-256"
+    assert_current_input_pins(
+        evidence,
+        root,
+        schema="marty.canvas-worker-rest-current-inputs/v2",
+        label="REST",
+        disclaimer="native REST replay",
+        expected_inputs=INPUTS,
     )
-    assert set(evidence["sha256"]) == INPUTS, "REST input set needs review"
-    for name, pinned in evidence["sha256"].items():
-        assert len(pinned) == 64 and all(c in "0123456789abcdef" for c in pinned)
-        assert normalized_sha256(root / name) == pinned, f"REST input drift: {name}"
     scenarios = json.loads(
         (root / "contracts/canvas-worker-rest-scenarios.json").read_text(
             encoding="utf-8"

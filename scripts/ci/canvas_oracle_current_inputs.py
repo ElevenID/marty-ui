@@ -132,6 +132,7 @@ def assert_current_input_pins(
     schema: str,
     label: str,
     disclaimer: str,
+    expected_inputs: set[str] | frozenset[str] | None = None,
 ) -> None:
     """Validate reviewed current-checkout pins, independently of input discovery."""
     assert evidence["schema"] == schema
@@ -140,6 +141,8 @@ def assert_current_input_pins(
     assert evidence["normalization"] == (
         "UTF-8 text with CRLF and CR converted to LF before SHA-256"
     )
+    if expected_inputs is not None:
+        assert set(evidence["sha256"]) == expected_inputs, f"{label} input set needs review"
     for name, pinned in evidence["sha256"].items():
         assert Path(name).as_posix() == name and ".." not in Path(name).parts
         assert len(pinned) == 64 and all(c in "0123456789abcdef" for c in pinned)
