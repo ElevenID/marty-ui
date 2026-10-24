@@ -84,13 +84,7 @@ fn signature(value: &Value) -> bool {
         .as_str()
         .is_some_and(|v| v.starts_with("vault:v1:"))
 }
-pub async fn tokens(bao: &OpenBaoHttp, context: &Value) -> Result<()> {
-    let operator = text(context, "token")?;
-    let ttl = context["minimum_ttl"].as_u64().ok_or(REFUSAL)?;
-    let old = Path::new(text(context, "old")?);
-    let new = Path::new(text(context, "new")?);
-    let orphan_new = flag(context, "require_orphan_new")?;
-    let orphan_old = flag(context, "require_orphan_old")?;
+fn token_scopes() -> Vec<(String, Option<&'static str>)> {
     let mut scopes = SELFHOST_ROLES
         .iter()
         .map(|r| (r.token_file.to_owned(), Some(r.key_name)))
@@ -102,10 +96,22 @@ pub async fn tokens(bao: &OpenBaoHttp, context: &Value) -> Result<()> {
         }
     }
     scopes.sort_by(|a, b| a.0.cmp(&b.0));
+    scopes
+}
+pub async fn tokens(bao: &OpenBaoHttp, context: &Value) -> Result<Vec<String>> {
+    let operator = text(context, "token")?;
+    let ttl = context["minimum_ttl"].as_u64().ok_or(REFUSAL)?;
+    let old = Path::new(text(context, "old")?);
+    let new = Path::new(text(context, "new")?);
+    let orphan_new = flag(context, "require_orphan_new")?;
+    let orphan_old = flag(context, "require_orphan_old")?;
+    let scopes = token_scopes();
+    let mut names = Vec::new();
     for (root, orphan) in [
         (old, orphan_old || (old == new && orphan_new)),
         (new, orphan_new),
     ] {
+        names.clear();
         for (name, key) in &scopes {
             let raw = read(&root.join(name))?;
             if !raw.is_ascii() {
@@ -143,6 +149,7 @@ pub async fn tokens(bao: &OpenBaoHttp, context: &Value) -> Result<()> {
                 .as_str()
                 .filter(|v| policy_reference(v))
                 .ok_or("renewed OpenBao policy reference is invalid")?;
+            names.push(name_ref.to_owned());
             let response = request(
                 bao,
                 Method::GET,
@@ -198,7 +205,37 @@ pub async fn tokens(bao: &OpenBaoHttp, context: &Value) -> Result<()> {
             }
         }
     }
-    Ok(())
+    Ok(names)
+}
+
+/// Bootstrap policy discovery reuses the live checks, never a second lookup snapshot.
+pub async fn renewal_inventory(bao: &OpenBaoHttp, context: &Value) -> Result<Vec<String>> {
+    let current = text(context, "current")?;
+    // Preserve rejection of every non-regular generation entry, including unrelated files.
+    let entries = generation::entries(Path::new(current))?;
+    if token_scopes()
+        .iter()
+        .any(|(name, _)| !entries.contains_key(name))
+    {
+        return Err("current generation lacks a renewed token input");
+    }
+    let checks = json!({
+        "token": text(context, "token")?, "old": current, "new": current,
+        "minimum_ttl": 3600, "require_orphan_new": false, "require_orphan_old": false,
+        "replacement": null, "retiring": false,
+    });
+    let names = tokens(bao, &checks).await?;
+    certificates(bao, &checks).await?;
+    if names.len() != 21
+        || names
+            .iter()
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+            != names.len()
+    {
+        return Err("existing scoped policy inventory is incomplete");
+    }
+    Ok(names)
 }
 async fn issuer(bao: &OpenBaoHttp, token: &str, mount: &str) -> Result<String> {
     let value = request(

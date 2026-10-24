@@ -1,5 +1,6 @@
 """Live preflight uses real HTTPS and certificates; expected scopes stay independent."""
 
+import os
 from pathlib import Path
 from types import SimpleNamespace
 import sys
@@ -122,6 +123,8 @@ def preflight_server(tmp_path):
                 "orphan": state.fault != generation + "-root-child",
                 "path": "auth/token/create/selfhost-renew-leaf",
             }
+            if state.fault == "duplicate-policy" and name == "keycloak_master_cookie_token":
+                data["policies"] = ["scope-keycloak-11id-cookie-token"]
             if state.fault == "policy-reference":
                 data["policies"] = ["bad/path"]
             if state.fault == "scope-default":
@@ -319,6 +322,44 @@ def test_native_certificates_bind_issuers_remote_keys_and_trust_modes(
         "workload_identity_ca_cert"
     }
     state.fault = fault
+    prepare_certificates(state, mode, fault)
+    replacement = (
+        None
+        if mode == "ordinary"
+        else (state.bao, "workload-pki-v5", "keycloak-pki-v5")
+    )
+    applicable = fault is not None and (fault != "same-keycloak" or mode != "ordinary")
+    if applicable:
+        with pytest.raises(ValueError):
+            activation.checked_certificates(
+                state.bao,
+                state.old,
+                state.new,
+                3600,
+                replacement=replacement,
+                retiring=mode == "retire",
+            )
+    else:
+        activation.checked_certificates(
+            state.bao,
+            state.old,
+            state.new,
+            3600,
+            replacement=replacement,
+            retiring=mode == "retire",
+        )
+        assert sum(path.startswith("transit/keys/") for _, path, *_ in state.seen) == 36
+        expected_keys = set(KEY_NAMES.values()) | {
+            f"keycloak-{r}-rs256" for r in ("master", "11id")
+        }
+        assert {
+            path.removeprefix("transit/keys/")
+            for _, path, *_ in state.seen
+            if path.startswith("transit/keys/")
+        } == expected_keys
+
+
+def prepare_certificates(state, mode="ordinary", fault=None):
     roots = {}
     for kind in ("workload", "keycloak"):
         for replacement in (False, True):
@@ -386,37 +427,67 @@ def test_native_certificates_bind_issuers_remote_keys_and_trust_modes(
     )
     if fault == "trust-order":
         (state.new / "workload_identity_ca_cert").write_text(after + before)
-    replacement = (
-        None
-        if mode == "ordinary"
-        else (state.bao, "workload-pki-v5", "keycloak-pki-v5")
-    )
-    applicable = fault is not None and (fault != "same-keycloak" or mode != "ordinary")
-    if applicable:
-        with pytest.raises(ValueError):
-            activation.checked_certificates(
-                state.bao,
-                state.old,
-                state.new,
-                3600,
-                replacement=replacement,
-                retiring=mode == "retire",
-            )
+
+
+@pytest.mark.parametrize("bootstrap", ["renewal", "ca-rotation"])
+@pytest.mark.parametrize("fault", [
+    None, "extra", "old-root-child", "missing", "directory", "symlink",
+    "duplicate-policy", "policy-reference", "ttl-float", "sign-version",
+    "key-export", "wrong-chain",
+])
+def test_native_bootstrap_inventory_reuses_live_proofs(preflight_server, bootstrap, fault,
+                                                     monkeypatch, tmp_path):
+    import provision_selfhost_renewal_identity as renewal
+    import provision_selfhost_ca_rotation_identity as rotation
+
+    state = preflight_server
+    prepare_certificates(state)
+    state.fault = fault
+    if fault == "extra":
+        (state.old / "unrelated-secret").write_text("preserved")
+    if fault == "missing":
+        (state.old / "keycloak_signing_kms_token").unlink()
+    if fault == "directory":
+        (state.old / "unrelated-directory").mkdir()
+    if fault == "symlink":
+        if os.name != "posix":
+            pytest.skip("POSIX generation symlink contract")
+        (state.old / "unrelated-link").symlink_to(state.old / "workload_identity_ca_cert")
+    if fault == "wrong-chain":
+        prepare_certificates(state, fault=fault)
+    owner = renewal if bootstrap == "renewal" else rotation
+    failed = fault not in (None, "extra", "old-root-child")
+    writes = []
+    monkeypatch.setattr(owner, "approle_operation", lambda *args, **kwargs: writes.append((args, kwargs)))
+    if os.name == "posix":
+        # Exercise the actual bootstrap boundary: failures cannot create AppRole authority.
+        state.old.chmod(0o700)
+        output = tmp_path / "identity"
+        output.mkdir(mode=0o700)
+        def invoke():
+            return owner.bootstrap(state.bao, state.old, output)
     else:
-        activation.checked_certificates(
-            state.bao,
-            state.old,
-            state.new,
-            3600,
-            replacement=replacement,
-            retiring=mode == "retire",
-        )
-        assert sum(path.startswith("transit/keys/") for _, path, *_ in state.seen) == 36
-        expected_keys = set(KEY_NAMES.values()) | {
-            f"keycloak-{r}-rs256" for r in ("master", "11id")
-        }
-        assert {
-            path.removeprefix("transit/keys/")
-            for _, path, *_ in state.seen
-            if path.startswith("transit/keys/")
-        } == expected_keys
+        def invoke():
+            return owner.existing_policy_names(state.bao, state.old)
+    if failed:
+        with pytest.raises((ValueError, RuntimeError)):
+            invoke()
+        assert not writes
+        if fault in ("missing", "directory", "symlink"):
+            assert not state.seen
+        return
+    result = invoke()
+    expected = ["scope-" + name.replace("_", "-") for name in sorted(
+        SELFHOST_TOKEN_FILES | {"keycloak_signing_kms_token", *(
+            f"keycloak_{r}_{p}_token" for r in ("master", "11id") for p in ("cookie", "ciba")
+        )}
+    )]
+    if os.name == "posix":
+        assert len(writes) == 1
+        assert writes[0][1]["names"] == expected
+    else:
+        assert result == expected
+    assert sum(path == "auth/token/lookup" for _, path, *_ in state.seen) == 42
+    assert sum(path.startswith("transit/keys/") for _, path, *_ in state.seen) == 36
+    assert all(method in ("GET", "POST") for method, *_ in state.seen)
+    assert not state.errors

@@ -17,7 +17,7 @@ import sys
 from urllib.error import HTTPError
 
 sys.dont_write_bytecode = True
-from selfhost_native_operator import OperatorCleanupError, approle_operation, approle_policy, operator_bytes, network_operation  # noqa: E402
+from selfhost_native_operator import OperatorCleanupError, approle_operation, approle_policy, network_operation  # noqa: E402
 from selfhost_operator_inputs import private_file, write_private, snapshot_origin, private_empty_or_source  # noqa: E402
 from provision_selfhost_renewal_identity import existing_policy_names  # noqa: E402
 from selfhost_openbao_client import Bao  # noqa: E402
@@ -32,15 +32,6 @@ TOKEN_FILE = "ca-rotation-operator-token"
 POLICY_NAMES_FILE = "ca-rotation-leaf-policies.json"
 # Pre-authorized exact mount names; a mid-path `*` is not an OpenBao ACL glob.
 VERSIONS = range(2, 9)
-
-
-def checked_issuer_certificate(certificate: str, kind: str, version: int) -> None:
-    """Verify the strict public replacement-root profile in the signed operator."""
-    try:
-        operator_bytes(Path(__file__).resolve().parents[1], "operator", "replacement-ca",
-                       kind, str(version), input=certificate.encode("ascii"))
-    except RuntimeError as error:
-        raise RuntimeError("CA replacement certificate failed native validation") from error
 
 
 def rotation_acl(names: list[str]) -> str:

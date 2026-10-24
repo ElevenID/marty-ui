@@ -41,13 +41,18 @@ def test_ca_policy_uses_exact_versioned_mounts_and_denies_other_authority() -> N
 
 
 def test_public_ca_certificate_verification_rejects_wrong_or_tampered_issuer() -> None:
+    from scripts.selfhost_native_operator import operator_bytes
+
+    def check(certificate, kind, version):
+        operator_bytes(Path(__file__).resolve().parents[1], "operator", "replacement-ca",
+                       kind, str(version), input=certificate.encode("ascii"))
     certificate = (Path(__file__).parent / "fixtures" /
                    "selfhost_ca_issuer_public.pem").read_text(encoding="ascii")
-    rotation.checked_issuer_certificate(certificate, "workload", 2)
-    with pytest.raises(RuntimeError, match="native validation"):
-        rotation.checked_issuer_certificate(certificate, "keycloak", 2)
-    with pytest.raises(RuntimeError, match="native validation"):
-        rotation.checked_issuer_certificate(certificate + certificate, "workload", 2)
+    check(certificate, "workload", 2)
+    with pytest.raises(RuntimeError):
+        check(certificate, "keycloak", 2)
+    with pytest.raises(RuntimeError):
+        check(certificate + certificate, "workload", 2)
 
     header, encoded = certificate.split("\n", 1)
     payload, footer = encoded.split("-----END CERTIFICATE-----", 1)
@@ -55,5 +60,5 @@ def test_public_ca_certificate_verification_rejects_wrong_or_tampered_issuer() -
     der[-1] ^= 1  # Keep the certificate parseable while invalidating its signature.
     tampered = (header + "\n" + base64.encodebytes(der).decode("ascii") +
                 "-----END CERTIFICATE-----" + footer)
-    with pytest.raises(RuntimeError, match="native validation"):
-        rotation.checked_issuer_certificate(tampered, "workload", 2)
+    with pytest.raises(RuntimeError):
+        check(tampered, "workload", 2)

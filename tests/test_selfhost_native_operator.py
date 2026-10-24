@@ -16,7 +16,8 @@ ROOT = Path(__file__).resolve().parents[1]
                                             ("approle-login", 300), ("approle-policy", 300),
                                             ("approle-rotate", None), ("approle-retire", None),
                                             ("leaf-refresh", None), ("keycloak-token", None),
-                                            ("keycloak-provision", None), ("ca-issuer", None)])
+                                            ("keycloak-provision", None), ("ca-issuer", None),
+                                            ("renewal-inventory", 600)])
 def test_native_transactions_cannot_be_killed_during_cleanup(monkeypatch, operation, timeout):
     from types import SimpleNamespace
     from scripts import selfhost_native_operator as native

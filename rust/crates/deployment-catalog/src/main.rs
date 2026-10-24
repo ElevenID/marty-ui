@@ -264,7 +264,11 @@ fn run() -> Result<(), String> {
         use std::io::{Read, Write};
         let result = match args.get(1).map(String::as_str) {
             Some(
-                "ca-issuer" | "activation-certificates" | "activation-tokens" | "authority-check",
+                "ca-issuer"
+                | "activation-certificates"
+                | "activation-tokens"
+                | "authority-check"
+                | "renewal-inventory",
             ) if args.len() == 4 => {
                 use marty_deployment_catalog::{activation_preflight as preflight, ca_issuer};
                 use std::{io::IsTerminal, path::Path, time::Duration};
@@ -299,6 +303,9 @@ fn run() -> Result<(), String> {
                             "activation-tokens" => {
                                 preflight::tokens(&bao, &context).await.map(|_| Value::Null)
                             }
+                            "renewal-inventory" => preflight::renewal_inventory(&bao, &context)
+                                .await
+                                .map(|names| serde_json::json!(names)),
                             _ => preflight::authority(
                                 &bao,
                                 context["token"].as_str().ok_or(REFUSAL)?,

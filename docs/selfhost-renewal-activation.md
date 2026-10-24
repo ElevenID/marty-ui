@@ -56,7 +56,13 @@ the existing private generation, HTTPS OpenBao CA, and the bootstrap root
 token. Its separate empty 0700 output directory holds a RoleID, SecretID,
 and the exact 21-policy receipt. The script requires the current keys,
 certificates, and scoped tokens to pass live custody checks before creating
-the AppRole and token role. Protect and back up these operator-only identity
+the AppRole and token role. Rust returns the sorted, unique 21-policy inventory
+from those same verified token lookups for both renewal and CA bootstrap; it
+rejects non-regular entries or missing required tokens before contacting OpenBao.
+Other regular generation files remain allowed, and initial bootstrap tokens may
+still be children of the installation root. The combined read-only inventory
+command has a 600-second deadline, with each HTTPS request bounded to 10 seconds.
+Protect and back up these operator-only identity
 files with the coordinated Raft/applicant/database state. Root-token
 retirement and recovery still need their own rehearsed procedure.
 

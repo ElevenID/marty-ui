@@ -11,17 +11,14 @@ from __future__ import annotations
 import argparse
 import os
 from pathlib import Path
-import re
 import sys
 from urllib.error import HTTPError
 
 sys.dont_write_bytecode = True
-from selfhost_native_operator import OperatorCleanupError, approle_operation, approle_policy  # noqa: E402
+from selfhost_native_operator import OperatorCleanupError, approle_operation, approle_policy, network_operation  # noqa: E402
 from selfhost_operator_inputs import private_file, private_empty_or_source  # noqa: E402
 from selfhost_operator_inputs import write_private as write_private  # noqa: E402
-from activate_selfhost_renewed_secrets import checked_certificates, checked_tokens  # noqa: E402
 from selfhost_openbao_client import (Bao, RENEWAL_LEAF_ROLE, RENEWAL_OPERATOR_POLICY)  # noqa: E402
-from stage_selfhost_renewed_secrets import RENEWED_TOKEN_FILES, entries  # noqa: E402
 from selfhost_approle_rotation import (  # noqa: E402
     RotationSpec,
 )
@@ -37,26 +34,10 @@ TOKEN_FILE = "renewal-operator-token"
 POLICY_NAMES_FILE = "renewal-leaf-policies.json"
 ROTATION = RotationSpec(AUTH_MOUNT, APPROLE, ROLE_ID_FILE, SECRET_ID_FILE,
                         "", "renewal")
-NAME = re.compile(r"[a-z0-9-]{1,160}\Z")
 
 
 def existing_policy_names(bao: Bao, current: Path) -> list[str]:
-    if not RENEWED_TOKEN_FILES <= entries(current).keys():
-        raise ValueError("current generation lacks a renewed token input")
-    checked_tokens(bao, current, current, 3600, require_orphan_new=False)
-    checked_certificates(bao, current, current, 3600)
-    names = []
-    for file_name in sorted(RENEWED_TOKEN_FILES):
-        token = (current / file_name).read_text(encoding="ascii").strip()
-        data = bao.request("POST", "auth/token/lookup", {"token": token}).get("data", {})
-        policies = data.get("policies")
-        if (not isinstance(policies, list) or len(policies) != 1
-                or not isinstance(policies[0], str) or not NAME.fullmatch(policies[0])):
-            raise ValueError("existing remote signer policy is invalid")
-        names.append(policies[0])
-    if len(names) != 21 or len(set(names)) != len(names):
-        raise ValueError("existing scoped policy inventory is incomplete")
-    return names
+    return network_operation(bao, "renewal-inventory", current=str(current))
 
 
 def operator_acl(policy_names: list[str], *, allow_secret_id_rotation: bool = True) -> str:
