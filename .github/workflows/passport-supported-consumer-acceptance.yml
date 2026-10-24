@@ -61,7 +61,7 @@ jobs:
         with:
           toolchain: 1.95.0
       - name: Prepare read-only Rust Passport model policy
-        run: cargo build --locked --manifest-path rust/Cargo.toml -p marty-deployment-catalog --bin marty-deploy
+        run: bash scripts/ci/prepare-native-model-operator.sh
       - name: Inspect disposable supported consumers against official release
         id: collect
         shell: bash

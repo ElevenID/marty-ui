@@ -2920,7 +2920,7 @@ jobs:
           toolchain: 1.95.0
       - name: Prepare Rust KMS operator for release contracts
         if: needs.changes.outputs.rollback_test_only != 'true' && needs.changes.outputs.k8s_policy_test_only != 'true' && needs.changes.outputs.didcomm_release_test_only != 'true'
-        run: cargo build --locked --manifest-path rust/Cargo.toml -p marty-deployment-catalog --bin marty-deploy
+        run: bash scripts/ci/prepare-native-model-operator.sh
       - name: Enforce OSS commerce boundary
         run: python scripts/check_oss_boundary.py
       - name: Require workflow policy test collection

@@ -42,8 +42,15 @@ def test_consumer_workflow_prepares_native_policy_before_collecting():
     prepare = next(i for i, step in enumerate(steps) if step.get("name") == "Prepare read-only Rust Passport model policy")
     collect = next(i for i, step in enumerate(steps) if step.get("id") == "collect")
     assert prepare < collect
-    assert "--locked" in steps[prepare]["run"]
-    assert "marty-deployment-catalog" in steps[prepare]["run"]
+    command = "bash scripts/ci/prepare-native-model-operator.sh"
+    assert steps[prepare]["run"] == command
+    helper = (ROOT / "scripts/ci/prepare-native-model-operator.sh").read_text(encoding="utf-8")
+    for requirement in ("+1.95.0 build --locked", "marty-deployment-catalog", "--build-identity",
+                        "sha256sum", "MARTY_DEPLOY_BIN_SHA256", "MARTY_DEPLOY_SOURCE_SHA", "GITHUB_ENV"):
+        assert requirement in helper
+    ci = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8"))
+    assert next(step for step in ci["jobs"]["test-release-contracts"]["steps"]
+                if step.get("name") == "Prepare Rust KMS operator for release contracts")["run"] == command
 
 
 def test_native_timeout_remains_a_caller_specific_refusal(monkeypatch):
