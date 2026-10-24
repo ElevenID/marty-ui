@@ -15,6 +15,13 @@ ignore = [
     # enable sized-chunks' ringbuffer feature, and stores non-panicking values.
     { id = "RUSTSEC-2023-0126", reason = "transitive SSI JSON-LD dependency with no fixed upstream release; affected mutation API is not exposed" },
     { id = "RUSTSEC-2026-0255", reason = "transitive SSI JSON-LD dependency with no fixed upstream release; ringbuffer is disabled and stored values do not panic on drop" },
+    # crypto-bigint 0.5.5 remains in the locked SSI, isomdl, DIDComm, and
+    # Marty verification graph. Those paths operate on attacker-controlled or
+    # otherwise public verification values; production private-key operations
+    # are delegated to the KMS-only providers. The fixed 0.7 line is not
+    # semver-compatible with those upstream curve crates. Keep this exception
+    # scoped to the advisory while their reviewed migration completes.
+    { id = "RUSTSEC-2026-0387", reason = "locked public-verification/KMS-only graph does not perform affected arithmetic on local secret integers; upstream curve migration is pending" },
 ]
 
 [bans]

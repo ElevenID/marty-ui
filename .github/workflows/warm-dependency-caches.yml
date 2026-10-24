@@ -47,7 +47,7 @@ jobs:
           cache-suffix: python-services
       - name: Warm shared Python dependencies
         if: steps.uv-cache.outputs.cache-hit != 'true'
-        run: uv pip install --system -r requirements-services.txt jsonschema
+        run: uv pip install --system -r requirements-services.txt 'jsonschema[format]>=4.23'
 
   browser:
     name: Warm pinned Chromium headless shell

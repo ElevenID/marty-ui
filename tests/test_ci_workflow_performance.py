@@ -103,6 +103,7 @@ def test_worker_fixture_integrity_and_process_containment_have_linux_ci_dependen
         if "uv pip install --system pytest" in line
     )
     assert {"pytest", "pytest-xdist==3.8.0", "sqlalchemy", "playwright"} <= set(command.split())
+    assert "'jsonschema[format]>=4.23'" in command.split()
     browser = steps["Install Python browser transport runtime"]
     assert browser["run"] == "python -m playwright install --with-deps --only-shell chromium"
     assert browser["if"] == steps["Run repository release checks"]["if"]
@@ -5106,9 +5107,19 @@ def test_ephemeral_ci_reads_only_shared_python_and_browser_caches() -> None:
         if step.get("name") == "Warm shared Python dependencies"
     )
     assert warm_install["if"] == "steps.uv-cache.outputs.cache-hit != 'true'"
+    protocol_install = next(
+        step
+        for step in ci["jobs"]["public-protocol-contract"]["steps"]
+        if step.get("name") == "Install contract-check dependencies"
+    )
+    format_aware_install = (
+        "uv pip install --system -r requirements-services.txt "
+        "'jsonschema[format]>=4.23'"
+    )
+    assert protocol_install["run"] == format_aware_install
     assert (
         warm_install["run"]
-        == "uv pip install --system -r requirements-services.txt jsonschema"
+        == format_aware_install
     )
 
     browser_steps = ci["jobs"]["test-credential-lifecycle-browser"]["steps"]

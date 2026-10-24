@@ -2849,7 +2849,7 @@ jobs:
             release/stack-lock.json
           cache-suffix: python-services
       - name: Install contract-check dependencies
-        run: uv pip install --system -r requirements-services.txt jsonschema
+        run: uv pip install --system -r requirements-services.txt 'jsonschema[format]>=4.23'
       - name: Enforce public response contract
         run: python scripts/check_gateway_public_protocol_contract.py --protocol-root marty-protocol
       - name: Enforce pinned public OpenAPI schemas
@@ -2905,7 +2905,7 @@ jobs:
           echo "${verification_digest#sha256:}  $verification_wheel" | sha256sum --check --strict
           echo "${iso18013_digest#sha256:}  $iso18013_wheel" | sha256sum --check --strict
           # Actual database execution remains in the isolated Rust/Docker gate.
-          uv pip install --system pytest pytest-xdist==3.8.0 pytest-asyncio pyyaml jsonschema cryptography playwright sqlalchemy httpx -r requirements-proto.txt "$marty_rs_wheel" "$verification_wheel" "$iso18013_wheel"
+          uv pip install --system pytest pytest-xdist==3.8.0 pytest-asyncio pyyaml 'jsonschema[format]>=4.23' cryptography playwright sqlalchemy httpx -r requirements-proto.txt "$marty_rs_wheel" "$verification_wheel" "$iso18013_wheel"
       - name: Install Python browser transport runtime
         if: needs.changes.outputs.planner_only != 'true' && needs.changes.outputs.rollback_test_only != 'true' && needs.changes.outputs.k8s_policy_test_only != 'true' && needs.changes.outputs.didcomm_release_test_only != 'true'
         run: python -m playwright install --with-deps --only-shell chromium
