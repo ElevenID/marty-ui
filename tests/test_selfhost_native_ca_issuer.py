@@ -96,6 +96,12 @@ def test_native_ca_create_or_resume_all_reviewed_mounts(
         "generate-lost",
         "mount-lost",
         "malformed-existing",
+        "existing-null",
+        "existing-array",
+        "existing-string",
+        "existing-bool",
+        "existing-number",
+        "existing-missing",
         "output-race",
     ],
 )
@@ -133,6 +139,9 @@ def test_ca_faults_report_recovery_without_publishing(approle_server, fault):
             }
         if path == "workload-pki-v2/cert/ca":
             if not created:
+                if fault.startswith("existing-"):
+                    data = {"null": None, "array": [], "string": "uncertain", "bool": False, "number": 0}
+                    return 200, {} if fault == "existing-missing" else {"data": data[fault.removeprefix("existing-")]}
                 if fault == "malformed-existing":
                     return 200, {"data": {"certificate": True}}
                 return (
@@ -175,6 +184,12 @@ def test_ca_faults_report_recovery_without_publishing(approle_server, fault):
         "mount-ttl",
         "mount-lost",
         "malformed-existing",
+        "existing-null",
+        "existing-array",
+        "existing-string",
+        "existing-bool",
+        "existing-number",
+        "existing-missing",
     ):
         assert not created
     if fault == "generate-lost":

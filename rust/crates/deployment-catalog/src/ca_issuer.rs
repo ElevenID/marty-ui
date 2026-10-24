@@ -46,8 +46,9 @@ pub async fn stage(bao: &OpenBaoHttp, context: &Value) -> Result<Value> {
         let configured=request(bao,Method::GET,&format!("sys/mounts/{mount}"),None,Some(token)).await?;
         if configured["data"]["type"]!="pki" || configured["data"]["config"]["max_lease_ttl"].as_u64()!=Some(365*24*3600) { return Err(REFUSAL); }
         let existing=optional_ca(bao,&format!("{mount}/cert/ca"),token).await?.unwrap_or(json!({"data":{}}));
-        if existing["data"].get("private_key").is_some() { return Err(REFUSAL); }
-        let value=match existing["data"].get("certificate") {
+        let existing_data=existing.get("data").and_then(Value::as_object).ok_or(REFUSAL)?;
+        if existing_data.get("private_key").is_some() { return Err(REFUSAL); }
+        let value=match existing_data.get("certificate") {
             Some(Value::String(certificate)) if !certificate.is_empty() => existing,
             None | Some(Value::Null) | Some(Value::String(_)) => request(bao,Method::POST,&format!("{mount}/root/generate/internal"),Some(&json!({"common_name":format!("Marty self-host {kind} CA v{version}"),"ttl":"8760h","key_type":"ec","key_bits":256})),Some(token)).await?,
             _ => return Err(REFUSAL),
