@@ -164,9 +164,10 @@ function applicationFixture() {
       },
       async post(route, body) {
         state.calls.push(['POST', route, body]);
+        const operation = record.status === 'REVOKED' ? 'reconcile-revocation' : 'resolve';
         record.status = 'REVOKED';
-        if (route.endsWith('/resolve')) {
-          assert.equal(route, `/v1/integrations/canvas/evidence-policy-reviews/${review.id}/resolve`);
+        if (route.endsWith('/resolve') || route.endsWith('/reconcile-revocation')) {
+          assert.equal(route, `/v1/integrations/canvas/evidence-policy-reviews/${review.id}/${operation}`);
           assert.equal(body.action, 'revoke');
           if (!state.retainReview) state.reviews = state.reviews.filter(row => row.id !== review.id);
           return { ...review, status: 'revoked', resolution_action: 'revoke' };
@@ -222,4 +223,13 @@ test('repeated cleanup reconciles a revoked credential through the idempotent tr
   const f = applicationFixture(); f.state.reviews = [f.unrelated]; f.state.record.status = 'REVOKED';
   await retireCanvasApplication(f.input);
   assert.equal(f.state.calls.find(([method]) => method === 'POST')[1], `/v1/issuance/${f.input.transactionId}/revoke`);
+});
+
+test('an already revoked credential uses explicit review recovery without changing public resolve', async () => {
+  const f = applicationFixture(); f.state.record.status = 'REVOKED';
+  const receipt = await retireCanvasApplication(f.input);
+  assert.equal(receipt.complete, true);
+  assert.equal(f.state.calls.find(([method]) => method === 'POST')[1],
+    `/v1/integrations/canvas/evidence-policy-reviews/${f.review.id}/reconcile-revocation`);
+  assert.deepEqual(f.state.reviews, [f.unrelated]);
 });

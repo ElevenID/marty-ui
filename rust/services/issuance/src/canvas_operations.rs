@@ -342,6 +342,10 @@ pub fn candidate_router(service: CanvasOperationsService) -> Router {
             post(resolve_review),
         )
         .route(
+            "/v1/integrations/canvas/evidence-policy-reviews/{id}/reconcile-revocation",
+            post(reconcile_review_revocation),
+        )
+        .route(
             "/v1/integrations/canvas/applications/{id}/canvas-sync",
             post(enqueue),
         )
@@ -382,6 +386,23 @@ async fn resolve_review(
     Path(id): Path<String>,
     request: axum::extract::Request,
 ) -> Result<Json<Value>, OperationsError> {
+    review_operation(service, id, request, false).await
+}
+
+async fn reconcile_review_revocation(
+    State(service): State<CanvasOperationsService>,
+    Path(id): Path<String>,
+    request: axum::extract::Request,
+) -> Result<Json<Value>, OperationsError> {
+    review_operation(service, id, request, true).await
+}
+
+async fn review_operation(
+    service: CanvasOperationsService,
+    id: String,
+    request: axum::extract::Request,
+    reconcile_revocation: bool,
+) -> Result<Json<Value>, OperationsError> {
     let headers = request.headers().clone();
     // The transport owns request size limits; this candidate does not add a
     // smaller application-body limit than the released Python endpoint.
@@ -415,17 +436,27 @@ async fn resolve_review(
     };
     service.authorize(&headers)?;
     let (action, notes) = review_payload(&payload)?;
+    if reconcile_revocation && action != crate::canvas_review_resolution::ReviewAction::Revoke {
+        return Err(OperationsError::detail(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "Revocation recovery requires action 'revoke'",
+        ));
+    }
     let organization = organization(&headers)?;
     let actor = ["X-Authenticated-User-ID", "X-User-ID", "X-API-Key-ID"]
         .iter()
         .filter_map(|name| header(&headers, name))
         .find(|value| !value.is_empty());
-    let result = service
-        .reviews
-        .as_ref()
-        .ok_or(OperationsError::Internal)?
-        .resolve(organization, &id, action, notes, actor)
-        .await?;
+    let resolver = service.reviews.as_ref().ok_or(OperationsError::Internal)?;
+    let result = if reconcile_revocation {
+        resolver
+            .reconcile_revocation(organization, &id, notes, actor)
+            .await?
+    } else {
+        resolver
+            .resolve(organization, &id, action, notes, actor)
+            .await?
+    };
     Collection::Reviews.project(&result).map(Json)
 }
 

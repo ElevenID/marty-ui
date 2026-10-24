@@ -20,8 +20,10 @@ const OID4VCI_AUTHORIZATION_TAG: &str = "oid4vci-authorization";
 const CANVAS_MIRROR_TAG: &str = "canvas-mirror";
 const RETENTION_TAG: &str = "retention";
 const NATIVE_EXTENSION_TAG: &str = "native-extension";
-pub(crate) const NATIVE_EXTENSION_ROUTE_COUNT: usize = 2;
+pub(crate) const NATIVE_EXTENSION_ROUTE_COUNT: usize = 3;
 const CANVAS_CLAIM_PATH: &str = "/v1/integrations/canvas/lti/experience-sessions/current/claim";
+const CANVAS_REVIEW_RECOVERY_PATH: &str =
+    "/v1/integrations/canvas/evidence-policy-reviews/{id}/reconcile-revocation";
 
 const CANVAS_MIRROR_BATCH_PATHS: [&str; 3] = [
     "/v1/issuance/delivery-records/canvas-credentials/process-pending",
@@ -61,17 +63,28 @@ struct NativeHttpExtension {
 fn validate_native_extensions(coverage: &Coverage) -> Result<(), &'static str> {
     let mut operations = BTreeSet::new();
     for route in &coverage.native_extension_http {
-        let operation = match route.method {
-            HttpMethod::Get => "read_canvas_learner_claim",
-            HttpMethod::Post => "create_canvas_learner_claim",
-            _ => return Err("unreviewed native extension method"),
+        let (operation, source, behavior_test) = match (route.method, route.path.as_str()) {
+            (HttpMethod::Get, CANVAS_CLAIM_PATH) => (
+                "read_canvas_learner_claim",
+                "rust/services/issuance/src/canvas_lti_claim.rs",
+                "rust/services/issuance/tests/support/canvas_claim_behavior.rs",
+            ),
+            (HttpMethod::Post, CANVAS_CLAIM_PATH) => (
+                "create_canvas_learner_claim",
+                "rust/services/issuance/src/canvas_lti_claim.rs",
+                "rust/services/issuance/tests/support/canvas_claim_behavior.rs",
+            ),
+            (HttpMethod::Post, CANVAS_REVIEW_RECOVERY_PATH) => (
+                "reconcile_canvas_review_revocation",
+                "rust/services/issuance/src/canvas_review_resolution.rs",
+                "rust/services/issuance/tests/canvas_award_candidate_postgres_contract.rs",
+            ),
+            _ => return Err("unreviewed native extension method or path"),
         };
-        if route.path != CANVAS_CLAIM_PATH
-            || route.operation != operation
+        if route.operation != operation
             || route.owner != NATIVE_SERVICE
-            || route.source != "rust/services/issuance/src/canvas_lti_claim.rs"
-            || route.behavior_test
-                != "rust/services/issuance/tests/support/canvas_claim_behavior.rs"
+            || route.source != source
+            || route.behavior_test != behavior_test
             || route.adaptation.is_empty()
             || !operations.insert(operation)
             || coverage
@@ -79,11 +92,11 @@ fn validate_native_extensions(coverage: &Coverage) -> Result<(), &'static str> {
                 .iter()
                 .any(|existing| existing.method == route.method && existing.path == route.path)
         {
-            return Err("native extension differs from reviewed claim contract");
+            return Err("native extension differs from reviewed contract");
         }
     }
     if operations.len() != NATIVE_EXTENSION_ROUTE_COUNT {
-        return Err("native claim extension requires both reviewed operations");
+        return Err("native extensions require every reviewed operation");
     }
     Ok(())
 }
@@ -341,12 +354,35 @@ mod tests {
             "../../../../contracts/issuance-native-coverage.json"
         ))
         .unwrap();
-        assert_eq!(coverage.native_extension_http.len(), 2);
-        assert!(coverage
-            .native_extension_http
-            .iter()
-            .all(|route| route.path == path));
+        assert_eq!(
+            coverage.native_extension_http.len(),
+            NATIVE_EXTENSION_ROUTE_COUNT
+        );
+        assert_eq!(
+            coverage
+                .native_extension_http
+                .iter()
+                .filter(|route| route.path == path)
+                .count(),
+            2
+        );
         assert!(coverage.native_http.iter().all(|route| route.path != path));
+    }
+
+    #[test]
+    fn canvas_revocation_recovery_is_an_explicit_native_post_extension() {
+        let path = "/v1/integrations/canvas/evidence-policy-reviews/review-1/reconcile-revocation";
+        assert!(is_native_http(HttpMethod::Post, path));
+        for method in [HttpMethod::Get, HttpMethod::Put, HttpMethod::Delete] {
+            assert!(!is_native_http(method, path));
+        }
+        for near_miss in [
+            format!("{path}/"),
+            format!("{path}/extra"),
+            path.replace("reconcile-revocation", "reconcile"),
+        ] {
+            assert!(!is_native_http(HttpMethod::Post, &near_miss));
+        }
     }
 
     #[test]
@@ -381,9 +417,14 @@ mod tests {
             ("adaptation", ""),
             ("unknown_authority", "ignored"),
         ] {
-            let mut candidate = frozen.clone();
-            candidate["native_extension_http"][0][field] = value.into();
-            assert!(rejected(candidate), "accepted unreviewed {field}");
+            for index in [0, 2] {
+                let mut candidate = frozen.clone();
+                candidate["native_extension_http"][index][field] = value.into();
+                assert!(
+                    rejected(candidate),
+                    "accepted unreviewed {field} at {index}"
+                );
+            }
         }
         let mut missing = frozen.clone();
         missing

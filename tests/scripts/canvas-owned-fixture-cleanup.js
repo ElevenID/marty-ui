@@ -250,7 +250,9 @@ async function retireCanvasApplication({ marty, organizationId, applicationId,
     // Existing Rust resolver owns both the credential lifecycle transition and
     // the durable review disposition/audit event. Never dismiss a failure or
     // edit queue rows directly merely to make cleanup appear successful.
-    const result = await marty.post(`/v1/integrations/canvas/evidence-policy-reviews/${enc(review.id)}/resolve`,
+    const operation = String(owned[0].status).toUpperCase() === 'REVOKED'
+      ? 'reconcile-revocation' : 'resolve';
+    const result = await marty.post(`/v1/integrations/canvas/evidence-policy-reviews/${enc(review.id)}/${operation}`,
       { action: 'revoke', note: 'Run-owned Canvas capture cleanup' }, [200]);
     for (const field of ['id', 'organization_id', 'application_id', 'credential_id', 'binding_id']) {
       same(result[field], review[field], `resolved review ${field}`);

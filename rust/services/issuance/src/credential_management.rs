@@ -416,6 +416,26 @@ impl CredentialManagementService {
         self.reconcile_persisted_revocation(&credential).await
     }
 
+    /// Recover only an existing revocation. Unlike transaction reconciliation,
+    /// this never changes an active or suspended credential's status. `None`
+    /// lets the caller report its operation-specific precondition conflict.
+    pub async fn reconcile_existing_revocation(
+        &self,
+        credential_id: &str,
+        trusted_organization_id: Option<&str>,
+        reason: Option<&str>,
+    ) -> Result<Option<CredentialStatusView>, CredentialManagementError> {
+        let credential = self.load(credential_id).await?;
+        enforce_organization(&credential, trusted_organization_id)?;
+        validate_reason(reason)?;
+        if credential.status != ManagedCredentialStatus::Revoked {
+            return Ok(None);
+        }
+        self.reconcile_persisted_revocation(&credential)
+            .await
+            .map(Some)
+    }
+
     async fn reconcile_persisted_revocation(
         &self,
         credential: &ManagedCredential,
@@ -775,11 +795,10 @@ mod tests {
         use crate::canvas_review_resolution::CanvasReviewLifecycle;
 
         let harness = Harness::new(ManagedCredentialStatus::Revoked);
-        let result = CanvasReviewLifecycle::transition(
+        let result = CanvasReviewLifecycle::reconcile_revocation(
             &harness.service(),
             "org-a",
             "credential-a",
-            CredentialLifecycleAction::Revoke,
             "Run-owned Canvas capture cleanup",
         )
         .await;
@@ -789,7 +808,7 @@ mod tests {
         );
         assert_eq!(
             *harness.calls.lock().expect("calls"),
-            ["load", "load", "publish:revoke", "canvas:revoke"]
+            ["load", "publish:revoke", "canvas:revoke"]
         );
         assert!(harness.events.lock().expect("events").is_empty());
         assert!(harness.audits.lock().expect("audits").is_empty());
@@ -811,17 +830,16 @@ mod tests {
                     .lock()
                     .expect("publication failure") = Some("offline".to_owned());
             }
-            assert!(CanvasReviewLifecycle::transition(
+            assert!(CanvasReviewLifecycle::reconcile_revocation(
                 &harness.service(),
                 organization,
                 "credential-a",
-                CredentialLifecycleAction::Revoke,
                 &reason,
             )
             .await
             .is_err());
             let expected = if publication_failure {
-                vec!["load", "load", "publish:revoke"]
+                vec!["load", "publish:revoke"]
             } else {
                 vec!["load"]
             };
@@ -843,6 +861,38 @@ mod tests {
                 .expect_err("public repeated revoke"),
             CredentialManagementError::AlreadyRevoked
         );
+        // The review resolve adapter also preserves the published error;
+        // callers must opt into the separately scoped recovery operation.
+        assert!(matches!(
+            CanvasReviewLifecycle::transition(
+                &harness.service(),
+                "org-a",
+                "credential-a",
+                CredentialLifecycleAction::Revoke,
+                "cleanup"
+            )
+            .await,
+            Err(crate::canvas_operations::OperationsError::Lifecycle(
+                CredentialManagementError::AlreadyRevoked
+            ))
+        ));
+        for status in [
+            ManagedCredentialStatus::Active,
+            ManagedCredentialStatus::Suspended,
+        ] {
+            let harness = Harness::new(status);
+            assert!(CanvasReviewLifecycle::reconcile_revocation(
+                &harness.service(),
+                "org-a",
+                "credential-a",
+                "cleanup"
+            )
+            .await
+            .is_err());
+            assert_eq!(*harness.calls.lock().expect("calls"), ["load"]);
+            assert!(harness.events.lock().expect("events").is_empty());
+            assert!(harness.audits.lock().expect("audits").is_empty());
+        }
     }
 
     #[tokio::test]

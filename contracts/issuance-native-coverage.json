@@ -902,6 +902,15 @@
       "source": "rust/services/issuance/src/canvas_lti_claim.rs",
       "behavior_test": "rust/services/issuance/tests/support/canvas_claim_behavior.rs",
       "adaptation": "Native-only session-scoped Canvas claim; not part of the frozen legacy HTTP surface."
+    },
+    {
+      "method": "POST",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews/{id}/reconcile-revocation",
+      "operation": "reconcile_canvas_review_revocation",
+      "owner": "issuance-native",
+      "source": "rust/services/issuance/src/canvas_review_resolution.rs",
+      "behavior_test": "rust/services/issuance/tests/canvas_award_candidate_postgres_contract.rs",
+      "adaptation": "Explicit native-only recovery for an open review whose credential is already revoked; preserves the frozen resolve endpoint's repeated-revocation error."
     }
   ],
   "native_grpc": [

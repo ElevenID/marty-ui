@@ -2026,7 +2026,8 @@ impl marty_issuance_service::credential_management::CredentialLifecycleEventSink
 #[tokio::test]
 async fn revoked_canvas_review_recovery_is_scoped_durable_and_retries_publication() {
     use marty_issuance_service::{
-        canvas_review_resolution::{CanvasReviewResolver, ReviewAction},
+        canvas_operations::{candidate_router, CanvasOperationsService},
+        canvas_review_resolution::CanvasReviewResolver,
         credential_management::CredentialManagementService,
         credential_management_postgres::PostgresCredentialManagementRepository,
     };
@@ -2069,12 +2070,96 @@ async fn revoked_canvas_review_recovery_is_scoped_durable_and_retries_publicatio
         publication.clone(),
         events.clone(),
     );
-    let resolver = CanvasReviewResolver::new(pool.clone(), Some(Arc::new(lifecycle)));
+    let lifecycle = Arc::new(lifecycle);
+    let resolver = CanvasReviewResolver::new(pool.clone(), Some(lifecycle.clone()));
+    let router = candidate_router(
+        CanvasOperationsService::new(pool.clone(), Some("recovery-test-key"))
+            .with_review_operations(Some(lifecycle)),
+    );
+    async fn request(
+        router: &axum::Router,
+        organization: &str,
+        key: &str,
+        operation: &str,
+        body: &str,
+    ) -> (axum::http::StatusCode, Value) {
+        use tower::ServiceExt;
+        let response = router.clone().oneshot(axum::http::Request::builder()
+            .method("POST")
+            .uri(format!("/v1/integrations/canvas/evidence-policy-reviews/review-recovery/{operation}"))
+            .header("x-api-key", key).header("x-organization-id", organization)
+            .header("x-user-id", "actor").header("content-type", "application/json")
+            .body(axum::body::Body::from(body.to_owned())).unwrap()).await.unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        (status, serde_json::from_slice(&bytes).unwrap())
+    }
+    for (organization, key, operation, body, expected) in [
+        (
+            "review-recovery-org",
+            "wrong-key",
+            "reconcile-revocation",
+            r#"{"action":"revoke"}"#,
+            401,
+        ),
+        (
+            "foreign-org",
+            "recovery-test-key",
+            "reconcile-revocation",
+            r#"{"action":"revoke"}"#,
+            404,
+        ),
+        (
+            "review-recovery-org",
+            "recovery-test-key",
+            "reconcile-revocation",
+            r#"{"action":"dismiss"}"#,
+            422,
+        ),
+        (
+            "review-recovery-org",
+            "recovery-test-key",
+            "resolve",
+            r#"{"action":"revoke"}"#,
+            400,
+        ),
+    ] {
+        assert_eq!(
+            request(&router, organization, key, operation, body)
+                .await
+                .0
+                .as_u16(),
+            expected
+        );
+        assert_eq!(publication.calls.load(Ordering::SeqCst), 0);
+    }
+    for status in ["active", "suspended"] {
+        sqlx::query("UPDATE issuance_service.issued_credentials SET status=$1, revoked=false WHERE id='review-recovery-credential'")
+            .bind(status).execute(&pool).await.unwrap();
+        assert_eq!(
+            request(
+                &router,
+                "review-recovery-org",
+                "recovery-test-key",
+                "reconcile-revocation",
+                r#"{"action":"revoke"}"#
+            )
+            .await
+            .0
+            .as_u16(),
+            409
+        );
+        assert_eq!(publication.calls.load(Ordering::SeqCst), 0);
+        assert_eq!(table_count(&pool, "issuance_events").await, 0);
+    }
+    sqlx::query("UPDATE issuance_service.issued_credentials SET status='revoked', revoked=true WHERE id='review-recovery-credential'")
+        .execute(&pool).await.unwrap();
     assert!(resolver
-        .resolve(
+        .reconcile_revocation(
             "foreign-org",
             "review-recovery",
-            ReviewAction::Revoke,
             Some("cleanup"),
             Some("actor")
         )
@@ -2083,10 +2168,9 @@ async fn revoked_canvas_review_recovery_is_scoped_durable_and_retries_publicatio
     assert_eq!(publication.calls.load(Ordering::SeqCst), 0);
     publication.fail.store(true, Ordering::SeqCst);
     assert!(resolver
-        .resolve(
+        .reconcile_revocation(
             "review-recovery-org",
             "review-recovery",
-            ReviewAction::Revoke,
             Some("cleanup"),
             Some("actor")
         )
@@ -2101,20 +2185,18 @@ async fn revoked_canvas_review_recovery_is_scoped_durable_and_retries_publicatio
     );
     assert_eq!(table_count(&pool, "issuance_events").await, 0);
     publication.fail.store(false, Ordering::SeqCst);
-    let resolved = resolver
-        .resolve(
-            "review-recovery-org",
-            "review-recovery",
-            ReviewAction::Revoke,
-            Some("cleanup"),
-            Some("actor"),
-        )
-        .await;
-    assert!(
-        resolved.is_ok(),
-        "existing revoked credential must not strand its review"
-    );
-    let resolved = resolved.ok().unwrap();
+    let (status, response) = request(
+        &router,
+        "review-recovery-org",
+        "recovery-test-key",
+        "reconcile-revocation",
+        r#"{"action":"revoke","note":"cleanup"}"#,
+    )
+    .await;
+    assert_eq!(status.as_u16(), 200, "{response}");
+    let resolved: Value = sqlx::query_scalar("SELECT to_jsonb(r) FROM issuance_service.evidence_policy_reviews r WHERE id='review-recovery'")
+        .fetch_one(&pool).await.unwrap();
+    assert_eq!(response["status"], "revoked");
     assert_eq!(resolved["status"], "revoked");
     assert_eq!(resolved["resolution_action"], "revoke");
     assert_eq!(resolved["resolved_by"], "actor");
@@ -2127,10 +2209,9 @@ async fn revoked_canvas_review_recovery_is_scoped_durable_and_retries_publicatio
         "no duplicate credential event"
     );
     assert!(resolver
-        .resolve(
+        .reconcile_revocation(
             "review-recovery-org",
             "review-recovery",
-            ReviewAction::Revoke,
             Some("cleanup"),
             Some("actor")
         )
