@@ -1,4 +1,6 @@
 export const IS_SELFHOST_UI = false;
+export const SHOW_PUBLIC_DEMOS = true;
+export const SHOW_PUBLIC_DOCUMENTATION_NAV = true;
 
 export const SHOW_PUBLIC_LOGIN_BUTTON = true;
 export const DISABLE_PUBLIC_LOGIN_BUTTON = false;

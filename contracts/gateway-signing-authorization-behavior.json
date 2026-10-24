@@ -44,7 +44,8 @@
       "request": {
         "payload_b64": "cGF5bG9hZA",
         "algorithm": "RS256",
-        "key_reference": "lti-key"
+        "key_reference": "lti-key",
+        "key_purpose": "vc_jwt_issuer"
       },
       "expected_error": {"status": 409, "contains": "reserved exclusively for lti_tool_signing"}
     },

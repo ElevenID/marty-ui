@@ -13,7 +13,9 @@ use crate::{
         CanvasAwardCandidateRepository, CanvasAwardCandidateRepositoryError,
         CanvasAwardCandidateSnapshot,
     },
-    canvas_issuance_guard::{evaluate_canvas_evidence_policy, validated_requirements},
+    canvas_issuance_guard::{
+        evaluate_canvas_evidence_policy, validated_requirements, LIST_CURRENT_FACTS,
+    },
     canvas_lti_bootstrap::CanvasLtiBootstrapApplication,
     canvas_lti_experience::{
         lti_subject, signed_canvas_identifier, CanvasLtiExperienceSessionContext,
@@ -44,7 +46,9 @@ pub(crate) const LOAD_PLATFORM_DEPLOYMENT: &str = "SELECT lti_deployment_id
 pub(crate) const LOAD_APPLICATION_TEMPLATE: &str = "SELECT jsonb_build_object(
         'id', id, 'organization_id', organization_id,
         'credential_template_id', credential_template_id,
-        'approval_policy_set_id', approval_policy_set_id, 'status', status
+        'approval_policy_set_id', approval_policy_set_id, 'status', status,
+        'claim_collection_rules', claim_collection_rules, 'form_fields', form_fields,
+        'name', name, 'description', description, 'application_validity_days', application_validity_days
     ) FROM issuance_service.application_templates
     WHERE id = $1 AND organization_id = $2";
 
@@ -78,25 +82,6 @@ pub(crate) const LOCK_APPLICATION: &str = "SELECT jsonb_build_object(
         'credential_id', credential_id
     ) FROM issuance_service.applications
     WHERE id = $1 AND organization_id = $2 FOR UPDATE";
-
-const LIST_CURRENT_FACTS: &str = "SELECT jsonb_build_object(
-        'id', fact.id, 'organization_id', fact.organization_id,
-        'application_id', fact.application_id, 'subject_id', fact.subject_id,
-        'provider', fact.provider, 'fact_type', fact.fact_type,
-        'scope', fact.scope, 'assertion', fact.assertion,
-        'verification', fact.verification, 'source', fact.source,
-        'requirement_id', fact.requirement_id, 'logical_key', fact.logical_key,
-        'source_revision', fact.source_revision, 'payload_hash', fact.payload_hash,
-        'effective_at', fact.effective_at, 'observed_at', fact.observed_at,
-        'created_at', fact.created_at
-    ) FROM issuance_service.evidence_fact_heads AS head
-    JOIN issuance_service.evidence_facts AS fact
-      ON fact.organization_id = head.organization_id
-     AND fact.application_id = head.application_id
-     AND fact.logical_key = head.logical_key
-     AND fact.id = head.fact_id
-    WHERE head.organization_id = $1 AND head.application_id = $2
-    ORDER BY fact.observed_at, fact.created_at, fact.id";
 
 const LOAD_CURRENT_FACT: &str = "SELECT id, payload_hash, effective_at, observed_at, created_at
     FROM issuance_service.evidence_facts AS fact
@@ -245,6 +230,9 @@ impl CanvasAwardCandidateRepository for PostgresCanvasAwardCandidateRepository {
         application: &CanvasLtiBootstrapApplication,
         plan: &CanvasAwardCandidateMaterializationPlan,
     ) -> Result<(), CanvasAwardCandidateRepositoryError> {
+        if marty_key_material_policy::contains_private_key_map(&plan.application_canvas_patch) {
+            return Err(CanvasAwardCandidateRepositoryError::Unavailable);
+        }
         let mut database = self.pool.begin().await.map_err(repository_error)?;
         let candidate = sqlx::query(
             "UPDATE issuance_service.canvas_award_candidates
@@ -429,7 +417,14 @@ pub(crate) async fn record_fact_and_policy_in_transaction(
     evaluate_policy: bool,
     fact_event_metadata: Option<Value>,
 ) -> Result<Option<Value>, CanvasAwardCandidateRepositoryError> {
-    if text(fact.get("organization_id")) != application.organization_id
+    if marty_key_material_policy::contains_private_key_map(fact)
+        || requirements
+            .iter()
+            .any(marty_key_material_policy::contains_private_key)
+        || fact_event_metadata
+            .as_ref()
+            .is_some_and(marty_key_material_policy::contains_private_key)
+        || text(fact.get("organization_id")) != application.organization_id
         || text(fact.get("application_id")) != application.id
         || !text(
             fact.get("verification")

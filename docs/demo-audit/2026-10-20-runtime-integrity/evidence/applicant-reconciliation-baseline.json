@@ -1,0 +1,22 @@
+{
+  "phase": "Before reconciliation production repair",
+  "observedHead": "0943e115b987be1208238c61dcb1437c16f23fe0",
+  "productionFilesEqualCommittedSource": true,
+  "sourceFiles": [
+    {
+      "path": "rust/services/applicant/src/http.rs",
+      "bytes": 55205,
+      "sha256": "7a565c4b85bf20505ea151a617d83601f8d03de6a60d8fb28bf989c77c0977e1"
+    },
+    {
+      "path": "rust/services/applicant/src/service.rs",
+      "bytes": 60344,
+      "sha256": "1623301eafafe8526aff80630fba729858eb3c8d845b3920d28583a9ffe69382"
+    },
+    {
+      "path": "rust/services/applicant/tests/http_behavior.rs",
+      "bytes": 30180,
+      "sha256": "f257df759317051923700cedd1977c9892588a482d1b0ba6e88dc0a1bc236191"
+    }
+  ]
+}

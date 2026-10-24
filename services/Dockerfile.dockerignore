@@ -9,9 +9,9 @@
 !contracts/**
 contracts/canvas-worker-oracle-producers.json
 contracts/canvas-worker-oracle-script-imports.json
-contracts/canvas-worker-startup-current-inputs.json
-contracts/canvas-worker-rest-current-inputs.json
+contracts/canvas-*-current-inputs.json
 contracts/canvas-worker-tier-obligations.json
+contracts/canvas-worker-package-migration.json
 contracts/python-value-fast-obligations.json
 contracts/canvas-renewal-profile-obligations.json
 !services/
@@ -28,6 +28,10 @@ services/common/
 !scripts/ci/public-sccache-stats.awk
 rust/services/*/tests
 rust/crates/*/tests
+rust/acceptance/support/base_runtime_redis.rs
+rust/acceptance/support/didcomm_gateway_replay.rs
+rust/acceptance/support/didcomm_native_grpc_fixture.rs
+rust/acceptance/support/issuance_named_peers.rs
 rust/**/target
 rust/**/.git
 rust/**/*.log
@@ -37,6 +41,7 @@ rust/services/issuance/src/canvas_operation_http_prepared_tests.rs
 rust/services/issuance/src/canvas_sync_provider_http_tests.rs
 rust/services/issuance/src/canvas_sync_processor_tests.rs
 rust/services/issuance/src/canvas_sync_worker_retry_tests.rs
+rust/services/issuance/src/canvas_sync_worker_renewal_tests.rs
 rust/services/issuance/src/initiation_didcomm/tests/initiation_didcomm_renewal_tests.rs
 rust/services/issuance/src/passport_http_reconciliation_tests.rs
 rust/services/issuance/src/python_format_tests.rs

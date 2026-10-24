@@ -1,10 +1,7 @@
 //! Native issuance service boundary.
 //!
-//! While migration status is `cutover-in-progress`, this crate is packaged only
-//! as the beta `issuance-native` sidecar and receives the exact paths enumerated
-//! by the coverage contract. The Python service remains the production runtime
-//! and parity oracle until every frozen HTTP, gRPC, worker, configuration, and
-//! migration gate passes.
+//! HTTP, gRPC, persistence, and worker implementations for native issuance.
+//! Historical migration consistency checks live in the integration test suite.
 
 #![forbid(unsafe_code)]
 
@@ -21,6 +18,7 @@ pub mod canvas_award_candidate_postgres;
 pub mod canvas_award_candidate_service;
 pub mod canvas_binding_domain;
 pub mod canvas_catalog;
+mod canvas_claim_projection;
 mod canvas_content_decoder;
 pub mod canvas_credentials_delivery_config;
 mod canvas_credentials_protocol;
@@ -36,6 +34,7 @@ pub mod canvas_legacy_ingest;
 pub mod canvas_legacy_ingest_postgres;
 pub mod canvas_lifecycle_delivery;
 pub mod canvas_lti_bootstrap;
+pub mod canvas_lti_claim;
 pub mod canvas_lti_deep_linking;
 pub mod canvas_lti_deep_linking_postgres;
 pub mod canvas_lti_evidence;
@@ -70,6 +69,7 @@ pub mod canvas_provider_http;
 pub mod canvas_readiness;
 pub mod canvas_readiness_runtime;
 mod canvas_response_text;
+pub mod didcomm_remote_kms;
 mod signing_error_detail;
 mod signing_http_response;
 pub use signing_http_response::SigningResponseFailure;
@@ -79,6 +79,7 @@ pub mod application_template_http;
 pub mod application_template_postgres;
 pub mod application_template_service;
 pub mod canvas_review_resolution;
+mod canvas_roster_patch;
 pub mod canvas_sync_lease;
 pub mod canvas_sync_processor;
 pub mod canvas_sync_processor_postgres;
@@ -88,7 +89,6 @@ pub mod canvas_sync_worker_lifecycle;
 pub mod canvas_sync_worker_postgres;
 pub mod client_auth;
 pub mod config;
-pub mod contract;
 pub mod credential;
 pub mod credential_builder;
 pub mod credential_issuer;
@@ -100,8 +100,10 @@ pub mod credential_management_http;
 pub mod credential_management_postgres;
 pub mod credential_postgres;
 pub mod credential_renewal;
+pub mod dependency_probe;
 pub mod dpop;
 pub mod ephemeral_postgres;
+mod grpc_client_channel;
 pub mod http;
 pub mod initiation;
 pub mod initiation_dependencies;
@@ -110,6 +112,7 @@ pub mod initiation_didcomm_http;
 pub mod initiation_http;
 pub mod initiation_response;
 pub mod integration_secret;
+pub mod integration_secret_kms;
 pub mod internal_application_approval;
 mod internal_application_diagnostics;
 #[cfg(feature = "feature-regression-observer")]
@@ -128,6 +131,7 @@ pub mod issued_credential_records;
 mod management_http;
 pub mod management_security;
 pub mod migration;
+mod migration_seed;
 mod network_policy;
 pub mod oid4vci_authorization;
 pub mod oid4vci_authorization_postgres;
@@ -144,12 +148,15 @@ pub mod passport_http;
 pub mod passport_provider_ingress;
 pub mod passport_repository;
 pub mod passport_signer;
+#[cfg(test)]
+pub(crate) mod passport_test_vectors;
 pub mod proof_nonce;
 pub mod resource_owner;
 pub mod resource_owner_postgres;
 pub mod retention;
 pub mod retention_http;
 pub mod runtime;
+pub mod signing_grant_config;
 pub mod signing_policy;
 pub mod tenant_discovery;
 pub mod tenant_postgres;
@@ -161,7 +168,6 @@ pub mod transaction_reads;
 pub mod transport;
 
 pub use config::*;
-pub use contract::*;
 pub use runtime::*;
 
 pub mod issuance_proto {

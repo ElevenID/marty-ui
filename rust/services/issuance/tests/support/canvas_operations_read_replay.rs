@@ -1,7 +1,3 @@
-use axum::{
-    body::{to_bytes, Body},
-    http::Request,
-};
 use marty_issuance_service::{
     canvas_operations::CanvasOperationsService, http::router_with_canvas_operations,
     transport::TransportPolicy, IssuanceRuntime, IssuanceServiceConfig,
@@ -9,7 +5,10 @@ use marty_issuance_service::{
 use marty_oid4vci::discovery::StaticDiscoveryDocuments;
 use serde_json::{json, Value};
 use sqlx::PgPool;
-use tower::ServiceExt;
+
+#[path = "canvas_operations_input_http.rs"]
+mod input_http;
+pub(super) use input_http::{request_body, request_case};
 
 /// Exercise the unchanged handlers through the same state/transport composition
 /// used by the native process. Gateway ownership is deliberately unchanged.
@@ -44,65 +43,6 @@ pub(super) fn timestamps(value: &mut Value) {
         }
         _ => {}
     }
-}
-
-/// Shared body recipe; raw bytes retain precedence over generated JSON.
-pub(super) fn request_body(case: &Value) -> String {
-    let mut payload = case.get("body").cloned().unwrap_or_else(|| json!({}));
-    if let Some(length) = case["note_length"].as_u64() {
-        payload["note"] = json!("n".repeat(usize::try_from(length).unwrap()));
-    }
-    case["raw_body"]
-        .as_str()
-        .map(str::to_owned)
-        .unwrap_or_else(|| payload.to_string())
-}
-
-pub(super) async fn request_case(router: &axum::Router, case: &Value) -> (u16, String, Value) {
-    let mut headers = std::collections::BTreeMap::from([
-        (
-            "X-API-Key".to_owned(),
-            "synthetic-operations-key".to_owned(),
-        ),
-        ("X-Organization-ID".to_owned(), "org-review".to_owned()),
-    ]);
-    if let Some(overrides) = case["headers"].as_object() {
-        for (key, value) in overrides {
-            headers.insert(key.clone(), value.as_str().unwrap().into());
-        }
-    }
-    for key in case["omit_headers"].as_array().into_iter().flatten() {
-        headers.remove(key.as_str().unwrap());
-    }
-    let mut request = Request::builder()
-        .method(case["method"].as_str().unwrap_or("GET"))
-        .uri(case["path"].as_str().unwrap());
-    let body = request_body(case);
-    if case["method"] == "POST" {
-        let content_type = case
-            .get("content_type")
-            .map_or(Some("application/json"), Value::as_str);
-        if let Some(value) = content_type {
-            request = request.header("content-type", value);
-        }
-    }
-    for (key, value) in headers {
-        request = request.header(key, value);
-    }
-    let response = router
-        .clone()
-        .oneshot(request.body(Body::from(body)).unwrap())
-        .await
-        .unwrap();
-    let status = response.status().as_u16();
-    let content_type = response.headers()["content-type"]
-        .to_str()
-        .unwrap()
-        .to_owned();
-    let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
-    let body =
-        serde_json::from_slice(&bytes).unwrap_or_else(|_| json!(String::from_utf8_lossy(&bytes)));
-    (status, content_type, body)
 }
 
 async fn filtering_window(pool: &PgPool, router: &axum::Router) {
@@ -165,7 +105,12 @@ pub async fn replay_inputs(pool: &PgPool) {
         pool.clone(),
         Some("synthetic-operations-key"),
     ));
+    let mut real_database_cases = 0;
     for (case, expected) in cases.iter().zip(frozen["observations"].as_array().unwrap()) {
+        if expected["status"] != 200 {
+            continue; // Pre-SQL rejections run against the same router in fast unit tests.
+        }
+        real_database_cases += 1;
         let (status, _content_type, body) = request_case(&router, case).await;
         assert_eq!(
             json!({"name":case["name"],"status":status,"body":body}),
@@ -174,6 +119,7 @@ pub async fn replay_inputs(pool: &PgPool) {
             case["name"]
         );
     }
+    assert_eq!(real_database_cases, 39);
 }
 
 pub(super) fn fixtures() -> &'static [Value; 3] {

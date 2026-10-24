@@ -106,7 +106,7 @@ const DEPLOY_TABS = [
   { label: 'Deployment Profiles', path: '/console/org/deploy/profiles' },
   { label: 'Canvas', path: '/console/org/deploy/canvas' },
   { label: 'Issuer Identity', path: '/console/org/deploy/issuer-identity' },
-  { label: 'Key Management', path: '/console/org/deploy/key-management' },
+  { label: 'Key Management', path: '/console/org/operator/key-management' },
 ];
 
 const CANVAS_FEATURE_KEYS = [
@@ -1341,7 +1341,9 @@ function CanvasIntegrationsPage() {
                 ) : (
                   <Stack spacing={1}>
                     {correctionReviews.slice(0, 10).map((review) => (
-                      <Paper key={review.id} variant="outlined" sx={{ p: 1.5 }}>
+                      <Paper key={review.id} variant="outlined" sx={{ p: 1.5 }}
+                        data-testid="canvas-correction-review" data-review-id={review.id}
+                        data-application-id={review.application_id} data-credential-id={review.credential_id}>
                         <Stack direction={{ xs: 'column', md: 'row' }} spacing={1} justifyContent="space-between" alignItems={{ xs: 'stretch', md: 'center' }}>
                           <Box>
                             <Typography variant="body2" fontWeight={600}>Credential {review.credential_id || review.id}</Typography>

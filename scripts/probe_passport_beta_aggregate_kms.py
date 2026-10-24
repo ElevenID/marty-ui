@@ -133,10 +133,18 @@ def checked_docker_context(plan: dict[str, Any]) -> str:
 def private_signing_request(container: str, route: str,
                             body: dict[str, Any] | None = None,
                             *, context: str | None = None) -> dict[str, Any]:
+    revoke = re.fullmatch(
+        r"/internal/documents/[A-Za-z0-9_-]{1,128}/csca-certificates/"
+        r"[A-Za-z0-9_.:-]{1,128}/revoke", route) is not None
+    if revoke:
+        require(isinstance(body, dict) and set(body) == {"reason"}
+                and isinstance(body["reason"], str) and 1 <= len(body["reason"]) <= 256
+                and not any(character in body["reason"] for character in "\r\n\0"),
+                "Private CSCA retirement reason is invalid")
     require(CONTAINER.fullmatch(container) is not None
             and (route in ("/internal/compat/resolve-issuer-did",
                            "/internal/compat/issuer-dids/sign")
-                 or re.fullmatch(
+                 or revoke or re.fullmatch(
                      r"/internal/documents/[A-Za-z0-9_-]{1,128}/csca-certificates/"
                      r"[A-Za-z0-9_.:-]{1,128}", route) is not None),
             "Private Signing Keys request input is invalid")
@@ -189,10 +197,17 @@ def transit_key_version(container: str, reference: str,
             and KEY_REFERENCE.fullmatch(reference) is not None,
             "Managed issuer key reference is invalid")
     script = (
-        'export VAULT_ADDR=http://127.0.0.1:8200; '
-        'export VAULT_TOKEN="$BAO_DEV_ROOT_TOKEN_ID"; '
-        '[ -n "$VAULT_TOKEN" ] || exit 4; '
-        'exec bao read -format=json "transit/keys/$1"'
+        '[ "${BAO_ADDR:-}" = "https://openbao:8200" ] || exit 4; '
+        '[ "${BAO_CACERT:-}" = "/bao/public-ca/ca.crt" ] || exit 4; '
+        '[ "${BAO_TOKEN_FILE:-}" = "/bao/signing-keys-token/token" ] || exit 4; '
+        '[ -r "$BAO_CACERT" ] && [ -r "$BAO_TOKEN_FILE" ] || exit 4; '
+        'token="$(cat "$BAO_TOKEN_FILE")"; '
+        '[ -n "$token" ] || exit 4; '
+        'case "$token" in *[!A-Za-z0-9._-]*) exit 4;; esac; '
+        'printf \"header = \\\"X-Vault-Token: %s\\\"\\n\" "$token" | '
+        'curl --config - --fail --silent --show-error --max-time 20 '
+        '--cacert "$BAO_CACERT" '
+        '"$BAO_ADDR/v1/transit/keys/$1"'
     )
     options = {} if context is None else {"context": context}
     response = docker_json(["docker", "exec", container, "sh", "-eu", "-c",
@@ -288,8 +303,8 @@ def prove(
         csca_hash, dsc_hash = openssl_verify(csca_pem, dsc_pem)
     except (ValueError, binascii.Error, ssl.SSLError, ChainProbeError) as exc:
         raise HostProbeError("Selected CSCA to DSC certificate chain is invalid") from exc
-    versions = {"csca": key_version(openbao, csca_ref),
-                "dsc": key_version(openbao, dsc_ref)}
+    versions = {"csca": key_version(signing_keys, csca_ref),
+                "dsc": key_version(signing_keys, dsc_ref)}
     chain = {
         "csca_http_status": 200, "dsc_http_status": 200,
         "chain_verified_by": "openssl-x509-strict",
@@ -313,8 +328,8 @@ def prove(
             and same_binding(csca, resolver(signing_keys, organization, csca_did, "csca"))
             and same_binding(dsc, resolver(signing_keys, organization, dsc_did,
                                            "x509_doc_signer"))
-            and key_version(openbao, csca_ref) == versions["csca"]
-            and key_version(openbao, dsc_ref) == versions["dsc"],
+            and key_version(signing_keys, csca_ref) == versions["csca"]
+            and key_version(signing_keys, dsc_ref) == versions["dsc"],
             "Managed issuer binding changed during beta pretransition proof")
     return {
         "schema": "marty.passport-beta-aggregate-kms-pretransition/v1",

@@ -1,0 +1,20 @@
+{
+  "schema": "marty.canvas-roster-metadata-obligations/v1",
+  "fast_shape_cases": [
+    "absent",
+    "preexisting",
+    "explicit_null",
+    "worker_only",
+    "heartbeat_only"
+  ],
+  "database_cases": [
+    "absent",
+    "preexisting",
+    "explicit_null",
+    "stale_target_generation",
+    "wrong_owner",
+    "wrong_attempt",
+    "expired_before_write",
+    "expired_during_lock"
+  ]
+}

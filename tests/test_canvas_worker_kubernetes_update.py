@@ -53,6 +53,18 @@ def worker(value):
     return value["spec"]["template"]["spec"]["containers"][0]
 
 
+def keycloak_deployment():
+    documents = yaml.safe_load_all(
+        (ROOT / "k8s/oracle/05-keycloak.yaml").read_text(encoding="utf-8")
+    )
+    value = next(item for item in documents if item.get("kind") == "Deployment")
+    value["metadata"]["namespace"] = NAMESPACE
+    value["spec"]["template"]["spec"]["containers"][0]["image"] = (
+        "ghcr.io/elevenid/marty-ui-oss/keycloak@sha256:" + "a" * 64
+    )
+    return value
+
+
 @pytest.mark.parametrize("args", [None, []])
 def test_exact_native_launch_accepts_absent_or_empty_args(args):
     value = deployment()
@@ -204,7 +216,7 @@ def extracted_update():
     return "\n".join(result)
 
 
-@pytest.mark.parametrize("case", ["native", "legacy", "missing", "get-failed"])
+@pytest.mark.parametrize("case", ["native", "legacy", "missing", "get-failed", "catalog-failed", "catalog-empty"])
 def test_actual_bash_guard_precedes_every_image_write(case, tmp_path):
     bash = shutil.which("bash")
     if os.name == "nt":
@@ -215,21 +227,27 @@ def test_actual_bash_guard_precedes_every_image_write(case, tmp_path):
     if case == "legacy":
         worker(candidate)["command"] = ["python"]
     raw = "" if case == "missing" else json.dumps(candidate)
+    keycloak_raw = json.dumps(keycloak_deployment())
     env = {
         # Absolute Bash/Python only; even a future `command kubectl` bypass
         # cannot reach the operator's installed cluster client.
         "PATH": tmp_path.as_posix(),
         "REPO_ROOT": ROOT.as_posix(),
+        "K8S_DIR": (ROOT / "k8s/oracle").as_posix(),
         "PYTHON_BIN": Path(sys.executable).as_posix(),
         "NAMESPACE": NAMESPACE,
         "IMAGE_TAG": "synthetic-tag",
         "IMAGE_REGISTRY": "synthetic.invalid/owned",
         "FIXTURE_JSON": raw,
+        "KEYCLOAK_FIXTURE_JSON": keycloak_raw,
+        "MARTY_KEYCLOAK_KMS_IMAGE": "ghcr.io/elevenid/marty-ui-oss/keycloak@sha256:" + "a" * 64,
         "PRIVATE_DIAGNOSTIC": PRIVATE,
         "GET_EXIT": "1" if case == "get-failed" else "0",
+        "TEST_CATALOG_FAIL": "1" if case == "catalog-failed" else "0",
+        "TEST_CATALOG_EMPTY": "1" if case == "catalog-empty" else "0",
         # This test isolates the Canvas cutover guard; the native issuance
         # selection and its image-update guard have separate contract tests.
-        "K8S_ISSUANCE_NATIVE_ENABLED": "false",
+        "K8S_ISSUANCE_NATIVE_ENABLED": "true",
     }
     assert "MARTY_ISSUANCE_IMAGE" not in env
     catalog = json.loads((ROOT / "deploy-config/catalog/services.json").read_text())
@@ -242,18 +260,35 @@ step() { :; }
 success() { :; }
 warn() { :; }
 error() { printf '%s\n' "$*" >&2; exit 1; }
-catalog_services() { printf '%s\n' gateway canvas-sync-worker issuance; }
+catalog_services() {
+  [[ "$TEST_CATALOG_FAIL" != 1 ]] || return 97
+  [[ "$TEST_CATALOG_EMPTY" != 1 ]] || return 0
+  printf '%s\n' gateway canvas-sync-worker issuance
+}
 command_not_found_handle() { return 91; }
+native_check() {
+  [[ "$1" == check-update && "$2" == --repo-root ]] || return 97
+  local snapshot
+  IFS= read -r snapshot || true
+  [[ "$snapshot" == '{"items":[]}' ]] || return 98
+}
 kubectl() {
   case "$1:$2" in
+    get:deployment/issuance-native)
+      printf '{}'
+      return 0 ;;
     get:deployment)
-      [[ $# == 8 && "$3" == canvas-sync-worker && "$4" == -n && "$5" == "$NAMESPACE" && "$6" == -o && "$7" == json && "$8" == --request-timeout=10s ]] || return 92
+      [[ $# == 8 && "$4" == -n && "$5" == "$NAMESPACE" && "$6" == -o && "$7" == json && "$8" == --request-timeout=10s ]] || return 92
+      if [[ "$3" == keycloak ]]; then
+        printf '%s' "$KEYCLOAK_FIXTURE_JSON"
+        return 0
+      fi
+      [[ "$3" == canvas-sync-worker ]] || return 92
       printf '%s\n' "$PRIVATE_DIAGNOSTIC" >&2
       printf '%s' "$FIXTURE_JSON"
       return "$GET_EXIT" ;;
     set:image)
       [[ $# == 6 && "$5" == -n && "$6" == "$NAMESPACE" ]] || return 93
-      [[ "$3" != deployment/issuance ]] || { printf 'FORBIDDEN-ISSUANCE-WRITE\n'; return 96; }
       if [[ "$3" == deployment/canvas-sync-worker ]]; then
         [[ "$4" == "canvas-sync-worker=${IMAGE_REGISTRY}/marty-ui/canvas-sync-worker:${IMAGE_TAG}" ]] || return 95
       fi
@@ -263,10 +298,21 @@ kubectl() {
   esac
 }
 readonly -f kubectl
+native_check() {
+  [[ "$1" == check-update ]] || return 96
+  local snapshot
+  IFS= read -r -d '' snapshot || :
+  [[ "$snapshot" == '{}' ]]
+}
 """
     result = subprocess.run(
         [bash, "--noprofile", "--norc", "-s"],
-        input=prelude + extracted_update() + "\ncmd_update_images\n",
+        input=(prelude + extracted_update() + "\n"
+               "prepare_kubernetes_native_issuance() {\n"
+               "  MARTY_SERVICES_IMAGE=synthetic.invalid/services@sha256:"
+               + "a" * 64 + "\n"
+               "  K8S_NATIVE_ISSUANCE_BIN=native_check\n"
+               "}\ncmd_update_images\n"),
         text=True,
         capture_output=True,
         env=env,
@@ -277,6 +323,14 @@ readonly -f kubectl
     if case == "native":
         assert result.returncode == 0, result.stderr
         assert result.stdout.splitlines() == [
+            "WRITE:deployment/keycloak",
+            "ROLLOUT",
+            "WRITE:deployment/signing-keys",
+            "ROLLOUT",
+            "WRITE:deployment/issuance-native",
+            "ROLLOUT",
+            "WRITE:deployment/issuance",
+            "ROLLOUT",
             "WRITE:deployment/gateway",
             "WRITE:deployment/canvas-sync-worker",
             "WRITE:deployment/ui",
@@ -286,4 +340,7 @@ readonly -f kubectl
     else:
         assert result.returncode != 0
         assert result.stdout == ""
-        assert "full-manifest cutover first" in result.stderr
+        if case.startswith("catalog-"):
+            assert "Deployment catalog" in result.stderr
+        else:
+            assert "full-manifest cutover first" in result.stderr

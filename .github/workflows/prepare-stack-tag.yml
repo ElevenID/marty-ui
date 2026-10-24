@@ -24,6 +24,8 @@ env:
   IMAGE: ghcr.io/elevenid/marty-ui-oss/ui
   SERVICES_IMAGE: ghcr.io/elevenid/marty-ui-oss/services
   MIGRATIONS_IMAGE: ghcr.io/elevenid/marty-ui-oss/migrations
+  OPENBAO_DIDCOMM_IMAGE: ghcr.io/elevenid/marty-ui-oss/openbao-didcomm
+  KEYCLOAK_IMAGE: ghcr.io/elevenid/marty-ui-oss/keycloak
 
 jobs:
   release-environment-preflight:
@@ -62,6 +64,11 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: "3.12"
+
+      - name: Require an accepted official harness source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python scripts/validate_official_harness_source.py
 
       - name: Fetch exact main and reject an existing tag
         shell: bash
@@ -115,6 +122,8 @@ jobs:
           --image "$IMAGE"
           --image "$SERVICES_IMAGE"
           --image "$MIGRATIONS_IMAGE"
+          --image "$OPENBAO_DIDCOMM_IMAGE"
+          --image "$KEYCLOAK_IMAGE"
 
       - name: Create the durable digest-first release claim
         env:
@@ -131,11 +140,15 @@ jobs:
           --image "ui=$IMAGE"
           --image "services=$SERVICES_IMAGE"
           --image "migrations=$MIGRATIONS_IMAGE"
+          --image "openbao_didcomm=$OPENBAO_DIDCOMM_IMAGE"
+          --image "keycloak=$KEYCLOAK_IMAGE"
           --tag-absent
           --release-absent
           --version-tag-absent ui=true
           --version-tag-absent services=true
           --version-tag-absent migrations=true
+          --version-tag-absent openbao_didcomm=true
+          --version-tag-absent keycloak=true
           --output release-transaction.json
 
       - name: Upload immutable no-write release claim

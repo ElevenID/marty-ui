@@ -4,8 +4,8 @@ Reference-only evidence for `_badgr_assertion_url`, `_badgr_validation_url`, and
 `_badgr_revoke_url` from Credentials commit
 `578e86ef43166be79add2d812e92ef650535edaa`. The adapter blob is
 `c86671e2b2ab5bb8a72de78a9bdadb0f340a5ec8`; the artifact records the exact selected
-AST/dependency closure. Existing pinned-source loader and regular-file output
-ownership utilities are reused without modification. No application module,
+AST/dependency closure. The historical capture reused a pinned-source loader and regular-file output
+ownership utilities. No application module,
 operator settings, provider network, Rust code, or runtime dependency is changed.
 
 The corpus contains 123 actual helper observations: 43 assertion, 43 validation,
@@ -24,18 +24,11 @@ deterministic parity. No provider request, lifecycle recovery, public route,
 database persistence, native formatter, or deployment is qualified here. The
 publication owner consumes this evidence before adopting a Rust formatting fix.
 
-The observation child has a closed environment and file/network/process audit
-fence after pinned definition loading. Any caught infrastructure violation fails
-the whole capture, never becoming an expected helper error. Source reads precede
-the separate 15-second observation bound. Both output streams are capped at
-4 MiB, independently drained via regular files, and the child is reaped within a
-separate five-second bound. Nonzero exit, stderr, malformed/duplicate/nonfinite
-JSON, incomplete outcomes, or changed source/case identity fail closed.
-
-Replay (read-only; explicit local Credentials Git checkout):
+The capture generators and their subprocess-control tests have been retired.
+The original implementation remains in Git history. Frozen helper observations
+remain covered by the shared production Rust owner and repository guards:
 
 ```text
-python scripts/capture_canvas_url_template_reference.py <credentials-checkout> --check
 python -m pytest tests/test_canvas_url_template_reference.py
 ```
 

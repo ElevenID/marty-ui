@@ -26,17 +26,17 @@ from urllib.request import HTTPRedirectHandler, HTTPSHandler, ProxyHandler, Requ
 if __package__:
     from .check_passport_supported_kubernetes_model import (
         approved_entrypoint, approved_runtime_spec, forbidden_routing_env,
+        kubernetes_config_value as resolve_kubernetes_config_value,
         inspect as inspect_kubernetes_model,
     )
     from .collect_passport_beta_acceptance import digest_file, verify_attestations
-    from .passport_supported_infra_images import qualified_images
 else:
     from check_passport_supported_kubernetes_model import (
         approved_entrypoint, approved_runtime_spec, forbidden_routing_env,
+        kubernetes_config_value as resolve_kubernetes_config_value,
         inspect as inspect_kubernetes_model,
     )
     from collect_passport_beta_acceptance import digest_file, verify_attestations
-    from passport_supported_infra_images import qualified_images
 
 
 SHA = re.compile(r"[0-9a-f]{40}\Z")
@@ -153,31 +153,7 @@ def environment_flags(values: object, service: str,
 
 
 def kubernetes_config_value(container: dict, data: dict, name: str) -> object:
-    """Resolve one deployed value from explicit env or the inspected ConfigMap."""
-    entries = container.get("env", [])
-    require(isinstance(entries, list), "Kubernetes passport environment is invalid")
-    matches = [entry for entry in entries
-               if isinstance(entry, dict) and entry.get("name") == name]
-    require(len(matches) <= 1, "Kubernetes passport environment is ambiguous")
-    if matches:
-        entry = matches[0]
-        if "value" in entry:
-            require("valueFrom" not in entry,
-                    "Kubernetes passport configuration source is ambiguous")
-            return entry["value"]
-        value_from = entry.get("valueFrom")
-        source = value_from.get("configMapKeyRef") if isinstance(value_from, dict) else None
-        require(isinstance(source, dict) and source.get("name") == "marty-config"
-                and source.get("key") == name,
-                "Kubernetes passport configuration source is invalid")
-        return data.get(name)
-    env_from = container.get("envFrom", [])
-    require(isinstance(env_from, list), "Kubernetes passport environment source is invalid")
-    require(len(env_from) == 1 and isinstance(env_from[0], dict)
-            and isinstance(env_from[0].get("configMapRef"), dict)
-            and env_from[0]["configMapRef"].get("name") == "marty-config",
-            "Kubernetes passport ConfigMap source is ambiguous")
-    return data.get(name)
+    return resolve_kubernetes_config_value(container, data, name, require=require)
 
 
 def kubernetes_literal_value(container: dict, name: str) -> object:
@@ -338,8 +314,8 @@ def observe_compose(
             and labels.get("com.docker.compose.service") == "edge"
             and isinstance(state, dict) and state.get("Running") is True
             and state.get("Status") == "running"
-            and config.get("Image") == qualified_images(verify_registry=False)["edge"],
-            f"{surface} HTTPS edge is not the isolated pinned image")
+            and config.get("Image") == services_reference,
+            f"{surface} HTTPS edge is not the signed services image")
     ports = edge.get("NetworkSettings", {}).get("Ports", {}).get("8443/tcp")
     bindings = edge.get("HostConfig", {}).get("PortBindings", {}).get("8443/tcp")
     require(isinstance(ports, list) and len(ports) == 1
@@ -761,9 +737,10 @@ def collect(
     oci = [item for item in artifacts if isinstance(item, dict)
            and item.get("type") == "oci"]
     images = {item.get("uri"): item.get("digest") for item in oci}
-    require(len(oci) == 3 and len(images) == 3 and set(images) == {
+    require(len(oci) == 4 and len(images) == 4 and set(images) == {
         "ghcr.io/elevenid/marty-ui-oss/ui", "ghcr.io/elevenid/marty-ui-oss/services",
         "ghcr.io/elevenid/marty-ui-oss/migrations",
+        "ghcr.io/elevenid/marty-ui-oss/openbao-didcomm",
     } and all(isinstance(value, str) and DIGEST.fullmatch(value) is not None
               for value in images.values()), "Released UI image roles are incomplete")
     signed = attest(manifest_path, images, source_commit)

@@ -1,9 +1,11 @@
-"""Pure comparator mutation tests; actual Compose rendering is a separate gate."""
+"""Mutation tests against the approved KMS-only self-host model."""
 
 from copy import deepcopy
 import hashlib
+import os
 from pathlib import Path
 import runpy
+import subprocess
 
 import pytest
 import yaml
@@ -12,12 +14,112 @@ ROOT = Path(__file__).resolve().parents[1]
 GATE = runpy.run_path(str(ROOT / "scripts/test_selfhost_native_owner_compose.py"))
 
 
+def test_selfhost_runtime_disallows_insecure_grpc_override():
+    model = yaml.safe_load((ROOT / "docker-compose.selfhost.prod.yml").read_text())
+    assert model["x-runtime-env"]["GRPC_INSECURE_ALLOWED"] == "false"
+    for name, service in model["services"].items():
+        environment = service.get("environment", {})
+        if isinstance(environment, dict) and "GRPC_INSECURE_ALLOWED" in environment:
+            assert environment["GRPC_INSECURE_ALLOWED"] == "false", name
+
+
+def test_auth_login_uses_bootstrapped_organization_issuer_did():
+    model = yaml.safe_load((ROOT / "docker-compose.selfhost.prod.yml").read_text())
+    services = model["services"]
+    expected = (
+        "did:web:${PUBLIC_DOMAIN:?PUBLIC_DOMAIN must be set}:orgs:"
+        "${MARTY_ORG_SLUG:-marty}"
+    )
+    assert services["auth"]["environment"]["CREDENTIAL_LOGIN_ISSUER_DID"] == expected
+    assert services["flow"]["environment"]["OID4VP_ISSUER_DID"] == expected
+
+
+def test_flow_waits_for_both_issuance_peers_without_a_startup_cycle():
+    # Flow's physical-document health check contacts Issuance at startup.
+    # A restored Compose up can otherwise leave Issuance Created while Flow
+    # restarts, blocking Auth, Gateway and Edge behind Flow health.
+    model = yaml.safe_load((ROOT / "docker-compose.selfhost.prod.yml").read_text())
+    services = model["services"]
+    flow_dependencies = services["flow"]["depends_on"]
+    for peer in ("issuance", "issuance-native"):
+        assert flow_dependencies[peer] == {"condition": "service_healthy"}
+    for peer in ("issuance", "issuance-native"):
+        pending = [peer]
+        visited = set()
+        while pending:
+            service = pending.pop()
+            if service in visited:
+                continue
+            visited.add(service)
+            pending.extend(services[service].get("depends_on", {}))
+        assert "flow" not in visited
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX shell is required")
+def test_keycloak_preserves_scoped_openbao_token_file(tmp_path):
+    model = yaml.safe_load((ROOT / "docker-compose.selfhost.prod.yml").read_text())
+    env = model["services"]["keycloak"]["environment"]
+    assert env["BAO_TOKEN_FILE"] == "/run/secrets/keycloak_signing_kms_token"
+    assert "BAO_TOKEN" not in env
+    assert env["KC_HOSTNAME"] == "https://${PUBLIC_DOMAIN:-localhost}"
+    assert "PRESERVE_BAO_TOKEN_FILE=1" in (
+        ROOT / "scripts/keycloak-selfhost-start.sh"
+    ).read_text()
+    token_file = tmp_path / "token"
+    token_file.write_text("synthetic-scoped-token", encoding="ascii")
+    result = subprocess.run(
+        ["sh", "-c", '. "$1"; test -n "$BAO_TOKEN_FILE" && test -z "${BAO_TOKEN:-}"',
+         "sh", str(ROOT / "scripts/load-secrets-env.sh")],
+        env={"PATH": "/usr/bin:/bin", "BAO_TOKEN_FILE": str(token_file),
+             "PRESERVE_BAO_TOKEN_FILE": "1"},
+        capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_selfhost_openbao_requires_transactional_raft_storage():
+    config = (ROOT / "docker/openbao-selfhost.hcl").read_text(encoding="utf-8")
+    bootstrap = (ROOT / "docker/openbao-selfhost-init.sh").read_text(encoding="utf-8")
+    assert 'storage "raft" {' in config
+    assert 'storage "file" {' not in config
+    assert "bao operator raft list-peers" in bootstrap
+
+
+def test_selfhost_redis_is_socket_only_and_available_to_exact_consumers():
+    model = yaml.safe_load((ROOT / "docker-compose.selfhost.prod.yml").read_text())
+    services = model["services"]
+    assert all("container_name" not in service for service in services.values())
+    redis = services["redis"]
+    assert redis["command"].split()[0:3] == ["redis-server", "--port", "0"]
+    assert "--unixsocket /data/run/redis.sock" in redis["command"]
+    assert "--unixsocketperm 777" in redis["command"]
+    assert model["volumes"] == {"redis-socket": None}
+    consumers = {
+        "db-migrate", "kms-initialize", "gateway", "auth", "organization", "signing-keys",
+        "flow", "verification", "revocation-profile", "device-registration",
+    }
+    for name, service in services.items():
+        mounts = [item for item in service.get("volumes", [])
+                  if isinstance(item, dict) and item.get("source") == "redis-socket"]
+        if name == "redis":
+            assert len(mounts) == 1 and mounts[0]["target"] == "/data/run"
+        elif name in consumers:
+            assert len(mounts) == 1 and mounts[0]["target"] == "/run/marty-redis"
+            assert mounts[0]["read_only"] is True
+            key = "SIGNING_KEYS_REDIS_URL" if name == "signing-keys" else "REDIS_URL"
+            assert service["environment"][key].startswith(
+                "unix:///run/marty-redis/redis.sock"
+            )
+        else:
+            assert not mounts, name
+
+
 def test_reference_identity_and_descriptor_closure():
     GATE["assert_input_inventory"]()
-    data = (ROOT / GATE["FROZEN"]).read_text(encoding="utf-8").encode()
+    data = (ROOT / GATE["APPROVED"]).read_text(encoding="utf-8").encode()
     assert (
         hashlib.sha256(data).hexdigest()
-        == "5c643478422ecb9f71bb9bd3133af55805e91b184bd8f3c84852fafd418905f8"
+        == "ae230c9efa87ac076f171208d8fc265f3441e6991e36377525c6ba0f54248ec9"
     )
     import json
 
@@ -25,105 +127,79 @@ def test_reference_identity_and_descriptor_closure():
     assert "docker-compose.service.issuance-native-runtime.yml" in descriptor["assets"]
 
 
-@pytest.fixture
-def models():
-    # Small independently spelled models test the comparator, not Compose.
-    before = {
-        "services": {
-            "issuance": {
-                "environment": {
-                    "ISSUANCE_AUTH_SESSION_TTL_MINUTES": GATE["SHARED_SETTINGS"][
-                        "ISSUANCE_AUTH_SESSION_TTL_MINUTES"
-                    ],
-                    "ENVIRONMENT": "production",
-                    "BAO_ADDR": "legacy",
-                    "TOKEN_HMAC_KEY_FILE": "/run/secrets/token",
-                    **{
-                        key: value
-                        for key, value in GATE["PUBLICATION_SETTINGS"].items()
-                        if key not in GATE["SHARED_ADDITIONS"]
-                    },
-                },
-                "secrets": [{"source": "token"}, {"source": "openbao_service_token"}],
-            },
-            "gateway": {
-                "environment": {"ISSUANCE_SERVICE_URL": "http://issuance:8005"},
-                "depends_on": {},
-            },
-            "flow": {
-                "environment": {"ISSUANCE_GRPC_TARGET": "issuance:9005"},
-                "secrets": [],
-            },
-        },
-        "volumes": {"preserved": {}},
-    }
-    after = deepcopy(before)
-    after["services"]["flow"]["environment"].update(
-        ISSUANCE_GRPC_TARGET="issuance-native:9005",
-        ISSUANCE_API_KEY_FILE="/run/secrets/issuance_api_key",
-        SIGNING_KEYS_INTERNAL_API_KEY_FILE="/run/secrets/issuance_api_key",
-        **GATE["PASSPORT_CONSUMER_ADDITIVE"]["flow"],
-    )
-    after["services"]["flow"]["secrets"].append(
-        {"source": "issuance_api_key", "target": "/run/secrets/issuance_api_key"}
-    )
-    after["x-issuance-application-env"] = {
-        "ENVIRONMENT": "production",
-        "TOKEN_HMAC_KEY_FILE": "/run/secrets/token",
-        **GATE["SHARED_SETTINGS"],
-        **GATE["PUBLICATION_SETTINGS"],
-    }
-    after["services"]["issuance"]["environment"].update(GATE["SHARED_ADDITIONS"])
-    after["services"]["gateway"]["environment"].update(
-        ISSUANCE_NATIVE_SERVICE_URL="http://issuance-native:8005",
-        GATEWAY_REQUIRED_READY_SERVICES=GATE["READY"],
-        SIGNING_KEYS_SERVICE_URL="http://signing-keys:8017",
-        **GATE["PASSPORT_CONSUMER_ADDITIVE"]["gateway"],
-    )
-    after["services"]["gateway"]["depends_on"]["issuance-native"] = {
-        "condition": "service_healthy",
-        "required": True,
-    }
-    after["services"]["issuance-native"] = {
-        "build": {
-            "context": ".",
-            "dockerfile": "services/Dockerfile",
-            "args": {"SERVICE_NAME": "issuance-native"},
-        },
-        "entrypoint": ["/app/services/entrypoint.sh"],
-        "command": [],
-        "environment": {
-            "ENVIRONMENT": "production",
-            "TOKEN_HMAC_KEY_FILE": "/run/secrets/token",
-            **GATE["SHARED_SETTINGS"],
-            **GATE["PUBLICATION_SETTINGS"],
-            "SERVICE_NAME": "issuance_native",
-            "ISSUANCE_GRPC_ENABLED": "true",
-            "RP_GRPC_TARGET": "revocation-profile:9013",
-            **GATE["NATIVE_ADDITIVE"],
-        },
-        "secrets": [{"source": "token"}],
-        "depends_on": {
-            name: {"condition": condition, "required": True}
-            for name, condition in [
-                ("db-migrate", "service_completed_successfully"),
-                ("issuance-migrations", "service_completed_successfully"),
-                ("postgres", "service_healthy"),
-                ("signing-keys", "service_healthy"),
-                ("revocation-profile", "service_healthy"),
-            ]
-        },
-        "healthcheck": {
-            "test": ["CMD", "curl", "--fail", "http://localhost:8005/health"],
-            "interval": "10s",
-            "timeout": "5s",
-            "retries": 3,
-        },
-        "restart": "unless-stopped",
-        "networks": {"default": None},
-    }
+@pytest.fixture(scope="module")
+def rendered_models():
+    # Compare the independently approved KMS-only source to the current model.
+    render = GATE["GATE"]["render"]
+    before = render(GATE["APPROVED"])
+    after = render(GATE["GATE"]["BASE"])
     GATE["assert_models"](before, after)
     return before, after
+
+
+def test_ordinary_migration_cannot_provision_kms(rendered_models):
+    _, current = rendered_models
+    services = current["services"]
+    migration = services["db-migrate"]
+    initializer = services["kms-initialize"]
+    assert migration["environment"]["MARTY_KMS_BOOTSTRAP_ENABLED"] == "false"
+    assert "BAO_TOKEN_FILE" not in migration["environment"]
+    assert all(secret["source"] != "openbao_bootstrap_token"
+               for secret in migration["secrets"])
+    assert initializer["profiles"] == ["kms-init"]
+    assert initializer["environment"]["MARTY_KMS_BOOTSTRAP_ENABLED"] == "true"
+    assert initializer["environment"]["BAO_TOKEN_FILE"] == "/run/secrets/openbao_bootstrap_token"
+    assert initializer["depends_on"]["db-migrate"]["condition"] == "service_completed_successfully"
+
+
+@pytest.mark.parametrize("missing", ["environment", "mount"])
+def test_issuance_alias_requires_authenticated_kms_binding(rendered_models, missing):
+    approved, current = deepcopy(rendered_models)
+    issuance = current["services"]["issuance"]
+    if missing == "environment":
+        del issuance["environment"]["SIGNING_KEYS_INTEGRATION_SECRET_KEY_FILE"]
+    else:
+        issuance["secrets"] = [
+            secret
+            for secret in issuance["secrets"]
+            if secret["source"] != "signing_keys_integration_secret_key"
+        ]
+    with pytest.raises(AssertionError):
+        GATE["assert_models"](approved, current)
+
+
+@pytest.fixture
+def models(rendered_models):
+    return deepcopy(rendered_models)
+
+
+@pytest.mark.parametrize("fault", ["raw-environment", "raw-secret-mount"])
+def test_approved_model_rejects_return_of_raw_master_key(models, fault):
+    approved, current = models
+    for model in (approved, current):
+        if fault == "raw-environment":
+            model["services"]["issuance"]["environment"][
+                "INTEGRATION_SECRET_MASTER_KEY_FILE"
+            ] = "/run/secrets/integration_secret_master_key"
+        else:
+            model["secrets"]["integration_secret_master_key"] = {
+                "file": "/synthetic/integration_secret_master_key"
+            }
+            model["services"]["issuance"]["secrets"].append(
+                {"source": "integration_secret_master_key"}
+            )
+    with pytest.raises(AssertionError):
+        GATE["assert_models"](approved, current)
+
+
+def test_approved_model_rejects_workload_tls_private_key_even_if_snapshotted(models):
+    approved, current = models
+    for model in (approved, current):
+        model["services"]["flow"]["environment"]["GRPC_WORKLOAD_TLS_SERVER_KEY"] = (
+            "/run/secrets/flow_workload_server_key"
+        )
+    with pytest.raises(AssertionError):
+        GATE["assert_models"](approved, current)
 
 
 @pytest.mark.parametrize(
@@ -159,6 +235,36 @@ def test_passport_consumer_additions_are_closed(models, owner, key):
     before, after = models
     after["services"][owner]["environment"][key] = "unreviewed"
     with pytest.raises(AssertionError):
+        GATE["assert_models"](before, after)
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "token-path",
+        "secret-source",
+        "missing-secret",
+        "bootstrap-token-path",
+        "bootstrap-secret-source",
+        "bootstrap-secret-missing",
+    ],
+)
+def test_production_migration_kms_identities_are_closed(models, fault):
+    before, after = models
+    migration = after["services"]["db-migrate"]
+    if fault == "token-path":
+        migration["environment"]["NOTIFICATION_OPENBAO_TOKEN_FILE"] = "/other"
+    elif fault == "secret-source":
+        migration["secrets"][-1]["source"] = "openbao_service_token"
+    elif fault == "missing-secret":
+        migration["secrets"].pop()
+    elif fault == "bootstrap-token-path":
+        migration["environment"]["BAO_TOKEN_FILE"] = "/run/secrets/openbao_service_token"
+    elif fault == "bootstrap-secret-source":
+        migration["secrets"][-2]["source"] = "openbao_service_token"
+    else:
+        migration["secrets"].pop(-2)
+    with pytest.raises((AssertionError, KeyError, IndexError)):
         GATE["assert_models"](before, after)
 
 
@@ -218,6 +324,25 @@ def test_siblings_resources_and_secret_boundary_are_closed(models, fault):
         )
     else:
         after["x-issuance-application-env"]["BAO_ADDR"] = "legacy"
+    with pytest.raises(AssertionError):
+        GATE["assert_models"](before, after)
+
+
+@pytest.mark.parametrize("fault", ["file", "binding", "mount"])
+def test_signing_keys_has_a_dedicated_openbao_token(models, fault):
+    before, after = models
+    if fault == "file":
+        after["secrets"]["signing_keys_openbao_token"]["file"] = (
+            "/synthetic/openbao_service_token"
+        )
+    elif fault == "binding":
+        after["services"]["signing-keys"]["environment"]["BAO_TOKEN_FILE"] = (
+            "/run/secrets/openbao_service_token"
+        )
+    else:
+        after["services"]["signing-keys"]["secrets"][0]["source"] = (
+            "openbao_service_token"
+        )
     with pytest.raises(AssertionError):
         GATE["assert_models"](before, after)
 

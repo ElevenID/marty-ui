@@ -3,7 +3,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use marty_didcomm::{DidDocument, DidResolver, VerificationMethod};
-use p256::elliptic_curve::sec1::ToEncodedPoint;
+use p256::elliptic_curve::sec1::ToSec1Point;
 use reqwest::{Client, StatusCode};
 use serde::Deserialize;
 use serde_json::{Map, Value};
@@ -191,7 +191,7 @@ fn select_public_key(
         return Err(IssuerResolutionError::Invalid);
     }
     let authorized = document
-        .assertion_method
+        .assertion_methods()
         .iter()
         .filter_map(|entry| match entry {
             Value::String(value) => normalize_method_id(&document.id, value),
@@ -249,7 +249,7 @@ fn repair_compressed_p256_jwk(jwk: &mut Map<String, Value>) -> Option<()> {
     }
     let compressed = URL_SAFE_NO_PAD.decode(string(jwk, "x")).ok()?;
     let key = p256::PublicKey::from_sec1_bytes(&compressed).ok()?;
-    let point = key.to_encoded_point(false);
+    let point = key.to_sec1_point(false);
     jwk.insert(
         "x".into(),
         Value::String(URL_SAFE_NO_PAD.encode(point.x()?)),
@@ -551,9 +551,9 @@ mod tests {
 
         let mut second = document.verification_method[0].clone();
         second.id = format!("{did}#1");
-        document
-            .assertion_method
-            .push(Value::String(second.id.clone()));
+        let mut assertion_methods = document.assertion_methods().to_vec();
+        assertion_methods.push(Value::String(second.id.clone()));
+        document.set_assertion_methods(assertion_methods).unwrap();
         document.verification_method.push(second);
         assert_eq!(
             select_public_key(&document, &request),
@@ -568,12 +568,10 @@ mod tests {
 
     #[test]
     fn compressed_p256_output_is_normalized_to_a_complete_public_jwk() {
-        let secret = p256::SecretKey::from_slice(&[7_u8; 32]).unwrap();
-        let compressed = secret.public_key().to_encoded_point(true);
         let mut jwk = serde_json::json!({
             "kty":"EC",
             "crv":"P-256",
-            "x":URL_SAFE_NO_PAD.encode(compressed.as_bytes())
+            "x":"Ax4YUy_UdUwC8wQdnHXOszuD_9gax85P6ILMscmLxYlu"
         })
         .as_object()
         .unwrap()
@@ -581,8 +579,14 @@ mod tests {
 
         repair_compressed_p256_jwk(&mut jwk).unwrap();
 
-        assert_eq!(URL_SAFE_NO_PAD.decode(string(&jwk, "x")).unwrap().len(), 32);
-        assert_eq!(URL_SAFE_NO_PAD.decode(string(&jwk, "y")).unwrap().len(), 32);
+        assert_eq!(
+            string(&jwk, "x"),
+            "HhhTL9R1TALzBB2cdc6zO4P_2BrHzk_ogsyxyYvFiW4"
+        );
+        assert_eq!(
+            string(&jwk, "y"),
+            "pGwxHE4v9A3ZajZT5uRURdMt_khuztdcepDGoYiBwKM"
+        );
         assert!(!jwk.contains_key("d"));
     }
 }

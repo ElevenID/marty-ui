@@ -12,13 +12,15 @@
 **/.next
 **/out
 **/target
+openbao/didcomm-authcrypt/.build/
 
 # CI inventory manifests are not product compilation or runtime inputs.
 contracts/canvas-worker-oracle-producers.json
 contracts/canvas-worker-oracle-script-imports.json
-contracts/canvas-worker-startup-current-inputs.json
-contracts/canvas-worker-rest-current-inputs.json
+# All matching Canvas input records are CI evidence, never image inputs.
+contracts/canvas-*-current-inputs.json
 contracts/canvas-worker-tier-obligations.json
+contracts/canvas-worker-package-migration.json
 contracts/python-value-fast-obligations.json
 contracts/canvas-renewal-profile-obligations.json
 
@@ -55,6 +57,7 @@ Thumbs.db
 .env
 .env.local
 .env.*.local
+docker/secrets/
 
 # Documentation
 *.md
@@ -74,7 +77,7 @@ tests/demo-recordings/
 tests/demo-recordings-report/
 tests/artifacts/
 
-# macOS-specific pre-built wheels (useless in Linux containers)
+# Do not admit local wheel artifacts into service build contexts.
 wheels/
 
 # CI/CD and infra (not needed in image)
@@ -87,13 +90,77 @@ rust/services/issuance/src/canvas_operation_http_prepared_tests.rs
 rust/services/issuance/src/canvas_sync_provider_http_tests.rs
 rust/services/issuance/src/canvas_sync_processor_tests.rs
 rust/services/issuance/src/canvas_sync_worker_retry_tests.rs
+rust/services/issuance/src/canvas_sync_worker_renewal_tests.rs
 rust/services/issuance/src/initiation_didcomm/tests/initiation_didcomm_renewal_tests.rs
 rust/services/issuance/src/passport_http_reconciliation_tests.rs
 rust/services/issuance/src/python_format_tests.rs
 rust/services/issuance/src/signing_http_projection_tests.rs
 rust/services/issuance/src/signing_http_response_tests.rs
 rust/services/issuance/src/token_rate_limit_http_tests.rs
+# Shared Flow/Canvas acceptance fixture; production binaries do not compile it.
+rust/acceptance/support/base_runtime_redis.rs
+rust/acceptance/support/didcomm_gateway_replay.rs
+rust/acceptance/support/didcomm_native_grpc_fixture.rs
+rust/acceptance/support/issuance_named_peers.rs
 # Cargo auto-discovers these oid4vp-contract test targets only for `cargo test`.
 # Production Docker COPY rust does not compile or execute them.
 rust/crates/oid4vp-contract/tests/contract_vectors.rs
 rust/crates/oid4vp-contract/tests/transport_metadata.rs
+# The worker acceptance target and its three #[path] support modules are test-only.
+# Root-context release builders copy Rust but compile production binaries only.
+rust/crates/canvas-worker-acceptance/tests/canvas_published_worker_contract.rs
+rust/crates/canvas-worker-acceptance/tests/support/canvas_rest_requalification.rs
+rust/crates/canvas-worker-acceptance/tests/support/canvas_startup_attestation.rs
+rust/crates/canvas-worker-acceptance/tests/support/canvas_worker_roster_metadata.rs
+# Canvas composition acceptance target and its support tree are checkout-only.
+rust/crates/canvas-acceptance/tests/canvas_published_schema_contract.rs
+rust/crates/canvas-acceptance/tests/support/base_runtime_canvas.rs
+rust/crates/canvas-acceptance/tests/support/base_runtime_container.rs
+rust/crates/canvas-acceptance/tests/support/base_runtime_didcomm.rs
+rust/crates/canvas-acceptance/tests/support/base_runtime_gateway.rs
+rust/crates/canvas-acceptance/tests/support/base_runtime_ordinary.rs
+rust/crates/canvas-acceptance/tests/support/base_runtime_redis.rs
+rust/crates/canvas-acceptance/tests/support/didcomm_composed_delivery.rs
+rust/crates/canvas-acceptance/tests/support/didcomm_fresh_initiation.rs
+rust/crates/canvas-acceptance/tests/support/didcomm_gateway_replay.rs
+rust/crates/canvas-acceptance/tests/support/didcomm_renewal_canvas.rs
+rust/crates/canvas-acceptance/tests/support/didcomm_renewal_composed.rs
+rust/crates/canvas-acceptance/tests/support/didcomm_unkeyed_grpc_initiation.rs
+rust/crates/canvas-acceptance/tests/support/owned_cleanup.rs
+rust/crates/canvas-acceptance/tests/support/remote_didcomm_sender.rs
+rust/crates/canvas-acceptance/tests/support/remote_tls_peer.rs
+rust/crates/canvas-acceptance/tests/support/rendered_base_process.rs
+rust/crates/canvas-acceptance/tests/support/renewal_binding_postgres.rs
+rust/crates/canvas-acceptance/tests/support/renewal_canvas_binding.rs
+rust/crates/canvas-acceptance/tests/support/renewal_fresh_main.rs
+rust/crates/canvas-acceptance/tests/support/renewal_gateway_replay.rs
+rust/crates/canvas-acceptance/tests/support/renewal_main_replay.rs
+rust/crates/canvas-acceptance/tests/support/resolved_kubernetes_runtime.rs
+rust/crates/canvas-acceptance/tests/support/resolved_runtime.rs
+rust/crates/canvas-acceptance/tests/support/runtime_failure_diagnostics.rs
+# The Flow acceptance target and its seven support modules are test-only.
+# Root-context release builders do not compile or run this test executable.
+rust/crates/flow-acceptance/tests/flow_published_schema_contract.rs
+rust/crates/flow-acceptance/tests/support/didcomm_flow_grpc_admission.rs
+rust/crates/flow-acceptance/tests/support/flow_admission.rs
+rust/crates/flow-acceptance/tests/support/flow_legacy_physical_http.rs
+rust/crates/flow-acceptance/tests/support/flow_native_consumer.rs
+rust/crates/flow-acceptance/tests/support/flow_public_startup.rs
+rust/crates/flow-acceptance/tests/support/flow_public_startup_peers.rs
+rust/crates/flow-acceptance/tests/support/flow_rendered_selection.rs
+# The self-host acceptance executable and fixture support are also test-only.
+rust/crates/selfhost-acceptance/tests/selfhost_public_image_contract.rs
+rust/crates/selfhost-acceptance/tests/native_kms_schema_contract.rs
+rust/crates/selfhost-acceptance/tests/support/selfhost_packaged_runtime.rs
+rust/crates/selfhost-acceptance/tests/support/selfhost_runtime_sidecar.rs
+# Cross-service acceptance targets are compiled from the checkout in CI, not
+# from the production image context.
+rust/crates/service-acceptance/tests/passport_managed_kms_chain.rs
+rust/crates/service-acceptance/tests/passport_gateway_postgres.rs
+rust/crates/service-acceptance/tests/gateway_signing_acceptance.rs
+rust/crates/service-acceptance/tests/holder_remote_live_kms.rs
+rust/crates/service-acceptance/tests/csca_capability_contract.rs
+rust/crates/service-acceptance/tests/tls_openbao_keyless.rs
+# CSCA test targets run from the checkout, not images.
+rust/services/signing-keys/tests/csca_lifecycle_behavior.rs
+rust/services/signing-keys/tests/csca_lifecycle_storage_contract.rs

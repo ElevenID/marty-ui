@@ -9,6 +9,10 @@ use std::sync::Mutex;
 
 type FailureCall = (String, String, Option<u64>, bool, String, i32);
 
+#[cfg(test)]
+#[path = "canvas_sync_worker_renewal_tests.rs"]
+mod renewal_tests;
+
 struct SpyRepository {
     leased: Mutex<Option<CanvasSyncJob>>,
     target: CanvasSyncTarget,
@@ -19,6 +23,7 @@ struct SpyRepository {
     failures: Mutex<Vec<FailureCall>>,
     failed_job_ids: Mutex<Vec<String>>,
     heartbeats: Mutex<Vec<(String, usize, bool)>>,
+    renewal: Option<Arc<renewal_tests::RenewalScript>>,
 }
 
 #[async_trait]
@@ -32,7 +37,9 @@ impl CanvasSyncWorkerRepository for SpyRepository {
             heartbeat.leased_jobs,
             heartbeat.processor_configured,
         ));
-        Ok(())
+        self.renewal
+            .as_ref()
+            .map_or(Ok(()), |script| script.heartbeat(heartbeat))
     }
     async fn enqueue_due(
         &self,
@@ -50,37 +57,57 @@ impl CanvasSyncWorkerRepository for SpyRepository {
     }
     async fn target(
         &self,
-        _: &str,
-        _: &str,
+        organization_id: &str,
+        target_id: &str,
     ) -> Result<Option<CanvasSyncTarget>, CanvasSyncRepositoryError> {
+        if let Some(script) = &self.renewal {
+            script.target(organization_id, target_id);
+        }
         Ok(Some(self.target.clone()))
     }
     async fn touch_target_heartbeat(
         &self,
-        _: &CanvasSyncTarget,
-        _: &str,
+        target: &CanvasSyncTarget,
+        worker_id: &str,
     ) -> Result<bool, CanvasSyncRepositoryError> {
-        Ok(true)
+        self.renewal
+            .as_ref()
+            .map_or(Ok(true), |script| script.touch(target, worker_id))
     }
-    async fn validate_target(&self, _: &CanvasSyncTarget) -> Result<(), CanvasSyncProcessingError> {
+    async fn validate_target(
+        &self,
+        target: &CanvasSyncTarget,
+    ) -> Result<(), CanvasSyncProcessingError> {
+        if let Some(script) = &self.renewal {
+            script.validate(target);
+        }
         *self.validation_calls.lock().unwrap() += 1;
         self.validation_error.clone().map_or(Ok(()), Err)
     }
     async fn renew_lease(
         &self,
-        _: &CanvasSyncJob,
-        _: &str,
-        _: &PythonConfigInteger,
+        job: &CanvasSyncJob,
+        worker_id: &str,
+        seconds: &PythonConfigInteger,
     ) -> Result<bool, CanvasSyncRepositoryError> {
+        if let Some(script) = &self.renewal {
+            return script.renew(job, worker_id, seconds);
+        }
         panic!("short processor must not need a renewal")
     }
     async fn complete_job(
         &self,
-        _: &CanvasSyncJob,
-        _: &str,
-        _: i32,
-        _: &CanvasSyncResult,
+        job: &CanvasSyncJob,
+        worker_id: &str,
+        version: i32,
+        result: &CanvasSyncResult,
     ) -> Result<bool, CanvasSyncRepositoryError> {
+        if let Some(script) = &self.renewal {
+            assert_eq!(result.len(), 1);
+            assert_eq!(result["facts_changed"].get(), "1");
+            script.persist(job, worker_id, version, "complete")?;
+            return Ok(true);
+        }
         panic!("rate limit must never complete a job")
     }
     async fn fail_job(
@@ -100,6 +127,9 @@ impl CanvasSyncWorkerRepository for SpyRepository {
         ));
         assert_eq!(job.id, self.expected_job_id);
         self.failed_job_ids.lock().unwrap().push(job.id.clone());
+        if let Some(script) = &self.renewal {
+            script.persist(job, worker_id, version, "fail")?;
+        }
         Ok(Some(self.failure_status))
     }
 }
@@ -120,6 +150,7 @@ fn spy_repository(
         failures: Mutex::new(Vec::new()),
         failed_job_ids: Mutex::new(Vec::new()),
         heartbeats: Mutex::new(Vec::new()),
+        renewal: None,
     })
 }
 
@@ -279,8 +310,41 @@ impl CanvasOAuthProvider for NoOAuth {
     }
 }
 
-#[tokio::test]
-async fn retry_hint_reaches_the_actual_worker_failure_port() {
+#[test]
+fn retry_delay_owns_all_normalized_header_shapes_and_backoff_edges() {
+    // The provider parser owns the raw header/date shapes; this policy sees
+    // only their effective hints. Expected delays are literal, not derived
+    // from the production backoff function.
+    for (shape, hint, expected) in [
+        ("http_date_future", Some(60), 60),
+        ("http_date_past", Some(0), 15),
+        ("malformed", Some(0), 15),
+        ("negative", Some(0), 15),
+        ("zero", Some(0), 15),
+        ("clamped", Some(86_400), 86_400),
+        ("huge_integer", Some(86_400), 86_400),
+    ] {
+        assert_eq!(job_retry_delay_seconds(1, hint, 0), expected, "{shape}");
+    }
+
+    for (attempt, hint, jitter, expected) in [
+        (0, None, 0, 15),
+        (1, None, u64::MAX, 20),
+        (2, None, u64::MAX, 40),
+        (3, Some(10), 0, 60),
+        (12, None, u64::MAX, 4_800),
+        (i32::MAX, None, u64::MAX, 4_800),
+        (1, Some(100_000), 0, 86_400),
+    ] {
+        assert_eq!(
+            job_retry_delay_seconds(attempt, hint, jitter),
+            expected,
+            "attempt={attempt}, hint={hint:?}, jitter={jitter}"
+        );
+    }
+}
+
+fn retry_job_fixture() -> (CanvasSyncJob, CanvasSyncTarget) {
     let now = Utc::now();
     let target = CanvasSyncTarget {
         id: "retry-target".into(),
@@ -311,6 +375,12 @@ async fn retry_hint_reaches_the_actual_worker_failure_port() {
         created_at: now,
         started_at: Some(now),
     };
+    (job, target)
+}
+
+#[tokio::test]
+async fn retry_hint_reaches_the_actual_worker_failure_port() {
+    let (job, target) = retry_job_fixture();
     for hint in [0, 60, 86_400] {
         let repository = spy_repository(
             job.clone(),

@@ -100,12 +100,21 @@ pub struct GatewayConfig {
     pub production: bool,
     pub service_urls: BTreeMap<String, String>,
     pub auth_grpc_target: String,
+    pub auth_grpc_client_tls: Option<GatewayAuthClientTls>,
     pub organization_grpc_target: String,
     pub event_stream_grpc_target: String,
     pub grpc_ca_certificate: Option<PathBuf>,
+    pub organization_grpc_ca_certificate: Option<PathBuf>,
+    pub event_stream_grpc_ca_certificate: Option<PathBuf>,
     pub grpc_insecure_allowed: bool,
     pub grpc_service_token: Option<String>,
+    pub device_registration_gateway_key: String,
     pub signing_internal_api_key: String,
+    pub service_sign_gateway_key: String,
+    pub sign_grant_bao_addr: Option<String>,
+    pub sign_grant_mint_token_file: Option<PathBuf>,
+    pub issuer_csr_grant_mint_token_file: Option<PathBuf>,
+    pub issuer_sign_key: String,
     pub dsc_issue_gateway_key: Option<String>,
     pub csca_issue_gateway_key: Option<String>,
     pub issuance_api_key: String,
@@ -127,6 +136,17 @@ pub struct GatewayConfig {
     pub release_identity: ReleaseIdentity,
 }
 
+#[derive(Clone, Debug)]
+pub struct GatewayAuthClientTls {
+    pub certificate: PathBuf,
+    pub ca_certificate: PathBuf,
+    pub kms_endpoint: String,
+    pub kms_ca_certificate: PathBuf,
+    pub kms_token_file: PathBuf,
+    pub kms_key_name: String,
+    pub kms_key_version: u32,
+}
+
 // Runtime credentials and connection targets must never enter diagnostic logs.
 impl fmt::Debug for GatewayConfig {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -140,12 +160,32 @@ impl fmt::Debug for GatewayConfig {
             )
             .field("grpc_targets_configured", &true)
             .field("grpc_ca_certificate", &self.grpc_ca_certificate)
+            .field(
+                "organization_grpc_ca_certificate",
+                &self.organization_grpc_ca_certificate,
+            )
+            .field(
+                "event_stream_grpc_ca_certificate",
+                &self.event_stream_grpc_ca_certificate,
+            )
             .field("grpc_insecure_allowed", &self.grpc_insecure_allowed)
             .field(
                 "grpc_service_token_configured",
                 &self.grpc_service_token.is_some(),
             )
+            .field("device_registration_gateway_key_configured", &true)
             .field("signing_internal_api_key_configured", &true)
+            .field("service_sign_gateway_key_configured", &true)
+            .field("sign_grant_bao_addr", &self.sign_grant_bao_addr)
+            .field(
+                "sign_grant_mint_token_file",
+                &self.sign_grant_mint_token_file,
+            )
+            .field(
+                "issuer_csr_grant_mint_token_file",
+                &self.issuer_csr_grant_mint_token_file,
+            )
+            .field("issuer_sign_key_configured", &true)
             .field(
                 "dsc_issue_gateway_key_configured",
                 &self.dsc_issue_gateway_key.is_some(),
@@ -254,6 +294,23 @@ impl GatewayConfig {
         if production {
             validate_production_secret("GRPC_SERVICE_TOKEN", grpc_service_token.as_deref(), 32)?;
         }
+        let device_registration_gateway_key = secret(values, "DEVICE_REGISTRATION_GATEWAY_KEY")?
+            .or_else(|| {
+                (!production).then(|| "dev-device-registration-gateway-key-change-me".into())
+            })
+            .ok_or_else(|| error("DEVICE_REGISTRATION_GATEWAY_KEY is required"))?;
+        if production {
+            validate_production_secret(
+                "DEVICE_REGISTRATION_GATEWAY_KEY",
+                Some(&device_registration_gateway_key),
+                32,
+            )?;
+        }
+        if grpc_service_token.as_deref() == Some(device_registration_gateway_key.as_str()) {
+            return Err(error(
+                "DEVICE_REGISTRATION_GATEWAY_KEY must differ from GRPC_SERVICE_TOKEN",
+            ));
+        }
         let signing_internal_api_key = secret(values, "SIGNING_KEYS_INTERNAL_API_KEY")?
             .or_else(|| (!production).then(|| "dev-signing-keys-internal-api-key".into()))
             .ok_or_else(|| error("SIGNING_KEYS_INTERNAL_API_KEY is required"))?;
@@ -265,6 +322,30 @@ impl GatewayConfig {
             )?;
         }
         let dsc_issue_gateway_key = secret(values, "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY")?;
+        let service_sign_gateway_key = secret(values, "SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY")?
+            .or_else(|| (!production).then(|| "dev-signing-keys-service-sign-gateway-key".into()))
+            .ok_or_else(|| error("SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY is required"))?;
+        if service_sign_gateway_key.len() < 32
+            || service_sign_gateway_key == signing_internal_api_key
+            || (production
+                && service_sign_gateway_key == "dev-signing-keys-service-sign-gateway-key")
+        {
+            return Err(error(
+                "SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY must be distinct and at least 32 characters",
+            ));
+        }
+        let issuer_sign_key = secret(values, "SIGNING_KEYS_ISSUER_SIGN_KEY")?
+            .or_else(|| (!production).then(|| "dev-signing-keys-issuer-did-sign-key".into()))
+            .ok_or_else(|| error("SIGNING_KEYS_ISSUER_SIGN_KEY is required"))?;
+        if issuer_sign_key.len() < 32
+            || issuer_sign_key == signing_internal_api_key
+            || issuer_sign_key == service_sign_gateway_key
+            || (production && issuer_sign_key == "dev-signing-keys-issuer-did-sign-key")
+        {
+            return Err(error(
+                "SIGNING_KEYS_ISSUER_SIGN_KEY must be distinct and at least 32 characters",
+            ));
+        }
         let csca_issue_gateway_key = secret(values, "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY")?;
         if csca_issue_gateway_key.is_some() && !environment.eq_ignore_ascii_case("beta") {
             return Err(error("CSCA issuance credential is beta-only"));
@@ -293,6 +374,7 @@ impl GatewayConfig {
             )?;
         }
         if csca_issue_gateway_key.as_deref() == Some(signing_internal_api_key.as_str())
+            || csca_issue_gateway_key.as_deref() == Some(service_sign_gateway_key.as_str())
             || csca_issue_gateway_key.as_deref() == dsc_issue_gateway_key.as_deref()
                 && csca_issue_gateway_key.is_some()
         {
@@ -305,6 +387,15 @@ impl GatewayConfig {
             .ok_or_else(|| error("ISSUANCE_API_KEY is required"))?;
         if production {
             validate_production_secret("ISSUANCE_API_KEY", Some(&issuance_api_key), 16)?;
+        }
+        if device_registration_gateway_key == signing_internal_api_key
+            || device_registration_gateway_key == service_sign_gateway_key
+            || device_registration_gateway_key == issuer_sign_key
+            || device_registration_gateway_key == issuance_api_key
+        {
+            return Err(error(
+                "DEVICE_REGISTRATION_GATEWAY_KEY must differ from other service credentials",
+            ));
         }
         if let Some(dsc_key) = dsc_issue_gateway_key.as_deref() {
             let reused_in_environment = values.iter().any(|(name, value)| {
@@ -320,6 +411,33 @@ impl GatewayConfig {
                     "DSC issuance credential must not be reused by another configuration value",
                 ));
             }
+        }
+        if dsc_issue_gateway_key.as_deref() == Some(service_sign_gateway_key.as_str())
+            || issuance_api_key == service_sign_gateway_key
+            || grpc_service_token.as_deref() == Some(service_sign_gateway_key.as_str())
+            || values.iter().any(|(name, value)| {
+                name != "SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY"
+                    && name != "SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY_FILE"
+                    && value.contains(&service_sign_gateway_key)
+            })
+        {
+            return Err(error(
+                "Service signing credential must not be reused by another configuration value",
+            ));
+        }
+        if issuer_sign_key == issuance_api_key
+            || grpc_service_token.as_deref() == Some(issuer_sign_key.as_str())
+            || dsc_issue_gateway_key.as_deref() == Some(issuer_sign_key.as_str())
+            || csca_issue_gateway_key.as_deref() == Some(issuer_sign_key.as_str())
+            || values.iter().any(|(name, value)| {
+                name != "SIGNING_KEYS_ISSUER_SIGN_KEY"
+                    && name != "SIGNING_KEYS_ISSUER_SIGN_KEY_FILE"
+                    && value.contains(&issuer_sign_key)
+            })
+        {
+            return Err(error(
+                "Issuer signing credential must not be reused by another configuration value",
+            ));
         }
         if let Some(csca_key) = csca_issue_gateway_key.as_deref() {
             let reused_in_environment = values.iter().any(|(name, value)| {
@@ -374,11 +492,14 @@ impl GatewayConfig {
         }
 
         let grpc_ca_certificate = value(values, "GRPC_TLS_CA_CERT").map(PathBuf::from);
+        let organization_grpc_ca_certificate = value(values, "ORG_GRPC_CA_CERT").map(PathBuf::from);
+        let event_stream_grpc_ca_certificate = value(values, "ES_GRPC_CA_CERT").map(PathBuf::from);
         let grpc_insecure_allowed = boolean(values, "GRPC_INSECURE_ALLOWED", false)?;
-        if production && grpc_ca_certificate.is_none() && !grpc_insecure_allowed {
-            return Err(error(
-                "GRPC_TLS_CA_CERT is required outside development unless GRPC_INSECURE_ALLOWED is explicit",
-            ));
+        if production && grpc_insecure_allowed {
+            return Err(error("deployed Gateway cannot allow insecure gRPC"));
+        }
+        if production && grpc_ca_certificate.is_none() {
+            return Err(error("GRPC_TLS_CA_CERT is required outside development"));
         }
 
         let cors_origins = csv(value(values, "CORS_ORIGINS")
@@ -458,17 +579,74 @@ impl GatewayConfig {
             ));
         }
 
+        let auth_grpc_target = grpc_target(values, "AUTH_GRPC_TARGET", "localhost:9001")?;
+        let auth_grpc_client_tls = gateway_auth_client_tls(values, production)?;
+        if auth_grpc_client_tls.is_some() && !auth_grpc_target.starts_with("https://") {
+            return Err(error(
+                "AUTH_GRPC_TARGET must use HTTPS with the remote client identity",
+            ));
+        }
+        let organization_grpc_target = grpc_target(values, "ORG_GRPC_TARGET", "organization:9002")?;
+        if production && organization_grpc_ca_certificate.is_none() {
+            return Err(error("ORG_GRPC_CA_CERT is required outside development"));
+        }
+        if organization_grpc_ca_certificate.is_some()
+            && !organization_grpc_target.starts_with("https://")
+        {
+            return Err(error(
+                "ORG_GRPC_TARGET must use explicit HTTPS with ORG_GRPC_CA_CERT",
+            ));
+        }
+        let event_stream_grpc_target = grpc_target(values, "ES_GRPC_TARGET", "event-stream:9015")?;
+        if production && event_stream_grpc_ca_certificate.is_none() {
+            return Err(error("ES_GRPC_CA_CERT is required outside development"));
+        }
+        if event_stream_grpc_ca_certificate.is_some()
+            && !event_stream_grpc_target.starts_with("https://")
+        {
+            return Err(error(
+                "ES_GRPC_TARGET must use explicit HTTPS with ES_GRPC_CA_CERT",
+            ));
+        }
+        if grpc_ca_certificate.is_some()
+            && [
+                &auth_grpc_target,
+                &organization_grpc_target,
+                &event_stream_grpc_target,
+            ]
+            .iter()
+            .any(|target| !target.starts_with("https://"))
+        {
+            return Err(error(
+                "gRPC targets must use explicit HTTPS when GRPC_TLS_CA_CERT is configured",
+            ));
+        }
+
         Ok(Self {
             address: SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), port),
             production,
             service_urls,
-            auth_grpc_target: grpc_target(values, "AUTH_GRPC_TARGET", "localhost:9001")?,
-            organization_grpc_target: grpc_target(values, "ORG_GRPC_TARGET", "organization:9002")?,
-            event_stream_grpc_target: grpc_target(values, "ES_GRPC_TARGET", "event-stream:9015")?,
+            auth_grpc_target,
+            auth_grpc_client_tls,
+            organization_grpc_target,
+            event_stream_grpc_target,
             grpc_ca_certificate,
+            organization_grpc_ca_certificate,
+            event_stream_grpc_ca_certificate,
             grpc_insecure_allowed,
             grpc_service_token,
+            device_registration_gateway_key,
             signing_internal_api_key,
+            service_sign_gateway_key,
+            sign_grant_bao_addr: value(values, "BAO_ADDR"),
+            sign_grant_mint_token_file: value(values, "GATEWAY_SIGN_GRANT_MINT_TOKEN_FILE")
+                .map(PathBuf::from),
+            issuer_csr_grant_mint_token_file: value(
+                values,
+                "GATEWAY_ISSUER_CSR_GRANT_MINT_TOKEN_FILE",
+            )
+            .map(PathBuf::from),
+            issuer_sign_key,
             dsc_issue_gateway_key,
             csca_issue_gateway_key,
             issuance_api_key,
@@ -576,8 +754,18 @@ fn validate_service_urls(urls: &BTreeMap<String, String>) -> Result<(), GatewayC
 
 fn redis_database_url(raw: &str, database: u8) -> Result<String, GatewayConfigError> {
     let mut parsed = url::Url::parse(raw).map_err(|_| error("REDIS_URL is invalid"))?;
+    if parsed.scheme() == "unix" {
+        if parsed.host_str().is_some() || !parsed.path().starts_with('/') {
+            return Err(error("REDIS_URL Unix socket must be local and absolute"));
+        }
+        parsed
+            .query_pairs_mut()
+            .clear()
+            .append_pair("db", &database.to_string());
+        return Ok(parsed.to_string());
+    }
     if parsed.scheme() != "redis" && parsed.scheme() != "rediss" {
-        return Err(error("REDIS_URL must use redis or rediss"));
+        return Err(error("REDIS_URL must use redis, rediss, or unix"));
     }
     if matches!(parsed.path(), "" | "/") {
         parsed.set_path(&format!("/{database}"));
@@ -610,6 +798,64 @@ fn grpc_target(
         )));
     }
     Ok(target)
+}
+
+fn gateway_auth_client_tls(
+    values: &BTreeMap<String, String>,
+    required: bool,
+) -> Result<Option<GatewayAuthClientTls>, GatewayConfigError> {
+    if values.contains_key("GRPC_WORKLOAD_TLS_CLIENT_KEY") {
+        return Err(error("GRPC_WORKLOAD_TLS_CLIENT_KEY is retired"));
+    }
+    const NAMES: [&str; 7] = [
+        "GRPC_WORKLOAD_TLS_CLIENT_CERT",
+        "GRPC_WORKLOAD_TLS_CA_CERT",
+        "GRPC_WORKLOAD_TLS_CLIENT_KMS_ADDR",
+        "GRPC_WORKLOAD_TLS_CLIENT_KMS_CA_CERT",
+        "GRPC_WORKLOAD_TLS_CLIENT_KMS_TOKEN_FILE",
+        "GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_NAME",
+        "GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_VERSION",
+    ];
+    let configured = NAMES
+        .iter()
+        .filter(|name| value(values, name).is_some())
+        .count();
+    if configured == 0 && !required {
+        return Ok(None);
+    }
+    if configured != NAMES.len() {
+        return Err(error(
+            "Gateway Auth mTLS requires complete remote KMS client identity",
+        ));
+    }
+    let endpoint = value(values, NAMES[2]).unwrap_or_default();
+    let parsed =
+        url::Url::parse(&endpoint).map_err(|_| error("Gateway Auth TLS KMS origin is invalid"))?;
+    if parsed.scheme() != "https"
+        || parsed.host_str().is_none()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.path() != "/"
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+    {
+        return Err(error("Gateway Auth TLS KMS origin must be HTTPS"));
+    }
+    let version = value(values, NAMES[6])
+        .unwrap_or_default()
+        .parse::<u32>()
+        .ok()
+        .filter(|version| *version > 0)
+        .ok_or_else(|| error("Gateway Auth TLS KMS version must be positive"))?;
+    Ok(Some(GatewayAuthClientTls {
+        certificate: PathBuf::from(value(values, NAMES[0]).unwrap_or_default()),
+        ca_certificate: PathBuf::from(value(values, NAMES[1]).unwrap_or_default()),
+        kms_endpoint: endpoint,
+        kms_ca_certificate: PathBuf::from(value(values, NAMES[3]).unwrap_or_default()),
+        kms_token_file: PathBuf::from(value(values, NAMES[4]).unwrap_or_default()),
+        kms_key_name: value(values, NAMES[5]).unwrap_or_default(),
+        kms_key_version: version,
+    }))
 }
 
 fn csv(raw: &str) -> Vec<String> {
@@ -681,6 +927,46 @@ fn error(message: impl Into<String>) -> GatewayConfigError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn add_remote_auth_client(values: &mut BTreeMap<String, String>) {
+        for (name, value) in [
+            ("AUTH_GRPC_TARGET", "https://auth:9001"),
+            ("GRPC_WORKLOAD_TLS_CLIENT_CERT", "gateway-public.pem"),
+            ("GRPC_WORKLOAD_TLS_CA_CERT", "workload-public-ca.pem"),
+            (
+                "GRPC_WORKLOAD_TLS_CLIENT_KMS_ADDR",
+                "https://bao.internal:8200",
+            ),
+            ("GRPC_WORKLOAD_TLS_CLIENT_KMS_CA_CERT", "bao-public-ca.pem"),
+            ("GRPC_WORKLOAD_TLS_CLIENT_KMS_TOKEN_FILE", "scoped-token"),
+            (
+                "GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_NAME",
+                "gateway-auth-client",
+            ),
+            ("GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_VERSION", "1"),
+        ] {
+            values.insert(name.into(), value.into());
+        }
+    }
+
+    #[test]
+    fn deployed_auth_client_identity_rejects_private_key_files_and_invalid_kms_origin() {
+        let mut values = BTreeMap::new();
+        assert!(gateway_auth_client_tls(&values, true).is_err());
+        add_remote_auth_client(&mut values);
+        assert!(gateway_auth_client_tls(&values, true).unwrap().is_some());
+        values.insert("GRPC_WORKLOAD_TLS_CLIENT_KEY".into(), "private.pem".into());
+        assert!(gateway_auth_client_tls(&values, true)
+            .unwrap_err()
+            .to_string()
+            .contains("retired"));
+        values.remove("GRPC_WORKLOAD_TLS_CLIENT_KEY");
+        values.insert(
+            "GRPC_WORKLOAD_TLS_CLIENT_KMS_ADDR".into(),
+            "http://bao.internal:8200".into(),
+        );
+        assert!(gateway_auth_client_tls(&values, true).is_err());
+    }
 
     #[test]
     fn development_defaults_preserve_legacy_local_runtime() {
@@ -847,6 +1133,10 @@ mod tests {
                 "synthetic-signing-key".into(),
             ),
             (
+                "SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY".into(),
+                "synthetic-dedicated-service-sign-key-000001".into(),
+            ),
+            (
                 "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY".into(),
                 "synthetic-dsc-gateway-only-credential-000001".into(),
             ),
@@ -861,6 +1151,7 @@ mod tests {
             "private-organization",
             "synthetic-grpc-token",
             "synthetic-signing-key",
+            "synthetic-dedicated-service-sign-key-000001",
             "synthetic-dsc-gateway-only-credential-000001",
             "synthetic-issuance-key",
             "synthetic-redis-password",
@@ -913,13 +1204,72 @@ mod tests {
             .to_string()
             .contains("GRPC_SERVICE_TOKEN"));
         values.insert("GRPC_SERVICE_TOKEN".into(), "g".repeat(32));
+        values.insert("DEVICE_REGISTRATION_GATEWAY_KEY".into(), "d".repeat(32));
         values.insert("SIGNING_KEYS_INTERNAL_API_KEY".into(), "s".repeat(32));
+        assert!(GatewayConfig::from_values(&values)
+            .expect_err("missing dedicated service signing credential")
+            .to_string()
+            .contains("SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY"));
+        values.insert(
+            "SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY".into(),
+            "k".repeat(32),
+        );
+        values.insert("SIGNING_KEYS_ISSUER_SIGN_KEY".into(), "e".repeat(32));
         values.insert("ISSUANCE_API_KEY".into(), "i".repeat(32));
         assert!(GatewayConfig::from_values(&values)
             .expect_err("missing TLS")
             .to_string()
             .contains("GRPC_TLS_CA_CERT"));
         values.insert("GRPC_INSECURE_ALLOWED".into(), "true".into());
+        assert!(GatewayConfig::from_values(&values)
+            .expect_err("deployed plaintext override is retired")
+            .to_string()
+            .contains("cannot allow insecure gRPC"));
+        values.insert("GRPC_INSECURE_ALLOWED".into(), "false".into());
+        values.insert("GRPC_TLS_CA_CERT".into(), "public-workload-ca.pem".into());
+        assert!(GatewayConfig::from_values(&values)
+            .expect_err("remote Auth mTLS is mandatory")
+            .to_string()
+            .contains("Gateway Auth mTLS"));
+        add_remote_auth_client(&mut values);
+        assert!(GatewayConfig::from_values(&values)
+            .expect_err("Organization CA is mandatory")
+            .to_string()
+            .contains("ORG_GRPC_CA_CERT"));
+        values.insert("ORG_GRPC_CA_CERT".into(), "public-org-ca.pem".into());
+        assert!(GatewayConfig::from_values(&values)
+            .expect_err("Organization target must use HTTPS")
+            .to_string()
+            .contains("ORG_GRPC_TARGET"));
+        values.insert("ORG_GRPC_TARGET".into(), "https://organization:9002".into());
+        assert!(GatewayConfig::from_values(&values)
+            .expect_err("Event Stream CA is mandatory")
+            .to_string()
+            .contains("ES_GRPC_CA_CERT"));
+        values.insert("ES_GRPC_CA_CERT".into(), "public-es-ca.pem".into());
+        assert!(GatewayConfig::from_values(&values)
+            .expect_err("Event Stream target must use HTTPS")
+            .to_string()
+            .contains("ES_GRPC_TARGET"));
+        values.insert("ES_GRPC_TARGET".into(), "https://event-stream:9015".into());
+        assert!(GatewayConfig::from_values(&values).is_ok());
+    }
+
+    #[test]
+    fn ca_verified_grpc_requires_explicit_https_targets() {
+        let mut values =
+            BTreeMap::from([("GRPC_TLS_CA_CERT".into(), "public-workload-ca.pem".into())]);
+        assert!(GatewayConfig::from_values(&values)
+            .unwrap_err()
+            .to_string()
+            .contains("explicit HTTPS"));
+        for (name, target) in [
+            ("AUTH_GRPC_TARGET", "https://auth:9001"),
+            ("ORG_GRPC_TARGET", "https://organization:9002"),
+            ("ES_GRPC_TARGET", "https://event-stream:9015"),
+        ] {
+            values.insert(name.into(), target.into());
+        }
         assert!(GatewayConfig::from_values(&values).is_ok());
     }
 
@@ -933,10 +1283,22 @@ mod tests {
                 "true".into(),
             ),
             ("GRPC_SERVICE_TOKEN".into(), "g".repeat(32)),
+            ("DEVICE_REGISTRATION_GATEWAY_KEY".into(), "a".repeat(32)),
             ("SIGNING_KEYS_INTERNAL_API_KEY".into(), "s".repeat(32)),
+            (
+                "SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY".into(),
+                "k".repeat(32),
+            ),
+            ("SIGNING_KEYS_ISSUER_SIGN_KEY".into(), "e".repeat(32)),
             ("ISSUANCE_API_KEY".into(), "i".repeat(32)),
-            ("GRPC_INSECURE_ALLOWED".into(), "true".into()),
+            ("GRPC_INSECURE_ALLOWED".into(), "false".into()),
+            ("GRPC_TLS_CA_CERT".into(), "public-workload-ca.pem".into()),
+            ("ORG_GRPC_CA_CERT".into(), "public-org-ca.pem".into()),
+            ("ORG_GRPC_TARGET".into(), "https://organization:9002".into()),
+            ("ES_GRPC_CA_CERT".into(), "public-es-ca.pem".into()),
+            ("ES_GRPC_TARGET".into(), "https://event-stream:9015".into()),
         ]);
+        add_remote_auth_client(&mut values);
         assert!(GatewayConfig::from_values(&values)
             .unwrap_err()
             .to_string()
@@ -1011,6 +1373,11 @@ mod tests {
                 .as_deref(),
             Some("redis://redis:6379/7")
         );
+        assert_eq!(
+            redis_database_url("unix:///run/marty-redis/redis.sock", 7).unwrap(),
+            "unix:///run/marty-redis/redis.sock?db=7"
+        );
+        assert!(redis_database_url("unix://remote/run/redis.sock", 7).is_err());
     }
 
     #[test]

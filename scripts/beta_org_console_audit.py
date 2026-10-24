@@ -10,15 +10,19 @@ screenshots, failing requests, page errors, and concise step notes.
 from __future__ import annotations
 
 import argparse
+import hashlib
+import importlib.util
 import json
 import os
 import re
+import secrets
+import subprocess
 import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, urljoin, urlparse
+from urllib.parse import parse_qs, quote, urljoin, urlparse
 from uuid import UUID
 
 from playwright.sync_api import Error as PlaywrightError
@@ -27,6 +31,10 @@ from playwright.sync_api import expect, sync_playwright
 
 
 ROOT = Path(__file__).resolve().parents[1]
+_cleanup_spec = importlib.util.spec_from_file_location("demo_cleanup_evidence", ROOT / "scripts/demo_cleanup_evidence.py")
+_cleanup_module = importlib.util.module_from_spec(_cleanup_spec)
+_cleanup_spec.loader.exec_module(_cleanup_module)
+owned_api_key_cleanup_proven = _cleanup_module.owned_api_key_cleanup_proven
 ENV_FILE = ROOT / ".env.tunnel.beta.local"
 ARTIFACT_ROOT = ROOT / "tests" / "artifacts"
 RECORDING_VIEWPORT = {"width": 1920, "height": 1080}
@@ -37,6 +45,18 @@ CROSS_ORG_ADMIN_PATHS = {
     "/v1/presentation-policies",
     "/v1/trust-profiles",
 }
+SIGNING_CAPABILITY_SCHEMA = "marty.signing-capability/v1"
+SIGNING_PURPOSES = ("vc_jwt_issuer", "oid4vp_request_signing")
+KNOWN_SECRETS: set[str] = set()
+
+# Shared with production-component checks; no guessed DOM fixture defines these controls.
+D10_UI_CONTROLS = json.loads((ROOT / "scripts/d10_ui_controls.json").read_text(encoding="utf8"))
+
+
+def d10_control_name(key: str) -> str | re.Pattern[str]:
+    definition = D10_UI_CONTROLS[key]
+    return re.compile(definition["regex"], re.I) if "regex" in definition else definition["name"]
+
 
 
 SECRET_PATTERNS = [
@@ -51,6 +71,36 @@ SECRET_PATTERNS = [
     re.compile(r"(\"fullKey\"\s*:\s*\")([^\"\\]+)(\")"),
     re.compile(r"(\"full_key\"\s*:\s*\")([^\"\\]+)(\")"),
 ]
+
+
+def start_recorder_capture(required: bool):
+    client_file = os.environ.get("DEMO_PYTHON_CAPTURE_CLIENT")
+    if not client_file:
+        if required:
+            raise ValueError("D10 recording and functional qualification require recorder-owned live Python capture")
+        return None
+    path = Path(client_file)
+    if (not path.is_absolute() or path.is_symlink() or not path.is_file()
+            or hashlib.sha256(path.read_bytes()).hexdigest() != os.environ.get("DEMO_PYTHON_CAPTURE_CLIENT_SHA256")):
+        raise ValueError("Recorder-owned Python client source binding is invalid")
+    spec = importlib.util.spec_from_file_location("recorder_python_live_evidence", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.PythonCapture()
+
+
+def bound_recorder_inputs(capture, signing_inputs, record_video, recording_pause_ms):
+    scenario = capture.inputs["scenario"]
+    expected_signing = {"endpoint": signing_inputs["endpoint"], "mount": signing_inputs["mount"],
+                        "namespace": signing_inputs["namespace"], "keyReference": signing_inputs["key_reference"],
+                        "caCertFile": signing_inputs.get("ca_cert_file", ""),
+                        "validatorSha256": signing_inputs["validator_sha256"]}
+    if (capture.inputs["origin"] != "https://beta.elevenidllc.com"
+            or scenario.get("signing") != expected_signing or scenario.get("recordVideo") is not record_video
+            or scenario.get("recordingPauseMs") != recording_pause_ms
+            or not re.fullmatch(r"[0-9]{14}-[a-f0-9]{8}", str(scenario.get("runId") or ""))):
+        raise ValueError("Actual D10 action inputs differ from recorder-acknowledged inputs")
+    return scenario
 
 
 def load_env_file(path: Path) -> dict[str, str]:
@@ -81,12 +131,119 @@ def redact_sensitive(value: str) -> str:
         return value
 
     redacted = value
+    for secret in sorted(KNOWN_SECRETS, key=len, reverse=True):
+        for representation in {secret, json.dumps(secret)[1:-1]}:
+            redacted = redacted.replace(representation, "[REDACTED]")
     for pattern in SECRET_PATTERNS:
         if pattern.groups >= 3:
             redacted = pattern.sub(r"\1[REDACTED]\3", redacted)
         else:
             redacted = pattern.sub("[REDACTED_API_KEY]", redacted)
     return redacted
+
+
+def signing_validator_digest(path: str | Path) -> str:
+    try:
+        with Path(path).open("rb") as stream:
+            return hashlib.file_digest(stream, "sha256").hexdigest()
+    except OSError:
+        raise ValueError("The native signing validator executable is unreadable") from None
+
+
+def load_signing_inputs(environment: dict[str, str] | None = None) -> dict[str, str]:
+    """Resolve real, explicit OpenBao inputs before any browser or mutation."""
+    environment = os.environ if environment is None else environment
+    required = ["DEMO_D10_KMS_URL", "DEMO_D10_KMS_MOUNT", "DEMO_D10_KMS_KEY_REFERENCE",
+                "DEMO_D10_KMS_TOKEN_FILE", "DEMO_SIGNING_CAPABILITY_BIN"]
+    if any(not str(environment.get(name) or "").strip() for name in required):
+        raise ValueError("D10 requires " + ", ".join(required) + "; no placeholder signer is permitted")
+    endpoint = environment["DEMO_D10_KMS_URL"].strip().rstrip("/")
+    parsed = urlparse(endpoint)
+    host = (parsed.hostname or "").lower()
+    if (parsed.scheme != "https" or not host or parsed.username or parsed.password
+            or parsed.query or parsed.fragment or parsed.path not in {"", "/"}
+            or host.endswith((".invalid", ".test", ".example"))
+            or host in {"example.com", "example.org", "example.net"}):
+        raise ValueError("DEMO_D10_KMS_URL must be the real HTTPS OpenBao origin, without credentials or a transit path")
+    mount = environment["DEMO_D10_KMS_MOUNT"].strip()
+    key_reference = environment["DEMO_D10_KMS_KEY_REFERENCE"].strip()
+    namespace = str(environment.get("DEMO_D10_KMS_NAMESPACE") or "").strip()
+    if (not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", mount)
+            or not re.fullmatch(r"[A-Za-z0-9._:-]{1,255}", key_reference)
+            or len(namespace) > 255 or any(ord(char) < 32 for char in namespace)):
+        raise ValueError("D10 requires a valid transit mount, existing key name, and optional namespace")
+    try:
+        token_file = Path(environment["DEMO_D10_KMS_TOKEN_FILE"])
+        if not token_file.is_file():
+            raise ValueError("invalid token file")
+        with token_file.open("rb") as stream:
+            token_bytes = stream.read(4097)
+        if len(token_bytes) > 4096:
+            raise ValueError("invalid token file")
+        token = token_bytes.decode("ascii").strip()
+    except (OSError, ValueError, UnicodeError):
+        raise ValueError("DEMO_D10_KMS_TOKEN_FILE must be a bounded readable token file") from None
+    if not 16 <= len(token) <= 4096 or any(char.isspace() or ord(char) < 32 for char in token):
+        raise ValueError("DEMO_D10_KMS_TOKEN_FILE does not contain a usable transit token")
+    ca_cert_file = str(environment.get("DEMO_D10_KMS_CA_CERT_FILE") or "").strip()
+    if ca_cert_file and (not ca_cert_file.startswith("/") or len(ca_cert_file) > 4096
+                         or any(ord(char) < 32 for char in ca_cert_file)):
+        raise ValueError("DEMO_D10_KMS_CA_CERT_FILE must be an absolute file path mounted on the beta signing server")
+    KNOWN_SECRETS.add(token)
+    validator = Path(environment["DEMO_SIGNING_CAPABILITY_BIN"]).resolve()
+    try:
+        if not validator.is_file():
+            raise ValueError("missing validator")
+        validator_sha256 = signing_validator_digest(validator)
+        version = subprocess.run([str(validator), "--version"], capture_output=True,
+                                 text=True, timeout=10, check=False)
+        if (version.returncode != 0 or version.stdout.strip() != SIGNING_CAPABILITY_SCHEMA
+                or signing_validator_digest(validator) != validator_sha256):
+            raise ValueError("wrong validator")
+    except (OSError, ValueError, subprocess.SubprocessError):
+        raise ValueError("Build and select the native validate-signing-capability binary before running D10") from None
+    return {"endpoint": endpoint, "mount": mount, "namespace": namespace, "ca_cert_file": ca_cert_file,
+            "key_reference": key_reference, "token": token, "validator": str(validator),
+            "validator_sha256": validator_sha256}
+
+
+def signing_capability_proven(report: dict[str, Any]) -> bool:
+    """Active configuration labels alone never establish a working signer."""
+    steps = report.get("steps") or []
+    configured = [step.get("signing_configuration") for step in steps
+                  if step.get("label") == "kms-service-configured"]
+    if len(configured) != 1 or not isinstance(configured[0], dict):
+        return False
+    scope = configured[0]
+    if any(not scope.get(key) for key in ("organization_id", "run_id", "default_service_id")):
+        return False
+    challenges: set[str] = set()
+    for purpose, identity_label, proof_label in [
+        ("vc_jwt_issuer", "issuer-identity-active", "issuer-signing-capability-verified"),
+        ("oid4vp_request_signing", "verifier-issuer-identity-active", "verifier-signing-capability-verified"),
+    ]:
+        identities = [step.get("issuer_identity") for step in steps if step.get("label") == identity_label]
+        proofs = [step.get("signing_capability") for step in steps if step.get("label") == proof_label]
+        if len(identities) != 1 or len(proofs) != 1 or not isinstance(identities[0], dict) or not isinstance(proofs[0], dict):
+            return False
+        proof, identity = proofs[0], identities[0]
+        if (proof.get("schema") != SIGNING_CAPABILITY_SCHEMA or proof.get("verified") is not True
+                or proof.get("scope") != "EXACT_PUBLIC_SERVICE_SIGNING_CAPABILITY_ONLY"
+                or proof.get("organization_id") != scope["organization_id"]
+                or proof.get("run_id") != scope["run_id"]
+                or proof.get("service_id") != scope["default_service_id"]
+                or not identity.get("issuer_did") or proof.get("issuer_did") != identity["issuer_did"]
+                or proof.get("key_purpose") != purpose or identity.get("key_purpose") != purpose
+                or identity.get("status") != "active" or identity.get("credential_format") != "SD_JWT_VC"
+                or identity.get("algorithm") != "ES256"
+                or proof.get("credential_format") != "SD_JWT_VC" or proof.get("algorithm") != "ES256"):
+            return False
+        for key in ("challenge_sha256", "key_binding_sha256", "public_key_sha256", "signature_sha256",
+                    "service_response_sha256", "identity_response_sha256", "signing_response_sha256"):
+            if not re.fullmatch(r"[0-9a-f]{64}", str(proof.get(key) or "")):
+                return False
+        challenges.add(proof["challenge_sha256"])
+    return len(challenges) == 2
 
 
 def visible(page: Page, selector: str, timeout: int = 800) -> bool:
@@ -275,6 +432,8 @@ def evaluate_release_checks(report: dict[str, Any]) -> dict[str, Any]:
         "kms-service-configured",
         "issuer-identity-active",
         "verifier-issuer-identity-active",
+        "issuer-signing-capability-verified",
+        "verifier-signing-capability-verified",
         "compliance-profile-available",
         "trust-profile-active",
         "revocation-profile-activated",
@@ -318,6 +477,12 @@ def evaluate_release_checks(report: dict[str, Any]) -> dict[str, Any]:
             "audit_coverage_incomplete",
             "The audit did not reach all required production credential flow steps.",
             missing_steps=missing_step_labels,
+        )
+
+    if not signing_capability_proven(report):
+        add_blocker(
+            "signing_capability_unverified",
+            "Both exact issuer purposes require a fresh, cryptographically verified public signing challenge.",
         )
 
     raw_secret_hits = [
@@ -413,6 +578,12 @@ def evaluate_release_checks(report: dict[str, Any]) -> dict[str, Any]:
             count=len(report.get("page_errors") or []),
         )
 
+    if not owned_api_key_cleanup_proven(report):
+        add_blocker(
+            "owned_api_key_cleanup_unverified",
+            "Every run-created API key requires a successful revocation bound to its exact key and organization.",
+        )
+
     transient_loading = [
         step.get("label")
         for step in steps
@@ -447,7 +618,7 @@ def organization_management_behavior_assertions(report: dict[str, Any]) -> dict[
             "kms-service-configured",
             "issuer-identity-active",
             "verifier-issuer-identity-active",
-        }.issubset(labels),
+        }.issubset(labels) and signing_capability_proven(report),
         "configure_trust_and_mip_primitives": {
             "trust-profile-active",
             "revocation-profile-activated",
@@ -701,14 +872,14 @@ class Audit:
             lambda msg: self.console.append(
                 {
                     "type": msg.type,
-                    "text": msg.text[:1000],
+                    "text": redact_sensitive(msg.text)[:1000],
                     "location": f"{msg.location.get('url', '')}:{msg.location.get('lineNumber', '')}",
                 }
             )
             if msg.type in {"error", "warning"}
             else None,
         )
-        self.page.on("pageerror", lambda err: self.page_errors.append(str(err)[:1500]))
+        self.page.on("pageerror", lambda err: self.page_errors.append(redact_sensitive(str(err))[:1500]))
         self.page.on(
             "requestfailed",
             self._record_failed_request,
@@ -887,6 +1058,7 @@ class Audit:
         extra: dict[str, Any] | None = None,
         redact_screenshot: bool = False,
     ) -> None:
+        note = redact_sensitive(note)
         filename = f"{len(self.steps) + 1:02d}-{slugify(label)[:80]}.png"
         screenshot = self.artifact_dir / filename
         scroll_position: dict[str, Any] | None = None
@@ -1131,6 +1303,111 @@ def active_organization_id(page: Page) -> str:
     return str(organization_id or '').strip()
 
 
+def require_created_organization(page: Page, name: str | None, before: dict[str, Any], after: dict[str, Any]) -> str:
+    """Bind the public organization name and fresh active ID before installing credentials."""
+    old_probe = before.get("/v1/organizations/mine") or {}
+    new_probe = after.get("/v1/organizations/mine") or {}
+    old, new = old_probe.get("body"), new_probe.get("body")
+    if not name or old_probe.get("status") != 200 or new_probe.get("status") != 200 or not isinstance(old, list) or not isinstance(new, list):
+        raise ValueError("D10 could not bind the newly created organization before signer setup")
+    active = active_organization_id(page)
+    matching = [item for item in new if isinstance(item, dict) and item.get("id") == active and item.get("name") == name]
+    if (not active or len(matching) != 1
+            or any(isinstance(item, dict) and item.get("id") == active for item in old)):
+        raise ValueError("D10 signer setup requires the exact fresh organization created by this run")
+    return active
+
+
+def public_signing_post(page: Page, endpoint: str, organization_id: str, body: dict[str, Any]) -> dict[str, Any]:
+    """Use the authenticated public Gateway; never call OpenBao from the driver."""
+    request_path = f"{endpoint}?organization_id={quote(organization_id, safe='')}"
+    return page.evaluate(
+        """async ({path, body}) => {
+          const response = await fetch(path, {method: 'POST', credentials: 'include',
+            headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+          return {status: response.status, body: await response.json().catch(() => null)};
+        }""", {"path": request_path, "body": body},
+    )
+
+
+def native_signing_capability(validator: str, mode: str, evidence: dict[str, Any], *,
+                              expected_binary_sha256: str | None = None) -> dict[str, Any]:
+    serialized = json.dumps(evidence, separators=(",", ":"))
+    if len(serialized.encode("utf-8")) > 64 * 1024:
+        raise ValueError("Signing capability evidence exceeds its bounded native contract")
+    try:
+        before = signing_validator_digest(validator)
+        if expected_binary_sha256 is not None and before != expected_binary_sha256:
+            raise ValueError("native validator bytes changed")
+        result = subprocess.run([validator, mode], input=serialized, text=True,
+                                capture_output=True, timeout=15, check=False)
+        if (result.returncode != 0 or len(result.stdout) > 64 * 1024
+                or signing_validator_digest(validator) != before):
+            raise ValueError("native rejection")
+        receipt = json.loads(result.stdout)
+        if not isinstance(receipt, dict) or receipt.get("schema") != SIGNING_CAPABILITY_SCHEMA:
+            raise ValueError("invalid native receipt")
+    except (OSError, ValueError, subprocess.SubprocessError):
+        raise ValueError(f"Native signing capability {mode} failed; no working-signer claim is permitted") from None
+    return receipt
+
+
+def verify_issuer_signing_capabilities(audit: Audit, run_id: str, inputs: dict[str, str]) -> None:
+    """Prove both exact public identity tuples without creating a credential."""
+    configured = [step.get("signing_configuration") for step in audit.steps if step.get("label") == "kms-service-configured"]
+    if len(configured) != 1 or not isinstance(configured[0], dict):
+        raise ValueError("No exact run-created signing service is available for the challenge")
+    scope = configured[0]
+    validator_sha256 = inputs.get("validator_sha256")
+    if not re.fullmatch(r"[0-9a-f]{64}", str(validator_sha256 or "")):
+        raise ValueError("The signing validator executable must be fingerprinted before setup")
+    organization_id = active_organization_id(audit.page)
+    if scope.get("organization_id") != organization_id or scope.get("run_id") != run_id:
+        raise ValueError("Signing challenge organization changed after registration")
+    for purpose, identity_label, proof_label in [
+        ("vc_jwt_issuer", "issuer-identity-active", "issuer-signing-capability-verified"),
+        ("oid4vp_request_signing", "verifier-issuer-identity-active", "verifier-signing-capability-verified"),
+    ]:
+        identities = [step.get("issuer_identity") for step in audit.steps if step.get("label") == identity_label]
+        if len(identities) != 1 or not isinstance(identities[0], dict) or not identities[0].get("issuer_did"):
+            raise ValueError("The run did not establish both exact active issuer identities")
+        issuer_did = identities[0]["issuer_did"]
+        tuple_request = {"organization_id": organization_id, "issuer_did": issuer_did,
+                         "key_purpose": purpose, "credential_format": "SD_JWT_VC", "algorithm": "ES256"}
+        evidence = {
+            "expected": {"run_id": run_id, "nonce": secrets.token_hex(32), **tuple_request,
+                         "service_id": scope["default_service_id"], "key_reference": inputs["key_reference"]},
+            "service_response": public_signing_post(audit.page, "/v1/signing-keys/config/resolve", organization_id,
+                                                    {"key_purpose": purpose, "algorithm": "ES256"}),
+            "identity_response": public_signing_post(audit.page, "/v1/signing-keys/issuer-identities/resolve",
+                                                     organization_id, tuple_request),
+            "signing_response": None,
+        }
+        prepared = native_signing_capability(inputs["validator"], "prepare", evidence,
+                                            expected_binary_sha256=validator_sha256)
+        evidence["signing_response"] = public_signing_post(
+            audit.page, f"/v1/signing-keys/services/{quote(scope['default_service_id'], safe='')}/sign",
+            organization_id, prepared["request"],
+        )
+        receipt = native_signing_capability(inputs["validator"], "verify", evidence,
+                                           expected_binary_sha256=validator_sha256)
+        if receipt.get("verified") is not True:
+            raise ValueError("Native signing capability did not confirm the signature")
+        validator_provenance = {"sha256": validator_sha256, "contract_version": SIGNING_CAPABILITY_SCHEMA,
+                                "scope": "LOCAL_EXECUTABLE_BYTES_NOT_DEPLOYED_BUILD_ATTESTATION"}
+        artifact_json = json.dumps({"input": evidence, "receipt": receipt, "validator": validator_provenance}, indent=2) + "\n"
+        if any(secret in artifact_json or json.dumps(secret)[1:-1] in artifact_json for secret in KNOWN_SECRETS):
+            raise ValueError("The signing response contained credential material; refusing to retain the evidence")
+        artifact = audit.artifact_dir / f"signing-capability-{purpose}.json"
+        artifact.write_text(artifact_json, encoding="utf-8")
+        audit.snapshot(proof_label,
+            f"The configured service signed a fresh {purpose} challenge; Rust verified it against the exact public issuer key. No credential or wallet session was created.",
+            {"signing_capability": receipt, "evidence_artifact": artifact.name,
+             "validator": validator_provenance,
+             "evidence_sha256": hashlib.sha256(artifact.read_bytes()).hexdigest()},
+        )
+
+
 def fetch_org_collection(page: Page, path: str, organization_id: str) -> dict[str, Any]:
     separator = '&' if '?' in path else '?'
     request_path = f"{path}{separator}organization_id={organization_id}"
@@ -1371,68 +1648,95 @@ def create_org(audit: Audit, run_id: str, email: str) -> str | None:
     return slug
 
 
-def create_key_service_if_possible(audit: Audit, run_id: str) -> None:
+def selected_signing_service(config: dict[str, Any]) -> dict[str, Any] | None:
+    services = config.get("services")
+    default_id = config.get("default_service_id")
+    if not isinstance(services, list) or not isinstance(default_id, str):
+        return None
+    return next(
+        (
+            service
+            for service in services
+            if isinstance(service, dict)
+            and service.get("id") == default_id
+            and service.get("status") in {"active", "configured", "registered"}
+        ),
+        None,
+    )
+
+
+def create_key_service_if_possible(audit: Audit, run_id: str, inputs: dict[str, str]) -> None:
+    """Register the declared real OpenBao service through the product controls."""
     page = audit.page
+    organization_id = active_organization_id(page)
+    if not organization_id:
+        raise ValueError("D10 requires a fresh active organization before service registration")
     audit.goto("/console/org/deploy/key-management/services/new")
     audit.snapshot("kms-service-wizard-opened", "Opened Register Key Management Service.")
-
-    if text_visible(page, "Unable to load", 1000) or text_visible(page, "No active organization", 1000):
-        return
-
-    # Prefer a transit provider card if visible, otherwise select the first service card.
-    if not audit.click_role("button", re.compile(r"openbao transit|hashicorp vault transit|custom transit", re.I), timeout=2500):
-        try:
-            page.locator("[role=button], .MuiPaper-root").filter(has_text=re.compile(r"Protocol:|Category:", re.I)).first.click(timeout=2500)
-            audit.settle()
-        except Exception:
-            audit.snapshot("kms-service-no-selectable-provider", "No selectable KMS provider card was found.")
-            return
-
-    audit.snapshot("kms-provider-selected", "Selected a KMS provider.")
-    if not audit.click_role("button", re.compile(r"next", re.I), timeout=3000):
-        audit.snapshot("kms-provider-next-blocked", "Next was unavailable after selecting provider.")
-        return
-
-    audit.fill_label(re.compile(r"service name", re.I), f"Audit Transit Service {run_id}")
-    # Field set varies by provider; fill likely required connection fields.
-    audit.fill_label(re.compile(r"service url", re.I), "https://kms.audit.invalid/transit")
-    audit.fill_label(re.compile(r"region|location", re.I), "us")
-    audit.fill_label(re.compile(r"transit mount|mount", re.I), "transit")
-    audit.fill_label(re.compile(r"credential reference", re.I), f"audit-secret-{run_id}")
-    audit.snapshot("kms-connection-filled", "Filled KMS connection metadata.")
-    if not audit.click_role("button", re.compile(r"next", re.I), timeout=3000):
-        audit.snapshot("kms-connection-next-blocked", "Next was unavailable on connection step.")
-        return
-
-    audit.fill_label(re.compile(r"key reference|key arn|key id|key name|key identifier", re.I), f"audit-key-{run_id}")
-    # Select a VC/issuer purpose when available.
-    for label in [re.compile(r"vc.*issuer|issuer|sd-jwt|credential", re.I)]:
-        try:
-            page.get_by_label(label).first.check(timeout=1500)
-            break
-        except Exception:
-            pass
-    audit.snapshot("kms-key-access-filled", "Filled KMS key access metadata.")
-    if not audit.click_role("button", re.compile(r"next", re.I), timeout=3000):
-        audit.snapshot("kms-key-access-next-blocked", "Next was unavailable on key access step.")
-        return
-
-    audit.snapshot("kms-review", "Reached KMS review.")
-    audit.click_role("button", re.compile(r"register service", re.I), timeout=5000)
-    audit.settle(5000)
-    audit.snapshot("kms-register-submitted", "Submitted KMS service registration.")
-
-    organization_id = active_organization_id(page)
+    if not audit.click_role(D10_UI_CONTROLS["kmsProvider"]["role"], d10_control_name("kmsProvider"), timeout=3000):
+        raise ValueError("The declared OpenBao Transit provider control is unavailable")
+    audit.snapshot("kms-provider-selected", "Selected the declared OpenBao Transit provider.")
+    if not audit.click_role(D10_UI_CONTROLS["next"]["role"], d10_control_name("next"), timeout=3000):
+        raise ValueError("The OpenBao connection step is unavailable")
+    fields = [("kmsServiceName", f"Audit Transit Service {run_id}"),
+              ("kmsUrl", inputs["endpoint"]), ("kmsMount", inputs["mount"]),
+              ("kmsToken", inputs["token"])]
+    if inputs["namespace"]:
+        fields.append(("kmsNamespace", inputs["namespace"]))
+    if inputs.get("ca_cert_file"):
+        fields.append(("kmsCaFile", inputs["ca_cert_file"]))
+    if page.get_by_label(d10_control_name("kmsToken")).first.get_attribute("type") != "password":
+        raise ValueError("The deployed transit token field must mask its value before capture")
+    for label, value in fields:
+        if not audit.fill_label(d10_control_name(label), value):
+            raise ValueError("A required OpenBao connection control is unavailable")
+    # Password input masking protects the video. Playwright tracing has not yet
+    # started: neither fill arguments nor request bodies containing this token
+    # may be captured. Known token values are also excluded from audit logs.
+    audit.snapshot("kms-connection-filled", "Entered the declared OpenBao connection; the token is hidden and this setup interval is excluded from the trace.")
+    if not audit.click_role(D10_UI_CONTROLS["next"]["role"], d10_control_name("next"), timeout=3000):
+        raise ValueError("The declared OpenBao connection did not pass form validation")
+    key_field = page.get_by_label(d10_control_name("kmsKey"))
+    if key_field.count() != 1:
+        raise ValueError("The real transit key selector is unavailable or ambiguous")
+    key_field.fill(inputs["key_reference"], timeout=5000)
+    for purpose in ["kmsIssuerPurpose", "kmsVerifierPurpose"]:
+        page.get_by_role(D10_UI_CONTROLS[purpose]["role"], name=d10_control_name(purpose)).check(timeout=3000)
+    default = D10_UI_CONTROLS["kmsDefault"]
+    page.get_by_role(default["role"], name=d10_control_name("kmsDefault"), exact=default["exact"]).check(timeout=3000)
+    audit.snapshot("kms-key-access-filled", "Selected the existing ES256 key for credential issuance and OID4VP request signing.")
+    if not audit.click_role(D10_UI_CONTROLS["next"]["role"], d10_control_name("next"), timeout=3000):
+        raise ValueError("The declared OpenBao key access did not pass form validation")
+    audit.snapshot("kms-review", "Reviewed the real OpenBao registration before submission.")
+    endpoint = f"/v1/signing-keys/config?organization_id={quote(organization_id, safe='')}"
+    with page.expect_response(lambda response: response.request.method == "PATCH"
+                              and response.url == audit.base_url + endpoint, timeout=30000) as observed:
+        if not audit.click_role(D10_UI_CONTROLS["kmsRegister"]["role"], d10_control_name("kmsRegister"), timeout=5000):
+            raise ValueError("The real service registration control is unavailable")
+    if not observed.value.ok:
+        raise ValueError("The public signing service registration did not succeed")
+    # A full navigation discards the token-bearing form before starting tracing.
+    audit.goto("/console/org/deploy/key-management/services")
+    if active_organization_id(page) != organization_id:
+        raise ValueError("Organization scope changed during signing service registration")
     probe = fetch_org_collection(page, "/v1/signing-keys/config", organization_id)
     config = probe.get("body") if isinstance(probe.get("body"), dict) else {}
-    services = config.get("services") if isinstance(config, dict) else []
-    if not config.get("hsm_enabled") or not isinstance(services, list) or not services:
-        audit.snapshot("kms-service-state-mismatch", "The canonical signing configuration did not contain an enabled service.")
-        return
-    audit.snapshot(
-        "kms-service-configured",
-        "Configured a signing service for the fresh organization.",
-        {"signing_configuration": {"hsm_enabled": True, "service_count": len(services)}},
+    service = selected_signing_service(config)
+    if (probe.get("status") != 200 or service is None
+            or service.get("name") != f"Audit Transit Service {run_id}"
+            or service.get("service_type") != "openbao-transit"
+            or str(service.get("endpoint") or "").rstrip("/") != inputs["endpoint"]
+            or service.get("mount") != inputs["mount"]
+            or str(service.get("namespace") or "") != inputs["namespace"]
+            or str(service.get("ca_cert_file") or "") != inputs.get("ca_cert_file", "")
+            or service.get("key_reference") != inputs["key_reference"]
+            or not set(SIGNING_PURPOSES).issubset(service.get("key_purposes") or [])
+            or "ES256" not in (service.get("algorithms") or [])):
+        raise ValueError("The exact run-created signing configuration was not selected")
+    audit.snapshot("kms-service-configured",
+        "Registered the real signing service; active metadata alone is not a capability result.",
+        {"signing_configuration": {"organization_id": organization_id, "run_id": run_id,
+         "default_service_id": service["id"], "service_count": len(config["services"])}},
     )
 
 
@@ -1441,19 +1745,7 @@ def create_issuer_identity(audit: Audit, run_id: str) -> None:
     audit.goto("/console/org/deploy/issuer-identity/new")
     audit.snapshot("issuer-identity-wizard-opened", "Opened issuer identity wizard.")
 
-    if text_visible(page, "No key management service", 1000) or text_visible(page, "No signing service registered", 1000):
-        audit.snapshot("issuer-identity-blocked", "Issuer identity creation is blocked because no signing service is registered.")
-        return
-
-    if text_visible(page, "No signing keys discovered", 1000):
-        audit.snapshot("issuer-identity-recommendation", "Issuer identity wizard warned that the signing service has no keys yet.")
-        if not audit.click_role("button", re.compile(r"use managed key creation|continue and create key", re.I), timeout=4000):
-            audit.click_role("button", re.compile(r"continue anyway", re.I), timeout=3000)
-        if not text_visible(page, "Choose a DID method", 1000) and text_visible(page, "No signing keys discovered", 1000):
-            audit.snapshot("issuer-identity-continue-unavailable", "Continue Anyway was unavailable after the signing-key recommendation.")
-            return
-
-    issuer_did_input = page.get_by_label(re.compile(r"^Issuer DID", re.I)).first
+    issuer_did_input = page.get_by_label(d10_control_name("issuerDid")).first
     issuer_did = issuer_did_input.input_value(timeout=3000).strip()
     if not issuer_did.startswith("did:"):
         audit.snapshot("issuer-identity-invalid-did", "Issuer identity wizard did not provide a valid DID.")
@@ -1464,8 +1756,8 @@ def create_issuer_identity(audit: Audit, run_id: str) -> None:
         {"issuer_did": issuer_did},
     )
     if not audit.click_role(
-        "button",
-        re.compile(r"^create managed identity$", re.I),
+        D10_UI_CONTROLS["issuerSubmit"]["role"],
+        d10_control_name("issuerSubmit"),
         timeout=5000,
     ):
         audit.snapshot("issuer-identity-submit-blocked", "Create managed identity was unavailable.")
@@ -2157,14 +2449,22 @@ def verify_resource_inventory(audit: Audit, run_id: str) -> None:
 
     config_probe = fetch_org_collection(page, "/v1/signing-keys/config", organization_id)
     config = config_probe.get("body") if isinstance(config_probe.get("body"), dict) else {}
-    if not config.get("hsm_enabled") or not isinstance(config.get("services"), list) or not config.get("services"):
+    service = selected_signing_service(config)
+    configured = [step.get("signing_configuration") for step in audit.steps
+                  if step.get("label") == "kms-service-configured"]
+    if (service is None or config_probe.get("status") != 200 or len(configured) != 1
+            or not isinstance(configured[0], dict)
+            or configured[0].get("organization_id") != organization_id
+            or configured[0].get("run_id") != run_id
+            or configured[0].get("default_service_id") != service.get("id")
+            or not signing_capability_proven({"steps": audit.steps})):
         missing.append("signing_service")
     else:
         inventory.append({
             "resource_type": "signing_service",
-            "id": config["services"][0].get("id"),
-            "name": config["services"][0].get("name"),
-            "status": config["services"][0].get("status") or "configured",
+            "id": service.get("id"),
+            "name": service.get("name"),
+            "status": service.get("status") or "configured",
         })
 
     dependency_errors: list[str] = []
@@ -2270,7 +2570,10 @@ def main() -> int:
     parser.add_argument(
         "--record-video",
         action="store_true",
-        help="Record a reviewable WebM video and Playwright trace in the audit artifact directory.",
+        help=(
+            "Record a reviewable WebM video and Playwright trace in the audit artifact directory. "
+            "The recorder's RECORD_VIDEO=0 override runs functional checks with a trace and no video."
+        ),
     )
     parser.add_argument(
         "--recording-pause-ms",
@@ -2288,8 +2591,13 @@ def main() -> int:
         ),
     )
     args = parser.parse_args()
+    functional_rerun = os.environ.get("RECORD_VIDEO") == "0"
+    record_video = args.record_video and not functional_rerun
+    # The D-10 recorder contract requires a trace in both modes. Functional
+    # traces retain execution events without capturing screenshots or DOMs.
+    record_trace = args.record_video or functional_rerun
 
-    env = load_env_file(ENV_FILE)
+    env = {} if os.environ.get("DEMO_PYTHON_CAPTURE_NONCE") else load_env_file(ENV_FILE)
     base_url = (
         args.base_url
         or os.environ.get("BETA_ORIGIN")
@@ -2297,16 +2605,32 @@ def main() -> int:
         or env.get("BASE_URL")
         or "https://beta.elevenidllc.com"
     )
-    if "beta.elevenidllc.com" not in base_url:
-        base_url = "https://beta.elevenidllc.com"
+    if (base_url != "https://beta.elevenidllc.com" or os.environ.get("BETA_LOCAL_PROXY") == "1"
+            or os.environ.get("NODE_TLS_REJECT_UNAUTHORIZED") not in {None, "1"}
+            or os.environ.get("MARTY_UI_CANDIDATE_DIST")):
+        print("D10 requires the exact beta HTTPS origin and verified deployed UI with normal TLS", file=sys.stderr)
+        return 2
 
     email = os.environ.get("TEST_VENDOR_EMAIL") or os.environ.get("TEST_ADMIN_EMAIL")
     password = os.environ.get("TEST_VENDOR_PASSWORD") or os.environ.get("TEST_ADMIN_PASSWORD")
     if not email or not password:
         print("Missing TEST_VENDOR_EMAIL/TEST_VENDOR_PASSWORD or admin fallback in beta env.", file=sys.stderr)
         return 2
+    KNOWN_SECRETS.add(password)
 
-    run_id = datetime.now().strftime("%Y%m%d%H%M%S")
+    try:
+        signing_inputs = load_signing_inputs()
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+
+    try:
+        capture = start_recorder_capture(required=record_trace)
+        acknowledged = bound_recorder_inputs(capture, signing_inputs, record_video, args.recording_pause_ms) if capture else None
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    run_id = acknowledged["runId"] if acknowledged else datetime.now().strftime("%Y%m%d%H%M%S") + "-" + secrets.token_hex(4)
     artifact_dir = resolve_artifact_dir(run_id)
     artifact_dir.mkdir(parents=True, exist_ok=True)
 
@@ -2315,9 +2639,9 @@ def main() -> int:
         context_options: dict[str, Any] = {
             "base_url": base_url,
             "viewport": RECORDING_VIEWPORT,
-            "ignore_https_errors": True,
+            "ignore_https_errors": False,
         }
-        if args.record_video:
+        if record_video:
             context_options.update({
                 "record_video_dir": str(artifact_dir),
                 "record_video_size": RECORDING_VIEWPORT,
@@ -2325,15 +2649,18 @@ def main() -> int:
         context = browser.new_context(
             **context_options,
         )
-        if args.record_video:
-            context.tracing.start(screenshots=True, snapshots=True, sources=True)
+        # Trace arguments and network bodies retain credentials even without
+        # screenshots. Start only after login and KMS credential submission.
+        trace_started = False
         page = context.new_page()
-        page_video = page.video if args.record_video else None
+        if capture:
+            capture.bind_page(page)
+        page_video = page.video if record_video else None
         audit = Audit(
             page,
             artifact_dir,
             base_url,
-            recording_pause_ms=args.recording_pause_ms if args.record_video else 0,
+            recording_pause_ms=args.recording_pause_ms if record_video else 0,
         )
         audit.attach_events()
 
@@ -2342,12 +2669,20 @@ def main() -> int:
             auth_probe = fetch_json_from_page(page, ["/v1/auth/me", "/v1/organizations/mine"])
             audit.snapshot("auth-probe", "Fetched auth/session probes.", {"auth_probe": auth_probe})
 
-            create_org(audit, run_id, email)
+            created_slug = create_org(audit, run_id, email)
             post_org_probe = fetch_json_from_page(page, ["/v1/auth/me", "/v1/organizations/mine"])
-            audit.snapshot("post-org-probe", "Fetched session after org creation.", {"auth_probe": post_org_probe})
+            organization_id = require_created_organization(page, created_slug, auth_probe, post_org_probe)
+            audit.snapshot("post-org-probe", "Bound the exact fresh organization before signer setup.",
+                           {"auth_probe": post_org_probe, "organization_id": organization_id})
 
-            create_key_service_if_possible(audit, run_id)
+            create_key_service_if_possible(audit, run_id, signing_inputs)
+            if record_trace:
+                context.tracing.start(
+                    screenshots=record_video, snapshots=record_video, sources=record_video,
+                )
+                trace_started = True
             create_issuer_identity(audit, run_id)
+            verify_issuer_signing_capabilities(audit, run_id, signing_inputs)
             create_trust_profile(audit, run_id)
             create_revocation_profile(audit, run_id)
             create_credential_template(audit, run_id)
@@ -2360,19 +2695,22 @@ def main() -> int:
             verify_unauthorized_administration_denied(audit)
         except Exception as exc:
             audit.snapshot("audit-exception", f"Audit stopped with exception: {exc!r}")
-            raise
+            # Do not re-emit an original Playwright exception chain that may
+            # contain token/password fill arguments in process stderr.
+            raise RuntimeError(f"D10 audit failed: {redact_sensitive(str(exc))}") from None
         finally:
             audit.cleanup_created_api_keys()
             report = audit.report()
-            recording: dict[str, str] | None = None
-            if args.record_video:
+            recording: dict[str, Any] | None = None
+            if trace_started:
                 trace_path = artifact_dir / "mip-primitives-management-trace.zip"
                 context.tracing.stop(path=str(trace_path))
+            if record_video:
                 recording = {
                     "video": report_artifact_path(
                         artifact_dir / "mip-primitives-management.webm", artifact_dir
                     ),
-                    "trace": report_artifact_path(trace_path, artifact_dir),
+                    "trace": report_artifact_path(trace_path, artifact_dir) if trace_started else None,
                 }
             context.close()
             if page_video is not None:
@@ -2384,8 +2722,24 @@ def main() -> int:
             browser.close()
             if recording:
                 report["recording"] = recording
+            if functional_rerun:
+                report.update({
+                    "functional_rerun": True,
+                    "capture_quality": {"status": "NOT_CAPTURED"},
+                    "recording": None,
+                    "trace": report_artifact_path(trace_path, artifact_dir) if trace_started else None,
+                })
+            if record_trace:
+                report["trace_coverage"] = {
+                    "status": "CAPTURED_AFTER_SENSITIVE_SETUP" if trace_started else "NOT_STARTED_SETUP_FAILED",
+                    "starts_after": "kms-service-configured",
+                    "omitted": ["authentication", "organization-creation", "kms-service-registration"],
+                    "reason": "Credential entry and service submission are excluded from trace arguments and network payloads.",
+                }
+                if not trace_started:
+                    report["releaseReady"] = False
             report_path = artifact_dir / "report.json"
-            report_path.write_text(json.dumps(report, indent=2, default=str), encoding="utf-8")
+            report_path.write_text(redact_sensitive(json.dumps(report, indent=2, default=str)), encoding="utf-8")
             print(f"[audit] report={report_path}")
 
     if args.github_env is not None and report["release_checks"]["status"] == "pass":
@@ -2398,7 +2752,9 @@ def main() -> int:
             f"verifier:{environment['BETA_AUDIT_VERIFIER_DID']}"
         )
 
-    return 0 if report["release_checks"]["status"] == "pass" else 1
+    if capture and report["releaseReady"]:
+        capture.complete()
+    return 0 if report["releaseReady"] else 1
 
 
 if __name__ == "__main__":

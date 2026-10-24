@@ -1,4 +1,10 @@
 export const IS_SELFHOST_UI = true;
+export const SELFHOST_PUBLIC_PROFILE = import.meta.env.VITE_SELFHOST_PUBLIC_PROFILE || 'full';
+if (!['full', 'tester'].includes(SELFHOST_PUBLIC_PROFILE)) {
+  throw new Error('Unsupported self-host public profile');
+}
+export const SHOW_PUBLIC_DEMOS = SELFHOST_PUBLIC_PROFILE !== 'tester';
+export const SHOW_PUBLIC_DOCUMENTATION_NAV = SELFHOST_PUBLIC_PROFILE !== 'tester';
 
 export const SELFHOST_PRODUCTION_PUBLIC_HOSTS = ['elevenidllc.com', 'www.elevenidllc.com'];
 
@@ -18,22 +24,24 @@ export function isSelfhostProductionPublicHost(hostname = getCurrentHostname()) 
   return SELFHOST_PRODUCTION_PUBLIC_HOSTS.includes(normalizeHostname(hostname));
 }
 
-export function getSelfhostPublicUiFlags(hostname = getCurrentHostname()) {
+export function getSelfhostPublicUiFlags(hostname = getCurrentHostname(), profile = SELFHOST_PUBLIC_PROFILE) {
   const disableProductionMarketingCtas = isSelfhostProductionPublicHost(hostname);
+  const tester = profile === 'tester';
 
   return {
     showPublicLoginButton: true,
     disablePublicLoginButton: false,
-    showPublicGetStartedButtons: true,
+    showPublicGetStartedButtons: !tester,
     disablePublicGetStartedButtons: disableProductionMarketingCtas,
-    showPublicPricingButtons: true,
+    showPublicPricingButtons: !tester,
     disablePublicPricingButtons: disableProductionMarketingCtas,
     enableLegacyAdminImpersonationBanner: false,
   };
 }
 
-export function getSelfhostPublicTabs(hostname = getCurrentHostname()) {
-  const { showPublicPricingButtons, disablePublicPricingButtons } = getSelfhostPublicUiFlags(hostname);
+export function getSelfhostPublicTabs(hostname = getCurrentHostname(), profile = SELFHOST_PUBLIC_PROFILE) {
+  const { showPublicPricingButtons, disablePublicPricingButtons } = getSelfhostPublicUiFlags(hostname, profile);
+  const tester = profile === 'tester';
 
   return [
     { labelKey: 'navigation.home', defaultLabel: 'Home', path: '/', exact: true },
@@ -54,9 +62,9 @@ export function getSelfhostPublicTabs(hostname = getCurrentHostname()) {
       ],
     },
     { labelKey: 'navigation.solutions', defaultLabel: 'Solutions', path: '/solutions' },
-    { labelKey: 'navigation.developers', defaultLabel: 'Developers', path: '/developers', prefixes: ['/developers'] },
+    ...(!tester ? [{ labelKey: 'navigation.developers', defaultLabel: 'Developers', path: '/developers', prefixes: ['/developers'] }] : []),
     { labelKey: 'navigation.standards', defaultLabel: 'Standards', path: '/standards' },
-    { labelKey: 'navigation.demos', defaultLabel: 'Demos', path: '/demos', prefixes: ['/demos'] },
+    ...(!tester ? [{ labelKey: 'navigation.demos', defaultLabel: 'Demos', path: '/demos', prefixes: ['/demos'] }] : []),
     {
       labelKey: 'navigation.resources',
       defaultLabel: 'Resources',
@@ -102,4 +110,4 @@ export const I18N_NAMESPACES = ['common', 'console', 'onboarding', 'forms', 'err
 
 export const PUBLIC_TABS = getSelfhostPublicTabs();
 
-export const SHOW_PUBLIC_CTA = true;
+export const SHOW_PUBLIC_CTA = SELFHOST_PUBLIC_PROFILE !== 'tester';

@@ -70,6 +70,7 @@ pub struct InMemoryFlowRepository {
 
 impl InMemoryFlowRepository {
     pub fn save_definition(&self, definition: FlowDefinition) -> Result<(), RepositoryError> {
+        checked_public_record(&definition)?;
         self.lock()?
             .definitions
             .insert(definition.id.clone(), definition);
@@ -98,6 +99,7 @@ impl InMemoryFlowRepository {
     }
 
     pub fn save_instance(&self, instance: FlowInstance) -> Result<(), RepositoryError> {
+        checked_public_record(&instance)?;
         let mut state = self.lock()?;
         if state
             .instances
@@ -143,6 +145,10 @@ impl InMemoryFlowRepository {
         callback: Option<Message>,
         now_ms: u64,
     ) -> Result<bool, RepositoryError> {
+        checked_public_record(&instance)?;
+        if let Some(message) = &callback {
+            checked_public_record(&message.payload)?;
+        }
         if !valid_sha256(nonce_digest) {
             return Err(RepositoryError::InvalidReplayDigest);
         }
@@ -192,6 +198,7 @@ impl InMemoryFlowRepository {
     }
 
     pub fn save_artifact(&self, artifact: FlowArtifact) -> Result<FlowArtifact, RepositoryError> {
+        checked_public_record(&artifact)?;
         let mut state = self.lock()?;
         let existing_id = artifact
             .issuance_transaction_id
@@ -235,6 +242,11 @@ impl InMemoryFlowRepository {
         mut receipt: ApplicationEventReceipt,
         planned: Vec<PlannedApplicationFlow>,
     ) -> Result<(ApplicationEventReceipt, bool), RepositoryError> {
+        checked_public_record(&receipt)?;
+        for candidate in &planned {
+            checked_public_record(&candidate.instance)?;
+            checked_public_record(&candidate.plan_entry)?;
+        }
         if !valid_sha256(&receipt.event_id_sha256) || !valid_sha256(&receipt.payload_sha256) {
             return Err(RepositoryError::InvalidReplayDigest);
         }
@@ -326,4 +338,13 @@ fn valid_sha256(value: &str) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+pub(crate) fn checked_public_record<T: Serialize>(value: T) -> Result<T, RepositoryError> {
+    let document = serde_json::to_value(&value)
+        .map_err(|_| RepositoryError::Storage("record serialization failed".into()))?;
+    if marty_key_material_policy::contains_private_key(&document) {
+        return Err(FlowRecordError::InvalidStoredState("private key material".into()).into());
+    }
+    Ok(value)
 }

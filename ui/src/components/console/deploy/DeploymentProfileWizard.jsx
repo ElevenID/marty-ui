@@ -31,7 +31,7 @@ import RuntimeSettingsStep from './steps/RuntimeSettingsStep';
 import IntegrationStep from './steps/IntegrationStep';
 import ReviewStep from './steps/ReviewStep';
 
-const DeploymentProfileWizard = () => {
+const DeploymentProfileWizardForm = () => {
   const navigate = useNavigate();
   const { t } = useTranslation('console');
   const { activeOrgId } = useConsole();
@@ -48,7 +48,7 @@ const DeploymentProfileWizard = () => {
       case 0: // Environment
         return data.name?.trim().length > 0 && data.environment_type;
       case 1: // Runtime Settings
-        return data.default_policy_id !== null;
+        return data.runtime_catalog_ready && Boolean(data.default_policy_id);
       case 2: // Integration (optional)
         return true;
       case 3: // Review
@@ -90,6 +90,7 @@ const DeploymentProfileWizard = () => {
       trust_profile_id: data.trust_profile_id || null,
       default_policy_id: data.default_policy_id || null,
       presentation_policy_ids: data.default_policy_id ? [data.default_policy_id] : [],
+      credential_template_ids: data.credential_template_ids,
       enabled_flow_ids: data.enabled_flows,
       callbacks,
       feature_flags: {
@@ -116,6 +117,9 @@ const DeploymentProfileWizard = () => {
       default_policy_id: null,
       trust_profile_id: null,
       enabled_flows: [],
+      credential_template_ids: [],
+      runtime_catalog_ready: false,
+      runtime_catalog: null,
       webhooks: {
         url: '',
         events: [],
@@ -298,4 +302,8 @@ const DeploymentProfileWizard = () => {
   );
 };
 
-export default DeploymentProfileWizard;
+export default function DeploymentProfileWizard() {
+  const { activeOrgId } = useConsole();
+  if (!activeOrgId) return <Typography>Select an organization before creating a deployment profile.</Typography>;
+  return <DeploymentProfileWizardForm key={activeOrgId} />;
+}

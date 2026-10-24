@@ -29,6 +29,7 @@ if ($PlanOnly -and -not $PhysicalProviderSnapshot) {
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 . (Join-Path $PSScriptRoot "beta-worker-launch-contract.ps1")
+. (Join-Path $PSScriptRoot "beta-state-volume-plan.ps1")
 if ([string]::IsNullOrWhiteSpace($TunnelEnvFile)) {
     $TunnelEnvFile = Join-Path $repoRoot ".env.tunnel.beta.local"
 }
@@ -105,20 +106,15 @@ function Get-StackArtifact([string]$Name, [string]$Type) {
     }
     return $artifact[0]
 }
-$martyCommon = Get-StackArtifact "marty-common" "python"
 $martyRs = Get-StackArtifact "marty-core-python" "python"
 $martyVerification = Get-StackArtifact "marty-verification-python" "python"
 $martyIso18013 = Get-StackArtifact "marty-iso18013-python" "python"
-$martyIssuance = Get-StackArtifact "marty-credentials-issuance" "oci"
-$env:MARTY_COMMON_URI = $martyCommon.uri
-$env:MARTY_COMMON_DIGEST = $martyCommon.digest
 $env:MARTY_RS_URI = $martyRs.uri
 $env:MARTY_RS_DIGEST = $martyRs.digest
 $env:MARTY_VERIFICATION_URI = $martyVerification.uri
 $env:MARTY_VERIFICATION_DIGEST = $martyVerification.digest
 $env:MARTY_ISO18013_URI = $martyIso18013.uri
 $env:MARTY_ISO18013_DIGEST = $martyIso18013.digest
-$env:MARTY_ISSUANCE_IMAGE = "$($martyIssuance.uri)@$($martyIssuance.digest)"
 $docsIds = @(& docker ps -a --filter "label=com.docker.compose.project=$project" --filter "label=com.docker.compose.service=docs" --format '{{.ID}}')
 if ($LASTEXITCODE -ne 0 -or $docsIds.Count -ne 1) { throw "Expected one existing beta docs container" }
 $env:MARTY_DOCS_IMAGE = & docker inspect $docsIds[0] --format '{{.Config.Image}}'
@@ -150,16 +146,6 @@ function Find-ServiceContainer([string]$Service) {
         throw "Refusing container outside $project"
     }
     return [string]$ids[0]
-}
-
-function Assert-BetaVolume([string]$Name) {
-    $raw = & docker volume inspect $Name
-    if ($LASTEXITCODE -ne 0) { throw "Required beta volume is absent: $Name" }
-    $volume = ($raw -join "`n") | ConvertFrom-Json
-    if ($volume.Count -ne 1 -or $volume[0].Labels.'com.docker.compose.project' -ne $project) {
-        throw "Refusing volume outside ${project}: $Name"
-    }
-    return $Name
 }
 
 function Get-ServiceContainer([string]$Service) {
@@ -198,7 +184,7 @@ $manifest = Get-Content -LiteralPath $backupManifestPath -Raw | ConvertFrom-Json
 if ($manifest.schema_version -ne 1 -or $manifest.phase -ne "maintenance_quiesced" -or $manifest.application_writers_stopped -ne $true) {
     throw "Backup is not a quiesced beta maintenance snapshot"
 }
-$requiredFiles = @("applicant_store.json", "openbao-data.tar.gz", "postgres-globals.sql", "postgres-keycloak.dump", "postgres-marty.dump", "redis-dump.rdb")
+$requiredFiles = @("applicant_store.json", "openbao-data.tar.gz", "openbao-raft.snap", "postgres-globals.sql", "postgres-keycloak.dump", "postgres-marty.dump", "redis-dump.rdb")
 foreach ($name in $requiredFiles) {
     $record = @($manifest.files | Where-Object name -eq $name)
     $path = Join-Path $backupDir $name
@@ -209,6 +195,13 @@ foreach ($name in $requiredFiles) {
 
 $preDeployDocument = Get-Content -LiteralPath $preDeployPath -Raw | ConvertFrom-Json
 $preDeploy = @($preDeployDocument | ForEach-Object { $_ })
+$priorIssuance = @($preDeploy | Where-Object { $_.service -eq "issuance" -and $_.running })
+$priorGateway = @($preDeploy | Where-Object { $_.service -eq "gateway" -and $_.running })
+if ($priorIssuance.Count -ne 1 -or $priorGateway.Count -ne 1 -or
+    $priorIssuance[0].image_id -notmatch '^sha256:[0-9a-f]{64}$' -or
+    $priorIssuance[0].image_id -cne $priorGateway[0].image_id) {
+    throw "Rust-only beta restore cannot replay a legacy issuance image; keep beta in maintenance and repair forward"
+}
 $applicationServices = @(
     "auth", "organization", "credential-template", "trust-profile", "applicant", "notification",
     "compliance-profile", "presentation-policy", "deployment-profile", "flow", "verification",
@@ -421,15 +414,7 @@ if ($workerRecords.Count -eq 1) {
     if ($LASTEXITCODE -ne 0) { throw "Worker rollback image must be available for preflight inspection before stopping beta" }
     $image = @((($rawImage -join "`n") | ConvertFrom-Json))
     if ($image.Count -ne 1 -or $image[0].Id -cne $workerRecord.image_id) { throw "Worker rollback image identity mismatch" }
-    $currentWorker = $null
-    if ($null -eq $workerRecord.PSObject.Properties['rollback_launch']) {
-        $configArguments = Get-ComposeArgs @('config', '--format', 'json')
-        $rawConfiguration = & docker @configArguments
-        if ($LASTEXITCODE -ne 0) { throw "Legacy worker rollback requires a readable matching Compose configuration before stopping beta" }
-        $configuration = ($rawConfiguration -join "`n") | ConvertFrom-Json
-        $currentWorker = (Get-BetaWorkerField $configuration.services 'canvas-sync-worker').Value
-    }
-    $workerLaunch = Resolve-BetaWorkerRollbackLaunch -Record $workerRecord -CurrentWorker $currentWorker -ImageConfig $image[0].Config
+    $workerLaunch = Resolve-BetaWorkerRollbackLaunch -Record $workerRecord -ImageConfig $image[0].Config
 }
 foreach ($record in $preDeploy) {
     if ($record.running -and $record.service -in $applicationServices) {
@@ -467,8 +452,16 @@ if ($uiRecord.Count -eq 1 -and $uiRecord[0].image_id -notmatch '^sha256:[0-9a-f]
 # Resolve every existing data target before stopping services or restoring any
 # earlier store. A missing/mislabeled later volume must fail without partial restore.
 $postgres = Get-ServiceContainer "postgres"
-$redisVolumeName = Assert-BetaVolume "elevenid-beta_redis_data"
-$applicantVolumeName = Assert-BetaVolume "elevenid-beta_applicant_data"
+if (-not $manifest.PSObject.Properties['state_volumes']) {
+    throw 'Restore requires a backup with explicit beta state-volume bindings'
+}
+$stateVolumes = @($manifest.state_volumes)
+Assert-BetaStateVolumePlan -Expected $stateVolumes
+$redisVolumeName = ($stateVolumes | Where-Object logical_name -eq 'redis_data').volume_name
+$applicantVolumeName = ($stateVolumes | Where-Object logical_name -eq 'applicant_data').volume_name
+$volumeOverride = Join-Path $resolvedArtifacts 'restore-state-volumes.json'
+(ConvertTo-BetaStateVolumeOverride -Plan $stateVolumes) | Set-Content -LiteralPath $volumeOverride -Encoding utf8
+$composeFiles += $volumeOverride
 Assert-LegacyBetaDatabaseUnfenced -PostgresContainer $postgres
 $yaml -join "`n" | Set-Content -LiteralPath $restoreImages -Encoding utf8
 $composeFiles += $restoreImages

@@ -1,0 +1,615 @@
+{
+  "schemaVersion": 1,
+  "task": "Retained independent Spruce lane and shared D05 native repair",
+  "recordedAt": "2026-10-20T05:24:12.148152+00:00",
+  "status": "PASS_LOCAL_IMPLEMENTATION_VERIFICATION",
+  "liveQualification": "NOT_RUN",
+  "recordingBinding": "UNBOUND",
+  "nativeSource": {
+    "repository": "spruceid/sprucekit-mobile",
+    "revision": "801a482c7bbd55fabbe5376f314dc40a05ec4c33",
+    "releaseTag": "0.19.4",
+    "package": "com.spruceid.mobilesdkexample",
+    "primarySources": [
+      {
+        "path": "android/Showcase/src/main/java/com/spruceid/mobilesdkexample/wallet/HandleOID4VCIView.kt",
+        "url": "https://github.com/spruceid/sprucekit-mobile/blob/801a482c7bbd55fabbe5376f314dc40a05ec4c33/android/Showcase/src/main/java/com/spruceid/mobilesdkexample/wallet/HandleOID4VCIView.kt",
+        "gitBlobSha": "323daea51f6b78706e44f4b44e6ad8c38d173cf9",
+        "sha256": "5777af208993d39dfe5a7854fd3332569740944c7c592eadfd860c53a93e6b70",
+        "localPath": "native-spruce-source/android/Showcase/src/main/java/com/spruceid/mobilesdkexample/wallet/HandleOID4VCIView.kt"
+      },
+      {
+        "path": "android/Showcase/src/main/java/com/spruceid/mobilesdkexample/wallet/HandleOID4VPView.kt",
+        "url": "https://github.com/spruceid/sprucekit-mobile/blob/801a482c7bbd55fabbe5376f314dc40a05ec4c33/android/Showcase/src/main/java/com/spruceid/mobilesdkexample/wallet/HandleOID4VPView.kt",
+        "gitBlobSha": "e5acf1f8fef0fbf32f6719ae8d180a34aa5c797c",
+        "sha256": "0b603b751c47f76c3dbb3b5af0dbdc27b5a421d3de21e9ca229638332a680f36",
+        "localPath": "native-spruce-source/android/Showcase/src/main/java/com/spruceid/mobilesdkexample/wallet/HandleOID4VPView.kt"
+      },
+      {
+        "path": "android/Showcase/src/main/java/com/spruceid/mobilesdkexample/credentials/AddToWalletView.kt",
+        "url": "https://github.com/spruceid/sprucekit-mobile/blob/801a482c7bbd55fabbe5376f314dc40a05ec4c33/android/Showcase/src/main/java/com/spruceid/mobilesdkexample/credentials/AddToWalletView.kt",
+        "gitBlobSha": "206595d91adae5a0efc52ea6549e9fd9454e0ba1",
+        "sha256": "d8c83dfda9b75172ae328755e473cd7c5882efa2348f666fc766729d76dabaab",
+        "localPath": "native-spruce-source/android/Showcase/src/main/java/com/spruceid/mobilesdkexample/credentials/AddToWalletView.kt"
+      },
+      {
+        "path": "android/Showcase/src/main/java/com/spruceid/mobilesdkexample/MainActivity.kt",
+        "url": "https://github.com/spruceid/sprucekit-mobile/blob/801a482c7bbd55fabbe5376f314dc40a05ec4c33/android/Showcase/src/main/java/com/spruceid/mobilesdkexample/MainActivity.kt",
+        "gitBlobSha": "e25ec2b1a30445ec831124cdd615758eae5e879c",
+        "sha256": "db8737aa362eb729c168cbbb48b639c2d6854d03763b6848f8fa4cd5461ef8bc",
+        "localPath": "native-spruce-source/android/Showcase/src/main/java/com/spruceid/mobilesdkexample/MainActivity.kt"
+      },
+      {
+        "path": "android/Showcase/src/main/java/com/spruceid/mobilesdkexample/navigation/SetupNavGraph.kt",
+        "url": "https://github.com/spruceid/sprucekit-mobile/blob/801a482c7bbd55fabbe5376f314dc40a05ec4c33/android/Showcase/src/main/java/com/spruceid/mobilesdkexample/navigation/SetupNavGraph.kt",
+        "gitBlobSha": "30b7a4d1414f03b8086521fb4a1022d45d09253f",
+        "sha256": "8a5a64330f8b34fb0b6f6e651af9caf99c965698dcd45ef1d64869fdacd92816",
+        "localPath": "native-spruce-source/android/Showcase/src/main/java/com/spruceid/mobilesdkexample/navigation/SetupNavGraph.kt"
+      },
+      {
+        "path": "android/Showcase/src/main/java/com/spruceid/mobilesdkexample/utils/Utils.kt",
+        "url": "https://github.com/spruceid/sprucekit-mobile/blob/801a482c7bbd55fabbe5376f314dc40a05ec4c33/android/Showcase/src/main/java/com/spruceid/mobilesdkexample/utils/Utils.kt",
+        "gitBlobSha": "494282df6914da97d48e79f3b4e428dc908c82a7",
+        "sha256": "da12d5ded5fb39b78c7e586de252c6186d6e175453db0aebf88a2f58cbcd222a",
+        "localPath": "native-spruce-source/android/Showcase/src/main/java/com/spruceid/mobilesdkexample/utils/Utils.kt"
+      },
+      {
+        "path": "rust/Cargo.toml",
+        "url": "https://github.com/spruceid/sprucekit-mobile/blob/801a482c7bbd55fabbe5376f314dc40a05ec4c33/rust/Cargo.toml",
+        "gitBlobSha": "d6d83ef414157bde30570654b5b0405ff0aaba80",
+        "sha256": "9c74db24edb1e0b3eb8e05859e89e18a6aa1fa3efa20352b571672dbc0123e4f",
+        "localPath": "native-spruce-source/rust/Cargo.toml"
+      },
+      {
+        "path": "rust/src/oid4vp/holder.rs",
+        "url": "https://github.com/spruceid/sprucekit-mobile/blob/801a482c7bbd55fabbe5376f314dc40a05ec4c33/rust/src/oid4vp/holder.rs",
+        "gitBlobSha": "5750e833b2d45ccbae0e1dd3c6cd0d69401ca973",
+        "sha256": "f0d64ec50d8a4e48312f8188d26068e1025f31e9ecf9acab3fd5c97a918e9438",
+        "localPath": "native-spruce-source/rust/src/oid4vp/holder.rs"
+      },
+      {
+        "path": "rust/src/oid4vp/permission_request.rs",
+        "url": "https://github.com/spruceid/sprucekit-mobile/blob/801a482c7bbd55fabbe5376f314dc40a05ec4c33/rust/src/oid4vp/permission_request.rs",
+        "gitBlobSha": "5a72c8f7a9549eacfbc1fb9f6258e0cc5954f3be",
+        "sha256": "e4163a72e682e32e772d635d595e95adef0a6d3f5c8df14f2e1cdb3fd0dd760f",
+        "localPath": "native-spruce-source/rust/src/oid4vp/permission_request.rs"
+      },
+      {
+        "path": "rust/src/oid4vp/presentation.rs",
+        "url": "https://github.com/spruceid/sprucekit-mobile/blob/801a482c7bbd55fabbe5376f314dc40a05ec4c33/rust/src/oid4vp/presentation.rs",
+        "gitBlobSha": "69d796a9dce6e810fc6e1edaa84145707b91614f",
+        "sha256": "5beeb3272f6f401d859b10f77e6f3c2af2f99adcfaf734785b2cf6b8b69e5b92",
+        "localPath": "native-spruce-source/rust/src/oid4vp/presentation.rs"
+      },
+      {
+        "path": "rust/src/credential/format/jwt_vc.rs",
+        "url": "https://github.com/spruceid/sprucekit-mobile/blob/801a482c7bbd55fabbe5376f314dc40a05ec4c33/rust/src/credential/format/jwt_vc.rs",
+        "gitBlobSha": "9d0145e6c2fd7a7b2d787ff9efaeef8ae0e9c9cf",
+        "sha256": "a270f63005107f52d79a73d3d1a1f4fd8edfc0a4a5b128bcf15248978b440108",
+        "localPath": "native-spruce-source/rust/src/credential/format/jwt_vc.rs"
+      },
+      {
+        "path": "rust/src/oid4vci/credential.rs",
+        "url": "https://github.com/spruceid/sprucekit-mobile/blob/801a482c7bbd55fabbe5376f314dc40a05ec4c33/rust/src/oid4vci/credential.rs",
+        "gitBlobSha": "ebb005866386e67e98f6eabfff1bcd3211d592d4",
+        "sha256": "301b2f3e975474d04d623ab70c5b04d36a34fd7860d945f445b39db037b822a5",
+        "localPath": "native-spruce-source/rust/src/oid4vci/credential.rs"
+      }
+    ],
+    "retainedPrimarySourcesVerification": {
+      "files": 12,
+      "result": "PASS",
+      "hashDomains": [
+        "Git blob SHA-1",
+        "SHA-256"
+      ]
+    }
+  },
+  "findings": [
+    {
+      "id": "native-controls",
+      "sources": [
+        "HandleOID4VCIView.kt:105-126,239-249",
+        "AddToWalletView.kt:119-151",
+        "HandleOID4VPView.kt:308-315,574-587,730-751"
+      ],
+      "observed": "OID4VCI exchange happens before the Add to Wallet save button. Single matching OID4VP credential skips selection; consent controls are Approve and Cancel. Both successful submission and cancellation navigate to wallet Home; the result URL is not used for an automatic Chrome return."
+    },
+    {
+      "id": "cancel-prerequisite",
+      "observed": "The previous cancel template did not issue a credential after wallet reset, so a clean wallet could not reach its required consent Cancel action."
+    },
+    {
+      "id": "expiry-boundary",
+      "observed": "The native wallet exchanges automatically on handoff, before its save screen. The repaired driver waits for the exact native offer_expires_at, observes the holder-scoped application HTTP200 response with EXPIRED/OFFER_EXPIRED before handoff, then requires the native expired error. The canonical inline offer has no public offer-reference GET; no HTTP410 claim is made."
+    },
+    {
+      "id": "source-support",
+      "sources": [
+        "rust/src/oid4vci/credential.rs:14-28",
+        "rust/src/oid4vp/holder.rs:185-208,245-259,284-359",
+        "rust/src/credential/format/jwt_vc.rs:187-297"
+      ],
+      "observed": "Pinned native Rust implements VCI credential exchange and signed JWT VC presentation for DCQL with direct_post/direct_post.jwt. This source fact is not a live interoperability or per-run credential-format claim."
+    },
+    {
+      "id": "trust-boundary",
+      "sources": [
+        "Utils.kt:31"
+      ],
+      "observed": "The Showcase trustedDids list is empty. The dedicated retained contract makes no independent wallet issuer-allowlist claim; service login results remain required."
+    }
+  ],
+  "verification": [
+    {
+      "name": "flow",
+      "command": "node test/spruceMembershipFlow.test.js",
+      "cwd": "/workspace/scratch/d8b5d3d3b0dd/marty-demo-recorder-complete",
+      "result": "PASS",
+      "exitCode": 0,
+      "passed": 12,
+      "failed": 0,
+      "skipped": 0,
+      "logPath": "retained-independent-flow.log",
+      "logSha256": "7d886be426b811dd32222055357811aac24c6335dca2d514f894d60846403e6a",
+      "namedCases": [
+        "all six source-bound native flows use real Add to Wallet and single-credential Approve/Cancel with explicit Chrome return",
+        "native contract rejects callbacks invented from package traces, substituted controls, weak reset and cross-organization receipts",
+        "frozen source requires real clean canonical routes, source pin, secret environment names and an actual registry ID",
+        "managed reset requires actual post-install pm clear Success and preserves failures",
+        "before claim refuses an existing holder application without issuing or withdrawing it",
+        "claim probe retains exact current ID before later failure and rejects different organizations and expired-offer reuse",
+        "expiry uses native server expiry and exact EXPIRED/OFFER_EXPIRED before handoff; a delay or generic failure cannot pass",
+        "canonical signed request observes the exact native Flow reference with distinct Auth/presentation nonces and blocks the chooser",
+        "generic trust error or missing authentication cannot become a typed native trust success",
+        "selectOption executes only an existing option and confirms the actual selected value",
+        "actual browser result probes require native page finalization and exact holder identity without consuming finalize",
+        "actual cancel probe checks its original pending request and same Chrome auth=false; a generic trust failure remains blocked"
+      ],
+      "scope": "Local source/config/controlled-response tests; no actual device or shared service invocation."
+    },
+    {
+      "name": "cancel",
+      "command": "node test/androidMembershipCancel.test.js",
+      "cwd": "/workspace/scratch/d8b5d3d3b0dd/marty-demo-recorder-complete",
+      "result": "PASS",
+      "exitCode": 0,
+      "passed": 4,
+      "failed": 0,
+      "skipped": 0,
+      "logPath": "retained-independent-cancel.log",
+      "logSha256": "4baf44e15446a0487606fee83ae70342d170f0526fcb95ed218f14e5bfdeb694",
+      "namedCases": [
+        "the declared cancel source first receives a fresh credential and then uses native Cancel and explicit Chrome return",
+        "holder cancellation qualifies only exact frozen source plus indexed native actions and real Chrome observations",
+        "missing false session evidence, wrong cancel package, reused credential, or missing actions cannot become a cancel pass",
+        "manifest binding rejects summary-only cancel reports and never upgrades catalog assertions"
+      ],
+      "scope": "Local source/config/controlled-response tests; no actual device or shared service invocation."
+    },
+    {
+      "name": "android",
+      "command": "node test/androidRecorder.test.js",
+      "cwd": "/workspace/scratch/d8b5d3d3b0dd/marty-demo-recorder-complete",
+      "result": "PASS",
+      "exitCode": 0,
+      "passed": 18,
+      "failed": 0,
+      "skipped": 0,
+      "logPath": "retained-independent-android.log",
+      "logSha256": "fef7f80fc8673bbd3aeb8de4698aa736d6138a27a0e82c4a1b6f96bc8ae6b7ef",
+      "namedCases": [
+        "requires release-bound Android scenario identity and executable actions",
+        "requires browser navigation for a same-device OpenID4VP scenario",
+        "keeps Android scenario URLs and screenshot artifacts inside release boundaries",
+        "binds hash-verified Android execution evidence into the matching release scenario",
+        "keeps separate Android records for happy and denial lanes",
+        "public Android wallet projection rejects malformed typed evidence before changing a manifest",
+        "Android gateway blocks incompatible public output or an evidence digest from different retained bytes",
+        "freezes scenario placeholders from a non-secret release fixture",
+        "reads nested verifier results for minimum-disclosure assertions",
+        "accepts only fully pinned Android profiles with an existing APK",
+        "freezes an Android profile from a local APK and immutable release inputs",
+        "defines the exact twelve-scenario v3 acceptance portfolio with D-05 lanes first",
+        "requires the selected Android lane set before a containerized release gate can run",
+        "redacts masked runtime input values from action evidence",
+        "creates and expires the D-05 offer before handoff using actual native state, then reopens the real claim route",
+        "accepts safe browser status-attribute assertions in scenarios",
+        "requires source-bound explicit browser returns for the D-05 happy lane, not a package summary",
+        "requires exact minimum-disclosure and issuer-trust assertions for D-03"
+      ],
+      "scope": "Local source/config/controlled-response tests; no actual device or shared service invocation."
+    },
+    {
+      "name": "runner",
+      "command": "MARTY_UI_REPOSITORY=/workspace/scratch/d8b5d3d3b0dd/marty-ui-production-gaps node test/retainedIndependentWallet.test.js",
+      "cwd": "/workspace/scratch/d8b5d3d3b0dd/marty-demo-recorder-complete",
+      "result": "PASS",
+      "exitCode": 0,
+      "passed": 7,
+      "failed": 0,
+      "skipped": 0,
+      "logPath": "retained-independent-runner.log",
+      "logSha256": "bd9614c4f3ce2668221d0eacfbc9f0ef52f865fc4979c5b16910c9fee6f159eb",
+      "namedCases": [
+        "dedicated retained config binds revision2, its exact entrypoint, four draft assertions and two fresh native recordings",
+        "retained runner requires exact two lanes, separate masked accounts and all native prerequisites before record dispatch",
+        "actual shared two-lane gateway maps source-bound evidence and privacy gates to the existing external capture flag only",
+        "source drift or external fixture changes prevent releaseReady and preserve failed evidence",
+        "existing retained media is rejected before native execution and failed lanes retain exact application reconciliation IDs",
+        "overview encoding failure prevents the external capture success flag after both native lanes pass",
+        "fresh-lane binding rejects old run identity, substituted report bytes, altered media and reused requests"
+      ],
+      "scope": "Local source/config/controlled-response tests; no actual device or shared service invocation."
+    },
+    {
+      "name": "d03-compatibility",
+      "command": "node test/privateAgeProofGateway.test.js",
+      "cwd": "/workspace/scratch/d8b5d3d3b0dd/marty-demo-recorder-complete",
+      "result": "PASS",
+      "exitCode": 0,
+      "passed": 7,
+      "failed": 0,
+      "skipped": 0,
+      "logPath": "retained-independent-d03-compatibility.log",
+      "logSha256": "c0014237d02c6b400b4a9c99d3d50369ba37aa407dce80d4f1c66b6b5a81d0e6",
+      "namedCases": [
+        "D03 config validates and retains both required independent-wallet evidence files",
+        "D03 binds the actual console result and explicit wallet selections to fresh resource IDs",
+        "D03 rejects substituted controls, ambiguous credentials, wrong origins and unknown denial",
+        "D03 checks all frozen wallet controls before creating the first issuance",
+        "D03 requires both lanes and ready native tools before issuance",
+        "D03 restores the non-secret frozen scenario after a lost device recording response",
+        "D03 keeps the real shared two-lane gate and only accepts measured device and native receipts"
+      ],
+      "scope": "Local source/config/controlled-response tests; no actual device or shared service invocation."
+    },
+    {
+      "name": "assertion-coverage",
+      "command": "node test/assertionCoverage.test.js",
+      "cwd": "/workspace/scratch/d8b5d3d3b0dd/marty-demo-recorder-complete",
+      "result": "PASS",
+      "exitCode": 0,
+      "passed": 2,
+      "failed": 0,
+      "skipped": 0,
+      "logPath": "retained-independent-assertion-coverage.log",
+      "logSha256": "41fa542ac048cb295e18b4d98d8e3fb15e2967604fcb5ab24be02e265e7817e9",
+      "namedCases": [
+        "reconciles explicit legacy ids across lanes without claiming functional qualification",
+        "a PASS header cannot conceal missing, duplicate, skipped or stale mapped assertions"
+      ],
+      "scope": "Local source/config/controlled-response tests; no actual device or shared service invocation."
+    },
+    {
+      "name": "overview",
+      "command": "NATIVE_OVERVIEW_TEST_ARTIFACTS=/workspace/scratch/d8b5d3d3b0dd/production-gap-evidence/synthetic-native-overview node test/retainedIndependentOverview.test.js",
+      "cwd": "/workspace/scratch/d8b5d3d3b0dd/marty-demo-recorder-complete",
+      "result": "PASS",
+      "exitCode": 0,
+      "passed": 4,
+      "failed": 0,
+      "skipped": 0,
+      "logPath": "retained-independent-overview.log",
+      "logSha256": "338e096408cb16b504081bb9a9ed177041b2e0ad19d80b1bbd36caa06bab121a",
+      "namedCases": [
+        "real FFmpeg overview preserves both complete portrait sources and produces a source-bound WebM accepted by the outer capture gate",
+        "actual low-frame-rate portrait media is rejected before any overview encoding",
+        "substituted source bytes, a different run, or preexisting primary cannot acquire overview provenance",
+        "an encoder failure retains raw media and cannot write a successful overview provenance file"
+      ],
+      "scope": "Real local FFmpeg/ffprobe on generated test colors only."
+    }
+  ],
+  "changedSourceHashes": [
+    {
+      "repository": "marty-demo-recorder",
+      "path": "android/README.md",
+      "sha256": "01258c50f41b49093db9feaddbe7119c648fb762fce480a8b3485d2f0ba667fc"
+    },
+    {
+      "repository": "marty-demo-recorder",
+      "path": "android/retained-independent-fixture.example.json",
+      "sha256": "89446741124aa2fa7ea345b7293c83cd39350147c26370ee4f11a7b9a18ec9d0"
+    },
+    {
+      "repository": "marty-demo-recorder",
+      "path": "android/retained-independent-gateway.example.json",
+      "sha256": "e6ed5ea0ab14005471118de82b3adf4234c23ade8cae960a15f865d25616ca00"
+    },
+    {
+      "repository": "marty-demo-recorder",
+      "path": "android/scenarios/membership-badge-login.spruceid-same-device.example.json",
+      "sha256": "c7e698e701ced24034744478719e89e728914880bcb83f63c1c2da0fed2d297b"
+    },
+    {
+      "repository": "marty-demo-recorder",
+      "path": "android/scenarios/membership-badge-login.spruceid-same-device-denial.example.json",
+      "sha256": "dccf1d0d2f42801a0015ab5ca6bd9a80633a78511a0c12258d69b642c01bfbbe"
+    },
+    {
+      "repository": "marty-demo-recorder",
+      "path": "android/scenarios/membership-badge-login.spruceid-same-device-untrusted-issuer.example.json",
+      "sha256": "417b125953882e420497b57a7cef5966c34bf10590bc5565efb2ae6d95da1637"
+    },
+    {
+      "repository": "marty-demo-recorder",
+      "path": "android/scenarios/membership-badge-login.spruceid-expired-offer.example.json",
+      "sha256": "6827612c2aa74f7b5a18b6c9697ee2384413cad3bc55c151f85cfc526c9bd12d"
+    },
+    {
+      "repository": "marty-demo-recorder",
+      "path": "android/scenarios/independent-wallet-interoperability.spruceid-happy.example.json",
+      "sha256": "c1a97a9abed29703ed821d71005e2db23672942e0567fb7c001052289d793993"
+    },
+    {
+      "repository": "marty-demo-recorder",
+      "path": "android/scenarios/independent-wallet-interoperability.spruceid-cancel.example.json",
+      "sha256": "dd657471de96dbc7d1f4c16fd09f7911045026f7a56ec419cfafef8174d7f216"
+    },
+    {
+      "repository": "marty-demo-recorder",
+      "path": "demos/independent-wallet-interoperability.json",
+      "sha256": "76d01c3fc2fd2fef50c24fbd00f81ab267f6bc893fe53a661cf2722b033ccb00"
+    },
+    {
+      "repository": "marty-demo-recorder",
+      "path": "docs/d05-native-lanes.md",
+      "sha256": "c8aaa9b0999a80c3775ba3990b6a6c0b3b9d3cc865cd3f10b14084a1150244cd"
+    },
+    {
+      "repository": "marty-demo-recorder",
+      "path": "docs/d05-supporting-lanes.md",
+      "sha256": "49e14b440c31c009672a50ce478c0c88c4153c54becab9207a5f0fc284e83012"
+    },
+    {
+      "repository": "marty-demo-recorder",
+      "path": "src/androidManifestEvidence.js",
+      "sha256": "47493cbf1cc9fa78bff24ddbf96b2fa46bf526eaa113c4ff366ef392d2ab1dfb"
+    },
+    {
+      "repository": "marty-demo-recorder",
+      "path": "src/androidMembershipCancel.js",
+      "sha256": "f5dc166f850136aefb1282cb0df19760546ead61945c9575c73099649d9310f6"
+    },
+    {
+      "repository": "marty-demo-recorder",
+      "path": "src/androidRecorder.js",
+      "sha256": "2480fef183e90097f7e625289f67723cbb863d966fa038819be1ba8991015de2"
+    },
+    {
+      "repository": "marty-demo-recorder",
+      "path": "src/androidReleaseGateway.js",
+      "sha256": "9c5c3436860236bf2e0f02fee0e84fcf6f8cd2fe42b6cd2b44da1031503044a2"
+    },
+    {
+      "repository": "marty-demo-recorder",
+      "path": "src/androidScenarioFixture.js",
+      "sha256": "ee9aed7cb62bd2314681f3036e9c533c469864ad21edf514ecc3fa7232b85ec6"
+    },
+    {
+      "repository": "marty-demo-recorder",
+      "path": "src/retainedIndependentOverview.js",
+      "sha256": "09026dd4cb54b989a00e9744d6b8d5ee2eb04bd3d6043592f9943d222d51f5ac"
+    },
+    {
+      "repository": "marty-demo-recorder",
+      "path": "src/retainedIndependentWallet.js",
+      "sha256": "e90c2a1dd94061c6e3340926890a900990328244c5a8fd8313532270b6eaecbc"
+    },
+    {
+      "repository": "marty-demo-recorder",
+      "path": "src/spruceMembershipBrowser.js",
+      "sha256": "8ebe08b8f89d24c9980bf1a86eafc46e76f1f33c77a76c1212af101019b03de2"
+    },
+    {
+      "repository": "marty-demo-recorder",
+      "path": "src/spruceMembershipFlow.js",
+      "sha256": "4c439c14ab14e27c844f49afc1074ca9c44e24a8d73651062e83ca34f5c7a72e"
+    },
+    {
+      "repository": "marty-demo-recorder",
+      "path": "test/androidMembershipCancel.test.js",
+      "sha256": "14a7e322292831763df09b400e2d7e2367b0dfd319561c25b7d05a60e7025dc2"
+    },
+    {
+      "repository": "marty-demo-recorder",
+      "path": "test/androidRecorder.test.js",
+      "sha256": "3fd6d1a91e46b74dffc37c823328d87acb44f95d61b84ffd5c9c92705cf11b59"
+    },
+    {
+      "repository": "marty-demo-recorder",
+      "path": "test/fixtures/spruceMembership.js",
+      "sha256": "4601c0ff5a65bdcc37d35edef444e8b19b6d9668a09e697e2498c2d9ca71cf3f"
+    },
+    {
+      "repository": "marty-demo-recorder",
+      "path": "test/retainedIndependentOverview.test.js",
+      "sha256": "c6ea618d7cd8e8b6f1b35ed09c978d92ff389aa45bfab2546af891aaea4e9d5f"
+    },
+    {
+      "repository": "marty-demo-recorder",
+      "path": "test/retainedIndependentWallet.test.js",
+      "sha256": "73ab2fff5bd60f0bab23fd2f15a9c023afe9dda88c71ac1c12bc07aa4514c108"
+    },
+    {
+      "repository": "marty-demo-recorder",
+      "path": "test/spruceMembershipFlow.test.js",
+      "sha256": "03862f7cd949f56a9c707b41be0641342f71d10d06efa2579cd9f1097572b874"
+    },
+    {
+      "repository": "marty-ui",
+      "path": "tests/scripts/audit-beta-independent-wallet-interoperability.js",
+      "sha256": "99701e4de54da9b3af4600e964a99bdbc2da9d6fbe315d90392a03a7443a013f"
+    }
+  ],
+  "result": "PASS",
+  "scope": "Source implementation, controlled-response checks and real synthetic-media conversion only; no live native wallet, beta session or recorded product demonstration.",
+  "nativeWalletRun": "NOT_RUN",
+  "liveBetaRun": "NOT_RUN",
+  "humanVoiceReview": "NOT_RUN",
+  "publicationQualification": "NOT_EVALUATED",
+  "implementedContract": {
+    "scenarioSlug": "independent-wallet-interoperability",
+    "scenarioRevision": 2,
+    "recordingClassification": "INDEPENDENT_WALLET",
+    "assertions": [
+      "fresh_native_credential_received",
+      "canonical_signed_request_presented",
+      "presentation_authenticated",
+      "holder_cancel_no_session"
+    ],
+    "laneIds": [
+      "spruceid-retained-independent-happy",
+      "spruceid-retained-independent-cancel"
+    ],
+    "nativeTransport": "PRODUCT_NATIVE_INTENT_FALLBACK",
+    "browserReturn": "EXPLICIT_CHROME_ACTIVATION",
+    "automaticWalletCallback": false,
+    "sourceBinding": "Exact clean UI and recorder revisions before/after invocation; config/manifest/template/fixture/profile/font byte hashes before dispatch and through completion; actual frozen scenario compared before adding fresh run ID; exact report/media byte digests and distinct holder/application/offer/request identities.",
+    "sourceOfProtocolValidation": "Existing product and native wallet Rust own issuance, signed-request processing, presentation and trust evaluation. JavaScript controls the browser/device and binds observed receipts.",
+    "fullReleaseQualification": "NOT_ESTABLISHED",
+    "releaseReadyMeaning": "Legacy external-qualification capture flag only. True requires both fresh typed native lanes, privacy gates, measured WebM overview and final source/input checks; it does not approve voice, captions, edits, publication or a full release.",
+    "serverRetirement": "NOT_PERFORMED. Exact observed application IDs remain available for authorized reconciliation; holder DTO does not expose a server credential ID. Consumed offers and cleared wallet data do not imply server revocation.",
+    "primaryVideo": "independent-wallet-overview.webm",
+    "rawVideos": [
+      "independent-wallet-happy.mp4",
+      "independent-wallet-cancel.mp4"
+    ],
+    "overviewProvenance": "independent-wallet-overview.provenance.json",
+    "overviewScope": "Both complete portrait sources in sequence; fit/pad to 1920x1080, VP9/WebM, 30 fps, no crop/trim/retime, no added cursor/narration or guided/master claim. Actual source/output/font hashes and media probes are retained."
+  },
+  "repositories": {
+    "marty-demo-recorder": {
+      "path": "/workspace/scratch/d8b5d3d3b0dd/marty-demo-recorder-complete",
+      "headAtCheck": "7c61c82b19cd3b7d050e7715d9b9ca58c30a0745",
+      "scope": "Exact owned working-tree bytes before parent-coordinated commit. These changes are not implied to exist in headAtCheck or any deployed build.",
+      "sourceSha256": {
+        "android/README.md": "01258c50f41b49093db9feaddbe7119c648fb762fce480a8b3485d2f0ba667fc",
+        "android/retained-independent-fixture.example.json": "89446741124aa2fa7ea345b7293c83cd39350147c26370ee4f11a7b9a18ec9d0",
+        "android/retained-independent-gateway.example.json": "e6ed5ea0ab14005471118de82b3adf4234c23ade8cae960a15f865d25616ca00",
+        "android/scenarios/membership-badge-login.spruceid-same-device.example.json": "c7e698e701ced24034744478719e89e728914880bcb83f63c1c2da0fed2d297b",
+        "android/scenarios/membership-badge-login.spruceid-same-device-denial.example.json": "dccf1d0d2f42801a0015ab5ca6bd9a80633a78511a0c12258d69b642c01bfbbe",
+        "android/scenarios/membership-badge-login.spruceid-same-device-untrusted-issuer.example.json": "417b125953882e420497b57a7cef5966c34bf10590bc5565efb2ae6d95da1637",
+        "android/scenarios/membership-badge-login.spruceid-expired-offer.example.json": "6827612c2aa74f7b5a18b6c9697ee2384413cad3bc55c151f85cfc526c9bd12d",
+        "android/scenarios/independent-wallet-interoperability.spruceid-happy.example.json": "c1a97a9abed29703ed821d71005e2db23672942e0567fb7c001052289d793993",
+        "android/scenarios/independent-wallet-interoperability.spruceid-cancel.example.json": "dd657471de96dbc7d1f4c16fd09f7911045026f7a56ec419cfafef8174d7f216",
+        "demos/independent-wallet-interoperability.json": "76d01c3fc2fd2fef50c24fbd00f81ab267f6bc893fe53a661cf2722b033ccb00",
+        "docs/d05-native-lanes.md": "c8aaa9b0999a80c3775ba3990b6a6c0b3b9d3cc865cd3f10b14084a1150244cd",
+        "docs/d05-supporting-lanes.md": "49e14b440c31c009672a50ce478c0c88c4153c54becab9207a5f0fc284e83012",
+        "src/androidManifestEvidence.js": "47493cbf1cc9fa78bff24ddbf96b2fa46bf526eaa113c4ff366ef392d2ab1dfb",
+        "src/androidMembershipCancel.js": "f5dc166f850136aefb1282cb0df19760546ead61945c9575c73099649d9310f6",
+        "src/androidRecorder.js": "2480fef183e90097f7e625289f67723cbb863d966fa038819be1ba8991015de2",
+        "src/androidReleaseGateway.js": "9c5c3436860236bf2e0f02fee0e84fcf6f8cd2fe42b6cd2b44da1031503044a2",
+        "src/androidScenarioFixture.js": "ee9aed7cb62bd2314681f3036e9c533c469864ad21edf514ecc3fa7232b85ec6",
+        "src/retainedIndependentOverview.js": "09026dd4cb54b989a00e9744d6b8d5ee2eb04bd3d6043592f9943d222d51f5ac",
+        "src/retainedIndependentWallet.js": "e90c2a1dd94061c6e3340926890a900990328244c5a8fd8313532270b6eaecbc",
+        "src/spruceMembershipBrowser.js": "8ebe08b8f89d24c9980bf1a86eafc46e76f1f33c77a76c1212af101019b03de2",
+        "src/spruceMembershipFlow.js": "4c439c14ab14e27c844f49afc1074ca9c44e24a8d73651062e83ca34f5c7a72e",
+        "test/androidMembershipCancel.test.js": "14a7e322292831763df09b400e2d7e2367b0dfd319561c25b7d05a60e7025dc2",
+        "test/androidRecorder.test.js": "3fd6d1a91e46b74dffc37c823328d87acb44f95d61b84ffd5c9c92705cf11b59",
+        "test/fixtures/spruceMembership.js": "4601c0ff5a65bdcc37d35edef444e8b19b6d9668a09e697e2498c2d9ca71cf3f",
+        "test/retainedIndependentOverview.test.js": "c6ea618d7cd8e8b6f1b35ed09c978d92ff389aa45bfab2546af891aaea4e9d5f",
+        "test/retainedIndependentWallet.test.js": "73ab2fff5bd60f0bab23fd2f15a9c023afe9dda88c71ac1c12bc07aa4514c108",
+        "test/spruceMembershipFlow.test.js": "03862f7cd949f56a9c707b41be0641342f71d10d06efa2579cd9f1097572b874"
+      }
+    },
+    "marty-ui": {
+      "path": "/workspace/scratch/d8b5d3d3b0dd/marty-ui-production-gaps",
+      "headAtCheck": "c1dd2e93fde6cb675eb7bb0fa0b95ab65c81920c",
+      "scope": "Exact owned working-tree bytes before parent-coordinated commit. These changes are not implied to exist in headAtCheck or any deployed build.",
+      "sourceSha256": {
+        "tests/scripts/audit-beta-independent-wallet-interoperability.js": "99701e4de54da9b3af4600e964a99bdbc2da9d6fbe315d90392a03a7443a013f"
+      }
+    }
+  },
+  "dependencySourceReview": {
+    "marty-demo-recorder": {
+      "sourceSha256": {
+        "src/compose.js": "e29c80adf7cf20fb8fd2d3209fb2b2c666c824e68fc799fde17494545b925985",
+        "src/mediaQuality.js": "acc1ee628550ee25ac621d8690fd83b6eab81befb3f207a11575e2b02ec96aaa",
+        "src/preflight.js": "5cd7f3fd476ef5e972c4b2028dd1b5a7c1ae4832ee9b635f26592d3f81768005",
+        "src/hashes.js": "28760485b7a5ab50cd567226ac582a554b464ea3c6792dbb7cca1b4ca7ffceef",
+        "src/externalQualification.js": "473c2f9fd02afbbd603ff6232649869dc0961d22b4b6099ab5c93d1d6371014d",
+        "src/recorder.js": "a2254fe2b945b8ba4df5a91b1a3fb691a2bc2de6e13a55167ddbdeac452f6b2f",
+        "src/config.js": "e1296db9e0dff8372d4ce1543a0818f2add2bcbb463059fb083ac841380b5430",
+        "src/releaseBinding.js": "799c990b1860d9b7f197c12374fb80420243960a68d8e634434687731b8a15b7",
+        "src/privateAgeProofGateway.js": "fab9c43e0b76c1fcccd4fa249f74fe6e173748f9ee48c887b139c9835b864c35",
+        "src/assertionCoverage.js": "29245c7a55d1ebff0f7a30e27ef7825db0237f010f178f6ce5d2ee3db8869efc",
+        "test/privateAgeProofGateway.test.js": "d768ea844a499547c5175e8413e5599e33ca2d512d837fddf6bb2757cc57ae50",
+        "test/assertionCoverage.test.js": "3b66b086f1a6629c5fe70a4398252d044d3ff7890a640635639c1f293a880dc2"
+      }
+    },
+    "marty-ui": {
+      "sourceSha256": {
+        "ui/public/demos/manifests/2026.08.0.json": "3e643f3b471daac620c670aa506c654fb7894b940744c83169775fb643a655f1",
+        "ui/src/components/applicant/ApplicationForm.jsx": "2b0944ef344e839b6e095fec857683473af89f8bac276224015d0b03f178d5e0",
+        "ui/src/components/console/applicant/ClaimCredentialDialog.jsx": "90974fd6391bab40b7bd14ae59fe8c7e36411a515d3836fa87d3ad8d8b5e201f"
+      }
+    }
+  },
+  "verificationSummary": {
+    "passed": 54,
+    "failed": 0,
+    "skipped": 0,
+    "harness": "Direct node test/file.test.js executes the imported node:test harness and retains named cases. This environment previously produced opaque file-level failure with the node --test wrapper; no success is inferred from that wrapper.",
+    "syntaxAndDataChecks": "Owned JS passes node --check; owned JSON parses; git diff --check passes in both actual repositories. Focused config test validates real recorder schema and current four-assertion revision2 draft manifest.",
+    "rustTests": "No new Rust tests or builds in this retained adapter change; existing native Rust behavior was reviewed from pinned primary sources."
+  },
+  "syntheticMediaVerification": {
+    "scope": "Generated red and blue clips; no wallet or product was recorded.",
+    "runId": "synthetic-overview-media-test",
+    "measuredOutput": {
+      "codec": "vp9",
+      "profile": "Profile 0",
+      "width": 1920,
+      "height": 1080,
+      "pixelFormat": "yuv420p",
+      "frameRate": 30,
+      "bitrate": 153536,
+      "colorPrimaries": null,
+      "colorTransfer": null,
+      "colorSpace": null,
+      "fieldOrder": "progressive",
+      "duration": 1,
+      "audioStreams": []
+    },
+    "files": [
+      {
+        "path": "synthetic-native-overview/SYNTHETIC-TEST-ONLY.txt",
+        "sha256": "abff833539c9f762b1ca7074b73a4bb7d84042a69eca19eb5524d0464d7fb450"
+      },
+      {
+        "path": "synthetic-native-overview/independent-wallet-cancel.mp4",
+        "sha256": "e6dce7faae85795ecea90596f136d50e5e3cade81693570923b631d60950168e"
+      },
+      {
+        "path": "synthetic-native-overview/independent-wallet-happy.mp4",
+        "sha256": "4f68436a7635e11efff38430c757948b3b2f9e6b6b572c209d3f5232d470221e"
+      },
+      {
+        "path": "synthetic-native-overview/independent-wallet-overview.provenance.json",
+        "sha256": "7d0c84a67e40ba6e1103e3d4bd3dca67dbb8959eb28bdb4d4f51502aae6c50d3"
+      },
+      {
+        "path": "synthetic-native-overview/independent-wallet-overview.webm",
+        "sha256": "f6259a9a9ae32ae83252de836b8f60cb6fbc6a1c03a0f1075df4abf6533a8f15"
+      },
+      {
+        "path": "synthetic-native-overview/overview-synthetic-frame.png",
+        "sha256": "e99f40f8942495e6f3207b09716937e34c5b63651357d730a68b1cdb1ad877ff"
+      }
+    ],
+    "visualInspection": "Opened extracted synthetic frame: full portrait source visible; disclosure labels legible and outside source.",
+    "frameExtractionCommand": "ffmpeg -hide_banner -loglevel error -n -ss 0.2 -i production-gap-evidence/synthetic-native-overview/independent-wallet-overview.webm -frames:v 1 production-gap-evidence/synthetic-native-overview/overview-synthetic-frame.png"
+  },
+  "remainingBoundaries": [
+    "No APK was built or run in this task. Source support does not establish installed-build interoperability, credential format or exact disclosures for a live run.",
+    "Frozen APK/provenance, clean AVD, compatible Chrome/driver/Appium and a product-observed native-intent fallback remain required. Digital Credentials chooser profiles block instead of being bypassed.",
+    "Fresh authorized synthetic holders, active one-click Open Badge application/template mapping, exact organization and visible issuance registry entry must exist in the intended deployed product.",
+    "Both fresh native recordings and exact native/service/session evidence with privacy scans are required for a run. Local synthetic tests cannot qualify them.",
+    "Server resource retirement is NOT_PERFORMED. No unrelated application or credential is withdrawn or revoked.",
+    "D03 EUDI/Spruce requirements and D05 four-lane policy remain intact; their reports cannot be relabeled for retained qualification.",
+    "Capture overview only satisfies the external capture canvas. Human voice/caption review, source-bound lifecycle editing, crops/pointers and publication remain unearned."
+  ]
+}

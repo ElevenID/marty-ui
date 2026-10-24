@@ -5,32 +5,44 @@ function New-BetaApplicationImagePlan {
         [Parameter(Mandatory = $true)][string[]]$Services,
         [Parameter(Mandatory = $true)][string]$ReleaseVersion,
         [Parameter(Mandatory = $true)][bool]$OfficialStackRelease,
-        [Parameter(Mandatory = $true)][string]$IssuanceReference,
-        [Parameter(Mandatory = $true)][string]$IssuanceDigest,
         [string]$ServicesReference = "",
-        [string]$ServicesDigest = ""
+        [string]$ServicesDigest = "",
+        [hashtable]$PreparedImages = $null
     )
 
+    $prepared = $null -ne $PreparedImages
+    if ($prepared) {
+        if ($OfficialStackRelease) { throw "Prepared local images cannot be official release inputs" }
+        if ($PreparedImages.Count -ne $Services.Count) { throw "Prepared images must cover the exact service set" }
+        foreach ($service in $Services) {
+            if (-not $PreparedImages.ContainsKey($service) -or
+                [string]$PreparedImages[$service] -cnotmatch '^sha256:[0-9a-f]{64}$') {
+                throw "Prepared image ID is missing or invalid: $service"
+            }
+        }
+    }
     foreach ($service in $Services) {
-        $externalIssuance = $service -eq "issuance"
-        $selectorPresent = $OfficialStackRelease -and -not $externalIssuance
-        $imageExpression = if ($externalIssuance) { '${MARTY_ISSUANCE_IMAGE}' }
+        $selectorPresent = $OfficialStackRelease -or $prepared
+        $imageExpression = if ($prepared) { [string]$PreparedImages[$service] }
             elseif ($OfficialStackRelease) { '${MARTY_SERVICES_IMAGE}' }
             else { "elevenid-local/${service}:${ReleaseVersion}" }
-        $effectiveReference = if ($externalIssuance) { $IssuanceReference }
-            elseif ($OfficialStackRelease) { $ServicesReference }
+        $effectiveReference = if ($OfficialStackRelease) { $ServicesReference }
             else { $imageExpression }
-        $knownDigest = if ($OfficialStackRelease) {
-            if ($externalIssuance) { $IssuanceDigest } else { $ServicesDigest }
+        $knownDigest = if ($prepared) { [string]$PreparedImages[$service] }
+        elseif ($OfficialStackRelease) {
+            $ServicesDigest
         } else { $null }
         [pscustomobject][ordered]@{
             service = $service
             image_expression = $imageExpression
             effective_reference = $effectiveReference
-            artifact_role = if ($externalIssuance) { "issuance" } elseif ($OfficialStackRelease) { "services" } else { "local" }
+            artifact_role = if ($OfficialStackRelease) { "services" } else { "local" }
             selector_present = $selectorPresent
-            selector = if ($selectorPresent) { $service -replace '-', '_' } else { $null }
-            build_eligible = -not $OfficialStackRelease -and -not $externalIssuance
+            selector = if ($selectorPresent) {
+                if ($service -eq "issuance") { "issuance_native" }
+                else { $service -replace '-', '_' }
+            } else { $null }
+            build_eligible = -not $OfficialStackRelease -and -not $prepared
             known_digest = $knownDigest
         }
     }
@@ -43,10 +55,43 @@ function ConvertTo-BetaApplicationImageLines {
     foreach ($entry in $Plan) {
         "  $($entry.service):"
         "    image: $($entry.image_expression)"
-        if ($entry.selector_present) {
+        if ($entry.selector_present -or $entry.service -eq "issuance") {
             "    environment:"
-            "      SERVICE_NAME: $($entry.selector)"
+            if ($entry.service -eq "issuance") { "      SERVICE_NAME: issuance_native" }
+            else { "      SERVICE_NAME: $($entry.selector)" }
+            if ($entry.service -eq "issuance") {
+                "      MARTY_SCHEMA_STARTUP_MODE: validate"
+                "      CANVAS_MIRROR_WORKER_ENABLED: 'false'"
+            }
         }
+        if ($entry.service -eq "issuance") {
+            if ($entry.build_eligible) {
+                "    build:"
+                "      context: ."
+                "      dockerfile: services/Dockerfile"
+                "      args:"
+                "        SERVICE_NAME: issuance-native"
+            } else {
+                "    build: !reset null"
+            }
+            "    entrypoint: [/usr/local/bin/marty-issuance-service]"
+            "    command: []"
+        }
+    }
+    $issuance = @($Plan | Where-Object { $_.service -eq "issuance" })
+    if ($issuance.Count -gt 1) { throw "Issuance image plan is ambiguous" }
+    if ($issuance.Count -eq 1) {
+        "  issuance-migrations:"
+        "    image: $($issuance[0].image_expression)"
+        "    build: !reset null"
+        "    entrypoint: [/usr/local/bin/marty-issuance-service]"
+        "    command: [migrate]"
+        "    environment:"
+        "      SERVICE_NAME: issuance_native"
+        '      DATABASE_URL: postgresql://marty:${MARTY_DB_PASSWORD:-marty_dev_password}@postgres:5432/marty'
+        "    depends_on:"
+        "      organization: {condition: service_healthy}"
+        "      credential-template: {condition: service_healthy}"
     }
 }
 

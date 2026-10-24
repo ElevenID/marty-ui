@@ -60,6 +60,13 @@ function statusValue(value) {
   return String(value || '').toLowerCase();
 }
 
+function decisionPassed(value) {
+  const decision = statusValue(value);
+  if (['allow', 'approved', 'passed', 'verified'].includes(decision)) return true;
+  if (['deny', 'denied', 'rejected', 'failed'].includes(decision)) return false;
+  return undefined;
+}
+
 function nestedClaims(claims = {}) {
   const safeClaims = asObject(claims);
   const subject = asObject(safeClaims.credentialSubject);
@@ -78,6 +85,13 @@ function credentialResultValue(credentialResults, key) {
   return undefined;
 }
 
+function allCredentialChecks(credentialResults, key) {
+  if (!credentialResults.length) return undefined;
+  const values = credentialResults.map((result) => result?.[key]);
+  if (!values.every((value) => typeof value === 'boolean')) return undefined;
+  return values.every(Boolean);
+}
+
 function claimResultsFromMipMessage(session = {}) {
   const payload = session.context_data?.mip_messages?.verification_result?.payload
     || session.mip_messages?.verification_result?.payload
@@ -88,6 +102,29 @@ function claimResultsFromMipMessage(session = {}) {
     }
     return acc;
   }, {});
+}
+
+// This inventory is produced after native mdoc authentication. Accepted policy
+// claims, requested claims, and an allow decision cannot substitute for it.
+function authenticatedMdocSummary(credentialResults) {
+  if (credentialResults.length !== 1) return {};
+  const credential = credentialResults[0];
+  const disclosures = credential?.authenticated_disclosures;
+  if (credential?.signature_valid !== true
+    || disclosures?.format !== 'mso_mdoc'
+    || disclosures.documents?.length !== 1) return {};
+  const document = disclosures.documents[0];
+  const namespaces = document?.namespaces;
+  if (!namespaces || typeof namespaces !== 'object' || Array.isArray(namespaces)) return {};
+  const lists = Object.values(namespaces);
+  if (lists.some((names) => !Array.isArray(names) || names.some((name) => typeof name !== 'string'))) return {};
+  return {
+    authenticatedDisclosedClaimNames: [...new Set(lists.flat())].sort(),
+    authenticatedDisclosureNamespaces: namespaces,
+    mdocDocumentType: document.doc_type,
+    issuerTrusted: credential.trust_check_passed === true,
+    credentialTemplateId: credential.credential_template_id,
+  };
 }
 
 export function extractVerificationSummary(session = {}) {
@@ -109,6 +146,13 @@ export function extractVerificationSummary(session = {}) {
     ...asArray(session.context_data?.credential_results),
   ];
   const firstCredential = credentialResults[0] || {};
+  const authoritativeCredentialResults = [
+    asArray(session.credential_results),
+    asArray(result.credential_results),
+    asArray(contextResult.credential_results),
+    asArray(session.context_data?.credential_results),
+  ].find((items) => items.length) || [];
+  const mdocSummary = authenticatedMdocSummary(authoritativeCredentialResults);
   const achievement = asObject(firstPresent(claims.achievement, claims.badge, claims.open_badge));
   const issuer = asObject(firstPresent(claims.issuer, claims.issuerProfile));
   const image = firstPresent(
@@ -132,15 +176,26 @@ export function extractVerificationSummary(session = {}) {
     claims.canvasCredentialsId,
   );
 
-  const passed = firstPresent(
+  const explicitDecision = firstPresent(
+    decisionPassed(result.decision),
+    decisionPassed(rawResult.decision),
+    decisionPassed(session.decision),
+    decisionPassed(session.result_code),
+    decisionPassed(result.evaluation_result),
+    decisionPassed(rawResult.evaluation_result),
+    decisionPassed(rawResult.result),
+  );
+  const terminalFailure = ['failed', 'denied', 'rejected', 'expired', 'cancelled'].includes(statusValue(session.status));
+  const passed = terminalFailure || explicitDecision === false ? false : firstPresent(
     result.passed,
     rawResult.passed,
-    ['passed', 'completed'].includes(statusValue(session.status)) ? true : undefined,
-    session.result_code ? statusValue(session.result_code) === 'passed' : undefined,
-    rawResult.evaluation_result ? statusValue(rawResult.evaluation_result) === 'passed' : undefined,
-    rawResult.result ? statusValue(rawResult.result) === 'passed' : undefined,
+    explicitDecision,
+    ['passed', 'completed', 'verified'].includes(statusValue(session.status)) ? true : undefined,
   );
   const trustValidated = firstPresent(
+    mdocSummary.issuerTrusted,
+    allCredentialChecks(credentialResults, 'trust_check_passed'),
+    allCredentialChecks(credentialResults, 'trust_validated'),
     result.trust_validated,
     rawResult.trust_validated,
     rawResult.decision ? rawResult.decision === 'allow' : undefined,
@@ -160,7 +215,11 @@ export function extractVerificationSummary(session = {}) {
   );
 
   return {
+    ...mdocSummary,
+    verificationInstanceId: firstPresent(session.instance_id, session.id),
+    verificationDecision: firstPresent(result.decision, rawResult.decision, session.decision),
     passed: Boolean(passed),
+    isOpenBadge: Boolean(achievement.name || achievement.id || claims.open_badge || claims.badge),
     badgeName: firstPresent(
       achievement.name,
       claims.achievement_name,
@@ -168,7 +227,7 @@ export function extractVerificationSummary(session = {}) {
       claims.name,
       firstCredential.credential_name,
       firstCredential.credential_template_name,
-      'Presented Credential',
+      mdocSummary.mdocDocumentType === 'org.iso.18013.5.1.mDL' ? 'Mobile driving licence' : 'Presented Credential',
     ),
     description: firstPresent(achievement.description, claims.description, firstCredential.description),
     image,
@@ -183,16 +242,17 @@ export function extractVerificationSummary(session = {}) {
     claims,
     claimsSatisfied: asArray(result.claims_satisfied || rawResult.claims_satisfied),
     claimsMissing: asArray(result.claims_missing || rawResult.claims_missing),
-    failureReason: firstPresent(result.failure_reason, rawResult.failure_reason, rawResult.decision_reason, session.error),
+    failureReason: firstPresent(result.failure_reason, rawResult.failure_reason, rawResult.decision_reason, session.decision_reason, session.error),
   };
 }
 
-function CheckLine({ label, value }) {
+function CheckLine({ label, value, uncheckedLabel }) {
   const known = value !== undefined && value !== null;
   const ok = Boolean(value);
+  const unchecked = known && !ok && Boolean(uncheckedLabel);
   return (
     <Stack direction="row" spacing={1} alignItems="center">
-      {known ? (
+      {known && !unchecked ? (
         ok ? <CheckCircleIcon color="success" fontSize="small" /> : <ErrorIcon color="error" fontSize="small" />
       ) : (
         <HelpOutlineIcon color="disabled" fontSize="small" />
@@ -200,8 +260,8 @@ function CheckLine({ label, value }) {
       <Typography variant="body2">{label}</Typography>
       <Chip
         size="small"
-        label={known ? (ok ? 'Passed' : 'Failed') : 'Not reported'}
-        color={known ? (ok ? 'success' : 'error') : 'default'}
+        label={unchecked ? uncheckedLabel : known ? (ok ? 'Passed' : 'Failed') : 'Not reported'}
+        color={known && !unchecked ? (ok ? 'success' : 'error') : 'default'}
         variant="outlined"
         sx={{ ml: 'auto' }}
       />
@@ -254,9 +314,22 @@ function ClaimList({ claims, claimsSatisfied, claimsMissing }) {
 function VerificationResultSummary({ session }) {
   const summary = extractVerificationSummary(session);
   const hasCanvasMirror = Boolean(summary.canvasCredentialId || summary.canvasAccount || summary.canvasDeliveryId);
+  const issuerTrusted = summary.passed
+    && allCredentialChecks(asArray(session?.credential_results), 'trust_check_passed') === true
+    ? 'true' : undefined;
 
   return (
-    <Paper variant="outlined" sx={{ p: 2, borderRadius: 1 }} data-testid="verification-result-summary">
+    <Paper
+      variant="outlined"
+      sx={{ p: 2, borderRadius: 1 }}
+      data-testid="verification-result-summary"
+      data-disclosed-claim-names={summary.authenticatedDisclosedClaimNames
+        ? JSON.stringify(summary.authenticatedDisclosedClaimNames) : undefined}
+      data-issuer-trusted={summary.issuerTrusted === undefined ? issuerTrusted : String(summary.issuerTrusted)}
+      data-credential-template-id={summary.credentialTemplateId}
+      data-verification-instance-id={summary.verificationInstanceId}
+      data-verification-decision={summary.verificationDecision}
+    >
       <Stack spacing={2}>
         <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} alignItems={{ xs: 'flex-start', sm: 'center' }}>
           <Avatar
@@ -272,7 +345,8 @@ function VerificationResultSummary({ session }) {
               <Typography variant="h6" sx={{ fontWeight: 800, overflowWrap: 'anywhere' }}>
                 {summary.badgeName}
               </Typography>
-              <Chip size="small" label="Open Badge" variant="outlined" />
+              <Chip size="small" label={summary.mdocDocumentType === 'org.iso.18013.5.1.mDL'
+                ? 'mDL' : summary.mdocDocumentType ? 'mdoc' : summary.isOpenBadge ? 'Open Badge' : 'Credential'} variant="outlined" />
               <Chip
                 size="small"
                 label={summary.passed ? 'Verified' : 'Not verified'}
@@ -284,9 +358,11 @@ function VerificationResultSummary({ session }) {
                 {summary.description}
               </Typography>
             ) : null}
-            <Typography variant="caption" color="text.secondary" sx={{ overflowWrap: 'anywhere', display: 'block', mt: 0.5 }}>
-              {summary.issuerName ? `${summary.issuerName} - ` : ''}{summary.issuerDid || 'Issuer not disclosed'}
-            </Typography>
+            {summary.issuerName ? (
+              <Typography component="p" variant="caption" color="text.secondary" sx={{ mt: 0.5 }}>
+                {summary.issuerName}
+              </Typography>
+            ) : null}
           </Box>
         </Stack>
 
@@ -301,7 +377,7 @@ function VerificationResultSummary({ session }) {
             Verification checks
           </Typography>
           <CheckLine label="Trust profile accepted the issuer" value={summary.trustValidated} />
-          <CheckLine label="Revocation/status was checked" value={summary.revocationChecked} />
+          <CheckLine label="Revocation/status was checked" value={summary.revocationChecked} uncheckedLabel="Not checked" />
           <CheckLine label="Credential signature was valid" value={summary.signatureValid} />
         </Stack>
 
@@ -310,6 +386,34 @@ function VerificationResultSummary({ session }) {
           claimsSatisfied={summary.claimsSatisfied}
           claimsMissing={summary.claimsMissing}
         />
+
+        {summary.issuerDid || summary.authenticatedDisclosedClaimNames ? (
+          <Box component="details">
+            <Box component="summary" sx={{ cursor: 'pointer', typography: 'body2', color: 'text.secondary' }}>
+              Credential details
+            </Box>
+            <Stack spacing={1} sx={{ mt: 1 }}>
+              {summary.issuerDid ? (
+                <Box>
+                  <Typography component="p" variant="subtitle2">Issuer identifier</Typography>
+                  <Typography component="p" variant="caption" color="text.secondary" sx={{ overflowWrap: 'anywhere' }}>
+                    {summary.issuerDid}
+                  </Typography>
+                </Box>
+              ) : null}
+              {summary.authenticatedDisclosedClaimNames ? (
+                <Box>
+                  <Typography component="p" variant="subtitle2">Authenticated disclosures</Typography>
+                  {Object.entries(summary.authenticatedDisclosureNamespaces).map(([namespace, names]) => (
+                    <Typography component="p" key={namespace} variant="body2" sx={{ overflowWrap: 'anywhere' }}>
+                      {namespace}: {names.length ? names.join(', ') : 'No elements disclosed'}
+                    </Typography>
+                  ))}
+                </Box>
+              ) : null}
+            </Stack>
+          </Box>
+        ) : null}
 
         {hasCanvasMirror ? (
           <>

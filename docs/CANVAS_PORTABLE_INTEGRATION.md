@@ -78,6 +78,14 @@ observed/effective timestamps, and the superseded fact ID. Fact insertion, head
 advance, policy evaluation, correction-review transition, and audit events are
 committed under one application lock.
 
+Read authoritative current heads with
+`GET /v1/organizations/{organization_id}/applicants/{application_id}/evidence-facts?current_only=true`.
+This tenant-checked review read joins the persisted evidence-head table. The
+same endpoint without the flag (or with `current_only=false`) retains the full
+immutable history. An older observation can legitimately have no supersession
+edge, so clients must not infer current heads from that edge or observation
+ordering. The flag must be a boolean; invalid values return `400`.
+
 ## Learner and background flow
 
 After a verified launch, the browser receives a one-time 60-second experience

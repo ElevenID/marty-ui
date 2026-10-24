@@ -1,0 +1,109 @@
+{
+  "schemaVersion": 1,
+  "dateUtc": "2026-10-20",
+  "scope": "Focused source, local Rust/HTTP/PostgreSQL/browser, and producer-consumer verification",
+  "overallStatement": "Domain and protocol checks passed within their recorded scope. The separate broad test-source TypeScript command failed. At the attribute-only checkpoint, focused claim UI suites reproduced the same five focus-restoration failures on the changed and clean pre-change source. The later organization-propagation fix passed its nine focused ApplicationForm cases. Neither failing check is represented as passing.",
+  "evidenceFiles": [
+    "evidence/d03-verification.json",
+    "evidence/d05-verification.json",
+    "evidence/d06-capture-verification.json",
+    "evidence/d09-verification.json",
+    "evidence/d09-narration-verification.json",
+    "evidence/native-control-ui-verification.json",
+    "evidence/native-claim-organization-verification.json",
+    "evidence/retained-independent-native-verification.json",
+    "evidence/retained-independent-content-verification.json",
+    "evidence/source-evidence-reconciliation.json",
+    "evidence/d10-verification.json",
+    "evidence/core-wallet-verification.json",
+    "evidence/android-manifest-verification.json",
+    "evidence/retained-wallet-verification.json",
+    "evidence/wallet-adoption-verification.json",
+    "evidence/catalog-verification.json",
+    "evidence/ui-typecheck-summary.json"
+  ],
+  "countPolicy": "Per-area named tests and executed commands are retained. Overlapping suites and feature-config reruns are not added into a portfolio-wide unique total.",
+  "coreWallet": {
+    "rustUnitCases": 5,
+    "realHttpCases": 1,
+    "realChromeProbes": 1,
+    "chromeAssertions": 5,
+    "browserAdapterCases": 5,
+    "lifecycleCases": 36
+  },
+  "D03": {
+    "namedCasesPassed": 61
+  },
+  "D09": {
+    "test_executions_passed": 68,
+    "unique_named_cases": 61,
+    "failed": 0,
+    "skipped_or_ignored": 0,
+    "count_basis": "15 Organization/gateway + 29 Node + 16 API-enabled native + 8 feature-disabled native; 7 native names run under both feature configurations"
+  },
+  "D10": {
+    "namedCasesPassed": 77
+  },
+  "claimUiControls": {
+    "changedAttributes": 3,
+    "currentPassed": 8,
+    "currentFailed": 5,
+    "sourceCheckpoint": "Attribute-only controls; the later organization propagation has its own record",
+    "cleanBaselinePassed": 8,
+    "cleanBaselineFailed": 5,
+    "identicalNamedFailures": true,
+    "failure": "MUI FocusTrap teardown: nodeToRestore.current.focus is not a function",
+    "testConfigurationModified": false,
+    "evidence": "evidence/native-control-ui-verification.json"
+  },
+  "claimOrganization": {
+    "namedCasesPassed": 9,
+    "failed": 0,
+    "beforeFixSelectedPassed": 1,
+    "beforeFixSelectedFailed": 2,
+    "scope": "ApplicationForm passes its resolved application organization to both claim dialogs; dialog mocked by the existing component test",
+    "evidence": "evidence/native-claim-organization-verification.json"
+  },
+  "retainedIndependentContent": {
+    "scenarioRevision": 2,
+    "assertions": 4,
+    "draftCues": 8,
+    "maximumCueWpm": 120,
+    "scope": "Existing configuration, manifest, narration, caption-layout and opening-roadmap validators; no audio or video generated",
+    "evidence": "evidence/retained-independent-content-verification.json"
+  },
+  "retainedNativeOverview": {
+    "namedCasesPassed": 4,
+    "failed": 0,
+    "scope": "Actual FFmpeg/ffprobe with explicitly synthetic portrait inputs; raw-source immutability, order, duration, quality and failure gates",
+    "output": "VP9 WebM, 1920x1080, 30 fps",
+    "actualNativeCapture": "NOT_RUN",
+    "evidence": "evidence/retained-independent-native-verification.json"
+  },
+  "sharedNativeAndRetainedRunner": {
+    "namedCasesPassedAcrossSevenCommands": 54,
+    "failed": 0,
+    "skipped": 0,
+    "includes": "12 shared flow, 4 cancel, 18 Android recorder, 7 retained runner, 7 D03 compatibility, 2 assertion coverage, 4 overview",
+    "countBoundary": "Includes shared/D03/coverage checks and the four overview cases already described; do not add to other area totals as unique portfolio tests",
+    "evidence": "evidence/retained-independent-native-verification.json"
+  },
+  "compose": {
+    "namedCasesPassed": 19,
+    "failed": 0,
+    "log": "evidence/compose-regression.log",
+    "method": "Actual H.264 MP4 encoding before/after tail padding; ffprobe stream and format duration, frame count, cadence and all frame timestamps.",
+    "result": "300 frames at 25 fps, exactly 12.00 seconds; final frame timestamp 11.96 seconds."
+  },
+  "qualification": {
+    "catalog": "14 DRAFT / 66 NOT_RUN",
+    "deployedProduction": "NOT_RUN",
+    "nativeIndependentWallets": "NOT_RUN",
+    "liveExternalKms": "NOT_RUN",
+    "newDemoCaptures": 0,
+    "guidedMasters": 0,
+    "voiceListeningReview": "NOT_RUN",
+    "physicalPassport": "NOT_CLAIMED"
+  },
+  "gitApplicationProofs": "The delivery archive adds eight exact-tree patch replay proofs and four genuine-history bundle checks after final commits."
+}

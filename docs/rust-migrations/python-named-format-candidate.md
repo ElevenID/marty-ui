@@ -31,15 +31,6 @@ errors to be distinguished from known existing capabilities that remain
 unmodeled. Eighteen independent absence observations retain Unicode, surrogates,
 NUL, quotes and long names.
 
-The follow-on metadata reference contains 463 exact CPython 3.12.10 templates:
-356 deterministic outcomes, 97 address-bearing identity shapes, and 10
-platform/build-state observations. Identity addresses are removed completely
-while retaining a closed owner classification; both uppercase and lowercase
-hexadecimal spellings are covered. Platform/build-state rows intentionally keep
-only their case identity and qualification, never a captured host value or a
-false Rust parity claim. These rows qualify possible formatter expansion; they
-are outside the selected Canvas URL surface.
-
 Remaining formatter-expansion gates, not blockers for the three selected Canvas
 URL consumers:
 
@@ -68,9 +59,11 @@ Only checked append and final formatted-output reservations currently expose
 the explicit recoverable resource error. Debug/Display expose only error kinds; exact
 lossless diagnostics require the explicit message accessor and caller policy.
 
-Reproduce the independent metadata inventory using exact CPython 3.12.10:
+The metadata and named-format generators have been retired; their source remains
+in Git history. Keep the frozen inventory and pairwise observations: the native
+formatter embeds the attribute inventory and tests all captured format cases.
+Run the repository guards with:
 
 ```text
-python -I scripts/capture_python_string_attributes.py --check
-python -I scripts/capture_python_format_metadata.py --check
+python -m pytest tests/test_python_string_attribute_inventory.py
 ```

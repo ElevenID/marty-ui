@@ -120,12 +120,11 @@ def _job(
     return application_id, job_id
 
 
-def start_physical_passport_flow(
+def create_physical_passport_definition(
     request: Request, organization_id: str, name: str,
-    references: dict[str, str], physical_document: dict[str, Any],
-    native_request: Request,
-) -> dict[str, str]:
-    """Create, activate, start, and read back a real Flow and same-job native ID."""
+    references: dict[str, str], *, resume: bool = False,
+) -> str:
+    """Create and activate the same physical Flow definition used by acceptance."""
     _require(isinstance(organization_id, str) and organization_id.strip()
              and isinstance(name, str) and name.strip(),
              "Flow organization and name are required")
@@ -133,10 +132,6 @@ def start_physical_passport_flow(
              and all(isinstance(references.get(field), str)
                      and references[field].strip() for field in REFERENCES),
              "Flow references must be present")
-    _require(isinstance(physical_document, dict)
-             and all(physical_document.get(field)
-                     for field in ("country_code", "applicant", "mrz", "data_groups")),
-             "Flow physical document is incomplete")
     definition_body = {
         "organization_id": organization_id,
         "name": name,
@@ -145,16 +140,37 @@ def start_physical_passport_flow(
         **{field: references[field] for field in REFERENCES},
     }
     draft = _response(request, "POST", "/v1/flows/definitions", definition_body)
-    definition_id = _definition(draft, organization_id, name, references, "DRAFT")
+    definition_status = draft.get("status") if resume else "DRAFT"
+    _require(definition_status in ("DRAFT", "ACTIVE"),
+             "Flow definition status is invalid")
+    definition_id = _definition(draft, organization_id, name, references,
+                                definition_status)
     definition_path = f"/v1/flows/definitions/{definition_id}"
     persisted_draft = _response(request, "GET", definition_path, None)
-    _definition(persisted_draft, organization_id, name, references, "DRAFT",
+    _definition(persisted_draft, organization_id, name, references, definition_status,
                 definition_id)
-    active = _response(request, "POST", f"{definition_path}/activate", None)
-    _definition(active, organization_id, name, references, "ACTIVE", definition_id)
+    if definition_status == "DRAFT":
+        active = _response(request, "POST", f"{definition_path}/activate", None)
+        _definition(active, organization_id, name, references, "ACTIVE", definition_id)
     persisted_active = _response(request, "GET", definition_path, None)
     _definition(persisted_active, organization_id, name, references, "ACTIVE",
                 definition_id)
+    return definition_id
+
+
+def start_physical_passport_flow(
+    request: Request, organization_id: str, name: str,
+    references: dict[str, str], physical_document: dict[str, Any],
+    native_request: Request,
+) -> dict[str, str]:
+    """Create, activate, start, and read back a real Flow and same-job native ID."""
+    _require(isinstance(physical_document, dict)
+             and all(physical_document.get(field)
+                     for field in ("country_code", "applicant", "mrz", "data_groups")),
+             "Flow physical document is incomplete")
+    definition_id = create_physical_passport_definition(
+        request, organization_id, name, references,
+    )
     started = _response(request, "POST", "/v1/flows/instances", {
         "organization_id": organization_id,
         "flow_definition_id": definition_id,

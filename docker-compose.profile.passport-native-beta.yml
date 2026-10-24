@@ -6,6 +6,12 @@ services:
       - marty-network
       - passport-callback-signing
 
+  openbao-init:
+    environment:
+      BAO_PASSPORT_CALLBACK_TOKEN_FILE: /bao/passport-callback/token
+    volumes:
+      - openbao_passport_callback:/bao/passport-callback
+
   gateway:
     environment:
       SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY_FILE: /run/secrets/dsc_issue_gateway_key
@@ -45,18 +51,10 @@ services:
       PASSPORT_KMS_CALLBACKS_ENABLED: "true"
       PASSPORT_TENANT_API_KEYS: ""
       PASSPORT_TENANT_API_KEYS_FILE: ""
-      PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED: "false"
-      PHYSICAL_DOCUMENT_ARTIFACT_KEY: ""
-      PHYSICAL_DOCUMENT_ARTIFACT_KEY_FILE: ""
-      ICAO_DOCUMENT_SIGNER_URL: ""
-      ICAO_DOCUMENT_SIGNER_API_KEY: ""
-      ICAO_DOCUMENT_SIGNER_API_KEY_FILE: ""
       PERSONALIZATION_BUREAU_URL: http://passport-beta-bureau:8020
       PERSONALIZATION_BUREAU_API_KEY: ${GRPC_SERVICE_TOKEN:?GRPC_SERVICE_TOKEN must be set for beta Rust services}
       PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID: passport-beta-bureau
       PERSONALIZATION_BUREAU_API_KEY_FILE: ""
-      PERSONALIZATION_BUREAU_WEBHOOK_SECRET: ""
-      PERSONALIZATION_BUREAU_WEBHOOK_SECRET_FILE: ""
 
   # Synthetic, non-physical provider: never selected outside this beta profile.
   # It stores only job metadata/digests and sends KMS-signed callbacks.
@@ -68,11 +66,16 @@ services:
       PASSPORT_CALLBACK_SIGNER_ENABLED: "true"
       SIGNING_KEYS_SERVICE_PORT: "8018"
       SIGNING_KEYS_INTERNAL_API_KEY: ${SIGNING_KEYS_INTERNAL_API_KEY:?SIGNING_KEYS_INTERNAL_API_KEY must be set for beta}
-      BAO_ADDR: http://openbao:8200
-      BAO_TOKEN: ${BAO_DEV_ROOT_TOKEN:?BAO_DEV_ROOT_TOKEN must be set for beta}
+      BAO_ADDR: https://openbao:8200
+      BAO_CACERT: /bao/public-ca/ca.crt
+      BAO_TOKEN_FILE: /bao/passport-callback/token
+      PRESERVE_BAO_TOKEN_FILE: "1"
+    volumes:
+      - openbao_public_ca:/bao/public-ca:ro
+      - openbao_passport_callback:/bao/passport-callback:ro
     depends_on:
-      openbao:
-        condition: service_healthy
+      openbao-init:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "curl", "--fail", "http://localhost:8018/health"]
       interval: 10s
@@ -119,3 +122,6 @@ secrets:
     file: ${PASSPORT_BETA_CEREMONY_SECRET_DIR:?set isolated beta ceremony secret directory}/dsc_issue_gateway_key
   csca_issue_gateway_key:
     file: ${PASSPORT_BETA_CEREMONY_SECRET_DIR:?set isolated beta ceremony secret directory}/csca_issue_gateway_key
+
+volumes:
+  openbao_passport_callback:

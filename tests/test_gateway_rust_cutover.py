@@ -41,7 +41,12 @@ def test_language_neutral_gateway_contracts_are_the_runtime_boundary() -> None:
         assert (ROOT / str(behavior[field])).is_file()
     assert 'include_str!("../../../../contracts/gateway-routes.json")' in rust_contract
     routes = json.loads(text("contracts/gateway-routes.json"))
-    assert routes["route_count"] == len(routes["routes"]) == 444
+    assert routes["route_count"] == len(routes["routes"]) == 461
+    assert {
+        ("GET", "/v1/organizations/{organization_id}/offline-verification-events"),
+        ("POST", "/v1/organizations/{organization_id}/offline-verification-events"),
+        ("GET", "/v1/organizations/{organization_id}/offline-verification-events/{verification_id}"),
+    } <= {(route["method"], route["path"]) for route in routes["routes"]}
     assert f"EXPECTED_ROUTE_COUNT: usize = {routes['route_count']}" in rust_contract
     assert not (ROOT / "scripts/gateway_route_contract.py").exists()
 
@@ -80,7 +85,8 @@ def test_deployed_manifests_require_distributed_gateway_state() -> None:
     assert "REDIS_DB_GATEWAY:" in base_gateway
     assert "ENVIRONMENT: beta" in beta_gateway
     assert "REDIS_PASSWORD must be set for beta" in beta_gateway
-    assert "REDIS_URL: redis://redis:6379" in selfhost_gateway
+    assert "REDIS_URL: unix:///run/marty-redis/redis.sock" in selfhost_gateway
+    assert "- *redis-socket-mount" in selfhost_gateway
     assert 'value(values, "REDIS_URL")' in config
     assert 'url::Url::parse(raw).map_err(|_| error("REDIS_URL is invalid"))' in config
 

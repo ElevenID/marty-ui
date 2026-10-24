@@ -28,13 +28,70 @@ def k8s_resources(file: str) -> list[dict]:
     return [item for item in yaml.safe_load_all((ROOT / file).read_text()) if item]
 
 
-def k8s_container(file: str, name: str) -> dict:
-    resource = next(
+def named_k8s_container(resources: list[dict], name: str) -> dict:
+    deployments = [
         item
-        for item in k8s_resources(file)
+        for item in resources
         if item["kind"] == "Deployment" and item["metadata"]["name"] == name
+    ]
+    assert len(deployments) == 1, f"Expected one {name} Deployment"
+    deployment = deployments[0]
+    assert deployment["metadata"]["namespace"] == "marty-prod", f"Wrong {name} namespace"
+    containers = [
+        item
+        for item in deployment["spec"]["template"]["spec"]["containers"]
+        if item["name"] == name
+    ]
+    assert len(containers) == 1, f"Expected one {name} container"
+    return containers[0]
+
+
+def k8s_container(file: str, name: str) -> dict:
+    return named_k8s_container(k8s_resources(file), name)
+
+
+@pytest.mark.parametrize(
+    "mutation", ["duplicate-deployment", "wrong-namespace", "missing-container", "duplicate-container"]
+)
+def test_k8s_consumer_requires_unique_deployment_and_named_container(mutation: str) -> None:
+    resources = k8s_resources("k8s/oracle/07-microservices.yaml")
+    assert named_k8s_container(resources, "flow")["name"] == "flow"
+    deployment = next(
+        item
+        for item in resources
+        if item["kind"] == "Deployment" and item["metadata"]["name"] == "flow"
     )
-    return resource["spec"]["template"]["spec"]["containers"][0]
+    if mutation == "duplicate-deployment":
+        resources.append(deployment.copy())
+    elif mutation == "wrong-namespace":
+        deployment["metadata"]["namespace"] = "other-synthetic-namespace"
+    elif mutation == "missing-container":
+        deployment["spec"]["template"]["spec"]["containers"][0]["name"] = "other"
+    else:
+        deployment["spec"]["template"]["spec"]["containers"].append(
+            deployment["spec"]["template"]["spec"]["containers"][0].copy()
+        )
+    expected = {
+        "duplicate-deployment": "Expected one flow Deployment",
+        "wrong-namespace": "Wrong flow namespace",
+        "missing-container": "Expected one flow container",
+        "duplicate-container": "Expected one flow container",
+    }[mutation]
+    with pytest.raises(AssertionError, match=expected):
+        named_k8s_container(resources, "flow")
+
+
+def test_k8s_consumer_selects_named_container_after_unrelated_sidecar() -> None:
+    resources = k8s_resources("k8s/oracle/07-microservices.yaml")
+    deployment = next(
+        item
+        for item in resources
+        if item["kind"] == "Deployment" and item["metadata"]["name"] == "flow"
+    )
+    containers = deployment["spec"]["template"]["spec"]["containers"]
+    selected = containers[0]
+    containers.insert(0, {"name": "unrelated-synthetic-sidecar", "env": []})
+    assert named_k8s_container(resources, "flow") is selected
 
 
 def test_route_fixture_matches_native_contract_and_gateway_declaration() -> None:
@@ -70,7 +127,7 @@ def test_compose_consumers_keep_selectors_off_and_share_token_source() -> None:
         )
         assert gateway["ISSUANCE_NATIVE_SERVICE_URL"] == "http://issuance-native:8005"
         if file == "docker-compose.selfhost.prod.yml":
-            assert flow["ISSUANCE_NATIVE_SERVICE_URL"] == CONTRACT["consumers"]["selfhost_compose"]["native_url_passthrough_default"]
+            assert flow["ISSUANCE_NATIVE_SERVICE_URL"] == CONTRACT["consumers"]["selfhost_compose"]["native_url_default"]
             assert all(
                 env["GRPC_SERVICE_TOKEN_FILE"] == "/run/secrets/grpc_service_token"
                 for env in (gateway, flow, owner)
@@ -83,9 +140,9 @@ def test_compose_consumers_keep_selectors_off_and_share_token_source() -> None:
             assert all(env["GRPC_SERVICE_TOKEN"] == "${GRPC_SERVICE_TOKEN:-dev-grpc-service-token-change-before-production}" for env in (gateway, flow, owner))
 
 
-def test_selfhost_flow_keeps_legacy_default_until_beta_profile_selects_native() -> None:
+def test_selfhost_flow_uses_native_owner_while_passport_routes_remain_opt_in() -> None:
     flow = compose_environment("docker-compose.selfhost.prod.yml", "flow")
-    assert flow["ISSUANCE_NATIVE_SERVICE_URL"] == "${ISSUANCE_NATIVE_SERVICE_URL:-http://issuance:8005}"
+    assert flow["ISSUANCE_NATIVE_SERVICE_URL"] == "http://issuance-native:8005"
     assert flow["ISSUANCE_SERVICE_URL"] == "http://issuance:8005"
     assert flow["PASSPORT_NATIVE_FLOW_ENABLED"] == "${PASSPORT_NATIVE_FLOW_ENABLED:-false}"
     for profile in ("docker-compose.profile.passport-native-beta.yml",
@@ -106,7 +163,7 @@ def test_selfhost_flow_keeps_legacy_default_until_beta_profile_selects_native() 
 @pytest.mark.parametrize(
     ("native_url", "enabled", "expected"),
     [
-        (None, "false", "http://issuance:8005"),
+        (None, "false", "http://issuance-native:8005"),
         ("http://issuance-native:8005", "true", "http://issuance-native:8005"),
     ],
 )

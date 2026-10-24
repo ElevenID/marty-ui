@@ -17,6 +17,67 @@ import yaml
 
 ROOT = Path(__file__).parents[1]
 CI_PATH = ROOT / ".github" / "workflows" / "ci.yml"
+RELEASE_TEST_COMMAND = "python -m pytest tests -n 2 -v --tb=short --durations=20"
+
+
+def test_disposable_tls_root_contracts_have_executed_release_owner() -> None:
+    _, workflow = _workflow(CI_PATH)
+    steps = workflow["jobs"]["test-release-contracts"]["steps"]
+    named = {step.get("name"): step for step in steps}
+    general = named["Run repository release checks"]
+    root = named["Exercise root-owned disposable TLS staging contracts"]
+    assert root["if"] == general["if"]
+    assert steps.index(root) == steps.index(general) + 1
+    assert root["shell"] == "bash"
+    command = root["run"]
+    assert 'python_bin="$(command -v python)"' in command
+    assert "sudo env PYTHONPATH=packages PYTHONDONTWRITEBYTECODE=1" in command
+    assert "-p no:cacheprovider --junitxml=" in command
+    for name in (
+        "test_stages_only_public_tls_outputs_into_existing_private_root",
+        "test_ownership_failure_removes_all_staged_tls_inputs",
+        "test_metadata_cleanup_failure_still_rolls_back_all_secrets",
+        "test_timeout_cleanup_retains_id_only_if_removal_fails",
+    ):
+        assert command.count(f"test_provision_selfhost_disposable_tls.py::{name}") == 1
+    assert "len(cases) != 6" in command
+    for required in ('("tests", 6)', '("skipped", 0)', '("failures", 0)', '("errors", 0)'):
+        assert required in command
+CANVAS_COMPOSITION_COMMAND = (
+    'MARTY_CANVAS_OPENBAO_URL="$kms_url" '
+    'MARTY_CANVAS_OPENBAO_ROOT_TOKEN="$kms_root_token" '
+    'MARTY_CANVAS_OPENBAO_CA_CERT_FILE="$kms_ca_file" '
+    'python3 "$obligation_runner" --name canvas_composition_acceptance '
+    '--owner canvas -- "$composition_executable" --skip "$serial_composition_test" '
+    '"${config_skips[@]}" "${timeout_skips[@]}" --nocapture '
+    '--test-threads=4 >"$composition_log" 2>&1 &'
+)
+CANVAS_WORKER_COMMAND = (
+    'MARTY_CANVAS_WORKER_RETRY_AFTER_TIER="$retry_after_tier" '
+    'MARTY_CANVAS_WORKER_VALIDATION_TIER="$validation_tier" '
+    'python3 "$obligation_runner" --name canvas_worker_acceptance '
+    '--owner canvas -- "$worker_executable" --skip "$serial_test" '
+    '--skip "$deadline_serial_test" "${historical_serial_skips[@]}" '
+    '"${preflight_skips[@]}" --nocapture --test-threads=4 '
+    '>"$worker_log" 2>&1 &'
+)
+
+
+def test_crawler_uses_the_locally_installed_puppeteer_browser_cli() -> None:
+    job = yaml.safe_load(CI_PATH.read_text(encoding="utf-8"))["jobs"][
+        "test-ui-crawler-artifacts"
+    ]
+    bootstrap = next(
+        step["run"]
+        for step in job["steps"]
+        if step.get("name") == "Bootstrap released UI dependencies"
+    )
+    assert bootstrap.index("PUPPETEER_SKIP_DOWNLOAD=true bun install") < bootstrap.index(
+        "bun x --no-install puppeteer browsers install"
+    )
+    assert "timeout 180s bun x --no-install puppeteer browsers install" in bootstrap
+    assert 'if [ "$attempt" -eq 3 ]; then' in bootstrap
+    assert "exit 1" in bootstrap
 
 
 def test_selfhost_operator_guide_is_a_packaged_input() -> None:
@@ -41,10 +102,16 @@ def test_worker_fixture_integrity_and_process_containment_have_linux_ci_dependen
         for line in installation.splitlines()
         if "uv pip install --system pytest" in line
     )
-    assert {"pytest", "sqlalchemy"} <= set(command.split())
+    assert {"pytest", "pytest-xdist==3.8.0", "sqlalchemy", "playwright"} <= set(command.split())
+    assert "'jsonschema[format]>=4.23'" in command.split()
+    browser = steps["Install Python browser transport runtime"]
+    assert browser["run"] == "python -m playwright install --with-deps --only-shell chromium"
+    assert browser["if"] == steps["Run repository release checks"]["if"]
+    assert job["steps"].index(steps["Install released test dependencies"]) < job["steps"].index(browser)
+    assert job["steps"].index(browser) < job["steps"].index(steps["Run repository release checks"])
     assert (
         steps["Run repository release checks"]["run"]
-        == "python -m pytest tests -v --tb=short"
+        == RELEASE_TEST_COMMAND
     )
 
 
@@ -180,6 +247,11 @@ def test_canvas_native_timeout_tiers_preserve_exact_frozen_observations(
     seen: list[str] = []
 
     def child(*_args, env, **_kwargs):
+        assert _args[0][1:4] == [
+            "canvas_operation_http::tests::native_socket_case",
+            "--exact",
+            "--ignored",
+        ]
         name = json.loads(env["MARTY_CANVAS_TIMEOUT_NATIVE_CASE"])["name"]
         seen.append(name)
         return SimpleNamespace(
@@ -194,11 +266,16 @@ def test_canvas_native_timeout_tiers_preserve_exact_frozen_observations(
         "json": json,
         "os": SimpleNamespace(environ={}),
         "subprocess": SimpleNamespace(run=child),
-        "loopback_tls": lambda: nullcontext(("https://127.0.0.1:1", None, Path("synthetic.pem"))),
+        "loopback_tls": lambda: nullcontext(
+            ("https://127.0.0.1:1", None, Path("synthetic.pem"))
+        ),
         "ROUTINE_NATIVE_CASES": routine_names,
         "FROZEN_NATIVE_CASE_COUNT": 104,
     }
-    exec(compile(ast.Module(body=[native], type_ignores=[]), "<native-tier>", "exec"), namespace)
+    exec(
+        compile(ast.Module(body=[native], type_ignores=[]), "<native-tier>", "exec"),
+        namespace,
+    )
     namespace["run_native"](Path("unused"), qualification)
     assert len(seen) == expected_count
     assert seen == (
@@ -256,74 +333,80 @@ def _assert_python_service_job_preserves_full_suite(document) -> None:
         "run": "python -m pytest -v --tb=short -x",
     }
     rust = document["jobs"]["test-rust-services"]
-    assert set(rust["services"]) == {"postgres", "redis", "openbao"}
+    assert not rust.get("services")
+    fixtures = yaml.safe_load(
+        (ROOT / ".github/compose/rust-ci-fixtures.yml").read_text(encoding="utf-8")
+    )["services"]
+    assert set(fixtures) == {"postgres", "redis", "openbao"}
     for service, port in (("postgres", 5432), ("redis", 6379)):
-        fixture = rust["services"][service]
-        assert fixture["image"].startswith(f"{service}:")
-        assert "@sha256:" in fixture["image"]
+        fixture = fixtures[service]
+        assert fixture["pull_policy"] == "never"
         assert fixture["ports"] == [f"{port}:{port}"]
-        assert "--health-cmd" in fixture["options"]
-    openbao = rust["services"]["openbao"]
+        assert fixture["healthcheck"]["retries"] >= 20
+    openbao = fixtures["openbao"]
     assert openbao["image"].startswith("quay.io/openbao/openbao@sha256:")
+    assert openbao["pull_policy"] == "never"
     assert openbao["ports"] == ["8200:8200"]
-    assert openbao["env"] == {
+    assert openbao["environment"] == {
         "BAO_DEV_ROOT_TOKEN_ID": "test-only",
         "BAO_DEV_LISTEN_ADDRESS": "0.0.0.0:8200",
     }
+    setup = next(
+        step for step in rust["steps"]
+        if step.get("name") == "Start digest-pinned Rust test services after registry setup"
+    )
+    assert setup["if"] == "matrix.lane != 'selfhost' && matrix.lane != 'renewal-unit'"
+    for image in (
+        "postgres:15-alpine@sha256:fceb6f86328c36f2438fae3b851b0cc57c4a7e69a58c866d9ce24281f2cf0c9c",
+        "redis:7.4-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99",
+        openbao["image"],
+    ):
+        assert image in setup["run"]
+    assert "up -d --wait --wait-timeout 90" in setup["run"]
+    cleanup = next(
+        step for step in rust["steps"]
+        if step.get("name") == "Remove owned Rust test services and volumes"
+    )
+    assert cleanup["if"] == (
+        "always() && matrix.lane != 'selfhost' && matrix.lane != 'renewal-unit'"
+    )
+    assert "down --volumes --remove-orphans" in cleanup["run"]
     chain_step_name = (
-        "Exercise Gateway CSR and managed passport chain with disposable OpenBao"
+        "Exercise scoped grant and managed passport chain over disposable HTTPS OpenBao"
     )
     managed_chain = next(
         step for step in rust["steps"] if step.get("name") == chain_step_name
     )["run"]
-    assert "--test passport_managed_kms_chain" in managed_chain
-    assert (
-        "-p marty-service-acceptance --test passport_managed_kms_chain" in managed_chain
+    assert managed_chain == "python3 scripts/probe_signing_keys_openbao_policy.py --grant-verifier"
+    policy_probe = (ROOT / "scripts/probe_signing_keys_openbao_policy.py").read_text(
+        encoding="utf-8"
     )
-    assert '-- --list | grep -Fx "$chain_test: test"' in managed_chain
-    assert '"$chain_test" -- --ignored --exact' in managed_chain
-    chain_test_name = (
-        "managed_passport_chain_issues_and_verifies_sod_without_exporting_private_keys"
-    )
-    assert chain_test_name in managed_chain
-    assert (
-        "test_name='authenticated_gateway_issues_dsc_with_operator_grant_and_dedicated_key'"
-        in managed_chain
-    )
-    assert (
-        managed_chain.count(
-            "-p marty-service-acceptance --test gateway_signing_acceptance"
-        )
-        == 4
-    )
+    assert '"passport_managed_kms_chain"' in policy_probe
+    assert "managed_passport_chain_issues_and_verifies_sod_without_exporting_private_keys" in policy_probe
+    assert '"service_certificate_live_kms"' in policy_probe
+    assert "live_grant_verification_is_one_use_before_kms_signing" in policy_probe
+    for suite in (
+        "vdsnc_registration_live_contract",
+        "public_key_metadata_live_contract",
+        "public_config_resolve_mock_contract",
+        "service_rotation_mock_contract",
+        "persisted_registry_credentials_use_real_openbao_ciphertext",
+    ):
+        assert suite in policy_probe
     for case in (
+        "authenticated_gateway_reaches_remaining_rust_signing_handlers",
+        "authenticated_gateway_rotates_only_a_dedicated_signing_service",
         "authenticated_gateway_generates_profile_scoped_passport_csrs_in_openbao",
         "authenticated_gateway_generates_a_dedicated_service_csr_in_openbao",
         "authenticated_gateway_issues_dsc_with_operator_grant_and_dedicated_key",
     ):
-        assert case in managed_chain
-    assert '-- --list | grep -Fx "$test_name: test"' in managed_chain
-    assert '"$test_name" -- --ignored --exact' in managed_chain
-    assert "-- --ignored --exact" in managed_chain
-    signing_routes = next(
+        assert case in policy_probe
+    redis_contracts = next(
         step["run"]
         for step in rust["steps"]
-        if step.get("name")
-        == "Exercise authenticated Signing Keys Gateway to Rust routes"
+        if step.get("name") == "Exercise live Signing Keys public contracts on disposable Redis"
     )
-    assert (
-        signing_routes.count(
-            "-p marty-service-acceptance --test gateway_signing_acceptance"
-        )
-        == 3
-    )
-    for case in (
-        "authenticated_gateway_reaches_remaining_rust_signing_handlers",
-        "authenticated_gateway_reaches_rust_managed_key_route_without_custody",
-        "authenticated_gateway_rotates_only_a_dedicated_signing_service",
-    ):
-        assert case in signing_routes
-    assert signing_routes.count("-- --ignored --exact") == 3
+    assert "--test public_key_metadata_live_contract" not in redis_contracts
     assert rust["env"]["FLOW_POSTGRES_TEST_URL"].endswith(
         "localhost:5432/marty_atomic_test"
     )
@@ -349,12 +432,15 @@ def test_gateway_signing_acceptance_discovery_fails_on_any_missing_case() -> Non
     assert script.count('"$acceptance_executable" --list') == 1
     assert "cargo " not in script
     names_source = script.split("for test_name in", 1)[1].split("; do", 1)[0]
-    names = re.findall(r"authenticated_gateway_[a-z_]+", names_source)
+    names = re.findall(r"(?:authenticated_gateway_|byok_gateway_)[a-z_]+", names_source)
     rust_source = (
         ROOT / "rust/crates/service-acceptance/tests/gateway_signing_acceptance.rs"
     ).read_text(encoding="utf-8")
-    actual = re.findall(r"(?m)^async fn (authenticated_gateway_[a-z_]+)\(", rust_source)
-    assert len(names) == len(set(names)) == 6
+    actual = re.findall(
+        r"(?m)^async fn ((?:authenticated_gateway_|byok_gateway_)[a-z_]+)\(",
+        rust_source,
+    )
+    assert len(names) == len(set(names)) == 7
     assert set(names) == set(actual)
 
     # Execute the workflow's real membership loop with synthetic discovery
@@ -388,6 +474,88 @@ def test_gateway_signing_acceptance_discovery_fails_on_any_missing_case() -> Non
             )
 
 
+def test_gateway_live_config_case_has_exact_contracts_lane_invocation() -> None:
+    _, document = _workflow(CI_PATH)
+    steps = document["jobs"]["test-rust-services"]["steps"]
+    execution = next(
+        step
+        for step in steps
+        if step.get("name") == "Exercise authenticated Signing Keys Gateway to Rust routes"
+    )
+    assert execution["if"] == "matrix.lane == 'contracts'"
+    script = execution["run"]
+    assert "MARTY_TEST_REDIS_DISPOSABLE_NONCE=\"$nonce\"" in script
+    assert "with_disposable_event_stream_kms.py" in script
+    assert "--profile signing-transit" in script
+    assert "BAO_TOKEN=test-only" not in script
+    assert "-p marty-service-acceptance --test gateway_signing_acceptance" in script
+    assert re.search(
+        r"byok_gateway_proxies_to_live_signing_keys_without_persisting_private_material"
+        r"\s+\\\s+-- --ignored --exact",
+        script,
+    )
+    acceptance = (
+        ROOT / "rust/crates/service-acceptance/tests/gateway_signing_acceptance.rs"
+    ).read_text(encoding="utf-8")
+    assert "async fn byok_gateway_proxies_to_live_signing_keys_without_persisting_private_material(" in acceptance
+    assert "byok_gateway_proxies_to_live_signing_keys_without_persisting_private_material" not in (
+        ROOT / "rust/services/gateway/src/runtime.rs"
+    ).read_text(encoding="utf-8")
+
+
+def test_oidf_keyless_edge_has_live_https_kms_contracts_lane_invocation() -> None:
+    _, document = _workflow(CI_PATH)
+    steps = document["jobs"]["test-rust-services"]["steps"]
+    [execution] = [
+        step for step in steps
+        if step.get("name") == "Exercise OIDF keyless HTTPS edge against disposable OpenBao"
+    ]
+    assert execution["if"] == "matrix.lane == 'contracts'"
+    script = execution["run"]
+    assert "--profile oidf-edge" in script
+    assert "tests::oidf_https_handshake_signs_with_versioned_remote_key" in script
+    assert "-- --ignored --exact --nocapture" in script
+
+
+def test_remote_holder_live_kms_has_one_acceptance_owner_and_exact_ci_call() -> None:
+    target = "holder_remote_live_kms"
+    case = "registration_provision_sign_and_deactivate_delete_remote_key"
+    acceptance = ROOT / "rust/crates/service-acceptance"
+    source = acceptance / "tests" / f"{target}.rs"
+    assert source.is_file()
+    assert f"async fn {case}()" in source.read_text(encoding="utf-8")
+    assert not (ROOT / "rust/services/device-registration/tests" / f"{target}.rs").exists()
+    acceptance_manifest = (acceptance / "Cargo.toml").read_text(encoding="utf-8")
+    assert f'name = "{target}"\npath = "tests/{target}.rs"' in acceptance_manifest
+    device_manifest = (
+        ROOT / "rust/services/device-registration/Cargo.toml"
+    ).read_text(encoding="utf-8")
+    assert "marty-signing-keys" not in device_manifest
+    _, workflow = _workflow(CI_PATH)
+    steps = workflow["jobs"]["test-rust-services"]["steps"]
+    execution = next(
+        step for step in steps
+        if step.get("name")
+        == "Qualify scoped provider callback verification against disposable OpenBao"
+    )
+    assert execution["if"] == "matrix.lane == 'contracts'"
+    assert execution["run"] == (
+        "python3 scripts/probe_signing_keys_openbao_policy.py --rust-adapter"
+    )
+    assert all(
+        "holder_remote_live_kms" not in step.get("run", "") for step in steps
+    )
+    probe = (ROOT / "scripts/probe_signing_keys_openbao_policy.py").read_text(
+        encoding="utf-8"
+    )
+    assert probe.count('"--test", "holder_remote_live_kms"') == 1
+    assert f'"{case}"' in probe
+    assert '"--", "--ignored", "--exact", "--nocapture"' in probe
+    assert '"BAO_CACERT": str(ca_file)' in probe
+    assert '"MARTY_TEST_OPENBAO_TOKEN": managed' in probe
+    assert "if not rust_test_succeeded(result):" in probe
+
+
 def test_python_service_job_retires_only_unused_fixture_provisioning() -> None:
     _assert_python_service_job_preserves_full_suite(_workflow(CI_PATH)[1])
 
@@ -400,10 +568,14 @@ def _classify_changed_paths(
     event: str = "pull_request",
     include_rust_plan: bool = False,
     include_planner_plan: bool = False,
+    include_rollback_plan: bool = False,
+    include_k8s_plan: bool = False,
+    include_didcomm_plan: bool = False,
     include_shadow: bool = False,
     proof_failure: bool = False,
     fetch_failure: bool = False,
     missing_base: bool = False,
+    working_directory: Path | None = None,
 ) -> list[dict[str, str]]:
     """Exercise the real Bash classifier against synthetic diffs."""
     _, document = _workflow(CI_PATH)
@@ -412,7 +584,7 @@ def _classify_changed_paths(
         for step in document["jobs"]["changes"]["steps"]
         if step.get("id") == "classify"
     ]
-    assert event in {"pull_request", "merge_group", "push"}
+    assert event in {"pull_request", "merge_group", "push", "workflow_dispatch", "schedule"}
     script = classifier["run"].replace("${{ github.event_name }}", event)
     assert "${{" not in script
     # Run the actual Bash classifier, not a Python copy of its path patterns.
@@ -463,7 +635,9 @@ done < "$SYNTHETIC_PATHS_FILE"
     if fetch_failure:
         prelude = prelude.replace("fetch) return 0 ;;", "fetch) return 44 ;;")
     if missing_base:
-        prelude = prelude.replace("export BASE_SHA=synthetic-base", "export BASE_SHA=''")
+        prelude = prelude.replace(
+            "export BASE_SHA=synthetic-base", "export BASE_SHA=''"
+        )
     paths_to_run = changed_paths
     if combined:
         # One git diff containing multiple paths must preserve every selected
@@ -512,6 +686,7 @@ done < "$SYNTHETIC_PATHS_FILE"
         # failure evidence; no ownership or full-plan fallback is relaxed.
         timeout=30,
         env=environment,
+        cwd=working_directory or ROOT,
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout == ""
@@ -524,6 +699,9 @@ done < "$SYNTHETIC_PATHS_FILE"
             if (
                 (include_rust_plan or key not in {"rust_runtime", "rust_matrix"})
                 and (include_planner_plan or key != "planner_only")
+                and (include_rollback_plan or key != "rollback_test_only")
+                and (include_k8s_plan or key != "k8s_policy_test_only")
+                and (include_didcomm_plan or key != "didcomm_release_test_only")
             )
         }
         for output in (
@@ -620,7 +798,7 @@ def test_merge_group_historical_input_shadow_keeps_full_validation(
     assert set(absent_base.values()) == {"true"}
 
 
-def test_verified_rust_test_leaves_select_only_contracts_not_runtime(
+def test_verified_rust_test_leaves_select_owned_unit_or_contracts_not_runtime(
     tmp_path: Path,
 ) -> None:
     verified = subprocess.run(
@@ -633,8 +811,25 @@ def test_verified_rust_test_leaves_select_only_contracts_not_runtime(
         check=True,
         capture_output=True,
     ).stdout.split(b"\0")
-    assert verified[-1] == b"" and len(verified) == 13
+    assert verified[-1] == b"" and len(verified) == 14
     leaves = [value.decode("utf-8") for value in verified[:-1]]
+    unit_leaves = [
+        "rust/services/issuance/src/canvas_operation_http_prepared_tests.rs",
+        "rust/services/issuance/src/canvas_sync_provider_http_tests.rs",
+        "rust/services/issuance/src/canvas_sync_processor_tests.rs",
+        "rust/services/issuance/src/canvas_sync_worker_retry_tests.rs",
+        "rust/services/issuance/src/canvas_sync_worker_renewal_tests.rs",
+        (
+            "rust/services/issuance/src/initiation_didcomm/tests/"
+            "initiation_didcomm_renewal_tests.rs"
+        ),
+        "rust/services/issuance/src/python_format_tests.rs",
+        "rust/services/issuance/src/signing_http_projection_tests.rs",
+        "rust/services/issuance/src/signing_http_response_tests.rs",
+        "rust/services/issuance/src/token_rate_limit_http_tests.rs",
+    ]
+    assert set(unit_leaves) <= set(leaves)
+    assert "rust/services/issuance/src/canvas_sync_worker_renewal_tests.rs" in leaves
     assert leaves[-2:] == [
         "rust/crates/oid4vp-contract/tests/contract_vectors.rs",
         "rust/crates/oid4vp-contract/tests/transport_metadata.rs",
@@ -644,6 +839,11 @@ def test_verified_rust_test_leaves_select_only_contracts_not_runtime(
         "initiation_didcomm_renewal_tests.rs"
     )
     assert nested in leaves
+    assert nested in unit_leaves
+    assert (
+        "rust/services/issuance/src/passport_http_reconciliation_tests.rs"
+        not in unit_leaves
+    )
     for leaf, selected in zip(
         leaves,
         _classify_changed_paths(leaves, tmp_path, include_rust_plan=True),
@@ -655,7 +855,10 @@ def test_verified_rust_test_leaves_select_only_contracts_not_runtime(
             "python": "false",
             "rust": "true",
             "rust_runtime": "false",
-            "rust_matrix": '["contracts"]',
+            "rust_matrix": (
+                '["renewal-unit"]' if leaf in unit_leaves else '["contracts"]'
+            ),
+            "openbao": "false",
             "release": "false",
             "verification": "false",
             "security": "false",
@@ -663,6 +866,19 @@ def test_verified_rust_test_leaves_select_only_contracts_not_runtime(
     assert (
         _classify_changed_paths(
             leaves, tmp_path, combined=True, include_rust_plan=True
+        )[0]["rust_matrix"]
+        == '["contracts"]'
+    )
+    assert (
+        _classify_changed_paths(
+            unit_leaves, tmp_path, combined=True, include_rust_plan=True
+        )[0]["rust_matrix"]
+        == '["renewal-unit"]'
+    )
+    assert (
+        _classify_changed_paths(
+            [unit_leaves[0], leaves[-1]], tmp_path,
+            combined=True, include_rust_plan=True,
         )[0]["rust_matrix"]
         == '["contracts"]'
     )
@@ -674,7 +890,7 @@ def test_verified_rust_test_leaves_select_only_contracts_not_runtime(
         include_rust_plan=True,
     )[0]
     assert mixed["rust_runtime"] == "true"
-    assert mixed["rust_matrix"] == '["canvas","contracts"]'
+    assert mixed["rust_matrix"] == '["canvas","contracts","selfhost"]'
     for paths in (
         ["rust/services/issuance/src/unreviewed_tests.rs"],
         ["rust/crates/oid4vp-contract/tests/unreviewed.rs"],
@@ -689,43 +905,368 @@ def test_verified_rust_test_leaves_select_only_contracts_not_runtime(
             paths, tmp_path, combined=True, include_rust_plan=True
         )[0]
         assert selected["rust_runtime"] == "true"
-        assert selected["rust_matrix"] == '["canvas","contracts"]'
+        assert selected["rust_matrix"] == '["canvas","contracts","selfhost"]'
     # A deleted leaf cannot pass the source-ownership proof in the checkout.
     deleted = _classify_changed_paths(
         [leaves[0]], tmp_path, include_rust_plan=True, proof_failure=True
     )[0]
     assert deleted["rust_runtime"] == "true"
-    assert deleted["rust_matrix"] == '["canvas","contracts"]'
+    assert deleted["rust_matrix"] == '["canvas","contracts","selfhost"]'
+    unit_without_proof = _classify_changed_paths(
+        [unit_leaves[0]], tmp_path, include_rust_plan=True, proof_failure=True
+    )[0]
+    assert unit_without_proof["rust_runtime"] == "true"
+    assert unit_without_proof["rust_matrix"] == '["canvas","contracts","selfhost"]'
     nested_without_proof = _classify_changed_paths(
         [nested], tmp_path, include_rust_plan=True, proof_failure=True
     )[0]
     assert nested_without_proof["rust_runtime"] == "true"
-    assert nested_without_proof["rust_matrix"] == '["canvas","contracts"]'
+    assert nested_without_proof["rust_matrix"] == '["canvas","contracts","selfhost"]'
     oid_without_proof = _classify_changed_paths(
         [leaves[-1]], tmp_path, include_rust_plan=True, proof_failure=True
     )[0]
     assert oid_without_proof["rust_runtime"] == "true"
-    assert oid_without_proof["rust_matrix"] == '["canvas","contracts"]'
+    assert oid_without_proof["rust_matrix"] == '["canvas","contracts","selfhost"]'
     oid_deleted = _classify_changed_paths(
         [leaves[-2]], tmp_path, include_rust_plan=True, proof_failure=True
     )[0]
     assert oid_deleted["rust_runtime"] == "true"
-    assert oid_deleted["rust_matrix"] == '["canvas","contracts"]'
+    assert oid_deleted["rust_matrix"] == '["canvas","contracts","selfhost"]'
     empty = _classify_changed_paths(
         [], tmp_path, combined=True, include_rust_plan=True
     )[0]
     assert empty["rust"] == empty["rust_runtime"] == "false"
-    assert empty["rust_matrix"] == '["canvas","contracts"]'
+    assert empty["rust_matrix"] == '["canvas","contracts","selfhost"]'
     queued = _classify_changed_paths(
-        [leaves[0]], tmp_path, event="merge_group", include_rust_plan=True
+        [unit_leaves[0]], tmp_path, event="merge_group", include_rust_plan=True
     )[0]
     assert queued["all"] == queued["rust_runtime"] == "true"
-    assert queued["rust_matrix"] == '["canvas","contracts"]'
+    assert queued["rust_matrix"] == '["canvas","contracts","selfhost"]'
     on_main = _classify_changed_paths(
         [leaves[-1]], tmp_path, event="push", include_rust_plan=True
     )[0]
     assert on_main["rust_runtime"] == "true"
-    assert on_main["rust_matrix"] == '["canvas","contracts"]'
+    assert on_main["rust_matrix"] == '["canvas","contracts","selfhost"]'
+
+
+def test_verified_contract_test_sources_select_contracts_only_on_pr(
+    tmp_path: Path,
+) -> None:
+    _, workflow = _workflow(CI_PATH)
+    [classifier] = [
+        step
+        for step in workflow["jobs"]["changes"]["steps"]
+        if step.get("id") == "classify"
+    ]
+    # Keep headroom below GitHub's 21,000-character expression limit.
+    assert len(classifier["run"].encode("utf-8")) < 20_500
+    assert (
+        classifier["run"].index("rust/crates/service-acceptance/tests/*|")
+        < classifier["run"].index("--select-contract-tests")
+    )
+    assert (
+        classifier["run"].index("rust/services/signing-keys/tests/*)")
+        < classifier["run"].index("--select-contract-tests")
+    )
+    verified = subprocess.run(
+        [
+            sys.executable,
+            "tests/test_rust_test_only_docker_context.py",
+            "--emit-verified-contract-tests",
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+    ).stdout.split(b"\0")
+    assert verified[-1] == b"" and len(verified) == 9
+    contract_tests = [value.decode("utf-8") for value in verified[:-1]]
+    assert contract_tests == [
+        "rust/crates/service-acceptance/tests/csca_capability_contract.rs",
+        "rust/crates/service-acceptance/tests/gateway_signing_acceptance.rs",
+        "rust/crates/service-acceptance/tests/holder_remote_live_kms.rs",
+        "rust/crates/service-acceptance/tests/passport_gateway_postgres.rs",
+        "rust/crates/service-acceptance/tests/passport_managed_kms_chain.rs",
+        "rust/crates/service-acceptance/tests/tls_openbao_keyless.rs",
+        "rust/services/signing-keys/tests/csca_lifecycle_behavior.rs",
+        "rust/services/signing-keys/tests/csca_lifecycle_storage_contract.rs",
+    ]
+    expected = {
+        "all": "false",
+        "ui": "false",
+        "python": "false",
+        "rust": "true",
+        "rust_runtime": "false",
+        "rust_matrix": '["contracts"]',
+        "openbao": "false",
+        "release": "false",
+        "verification": "false",
+        "security": "false",
+    }
+    assert (
+        _classify_changed_paths(contract_tests, tmp_path, include_rust_plan=True)
+        == [expected] * len(contract_tests)
+    )
+    assert _classify_changed_paths(
+        contract_tests, tmp_path, combined=True, include_rust_plan=True
+    ) == [expected]
+    for paths in (
+        [contract_tests[0], "docs/architecture-feedback-improvement-plan.md"],
+        [contract_tests[1], "rust/crates/service-acceptance/Cargo.toml"],
+        [contract_tests[2], "rust/crates/service-acceptance/tests/unreviewed.rs"],
+        [
+            contract_tests[0],
+            "rust/crates/selfhost-acceptance/tests/selfhost_public_image_contract.rs",
+        ],
+        [contract_tests[0] + "\nother"],
+        [contract_tests[4], "rust/services/signing-keys/tests/unreviewed.rs"],
+        [contract_tests[5], "rust/services/signing-keys/Cargo.toml"],
+    ):
+        selected = _classify_changed_paths(
+            paths, tmp_path, combined=True, include_rust_plan=True
+        )[0]
+        assert selected["rust_runtime"] == "true"
+        assert selected["rust_matrix"] == '["canvas","contracts","selfhost"]'
+    unverified = _classify_changed_paths(
+        [contract_tests[0]], tmp_path, include_rust_plan=True, proof_failure=True
+    )[0]
+    assert unverified["rust_runtime"] == "true"
+    assert unverified["rust_matrix"] == '["canvas","contracts","selfhost"]'
+    queued = _classify_changed_paths(
+        [contract_tests[-1]], tmp_path, event="merge_group", include_rust_plan=True
+    )[0]
+    assert queued["all"] == queued["rust_runtime"] == "true"
+    assert queued["rust_matrix"] == '["canvas","contracts","selfhost"]'
+    on_main = _classify_changed_paths(
+        [contract_tests[-1]], tmp_path, event="push", include_rust_plan=True
+    )[0]
+    assert on_main["rust_runtime"] == "true"
+    assert on_main["rust_matrix"] == '["canvas","contracts","selfhost"]'
+    jobs = yaml.safe_load(CI_PATH.read_text(encoding="utf-8"))["jobs"]
+    assert jobs["test-rust-services"]["if"] == "needs.changes.outputs.rust == 'true'"
+    contract_steps = jobs["test-rust-services"]["steps"]
+    [workspace_owner] = [
+        step for step in contract_steps if step.get("name") == "Run safe Rust contract groups concurrently"
+    ]
+    assert "cargo test --locked --workspace" in workspace_owner["run"]
+    assert "--exclude marty-signing-keys" not in workspace_owner["run"]
+    assert "source ../scripts/ci/rust_contract_execution.sh" in workspace_owner["run"]
+    assert (
+        workspace_owner["run"].count(
+            "run_timed verification target/debug/verification-postgres-contract"
+        )
+        == 1
+    )
+    assert (
+        workspace_owner["run"].count(
+            "run_timed gateway target/debug/gateway-redis-contract"
+        )
+        == 1
+    )
+    [live_owner] = [
+        step for step in contract_steps
+        if step.get("name") == "Exercise live Signing Keys public contracts on disposable Redis"
+    ]
+    assert "csca_lifecycle_storage_contract:2" in live_owner["run"]
+    assert live_owner["if"] == "matrix.lane == 'contracts'"
+    assert "test-rust-services" in jobs["ci-gate"]["needs"]
+    assert (
+        'require_selected test-rust-services "$RUST_SERVICES_RESULT" "$RUST_SELECTED"'
+        in jobs["ci-gate"]["steps"][0]["run"]
+    )
+
+
+def test_verified_worker_test_sources_select_only_worker_on_pr(tmp_path: Path) -> None:
+    verified = subprocess.run(
+        [
+            sys.executable,
+            "tests/test_rust_test_only_docker_context.py",
+            "--emit-verified-worker-tests",
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+    ).stdout.split(b"\0")
+    assert verified[-1] == b"" and len(verified) == 5
+    worker_tests = [value.decode("utf-8") for value in verified[:-1]]
+    assert worker_tests == [
+        "rust/crates/canvas-worker-acceptance/tests/canvas_published_worker_contract.rs",
+        "rust/crates/canvas-worker-acceptance/tests/support/canvas_rest_requalification.rs",
+        "rust/crates/canvas-worker-acceptance/tests/support/canvas_startup_attestation.rs",
+        "rust/crates/canvas-worker-acceptance/tests/support/canvas_worker_roster_metadata.rs",
+    ]
+    expected = {
+        "all": "false",
+        "ui": "false",
+        "python": "false",
+        "rust": "true",
+        "rust_runtime": "false",
+        "rust_matrix": '["worker"]',
+        "openbao": "false",
+        "release": "false",
+        "verification": "false",
+        "security": "false",
+    }
+    assert (
+        _classify_changed_paths(worker_tests, tmp_path, include_rust_plan=True)
+        == [expected] * 4
+    )
+    assert _classify_changed_paths(
+        worker_tests, tmp_path, combined=True, include_rust_plan=True
+    ) == [expected]
+    for paths in (
+        [worker_tests[0], "docs/architecture-feedback-improvement-plan.md"],
+        [worker_tests[1], "rust/crates/canvas-worker-acceptance/src/lib.rs"],
+        [worker_tests[-1], "rust/services/issuance/tests/support/canvas_published_database.rs"],
+        ["rust/crates/canvas-worker-acceptance/tests/support/unreviewed.rs"],
+        [worker_tests[2] + "\nother"],
+    ):
+        selected = _classify_changed_paths(
+            paths, tmp_path, combined=True, include_rust_plan=True
+        )[0]
+        assert selected["rust_runtime"] == "true"
+        assert selected["rust_matrix"] == '["canvas","contracts","selfhost"]'
+    without_proof = _classify_changed_paths(
+        [worker_tests[0]], tmp_path, include_rust_plan=True, proof_failure=True
+    )[0]
+    assert without_proof["rust_runtime"] == "true"
+    assert without_proof["rust_matrix"] == '["canvas","contracts","selfhost"]'
+    roster_without_proof = _classify_changed_paths(
+        [worker_tests[-1]], tmp_path, include_rust_plan=True, proof_failure=True
+    )[0]
+    assert roster_without_proof["rust_runtime"] == "true"
+    assert roster_without_proof["rust_matrix"] == '["canvas","contracts","selfhost"]'
+    queued = _classify_changed_paths(
+        [worker_tests[0]], tmp_path, event="merge_group", include_rust_plan=True
+    )[0]
+    assert queued["all"] == queued["rust_runtime"] == "true"
+    assert queued["rust_matrix"] == '["canvas","contracts","selfhost"]'
+
+
+def test_verified_flow_test_sources_select_only_flow_on_pr(tmp_path: Path) -> None:
+    verified = subprocess.run(
+        [
+            sys.executable,
+            "tests/test_rust_test_only_docker_context.py",
+            "--emit-verified-flow-tests",
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+    ).stdout.split(b"\0")
+    assert verified[-1] == b"" and len(verified) == 9
+    flow_tests = [value.decode("utf-8") for value in verified[:-1]]
+    assert flow_tests == [
+        "rust/crates/flow-acceptance/tests/flow_published_schema_contract.rs",
+        "rust/crates/flow-acceptance/tests/support/didcomm_flow_grpc_admission.rs",
+        "rust/crates/flow-acceptance/tests/support/flow_admission.rs",
+        "rust/crates/flow-acceptance/tests/support/flow_legacy_physical_http.rs",
+        "rust/crates/flow-acceptance/tests/support/flow_native_consumer.rs",
+        "rust/crates/flow-acceptance/tests/support/flow_public_startup.rs",
+        "rust/crates/flow-acceptance/tests/support/flow_public_startup_peers.rs",
+        "rust/crates/flow-acceptance/tests/support/flow_rendered_selection.rs",
+    ]
+    expected = {
+        "all": "false",
+        "ui": "false",
+        "python": "false",
+        "rust": "true",
+        "rust_runtime": "false",
+        "rust_matrix": '["flow"]',
+        "openbao": "false",
+        "release": "false",
+        "verification": "false",
+        "security": "false",
+    }
+    assert _classify_changed_paths(
+        flow_tests, tmp_path, include_rust_plan=True
+    ) == [expected] * 8
+    assert _classify_changed_paths(
+        flow_tests, tmp_path, combined=True, include_rust_plan=True
+    ) == [expected]
+    for paths in (
+        [flow_tests[0], "docs/architecture-feedback-improvement-plan.md"],
+        [flow_tests[1], "rust/crates/flow-acceptance/Cargo.toml"],
+        [flow_tests[-1], "rust/acceptance/support/base_runtime_redis.rs"],
+        ["rust/crates/flow-acceptance/tests/support/unreviewed.rs"],
+        [flow_tests[2] + "\nother"],
+    ):
+        selected = _classify_changed_paths(
+            paths, tmp_path, combined=True, include_rust_plan=True
+        )[0]
+        assert selected["rust_runtime"] == "true"
+        assert selected["rust_matrix"] == '["canvas","contracts","selfhost"]'
+    without_proof = _classify_changed_paths(
+        [flow_tests[0]], tmp_path, include_rust_plan=True, proof_failure=True
+    )[0]
+    assert without_proof["rust_runtime"] == "true"
+    assert without_proof["rust_matrix"] == '["canvas","contracts","selfhost"]'
+    queued = _classify_changed_paths(
+        [flow_tests[0]], tmp_path, event="merge_group", include_rust_plan=True
+    )[0]
+    assert queued["all"] == queued["rust_runtime"] == "true"
+    assert queued["rust_matrix"] == '["canvas","contracts","selfhost"]'
+
+
+def test_verified_selfhost_test_sources_select_only_selfhost_on_pr(
+    tmp_path: Path,
+) -> None:
+    verified = subprocess.run(
+        [
+            sys.executable,
+            "tests/test_rust_test_only_docker_context.py",
+            "--emit-verified-selfhost-tests",
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+    ).stdout.split(b"\0")
+    assert verified[-1] == b"" and len(verified) == 4
+    selfhost_tests = [value.decode("utf-8") for value in verified[:-1]]
+    assert selfhost_tests == [
+        "rust/crates/selfhost-acceptance/tests/selfhost_public_image_contract.rs",
+        "rust/crates/selfhost-acceptance/tests/support/selfhost_packaged_runtime.rs",
+        "rust/crates/selfhost-acceptance/tests/support/selfhost_runtime_sidecar.rs",
+    ]
+    expected = {
+        "all": "false",
+        "ui": "false",
+        "python": "false",
+        "rust": "true",
+        "rust_runtime": "false",
+        "rust_matrix": '["selfhost"]',
+        "openbao": "false",
+        "release": "false",
+        "verification": "false",
+        "security": "false",
+    }
+    assert _classify_changed_paths(
+        selfhost_tests, tmp_path, include_rust_plan=True
+    ) == [expected] * 3
+    assert _classify_changed_paths(
+        selfhost_tests, tmp_path, combined=True, include_rust_plan=True
+    ) == [expected]
+    for paths in (
+        [selfhost_tests[0], "docs/architecture-feedback-improvement-plan.md"],
+        [selfhost_tests[1], "rust/crates/selfhost-acceptance/Cargo.toml"],
+        [selfhost_tests[-1], "rust/services/issuance/tests/support/canvas_published_database.rs"],
+        ["rust/crates/selfhost-acceptance/tests/support/unreviewed.rs"],
+        [selfhost_tests[2] + "\nother"],
+    ):
+        selected = _classify_changed_paths(
+            paths, tmp_path, combined=True, include_rust_plan=True
+        )[0]
+        assert selected["rust_runtime"] == "true"
+        assert selected["rust_matrix"] == '["canvas","contracts","selfhost"]'
+    without_proof = _classify_changed_paths(
+        [selfhost_tests[0]], tmp_path, include_rust_plan=True, proof_failure=True
+    )[0]
+    assert without_proof["rust_runtime"] == "true"
+    assert without_proof["rust_matrix"] == '["canvas","contracts","selfhost"]'
+    queued = _classify_changed_paths(
+        [selfhost_tests[0]], tmp_path, event="merge_group", include_rust_plan=True
+    )[0]
+    assert queued["all"] == queued["rust_runtime"] == "true"
+    assert queued["rust_matrix"] == '["canvas","contracts","selfhost"]'
 
 
 def test_generated_beta_image_inputs_retain_runtime_and_canvas_matrix(
@@ -743,7 +1284,7 @@ def test_generated_beta_image_inputs_retain_runtime_and_canvas_matrix(
         assert (ROOT / path).is_file(), path
         selected = _classify_changed_paths([path], tmp_path, include_rust_plan=True)[0]
         assert selected["rust"] == selected["rust_runtime"] == "true", path
-        assert selected["rust_matrix"] == '["canvas","contracts"]', path
+        assert selected["rust_matrix"] == '["canvas","contracts","selfhost"]', path
     queued = _classify_changed_paths(
         ["rust/services/issuance/src/lib.rs"],
         tmp_path,
@@ -751,7 +1292,99 @@ def test_generated_beta_image_inputs_retain_runtime_and_canvas_matrix(
         include_rust_plan=True,
     )[0]
     assert queued["all"] == queued["rust_runtime"] == "true"
-    assert queued["rust_matrix"] == '["canvas","contracts"]'
+    assert queued["rust_matrix"] == '["canvas","contracts","selfhost"]'
+
+
+def test_openbao_plugin_changes_select_required_image_lane(tmp_path: Path) -> None:
+    for path in (
+        "openbao/didcomm-authcrypt/backend/haip.go",
+        "docker/openbao-haip-migration-audit-policy.hcl",
+        "keycloak/openbao-provider/src/main/java/dev/marty/keycloak/kms/RemoteDirectJwe.java",
+        "scripts/probe_keycloak_remote_rs256.py",
+        "scripts/sql/keycloak-kms-only-verify.sql",
+    ):
+        selected = _classify_changed_path(path, tmp_path)
+        assert selected["openbao"] == selected["rust"] == selected["security"] == "true"
+    for path in (
+        "rust/services/flow/src/request_object.rs",
+        "rust/services/flow/src/verification_submission.rs",
+        "rust/services/flow/src/http_providers.rs",
+        "rust/services/flow/tests/haip_live_signing.rs",
+        "rust/services/signing-keys/src/flow_envelope.rs",
+        "rust/services/signing-keys/src/http.rs",
+        "rust/crates/oid4vp-contract/src/haip_key.rs",
+    ):
+        selected = _classify_changed_path(path, tmp_path)
+        assert selected["openbao"] == selected["rust"] == selected["security"] == "true"
+    assert (
+        _classify_changed_path("rust/services/flow/src/lib.rs", tmp_path)["openbao"]
+        == "false"
+    )
+    assert (
+        _classify_changed_paths(
+            ["rust/services/flow/src/lib.rs"], tmp_path, event="merge_group"
+        )[0]["openbao"]
+        == "true"
+    )
+
+    _, document = _workflow(CI_PATH)
+    job = document["jobs"]["test-openbao-didcomm-plugin"]
+    assert job["if"] == "needs.changes.outputs.openbao == 'true'"
+    image_build = next(
+        step for step in job["steps"]
+        if step.get("name") == "Test and build the pinned OpenBao plugin image"
+    )
+    assert image_build["with"]["file"] == "openbao/didcomm-authcrypt/Dockerfile"
+    keycloak_build = next(
+        step for step in job["steps"]
+        if step.get("name") == "Build the pinned Keycloak remote-key image"
+    )
+    assert keycloak_build["with"]["file"] == "keycloak/openbao-provider/Dockerfile"
+    keycloak_gate = next(
+        step for step in job["steps"]
+        if step.get("name") == "Qualify Keycloak browser, CIBA, KMS-loss, and PostgreSQL custody"
+    )
+    assert "scripts/probe_keycloak_remote_rs256.py --require-browser" in keycloak_gate["run"]
+    assert "--keycloak-image marty-keycloak-openbao:ci" in keycloak_gate["run"]
+    assert "--openbao-image marty-openbao-didcomm:ci" in keycloak_gate["run"]
+    storage_gate = next(
+        step
+        for step in job["steps"]
+        if step.get("name")
+        == "Qualify packaged plugin storage and self-host Raft behavior"
+    )
+    assert (
+        storage_gate["env"]["MARTY_OPENBAO_PROBE_IMAGE"] == "marty-openbao-didcomm:ci"
+    )
+    for probe in (
+        "probe_didcomm_issuance_token.py",
+        "probe_didcomm_openbao_file_storage.py",
+        "probe_selfhost_openbao_raft_bootstrap.py",
+        "probe_didcomm_openbao_ha.py",
+    ):
+        assert probe in storage_gate["run"]
+    assert not any(
+        step.get("name") == "Qualify live Raft snapshot export and recovery"
+        for step in job["steps"]
+    )
+    coordinated_gate = next(
+        step
+        for step in job["steps"]
+        if step.get("name")
+        == "Qualify Rust integration-secret recovery with coordinated PostgreSQL and Raft restore"
+    )
+    assert (
+        coordinated_gate["env"]["MARTY_OPENBAO_PROBE_IMAGE"]
+        == "marty-openbao-didcomm:ci"
+    )
+    assert coordinated_gate["env"]["CARGO_PROFILE_DEV_DEBUG"] == 0
+    assert coordinated_gate["env"]["CARGO_PROFILE_TEST_DEBUG"] == 0
+    assert "probe_integration_secret_coordinated_restore.py" in coordinated_gate["run"]
+    assert job["timeout-minutes"] >= 30
+    assert "CGO_ENABLED=0 go test ./... && CGO_ENABLED=0 go vet ./..." in (
+        ROOT / "openbao/didcomm-authcrypt/Dockerfile"
+    ).read_text(encoding="utf-8")
+    assert "test-openbao-didcomm-plugin" in document["jobs"]["ci-gate"]["needs"]
 
 
 @pytest.mark.parametrize(
@@ -792,9 +1425,16 @@ def test_python_service_cleanup_guard_rejects_weakened_coverage(mutation) -> Non
     elif mutation == "restore-url":
         job["env"] = {"FLOW_POSTGRES_TEST_URL": "postgresql://localhost:5432/unused"}
     elif mutation.startswith("drop-rust-"):
-        del document["jobs"]["test-rust-services"]["services"][
-            mutation.removeprefix("drop-rust-")
-        ]
+        setup = next(
+            step for step in document["jobs"]["test-rust-services"]["steps"]
+            if step.get("name") == "Start digest-pinned Rust test services after registry setup"
+        )
+        setup["run"] = setup["run"].replace(
+            {"postgres": "postgres:15-alpine@sha256:fceb6f86328c36f2438fae3b851b0cc57c4a7e69a58c866d9ce24281f2cf0c9c",
+             "redis": "redis:7.4-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99",
+             "openbao": "quay.io/openbao/openbao@sha256:6c75c97223873807260352f269640935a07db0c26b3dbf12a98a36ec43ad9878"}[
+                mutation.removeprefix("drop-rust-")
+            ], "removed")
     elif mutation == "wrong-directory":
         step["working-directory"] = "tests"
     else:
@@ -816,7 +1456,11 @@ def test_pull_request_classifier_is_conservative_and_merge_queue_is_complete() -
         "rust",
         "rust_runtime",
         "rust_matrix",
+        "openbao",
         "planner_only",
+        "rollback_test_only",
+        "didcomm_release_test_only",
+        "k8s_policy_test_only",
         "release",
         "verification",
         "security",
@@ -830,10 +1474,10 @@ def test_pull_request_classifier_is_conservative_and_merge_queue_is_complete() -
         "test-ui-crawler-artifacts",
         "test-ui-crawler-nginx",
         "test-services",
-        "test-passport-fence-postgres",
         "test-rust-feature-probe",
-        "test-rust-passport-image",
         "test-rust-services",
+        "test-openbao-didcomm-plugin",
+        "test-native-operator",
         "rust-lint-policy",
         "test-rust-service-images",
         "public-protocol-contract",
@@ -881,13 +1525,13 @@ def test_ci_gate_accepts_only_planned_pr_skips_and_all_successful_merge_groups()
         "python": {"test-services"},
         "rust": {
             "test-rust-services",
+            "test-native-operator",
             "rust-lint-policy",
             "rust-supply-chain",
         },
+        "openbao": {"test-openbao-didcomm-plugin"},
         "rust_runtime": {
-            "test-passport-fence-postgres",
             "test-rust-feature-probe",
-            "test-rust-passport-image",
             "test-rust-service-images",
         },
         "security": {"security"},
@@ -918,6 +1562,7 @@ def test_ci_gate_accepts_only_planned_pr_skips_and_all_successful_merge_groups()
         "PYTHON_SELECTED": "python",
         "RUST_SELECTED": "rust",
         "RUST_RUNTIME_SELECTED": "rust_runtime",
+        "OPENBAO_SELECTED": "openbao",
         "RELEASE_SELECTED": "release",
         "VERIFICATION_SELECTED": "verification",
         "SECURITY_SELECTED": "security",
@@ -925,6 +1570,12 @@ def test_ci_gate_accepts_only_planned_pr_skips_and_all_successful_merge_groups()
     for key, flag in selections.items():
         assert gate["env"][key] == f"${{{{ needs.changes.outputs.{flag} }}}}"
     assert gate["env"]["RUST_MATRIX"] == "${{ needs.changes.outputs.rust_matrix }}"
+    assert gate["env"]["ROLLBACK_TEST_ONLY"] == (
+        "${{ needs.changes.outputs.rollback_test_only }}"
+    )
+    assert gate["env"]["DIDCOMM_RELEASE_TEST_ONLY"] == (
+        "${{ needs.changes.outputs.didcomm_release_test_only }}"
+    )
     bash = "bash"
     if os.name == "nt":
         git = shutil.which("git")
@@ -938,9 +1589,14 @@ def test_ci_gate_accepts_only_planned_pr_skips_and_all_successful_merge_groups()
         result_count=None,
         selection_overrides=None,
         leaf_only=False,
+        worker_only=False,
+        flow_only=False,
+        selfhost_only=False,
     ):
         selected = set(flags)
-        if "rust" in selected and not leaf_only:
+        if "rust" in selected and not (
+            leaf_only or worker_only or flow_only or selfhost_only
+        ):
             selected.add("rust_runtime")
         active = {"changes", "lint"}
         for flag, names in groups.items():
@@ -962,14 +1618,24 @@ def test_ci_gate_accepts_only_planned_pr_skips_and_all_successful_merge_groups()
             }
         )
         environment.update(selection_overrides or {})
+        environment.setdefault("ROLLBACK_TEST_ONLY", "false")
+        environment.setdefault("DIDCOMM_RELEASE_TEST_ONLY", "false")
         environment["RUST_MATRIX"] = (
-            '["contracts"]' if leaf_only else '["canvas","contracts"]'
+            '["worker"]'
+            if worker_only
+            else '["flow"]'
+            if flow_only
+            else '["selfhost"]'
+            if selfhost_only
+            else '["contracts"]'
+            if leaf_only
+            else '["canvas","contracts","selfhost"]'
         )
         environment.update(selection_overrides or {})
         environment.update({key: results[name] for name, key in result_env.items()})
         values = [results[name] for name in gate["needs"]]
         environment["CI_LANE_RESULTS"] = " ".join(values[:result_count])
-        assert len(environment["CI_LANE_RESULTS"].split()) == (result_count or 18)
+        assert len(environment["CI_LANE_RESULTS"].split()) == (result_count or len(gate["needs"]))
         script = gate["steps"][0]["run"].replace("${{ github.event_name }}", event)
         return subprocess.run(
             [bash, "-c", script],
@@ -983,6 +1649,7 @@ def test_ci_gate_accepts_only_planned_pr_skips_and_all_successful_merge_groups()
         (),
         ("ui",),
         ("rust",),
+        ("rust", "openbao", "security"),
         ("python", "security"),
         ("release",),
         ("release", "verification"),
@@ -992,11 +1659,87 @@ def test_ci_gate_accepts_only_planned_pr_skips_and_all_successful_merge_groups()
         assert result.returncode == 0, (flags, result.stdout, result.stderr)
     assert exercise(("rust",), {"test-rust-services": "skipped"}).returncode != 0
     assert exercise(("rust",), leaf_only=True).returncode == 0
+    unit_plan = {"RUST_MATRIX": '["renewal-unit"]'}
+    assert exercise(
+        ("rust",), leaf_only=True, selection_overrides=unit_plan
+    ).returncode == 0
+    assert exercise(
+        ("rust",), leaf_only=True, selection_overrides=unit_plan,
+        event="merge_group",
+    ).returncode != 0
+    assert exercise(
+        ("rust",), leaf_only=True, selection_overrides=unit_plan,
+        overrides={"test-rust-services": "skipped"},
+    ).returncode != 0
+    assert exercise(
+        ("rust",), leaf_only=True, selection_overrides=unit_plan,
+        overrides={"rust-supply-chain": "skipped"},
+    ).returncode != 0
+    assert exercise(("rust",), worker_only=True).returncode == 0
+    assert exercise(("rust",), flow_only=True).returncode == 0
+    assert exercise(("rust",), selfhost_only=True).returncode == 0
+    assert exercise(("rust",), selfhost_only=True, event="merge_group").returncode != 0
+    assert (
+        exercise(("rust",), selfhost_only=True, overrides={"test-release-contracts": "skipped"})
+        .returncode
+        != 0
+    )
+    assert (
+        exercise(("rust",), selfhost_only=True, overrides={"rust-supply-chain": "skipped"})
+        .returncode
+        != 0
+    )
+    assert exercise(("rust",), flow_only=True, event="merge_group").returncode != 0
+    assert (
+        exercise(("rust",), flow_only=True, overrides={"rust-supply-chain": "skipped"})
+        .returncode
+        != 0
+    )
+    assert (
+        exercise(("rust",), flow_only=True, overrides={"test-release-contracts": "skipped"})
+        .returncode
+        != 0
+    )
+    assert exercise(("rust",), worker_only=True, event="merge_group").returncode != 0
+    assert (
+        exercise(
+            ("rust",),
+            worker_only=True,
+            selection_overrides={"RUST_RUNTIME_SELECTED": "true"},
+        ).returncode
+        != 0
+    )
+    assert (
+        exercise(
+            ("rust",),
+            worker_only=True,
+            selection_overrides={"RUST_MATRIX": '["contracts","worker"]'},
+        ).returncode
+        != 0
+    )
+    assert (
+        exercise(
+            ("rust",), worker_only=True, overrides={"rust-lint-policy": "skipped"}
+        ).returncode
+        != 0
+    )
+    assert (
+        exercise(
+            ("rust",), worker_only=True, overrides={"rust-supply-chain": "skipped"}
+        ).returncode
+        != 0
+    )
+    assert (
+        exercise(
+            ("rust",), worker_only=True, overrides={"test-release-contracts": "skipped"}
+        ).returncode
+        != 0
+    )
     assert (
         exercise(
             ("rust",),
             leaf_only=True,
-            selection_overrides={"RUST_MATRIX": '["canvas","contracts"]'},
+            selection_overrides={"RUST_MATRIX": '["canvas","contracts","selfhost"]'},
         ).returncode
         != 0
     )
@@ -1022,8 +1765,55 @@ def test_ci_gate_accepts_only_planned_pr_skips_and_all_successful_merge_groups()
     assert exercise(("ui",), {"fast-feedback": "failure"}).returncode != 0
     assert exercise((), {"changes": "failure"}).returncode != 0
     assert exercise((), selection_overrides={"RUST_SELECTED": ""}).returncode != 0
-    assert exercise((), result_count=17).returncode != 0
+    assert exercise((), result_count=16).returncode != 0
+    didcomm_mode = {"DIDCOMM_RELEASE_TEST_ONLY": "true"}
+    assert exercise(("release",), selection_overrides=didcomm_mode).returncode == 0
+    assert (
+        exercise(
+            ("release",),
+            overrides={"test-release-contracts": "skipped"},
+            selection_overrides=didcomm_mode,
+        ).returncode
+        != 0
+    )
+    assert exercise(("ui", "release"), selection_overrides=didcomm_mode).returncode != 0
+    assert exercise(("release",), event="merge_group", selection_overrides=didcomm_mode).returncode != 0
+    assert exercise(("release",), event="workflow_dispatch", selection_overrides=didcomm_mode).returncode != 0
+    for invalid in ("", "TRUE", "invalid"):
+        assert exercise(("release",), selection_overrides={"DIDCOMM_RELEASE_TEST_ONLY": invalid}).returncode != 0
+    assert (
+        exercise(("release", "openbao"), selection_overrides=didcomm_mode).returncode
+        != 0
+    )
     assert exercise(tuple(selections.values()), event="merge_group").returncode == 0
+    assert (
+        exercise(
+            ("release", "security"),
+            selection_overrides={"ROLLBACK_TEST_ONLY": "true"},
+        ).returncode
+        == 0
+    )
+    assert (
+        exercise(
+            ("release",), selection_overrides={"ROLLBACK_TEST_ONLY": "true"}
+        ).returncode
+        != 0
+    )
+    assert (
+        exercise(
+            tuple(selections.values()),
+            event="merge_group",
+            selection_overrides={"ROLLBACK_TEST_ONLY": "true"},
+        ).returncode
+        != 0
+    )
+    assert (
+        exercise(
+            ("release", "security"),
+            selection_overrides={"ROLLBACK_TEST_ONLY": "missing"},
+        ).returncode
+        != 0
+    )
     assert exercise(("rust",), event="merge_group", leaf_only=True).returncode != 0
     assert (
         exercise(
@@ -1066,77 +1856,102 @@ def test_independent_rust_lanes_remain_required_without_transferring_builds() ->
     jobs = document["jobs"]
     service_names = {step.get("name") for step in jobs["test-rust-services"]["steps"]}
     probe = jobs["test-rust-feature-probe"]
-    passport = jobs["test-rust-passport-image"]
-    assert probe["needs"] == passport["needs"] == "changes"
-    assert (
-        probe["if"] == passport["if"] == "needs.changes.outputs.rust_runtime == 'true'"
-    )
+    assert probe["needs"] == "changes"
+    assert probe["if"] == "needs.changes.outputs.rust_runtime == 'true'"
     assert jobs["test-rust-services"]["if"] == "needs.changes.outputs.rust == 'true'"
-    assert {"test-rust-feature-probe", "test-rust-passport-image"} <= set(
-        jobs["ci-gate"]["needs"]
-    )
+    assert "test-rust-feature-probe" in jobs["ci-gate"]["needs"]
+    assert "test-rust-passport-image" not in jobs
     assert "Verify frozen Rust feature-regression probe" not in service_names
     assert "Build opt-in passport test-mode image" not in service_names
     assert "Verify opt-in passport test-mode image boundary" not in service_names
     assert {step.get("name") for step in probe["steps"]} >= {
         "Verify frozen Rust feature-regression probe"
     }
-    passport_names = [step.get("name") for step in passport["steps"]]
-    assert passport_names.index(
-        "Build opt-in passport test-mode image"
-    ) < passport_names.index("Verify opt-in passport test-mode image boundary")
     assert "Build public selfhost image" in service_names
-    for job in (probe, passport):
-        assert not any(
-            step.get("uses", "").startswith("actions/download-artifact@")
-            for step in job["steps"]
-        )
+    assert not any(
+        step.get("uses", "").startswith("actions/download-artifact@")
+        for step in probe["steps"]
+    )
 
 
 def test_rust_matrix_keeps_canvas_state_local_and_contracts_parallel() -> None:
     _, document = _workflow(CI_PATH)
     job = document["jobs"]["test-rust-services"]
-    assert job["strategy"] == {
-        "fail-fast": False,
-        "matrix": {"lane": "${{ fromJSON(needs.changes.outputs.rust_matrix) }}"},
-    }
+    assert job["strategy"]["fail-fast"] is False
+    matrix = job["strategy"]["matrix"]["lane"]
+    assert "github.event_name == 'pull_request'" in matrix
+    assert "ci-worker-diagnostic" in matrix
+    assert '\'["canvas","contracts","worker","selfhost"]\'' in matrix
+    assert "ci-selfhost-diagnostic" in matrix
+    assert "ci-renewal-unit-diagnostic" in matrix
+    assert matrix.count("ci-renewal-unit-diagnostic") == 2
+    assert '\'["canvas","contracts","worker","selfhost","renewal-unit"]\'' in matrix
+    assert '\'["canvas","contracts","selfhost","renewal-unit"]\'' in matrix
+    assert matrix.index(
+        '\'["canvas","contracts","worker","selfhost","renewal-unit"]\''
+    ) < matrix.index(
+        '\'["canvas","contracts","selfhost","renewal-unit"]\''
+    ) < matrix.index(
+        '\'["canvas","contracts","worker","selfhost"]\''
+    )
+    assert '\'["canvas","contracts","selfhost"]\'' in matrix
+    assert '\'["canvas","contracts","worker","selfhost"]\'' in matrix
+    assert "|| needs.changes.outputs.rust_matrix) }}" in matrix
     steps = {step.get("name"): step for step in job["steps"] if step.get("name")}
     canvas = {
-        "Prepare isolated Canvas worker harness dependencies",
         "Require Kubernetes deployment contract executables",
         "Fail fast on image-free Canvas renewal configuration",
         "Compile Bookworm-compatible base runtime acceptance",
         "Test native Canvas AGS/NRPS over real HTTPS",
         "Test Canvas publication adapter over real HTTPS",
         "Prepare required rendered base executable acceptance",
-        "Expose public image compiler cache credentials",
-        "Build public selfhost image",
-        "Prepare public selfhost image loader acceptance",
-        "Verify default passport test-mode boundary",
         "Preflight published worker parity in two isolated groups",
         "Prepare owned runtime failure diagnostics",
-        "Test native Canvas operation timeout TLS parity",
     }
     contracts = {
-        "Prepare pinned standalone Compose renderer for Rust contracts",
-        "Verify feature-regression observer isolation",
         "Prepare database contract executables",
         "Create isolated Rust contract databases",
         "Run safe Rust contract groups concurrently",
-        "Exercise authenticated Signing Keys Gateway to Rust routes",
         "Exercise live Signing Keys public contracts on disposable Redis",
-        "Exercise Gateway CSR and managed passport chain with disposable OpenBao",
+        "Exercise scoped grant and managed passport chain over disposable HTTPS OpenBao",
         "Run Flow database contract after workspace suite",
-        "Test packaged passport self-signed mode",
         "Test beta passport reconciliation and native batch on PostgreSQL",
         "Test native passport Gateway signed webhook on PostgreSQL",
+        "Test native Canvas operation timeout TLS parity",
     }
     for name in canvas:
         assert steps[name]["if"] == "matrix.lane == 'canvas'"
         assert not steps[name].get("continue-on-error", False)
+    for name in (
+        "Expose public image compiler cache credentials",
+        "Build public selfhost image",
+        "Prepare public selfhost image loader acceptance",
+        "Verify local passport signing is forbidden",
+    ):
+        assert steps[name]["if"] == "matrix.lane == 'selfhost'"
+        assert not steps[name].get("continue-on-error", False)
+    assert steps["Prepare isolated Canvas worker harness dependencies"]["if"] == (
+        "matrix.lane == 'canvas' || matrix.lane == 'worker'"
+    )
     for name in contracts:
         assert steps[name]["if"] == "matrix.lane == 'contracts'"
         assert not steps[name].get("continue-on-error", False)
+    live_signing = steps["Exercise live Signing Keys public contracts on disposable Redis"]["run"]
+    assert "csca_lifecycle_storage_contract:2" in live_signing
+    assert "managed_key_create_live_contract" not in live_signing
+    assert "--rust-adapter" in steps[
+        "Qualify scoped provider callback verification against disposable OpenBao"
+    ]["run"]
+    assert "document_storage_contract:1" in live_signing
+    assert "service_rotation_live_contract" not in live_signing
+    assert "vdsnc_registration_live_contract" not in live_signing
+    live_openbao = steps[
+        "Exercise scoped grant and managed passport chain over disposable HTTPS OpenBao"
+    ]["run"]
+    assert live_openbao == "python3 scripts/probe_signing_keys_openbao_policy.py --grant-verifier"
+    assert steps["Prepare pinned standalone Compose renderer for Rust contracts"][
+        "if"
+    ] == "matrix.lane == 'contracts' || matrix.lane == 'flow' || matrix.lane == 'selfhost'"
     renderer = steps["Prepare pinned standalone Compose renderer for Rust contracts"]
     assert "bash scripts/ci/install-compose-renderer.sh" in renderer["run"]
     assert "MARTY_BASE_COMPOSE_BINARY=%s" in renderer["run"]
@@ -1153,7 +1968,10 @@ def test_rust_matrix_keeps_canvas_state_local_and_contracts_parallel() -> None:
         not in steps["Prepare required rendered base executable acceptance"]["run"]
     )
     late = steps["Prepare required rendered base executable acceptance"]["run"]
-    assert "docker pull redis:7-alpine" in late
+    assert "bash scripts/ci/pull-pinned-dockerhub-image.sh" in late
+    assert "redis:7-alpine@sha256:e7723ff73d963f5cc6d9c4643ea3d989527a402a319239054e9472a7fb9219a2" in late
+    assert 'docker tag "$redis_image" redis:7-alpine' in late
+    assert "docker pull redis:7-alpine" not in late
     assert "docker build --tag marty-envoy:native-contract config/envoy" in late
     assert (
         names.index("Compile reusable Rust test executables")
@@ -1166,11 +1984,30 @@ def test_rust_matrix_keeps_canvas_state_local_and_contracts_parallel() -> None:
         < names.index("Prepare pinned standalone Compose renderer for Rust contracts")
         < names.index("Run safe Rust contract groups concurrently")
     )
+    assert "if" not in steps["Compile reusable Rust test executables"]
+    assert steps["Run isolated database contract suites concurrently"]["if"] == (
+        "matrix.lane != 'renewal-unit'"
+    )
     for name in (
-        "Compile reusable Rust test executables",
-        "Run isolated database contract suites concurrently",
+        "Prefer cached Docker Hub images without restarting the runner daemon",
+        "Select the exact BuildKit image with registry fallback",
     ):
-        assert "if" not in steps[name]
+        assert steps[name]["if"] == "matrix.lane != 'renewal-unit'"
+    assert next(
+        step for step in job["steps"] if step.get("uses", "").startswith("docker/setup-buildx-action@")
+    )["if"] == "matrix.lane != 'renewal-unit'"
+    observer = steps["Verify feature-regression observer isolation"]
+    assert observer["if"] == "matrix.lane == 'contracts' || matrix.lane == 'renewal-unit'"
+    assert "--features feature-regression-observer" in observer["run"]
+    assert not observer.get("continue-on-error", False)
+    focused = steps["Execute ordinary Issuance library obligations"]
+    assert focused["if"] == "matrix.lane == 'renewal-unit'"
+    assert "--name issuance_library_unit --owner renewal-unit" in focused["run"]
+    assert '"${executables[0]}" --test-threads=4' in focused["run"]
+    assert "canvas_sync_worker::retry_handoff_tests::" not in focused["run"]
+    compile_step = steps["Compile reusable Rust test executables"]["run"]
+    assert "cargo test --locked -p marty-issuance-service --lib --no-run" in compile_step
+    assert "--renewal-unit-only \"$artifacts\" target" in compile_step
     assert steps["Preserve synthetic runtime failure diagnostics"]["if"] == (
         "always() && matrix.lane == 'canvas'"
     )
@@ -1223,6 +2060,7 @@ def test_actual_classifier_selects_gates_for_compiler_and_runtime_inputs(
             "ui",
             "python",
             "rust",
+            "openbao",
             "release",
             "verification",
             "security",
@@ -1240,7 +2078,7 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
     _, workflow = _workflow(CI_PATH)
     release = workflow["jobs"]["test-release-contracts"]
     assert any(
-        step.get("run") == "python -m pytest tests -v --tb=short"
+        step.get("run") == RELEASE_TEST_COMMAND
         for step in release["steps"]
     ), "The release lane must still execute the inventory tests"
     inventory_consumers = {
@@ -1257,27 +2095,76 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
             "contracts/canvas-worker-tier-obligations.json",
             "tests/test_ci_workflow_performance.py",
             "tests/test_canvas_worker_oracle_script_closure.py",
-            "tests/test_canvas_worker_rest_input_evidence.py",
-            "tests/test_canvas_worker_startup_input_evidence.py",
-            "rust/crates/canvas-acceptance/tests/support/canvas_startup_attestation.rs",
+            "tests/test_canvas_worker_provider_signals_input_evidence.py",
+            "tests/test_canvas_worker_timeout_input_evidence.py",
+            "tests/test_canvas_worker_retry_after_input_evidence.py",
         },
         "canvas-worker-rest-current-inputs.json": {
             ".github/workflows/ci.yml",
+            "contracts/canvas-worker-tier-obligations.json",
+            "scripts/ci/check_canvas_tier_obligations.py",
+            "contracts/canvas-worker-provider-recovery-current-inputs.json",
             "tests/test_ci_workflow_performance.py",
             "tests/test_canvas_worker_rest_input_evidence.py",
+            "tests/test_canvas_worker_oracle_script_closure.py",
+            "rust/crates/canvas-worker-acceptance/tests/support/canvas_rest_requalification.rs",
+        },
+        "canvas-worker-provider-signals-current-inputs.json": {
+            ".github/workflows/ci.yml",
+            "tests/test_canvas_worker_provider_signals_input_evidence.py",
+            "tests/test_ci_workflow_performance.py",
+        },
+        "canvas-worker-timeout-current-inputs.json": {
+            ".github/workflows/ci.yml",
+            "scripts/canvas_native_rest_contract.py",
+            "tests/test_canvas_native_rest_contract.py",
+            "tests/test_canvas_worker_timeout_input_evidence.py",
+            "tests/test_ci_workflow_performance.py",
+        },
+        "canvas-worker-provider-recovery-current-inputs.json": {
+            ".github/workflows/ci.yml",
+            "tests/test_canvas_worker_oracle_script_closure.py",
+            "tests/test_ci_workflow_performance.py",
+        },
+        "canvas-worker-mixed-roster-current-inputs.json": {
+            ".github/workflows/ci.yml",
+            "tests/test_canvas_worker_oracle_script_closure.py",
+            "tests/test_ci_workflow_performance.py",
+        },
+        "canvas-json-depth-current-inputs.json": {
+            ".github/workflows/ci.yml",
+            "tests/test_ci_workflow_performance.py",
+            "tests/test_canvas_json_depth_current_inputs.py",
+        },
+        "canvas-operations-input-current-inputs.json": {
+            ".github/workflows/ci.yml",
+            "tests/test_ci_workflow_performance.py",
+            "tests/test_canvas_operations_input_current_inputs.py",
+        },
+        "canvas-worker-retry-after-current-inputs.json": {
+            ".github/workflows/ci.yml",
+            "tests/test_ci_workflow_performance.py",
+            "tests/test_canvas_worker_retry_after_input_evidence.py",
         },
         "canvas-worker-startup-current-inputs.json": {
             ".github/workflows/ci.yml",
             "tests/test_ci_workflow_performance.py",
             "tests/test_canvas_worker_startup_input_evidence.py",
-            "rust/crates/canvas-acceptance/tests/support/canvas_startup_attestation.rs",
+            "rust/crates/canvas-worker-acceptance/tests/support/canvas_startup_attestation.rs",
         },
         "canvas-worker-tier-obligations.json": {
             ".github/workflows/ci.yml",
             "scripts/ci/check_canvas_tier_obligations.py",
             "scripts/test_canvas_worker_rest_https.py",
             "tests/test_canvas_tier_obligations.py",
+            "tests/test_canvas_worker_oracle_producer_inventory.py",
             "tests/test_canvas_worker_validation_tier.py",
+            "tests/test_ci_workflow_performance.py",
+        },
+        "canvas-worker-package-migration.json": {
+            "scripts/ci/check_canvas_tier_obligations.py",
+            "tests/test_canvas_tier_obligations.py",
+            "tests/test_canvas_published_preflight.py",
             "tests/test_ci_workflow_performance.py",
         },
         "python-value-fast-obligations.json": {
@@ -1292,6 +2179,17 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
             "tests/test_ci_workflow_performance.py",
         },
     }
+    current_input_manifests = {
+        name
+        for name in inventory_consumers
+        if name.startswith("canvas-") and name.endswith("-current-inputs.json")
+    }
+    release_only_records = {
+        "canvas-worker-provider-recovery-current-inputs.json",
+    }
+    assert CI_PATH.read_text(encoding="utf-8").count(
+        "contracts/canvas-*-current-inputs.json"
+    ) == 1, "Review the bounded classifier alongside the manifest inventory"
     for manifest, expected in inventory_consumers.items():
         references = subprocess.run(
             ["git", "grep", "-l", "-F", "--", manifest],
@@ -1304,7 +2202,11 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
             path
             for path in references.stdout.splitlines()
             if not path.endswith((".md", ".dockerignore"))
-        } == expected, f"Review new consumer of {manifest} before narrowing its gate"
+        } == (
+            expected - {".github/workflows/ci.yml"}
+            if manifest in current_input_manifests and manifest not in release_only_records
+            else expected
+        ), f"Review new consumer of {manifest} before narrowing its gate"
     tracked = subprocess.run(
         ["git", "ls-files", "--", "*Dockerfile*"],
         cwd=ROOT,
@@ -1323,6 +2225,7 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
     }
     image_contexts = {
         "services/Dockerfile": "services/Dockerfile.dockerignore",
+        "services/Dockerfile.migrations": "services/Dockerfile.migrations.dockerignore",
         "rust/services/Dockerfile.ci": "rust/services/Dockerfile.ci.dockerignore",
         "rust/services/event-stream/Dockerfile": ".dockerignore",
         "rust/services/revocation-profile/Dockerfile": ".dockerignore",
@@ -1330,10 +2233,26 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
     assert copying_contracts == set(image_contexts), (
         "Review every image context that copies contracts before narrowing this gate"
     )
+    current_input_pattern = "contracts/canvas-*-current-inputs.json"
+    assert {
+        path.name for path in (ROOT / "contracts").glob("canvas-*-current-inputs.json")
+    } == current_input_manifests, (
+        "Review every Canvas input record and its consumers before excluding it from images"
+    )
     for ignore_path in set(image_contexts.values()):
         lines = (ROOT / ignore_path).read_text(encoding="utf-8").splitlines()
+        assert lines.count(current_input_pattern) == 1
+        assert not any(
+            line.startswith("!contracts")
+            for line in lines[lines.index(current_input_pattern) + 1 :]
+        ), f"Later rule re-includes Canvas input records in {ignore_path}"
         for manifest in inventory_consumers:
             exclusion = f"contracts/{manifest}"
+            if manifest in current_input_manifests:
+                assert exclusion not in lines, (
+                    f"Canvas input record should use the reviewed pattern in {ignore_path}"
+                )
+                continue
             assert lines.count(exclusion) == 1, (
                 f"Inventory manifest must be excluded from {ignore_path}"
             )
@@ -1341,15 +2260,29 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
                 line.startswith("!contracts")
                 for line in lines[lines.index(exclusion) + 1 :]
             ), f"Later rule re-includes {exclusion} in {ignore_path}"
+    python_only_input_records = {
+        "contracts/canvas-worker-provider-recovery-current-inputs.json",
+    }
     for path in (
         "contracts/canvas-worker-oracle-producers.json",
         "contracts/canvas-worker-oracle-script-imports.json",
+        "contracts/canvas-worker-provider-signals-current-inputs.json",
+        "contracts/canvas-worker-timeout-current-inputs.json",
+        "contracts/canvas-worker-provider-recovery-current-inputs.json",
+        "contracts/canvas-json-depth-current-inputs.json",
+        "contracts/canvas-worker-mixed-roster-current-inputs.json",
+        "contracts/canvas-operations-input-current-inputs.json",
         "contracts/canvas-worker-tier-obligations.json",
         "contracts/python-value-fast-obligations.json",
         "contracts/canvas-renewal-profile-obligations.json",
         "tests/test_canvas_worker_oracle_producer_inventory.py",
         "tests/test_canvas_worker_oracle_script_closure.py",
         "tests/test_canvas_worker_rest_input_evidence.py",
+        "tests/test_canvas_worker_provider_signals_input_evidence.py",
+        "tests/test_canvas_worker_timeout_input_evidence.py",
+        "tests/test_canvas_json_depth_current_inputs.py",
+        "tests/test_canvas_operations_input_current_inputs.py",
+        "tests/test_canvas_worker_retry_after_input_evidence.py",
         "tests/test_canvas_worker_startup_input_evidence.py",
         "tests/test_canvas_worker_validation_tier.py",
         "tests/test_python_value_fast_obligations.py",
@@ -1360,7 +2293,10 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
             "all": "false",
             "ui": "false",
             "python": "false",
-            "rust": str(path.startswith("contracts/")).lower(),
+            "rust": str(
+                path.startswith("contracts/") and path not in python_only_input_records
+            ).lower(),
+            "openbao": "false",
             "release": "true",
             "verification": "false",
             "security": "false",
@@ -1384,10 +2320,61 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
         "ui": "false",
         "python": "false",
         "rust": "true",
+        "openbao": "false",
         "release": "true",
         "verification": "false",
         "security": "false",
     }
+    assert _classify_changed_path(
+        "contracts/canvas-worker-retry-after-current-inputs.json", tmp_path
+    ) == {
+        "all": "false",
+        "ui": "false",
+        "python": "false",
+        "rust": "true",
+        "openbao": "false",
+        "release": "true",
+        "verification": "false",
+        "security": "false",
+    }
+    for record in python_only_input_records:
+        assert _classify_changed_paths(
+            [record, "tests/test_canvas_worker_oracle_script_closure.py"],
+            tmp_path,
+            combined=True,
+        )[0] == {
+            "all": "false",
+            "ui": "false",
+            "python": "false",
+            "rust": "false",
+            "openbao": "false",
+            "release": "true",
+            "verification": "false",
+            "security": "false",
+        }
+        assert _classify_changed_paths(
+            [record, "scripts/run_canvas_worker_provider_recovery_oracle.py"],
+            tmp_path,
+            combined=True,
+        )[0]["all"] == "true", "A changed capture implementation must stay broad"
+    assert _classify_changed_path(
+        "contracts/canvas-new-current-inputs.json", tmp_path
+    ) == {
+        "all": "false",
+        "ui": "false",
+        "python": "false",
+        "rust": "true",
+        "openbao": "false",
+        "release": "true",
+        "verification": "false",
+        "security": "false",
+    }
+    assert all(
+        value == "true"
+        for value in _classify_changed_path(
+            "contracts/canvas-foo/bar-current-inputs.json", tmp_path
+        ).values()
+    ), "A nested lookalike must fall back to the complete matrix"
     # A new sibling test or changed corpus is not covered by this narrow rule.
     assert (
         _classify_changed_path(
@@ -1427,11 +2414,14 @@ def test_evidence_test_sources_keep_their_release_owner_without_runtime_lanes(
 ) -> None:
     _, workflow = _workflow(CI_PATH)
     assert any(
-        step.get("run") == "python -m pytest tests -v --tb=short"
+        step.get("run") == RELEASE_TEST_COMMAND
         for step in workflow["jobs"]["test-release-contracts"]["steps"]
     )
     paths = (
         "tests/test_canvas_worker_startup_input_evidence.py",
+        "tests/test_canvas_worker_provider_signals_input_evidence.py",
+        "tests/test_canvas_worker_timeout_input_evidence.py",
+        "tests/test_canvas_worker_retry_after_input_evidence.py",
         "tests/test_canvas_worker_validation_tier.py",
         "tests/test_python_value_fast_obligations.py",
         "tests/test_canvas_renewal_profile_obligations.py",
@@ -1441,6 +2431,7 @@ def test_evidence_test_sources_keep_their_release_owner_without_runtime_lanes(
         "ui": "false",
         "python": "false",
         "rust": "false",
+        "openbao": "false",
         "release": "true",
         "verification": "false",
         "security": "false",
@@ -1458,6 +2449,9 @@ def test_evidence_test_sources_keep_their_release_owner_without_runtime_lanes(
     # inputs that the tests inspect; mixed/unknown edits also fail closed.
     for path in (
         "contracts/canvas-worker-startup-current-inputs.json",
+        "contracts/canvas-worker-provider-signals-current-inputs.json",
+        "contracts/canvas-worker-timeout-current-inputs.json",
+        "contracts/canvas-worker-retry-after-current-inputs.json",
         "contracts/canvas-worker-tier-obligations.json",
         "contracts/python-value-fast-obligations.json",
         "contracts/canvas-renewal-profile-obligations.json",
@@ -1490,13 +2484,108 @@ def test_evidence_test_sources_keep_their_release_owner_without_runtime_lanes(
     )
 
 
+def test_canvas_current_input_helper_has_only_release_test_consumers(
+    tmp_path: Path,
+) -> None:
+    helper = "scripts/ci/canvas_oracle_current_inputs.py"
+    owners = {
+        "tests/test_canvas_json_depth_current_inputs.py",
+        "tests/test_canvas_operations_input_current_inputs.py",
+        "tests/test_canvas_worker_startup_input_evidence.py",
+        "tests/test_canvas_worker_rest_input_evidence.py",
+        "tests/test_canvas_worker_provider_signals_input_evidence.py",
+        "tests/test_canvas_worker_timeout_input_evidence.py",
+        "tests/test_canvas_worker_retry_after_input_evidence.py",
+        "tests/test_canvas_worker_oracle_producer_inventory.py",
+        "tests/test_canvas_worker_oracle_script_closure.py",
+    }
+    assert (ROOT / helper).is_file()
+    references = subprocess.run(
+        ["git", "grep", "-l", "-F", "--", "canvas_oracle_current_inputs"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert {
+        path
+        for path in references.stdout.splitlines()
+        if not path.endswith(".md") and path != "tests/test_ci_workflow_performance.py"
+    } == owners | {".github/workflows/ci.yml"}, (
+        "Review a new Canvas helper consumer before narrowing its PR checks"
+    )
+    for path in owners:
+        source = (ROOT / path).read_text(encoding="utf-8")
+        assert "from scripts.ci.canvas_oracle_current_inputs import" in source
+
+    _, workflow = _workflow(CI_PATH)
+    release = workflow["jobs"]["test-release-contracts"]
+    assert any(
+        step.get("run") == RELEASE_TEST_COMMAND
+        for step in release["steps"]
+    )
+    assert CI_PATH.read_text(encoding="utf-8").count(helper) == 1
+    for other in (ROOT / ".github/workflows").glob("*.yml"):
+        if other != CI_PATH:
+            assert helper not in other.read_text(encoding="utf-8")
+    for dockerfile, ignore in (
+        ("services/Dockerfile", "services/Dockerfile.dockerignore"),
+        ("rust/services/Dockerfile.ci", "rust/services/Dockerfile.ci.dockerignore"),
+    ):
+        source = (ROOT / dockerfile).read_text(encoding="utf-8")
+        assert helper not in source
+        assert not re.search(
+            r"(?m)^(?:COPY|ADD)\s+(?:--\S+\s+)*(?:\.|scripts/?|scripts/ci/?)\s", source
+        )
+        included = [
+            line
+            for line in (ROOT / ignore).read_text(encoding="utf-8").splitlines()
+            if line.startswith("!scripts/ci/") and line != "!scripts/ci/"
+        ]
+        assert included == (
+            [
+                "!scripts/ci/run-public-rust-build.sh",
+                "!scripts/ci/public-sccache-stats.awk",
+            ]
+            if dockerfile == "services/Dockerfile"
+            else ["!scripts/ci/verify-release-cache.sh"]
+        )
+
+    selected = {
+        "all": "false",
+        "ui": "false",
+        "python": "false",
+        "rust": "false",
+        "openbao": "false",
+        "release": "true",
+        "verification": "false",
+        "security": "false",
+    }
+    for path in (helper, *owners):
+        assert _classify_changed_path(path, tmp_path) == selected
+    assert _classify_changed_path("scripts/ci/new_helper.py", tmp_path)["all"] == "true"
+    assert _classify_changed_paths(
+        [helper, "unknown-new-input.txt"], tmp_path, combined=True
+    )[0] == {key: "true" for key in selected}
+    mixed = _classify_changed_paths(
+        [helper, "rust/services/issuance/src/lib.rs"], tmp_path, combined=True
+    )[0]
+    assert mixed["rust"] == mixed["release"] == "true"
+    assert all(
+        value == "true"
+        for value in _classify_changed_paths([helper], tmp_path, event="merge_group")[
+            0
+        ].values()
+    )
+
+
 def test_runner_registration_inputs_keep_release_coverage_without_full_pr_matrix(
     tmp_path: Path,
 ) -> None:
     _, workflow = _workflow(CI_PATH)
     release = workflow["jobs"]["test-release-contracts"]
     assert any(
-        step.get("run") == "python -m pytest tests -v --tb=short"
+        step.get("run") == RELEASE_TEST_COMMAND
         for step in release["steps"]
     ), "The release lane must still execute the runner policy tests"
 
@@ -1507,6 +2596,12 @@ def test_runner_registration_inputs_keep_release_coverage_without_full_pr_matrix
             "scripts/setup-canvas-oss-runner.ps1",
             "tests/test_canvas_oss_acceptance_topology.py",
             "tests/test_canvas_oss_runner_quarantine.py",
+            "tests/test_runner_routing_labels.py",
+        },
+        "runner-host-capacity-policy.ps1": {
+            "scripts/check-canvas-prebuilt-backing-capacity.ps1",
+            "scripts/register-canvas-oss-runner.ps1",
+            "tests/test_runner_routing_labels.py",
         },
         "runner-routing-label-policy.ps1": {
             "scripts/register-canvas-oss-runner.ps1",
@@ -1539,6 +2634,7 @@ def test_runner_registration_inputs_keep_release_coverage_without_full_pr_matrix
         "ui": "false",
         "python": "false",
         "rust": "false",
+        "openbao": "false",
         "release": "true",
         "verification": "false",
         "security": "false",
@@ -1569,7 +2665,7 @@ def test_release_contract_test_sources_keep_their_release_owner(
     _, workflow = _workflow(CI_PATH)
     release = workflow["jobs"]["test-release-contracts"]
     assert any(
-        step.get("run") == "python -m pytest tests -v --tb=short"
+        step.get("run") == RELEASE_TEST_COMMAND
         for step in release["steps"]
     ), "The release lane must execute every narrowed test module"
 
@@ -1578,6 +2674,7 @@ def test_release_contract_test_sources_keep_their_release_owner(
         "ui": "false",
         "python": "false",
         "rust": "false",
+        "openbao": "false",
         "release": "true",
         "verification": "false",
         "security": "false",
@@ -1627,7 +2724,7 @@ def test_release_owned_policy_test_sources_have_no_second_execution_owner(
 ) -> None:
     _, workflow = _workflow(CI_PATH)
     assert any(
-        step.get("run") == "python -m pytest tests -v --tb=short"
+        step.get("run") == RELEASE_TEST_COMMAND
         for step in workflow["jobs"]["test-release-contracts"]["steps"]
     )
     assert any(
@@ -1640,6 +2737,7 @@ def test_release_owned_policy_test_sources_have_no_second_execution_owner(
         "ui": "false",
         "python": "false",
         "rust": "false",
+        "openbao": "false",
         "release": "true",
         "verification": "false",
         "security": "false",
@@ -1667,8 +2765,8 @@ def test_release_owned_policy_test_sources_have_no_second_execution_owner(
     for path in candidates:
         assert (ROOT / path).is_file(), f"stale release-only selector: {path}"
         # The policy owner has one classifier reference, one collection
-        # command, and the mutually exclusive planner-only PR invocation.
-        expected_refs = 3 if path == "tests/test_ci_workflow_performance.py" else 1
+        # command, and four mutually exclusive test-source-only PR invocations.
+        expected_refs = 6 if path == "tests/test_ci_workflow_performance.py" else 1
         assert ci_source.count(path) == expected_refs, (
             f"other direct CI consumer: {path}"
         )
@@ -1702,7 +2800,6 @@ def test_release_owned_policy_test_sources_have_no_second_execution_owner(
         )["all"]
         == "true"
     )
-
 
     assert (
         _classify_changed_path(
@@ -1744,7 +2841,7 @@ def test_release_owned_policy_test_sources_have_no_second_execution_owner(
         _classify_changed_paths(
             [
                 "tests/test_canvas_published_preflight.py",
-                "rust/crates/canvas-acceptance/tests/canvas_published_worker_contract.rs",
+                "rust/crates/canvas-worker-acceptance/tests/canvas_published_worker_contract.rs",
             ],
             tmp_path,
             combined=True,
@@ -1816,7 +2913,7 @@ def test_model_and_compose_policy_sources_select_only_their_release_owner(
 ) -> None:
     _, workflow = _workflow(CI_PATH)
     assert any(
-        step.get("run") == "python -m pytest tests -v --tb=short"
+        step.get("run") == RELEASE_TEST_COMMAND
         for step in workflow["jobs"]["test-release-contracts"]["steps"]
     )
     candidates = (
@@ -1828,11 +2925,18 @@ def test_model_and_compose_policy_sources_select_only_their_release_owner(
         "tests/test_conformance_native.py",
         "tests/test_passport_supported_disposable_compose.py",
         "tests/test_gateway_rust_cutover.py",
+        "tests/test_issuance_consumer_bindings.py",
+        "tests/test_kubernetes_app_service_coverage.py",
+        "tests/test_check_kubernetes_services_release.py",
+        "tests/test_kubernetes_token_hmac_secret.py",
+        "tests/test_passport_supported_k8s_deployment.py",
+        "tests/test_passport_supported_consumer_routing.py",
     )
     ci_source = CI_PATH.read_text(encoding="utf-8")
     for path in candidates:
         assert (ROOT / path).is_file(), f"stale release-only selector: {path}"
-        assert ci_source.count(path) == 1, f"other direct CI consumer: {path}"
+        expected_references = 3 if path in candidates[-6:] else 1
+        assert ci_source.count(path) == expected_references, f"other direct CI consumer: {path}"
         for other_workflow in (ROOT / ".github" / "workflows").glob("*.yml"):
             if other_workflow != CI_PATH:
                 assert path not in other_workflow.read_text(encoding="utf-8")
@@ -1841,21 +2945,33 @@ def test_model_and_compose_policy_sources_select_only_their_release_owner(
         "ui": "false",
         "python": "false",
         "rust": "false",
+        "openbao": "false",
         "release": "true",
         "verification": "false",
         "security": "false",
     }
     assert _classify_changed_paths(candidates, tmp_path) == [expected] * len(candidates)
-    assert _classify_changed_path(
-        "tests/test_gateway_rust_cutover_helpers.py", tmp_path
-    )["all"] == "true"
+    assert (
+        _classify_changed_path("tests/test_gateway_rust_cutover_helpers.py", tmp_path)[
+            "all"
+        ]
+        == "true"
+    )
+    assert (
+        _classify_changed_path("tests/test_kubernetes_app_service_coverage_helpers.py", tmp_path)[
+            "all"
+        ]
+        == "true"
+    )
     mixed = _classify_changed_paths(
         [candidates[0], "services/Dockerfile"], tmp_path, combined=True
     )[0]
-    assert all(mixed[name] == "true" for name in ("release", "rust", "python", "security"))
-    protected = _classify_changed_paths(
-        [candidates[0]], tmp_path, event="merge_group"
-    )[0]
+    assert all(
+        mixed[name] == "true" for name in ("release", "rust", "python", "security")
+    )
+    protected = _classify_changed_paths([candidates[0]], tmp_path, event="merge_group")[
+        0
+    ]
     assert protected["all"] == protected["rust"] == "true"
 
 
@@ -1868,7 +2984,7 @@ def test_shadow_planner_sources_use_existing_release_owner_on_prs(
     assert "needs.changes.outputs.release == 'true'" in release["if"]
     release_steps = {step.get("name"): step for step in release["steps"]}
     assert release_steps["Run repository release checks"]["run"] == (
-        "python -m pytest tests -v --tb=short"
+        RELEASE_TEST_COMMAND
     )
     shadow = release_steps["Report affected Rust packages in shadow mode"]
     assert shadow["if"] == "github.event_name == 'pull_request'"
@@ -1891,6 +3007,7 @@ def test_shadow_planner_sources_use_existing_release_owner_on_prs(
             "ui": "false",
             "python": "false",
             "rust": "false",
+            "openbao": "false",
             "release": "true",
             "verification": "false",
             "security": "false",
@@ -1933,6 +3050,290 @@ def test_shadow_planner_sources_use_existing_release_owner_on_prs(
     )
 
 
+def test_kubernetes_policy_test_source_pr_keeps_full_protected_checks(
+    tmp_path: Path,
+) -> None:
+    _, workflow = _workflow(CI_PATH)
+    assert workflow["jobs"]["changes"]["outputs"]["k8s_policy_test_only"] == (
+        "${{ steps.classify.outputs.k8s_policy_test_only }}"
+    )
+    cohort = (
+        "tests/test_issuance_consumer_bindings.py",
+        "tests/test_kubernetes_app_service_coverage.py",
+        "tests/test_check_kubernetes_services_release.py",
+        "tests/test_kubernetes_token_hmac_secret.py",
+        "tests/test_passport_supported_k8s_deployment.py",
+        "tests/test_passport_supported_consumer_routing.py",
+    )
+
+    def classify(paths, **kwargs):
+        return _classify_changed_paths(
+            paths,
+            tmp_path,
+            combined=True,
+            include_rust_plan=True,
+            include_planner_plan=True,
+            include_rollback_plan=True,
+            include_k8s_plan=True,
+            **kwargs,
+        )[0]
+
+    expected = {
+        "all": "false",
+        "ui": "false",
+        "python": "false",
+        "rust": "false",
+        "rust_runtime": "false",
+        "rust_matrix": '["canvas","contracts","selfhost"]',
+        "openbao": "false",
+        "planner_only": "false",
+        "rollback_test_only": "false",
+        "k8s_policy_test_only": "true",
+        "release": "true",
+        "verification": "false",
+        "security": "false",
+    }
+    for path in cohort:
+        assert classify([path]) == expected
+    assert classify(list(cohort)) == expected
+    assert classify([])["k8s_policy_test_only"] == "false"
+    assert classify([cohort[0], cohort[0]])["k8s_policy_test_only"] == "false"
+    for other in (
+        "docs/architecture-feedback-improvement-plan.md",
+        "tests/test_passport_supported_consumer_routing_helpers.py",
+        "k8s/oracle/07-microservices.yaml",
+        "scripts/deploy-kubernetes.sh",
+        ".github/workflows/ci.yml",
+    ):
+        selected = classify([cohort[0], other])
+        assert selected["k8s_policy_test_only"] == "false", other
+        assert selected["release"] == "true", other
+    protected = classify([cohort[0]], event="merge_group")
+    assert protected["all"] == protected["release"] == "true"
+    assert protected["k8s_policy_test_only"] == "false"
+    assert classify([cohort[0]], event="push")["k8s_policy_test_only"] == "false"
+    no_base = classify([cohort[0]], missing_base=True)
+    assert no_base["all"] == "true"
+    assert no_base["k8s_policy_test_only"] == "false"
+
+    absent = tmp_path / "absent-k8s-policy-source"
+    absent.mkdir()
+    assert classify([cohort[0]], working_directory=absent)[
+        "k8s_policy_test_only"
+    ] == "false"
+    linked = tmp_path / "linked-k8s-policy-source"
+    (linked / "tests").mkdir(parents=True)
+    try:
+        (linked / cohort[0]).symlink_to(ROOT / cohort[0])
+    except (OSError, NotImplementedError):
+        pass  # Windows without symlink privilege; protected Linux checks it.
+    else:
+        assert classify([cohort[0]], working_directory=linked)[
+            "k8s_policy_test_only"
+        ] == "false"
+
+    steps = {
+        step.get("name"): step
+        for step in workflow["jobs"]["test-release-contracts"]["steps"]
+    }
+    bounded = steps["Run Kubernetes policy test-source PR checks"]
+    assert bounded["if"] == "needs.changes.outputs.k8s_policy_test_only == 'true'"
+    assert bounded["run"].split() == [
+        "python", "-m", "pytest", *cohort,
+        "tests/test_ci_workflow_performance.py", "-v", "--tb=short",
+    ]
+    full_only = (
+        "needs.changes.outputs.planner_only != 'true' && "
+        "needs.changes.outputs.rollback_test_only != 'true' && "
+        "needs.changes.outputs.k8s_policy_test_only != 'true' && "
+        "needs.changes.outputs.didcomm_release_test_only != 'true'"
+    )
+    for name in (
+        "Run repository release checks",
+        "Configure the pinned containerd image store",
+        "Configure the pinned OCI exporter",
+        "Require the exact supported OCI backend",
+        "Prove the same OCI archive through the future consumer path",
+    ):
+        assert steps[name]["if"] == full_only
+        assert not steps[name].get("continue-on-error", False)
+    assert steps["Run repository release checks"]["run"] == (
+        RELEASE_TEST_COMMAND
+    )
+
+
+def test_didcomm_policy_test_sources_have_exact_release_owner(
+    tmp_path: Path,
+) -> None:
+    cases = {
+        "tests/test_didcomm_native_consumer_ownership.py": 38,
+    }
+    _, workflow = _workflow(CI_PATH)
+    ci_source = CI_PATH.read_text(encoding="utf-8")
+
+    def classify(paths: list[str], **kwargs: object) -> dict[str, str]:
+        return _classify_changed_paths(paths, tmp_path, combined=True, **kwargs)[0]
+
+    selected = {
+        "all": "false",
+        "ui": "false",
+        "python": "false",
+        "rust": "false",
+        "openbao": "false",
+        "release": "true",
+        "verification": "false",
+        "security": "false",
+    }
+    assert classify([])["release"] == "false"
+    for source, count in cases.items():
+        assert ci_source.count(source) == 3  # Proof, classifier arm and owned test command.
+        assert (ROOT / source).is_file() and not (ROOT / source).is_symlink()
+        for other_workflow in (ROOT / ".github" / "workflows").glob("*.yml"):
+            if other_workflow != CI_PATH:
+                assert source not in other_workflow.read_text(encoding="utf-8")
+        assert classify([source]) == selected
+        for paths in (
+            [source, source],
+            [source, "docs/architecture-feedback-improvement-plan.md"],
+            [source, "contracts/didcomm-native-consumer-ownership.json"],
+            [source, "docker-compose.base.yml"],
+            [source, "tests/test_didcomm_native_consumer_ownership_helper.py"],
+            ["tests/renamed_didcomm_owner.py", source],
+            *([source, other] for other in cases if other != source),
+        ):
+            assert classify(paths)["all"] == "true", paths
+        assert classify([source], event="merge_group")["all"] == "true"
+        assert classify([source], event="push")["all"] == "true"
+        assert classify([source], missing_base=True)["all"] == "true"
+
+        absent = tmp_path / f"absent-{Path(source).stem}"
+        absent.mkdir()
+        assert classify([source], working_directory=absent)["all"] == "true"
+        linked = tmp_path / f"linked-{Path(source).stem}"
+        (linked / "tests").mkdir(parents=True)
+        try:
+            (linked / source).symlink_to(ROOT / source)
+        except (OSError, NotImplementedError):
+            pass  # Windows without symlink privilege; protected Linux checks it.
+        else:
+            assert classify([source], working_directory=linked)["all"] == "true"
+
+        collected = subprocess.run(
+            [sys.executable, "-m", "pytest", "--collect-only", "-q", source],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        assert f"{count} tests collected" in collected.stdout
+
+    release = workflow["jobs"]["test-release-contracts"]
+    assert "needs.changes.outputs.release == 'true'" in release["if"]
+    assert any(
+        step.get("run") == RELEASE_TEST_COMMAND for step in release["steps"]
+    )
+    assert "tests" in RELEASE_TEST_COMMAND.split()
+    assert sum(cases.values()) == 38
+
+
+def test_exact_didcomm_release_pr_path_preserves_full_release_fallback(
+    tmp_path: Path,
+) -> None:
+    _, workflow = _workflow(CI_PATH)
+    assert workflow["jobs"]["changes"]["outputs"]["didcomm_release_test_only"] == (
+        "${{ steps.classify.outputs.didcomm_release_test_only }}"
+    )
+    sources = (
+        "tests/test_didcomm_native_consumer_ownership.py",
+    )
+
+    def classify(paths: list[str], **kwargs: object) -> dict[str, str]:
+        return _classify_changed_paths(
+            paths, tmp_path, combined=True, include_didcomm_plan=True, **kwargs
+        )[0]
+
+    for source in sources:
+        selected = classify([source])
+        assert selected["didcomm_release_test_only"] == "true"
+        assert selected["release"] == "true"
+        assert all(selected[name] == "false" for name in (
+            "all", "ui", "python", "rust", "openbao", "verification", "security"
+        ))
+        for other in (
+            source,
+            *(path for path in sources if path != source),
+            "docs/architecture-feedback-improvement-plan.md",
+            "contracts/didcomm-native-consumer-ownership.json",
+            "docker-compose.base.yml",
+            "tests/unknown_didcomm_test.py",
+            "tests/test_didcomm_native_credentials_release.py",
+            "tests/test_issuance_retention_credentials_release.py",
+            "renamed/old_didcomm_test.py",
+        ):
+            mixed = classify([source, other])
+            assert mixed["didcomm_release_test_only"] == "false", other
+            assert mixed["all"] == "true", other
+        for event in ("merge_group", "push"):
+            protected = classify([source], event=event)
+            assert protected["didcomm_release_test_only"] == "false"
+            assert protected["all"] == "true"
+        for event in ("workflow_dispatch", "schedule"):
+            official = classify([source], event=event, missing_base=True)
+            assert official["didcomm_release_test_only"] == "false"
+            assert official["all"] == "true"
+        no_base = classify([source], missing_base=True)
+        assert no_base["didcomm_release_test_only"] == "false"
+        assert no_base["all"] == "true"
+    for retired in (
+        "tests/test_didcomm_native_credentials_release.py",
+        "tests/test_issuance_retention_credentials_release.py",
+    ):
+        fallback = classify([retired])
+        assert fallback["didcomm_release_test_only"] == "false"
+        assert fallback["all"] == "true"
+    assert classify([])["didcomm_release_test_only"] == "false"
+
+    release = workflow["jobs"]["test-release-contracts"]
+    assert release["name"] == "Release Contract Tests"
+    steps = {step.get("name"): step for step in release["steps"]}
+    focused_flag = "needs.changes.outputs.didcomm_release_test_only"
+    focused = steps["Run exact DIDComm test-source PR checks"]
+    assert focused["if"] == f"{focused_flag} == 'true'"
+    assert focused["run"].split() == [
+        "python", "-m", "pytest", *sources,
+        "tests/test_ci_workflow_performance.py::test_didcomm_policy_test_sources_have_exact_release_owner",
+        "-v", "--tb=short",
+    ]
+    # Missing or malformed output must run the existing full path, not the
+    # focused one. The other bounded PR modes retain their own exclusions.
+    full_only = (
+        "needs.changes.outputs.planner_only != 'true' && "
+        "needs.changes.outputs.rollback_test_only != 'true' && "
+        "needs.changes.outputs.k8s_policy_test_only != 'true' && "
+        f"{focused_flag} != 'true'"
+    )
+    for name in (
+        "Run repository release checks",
+        "Configure the pinned containerd image store",
+        "Configure the pinned OCI exporter",
+        "Require the exact supported OCI backend",
+        "Prove the same OCI archive through the future consumer path",
+    ):
+        assert steps[name]["if"] == full_only
+    assert steps["Run repository release checks"]["run"] == RELEASE_TEST_COMMAND
+    for name in (
+        "Install released test dependencies",
+        "Verify released mdoc binding evidence contract",
+        "Enforce OSS commerce boundary",
+        "Require workflow policy test collection",
+    ):
+        assert "if" not in steps[name]
+    assert "if" not in release["steps"][0]  # Main checkout remains mandatory.
+    assert workflow["jobs"]["ci-gate"]["env"]["DIDCOMM_RELEASE_TEST_ONLY"] == (
+        f"${{{{ {focused_flag} }}}}"
+    )
+
+
 def test_planner_only_pr_feedback_retains_full_protected_release_checks(
     tmp_path: Path,
 ) -> None:
@@ -1943,6 +3344,7 @@ def test_planner_only_pr_feedback_retains_full_protected_release_checks(
         "scripts/ci/plan_affected_rust.py",
         "tests/test_plan_affected_rust.py",
         "docs/architecture-feedback-improvement-plan.md",
+        "docs/architecture-test-obligations.md",
     ]
     exact = _classify_changed_paths(
         planner_paths, tmp_path, combined=True, include_planner_plan=True
@@ -1954,10 +3356,47 @@ def test_planner_only_pr_feedback_retains_full_protected_release_checks(
             [source], tmp_path, include_planner_plan=True
         )[0]
         assert selected["planner_only"] == selected["release"] == "true"
-    document_only = _classify_changed_paths(
-        [planner_paths[2]], tmp_path, include_planner_plan=True
-    )[0]
-    assert document_only["planner_only"] == "false"
+    for document in planner_paths[2:]:
+        document_only = _classify_changed_paths(
+            [document], tmp_path, include_planner_plan=True
+        )[0]
+        assert document_only["planner_only"] == "false"
+        bounded = _classify_changed_paths(
+            [planner_paths[0], document],
+            tmp_path,
+            combined=True,
+            include_planner_plan=True,
+        )[0]
+        assert bounded["planner_only"] == bounded["release"] == "true"
+        assert bounded["all"] == bounded["rust"] == "false"
+        absent = tmp_path / ("absent-" + Path(document).stem)
+        for source in planner_paths[:2]:
+            target = absent / source
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text("synthetic planner source", encoding="utf-8")
+        missing_document = _classify_changed_paths(
+            [planner_paths[0], document],
+            tmp_path,
+            combined=True,
+            include_planner_plan=True,
+            working_directory=absent,
+        )[0]
+        assert missing_document["planner_only"] == "false"
+        linked_document = absent / document
+        linked_document.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            linked_document.symlink_to(ROOT / document)
+        except (OSError, NotImplementedError):
+            pass  # Windows without symlink privilege; protected Linux checks it.
+        else:
+            linked = _classify_changed_paths(
+                [planner_paths[0], document],
+                tmp_path,
+                combined=True,
+                include_planner_plan=True,
+                working_directory=absent,
+            )[0]
+            assert linked["planner_only"] == "false"
     empty_diff = _classify_changed_paths(
         [], tmp_path, combined=True, include_planner_plan=True
     )[0]
@@ -2001,24 +3440,154 @@ def test_planner_only_pr_feedback_retains_full_protected_release_checks(
     planner_command = steps["Run planner-owned PR checks"]["run"]
     assert "tests/test_plan_affected_rust.py" in planner_command
     assert "tests/test_ci_workflow_performance.py" in planner_command
-    assert steps["Run repository release checks"]["if"] == (
-        "needs.changes.outputs.planner_only != 'true'"
+    complete_only = (
+        "needs.changes.outputs.planner_only != 'true' && "
+        "needs.changes.outputs.rollback_test_only != 'true' && "
+        "needs.changes.outputs.k8s_policy_test_only != 'true' && "
+        "needs.changes.outputs.didcomm_release_test_only != 'true'"
     )
+    assert steps["Run repository release checks"]["if"] == complete_only
     assert steps["Run repository release checks"]["run"] == (
-        "python -m pytest tests -v --tb=short"
+        RELEASE_TEST_COMMAND
     )
     for name in (
-        "Replay Canvas mirror oracle in exact Credentials release image",
         "Configure the pinned containerd image store",
         "Configure the pinned OCI exporter",
         "Require the exact supported OCI backend",
         "Prove the same OCI archive through the future consumer path",
-        "Require a compatible Credentials image for native DIDComm consumers",
-        "Require the event-owner migration for native retention",
     ):
-        assert steps[name]["if"] == "needs.changes.outputs.planner_only != 'true'"
+        assert steps[name]["if"] == complete_only
     assert steps["Report affected Rust packages in shadow mode"]["if"] == (
         "github.event_name == 'pull_request'"
+    )
+
+
+def test_rollback_test_only_pr_keeps_full_mixed_and_protected_validation(
+    tmp_path: Path,
+) -> None:
+    _, workflow = _workflow(CI_PATH)
+    source = "tests/test_beta_worker_launch_rollback.py"
+    assert workflow["jobs"]["changes"]["outputs"]["rollback_test_only"] == (
+        "${{ steps.classify.outputs.rollback_test_only }}"
+    )
+
+    def classify(paths, **kwargs):
+        return _classify_changed_paths(
+            paths,
+            tmp_path,
+            combined=True,
+            include_rust_plan=True,
+            include_planner_plan=True,
+            include_rollback_plan=True,
+            **kwargs,
+        )[0]
+
+    exact = classify([source])
+    assert exact == {
+        "all": "false",
+        "ui": "false",
+        "python": "false",
+        "rust": "false",
+        "rust_runtime": "false",
+        "rust_matrix": '["canvas","contracts","selfhost"]',
+        "openbao": "false",
+        "planner_only": "false",
+        "rollback_test_only": "true",
+        "release": "true",
+        "verification": "false",
+        "security": "true",
+    }
+    assert classify([])["rollback_test_only"] == "false"
+    for other in (
+        "docs/architecture-feedback-improvement-plan.md",
+        "scripts/beta-worker-launch-contract.ps1",
+        "scripts/deploy-local-beta-release.ps1",
+        "scripts/restore-local-beta-release.ps1",
+        ".github/workflows/ci.yml",
+        "tests/test_beta_worker_launch_rollback_helper.py",
+        "tests/package-lock.json",
+        "rust/services/issuance/src/main.rs",
+        "unrecognized/rollback-input.bin",
+        "renamed/rollback-contract.py",
+    ):
+        mixed = classify([source, other])
+        assert mixed["rollback_test_only"] == "false", other
+        assert mixed["all"] == "true", other
+    assert classify([source, source])["all"] == "true"
+    no_base = classify([source], missing_base=True)
+    assert no_base["all"] == "true"
+    assert no_base["rollback_test_only"] == "false"
+    protected = classify([source], event="merge_group")
+    assert protected["all"] == "true"
+    assert protected["rollback_test_only"] == "false"
+    assert classify([source], event="push")["rollback_test_only"] == "false"
+    with pytest.raises(AssertionError):
+        classify([source], fetch_failure=True)
+
+    # A deleted or symlinked source is not the reviewed test-only leaf.
+    absent = tmp_path / "absent-source"
+    (absent / "tests").mkdir(parents=True)
+    assert classify([source], working_directory=absent)["all"] == "true"
+    linked = tmp_path / "linked-source"
+    (linked / "tests").mkdir(parents=True)
+    try:
+        (linked / source).symlink_to(ROOT / source)
+    except (OSError, NotImplementedError):
+        pass  # Windows without symlink privilege; the Linux CI case executes it.
+    else:
+        assert classify([source], working_directory=linked)["all"] == "true"
+
+    release = workflow["jobs"]["test-release-contracts"]
+    steps = {step.get("name"): step for step in release["steps"]}
+    bounded = steps["Run rollback-test-owned PR checks"]
+    assert bounded["if"] == "needs.changes.outputs.rollback_test_only == 'true'"
+    assert bounded["run"].split() == [
+        "python",
+        "-m",
+        "pytest",
+        source,
+        "tests/test_ci_workflow_performance.py",
+        "-v",
+        "--tb=short",
+    ]
+    assert steps["Run repository release checks"]["run"] == (
+        RELEASE_TEST_COMMAND
+    )
+    full_only = (
+        "needs.changes.outputs.planner_only != 'true' && "
+        "needs.changes.outputs.rollback_test_only != 'true' && "
+        "needs.changes.outputs.k8s_policy_test_only != 'true' && "
+        "needs.changes.outputs.didcomm_release_test_only != 'true'"
+    )
+    for name in (
+        "Run repository release checks",
+        "Configure the pinned containerd image store",
+        "Configure the pinned OCI exporter",
+        "Require the exact supported OCI backend",
+        "Prove the same OCI archive through the future consumer path",
+    ):
+        assert steps[name]["if"] == full_only
+        assert not steps[name].get("continue-on-error", False)
+    for name in (
+        "Install released test dependencies",
+        "Verify released mdoc binding evidence contract",
+        "Enforce OSS commerce boundary",
+        "Require workflow policy test collection",
+    ):
+        assert "if" not in steps[name]
+    assert steps["Report affected Rust packages in shadow mode"]["if"] == (
+        "github.event_name == 'pull_request'"
+    )
+    assert workflow["jobs"]["security"]["if"] == (
+        "needs.changes.outputs.security == 'true'"
+    )
+    for dockerfile in ("services/Dockerfile", "docker/ui.Dockerfile"):
+        assert "COPY tests" not in (ROOT / dockerfile).read_text(encoding="utf-8")
+    gate = workflow["jobs"]["ci-gate"]
+    assert {"security", "test-release-contracts"} <= set(gate["needs"])
+    assert (
+        'require_selected security "$SECURITY_RESULT" "$SECURITY_SELECTED"'
+        in (gate["steps"][0]["run"])
     )
 
 
@@ -2027,7 +3596,7 @@ def test_frozen_reference_test_sources_select_only_release_on_prs(
 ) -> None:
     _, workflow = _workflow(CI_PATH)
     assert any(
-        step.get("run") == "python -m pytest tests -v --tb=short"
+        step.get("run") == RELEASE_TEST_COMMAND
         for step in workflow["jobs"]["test-release-contracts"]["steps"]
     )
     paths = (
@@ -2040,6 +3609,7 @@ def test_frozen_reference_test_sources_select_only_release_on_prs(
         "ui": "false",
         "python": "false",
         "rust": "false",
+        "openbao": "false",
         "release": "true",
         "verification": "false",
         "security": "false",
@@ -2054,7 +3624,7 @@ def test_frozen_reference_test_sources_select_only_release_on_prs(
         assert _classify_changed_path(path, tmp_path) == selected
 
     # This selector is for exact test sources, not reference artifacts or
-    # capture implementations. Their existing Rust/full owners must remain.
+    # support implementations. Their existing Rust/full owners must remain.
     for path in (
         "contracts/signing-response-python-reference.json",
         "contracts/token-rate-python-reference.json",
@@ -2062,9 +3632,7 @@ def test_frozen_reference_test_sources_select_only_release_on_prs(
     ):
         assert _classify_changed_path(path, tmp_path)["rust"] == "true"
     for path in (
-        "scripts/capture_signing_response_reference.py",
-        "scripts/capture_token_rate_reference.py",
-        "scripts/capture_canvas_url_template_reference.py",
+        "scripts/new-unregistered-database-probe.py",
         "tests/test_signing_response_reference_helpers.py",
         "unknown-new-input.txt",
     ):
@@ -2104,13 +3672,24 @@ def test_selfhost_reference_test_is_not_a_service_image_input() -> None:
     dockerfiles = [
         ROOT / "services/Dockerfile",
         ROOT / "services/Dockerfile.migrations",
+        ROOT / "openbao/didcomm-authcrypt/Dockerfile",
+        ROOT / "keycloak/openbao-provider/Dockerfile",
         ROOT / "rust/services/Dockerfile.ci",
         *(ROOT / "rust/services").glob("*/Dockerfile"),
     ]
     scanned = {path.relative_to(ROOT).as_posix() for path in dockerfiles}
     for workflow, excluded in (
         (CI_PATH, set()),
-        (ROOT / ".github/workflows/cd.yml", {"docker/ui.Dockerfile"}),
+        # Official-only UI and tunnel-wrapper roles do not compile Rust
+        # service binaries; their separate release ownership is asserted by
+        # test_selfhost_release_preparation.py.
+        (
+            ROOT / ".github/workflows/cd.yml",
+            {
+                "docker/ui.Dockerfile",
+                "docker/cloudflared-wrapper.Dockerfile",
+            },
+        ),
     ):
         image_inputs = set(
             re.findall(
@@ -2264,11 +3843,21 @@ def test_classifier_diff_reports_both_rename_endpoints(tmp_path: Path) -> None:
 
 
 def _assert_required_canvas_target_completion(published: str) -> None:
-    assert "(( composition_status == 0 && worker_status == 0 ))" in published
-    assert published.index(
-        "(( composition_status == 0 && worker_status == 0 ))"
-    ) < published.index("if (( expected_skipped_config_tests == 0 )); then")
+    target_success = (
+        "(( composition_status == 0 && flow_status == 0 && worker_status == 0 && selfhost_status == 0 ))"
+    )
+    assert target_success in published
+    assert published.index(target_success) < published.index(
+        "if (( expected_skipped_config_tests == 0 )); then"
+    )
     assert 'run-canvas-config-proofs.py" verify "$composition_executable"' in published
+    assert 'list-flow-acceptance-cases.sh" "$flow_executable")' in published
+    flow_inventory = (ROOT / "scripts/ci/list-flow-acceptance-cases.sh").read_text(
+        encoding="utf-8"
+    )
+    assert 'flow_tests=$("$1" --list)' in flow_inventory
+    assert "Flow executable changed its exact nine-case owner inventory" in flow_inventory
+    assert 'report_target_timing flow "$flow_started" "$flow_status" "$flow_end"' in published
     assert (
         published.count("grep -Fo 'RENDERED_BASE_RENEWAL_CONFIG_2X2_COMPLETE_V1'") == 2
     )
@@ -2281,10 +3870,13 @@ def _assert_required_canvas_target_completion(published: str) -> None:
         == 1
     )
     assert (
-        "[[ $((all_tests - parallel_tests)) == $((2 + expected_skipped_worker_tests + expected_skipped_config_tests + expected_skipped_timeout_tests)) ]]"
+        "[[ $((all_tests - parallel_tests)) == $((3 + ${#historical_serial_tests[@]} + expected_skipped_worker_tests + expected_skipped_config_tests + expected_skipped_timeout_tests)) ]]"
         in published
     )
-    assert '"${config_skips[@]}" "${timeout_skips[@]}" --nocapture --test-threads=4' in published
+    assert (
+        '"${config_skips[@]}" "${timeout_skips[@]}" --nocapture --test-threads=4'
+        in published
+    )
     assert published.rstrip().endswith(
         'python3 "$(dirname "${BASH_SOURCE[0]}")/check_canvas_tier_obligations.py" '
         '--require-execution canvas "$worker_log"'
@@ -2299,12 +3891,14 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
         for step in steps
         if step.get("name") == "Run isolated database contract suites concurrently"
     )
-    assert "if" not in gate
+    assert gate["if"] == "matrix.lane != 'renewal-unit'"
     assert not gate.get("continue-on-error", False)
-    assert gate["run"] == (
-        "python3 ../scripts/ci/run-db-contract-groups.py "
-        "${{ matrix.lane == 'canvas' && 'canvas' || 'rust-db' }}"
-    )
+    assert "run-db-contract-groups.py worker-preflights" in gate["run"]
+    assert "run-db-contract-groups.py worker-canvas" in gate["run"]
+    assert (
+        "run-db-contract-groups.py "
+        "${{ matrix.lane == 'canvas' && 'canvas-without-selfhost' || 'rust-db' }}"
+    ) in gate["run"]
     published = (ROOT / "scripts/ci/run-published-canvas-contracts.sh").read_text(
         encoding="utf-8"
     )
@@ -2353,9 +3947,8 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
     )
     assert "grep -Fx 'status_provider_matches_json_depth_reference: test'" in published
     assert (
-        "grep -Fx 'worker_rest_reference_matches_published_process: test'" in published
+        "grep -Fx 'worker_rest_matches_frozen_published_process: test'" in published
     )
-    assert "grep -Fx 'worker_rest_matches_frozen_published_process: test'" in published
     assert "grep -Fx 'worker_rest_native_child: test'" in published
     assert "grep -Fx 'worker_retry_matches_frozen_published_process: test'" in published
     assert (
@@ -2413,14 +4006,7 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
         in published
     )
     assert (
-        "grep -Fx 'worker_retry_reference_matches_published_process: test'" in published
-    )
-    assert (
         "grep -Fx 'worker_retry_after_reference_matches_published_process: test'"
-        in published
-    )
-    assert (
-        "grep -Fx 'worker_validation_reference_matches_published_process: test'"
         in published
     )
     assert (
@@ -2436,31 +4022,21 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
         in published
     )
     assert "grep -Fx 'worker_facts_match_frozen_published_process: test'" in published
+    assert (
+        "grep -Fx 'worker_roster_failure_matches_frozen_published_process: test'"
+        in published
+    )
     for name in [
-        "worker_roster_failure_reference_matches_published_process",
-        "worker_roster_failure_matches_frozen_published_process",
-    ]:
-        assert f"grep -Fx '{name}: test'" in published
-    for name in [
-        "worker_oauth_revocation_reference_matches_published_process",
         "worker_oauth_revocation_matches_frozen_published_process",
         "worker_oauth_revocation_native_child",
-        "worker_oauth_revocation_fence_reference_matches_published_process",
         "worker_oauth_revocation_fence_matches_frozen_published_process",
-        "worker_oauth_revocation_patch_reference_matches_published_process",
         "worker_oauth_revocation_patch_matches_frozen_published_process",
-        "worker_oauth_revocation_retry_after_reference_matches_published_process",
         "worker_oauth_revocation_retry_after_matches_frozen_published_process",
-        "worker_oauth_revocation_backoff_reference_matches_published_process",
         "worker_oauth_revocation_backoff_matches_frozen_published_process",
-        "worker_oauth_revocation_queue_reference_matches_published_process",
         "worker_oauth_revocation_queue_matches_frozen_published_process",
         "worker_oauth_revocation_repository_selection_matches_published_order",
-        "worker_oauth_revocation_lease_reference_matches_published_process",
         "worker_oauth_revocation_lease_matches_frozen_published_process",
-        "worker_oauth_revocation_counters_reference_matches_published_cycle",
         "worker_oauth_revocation_counters_matches_frozen_published_cycle",
-        "worker_oauth_revocation_secrets_reference_matches_published_process",
         "worker_oauth_revocation_secrets_matches_frozen_published_process",
         "worker_oauth_revocation_secret_reference_constraints_match_published_schema",
         "worker_oauth_revocation_empty_token_is_not_dispatched",
@@ -2493,13 +4069,9 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
         "worker_provider_recovery_first_native_child",
         "canvas_worker_provider_completion_replay::rejected_owner_check_rejects_unrelated_or_reference_drift",
         "canvas_worker_provider_recovery_replay::newer_generation_check_rejects_any_target_mutation",
-        "worker_oauth_revocation_selection_reference_matches_published_repository",
         "worker_oauth_revocation_selection_repository_matches_published",
     ]:
         assert f"grep -Fx '{name}: test'" in published
-    assert (
-        "grep -Fx 'worker_facts_reference_matches_published_process: test'" in published
-    )
     assert (
         "grep -Fx 'worker_startup_matches_published_process_and_idle_heartbeat: test'"
         in published
@@ -2553,10 +4125,10 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
         "grep -Fx 'didcomm_fresh_http_admission_composes_reservation_and_delivery: test'"
         in published
     )
-    assert (
-        "grep -Fx 'didcomm_http_admission_recovers_real_keyed_reservation: test'"
-        in published
+    flow_inventory = (ROOT / "scripts/ci/list-flow-acceptance-cases.sh").read_text(
+        encoding="utf-8"
     )
+    assert "'didcomm_http_admission_recovers_real_keyed_reservation: test'" in flow_inventory
     assert (
         "grep -Fx 'didcomm_fresh_gateway_admission_preserves_public_projection_without_legacy_fallback: test'"
         in published
@@ -2566,16 +4138,16 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
         in published
     )
     assert (
-        "grep -Fx 'didcomm_flow_grpc_provider_preserves_keyed_admission: test'"
-        in published
+        "'didcomm_flow_grpc_provider_preserves_keyed_admission: test'"
+        in flow_inventory
     )
     assert (
-        "grep -Fx 'flow_native_consumer_preserves_artifacts_retries_and_legacy_physical_http: test'"
-        in published
+        "'flow_native_consumer_preserves_artifacts_retries_and_legacy_physical_http: test'"
+        in flow_inventory
     )
     assert (
-        "grep -Fx 'flow_rendered_settings_select_native_rpc_and_preserve_legacy_http: test'"
-        in published
+        "'flow_rendered_settings_select_native_rpc_and_preserve_legacy_http: test'"
+        in flow_inventory
     )
     assert (
         "grep -Fx 'didcomm_unkeyed_grpc_initiation_composes_real_delivery: test'"
@@ -2604,26 +4176,34 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
     _assert_required_canvas_target_completion(published)
     assert (
         published.splitlines().count(
-            '"$composition_executable" --skip "$serial_composition_test" "${config_skips[@]}" "${timeout_skips[@]}" --nocapture --test-threads=4 >"$composition_log" 2>&1 &'
+            CANVAS_COMPOSITION_COMMAND
         )
         == 1
     )
     assert (
         published.splitlines().count(
-            'MARTY_CANVAS_WORKER_RETRY_AFTER_TIER="$retry_after_tier" MARTY_CANVAS_WORKER_VALIDATION_TIER="$validation_tier" "$worker_executable" --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=4 >"$worker_log" 2>&1 &'
+            CANVAS_WORKER_COMMAND
         )
         == 1
     )
     assert 'kill "$composition_pid" "$worker_pid"' in published
+    assert 'if [[ -n "$selfhost_pid" ]]; then kill "$selfhost_pid"' in published
+    assert 'if [[ -n "$flow_pid" ]]; then kill "$flow_pid"' in published
     assert 'tail --pid="$pid"' in published
     assert (
-        'relay_target_timing "$composition_pid" "$composition_log" "$composition_end" &'
+        'relay_target_timing "$composition_pid" "$composition_log" "$composition_end" composition &'
         in published
     )
     assert (
-        'relay_target_timing "$worker_pid" "$worker_log" "$worker_end" &' in published
+        'relay_target_timing "$worker_pid" "$worker_log" "$worker_end" worker &' in published
     )
+    assert 'relay_target_timing "$flow_pid" "$flow_log" "$flow_end" flow &' in published
     assert 'wait "$composition_pid" || composition_status=$?' in published
+    assert 'wait "$flow_pid" || flow_status=$?' in published
+    assert '  --name flow_acceptance --owner canvas -- \\' in published
+    assert published.index('wait "$composition_pid" || composition_status=$?') < published.index(
+        '  "$flow_executable" --nocapture --test-threads=4 >"$flow_log" 2>&1 &'
+    )
     assert 'wait "$worker_pid" || worker_status=$?' in published
     assert (
         '"$worker_executable" "$serial_test" --exact --nocapture --test-threads=1'
@@ -2649,8 +4229,20 @@ def test_native_canvas_socket_timeout_gate_is_explicit_and_mandatory() -> None:
         for step in steps
         if step.get("name") == "Test native Canvas operation timeout TLS parity"
     )
-    assert gate["if"] == "matrix.lane == 'canvas'"
+    assert gate["if"] == "matrix.lane == 'contracts'"
     assert not gate.get("continue-on-error", False)
+    matrix = document["jobs"]["test-rust-services"]["strategy"]["matrix"]["lane"]
+    for literal in re.findall(r"'(\[[^']+\])'", matrix):
+        lanes = json.loads(literal)
+        if "canvas" in lanes:
+            assert "contracts" in lanes
+    compile_step = next(
+        step["run"]
+        for step in steps
+        if step.get("name") == "Compile reusable Rust test executables"
+    )
+    assert 'elif [[ "${{ matrix.lane }}" == contracts ]]; then' in compile_step
+    assert "cargo test --locked --workspace --no-run" in compile_step
     assert (
         "grep -Fx 'canvas_operation_http::tests::native_socket_case: test'"
         in gate["run"]
@@ -2659,6 +4251,20 @@ def test_native_canvas_socket_timeout_gate_is_explicit_and_mandatory() -> None:
     assert '--qualification "$MARTY_CANVAS_FULL_QUALIFICATION"' in gate["run"]
     assert "select(.profile.test == true)" in gate["run"]
     assert "httpx==0.26.0 cryptography==44.0.3" in gate["run"]
+    source = (ROOT / "rust/services/issuance/src/canvas_operation_http.rs").read_text(
+        encoding="utf-8"
+    )
+    assert (
+        '#[tokio::test]\n    #[ignore = "requires the owned loopback TLS '
+        'and historical socket fixture"]\n    async fn native_socket_case()'
+    ) in source
+    assert 'let Ok(raw) = std::env::var("MARTY_CANVAS_TIMEOUT_NATIVE_CASE")' not in source
+    assert '.unwrap_or_else(|_| panic!("owned native Canvas socket case is absent"))' in source
+    assert '.expect("owned native Canvas socket case")' not in source
+    runner = (ROOT / "scripts/run_canvas_timeout_consumer_oracle.py").read_text(
+        encoding="utf-8"
+    )
+    assert '"canvas_operation_http::tests::native_socket_case",\n                    "--exact",\n                    "--ignored",' in runner
 
 
 GATEWAY_REGISTRATIONS = [
@@ -2672,7 +4278,7 @@ GATEWAY_REGISTRATIONS = [
     (
         "operations_gateway_candidate_preserves_review_lifecycle",
         "canvas_gateway_lifecycle_replay",
-        "start_with_status_provider",
+        "start_with_status_native_seed",
         5,
         "gateway lifecycle replay must not deadlock",
     ),
@@ -2689,13 +4295,13 @@ def _assert_gateway_operations_registration(
     _assert_required_canvas_target_completion(published)
     assert (
         published.splitlines().count(
-            '"$composition_executable" --skip "$serial_composition_test" "${config_skips[@]}" "${timeout_skips[@]}" --nocapture --test-threads=4 >"$composition_log" 2>&1 &'
+            CANVAS_COMPOSITION_COMMAND
         )
         == 1
     )
     assert (
         published.splitlines().count(
-            'MARTY_CANVAS_WORKER_RETRY_AFTER_TIER="$retry_after_tier" MARTY_CANVAS_WORKER_VALIDATION_TIER="$validation_tier" "$worker_executable" --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=4 >"$worker_log" 2>&1 &'
+            CANVAS_WORKER_COMMAND
         )
         == 1
     )
@@ -2793,13 +4399,19 @@ def test_gateway_operations_registration_rejects_disabled_or_incomplete_gate(
         )
     elif mutation == "filtered-full-run":
         published = published.replace(
-            'MARTY_CANVAS_WORKER_RETRY_AFTER_TIER="$retry_after_tier" MARTY_CANVAS_WORKER_VALIDATION_TIER="$validation_tier" "$worker_executable" --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=4',
-            'MARTY_CANVAS_WORKER_RETRY_AFTER_TIER="$retry_after_tier" MARTY_CANVAS_WORKER_VALIDATION_TIER="$validation_tier" "$worker_executable" unrelated_filter --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=4',
+            CANVAS_WORKER_COMMAND,
+            CANVAS_WORKER_COMMAND.replace(
+                '"$worker_executable" --skip',
+                '"$worker_executable" unrelated_filter --skip',
+            ),
         )
     elif mutation == "filtered-composition-run":
         published = published.replace(
-            '"$composition_executable" --skip "$serial_composition_test" "${config_skips[@]}" "${timeout_skips[@]}" --nocapture --test-threads=4',
-            '"$composition_executable" unrelated_filter --skip "$serial_composition_test" "${config_skips[@]}" "${timeout_skips[@]}" --nocapture --test-threads=4',
+            CANVAS_COMPOSITION_COMMAND,
+            CANVAS_COMPOSITION_COMMAND.replace(
+                '"$composition_executable" --skip',
+                '"$composition_executable" unrelated_filter --skip',
+            ),
         )
     else:
         start = source.index(f"async fn {name}")
@@ -2815,7 +4427,7 @@ def test_gateway_operations_registration_rejects_disabled_or_incomplete_gate(
             "wrong-specialized-database": (
                 f"{database}()",
                 "start_with_review_recovery()"
-                if database == "start_with_status_provider"
+                if database == "start_with_status_native_seed"
                 else "start_with_status_provider()",
             ),
             "cleanup": ("    owned.close().unwrap();", ""),
@@ -2857,6 +4469,7 @@ def _assert_no_rust_executable_transfer(steps) -> None:
         ),
         "Upload Rust build evidence": "${{ runner.temp }}/rust-build-evidence/",
         "Preserve fresh full-main startup attestation": "${{ runner.temp }}/canvas-startup-fresh-run.json",
+        "Preserve fresh full-main REST requalification evidence": "${{ runner.temp }}/canvas-rest-fresh-run.json",
     }
     uploads = {}
     for step in steps:
@@ -2868,6 +4481,73 @@ def _assert_no_rust_executable_transfer(steps) -> None:
             assert step.get("with", {}).get("path") == expected_uploads[name]
             uploads[name] = step
     assert set(uploads) == set(expected_uploads)
+
+
+def _assert_paired_fresh_worker_evidence(steps) -> None:
+    condition = (
+        "success() && matrix.lane == 'canvas' && "
+        "env.MARTY_CANVAS_FULL_QUALIFICATION == '1' && "
+        "github.ref == 'refs/heads/main'"
+    )
+    guard = next(
+        step
+        for step in steps
+        if step.get("name") == "Require paired fresh full-main worker evidence"
+    )
+    assert guard["if"] == condition
+    assert guard["shell"] == "bash" and not guard.get("continue-on-error", False)
+    for name in ("canvas-startup-fresh-run.json", "canvas-rest-fresh-run.json"):
+        assert guard["run"].count(f'test -s "$RUNNER_TEMP/{name}"') == 1
+    startup = next(
+        step
+        for step in steps
+        if step.get("name") == "Preserve fresh full-main startup attestation"
+    )
+    rest = next(
+        step
+        for step in steps
+        if step.get("name") == "Preserve fresh full-main REST requalification evidence"
+    )
+    for upload in (startup, rest):
+        assert upload["if"] == condition
+        assert upload["with"]["if-no-files-found"] == "error"
+        assert upload["with"]["retention-days"] == 14
+    assert steps.index(guard) < steps.index(startup) < steps.index(rest)
+
+
+def test_rest_requalification_upload_requires_successful_full_main_canvas() -> None:
+    _, document = _workflow(CI_PATH)
+    steps = document["jobs"]["test-rust-services"]["steps"]
+    _assert_no_rust_executable_transfer(steps)
+    _assert_paired_fresh_worker_evidence(steps)
+
+
+@pytest.mark.parametrize(
+    "fault", ["missing-rest", "missing-startup", "wrong-condition", "late-guard"]
+)
+def test_fresh_worker_evidence_pair_rejects_weakening(fault: str) -> None:
+    _, document = _workflow(CI_PATH)
+    steps = document["jobs"]["test-rust-services"]["steps"]
+    guard = next(
+        step
+        for step in steps
+        if step.get("name") == "Require paired fresh full-main worker evidence"
+    )
+    if fault == "missing-rest":
+        guard["run"] = guard["run"].replace(
+            'test -s "$RUNNER_TEMP/canvas-rest-fresh-run.json"', "true"
+        )
+    elif fault == "missing-startup":
+        guard["run"] = guard["run"].replace(
+            'test -s "$RUNNER_TEMP/canvas-startup-fresh-run.json"', "true"
+        )
+    elif fault == "wrong-condition":
+        guard["if"] = "matrix.lane == 'canvas'"
+    else:
+        steps.remove(guard)
+        steps.append(guard)
+    with pytest.raises(AssertionError):
+        _assert_paired_fresh_worker_evidence(steps)
 
 
 @pytest.mark.parametrize(
@@ -2923,7 +4603,7 @@ def test_rust_contracts_reuse_local_executables_without_artifact_transfer() -> N
     _assert_no_rust_executable_transfer(rust_job["steps"])
     for group in ("workspace", "verification", "gateway"):
         assert f"rust-{group}.status" in source
-    assert "target/debug/flow-postgres-contract --test-threads=1" in source
+    assert "run_timed flow_postgres target/debug/flow-postgres-contract --test-threads=1" in source
     assert "target/debug/verification-postgres-contract" in source
     assert "target/debug/gateway-redis-contract" in source
     assert (
@@ -3184,10 +4864,27 @@ def test_advanced_codeql_keeps_full_merge_and_scheduled_coverage() -> None:
             step for step in job["steps"] if step.get("name", "").startswith("Analyze")
         ]
         assert analysis_steps
-        assert all(
-            step["if"] == "steps.scope.outputs.analyze == 'true'"
-            for step in analysis_steps
-        )
+        expected_condition = "steps.scope.outputs.analyze == 'true'"
+        if job is rust_job:
+            expected_condition += " && steps.test_only.outputs.skip != 'true'"
+            proof = next(step for step in job["steps"] if step.get("id") == "test_only")
+            assert proof["if"] == "steps.scope.outputs.test_only_candidate == 'true'"
+            assert "--emit-verified-worker-tests" in proof["with"]["script"]
+            assert "--emit-verified-flow-tests" in proof["with"]["script"]
+            assert "--emit-verified-selfhost-tests" in proof["with"]["script"]
+            init = next(
+                step for step in job["steps"]
+                if step.get("name") == "Initialize production-focused analysis"
+            )
+            assert init["with"]["languages"] == "rust"
+            assert init["with"]["build-mode"] == "none"
+            assert init["with"]["config-file"] == (
+                "${{ (github.event_name == 'schedule' || "
+                "github.event_name == 'workflow_dispatch') && "
+                "'./.github/codeql/codeql-full.yml' || "
+                "'./.github/codeql/codeql-production.yml' }}"
+            )
+        assert all(step["if"] == expected_condition for step in analysis_steps)
     assert "filename.startsWith('rust/')" in rust_source
     assert "filename.startsWith('.github/codeql/')" in rust_source
     assert "filename === '.github/workflows/codeql-rust.yml'" in rust_source
@@ -3208,6 +4905,158 @@ def test_advanced_codeql_keeps_full_merge_and_scheduled_coverage() -> None:
         "path": "dynamic/github-code-scanning/codeql",
         "event": "dynamic",
     } not in required
+
+
+def test_rust_codeql_test_only_scope_fails_closed() -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is unavailable for the GitHub Script policy test")
+    workflow = yaml.safe_load(
+        (ROOT / ".github/workflows/codeql-rust.yml").read_text(encoding="utf-8")
+    )
+    steps = workflow["jobs"]["analyze-rust"]["steps"]
+    scope = next(step for step in steps if step.get("id") == "scope")["with"]["script"]
+    proof = next(step for step in steps if step.get("id") == "test_only")["with"]["script"]
+    workflow_source = (ROOT / ".github/workflows/codeql-rust.yml").read_text(
+        encoding="utf-8"
+    )
+    config = (ROOT / ".github/codeql/codeql-production.yml").read_text(
+        encoding="utf-8"
+    )
+    selfhost = "rust/crates/selfhost-acceptance/tests/support/selfhost_runtime_sidecar.rs"
+    service_acceptance = "rust/crates/service-acceptance/tests/gateway_signing_acceptance.rs"
+    signing_csca = "rust/services/signing-keys/tests/csca_lifecycle_behavior.rs"
+    proofs = {
+        "--emit-verified-worker-tests": {
+            "status": 0,
+            "stdout": "rust/crates/canvas-worker-acceptance/tests/canvas_published_worker_contract.rs\0",
+        },
+        "--emit-verified-flow-tests": {
+            "status": 0,
+            "stdout": "rust/crates/flow-acceptance/tests/flow_published_schema_contract.rs\0",
+        },
+        "--emit-verified-selfhost-tests": {"status": 0, "stdout": selfhost + "\0"},
+        "--emit-verified-contract-tests": {
+            "status": 0,
+            "stdout": service_acceptance + "\0" + signing_csca + "\0",
+        },
+    }
+    harness = r"""
+      const fs = require('node:fs');
+      const payload = JSON.parse(fs.readFileSync(0, 'utf8'));
+      const outputs = {};
+      const core = { setOutput: (key, value) => { outputs[key] = value; }, info: () => {} };
+      const github = {
+        paginate: async () => payload.files,
+        rest: { pulls: { listFiles: {} } },
+      };
+      const context = {
+        eventName: payload.event,
+        repo: { owner: 'ElevenID', repo: 'marty-ui' },
+        payload: { pull_request: { number: 1228 } },
+      };
+      (async () => {
+        const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+        await new AsyncFunction('core', 'github', 'context', payload.scope)(
+          core, github, context
+        );
+        if (outputs.test_only_candidate === 'true') {
+          const mockedRequire = name => {
+            if (name === 'node:fs') return { readFileSync: path =>
+              path.endsWith('codeql-production.yml') ? payload.config : payload.workflow
+            };
+            if (name === 'node:child_process') return {
+              spawnSync: (_program, args) => payload.proofs[args[1]] ||
+                { status: 1, stderr: 'unverified', stdout: '' },
+            };
+            throw new Error(`unexpected module: ${name}`);
+          };
+          await new AsyncFunction('core', 'require', 'process', payload.proof)(
+            core, mockedRequire, { env: { CANDIDATE_PATHS: outputs.candidate_paths } }
+          );
+        }
+        process.stdout.write(JSON.stringify(outputs));
+      })().catch(error => { console.error(error); process.exitCode = 1; });
+    """
+
+    def classify(files: list[dict], *, event: str = "pull_request",
+                 codeql_config: str = config, workflow_text: str = workflow_source,
+                 proof_results: dict = proofs) -> dict:
+        result = subprocess.run(
+            [node, "-e", harness],
+            input=json.dumps({
+                "files": files, "event": event, "config": codeql_config,
+                "workflow": workflow_text,
+                "proofs": proof_results, "scope": scope, "proof": proof,
+            }),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr
+        return json.loads(result.stdout)
+
+    exact = [{"filename": selfhost, "status": "modified"}]
+    assert classify(exact)["skip"] == "true"
+    assert classify([{"filename": service_acceptance, "status": "modified"}])["skip"] == "true"
+    assert classify([{"filename": signing_csca, "status": "modified"}])["skip"] == "true"
+    assert classify([
+        {"filename": service_acceptance, "status": "modified"},
+        {"filename": selfhost, "status": "modified"},
+    ])["skip"] == "true"
+    for path in [
+        "rust/crates/canvas-worker-acceptance/tests/canvas_published_worker_contract.rs",
+        "rust/crates/flow-acceptance/tests/flow_published_schema_contract.rs",
+    ]:
+        assert classify([{"filename": path, "status": "modified"}])["skip"] == "true"
+    for changed in [
+        exact + [{"filename": "README.md", "status": "modified"}],
+        [{"filename": selfhost, "status": "added"}],
+        [{"filename": selfhost, "status": "renamed", "previous_filename": "old.rs"}],
+        [{"filename": "rust/services/issuance/src/main.rs", "status": "modified"}],
+    ]:
+        assert "skip" not in classify(changed)
+    assert "skip" not in classify([{
+        "filename": "rust/crates/selfhost-acceptance/tests/support/unverified.rs",
+        "status": "modified",
+    }])
+    assert "skip" not in classify([{
+        "filename": "rust/crates/service-acceptance/tests/unverified.rs",
+        "status": "modified",
+    }])
+    for status in ("added", "renamed"):
+        assert "skip" not in classify([{
+            "filename": service_acceptance,
+            "status": status,
+            "previous_filename": "old.rs" if status == "renamed" else None,
+        }])
+    assert "skip" not in classify(exact, codeql_config=config + "# changed\n")
+    assert "skip" not in classify(
+        exact, workflow_text=workflow_source.replace("build-mode: none", "build-mode: manual")
+    )
+    assert "skip" not in classify(
+        exact, workflow_text=workflow_source.replace(
+            "|| './.github/codeql/codeql-production.yml'",
+            "|| './.github/codeql/codeql-full.yml'",
+        )
+    )
+    failed_proofs = {**proofs, "--emit-verified-selfhost-tests": {
+        "status": 1, "stdout": "", "stderr": "proof failed"
+    }}
+    assert "skip" not in classify(exact, proof_results=failed_proofs)
+    failed_service_proof = {**proofs, "--emit-verified-contract-tests": {
+        "status": 1, "stdout": "", "stderr": "proof failed"
+    }}
+    assert "skip" not in classify(
+        [{"filename": service_acceptance, "status": "modified"}],
+        proof_results=failed_service_proof,
+    )
+    assert "skip" not in classify(
+        [{"filename": signing_csca, "status": "modified"}],
+        proof_results=failed_service_proof,
+    )
+    assert classify(exact, event="merge_group")["analyze"] == "true"
+    assert classify([{"filename": "README.md", "status": "modified"}])["analyze"] == "false"
 
 
 def test_warm_cache_uses_the_same_rust_test_profile() -> None:
@@ -3258,9 +5107,19 @@ def test_ephemeral_ci_reads_only_shared_python_and_browser_caches() -> None:
         if step.get("name") == "Warm shared Python dependencies"
     )
     assert warm_install["if"] == "steps.uv-cache.outputs.cache-hit != 'true'"
+    protocol_install = next(
+        step
+        for step in ci["jobs"]["public-protocol-contract"]["steps"]
+        if step.get("name") == "Install contract-check dependencies"
+    )
+    format_aware_install = (
+        "uv pip install --system -r requirements-services.txt "
+        "'jsonschema[format]>=4.23'"
+    )
+    assert protocol_install["run"] == format_aware_install
     assert (
         warm_install["run"]
-        == "uv pip install --system -r requirements-services.txt jsonschema"
+        == format_aware_install
     )
 
     browser_steps = ci["jobs"]["test-credential-lifecycle-browser"]["steps"]
@@ -3294,20 +5153,26 @@ def test_ephemeral_ci_reads_only_shared_python_and_browser_caches() -> None:
     assert "rust/**" not in warm[True]["push"]["paths"]
 
 
-def test_closed_pull_request_cache_cleanup_is_rate_limit_safe() -> None:
-    source, document = _workflow(
-        ROOT / ".github" / "workflows" / "cleanup-ci-caches.yml"
-    )
+def test_closed_pull_request_cache_cleanup_uses_reviewed_shared_owner() -> None:
+    _, document = _workflow(ROOT / ".github/workflows/cleanup-ci-caches.yml")
     cleanup = document["jobs"]["cleanup"]
-    script = cleanup["steps"][0]["with"]["script"]
-
-    assert "Promise.all" not in script
-    assert "await delay(500)" in script
-    assert "error.status === 429 || error.status === 403" in script
-    assert "const maxAttempts = 7" in script
-    assert "retry-after" in script
-    assert "2_000 * (2 ** attempt)" in script
-    assert "maxDeletions = 2000" in source
+    # Runtime queue/reopened/rate-limit cases are owned by the shared action's
+    # actions/cleanup-ci-caches/cleanup.test.cjs in ElevenID/.github.
+    assert len(cleanup["steps"]) == 1
+    step = cleanup["steps"][0]
+    assert step["uses"] == (
+        "ElevenID/.github/actions/cleanup-ci-caches@"
+        "3883ccbf1f612a43a746db1d9321015d561efeb1"
+    )
+    assert step["with"] == {
+        "max-deletions": "2000",
+        "include-queue-on-close": "true",
+    }
+    assert cleanup["permissions"] == {
+        "actions": "write", "contents": "read", "pull-requests": "read"
+    }
+    assert document[True]["pull_request"]["types"] == ["closed"]
+    assert document["concurrency"]["cancel-in-progress"] is False
 
 
 def test_compiler_cache_writes_are_reserved_for_trusted_main() -> None:
@@ -3465,6 +5330,51 @@ def test_required_rust_lanes_use_uncached_compiler_only_when_optional_cache_fail
             "rustc-synthetic -vV"
         )
         assert (tmp_path / "github-env").read_text(encoding="utf-8") == expected_env
+
+
+def test_bookworm_compile_phase_timings_keep_exact_offline_targets() -> None:
+    _, ci = _workflow(CI_PATH)
+    steps = {
+        step.get("name"): step for step in ci["jobs"]["test-rust-services"]["steps"]
+    }
+    compile_step = steps["Compile reusable Rust test executables"]["run"]
+    capture_step = steps["Capture host compiler cache counters after compile"]
+    assert "--network none --read-only" in compile_step
+    assert "--locked --offline" in compile_step
+    assert 'host_mold="$(command -v mold)"' in compile_step
+    assert '"$(realpath "$host_mold")" == /usr/local/bin/mold' in compile_step
+    assert "mold 2[.]41[.]0" in compile_step
+    assert "--env 'RUSTFLAGS=-C link-arg=-fuse-ld=mold'" in compile_step
+    assert '--volume "$host_mold:/usr/local/bin/ld.mold:ro"' in compile_step
+    assert 'ld.mold --version | grep -Eq' in compile_step
+    assert 'probe="$CARGO_TARGET_DIR/.marty-mold-link-probe"' in compile_step
+    assert '-fuse-ld=mold -o "$probe"' in compile_step
+    assert compile_step.index('"$probe"\n') < compile_step.index('rm -- "$probe"')
+    assert "bookworm-host-phases.tsv" in compile_step
+    for phase, command in (
+        ("cargo_fetch", "cargo fetch --locked"),
+        ("container_compile", "docker run --rm --network none --read-only"),
+        ("verify_artifacts", "python3 ../scripts/ci/verify-canvas-test-artifacts.py"),
+    ):
+        assert f"run_host_phase {phase} {command}" in compile_step
+    assert "run_host_phase builder_pull bash \\" in compile_step
+    assert '../scripts/ci/pull-pinned-dockerhub-image.sh "$bookworm_builder"' in compile_step
+    assert (
+        'printf "phase\\telapsed_seconds\\ttarget_bytes\\texit_code\\n"' in compile_step
+    )
+    assert 'return "$exit_code"' in compile_step
+    for phase, command in (
+        ("tests", "cargo test"),
+        ("issuance_binaries", "cargo build"),
+        ("gateway_binary", "cargo build"),
+        ("flow_binary", "cargo build"),
+    ):
+        assert f"run_cargo_phase {phase} {command} --locked --offline" in compile_step
+    assert "python3 ../scripts/ci/verify-canvas-test-artifacts.py" in compile_step
+    assert capture_step["if"] == "always()"
+    assert "test ! -L rust/target/bookworm-compile-phases.tsv" in capture_step["run"]
+    assert "-le 4096" in capture_step["run"]
+    assert "rust-build-evidence/bookworm-compile-phases.tsv" in capture_step["run"]
 
 
 def test_optional_cache_stats_failure_cannot_fail_required_rust_lanes(
@@ -3631,7 +5541,13 @@ def test_image_context_excludes_integration_tests_but_keeps_build_inputs() -> No
 
 @pytest.mark.parametrize(
     "package",
-    ["services/issuance", "crates/service-acceptance", "crates/canvas-acceptance"],
+    [
+        "services/issuance",
+        "crates/service-acceptance",
+        "crates/canvas-acceptance",
+        "crates/canvas-worker-acceptance",
+        "crates/flow-acceptance",
+    ],
 )
 def test_every_issuance_and_acceptance_integration_test_remains_registered(
     package,
@@ -3655,6 +5571,7 @@ def test_every_issuance_and_acceptance_integration_test_remains_registered(
             "canvas_sync_worker_configuration_oracle.rs",
             "canvas_worker_result_oracle.rs",
             "issued_credential_adapter_behavior.rs",
+            "migration_contract.rs",
             "proof_nonce_behavior.rs",
         }
         if package == "services/issuance"
@@ -3694,6 +5611,83 @@ def test_service_acceptance_keeps_composition_dependencies_out_of_service_builds
     assert "marty-signing-keys" not in issuance.get("dev-dependencies", {})
 
 
+def _dev_dependency_packages(
+    manifest: dict, workspace_dependencies: dict
+) -> set[str]:
+    tables = []
+    for owner in (manifest, *manifest.get("target", {}).values()):
+        tables.extend(
+            owner.get(key, {}) for key in ("dev-dependencies", "dev_dependencies")
+        )
+    packages = set()
+    for dependencies in tables:
+        for alias, declaration in dependencies.items():
+            package = alias
+            if isinstance(declaration, dict):
+                inherited = workspace_dependencies.get(alias, {})
+                if declaration.get("workspace") and isinstance(inherited, dict):
+                    package = inherited.get("package", package)
+                package = declaration.get("package", package)
+            packages.add(package)
+    return packages
+
+
+def test_service_dev_dependencies_do_not_reintroduce_cross_service_test_edges() -> (
+    None
+):
+    rust = ROOT / "rust"
+    workspace = tomllib.loads((rust / "Cargo.toml").read_text(encoding="utf-8"))
+    manifests = sorted((rust / "services").glob("*/Cargo.toml"))
+    assert manifests
+    documents = {
+        path: tomllib.loads(path.read_text(encoding="utf-8")) for path in manifests
+    }
+    service_packages = {document["package"]["name"] for document in documents.values()}
+    workspace_dependencies = workspace["workspace"]["dependencies"]
+    edges = {
+        (document["package"]["name"], dependency)
+        for document in documents.values()
+        for dependency in _dev_dependency_packages(document, workspace_dependencies)
+        if dependency in service_packages
+    }
+    assert not edges, f"Move cross-service tests to an acceptance package: {sorted(edges)}"
+
+
+def test_service_dev_edge_guard_resolves_aliases_and_target_specific_deps() -> None:
+    manifest = {
+        "dev-dependencies": {
+            "gateway_alias": {"package": "marty-gateway", "path": "../gateway"},
+            "inherited_alias": {"workspace": True},
+        },
+        "dev_dependencies": {
+            "signing_alias": {"package": "marty-signing-keys", "path": "../signing-keys"}
+        },
+        "target": {
+            "cfg(unix)": {
+                "dev-dependencies": {
+                    "flow_alias": {"package": "marty-flow", "path": "../flow"}
+                },
+                "dev_dependencies": {
+                    "issuance_alias": {
+                        "package": "marty-issuance-service",
+                        "path": "../issuance",
+                    }
+                }
+            }
+        },
+    }
+    workspace_dependencies = {
+        "inherited_alias": {"package": "marty-auth", "path": "services/auth"}
+    }
+    assert _dev_dependency_packages(manifest, workspace_dependencies) == {
+        "marty-gateway",
+        "marty-auth",
+        "marty-flow",
+        "marty-signing-keys",
+        "marty-issuance-service",
+    }
+
+
 def test_canvas_acceptance_has_distinct_targets_without_signing_kms_dependencies() -> (
     None
 ):
@@ -3705,16 +5699,39 @@ def test_canvas_acceptance_has_distinct_targets_without_signing_kms_dependencies
     )
     workspace = tomllib.loads((ROOT / "rust/Cargo.toml").read_text(encoding="utf-8"))
     assert "crates/canvas-acceptance" in workspace["workspace"]["members"]
+    worker = tomllib.loads(
+        (ROOT / "rust/crates/canvas-worker-acceptance/Cargo.toml").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert "crates/canvas-worker-acceptance" in workspace["workspace"]["members"]
     assert {target["name"] for target in canvas["test"]} == {
-        "canvas_published_worker_contract",
         "canvas_published_schema_contract",
+    }
+    assert {target["name"] for target in worker["test"]} == {
+        "canvas_published_worker_contract",
     }
     assert {target["name"] for target in gateway["test"]} == {
         "passport_managed_kms_chain",
         "passport_gateway_postgres",
         "gateway_signing_acceptance",
+        "csca_capability_contract",
+        "tls_openbao_keyless",
+        "holder_remote_live_kms",
     }
     assert "marty-signing-keys" not in canvas["dev-dependencies"]
+    assert "marty-signing-keys" not in worker["dev-dependencies"]
+    assert not {
+        "marty-flow",
+        "marty-gateway",
+        "marty-selfhost-bundle",
+        "marty-release-evidence",
+        "marty-didcomm",
+        "marty-oid4vci",
+        "marty-verification",
+        "mmf-platform",
+        "mmf-security",
+    } & set(worker["dev-dependencies"])
     assert "marty-signing-keys" in gateway["dev-dependencies"]
     workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
     runner = (ROOT / "scripts/ci/run-published-canvas-contracts.sh").read_text(
@@ -3722,9 +5739,11 @@ def test_canvas_acceptance_has_distinct_targets_without_signing_kms_dependencies
     )
     groups = (ROOT / "scripts/ci/run-db-contract-groups.py").read_text(encoding="utf-8")
     assert "-p marty-canvas-acceptance" in workflow
+    assert "-p marty-canvas-worker-acceptance" in workflow
     assert 'contains("#marty-canvas-acceptance@")' in workflow
     assert "package=marty-canvas-acceptance" in runner
-    assert '"#marty-canvas-acceptance@"' in groups
+    assert "package=marty-canvas-worker-acceptance" in runner
+    assert '"#marty-canvas-worker-acceptance@"' in groups
 
 
 def test_passport_webhook_boundary_has_one_acceptance_owner_and_a_real_db_gate() -> (
@@ -3753,59 +5772,31 @@ def test_passport_webhook_boundary_has_one_acceptance_owner_and_a_real_db_gate()
         if step.get("name")
         == "Test native passport Gateway signed webhook on PostgreSQL"
     )
+    names = [step.get("name") for step in contracts]
+    assert names.count(gate["name"]) == 1
+    assert (
+        names.index("Create isolated Rust contract databases")
+        < names.index(gate["name"])
+        < names.index("Run safe Rust contract groups concurrently")
+    )
+    create = next(
+        step
+        for step in contracts
+        if step.get("name") == "Create isolated Rust contract databases"
+    )
+    assert "marty_passport_gateway_test" in create["run"]
+    assert gate["if"] == "matrix.lane == 'contracts'"
     assert gate["env"]["MARTY_PASSPORT_GATEWAY_TEST_URL"].endswith(
         "/marty_passport_gateway_test"
     )
     assert "--test passport_gateway_postgres" in gate["run"]
     assert "-- --exact" in gate["run"]
-
-
-@pytest.mark.parametrize("event", ["pull_request", "workflow_dispatch"])
-@pytest.mark.parametrize("reopened", [False, True])
-def test_cache_cleanup_includes_queue_refs_but_preserves_active_and_main(
-    event: str, reopened: bool
-) -> None:
-    _, document = _workflow(ROOT / ".github/workflows/cleanup-ci-caches.yml")
-    script = document["jobs"]["cleanup"]["steps"][0]["with"]["script"]
-    harness = (
-        r"""
-      const deleted = [];
-      const entries = [
-        {id: 1, ref: 'refs/pull/23/merge'},
-        {id: 2, ref: 'refs/heads/gh-readonly-queue/main/pr-23-abcdef'},
-        {id: 3, ref: 'refs/heads/main'},
-        {id: 4, ref: 'refs/pull/24/merge'},
-        {id: 5, ref: 'refs/heads/gh-readonly-queue/main/pr-24-abcdef'},
-        {id: 6, ref: 'refs/heads/feature'},
-      ];
-      const github = {
-        request: async (_, params) => {
-          if (params.ref) throw new Error('ref filter hides queue caches');
-          return {data: {actions_caches: entries}};
-        },
-        rest: {
-          pulls: {get: async ({pull_number}) => ({data: {state: pull_number === 23 && !REOPENED ? 'closed' : 'open'}})},
-          actions: {deleteActionsCacheById: async ({cache_id}) => { deleted.push(cache_id); }},
-        },
-      };
-      const summary = {addHeading() {return this}, addRaw() {return this}, async write() {}};
-      const core = {info() {}, warning() {}, summary};
-      const context = {repo: {owner: 'test', repo: 'test'}, eventName: EVENT,
-        payload: {pull_request: {number: 23}}};
-      const AsyncFunction = Object.getPrototypeOf(async function() {}).constructor;
-      await new AsyncFunction('github', 'context', 'core', 'setTimeout', SCRIPT)(
-        github, context, core, callback => callback());
-      if (JSON.stringify(deleted) !== (REOPENED ? '[]' : '[1,2]')) throw new Error(JSON.stringify(deleted));
-    """.replace("EVENT", json.dumps(event))
-        .replace("REOPENED", json.dumps(reopened))
-        .replace("SCRIPT", json.dumps(script))
-    )
-    result = subprocess.run(
-        ["node", "--input-type=module", "--eval", harness],
-        capture_output=True,
-        text=True,
-    )
-    assert result.returncode == 0, result.stderr
+    source = (
+        ROOT / "rust/crates/service-acceptance/tests/passport_gateway_postgres.rs"
+    ).read_text(encoding="utf-8")
+    assert '"marty_passport_gateway_test"' in source
+    assert 'sqlx::query("DROP SCHEMA IF EXISTS issuance_service CASCADE")' in source
+    assert "migration::migrate_passport(&pool).await.unwrap();" in source
 
 
 @pytest.mark.parametrize(
@@ -3866,3 +5857,90 @@ def test_renewal_matrix_preserves_real_deadlines_and_all_combinations() -> None:
     assert "Duration::from_secs(20)" in source
     assert "Duration::from_secs(30)" in source
     assert "sum::<usize>(),60" in re.sub(r"\s+", "", source)
+
+
+def test_renewal_write_boundaries_overlap_only_with_owned_databases() -> None:
+    support = ROOT / "rust/services/issuance/tests/support"
+    source = (support / "canvas_worker_renewal_oracle.rs").read_text(encoding="utf-8")
+    dispatch = source.split("pub async fn assert_renewal_write_failure_boundaries", 1)[
+        1
+    ]
+    dispatch, assertions = dispatch.split("async fn assert_write_failure_boundary", 1)
+    assert "tokio::join!(" in dispatch
+    assert dispatch.count("settle_group(isolated_database(") == 3
+    for stage, attempts in (
+        ("lease", "[2, 0, 0]"),
+        ("target", "[2, 2, 0]"),
+        ("process", "[2, 2, 2]"),
+    ):
+        assert (
+            f'assert_write_failure_boundary(&pool, "{stage}", {attempts}).await'
+            in dispatch
+        )
+    assert dispatch.index("tokio::join!(") < dispatch.index(
+        "for result in [lease, target, process]"
+    )
+    assert "Duration::from_secs(10)" in source
+    for obligation in (
+        "await_write_failure(cycle.as_mut(), pool, expected_attempts).await",
+        "prior lease write remains committed",
+        "target heartbeat remains committed despite process heartbeat failure",
+        'assert_eq!(status, "leased")',
+        "renewal failure is not successful job completion",
+        "remove_write_probes(pool).await",
+    ):
+        assert obligation in assertions
+    owner = (support / "canvas_worker_renewal_job_outcomes.rs").read_text(
+        encoding="utf-8"
+    )
+    assert owner.count("CREATE DATABASE {database}") == 1
+    assert owner.count("DROP DATABASE {database}") == 1
+    assert owner.count(".max_connections(6)") == 1
+    assert "action(pool.clone()).await" in owner
+    assert (
+        owner.index("action(pool.clone()).await")
+        < owner.index("pool.close().await")
+        < owner.index("DROP DATABASE {database}")
+    )
+
+
+def test_native_kms_schema_acceptance_is_mandatory_in_contracts_lane() -> None:
+    _, ci = _workflow(CI_PATH)
+    steps = ci["jobs"]["test-rust-services"]["steps"]
+    gate = next(step for step in steps if step.get("name") ==
+                "Prove native migration and profile KMS custody on fresh databases")
+    assert gate["if"] == "matrix.lane == 'contracts'"
+    assert not gate.get("continue-on-error", False)
+    run = gate["run"]
+    assert "set -euo pipefail" in run
+    assert "resolve_recorded_contract_executable marty-selfhost-acceptance native_kms_schema_contract" in run
+    assert "native_owners_preserve_kms_only_custody --ignored --exact --nocapture" in run
+    for name in ("AUTH_CONTRACT", "ORGANIZATION_CONTRACT", "CREDENTIAL_TEMPLATE_CONTRACT",
+                 "PRESENTATION_POLICY_CONTRACT", "FLOW_CONTRACT", "VERIFICATION_BINARY",
+                 "DEPLOYMENT_BINARY", "COMPLIANCE_BINARY"):
+        assert "MARTY_KMS_" + name + "=" in run
+        assert "export MARTY_KMS_" + name in run
+    assert "|| true" not in run
+    workflow = CI_PATH.read_text(encoding="utf-8")
+    assert "cargo build --locked -p marty-deployment-profile -p marty-compliance-profile -p marty-verification-service --bins --message-format=json" in workflow
+
+
+def test_native_kms_audit_changes_keep_contracts_ci_selected(tmp_path: Path) -> None:
+    selected = _classify_changed_paths(
+        ["rust/crates/selfhost-acceptance/tests/native_kms_schema_contract.rs"],
+        tmp_path, include_rust_plan=True)[0]
+    assert selected["rust"] == "true"
+    assert "contracts" in json.loads(selected["rust_matrix"])
+
+
+def test_registry_source_render_uses_pinned_renderer_without_changing_docker_plugin() -> None:
+    _, ci = _workflow(CI_PATH)
+    steps = ci["jobs"]["test-release-contracts"]["steps"]
+    prepare = next(step for step in steps if step.get("name") == "Prepare source-only deployment registry renderer")
+    release = next(step for step in steps if step.get("name") == "Run repository release checks")
+    assert steps.index(prepare) < steps.index(release)
+    assert prepare["if"] == release["if"]
+    assert prepare["run"] == "bash scripts/ci/install-compose-renderer.sh"
+    assert release["env"]["MARTY_COMPOSE_RENDERER"] == "${{ runner.temp }}/compose-render-v5.4.0"
+    assert release["run"] == "python -m pytest tests -n 2 -v --tb=short --durations=20"
+    assert not prepare.get("continue-on-error", False)

@@ -11,7 +11,7 @@ import uuid
 import pytest
 
 from scripts import passport_supported_flow_gateway as gateway
-from services.passport_disposable_identity import issuer_did
+from scripts.passport_disposable_identity import issuer_did
 
 
 KEY = "mk_test_" + "a" * 43

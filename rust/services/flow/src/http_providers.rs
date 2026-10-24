@@ -1,23 +1,35 @@
-use std::{collections::BTreeMap, time::Duration};
+use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use marty_passport_auth::PassportTenantCredentialSource;
 #[cfg(test)]
 use marty_passport_auth::PassportTenantKeyring;
+use marty_signing_grant::{
+    minter::{GrantMinter, GrantMinting},
+    GrantBinding, SigningOrigin, HEADER_NAME,
+};
 use reqwest::{Client, Method, StatusCode};
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 use url::Url;
 
 use crate::{
-    FlowKeyEnvelope, FlowKeyEnvelopeProvider, FlowKeyEnvelopeRequest, FlowProviderError,
-    FlowReference, FlowReferenceKind, FlowReferenceProvider, PhysicalDocumentOperation,
-    PhysicalDocumentProvider, PhysicalDocumentRequest, PhysicalDocumentResult,
-    PhysicalDocumentRoute, SigningIdentity, SigningIdentityProvider, SigningRequest, SigningResult,
+    FlowKeyEnvelopeProvider, FlowProviderError, FlowReference, FlowReferenceKind,
+    FlowReferenceProvider, HaipRemoteKey, PhysicalDocumentOperation, PhysicalDocumentProvider,
+    PhysicalDocumentRequest, PhysicalDocumentResult, PhysicalDocumentRoute, SigningIdentity,
+    SigningIdentityProvider, SigningRequest, SigningResult,
 };
 
 const MAXIMUM_RESPONSE_BYTES: usize = 1024 * 1024;
+
+#[derive(Default)]
+struct RequestContext<'a> {
+    principal_id: Option<&'a str>,
+    organization_id: Option<&'a str>,
+    grant: Option<&'a str>,
+    gateway_api_key_actor: Option<&'a marty_api_key_policy::GatewayApiKeyActor>,
+}
 
 #[derive(Clone)]
 struct BoundedHttpClient {
@@ -103,8 +115,17 @@ impl BoundedHttpClient {
         body: Option<Value>,
         principal_id: Option<&str>,
     ) -> Result<T, FlowProviderError> {
-        self.json_with_context(method, path, query, body, principal_id, None)
-            .await
+        self.json_with_context(
+            method,
+            path,
+            query,
+            body,
+            RequestContext {
+                principal_id,
+                ..RequestContext::default()
+            },
+        )
+        .await
     }
 
     async fn json_for_organization<T: DeserializeOwned>(
@@ -115,8 +136,38 @@ impl BoundedHttpClient {
         body: Option<Value>,
         organization_id: &str,
     ) -> Result<T, FlowProviderError> {
-        self.json_with_context(method, path, query, body, None, Some(organization_id))
-            .await
+        self.json_with_context(
+            method,
+            path,
+            query,
+            body,
+            RequestContext {
+                organization_id: Some(organization_id),
+                ..RequestContext::default()
+            },
+        )
+        .await
+    }
+
+    async fn json_with_grant<T: DeserializeOwned>(
+        &self,
+        method: Method,
+        path: &str,
+        query: &[(&str, &str)],
+        body: Option<Value>,
+        grant: &str,
+    ) -> Result<T, FlowProviderError> {
+        self.json_with_context(
+            method,
+            path,
+            query,
+            body,
+            RequestContext {
+                grant: Some(grant),
+                ..RequestContext::default()
+            },
+        )
+        .await
     }
 
     async fn json_with_context<T: DeserializeOwned>(
@@ -125,8 +176,7 @@ impl BoundedHttpClient {
         path: &str,
         query: &[(&str, &str)],
         body: Option<Value>,
-        principal_id: Option<&str>,
-        organization_id: Option<&str>,
+        context: RequestContext<'_>,
     ) -> Result<T, FlowProviderError> {
         let url = self
             .base_url
@@ -139,11 +189,22 @@ impl BoundedHttpClient {
         if let Some(service_token) = &self.service_token {
             request = request.header("X-Service-Token", service_token);
         }
-        if let Some(principal_id) = principal_id {
+        if let Some(actor) = context.gateway_api_key_actor {
+            if self.service_token.is_none() {
+                return Err(invalid_config(self.provider));
+            }
+            request = request
+                .header("X-API-Key-ID", actor.principal_id())
+                .header("X-API-Key-Scopes", actor.scopes_csv());
+        }
+        if let Some(principal_id) = context.principal_id {
             request = request.header("X-User-ID", principal_id);
         }
-        if let Some(organization_id) = organization_id {
+        if let Some(organization_id) = context.organization_id {
             request = request.header("X-Organization-ID", organization_id);
+        }
+        if let Some(grant) = context.grant {
+            request = request.header(HEADER_NAME, grant);
         }
         if let Some(body) = body {
             request = request.json(&body);
@@ -261,6 +322,32 @@ impl FlowReferenceProvider for HttpFlowReferenceProvider {
         principal_id: &str,
         organization_id: &str,
     ) -> Result<FlowReference, FlowProviderError> {
+        self.resolve_scoped(kind, reference_id, principal_id, organization_id, None)
+            .await
+    }
+
+    async fn resolve_for_actor(
+        &self,
+        kind: FlowReferenceKind,
+        reference_id: &str,
+        principal_id: &str,
+        organization_id: &str,
+        actor: Option<&marty_api_key_policy::GatewayApiKeyActor>,
+    ) -> Result<FlowReference, FlowProviderError> {
+        self.resolve_scoped(kind, reference_id, principal_id, organization_id, actor)
+            .await
+    }
+}
+
+impl HttpFlowReferenceProvider {
+    async fn resolve_scoped(
+        &self,
+        kind: FlowReferenceKind,
+        reference_id: &str,
+        principal_id: &str,
+        organization_id: &str,
+        actor: Option<&marty_api_key_policy::GatewayApiKeyActor>,
+    ) -> Result<FlowReference, FlowProviderError> {
         if reference_id.trim().is_empty()
             || reference_id.len() > 255
             || principal_id.trim().is_empty()
@@ -284,34 +371,49 @@ impl FlowReferenceProvider for HttpFlowReferenceProvider {
             }
             FlowReferenceKind::DeliveryDestination => {
                 self.delivery_destinations
-                    .json_as(
+                    .json_with_context(
                         Method::GET,
                         &format!("v1/delivery-destinations/{encoded}"),
                         &[],
                         None,
-                        Some(principal_id),
+                        RequestContext {
+                            principal_id: Some(principal_id),
+                            organization_id: Some(organization_id),
+                            gateway_api_key_actor: actor,
+                            ..RequestContext::default()
+                        },
                     )
                     .await?
             }
             FlowReferenceKind::TrustProfile => {
                 self.trust_profiles
-                    .json_as(
+                    .json_with_context(
                         Method::GET,
                         &format!("v1/trust-profiles/{encoded}"),
                         &[],
                         None,
-                        Some(principal_id),
+                        RequestContext {
+                            principal_id: Some(principal_id),
+                            organization_id: Some(organization_id),
+                            gateway_api_key_actor: actor,
+                            ..RequestContext::default()
+                        },
                     )
                     .await?
             }
             FlowReferenceKind::DeploymentProfile => {
                 self.deployment_profiles
-                    .json_as(
+                    .json_with_context(
                         Method::GET,
                         &format!("v1/deployment-profiles/{encoded}"),
                         &[],
                         None,
-                        Some(principal_id),
+                        RequestContext {
+                            principal_id: Some(principal_id),
+                            organization_id: Some(organization_id),
+                            gateway_api_key_actor: actor,
+                            ..RequestContext::default()
+                        },
                     )
                     .await?
             }
@@ -341,11 +443,20 @@ impl FlowReferenceProvider for HttpFlowReferenceProvider {
 #[derive(Clone)]
 pub struct HttpSigningProvider {
     signing: BoundedHttpClient,
+    issuer_signing: BoundedHttpClient,
     envelopes: BoundedHttpClient,
+    grant_minter: Option<Arc<dyn GrantMinting>>,
 }
 
 impl HttpSigningProvider {
-    pub fn new(base_url: &str, api_key: &str) -> Result<Self, FlowProviderError> {
+    pub fn new(
+        base_url: &str,
+        api_key: &str,
+        issuer_sign_key: &str,
+    ) -> Result<Self, FlowProviderError> {
+        if api_key == issuer_sign_key {
+            return Err(invalid_config("signing_identity"));
+        }
         let envelopes = BoundedHttpClient::new(
             base_url,
             api_key,
@@ -363,8 +474,20 @@ impl HttpSigningProvider {
                 "signing_identity",
                 Duration::from_secs(10),
             )?,
+            issuer_signing: BoundedHttpClient::new(
+                compatibility_url.as_str(),
+                issuer_sign_key,
+                "signing_identity",
+                Duration::from_secs(10),
+            )?,
             envelopes,
+            grant_minter: None,
         })
+    }
+
+    pub fn with_grant_minter(mut self, grant_minter: GrantMinter) -> Self {
+        self.grant_minter = Some(Arc::new(grant_minter));
+        self
     }
 
     pub async fn health_check(&self) -> Result<(), FlowProviderError> {
@@ -408,21 +531,56 @@ impl SigningIdentityProvider for HttpSigningProvider {
     }
 
     async fn sign(&self, request: &SigningRequest) -> Result<SigningResult, FlowProviderError> {
+        let minter = self
+            .grant_minter
+            .as_ref()
+            .ok_or(FlowProviderError::Unavailable {
+                provider: "signing_identity",
+            })?;
+        let payload = URL_SAFE_NO_PAD
+            .decode(&request.payload_b64url)
+            .map_err(|_| invalid_config("signing_identity"))?;
+        if payload.is_empty() || URL_SAFE_NO_PAD.encode(&payload) != request.payload_b64url {
+            return Err(invalid_config("signing_identity"));
+        }
+        let grant = minter
+            .mint(&GrantBinding {
+                origin: SigningOrigin::FlowWalletRequest,
+                operation_id: &request.operation_id,
+                organization_id: &request.organization_id,
+                route: "/internal/compat/issuer-dids/sign",
+                service_id: None,
+                issuer_did: Some(&request.issuer_did),
+                key_reference: Some(&request.signing_key_reference),
+                key_purpose: &request.key_purpose,
+                algorithm: &request.algorithm,
+                payload: &payload,
+            })
+            .await
+            .map_err(|_| FlowProviderError::Unavailable {
+                provider: "signing_identity",
+            })?
+            .to_header_value()
+            .map_err(|_| FlowProviderError::Unavailable {
+                provider: "signing_identity",
+            })?;
         let body = json!({
             "organization_id": request.organization_id,
             "issuer_did": request.issuer_did,
             "credential_format": request.credential_format,
             "key_purpose": request.key_purpose,
             "payload_b64": request.payload_b64url,
-            "algorithm": request.algorithm
+            "algorithm": request.algorithm,
+            "key_reference": request.signing_key_reference,
         });
         let response: Value = self
-            .signing
-            .json(
+            .issuer_signing
+            .json_with_grant(
                 Method::POST,
                 "issuer-dids/sign",
                 &[("organization_id", &request.organization_id)],
                 Some(body),
+                &grant,
             )
             .await?;
         let signature = raw_signature(&response)?;
@@ -443,60 +601,114 @@ impl SigningIdentityProvider for HttpSigningProvider {
 
 #[async_trait]
 impl FlowKeyEnvelopeProvider for HttpSigningProvider {
-    async fn wrap(
+    async fn resolve_haip_key(
         &self,
-        request: &FlowKeyEnvelopeRequest,
-    ) -> Result<FlowKeyEnvelope, FlowProviderError> {
+        organization_id: &str,
+        flow_instance_id: &str,
+        version: &str,
+    ) -> Result<HaipRemoteKey, FlowProviderError> {
         let response: Value = self
             .envelopes
             .json(
                 Method::POST,
-                "flow-key-envelopes/wrap",
-                &[("organization_id", &request.organization_id)],
+                "haip-response-keys/resolve",
+                &[("organization_id", organization_id)],
                 Some(json!({
-                    "flow_instance_id": request.flow_instance_id,
-                    "plaintext_b64": URL_SAFE_NO_PAD.encode(request.key_json.as_bytes())
+                    "organization_id": organization_id,
+                    "flow_instance_id": flow_instance_id,
+                    "version": version,
                 })),
             )
             .await?;
-        let envelope = response
-            .get("ciphertext")
-            .and_then(Value::as_str)
-            .filter(|value| value.starts_with("vault:"))
-            .ok_or_else(|| invalid_response("flow_key_envelope"))?;
-        Ok(FlowKeyEnvelope {
-            organization_id: request.organization_id.clone(),
-            flow_instance_id: request.flow_instance_id.clone(),
-            purpose: request.purpose.clone(),
-            envelope: envelope.into(),
-        })
+        parse_haip_key_response(&response, organization_id, flow_instance_id, Some(version))
     }
 
-    async fn unwrap(&self, envelope: &FlowKeyEnvelope) -> Result<String, FlowProviderError> {
-        if !envelope.envelope.starts_with("vault:") {
-            return Err(invalid_response("flow_key_envelope"));
-        }
+    async fn create_haip_key(
+        &self,
+        organization_id: &str,
+        flow_instance_id: &str,
+    ) -> Result<HaipRemoteKey, FlowProviderError> {
         let response: Value = self
             .envelopes
             .json(
                 Method::POST,
-                "flow-key-envelopes/unwrap",
-                &[("organization_id", &envelope.organization_id)],
+                "haip-response-keys/create",
+                &[("organization_id", organization_id)],
+                Some(json!({"organization_id": organization_id, "flow_instance_id": flow_instance_id})),
+            )
+            .await?;
+        parse_haip_key_response(&response, organization_id, flow_instance_id, None)
+    }
+
+    async fn decrypt_haip_response(
+        &self,
+        organization_id: &str,
+        flow_instance_id: &str,
+        version: &str,
+        jwe: &str,
+    ) -> Result<Vec<u8>, FlowProviderError> {
+        let response: Value = self
+            .envelopes
+            .json(
+                Method::POST,
+                "haip-response-keys/decrypt",
+                &[("organization_id", organization_id)],
                 Some(json!({
-                    "flow_instance_id": envelope.flow_instance_id,
-                    "ciphertext": envelope.envelope
+                    "organization_id": organization_id,
+                    "flow_instance_id": flow_instance_id,
+                    "version": version,
+                    "jwe": jwe,
                 })),
             )
             .await?;
-        let encoded = response
-            .get("plaintext_b64")
-            .and_then(Value::as_str)
+        if response["organization_id"] != organization_id
+            || response["flow_instance_id"] != flow_instance_id
+            || response["version"] != version
+        {
+            return Err(invalid_response("flow_key_envelope"));
+        }
+        let encoded = response["plaintext_b64"]
+            .as_str()
             .ok_or_else(|| invalid_response("flow_key_envelope"))?;
-        let decoded = URL_SAFE_NO_PAD
+        let plaintext = URL_SAFE_NO_PAD
             .decode(encoded)
             .map_err(|_| invalid_response("flow_key_envelope"))?;
-        String::from_utf8(decoded).map_err(|_| invalid_response("flow_key_envelope"))
+        if plaintext.is_empty() || plaintext.len() > MAXIMUM_RESPONSE_BYTES {
+            return Err(invalid_response("flow_key_envelope"));
+        }
+        Ok(plaintext)
     }
+}
+
+fn parse_haip_key_response(
+    response: &Value,
+    organization_id: &str,
+    flow_instance_id: &str,
+    expected_version: Option<&str>,
+) -> Result<HaipRemoteKey, FlowProviderError> {
+    if response["organization_id"] != organization_id
+        || response["flow_instance_id"] != flow_instance_id
+    {
+        return Err(invalid_response("flow_key_envelope"));
+    }
+    let reference = response["key_reference"]
+        .as_str()
+        .ok_or_else(|| invalid_response("flow_key_envelope"))?;
+    let version =
+        marty_oid4vp_contract::haip_key::version_for(reference, organization_id, flow_instance_id)
+            .ok_or_else(|| invalid_response("flow_key_envelope"))?;
+    if response["version"] != version
+        || expected_version.is_some_and(|expected| expected != version)
+        || !marty_oid4vp_contract::haip_key::matches_public_jwk(&response["public_jwk"], version)
+    {
+        return Err(invalid_response("flow_key_envelope"));
+    }
+    Ok(HaipRemoteKey {
+        organization_id: organization_id.into(),
+        flow_instance_id: flow_instance_id.into(),
+        key_reference: reference.into(),
+        public_jwk: response["public_jwk"].clone(),
+    })
 }
 
 #[derive(Clone)]
@@ -697,7 +909,8 @@ fn http_status(provider: &'static str, status: StatusCode) -> FlowProviderError 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Arc, Mutex};
+    use marty_signing_grant::{GrantClaims, GrantEnvelope, GrantError};
+    use std::sync::Mutex;
 
     use axum::{
         extract::State,
@@ -708,6 +921,36 @@ mod tests {
 
     type CapturedRequest = Arc<Mutex<Option<(HeaderMap, Uri, Value)>>>;
     type CapturedRead = Arc<Mutex<Option<(HeaderMap, Uri)>>>;
+
+    // This contract test checks Flow's authorized request binding and HTTP
+    // shape. Transit HMAC minting is covered by the connected OpenBao tests.
+    struct ContractGrantMinter;
+
+    #[async_trait]
+    impl GrantMinting for ContractGrantMinter {
+        async fn mint(&self, binding: &GrantBinding<'_>) -> Result<GrantEnvelope, GrantError> {
+            let now = chrono::Utc::now().timestamp();
+            Ok(GrantEnvelope {
+                claims: GrantClaims {
+                    version: 1,
+                    origin: binding.origin,
+                    operation_id: binding.operation_id.to_owned(),
+                    organization_id: binding.organization_id.to_owned(),
+                    route: binding.route.to_owned(),
+                    service_id: binding.service_id.map(str::to_owned),
+                    issuer_did: binding.issuer_did.map(str::to_owned),
+                    key_reference: binding.key_reference.map(str::to_owned),
+                    key_purpose: binding.key_purpose.to_owned(),
+                    algorithm: binding.algorithm.to_owned(),
+                    payload_sha256_b64: marty_signing_grant::payload_digest(binding.payload),
+                    issued_at: now,
+                    expires_at: now + 30,
+                    nonce: "contract-only-nonce".into(),
+                },
+                hmac: "not-a-production-hmac".into(),
+            })
+        }
+    }
 
     async fn signing_resolver(
         State(captured): State<CapturedRequest>,
@@ -720,6 +963,7 @@ mod tests {
             "organization_id": body["organization_id"],
             "issuer_did": body["issuer_did"],
             "verification_method_id": format!("{}#key-1", body["issuer_did"].as_str().unwrap()),
+            "signing_key_reference": "managed-key-1",
             "public_jwk": {"kty": "EC", "crv": "P-256", "x": "x", "y": "y"},
             "key_purpose": body["key_purpose"],
             "credential_format": body["credential_format"],
@@ -742,6 +986,41 @@ mod tests {
         }))
     }
 
+    async fn haip_create_capture(
+        State(captured): State<CapturedRequest>,
+        headers: HeaderMap,
+        uri: Uri,
+        Json(body): Json<Value>,
+    ) -> Json<Value> {
+        *captured.lock().unwrap() = Some((headers, uri, body));
+        let version = "0123456789abcdef0123456789abcdef";
+        Json(json!({
+            "organization_id":"org-1", "flow_instance_id":"flow-1",
+            "version":version,
+            "key_reference":format!("didcomm/haip/keys/org-1/flow-1/versions/{version}"),
+            "public_jwk":{
+                "kty":"EC","crv":"P-256","alg":"ECDH-ES","use":"enc",
+                "kid":format!("oid4vp-haip-{version}"),
+                "x":"axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY",
+                "y":"T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU"
+            }
+        }))
+    }
+
+    async fn haip_decrypt_capture(
+        State(captured): State<CapturedRequest>,
+        headers: HeaderMap,
+        uri: Uri,
+        Json(body): Json<Value>,
+    ) -> Json<Value> {
+        *captured.lock().unwrap() = Some((headers, uri, body));
+        Json(json!({
+            "organization_id":"org-1", "flow_instance_id":"flow-1",
+            "version":"0123456789abcdef0123456789abcdef",
+            "plaintext_b64":URL_SAFE_NO_PAD.encode(br#"{"vp_token":"fixture"}"#),
+        }))
+    }
+
     async fn reference_resolver(
         State(captured): State<CapturedRead>,
         headers: HeaderMap,
@@ -754,6 +1033,77 @@ mod tests {
             "organization_id": "org-1",
             "status": "active",
         }))
+    }
+
+    #[tokio::test]
+    async fn reference_delegation_preserves_authenticated_key_scope_without_using_the_operator_key()
+    {
+        const KEY: &str = "10000000-0000-4000-8000-000000000001";
+        const ORG: &str = "20000000-0000-4000-8000-000000000001";
+        async fn resolver(
+            State(captured): State<CapturedRead>,
+            headers: HeaderMap,
+            uri: Uri,
+        ) -> Json<Value> {
+            let id = uri.path().rsplit('/').next().unwrap().to_string();
+            *captured.lock().unwrap() = Some((headers, uri));
+            Json(json!({"id": id, "organization_id": ORG, "status":"ACTIVE"}))
+        }
+        let captured = CapturedRead::default();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let app = Router::new()
+            .route("/v1/deployment-profiles/{id}", get(resolver))
+            .with_state(captured.clone());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let token = "s".repeat(32);
+        let actor = marty_api_key_policy::GatewayApiKeyActor::parse(
+            KEY,
+            ORG,
+            "flows:write,deployment:read",
+        )
+        .unwrap();
+        let provider = HttpFlowReferenceProvider::new(
+            &base,
+            &"a".repeat(32),
+            &base,
+            &base,
+            &base,
+            Some(&token),
+        )
+        .unwrap();
+        let result = provider
+            .resolve_for_actor(
+                FlowReferenceKind::DeploymentProfile,
+                "deployment-1",
+                KEY,
+                ORG,
+                Some(&actor),
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.organization_id.as_deref(), Some(ORG));
+        let (headers, _) = captured.lock().unwrap().take().unwrap();
+        assert_eq!(headers["x-service-token"], token);
+        assert_eq!(headers["x-api-key-id"], KEY);
+        assert_eq!(headers["x-api-key-scopes"], "flows:write,deployment:read");
+        assert_eq!(headers["x-organization-id"], ORG);
+        assert!(headers.get("x-api-key").is_none());
+        let unconfigured =
+            HttpFlowReferenceProvider::new(&base, &"a".repeat(32), &base, &base, &base, None)
+                .unwrap();
+        assert!(unconfigured
+            .resolve_for_actor(
+                FlowReferenceKind::DeploymentProfile,
+                "deployment-1",
+                KEY,
+                ORG,
+                Some(&actor)
+            )
+            .await
+            .is_err());
+        assert!(captured.lock().unwrap().is_none());
+        server.abort();
     }
 
     async fn physical_capture(
@@ -786,11 +1136,18 @@ mod tests {
 
     #[test]
     fn provider_configuration_rejects_credentials_and_weak_api_keys() {
-        assert!(
-            HttpSigningProvider::new("https://user@example.com/internal/", &"a".repeat(32))
-                .is_err()
-        );
-        assert!(HttpSigningProvider::new("https://example.com/internal/", "short").is_err());
+        assert!(HttpSigningProvider::new(
+            "https://user@example.com/internal/",
+            &"a".repeat(32),
+            &"b".repeat(32)
+        )
+        .is_err());
+        assert!(HttpSigningProvider::new(
+            "https://example.com/internal/",
+            "short",
+            &"b".repeat(32)
+        )
+        .is_err());
         assert!(HttpFlowReferenceProvider::new(
             "https://issuance.example",
             &"a".repeat(32),
@@ -800,8 +1157,12 @@ mod tests {
             Some("short"),
         )
         .is_err());
-        let signing =
-            HttpSigningProvider::new("https://example.com/internal/", &"a".repeat(32)).unwrap();
+        let signing = HttpSigningProvider::new(
+            "https://example.com/internal/",
+            &"a".repeat(32),
+            &"b".repeat(32),
+        )
+        .unwrap();
         assert_eq!(
             signing.signing.base_url.as_str(),
             "https://example.com/internal/compat/"
@@ -853,8 +1214,12 @@ mod tests {
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
         let api_key = "0123456789abcdef0123456789abcdef";
-        let provider =
-            HttpSigningProvider::new(&format!("http://{address}/internal/"), api_key).unwrap();
+        let provider = HttpSigningProvider::new(
+            &format!("http://{address}/internal/"),
+            api_key,
+            &"b".repeat(32),
+        )
+        .unwrap();
 
         let identity = provider
             .resolve(
@@ -895,27 +1260,53 @@ mod tests {
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
         let api_key = "0123456789abcdef0123456789abcdef";
-        let provider =
-            HttpSigningProvider::new(&format!("http://{address}/internal/"), api_key).unwrap();
+        let unconfigured = HttpSigningProvider::new(
+            &format!("http://{address}/internal/"),
+            api_key,
+            &"b".repeat(32),
+        )
+        .unwrap();
 
-        let result = provider
-            .sign(&SigningRequest {
-                organization_id: "org-1".into(),
-                issuer_did: "did:web:issuer.example".into(),
-                verification_method_id: "did:web:issuer.example#key-1".into(),
-                key_purpose: "oid4vp_request_signing".into(),
-                credential_format: "oauth-authz-req+jwt".into(),
-                algorithm: "ES256".into(),
-                payload_b64url: "cGF5bG9hZA".into(),
+        let request = SigningRequest {
+            operation_id: "instance-1".into(),
+            organization_id: "org-1".into(),
+            issuer_did: "did:web:issuer.example".into(),
+            verification_method_id: "did:web:issuer.example#key-1".into(),
+            signing_key_reference: "managed-key-1".into(),
+            key_purpose: "oid4vp_request_signing".into(),
+            credential_format: "oauth-authz-req+jwt".into(),
+            algorithm: "ES256".into(),
+            payload_b64url: "cGF5bG9hZA".into(),
+        };
+        assert!(matches!(
+            unconfigured.sign(&request).await,
+            Err(FlowProviderError::Unavailable {
+                provider: "signing_identity"
             })
-            .await
-            .unwrap();
+        ));
+        assert!(captured.lock().unwrap().is_none());
+        let mut provider = unconfigured;
+        provider.grant_minter = Some(Arc::new(ContractGrantMinter));
+
+        let result = provider.sign(&request).await.unwrap();
         assert_eq!(result.signature_raw_b64url, "c2lnbmF0dXJl");
 
         let (headers, uri, body) = captured.lock().unwrap().take().unwrap();
         assert_eq!(uri.path(), "/internal/compat/issuer-dids/sign");
         assert_eq!(uri.query(), Some("organization_id=org-1"));
-        assert_eq!(headers.get("x-api-key").unwrap(), api_key);
+        assert_eq!(headers.get("x-api-key").unwrap(), &"b".repeat(32));
+        let grant = marty_signing_grant::GrantEnvelope::from_header_value(
+            headers.get(HEADER_NAME).unwrap().to_str().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(grant.claims.operation_id, "instance-1");
+        assert_eq!(grant.claims.organization_id, "org-1");
+        assert_eq!(grant.claims.route, "/internal/compat/issuer-dids/sign");
+        assert_eq!(grant.claims.key_reference.as_deref(), Some("managed-key-1"));
+        assert_eq!(
+            grant.claims.payload_sha256_b64,
+            marty_signing_grant::payload_digest(b"payload")
+        );
         assert_eq!(
             body,
             json!({
@@ -924,7 +1315,93 @@ mod tests {
                 "key_purpose": "oid4vp_request_signing",
                 "credential_format": "oauth-authz-req+jwt",
                 "algorithm": "ES256",
+                "key_reference": "managed-key-1",
                 "payload_b64": "cGF5bG9hZA",
+            })
+        );
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn haip_adapter_sends_exact_scope_and_accepts_only_bound_public_response() {
+        let captured = CapturedRequest::default();
+        let router = Router::new()
+            .route(
+                "/internal/haip-response-keys/create",
+                post(haip_create_capture),
+            )
+            .route(
+                "/internal/haip-response-keys/resolve",
+                post(haip_create_capture),
+            )
+            .route(
+                "/internal/haip-response-keys/decrypt",
+                post(haip_decrypt_capture),
+            )
+            .with_state(captured.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        let api_key = "0123456789abcdef0123456789abcdef";
+        let provider = HttpSigningProvider::new(
+            &format!("http://{address}/internal/"),
+            api_key,
+            &"b".repeat(32),
+        )
+        .unwrap();
+
+        let key = provider.create_haip_key("org-1", "flow-1").await.unwrap();
+        assert!(key.public_jwk.get("d").is_none());
+        let (headers, uri, body) = captured.lock().unwrap().take().unwrap();
+        assert_eq!(uri.path(), "/internal/haip-response-keys/create");
+        assert_eq!(uri.query(), Some("organization_id=org-1"));
+        assert_eq!(headers.get("x-api-key").unwrap(), api_key);
+        assert_eq!(
+            body,
+            json!({"organization_id":"org-1","flow_instance_id":"flow-1"})
+        );
+
+        let resolved = provider
+            .resolve_haip_key("org-1", "flow-1", "0123456789abcdef0123456789abcdef")
+            .await
+            .unwrap();
+        assert_eq!(resolved.key_reference, key.key_reference);
+        let (headers, uri, body) = captured.lock().unwrap().take().unwrap();
+        assert_eq!(uri.path(), "/internal/haip-response-keys/resolve");
+        assert_eq!(uri.query(), Some("organization_id=org-1"));
+        assert_eq!(headers.get("x-api-key").unwrap(), api_key);
+        assert_eq!(
+            body,
+            json!({
+                "organization_id":"org-1", "flow_instance_id":"flow-1",
+                "version":"0123456789abcdef0123456789abcdef"
+            })
+        );
+        assert!(provider
+            .resolve_haip_key("org-1", "flow-1", "0".repeat(32).as_str())
+            .await
+            .is_err());
+        captured.lock().unwrap().take();
+
+        let plaintext = provider
+            .decrypt_haip_response(
+                "org-1",
+                "flow-1",
+                "0123456789abcdef0123456789abcdef",
+                "compact.jwe",
+            )
+            .await
+            .unwrap();
+        assert_eq!(plaintext, br#"{"vp_token":"fixture"}"#);
+        let (headers, uri, body) = captured.lock().unwrap().take().unwrap();
+        assert_eq!(uri.path(), "/internal/haip-response-keys/decrypt");
+        assert_eq!(uri.query(), Some("organization_id=org-1"));
+        assert_eq!(headers.get("x-api-key").unwrap(), api_key);
+        assert_eq!(
+            body,
+            json!({
+                "organization_id":"org-1", "flow_instance_id":"flow-1",
+                "version":"0123456789abcdef0123456789abcdef", "jwe":"compact.jwe"
             })
         );
         server.abort();

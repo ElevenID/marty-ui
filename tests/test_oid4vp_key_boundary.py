@@ -27,31 +27,27 @@ def test_marty_oid4vp_services_do_not_accept_private_signing_key_files() -> None
 
 
 def test_oid4vp_signing_and_flow_envelopes_have_dedicated_kms_keys() -> None:
-    migrations = (ROOT / "services" / "run_all_migrations.py").read_text(
-        encoding="utf-8"
-    )
+    migrations = (ROOT / "rust" / "services" / "signing-keys" / "src" / "bootstrap.rs").read_text(encoding="utf-8")
+    adapter = (ROOT / "rust" / "services" / "signing-keys" / "src" / "bootstrap_runtime.rs").read_text(encoding="utf-8")
 
     assert '"ip-marty-oid4vp-verifier"' in migrations
     assert '"oid4vp-verifier-marty-es256"' in migrations
     assert '"oid4vp_request_signing"' in migrations
     assert '"flow-response-envelope-marty-aes256"' in migrations
-    assert '"exportable": False' in migrations
+    assert '"exportable":false' in adapter
 
 
-def test_openbao_initializer_provisions_and_authorizes_purpose_bound_protocol_keys() -> None:
+def test_openbao_initializer_authorizes_tenant_bound_protocol_keys_without_global_keys() -> None:
     init_script = (ROOT / "docker" / "openbao-init.sh").read_text(
         encoding="utf-8"
     )
 
-    for key_id, key_type in (
-        ("oid4vp-verifier-marty-es256", "ecdsa-p256"),
-        ("lti-tool-marty-rs256", "rsa-2048"),
-    ):
-        assert f"transit/keys/{key_id}" in init_script
-        assert f"type={key_type}" in init_script
-        assert f'path "transit/sign/{key_id}"' in init_script
-        assert f'path "transit/verify/{key_id}"' in init_script
-        assert f'path "transit/keys/{key_id}"' in init_script
+    for prefix in ("oid4vp-verifier-", "lti-tool-"):
+        assert f'path "transit/sign/{prefix}*"' in init_script
+        assert f'path "transit/verify/{prefix}*"' in init_script
+        assert f'path "transit/keys/{prefix}*"' in init_script
+    assert "transit/keys/oid4vp-verifier-marty-es256" not in init_script
+    assert "transit/keys/lti-tool-marty-rs256" not in init_script
 
 
 def test_protocol_services_cannot_select_an_issuer_profile_for_signing() -> None:

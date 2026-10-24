@@ -134,12 +134,20 @@ impl CredentialTemplateControlPlane for ControlPlane {
         credential_format: &str,
     ) -> Result<IssuerIdentity, ControlPlaneError> {
         assert_eq!(organization_id, "org-1");
-        assert!(matches!(credential_format, "sd_jwt_vc" | "icao_emrtd"));
+        assert!(matches!(
+            credential_format,
+            "sd_jwt_vc" | "icao_emrtd" | "ldp_vc"
+        ));
         Ok(IssuerIdentity {
             issuer_did: requested_issuer_did
                 .unwrap_or("did:web:issuer.example")
                 .to_owned(),
-            issuer_algorithm: "ES256".to_owned(),
+            issuer_algorithm: if credential_format == "ldp_vc" {
+                "EdDSA"
+            } else {
+                "ES256"
+            }
+            .to_owned(),
         })
     }
 
@@ -397,10 +405,49 @@ async fn internal_metadata_fails_closed_when_the_repository_is_unavailable() {
 }
 
 #[tokio::test]
-async fn physical_passport_template_uses_the_managed_issuer_and_stays_out_of_oid4vci() {
+async fn active_data_integrity_template_is_advertised_for_oid4vci() {
     let (_repository, application) = build_application(ControlPlane {
         deny_membership: false,
         deny_revocation: false,
+        deny_trust: false,
+    });
+    let mut data_integrity = command();
+    data_integrity.name = "VC-API Data Integrity Badge".into();
+    data_integrity.credential_type = "DataIntegrityBadge".into();
+    data_integrity.supported_formats = vec![CredentialFormat::JsonLd];
+    data_integrity.credential_payload_format = Some("json_ld".into());
+    data_integrity.selective_disclosure_fields.clear();
+    let draft = application.create_template(data_integrity).await.unwrap();
+    assert_eq!(draft.credential_payload_format, "JSON_LD");
+    assert_eq!(draft.issuer_algorithm.as_deref(), Some("EdDSA"));
+    application
+        .activate_template("user-1", &draft.id, Utc::now())
+        .await
+        .unwrap();
+    let metadata = application
+        .credential_configurations_internal()
+        .await
+        .unwrap();
+    let configuration = &metadata.configurations["DataIntegrityBadge"];
+    assert_eq!(configuration["format"], "ldp_vc");
+    assert_eq!(
+        configuration["credential_signing_alg_values_supported"],
+        serde_json::json!(["EdDSA"])
+    );
+    assert_eq!(
+        configuration["credential_definition"],
+        serde_json::json!({
+            "@context": ["https://www.w3.org/ns/credentials/v2"],
+            "type": ["VerifiableCredential", "DataIntegrityBadge"]
+        })
+    );
+}
+
+#[tokio::test]
+async fn physical_passport_template_uses_the_managed_issuer_and_stays_out_of_oid4vci() {
+    let (_repository, application) = build_application(ControlPlane {
+        deny_membership: false,
+        deny_revocation: true,
         deny_trust: false,
     });
     let mut physical = command();
@@ -410,6 +457,7 @@ async fn physical_passport_template_uses_the_managed_issuer_and_stays_out_of_oid
     physical.supported_formats = vec![CredentialFormat::IcaoEmrtd];
     physical.credential_payload_format = Some("ICAO_EMRTD".into());
     physical.issuance_protocol = Some("PHYSICAL_DOCUMENT".into());
+    physical.revocation_profile_id = None;
     let draft = application.create_template(physical.clone()).await.unwrap();
     assert_eq!(draft.credential_payload_format, "ICAO_EMRTD");
     assert_eq!(draft.issuance_protocol, "PHYSICAL_DOCUMENT");
@@ -425,6 +473,32 @@ async fn physical_passport_template_uses_the_managed_issuer_and_stays_out_of_oid
         .unwrap()
         .configurations
         .is_empty());
+    let mut invalid_revocation = physical.clone();
+    invalid_revocation.revocation_profile_id = Some("revocation-1".into());
+    assert!(application
+        .create_template(invalid_revocation)
+        .await
+        .is_err());
+    let mut blank_revocation = physical.clone();
+    blank_revocation.revocation_profile_id = Some("  ".into());
+    assert!(application.create_template(blank_revocation).await.is_err());
+    let digital_draft = application.create_template(command()).await.unwrap();
+    let converted = application
+        .update_template(UpdateTemplateCommand {
+            user_id: "user-1".into(),
+            template_id: digital_draft.id,
+            patch: UpdateTemplatePatch {
+                supported_formats: Some(vec![CredentialFormat::IcaoEmrtd]),
+                credential_payload_format: Some("ICAO_EMRTD".into()),
+                issuance_protocol: Some("PHYSICAL_DOCUMENT".into()),
+                revocation_profile_id: Some(String::new()),
+                ..UpdateTemplatePatch::default()
+            },
+            now: Utc::now(),
+        })
+        .await
+        .expect("draft conversion clears the digital revocation profile");
+    assert_eq!(converted.revocation_profile_id, None);
     physical.issuance_protocol = Some("OID4VCI_PRE_AUTH".into());
     assert!(application.create_template(physical).await.is_err());
 }

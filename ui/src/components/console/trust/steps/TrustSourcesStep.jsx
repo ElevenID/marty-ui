@@ -88,6 +88,9 @@ const normalizeIssuer = (issuer, importSource = 'manual') => {
 
   return {
     did,
+    ...(issuer.organization_id !== undefined ? { organization_id: issuer.organization_id } : {}),
+    ...(issuer.verification_method_ids !== undefined ? { verification_method_ids: issuer.verification_method_ids } : {}),
+    ...(issuer.did_resolution !== undefined ? { did_resolution: issuer.did_resolution } : {}),
     source_type: 'PINNED_ISSUER',
     name: issuer.name || '',
     description: issuer.description || '',
@@ -186,6 +189,13 @@ const getRegistrySyncSummary = (source) => {
 const TrustSourcesStep = ({ data, onChange }) => {
   const { t } = useTranslation(['console', 'common']);
   const [newIssuerDid, setNewIssuerDid] = useState('');
+  const [configureResolution, setConfigureResolution] = useState(false);
+  const [issuerOrganization, setIssuerOrganization] = useState('');
+  const [methodPins, setMethodPins] = useState('');
+  const [resolverType, setResolverType] = useState('ORGANIZATION_REGISTRY');
+  const [allowPublicFallback, setAllowPublicFallback] = useState(false);
+  const [cacheTtl, setCacheTtl] = useState('300');
+  const [didControlError, setDidControlError] = useState('');
   const [tabValue, setTabValue] = useState(0);
   const [openRegistryDialog, setOpenRegistryDialog] = useState(false);
   const [registrySources, setRegistrySources] = useState(data.registry_sources || []);
@@ -327,6 +337,18 @@ const TrustSourcesStep = ({ data, onChange }) => {
     }
 
     if (!newIssuerDid.trim()) return;
+    const pins = methodPins.split(/[\n,;|]+/).map((pin) => pin.trim()).filter(Boolean);
+    if (configureResolution) {
+      if (!newIssuerDid.trim().startsWith('did:')
+        || (resolverType !== 'PUBLIC_DID' && !issuerOrganization.trim())
+        || !/^\d+$/.test(cacheTtl) || !Number.isSafeInteger(Number(cacheTtl))
+        || new Set(pins).size !== pins.length
+        || pins.some((pin) => !pin.startsWith(`${newIssuerDid.trim()}#`) || pin.endsWith('#') || /\s/.test(pin))) {
+        setDidControlError('Enter an organization for registry resolution, nonnegative cache seconds, and unique method IDs belonging to this DID.');
+        return;
+      }
+    }
+    setDidControlError('');
     const trusted = [...trustedIssuers];
 
     // Check for duplicates
@@ -338,6 +360,11 @@ const TrustSourcesStep = ({ data, onChange }) => {
       normalizeIssuer(
         {
           did: newIssuerDid.trim(),
+          ...(configureResolution ? {
+            ...(issuerOrganization.trim() ? { organization_id: issuerOrganization.trim() } : {}),
+            verification_method_ids: pins,
+            did_resolution: { resolver_type: resolverType, allow_public_fallback: allowPublicFallback, cache_ttl_seconds: Number(cacheTtl) },
+          } : {}),
           name: newIssuerName.trim(),
           country: newIssuerCountry.trim(),
           credential_types: newIssuerCredentialTypes,
@@ -351,6 +378,12 @@ const TrustSourcesStep = ({ data, onChange }) => {
 
     updateTrustedIssuers(trusted);
     setNewIssuerDid('');
+    setConfigureResolution(false);
+    setIssuerOrganization('');
+    setMethodPins('');
+    setResolverType('ORGANIZATION_REGISTRY');
+    setAllowPublicFallback(false);
+    setCacheTtl('300');
     setNewIssuerName('');
     setNewIssuerCountry('');
     setNewIssuerCredentialTypes('');
@@ -618,6 +651,25 @@ const TrustSourcesStep = ({ data, onChange }) => {
                   fullWidth
                 />
               </Stack>
+              <FormControlLabel control={<Checkbox checked={configureResolution} onChange={(e) => setConfigureResolution(e.target.checked)} />} label="Configure DID resolution" />
+              {configureResolution && (
+                <Stack spacing={2} sx={{ mb: 2 }}>
+                  <TextField label="Issuer organization scope" value={issuerOrganization} onChange={(e) => setIssuerOrganization(e.target.value)} helperText="An organization scope requires its issuer registry to be checked first." />
+                  <FormControl fullWidth>
+                    <InputLabel id="did-resolver-type-label">DID resolver</InputLabel>
+                    <Select labelId="did-resolver-type-label" label="DID resolver" value={resolverType} onChange={(e) => setResolverType(e.target.value)}>
+                      <MenuItem value="ORGANIZATION_REGISTRY">Organization registry</MenuItem>
+                      <MenuItem value="ORGANIZATION_REGISTRY_WITH_PUBLIC_FALLBACK">Organization registry with public fallback</MenuItem>
+                      <MenuItem value="PUBLIC_DID">Public DID</MenuItem>
+                    </Select>
+                  </FormControl>
+                  <TextField label="Pinned verification method IDs" value={methodPins} onChange={(e) => setMethodPins(e.target.value)} multiline helperText="Optional full DID method IDs, one per line. Only assertion-authorized methods are accepted." />
+                  <TextField label="Maximum cache age (seconds)" type="number" value={cacheTtl} onChange={(e) => setCacheTtl(e.target.value)} helperText="Zero disables cache reuse." />
+                  <FormControlLabel control={<Checkbox checked={allowPublicFallback} onChange={(e) => setAllowPublicFallback(e.target.checked)} />} label="Allow public fallback after a registry outage" />
+                  <Typography variant="body2" color="text.secondary">Inactive, incompatible, ambiguous, or wrong-tenant identities always fail. Registry-with-fallback and public resolver modes also permit public fallback after an outage.</Typography>
+                  {didControlError && <Alert severity="error">{didControlError}</Alert>}
+                </Stack>
+              )}
               <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} sx={{ mb: 2 }}>
                 <TextField
                   label={t('wizards.trustProfile.trustSourcesStep.accreditationBody.label', { defaultValue: 'Accreditation Authority' })}

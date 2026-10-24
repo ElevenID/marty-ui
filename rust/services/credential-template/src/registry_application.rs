@@ -561,6 +561,24 @@ impl CredentialTemplateRegistryApplication {
         Ok(entry)
     }
 
+    pub async fn get_destination_for_gateway_api_key(
+        &self,
+        actor: &marty_api_key_policy::GatewayApiKeyActor,
+        destination_id: &str,
+    ) -> Result<DeliveryDestinationEntry, CredentialTemplateApplicationError> {
+        let entry = self.load_destination(destination_id).await?;
+        let actor_organization = actor.organization_id();
+        let organization = match entry.organization_id.as_deref() {
+            Some(organization) => organization,
+            None if entry.is_system => &actor_organization,
+            None => return Err(crate::application::ControlPlaneError::MembershipRequired.into()),
+        };
+        if !actor.authorizes(&actor.principal_id(), organization, "wallet:view") {
+            return Err(crate::application::ControlPlaneError::MembershipRequired.into());
+        }
+        Ok(entry)
+    }
+
     pub async fn create_destination(
         &self,
         command: CreateDestinationCommand,

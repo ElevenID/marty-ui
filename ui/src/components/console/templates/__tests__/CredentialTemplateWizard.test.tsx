@@ -60,7 +60,7 @@ describe('CredentialTemplateWizard', () => {
   })
 
   describe('step 1: basics', () => {
-    it('should require name, credential type, and vct', async () => {
+    it('requires basics before choosing format-dependent VCT requirements', async () => {
       const { user } = render(<CredentialTemplateWizard />)
 
       const nextButton = screen.getByTestId('wizard.template.next')
@@ -68,7 +68,7 @@ describe('CredentialTemplateWizard', () => {
 
       // Enter name only — credential_type is pre-filled via initialData
       await user.type(screen.getByLabelText(/Template Name/i), 'mDL Template')
-      expect(nextButton).toBeDisabled()
+      expect(nextButton).toBeEnabled()
 
       // Enter vct
       await user.type(screen.getByLabelText(/VCT/i), 'org.iso.18013.5.1.mDL')
@@ -147,12 +147,26 @@ describe('CredentialTemplateWizard', () => {
   })
 
   describe('complete wizard flow', () => {
-    it('creates the template in the active console organization', async () => {
+    it.each(['digital', 'physical', 'stale'])('uses current API compatibility for the %s template journey', async (mode) => {
       let createdPayload: Record<string, unknown> | undefined
       let activationRequested = false
       let internalIssuerProfileFetches = 0
+      let optionRequests = 0
+      const physical = mode === 'physical'
+      const payloadFormat = physical ? 'ICAO_EMRTD' : 'SD_JWT_VC'
+      const protocol = physical ? 'PHYSICAL_DOCUMENT' : 'OID4VCI_PRE_AUTH'
 
       server.use(
+        http.post('*/v1/credential-templates/issuer-options', async ({ request }) => {
+          const body = await request.json() as Record<string, unknown>
+          expect(body.organization_id).toBe('console-org')
+          expect(body.compliance_profile_id).toBe('compliance-1')
+          optionRequests += 1
+          return HttpResponse.json({ organization_id: 'console-org', compliance_profile_id: 'compliance-1',
+            credential_payload_format: payloadFormat, supported_formats: [payloadFormat], issuance_protocol: protocol,
+            requirements: { vct: !physical, doctype: false, revocation_profile: !physical, x509_certificate: physical },
+            identities: mode === 'stale' && optionRequests > 1 ? [] : [{ issuer_did: 'did:web:issuer.example.com', bindings: [{ credential_format: payloadFormat, key_purpose: physical ? 'x509_doc_signer' : 'vc_jwt_issuer', algorithm: 'ES256' }] }], rejected_issuers: [] })
+        }),
         http.get('*/v1/signing-keys/issuer-profiles', () => {
           internalIssuerProfileFetches += 1
           return HttpResponse.json({ profiles: [] })
@@ -198,7 +212,8 @@ describe('CredentialTemplateWizard', () => {
             organization_id: null,
             name: 'OID4VC Core',
             compliance_code: 'OID4VC',
-            credential_format: 'SD_JWT_VC',
+            credential_format: payloadFormat,
+            issuance_protocol: protocol,
             status: 'ACTIVE',
             is_system: true,
             discoverable: true,
@@ -233,17 +248,32 @@ describe('CredentialTemplateWizard', () => {
       await waitFor(() => expect(screen.getByTestId('wizard.template.next')).toBeEnabled())
       await user.click(screen.getByTestId('wizard.template.next'))
 
+      await waitFor(() => expect(screen.getByRole('combobox', { name: 'Issuer DID' })).not.toHaveAttribute('aria-disabled', 'true'))
+      await user.click(screen.getByRole('combobox', { name: 'Issuer DID' }))
+      await user.click(await screen.findByRole('option', { name: 'did:web:issuer.example.com' }))
       await waitFor(() => expect(screen.getByTestId('wizard.template.next')).toBeEnabled())
       await user.click(screen.getByTestId('wizard.template.next'))
 
-      const revocationSelect = await screen.findByLabelText(/revocation profile/i)
-      await user.click(revocationSelect)
-      await user.click(await screen.findByRole('option', { name: /lifecycle status/i }))
+      if (physical) {
+        expect(await screen.findByText(/does not use a digital Revocation Profile/)).toBeInTheDocument()
+        expect(screen.queryByRole('combobox', { name: /revocation profile/i })).not.toBeInTheDocument()
+      } else {
+        const revocationSelect = await screen.findByLabelText(/revocation profile/i)
+        await user.click(revocationSelect)
+        await user.click(await screen.findByRole('option', { name: /lifecycle status/i }))
+      }
       await waitFor(() => expect(screen.getByTestId('wizard.template.next')).toBeEnabled())
       await user.click(screen.getByTestId('wizard.template.next'))
 
       await waitFor(() => expect(screen.getByTestId('wizard.template.submit')).toBeEnabled())
       await user.click(screen.getByTestId('wizard.template.submit'))
+
+      if (mode === 'stale') {
+        expect(await screen.findByText(/Issuer compatibility changed/)).toBeInTheDocument()
+        expect(createdPayload).toBeUndefined()
+        expect(activationRequested).toBe(false)
+        return
+      }
 
       await waitFor(() => {
         expect(createdPayload).toEqual(expect.objectContaining({
@@ -251,7 +281,10 @@ describe('CredentialTemplateWizard', () => {
           issuer_did: 'did:web:issuer.example.com',
           trust_profile_id: 'trust-1',
           compliance_profile_id: 'compliance-1',
-          revocation_profile_id: 'revocation-1',
+          revocation_profile_id: physical ? null : 'revocation-1',
+          credential_payload_format: payloadFormat,
+          supported_formats: [payloadFormat],
+          issuance_protocol: protocol,
         }))
         expect(createdPayload).not.toHaveProperty('issuer_profile_id')
         expect(createdPayload).not.toHaveProperty('issuer_algorithm')
@@ -263,7 +296,7 @@ describe('CredentialTemplateWizard', () => {
         expect(createdPayload).not.toHaveProperty('generate_artifacts_automatically')
         expect(createdPayload).not.toHaveProperty('activate_immediately')
         expect(createdPayload).not.toHaveProperty('supported_wallet_ids')
-        expect(createdPayload).not.toHaveProperty('issuance_protocol')
+        expect(createdPayload).not.toHaveProperty('_issuer_selection')
         expect(internalIssuerProfileFetches).toBe(0)
         expect(activationRequested).toBe(true)
         expect(screen.getByText(/now active/i)).toBeInTheDocument()

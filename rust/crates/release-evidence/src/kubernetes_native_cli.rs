@@ -1,6 +1,7 @@
 use marty_release_evidence::kubernetes_native::{
     self as native, Environment, Result, MAX_BYTES, REFUSAL,
 };
+use serde_json::json;
 use std::{
     fs::File,
     io::{self, Read, Write},
@@ -53,6 +54,20 @@ fn run() -> Result<()> {
         }
         return Ok(());
     }
+    if operation == "check-selection" {
+        if !enabled || repo.is_some() || manifests.is_some() {
+            return Err(REFUSAL);
+        }
+        let namespace = namespace.ok_or(REFUSAL)?;
+        let documents = native::documents(&bounded(io::stdin().lock())?)?;
+        if documents.len() != 1 {
+            return Err(REFUSAL);
+        }
+        return native::selected_passport_config(
+            &json!({"kind":"List","items":documents}),
+            &namespace,
+        );
+    }
     if !enabled || (operation != "render" && operation != "check-update") {
         return Err(REFUSAL);
     }
@@ -84,6 +99,7 @@ fn run() -> Result<()> {
         let bytes = bounded(io::stdin().lock())?;
         let parsed: serde_yaml::Value = serde_yaml::from_slice(&bytes).map_err(|_| REFUSAL)?;
         let actual = serde_json::to_value(parsed).map_err(|_| REFUSAL)?;
+        native::selected_passport_config(&actual, &namespace)?;
         native::check_update(&actual, &expected, &namespace)?;
     }
     Ok(())

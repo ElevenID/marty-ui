@@ -12,6 +12,14 @@ import subprocess
 import sys
 from urllib.parse import urlsplit
 
+try:
+    from .check_beta_keycloak_kms import KeycloakKmsError, validate_model as validate_keycloak_kms
+except ImportError:
+    try:
+        from scripts.check_beta_keycloak_kms import KeycloakKmsError, validate_model as validate_keycloak_kms
+    except ImportError:
+        from check_beta_keycloak_kms import KeycloakKmsError, validate_model as validate_keycloak_kms
+
 MAX_MODEL_BYTES = 8 * 1024 * 1024
 MAX_MOUNT_ENTRIES = 1024
 MAX_MOUNT_FILES = 512
@@ -69,6 +77,22 @@ def is_known_beta_canvas_config(source, service_name, repository_root):
             and not candidate.is_symlink() and candidate.resolve() == expected)
 
 
+def is_known_openbao_bootstrap_file(source, service_name, repository_root):
+    """Allow only the two KMS-owned Raft bootstrap inputs in beta."""
+    allowed = {
+        "openbao": {"docker/openbao-selfhost.hcl"},
+        "openbao-init": {"docker/openbao-selfhost-init.sh"},
+    }
+    root = Path(repository_root).resolve()
+    candidate = Path(source).absolute() if isinstance(source, str) else None
+    return (
+        candidate is not None
+        and any(candidate == root / relative for relative in allowed.get(service_name, ()))
+        and not candidate.is_symlink()
+        and candidate.resolve() == candidate
+    )
+
+
 def environment(service):
     value = service.get("environment")
     if isinstance(value, dict):
@@ -76,6 +100,17 @@ def environment(service):
     if isinstance(value, list) and all(isinstance(item, str) for item in value):
         return dict(item.split("=", 1) for item in value if "=" in item)
     raise PassportConfigurationError("Invalid beta passport service environment")
+
+
+def has_readonly_volume(service, source, target):
+    return any(
+        isinstance(mount, dict)
+        and mount.get("type") == "volume"
+        and mount.get("source") == source
+        and mount.get("target") == target
+        and mount.get("read_only") is True
+        for mount in service.get("volumes", [])
+    )
 
 
 def contains_credential(value, credential):
@@ -356,7 +391,7 @@ def validate_physical_model(model, files, provider_registry=None):
                          "name": "elevenid-beta-network"},
                      "Beta physical provider networks are not isolated")
     physical_secrets = {
-        "passport_physical_provider_api_key", "passport_provider_webhook_secret",
+        "passport_physical_provider_api_key",
         "passport_callback_signer_api_key", "passport_callback_signer_bao_token",
     }
     expected_secret_consumers = {
@@ -364,8 +399,10 @@ def validate_physical_model(model, files, provider_registry=None):
         "passport-callback-signer-supported": {
             "passport_callback_signer_api_key", "passport_callback_signer_bao_token"},
         "passport-provider-ingress": {
-            "passport_callback_signer_api_key", "passport_provider_webhook_secret"},
+            "passport_callback_signer_api_key"},
     }
+    physical_require("passport_provider_webhook_secret" not in model.get("secrets", {}),
+                     "Local provider webhook secret is forbidden")
     physical_secret_root = physical_secret_path(
         model, "passport_callback_signer_bao_token").parent.resolve()
     approved_secret_names = physical_secrets | {"marty_db_password"}
@@ -398,7 +435,16 @@ def validate_physical_model(model, files, provider_registry=None):
                        and service.get("network_mode") == "service:issuance"
                        and set(services.get("issuance", {}).get("networks", {}))
                        == {"marty-network"})
-        physical_require((not service.get("network_mode") or bridge_mode)
+        keyless_envoy_bridge = (name == "envoy-issuance-bridge"
+                                and service.get("network_mode") == "service:envoy"
+                                and set(services.get("envoy", {}).get("networks", {}))
+                                == {"marty-network"})
+        isolated_kms_init = (name == "openbao-tls-init"
+                             and service.get("network_mode") == "none"
+                             and not service_networks)
+        physical_require((not service.get("network_mode") or bridge_mode
+                          or keyless_envoy_bridge
+                          or isolated_kms_init)
                          and not service.get("volumes_from"),
                          "Beta physical provider service inherited network or volumes")
         if "passport-provider-signing" in service_networks:
@@ -446,6 +492,8 @@ def validate_physical_model(model, files, provider_registry=None):
             source_for_name_check = physical_source_for_name_check(
                 source, kind, Path(__file__).resolve().parents[1])
             physical_require(known_beta_canvas_config
+                             or is_known_openbao_bootstrap_file(
+                                 source, name, Path(__file__).resolve().parents[1])
                              or not re.search(r"prod|production|selfhost",
                                               source_for_name_check,
                                               re.IGNORECASE),
@@ -476,27 +524,62 @@ def validate_physical_model(model, files, provider_registry=None):
         actual = service.get("networks")
         physical_require(isinstance(actual, dict) and set(actual) == expected,
                          "Beta physical provider service network membership is invalid")
-    for service in (services["gateway"], services["flow"],
-                    services["issuance-native"], services["signing-keys"],
-                    signer_service, ingress_service):
+    grant_volumes = {
+        "gateway": [("openbao_gateway_grant", "/bao/gateway-grant")],
+        "flow": [("openbao_flow_grant", "/bao/flow-grant")],
+        "issuance-native": [
+            ("openbao_issuance_credential_grant", "/bao/issuance-credential-grant"),
+            ("openbao_issuance_canvas_grant", "/bao/issuance-canvas-grant"),
+            ("openbao_issuance_readiness_grant", "/bao/issuance-readiness-grant"),
+            ("openbao_issuance_passport_grant", "/bao/issuance-passport-grant"),
+        ],
+        "signing-keys": [("openbao_verify_grant", "/bao/verify-grant")],
+    }
+    for owner in ("gateway", "flow", "issuance-native", "signing-keys"):
+        grant_volumes[owner].insert(0, ("openbao_public_ca", "/bao/public-ca"))
+    grant_volumes["issuance-native"].insert(
+        1, ("openbao_didcomm_issuance_token", "/bao/didcomm-issuance-token"))
+    grant_volumes["signing-keys"].insert(
+        1, ("openbao_signing_keys_token", "/bao/signing-keys-token"))
+    for name, service in (("gateway", services["gateway"]),
+                          ("flow", services["flow"]),
+                          ("issuance-native", services["issuance-native"]),
+                          ("signing-keys", services["signing-keys"]),
+                          ("callback-signer", signer_service),
+                          ("provider-ingress", ingress_service)):
+        allowed_volumes = [{"type": "volume", "source": source,
+                            "target": target, "read_only": True, "volume": {}}
+                           for source, target in grant_volumes.get(name, [])]
+        physical_require(service.get("volumes", []) == allowed_volumes,
+                         f"Beta physical provider service escaped isolation: {name}")
         physical_require(not any(service.get(field) for field in (
-            "volumes", "configs", "privileged", "network_mode", "container_name", "volumes_from",
+            "configs", "privileged", "network_mode", "container_name", "volumes_from",
             "devices", "extra_hosts", "pid", "ipc", "cgroup_parent")),
             "Beta physical provider service escaped isolation")
         labels = service.get("labels", {})
         physical_require(isinstance(labels, dict)
                          and not any(key.startswith("com.docker.compose.") for key in labels),
                          "Beta physical provider callback service labels are invalid")
-    for name in ("gateway", "signing-keys"):
-        physical_require(not physical_secret_sources(services[name]),
-                         "Beta physical provider core service gained a secret mount")
+    physical_require(physical_secret_sources(services["gateway"]) ==
+                     {"workload_identity_ca_cert", "gateway_workload_client_cert",
+                      "gateway_tls_kms_token", "openbao_tls_ca_cert"},
+                     "Beta physical provider Gateway CA mounts are invalid")
+    physical_require(physical_secret_sources(services["signing-keys"]) == {
+        "dev_integration_secret_server_cert",
+        "dev_integration_secret_ca",
+        "openbao_tls_ca_cert",
+        "signing_keys_tls_kms_token",
+    }, "Beta physical provider Signing Keys TLS mounts are invalid")
     physical_require(physical_secret_sources(services["flow"]) == {
-        "flow_workload_client_cert", "flow_workload_client_key",
-        "flow_workload_server_cert", "flow_workload_server_key",
-        "workload_identity_ca_cert"},
+        "flow_workload_client_cert", "flow_client_tls_kms_token",
+        "flow_workload_server_cert", "flow_server_tls_kms_token",
+        "openbao_tls_ca_cert", "workload_identity_ca_cert"},
         "Beta physical provider flow workload secret mounts are invalid")
     physical_require(physical_secret_sources(services["issuance-native"])
-                     == {"passport_physical_provider_api_key"},
+                     == {"passport_physical_provider_api_key",
+                         "dev_integration_secret_ca", "workload_identity_ca_cert",
+                         "issuance_workload_server_cert", "issuance_tls_kms_token",
+                         "openbao_tls_ca_cert"},
                      "Beta physical provider native secret mounts are invalid")
     for service in (signer_service, ingress_service):
         physical_require(not any(service.get(field) for field in (
@@ -521,8 +604,10 @@ def validate_physical_model(model, files, provider_registry=None):
     physical_require(all(str(native.get(name, "false")).lower() == "true" for name in (
         "PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED", "PASSPORT_KMS_ARTIFACTS_ENABLED",
         "PASSPORT_KMS_CALLBACKS_ENABLED"))
-        and str(native.get("PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED", "false")).lower() == "false"
-        and not native.get("ICAO_DOCUMENT_SIGNER_URL"),
+        and "PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED" not in native
+        and all(name not in native for name in (
+            "ICAO_DOCUMENT_SIGNER_URL", "ICAO_DOCUMENT_SIGNER_API_KEY",
+            "ICAO_DOCUMENT_SIGNER_API_KEY_FILE")),
         "Beta physical provider KMS mode is incomplete")
     for name in PASSPORT_RAW_KEY_NAMES:
         physical_require(not native.get(name) and not native.get(f"{name}_FILE"),
@@ -570,26 +655,33 @@ def validate_physical_model(model, files, provider_registry=None):
     physical_require(native.get("PERSONALIZATION_BUREAU_API_KEY") in (None, "")
                      and native.get("PERSONALIZATION_BUREAU_API_KEY_FILE")
                      == "/run/secrets/passport_physical_provider_api_key"
-                     and not native.get("PERSONALIZATION_BUREAU_WEBHOOK_SECRET")
-                     and not native.get("PERSONALIZATION_BUREAU_WEBHOOK_SECRET_FILE")
+                     and "PERSONALIZATION_BUREAU_WEBHOOK_SECRET" not in native
+                     and "PERSONALIZATION_BUREAU_WEBHOOK_SECRET_FILE" not in native
                      and "passport_physical_provider_api_key" in
                      physical_secret_sources(services["issuance-native"]),
                      "Beta physical provider API credential must be file-backed")
-    physical_require(signer.get("SERVICE_NAME") == "passport_callback_signer"
-                     and signer.get("ENVIRONMENT") == "beta"
-                     and str(signer.get("PASSPORT_CALLBACK_SIGNER_ENABLED", "false")).lower()
+    physical_require(signer.get("SERVICE_NAME") == "passport_callback_signer_supported"
+                     and signer.get("ENVIRONMENT") == "production"
+                     and str(signer.get("PASSPORT_SUPPORTED_CALLBACK_SIGNER_ENABLED", "false")).lower()
                      == "true"
-                     and signer.get("SIGNING_KEYS_INTERNAL_API_KEY_FILE")
+                     and signer.get("PASSPORT_CALLBACK_SIGNER_API_KEY_FILE")
                      == "/run/secrets/passport_callback_signer_api_key"
-                     and signer.get("BAO_TOKEN_FILE")
+                     and signer.get("PASSPORT_CALLBACK_SIGNER_BAO_TOKEN_FILE")
                      == "/run/secrets/passport_callback_signer_bao_token"
-                     and signer.get("BAO_ADDR") == "http://openbao:8200"
+                     and signer.get("BAO_ADDR") == "https://openbao:8200"
+                     and signer.get("BAO_CACERT") == "/run/secrets/openbao_tls_ca_cert"
                      and not any(signer.get(name) for name in (
-                         "SIGNING_KEYS_INTERNAL_API_KEY", "BAO_TOKEN", "OPENBAO_SERVICE_TOKEN",
-                         "OPENBAO_SERVICE_TOKEN_FILE"))
+                         "SIGNING_KEYS_INTERNAL_API_KEY", "SIGNING_KEYS_INTERNAL_API_KEY_FILE",
+                         "BAO_TOKEN", "BAO_TOKEN_FILE", "OPENBAO_SERVICE_TOKEN",
+                         "OPENBAO_SERVICE_TOKEN_FILE", "PASSPORT_CALLBACK_SIGNER_ENABLED"))
+                     and not any(name in signer for name in (
+                         "PASSPORT_PROVIDER_WEBHOOK_SECRET_FILE",
+                         "PASSPORT_PROVIDER_WEBHOOK_SECRET",
+                         "PASSPORT_PROVIDER_HMAC_SOURCE_FILE"))
                      and physical_secret_sources(signer_service) == {
                          "passport_callback_signer_api_key",
-                         "passport_callback_signer_bao_token"},
+                         "passport_callback_signer_bao_token",
+                         "openbao_tls_ca_cert"},
                      "Beta physical provider signer is not isolated")
     physical_require(ingress.get("SERVICE_NAME") == "passport_provider_ingress"
                      and str(ingress.get("PASSPORT_PROVIDER_INGRESS_ENABLED", "false")).lower()
@@ -599,11 +691,16 @@ def validate_physical_model(model, files, provider_registry=None):
                      == PRIVATE_CALLBACK_URL
                      and ingress.get("PASSPORT_PROVIDER_SIGNER_API_KEY_FILE")
                      == "/run/secrets/passport_callback_signer_api_key"
-                     and ingress.get("PASSPORT_PROVIDER_WEBHOOK_SECRET_FILE")
-                     == "/run/secrets/passport_provider_webhook_secret"
+                     and re.fullmatch(r"[1-9][0-9]{0,9}",
+                                      str(ingress.get("PASSPORT_PROVIDER_HMAC_KEY_VERSION", "")))
+                     and int(ingress["PASSPORT_PROVIDER_HMAC_KEY_VERSION"]) <= 4294967295
+                     and not any(name in ingress for name in (
+                         "PASSPORT_PROVIDER_WEBHOOK_SECRET_FILE",
+                         "PASSPORT_PROVIDER_WEBHOOK_SECRET",
+                         "PASSPORT_PROVIDER_HMAC_SOURCE_FILE"))
                      and physical_secret_sources(ingress_service) == {
                          "passport_callback_signer_api_key",
-                         "passport_provider_webhook_secret", "marty_db_password"},
+                         "marty_db_password"},
                      "Beta physical provider callback ingress is invalid")
     physical_require(signing.get("ENVIRONMENT") == "beta"
                      and str(signing.get("SIGNING_KEYS_BETA_CSCA_ISSUANCE_ENABLED", "false"))
@@ -659,11 +756,11 @@ def validate_physical_model(model, files, provider_registry=None):
                      and ingress_service.get("image") == image,
                      "Beta physical provider callback image is not immutable")
     secret_values = [physical_secret(model, name) for name in (
-        "passport_physical_provider_api_key", "passport_provider_webhook_secret",
+        "passport_physical_provider_api_key",
         "passport_callback_signer_api_key", "passport_callback_signer_bao_token",
     )]
     secret_paths = [physical_secret_path(model, name) for name in (
-        "passport_physical_provider_api_key", "passport_provider_webhook_secret",
+        "passport_physical_provider_api_key",
         "passport_callback_signer_api_key", "passport_callback_signer_bao_token",
         "marty_db_password",
     )]
@@ -675,7 +772,7 @@ def validate_physical_model(model, files, provider_registry=None):
     except (OSError, UnicodeError, ValueError) as exc:
         raise PassportConfigurationError("Beta physical provider database binding is invalid") from exc
     physical_require(beta_db_password
-                     and native_database.scheme == "postgresql+asyncpg"
+                     and native_database.scheme == "postgresql"
                      and native_database.hostname == "postgres"
                      and native_database.port == 5432
                      and native_database.username == "marty"
@@ -692,7 +789,12 @@ def validate_physical_model(model, files, provider_registry=None):
 
 
 def validate_model(model, *, passport_enabled, files, physical_provider=False,
-                   provider_registry=None):
+                   provider_registry=None, prepared_services_image=None):
+    if prepared_services_image is not None and (
+        not passport_enabled or physical_provider
+        or not re.fullmatch(r"sha256:[0-9a-f]{64}", str(prepared_services_image))
+    ):
+        raise PassportConfigurationError("Prepared local passport image requires explicit native simulator selection and an immutable image ID")
     if physical_provider:
         physical_require(passport_enabled,
                          "Beta physical provider requires native passport selection")
@@ -799,14 +901,19 @@ def validate_model(model, *, passport_enabled, files, physical_provider=False,
         ):
             if str(native.get(name, "false")).lower() != "true":
                 raise PassportConfigurationError("Beta passport KMS mode is incomplete")
-        if (
-            str(native.get("PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED", "false")).lower()
-            != "false"
-        ):
+        if "PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED" in native:
             raise PassportConfigurationError(
-                "Beta passport self-signed mode is forbidden"
+                "Beta passport self-signed configuration is forbidden"
             )
-        if native.get("ICAO_DOCUMENT_SIGNER_URL"):
+        if ("PERSONALIZATION_BUREAU_WEBHOOK_SECRET" in native
+                or "PERSONALIZATION_BUREAU_WEBHOOK_SECRET_FILE" in native):
+            raise PassportConfigurationError(
+                "Beta passport local callback secret is forbidden"
+            )
+        if any(name in native for name in (
+            "ICAO_DOCUMENT_SIGNER_URL", "ICAO_DOCUMENT_SIGNER_API_KEY",
+            "ICAO_DOCUMENT_SIGNER_API_KEY_FILE",
+        )):
             raise PassportConfigurationError("Beta passport remote signer is forbidden")
         if native.get("PERSONALIZATION_BUREAU_URL") != PRIVATE_BUREAU_URL:
             raise PassportConfigurationError("Beta passport bureau target is invalid")
@@ -825,9 +932,8 @@ def validate_model(model, *, passport_enabled, files, physical_provider=False,
         if not (
             isinstance(database_url, str)
             and isinstance(native_database_url, str)
-            and native_database_url.startswith("postgresql+asyncpg://")
-            and database_url
-            == native_database_url.replace("postgresql+asyncpg://", "postgresql://", 1)
+            and native_database_url.startswith("postgresql://")
+            and database_url == native_database_url
         ):
             raise PassportConfigurationError("Beta passport database target is invalid")
         database_target = urlsplit(database_url)
@@ -891,17 +997,32 @@ def validate_model(model, *, passport_enabled, files, physical_provider=False,
             == "true"
             and str(callback_signer_env.get("SIGNING_KEYS_SERVICE_PORT")) == "8018"
             and callback_signer_env.get("SIGNING_KEYS_INTERNAL_API_KEY") == signing_key
-            and callback_signer_env.get("BAO_ADDR") == "http://openbao:8200"
-            and callback_signer_env.get("BAO_TOKEN")
-            and callback_signer_env.get("BAO_TOKEN") == signing.get("BAO_TOKEN")
+            and callback_signer_env.get("BAO_ADDR") == "https://openbao:8200"
+            and callback_signer_env.get("BAO_CACERT") == "/bao/public-ca/ca.crt"
+            and callback_signer_env.get("BAO_TOKEN_FILE") == "/bao/passport-callback/token"
+            and str(callback_signer_env.get("PRESERVE_BAO_TOKEN_FILE")) == "1"
+            and not any(callback_signer_env.get(name) for name in (
+                "BAO_TOKEN", "OPENBAO_SERVICE_TOKEN", "OPENBAO_SERVICE_TOKEN_FILE"))
+            and has_readonly_volume(callback_signer, "openbao_public_ca", "/bao/public-ca")
+            and has_readonly_volume(callback_signer, "openbao_passport_callback", "/bao/passport-callback")
+            and len(callback_signer.get("volumes", [])) == 2
         ):
             raise PassportConfigurationError(
                 "Beta callback signer configuration is invalid"
             )
-        if not re.fullmatch(
-            r"ghcr\.io/elevenid/marty-ui-oss/services@sha256:[0-9a-f]{64}",
-            str(bureau.get("image", "")),
-        ):
+        for service_name, service in services.items():
+            if service_name in {"openbao-init", "passport-callback-signer"}:
+                continue
+            if any(isinstance(mount, dict) and
+                   mount.get("source") == "openbao_passport_callback"
+                   for mount in service.get("volumes", [])):
+                raise PassportConfigurationError(
+                    "Beta callback token is mounted outside its owner"
+                )
+        image = str(bureau.get("image", ""))
+        image_valid = image == prepared_services_image if prepared_services_image is not None else bool(re.fullmatch(
+            r"ghcr\.io/elevenid/marty-ui-oss/services@sha256:[0-9a-f]{64}", image))
+        if not image_valid:
             raise PassportConfigurationError(
                 "Beta passport bureau image must be immutable"
             )
@@ -927,7 +1048,6 @@ def validate_model(model, *, passport_enabled, files, physical_provider=False,
             for name in (
                 "ports",
                 "secrets",
-                "volumes",
                 "build",
                 "entrypoint",
                 "command",
@@ -990,7 +1110,8 @@ def validate_model(model, *, passport_enabled, files, physical_provider=False,
 
 def validate_compose(
     *, project, env_files, files, passport_enabled, physical_provider=False,
-    runner=subprocess.run
+    prepared_services_image=None,
+    runner=subprocess.run, keycloak_validator=validate_keycloak_kms,
 ):
     command = ["docker", "compose", "--project-name", project]
     for path in env_files:
@@ -1009,10 +1130,15 @@ def validate_compose(
         )
         if result.returncode or len(result.stdout) > MAX_MODEL_BYTES:
             raise PassportConfigurationError("Beta passport Compose validation failed")
+        model = json.loads(result.stdout)
+        keycloak_validator(model, check_files=True)
         validate_model(
-            json.loads(result.stdout), passport_enabled=passport_enabled, files=files,
-            physical_provider=physical_provider
+            model, passport_enabled=passport_enabled, files=files,
+            physical_provider=physical_provider,
+            prepared_services_image=prepared_services_image,
         )
+    except KeycloakKmsError as error:
+        raise PassportConfigurationError(str(error)) from None
     except (OSError, subprocess.SubprocessError, UnicodeError, json.JSONDecodeError):
         raise PassportConfigurationError(
             "Beta passport Compose validation failed"
@@ -1026,6 +1152,7 @@ def main():
     parser.add_argument("--file", action="append", required=True)
     parser.add_argument("--passport-enabled", action="store_true")
     parser.add_argument("--physical-provider", action="store_true")
+    parser.add_argument("--prepared-services-image", help="Exact caller-verified local services image ID; never a tag or an official release")
     args = parser.parse_args()
     try:
         validate_compose(
@@ -1034,6 +1161,7 @@ def main():
             files=args.file,
             passport_enabled=args.passport_enabled,
             physical_provider=args.physical_provider,
+            prepared_services_image=args.prepared_services_image,
         )
     except PassportConfigurationError as error:
         print(str(error), file=sys.stderr)

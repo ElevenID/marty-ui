@@ -13,7 +13,7 @@ PRIVATE = "DIDCOMM_ALLOW_PRIVATE_IPS"
 UNUSED_PRIVATE = "DIDCOMM_ALLOW_PRIVATE_ENDPOINTS"
 NATIVE_URL = "http://issuance-native:8005"
 LEGACY_URL = "http://issuance:8005"
-SELFHOST_NATIVE_URL = "${ISSUANCE_NATIVE_SERVICE_URL:-http://issuance:8005}"
+SELFHOST_NATIVE_URL = NATIVE_URL
 
 
 class UniqueKeyLoader(yaml.SafeLoader):
@@ -101,23 +101,26 @@ def assert_kubernetes_bindings(documents, config):
         }
     }
     service = resource(documents, "Service", "issuance")
+    assert environment(issuance)["SIGNING_KEYS_INTERNAL_URL"] == {
+        "value": "http://gateway:8000/internal/signing-keys"
+    }
     assert flow["envFrom"] == [{"configMapRef": {"name": "marty-config"}}]
     assert config["metadata"]["name"] == "marty-config"
     assert config["metadata"]["namespace"] == "marty-prod"
     assert {key: value for key, value in config["data"].items() if target_key(key)} == {
         "ISSUANCE_SERVICE_URL": LEGACY_URL,
-        "ISSUANCE_NATIVE_SERVICE_URL": LEGACY_URL,
-        "ES_GRPC_TARGET": "event-stream:9015",
+        "ISSUANCE_NATIVE_SERVICE_URL": NATIVE_URL,
+        "ES_GRPC_TARGET": "https://event-stream:9015",
     }
-    assert environment(flow)[TARGET] == {"value": "issuance:9005"}
+    assert environment(flow)[TARGET] == {"value": "https://issuance-native:9005"}
     assert service["spec"]["ports"] == [
         {"port": 8005, "targetPort": 8005, "name": "http"},
-        {"port": 9005, "targetPort": 9005, "name": "grpc"},
     ]
     assert service["spec"]["selector"] == {"app": "issuance"}
-    assert issuance["ports"] == [{"containerPort": 8005}, {"containerPort": 9005}]
+    assert issuance["ports"] == [{"containerPort": 8005}]
     assert issuance["image"] == "${MARTY_ISSUANCE_IMAGE}"
-    assert "command" not in issuance and "args" not in issuance
+    assert issuance["command"] == ["/usr/local/bin/marty-issuance-service"]
+    assert "args" not in issuance
     assert not any(
         item and item["metadata"]["name"] == "issuance-native" for item in documents
     )
@@ -162,25 +165,49 @@ def assert_kubernetes_bindings(documents, config):
     expected = {
         "gateway": {
             "ISSUANCE_SERVICE_URL": legacy_alias,
-            "AUTH_GRPC_TARGET": {"value": "auth:9001"},
+            "AUTH_GRPC_TARGET": {"value": "https://auth:9001"},
+            "ORG_GRPC_TARGET": {"value": "https://organization:9002"},
+            "ES_GRPC_TARGET": {"value": "https://event-stream:9015"},
         },
-        "organization": {"ES_GRPC_TARGET": {"value": "event-stream:9015"}},
+        "organization": {"ES_GRPC_TARGET": {"value": "https://event-stream:9015"}},
         "issuance": {
-            "ORG_GRPC_TARGET": {"value": "organization:9002"},
-            "CT_GRPC_TARGET": {"value": "credential-template:9003"},
+            "ORG_GRPC_TARGET": {"value": "https://organization:9002"},
+            "CT_GRPC_TARGET": {"value": "https://credential-template:9003"},
+            "RP_GRPC_TARGET": {"value": "https://revocation-profile:9013"},
         },
         "verification": {
-            "PP_GRPC_TARGET": {"value": "presentation-policy:9009"},
-            "ORG_GRPC_TARGET": {"value": "organization:9002"},
-            "CT_GRPC_TARGET": {"value": "credential-template:9003"},
+            "PP_GRPC_TARGET": {"value": "https://presentation-policy:9009"},
+            "ORG_GRPC_TARGET": {"value": "https://organization:9002"},
+            "CT_GRPC_TARGET": {"value": "https://credential-template:9003"},
         },
-        "auth": {"ISSUANCE_NATIVE_SERVICE_URL": native_alias},
-        "applicant": {"ISSUANCE_NATIVE_SERVICE_URL": native_alias},
-        "presentation-policy": {"ISSUANCE_NATIVE_SERVICE_URL": native_alias},
-        "revocation-profile": {"ORG_GRPC_TARGET": {"value": "organization:9002"}},
-        "device-registration": {"ORG_GRPC_TARGET": {"value": "organization:9002"}},
+        "auth": {
+            "FLOW_GRPC_TARGET": {"value": "https://flow:9011"},
+            "ES_GRPC_TARGET": {"value": "https://event-stream:9015"},
+            "ORG_GRPC_TARGET": {"value": "https://organization:9002"},
+            "ISSUANCE_NATIVE_SERVICE_URL": native_alias,
+        },
+        "applicant": {
+            "ES_GRPC_TARGET": {"value": "https://event-stream:9015"},
+            "ISSUANCE_NATIVE_SERVICE_URL": native_alias,
+        },
+        "presentation-policy": {
+            "ISSUANCE_NATIVE_SERVICE_URL": native_alias,
+            "ORG_GRPC_TARGET": {"value": "https://organization:9002"},
+        },
+        "revocation-profile": {"ORG_GRPC_TARGET": {"value": "https://organization:9002"}},
+        "device-registration": {"ORG_GRPC_TARGET": {"value": "https://organization:9002"}},
+        "compliance-profile": {"ORG_GRPC_TARGET": {"value": "https://organization:9002"}},
+        "deployment-profile": {"ORG_GRPC_TARGET": {"value": "https://organization:9002"}},
+        "credential-template": {
+            "ORG_GRPC_TARGET": {"value": "https://organization:9002"},
+            "RP_GRPC_TARGET": {"value": "https://revocation-profile:9013"},
+        },
+        "trust-profile": {"ORG_GRPC_TARGET": {"value": "https://organization:9002"}},
         "flow": {
-            TARGET: {"value": "issuance:9005"},
+            "ORG_GRPC_TARGET": {"value": "https://organization:9002"},
+            "CT_GRPC_TARGET": {"value": "https://credential-template:9003"},
+            "PP_GRPC_TARGET": {"value": "https://presentation-policy:9009"},
+            TARGET: {"value": "https://issuance-native:9005"},
             "ISSUANCE_SERVICE_URL": legacy_alias,
             "ISSUANCE_NATIVE_SERVICE_URL": native_alias,
         },
@@ -202,21 +229,18 @@ def assert_selfhost_bindings(compose):
         "service": "issuance-native",
     }
     issuance = services["issuance"]
-    assert (
-        issuance["image"]
-        == "${MARTY_ISSUANCE_IMAGE:?set MARTY_ISSUANCE_IMAGE to an immutable issuance image digest}"
+    assert issuance["environment"]["SIGNING_KEYS_INTERNAL_URL"] == (
+        "http://gateway:8000/internal/signing-keys"
     )
+    assert issuance["build"]["dockerfile"] == "services/Dockerfile"
+    assert issuance["build"]["args"]["SERVICE_NAME"] == "issuance-native"
     assert issuance["entrypoint"] == ["/bin/sh", "/app/load-openbao-token-and-start.sh"]
-    assert issuance["command"] == [
-        "python",
-        "-m",
-        "uvicorn",
-        "main:app",
-        "--host",
-        "0.0.0.0",
-        "--port",
-        "8005",
-    ]
+    assert issuance["command"] == ["/usr/local/bin/marty-issuance-service"]
+    assert issuance["environment"]["SERVICE_NAME"] == "issuance_native"
+    assert issuance["environment"]["MARTY_SCHEMA_STARTUP_MODE"] == "validate"
+    assert issuance["environment"]["DATABASE_URL_TEMPLATE"] == (
+        "postgresql://marty:$${MARTY_DB_PASSWORD}@postgres:5432/marty"
+    )
     flags = {
         name: {
             key: value
@@ -230,16 +254,14 @@ def assert_selfhost_bindings(compose):
         "issuance-native": {PRIVATE: "false"},
     }
 
-    common = "revocation-profile-migrate db-migrate issuance-migrations gateway auth organization credential-template trust-profile issuance applicant notification compliance-profile presentation-policy deployment-profile signing-keys flow verification revocation-profile device-registration event-stream".split()
-    expected = {name: {"ES_GRPC_TARGET": "event-stream:9015"} for name in common}
-    organization = {"ORG_GRPC_TARGET": "organization:9002"}
+    common = "revocation-profile-migrate db-migrate kms-initialize issuance-migrations gateway auth organization credential-template trust-profile issuance applicant notification compliance-profile presentation-policy deployment-profile signing-keys flow verification revocation-profile device-registration event-stream".split()
+    expected = {name: {"ES_GRPC_TARGET": "https://event-stream:9015"} for name in common}
     for name in (
         "gateway",
         "auth",
         "credential-template",
         "trust-profile",
         "issuance",
-        "applicant",
         "compliance-profile",
         "presentation-policy",
         "deployment-profile",
@@ -248,26 +270,29 @@ def assert_selfhost_bindings(compose):
         "revocation-profile",
         "device-registration",
     ):
-        expected[name].update(organization)
+        expected[name]["ORG_GRPC_TARGET"] = "https://organization:9002"
     for name in ("issuance", "flow", "verification"):
-        expected[name]["CT_GRPC_TARGET"] = "credential-template:9003"
+        expected[name]["CT_GRPC_TARGET"] = "https://credential-template:9003"
     for name in ("flow", "verification"):
-        expected[name]["PP_GRPC_TARGET"] = "presentation-policy:9009"
-    for name in ("auth", "applicant"):
-        expected[name]["FLOW_GRPC_TARGET"] = "flow:9011"
+        expected[name]["PP_GRPC_TARGET"] = "https://presentation-policy:9009"
+    expected["auth"]["FLOW_GRPC_TARGET"] = "https://flow:9011"
+    expected["credential-template"]["RP_GRPC_TARGET"] = "https://revocation-profile:9013"
+    expected["issuance"]["RP_GRPC_TARGET"] = "https://revocation-profile:9013"
     expected["gateway"]["ISSUANCE_SERVICE_URL"] = LEGACY_URL
     expected["gateway"]["ISSUANCE_NATIVE_SERVICE_URL"] = NATIVE_URL
     for name in ("auth", "applicant", "presentation-policy"):
         expected[name]["ISSUANCE_SERVICE_URL"] = LEGACY_URL
     expected["flow"]["ISSUANCE_SERVICE_URL"] = LEGACY_URL
     expected["flow"]["ISSUANCE_NATIVE_SERVICE_URL"] = SELFHOST_NATIVE_URL
-    expected["gateway"]["AUTH_GRPC_TARGET"] = "auth:9001"
-    expected["flow"][TARGET] = "issuance-native:9005"
+    expected["gateway"]["AUTH_GRPC_TARGET"] = "https://auth:9001"
+    expected["flow"][TARGET] = "https://issuance-native:9005"
+    expected["issuance"]["DIDCOMM_DELIVERY_OWNER"] = "native"
+    expected["issuance"]["ISSUANCE_NATIVE_SERVICE_URL"] = NATIVE_URL
     expected["issuance-native"] = {
-        "ES_GRPC_TARGET": "event-stream:9015",
-        "ORG_GRPC_TARGET": "organization:9002",
-        "CT_GRPC_TARGET": "credential-template:9003",
-        "RP_GRPC_TARGET": "revocation-profile:9013",
+        "ES_GRPC_TARGET": "https://event-stream:9015",
+        "ORG_GRPC_TARGET": "https://organization:9002",
+        "CT_GRPC_TARGET": "https://credential-template:9003",
+        "RP_GRPC_TARGET": "https://revocation-profile:9013",
     }
     actual = {
         name: {
@@ -322,10 +347,10 @@ def assert_compose_owner_split(compose, *, production=False):
     }
     assert {name: values for name, values in actual.items() if values} == expected
     if production:
-        for name in ("auth", "applicant", "presentation-policy", "flow"):
+        for name in ("auth", "applicant", "presentation-policy"):
             assert "issuance" not in services[name]["depends_on"]
             assert "issuance-native" not in services[name]["depends_on"]
-        dependency_owners = ("gateway",)
+        dependency_owners = ("gateway", "flow")
     else:
         for name in ("auth", "applicant", "presentation-policy"):
             assert services[name]["depends_on"].get("issuance-native") == {
@@ -348,6 +373,89 @@ def test_source_bindings_match_actual_service_and_restrictive_policy():
     assert_compose_owner_split(base)
     assert_compose_owner_split(selfhost, production=True)
     assert_selfhost_bindings(selfhost)
+
+
+def test_deployed_issuance_http_alias_has_tls_peers_and_no_grpc_listener():
+    base = yaml.safe_load((ROOT / "docker-compose.base.yml").read_text())
+    base_alias = base["services"]["issuance"]
+    assert base_alias["environment"]["ISSUANCE_GRPC_ENABLED"] == "false"
+    assert base_alias["ports"] == ["127.0.0.1:8005:8005"]
+    production = yaml.safe_load((ROOT / "docker-compose.selfhost.prod.yml").read_text())
+    beta = yaml.safe_load((ROOT / "docker-compose.beta.yml").read_text())
+    for stack in (production, beta):
+        alias = stack["services"]["issuance"]
+        environment = alias["environment"]
+        assert environment["ISSUANCE_GRPC_ENABLED"] == "false"
+        assert environment["GRPC_TLS_CA_CERT"] == "/run/secrets/workload_identity_ca_cert"
+        assert {
+            name: environment[name]
+            for name in ("ORG_GRPC_TARGET", "CT_GRPC_TARGET", "RP_GRPC_TARGET")
+        } == {
+            "ORG_GRPC_TARGET": "https://organization:9002",
+            "CT_GRPC_TARGET": "https://credential-template:9003",
+            "RP_GRPC_TARGET": "https://revocation-profile:9013",
+        }
+        assert "GRPC_WORKLOAD_TLS_SERVER_KEY" not in environment
+        assert "workload_identity_ca_cert" in alias["secrets"]
+
+    kubernetes = yaml.safe_load_all((ROOT / "k8s/oracle/07-microservices.yaml").read_text())
+    deployment = next(
+        document
+        for document in kubernetes
+        if document and document.get("kind") == "Deployment"
+        and document["metadata"]["name"] == "issuance"
+    )
+    [container] = deployment["spec"]["template"]["spec"]["containers"]
+    environment = {entry["name"]: entry.get("value") for entry in container["env"]}
+    assert environment["ISSUANCE_GRPC_ENABLED"] == "false"
+    assert environment["GRPC_TLS_CA_CERT"].endswith("/ca.crt")
+    assert [port["containerPort"] for port in container["ports"]] == [8005]
+    alias_service = next(
+        document
+        for document in yaml.safe_load_all((ROOT / "k8s/oracle/07-microservices.yaml").read_text())
+        if document and document.get("kind") == "Service"
+        and document["metadata"]["name"] == "issuance"
+    )
+    assert alias_service["spec"]["ports"] == [
+        {"port": 8005, "targetPort": 8005, "name": "http"}
+    ]
+
+
+def test_deployed_grpc_targets_are_explicit_https_across_the_service_graph():
+    base = yaml.safe_load((ROOT / "docker-compose.base.yml").read_text())["services"]
+    beta = yaml.safe_load((ROOT / "docker-compose.beta.yml").read_text())["services"]
+    production = yaml.safe_load((ROOT / "docker-compose.selfhost.prod.yml").read_text())["services"]
+    for layers in ((production,), (base, beta)):
+        targets = []
+        for service in set().union(*(set(layer) for layer in layers)):
+            environment = {}
+            for layer in layers:
+                values = layer.get(service, {}).get("environment", {})
+                if isinstance(values, dict):
+                    environment.update(values)
+                else:
+                    environment.update(
+                        item.split("=", 1) for item in values if "=" in item
+                    )
+            targets.extend(
+                (service, name, value)
+                for name, value in environment.items()
+                if name.endswith("GRPC_TARGET") and value
+            )
+        assert targets
+        assert all(str(value).startswith("https://") for _, _, value in targets)
+
+    kubernetes = yaml.safe_load_all((ROOT / "k8s/oracle/07-microservices.yaml").read_text())
+    targets = [
+        entry
+        for document in kubernetes
+        if document and document.get("kind") == "Deployment"
+        for container in document["spec"]["template"]["spec"]["containers"]
+        for entry in container.get("env", [])
+        if entry["name"].endswith("GRPC_TARGET")
+    ]
+    assert targets
+    assert all(entry.get("value", "").startswith("https://") for entry in targets)
 
 
 @pytest.mark.parametrize("mutation", ["duplicate", "other-reference"])
@@ -391,7 +499,7 @@ def test_kubernetes_guard_rejects_misplaced_or_unrelated_target_changes(mutation
     elif mutation == "wrong-port":
         target["value"] = "issuance:9006"
     elif mutation == "native":
-        target["value"] = "issuance-native:9005"
+        target["value"] = "issuance:9005"
     elif mutation == "duplicate":
         flow["env"].append(deepcopy(target))
     elif mutation == "wrong-container":
@@ -403,9 +511,13 @@ def test_kubernetes_guard_rejects_misplaced_or_unrelated_target_changes(mutation
             "initContainers"
         ] = [{"name": "flow", "env": [target]}]
     elif mutation == "service-port":
-        resource(documents, "Service", "issuance")["spec"]["ports"][1]["port"] = 9006
+        resource(documents, "Service", "issuance")["spec"]["ports"].append(
+            {"port": 9005, "targetPort": 9005, "name": "grpc"}
+        )
     elif mutation == "container-port":
-        container(documents, "issuance", "issuance")["ports"][1]["containerPort"] = 9006
+        container(documents, "issuance", "issuance")["ports"].append(
+            {"containerPort": 9005}
+        )
     elif mutation == "physical-http":
         config["data"]["ISSUANCE_SERVICE_URL"] = "http://issuance-native:8005"
     else:
@@ -459,7 +571,7 @@ def test_selfhost_guard_rejects_policy_drift_and_unrelated_target_changes(mutati
     elif mutation == "other-target":
         services["flow"]["environment"]["CT_GRPC_TARGET"] = "other:9003"
     else:
-        services["issuance"]["command"] = ["/usr/local/bin/marty-issuance-service"]
+        services["issuance"]["command"] = ["python", "-m", "uvicorn", "main:app"]
     with pytest.raises(AssertionError):
         assert_selfhost_bindings(compose)
 
@@ -555,7 +667,9 @@ def test_compose_owner_split_rejects_missing_health_dependency(
 )
 def test_production_rejects_native_http_consumer_reintroduction(service, setting):
     _, _, _, selfhost = source_models()
-    selfhost["services"][service]["environment"][setting] = NATIVE_URL
+    selfhost["services"][service]["environment"][setting] = (
+        LEGACY_URL if service == "flow" else NATIVE_URL
+    )
     with pytest.raises(AssertionError):
         assert_compose_owner_split(selfhost, production=True)
 
@@ -564,7 +678,7 @@ def test_production_rejects_native_http_consumer_reintroduction(service, setting
     ("service", "dependency"),
     [
         (service, dependency)
-        for service in ("auth", "applicant", "presentation-policy", "flow")
+        for service in ("auth", "applicant", "presentation-policy")
         for dependency in ("issuance", "issuance-native")
     ],
 )
@@ -575,6 +689,14 @@ def test_production_rejects_issuance_dependency_reintroduction(
     selfhost["services"][service]["depends_on"][dependency] = {
         "condition": "service_healthy"
     }
+    with pytest.raises(AssertionError):
+        assert_compose_owner_split(selfhost, production=True)
+
+
+@pytest.mark.parametrize("dependency", ["issuance", "issuance-native"])
+def test_production_rejects_flow_issuance_readiness_loss(dependency):
+    _, _, _, selfhost = source_models()
+    del selfhost["services"]["flow"]["depends_on"][dependency]
     with pytest.raises(AssertionError):
         assert_compose_owner_split(selfhost, production=True)
 

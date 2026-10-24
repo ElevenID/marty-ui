@@ -1,5 +1,10 @@
 # Next aggregate beta: acceptance checklist
 
+The current post-deletion execution sequence is
+[Post-deletion Rust passport beta cutover](passport-postdeletion-beta-cutover.md).
+The predeletion release/run instructions below are historical and are not
+prerequisites for the Rust-only source after merged Python deletion.
+
 The final aggregate beta operator requires two external issuer input files.
 `IssuerChainFile` contains exactly `organization_id`, `csca_issuer_did`,
 `csca_certificate_id`, and `dsc_issuer_did`. Its organization and DSC DID must
@@ -23,18 +28,30 @@ both profiles, and nonexportable Transit keys in preserved beta OpenBao.
 Keep the ceremony intent, ceremony receipt and KMS proof with the aggregate
 receipt. Public ingress remains closed until the Rust owner checks pass.
 
-Source-readiness audit: Signing Keys #913 and the passport aggregate #919 are
-on protected main. The reviewed aggregate correction and deployment writer fence
-must also be on protected main before a release claim. The
-[1.1.218 coordinate](passport-predeletion-release-1.1.218.md) was tombstoned
-after qualification failed. The [1.1.219 coordinate](passport-predeletion-release-1.1.219.md)
-also stopped before promotion when its pinned public-stack harness selected a
-retired Python DIDComm owner. The [1.1.220 release](passport-predeletion-release-1.1.220.md)
-passed release qualification, but its protected disposable producer failed and
-did not create acceptance evidence. The [1.1.221 coordinate](passport-predeletion-release-1.1.221.md)
-selects the reviewed teardown correction for another Rust qualification run.
-Historical beta 1.1.217 evidence cannot qualify the new source.
+## Historical release boundaries
+
+The old coordinate reports are retired at Git checkpoint `053102a80`; select
+current source and coordinates from the stack lock and the post-deletion
+cutover workflow linked above. Their outcomes must not be relabeled:
+
+- Beta 1.1.215 deployed, but CSP blocked WASM and organization restoration.
+  Beta 1.1.216 deployed, but JSON-versus-JSONB claims storage broke token exchange.
+  Beta 1.1.217's KMS/theme evidence did not prove full lifecycle, devices or soak.
+- The 1.1.218 claim was tombstoned and must not be reused. Its actual verifier
+  failure was Syft CycloneDX 1.7 versus the harness's 1.6 requirement, before
+  reading the SPDX oracle; the sealed tombstone's SPDX diagnosis was incorrect.
+  Public stack smoke also found missing psycopg 3 in the migrations image.
+- The 1.1.219 claim stopped before promotion because the pinned harness selected
+  the retired Python DIDComm owner. This coordinate must not be reused either.
+- Release 1.1.220 published successfully, but its protected disposable producer
+  rejected OpenBao's owned `callback_signing` primary network instead of
+  `private`. The project was quarantined, then recovered through attested
+  ownership checks with production inventories unchanged. It supplied no beta
+  or passport acceptance. 1.1.221 was the proposed corrected qualification
+  coordinate, not proof of acceptance or a current unused-coordinate claim.
+
 The final beta release must come from the source after Python passport deletion.
+Historical release success is not authorization to deploy another source.
 
 ## Protected configuration audit — 2026-09-20
 
@@ -100,25 +117,33 @@ The final beta release must come from the source after Python passport deletion.
    `scripts/run-passport-beta-aggregate-deploy.ps1` from a clean released
    worktree. Supply the signed stack manifest and the attested fence,
    maintenance, and native migration receipts. Supply an absolute
-   `-ApplicationFile` outside protected source with the pilot organization's
-   `organization_id`, managed `issuer_did`, `application_template_id`,
-   `credential_template_id`, and `delivery_destination_profile_id`. The
+   `-ApplicationFile` as an absolute output path outside protected source. The
+   operator creates and verifies the pilot organization's Credential Template,
+   Application Template, and physical destination through staged Gateway while
+   the passport write fence remains `fully_fenced`, then durably writes the
+   selected IDs and managed issuer DID to that file. The
    operator also needs `-IssuerChainFile` and `-IssuerCeremonyFile` with the
    selected managed CSCA/DSC identities and exact certificate request, plus
    distinct `-CscaSessionFile` and `-DscSessionFile` cookies with the grants
    described above. The selected DIDs must be local path-scoped
    `did:web:beta.elevenidllc.com:orgs:...` identities. The operator checks
    the staged Signing Keys `PUBLIC_DOMAIN` before sealing the ceremony intent.
-   The operator creates the profiles and certificates through normal Gateway
+   The operator creates the DSC issuer profile before the Credential Template,
+   then completes the CSCA/DSC certificate ceremony through normal Gateway
    authorization while the public edge remains closed.
-   The operator also needs an absolute `-FlowFile` with the pilot organization's
-   active physical `flow_definition_id` and matching issuer DID, and an
+   Supply `-FlowFile` as an absolute output path outside protected source. After
+   the Rust owner transition, the operator creates and activates the physical
+   Flow through staged Gateway and durably writes its ID. It also needs an
    absolute `-SessionFile` containing a governed beta operator Cookie value
-   with `flow-definition:view`, `credential-template:view`,
+   with Credential Template, Application Template, and destination create/view/
+   activate grants, `flow-definition:create`, `flow-definition:activate`,
+   `flow-definition:view`, `credential-template:view`,
    `flow-instance:start`, and `flow-instance:view` permissions. Keep
-   all private inputs outside protected source. Start signed Gateway on its
-   verified loopback listener while the public edge is stopped, and validate
-   the live Flow definition, references and issuer before the transition.
+   all private inputs and generated outputs outside protected source. Start
+   signed Gateway on its verified loopback listener while the public edge is
+   stopped. Durable reference intents prevent replaying an uncertain creation
+   or activation POST; unresolved writes keep ingress closed. Validate the live
+   Flow definition, references and issuer after the transition.
    After the transition, create a synthetic DRAFT job through signed Rust
    issuance and a physical Flow through private Gateway, then match both
    responses to durable Flow and encrypted job rows. Durable attempt and
@@ -323,6 +348,5 @@ The final beta release must come from the source after Python passport deletion.
 
 Local unit/configuration/runtime qualification remains useful prerequisite
 evidence, not proof of released image provenance, real device behavior or the
-completed beta soak. Historical instructions remain in
-[beta 1.1.217 follow-up](beta-acceptance-follow-up-1.1.217.md); their old source
+completed beta soak. The historical coordinate notes are summarized above; their old source
 coordinates and draft status must not be reused as current deployment state.

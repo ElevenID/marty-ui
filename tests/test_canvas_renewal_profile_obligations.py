@@ -110,7 +110,16 @@ def _compact(text: str) -> str:
 
 
 def _body(source: str, name: str, *, test: bool) -> str:
-    prefix = r"#\[tokio::test\]\s*async fn " if test else r"pub\(super\) async fn "
+    multi_thread = {
+        "base_profile_gateway_composition_child",
+        "base_profile_envoy_composition_child",
+        "kubernetes_profile_gateway_composition_child",
+        "kubernetes_resolved_native_profile_delivers_both_encryption_modes",
+        "base_profile_native_renewal_uses_actual_rendered_configuration",
+    }
+    attribute = (r'#\[tokio::test\(flavor = "multi_thread"\)\]'
+                 if name in multi_thread else r"#\[tokio::test\]")
+    prefix = rf"{attribute}\s*async fn " if test else r"pub\(super\) async fn "
     matches = re.findall(
         rf"(?m)^{prefix}{re.escape(name)}\([^)]*\)\s*\{{(.*?)^\}}",
         source,
@@ -333,7 +342,7 @@ def _validate_component_owners(manifest: dict, inputs: dict[str, str]) -> None:
         else:
             assert inputs["runner"].count(f"--skip {test}") == 1
             assert inputs["runner"].index(f"--skip {test}") < inputs["runner"].index(
-                "expected_skipped_config_tests=2"
+                "expected_skipped_config_tests=3"
             )
     _validate_rendered_config_owner(
         inputs["source"], RENDERED_CONFIG.read_text(encoding="utf-8"), inputs["runner"]
@@ -536,7 +545,7 @@ def _validate_rendered_config_owner(source: str, config: str, runner: str) -> No
     assert f"--skip {name}" not in runner
     assert runner.count(f"--skip rendered_base_process::{name}") == 1
     assert runner.index(f"--skip rendered_base_process::{name}") < runner.index(
-        "expected_skipped_config_tests=2"
+        "expected_skipped_config_tests=3"
     )
     assert (
         runner.count(
@@ -545,7 +554,7 @@ def _validate_rendered_config_owner(source: str, config: str, runner: str) -> No
         == 2
     )
     assert runner.index(
-        "(( composition_status == 0 && worker_status == 0 ))"
+        "(( composition_status == 0 && flow_status == 0 && worker_status == 0 && selfhost_status == 0 ))"
     ) < runner.index("grep -Fo 'RENDERED_BASE_RENEWAL_CONFIG_2X2_COMPLETE_V1'")
 
 
@@ -609,30 +618,33 @@ def test_rendered_config_execution_guard_rejects_noop_failure_and_duplicate_mark
     assert bash is not None
     runner = RUNNER.read_text(encoding="utf-8")
     guard = re.search(
-        r"(?ms)^\(\( composition_status == 0 && worker_status == 0 \)\).*?^fi$",
+        r"(?ms)^\(\( composition_status == 0 && flow_status == 0 && worker_status == 0 && selfhost_status == 0 \)\).*?^fi$",
         runner,
     )
     assert guard is not None
     marker = "RENDERED_BASE_RENEWAL_CONFIG_2X2_COMPLETE_V1"
     log = tmp_path / "composition.log"
     other_markers = [
+        "RENDERED_BASE_RENDERER_LIMITS_COMPLETE_V1",
         "RESOLVED_KUBERNETES_RENEWAL_CONFIG_2X2_COMPLETE_V1",
         "DIDCOMM_RENEWAL_PRIVATE_IP_PG_REFUSAL_COMPLETE_V1",
     ]
-    for lines, composition_status, expected in (
-        ([f"test case ... {marker}", "ok"], 0, 0),
-        (["test case ...", marker, "ok"], 0, 0),
-        (["test case ... ok"], 0, 1),
-        ([f"test case ... {marker}"], 1, 1),
-        ([marker, marker], 0, 1),
-        ([marker + marker], 0, 1),
+    for lines, composition_status, flow_status, selfhost_status, expected in (
+        ([f"test case ... {marker}", "ok"], 0, 0, 0, 0),
+        (["test case ...", marker, "ok"], 0, 0, 0, 0),
+        (["test case ... ok"], 0, 0, 0, 1),
+        ([f"test case ... {marker}"], 1, 0, 0, 1),
+        ([marker], 0, 1, 0, 1),
+        ([marker], 0, 0, 1, 1),
+        ([marker, marker], 0, 0, 0, 1),
+        ([marker + marker], 0, 0, 0, 1),
     ):
         log.write_text("\n".join([*lines, *other_markers]) + "\n", encoding="utf-8")
         result = subprocess.run(
             [
                 bash,
                 "-c",
-                f'set -euo pipefail\ncomposition_log="$1"\ncomposition_status={composition_status}\nworker_status=0\nexpected_skipped_config_tests=0\nexpected_skipped_timeout_tests=1\n{guard.group()}',
+                f'set -euo pipefail\ncomposition_log="$1"\ncomposition_status={composition_status}\nflow_status={flow_status}\nworker_status=0\nselfhost_status={selfhost_status}\nexpected_skipped_config_tests=0\nexpected_skipped_timeout_tests=1\n{guard.group()}',
                 "_",
                 log.as_posix(),
             ],

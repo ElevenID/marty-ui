@@ -43,13 +43,15 @@ import {
   DEFAULT_KEY_MANAGEMENT_CONFIG,
   PURPOSES_REQUIRING_CERTIFICATE,
   getDefaultKeyManagementService,
+  createKeyManagementConfigUpdate,
+  createKeyManagementRemovalPayload,
   normalizeKeyManagementConfig,
 } from './keyManagementServiceCatalog';
 
 const getBreadcrumbs = (t) => [
   { label: t('deploy.breadcrumbs.console'), path: '/console' },
-  { label: t('deploy.breadcrumbs.deploy'), path: '/console/org/deploy' },
-  { label: 'Key Management', path: '/console/org/deploy/key-management' },
+  { label: 'Operator', path: '/console/org/operator' },
+  { label: 'Operator Key Management', path: '/console/org/operator/key-management' },
 ];
 
 const statusSeverityMap = {
@@ -137,35 +139,6 @@ const MANAGED_OPENBAO_SERVICE_ID = 'managed-openbao-transit';
 const toBrandDisplay = (value) => (
   typeof value === 'string' ? value.replace(BRAND_PATTERN, 'Elevenidllc') : value
 );
-
-const normalizeRoleCandidate = (value) => (
-  typeof value === 'string'
-    ? value.trim().toLowerCase().replace(/[-\s]+/g, '_')
-    : ''
-);
-
-const isOrgServiceAdminRole = (role) => {
-  const roleCandidates = [
-    role,
-    role?.name,
-    role?.display_name,
-    role?.role,
-    role?.role_name,
-    role?.slug,
-  ]
-    .map(normalizeRoleCandidate)
-    .filter(Boolean);
-
-  return roleCandidates.some((candidate) => [
-    'owner',
-    'admin',
-    'administrator',
-    'org_admin',
-    'organization_admin',
-    'org_owner',
-    'organization_owner',
-  ].includes(candidate));
-};
 
 const normalizePurposeCandidate = (value) => (
   typeof value === 'string' ? value.trim().toLowerCase() : ''
@@ -411,16 +384,16 @@ export default function SigningKeysPage() {
   const [certAction, setCertAction] = useState('view'); // 'view' | 'csr' | 'upload'
   const [certData, setCertData] = useState({ cert_pem: '', cert_chain_pem: '', common_name: '' });
 
-  const { can, roles, isLoading: permissionsLoading } = usePermissions();
+  const { can, isLoading: permissionsLoading } = usePermissions();
   const { showNotification } = useNotifications();
-  const canManageSigningKeys = can('signing-key', 'create');
-  const canManageSigningServices = canManageSigningKeys || (Array.isArray(roles) && roles.some(isOrgServiceAdminRole));
-  const canOpenServiceWizard = !permissionsLoading;
+  const canManageSigningKeys = !permissionsLoading && can('signing-key', 'create');
+  const canManageSigningServices = canManageSigningKeys;
+  const canOpenServiceWizard = canManageSigningServices;
   const registerServiceDisabledReason = permissionsLoading
     ? 'Checking your organization permissions...'
-    : '';
+    : canManageSigningServices ? '' : 'Key management configuration requires signing-key create permission.';
 
-  const openServiceWizard = () => navigate('/console/org/deploy/key-management/services/new');
+  const openServiceWizard = () => navigate('/console/org/operator/key-management/services/new');
 
   const reloadAll = async () => {
     await Promise.all([reloadKeys(), reloadConfig()]);
@@ -487,6 +460,8 @@ export default function SigningKeysPage() {
     try {
       const result = await signingKeysApi.generateServiceCsr(service.id, {
         ...orgRequestParams,
+        key_reference: service.key_reference,
+        algorithm: service.algorithms?.[0],
         country: certData.country,
         organization: certData.organization,
         common_name: certData.common_name || service.name,
@@ -522,8 +497,7 @@ export default function SigningKeysPage() {
     try {
       await signingKeysApi.updateKeyManagementConfig({
         ...orgRequestParams,
-        services,
-        default_service_id: serviceId,
+        ...createKeyManagementConfigUpdate(keyManagementConfig, { default_service_id: serviceId }),
       });
       await reloadConfig();
       showNotification?.('Updated the default signing service.', 'success');
@@ -539,15 +513,9 @@ export default function SigningKeysPage() {
     }
 
     try {
-      const remainingServices = services.filter((service) => service.id !== serviceId);
-      const nextDefaultServiceId = keyManagementConfig.default_service_id === serviceId
-        ? remainingServices[0]?.id || null
-        : keyManagementConfig.default_service_id;
-
       await signingKeysApi.updateKeyManagementConfig({
         ...orgRequestParams,
-        services: remainingServices,
-        default_service_id: nextDefaultServiceId,
+        ...createKeyManagementRemovalPayload(keyManagementConfig, serviceId),
       });
       await reloadConfig();
       showNotification?.('Removed the key management service registration.', 'success');
@@ -768,7 +736,7 @@ export default function SigningKeysPage() {
 
           {!canManageSigningServices && !permissionsLoading && (
             <Alert severity="info" sx={{ mb: 2 }}>
-              Service registration is available from this page. Updating or removing existing services may still require elevated permissions.
+              You can view key management. Registering, updating, rotating, or removing services requires signing-key create permission.
             </Alert>
           )}
 

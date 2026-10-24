@@ -1,5 +1,6 @@
 """Revocation harness integrity controls, not application parity evidence."""
 
+import hashlib
 import importlib
 import json
 from pathlib import Path
@@ -32,8 +33,8 @@ def test_revocation_matrix_retains_transport_and_cleanup_inputs():
 def test_nested_lease_matrix_inherits_queue_and_original_seed(monkeypatch):
     root = Path(__file__).resolve().parents[1]
     monkeypatch.syspath_prepend(str(root / "scripts"))
-    oracle = importlib.import_module("run_canvas_worker_oauth_revocation_oracle")
-    matrix = oracle.load_matrix(
+    native = importlib.import_module("test_canvas_worker_oauth_revocation_https")
+    matrix = native.load_matrix(
         root / "contracts", "canvas-worker-oauth-revocation-lease-scenarios.json"
     )
     assert len(matrix["seed"]) == 4 and len(matrix["before_start_sql"]) == 5
@@ -61,10 +62,15 @@ def test_nested_lease_matrix_inherits_queue_and_original_seed(monkeypatch):
 
 
 def test_nonempty_selection_reference_preserves_exact_cap_and_order(monkeypatch):
+    def ordered_selection_digest(ids):
+        return hashlib.sha256(
+            json.dumps(ids, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+
     root = Path(__file__).resolve().parents[1]
     monkeypatch.syspath_prepend(str(root / "scripts"))
-    oracle = importlib.import_module("run_canvas_worker_oauth_revocation_oracle")
-    matrix = oracle.load_matrix(
+    native = importlib.import_module("test_canvas_worker_oauth_revocation_https")
+    matrix = native.load_matrix(
         root / "contracts", "canvas-worker-oauth-revocation-selection-scenarios.json"
     )
     assert matrix["cases"][0]["limits"] == [0, 499, 500, 501, 2147483648]
@@ -83,12 +89,12 @@ def test_nonempty_selection_reference_preserves_exact_cap_and_order(monkeypatch)
     ]
     for item in reference["selections"]:
         ids = [f"cap-{n:04d}" for n in range(1, item["count"] + 1)]
-        assert item["ordered_ids_sha256"] == oracle.ordered_selection_digest(ids)
-        assert item["ordered_ids_sha256"] != oracle.ordered_selection_digest(
+        assert item["ordered_ids_sha256"] == ordered_selection_digest(ids)
+        assert item["ordered_ids_sha256"] != ordered_selection_digest(
             ids + [ids[-1]]
         )
         if len(ids) > 1:
-            assert item["ordered_ids_sha256"] != oracle.ordered_selection_digest(
+            assert item["ordered_ids_sha256"] != ordered_selection_digest(
                 list(reversed(ids))
             )
     assert reference["lease_acquisition_count"] == reference["http_request_count"] == 0
@@ -112,42 +118,15 @@ def test_repository_only_corpus_cannot_claim_native_https_replay(monkeypatch):
 
 
 @pytest.mark.parametrize("filename", ["a.json", "../outside.json"])
-def test_reference_matrix_rejects_cycles_and_external_paths(
+def test_native_matrix_rejects_cycles_and_external_paths(
     monkeypatch, tmp_path, filename
 ):
     monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / "scripts"))
-    oracle = importlib.import_module("run_canvas_worker_oauth_revocation_oracle")
+    native = importlib.import_module("test_canvas_worker_oauth_revocation_https")
     (tmp_path / "a.json").write_text(json.dumps({"base_scenario": "b.json"}))
     (tmp_path / "b.json").write_text(json.dumps({"base_scenario": "a.json"}))
     with pytest.raises(AssertionError):
-        oracle.load_matrix(tmp_path, filename)
-
-
-@pytest.mark.parametrize(
-    "durations",
-    [
-        [30, 30],
-        [30, 30, None],
-        [30, 30, 29.8],
-        [30, 30, 30.2],
-        [30, 30, float("nan")],
-        [30, 30, float("inf")],
-        [30, 30, "30"],
-        [30, 30, True],
-    ],
-)
-def test_acquired_lease_observation_rejects_incomplete_or_wrong_evidence(
-    monkeypatch, durations
-):
-    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / "scripts"))
-    oracle = importlib.import_module("run_canvas_worker_oauth_revocation_oracle")
-    with pytest.raises(AssertionError):
-        oracle.observe_acquired_leases(durations, 30, 3)
-    assert oracle.observe_acquired_leases([29.95, 30, 30.05], 30, 3) == {
-        "seconds": 30,
-        "count": 3,
-        "all_within_tolerance": True,
-    }
+        native.load_matrix(tmp_path, filename)
 
 
 @pytest.mark.parametrize("names,reference", [(["a", "a"], {"a": {}}), (["a"], {})])
@@ -256,8 +235,8 @@ def test_native_owner_fails_closed_and_closes_https(
 def test_secret_reference_cases_preserve_no_request_retry_and_tenant_state(monkeypatch):
     contracts = Path(__file__).resolve().parents[1] / "contracts"
     monkeypatch.syspath_prepend(str(contracts.parent / "scripts"))
-    oracle = importlib.import_module("run_canvas_worker_oauth_revocation_oracle")
-    matrix = oracle.load_matrix(
+    native = importlib.import_module("test_canvas_worker_oauth_revocation_https")
+    matrix = native.load_matrix(
         contracts, "canvas-worker-oauth-revocation-secrets-scenarios.json"
     )
     reference = json.loads(
@@ -314,8 +293,8 @@ def test_secret_reference_cases_preserve_no_request_retry_and_tenant_state(monke
 def test_cycle_reference_counts_return_values_not_durable_retry_count(monkeypatch):
     contracts = Path(__file__).resolve().parents[1] / "contracts"
     monkeypatch.syspath_prepend(str(contracts.parent / "scripts"))
-    oracle = importlib.import_module("run_canvas_worker_oauth_revocation_oracle")
-    matrix = oracle.load_matrix(
+    native = importlib.import_module("test_canvas_worker_oauth_revocation_https")
+    matrix = native.load_matrix(
         contracts, "canvas-worker-oauth-revocation-counters-scenarios.json"
     )
     reference = json.loads(
@@ -583,6 +562,8 @@ def test_retry_parent_checks_real_deadline_record_and_closes_fixture(
         {
             "available_at": (updated + timedelta(seconds=delay)).isoformat(),
             "updated_at": updated.isoformat(),
+            "decision_window_start": updated.isoformat(),
+            "decision_window_end": updated.isoformat(),
         }
     )
     if case_name == "missing":

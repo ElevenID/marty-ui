@@ -864,6 +864,93 @@ async fn start_authorizes_before_storage_and_persists_only_hashed_server_owned_s
 }
 
 #[tokio::test]
+async fn callback_rejects_a_removed_platform_before_exchanging_tokens() {
+    let (service, repository, vault, provider) = fixture();
+    let started = service
+        .start(
+            "platform-1",
+            start_request(),
+            Some("management-key"),
+            Some("org-1"),
+        )
+        .await
+        .expect("start");
+    repository
+        .state
+        .lock()
+        .expect("repository state")
+        .platforms
+        .remove("platform-1");
+
+    let response = service
+        .callback(CanvasOAuthCallbackRequest {
+            code: Some("authorization-code".to_owned()),
+            state: state_from_authorization_url(&started.authorization_url),
+            error: None,
+        })
+        .await
+        .expect("sanitized platform failure redirect");
+    assert!(response
+        .location
+        .contains("error_code=oauth_platform_invalid"));
+    assert!(provider
+        .state
+        .lock()
+        .expect("provider state")
+        .exchanges
+        .is_empty());
+    assert!(vault.state.lock().expect("vault state").saved.is_empty());
+}
+
+#[tokio::test]
+async fn callback_rejects_a_disabled_rollout_before_exchanging_tokens() {
+    let (service, repository, vault, provider) = fixture();
+    let started = service
+        .start(
+            "platform-1",
+            start_request(),
+            Some("management-key"),
+            Some("org-1"),
+        )
+        .await
+        .expect("start");
+    let disabled_service = CanvasOAuthService::new(
+        Arc::new(repository),
+        Arc::new(vault.clone()),
+        Arc::new(provider.clone()),
+        Some("management-key"),
+        CanvasOAuthServiceConfig {
+            issuer_base_url: "https://issuer.example.edu".to_owned(),
+            completion_base_url: "https://app.example.edu/integrations/canvas".to_owned(),
+            portable_enabled: false,
+            pilot_organizations: BTreeSet::from(["org-1".to_owned()]),
+            allow_private_networks: false,
+            allow_http_localhost: false,
+        },
+    )
+    .expect("service with rollout disabled");
+
+    let response = disabled_service
+        .callback(CanvasOAuthCallbackRequest {
+            code: Some("authorization-code".to_owned()),
+            state: state_from_authorization_url(&started.authorization_url),
+            error: None,
+        })
+        .await
+        .expect("sanitized rollout failure redirect");
+    assert!(response
+        .location
+        .contains("error_code=oauth_rollout_disabled"));
+    assert!(provider
+        .state
+        .lock()
+        .expect("provider state")
+        .exchanges
+        .is_empty());
+    assert!(vault.state.lock().expect("vault state").saved.is_empty());
+}
+
+#[tokio::test]
 async fn callback_is_single_use_never_reflects_provider_error_and_publishes_encrypted_refs() {
     let (service, repository, vault, provider) = fixture();
     let started = service

@@ -47,7 +47,14 @@ def test_native_migration_and_repository_contracts_run_against_postgresql_in_ci(
     assert "python3 ../scripts/ci/run-db-contract-groups.py" in workflow
     assert "export CREDENTIAL_TEMPLATE_POSTGRES_TEST_URL=" in runtime
     assert "target/debug/credential-template-migration-contract --test-threads=1" in runtime
-    assert 'contains("marty-credential-template")' in workflow
+    assert (
+        "resolve_recorded_contract_executable marty-credential-template "
+        "migration_contract"
+    ) in workflow
+    assert (
+        "resolve_recorded_contract_executable marty-credential-template "
+        "postgres_integration"
+    ) in workflow
 
 
 def test_compose_supplies_every_fail_closed_native_dependency() -> None:
@@ -89,8 +96,8 @@ def test_only_the_native_credential_template_runtime_remains() -> None:
     assert behavior["python_runtime_fallback"] is False
 
 
-def test_python_migration_runner_does_not_import_deleted_credential_template() -> None:
-    migration_runner = text("services/run_all_migrations.py")
+def test_rust_migration_bootstrap_does_not_import_deleted_credential_template() -> None:
+    migration_runner = text("rust/services/signing-keys/src/bootstrap_engine.rs")
     assert '"name": "credential_template"' not in migration_runner
     assert '"module": "credential_template.infrastructure.models"' not in migration_runner
 

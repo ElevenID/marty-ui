@@ -37,26 +37,30 @@ fn bounded_render(
     }
 }
 
-pub(super) fn assert_renderer_deadlines() {
-    let python = std::env::var_os("MARTY_DIDCOMM_TEST_PYTHON")
-        .expect("configured renderer qualification requires explicit Python");
-    for (program, expected) in [
+pub(super) fn require_explicit_python() -> std::ffi::OsString {
+    std::env::var_os("MARTY_DIDCOMM_TEST_PYTHON")
+        .expect("configured renderer qualification requires explicit Python")
+}
+
+fn assert_renderer_deadlines() {
+    let python = require_explicit_python();
+    for (program, expected, deadline) in [
         (
             "import os,time; os.close(1); time.sleep(30)",
             "Compose rendering exceeded deadline",
+            Duration::from_millis(400),
         ),
         (
             "import sys,time; sys.stdout.write('x'*262145); sys.stdout.flush(); time.sleep(30)",
             "rendered model exceeds limit",
+            // Busy shared runners can take longer than 400 ms to start Python.
+            // Keep this bounded, but let the output-limit assertion win.
+            Duration::from_secs(5),
         ),
     ] {
         let started = Instant::now();
-        let error = bounded_render(
-            Command::new(&python).args(["-c", program]),
-            b"{}",
-            Duration::from_millis(400),
-        )
-        .unwrap_err();
+        let error = bounded_render(Command::new(&python).args(["-c", program]), b"{}", deadline)
+            .unwrap_err();
         assert_eq!(error.to_string(), expected);
         assert!(started.elapsed() < Duration::from_secs(10));
     }
@@ -69,6 +73,16 @@ pub(super) fn assert_renderer_deadlines() {
         .unwrap(),
         b"{}"
     );
+}
+
+#[test]
+fn renderer_bounds_proof_is_image_free() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        eprintln!("Renderer bounds proof requires the configured Linux gate");
+        return;
+    }
+    assert_renderer_deadlines();
+    println!("\nRENDERED_BASE_RENDERER_LIMITS_COMPLETE_V1");
 }
 
 #[derive(Deserialize)]
@@ -157,8 +171,14 @@ fn rendered_base_renewal_config_crosses_encryption_and_private_address_policy() 
     let directory = tempfile::tempdir().expect("owned synthetic policy directory");
     let ca = directory.path().join("ca.pem");
     let policy = directory.path().join("didcomm-encryption-policy.json");
-    std::fs::write(&ca, b"synthetic CA fixture").unwrap();
+    let token = directory.path().join("openbao-token");
+    std::fs::write(
+        &ca,
+        b"-----BEGIN CERTIFICATE-----\nsynthetic CA fixture\n-----END CERTIFICATE-----\n",
+    )
+    .unwrap();
     std::fs::write(&policy, b"{}").unwrap();
+    std::fs::write(&token, b"synthetic token fixture").unwrap();
     let ca = ca.to_str().unwrap();
     let policy = policy.to_str().unwrap();
 
@@ -173,8 +193,9 @@ fn rendered_base_renewal_config_crosses_encryption_and_private_address_policy() 
                 "ISSUANCE_API_KEY": super::issuance_named_peers::API_KEY,
                 "GRPC_SERVICE_TOKEN": super::issuance_named_peers::TOKEN,
                 "SIGNING_KEYS_INTERNAL_API_KEY": super::issuance_named_peers::SIGNING_KEY,
+                "SIGNING_KEYS_ISSUER_SIGN_KEY": super::issuance_named_peers::ISSUER_SIGN_KEY,
+                "SIGNING_KEYS_INTEGRATION_SECRET_KEY": super::issuance_named_peers::ENVELOPE_KEY,
                 "TOKEN_HMAC_KEY": "synthetic-fresh-main-hmac",
-                "INTEGRATION_SECRET_MASTER_KEY": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
                 "PUBLIC_API_URL": "https://issuer.example",
                 "UI_BASE_URL": "http://localhost:3000",
                 "ISSUANCE_OFFER_TTL_MINUTES": "10080",
@@ -188,21 +209,62 @@ fn rendered_base_renewal_config_crosses_encryption_and_private_address_policy() 
             "database_url": "postgresql://oracle:synthetic-local-only@127.0.0.1:15432/canvas_published_schema_test",
             "redis_url": "redis://127.0.0.1:16379",
             "peer_origin": "http://127.0.0.1:18001",
+            "grpc_peer_origin": "https://127.0.0.1:18003",
+            "grpc_ca_file": ca,
+            "grpc_tls_certificate_file": ca,
+            "grpc_tls_token_file": token,
+            "grpc_tls_key_name": "canvas_grpc_tls_synthetic",
             "legacy_origin": "http://127.0.0.1:18002",
             "ca_file": ca,
             "policy_directory": directory.path(),
+            "kms_url": "https://127.0.0.1:18200",
+            "kms_ca_file": ca,
+            "kms_token_file": token,
+            "integration_secret_kms_url": "https://127.0.0.1:18201/internal",
+            "integration_secret_kms_ca_file": ca,
             "authcrypt": authenticated,
             "allow_private_ips": allow_private_ips
         });
         let rendered = RenderedBase::render(&spec);
         let native = &rendered.native_environment;
         let gateway = &rendered.gateway_environment;
+        for name in ["GRPC_WORKLOAD_TLS_SERVER_CERT", "GRPC_WORKLOAD_TLS_CA_CERT"] {
+            assert_eq!(native.get(name).map(String::as_str), Some(ca));
+        }
+        assert_eq!(
+            native
+                .get("GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE")
+                .map(String::as_str),
+            Some(token.to_str().unwrap())
+        );
         assert_eq!(
             native.get("DIDCOMM_ALLOW_PRIVATE_IPS").map(String::as_str),
             Some(expected_private_ips)
         );
         assert_eq!(
             native.get("DIDCOMM_TLS_CA_FILE").map(String::as_str),
+            Some(ca)
+        );
+        assert_eq!(
+            native.get("DIDCOMM_KMS_ADDR").map(String::as_str),
+            Some("https://127.0.0.1:18200")
+        );
+        assert_eq!(
+            native.get("DIDCOMM_KMS_CA_CERT_FILE").map(String::as_str),
+            Some(ca)
+        );
+        assert_eq!(
+            native.get("DIDCOMM_KMS_TOKEN_FILE").map(String::as_str),
+            Some(token.to_str().unwrap())
+        );
+        assert_eq!(
+            native.get("INTEGRATION_SECRET_KMS_URL").map(String::as_str),
+            Some("https://127.0.0.1:18201/internal")
+        );
+        assert_eq!(
+            native
+                .get("INTEGRATION_SECRET_KMS_CA_FILE")
+                .map(String::as_str),
             Some(ca)
         );
         assert_eq!(

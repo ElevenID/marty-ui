@@ -1,86 +1,43 @@
 use chrono::{Duration, Utc};
-use marty_crypto::cert_builder::{CertProfile, CertificateBuilderConfig, DistinguishedName};
-use marty_crypto::certificate::{der_to_pem, get_certificate_info, load_certificate_pem};
+use marty_crypto::certificate::{get_certificate_info, load_certificate_pem};
 use marty_crypto::jwk::certificate_pem_to_jwk;
-use marty_crypto::keygen::KeyType;
 use marty_signing_keys::csca_lifecycle::{
     CscaCertificateStatus, CscaLifecycleDocument, CscaLifecycleError,
     ExpiringCscaCertificatesRequest, ImportCscaCertificateRequest, ListCscaCertificatesQuery,
     ListCscaOutboxQuery, RenewCscaCertificateRequest,
 };
-use marty_verification::issuance::{CscaAuthority, CscaKeyAlgorithm};
 use serde_json::{json, Value};
 
-fn csca_request(country: &str, label: &str) -> ImportCscaCertificateRequest {
-    let authority = CscaAuthority::new(country, label, 30).unwrap();
-    let cert_pem = authority.cert_pem().unwrap();
-    ImportCscaCertificateRequest {
-        expected_public_jwk: serde_json::to_value(certificate_pem_to_jwk(&cert_pem).unwrap())
-            .unwrap(),
-        cert_pem,
-        cert_chain_pem: String::new(),
-        key_reference: format!("hsm://csca/{}", country.to_lowercase()),
-        metadata: json!({"country": country}),
+fn public_csca_pem(country: &str, version: &str) -> &'static str {
+    match (country, version) {
+        ("DEU", "original") => include_str!("fixtures/csca_public/deu-original.pem"),
+        ("DEU", "renewed") => include_str!("fixtures/csca_public/deu-renewed.pem"),
+        ("DEU", "other-key") => include_str!("fixtures/csca_public/deu-other-key.pem"),
+        ("USA", "original") => include_str!("fixtures/csca_public/usa-original.pem"),
+        ("USA", "renewed") => include_str!("fixtures/csca_public/usa-renewed.pem"),
+        ("USA", "other-key") => include_str!("fixtures/csca_public/usa-other-key.pem"),
+        ("CAN", "original") => include_str!("fixtures/csca_public/can-original.pem"),
+        _ => panic!("unsupported public CSCA fixture"),
     }
 }
 
-fn csca_request_with_reusable_key(
-    country: &str,
-    label: &str,
-    key_reference: &str,
-) -> (ImportCscaCertificateRequest, String) {
-    let config = CertificateBuilderConfig::new()
-        .subject(
-            DistinguishedName::new()
-                .cn(&format!("{country} Country Signing CA"))
-                .country(country)
-                .organization(label),
-        )
-        .validity_days(30)
-        .profile(CertProfile::Csca {
-            country_code: country.to_string(),
-        })
-        .key_type(KeyType::EcdsaP256);
-    let (cert_der, private_key_pem) = config.build_self_signed().unwrap();
-    (
-        request_from_der(cert_der, key_reference, country),
-        private_key_pem,
+fn csca_request(country: &str, _label: &str) -> ImportCscaCertificateRequest {
+    request_from_public_cert(
+        public_csca_pem(country, "original"),
+        &format!("hsm://csca/{}", country.to_lowercase()),
+        country,
     )
 }
 
-fn renewed_csca_request_with_key(
-    country: &str,
-    label: &str,
-    key_reference: &str,
-    private_key_pem: &str,
-) -> ImportCscaCertificateRequest {
-    let cert_der = CertificateBuilderConfig::new()
-        .subject(
-            DistinguishedName::new()
-                .cn(&format!("{country} Country Signing CA"))
-                .country(country)
-                .organization(label),
-        )
-        .validity_days(30)
-        .profile(CertProfile::Csca {
-            country_code: country.to_string(),
-        })
-        .key_type(KeyType::EcdsaP256)
-        .build_self_signed_with_key(private_key_pem)
-        .unwrap();
-    request_from_der(cert_der, key_reference, country)
-}
-
-fn request_from_der(
-    cert_der: Vec<u8>,
+fn request_from_public_cert(
+    cert_pem: &str,
     key_reference: &str,
     country: &str,
 ) -> ImportCscaCertificateRequest {
-    let cert_pem = der_to_pem(&cert_der).unwrap();
     ImportCscaCertificateRequest {
-        expected_public_jwk: serde_json::to_value(certificate_pem_to_jwk(&cert_pem).unwrap())
+        expected_public_jwk: serde_json::to_value(certificate_pem_to_jwk(cert_pem).unwrap())
             .unwrap(),
-        cert_pem,
+        cert_pem: cert_pem.to_string(),
         cert_chain_pem: String::new(),
         key_reference: key_reference.to_string(),
         metadata: json!({"country": country}),
@@ -112,19 +69,6 @@ fn trust_anchor_projection_excludes_private_routing_and_inactive_certificates() 
 
     document.revoke("csca-deu-1", "retired", now).unwrap();
     assert!(document.active_certificate_data(now).unwrap().is_empty());
-}
-
-#[test]
-fn creation_algorithms_match_the_language_neutral_contract() {
-    let contract: Value = serde_json::from_str(include_str!(
-        "../../../../contracts/csca-capability-behavior.json"
-    ))
-    .unwrap();
-    let supported = CscaKeyAlgorithm::ALL.map(CscaKeyAlgorithm::as_str);
-    assert_eq!(
-        json!(supported),
-        contract["supported_rust_surface"]["emrtd_issuance"]["creation_algorithms"]
-    );
 }
 
 #[test]
@@ -242,7 +186,7 @@ fn revocation_is_idempotent_and_renewal_records_both_sides_of_lineage() {
         .renew(
             "csca-deu-1",
             "csca-deu-2",
-            csca_request("DEU", "German CSCA 1"),
+            request_from_public_cert(public_csca_pem("DEU", "other-key"), "hsm://csca/deu", "DEU"),
             false,
             now + Duration::seconds(3),
         )
@@ -276,8 +220,7 @@ fn revocation_is_idempotent_and_renewal_records_both_sides_of_lineage() {
 
 #[test]
 fn renewal_key_reuse_is_explicit_verified_and_atomic() {
-    let (original, private_key_pem) =
-        csca_request_with_reusable_key("DEU", "German CSCA 1", "hsm://csca/deu");
+    let original = csca_request("DEU", "German CSCA 1");
     let now = certificate_not_before(&original);
     let mut document = CscaLifecycleDocument::empty("org-a", now);
     document
@@ -285,7 +228,7 @@ fn renewal_key_reuse_is_explicit_verified_and_atomic() {
         .unwrap();
 
     let reused =
-        renewed_csca_request_with_key("DEU", "German CSCA 1", "hsm://csca/deu", &private_key_pem);
+        request_from_public_cert(public_csca_pem("DEU", "renewed"), "hsm://csca/deu", "DEU");
     let replacement = document
         .renew(
             "csca-deu-1",
@@ -308,8 +251,7 @@ fn renewal_key_reuse_is_explicit_verified_and_atomic() {
     assert_eq!(event.topic, "certificate.renewed");
     assert_eq!(event.payload["reused_key"], true);
 
-    let (original, private_key_pem) =
-        csca_request_with_reusable_key("USA", "US CSCA 1", "hsm://csca/usa");
+    let original = csca_request("USA", "US CSCA 1");
     let usa_now = certificate_not_before(&original);
     let mut rejected = CscaLifecycleDocument::empty("org-b", usa_now);
     rejected
@@ -318,7 +260,7 @@ fn renewal_key_reuse_is_explicit_verified_and_atomic() {
     let revision = rejected.revision;
 
     let wrong_reference =
-        renewed_csca_request_with_key("USA", "US CSCA 1", "hsm://csca/other", &private_key_pem);
+        request_from_public_cert(public_csca_pem("USA", "renewed"), "hsm://csca/other", "USA");
     assert!(matches!(
         rejected.renew(
             "csca-usa-1",
@@ -330,7 +272,7 @@ fn renewal_key_reuse_is_explicit_verified_and_atomic() {
         Err(CscaLifecycleError::Invalid(_))
     ));
     let unrequested_reuse =
-        renewed_csca_request_with_key("USA", "US CSCA 1", "hsm://csca/usa", &private_key_pem);
+        request_from_public_cert(public_csca_pem("USA", "renewed"), "hsm://csca/usa", "USA");
     assert!(matches!(
         rejected.renew(
             "csca-usa-1",
@@ -342,8 +284,8 @@ fn renewal_key_reuse_is_explicit_verified_and_atomic() {
         Err(CscaLifecycleError::Invalid(_))
     ));
 
-    let mut different_key = csca_request("USA", "US CSCA 1");
-    different_key.key_reference = "hsm://csca/usa".to_string();
+    let different_key =
+        request_from_public_cert(public_csca_pem("USA", "other-key"), "hsm://csca/usa", "USA");
     assert!(matches!(
         rejected.renew(
             "csca-usa-1",
@@ -422,7 +364,7 @@ fn lifecycle_requests_accept_legacy_names_but_reject_silently_ignored_fields() {
 
 #[test]
 fn transactional_outbox_acknowledgement_is_idempotent_and_bounded() {
-    let now = Utc::now();
+    let now = certificate_not_before(&csca_request("DEU", "German CSCA"));
     let mut document = CscaLifecycleDocument::empty("org-a", now);
     document
         .import("csca-deu-1", csca_request("DEU", "German CSCA"), now)
@@ -463,7 +405,7 @@ fn transactional_outbox_acknowledgement_is_idempotent_and_bounded() {
 
 #[test]
 fn malformed_duplicate_and_non_ca_imports_fail_without_mutating_state() {
-    let now = Utc::now();
+    let now = certificate_not_before(&csca_request("DEU", "German CSCA"));
     let mut document = CscaLifecycleDocument::empty("org-a", now);
     document
         .import("csca-deu-1", csca_request("DEU", "German CSCA"), now)
@@ -524,7 +466,7 @@ fn malformed_duplicate_and_non_ca_imports_fail_without_mutating_state() {
         Err(CscaLifecycleError::Invalid(_))
     ));
     let mut unrelated_chain = csca_request("USA", "Same subject");
-    unrelated_chain.cert_chain_pem = csca_request("USA", "Same subject").cert_pem;
+    unrelated_chain.cert_chain_pem = public_csca_pem("USA", "other-key").to_string();
     assert!(matches!(
         document.import("unrelated-chain", unrelated_chain, now),
         Err(CscaLifecycleError::Invalid(_))
@@ -547,6 +489,12 @@ fn malformed_duplicate_and_non_ca_imports_fail_without_mutating_state() {
     });
     assert!(matches!(
         document.import("leaked-jwk", leaked_jwk, now),
+        Err(CscaLifecycleError::Invalid(_))
+    ));
+    let mut leaked_expected_jwk = csca_request("USA", "Leaked expected JWK");
+    leaked_expected_jwk.expected_public_jwk["d"] = json!("private");
+    assert!(matches!(
+        document.import("leaked-expected-jwk", leaked_expected_jwk, now),
         Err(CscaLifecycleError::Invalid(_))
     ));
     assert_eq!(document.revision, revision);

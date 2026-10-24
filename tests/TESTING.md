@@ -607,15 +607,15 @@ single endpoint, but this environment standardizes on the pull-request grant.
 Metadata read is required for the collaborator-permission lookup. Do not grant
 write or administration permissions.
 
-Every release environment must have Burdettadam configured as a required
-reviewer, administrator bypass disabled, and a protected-branch or custom
-deployment-branch policy. This repository uses an explicit solo-maintainer
-model, so the named maintainer may approve their own deployment after all
-required checks pass; the reviewer checkpoint remains a deliberate release
-action and is not represented as independent review. The stack-release,
-beta-lifecycle, and
-wallet-conformance workflows call the shared read-only preflight before running
-their protected job; the stack release runs it before building an image. The
+The `stack-release` environment must have no required-reviewer rule, so a
+qualified release publishes without a manual deployment approval. It retains
+administrator bypass disabled and a protected-branch deployment policy.
+`beta-lifecycle` and `wallet-conformance` require Burdettadam as a reviewer,
+administrator bypass disabled, and a protected-branch or custom deployment
+policy. Those environments use a solo-maintainer review model, not independent
+review. The stack-release, beta-lifecycle, and wallet-conformance workflows
+call the shared read-only preflight before running their protected jobs; the
+stack release runs it before building an image. The
 workflow check intentionally inspects protection metadata only, so it can use
 the least-privileged `GITHUB_TOKEN`:
 

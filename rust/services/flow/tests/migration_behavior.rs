@@ -75,3 +75,43 @@ fn built_in_seed_contract_preserves_every_intended_flow() {
     assert!(sql.contains("to_regclass('deployment_profile_service.deployment_profiles')"));
     assert_eq!(sql.matches("rust_flow_seed_0001").count(), 1);
 }
+
+#[tokio::test]
+async fn fresh_postgres_migration_is_idempotent_when_configured() {
+    let Ok(database_url) = std::env::var("FLOW_MIGRATION_AUDIT_URL") else {
+        eprintln!("FLOW_MIGRATION_AUDIT_URL is not configured; migration audit skipped");
+        return;
+    };
+    let options: sqlx::postgres::PgConnectOptions = database_url.parse().unwrap();
+    assert!(matches!(options.get_host(), "127.0.0.1" | "localhost"));
+    assert_eq!(options.get_database(), Some("marty_kms_flow"));
+    let pool = sqlx::PgPool::connect_with(options).await.unwrap();
+    sqlx::raw_sql(
+        "CREATE SCHEMA deployment_profile_service;
+         CREATE TABLE deployment_profile_service.deployment_profiles (
+             id text PRIMARY KEY,
+             enabled_flow_ids jsonb NOT NULL DEFAULT '[]'::jsonb
+         );
+         INSERT INTO deployment_profile_service.deployment_profiles(id)
+         VALUES ('70000000-0000-0000-0000-000000000001');",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    for _ in 0..2 {
+        marty_flow::migrate_flow_schema(&pool).await.unwrap();
+        marty_flow::validate_flow_schema(&pool).await.unwrap();
+    }
+    let enabled: serde_json::Value = sqlx::query_scalar(
+        "SELECT enabled_flow_ids FROM deployment_profile_service.deployment_profiles
+         WHERE id='70000000-0000-0000-0000-000000000001'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        enabled,
+        serde_json::json!(["71000000-0000-0000-0000-000000000001"])
+    );
+    pool.close().await;
+}

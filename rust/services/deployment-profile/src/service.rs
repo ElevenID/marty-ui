@@ -15,6 +15,7 @@ use crate::{
 pub struct DeploymentService {
     repository: Arc<dyn DeploymentRepository>,
     memberships: Arc<dyn TenantMembershipProvider>,
+    gateway_actor: Option<marty_api_key_policy::GatewayApiKeyActor>,
 }
 
 impl DeploymentService {
@@ -26,7 +27,26 @@ impl DeploymentService {
         Self {
             repository,
             memberships,
+            gateway_actor: None,
         }
+    }
+
+    pub(crate) fn for_gateway_api_key(
+        &self,
+        actor: marty_api_key_policy::GatewayApiKeyActor,
+    ) -> Self {
+        Self {
+            gateway_actor: Some(actor),
+            ..self.clone()
+        }
+    }
+
+    pub(crate) async fn internal_owner(
+        &self,
+        id: &str,
+    ) -> Result<(String, String), DeploymentError> {
+        let profile = self.profile(id).await?;
+        Ok((profile.id, profile.organization_id))
     }
 
     pub async fn create(
@@ -295,6 +315,13 @@ impl DeploymentService {
         organization_id: &str,
         permission: &str,
     ) -> Result<(), DeploymentError> {
+        if let Some(actor) = &self.gateway_actor {
+            return if actor.authorizes(user_id, organization_id, permission) {
+                Ok(())
+            } else {
+                Err(DeploymentError::Forbidden("Permission denied".into()))
+            };
+        }
         if user_id.trim().is_empty() {
             return Err(DeploymentError::Unauthorized(
                 "Authentication required".into(),

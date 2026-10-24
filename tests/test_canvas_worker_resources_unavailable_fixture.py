@@ -1,6 +1,5 @@
 """Resource-removal fixture integrity, not native Linux process qualification."""
 
-import ast
 from http.client import HTTPSConnection
 import importlib
 import json
@@ -83,32 +82,15 @@ def test_resource_fixture_only_changes_its_exact_disposable_binding_and_referenc
         "'target-review','queued',0,8,'2026-09-01T00:00:00Z','{}',"
         "'2026-09-01T00:00:00Z','2026-09-01T00:00:00Z')"
     )
-    source = ast.parse(
-        (ROOT / "scripts/run_canvas_worker_resources_unavailable_oracle.py").read_text()
-    )
-    run = next(
-        node
-        for node in source.body
-        if isinstance(node, ast.FunctionDef) and node.name == "run"
-    )
-    starts = [
-        node.lineno
-        for node in ast.walk(run)
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Name)
-        and node.func.id == "start_blocked_workers"
-    ]
-    seeds = [
-        node.lineno
-        for node in ast.walk(run)
-        if isinstance(node, ast.Subscript)
-        and isinstance(node.value, ast.Name)
-        and node.value.id == "queued"
-        and isinstance(node.slice, ast.Constant)
-        and node.slice.value == "initial_job_seed"
-    ]
-    assert len(starts) == len(seeds) == 1
-    assert seeds[0] < starts[0], (
+    replay = (
+        ROOT
+        / "rust/services/issuance/tests/support/canvas_worker_resources_unavailable_replay.rs"
+    ).read_text()
+    queued_seed = 'validation_scenarios()["initial_job_seed"]'
+    start = "OwnedWorker::start_with_environment("
+    assert replay.count(queued_seed) == replay.count(start) == 1
+    assert replay.index(queued_seed) < replay.index("seed.commit().await.unwrap()")
+    assert replay.index("seed.commit().await.unwrap()") < replay.index(start), (
         "Only an initial queued seed before worker startup is allowed"
     )
 
@@ -319,7 +301,7 @@ def test_parent_checks_actual_zero_requests_and_exact_child_selection(
         native.run_scenario(*arguments)
     else:
         message = {
-            "unexpected_https": "Actual worker HTTPS requests differ",
+            "unexpected_https": "Actual stock worker HTTPS requests differ",
             "child_exit": "Native worker replay failed",
             "reference_io": "Resource lookup failure must precede provider I/O",
         }[failure]

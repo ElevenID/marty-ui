@@ -1,12 +1,9 @@
-"""Actual extracted secret helpers with synthetic inputs; never run a deployment.
-
-Every kubectl call is a closed shell double. Namespace/pull-secret calls precede
-validation in the existing source, so rejected inputs do NOT prove zero mutation.
-"""
+"""Actual secret helpers with synthetic inputs and closed kubectl doubles."""
 
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 from pathlib import Path
 import re
@@ -77,11 +74,25 @@ def harness(tmp_path):
     assert bash and Path(bash).is_file()
     empty_path = tmp_path / "empty-path"
     empty_path.mkdir()
+    keycloak_secret_dir = tmp_path / "keycloak-secret-dir"
+    keycloak_secret_dir.mkdir()
+    operator_root = tmp_path / "operator"
+    operator_scripts = operator_root / "scripts"
+    operator_scripts.mkdir(parents=True)
+    catalog_double = operator_scripts / "marty-deploy.sh"
+    catalog_double.write_bytes(
+        b'#!/bin/sh\n'
+        b'[ "$1" = secrets ] && [ "$3" = --field ] && [ "$4" = env ] || exit 96\n'
+        b'[ "${TEST_CATALOG_FAIL:-}" != 1 ] || exit 97\n'
+        b'[ "${TEST_CATALOG_EMPTY:-}" != 1 ] || exit 0\n'
+        b'printf "%s\\n" "$TEST_REQUIRED_SECRET_ENVS"\n'
+    )
+    catalog_double.chmod(0o755)
     env = {
         "PATH": empty_path.as_posix(),
         "PYTHON_BIN": "catalog_python",
         "TEST_PYTHON": sys.executable.replace("\\", "/"),
-        "REPO_ROOT": ROOT.as_posix(),
+        "REPO_ROOT": operator_root.as_posix(),
         "TEST_ROOT": tmp_path.as_posix(),
         "NAMESPACE": "synthetic-owned-namespace",
         "K8S_STACK_NAME": "kubernetes-production",
@@ -90,15 +101,50 @@ def harness(tmp_path):
         "REGISTRY_HOST": "registry.example.invalid",
         "IMAGE_PULL_SECRET_NAME": "synthetic-pull-secret",
         "FLOW_WEBHOOK_SECRET": "synthetic-flow-webhook-at-least-thirty-two-bytes",
+        "SIGNING_KEYS_WORKLOAD_SERVER_CERT": "synthetic-signing-keys-server-certificate",
+        "OPENBAO_TLS_CA_CERT": "synthetic-openbao-ca-certificate",
+        "SIGNING_KEYS_TLS_KMS_TOKEN": "synthetic-signing-keys-tls-kms-token",
         "PYTHONPATH": str(ROOT / "packages"),
+        "TEST_REQUIRED_SECRET_ENVS": "\n".join(
+            entry["env"] for entry in token_catalog().values()
+            if "kubernetes-production" in entry.get("required_for", [])
+            and "env" in entry
+        ),
     }
     if os.name == "nt":
         env["SystemRoot"] = os.environ["SystemRoot"]
     for entry in token_catalog().values():
-        if "kubernetes-production" in entry.get("required_for", []):
+        if "kubernetes-production" in entry.get("required_for", []) and "env" in entry:
             env.setdefault(
                 entry["env"], "synthetic-required-value-at-least-thirty-two-bytes"
             )
+    env["DEVICE_REGISTRATION_GATEWAY_KEY"] = (
+        "synthetic-distinct-device-gateway-key-at-least-thirty-two-bytes"
+    )
+    env["DEVICE_REGISTRATION_SIGNING_KEYS_KEY"] = (
+        "synthetic-distinct-device-signing-key-at-least-thirty-two-bytes"
+    )
+    env["ISSUANCE_API_KEY"] = "synthetic-distinct-issuance-api-key-at-least-thirty-two-bytes"
+    env["SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY"] = (
+        "synthetic-distinct-service-sign-gateway-key-at-least-thirty-two-bytes"
+    )
+    env["SIGNING_KEYS_ISSUER_SIGN_KEY"] = (
+        "synthetic-distinct-issuer-sign-key-at-least-thirty-two-bytes"
+    )
+    env["OPENBAO_BOOTSTRAP_TOKEN"] = (
+        "synthetic-distinct-migration-bootstrap-token-at-least-thirty-two-bytes"
+    )
+    for role in (
+        "FLOW_SIGN_GRANT_MINT_TOKEN",
+        "ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN",
+        "ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN",
+        "ISSUANCE_READINESS_SIGN_GRANT_MINT_TOKEN",
+        "ISSUANCE_PASSPORT_SIGN_GRANT_MINT_TOKEN",
+        "GATEWAY_SIGN_GRANT_MINT_TOKEN",
+        "GATEWAY_ISSUER_CSR_GRANT_MINT_TOKEN",
+        "SIGNING_KEYS_GRANT_VERIFY_TOKEN",
+    ):
+        env[role] = f"synthetic-distinct-{role.lower()}-credential"
     env.pop("TOKEN_HMAC_KEY")
     prelude = r"""
 set -euo pipefail
@@ -122,13 +168,25 @@ tr() {
     fi
   fi
 }
-# Execute the actual read-only catalog CLI. Windows Python otherwise emits
-# CRLF into Bash's read loop; model the deployment's POSIX stdout without
-# changing the catalog values, resolver or extracted setup function.
-catalog_python() {
-  "$TEST_PYTHON" -c 'import runpy,sys; sys.stdout.reconfigure(newline="\n"); sys.argv=sys.argv[1:]; runpy.run_path(sys.argv[0],run_name="__main__")' "$@"
-}
+# The test-owned script models the Rust CLI output and failure status.
 command_not_found_handle() { printf 'Unexpected external command\n' >&2; return 91; }
+mktemp() {
+  [[ "$#" == 1 && "$1" == -d ]] || return 97
+  printf '%s\n' "$TEST_ROOT/keycloak-secret-dir"
+}
+rm() {
+  [[ "$1" == -f && "$2" == -- ]] || return 97
+  shift 2
+  local path
+  for path in "$@"; do
+    [[ "$path" == "$TEST_ROOT/keycloak-secret-dir/"* ]] || return 97
+  done
+  /usr/bin/rm -f -- "$@"
+}
+rmdir() {
+  [[ "$1" == -- && "$2" == "$TEST_ROOT/keycloak-secret-dir" ]] || return 97
+  /usr/bin/rmdir -- "$2"
+}
 kubectl() {
   case "$1:$2:${3:-}" in
     create:namespace:synthetic-owned-namespace) ;;
@@ -136,7 +194,7 @@ kubectl() {
       [[ "$4" == synthetic-pull-secret ]] || return 92 ;;
     create:secret:generic)
       case "$4" in
-        marty-secrets|presentation-policy-workload-tls|flow-workload-tls|flow-server-workload-tls|auth-workload-tls|applicant-workload-tls|verification-workload-tls|deployment-profile-workload-tls|compliance-profile-workload-tls) ;;
+        marty-secrets|keycloak-kms|signing-keys-integration-secret-server-tls|signing-keys-tls-kms|signing-keys-integration-secret-ca|org-workload-tls|org-tls-kms|es-workload-tls|es-tls-kms|rp-workload-tls|rp-tls-kms|ct-workload-tls|ct-tls-kms|presentation-policy-workload-tls|pp-tls-kms|flow-workload-tls|flow-client-tls-kms|flow-server-workload-tls|flow-server-tls-kms|auth-workload-tls|auth-tls-kms|auth-server-tls|auth-server-kms|gateway-auth-tls|gateway-auth-kms|issuance-server-tls|issuance-server-kms|verification-workload-tls|verification-tls-kms|deployment-profile-workload-tls|deployment-profile-tls-kms|compliance-profile-workload-tls|compliance-profile-tls-kms) ;;
         *) return 93 ;;
       esac ;;
     apply:-f:-) [[ $# == 3 ]] || return 94 ;;
@@ -193,6 +251,45 @@ def applications(calls):
     ]
 
 
+@pytest.mark.parametrize(
+    "first,second",
+    [
+        ("FLOW_SIGN_GRANT_MINT_TOKEN", "GATEWAY_SIGN_GRANT_MINT_TOKEN"),
+        ("GATEWAY_SIGN_GRANT_MINT_TOKEN", "GATEWAY_ISSUER_CSR_GRANT_MINT_TOKEN"),
+        ("GATEWAY_ISSUER_CSR_GRANT_MINT_TOKEN", "SIGNING_KEYS_GRANT_VERIFY_TOKEN"),
+        ("FLOW_SIGN_GRANT_MINT_TOKEN", "SIGNING_KEYS_GRANT_VERIFY_TOKEN"),
+        ("ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN", "ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN"),
+        ("ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN", "ISSUANCE_READINESS_SIGN_GRANT_MINT_TOKEN"),
+        ("ISSUANCE_READINESS_SIGN_GRANT_MINT_TOKEN", "ISSUANCE_PASSPORT_SIGN_GRANT_MINT_TOKEN"),
+        ("ISSUANCE_PASSPORT_SIGN_GRANT_MINT_TOKEN", "SIGNING_KEYS_GRANT_VERIFY_TOKEN"),
+        ("ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN", "OPENBAO_SERVICE_TOKEN"),
+        ("ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN", "OPENBAO_BOOTSTRAP_TOKEN"),
+        ("GATEWAY_SIGN_GRANT_MINT_TOKEN", "SIGNING_KEYS_GRANT_VERIFY_TOKEN"),
+        ("FLOW_SIGN_GRANT_MINT_TOKEN", "OPENBAO_SERVICE_TOKEN"),
+        ("GATEWAY_SIGN_GRANT_MINT_TOKEN", "SIGNING_KEYS_OPENBAO_TOKEN"),
+        ("SIGNING_KEYS_GRANT_VERIFY_TOKEN", "DIDCOMM_ISSUANCE_OPENBAO_TOKEN"),
+    ],
+)
+def test_signing_grant_roles_reject_shared_openbao_credentials(harness, first, second):
+    shared = f"synthetic-shared-{first.lower()}-credential"
+    result, calls = harness({"TOKEN_HMAC_KEY": TOKEN, first: shared, second: shared})
+    assert result.returncode != 0
+    assert "must be distinct" in result.stderr or "must differ" in result.stderr
+    assert not applications(calls)
+
+
+def test_migration_bootstrap_token_cannot_reuse_runtime_openbao_token(harness):
+    shared = "synthetic-shared-runtime-and-migration-openbao-token"
+    result, calls = harness({
+        "TOKEN_HMAC_KEY": TOKEN,
+        "OPENBAO_SERVICE_TOKEN": shared,
+        "OPENBAO_BOOTSTRAP_TOKEN": shared,
+    })
+    assert result.returncode != 0
+    assert "must differ from the runtime OpenBao token" in result.stderr
+    assert not applications(calls)
+
+
 @pytest.mark.parametrize("source", ["environment", "file", "empty-env-with-file"])
 def test_setup_publishes_same_existing_token_once_without_echo(harness, source):
     if source == "environment":
@@ -223,8 +320,82 @@ def test_setup_publishes_same_existing_token_once_without_echo(harness, source):
     )
     assert (
         len([call for call in calls if call[:3] == ["create", "secret", "generic"]])
-        == 9
+            == 33
     )
+    created_names = {
+        call[3]
+        for call in calls
+        if call[:3] == ["create", "secret", "generic"]
+    }
+    assert {
+        "keycloak-kms",
+        "org-workload-tls", "org-tls-kms",
+        "es-workload-tls", "es-tls-kms",
+        "rp-workload-tls", "rp-tls-kms",
+        "ct-workload-tls", "ct-tls-kms",
+    } <= created_names
+    signing_tls = next(
+        call for call in calls
+        if call[:4] == ["create", "secret", "generic", "signing-keys-integration-secret-server-tls"]
+    )
+    assert any(arg.startswith("--from-literal=tls.crt=") for arg in signing_tls)
+    assert not any(arg.startswith("--from-literal=tls.key=") for arg in signing_tls)
+    kms_tls = next(
+        call for call in calls
+        if call[:4] == ["create", "secret", "generic", "signing-keys-tls-kms"]
+    )
+    assert any(arg.startswith("--from-literal=ca.crt=") for arg in kms_tls)
+    assert any(arg.startswith("--from-literal=token=") for arg in kms_tls)
+    pp_tls = next(
+        call for call in calls
+        if call[:4] == ["create", "secret", "generic", "presentation-policy-workload-tls"]
+    )
+    assert not any(arg.startswith("--from-literal=tls.key=") for arg in pp_tls)
+    pp_kms = next(
+        call for call in calls
+        if call[:4] == ["create", "secret", "generic", "pp-tls-kms"]
+    )
+    assert any(arg.startswith("--from-literal=ca.crt=") for arg in pp_kms)
+    assert any(arg.startswith("--from-literal=token=") for arg in pp_kms)
+    auth_tls = next(
+        call for call in calls
+        if call[:4] == ["create", "secret", "generic", "auth-workload-tls"]
+    )
+    assert not any(arg.startswith("--from-literal=tls.key=") for arg in auth_tls)
+    auth_kms = next(
+        call for call in calls
+        if call[:4] == ["create", "secret", "generic", "auth-tls-kms"]
+    )
+    assert any(arg.startswith("--from-literal=ca.crt=") for arg in auth_kms)
+    assert any(arg.startswith("--from-literal=token=") for arg in auth_kms)
+    verification_tls = next(
+        call for call in calls
+        if call[:4] == ["create", "secret", "generic", "verification-workload-tls"]
+    )
+    assert not any(arg.startswith("--from-literal=tls.key=") for arg in verification_tls)
+    verification_kms = next(
+        call for call in calls
+        if call[:4] == ["create", "secret", "generic", "verification-tls-kms"]
+    )
+    assert any(arg.startswith("--from-literal=ca.crt=") for arg in verification_kms)
+    assert any(arg.startswith("--from-literal=token=") for arg in verification_kms)
+    for workload, signer in (
+        ("flow-workload-tls", "flow-client-tls-kms"),
+        ("flow-server-workload-tls", "flow-server-tls-kms"),
+        ("deployment-profile-workload-tls", "deployment-profile-tls-kms"),
+        ("compliance-profile-workload-tls", "compliance-profile-tls-kms"),
+    ):
+        tls_secret = next(
+            call for call in calls
+            if call[:4] == ["create", "secret", "generic", workload]
+        )
+        assert not any(arg.startswith("--from-literal=tls.key=") for arg in tls_secret)
+        kms_secret = next(
+            call for call in calls
+            if call[:4] == ["create", "secret", "generic", signer]
+        )
+        assert any(arg.startswith("--from-literal=ca.crt=") for arg in kms_secret)
+        assert any(arg.startswith("--from-literal=token=") for arg in kms_secret)
 
 
 @pytest.mark.parametrize("source", ["environment", "file"])
@@ -349,3 +520,102 @@ def test_second_valid_file_read_cannot_replace_validated_captured_key(
     assert selected == {"issuance": TOKEN, "canvas-sync-worker": TOKEN}
     assert TOKEN not in result.stdout + result.stderr
     assert later not in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("failure", ["exit", "empty"])
+def test_catalog_failure_blocks_every_secret_mutation(harness, failure):
+    flag = "TEST_CATALOG_FAIL" if failure == "exit" else "TEST_CATALOG_EMPTY"
+    result, calls = harness({flag: "1"}, file_bytes=(TOKEN + "\n").encode())
+    assert result.returncode != 0
+    assert "Deployment catalog" in result.stderr
+    assert calls == []
+
+
+def test_setup_secrets_dispatch_rejects_catalog_failure_before_kubectl_write(tmp_path):
+    if os.name == "nt":
+        git = shutil.which("git")
+        assert git
+        bash = str(Path(git).resolve().parents[1] / "bin/bash.exe")
+    else:
+        bash = shutil.which("bash")
+    assert bash
+    source_sha = subprocess.check_output(
+        ["git", "-C", str(ROOT), "rev-parse", "HEAD"], text=True,
+    ).strip()
+    binary = tmp_path / "marty-deploy"
+    binary.write_bytes(
+        ("#!/bin/sh\n"
+         "if [ \"$1\" = --build-identity ]; then\n"
+         f"  printf '%s\\n' '{source_sha}:v1.1.246'\n"
+         "elif [ \"$3\" = validate ]; then\n"
+         "  printf 'catalog valid\\n'\n"
+         "else\n"
+         "  exit 97\n"
+         "fi\n").encode()
+    )
+    binary.chmod(0o755)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    kubectl = bin_dir / "kubectl"
+    kubectl.write_bytes(
+        b'#!/bin/sh\n'
+        b'case "$1" in\n'
+        b'  cluster-info) exit 0 ;;\n'
+        b'  config) printf "synthetic-context\\n" ;;\n'
+        b'  *) printf "WRITE:%s\\n" "$1" >> "$KUBECTL_WRITES"; exit 98 ;;\n'
+        b'esac\n'
+    )
+    kubectl.chmod(0o755)
+    env_file = tmp_path / "operator.env"
+    env_file.write_bytes(b"IMAGE_REGISTRY=synthetic.invalid/owned\n")
+    writes = tmp_path / "writes.log"
+    result = subprocess.run(
+        [bash, str(ROOT / "scripts/deploy-kubernetes.sh"), "setup-secrets",
+         "--env-file", str(env_file)],
+        env={**os.environ,
+             "PATH": str(bin_dir) + os.pathsep + os.environ.get("PATH", ""),
+             "MARTY_DEPLOY_BIN": str(binary),
+             "MARTY_DEPLOY_BIN_SHA256": hashlib.sha256(binary.read_bytes()).hexdigest(),
+             "MARTY_DEPLOY_SOURCE_SHA": source_sha,
+             "MARTY_DEPLOY_RELEASE_TAG": "v1.1.246",
+             "KUBECTL_WRITES": str(writes)},
+        capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode != 0
+    assert "Deployment catalog secret lookup failed" in result.stderr + result.stdout
+    assert not writes.exists()
+
+
+@pytest.mark.parametrize("failure", ["exit", "empty"])
+def test_full_deploy_rejects_catalog_failure_before_first_manifest(tmp_path, failure):
+    if os.name == "nt":
+        git = shutil.which("git")
+        assert git
+        bash = str(Path(git).resolve().parents[1] / "bin/bash.exe")
+    else:
+        bash = shutil.which("bash")
+    assert bash
+    source = (ROOT / "scripts/deploy-kubernetes.sh").read_text(encoding="utf-8")
+    function = re.findall(r"^cmd_deploy\(\) \{\n.*?^\}", source, re.M | re.S)
+    assert len(function) == 1
+    failure_script = "return 97" if failure == "exit" else "return 0"
+    harness = (
+        "set -euo pipefail\n"
+        "K8S_STACK_NAME=kubernetes-production\n"
+        "K8S_DIR=/synthetic/manifests\n"
+        "prepare_kubernetes_native_issuance() { :; }\n"
+        "require_kubernetes_passport_selection() { :; }\n"
+        f"catalog_required_secret_envs() {{ {failure_script}; }}\n"
+        "apply_manifest() { printf 'APPLY:%s\\n' \"$1\"; }\n"
+        "cmd_setup_secrets() { printf 'SECRET-WRITE\\n'; }\n"
+        "error() { printf '%s\\n' \"$*\" >&2; return 1; }\n"
+        + function[0] + "\ncmd_deploy\n"
+    )
+    result = subprocess.run(
+        [bash, "--noprofile", "--norc", "-s"], input=harness,
+        text=True, encoding="utf-8", capture_output=True, cwd=tmp_path, timeout=30,
+    )
+    assert result.returncode != 0
+    assert "Deployment catalog" in result.stderr
+    assert "APPLY:" not in result.stdout
+    assert "SECRET-WRITE" not in result.stdout

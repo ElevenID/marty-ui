@@ -9,8 +9,16 @@ import subprocess
 from pathlib import Path
 
 import yaml
+import pytest
 
 from scripts import stack_tag_gate
+from scripts.selfhost_handoff_contract import PINNED_INTEGRATION_SHA
+from scripts.kms_core_release import (
+    CORE_RELEASE_URI,
+    CORE_REVISION,
+    CORE_VERSION,
+    CORE_WHEEL_PREFIXES,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 FULL_SHA_ACTION = re.compile(r"^\s*(?:-\s*)?uses:\s*[^\s]+@[0-9a-f]{40}\s*$")
@@ -23,6 +31,22 @@ def _text(relative_path: str) -> str:
 
 def test_stack_lock_bytes_are_platform_stable() -> None:
     assert "release/stack-lock*.json text eol=lf" in _text(".gitattributes")
+
+
+def test_ci_retries_transient_public_wheel_errors_without_skipping_digests() -> None:
+    jobs = yaml.safe_load(_text(".github/workflows/ci.yml"))["jobs"]
+    for job_id in ("test-services", "test-release-contracts"):
+        install = next(
+            step["run"] for step in jobs[job_id]["steps"]
+            if step.get("name") in {"Install dependencies", "Install released test dependencies"}
+        )
+        for name in ("marty_rs", "verification", "iso18013"):
+            assert (
+                "curl --fail --location --silent --show-error --connect-timeout 15 "
+                "--max-time 60 --retry 5 --retry-delay 2 --retry-max-time 120 "
+                f'"${name}_uri" --output "${name}_wheel"'
+            ) in install
+            assert f'echo "${{{name}_digest#sha256:}}  ${name}_wheel" | sha256sum --check --strict' in install
 
 
 def test_every_workflow_run_download_binds_the_repository_explicitly() -> None:
@@ -50,7 +74,6 @@ def test_stack_release_consumes_only_immutable_public_components() -> None:
         "marty-api-core",
         "marty-blog",
         "marty-cli",
-        "marty-common",
         "marty-core-python",
         "marty-verification-python",
         "marty-iso18013-python",
@@ -60,7 +83,7 @@ def test_stack_release_consumes_only_immutable_public_components() -> None:
         assert f'select(.name == "{component}")' in workflow
 
     assert "gh attestation verify" in workflow
-    assert 'docker pull "$uri@$digest"' in workflow
+    assert 'gh attestation verify "oci://ghcr.io/elevenid/marty-ui-oss/services@$SERVICES_DIGEST"' in workflow
     assert "repository: ElevenID/marty-integration-tests" not in workflow
     assert '--history integration-history' in workflow
     assert '--expected-commit "$INTEGRATION_COMMIT"' in workflow
@@ -82,8 +105,8 @@ def test_stack_release_consumes_only_immutable_public_components() -> None:
         in workflow
     )
     assert "npm install --global /tmp/marty-api-core.tgz /tmp/marty-cli.tgz" in workflow
-    assert 'any(.assets[]; .name == "stack-manifest.json")' in workflow
-    assert "No previous public stack release" in workflow
+    assert "Render the exact Rust-only public stack images" in workflow
+    assert "--previous-manifest" not in workflow
     assert "marty-subscriptions" not in workflow
     assert "runs-on: self-hosted" not in workflow
     assert "runs-on: ubuntu-latest" in workflow
@@ -109,23 +132,14 @@ def test_ci_verifies_the_pinned_mdoc_binding_evidence_contract() -> None:
     assert "result.not_revoked is None" in workflow
 
 
-def test_ci_and_stack_lock_pin_the_same_marty_common_release() -> None:
+def test_ci_and_stack_lock_exclude_retired_marty_common_wheel() -> None:
     workflow_text = _text(".github/workflows/ci.yml")
     workflow = yaml.safe_load(workflow_text)
     lock = json.loads(_text("release/stack-lock.json"))
-    common = next(
-        component
-        for component in lock["components"]
-        if component["name"] == "marty-common"
-    )
-    artifact = next(item for item in common["artifacts"] if item["type"] == "python")
-
-    assert common["version"] == "0.2.16"
-    assert common["commit"] == "36bb2aac65759edc2ccdce120e16a61391a7ce32"
-    assert workflow["env"]["MARTY_COMMON_URI"] == artifact["uri"]
-    assert workflow["env"]["MARTY_COMMON_DIGEST"] == artifact["digest"]
-    assert 'marty_common_wheel="$RUNNER_TEMP/${MARTY_COMMON_URI##*/}"' in workflow_text
-    assert "marty_common-0.2.4" not in workflow_text
+    assert all(item["name"] != "marty-common" for item in lock["components"])
+    assert "MARTY_COMMON_URI" not in workflow["env"]
+    assert "MARTY_COMMON_DIGEST" not in workflow["env"]
+    assert 'marty_common_wheel=' not in workflow_text
 
 
 def test_ci_and_stack_lock_pin_the_same_npm_releases() -> None:
@@ -213,8 +227,9 @@ def test_stack_release_publishes_signed_evidence() -> None:
     assert "sbom: true" in workflow
     assert "SHA256SUMS" in workflow
     assert "softprops/action-gh-release" not in workflow
-    assert 'gh release create "$TAG" --verify-tag --generate-notes "${assets[@]}"' in workflow
-    assert "assets=(stack-manifest.json release-transaction.json" in workflow
+    assert 'gh release create "$TAG" --verify-tag --generate-notes "${OPERATOR_RELEASE_ASSETS[@]}"' in workflow
+    assert "source scripts/operator-release-assets.sh" in workflow
+    assert "operator_release_require_remote_allowlist" in workflow
     assert 'release_id="$(gh api' in workflow
     assert 'echo "id=$release_id" >> "$GITHUB_OUTPUT"' in workflow
     assert "pytest tests/oss_stack" in workflow
@@ -228,14 +243,8 @@ def test_release_checksums_cover_every_published_asset_once(tmp_path: Path) -> N
         step["run"] for step in steps
         if step.get("name") == "Sign and checksum manifest evidence"
     )
-    publication = next(step["run"] for step in steps if step.get("id") == "release")
-    checksum_commands = [
-        line for line in signing.splitlines() if line.startswith("sha256sum ")
-    ]
-    asset_commands = [
-        line for line in publication.splitlines() if line.startswith("assets=(")
-    ]
-    assert len(checksum_commands) == len(asset_commands) == 1
+    assert 'sha256sum "${OPERATOR_CHECKSUM_INPUTS[@]}" > SHA256SUMS' in signing
+    assert "operator_release_require_local_assets" in signing
 
     subjects = {
         "stack-manifest.json",
@@ -243,6 +252,10 @@ def test_release_checksums_cover_every_published_asset_once(tmp_path: Path) -> N
         "marty-ui-sbom.cdx.json",
         "marty-ui-services-sbom.cdx.json",
         "marty-ui-migrations-sbom.cdx.json",
+        "marty-deploy-linux-amd64",
+        "marty-deploy-linux-arm64",
+        "marty-ui-openbao-didcomm-sbom.cdx.json",
+        "marty-ui-keycloak-sbom.cdx.json",
     }
     expected_assets = subjects | {f"{name}.sigstore.json" for name in subjects}
     for name in expected_assets:
@@ -260,10 +273,12 @@ def test_release_checksums_cover_every_published_asset_once(tmp_path: Path) -> N
     result = subprocess.run(
         [
             bash, "--noprofile", "--norc", "-euo", "pipefail", "-c",
-            checksum_commands[0] + "\n" + asset_commands[0]
-            + '\nprintf "%s\\n" "${assets[@]}"',
+            'source "$ASSET_SCRIPT"\nsha256sum "${OPERATOR_CHECKSUM_INPUTS[@]}" > SHA256SUMS\n'
+            'operator_release_require_local_assets\nprintf "%s\\n" "${OPERATOR_RELEASE_ASSETS[@]}"',
         ],
-        cwd=tmp_path, capture_output=True, text=True, check=True, timeout=30,
+        cwd=tmp_path,
+        env={**os.environ, "ASSET_SCRIPT": str(ROOT / "scripts/operator-release-assets.sh")},
+        capture_output=True, text=True, check=True, timeout=30,
     )
 
     def flat_name(value: str) -> str:
@@ -299,6 +314,129 @@ def test_release_checksums_cover_every_published_asset_once(tmp_path: Path) -> N
     corrupted = verify()
     assert corrupted.returncode != 0
     assert "release-transaction.json: FAILED" in corrupted.stdout
+
+    (tmp_path / "release-transaction.json").write_bytes(
+        b"fixture:release-transaction.json\n"
+    )
+    with (tmp_path / "SHA256SUMS").open("a", encoding="utf-8") as handle:
+        handle.write(f"{'0' * 64}  unexpected-asset\n")
+    unexpected = subprocess.run(
+        [bash, "--noprofile", "--norc", "-c",
+         'source "$ASSET_SCRIPT"; operator_release_require_checksum_names SHA256SUMS'],
+        cwd=tmp_path,
+        env={**os.environ, "ASSET_SCRIPT": str(ROOT / "scripts/operator-release-assets.sh")},
+        capture_output=True, text=True, timeout=30,
+    )
+    assert unexpected.returncode != 0
+    assert "exact release assets" in unexpected.stderr
+
+
+def test_operator_release_builds_native_arches_and_verifies_provenance() -> None:
+    jobs = yaml.safe_load(_text(".github/workflows/cd.yml"))["jobs"]
+    build = jobs["build-operator-catalog"]
+    publisher = jobs["publish-manifest"]
+    matrix = build["strategy"]["matrix"]["include"]
+    assert {(item["runner"], item["arch"]) for item in matrix} == {
+        ("ubuntu-24.04", "amd64"), ("ubuntu-24.04-arm", "arm64")
+    }
+    assert {item["target"] for item in matrix} == {
+        "x86_64-unknown-linux-musl", "aarch64-unknown-linux-musl"
+    }
+    assert build["permissions"]["attestations"] == "write"
+    assert "build-operator-catalog" in publisher["needs"]
+    build_steps = "\n".join(step.get("run", "") for step in build["steps"])
+    publish_steps = "\n".join(step.get("run", "") for step in publisher["steps"])
+    assert 'test "$GITHUB_SHA" = "$SOURCE_SHA"' in build_steps
+    assert 'if readelf -l "$asset" | grep -q INTERP' in build_steps
+    assert 'test "$(./"$asset" --build-identity)" = "$MARTY_DEPLOY_SOURCE_SHA:$MARTY_DEPLOY_RELEASE_TAG"' in build_steps
+    assert 'grep -aFq -- "$SOURCE_SHA:$RELEASE_TAG" "$asset"' in publish_steps
+    assert '--source-digest "$SOURCE_SHA" --source-ref refs/heads/main' in publish_steps
+    assert "operator_release_require_remote_allowlist" in publish_steps
+
+    installer = _text("scripts/install-marty-deploy.sh")
+    for condition in (
+        "operator_release_require_remote_allowlist",
+        "operator_release_require_checksum_names",
+        "cosign verify-blob",
+        'signer_workflow=cd.yml',
+        '--certificate-identity "https://github.com/$repo/.github/workflows/$signer_workflow@refs/heads/main"',
+        '--source-digest "$source_sha" --source-ref refs/heads/main',
+        'test "$("$stage/$asset" --build-identity)" = "$source_sha:$tag"',
+    ):
+        assert condition in installer
+
+
+def test_release_resume_accepts_original_signed_assets_after_bundle_regeneration(
+    tmp_path: Path,
+) -> None:
+    """A retry may produce different valid Sigstore bundles for the same source."""
+    workflow = yaml.safe_load(_text(".github/workflows/cd.yml"))
+    step = next(
+        step["run"] for step in workflow["jobs"]["publish-manifest"]["steps"]
+        if step.get("name") == "Detect only an exact resumable immutable release"
+    )
+    assert "operator_release_verify_published_assets existing-release" in step
+    assert "cmp --silent stack-manifest.json existing-release/stack-manifest.json" in step
+    assert "cmp --silent release-transaction.json existing-release/release-transaction.json" in step
+    assert 'cmp --silent "$asset"' not in step
+
+    old = tmp_path / "published"
+    new = tmp_path / "regenerated"
+    for directory, signature in ((old, b"original"), (new, b"retry")):
+        directory.mkdir()
+        subjects = (
+            "stack-manifest.json", "release-transaction.json",
+            "marty-ui-sbom.cdx.json", "marty-ui-services-sbom.cdx.json",
+            "marty-ui-migrations-sbom.cdx.json", "marty-ui-openbao-didcomm-sbom.cdx.json",
+            "marty-ui-keycloak-sbom.cdx.json",
+            "marty-deploy-linux-amd64",
+            "marty-deploy-linux-arm64",
+        )
+        for name in subjects:
+            (directory / name).write_bytes(f"qualified:{name}\n".encode())
+            (directory / f"{name}.sigstore.json").write_bytes(signature + name.encode())
+        checksums = "".join(
+            f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.name}\n"
+            for path in directory.iterdir()
+        )
+        (directory / "SHA256SUMS").write_bytes(checksums.encode())
+
+    assert (old / "SHA256SUMS").read_bytes() != (new / "SHA256SUMS").read_bytes()
+    if os.name == "nt":
+        git = shutil.which("git")
+        assert git is not None
+        bash = str(Path(git).resolve().parents[1] / "bin" / "bash.exe")
+    else:
+        bash = shutil.which("bash")
+    assert bash is not None
+    script = (
+        'source "$ASSET_SCRIPT"\n'
+        'cosign() { printf "cosign:%s\\n" "$3" >> "$VERIFY_LOG"; }\n'
+        'gh() { printf "gh:%s\\n" "$3" >> "$VERIFY_LOG"; }\n'
+        'operator_release_verify_published_assets "$PUBLISHED" '
+        '"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" ElevenID/marty-ui\n'
+    )
+    log = tmp_path / "verification.log"
+    result = subprocess.run(
+        [bash, "--noprofile", "--norc", "-euo", "pipefail", "-c", script],
+        env={**os.environ, "ASSET_SCRIPT": str(ROOT / "scripts/operator-release-assets.sh"),
+             "PUBLISHED": str(old), "VERIFY_LOG": str(log)},
+        capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+    calls = log.read_text(encoding="utf-8").splitlines()
+    assert len(calls) == 18  # Nine Cosign signatures and nine source attestations.
+    assert sum(call.startswith("cosign:") for call in calls) == 9
+    assert sum(call.startswith("gh:") for call in calls) == 9
+
+    (old / "marty-deploy-linux-arm64").write_bytes(b"tampered")
+    tampered = subprocess.run(
+        [bash, "--noprofile", "--norc", "-euo", "pipefail", "-c", script],
+        env={**os.environ, "ASSET_SCRIPT": str(ROOT / "scripts/operator-release-assets.sh"),
+             "PUBLISHED": str(old), "VERIFY_LOG": str(log)},
+        capture_output=True, text=True, timeout=30,
+    )
+    assert tampered.returncode != 0
 
 
 def test_beta_lifecycle_binds_the_deployed_sha_to_stack_release_evidence() -> None:
@@ -515,9 +653,8 @@ def test_stack_release_allows_only_successful_one_shot_exits() -> None:
     assert (
         "docker compose --env-file .env.stack ps --status exited --services" in workflow
     )
-    assert '$0 != "migrations"' in workflow
-    assert '$0 != "issuance-migrations"' in workflow
-    assert '$0 != "revocation-profile-migrations"' in workflow
+    assert "migrations|issuance-migrations|revocation-profile-migrations|" in workflow
+    assert "docker inspect --format '{{.State.ExitCode}}'" in workflow
     assert "grep -v '^migrations$' || true" not in workflow
 
 
@@ -539,40 +676,44 @@ def test_deletion_release_uses_the_reviewed_integration_suite_and_rust_candidate
         for component in lock["components"]
         if component["name"] == "marty-integration-tests"
     )
-    assert integration["version"] == "1.2.81"
-    assert integration["commit"] == "01f2d4f6425c0dd6d11ca1a92f5e46f4cea70a04"
+    assert integration["version"] == "1.2.90"
+    assert integration["commit"] == "5b3ec6a802a5e13201be8883741889405a86d146"
+    assert PINNED_INTEGRATION_SHA == integration["commit"]
     assert integration["artifacts"][0]["digest"] == (
-        "sha256:76ea94e645fbbc7c821e85f64b2e28fa3199186e1f1c5f14829034fd75e2e178"
+            "sha256:2dddf814b58d0214c41407c92eca331e54ff85ee30990c224fb3a82dccec589c"
     )
 
-    issuance = next(
-        component
-        for component in lock["components"]
-        if component["name"] == "marty-credentials-issuance"
-    )
-    qualified = json.loads(_text("contracts/didcomm-native-consumer-ownership.json"))[
-        "release_gate"
-    ]["qualified_release"]
-    assert issuance["version"] == qualified["version"]
-    assert issuance["commit"] == qualified["commit"]
-    assert issuance["artifacts"][0]["digest"] == qualified["digest"]
+    assert all(component["name"] != "marty-credentials-issuance"
+               for component in lock["components"])
+    assert all(artifact["type"] != "oci"
+               for component in lock["components"]
+               for artifact in component["artifacts"])
 
 
-def test_verifier_release_lineage_is_eligible_and_evidence_bounded() -> None:
+def test_verifier_release_lineage_uses_hardened_core_and_native_issuance() -> None:
     lock = json.loads(_text("release/stack-lock.json"))
     components = {component["name"]: component for component in lock["components"]}
 
-    assert lock["release"] == "marty-ui@1.1.232"
+    assert lock["release"] == "marty-ui@1.1.263"
     assert lock["release_state"] == "eligible"
-    stack_tag_gate.require_release_eligible(ROOT, "v1.1.232")
-    qualified = json.loads(_text("contracts/didcomm-native-consumer-ownership.json"))[
-        "release_gate"
-    ]["qualified_release"]
-    assert components["marty-credentials-issuance"]["version"] == qualified["version"]
-    assert components["marty-integration-tests"]["version"] == "1.2.81"
+    stack_tag_gate.require_release_eligible(ROOT, "v1.1.263")
+    workflow = _text(".github/workflows/cd.yml")
+    assert 'manifest_timestamp="$(git show -s --format=%cI "$SOURCE_SHA")"' in workflow
+    assert '--generated-at "$manifest_timestamp" --output stack-manifest.json' in workflow
+    assert '`prepare_selfhost_lock=true`' in _text("docs/selfhost-disposable-qualification-runbook.md")
+    release_tag = "v" + lock["release"].removeprefix("marty-ui@")
+    cutover_guide = _text("docs/keycloak-kms-installed-cutover.md")
+    assert release_tag in cutover_guide
+    kms_tracker = _text("docs/remote-kms-hardening-plan.md")
+    assert f"source stack lock currently selects `{lock['release']}`" in kms_tracker
+    with pytest.raises(stack_tag_gate.StackTagGateError, match="release"):
+        stack_tag_gate.require_release_eligible(ROOT, "v1.1.244")
+    assert "marty-credentials-issuance" not in components
+    assert components["marty-integration-tests"]["version"] == "1.2.90"
 
+    # Detailed producer incident history belongs in the incident/runbook owners,
+    # rather than being duplicated in the current migration requirements.
     documents = (
-        _text("docs/CONSOLIDATED_RUST_MIGRATION_ROADMAP.md"),
         _text("docs/rust-migrations/verification-image-consolidation-plan.md"),
         _text("docs/rust-migrations/verifier-release-incident-2026-08-31.md"),
     )
@@ -639,7 +780,7 @@ def test_stack_release_is_claim_only_digest_first_and_publishes_last() -> None:
     assert "create-transaction-pin" in workflow
     assert "run-transaction" in workflow
     assert "TAG: ${{ needs.resolve-transaction.outputs.tag }}" in workflow
-    assert 'gh release create "$TAG" --verify-tag --generate-notes "${assets[@]}"' in workflow
+    assert 'gh release create "$TAG" --verify-tag --generate-notes "${OPERATOR_RELEASE_ASSETS[@]}"' in workflow
     assert "overwrite_files:" not in workflow
     assert "draft: true" not in workflow
     assert 'gh release edit "$RELEASE_TAG"' not in workflow
@@ -677,6 +818,75 @@ def test_verifier_scans_request_the_frozen_cyclonedx_schema() -> None:
     )
     assert "create-transaction-pin" in verifier["run"]
     assert "validate-sbom" in verifier["run"]
+
+
+def test_verifier_transaction_uses_attested_core_source_and_disposable_kms() -> None:
+    release = yaml.safe_load(_text(".github/workflows/cd.yml"))
+    steps = release["jobs"]["verifier-differential"]["steps"]
+    producer = next(step for step in steps if step.get("name") == "Build the exact attested Core KMS verifier producer")
+    assert "config/credentials-verifier-positive-producer.json" in producer["run"]
+    assert "gh attestation verify" in producer["run"]
+    assert "--source-ref \"refs/tags/$tag\"" in producer["run"]
+    assert "--source-digest \"$commit\"" in producer["run"]
+    assert "--deny-self-hosted-runners" in producer["run"]
+    assert "extract_verified_source.py" in producer["run"]
+    assert "--expected-sha256 \"$digest\"" in producer["run"]
+    assert "--expected-commit \"$commit\"" in producer["run"]
+    assert "cargo +1.97.1 build --locked" in producer["run"]
+    verifier = next(
+        step for step in steps
+        if step.get("name") == "Verify and exercise the exact services digest against the immutable oracle"
+    )
+    assert "scripts/with_disposable_verifier_kms.py" in verifier["run"]
+    assert "--bin marty-test-signer-agent" in producer["run"]
+    assert "--agent \"$GITHUB_WORKSPACE/core-source/target/debug/marty-test-signer-agent\"" in verifier["run"]
+    assert "compare-transaction-evidence" in verifier["run"]
+
+
+def test_exercised_public_kms_helper_is_attested_only_for_prepared_selfhost() -> None:
+    jobs = yaml.safe_load(_text(".github/workflows/cd.yml"))["jobs"]
+    verifier = jobs["verifier-differential"]
+    assert verifier["runs-on"] == "ubuntu-24.04"
+    assert verifier["permissions"]["attestations"] == "write"
+    assert verifier["permissions"]["id-token"] == "write"
+    steps = verifier["steps"]
+    named = {step.get("name"): i for i, step in enumerate(steps)}
+    build = named["Build the Rust public-key fixture converter"]
+    exercise = named["Verify and exercise the exact services digest against the immutable oracle"]
+    record = named["Record the exercised self-host public-key helper"]
+    verify = named["Verify the just-attested helper source"]
+    attest = [i for i, step in enumerate(steps)
+              if step.get("uses", "").startswith("actions/attest-build-provenance@")]
+    bundles = named["Preserve exact public-key helper SLSA bundles"]
+    upload = next(i for i, step in enumerate(steps)
+                  if step.get("with", {}).get("name", "").startswith("selfhost-public-kms-jwk-unqualified-"))
+    assert len(attest) == 2
+    assert build < exercise < record < attest[0] < attest[1] < bundles < verify < upload
+    assert steps[build]["env"]["PREPARE_SELFHOST_LOCK"] == "${{ inputs.prepare_selfhost_lock }}"
+    assert 'if [[ "$PREPARE_SELFHOST_LOCK" = true ]]; then' in steps[build]["run"]
+    assert 'test "$GITHUB_SHA" = "$SOURCE_SHA"' in steps[build]["run"]
+    assert "--bin public-kms-jwk" in steps[build]["run"]
+    assert all(steps[i]["if"] == "inputs.prepare_selfhost_lock == true"
+               for i in (record, *attest, verify, upload))
+    assert [steps[i]["with"]["subject-path"] for i in attest] == [
+        "public-kms-jwk", "selfhost-public-kms-jwk.json"]
+    assert [steps[i]["id"] for i in attest] == [
+        "attest-public-kms-binary", "attest-public-kms-receipt"]
+    assert all("outputs.bundle-path" in value for value in steps[bundles]["env"].values())
+    assert "test -s \"$BINARY_BUNDLE\"" in steps[bundles]["run"]
+    assert "test -s \"$RECEIPT_BUNDLE\"" in steps[bundles]["run"]
+    assert "install -m 0755 marty-ui/rust/target/release/public-kms-jwk public-kms-jwk" in steps[record]["run"]
+    assert "cmp marty-ui/rust/target/release/public-kms-jwk public-kms-jwk" in steps[record]["run"]
+    assert "verify_selfhost_public_kms_helper.py" in steps[verify]["run"]
+    assert '--run-id "$GITHUB_RUN_ID"' in steps[verify]["run"]
+    assert "selfhost-public-kms-jwk.json" in steps[upload]["with"]["path"]
+    assert "public-kms-jwk" in steps[upload]["with"]["path"]
+    assert "public-kms-jwk.slsa-bundle.json" in steps[upload]["with"]["path"]
+    assert "selfhost-public-kms-jwk.slsa-bundle.json" in steps[upload]["with"]["path"]
+    assert steps[upload]["with"]["retention-days"] == 7
+    # Producer-only: no immutable release asset or tester-side bypass yet.
+    assert "selfhost-public-kms-jwk" not in str(jobs["publish-manifest"])
+    assert "build_public_kms_jwk_tool" in _text("scripts/run_selfhost_business_journey.py")
 
 
 def test_stack_release_actions_are_pinned_by_full_commit_sha() -> None:
@@ -741,30 +951,160 @@ def test_stack_release_uses_read_only_default_permissions() -> None:
         assert permissions.get("security-events") != "write"
 
 
-def test_release_approval_notice_cannot_replace_the_protected_gate() -> None:
+def test_verifier_kms_producer_is_an_attested_release_locked_commit() -> None:
     jobs = yaml.safe_load(_text(".github/workflows/cd.yml"))["jobs"]
-    notice = jobs["notify-release-approval"]
-    publication = jobs["publish-manifest"]
-    script = notice["steps"][0]["run"]
+    verifier = jobs["verifier-differential"]
+    producer = next(step for step in verifier["steps"]
+                    if step.get("name") == "Build the exact attested Core KMS verifier producer")
+    assert 'select(.repository == "ElevenID/marty-core")' in producer["run"]
+    assert 'all(.[]; . == [$commit, $version])' in producer["run"]
+    assert "gh attestation verify" in producer["run"]
+    assert "extract_verified_source.py" in producer["run"]
+    script = next(step["run"] for step in verifier["steps"]
+                  if step.get("name") == "Verify and exercise the exact services digest against the immutable oracle")
+    assert "--jwk-tool" in script
+    assert "with_disposable_verifier_kms.py" in script
 
-    assert notice["needs"] == publication["needs"]
-    assert "notify-release-approval" not in publication["needs"]
-    assert notice["if"] == "github.ref == 'refs/heads/main'"
-    assert notice["continue-on-error"] is True
-    assert notice["permissions"] == {"actions": "read", "issues": "write"}
-    assert "environment" not in notice
+
+def test_fresh_native_schema_gate_binds_exact_release_images() -> None:
+    jobs = yaml.safe_load(_text(".github/workflows/cd.yml"))["jobs"]
+    native = jobs["native-schema-image-qualification"]
+    release = jobs["qualify-release"]
+    assert native["needs"] == [
+        "resolve-transaction", "build-services", "record-digests",
+    ]
+    assert "native-schema-image-qualification" in release["needs"]
+    step = next(item for item in native["steps"]
+                if item.get("name") == "Verify and qualify exact released Rust schema images")
+    assert step["env"]["SERVICES_DIGEST"] == (
+        "${{ needs.build-services.outputs.services_digest }}")
+    assert step["env"]["MIGRATIONS_DIGEST"] == (
+        "${{ needs.build-services.outputs.migrations_digest }}")
+    assert step["env"]["SOURCE_SHA"] == (
+        "${{ needs.resolve-transaction.outputs.source_sha }}")
+    script = step["run"]
+    assert "gh attestation verify" in script
+    assert "--source-ref refs/heads/main --deny-self-hosted-runners" in script
+    assert "python scripts/qualify_selfhost_migrations.py" in script
+    assert "deploy-config/passport-supported-disposable-infra-images.json" in script
+    assert "--services-image \"$services_image\"" in script
+    assert "--migrations-image \"$migrations_image\"" in script
+    assert 'marty.selfhost-migrations-qualification/v3' in script
+    assert 'marty.selfhost-migrations-qualification/v3' in _text(
+        "scripts/qualify_selfhost_migrations.py")
+    assert 'reachable-unreachable-malformed-read-only' in script
+    assert '.runs == "2"' in script
+    assert any(item.get("with", {}).get("name") ==
+               "stack-release-native-schema-gate-${{ github.run_id }}"
+               for item in native["steps"])
+    assert any(item.get("with", {}).get("name") ==
+               "stack-release-native-schema-gate-${{ github.run_id }}"
+               for item in release["steps"])
+    persist = next(item["run"] for item in release["steps"]
+                   if item.get("name") == "Persist exact gate evidence")
+    assert "sha256sum gates/native/native-schema.json" in persist
+    assert '--gate "native_schema=$GITHUB_RUN_ID:$native_digest"' in persist
+
+
+def test_public_stack_smoke_binds_all_five_kms_images() -> None:
+    jobs = yaml.safe_load(_text(".github/workflows/cd.yml"))["jobs"]
+    smoke = jobs["public-stack-smoke"]
+    plugin = jobs["didcomm-plugin-image-qualification"]
+    release = jobs["qualify-release"]
+    build = next(step for step in smoke["steps"]
+                 if step.get("name") == "Build candidate stack manifest")
+    script = build["run"]
+
+    assert "build-openbao-didcomm" in smoke["needs"]
+    assert build["env"]["OPENBAO_DIDCOMM_DIGEST"] == "${{ needs.build-openbao-didcomm.outputs.digest }}"
+    assert script.count('{type: "oci"') == 5
+    assert 'marty-ui-oss/keycloak' in script
+    assert 'marty-ui-oss/openbao-didcomm' in script
+    assert "build-openbao-didcomm" in plugin["needs"]
+    assert "didcomm-plugin-image-qualification" in release["needs"]
+    run = next(step["run"] for step in smoke["steps"]
+               if step.get("name") == "Run the artifact-only public integration suite")
+    for service in (
+        "openbao-tls-init",
+        "openbao-ca-export",
+        "openbao-plugin-bootstrap",
+        "signing-integration-tls-bootstrap",
+    ):
+        assert service in run
+    assert "docker inspect --format '{{.State.ExitCode}}'" in run
+
+
+def test_release_qualifies_exact_keycloak_kms_image_before_promotion() -> None:
+    jobs = yaml.safe_load(_text(".github/workflows/cd.yml"))["jobs"]
+    gate = jobs["keycloak-kms-image-qualification"]
+    assert {"build-keycloak", "build-openbao-didcomm", "record-digests"} <= set(gate["needs"])
+    proof = next(step["run"] for step in gate["steps"]
+                 if step.get("name") == "Verify and exercise exact Keycloak and OpenBao image digests")
+    assert 'gh attestation verify "oci://$image"' in proof
+    assert '--require-browser' in proof
+    assert '--keycloak-image "$keycloak" --openbao-image "$openbao"' in proof
+    assert "keycloak-kms-image-qualification" in jobs["qualify-release"]["needs"]
+    qualifier = next(step["run"] for step in jobs["qualify-release"]["steps"]
+                     if step.get("name") == "Persist exact gate evidence")
+    assert '--gate "keycloak_kms=$GITHUB_RUN_ID:$keycloak_digest"' in qualifier
+
+
+def test_release_publishes_and_qualifies_the_exact_openbao_didcomm_image() -> None:
+    workflow = _text(".github/workflows/cd.yml")
+    jobs = yaml.safe_load(workflow)["jobs"]
+    prepare = _text(".github/workflows/prepare-stack-tag.yml")
+    image = "ghcr.io/elevenid/marty-ui-oss/openbao-didcomm"
+
+    assert f"OPENBAO_DIDCOMM_IMAGE: {image}" in workflow
+    assert f"OPENBAO_DIDCOMM_IMAGE: {image}" in prepare
+    assert '--image "openbao_didcomm=$OPENBAO_DIDCOMM_IMAGE"' in prepare
+    build = jobs["build-openbao-didcomm"]
+    build_step = next(step for step in build["steps"] if step.get("id") == "build")
+    assert build_step["with"]["file"] == "openbao/didcomm-authcrypt/Dockerfile"
+    assert "push-by-digest=true" in build_step["with"]["outputs"]
+    assert any("actions/attest-build-provenance" in step.get("uses", "")
+               for step in build["steps"])
+    assert any('cosign sign --yes "$OPENBAO_DIDCOMM_IMAGE@$DIGEST"'
+               in step.get("run", "") for step in build["steps"])
+
+    assert "build-openbao-didcomm" in jobs["record-digests"]["needs"]
+    recorded = next(step["run"] for step in jobs["record-digests"]["steps"]
+                    if step.get("name") == "Persist the exact digest checkpoint")
+    assert '--digest "openbao_didcomm=$OPENBAO_DIDCOMM_DIGEST"' in recorded
+    gate = jobs["didcomm-plugin-image-qualification"]
+    assert "build-openbao-didcomm" in gate["needs"]
+    probe = next(step["run"] for step in gate["steps"]
+                 if step.get("name") == "Verify and exercise the exact published OpenBao DIDComm image")
+    for required in (
+        'gh attestation verify "oci://$image"',
+        'export MARTY_OPENBAO_PROBE_IMAGE="$image"',
+        "probe_didcomm_issuance_token.py",
+        "probe_didcomm_openbao_ha.py",
+        "probe_selfhost_openbao_raft_bootstrap.py",
+    ):
+        assert required in probe
+    assert "didcomm-plugin-image-qualification" in jobs["qualify-release"]["needs"]
+    assert '--gate "didcomm_plugin=$GITHUB_RUN_ID:$didcomm_digest"' in workflow
+    publication = jobs["publish-manifest"]
+    assert "build-openbao-didcomm" in publication["needs"]
+    assert '--role openbao_didcomm --digest "$DIGEST"' in workflow
+    assert 'uri: "ghcr.io/elevenid/marty-ui-oss/openbao-didcomm"' in workflow
+    assert "marty-ui-openbao-didcomm-sbom.cdx.json" in workflow
+
+
+def test_release_publication_needs_qualified_artifacts_without_manual_review() -> None:
+    jobs = yaml.safe_load(_text(".github/workflows/cd.yml"))["jobs"]
+    publication = jobs["publish-manifest"]
+    requirement = json.loads(_text("deploy-config/github-release-environments.json"))[
+        "environments"
+    ]["stack-release"]
+
+    assert "notify-release-approval" not in jobs
     assert publication["environment"] == "stack-release"
-    assert "pending_deployments" in script
-    assert '.environment.name == "stack-release"' in script
-    assert '.reviewers[]?' in script
-    assert '.type == "User"' in script
-    assert '.type == "Team"' in script
-    assert '"@" + $owner + "/" + .reviewer.slug' in script
-    assert "stack-release-approval:$GITHUB_RUN_ID:$GITHUB_RUN_ATTEMPT" in script
-    assert '.user.login == "github-actions[bot]"' in script
-    assert "publish_status" in script
-    assert 'gh issue comment "$issue" --repo "$GITHUB_REPOSITORY"' in script
-    assert "gh api --method POST" not in script
+    assert "qualify-release" in publication["needs"]
+    assert requirement["require_reviewers"] is False
+    assert requirement["require_branch_policy"] is True
+    assert requirement["prevent_admin_bypass"] is True
 
 
 def test_public_builds_do_not_checkout_sibling_sources() -> None:
@@ -780,15 +1120,10 @@ def test_public_builds_do_not_checkout_sibling_sources() -> None:
 
     assert "context: .." not in workflow
     assert "COPY ../" not in dockerfiles
-    assert "MARTY_COMMON_URI" in dockerfiles
-    assert "MARTY_COMMON_DIGEST" in dockerfiles
-    assert "MARTY_VERIFICATION_URI" in dockerfiles
-    assert "MARTY_VERIFICATION_DIGEST" in dockerfiles
-    assert "MARTY_ISO18013_URI" in dockerfiles
-    assert "MARTY_ISO18013_DIGEST" in dockerfiles
-    assert 'MARTY_COMMON_WHEEL="/tmp/${MARTY_COMMON_URI##*/}"' in dockerfiles
-    assert "/tmp/marty-common.whl" not in dockerfiles
-    assert "sha256sum --check --strict" in dockerfiles
+    assert "marty-migration-bootstrap" in dockerfiles
+    assert "COPY ../" not in dockerfiles
+    assert "pip install" not in _text("services/Dockerfile.migrations")
+    assert "marty_common" not in dockerfiles
 
 
 def test_stack_release_creates_the_annotated_tag_only_after_digest_qualification() -> (
@@ -799,8 +1134,10 @@ def test_stack_release_creates_the_annotated_tag_only_after_digest_qualification
     assert "Require the exact claimed protected-main source" in workflow
     assert "+refs/heads/main:refs/remotes/origin/main" in workflow
     assert "Create or verify the late annotated source tag" in workflow
-    assert 'git tag -a "$TAG" "$SOURCE_SHA"' in workflow
-    assert 'git push origin "refs/tags/$TAG:refs/tags/$TAG"' in workflow
+    helper = _text("scripts/push_promoted_release_tag.py")
+    assert 'command("git", "tag", "-a", tag, source' in helper
+    assert 'command("git", "push", "--atomic", "origin", f"{source}:refs/heads/main"' in helper
+    assert 'f"refs/tags/{tag}:refs/tags/{tag}"' in helper
     assert 'test "$(git cat-file -t "refs/tags/$TAG")" = tag' in workflow
     assert (
         'test "$(git rev-parse "refs/tags/$TAG^{commit}")" = "$SOURCE_SHA"' in workflow
@@ -809,6 +1146,28 @@ def test_stack_release_creates_the_annotated_tag_only_after_digest_qualification
     assert workflow.index("stack-release-qualified-") < workflow.index(
         "Create or verify the late annotated source tag"
     )
+
+
+def test_workflow_changing_source_tag_uses_local_promotion_handoff() -> None:
+    jobs = yaml.safe_load(_text(".github/workflows/cd.yml"))["jobs"]
+    assert "STACK_RELEASE_TAG_TOKEN" not in _text(".github/workflows/cd.yml")
+
+    publisher = jobs["publish-manifest"]
+    checkout = next(
+        step for step in publisher["steps"]
+        if step.get("uses", "").startswith("actions/checkout@")
+    )
+    assert checkout["with"]["persist-credentials"] is False
+    tag_step = next(
+        step for step in publisher["steps"]
+        if step.get("name") == "Create or verify the late annotated source tag"
+    )
+    assert "GH_TOKEN" not in tag_step["env"]
+    assert "stack-release-promotion-complete-$GITHUB_RUN_ID" in tag_step["run"]
+    assert "exit 1" in tag_step["run"]
+    helper = _text("scripts/push_promoted_release_tag.py")
+    assert 'required_state="promoted"' in helper
+    assert "gh\", \"auth\", \"setup-git" in helper
 
 
 def test_stack_tag_requires_exact_main_gate_evidence() -> None:
@@ -855,7 +1214,7 @@ def test_stack_tag_requires_exact_main_gate_evidence() -> None:
     assert "actions: read" in workflow
 
 
-def test_stack_tag_and_release_require_explicit_eligibility() -> None:
+def test_stack_tag_and_release_require_the_reviewed_eligibility_lock() -> None:
     workflow = _text(".github/workflows/cd.yml")
     prepare = _text(".github/workflows/prepare-stack-tag.yml")
     lock = json.loads(_text("release/stack-lock.json"))
@@ -873,15 +1232,16 @@ def test_stack_tag_and_release_require_explicit_eligibility() -> None:
     )
 
 
-def test_python_migration_image_installs_every_required_native_backend() -> None:
+def test_rust_migration_image_has_no_python_runtime_or_wheels() -> None:
     service = _text("services/Dockerfile")
     migrations = _text("services/Dockerfile.migrations")
 
-    assert 'MARTY_RS_WHEEL="/tmp/${MARTY_RS_URI##*/}"' in migrations
-    assert 'MARTY_VERIFICATION_WHEEL="/tmp/${MARTY_VERIFICATION_URI##*/}"' in migrations
-    assert 'MARTY_ISO18013_WHEEL="/tmp/${MARTY_ISO18013_URI##*/}"' in migrations
-    assert '"$MARTY_VERIFICATION_WHEEL"' in migrations
-    assert '"$MARTY_ISO18013_WHEEL"' in migrations
+    assert "FROM debian:bookworm-slim" in migrations
+    assert "marty-migration-bootstrap" in migrations
+    assert "marty-notification" in migrations
+    assert "COPY services /app/services" not in migrations
+    assert "RUN python" not in migrations
+    assert "pip install" not in migrations
     assert "MARTY_RS_WHEEL" not in service
     assert "python" not in service.split("FROM debian:bookworm-slim", maxsplit=1)[1]
 
@@ -892,8 +1252,11 @@ def test_python_migration_image_installs_every_required_native_backend() -> None
         "marty-verification-python",
         "marty-iso18013-python",
     ):
-        assert components[name]["version"] == "0.1.61"
-        assert components[name]["commit"] == "a3adbbdca93251e4db7933c5c77fe5e8c3f4266c"
+        assert components[name]["version"] == CORE_VERSION
+        assert components[name]["commit"] == CORE_REVISION
+        assert components[name]["artifacts"][0]["uri"].startswith(
+            CORE_RELEASE_URI + CORE_WHEEL_PREFIXES[name] + "-" + CORE_VERSION + "-"
+        )
 
 
 def test_release_images_reject_commerce_markers() -> None:

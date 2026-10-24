@@ -17,7 +17,7 @@ def metadata(workflow):
     return {
         "id": RUN, "event": "workflow_dispatch",
         "path": f".github/workflows/{workflow}",
-        "head_branch": "main", "head_sha": SOURCE,
+        "head_branch": "v1.1.244", "head_sha": SOURCE,
         "run_attempt": 1, "status": "completed", "conclusion": "success",
         "run_started_at": "2026-10-01T12:00:00Z",
         "updated_at": "2026-10-01T12:10:00Z",
@@ -65,8 +65,32 @@ def downloader(kind, *, run=None, artifact=None, extra=None):
     })
 
     def execute(args):
+        if args[-2:] == ["show", f"{SOURCE}:release/stack-lock.json"]:
+            return json.dumps({"schema": "marty.stack-lock/v1",
+                               "release": "marty-ui@1.1.244",
+                               "release_state": "eligible"})
         if args[:2] == ["gh", "api"]:
+            if args[2].endswith("/git/tags/" + "d" * 40):
+                return json.dumps({
+                    "tag": "v1.1.244", "object": {"type": "commit", "sha": SOURCE},
+                    "message": (f"Release-Transaction: {'e' * 64}\n"
+                                f"Claim-Run: 123\nSource-SHA: {SOURCE}\n"),
+                })
+            if args[2].endswith("/actions/runs/123"):
+                return json.dumps({
+                    "id": 123, "path": ".github/workflows/prepare-stack-tag.yml",
+                    "event": "workflow_dispatch", "head_branch": "main",
+                    "head_sha": SOURCE, "status": "completed",
+                    "conclusion": "success",
+                })
+            if args[2].endswith("/releases/tags/v1.1.244"):
+                return json.dumps({"tag_name": "v1.1.244", "draft": False,
+                                   "prerelease": False,
+                                   "published_at": "2026-10-11T16:00:00Z"})
             return json.dumps(source)
+        if args[:2] == ["git", "ls-remote"]:
+            return (f"{'d' * 40}\trefs/tags/v1.1.244\n"
+                    f"{SOURCE}\trefs/tags/v1.1.244^{{}}\n")
         assert args[:3] == ["gh", "run", "download"]
         destination = Path(args[args.index("--dir") + 1])
         (destination / f"{prefix}-{RUN}.json").write_text(json.dumps(payload))
@@ -97,11 +121,11 @@ def test_reads_exact_protected_preliminary_soak_and_publication():
 def test_rejects_unprotected_run_or_bad_workflow():
     wrong_branch = metadata("passport-beta-preliminary.yml")
     wrong_branch["head_branch"] = "feature"
-    with pytest.raises(ProtectedArtifactError, match="protected main"):
+    with pytest.raises(ProtectedArtifactError, match="release-tag"):
         read_artifact("preliminary", RUN,
                       execute=downloader("preliminary", run=wrong_branch))
     wrong_workflow = metadata("ci.yml")
-    with pytest.raises(ProtectedArtifactError, match="protected main"):
+    with pytest.raises(ProtectedArtifactError, match="release-tag"):
         read_artifact("preliminary", RUN,
                       execute=downloader("preliminary", run=wrong_workflow))
 

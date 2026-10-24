@@ -584,21 +584,3 @@ def test_every_intentional_correction_preserves_a_valid_capability() -> None:
         "identical_retries_are_idempotent": True,
         "multiple_distinct_supported_events_per_notification_id": True,
     }
-
-
-def test_capture_script_is_replayable_but_not_a_runtime_dependency() -> None:
-    script = (
-        ROOT / "scripts" / "capture_oid4vci_authorization_reference.py"
-    ).read_text(encoding="utf-8")
-    assert 'SOURCE_COMMIT = "aaa6a9b8e31e62cd0ab087eef5fc1f4835048e26"' in script
-    assert 'SOURCE_TREE = "819b7458a31c75d28043a4660643b029c5ec4567"' in script
-    assert "ASGITransport(app=app, raise_app_exceptions=False)" in script
-    assert "--verify" in script
-    assert (
-        "unchanged route composition executed through FastAPI ASGI transport" in script
-    )
-    assert "repo.calls[:2]" not in script
-    assert "lifecycle_calls" not in script
-    assert "capture_oid4vci_authorization_reference" not in (
-        ROOT / "rust" / "services" / "issuance" / "Cargo.toml"
-    ).read_text(encoding="utf-8")

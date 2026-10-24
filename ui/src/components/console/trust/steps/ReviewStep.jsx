@@ -170,6 +170,7 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
                 {data.trusted_issuers.slice(0, 3).map((issuer, index) => (
                   <ListItem key={index} sx={{ px: 0 }}>
                     <ListItemText
+                      secondary={issuer.did_resolution ? `Scope: ${issuer.organization_id || 'public'}; resolver: ${issuer.did_resolution.resolver_type}; cache: ${issuer.did_resolution.cache_ttl_seconds ?? 300}s; pinned methods: ${(issuer.verification_method_ids || []).join(', ') || 'any assertion-authorized method'}; public fallback: ${issuer.did_resolution.allow_public_fallback || ['PUBLIC_DID', 'ORGANIZATION_REGISTRY_WITH_PUBLIC_FALLBACK'].includes(issuer.did_resolution.resolver_type) ? 'allowed' : 'disabled'}` : undefined}
                       primary={
                         issuer.certificate_pem ? (
                           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>

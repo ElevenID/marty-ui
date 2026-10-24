@@ -5,14 +5,16 @@ use axum::{
     body::{to_bytes, Body},
     http::{Request, StatusCode},
 };
+use chrono::Utc;
 use marty_deployment_profile::{
     deployment_router, ApiAuthConfiguration, AssignDeviceRequest, AuthMethod,
     CreateDeploymentProfileRequest, CreateLaneRequest, DeploymentError, DeploymentHttpState,
-    DeploymentRepository, DeploymentService, MemoryDeploymentRepository,
-    UpdateDeploymentProfileRequest,
+    DeploymentProfile, DeploymentRepository, DeploymentService, Lane, MemoryDeploymentRepository,
+    PostgresDeploymentRepository, UpdateDeploymentProfileRequest,
 };
 use mmf_security::{SecurityError, TenantMembership, TenantMembershipProvider};
 use serde_json::{json, Value};
+use sqlx::postgres::PgPoolOptions;
 use tower::ServiceExt;
 
 #[derive(Clone)]
@@ -81,6 +83,48 @@ fn create_request() -> CreateDeploymentProfileRequest {
         "environment_config":{"language":"fr-FR","offline_cache_ttl_seconds":7200},
         "enabled_flow_ids":["flow-1","flow-1"], "update_channel":"beta"
     })).unwrap()
+}
+
+#[tokio::test]
+async fn repository_rejects_private_key_material_before_database_access() {
+    let pool = PgPoolOptions::new()
+        .connect_lazy("postgres://localhost:1/deployment_profile_test")
+        .unwrap();
+    let postgres = PostgresDeploymentRepository::new(pool);
+    let memory = MemoryDeploymentRepository::new();
+
+    let mut profile = DeploymentProfile::new(create_request(), Utc::now()).unwrap();
+    profile.environment_config.insert(
+        "issuer".into(),
+        json!({"public_jwk":{"kty":"EC","crv":"P-256","d":"secret"}}),
+    );
+    for repository in [&postgres as &dyn DeploymentRepository, &memory] {
+        assert!(matches!(
+            repository.save_profile(profile.clone()).await,
+            Err(DeploymentError::BadRequest(_))
+        ));
+    }
+
+    let mut lane = Lane::new(
+        &profile.id,
+        serde_json::from_value(json!({"name":"Arrival"})).unwrap(),
+        Utc::now(),
+    )
+    .unwrap();
+    lane.metadata
+        .insert("config".into(), json!(r#"{"private_key_pem":"secret"}"#));
+    for repository in [&postgres as &dyn DeploymentRepository, &memory] {
+        assert!(matches!(
+            repository.save_lane(lane.clone()).await,
+            Err(DeploymentError::BadRequest(_))
+        ));
+    }
+
+    profile.environment_config.insert(
+        "issuer".into(),
+        json!({"public_jwk":{"kty":"EC","crv":"P-256","x":"public"},"key_reference":"transit/issuer/1"}),
+    );
+    memory.save_profile(profile).await.unwrap();
 }
 
 #[tokio::test]
@@ -295,7 +339,24 @@ async fn lifecycle_and_exact_tenant_permissions_fail_closed() {
 #[tokio::test]
 async fn http_surface_preserves_validation_status_and_rejects_removed_aliases() {
     let (service, _) = harness(all_permissions());
-    let app = deployment_router(DeploymentHttpState { service });
+    let profile = service.create(create_request(), "user-1").await.unwrap();
+    let app = deployment_router(
+        DeploymentHttpState::new(service)
+            .with_service_token(Some("s".repeat(32)))
+            .unwrap(),
+    );
+    let human = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/v1/deployment-profiles/{}", profile.id))
+                .header("x-user-id", "user-1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(human.status(), StatusCode::OK);
     let response = app.clone().oneshot(Request::builder().method("POST").uri("/v1/deployment-profiles")
         .header("content-type", "application/json").header("x-user-id", "user-1")
         .body(Body::from(json!({"organization_id":"org-1","name":"Legacy","trust_profile_id":"trust-1","presentation_policy_ids":["policy-1"],"default_presentation_policy_id":"policy-1","ux_config":{}}).to_string())).unwrap()).await.unwrap();
@@ -314,4 +375,184 @@ async fn http_surface_preserves_validation_status_and_rejects_removed_aliases() 
         .unwrap();
     assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
     let _ = to_bytes(response.into_body(), 1024).await.unwrap();
+}
+
+#[tokio::test]
+async fn gateway_api_key_reads_and_writes_require_service_identity_tenant_and_exact_scope() {
+    const ORG: &str = "20000000-0000-4000-8000-000000000001";
+    const OTHER: &str = "20000000-0000-4000-8000-000000000002";
+    const KEY: &str = "10000000-0000-4000-8000-000000000001";
+    let (service, repository) = harness(BTreeSet::new());
+    let mut request = create_request();
+    request.organization_id = ORG.into();
+    let profile = DeploymentProfile::new(request, Utc::now()).unwrap();
+    let id = profile.id.clone();
+    repository.save_profile(profile).await.unwrap();
+    let token = "s".repeat(32);
+    let app = deployment_router(
+        DeploymentHttpState::new(service.clone())
+            .with_service_token(Some(token.clone()))
+            .unwrap(),
+    );
+    for (method, scopes, organization, supplied_token, key, status) in [
+        (
+            "GET",
+            "deployment:read",
+            ORG,
+            token.as_str(),
+            KEY,
+            StatusCode::OK,
+        ),
+        (
+            "GET",
+            "deployment:read",
+            ORG,
+            "",
+            KEY,
+            StatusCode::UNAUTHORIZED,
+        ),
+        (
+            "GET",
+            "deployment:read",
+            ORG,
+            "wrong-token",
+            KEY,
+            StatusCode::UNAUTHORIZED,
+        ),
+        (
+            "GET",
+            "deployment:read",
+            OTHER,
+            token.as_str(),
+            KEY,
+            StatusCode::FORBIDDEN,
+        ),
+        (
+            "GET",
+            "flows:read",
+            ORG,
+            token.as_str(),
+            KEY,
+            StatusCode::FORBIDDEN,
+        ),
+        (
+            "GET",
+            "deployment:read",
+            ORG,
+            token.as_str(),
+            "malformed",
+            StatusCode::UNAUTHORIZED,
+        ),
+        (
+            "PATCH",
+            "deployment:read",
+            ORG,
+            token.as_str(),
+            KEY,
+            StatusCode::FORBIDDEN,
+        ),
+        (
+            "PATCH",
+            "deployment:write",
+            OTHER,
+            token.as_str(),
+            KEY,
+            StatusCode::FORBIDDEN,
+        ),
+        (
+            "PATCH",
+            "deployment:write",
+            ORG,
+            token.as_str(),
+            KEY,
+            StatusCode::OK,
+        ),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(format!("/v1/deployment-profiles/{id}"))
+                    .header("content-type", "application/json")
+                    .header("x-service-token", supplied_token)
+                    .header("x-api-key-id", key)
+                    .header("x-api-key-scopes", scopes)
+                    .header("x-organization-id", organization)
+                    .body(Body::from(if method == "PATCH" {
+                        r#"{"description":"API key metadata update"}"#
+                    } else {
+                        ""
+                    }))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            status,
+            "{method} {scopes} {organization}"
+        );
+    }
+    let stored = repository.profile(&id).await.unwrap().unwrap();
+    assert_eq!(stored.organization_id, ORG);
+    assert_eq!(
+        stored.description.as_deref(),
+        Some("API key metadata update")
+    );
+    assert_eq!(stored.credential_template_ids, vec!["template-1"]);
+    // An unconfigured development listener must not trust caller-supplied key metadata.
+    let response = deployment_router(DeploymentHttpState::new(service))
+        .oneshot(
+            Request::builder()
+                .uri(format!("/v1/deployment-profiles/{id}"))
+                .header("x-api-key-id", KEY)
+                .header("x-api-key-scopes", "admin:full")
+                .header("x-organization-id", ORG)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn resource_owner_projection_is_minimal_and_service_authenticated() {
+    let (service, repository) = harness(BTreeSet::new());
+    let profile = DeploymentProfile::new(create_request(), Utc::now()).unwrap();
+    let id = profile.id.clone();
+    repository.save_profile(profile).await.unwrap();
+    let token = "s".repeat(32);
+    let app = deployment_router(
+        DeploymentHttpState::new(service)
+            .with_service_token(Some(token.clone()))
+            .unwrap(),
+    );
+    for (supplied, expected) in [
+        ("", StatusCode::UNAUTHORIZED),
+        ("wrong", StatusCode::UNAUTHORIZED),
+        (token.as_str(), StatusCode::OK),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/internal/v1/resource-owners/deployment-profiles/{id}"
+                    ))
+                    .header("x-service-token", supplied)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected);
+        if expected == StatusCode::OK {
+            let value: Value =
+                serde_json::from_slice(&to_bytes(response.into_body(), 1024).await.unwrap())
+                    .unwrap();
+            assert_eq!(value, json!({"id":id,"organization_id":"org-1"}));
+        }
+    }
 }

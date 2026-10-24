@@ -1,0 +1,219 @@
+name: Self-host prepared consumer (unqualified)
+
+on:
+  workflow_run:
+    workflows: ["Stack release"]
+    types: [completed]
+
+concurrency:
+  group: selfhost-prepared-consumer-${{ github.event.workflow_run.id }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  installed-migrations:
+    # workflow_run has read-only default-branch cache access. Only an opt-in
+    # successful Stack release from main may reach the artifact consumer.
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'workflow_dispatch' && github.event.workflow_run.head_branch == 'main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Select an opt-in prepared bundle
+        id: select
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STACK_RUN_ID: ${{ github.event.workflow_run.id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$STACK_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          bundle_name="selfhost-lock-preparation-unqualified-$STACK_RUN_ID"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$STACK_RUN_ID/artifacts?name=$bundle_name" > "$RUNNER_TEMP/bundle-artifacts.json"
+          if jq -e '.total_count == 0 and (.artifacts | length) == 0' "$RUNNER_TEMP/bundle-artifacts.json" >/dev/null; then
+            echo 'No opt-in prepared self-host bundle; consumer skipped.' >> "$GITHUB_STEP_SUMMARY"
+            echo 'present=false' >> "$GITHUB_OUTPUT"
+          else
+            echo 'present=true' >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        if: steps.select.outputs.present == 'true'
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        if: steps.select.outputs.present == 'true'
+        with:
+          python-version: "3.12"
+      - name: Install exact offline source parsers
+        if: steps.select.outputs.present == 'true'
+        run: python -m pip install PyYAML==6.0.3 jsonschema==4.25.1
+      - name: Bind the successful first-attempt producer and unique artifacts
+        if: steps.select.outputs.present == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STACK_RUN_ID: ${{ github.event.workflow_run.id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          test "$(git rev-parse 'HEAD^{commit}')" = "$GITHUB_SHA"
+          test "$(uname -m)" = x86_64
+          [[ "$STACK_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          bundle_name="selfhost-lock-preparation-unqualified-$STACK_RUN_ID"
+          transaction_name="stack-release-qualified-$STACK_RUN_ID"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$STACK_RUN_ID" > "$RUNNER_TEMP/producer-run.json"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$STACK_RUN_ID/artifacts?name=$bundle_name" > "$RUNNER_TEMP/bundle-artifacts.json"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$STACK_RUN_ID/artifacts?name=$transaction_name" > "$RUNNER_TEMP/transaction-artifacts.json"
+          python scripts/check_selfhost_preparation_artifacts.py \
+            --run "$RUNNER_TEMP/producer-run.json" \
+            --bundle "$RUNNER_TEMP/bundle-artifacts.json" \
+            --transaction "$RUNNER_TEMP/transaction-artifacts.json" \
+            --run-id "$STACK_RUN_ID" --source-sha "$GITHUB_SHA" \
+            --output "$RUNNER_TEMP/producer-binding.json"
+          mkdir prepared transaction
+          gh run download "$STACK_RUN_ID" --repo "$GITHUB_REPOSITORY" \
+            -n "$bundle_name" -D prepared
+          gh run download "$STACK_RUN_ID" --repo "$GITHUB_REPOSITORY" \
+            -n "$transaction_name" -D transaction
+          # Reject a producer rerun or artifact replacement while downloading.
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$STACK_RUN_ID" > "$RUNNER_TEMP/producer-run-after.json"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$STACK_RUN_ID/artifacts?name=$bundle_name" > "$RUNNER_TEMP/bundle-artifacts-after.json"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$STACK_RUN_ID/artifacts?name=$transaction_name" > "$RUNNER_TEMP/transaction-artifacts-after.json"
+          python scripts/check_selfhost_preparation_artifacts.py \
+            --run "$RUNNER_TEMP/producer-run-after.json" \
+            --bundle "$RUNNER_TEMP/bundle-artifacts-after.json" \
+            --transaction "$RUNNER_TEMP/transaction-artifacts-after.json" \
+            --run-id "$STACK_RUN_ID" --source-sha "$GITHUB_SHA" \
+            --output "$RUNNER_TEMP/producer-binding-after.json"
+          cmp "$RUNNER_TEMP/producer-binding.json" "$RUNNER_TEMP/producer-binding-after.json"
+      - name: Verify the exact unqualified archive before extracting
+        if: steps.select.outputs.present == 'true'
+        env:
+          STACK_RUN_ID: ${{ github.event.workflow_run.id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/release_transaction.py validate \
+            --input transaction/release-transaction.json \
+            --repository "$GITHUB_REPOSITORY" --source-sha "$GITHUB_SHA" \
+            --stack-lock release/stack-lock.json \
+            --claim-run-id "$(jq -er .claim_run_id transaction/release-transaction.json)" \
+            --output "$RUNNER_TEMP/validated-transaction.json"
+          jq -e '(.state == "qualified" or .state == "promoting" or .state == "promoted") and (.gates | length == 4)' \
+            "$RUNNER_TEMP/validated-transaction.json" >/dev/null
+          python scripts/check_prepared_selfhost_consumer.py \
+            --archive prepared/prepared-selfhost-bundle.zip \
+            --image-lock prepared/prepared-selfhost-images.json \
+            --transaction transaction/release-transaction.json \
+            --receipt prepared/prepared-selfhost-bundle.json \
+            --descriptor prepared/prepared-selfhost-product-descriptor.json \
+            --expected-source-sha "$GITHUB_SHA" \
+            --expected-run-id "$STACK_RUN_ID" --verify-archive-only
+          mkdir "$RUNNER_TEMP/selfhost-installed"
+          unzip -q prepared/prepared-selfhost-bundle.zip -d "$RUNNER_TEMP/selfhost-installed"
+      - name: Plan the complete extracted Compose runtime DAG (unqualified)
+        if: steps.select.outputs.present == 'true'
+        env:
+          STACK_RUN_ID: ${{ github.event.workflow_run.id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir "$RUNNER_TEMP/selfhost-plan-state" "$RUNNER_TEMP/selfhost-plan-secrets"
+          export SELFHOST_STATE_DIR="$RUNNER_TEMP/selfhost-plan-state"
+          export SELFHOST_SECRET_DIR="$RUNNER_TEMP/selfhost-plan-secrets"
+          (
+            cd "$RUNNER_TEMP/selfhost-installed/selfhost-prepared"
+            docker compose --profile '*' --env-file .env.selfhost.production.example \
+              -f docker-compose.yml config --format json \
+              > "$RUNNER_TEMP/selfhost-plan-compose.json"
+          )
+          python scripts/check_selfhost_installed_runtime_plan.py \
+            --archive prepared/prepared-selfhost-bundle.zip \
+            --image-lock prepared/prepared-selfhost-images.json \
+            --transaction transaction/release-transaction.json \
+            --receipt prepared/prepared-selfhost-bundle.json \
+            --descriptor prepared/prepared-selfhost-product-descriptor.json \
+            --compose-model "$RUNNER_TEMP/selfhost-plan-compose.json" \
+            --source-checkout "$GITHUB_WORKSPACE" \
+            --install-root "$RUNNER_TEMP/selfhost-installed/selfhost-prepared" \
+            --state-root "$SELFHOST_STATE_DIR" \
+            --secret-root "$SELFHOST_SECRET_DIR" \
+            --expected-source-sha "$GITHUB_SHA" --expected-run-id "$STACK_RUN_ID" \
+            --output "$RUNNER_TEMP/selfhost-runtime-plan.json"
+          jq -e '.schema == "marty.selfhost-installed-runtime-plan/v1" and .qualification == "unqualified" and .service_count == 31 and .default_service_count == 29 and .beta_tunnel_service_count == 2' \
+            "$RUNNER_TEMP/selfhost-runtime-plan.json" >/dev/null
+          cp "$RUNNER_TEMP/selfhost-runtime-plan.json" ./selfhost-runtime-plan.json
+      - name: Probe extracted OpenBao bootstrap handoff on disposable Linux state
+        if: steps.select.outputs.present == 'true'
+        env:
+          STACK_RUN_ID: ${{ github.event.workflow_run.id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/probe_selfhost_installed_bootstrap.py \
+            --archive prepared/prepared-selfhost-bundle.zip \
+            --image-lock prepared/prepared-selfhost-images.json \
+            --transaction transaction/release-transaction.json \
+            --receipt prepared/prepared-selfhost-bundle.json \
+            --descriptor prepared/prepared-selfhost-product-descriptor.json \
+            --install-root "$RUNNER_TEMP/selfhost-installed/selfhost-prepared" \
+            --source-sha "$GITHUB_SHA" --run-id "$STACK_RUN_ID" \
+            > "$RUNNER_TEMP/selfhost-installed-bootstrap.json"
+          jq -e '.schema == "marty.selfhost-bootstrap-handoff-probe/v1" and .qualification == "unqualified" and .scoped_tokens == ["openbao_service_token", "openbao_bootstrap_token", "notification_openbao_token", "passport_callback_signer_bao_token"]' \
+            "$RUNNER_TEMP/selfhost-installed-bootstrap.json" >/dev/null
+          cp "$RUNNER_TEMP/selfhost-installed-bootstrap.json" ./selfhost-installed-bootstrap.json
+      - name: Probe scoped migrations and signing runtime on exact Linux amd64 images
+        if: steps.select.outputs.present == 'true'
+        env:
+          STACK_RUN_ID: ${{ github.event.workflow_run.id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/probe_selfhost_installed_signing_keys.py \
+            --archive prepared/prepared-selfhost-bundle.zip \
+            --image-lock prepared/prepared-selfhost-images.json \
+            --transaction transaction/release-transaction.json \
+            --receipt prepared/prepared-selfhost-bundle.json \
+            --descriptor prepared/prepared-selfhost-product-descriptor.json \
+            --install-root "$RUNNER_TEMP/selfhost-installed/selfhost-prepared" \
+            --source-sha "$GITHUB_SHA" --run-id "$STACK_RUN_ID" \
+            > "$RUNNER_TEMP/selfhost-installed-signing.json"
+          jq -e '.schema == "marty.selfhost-installed-migrations-probe/v1" and .qualification == "unqualified" and .runs == 2 and .runtime.schema == "marty.selfhost-signing-runtime-probe/v1" and .runtime.qualification == "unqualified" and .runtime.public_jwk_count >= 2 and .runtime.unknown_organization_keys == 0' \
+            "$RUNNER_TEMP/selfhost-installed-signing.json" >/dev/null
+          cp "$RUNNER_TEMP/selfhost-installed-signing.json" ./selfhost-installed-signing.json
+          cp "$RUNNER_TEMP/producer-binding.json" ./selfhost-producer-binding.json
+      - name: Probe scoped Organization runtime on exact Linux amd64 image
+        if: steps.select.outputs.present == 'true'
+        env:
+          STACK_RUN_ID: ${{ github.event.workflow_run.id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/probe_selfhost_installed_organization.py \
+            --archive prepared/prepared-selfhost-bundle.zip \
+            --image-lock prepared/prepared-selfhost-images.json \
+            --transaction transaction/release-transaction.json \
+            --receipt prepared/prepared-selfhost-bundle.json \
+            --descriptor prepared/prepared-selfhost-product-descriptor.json \
+            --install-root "$RUNNER_TEMP/selfhost-installed/selfhost-prepared" \
+            --source-sha "$GITHUB_SHA" --run-id "$STACK_RUN_ID" \
+            > "$RUNNER_TEMP/selfhost-installed-organization.json"
+          jq -e '.schema == "marty.selfhost-installed-migrations-probe/v1" and .qualification == "unqualified" and .runs == 2 and .runtime.schema == "marty.selfhost-organization-runtime-probe/v1" and .runtime.qualification == "unqualified" and .runtime.service == "organization" and .runtime.seeded_organization_id == "00000000-0000-0000-0000-000000000001" and .runtime.organization_count >= 1 and .runtime.missing_token_status == 401 and .runtime.wrong_token_status == 401' \
+            "$RUNNER_TEMP/selfhost-installed-organization.json" >/dev/null
+          cp "$RUNNER_TEMP/selfhost-installed-organization.json" ./selfhost-installed-organization.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: steps.select.outputs.present == 'true'
+        with:
+          name: selfhost-installed-signing-unqualified-${{ github.run_id }}
+          path: |
+            selfhost-installed-bootstrap.json
+            selfhost-installed-signing.json
+            selfhost-installed-organization.json
+            selfhost-runtime-plan.json
+            selfhost-producer-binding.json
+          if-no-files-found: error
+          retention-days: 30

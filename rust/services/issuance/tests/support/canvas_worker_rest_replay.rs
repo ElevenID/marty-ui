@@ -1,11 +1,12 @@
 //! Actual native binary, published schema, real HTTPS and encrypted OAuth.
 //! The Python parent checks every request; this child checks durable effects.
 use super::canvas_worker_process_signals::OwnedWorker;
-use chrono::Utc;
+use super::remote_integration_secret;
+use chrono::{DateTime, Utc};
 use marty_issuance_service::{
     canvas_oauth::{CanvasOAuthConnection, CanvasOAuthRepository, CanvasOAuthSecretVault},
     canvas_oauth_postgres::{PostgresCanvasOAuthRepository, PostgresIntegrationSecretVault},
-    integration_secret::{IntegrationSecretCipher, NewIntegrationSecret},
+    integration_secret::NewIntegrationSecret,
 };
 use serde_json::{json, Value};
 use sqlx::PgPool;
@@ -172,10 +173,9 @@ pub(super) async fn prepare(pool: &PgPool, origin: &str, scenario: &str) -> Work
         .execute(pool)
         .await
         .unwrap();
-    let vault = PostgresIntegrationSecretVault::new(
+    let vault = PostgresIntegrationSecretVault::new_remote(
         pool.clone(),
-        IntegrationSecretCipher::from_base64("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
-            .unwrap(),
+        remote_integration_secret::cipher(),
     );
     vault
         .save(NewIntegrationSecret {
@@ -364,6 +364,11 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, scenario: &
                 environment.insert(name.clone(), value.as_str().unwrap().to_owned());
             }
         }
+        let retry_window_start = if scenario == "retry-after" {
+            Some(retry_timing_clock(pool).await)
+        } else {
+            None
+        };
         let race = validation_case.and_then(|case| case.get("reference_race"));
         let mut worker = if let Some(race) = race {
             use super::canvas_worker_concurrent_replay::{start_workers_at_barrier, WorkerBarrier};
@@ -474,14 +479,26 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, scenario: &
             print_retry_timing(
                 pool,
                 "SELECT available_at,updated_at FROM issuance_service.canvas_evidence_sync_jobs",
+                (retry_window_start.unwrap(), retry_timing_clock(pool).await),
             )
             .await;
         }
     }
 }
 
-pub(super) async fn print_retry_timing(pool: &PgPool, query: &'static str) {
-    let (available_at, updated_at): (chrono::DateTime<Utc>, chrono::DateTime<Utc>) =
+pub(super) async fn retry_timing_clock(pool: &PgPool) -> DateTime<Utc> {
+    sqlx::query_scalar("SELECT clock_timestamp()")
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+pub(super) async fn print_retry_timing(
+    pool: &PgPool,
+    query: &'static str,
+    window: (DateTime<Utc>, DateTime<Utc>),
+) {
+    let (available_at, updated_at): (DateTime<Utc>, DateTime<Utc>) =
         sqlx::query_as(query).fetch_one(pool).await.unwrap();
     // One transient actual deadline record, shared by job and OAuth retries.
     // The HTTPS parent compares it to its emitted header, never a mock clock.
@@ -490,6 +507,8 @@ pub(super) async fn print_retry_timing(pool: &PgPool, query: &'static str) {
         json!({
             "available_at": available_at.to_rfc3339(),
             "updated_at": updated_at.to_rfc3339(),
+            "decision_window_start": window.0.to_rfc3339(),
+            "decision_window_end": window.1.to_rfc3339(),
         })
     );
 }

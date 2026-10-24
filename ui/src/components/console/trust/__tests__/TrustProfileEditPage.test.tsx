@@ -99,12 +99,13 @@ describe('TrustProfileEditPage', () => {
     renderWithRouter(<TrustProfileEditPage />)
 
     const saveButton = await screen.findByTestId('edit.trustProfile.save')
+    fireEvent.change(screen.getByDisplayValue('Production Trust'), { target: { value: 'Renamed Trust' } })
     fireEvent.click(saveButton)
 
     await waitFor(() => {
       expect(updateTrustProfile).toHaveBeenCalledWith(
         'profile-1',
-        expect.objectContaining({ name: 'Production Trust' })
+        { name: 'Renamed Trust' }
       )
     })
 
@@ -151,7 +152,7 @@ describe('TrustProfileEditPage', () => {
     await waitFor(() => {
       expect(updateTrustProfile).toHaveBeenCalled()
       const savedPayload = updateTrustProfile.mock.calls.at(-1)?.[1]
-      expect(savedPayload.framework_type).toBe('custom')
+      expect(savedPayload).not.toHaveProperty('framework_type')
       expect(savedPayload.supported_formats).toEqual(expect.arrayContaining(['mdoc', 'jwt_vc', 'ldp_vc']))
       expect(savedPayload.supported_formats).not.toContain('sd_jwt_vc')
     })
@@ -173,9 +174,20 @@ describe('TrustProfileEditPage', () => {
     renderWithRouter(<TrustProfileEditPage />)
 
     const saveButton = await screen.findByTestId('edit.trustProfile.save')
+    fireEvent.change(screen.getByDisplayValue('Main production profile'), { target: { value: 'Updated description' } })
     fireEvent.click(saveButton)
 
     expect(await screen.findByText('Conflict error')).toBeInTheDocument()
+  })
+
+  it('leaves an unchanged profile untouched and shows status as read-only', async () => {
+    getTrustProfile.mockResolvedValue(PROFILE_FIXTURE)
+    renderWithRouter(<TrustProfileEditPage />)
+    const saveButton = await screen.findByTestId('edit.trustProfile.save')
+    expect(screen.getByTestId('edit.trustProfile.status')).toBeDisabled()
+    fireEvent.click(saveButton)
+    await waitFor(() => expect(mockNavigate).toHaveBeenCalledWith('/console/org/trust/profiles/profile-1'))
+    expect(updateTrustProfile).not.toHaveBeenCalled()
   })
 
   it('shows not-found state when profile fetch rejects', async () => {

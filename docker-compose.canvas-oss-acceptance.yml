@@ -163,6 +163,7 @@ services:
       CANVAS_OSS_LEARNER_EMAIL_FILE: /run/secrets/canvas_learner_email
       CANVAS_OSS_LEARNER_PASSWORD_FILE: /run/secrets/canvas_learner_password
       CANVAS_OSS_MARTY_API_KEY_FILE: /run/secrets/canvas_marty_api_key
+      CANVAS_OSS_CONTRACT_DEADLINE_EPOCH: ${CANVAS_OSS_CONTRACT_DEADLINE_EPOCH:-}
       CANVAS_OSS_CONTRACT_SERVICE: canvas-contract
       CANVAS_OSS_EXECUTION_BOUNDARY: docker_compose_one_shot
       CANVAS_OSS_SECRET_TRANSPORT: compose_secret_files
@@ -201,7 +202,7 @@ networks:
   canvas-oss-private: {}
   beta-tunnel:
     external: true
-    name: marty-infra-network
+    name: elevenid-beta-network
 
 volumes:
   canvas_oss_postgres:

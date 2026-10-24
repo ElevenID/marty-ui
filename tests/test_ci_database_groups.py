@@ -75,7 +75,10 @@ def test_retained_preflights_all_finish_when_one_fails(tmp_path: Path) -> None:
     "mode,expected",
     [
         ("canvas", "published-canvas"),
+        ("canvas-without-selfhost", "published-canvas"),
         ("rust-db", "rust-db"),
+        ("worker-canvas", "published-worker"),
+        ("selfhost-canvas", "published-selfhost"),
     ],
 )
 def test_split_lanes_run_exactly_their_owned_database_group(
@@ -95,8 +98,76 @@ def test_split_lanes_run_exactly_their_owned_database_group(
     assert set(observed) == {expected}
     if mode == "canvas":
         assert observed[expected][-1] == "full-after-preflights"
+    elif mode == "canvas-without-selfhost":
+        assert observed[expected][-1] == "full-after-preflights-without-selfhost"
+    elif mode == "worker-canvas":
+        assert observed[expected][-1] == "worker-full-after-preflights"
+    elif mode == "selfhost-canvas":
+        assert observed[expected][-1] == "selfhost-only"
+        assert "run-published-canvas-contracts.sh" in observed[expected][-2]
     else:
         assert "run-rust-db-contracts.sh" in observed[expected][-1]
+
+
+def test_worker_only_group_without_preflight_proof_retains_full_worker_suite(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr(GROUPS, "_has_preflight_evidence", lambda: False)
+    observed = {}
+
+    def fake_groups(commands, directory):
+        observed.update(commands)
+        for name in commands:
+            (directory / f"{name}.log").write_text("passed\n", encoding="utf-8")
+        return {name: 0 for name in commands}
+
+    monkeypatch.setattr(GROUPS, "run_groups", fake_groups)
+    assert GROUPS.main("worker-canvas") == 0
+    assert set(observed) == {"published-worker"}
+    assert observed["published-worker"][-1] == "worker-full"
+
+
+def test_canvas_without_selfhost_still_runs_full_suite_without_preflight_proof(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr(GROUPS, "_has_preflight_evidence", lambda: False)
+    observed = {}
+
+    def fake_groups(commands, directory):
+        observed.update(commands)
+        for name in commands:
+            (directory / f"{name}.log").write_text("passed\n", encoding="utf-8")
+        return {name: 0 for name in commands}
+
+    monkeypatch.setattr(GROUPS, "run_groups", fake_groups)
+    assert GROUPS.main("canvas-without-selfhost") == 0
+    assert set(observed) == {"published-canvas"}
+    assert observed["published-canvas"][-1] == "full-without-selfhost"
+
+
+@pytest.mark.parametrize("qualification,count", [("0", 2), ("1", 4)])
+def test_worker_only_preflights_keep_exact_modes_and_evidence_owner(
+    tmp_path: Path, monkeypatch, qualification: str, count: int
+) -> None:
+    monkeypatch.setenv("MARTY_CANVAS_FULL_QUALIFICATION", qualification)
+    monkeypatch.setattr(GROUPS, "_preflight_evidence", lambda: None)
+    observed = {}
+
+    def fake_groups(commands, directory):
+        observed.update(commands)
+        for name in commands:
+            (directory / f"{name}.log").write_text("passed\n", encoding="utf-8")
+        return {name: 0 for name in commands}
+
+    monkeypatch.setattr(GROUPS, "run_groups", fake_groups)
+    assert GROUPS.main("worker-preflights") == 0
+    assert len(observed) == count
+    assert set(observed) == set(
+        GROUPS.FULL_QUALIFICATION_PREFLIGHT_MODES
+        if qualification == "1"
+        else GROUPS.PREFLIGHT_MODES
+    )
+    assert all(command[-1] == f"worker-{name}" for name, command in observed.items())
 
 
 @pytest.mark.parametrize("qualification", ["0", "1"])
@@ -114,7 +185,7 @@ def test_preflight_evidence_requires_both_successes_and_same_executable(
         json.dumps(
             {
                 "reason": "compiler-artifact",
-                "package_id": "path+file:///checkout/rust/crates/canvas-acceptance#marty-canvas-acceptance@0.1.0",
+                "package_id": "path+file:///checkout/rust/crates/canvas-worker-acceptance#marty-canvas-worker-acceptance@0.1.0",
                 "target": {"name": "canvas_published_worker_contract"},
                 "executable": str(executable),
             }
@@ -330,6 +401,39 @@ def test_phase_telemetry_is_live_allowlisted_and_does_not_mask_failure(
     assert private in (tmp_path / "rust-db.log").read_text()
 
 
+def test_target_relay_phase_reaches_artifact_without_changing_contract_result(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
+    script = (
+        "print('MARTY_CI_TARGET_PHASE_V1 composition "
+        '{"phase":"migration_seed","name":"published_probe","duration_ms":12,"status":"ok"}'
+        "', flush=True)"
+    )
+    assert GROUPS.run_groups(
+        {"published-canvas": [sys.executable, "-c", script]}, tmp_path
+    ) == {"published-canvas": 0}
+    progress = capsys.readouterr().out
+    assert "target=composition phase=migration_seed name=published_probe" in progress
+    evidence = [
+        json.loads(line)
+        for line in (tmp_path / "rust-build-evidence/db-contract-timing.jsonl")
+        .read_text()
+        .splitlines()
+    ]
+    assert evidence[0] == {
+        "schema": "marty.ci.db-phase/v1",
+        "group": "published-canvas",
+        "target": "composition",
+        "phase": "migration_seed",
+        "name": "published_probe",
+        "duration_ms": 12,
+        "status": "ok",
+    }
+    assert evidence[1]["phase"] == "contract"
+    assert evidence[1]["status"] == "ok"
+
+
 @pytest.mark.parametrize(
     "marker",
     [
@@ -344,11 +448,56 @@ def test_phase_parser_rejects_non_schema_or_oversized_values(marker: str) -> Non
     assert GROUPS._safe_phase(GROUPS.TIMING_PREFIX + marker, "published-canvas") is None
 
 
+def test_target_relay_tags_only_fixed_published_canvas_phase_owners() -> None:
+    marker = '{"phase":"migration_seed","name":"published_probe","duration_ms":12,"status":"ok"}'
+    for target in GROUPS.TARGET_NAMES:
+        assert GROUPS._safe_phase(
+            GROUPS.TARGET_TIMING_PREFIX + target + " " + marker,
+            "published-canvas",
+        ) == {
+            "schema": "marty.ci.db-phase/v1",
+            "group": "published-canvas",
+            "target": target,
+            "phase": "migration_seed",
+            "name": "published_probe",
+            "duration_ms": 12,
+            "status": "ok",
+        }
+    for bad in (
+        GROUPS.TARGET_TIMING_PREFIX + "unreviewed " + marker,
+        GROUPS.TARGET_TIMING_PREFIX + "worker" + marker,
+        GROUPS.TARGET_TIMING_PREFIX + "worker " + marker + "private-payload",
+        GROUPS.TARGET_TIMING_PREFIX
+        + 'worker {"phase":"canvas_target","name":"worker","duration_ms":12,"status":"ok"}',
+    ):
+        assert GROUPS._safe_phase(bad, "published-canvas") is None
+    assert (
+        GROUPS._safe_phase(GROUPS.TARGET_TIMING_PREFIX + "worker " + marker, "rust-db")
+        is None
+    )
+
+
 def test_phase_parser_accepts_only_known_case_and_contract_ids() -> None:
     # Published matrix IDs are checked-in case identities, not probe output,
     # environment values, SQL, URLs, or arbitrary text from the child log.
-    assert len(GROUPS.PUBLISHED_MATRIX_PROBE_NAMES) == 95
-    assert len(GROUPS.PUBLISHED_MATRIX_SCENARIOS) == 21
+    assert len(GROUPS.PUBLISHED_MATRIX_PROBE_NAMES) == 29
+    assert len(GROUPS.PUBLISHED_MATRIX_SCENARIOS) == 8
+    assert len(GROUPS.JSON_CONSUMER_CASE_NAMES) == 132
+    for name in GROUPS.JSON_CONSUMER_CASE_NAMES:
+        marker = json.dumps(
+            {"phase": "oracle_case", "name": name, "duration_ms": 1, "status": "ok"}
+        )
+        assert GROUPS._safe_phase(GROUPS.TIMING_PREFIX + marker, "published-canvas")
+    for name in (
+        "json_depth.setup",
+        "json_depth.validation",
+        "json_depth.provider",
+        "json_depth.encoding",
+    ):
+        marker = json.dumps(
+            {"phase": "oracle_phase", "name": name, "duration_ms": 1, "status": "ok"}
+        )
+        assert GROUPS._safe_phase(GROUPS.TIMING_PREFIX + marker, "published-canvas")
     for name in GROUPS.PUBLISHED_MATRIX_PROBE_NAMES:
         marker = json.dumps(
             {"phase": "migration_seed", "name": name, "duration_ms": 1, "status": "ok"}
@@ -361,20 +510,31 @@ def test_phase_parser_accepts_only_known_case_and_contract_ids() -> None:
         assert GROUPS._safe_phase(GROUPS.TIMING_PREFIX + marker, "published-canvas")
     for phase, name in (
         ("migration_seed", "published_probe"),
+        ("migration_seed", "published_base_restore"),
+        ("migration_seed", "status_native_seed"),
         ("migration_seed", "worker_validation_template"),
+        ("fixture_seed", "status_native_seed"),
         ("scenario", "retry-after.http_date_future"),
         ("scenario", "repository_roster_metadata"),
+        ("scenario", "repository_roster_expired_before_write"),
+        ("scenario", "repository_roster_expired_during_lock"),
         ("scenario", "repository_resource_race"),
         ("scenario", "repository_validation"),
         ("cleanup", "published_database_removal"),
         ("contract", "canvas_sync_worker_postgres_contract"),
         ("contract_phase", "renewal_job_outcomes"),
+        ("canvas_target", "flow"),
+        ("canvas_target", "selfhost"),
     ):
         marker = json.dumps(
             {"phase": phase, "name": name, "duration_ms": 1, "status": "ok"}
         )
         assert GROUPS._safe_phase(GROUPS.TIMING_PREFIX + marker, "published-canvas")
     marker = '{"phase":"scenario","name":"secret123","duration_ms":1,"status":"ok"}'
+    assert GROUPS._safe_phase(GROUPS.TIMING_PREFIX + marker, "published-canvas") is None
+    marker = '{"phase":"oracle_case","name":"json_consumer.validation.secret123","duration_ms":1,"status":"ok"}'
+    assert GROUPS._safe_phase(GROUPS.TIMING_PREFIX + marker, "published-canvas") is None
+    marker = '{"phase":"oracle_phase","name":"json_depth.secret123","duration_ms":1,"status":"ok"}'
     assert GROUPS._safe_phase(GROUPS.TIMING_PREFIX + marker, "published-canvas") is None
     for phase in ("fixture_seed", "cleanup"):
         marker = json.dumps(
@@ -385,7 +545,10 @@ def test_phase_parser_accepts_only_known_case_and_contract_ids() -> None:
                 "status": "ok",
             }
         )
-        assert GROUPS._safe_phase(GROUPS.TIMING_PREFIX + marker, "published-canvas") is None
+        assert (
+            GROUPS._safe_phase(GROUPS.TIMING_PREFIX + marker, "published-canvas")
+            is None
+        )
     for name in (
         "case_from_scenario",
         "json_depth_extra",
@@ -403,23 +566,69 @@ def test_phase_parser_accepts_only_known_case_and_contract_ids() -> None:
         )
 
 
+def test_json_depth_route_timing_ids_match_frozen_cases_and_reject_unknowns() -> None:
+    spec = json.loads(
+        (ROOT / "contracts/canvas-json-depth-scenarios.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert spec["schema"] == "marty.canvas-json-depth-scenarios/v1"
+    assert spec["depths"] == list(GROUPS.JSON_DEPTH_ROUTE_DEPTHS)
+    assert spec["shapes"] == ["array", "object"]
+    assert spec["statuses"] == [200, 403]
+    assert len(GROUPS.JSON_DEPTH_ROUTE_CASE_NAMES) == 64
+    source = (
+        ROOT / "rust/services/issuance/tests/support/canvas_status_runtime_contract.rs"
+    ).read_text(encoding="utf-8")
+    assert 'format!("json_depth_route.{}"' in source
+    for name in GROUPS.JSON_DEPTH_ROUTE_CASE_NAMES:
+        marker = json.dumps(
+            {"phase": "scenario", "name": name, "duration_ms": 1, "status": "ok"}
+        )
+        parsed = GROUPS._safe_phase(
+            GROUPS.TARGET_TIMING_PREFIX + "composition " + marker,
+            "published-canvas",
+        )
+        assert parsed is not None
+        assert parsed["target"] == "composition"
+    for name in (
+        "json_depth_route.json_depth_array_2_200",
+        "json_depth_route.json_depth_array_1_201",
+        "json_depth_route.json_depth_private_payload_1_200",
+    ):
+        marker = json.dumps(
+            {"phase": "scenario", "name": name, "duration_ms": 1, "status": "ok"}
+        )
+        assert (
+            GROUPS._safe_phase(
+                GROUPS.TARGET_TIMING_PREFIX + "composition " + marker,
+                "published-canvas",
+            )
+            is None
+        )
+
+
 def test_migration_seed_labels_have_fixed_constructor_owners() -> None:
     support = (
         ROOT / "rust/services/issuance/tests/support/canvas_published_database.rs"
     ).read_text(encoding="utf-8")
     worker = (
-        ROOT / "rust/crates/canvas-acceptance/tests/canvas_published_worker_contract.rs"
+        ROOT
+        / "rust/crates/canvas-worker-acceptance/tests/canvas_published_worker_contract.rs"
     ).read_text(encoding="utf-8")
     fixed_names = support.split("const TIMED_PUBLISHED_SCRIPTS: &[&str] = &[", 1)[
         1
     ].split("];", 1)[0]
     fixed_names = re.findall(r'"([a-z0-9_]+)"', fixed_names)
-    assert len(fixed_names) == len(set(fixed_names)) == 25
+    assert len(fixed_names) == len(set(fixed_names)) == 21
     assert set(fixed_names) == GROUPS.TIMED_PUBLISHED_SCRIPTS
     constructor_scripts = re.findall(r'Some\(\(\s*"([a-z0-9_]+)"', support)
     assert set(constructor_scripts) == GROUPS.TIMED_PUBLISHED_SCRIPTS
     assert "TIMED_PUBLISHED_SCRIPTS.contains(&script)" in support
     assert '"published_probe".to_owned()' in support
+    assert (
+        'PhaseTimer::start("migration_seed", "published_base_restore")' in support
+    )
     assert support.count('"worker_validation_template"') == 1
     assert (
         worker.count("PublishedDatabase::start_for_worker_validation_template()") == 1
@@ -429,6 +638,8 @@ def test_migration_seed_labels_have_fixed_constructor_owners() -> None:
         'return Err("unsupported owned worker matrix case".into());'
     ) < (support.index("worker_matrix_timing_name(scenario, case)?"))
     assert "Self::start_probe_with_migration_named(" in support
+    assert support.count('Some("status_native_seed".into())') == 1
+    assert support.count('PhaseTimer::start("fixture_seed", "status_native_seed")') == 1
     assert 'strip_prefix("worker-")' in support
     # Every Rust wrapper that reaches the shared case constructor must have
     # an exact checked-in scenario family in the timing collector. This also
@@ -437,7 +648,7 @@ def test_migration_seed_labels_have_fixed_constructor_owners() -> None:
         r'Self::start_with_worker_case\(\s*case,\s*include_str!\(\s*"\.\./\.\./\.\./\.\./\.\./contracts/canvas-worker-([a-z-]+)-scenarios\.json"\s*\)',
         support,
     )
-    assert len(wrapper_families) == support.count("Self::start_with_worker_case(") == 21
+    assert len(wrapper_families) == support.count("Self::start_with_worker_case(") == 8
     assert set(wrapper_families) == GROUPS.PUBLISHED_MATRIX_SCENARIOS
 
 
@@ -446,18 +657,25 @@ def test_repository_matrix_timing_labels_have_exact_rust_owners() -> None:
         ROOT / "rust/services/issuance/tests/support/canvas_published_database.rs"
     ).read_text(encoding="utf-8")
     worker = (
-        ROOT / "rust/crates/canvas-acceptance/tests/canvas_published_worker_contract.rs"
+        ROOT
+        / "rust/crates/canvas-worker-acceptance/tests/canvas_published_worker_contract.rs"
     ).read_text(encoding="utf-8")
     labels = re.findall(
-        r'RepositoryMatrix::(?:RosterMetadata|ResourceRace|Validation) => "([a-z_]+)"',
+        r'RepositoryMatrix::(?:RosterMetadata|RosterExpiredBeforeWrite|RosterExpiredDuringLock|ResourceRace|Validation) => "([a-z_]+)"',
         support,
     )
-    assert len(labels) == len(set(labels)) == 3
+    assert len(labels) == len(set(labels)) == 5
     assert set(labels) == GROUPS.REPOSITORY_MATRIX_NAMES
-    assert worker.count("repository_matrix_timer(") == 3
-    for variant in ("RosterMetadata", "ResourceRace", "Validation"):
+    assert worker.count("repository_matrix_timer(") == 4
+    for variant in (
+        "RosterMetadata",
+        "RosterExpiredBeforeWrite",
+        "RosterExpiredDuringLock",
+        "ResourceRace",
+        "Validation",
+    ):
         assert worker.count(f"RepositoryMatrix::{variant}") == 1
-    assert worker.count("timing.success();") == 3
+    assert worker.count("timing.success();") == 4
 
 
 def test_composite_phase_allowlist_matches_exact_instrumented_boundaries() -> None:

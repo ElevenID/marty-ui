@@ -16,7 +16,10 @@ use marty_gateway::{
     },
     transport::ReqwestUpstream,
 };
-use mmf_platform::{GatewayProxy, ProxyConfig};
+use marty_signing_grant::{minter::GrantMinter, SigningOrigin};
+use mmf_platform::{
+    GatewayProxy, KeylessGrpcTransportOptions, OpenBaoTlsIdentityFiles, ProxyConfig,
+};
 use tonic::transport::{Certificate, Channel, ClientTlsConfig, Endpoint};
 use tracing::info;
 use tracing_subscriber::EnvFilter;
@@ -29,6 +32,33 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .init();
 
     let config = GatewayConfig::from_env()?;
+    if config.sign_grant_mint_token_file == config.issuer_csr_grant_mint_token_file {
+        return Err(
+            "Gateway service and issuer CSR grants require distinct scoped token files".into(),
+        );
+    }
+    let service_sign_grant_minter = GrantMinter::for_managed_openbao(
+        config
+            .sign_grant_bao_addr
+            .as_deref()
+            .ok_or("BAO_ADDR is required for Gateway signing grants")?,
+        SigningOrigin::GatewayService,
+        config
+            .sign_grant_mint_token_file
+            .clone()
+            .ok_or("GATEWAY_SIGN_GRANT_MINT_TOKEN_FILE is required")?,
+    )?;
+    let issuer_csr_grant_minter = GrantMinter::for_managed_openbao(
+        config
+            .sign_grant_bao_addr
+            .as_deref()
+            .ok_or("BAO_ADDR is required for Gateway signing grants")?,
+        SigningOrigin::GatewayIssuerDid,
+        config
+            .issuer_csr_grant_mint_token_file
+            .clone()
+            .ok_or("GATEWAY_ISSUER_CSR_GRANT_MINT_TOKEN_FILE is required")?,
+    )?;
     let contract = GatewayContract::load()?;
     let routes = contract.runtime_route_table_with_passport_selectors(
         config.passport_native_gateway_enabled,
@@ -57,9 +87,33 @@ async fn main() -> Result<(), Box<dyn Error>> {
         ..DistributedProviderConfig::default()
     })
     .await?;
+    let auth_channel = if let Some(tls) = &config.auth_grpc_client_tls {
+        OpenBaoTlsIdentityFiles {
+            certificate_chain_file: tls.certificate.clone(),
+            kms_ca_cert_file: tls.kms_ca_certificate.clone(),
+            kms_endpoint: tls.kms_endpoint.clone(),
+            kms_token_file: tls.kms_token_file.clone(),
+            kms_key_name: tls.kms_key_name.clone(),
+            kms_key_version: tls.kms_key_version,
+            request_timeout: Duration::from_secs(10),
+            max_concurrent_signs: 64,
+        }
+        .grpc_channel_connected(
+            &config.auth_grpc_target,
+            &tls.ca_certificate,
+            KeylessGrpcTransportOptions::default(),
+        )
+        .await?
+    } else {
+        grpc_channel(&config, &config.auth_grpc_target, None)?
+    };
     let identity_provider = Arc::new(GrpcIdentityProvider::new(
-        grpc_channel(&config, &config.auth_grpc_target)?,
-        grpc_channel(&config, &config.organization_grpc_target)?,
+        auth_channel,
+        grpc_channel(
+            &config,
+            &config.organization_grpc_target,
+            config.organization_grpc_ca_certificate.as_ref(),
+        )?,
         Duration::from_secs(5),
         config.grpc_service_token.clone(),
     ));
@@ -76,7 +130,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let owners: Arc<dyn ResourceOwnerProvider> = http_provider.clone();
     let readiness: Arc<dyn ReadinessProvider> = http_provider;
     let event_streams = Arc::new(GrpcEventStreamProvider::new(
-        grpc_channel(&config, &config.event_stream_grpc_target)?,
+        grpc_channel(
+            &config,
+            &config.event_stream_grpc_target,
+            config.event_stream_grpc_ca_certificate.as_ref(),
+        )?,
         config.grpc_service_token.clone(),
     ));
     let state = Arc::new(
@@ -101,6 +159,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
             config.release_identity.clone(),
         )?
         .with_service_token(config.grpc_service_token.clone())?
+        .with_device_registration_gateway_key(config.device_registration_gateway_key.clone())?
+        .with_service_sign_gateway_key(config.service_sign_gateway_key.clone())?
+        .with_service_sign_grant_minter(service_sign_grant_minter)
+        .with_issuer_csr_grant_minter(issuer_csr_grant_minter)
+        .with_issuer_sign_key(config.issuer_sign_key.clone())?
         .with_dsc_issue_gateway_key(config.dsc_issue_gateway_key.clone())?
         .with_csca_issue_gateway_key(config.csca_issue_gateway_key.clone())?
         .with_passport_native_gateway(
@@ -146,21 +209,21 @@ async fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn grpc_channel(config: &GatewayConfig, target: &str) -> Result<Channel, Box<dyn Error>> {
-    let mut endpoint_target = target.to_owned();
-    let mut endpoint = if let Some(ca_path) = &config.grpc_ca_certificate {
-        if endpoint_target.starts_with("http://") {
-            endpoint_target = endpoint_target.replacen("http://", "https://", 1);
-        }
-        let parsed = url::Url::parse(&endpoint_target)?;
+fn grpc_channel(
+    config: &GatewayConfig,
+    target: &str,
+    ca_override: Option<&std::path::PathBuf>,
+) -> Result<Channel, Box<dyn Error>> {
+    let mut endpoint = if let Some(ca_path) = ca_override.or(config.grpc_ca_certificate.as_ref()) {
+        let parsed = url::Url::parse(target)?;
         let host = parsed.host_str().ok_or("gRPC endpoint requires a host")?;
-        Endpoint::from_shared(endpoint_target.clone())?.tls_config(
+        Endpoint::from_shared(target.to_owned())?.tls_config(
             ClientTlsConfig::new()
                 .ca_certificate(Certificate::from_pem(fs::read(ca_path)?))
                 .domain_name(host),
         )?
     } else {
-        Endpoint::from_shared(endpoint_target)?
+        Endpoint::from_shared(target.to_owned())?
     };
     endpoint = endpoint
         .connect_timeout(Duration::from_secs(5))

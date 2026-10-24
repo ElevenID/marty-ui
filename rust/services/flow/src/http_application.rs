@@ -1,7 +1,7 @@
+use crate::http_read::FlowRequestState;
 use std::{collections::BTreeMap, sync::Arc};
 
 use axum::{
-    extract::State,
     http::{HeaderMap, StatusCode},
     routing::post,
     Json, Router,
@@ -53,7 +53,7 @@ pub fn flow_application_routes() -> Router<FlowHttpState> {
 }
 
 async fn receive_application_approved(
-    State(state): State<FlowHttpState>,
+    FlowRequestState(state): FlowRequestState,
     headers: HeaderMap,
     Json(payload): Json<Value>,
 ) -> Result<Json<crate::ApplicationApprovalResponse>, FlowHttpError> {

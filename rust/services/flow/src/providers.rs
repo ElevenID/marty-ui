@@ -187,6 +187,7 @@ pub struct SigningIdentity {
     pub organization_id: String,
     pub issuer_did: String,
     pub verification_method_id: String,
+    pub signing_key_reference: String,
     pub public_jwk: BTreeMap<String, Value>,
     pub key_purpose: String,
     #[serde(default)]
@@ -211,6 +212,7 @@ impl SigningIdentity {
             && self
                 .verification_method_id
                 .starts_with(&format!("{issuer_did}#"))
+            && !self.signing_key_reference.trim().is_empty()
             && self.key_purpose == key_purpose
             && self.credential_format == credential_format
             && algorithm.is_none_or(|algorithm| self.algorithm == algorithm)
@@ -230,9 +232,12 @@ impl SigningIdentity {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SigningRequest {
+    /// The validated Flow instance authorizing this request-object sign.
+    pub operation_id: String,
     pub organization_id: String,
     pub issuer_did: String,
     pub verification_method_id: String,
+    pub signing_key_reference: String,
     pub key_purpose: String,
     pub credential_format: String,
     pub algorithm: String,
@@ -264,20 +269,12 @@ impl SigningResult {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct FlowKeyEnvelopeRequest {
+#[derive(Clone, Debug, PartialEq)]
+pub struct HaipRemoteKey {
     pub organization_id: String,
     pub flow_instance_id: String,
-    pub purpose: String,
-    pub key_json: String,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct FlowKeyEnvelope {
-    pub organization_id: String,
-    pub flow_instance_id: String,
-    pub purpose: String,
-    pub envelope: String,
+    pub key_reference: String,
+    pub public_jwk: Value,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -399,12 +396,38 @@ pub trait SigningIdentityProvider: Send + Sync {
 
 #[async_trait]
 pub trait FlowKeyEnvelopeProvider: Send + Sync {
-    async fn wrap(
+    async fn resolve_haip_key(
         &self,
-        request: &FlowKeyEnvelopeRequest,
-    ) -> Result<FlowKeyEnvelope, FlowProviderError>;
+        _organization_id: &str,
+        _flow_instance_id: &str,
+        _version: &str,
+    ) -> Result<HaipRemoteKey, FlowProviderError> {
+        Err(FlowProviderError::Unavailable {
+            provider: "flow_key_envelope",
+        })
+    }
 
-    async fn unwrap(&self, envelope: &FlowKeyEnvelope) -> Result<String, FlowProviderError>;
+    async fn create_haip_key(
+        &self,
+        _organization_id: &str,
+        _flow_instance_id: &str,
+    ) -> Result<HaipRemoteKey, FlowProviderError> {
+        Err(FlowProviderError::Unavailable {
+            provider: "flow_key_envelope",
+        })
+    }
+
+    async fn decrypt_haip_response(
+        &self,
+        _organization_id: &str,
+        _flow_instance_id: &str,
+        _version: &str,
+        _jwe: &str,
+    ) -> Result<Vec<u8>, FlowProviderError> {
+        Err(FlowProviderError::Unavailable {
+            provider: "flow_key_envelope",
+        })
+    }
 }
 
 #[async_trait]
@@ -417,6 +440,23 @@ pub trait PhysicalDocumentProvider: Send + Sync {
 
 #[async_trait]
 pub trait FlowReferenceProvider: Send + Sync {
+    async fn resolve_for_actor(
+        &self,
+        kind: FlowReferenceKind,
+        reference_id: &str,
+        principal_id: &str,
+        organization_id: &str,
+        actor: Option<&marty_api_key_policy::GatewayApiKeyActor>,
+    ) -> Result<FlowReference, FlowProviderError> {
+        if actor.is_some() {
+            return Err(FlowProviderError::Unavailable {
+                provider: "gateway_reference_delegation",
+            });
+        }
+        self.resolve(kind, reference_id, principal_id, organization_id)
+            .await
+    }
+
     async fn resolve(
         &self,
         kind: FlowReferenceKind,
@@ -428,6 +468,8 @@ pub trait FlowReferenceProvider: Send + Sync {
 
 #[derive(Clone, Default)]
 pub struct FlowProviderRegistry {
+    /// Set only on a request-local clone after gateway service authentication.
+    pub gateway_api_key_actor: Option<marty_api_key_policy::GatewayApiKeyActor>,
     pub tenant_membership: Option<Arc<dyn TenantMembershipProvider>>,
     pub credential_template: Option<Arc<dyn CredentialTemplateProvider>>,
     pub presentation_policy: Option<Arc<dyn PresentationPolicyProvider>>,
@@ -472,6 +514,15 @@ impl FlowProviderRegistry {
         permission: &str,
         owner_only: bool,
     ) -> Result<(), FlowProviderError> {
+        if let Some(actor) = &self.gateway_api_key_actor {
+            return if !owner_only && actor.authorizes(principal_id, organization_id, permission) {
+                Ok(())
+            } else {
+                Err(authorization_error(
+                    TenantAuthorizationFailure::ActionNotAuthorized,
+                ))
+            };
+        }
         let provider = self
             .tenant_membership
             .as_ref()

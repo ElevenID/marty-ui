@@ -212,8 +212,9 @@ def collect(
         "ghcr.io/elevenid/marty-ui-oss/ui",
         "ghcr.io/elevenid/marty-ui-oss/services",
         "ghcr.io/elevenid/marty-ui-oss/migrations",
+        "ghcr.io/elevenid/marty-ui-oss/openbao-didcomm",
     }, "Stack UI OCI roles are incomplete or ambiguous")
-    require(len([artifact for artifact in ui[0]["artifacts"] if isinstance(artifact, dict) and artifact.get("type") == "oci"]) == 3, "Stack UI OCI roles must be unique")
+    require(len([artifact for artifact in ui[0]["artifacts"] if isinstance(artifact, dict) and artifact.get("type") == "oci"]) == len(oci_digests), "Stack UI OCI roles must be unique")
     service_images = {f"{uri}@{digest}": digest for uri, digest in oci_digests.items() if uri == "ghcr.io/elevenid/marty-ui-oss/services"}
     require(len(service_images) == 1, "Stack must name one immutable Marty services image")
     signed = attest(manifest_path, oci_digests, commit) if attest is not None else False

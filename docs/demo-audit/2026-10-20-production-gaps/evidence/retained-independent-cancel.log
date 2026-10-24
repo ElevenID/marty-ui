@@ -1,0 +1,12 @@
+✔ the declared cancel source first receives a fresh credential and then uses native Cancel and explicit Chrome return (9.000212ms)
+✔ holder cancellation qualifies only exact frozen source plus indexed native actions and real Chrome observations (4.647488ms)
+✔ missing false session evidence, wrong cancel package, reused credential, or missing actions cannot become a cancel pass (10.949228ms)
+✔ manifest binding rejects summary-only cancel reports and never upgrades catalog assertions (9.274065ms)
+ℹ tests 4
+ℹ suites 0
+ℹ pass 4
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 43.933887

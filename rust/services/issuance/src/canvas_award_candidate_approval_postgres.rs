@@ -14,10 +14,11 @@ use crate::{
         LOAD_APPLICATION_TEMPLATE, LOAD_BINDING, LOAD_PLATFORM_DEPLOYMENT,
     },
     canvas_award_candidate_service::CanvasAwardCandidateApprovalError,
+    canvas_issuance_guard::LIST_CURRENT_FACTS,
     canvas_lti_bootstrap::CanvasLtiBootstrapApplication,
     canvas_lti_experience::CanvasLtiExperienceSessionContext,
     credential::{CredentialTransaction, CredentialTransactionStatus},
-    credential_postgres::transaction_row,
+    credential_postgres::{transaction_contains_private_material, transaction_row},
 };
 
 const LOAD_APPLICATION: &str = "SELECT jsonb_build_object(
@@ -91,7 +92,9 @@ const LOCK_APPROVAL_BINDING: &str = "SELECT jsonb_build_object(
 const LOCK_APPROVAL_TEMPLATE: &str = "SELECT jsonb_build_object(
         'id', id, 'organization_id', organization_id,
         'credential_template_id', credential_template_id,
-        'approval_policy_set_id', approval_policy_set_id, 'status', status
+        'approval_policy_set_id', approval_policy_set_id, 'status', status,
+        'claim_collection_rules', claim_collection_rules, 'form_fields', form_fields,
+        'name', name, 'description', description, 'application_validity_days', application_validity_days
     ) FROM issuance_service.application_templates
     WHERE id = $1 AND organization_id = $2 FOR SHARE";
 
@@ -191,6 +194,12 @@ impl CanvasAwardApprovalRepository for PostgresCanvasAwardApprovalRepository {
             true
         };
         Ok(Some(CanvasAwardApprovalSnapshot {
+            evidence_facts: sqlx::query_scalar::<_, Value>(LIST_CURRENT_FACTS)
+                .bind(&application.organization_id)
+                .bind(&application.id)
+                .fetch_all(&self.pool)
+                .await
+                .map_err(approval_repository_error)?,
             application: application_value,
             application_template,
             binding,
@@ -238,6 +247,7 @@ impl CanvasApplicationApprovalRepository for PostgresCanvasAwardApprovalReposito
         let template_id = text(application.get("application_template_id"));
         if platform_id.is_empty() || binding_id.is_empty() {
             return Ok(Some(CanvasApplicationApprovalSnapshot {
+                evidence_facts: Vec::new(),
                 application,
                 application_template: serde_json::Map::new(),
                 platform: serde_json::Map::new(),
@@ -283,6 +293,12 @@ impl CanvasApplicationApprovalRepository for PostgresCanvasAwardApprovalReposito
         let existing_transaction =
             load_current_pending_transaction(&self.pool, &application).await?;
         Ok(Some(CanvasApplicationApprovalSnapshot {
+            evidence_facts: sqlx::query_scalar::<_, Value>(LIST_CURRENT_FACTS)
+                .bind(organization_id)
+                .bind(application_id)
+                .fetch_all(&self.pool)
+                .await
+                .map_err(manual_approval_repository_error)?,
             application,
             application_template,
             platform,
@@ -493,7 +509,41 @@ async fn lock_manual_approval_dependencies(
     {
         return Err(CanvasApplicationApprovalError::NotReady);
     }
+    if snapshot
+        .application_template
+        .get("claim_collection_rules")
+        .and_then(Value::as_array)
+        .is_some_and(|rules| !rules.is_empty())
+    {
+        let mut query = sqlx::QueryBuilder::<sqlx::Postgres>::new(LIST_CURRENT_FACTS);
+        query.push(" FOR SHARE OF head, fact");
+        let current = query
+            .build_query_scalar::<Value>()
+            .bind(&prepared.organization_id)
+            .bind(prepared.application_id.as_deref().unwrap_or_default())
+            .fetch_all(&mut **database)
+            .await
+            .map_err(manual_approval_repository_error)?;
+        if fact_identities(&current) != fact_identities(&snapshot.evidence_facts) {
+            return Err(CanvasApplicationApprovalError::NotReady);
+        }
+    }
     Ok(())
+}
+
+fn fact_identities(facts: &[Value]) -> Vec<(String, String, String)> {
+    let mut identities = facts
+        .iter()
+        .map(|fact| {
+            (
+                text(fact.get("id")),
+                text(fact.get("payload_hash")),
+                text(fact.get("source_revision")),
+            )
+        })
+        .collect::<Vec<_>>();
+    identities.sort();
+    identities
 }
 
 fn application_approval_snapshot_is_current(
@@ -542,7 +592,8 @@ async fn refresh_pending_canvas_transaction(
     prepared: &CredentialTransaction,
     reviewed_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<(), CanvasApplicationApprovalError> {
-    if prepared.status != CredentialTransactionStatus::Pending
+    if transaction_contains_private_material(prepared)
+        || prepared.status != CredentialTransactionStatus::Pending
         || prepared
             .issuer_profile_id
             .as_deref()
@@ -923,7 +974,8 @@ pub(crate) async fn insert_transaction(
     database: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     transaction: &CredentialTransaction,
 ) -> Result<(), CanvasAwardCandidateApprovalError> {
-    if transaction.status != CredentialTransactionStatus::Pending
+    if transaction_contains_private_material(transaction)
+        || transaction.status != CredentialTransactionStatus::Pending
         || transaction
             .issuer_profile_id
             .as_deref()

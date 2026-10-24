@@ -78,6 +78,12 @@ Auth  Organization  Trust/Profile/Policy services  Flow/Applicant/etc.
 ```
 
 Locally, the stack is orchestrated with `docker-compose.base.yml` plus profile overlays.
+Provision public workload certificates, the trusted OpenBao CA, scoped token
+files, and versioned non-exportable Transit key references before starting the
+stack. Signing Keys serves its integration-secret HTTPS endpoint with a remote
+TLS signer; Issuance and the Canvas worker consume its public CA. Workload TLS
+private-key files are unsupported. The beta deployment validates these inputs
+with `scripts/ensure-beta-workload-identity.ps1`.
 
 ## Runtime inputs
 
@@ -320,6 +326,20 @@ for development use.
 ## Development
 
 ### Current local development setup
+
+For an isolated worktree feedback loop, use `python scripts/dev/worktree_stack.py up`
+from that worktree to start its own PostgreSQL and Redis. The helper derives a
+Compose project, network, volumes, and loopback ports from the resolved worktree
+path; `config` prints its identity and `ps` shows its containers. Install UI
+dependencies in that worktree with `cd ui && npm ci`, then run
+`python scripts/dev/worktree_stack.py ui` from the repository root for Vite live
+reload. The UI points only at this worktree's Gateway port; until a Gateway is
+started there, API calls fail rather than reaching another local Marty stack.
+Stop Vite with Ctrl+C and use `python scripts/dev/worktree_stack.py down` to
+stop this worktree's containers without deleting their database volumes.
+`--port-base` can select another eight-port loopback range if the derived range
+is occupied. This focused local loop is not a full product installation or
+protected CI/release evidence.
 
 Use the microservice stack managed by the Makefile and compose files:
 

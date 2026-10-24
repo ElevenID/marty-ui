@@ -1,77 +1,36 @@
-"""Logging corpus and container ownership controls, not process parity evidence."""
+"""Frozen logging corpus and its native Rust owner."""
 
-import importlib
 import json
 from pathlib import Path
-import subprocess
-
-import pytest
 
 
-def test_logging_reference_preserves_all_declared_inputs_and_source():
+def test_frozen_logging_corpus_has_native_owner_and_all_declared_inputs():
     root = Path(__file__).resolve().parents[1]
     contracts = root / "contracts"
     reference = json.loads(
         (contracts / "canvas-worker-logging-oracle.json").read_text()
     )
-    spec = json.loads((contracts / "canvas-worker-logging-scenarios.json").read_text())
-    startup = json.loads((contracts / "canvas-worker-startup-oracle.json").read_text())
-    assert (
-        reference["source_sha256"] == startup["source_sha256"]["issuance.canvas_worker"]
+    scenarios = json.loads(
+        (contracts / "canvas-worker-logging-scenarios.json").read_text()
     )
-    assert [case["input"] for case in reference["cases"]] == spec["levels"]
+    startup = json.loads((contracts / "canvas-worker-startup-oracle.json").read_text())
+    assert reference["source_sha256"] == startup["source_sha256"]["issuance.canvas_worker"]
+    assert [case["input"] for case in reference["cases"]] == scenarios["levels"]
     assert len(reference["cases"]) == 16
     assert sum("error_class" in case["observed"] for case in reference["cases"]) == 7
+    worker = (root / "rust/services/issuance/src/bin/canvas_sync_worker.rs").read_text()
+    process = (
+        root / "rust/services/issuance/tests/support/canvas_worker_logging_contract.rs"
+    ).read_text()
+    assert "fn deployed_log_level_matches_frozen_published_thresholds()" in worker
+    assert "contracts/canvas-worker-logging-oracle.json" in worker
+    assert "fn invalid_log_level_process_failure_does_not_echo_operator_value()" in process
     workflow = (root / ".github/workflows/ci.yml").read_text(encoding="utf-8")
-    assert "python3 scripts/test_canvas_worker_logging_reference.py" in workflow
+    assert "python3 scripts/test_canvas_worker_logging_reference.py" not in workflow
+    assert "cargo test --locked --workspace" in workflow
     dockerfile = (root / "rust/services/Dockerfile.ci").read_text(encoding="utf-8")
     issuance = dockerfile.split("FROM runtime AS issuance\n", 1)[1].split(
         "FROM runtime AS gateway\n", 1
     )[0]
     assert "RUST_LOG=" not in issuance, "image defaults must not mask deployed LOG_LEVEL"
     assert "RUST_LOG=" not in (root / "services/Dockerfile").read_text(encoding="utf-8")
-
-
-@pytest.mark.parametrize("failure", [None, "start", "wait", "exit", "mismatch"])
-def test_reference_container_is_reaped_after_every_observation_path(
-    monkeypatch, failure
-):
-    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / "scripts"))
-    runner = importlib.import_module("test_canvas_worker_logging_reference")
-    owner = importlib.import_module("test_canvas_worker_image_entrypoint")
-    calls = []
-    identity = "a" * 64
-    image = "ghcr.io/elevenid/marty-credentials-issuance@sha256:" + "0" * 64
-
-    def docker(*arguments, **options):
-        calls.append((arguments, options))
-        operation = arguments[0]
-        if operation == "create":
-            return identity
-        if operation == failure:
-            raise subprocess.CalledProcessError(1, ["docker", operation])
-        if operation == "wait":
-            assert options["timeout"] == 20
-            return "1" if failure == "exit" else "0"
-        if operation == "logs":
-            return (
-                "mismatch"
-                if failure == "mismatch"
-                else "Published worker logging reference passed (16 cases)"
-            )
-        return ""
-
-    monkeypatch.setattr(owner, "docker", docker)
-    monkeypatch.setattr(runner, "docker", docker)
-    monkeypatch.setattr(runner, "contract", lambda _name: {"observed_image": image})
-    if failure:
-        with pytest.raises((AssertionError, subprocess.CalledProcessError)):
-            runner.run()
-    else:
-        runner.run()
-    assert calls[0] == (("pull", image), {"timeout": 180})
-    assert calls[-1][0] == ("rm", "--force", identity)
-    create = next(arguments for arguments, _options in calls if arguments[0] == "create")
-    assert create[create.index("--network") + 1] == "none"
-    assert "--read-only" in create and "--publish" not in create
-    assert create[-1] == "--check"

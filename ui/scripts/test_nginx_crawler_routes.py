@@ -8,6 +8,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import textwrap
 import time
 import unittest
 import uuid
@@ -103,7 +104,7 @@ class NginxCrawlerRouteContract(unittest.TestCase):
                 "  location /api/ { default_type application/json; "
                 "return 503 '{\"fixture\":\"gateway\",\"status\":503}'; }\n"
                 "  location = /openapi.json { default_type application/json; "
-                "return 502 '{\"fixture\":\"gateway\",\"status\":502}'; }\n"
+                "return 200 '{\"openapi\":\"3.1.0\",\"info\":{\"title\":\"gateway fixture\",\"version\":\"test\"},\"paths\":{}}'; }\n"
                 "  location / { default_type application/json; "
                 "return 503 '{\"fixture\":\"gateway\",\"status\":503}'; }\n"
                 "}\n",
@@ -129,6 +130,8 @@ class NginxCrawlerRouteContract(unittest.TestCase):
                 cls.network,
                 "--network-alias",
                 "gateway",
+                "--network-alias",
+                "gateway.marty-prod.svc.cluster.local",
                 gateway_image,
             )
         except BaseException:
@@ -150,15 +153,16 @@ class NginxCrawlerRouteContract(unittest.TestCase):
         if hasattr(cls, "temporary"):
             cls.temporary.cleanup()
 
-    def start_ui(self, config_name: str) -> tuple[str, int]:
+    def start_ui(self, config_name: str, config_path: Path | None = None) -> tuple[str, int]:
         variant = config_name.removeprefix("nginx.").removesuffix(".conf")
         context = self.root / variant
         write_image_context(
             context,
-            UI_ROOT / config_name,
+            config_path or UI_ROOT / config_name,
             {
                 "index.html": "<h1>marketing fixture</h1>",
                 "console/index.html": "<h1>console fixture</h1>",
+                "locales/de/marketing.json": '{"navigation":{"home":"Startseite"}}',
                 **{name: content for name, (_, content) in CRAWLER_FILES.items()},
             },
         )
@@ -254,6 +258,18 @@ class NginxCrawlerRouteContract(unittest.TestCase):
             status, _, body = self.request(port, path)
             self.assertEqual(status, 200)
             self.assertIn("marketing fixture", body)
+        status, headers, body = self.request(port, "/locales/de/marketing.json")
+        self.assertEqual(status, 200)
+        self.assertTrue(headers["content-type"].startswith("application/json"))
+        self.assertEqual(json.loads(body)["navigation"]["home"], "Startseite")
+        status, headers, body = self.request(port, "/locales/de/missing.json")
+        self.assertEqual(status, 404)
+        self.assertNotIn("marketing fixture", body)
+        self.assert_security_headers(headers)
+        status, headers, body = self.request(port, "/openapi.yaml")
+        self.assertEqual(status, 308)
+        self.assertEqual(headers["location"], "/openapi.json")
+        self.assertNotIn("marketing fixture", body)
         for path in ("/console", "/console/credentials"):
             status, _, body = self.request(port, path)
             self.assertEqual(status, 200)
@@ -264,7 +280,7 @@ class NginxCrawlerRouteContract(unittest.TestCase):
                 ("/v1/private-fixture", 401),
                 ("/auth/private-fixture", 401),
                 ("/api/failure-fixture", 503),
-                ("/openapi.json", 502),
+                ("/openapi.json", 200),
                 ("/ready", 503),
             ):
                 with self.subTest(path=path):
@@ -273,6 +289,9 @@ class NginxCrawlerRouteContract(unittest.TestCase):
                     self.assertIn("gateway", body)
                     self.assert_security_headers(headers)
         else:
+            status, headers, body = self.request(port, "/openapi.json")
+            self.assertEqual(status, 503)
+            self.assertEqual(json.loads(body)["error"], "openapi_gateway_proxy_required")
             for path in ("/ready", "/health/ready"):
                 status, headers, body = self.request(port, path)
                 self.assertEqual(status, 503)
@@ -283,6 +302,26 @@ class NginxCrawlerRouteContract(unittest.TestCase):
         for config_name in ("nginx.prod.conf", "nginx.spa.conf"):
             with self.subTest(config=config_name):
                 self.verify_config(config_name)
+
+    def test_oke_mounted_config_serves_gateway_schema_instead_of_spa(self) -> None:
+        manifest = (UI_ROOT.parent / "k8s/oracle/08-ui.yaml").read_text(encoding="utf-8")
+        block = manifest.split("  default.conf: |\n", 1)[1].split("\n---", 1)[0]
+        # Use the actual mounted configuration, substituting only the test DNS
+        # infrastructure. The fixture carries the real Kubernetes service alias.
+        config = textwrap.dedent(block).replace(
+            "kube-dns.kube-system.svc.cluster.local", "127.0.0.11"
+        )
+        config_path = self.root / "nginx.oke.conf"
+        config_path.write_text(config, encoding="utf-8")
+        _, port = self.start_ui("nginx.oke.conf", config_path)
+        status, headers, body = self.request(port, "/openapi.json")
+        self.assertEqual(status, 200)
+        self.assertTrue(headers["content-type"].startswith("application/json"))
+        self.assertEqual(json.loads(body)["openapi"], "3.1.0")
+        self.assertNotIn("marketing fixture", body)
+        status, headers, _ = self.request(port, "/openapi.yaml")
+        self.assertEqual(status, 308)
+        self.assertEqual(headers["location"], "/openapi.json")
 
 
 if __name__ == "__main__":

@@ -10,8 +10,9 @@ ROOT = Path(__file__).resolve().parents[1]
 EXECUTABLE = "rust/crates/selfhost-bundle/tests/executable_bundle.rs"
 SHARED = "rust/crates/selfhost-bundle/tests/support/extracted_bundle.rs"
 ADAPTER = "rust/crates/selfhost-bundle/tests/support/resolved_selfhost_runtime.rs"
-PACKAGED = "rust/crates/canvas-acceptance/tests/support/selfhost_packaged_runtime.rs"
-SIDECAR = "rust/crates/canvas-acceptance/tests/support/selfhost_runtime_sidecar.rs"
+PACKAGED = "rust/crates/selfhost-acceptance/tests/support/selfhost_packaged_runtime.rs"
+SIDECAR = "rust/crates/selfhost-acceptance/tests/support/selfhost_runtime_sidecar.rs"
+OWNER = "rust/crates/selfhost-acceptance/tests/selfhost_public_image_contract.rs"
 NAME = (
     "actual_cli_packages_and_renders_extracted_bundle_with_contained_asset_references"
 )
@@ -23,6 +24,70 @@ def read(name):
 
 def compact(value):
     return re.sub(r"\s+", "", value)
+
+
+def rust_function(source, name, indent=""):
+    matches = re.findall(
+        rf"^{indent}(?:pub\(super\) )?fn {name}\(.*?^{indent}\}}",
+        source,
+        re.MULTILINE | re.DOTALL,
+    )
+    assert len(matches) == 1
+    return compact(matches[0])
+
+
+def assert_log_boundary_connected(sidecar):
+    classifier = rust_function(sidecar, "log_boundary_status")
+    for required in [
+        "serde_json::from_str::<Value>(line)",
+        'event["fields"]["message"] == message',
+        'event["fields"][field] == value',
+    ]:
+        assert compact(required) in classifier
+    secret_check = compact(
+        "let secrets_absent = secrets.iter().all(|value| "
+        "!value.is_empty() && !log.contains(value));"
+    )
+    reject_leak = compact(
+        "if !secrets_absent { return LogBoundaryStatus::SecretExposed; }"
+    )
+    assert secret_check in classifier
+    assert reject_leak in classifier
+    assert classifier.index(reject_leak) < classifier.index(
+        "letexpected_present=match"
+    )
+    assert compact(
+        "if expected_present { LogBoundaryStatus::Satisfied } "
+        "else { LogBoundaryStatus::ExpectedMissing }"
+    ) in classifier
+    assert compact(
+        "log_boundary_status(log, secrets, expected) == LogBoundaryStatus::Satisfied"
+    ) in rust_function(sidecar, "log_satisfies_boundary")
+
+    waiter = rust_function(sidecar, "wait_for_log_boundary")
+    for required in [
+        "require(secrets.iter().all(|value| !value.is_empty()))?;",
+        "let deadline = Instant::now().checked_add(budget).ok_or(ERROR)?;",
+        "let remaining = deadline.saturating_duration_since(Instant::now()); "
+        "require(!remaining.is_zero())?; let bytes = read_log(remaining)?;",
+        "let log = String::from_utf8(bytes).map_err(|_| ERROR)?;",
+        "match log_boundary_status(&log, secrets, expected)",
+        "LogBoundaryStatus::SecretExposed => return Err(ERROR.into()),",
+        "LogBoundaryStatus::Satisfied => return require(Instant::now() < deadline),",
+        "LogBoundaryStatus::ExpectedMissing => { "
+        "let remaining = deadline.saturating_duration_since(Instant::now()); "
+        "require(!remaining.is_zero())?; "
+        "std::thread::sleep(Duration::from_millis(100).min(remaining)); }",
+    ]:
+        assert compact(required) in waiter
+    owned = rust_function(sidecar, "verify_log_boundary", "    ")
+    assert compact("self.checked(&inspect(id)?, id)?;") in owned
+    assert compact(
+        "wait_for_log_boundary(secrets, expected, Duration::from_secs(5), |remaining|"
+    ) in owned
+    assert compact(
+        'docker_output_with_timeout(&["logs", id], remaining, 1024 * 1024,)?'
+    ) in owned
 
 
 def assert_connected(reader):
@@ -73,9 +138,12 @@ def test_actual_extracted_runtime_model_is_mandatory():
 
 
 def assert_public_image_loader_connected(reader):
-    source = reader("rust/crates/canvas-acceptance/tests/canvas_published_schema_contract.rs")
+    source = reader(OWNER)
     runtime = reader(PACKAGED)
     sidecar = reader(SIDECAR)
+    root_ignore = reader(".dockerignore")
+    for test_only in (OWNER, PACKAGED, SIDECAR):
+        assert root_ignore.splitlines().count(test_only) == 1
     assert '#[path = "support/selfhost_packaged_runtime.rs"]' in source
     assert '#[path = "support/selfhost_runtime_sidecar.rs"]' in source
     main = reader("rust/services/issuance/src/main.rs")
@@ -86,8 +154,10 @@ def assert_public_image_loader_connected(reader):
         "selfhost_public_image_loader_child",
     ]:
         assert source.count(f"fn {name}()") == 1
-        line = f"printf '%s\\n' \"$all_test_names\" | grep -Fx '{name}: test'"
+        line = f"  printf '%s\\n' \"$all_test_names\" | grep -Fx '{name}: test'"
         assert runner.splitlines().count(line) == 1
+    assert 'require_selfhost_tests "$("$selfhost_executable" --list)"' in runner
+    assert "17 passed; 0 failed; 0 ignored" in runner
     for required in [
         "selfhost_packaged_runtime::run_isolated_child()",
         "PendingOperation::begin",
@@ -120,13 +190,11 @@ def assert_public_image_loader_connected(reader):
         'value: "28P01"',
     ]:
         assert compact(required) in compact(runtime)
-    for required in [
-        "serde_json::from_str::<Value>(line)",
-        'event["fields"]["message"] == message',
-        'event["fields"][field] == value',
-        "secrets_absent && expected_present",
-    ]:
-        assert compact(required) in compact(sidecar)
+    assert_log_boundary_connected(sidecar)
+    assert compact(
+        "service.verify_log_boundary("
+        "&secrets.iter().map(String::as_str).collect::<Vec<_>>(), expected, )}"
+    ) in rust_function(runtime, "run_service")
     for required in [
         'database_sqlstate = "28P01"',
         'code == "28P01"',
@@ -152,10 +220,11 @@ def assert_public_image_loader_connected(reader):
     assert len(matches) == 1
     index, step = matches[0]
     assert set(step) == {"name", "if", "shell", "run"}
-    assert step["if"] == "matrix.lane == 'canvas'"
+    assert step["if"] == "matrix.lane == 'selfhost'"
     assert step["shell"] == "bash"
     body = step["run"]
     build = steps[index - 1]
+    assert build["if"] == "matrix.lane == 'selfhost'"
     assert build["name"] == "Build public selfhost image"
     assert build["with"]["file"] == "services/Dockerfile"
     assert build["with"]["tags"] == "marty-selfhost-public:contract"
@@ -181,6 +250,57 @@ def test_public_image_loader_is_a_mandatory_exact_source_image_gate():
 
 
 @pytest.mark.parametrize(
+    ("original", "replacement"),
+    [
+        ("serde_json::from_str::<Value>(line)", "disconnected_parser(line)"),
+        ('event["fields"]["message"] == message', "true"),
+        ('event["fields"][field] == value', "true"),
+        ("!value.is_empty() && !log.contains(value)", "true"),
+        (
+            "if !secrets_absent {\n        return LogBoundaryStatus::SecretExposed;",
+            "if !secrets_absent {\n        return LogBoundaryStatus::ExpectedMissing;",
+        ),
+        (
+            "if expected_present {\n        LogBoundaryStatus::Satisfied",
+            "if !expected_present {\n        LogBoundaryStatus::Satisfied",
+        ),
+        (
+            "log_boundary_status(log, secrets, expected) == LogBoundaryStatus::Satisfied",
+            "true",
+        ),
+        (
+            "String::from_utf8(bytes).map_err(|_| ERROR)?",
+            "String::from_utf8_lossy(&bytes)",
+        ),
+        ("read_log(remaining)?", "read_log(remaining).unwrap_or_default()"),
+        (
+            "return require(Instant::now() < deadline)",
+            "return Ok(())",
+        ),
+        ("require(!remaining.is_zero())?;", ""),
+        (".min(remaining)", ""),
+        (
+            "wait_for_log_boundary(secrets, expected, Duration::from_secs(5)",
+            "disconnected_waiter(secrets, expected, Duration::from_secs(5)",
+        ),
+        (
+            '&["logs", id],\n                remaining,',
+            '&["logs", id],\n                Duration::from_secs(5),',
+        ),
+    ],
+)
+def test_log_boundary_connectivity_rejects_weakened_retry_paths(
+    original, replacement
+):
+    source = read(SIDECAR)
+    assert original in source
+    changed = source.replace(original, replacement, 1)
+    assert changed != source
+    with pytest.raises(AssertionError):
+        assert_log_boundary_connected(changed)
+
+
+@pytest.mark.parametrize(
     "fault",
     [
         "source",
@@ -199,6 +319,8 @@ def test_public_image_loader_is_a_mandatory_exact_source_image_gate():
         "wrong-password-marker",
         "wrong-password-sqlstate",
         "wrong-password-structured",
+        "log-boundary-call",
+        "log-boundary-summary",
     ],
 )
 def test_public_image_loader_refuses_disconnected_or_weakened_gates(fault):
@@ -206,7 +328,7 @@ def test_public_image_loader_refuses_disconnected_or_weakened_gates(fault):
         source = read(name)
         replacements = {
             "source": (
-                "rust/crates/canvas-acceptance/tests/canvas_published_schema_contract.rs",
+                OWNER,
                 "selfhost_packaged_runtime::run_isolated_child()",
             ),
             "runner": (
@@ -259,6 +381,11 @@ def test_public_image_loader_refuses_disconnected_or_weakened_gates(fault):
             "wrong-password-structured": (
                 PACKAGED,
                 "LogExpectation::Structured",
+            ),
+            "log-boundary-call": (PACKAGED, "service.verify_log_boundary("),
+            "log-boundary-summary": (
+                "scripts/ci/run-published-canvas-contracts.sh",
+                "17 passed; 0 failed; 0 ignored",
             ),
         }
         target, value = replacements[fault]

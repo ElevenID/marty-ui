@@ -76,7 +76,7 @@ timing; fresh-head hosted BODY/expiry parity is still required.
 
 ## Independent authority
 
-[The body capture record](canvas-worker-body-timeout-capture-plan.md) records
+The [frozen body corpus](../../contracts/canvas-worker-body-timeout-oracle.json) records
 six-case A/B captures at `ffb515200`, exact raw byte agreement, and subsequent
 configured regeneration at `c092509c7` (263.15s). The 2026-09-19 corpus
 contained 46,042 bytes with SHA256
@@ -159,3 +159,19 @@ Do not rewrite the corpus or weaken the gates to accommodate native behavior.
 OAuth/LTI/signing, decoder allocation, all consumer configurations, demos,
 devices, whole-worker cutover and aggregate beta acceptance remain separate
 requirements. Production is unchanged.
+
+## Capture maintenance boundary
+
+The historical timeout plans and local audit transcripts are retired at Git
+checkpoint `053102a80`. The frozen corpora, pinned published-process runners,
+current-input manifests and native replay tests remain executable authorities.
+Keep prompt/delayed headers and progressing/stalled bodies distinct for both
+application and roster scopes. A progressing body may exceed one total timeout
+interval; a stalled body must fail at the applicable inactivity boundary.
+
+Retain source/image pins, exact request ledgers, durable first-attempt identity,
+lease/renewal fences, completed-prefix effects, late-write rejection, bounded
+private output and secret tripwires, joined handlers and owned SIGINT cleanup.
+Reject observations outside the existing 0.5-second clock-agreement guard;
+invalid timing is not permission to widen tolerances or rewrite expectations.
+No historical capture authorizes consumer routing, deletion or deployment.

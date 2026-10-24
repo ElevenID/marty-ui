@@ -17,4 +17,7 @@ fi
 
 unset CLOUDFLARE_TUNNEL_TOKEN_FILE
 
-exec cloudflared tunnel --no-autoupdate run --token "${token}"
+TUNNEL_TOKEN="${token}"
+export TUNNEL_TOKEN
+unset token
+exec cloudflared tunnel --no-autoupdate run

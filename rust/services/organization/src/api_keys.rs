@@ -36,6 +36,7 @@ pub const MIP_API_KEY_SCOPES: &[&str] = &[
     "roles:read",
     "roles:write",
     "audit:read",
+    "audit:write",
     "webhooks:read",
     "webhooks:write",
     "notifications:send",

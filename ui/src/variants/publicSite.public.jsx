@@ -49,7 +49,7 @@ export function getPublicLoginFallback() {
   return '/';
 }
 
-export function renderMarketingRoutes({ login }) {
+export function renderMarketingRoutes({ login, showDemos = true }) {
   return (
     <>
       <Route path="/product" element={<ProductPage />} />
@@ -58,10 +58,10 @@ export function renderMarketingRoutes({ login }) {
       <Route path="/architecture" element={<ArchitecturePage />} />
       <Route path="/security" element={<SecurityPage />} />
       <Route path="/resources" element={<ResourcesPage />} />
-      <Route path="/demos" element={<DemoCatalogPage />} />
-      <Route path="/demos/latest/:scenario" element={<DemoLatestScenarioRedirect />} />
-      <Route path="/demos/:stackVersion/:scenario" element={<DemoScenarioPage />} />
-      <Route path="/demos/:stackVersion" element={<DemoReleasePage />} />
+      {showDemos && <Route path="/demos" element={<DemoCatalogPage />} />}
+      {showDemos && <Route path="/demos/latest/:scenario" element={<DemoLatestScenarioRedirect />} />}
+      {showDemos && <Route path="/demos/:stackVersion/:scenario" element={<DemoScenarioPage />} />}
+      {showDemos && <Route path="/demos/:stackVersion" element={<DemoReleasePage />} />}
       <Route path="/verification" element={<Navigate to="/verifiable-credential-api" replace />} />
       <Route path="/verifiable-credential-api" element={<VerifiableCredentialApiPage />} />
       <Route path="/eudi-wallet-verification" element={<EudiWalletVerificationPage />} />

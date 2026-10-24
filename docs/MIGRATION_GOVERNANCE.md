@@ -102,7 +102,7 @@ Best practice:
 - make them re-runnable after a reset
 - scope them clearly by profile
 
-The first extracted explicit seed pack is `scripts/seed_demo_vendor_fixtures.py`,
+The first extracted explicit seed pack is the Rust `marty-demo-vendor-seed` binary,
 wrapped by `make seed-demo-vendor-fixtures` and now used by the dev/beta reset
 targets as a bridge while older demo-only Alembic revisions are phased out.
 Those reset targets set `MARTY_USE_EXPLICIT_DEMO_SEED_PACK=1` during migration
@@ -196,7 +196,7 @@ For migration-related work, test the right path:
 
 - Stable Marty IDs are architectural glue across services today; do not change them casually.
 - Some historical migrations include beta URLs. New work should avoid baking environment-specific hostnames into persistent data when a template or derived runtime URL is more appropriate.
-- `run_all_migrations.py` currently also performs KMS/DID bootstrap. Treat that as orchestration/bootstrap behavior, not as a reason to overload every Alembic revision with runtime concerns.
+- The shared Rust migration bootstrap performs KMS/DID setup before the notification migration. Keep that orchestration separate from service schema revisions.
 
 ## Go-forward rule of thumb
 

@@ -275,7 +275,24 @@ pub async fn replay(
             "ISSUANCE_API_KEY".into(),
             "synthetic-startup-api-key".into(),
         ),
+        (
+            "SIGNING_KEYS_INTERNAL_API_KEY".into(),
+            "synthetic-startup-api-key".into(),
+        ),
+        (
+            "SIGNING_KEYS_ISSUER_SIGN_KEY".into(),
+            "synthetic-mixed-roster-issuer-sign-key-0001".into(),
+        ),
         ("SIGNING_KEYS_INTERNAL_URL".into(), signer_origin.into()),
+        (
+            "BAO_ADDR".into(),
+            std::env::var("MARTY_CANVAS_WORKER_MIXED_ROSTER_GRANT_ORIGIN").unwrap(),
+        ),
+        ("BAO_CACERT".into(), std::env::var("SSL_CERT_FILE").unwrap()),
+        (
+            "ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN_FILE".into(),
+            std::env::var("MARTY_CANVAS_WORKER_MIXED_ROSTER_GRANT_TOKEN_FILE").unwrap(),
+        ),
     ]);
     let stages = case["stages"].as_array().unwrap();
     let expected = reference["observations"].as_array().unwrap();

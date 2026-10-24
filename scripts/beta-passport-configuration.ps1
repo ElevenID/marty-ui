@@ -17,7 +17,8 @@ function Assert-BetaPassportConfiguration {
         [Parameter(Mandatory = $true)][string[]]$EnvFiles,
         [Parameter(Mandatory = $true)][string[]]$ComposeFiles,
         [bool]$PassportEnabled,
-        [bool]$PhysicalProvider = $false
+        [bool]$PhysicalProvider = $false,
+        [string]$PreparedServicesImage = ""
     )
     $validationArgs = @(
         (Join-Path $RepoRoot "scripts/validate_beta_passport_configuration.py"),
@@ -27,6 +28,12 @@ function Assert-BetaPassportConfiguration {
     foreach ($path in $ComposeFiles) { $validationArgs += @("--file", $path) }
     if ($PassportEnabled) { $validationArgs += "--passport-enabled" }
     if ($PhysicalProvider) { $validationArgs += "--physical-provider" }
+    if ($PreparedServicesImage) {
+        if (-not $PassportEnabled -or $PhysicalProvider -or $PreparedServicesImage -cnotmatch '^sha256:[0-9a-f]{64}$') {
+            throw "Prepared local passport image requires native simulator selection and an immutable ID"
+        }
+        $validationArgs += @("--prepared-services-image", $PreparedServicesImage)
+    }
     & python @validationArgs
     if ($LASTEXITCODE -ne 0) { throw "Beta passport configuration validation failed" }
 }

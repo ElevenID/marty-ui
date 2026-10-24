@@ -1,5 +1,14 @@
 # OAuth revocation coverage audit
 
+2026-10-10 KMS-only cleanup candidate: the legacy Python OAuth oracle runner
+and ten live regeneration tests are removed locally. Native HTTPS Rust worker
+tests retain all 39 frozen process/cycle cases, while a distinct real
+PostgreSQL repository test retains the 509-row capped-selection observation.
+All ten frozen scenario/corpus pairs have byte pins and compiled native test
+owners in the Canvas tier inventory. No current native result is claimed until
+the hosted Linux job executes this candidate; the historical captures below
+remain provenance, not an active private-key-capable oracle.
+
 Scope: gate 10 of the whole-worker cutover, checked against
 `contracts/issuance-canvas-sync-worker.json` sections `oauth_revocation`,
 `retry_and_backoff.oauth_revocation`, and the explicit legacy-oracle gap.

@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -32,27 +33,35 @@ def consumer_workflow() -> tuple[str, dict[str, object]]:
     return source, yaml.safe_load(source)
 
 
-def assert_supported_containerd_store(job: dict[str, object]) -> None:
+def assert_supported_containerd_store(
+    job: dict[str, object], *, ci_mirror: bool = False
+) -> None:
     steps = job["steps"]
     assert isinstance(steps, list)
     setup_docker = next(step for step in steps if step.get("uses") == SETUP_DOCKER)
     assert setup_docker["with"]["version"] == "v29.7.2"
-    assert json.loads(setup_docker["with"]["daemon-config"]) == {
+    expected_config: dict[str, object] = {
         "features": {"containerd-snapshotter": True}
     }
+    if ci_mirror:
+        expected_config["registry-mirrors"] = ["https://mirror.gcr.io"]
+    assert json.loads(setup_docker["with"]["daemon-config"]) == expected_config
 
 
-def assert_supported_backend(job: dict[str, object]) -> None:
-    assert_supported_containerd_store(job)
+def assert_supported_backend(job: dict[str, object], *, ci_mirror: bool = False) -> None:
+    assert_supported_containerd_store(job, ci_mirror=ci_mirror)
     steps = job["steps"]
     assert isinstance(steps, list)
     setup_buildx = next(step for step in steps if step.get("uses") == SETUP_BUILDX)
     assert setup_buildx["id"] == "buildx"
-    assert setup_buildx["with"] == {
+    expected_buildx: dict[str, object] = {
         "version": "v0.36.1",
         "driver": "docker-container",
         "driver-opts": f"image={BUILDKIT_IMAGE}",
     }
+    if ci_mirror:
+        expected_buildx["buildkitd-config"] = ".github/buildkit-ci-mirror.toml"
+    assert setup_buildx["with"] == expected_buildx
     probe = next(
         step
         for step in steps
@@ -114,19 +123,21 @@ def test_candidate_floor_matches_roadmap_and_is_ancestor_when_available() -> Non
         encoding="utf-8"
     )
     assert VERIFICATION_FLOOR in roadmap
-    object_check = subprocess.run(
-        ["git", "-C", str(ROOT), "cat-file", "-e", f"{VERIFICATION_FLOOR}^{{commit}}"],
-        check=False,
+    shallow = subprocess.run(
+        ["git", "-C", str(ROOT), "rev-parse", "--is-shallow-repository"],
+        check=True,
+        capture_output=True,
+        text=True,
     )
-    if object_check.returncode != 0:
-        shallow = subprocess.run(
-            ["git", "-C", str(ROOT), "rev-parse", "--is-shallow-repository"],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        assert shallow.stdout.strip() == "true"
+    if shallow.stdout.strip() == "true":
+        # Another worktree may have the floor object while this checkout still
+        # lacks the connecting history; only the full-fetch workflow can prove it.
         return
+    assert shallow.stdout.strip() == "false"
+    subprocess.run(
+        ["git", "-C", str(ROOT), "cat-file", "-e", f"{VERIFICATION_FLOOR}^{{commit}}"],
+        check=True,
+    )
     subprocess.run(
         [
             "git",
@@ -139,6 +150,65 @@ def test_candidate_floor_matches_roadmap_and_is_ancestor_when_available() -> Non
         ],
         check=True,
     )
+
+
+@pytest.mark.parametrize("ancestor_exit", [0, 1])
+def test_candidate_floor_requires_ancestor_with_complete_history(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, ancestor_exit: int
+) -> None:
+    roadmap = tmp_path / "docs" / "CONSOLIDATED_RUST_MIGRATION_ROADMAP.md"
+    roadmap.parent.mkdir()
+    roadmap.write_text(VERIFICATION_FLOOR, encoding="utf-8")
+    monkeypatch.setattr(sys.modules[__name__], "ROOT", tmp_path)
+    calls: list[list[str]] = []
+
+    def fake_run(
+        command: list[str], *, check: bool = False, **_kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        if "rev-parse" in command:
+            return subprocess.CompletedProcess(command, 0, stdout="false\n")
+        if "merge-base" in command and ancestor_exit and check:
+            raise subprocess.CalledProcessError(ancestor_exit, command)
+        return subprocess.CompletedProcess(
+            command, ancestor_exit if "merge-base" in command else 0
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    if ancestor_exit:
+        with pytest.raises(subprocess.CalledProcessError):
+            test_candidate_floor_matches_roadmap_and_is_ancestor_when_available()
+    else:
+        test_candidate_floor_matches_roadmap_and_is_ancestor_when_available()
+    assert [command[3] for command in calls] == [
+        "rev-parse",
+        "cat-file",
+        "merge-base",
+    ]
+
+
+def test_candidate_floor_cached_object_does_not_prove_shallow_ancestry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    roadmap = tmp_path / "docs" / "CONSOLIDATED_RUST_MIGRATION_ROADMAP.md"
+    roadmap.parent.mkdir()
+    roadmap.write_text(VERIFICATION_FLOOR, encoding="utf-8")
+    monkeypatch.setattr(sys.modules[__name__], "ROOT", tmp_path)
+    calls: list[list[str]] = []
+
+    def fake_run(
+        command: list[str], **_kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        if "rev-parse" in command:
+            return subprocess.CompletedProcess(command, 0, stdout="true\n")
+        if "cat-file" in command:
+            return subprocess.CompletedProcess(command, 0)
+        raise AssertionError("shallow history cannot prove floor ancestry")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    test_candidate_floor_matches_roadmap_and_is_ancestor_when_available()
+    assert [command[3] for command in calls] == ["rev-parse"]
 
 
 def test_candidate_workflow_uses_fixed_actions_and_exact_five_file_bundle() -> None:
@@ -486,7 +556,7 @@ def test_supported_containerd_candidate_contract_is_a_required_ci_lane() -> None
         if str(step.get("uses", "")).startswith("actions/setup-python@")
     )
     assert setup_python["with"]["python-version"] == "3.12.10"
-    assert_supported_backend(job)
+    assert_supported_backend(job, ci_mirror=True)
     steps = job["steps"]
     commands = "\n".join(str(step.get("run", "")) for step in steps)
     candidate_step = next(

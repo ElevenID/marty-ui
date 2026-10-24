@@ -86,6 +86,8 @@ def assert_shared_rust_services(base, bundle):
         if name == "issuance-native":
             assert selector == "issuance_native"
             original = native_dispatcher_model(original)
+        elif name in {"issuance", "issuance-migrations"}:
+            assert selector == "issuance_native"
         else:
             assert not original.get("command") and not original.get("entrypoint"), (
                 f"Review explicit Rust launch override: {name}"
@@ -204,23 +206,56 @@ def assert_no_canvas_overlay_activation(compose_command=None):
     ), "Selected Canvas profile must activate the worker"
 
 
+def assert_no_canvas_issuance_secret(base, preview):
+    """The preview must omit the Canvas secret without changing other runtime inputs."""
+    for name in ("issuance", "issuance-native"):
+        original = deepcopy(base["services"][name])
+        expected = deepcopy(original)
+        original_env = environment_mapping(original["environment"])
+        expected_env = environment_mapping(expected["environment"])
+        assert original_env["CANVAS_CREDENTIALS_SHARED_SECRET_FILE"] == (
+            "/run/secrets/canvas_credentials_shared_secret"
+        )
+        expected_env.update(
+            CANVAS_PORTABLE_INTEGRATION_ENABLED="false",
+            CANVAS_LEGACY_EVENT_INGEST_ENABLED="false",
+            CANVAS_MIRROR_WORKER_ENABLED="false",
+            CANVAS_CREDENTIALS_SHARED_SECRET_FILE="",
+        )
+        expected["environment"] = expected_env
+        assert any(
+            secret["source"] == "canvas_credentials_shared_secret"
+            for secret in expected["secrets"]
+        )
+        expected["secrets"] = [
+            secret
+            for secret in expected["secrets"]
+            if secret["source"] != "canvas_credentials_shared_secret"
+        ]
+        actual = deepcopy(preview["services"][name])
+        actual["environment"] = environment_mapping(actual["environment"])
+        assert actual == expected, (
+            f"No-Canvas issuance must preserve every unrelated runtime field: {name}"
+        )
+
+
 def assert_inherited_service(base, bundle, service):
     assert bundle["services"][service] == base["services"][service], (
-        f"Bundle must preserve the complete unqualified Python {service} definition"
+        f"Bundle must preserve the complete unqualified Rust {service} definition"
     )
 
 
 def assert_published_issuance_preserved(base, bundle):
     original = base["services"]["issuance"]
     migration = base["services"]["issuance-migrations"]
-    assert original["image"].startswith("${MARTY_ISSUANCE_IMAGE:?"), (
-        "Unqualified issuance API must retain its immutable published image"
-    )
-    assert original["image"] == migration["image"]
+    for service in (original, migration):
+        assert service["build"]["dockerfile"] == "services/Dockerfile"
+        assert service["build"]["args"]["SERVICE_NAME"] == "issuance-native"
     assert original["entrypoint"] == ["/bin/sh", "/app/load-openbao-token-and-start.sh"]
-    assert original["command"][:4] == ["python", "-m", "uvicorn", "main:app"]
-    for service in ("issuance", "issuance-migrations"):
-        assert_inherited_service(base, bundle, service)
+    assert original["command"] == ["/usr/local/bin/marty-issuance-service"]
+    assert migration["command"][0].endswith("exec /usr/local/bin/marty-issuance-service migrate\n")
+    # The bundle replaces source builds with the shared Rust image. Its full
+    # rendered launch and environment are checked by assert_shared_rust_services.
 
 
 def assert_worker_preserved(base, bundle):
@@ -339,13 +374,22 @@ def conformance_cases():
 
 
 def catalog_cases():
-    owner = runpy.run_path(str(ROOT / "packages/marty_devops/catalog.py"))
-    catalog = owner["DeploymentCatalog"].load(ROOT)
+    stacks = {
+        payload["name"]: payload
+        for path in (ROOT / "deploy-config/stacks").glob("*.json")
+        if (payload := json.loads(path.read_text(encoding="utf-8")))
+    }
     cases = []
-    for name, stack in sorted(catalog.stacks.items()):
+    for name, stack in sorted(stacks.items()):
         if not stack.get("compose_files"):
             continue
-        required = WORKER in catalog.running_services_for_stack(name)
+        result = subprocess.run(
+            ["cargo", "+1.95.0", "run", "--quiet", "--locked", "--manifest-path", str(ROOT / "rust/Cargo.toml"),
+             "-p", "marty-deployment-catalog", "--bin", "marty-deploy", "--", "--repo-root", str(ROOT),
+             "services", name, "--running-only"],
+            check=True, capture_output=True, text=True, cwd=ROOT,
+        )
+        required = WORKER in result.stdout.splitlines()
         if not required and name != "selfhost-beta-tunnel":
             continue
         if name == "selfhost-beta-tunnel":
@@ -437,7 +481,8 @@ def assert_consumer_matrix(renderer=None):
         )
         shared_image = consumer_shared_image(case["files"], model)
         assert_consumer_worker(
-            base, model, case["name"], isolated=True, shared_image=shared_image
+            base, model, case["name"], isolated=True,
+            beta="docker-compose.beta.yml" in case["files"], shared_image=shared_image
         )
         assert_conformance_isolation(model)
         checked.append(case["name"])
@@ -501,6 +546,7 @@ def run(suite="bundle", compose_command=None):
     assert_worker_preserved(base, bundle)
     preview = renderer(BASE, BUNDLE, NO_CANVAS)
     assert preview["services"][WORKER]["profiles"] == ["canvas"]
+    assert_no_canvas_issuance_secret(bundle, preview)
     assert_published_issuance_preserved(base, bundle)
     converted = assert_shared_rust_services(base, bundle)
     print(

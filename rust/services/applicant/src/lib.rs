@@ -8,12 +8,25 @@ use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
 use uuid::Uuid;
 
+pub mod event_stream_channel;
 pub mod http;
 pub mod issuance;
 pub mod migration;
 pub mod providers;
 pub mod service;
 pub mod store;
+
+/// Applicant currently has no workload TLS client. Reject inherited settings
+/// rather than giving operators the false impression that they protect traffic.
+pub fn reject_unused_workload_tls(names: impl IntoIterator<Item = String>) -> Result<(), String> {
+    if let Some(name) = names
+        .into_iter()
+        .find(|name| name.starts_with("GRPC_WORKLOAD_TLS_"))
+    {
+        return Err(format!("{name} is unsupported by Applicant"));
+    }
+    Ok(())
+}
 
 pub const MAX_EVIDENCE_BYTES: usize = 10 * 1024 * 1024;
 pub const LOCK_TTL_SECONDS: i64 = 300;
@@ -271,7 +284,6 @@ pub struct Biometric {
     pub template_data_base64: String,
     #[serde(default)]
     pub image_data_base64: Option<String>,
-    pub is_live_capture: bool,
     #[serde(default)]
     pub capture_device_id: Option<String>,
     pub created_at: DateTime<Utc>,
@@ -503,7 +515,7 @@ pub struct FieldDefinition {
     pub field_type: Option<String>,
     #[serde(default)]
     pub required: bool,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "nullable_field_options")]
     pub options: Vec<Value>,
     #[serde(default)]
     pub validation_pattern: Option<String>,
@@ -511,6 +523,13 @@ pub struct FieldDefinition {
     pub minimum: Option<f64>,
     #[serde(default)]
     pub maximum: Option<f64>,
+}
+
+fn nullable_field_options<'de, D>(deserializer: D) -> Result<Vec<Value>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Option::<Vec<Value>>::deserialize(deserializer)?.unwrap_or_default())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

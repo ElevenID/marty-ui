@@ -1,34 +1,93 @@
-"""Root-discovered artifact/control guards; no FastAPI/httpx imports required."""
+"""Frozen Canvas artifact identity, response, and side-effect regression guards."""
 
 from __future__ import annotations
 
-import ast
 import copy
 import hashlib
-import importlib.util
-import io
 import json
 import math
 from pathlib import Path
-import subprocess
-import sys
 
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-CAPTURE = ROOT / "scripts/capture_canvas_mirror_reference.py"
 CONTRACT = ROOT / "contracts/issuance-canvas-mirror.json"
 
+# Historical source identities for the frozen corpora, independent of capture tooling.
+REVISION = "aaa6a9b8e31e62cd0ab087eef5fc1f4835048e26"
+ROUTES = "issuance.infrastructure.api.routes"
+ADAPTER = "issuance.infrastructure.adapters.canvas_credentials_adapter"
+SOURCES = {
+    "issuance.infrastructure.api.routes": (
+        "services/issuance/infrastructure/api/routes.py",
+        "f71dd82163fcb2296209f880fe78d55a130d356b",
+    ),
+    "issuance.infrastructure.adapters.canvas_credentials_adapter": (
+        "services/issuance/infrastructure/adapters/canvas_credentials_adapter.py",
+        "c86671e2b2ab5bb8a72de78a9bdadb0f340a5ec8",
+    ),
+    "issuance.domain.entities": (
+        "services/issuance/domain/entities.py",
+        "1b5e2eba90c1ec13c1a38135f4da92813f1d1073",
+    ),
+    "issuance.domain.ports": (
+        "services/issuance/domain/ports.py",
+        "3454e78deb21af39a1d842ebfed3d8899aa69325",
+    ),
+    "issuance.infrastructure.adapters.memory_repository": (
+        "services/issuance/infrastructure/adapters/memory_repository.py",
+        "b9c65f5b35eebe1de9392491b8e3595396ff6565",
+    ),
+    "issuance.infrastructure.adapters.delivery_records": (
+        "services/issuance/infrastructure/adapters/delivery_records.py",
+        "eda21f907f3abd1e4652e06400f5a6dcf424952f",
+    ),
+    "issuance.application.canvas_feature_flags": (
+        "services/issuance/application/canvas_feature_flags.py",
+        "0fd22c63f09641f886d6c7c4bad5d16393fabe92",
+    ),
+    "issuance.application.canvas_runtime": (
+        "services/issuance/application/canvas_runtime.py",
+        "ae2874fb057e19db7cfd6b28dc39a77eba02c3fb",
+    ),
+    "issuance.application.canvas_lti_services": (
+        "services/issuance/application/canvas_lti_services.py",
+        "6bde953e9be8c01b51e622668a2cf9fc016f581d",
+    ),
+    "issuance.application.credential_vct": (
+        "services/issuance/application/credential_vct.py",
+        "bff0c6bf046e7df15447350d0e4bcc645b8e28d2",
+    ),
+    "mirror_seed": (
+        "tests/test_issuance_changes.py",
+        "7ab0a410bd6a4b4507ddd535365fadf7f3dbac03",
+    ),
+    "startup_evidence": (
+        "services/issuance/main.py",
+        "d2c7135bffc8d3ea8184233626b7e573f1fb837d",
+    ),
+    "release_profile": (
+        "services/Dockerfile",
+        "13bcb60f46601303b0f524427d9d5aa6bce927d9",
+    ),
+}
+RELEASE_IMAGE = "ghcr.io/elevenid/marty-credentials-issuance"
+RELEASE_IMAGE_DIGEST = (
+    "sha256:815cbba6efc7c91e770a8dd15fe5fa102d252a485073bf60f0e0d5e0a73b28e5"
+)
+RELEASE_DEPENDENCIES = {"fastapi": "0.109.0", "pydantic": "2.11.7", "httpx": "0.26.0"}
+OPERATIONS = (
+    "publish_issued_credential_canvas_mirror",
+    "process_pending_canvas_mirror_deliveries",
+    "process_failed_canvas_mirror_status_syncs",
+    "run_canvas_mirror_automation_cycle_endpoint",
+    "get_canvas_mirror_health",
+    "get_canvas_mirror_provenance",
+)
 
-@pytest.fixture
-def capture():
-    # The capture module's top-level imports are stdlib only. Application
-    # dependencies are loaded solely inside the explicit observation worker.
-    spec = importlib.util.spec_from_file_location("mirror_reference_guards", CAPTURE)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    yield module
-    module.VIOLATIONS.clear()
+
+def canonical_json_bytes(raw):
+    return raw.decode("utf-8").replace("\r\n", "\n").encode("utf-8")
 
 
 @pytest.fixture
@@ -40,27 +99,25 @@ def artifact():
     )
 
 
-def assert_artifact_files(contract, read_bytes, capture):
+def assert_artifact_files(contract, read_bytes):
     for owner in ("reference", "scenarios"):
         assert (
             hashlib.sha256(
-                capture.canonical_json_bytes(read_bytes(contract[owner]["path"]))
+                canonical_json_bytes(read_bytes(contract[owner]["path"]))
             ).hexdigest()
             == contract[owner]["sha256"]
         )
 
 
-def assert_connected(contract, reference, scenarios, capture):
+def assert_connected(contract, reference, scenarios):
     assert contract["phase"] == "frozen-controlled-reference-only"
-    assert contract["source_commit"] == reference["source_commit"] == capture.REVISION
+    assert contract["source_commit"] == reference["source_commit"] == REVISION
     assert reference["sources"] == {
-        name: list(value) for name, value in capture.SOURCES.items()
+        name: list(value) for name, value in SOURCES.items()
     }
-    assert {route["operation"] for route in contract["routes"]} == set(
-        capture.OPERATIONS
-    )
-    selected = set(reference["selected_definitions"][capture.ROUTES])
-    assert set(capture.OPERATIONS) <= selected
+    assert {route["operation"] for route in contract["routes"]} == set(OPERATIONS)
+    selected = set(reference["selected_definitions"][ROUTES])
+    assert set(OPERATIONS) <= selected
     assert {
         "_verify_management_api_key",
         "_require_trusted_organization",
@@ -95,18 +152,18 @@ def assert_connected(contract, reference, scenarios, capture):
     assert contract["native_selection"] == "unchanged"
 
 
-def require_publication_boundary(contract, capture, read_bytes):
+def require_publication_boundary(contract, read_bytes):
     decoded = {}
     for kind in ("reference", "scenarios"):
         owner = contract[f"publication_boundary_{kind}"]
-        raw = capture.canonical_json_bytes(read_bytes(owner["path"]))
+        raw = canonical_json_bytes(read_bytes(owner["path"]))
         assert hashlib.sha256(raw).hexdigest() == owner["sha256"]
         decoded[kind] = json.loads(raw)
     reference, scenarios = decoded["reference"], decoded["scenarios"]
     assert reference["schema"] == "marty.canvas-publication-boundary-reference/v1"
-    assert reference["source_commit"] == scenarios["source_commit"] == capture.REVISION
+    assert reference["source_commit"] == scenarios["source_commit"] == REVISION
     assert reference["sources"] == {
-        name: list(value) for name, value in capture.SOURCES.items()
+        name: list(value) for name, value in SOURCES.items()
     }
     assert (
         reference["scenarios_sha256"]
@@ -140,7 +197,7 @@ def require_publication_boundary(contract, capture, read_bytes):
         "publish_canvas_credential_mirror",
         "_build_badgr_assertion_payload",
         "_build_canvas_publish_payload",
-    } <= set(reference["selected_definitions"][capture.ADAPTER])
+    } <= set(reference["selected_definitions"][ADAPTER])
     assert reference["infrastructure_controls"] == [
         "missing-global-fatal",
         "caught-unowned-origin-fatal",
@@ -190,92 +247,52 @@ def require_publication_boundary(contract, capture, read_bytes):
             )
 
 
-def test_additive_publication_boundary_hashes_sources_and_complete_observations(
-    capture,
-):
+def test_additive_publication_boundary_hashes_sources_and_complete_observations():
     contract = json.loads(CONTRACT.read_text(encoding="utf-8"))
 
     def read(path):
         return (ROOT / path).read_bytes()
 
-    require_publication_boundary(contract, capture, read)
+    require_publication_boundary(contract, read)
     require_publication_boundary(
         contract,
-        capture,
-        lambda path: capture.canonical_json_bytes(read(path)).replace(b"\n", b"\r\n"),
+        lambda path: canonical_json_bytes(read(path)).replace(b"\n", b"\r\n"),
     )
     for key in ("publication_boundary_reference", "publication_boundary_scenarios"):
         target = contract[key]["path"]
         with pytest.raises(AssertionError):
             require_publication_boundary(
                 contract,
-                capture,
                 lambda path: read(path) + b" " if path == target else read(path),
             )
     changed = copy.deepcopy(contract)
     changed["publication_boundary_observations"]["adapter_cancellation"] = 0
     with pytest.raises(AssertionError):
-        require_publication_boundary(changed, capture, read)
+        require_publication_boundary(changed, read)
 
 
-@pytest.mark.parametrize(
-    "modes",
-    [
-        {"audit": True, "adapter_reference": True},
-        {"audit": True, "publication_boundary": True},
-        {"adapter_reference": True, "publication_boundary": True},
-        {"audit": True, "adapter_reference": True, "publication_boundary": True},
-    ],
-)
-def test_conflicting_reference_modes_cannot_spawn_or_execute(capture, modes):
-    for entrypoint in (capture.bounded_observation_child, capture.observe_sources):
-        with pytest.raises(ValueError, match="mutually exclusive"):
-            entrypoint({}, **modes)
-
-
-def test_boundary_cancellation_keeps_original_owned_task_sequence(capture):
-    tree = ast.parse(CAPTURE.read_text(encoding="utf-8"))
-    functions = {
-        node.name: node for node in tree.body if isinstance(node, ast.AsyncFunctionDef)
-    }
-    cancellation = ast.unparse(functions["cancel_provider_action"])
-    assert "asyncio.create_task(action)" in cancellation
-    assert "await asyncio.wait_for(provider_entered.wait(), 2)" in cancellation
-    assert "task.cancel()" in cancellation
-    assert "await task" in cancellation
-    assert "await asyncio.gather(task, return_exceptions=True)" in cancellation
-    assert "except asyncio.CancelledError" in cancellation
-    assert "Provider cancellation was swallowed" in cancellation
-    # Both direct adapter and prior ASGI/loop branches use this owner. The
-    # bounded complete child remains the final cancellation-swallowing fence.
-    assert (
-        ast.unparse(functions["observe_http"]).count("await cancel_provider_action(")
-        == 2
-    )
-
-
-def test_contract_artifact_hashes_and_source_coverage(capture, artifact):
+def test_contract_artifact_hashes_and_source_coverage(artifact):
     contract = json.loads(CONTRACT.read_text())
     scenarios = json.loads(
         (ROOT / contract["scenarios"]["path"]).read_text(encoding="utf-8")
     )
-    assert_artifact_files(contract, lambda path: (ROOT / path).read_bytes(), capture)
+    assert_artifact_files(contract, lambda path: (ROOT / path).read_bytes())
     assert contract["artifact_identity"] == "UTF-8; CRLF normalized to LF only"
-    assert_connected(contract, artifact, scenarios, capture)
+    assert_connected(contract, artifact, scenarios)
     coverage = json.loads(
         (ROOT / "contracts/issuance-native-coverage.json").read_text()
     )
     assert coverage["upstream"]["sha256"] == contract["upstream_surface_sha256"]
     assert artifact["scenarios_sha256"] == contract["scenarios"]["sha256"]
     assert artifact["release_image"] == {
-        "uri": capture.RELEASE_IMAGE,
-        "digest": capture.RELEASE_IMAGE_DIGEST,
+        "uri": RELEASE_IMAGE,
+        "digest": RELEASE_IMAGE_DIGEST,
     }
-    assert artifact["dependencies"] == capture.RELEASE_DEPENDENCIES
+    assert artifact["dependencies"] == RELEASE_DEPENDENCIES
 
 
 @pytest.mark.parametrize("owner", ["reference", "scenarios"])
-def test_changed_artifact_is_rejected(owner, capture):
+def test_changed_artifact_is_rejected(owner):
     contract = json.loads(CONTRACT.read_text())
     target = contract[owner]["path"]
     original = (ROOT / target).read_bytes()
@@ -286,26 +303,26 @@ def test_changed_artifact_is_rejected(owner, capture):
         return mutated if path == target else (ROOT / path).read_bytes()
 
     with pytest.raises(AssertionError):
-        assert_artifact_files(contract, changed, capture)
+        assert_artifact_files(contract, changed)
 
 
-def test_crlf_artifacts_preserve_exact_identity(capture):
+def test_crlf_artifacts_preserve_exact_identity():
     contract = json.loads(CONTRACT.read_text())
 
     def crlf(path):
-        raw = capture.canonical_json_bytes((ROOT / path).read_bytes())
+        raw = canonical_json_bytes((ROOT / path).read_bytes())
         assert b"\n" in raw
         return raw.replace(b"\n", b"\r\n")
 
-    assert_artifact_files(contract, crlf, capture)
+    assert_artifact_files(contract, crlf)
 
 
-def test_canonical_json_identity_has_no_other_normalization(capture):
+def test_canonical_json_identity_has_no_other_normalization():
     raw = '{"value":"é", "space": 1}\r\n'.encode("utf-8")
-    assert capture.canonical_json_bytes(raw) == raw.replace(b"\r\n", b"\n")
-    assert capture.canonical_json_bytes(b"{\r}") == b"{\r}"
+    assert canonical_json_bytes(raw) == raw.replace(b"\r\n", b"\n")
+    assert canonical_json_bytes(b"{\r}") == b"{\r}"
     with pytest.raises(UnicodeDecodeError):
-        capture.canonical_json_bytes(b"\xff")
+        canonical_json_bytes(b"\xff")
 
 
 @pytest.fixture
@@ -321,28 +338,23 @@ def adapter_artifact():
     )
 
 
-def test_adapter_artifact_hashes_and_closed_source(capture, adapter_artifact):
+def test_adapter_artifact_hashes_and_closed_source(adapter_artifact):
     contract = json.loads(CONTRACT.read_text())
     owners = {key: contract[f"adapter_{key}"] for key in ("reference", "scenarios")}
-    assert_artifact_files(owners, lambda path: (ROOT / path).read_bytes(), capture)
+    assert_artifact_files(owners, lambda path: (ROOT / path).read_bytes())
     assert_artifact_files(
         owners,
-        lambda path: capture.canonical_json_bytes((ROOT / path).read_bytes()).replace(
+        lambda path: canonical_json_bytes((ROOT / path).read_bytes()).replace(
             b"\n", b"\r\n"
         ),
-        capture,
     )
     scenarios = json.loads(
         (ROOT / owners["scenarios"]["path"]).read_text(encoding="utf-8")
     )
     assert adapter_artifact["schema"] == "marty.canvas-mirror-adapter-reference/v1"
-    assert (
-        adapter_artifact["source_commit"]
-        == scenarios["source_commit"]
-        == capture.REVISION
-    )
+    assert adapter_artifact["source_commit"] == scenarios["source_commit"] == REVISION
     assert adapter_artifact["sources"] == {
-        key: list(value) for key, value in capture.SOURCES.items()
+        key: list(value) for key, value in SOURCES.items()
     }
     assert adapter_artifact["scenarios_sha256"] == owners["scenarios"]["sha256"]
     assert [case["id"] for case in adapter_artifact["adapter"]] == [
@@ -359,7 +371,7 @@ def test_adapter_artifact_hashes_and_closed_source(capture, adapter_artifact):
 
 
 @pytest.mark.parametrize("owner", ["reference", "scenarios"])
-def test_adapter_content_mutation_is_rejected(capture, owner):
+def test_adapter_content_mutation_is_rejected(owner):
     contract = json.loads(CONTRACT.read_text())
     owners = {key: contract[f"adapter_{key}"] for key in ("reference", "scenarios")}
     path = owners[owner]["path"]
@@ -372,7 +384,6 @@ def test_adapter_content_mutation_is_rejected(capture, owner):
             lambda current: (
                 changed if current == path else (ROOT / current).read_bytes()
             ),
-            capture,
         )
 
 
@@ -495,26 +506,24 @@ def test_adapter_delivery_secret_policy_is_not_validation_policy(adapter_artifac
 
 
 @pytest.mark.parametrize("mutation", ["route", "auth", "loop", "case", "source"])
-def test_disconnected_reference_is_rejected(capture, artifact, mutation):
+def test_disconnected_reference_is_rejected(artifact, mutation):
     contract = json.loads(CONTRACT.read_text())
     scenarios = json.loads(
         (ROOT / contract["scenarios"]["path"]).read_text(encoding="utf-8")
     )
     changed = copy.deepcopy(artifact)
     if mutation == "route":
-        changed["selected_definitions"][capture.ROUTES].remove(capture.OPERATIONS[0])
+        changed["selected_definitions"][ROUTES].remove(OPERATIONS[0])
     elif mutation == "auth":
-        changed["selected_definitions"][capture.ROUTES].remove(
-            "_verify_management_api_key"
-        )
+        changed["selected_definitions"][ROUTES].remove("_verify_management_api_key")
     elif mutation == "loop":
         changed["loop"].pop()
     elif mutation == "case":
         changed["http"].pop()
     else:
-        changed["sources"][capture.ROUTES][1] = "0" * 40
+        changed["sources"][ROUTES][1] = "0" * 40
     with pytest.raises(AssertionError):
-        assert_connected(contract, changed, scenarios, capture)
+        assert_connected(contract, changed, scenarios)
 
 
 def test_lossless_snapshot_references_are_complete(artifact):
@@ -561,23 +570,21 @@ def test_positive_replay_and_denial_side_effects(artifact):
     assert cases["health_foreign_context"]["responses"][0]["status"] == 200
 
 
-def test_current_release_route_inventory_is_exact(capture):
+def test_current_release_route_inventory_is_exact():
     contract = json.loads(CONTRACT.read_text(encoding="utf-8"))
     assert contract["source_release"] == "v0.1.76"
-    assert contract["source_commit"] == capture.REVISION
+    assert contract["source_commit"] == REVISION
     assert contract["source_tree"] == "819b7458a31c75d28043a4660643b029c5ec4567"
-    assert contract["source_path"] == capture.SOURCES[capture.ROUTES][0]
-    assert contract["source_blob_sha1"] == capture.SOURCES[capture.ROUTES][1]
+    assert contract["source_path"] == SOURCES[ROUTES][0]
+    assert contract["source_blob_sha1"] == SOURCES[ROUTES][1]
     assert contract["release_runtime"] == {
-        "image": capture.RELEASE_IMAGE,
-        "digest": capture.RELEASE_IMAGE_DIGEST,
-        "dependencies": capture.RELEASE_DEPENDENCIES,
-        "profile_source_path": capture.SOURCES["release_profile"][0],
-        "profile_source_blob_sha1": capture.SOURCES["release_profile"][1],
+        "image": RELEASE_IMAGE,
+        "digest": RELEASE_IMAGE_DIGEST,
+        "dependencies": RELEASE_DEPENDENCIES,
+        "profile_source_path": SOURCES["release_profile"][0],
+        "profile_source_blob_sha1": SOURCES["release_profile"][1],
     }
-    assert [route["operation"] for route in contract["routes"]] == list(
-        capture.OPERATIONS
-    )
+    assert [route["operation"] for route in contract["routes"]] == list(OPERATIONS)
     assert [route["source_line"] for route in contract["routes"]] == [
         6151,
         6201,
@@ -769,354 +776,3 @@ def test_loop_timing_and_exception_continuation(artifact):
         for name, case in loops.items()
         if name != "disabled"
     )
-
-
-def test_infrastructure_failure_cannot_be_swallowed(capture):
-    try:
-        capture.denied_network()
-    except AssertionError:
-        pass
-    with pytest.raises(AssertionError, match="infrastructure"):
-        capture.require_clean_capture()
-
-
-def test_unowned_dns_is_fatal_even_if_caught(capture):
-    with pytest.raises(AssertionError):
-        capture.controlled_dns("unowned.example", 443)
-    with pytest.raises(AssertionError):
-        capture.require_clean_capture()
-
-
-def test_missing_ast_global_is_fatal(capture, monkeypatch):
-    monkeypatch.setattr(
-        capture, "SOURCES", {"guard_example": ("guard_example.py", "not-used")}
-    )
-    loader = capture.PinnedDefinitions(
-        {"guard_example": "def run():\n    return missing_dependency()\n"}
-    )
-    try:
-        loader.load("guard_example", ["run"])
-        with pytest.raises(ValueError, match="missing_dependency"):
-            loader.validate_bindings()
-    finally:
-        loader.close()
-
-
-def test_source_input_hash_mismatch_is_fatal(capture):
-    with pytest.raises(ValueError, match="Incomplete"):
-        capture.verify_sources({})
-    wrong = {name: "" for name in capture.SOURCES}
-    with pytest.raises(ValueError, match="Untrusted"):
-        capture.verify_sources(wrong)
-
-
-def test_release_dependency_profile_is_source_bound_and_fail_closed(
-    capture, monkeypatch
-):
-    profile = " ".join(
-        f"{package}=={version}"
-        for package, version in capture.RELEASE_DEPENDENCIES.items()
-    )
-    capture.verify_release_profile_source(profile)
-    with pytest.raises(ValueError, match="Pinned release dependency profile"):
-        capture.verify_release_profile_source(
-            profile.replace("fastapi==0.109.0", "fastapi==0.109.1")
-        )
-
-    monkeypatch.setattr(
-        capture.importlib.metadata,
-        "version",
-        lambda package: (
-            "0.109.1"
-            if package == "fastapi"
-            else capture.RELEASE_DEPENDENCIES[package]
-        ),
-    )
-    with pytest.raises(RuntimeError, match="immutable Credentials v0.1.76"):
-        capture.require_release_dependency_profile()
-
-
-def test_pinned_closure_distinguishes_function_locals_from_globals(capture):
-    function = ast.parse(
-        "def capture(repo, *, clock):\n"
-        "    response = repo.read()\n"
-        "    return normalize(response, clock())\n"
-    ).body[0]
-
-    assert capture.referenced_names(function) == {"normalize"}
-
-
-def test_ci_replays_reference_in_exact_release_image():
-    workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
-    assert "needs.changes.outputs.rust == 'true'" in workflow
-    assert "repository: ElevenID/marty-credentials" in workflow
-    assert "ref: aaa6a9b8e31e62cd0ab087eef5fc1f4835048e26" in workflow
-    assert "docker pull \"$image@$digest\"" in workflow
-    assert workflow.count("scripts/capture_canvas_mirror_reference.py") >= 3
-    assert "--release-image --check" in workflow
-    assert "--release-image --adapter-reference --check" in workflow
-    assert "--release-image --publication-boundary-reference --check" in workflow
-    assert (
-        "sha256:815cbba6efc7c91e770a8dd15fe5fa102d252a485073bf60f0e0d5e0a73b28e5"
-        in workflow
-    )
-
-
-@pytest.mark.parametrize("operation", ["check", "write_reference"])
-def test_behavioral_artifact_operations_require_release_image(capture, operation):
-    arguments = {operation: True}
-    with pytest.raises(ValueError, match="require --release-image"):
-        capture.require_release_image_controller(**arguments)
-
-    capture.require_release_image_controller(release_image=True, **arguments)
-    capture.require_release_image_controller(audit=True, **arguments)
-
-
-@pytest.mark.parametrize("operation", ["--check", "--write-reference"])
-def test_cli_rejects_ambient_behavioral_artifact_operation(operation):
-    completed = subprocess.run(
-        [sys.executable, str(CAPTURE), str(ROOT), operation],
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        check=False,
-        timeout=5,
-    )
-    assert completed.returncode == 2
-    assert b"require --release-image" in completed.stderr
-
-
-def test_release_image_process_is_isolated_and_profile_checked(
-    capture, artifact, monkeypatch
-):
-    monkeypatch.setattr(capture, "verify_sources", lambda _sources: None)
-    observed = {}
-
-    def bounded(arguments, _source_input, **controls):
-        observed["arguments"] = arguments
-        observed["controls"] = controls
-        return 0, json.dumps(artifact).encode(), b""
-
-    monkeypatch.setattr(capture, "run_bounded_process", bounded)
-    _, actual = capture.release_image_observation({})
-    assert actual == artifact
-    arguments = observed["arguments"]
-    for option, value in (
-        ("--network", "none"),
-        ("--cap-drop", "ALL"),
-        ("--security-opt", "no-new-privileges"),
-        ("--tmpfs", "/tmp:rw,noexec,nosuid,nodev,size=16m"),
-    ):
-        position = arguments.index(option)
-        assert arguments[position + 1] == value
-    assert "--read-only" in arguments
-    assert f"{capture.ROOT}:/review:ro" in arguments
-    assert (
-        f"{capture.RELEASE_IMAGE}@{capture.RELEASE_IMAGE_DIGEST}" in arguments
-    )
-    assert observed["controls"] == {
-        "deadline_seconds": 45,
-        "label": "Immutable release-image observation",
-    }
-
-
-@pytest.mark.parametrize("mode", ["profile", "timeout", "flood", "nonzero", "stderr"])
-def test_release_image_observation_fails_closed(
-    capture, artifact, monkeypatch, mode
-):
-    monkeypatch.setattr(capture, "verify_sources", lambda _sources: None)
-    result = copy.deepcopy(artifact)
-    if mode == "profile":
-        result["dependencies"]["fastapi"] = "0.109.1"
-    outcomes = {
-        "profile": (0, json.dumps(result).encode(), b""),
-        "nonzero": (7, json.dumps(artifact).encode(), b"controlled failure"),
-        "stderr": (0, json.dumps(artifact).encode(), b"unexpected warning"),
-    }
-    if mode in {"timeout", "flood"}:
-        reason = "45-second deadline" if mode == "timeout" else "size limit"
-
-        def fail_bounded(*_args, **_kwargs):
-            raise RuntimeError(reason)
-
-        monkeypatch.setattr(capture, "run_bounded_process", fail_bounded)
-    else:
-        monkeypatch.setattr(
-            capture,
-            "run_bounded_process",
-            lambda *_args, **_kwargs: outcomes[mode],
-        )
-        reason = "profile differs" if mode == "profile" else "observation failed"
-    with pytest.raises(RuntimeError, match=reason):
-        capture.release_image_observation({})
-
-
-@pytest.mark.parametrize(
-    "mode", ["deadline", "flood", "failed", "partial", "reader", "startup"]
-)
-def test_observation_child_failures_never_return_corpus(
-    capture, artifact, monkeypatch, mode
-):
-    monkeypatch.setattr(capture, "verify_sources", lambda _sources: None)
-    monkeypatch.setattr(capture.time, "sleep", lambda _seconds: None)
-    ticks = iter([0.0, 31.0, 32.0])
-    monkeypatch.setattr(capture.time, "monotonic", lambda: next(ticks, 33.0))
-
-    class Child:
-        returncode = (
-            None if mode in {"deadline", "startup"} else (1 if mode == "failed" else 0)
-        )
-        stdout = io.BytesIO(
-            b'{"partial":' if mode == "partial" else json.dumps(artifact).encode()
-        )
-        stderr = io.BytesIO(
-            b" " * (4 * 1024 * 1024 + 1) if mode == "flood" else b"controlled failure"
-        )
-        killed = False
-        waited = False
-
-        def poll(self):
-            return self.returncode
-
-        def kill(self):
-            self.killed = True
-            self.returncode = -1
-
-        def wait(self, timeout):
-            assert timeout == 5
-            self.waited = True
-            return self.returncode
-
-    child = Child()
-    if mode == "reader":
-
-        class FailedReader(io.BytesIO):
-            def read(self, _size=-1):
-                raise OSError("controlled reader failure")
-
-        child.stderr = FailedReader()
-    if mode == "startup":
-
-        class FailedThread(capture.threading.Thread):
-            def start(self):
-                raise RuntimeError("controlled thread startup failure")
-
-        monkeypatch.setattr(capture.threading, "Thread", FailedThread)
-    monkeypatch.setattr(capture.subprocess, "Popen", lambda *_args, **_kwargs: child)
-    if mode == "partial":
-        expected_type, reason = json.JSONDecodeError, "Expecting value"
-    else:
-        expected_type, reason = (
-            RuntimeError,
-            {
-                "deadline": "30-second deadline",
-                "flood": "output collection failed",
-                "reader": "output collection failed",
-                "failed": "Observation child failed",
-                "startup": "controlled thread startup failure",
-            }[mode],
-        )
-    with pytest.raises(expected_type, match=reason):
-        capture.bounded_observation_child({})
-    assert child.waited
-    assert child.killed == (mode in {"deadline", "startup"})
-
-
-@pytest.mark.parametrize("mode", ["reader", "flood", "nonzero"])
-def test_child_failure_controls_have_otherwise_acceptable_output(
-    capture, artifact, monkeypatch, mode
-):
-    """Mutation control: suppress only the relevant signal, not JSON validation."""
-    monkeypatch.setattr(capture, "verify_sources", lambda _sources: None)
-    original_event = capture.threading.Event
-    first_event = True
-
-    class SuppressedSignal(original_event):
-        def set(self):
-            pass
-
-    def event():
-        nonlocal first_event
-        if first_event:
-            first_event = False
-            return SuppressedSignal()
-        return original_event()
-
-    if mode != "nonzero":
-        monkeypatch.setattr(capture.threading, "Event", event)
-
-    class FailedReader(io.BytesIO):
-        def read(self, _size=-1):
-            raise OSError("controlled reader failure")
-
-    class Child:
-        # For nonzero mode, changing precisely the exit status is the mutation.
-        returncode = 0
-        stdout = io.BytesIO(json.dumps(artifact).encode())
-        stderr = (
-            FailedReader()
-            if mode == "reader"
-            else io.BytesIO(
-                b" " * (4 * 1024 * 1024 + 1)
-                if mode == "flood"
-                else b"controlled failure"
-            )
-        )
-
-        def poll(self):
-            return 0
-
-        def wait(self, timeout):
-            return 0
-
-    monkeypatch.setattr(capture.subprocess, "Popen", lambda *_args, **_kwargs: Child())
-    _, actual = capture.bounded_observation_child({})
-    assert actual == artifact
-
-
-def test_imports_are_inert_and_worker_does_not_read_git():
-    tree = ast.parse(CAPTURE.read_text())
-    for node in tree.body:
-        if isinstance(node, ast.Import):
-            assert all(
-                alias.name.split(".")[0]
-                not in {"fastapi", "httpx", "pydantic", "issuance"}
-                for alias in node.names
-            )
-        elif isinstance(node, ast.ImportFrom):
-            assert (node.module or "").split(".")[0] not in {
-                "fastapi",
-                "httpx",
-                "pydantic",
-                "issuance",
-            }
-    main = next(
-        node
-        for node in tree.body
-        if isinstance(node, ast.FunctionDef) and node.name == "main"
-    )
-    worker = next(
-        node
-        for node in main.body
-        if isinstance(node, ast.If) and ast.unparse(node.test) == "args.worker"
-    )
-    assert "read_sources" not in ast.unparse(worker)
-    assert "observe_sources(json.load(sys.stdin)" in ast.unparse(worker)
-
-
-@pytest.mark.parametrize("future", [False, True])
-def test_loader_preserves_original_annotation_semantics(capture, monkeypatch, future):
-    prefix = "from __future__ import annotations\n" if future else ""
-    name = "annotation_guard"
-    monkeypatch.setattr(capture, "SOURCES", {name: ("annotation_guard.py", "unused")})
-    loader = capture.PinnedDefinitions(
-        {name: prefix + "def run(value: int) -> int:\n    return value\n"}
-    )
-    try:
-        module = loader.load(name, ["run"])
-        assert module.run.__annotations__ == {
-            "value": "int" if future else int,
-            "return": "int" if future else int,
-        }
-    finally:
-        loader.close()

@@ -1582,6 +1582,11 @@ pub fn plan_organization_update(
         updated_fields.push("requires_approval".into());
     }
     if let Some(settings) = patch.settings {
+        if marty_key_material_policy::contains_private_key_map(&settings) {
+            return Err(OrganizationApplicationError::InvalidCommand(
+                "organization settings must not contain private key material",
+            ));
+        }
         organization.settings.extend(settings);
         updated_fields.push("settings".into());
     }

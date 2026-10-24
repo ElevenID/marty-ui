@@ -18,7 +18,9 @@ axum.workspace = true
 base64.workspace = true
 chrono.workspace = true
 http.workspace = true
+marty-api-key-policy = { path = "../../crates/api-key-policy" }
 marty-status.workspace = true
+mmf-platform.workspace = true
 prost.workspace = true
 redis.workspace = true
 serde.workspace = true
@@ -28,6 +30,7 @@ subtle.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tokio-stream.workspace = true
+url.workspace = true
 tonic.workspace = true
 tonic-health.workspace = true
 tonic-prost.workspace = true

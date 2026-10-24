@@ -102,6 +102,20 @@ make run-ui
 
 This is the usual fast feedback loop for frontend and gateway work.
 
+## Frontend tooling and remaining maintenance
+
+The UI uses Vite and Vitest; `ui/package.json` owns supported build, preview,
+test and bundle-analysis commands. Use `VITE_*` frontend variables and `ui/dist/`
+build output. The old CRA migration summary is retired; its estimated speedups
+and historical dependency versions are not current performance results.
+
+Incremental TypeScript coverage, service-worker/PWA qualification, build
+performance measurement, and environment-specific configuration remain
+maintenance proposals where not already qualified. Their completion requires
+current tests and deployment evidence; retiring the migration report closes none
+of them. Use the existing bundle-analysis command rather than adding another
+parallel build-analysis tool.
+
 ## Frequently used Make targets
 
 | Command | Description |
@@ -116,16 +130,12 @@ This is the usual fast feedback loop for frontend and gateway work.
 | `make grpc-health` | Probe gRPC-enabled services |
 | `make help` | Show all supported targets |
 
-## Native Rust wheel workflow
+## Native Rust package workflow
 
-If you need local native wheels for Rust-backed packages:
-
-```bash
-make build-wheels
-```
-
-That script writes wheels into `wheels/` using the sibling `marty-credentials`
-and `marty-core` repositories.
+Build UI-owned Rust services with `make services-build`. Python extension wheels
+are owned and published by `ElevenID/marty-core`; use its build and release
+workflow, then update the digest-pinned artifacts in `release/stack-lock.json`.
+The UI repository does not build or check in local copies of those wheels.
 
 ## Open Badges FFI
 
@@ -166,7 +176,7 @@ make grpc-health
 ### Rust-backed package changes
 
 ```bash
-make build-wheels
+make services-build
 make services-restart
 ```
 

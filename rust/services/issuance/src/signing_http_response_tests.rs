@@ -16,6 +16,7 @@ use axum::{
     Router,
 };
 use marty_oid4vci::discovery::ProofPolicyRequest;
+use marty_signing_grant::SigningOrigin;
 use serde_json::json;
 use std::{
     sync::{Arc, Mutex},
@@ -361,12 +362,15 @@ async fn fifteen_portable_frozen_lossless_diagnostics_cross_real_http() {
 fn sign_request() -> SignRequest {
     SignRequest {
         organization_id: "org-a".into(),
+        operation_id: "synthetic-operation".into(),
         issuer_did: "did:web:issuer.example".into(),
         credential_format: "jwt_vc_json".into(),
         key_purpose: "vc_jwt_issuer".into(),
         payload: b"controlled-public-payload".to_vec(),
         algorithm: "EdDSA".into(),
         verification_method_id: "did:web:issuer.example#key-1".into(),
+        expected_public_jwk: None,
+        signing_key_reference: "transit/keys/issuer-1".into(),
     }
 }
 fn proof_request(did: bool) -> ProofPolicyRequest {
@@ -402,7 +406,11 @@ async fn three_production_owners_keep_operation_identity_requests_and_privacy() 
         Some("synthetic-service-key"),
         Duration::from_secs(2),
     )
-    .unwrap();
+    .unwrap()
+    .with_grant_minter(
+        SigningOrigin::IssuanceCredential,
+        crate::signing_grant_config::ContractGrantMinter(SigningOrigin::IssuanceCredential),
+    );
     let policy = HttpProofPolicyResolver::new(
         peer.base.clone(),
         Some("synthetic-service-key"),
@@ -460,11 +468,78 @@ async fn three_production_owners_keep_operation_identity_requests_and_privacy() 
         assert!(records[2].uri.starts_with("/internal/issuer-dids/sign?"));
         assert_eq!(
             serde_json::from_slice::<Value>(&records[2].body).unwrap(),
-            json!({"issuer_did":"did:web:issuer.example", "credential_format":"jwt_vc_json", "key_purpose":"vc_jwt_issuer", "payload_b64":"Y29udHJvbGxlZC1wdWJsaWMtcGF5bG9hZA", "algorithm":"EdDSA"})
+            json!({"issuer_did":"did:web:issuer.example", "credential_format":"jwt_vc_json", "key_purpose":"vc_jwt_issuer", "key_reference":"transit/keys/issuer-1", "payload_b64":"Y29udHJvbGxlZC1wdWJsaWMtcGF5bG9hZA", "algorithm":"EdDSA", "verification_method_id":"did:web:issuer.example#key-1"})
         );
         assert!(records[3].uri.starts_with("/internal/issuer-context?"));
         assert!(records[4].uri.starts_with("/internal/resolve-issuer-did?"));
     }
+    peer.close().await;
+}
+
+#[tokio::test]
+async fn deployed_issuance_signing_url_uses_gateway_resolve_and_sign_routes() {
+    fn deployed_url(source: &str) -> reqwest::Url {
+        let model: serde_yaml::Value = serde_yaml::from_str(source).unwrap();
+        model["services"]["issuance"]["environment"]["SIGNING_KEYS_INTERNAL_URL"]
+            .as_str()
+            .unwrap()
+            .parse()
+            .unwrap()
+    }
+    let base = deployed_url(include_str!("../../../../docker-compose.base.yml"));
+    let selfhost = deployed_url(include_str!("../../../../docker-compose.selfhost.prod.yml"));
+    assert_eq!(base, selfhost);
+    assert_eq!(base.path(), "/internal/signing-keys");
+    assert_eq!(base.host_str(), Some("gateway"));
+
+    let mut peer = Peer::new(Reply::json(503, b"{}".as_slice())).await;
+    peer.base.set_path(base.path());
+    let resolver = HttpIssuerContextResolver::new(
+        peer.base.clone(),
+        Some("synthetic-service-key"),
+        Duration::from_secs(2),
+    )
+    .unwrap();
+    let signer = HttpDidSigner::new(
+        peer.base.clone(),
+        Some("synthetic-issuer-sign-key"),
+        Duration::from_secs(2),
+    )
+    .unwrap()
+    .with_grant_minter(
+        SigningOrigin::IssuanceCredential,
+        crate::signing_grant_config::ContractGrantMinter(SigningOrigin::IssuanceCredential),
+    );
+    assert!(resolver
+        .resolve_raw(
+            "org-a",
+            "did:web:issuer.example",
+            None,
+            "jwt_vc_json",
+            "vc_jwt_issuer",
+            "EdDSA",
+        )
+        .await
+        .is_err());
+    assert!(signer.sign_did(sign_request()).await.is_err());
+    let requests = peer.take_requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0].method, "GET");
+    assert!(requests[0]
+        .uri
+        .starts_with("/internal/signing-keys/resolve-issuer-did?"));
+    assert_eq!(requests[0].headers["x-api-key"], "synthetic-service-key");
+    assert_eq!(requests[1].method, "POST");
+    assert!(requests[1]
+        .uri
+        .starts_with("/internal/signing-keys/issuer-dids/sign?"));
+    assert_eq!(
+        requests[1].headers["x-api-key"],
+        "synthetic-issuer-sign-key"
+    );
+    assert!(requests[1]
+        .headers
+        .contains_key(marty_signing_grant::HEADER_NAME));
     peer.close().await;
 }
 
@@ -482,7 +557,11 @@ async fn redirects_continue_existing_success_validators_and_404_defaults() {
         Some("synthetic-service-key"),
         Duration::from_secs(2),
     )
-    .unwrap();
+    .unwrap()
+    .with_grant_minter(
+        SigningOrigin::IssuanceCredential,
+        crate::signing_grant_config::ContractGrantMinter(SigningOrigin::IssuanceCredential),
+    );
     let policy = HttpProofPolicyResolver::new(
         peer.base.clone(),
         Some("synthetic-service-key"),

@@ -2,9 +2,69 @@
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 from pathlib import Path
+
+
+def flat_local_script_imports(path: Path, scripts: Path) -> set[str]:
+    """Inventory static flat script imports; require review for dynamic imports."""
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    dynamic_names = {"__import__"}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module in {
+            "importlib",
+            "importlib.util",
+            "runpy",
+        }:
+            dynamic_names.update(
+                alias.asname or alias.name
+                for alias in node.names
+                if alias.name in {"import_module", "run_path", "spec_from_file_location"}
+            )
+    imported = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            names = [alias.name for alias in node.names]
+        elif isinstance(node, ast.ImportFrom):
+            assert node.level == 0, f"Review relative local import in {path.name}"
+            names = [node.module] if node.module else []
+        elif isinstance(node, ast.Call):
+            function = node.func
+            assert not (
+                isinstance(function, ast.Name) and function.id in dynamic_names
+                or isinstance(function, ast.Attribute)
+                and function.attr in {"import_module", "run_path", "spec_from_file_location"}
+            ), f"Review dynamic import in {path.name}"
+            continue
+        else:
+            continue
+        for name in names:
+            base = name.split(".", 1)[0]
+            assert not (scripts / base).is_dir(), (
+                f"Review local package import in {path.name}: {name}"
+            )
+            if (scripts / f"{base}.py").is_file():
+                imported.add(f"{base}.py")
+    return imported
+
+
+def launched_scripts(source: Path, scripts: Path) -> list[str]:
+    """Inventory literal flat capture-script process paths."""
+    tree = ast.parse(source.read_text(encoding="utf-8"), filename=str(source))
+    prefix = "/verification/scripts/"
+    launched = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
+            continue
+        if not node.value.startswith(prefix) or not node.value.endswith(".py"):
+            continue
+        name = node.value.removeprefix(prefix)
+        assert Path(name).name == name, f"Review process script path in {source.name}"
+        assert (scripts / name).is_file(), f"Missing process script: {name}"
+        launched.add(name)
+    return sorted(launched)
 
 
 def json_references(value):
@@ -70,10 +130,11 @@ def assert_current_inputs(
     graph: dict,
     root: Path,
     *,
-    entrypoint: str,
+    entrypoint: str | tuple[str, ...],
     schema: str,
     label: str,
     disclaimer: str,
+    additional_inputs: frozenset[str] = frozenset(),
 ) -> None:
     assert evidence["schema"] == schema
     assert set(evidence) == {"schema", "purpose", "normalization", "sha256"}
@@ -85,6 +146,13 @@ def assert_current_inputs(
         assert Path(name).as_posix() == name and ".." not in Path(name).parts
         assert len(pinned) == 64 and all(c in "0123456789abcdef" for c in pinned)
         assert normalized_sha256(root / name) == pinned, f"{label} input drift: {name}"
-    assert set(evidence["sha256"]) == expanded_inputs(graph, entrypoint, root), (
+    entrypoints = (entrypoint,) if isinstance(entrypoint, str) else entrypoint
+    assert entrypoints and len(entrypoints) == len(set(entrypoints)), (
+        f"{label} producer entries need input review"
+    )
+    expected = set(additional_inputs)
+    for producer in entrypoints:
+        expected.update(expanded_inputs(graph, producer, root))
+    assert set(evidence["sha256"]) == expected, (
         f"{label} script, local imports, children, and scenarios need input review"
     )

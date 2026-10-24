@@ -72,6 +72,19 @@ def _direct_opener():
     return build_opener(ProxyHandler({}), NoRedirect)
 
 
+def denial_projection(denial: Any) -> dict[str, bool]:
+    """Share the exact public denial contract across actual HTTP transports."""
+    detail = denial.get("detail") if isinstance(denial, dict) else None
+    return {
+        "missing_signature_header": (
+            isinstance(detail, list) and len(detail) == 1
+            and isinstance(detail[0], dict)
+            and detail[0].get("type") == "missing"
+            and detail[0].get("loc") == ["header", "x-personalization-signature"]),
+        "webhook_job_not_found": detail == "Physical document job not found",
+    }
+
+
 def _request_job_direct(
     method: str, path: str, body: dict[str, Any] | None, api_key: str,
 ) -> tuple[int, dict[str, Any]]:
@@ -195,17 +208,47 @@ def _post_callback(body: bytes, signature: str | None) -> tuple[int, dict[str, b
             denial = json.loads(raw)
         except (OSError, ValueError) as error:
             raise NegativeCallbackError("Beta callback denial is invalid") from error
-        detail = denial.get("detail") if isinstance(denial, dict) else None
-        return exc.code, {
-            "missing_signature_header": (
-                isinstance(detail, list) and len(detail) == 1
-                and isinstance(detail[0], dict)
-                and detail[0].get("type") == "missing"
-                and detail[0].get("loc") == ["header", "x-personalization-signature"]),
-            "webhook_job_not_found": detail == "Physical document job not found",
-        }
+        return exc.code, denial_projection(denial)
     except (OSError, URLError) as exc:
         raise NegativeCallbackError("Beta callback denial request failed") from exc
+
+
+def post_internal_callback(
+    bureau_container_id: str, body: bytes, signature: str | None,
+) -> tuple[int, dict[str, bool]]:
+    """Exercise the same isolated native callback path used by the beta bureau.
+
+    The public gateway intentionally masks downstream denial details. The
+    bureau's callback network exposes the native denial without changing the
+    production route or putting callback bytes/signatures in process args.
+    """
+    require(CONTAINER.fullmatch(bureau_container_id) is not None,
+            "Selected beta bureau container ID is invalid")
+    require(isinstance(body, bytes) and len(body) <= 8192
+            and (signature is None or SIGNATURE.fullmatch(signature) is not None),
+            "Protected callback request is invalid")
+    script = (
+        'IFS= read -r signature; '
+        'if [ -n "$signature" ]; then set -- -H "x-personalization-signature: $signature"; fi; '
+        'exec curl --silent --show-error --max-time 20 '
+        '-H "Content-Type: application/json" "$@" --data-binary @- '
+        '--write-out "\\n%{http_code}" '
+        'http://issuance-native:8005/v1/passport/webhooks/personalization'
+    )
+    try:
+        result = subprocess.run(
+            ["docker", "exec", "-i", bureau_container_id, "sh", "-eu", "-c", script],
+            input=(signature or "").encode("ascii") + b"\n" + body,
+            capture_output=True, timeout=30, check=True,
+        )
+        raw, status = result.stdout.rsplit(b"\n", 1)
+        require(len(raw) <= 4096 and len(status) == 3 and status.isdigit(),
+                "Native callback response is invalid")
+        denial = json.loads(raw)
+        require(isinstance(denial, dict), "Native callback denial is invalid")
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        raise NegativeCallbackError("Isolated native callback request failed") from exc
+    return int(status), denial_projection(denial)
 
 
 def _check_production(api_key: str, deployment: dict[str, Any]) -> None:

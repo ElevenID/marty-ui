@@ -1099,6 +1099,24 @@ async fn notifications_validate_bind_persist_and_idempotently_acknowledge_suppor
     assert!(body.is_none());
     assert_eq!(repository.inspect(|state| state.notifications.len()), 4);
 
+    for extension in ["true", r#"{"future":[1,null,"value"]}"#] {
+        let body = format!(
+            r#"{{"notification_id":"notification-a","event":"credential_deleted","extension":{extension}}}"#
+        );
+        let (status, _, body) = send(
+            app(&repository),
+            "POST",
+            "/v1/issuance/notification",
+            Some("application/json"),
+            Some("Bearer token-a"),
+            &body,
+        )
+        .await;
+        assert_eq!(status, 204, "unknown notification extensions are ignored");
+        assert!(body.is_none());
+    }
+    assert_eq!(repository.inspect(|state| state.notifications.len()), 4);
+
     let (status, _, body) = send(
         app(&repository),
         "POST",
@@ -1127,8 +1145,9 @@ async fn notifications_validate_bind_persist_and_idempotently_acknowledge_suppor
     for body in [
         r#"{"notification_id":"notification-a","event":"accepted"}"#,
         r#"{"notification_id":"notification-a","event":"credential_deleted","event_description":"line\nbreak"}"#,
-        r#"{"notification_id":"notification-a","event":"credential_deleted","extra":true}"#,
         r#"{"notification_id":"notification-a","notification_id":"notification-a","event":"credential_deleted"}"#,
+        r#"{"notification_id":"notification-a","event":"credential_deleted","event":"credential_accepted"}"#,
+        r#"{"notification_id":"notification-a","event":"credential_deleted","event_description":null,"event_description":"again"}"#,
     ] {
         let (status, _, response) = send(
             app(&repository),

@@ -4,6 +4,147 @@ Marty beta delivery is an aggregate, immutable Rust stack release. The former
 per-repository Python-wheel beta process is retired. Do not publish or install
 Python MMF beta packages and do not recreate `release-beta.yml` workflows.
 
+## Installation-test nightlies
+
+The separate `nightly-release.yml` workflow publishes experimental Linux amd64
+prereleases, not stable releases or supported self-host qualification. First run
+`prepare-nightly-claim.yml` on current protected `main`, then dispatch
+`nightly-release.yml` on that same source with its successful `claim_run_id`.
+The identity is `vMAJOR.MINOR.PATCH-nightly.YYYYMMDD.CLAIM_RUN_ID`; neither the
+stable source lock nor an existing release is rewritten.
+
+Publication requires seven exact-source image builds and provenance, an
+image-locked ZIP and unqualified descriptor, anonymous Linux amd64 image pulls,
+all five pinned public-runtime happy paths, owned cleanup, signed assets, and
+exact-source GitHub provenance. These public-runtime checks do **not** establish
+that the self-host ZIP has passed installed qualification. The preview README
+states that limitation and directs disposable installation tests to the matching
+source runbook. Official releases still require their complete existing gates.
+No recordings or YouTube publication run for nightlies.
+
+`scripts/install-marty-deploy.sh TAG SOURCE_SHA DESTINATION` accepts a nightly only on Linux
+amd64 and verifies its nightly-workflow signatures, provenance, source, and
+build identity. The release's `RELEASE-SHA256SUMS` covers the full signed release;
+the original six-asset `SHA256SUMS` remains the preview-staging inventory.
+
+## Developer validation
+
+Use isolated working branches and local builds for developer testing. Do not
+wait for hosted CI, an aggregate release tag, or published images to exercise
+a candidate feature. Combine related repairs into larger reviewable commits.
+Run a focused behavioral check for the concrete change; broaden testing when a
+failure or an affected boundary warrants it. Full release qualification remains
+part of publication and promotion, rather than a prerequisite for each experiment.
+
+For UI work, reuse installed dependencies and run `npm run build` from `ui` with
+`DISABLE_PRERENDER=1` when testing application behavior. This checks TypeScript
+and bundles the application without the unrelated marketing prerender step.
+Record the exact source and distinguish local results from deployed-beta results.
+Use beta-only guarded local build/overlay paths for runtime experiments, preserving
+backup, recovery, credential custody, and production isolation. A local candidate
+does not acquire official release status from a successful developer run.
+`create_local_release_manifest.py` accepts clean branch commits for this local
+path, snapshots the coordinated sources, and binds their exact commits and bytes.
+Its recorded `origin/main` revision is informational; verification does not wait
+for those branch commits to merge. Dirty or changed sources and any claim that
+the local snapshot is promotion-eligible or release-ready remain rejected.
+
+For separately prepared developer runtime images, `-UsePreparedLocalImages`
+accepts the local `elevenid-local/services`, `db-migrate`, and `ui` tags for the
+snapshot's release label. The runner resolves each tag to an immutable image ID,
+checks Linux/amd64 and exact source/version labels through that ID, and reuses
+the shared service selectors. It skips image builds while retaining source
+verification, rehearsal, backups, maintenance fencing, and recovery. This option
+cannot be combined with `-OfficialStackRelease`.
+`-PlanOnly` checks the current passport fence boundary, prepared image inputs,
+and paired DIDComm/passport configuration; execution repeats those checks under
+the deployment lock. DIDComm uses the existing native HTTPS custody validator
+for the current TLS/Raft profile, including when encrypted delivery is disabled.
+
+`scripts/generate_local_runtime_dockerfiles.py --source <checkout> --output <directory>`
+derives service, migration, and public UI runtime recipes from the production
+Dockerfiles. It preserves their runtime stages and replaces only compiler/asset
+inputs with named `local_binaries` and `local_assets` contexts. Linux binaries are
+copied with executable permissions even when their context is on a Windows drive.
+The generator checks the service executable inventory against the shared build
+script; it does not build or qualify images. Supply freshly built UI assets with
+the snapshot's `marty-ui-release.json`. The prepared-image runner checks that
+served marker as well as image labels before starting maintenance.
+
+Use `scripts/smoke_local_beta_ui.py --image <image-id> --source-manifest <manifest>`
+for a quick local UI component check. It starts an owned loopback-only container,
+checks the homepage, console shell, served marker and local script MIME types,
+requires the UI alone to refuse stack readiness, and removes its container.
+This is component validation, not an authenticated demo or full-stack qualification.
+
+The shared Compose graph waits for organization health before starting
+revocation-profile. Native TLS startup eagerly connects to that gRPC service;
+starting both together can exhaust the health retries and abort dependent
+application startup even though organization becomes healthy moments later.
+Keep the dependency in the shared graph instead of weakening the health check.
+If a prior rollout already completed migrations and stopped during application
+startup, inspect the retained artifacts and use the guarded
+`complete-local-beta-startup.ps1` path. Do not replay migrations to restart
+already prepared application containers.
+
+After an authorized beta database reset, a host passport-fence marker can still
+refer to the retired PostgreSQL cluster. Use
+`reconcile-reset-beta-passport-fence.ps1 -PostgresContainer <full-id>` to inspect
+that condition without mutation. The tool requires the running beta PostgreSQL
+container, no current passport fence schema, an intact installation receipt, and
+different old/current container and PostgreSQL system identities. With `-Apply`
+and a new `-OutputPath`, it acquires the deployment lock, rechecks the evidence,
+archives the original marker beside itself and retains a reconciliation receipt.
+It changes no database state. A live fence, same-cluster restart, incomplete
+intent, changed receipt, or production target remains rejected. Never delete a
+marker merely because a local deployment is blocked.
+
+State-volume names are resolved from the actual beta PostgreSQL, Redis, applicant
+and OpenBao mounts. The shared plan requires exact project/resource ownership,
+records each volume's creation identity, and rejects foreign/shared attachments
+except stopped successful beta OpenBao initializers. Deployment pins those
+existing volumes as external resources, so a reset-specific name is preserved
+and a missing volume cannot be silently created. Backups retain the plan;
+restore checks it before stopping services or writing data. A historical backup
+without explicit volume bindings requires investigation before restore.
+Backup directories restrict access to the current user, SYSTEM and local
+administrators on Windows (mode 0700 elsewhere). OpenBao backup uses its native
+Raft snapshot command with credentials kept inside the node; the separate static
+custody archive excludes the live Raft directory. Database restore preserves the
+running OpenBao state; disaster recovery of its retained snapshot is separate.
+Rehearsal readiness uses argument arrays and captures expected native startup
+errors without changing the caller's failure policy. Its temporary OpenBao CA
+is read through `exec` and accepted only as a public PEM certificate; Docker's
+archive API cannot retrieve that tmpfs file on the beta host.
+
+For a failed cutover whose application state is unchanged,
+`recover-unchanged-local-beta.ps1` can inspect the retained quiesced backup and
+the exact prior container set. It holds the host deployment mutex, checks volume
+identities and backup hashes, compares both databases with native dumps while
+preserving SQL/data bytes, and checks the applicant store. It also requires the
+exact Redis RDB with zero unsnapshotted changes or persistence operations,
+compares every OpenBao FSM byte through a fresh native Raft snapshot, and checks
+static custody file bytes and modes. Snapshot transport timestamps and Raft
+consensus metadata are not KMS domain state. A background KMS change can make
+this deliberately conservative comparison refuse recovery; use forward repair
+rather than excluding changed records. With `-Apply` it starts
+only those stopped prior containers, verifies their health and original local/
+tunneled API/UI bindings, then clears the pending marker. It restores no database
+and modifies no KMS state. A changed database, image, owner, volume or active job
+requires investigation and forward repair instead. Keep the original failed
+cutover and recovery receipts; recovery is not an updated-beta qualification.
+
+An update of an already initialized beta uses the production ordinary-migration
+contract: KMS/DID initialization is disabled, the initialization token is absent,
+and only the Notification envelope token and public CA are mounted. The separate
+initialization role's short-lived token is not a signing-key rotation mechanism.
+Native database, issuance and revocation migration jobs use frozen image IDs with
+their build definitions removed. Rehearsal and live migration run the same normal
+migration entrypoint, including Notification schema migration. An existing Raft
+node is checked for readiness rather than rerunning its fresh-only initializer.
+The durable configuration includes every initializer script and policy; missing
+bind sources cannot become empty directories that falsely report success.
+
 ## Release sequence
 
 1. Merge every coordinated component through its protected default branch and
@@ -39,11 +180,11 @@ Python MMF beta packages and do not recreate `release-beta.yml` workflows.
 
 The three workflows fail closed through the repository's shared release-
 environment preflight. `stack-release`, `beta-lifecycle`, and
-`wallet-conformance` must disallow administrator bypass, restrict deployment
-branches or tags, and require the named accountable maintainer review. This
-repository currently has one active maintainer, so `burdettadam` may approve
-their own deployment after the governed pull request and required status checks
-pass; an alternate identity must not be used to manufacture independence.
+`wallet-conformance` disallow administrator bypass and restrict deployment
+branches or tags. The protected `stack-release` environment has no required
+reviewer, so a qualified release can continue without a manual deployment
+approval. `beta-lifecycle` and `wallet-conformance` still require their named
+accountable maintainer review.
 
 The accepted evidence set must bind every result to the same release version,
 complete component revision map, stack-release run, beta source ID, and deployed
@@ -121,8 +262,25 @@ gh release download $releaseTag --repo ElevenID/marty-ui --dir $releaseArtifacts
   -OfficialStackRelease `
   -RecorderRevision $recorderRevision `
   -TunnelEnvFile "C:\beta-runtime\.env.tunnel.beta.local" `
+  -TunnelTokenEnvFile "C:\beta-runtime\private\connector-token.env" `
   -GeneratedEnvFile "C:\beta-runtime\.env.beta.generated.local"
 ```
+
+`TunnelTokenEnvFile` must contain only `TUNNEL_TOKEN=<active token>` and stay in a
+private, unlinked file outside OneDrive. Use the existing protected connector
+input from the last completed rotation; never copy an old token from a repository
+environment file. The runner verifies its access controls and exact match to the
+running beta connector, then binds the file fingerprint and container identity
+through the final pre-maintenance check. Missing, stale, changed or foreign
+credentials fail before maintenance. Planning reads these inputs but writes no
+override. Actual deployment adds a public-path-only Compose override that removes
+the old inline value and resolves the protected input file. Connector commands
+use the token environment rather than a secret argument. This does not rotate a
+token or restart the existing connector.
+
+For an older connector whose command still contains `--token`, use the
+[one-time environment-only migration](beta-connector-credential-migration.md)
+before the application rollout. The normal credential gate remains strict.
 
 The runner validates every release and source input twice, with the final check
 immediately before the maintenance window. It retains the existing preflight

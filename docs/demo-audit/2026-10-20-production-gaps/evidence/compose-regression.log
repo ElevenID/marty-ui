@@ -1,0 +1,27 @@
+✔ camera eases from stable context to bounded focus and optionally pulls back without retiming (3.017585ms)
+✔ camera rejects unsupported geometry, expression injection and motion without stable dwell (0.837772ms)
+✔ FFmpeg camera renders changing geometry, stable final focus and exact frame budget (180.326885ms)
+✔ binds screen identity labels into the edit evidence and renders them after framing (0.745313ms)
+✔ binds readable crops to source bounds and preserves aspect ratio across segments (0.423778ms)
+✔ pads synchronized sources through the reviewed caption timeline (0.217517ms)
+✔ rejects unordered chapters before invoking FFmpeg (0.189035ms)
+✔ reads the final reviewed VTT cue end as the minimum master duration (0.264609ms)
+✔ accepts sequential ElevenID and EUDI wallet chapter recordings (0.232289ms)
+✔ validates and binds an ordered editorial segment map (0.432531ms)
+✔ writes a non-overwriting composition report beside the master (1.044293ms)
+✔ adds governed slate time without consuming source frames (0.175885ms)
+✔ validates governed derivative timing, layout, narration, and disclosure options (1.171194ms)
+✔ binds approved local narration provenance to the selected recording (6.396484ms)
+✔ builds opening, persistent disclosure, and evidence-bounded closing overlays (0.685392ms)
+✔ packages manifest-bound release and transcript evidence (1.648763ms)
+✔ sequential edit switches independent clocks and validates each source separately (0.681146ms)
+✔ sequential lineage binds both hashes and reports omitted ranges per independent source (0.920256ms)
+✔ renders exact segment frame budgets when short high-rate trims lose trailing frame time (1842.897555ms)
+ℹ tests 19
+ℹ suites 0
+ℹ pass 19
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 2048.002829

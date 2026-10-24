@@ -177,12 +177,64 @@ pub async fn apply_physical_advance_side_effect(
     validate_physical_result(operation, &result, None)?;
     let context = context_mut(&mut instance)?;
     record_physical_route(context, result.route.as_ref(), false)?;
-    context.insert(
-        "physical_document_job".into(),
-        serde_json::to_value(result.data)
-            .map_err(|_| FlowInstanceSideEffectError::InvalidResponse("physical document job"))?,
-    );
+    let previous =
+        context
+            .get("physical_document_job")
+            .ok_or(FlowInstanceSideEffectError::InvalidContext(
+                "physical document job is not initialized",
+            ))?;
+    let refreshed = preserve_signed_physical_material(previous, json!(result.data))?;
+    context.insert("physical_document_job".into(), refreshed);
     Ok(instance)
+}
+
+fn preserve_signed_physical_material(
+    previous: &Value,
+    mut refreshed: Value,
+) -> Result<Value, FlowInstanceSideEffectError> {
+    let old = previous
+        .as_object()
+        .ok_or(FlowInstanceSideEffectError::InvalidContext(
+            "physical document job",
+        ))?;
+    let new = refreshed
+        .as_object_mut()
+        .ok_or(FlowInstanceSideEffectError::InvalidResponse(
+            "physical document job",
+        ))?;
+    // Each native operation returns a fresh status DTO. It can omit signed-SOD
+    // fields, but must never switch the owned job or contradict signed material.
+    for field in [
+        "id",
+        "organization_id",
+        "application_id",
+        "flow_execution_id",
+        "issuer_did",
+    ] {
+        if let Some(value) = old.get(field).filter(|value| !value.is_null()) {
+            if new.get(field) != Some(value) {
+                return Err(FlowInstanceSideEffectError::InvalidResponse(
+                    "physical document identity changed",
+                ));
+            }
+        }
+    }
+    for field in ["sod_sha256", "sod_signature_verified"] {
+        if let Some(value) = old.get(field).filter(|value| !value.is_null()) {
+            match new.get(field) {
+                Some(incoming) if !incoming.is_null() && incoming != value => {
+                    return Err(FlowInstanceSideEffectError::InvalidResponse(
+                        "signed physical document material changed",
+                    ));
+                }
+                Some(incoming) if !incoming.is_null() => {}
+                _ => {
+                    new.insert(field.into(), value.clone());
+                }
+            }
+        }
+    }
+    Ok(refreshed)
 }
 
 async fn initialize_physical_document(
@@ -610,6 +662,32 @@ fn empty_json_value(value: &Value) -> bool {
 #[cfg(test)]
 mod route_trace_tests {
     use super::*;
+
+    #[test]
+    fn native_status_refresh_preserves_only_verified_signed_material() {
+        let signed = json!({
+            "id":"job-1", "organization_id":"org-1", "application_id":"app-1",
+            "flow_execution_id":"flow-1", "issuer_did":"did:web:issuer.example",
+            "status":"SOD_SIGNED", "sod_sha256":"signed-hash",
+            "sod_signature_verified":true
+        });
+        let submitted = json!({
+            "id":"job-1", "organization_id":"org-1", "application_id":"app-1",
+            "flow_execution_id":"flow-1", "issuer_did":"did:web:issuer.example",
+            "status":"READY_FOR_ACTIVATION", "bureau_job_id":"bureau-1"
+        });
+        let merged = preserve_signed_physical_material(&signed, submitted.clone()).unwrap();
+        assert_eq!(merged["sod_sha256"], "signed-hash");
+        assert_eq!(merged["sod_signature_verified"], true);
+        assert_eq!(merged["status"], "READY_FOR_ACTIVATION");
+        assert_eq!(merged["bureau_job_id"], "bureau-1");
+        let mut foreign = submitted.clone();
+        foreign["id"] = json!("foreign-job");
+        assert!(preserve_signed_physical_material(&signed, foreign).is_err());
+        let mut conflicting = submitted;
+        conflicting["sod_sha256"] = json!("different-hash");
+        assert!(preserve_signed_physical_material(&signed, conflicting).is_err());
+    }
 
     #[test]
     fn provider_trace_overwrites_caller_context_and_requires_continuity() {

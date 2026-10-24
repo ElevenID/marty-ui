@@ -2,60 +2,11 @@ use sqlx::postgres::PgPoolOptions;
 use std::collections::BTreeSet;
 use tracing::instrument::WithSubscriber;
 
-#[path = "../../selfhost-bundle/tests/support/extracted_bundle.rs"]
-mod selfhost_extracted;
-#[path = "support/selfhost_packaged_runtime.rs"]
-mod selfhost_packaged_runtime;
-#[path = "../../selfhost-bundle/tests/support/resolved_selfhost_runtime.rs"]
-mod selfhost_prepared;
-#[path = "support/selfhost_runtime_sidecar.rs"]
-mod selfhost_runtime_sidecar;
-
-#[test]
-fn selfhost_public_image_loader_isolated() {
-    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
-        eprintln!("Selfhost public image acceptance requires the configured Linux gate");
-        return;
-    }
-    selfhost_packaged_runtime::run_isolated_child().unwrap();
-}
-
-#[tokio::test]
-async fn selfhost_public_image_loader_child() {
-    if std::env::var("MARTY_SELFHOST_LOADER_CHILD").as_deref() != Ok("1") {
-        eprintln!("Selfhost loader child requires the closed host coordinator");
-        return;
-    }
-    selfhost_runtime_sidecar::require_closed_child().unwrap();
-    let sentinel = std::env::var("MARTY_SELFHOST_CHILD_SENTINEL").unwrap();
-    uuid::Uuid::parse_str(&sentinel).unwrap();
-    let fixture = selfhost_packaged_runtime::preflight().unwrap();
-    // The surviving host owns this UUID and always verifies recovery. Do not
-    // remove its namespace before an interrupted native mount is recovered.
-    let database_pending = selfhost_runtime_sidecar::PendingOperation::begin(
-        selfhost_runtime_sidecar::PendingKind::Database,
-    )
-    .unwrap();
-    let owned = std::mem::ManuallyDrop::new(
-        canvas_published_database::PublishedDatabase::start_with_scope(
-            selfhost_runtime_sidecar::parent_scope().unwrap(),
-        )
-        .await
-        .unwrap(),
-    );
-    database_pending.complete().unwrap();
-    selfhost_packaged_runtime::after_database_checkpoint().unwrap();
-    use futures_util::FutureExt;
-    let result = std::panic::AssertUnwindSafe(selfhost_packaged_runtime::run(&owned, fixture))
-        .catch_unwind()
-        .await
-        .unwrap_or_else(|_| Err("Selfhost child operation panicked".into()));
-    result.unwrap();
-    println!("\nSELFHOST_PUBLIC_LOADER_COMPLETE:{sentinel}");
-}
-
 #[path = "../../../services/issuance/tests/support/renewal_reference_fixture.rs"]
 mod renewal_reference_fixture;
+
+#[path = "support/owned_cleanup.rs"]
+mod owned_cleanup;
 
 #[path = "support/base_runtime_canvas.rs"]
 mod base_runtime_canvas;
@@ -77,8 +28,10 @@ mod bounded_fixture_command {
 mod envoy_runtime;
 #[path = "../../../services/issuance/tests/support/envoy_runtime_sidecar.rs"]
 mod envoy_runtime_sidecar;
-#[path = "../../../services/issuance/tests/support/issuance_named_peers.rs"]
+#[path = "../../../acceptance/support/issuance_named_peers.rs"]
 mod issuance_named_peers;
+#[path = "support/remote_tls_peer.rs"]
+mod remote_tls_peer;
 #[path = "support/rendered_base_process.rs"]
 mod rendered_base_process;
 #[path = "support/renewal_binding_postgres.rs"]
@@ -96,11 +49,39 @@ mod resolved_runtime;
 #[path = "support/runtime_failure_diagnostics.rs"]
 mod runtime_failure_diagnostics;
 
+#[tokio::test]
+#[ignore = "requires the disposable Canvas OpenBao Transit backend"]
+async fn scoped_transit_signer_verifies_without_key_read_authority() {
+    let base_url = std::env::var("MARTY_CANVAS_OPENBAO_URL").unwrap();
+    let root_token = std::env::var("MARTY_CANVAS_OPENBAO_ROOT_TOKEN").unwrap();
+    let ca_file = std::env::var("MARTY_CANVAS_OPENBAO_CA_CERT_FILE").unwrap();
+    let signer = issuance_named_peers::RemoteIssuerSigner::create(
+        &base_url,
+        &root_token,
+        std::path::Path::new(&ca_file),
+    )
+    .await;
+    let payload = b"canvas managed issuer signing proof";
+    let signature = ed25519_dalek::Signature::from_slice(&signer.sign(payload).await).unwrap();
+    signer
+        .verifying_key()
+        .verify_strict(payload, &signature)
+        .unwrap();
+    assert_eq!(
+        signer.metadata_read_status().await,
+        axum::http::StatusCode::FORBIDDEN
+    );
+}
+
 #[test]
 fn composition_source_root_matches_acceptance_package_root() {
     let root = canvas_published_database::repository_root();
     assert_eq!(base_runtime_container::lexical_source_root().unwrap(), root);
-    for package in ["rust/services/issuance", "rust/crates/canvas-acceptance"] {
+    for package in [
+        "rust/services/issuance",
+        "rust/crates/canvas-acceptance",
+        "rust/crates/flow-acceptance",
+    ] {
         assert_eq!(
             canvas_published_database::repository_root_from(&root.join(package)),
             Some(root.as_path()),
@@ -139,7 +120,7 @@ async fn kubernetes_profile_gateway_composition_isolated() {
     base_runtime_container::retain_failure(result, owned.close_verified()).unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn kubernetes_profile_gateway_composition_child() {
     if std::env::var("MARTY_KUBERNETES_RUNTIME_CHILD").as_deref() != Ok("1") {
         eprintln!("Kubernetes inner test requires the owned prepared-model namespace");
@@ -163,7 +144,7 @@ async fn kubernetes_profile_gateway_composition_child() {
     println!("\nMARTY_BASE_COMPOSITION_COMPLETE_V1");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn kubernetes_resolved_native_profile_delivers_both_encryption_modes() {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
         eprintln!("Kubernetes native-only profile requires configured owned fixtures");
@@ -232,7 +213,7 @@ async fn envoy_actual_image_validates_candidate() {
         .expect("Actual baseline/candidate Envoy image validation and cleanup");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn base_profile_envoy_composition_child() {
     if std::env::var("MARTY_BASE_RUNTIME_CHILD").as_deref() != Ok("1") {
         eprintln!("Inner Envoy composition is invoked only by the exact-owned namespace container");
@@ -282,7 +263,7 @@ async fn base_profile_gateway_composition_isolated() {
     result.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn base_profile_gateway_composition_child() {
     if std::env::var("MARTY_BASE_RUNTIME_CHILD").as_deref() != Ok("1") {
         eprintln!("Inner composition is invoked only by the exact-owned namespace container");
@@ -293,7 +274,7 @@ async fn base_profile_gateway_composition_child() {
         std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref(),
         Ok("1")
     );
-    rendered_base_process::assert_renderer_deadlines();
+    let _ = rendered_base_process::require_explicit_python();
     renewal_fresh_main::run_gateway(
         "postgresql://oracle:synthetic-local-only@127.0.0.1:5432/canvas_published_schema_test",
         "redis://127.0.0.1:6379",
@@ -302,13 +283,13 @@ async fn base_profile_gateway_composition_child() {
     println!("\nMARTY_BASE_COMPOSITION_COMPLETE_V1");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn base_profile_native_renewal_uses_actual_rendered_configuration() {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
         eprintln!("Rendered base native process requires the exact-owned published schema gate");
         return;
     }
-    rendered_base_process::assert_renderer_deadlines();
+    let _ = rendered_base_process::require_explicit_python();
     let owned = canvas_published_database::PublishedDatabase::start()
         .await
         .unwrap();
@@ -418,7 +399,8 @@ async fn didcomm_renewal_private_ip_refusal_preserves_published_rows() {
     println!("\nDIDCOMM_RENEWAL_PRIVATE_IP_PG_REFUSAL_COMPLETE_V1");
 }
 
-#[path = "../../../services/issuance/tests/support/didcomm_native_grpc_fixture.rs"]
+#[path = "../../../acceptance/support/didcomm_native_grpc_fixture.rs"]
+#[allow(dead_code, reason = "shared fixture also serves Flow acceptance cases")]
 mod didcomm_native_grpc_fixture;
 
 #[tokio::test]
@@ -434,89 +416,14 @@ async fn didcomm_unkeyed_grpc_initiation_composes_real_delivery() {
     owned.close_verified().unwrap();
 }
 
-#[path = "support/didcomm_admission_recovery.rs"]
-mod didcomm_admission_recovery;
-
-#[tokio::test]
-async fn didcomm_flow_grpc_provider_preserves_keyed_admission() {
-    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
-        eprintln!("Flow gRPC admission requires the exact-owned published schema gate");
-        return;
-    }
-    let owned = canvas_published_database::PublishedDatabase::start()
-        .await
-        .unwrap();
-    didcomm_admission_recovery::run_flow_grpc(&owned.url).await;
-    owned.close_verified().unwrap();
-}
-
-#[tokio::test]
-async fn flow_native_consumer_preserves_artifacts_retries_and_legacy_physical_http() {
-    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
-        eprintln!("Flow consumer composition requires the exact-owned published schema gate");
-        return;
-    }
-    let owned = canvas_published_database::PublishedDatabase::start()
-        .await
-        .unwrap();
-    didcomm_admission_recovery::run_flow_consumer(&owned.url).await;
-    owned.close_verified().unwrap();
-}
-
-#[tokio::test]
-async fn flow_rendered_provider_child() {
-    if std::env::var("MARTY_FLOW_RENDERED_CHILD").as_deref() != Ok("1") {
-        return;
-    }
-    didcomm_admission_recovery::flow_rendered_child().await;
-}
-
-#[tokio::test]
-async fn flow_actual_main_boots_rendered_base_and_preserves_public_admission() {
-    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
-        eprintln!("Actual Flow startup requires the exact-owned published schema gate");
-        return;
-    }
-    let owned = canvas_published_database::PublishedDatabase::start()
-        .await
-        .unwrap();
-    let redis = base_runtime_redis::OwnedRedis::start().await.unwrap();
-    didcomm_admission_recovery::run_flow_public_startup(&owned.url, redis.url()).await;
-    redis.close_verified().unwrap();
-    owned.close_verified().unwrap();
-}
-
-#[tokio::test]
-async fn flow_rendered_settings_select_native_rpc_and_preserve_legacy_http() {
-    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
-        eprintln!("Rendered Flow selection requires the exact-owned published schema gate");
-        return;
-    }
-    let owned = canvas_published_database::PublishedDatabase::start()
-        .await
-        .unwrap();
-    didcomm_admission_recovery::run_flow_rendered(&owned.url).await;
-    owned.close_verified().unwrap();
-}
-
-#[tokio::test]
-async fn didcomm_http_admission_recovers_real_keyed_reservation() {
-    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
-        eprintln!("Admission recovery requires the exact-owned published schema gate");
-        return;
-    }
-    let owned = canvas_published_database::PublishedDatabase::start()
-        .await
-        .unwrap();
-    didcomm_admission_recovery::run(&owned.url).await;
-    owned.close_verified().unwrap();
-}
-
 #[path = "../../../services/issuance/tests/support/didcomm_wallet_fixture.rs"]
 mod didcomm_wallet_fixture;
 
 #[path = "../../../services/issuance/tests/support/didcomm_test_fixtures.rs"]
 mod didcomm_test_fixtures;
+
+#[path = "support/remote_didcomm_sender.rs"]
+mod remote_didcomm_sender;
 
 #[path = "support/didcomm_composed_delivery.rs"]
 mod didcomm_composed_delivery;
@@ -560,7 +467,7 @@ async fn didcomm_fresh_http_admission_composes_reservation_and_delivery() {
     owned.close_verified().unwrap();
 }
 
-#[path = "../../../services/issuance/tests/support/didcomm_gateway_replay.rs"]
+#[path = "support/didcomm_gateway_replay.rs"]
 mod didcomm_gateway_replay;
 
 #[path = "../../../services/issuance/tests/support/didcomm_tls_transport_contract.rs"]
@@ -650,7 +557,7 @@ async fn operations_gateway_candidate_preserves_review_lifecycle() {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
         return;
     }
-    let owned = canvas_published_database::PublishedDatabase::start_with_status_provider()
+    let owned = canvas_published_database::PublishedDatabase::start_with_status_native_seed()
         .await
         .unwrap();
     let pool = PgPoolOptions::new()
@@ -1058,7 +965,7 @@ async fn status_runtime_preserves_credential_and_delivery_effects() {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
         return;
     }
-    let owned = canvas_published_database::PublishedDatabase::start_with_status_provider()
+    let owned = canvas_published_database::PublishedDatabase::start_with_status_native_seed()
         .await
         .unwrap();
     let pool = PgPoolOptions::new()
@@ -1071,6 +978,88 @@ async fn status_runtime_preserves_credential_and_delivery_effects() {
     owned.close().unwrap();
 }
 
+async fn assert_status_native_seed_matches_published(
+    published: &canvas_published_database::PublishedDatabase,
+) {
+    // The independent oracle remains the only published-behavior capture.
+    // Check that its resulting native-test rows can be initialized without
+    // replaying the whole provider matrix in every separate database.
+    let seeded = canvas_published_database::PublishedDatabase::start_with_status_native_seed()
+        .await
+        .unwrap();
+    let first = PgPoolOptions::new().connect(&published.url).await.unwrap();
+    let second = PgPoolOptions::new().connect(&seeded.url).await.unwrap();
+    for (table, query) in [
+        (
+            "organizations",
+            "SELECT COALESCE(jsonb_agg(to_jsonb(t) ORDER BY id), '[]'::jsonb) FROM organization_service.organizations t",
+        ),
+        (
+            "application_templates",
+            "SELECT COALESCE(jsonb_agg(to_jsonb(t) ORDER BY id), '[]'::jsonb) FROM issuance_service.application_templates t",
+        ),
+        (
+            "issued_credentials",
+            "SELECT COALESCE(jsonb_agg(to_jsonb(t) ORDER BY id), '[]'::jsonb) FROM issuance_service.issued_credentials t",
+        ),
+        (
+            "credential_delivery_records",
+            "SELECT COALESCE(jsonb_agg(to_jsonb(t) ORDER BY id), '[]'::jsonb) FROM issuance_service.credential_delivery_records t",
+        ),
+        (
+            "canvas_program_bindings",
+            "SELECT COALESCE(jsonb_agg(to_jsonb(t) ORDER BY id), '[]'::jsonb) FROM issuance_service.canvas_program_bindings t",
+        ),
+        (
+            "canvas_platforms",
+            "SELECT COALESCE(jsonb_agg(to_jsonb(t) ORDER BY id), '[]'::jsonb) FROM issuance_service.canvas_platforms t",
+        ),
+        (
+            "issuance_transactions",
+            "SELECT COALESCE(jsonb_agg(to_jsonb(t) ORDER BY id), '[]'::jsonb) FROM issuance_service.issuance_transactions t",
+        ),
+        (
+            "applications",
+            "SELECT COALESCE(jsonb_agg(to_jsonb(t) ORDER BY id), '[]'::jsonb) FROM issuance_service.applications t",
+        ),
+        (
+            "canvas_learner_identities",
+            "SELECT COALESCE(jsonb_agg(to_jsonb(t) ORDER BY id), '[]'::jsonb) FROM issuance_service.canvas_learner_identities t",
+        ),
+        (
+            "canvas_evidence_sync_targets",
+            "SELECT COALESCE(jsonb_agg(to_jsonb(t) ORDER BY id), '[]'::jsonb) FROM issuance_service.canvas_evidence_sync_targets t",
+        ),
+    ] {
+        let mut left: serde_json::Value = sqlx::query_scalar(query)
+            .fetch_one(&first)
+            .await
+            .unwrap();
+        let mut right: serde_json::Value = sqlx::query_scalar(query)
+            .fetch_one(&second)
+            .await
+            .unwrap();
+        for rows in [&mut left, &mut right] {
+            for row in rows.as_array_mut().unwrap() {
+                for timestamp in [
+                    "created_at", "updated_at", "issued_at", "status_updated_at",
+                    "activated_at", "expires_at", "submitted_at", "verified_at",
+                    "next_run_at",
+                ] {
+                    row.as_object_mut().unwrap().remove(timestamp);
+                }
+            }
+        }
+        assert_eq!(
+            left, right,
+            "native status seed differs from published {table}"
+        );
+    }
+    first.close().await;
+    second.close().await;
+    seeded.close().unwrap();
+}
+
 #[tokio::test]
 async fn status_provider_matches_frozen_protocol() {
     canvas_status_provider_replay::replay(&canvas_status_provider_replay::frozen()).await;
@@ -1081,7 +1070,7 @@ async fn status_runtime_composes_review_resolution_with_configured_http() {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
         return;
     }
-    let owned = canvas_published_database::PublishedDatabase::start_with_status_provider()
+    let owned = canvas_published_database::PublishedDatabase::start_with_status_native_seed()
         .await
         .unwrap();
     let pool = PgPoolOptions::new()
@@ -1099,7 +1088,7 @@ async fn status_main_process_resolves_reviews_with_real_http_publication_and_mir
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
         return;
     }
-    let owned = canvas_published_database::PublishedDatabase::start_with_status_provider()
+    let owned = canvas_published_database::PublishedDatabase::start_with_status_native_seed()
         .await
         .unwrap();
     let pool = PgPoolOptions::new()
@@ -1118,7 +1107,7 @@ async fn canvas_mirror_worker_enabled_packaged_main_runs_and_shuts_down_cleanly(
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
         return;
     }
-    let owned = canvas_published_database::PublishedDatabase::start_with_status_provider()
+    let owned = canvas_published_database::PublishedDatabase::start_with_status_native_seed()
         .await
         .unwrap();
     let pool = PgPoolOptions::new()
@@ -1137,7 +1126,7 @@ async fn status_runtime_preserves_unicode_failures_and_recovery() {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
         return;
     }
-    let owned = canvas_published_database::PublishedDatabase::start_with_status_provider()
+    let owned = canvas_published_database::PublishedDatabase::start_with_status_native_seed()
         .await
         .unwrap();
     let pool = PgPoolOptions::new()
@@ -1155,7 +1144,7 @@ async fn status_runtime_preserves_charset_failures_and_recovery() {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
         return;
     }
-    let owned = canvas_published_database::PublishedDatabase::start_with_status_provider()
+    let owned = canvas_published_database::PublishedDatabase::start_with_status_native_seed()
         .await
         .unwrap();
     let pool = PgPoolOptions::new()
@@ -1177,6 +1166,7 @@ async fn status_provider_matches_published_python() {
         .await
         .unwrap();
     let oracle = owned.oracle.clone().unwrap();
+    assert_status_native_seed_matches_published(&owned).await;
     owned.close().unwrap();
     assert_eq!(oracle, canvas_status_provider_replay::frozen());
     canvas_status_provider_replay::replay(&oracle).await;
@@ -1187,7 +1177,7 @@ async fn status_runtime_preserves_iso2022_failures_and_recovery() {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
         return;
     }
-    let owned = canvas_published_database::PublishedDatabase::start_with_status_provider()
+    let owned = canvas_published_database::PublishedDatabase::start_with_status_native_seed()
         .await
         .unwrap();
     let pool = PgPoolOptions::new()
@@ -1205,7 +1195,7 @@ async fn status_runtime_preserves_ordinal_failures_and_recovery() {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
         return;
     }
-    let owned = canvas_published_database::PublishedDatabase::start_with_status_provider()
+    let owned = canvas_published_database::PublishedDatabase::start_with_status_native_seed()
         .await
         .unwrap();
     let pool = PgPoolOptions::new()
@@ -1223,7 +1213,7 @@ async fn status_runtime_preserves_utf7_label_failures_and_recovery() {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
         return;
     }
-    let owned = canvas_published_database::PublishedDatabase::start_with_status_provider()
+    let owned = canvas_published_database::PublishedDatabase::start_with_status_native_seed()
         .await
         .unwrap();
     let pool = PgPoolOptions::new()
@@ -1242,7 +1232,7 @@ async fn status_runtime_matches_utf7_full_credential_routes() {
         return;
     }
     canvas_status_provider_replay::replay_utf7().await;
-    let owned = canvas_published_database::PublishedDatabase::start_with_status_provider()
+    let owned = canvas_published_database::PublishedDatabase::start_with_status_native_seed()
         .await
         .unwrap();
     let pool = PgPoolOptions::new()
@@ -1265,7 +1255,7 @@ async fn status_runtime_matches_json_full_credential_routes() {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
         return;
     }
-    let owned = canvas_published_database::PublishedDatabase::start_with_status_provider()
+    let owned = canvas_published_database::PublishedDatabase::start_with_status_native_seed()
         .await
         .unwrap();
     let pool = PgPoolOptions::new()
@@ -1283,7 +1273,7 @@ async fn status_runtime_matches_json_depth_full_credential_routes() {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
         return;
     }
-    let owned = canvas_published_database::PublishedDatabase::start_with_status_provider()
+    let owned = canvas_published_database::PublishedDatabase::start_with_status_native_seed()
         .await
         .unwrap();
     let pool = PgPoolOptions::new()

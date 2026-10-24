@@ -358,14 +358,10 @@ fn project_instance(value: Value) -> Result<Value, FlowContractError> {
             "CANCELLED",
         ],
     )?;
-    for field in ["flow_id", "flow_type"] {
-        let Some(entry) = value.get(field) else {
-            return Err(FlowContractError);
-        };
-        if !entry.is_null() && !entry.is_string() {
-            return Err(FlowContractError);
-        }
-    }
+    // The Flow service omits optional identities for standalone or seeded
+    // instances. Keep the same omission semantics at the public boundary;
+    // flow_type, when present, is already checked against the canonical enum.
+    optional_string(&value, "flow_id", usize::MAX)?;
     for field in ["context_data", "step_results", "metadata"] {
         let entry = value
             .get(field)
@@ -453,6 +449,7 @@ fn project_credential_result(value: Value) -> Result<Value, FlowContractError> {
             "satisfied",
             "issuer_did",
             "claim_results",
+            "authenticated_disclosures",
             "trust_check_passed",
             "freshness_check_passed",
             "signature_valid",
@@ -468,16 +465,23 @@ fn project_credential_result(value: Value) -> Result<Value, FlowContractError> {
     required_bool(&value, "satisfied")?;
     optional_string(&value, "issuer_did", usize::MAX)?;
     optional_string(&value, "revocation_status", usize::MAX)?;
+    if let Some(disclosures) = value.get_mut("authenticated_disclosures") {
+        if !disclosures.is_null() {
+            *disclosures = project_authenticated_mdoc_disclosures(disclosures.take())?;
+        }
+    }
     value.entry("claim_results").or_insert_with(|| json!([]));
-    value.entry("trust_check_passed").or_insert(json!(true));
-    value.entry("freshness_check_passed").or_insert(json!(true));
-    value.entry("signature_valid").or_insert(json!(true));
     for field in [
         "trust_check_passed",
         "freshness_check_passed",
         "signature_valid",
     ] {
-        required_bool(&value, field)?;
+        if value
+            .get(field)
+            .is_some_and(|entry| !entry.is_null() && !entry.is_boolean())
+        {
+            return Err(FlowContractError);
+        }
     }
     for field in ["revocation_checked", "not_revoked"] {
         if value
@@ -498,6 +502,34 @@ fn project_credential_result(value: Value) -> Result<Value, FlowContractError> {
         *claim = project_claim_result(claim.take())?;
     }
     omit_nulls(&mut value);
+    Ok(Value::Object(value))
+}
+
+fn project_authenticated_mdoc_disclosures(value: Value) -> Result<Value, FlowContractError> {
+    let mut value = strict_object(value, &["format", "documents"])?;
+    required_enum(&value, "format", &["mso_mdoc"])?;
+    let documents = value
+        .get_mut("documents")
+        .and_then(Value::as_array_mut)
+        .ok_or(FlowContractError)?;
+    if documents.len() != 1 {
+        return Err(FlowContractError);
+    }
+    for document in documents {
+        let object = strict_object(document.take(), &["doc_type", "namespaces"])?;
+        required_string(&object, "doc_type", 1, 255)?;
+        let namespaces = object
+            .get("namespaces")
+            .and_then(Value::as_object)
+            .ok_or(FlowContractError)?;
+        for (namespace, names) in namespaces {
+            if namespace.is_empty() || namespace.len() > 255 {
+                return Err(FlowContractError);
+            }
+            validate_string_array(Some(names), true)?;
+        }
+        *document = Value::Object(object);
+    }
     Ok(Value::Object(value))
 }
 
@@ -777,6 +809,37 @@ mod tests {
     use super::*;
     use serde::Deserialize;
 
+    #[test]
+    fn authenticated_mdoc_disclosure_names_survive_the_public_gateway_projection() {
+        let disclosures = json!({"format": "mso_mdoc", "documents": [{
+            "doc_type": "org.iso.18013.5.1.mDL",
+            "namespaces": {"org.iso.18013.5.1": ["age_over_21", "birth_date"]}
+        }]});
+        let projected = project_credential_result(json!({
+            "credential_template_id": "mdl-1", "satisfied": true,
+            "signature_valid": true, "trust_check_passed": true,
+            "authenticated_disclosures": disclosures
+        }))
+        .unwrap();
+        assert_eq!(projected["authenticated_disclosures"], disclosures);
+    }
+
+    #[test]
+    fn public_mdoc_disclosure_projection_rejects_claim_values_and_extra_documents() {
+        for documents in [
+            json!([{"doc_type": "org.iso.18013.5.1.mDL", "namespaces": {"org.iso.18013.5.1": {"birth_date": "1990-01-01"}}}]),
+            json!([
+                {"doc_type": "org.iso.18013.5.1.mDL", "namespaces": {"org.iso.18013.5.1": ["age_over_21"]}},
+                {"doc_type": "other", "namespaces": {"private": ["name"]}}
+            ]),
+        ] {
+            assert!(project_authenticated_mdoc_disclosures(json!({
+                "format": "mso_mdoc", "documents": documents
+            }))
+            .is_err());
+        }
+    }
+
     #[derive(Deserialize)]
     struct Contract {
         schema_version: u32,
@@ -793,6 +856,32 @@ mod tests {
         expected_instance: Value,
         internal_verification_result: Value,
         expected_verification_result: Value,
+    }
+
+    #[test]
+    fn flow_instance_optional_identity_matches_service_projection() {
+        let contract: Contract = serde_json::from_str(include_str!(
+            "../../../../contracts/gateway-flow-behavior.json"
+        ))
+        .expect("flow contract");
+        let mut standalone = contract.internal_instance;
+        standalone.as_object_mut().unwrap().remove("flow_id");
+        standalone.as_object_mut().unwrap().remove("flow_type");
+        let projected = project_response(json!([standalone.clone()]), FlowResponseKind::Instance)
+            .expect("omitted optional identities must not break the entire history list");
+        assert!(projected[0].get("flow_id").is_none());
+        assert!(projected[0].get("flow_type").is_none());
+        for (field, invalid) in [
+            ("flow_id", json!(42)),
+            ("flow_type", json!(42)),
+            ("flow_type", json!("unknown_protocol")),
+        ] {
+            let mut malformed = standalone.clone();
+            malformed[field] = invalid;
+            assert!(project_response(malformed, FlowResponseKind::Instance).is_err());
+        }
+        standalone["context_data"]["private_key"] = json!("must-not-leak");
+        assert!(project_response(standalone, FlowResponseKind::Instance).is_err());
     }
 
     #[test]
@@ -847,5 +936,33 @@ mod tests {
             .expect("verification result"),
             contract.expected_verification_result
         );
+    }
+
+    #[test]
+    fn credential_checks_are_never_invented_by_projection() {
+        let missing_checks = json!({
+            "credential_template_id": "template-1",
+            "satisfied": true
+        });
+        let projected = project_credential_result(missing_checks).expect("project result");
+        for field in [
+            "trust_check_passed",
+            "freshness_check_passed",
+            "signature_valid",
+        ] {
+            assert!(projected.get(field).is_none(), "unexpected {field}");
+        }
+
+        let explicit_checks = json!({
+            "credential_template_id": "template-1",
+            "satisfied": false,
+            "trust_check_passed": false,
+            "freshness_check_passed": true,
+            "signature_valid": false
+        });
+        let projected = project_credential_result(explicit_checks).expect("project result");
+        assert_eq!(projected["trust_check_passed"], false);
+        assert_eq!(projected["freshness_check_passed"], true);
+        assert_eq!(projected["signature_valid"], false);
     }
 }

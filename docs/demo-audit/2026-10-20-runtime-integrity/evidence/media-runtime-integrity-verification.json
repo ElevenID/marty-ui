@@ -1,0 +1,117 @@
+{
+  "kind": "MARTY_MEDIA_RUNTIME_INTEGRITY_REPAIRS",
+  "schemaVersion": 1,
+  "repository": "ElevenID/marty-demo-recorder",
+  "baseRevision": "8d8bf8673f9a1162a4f7a788c1f2e8349a3f8a25",
+  "testedRevision": "cfcd351c53cc3686b6b805a414e92c703c209504",
+  "testedTree": "f97d6e17d2da9edfa9b3f2d2446fd6bfe34a31fb",
+  "implementation": [
+    {
+      "gap": "Pointer evidence accepted arbitrary bytes without source/event identity",
+      "files": [
+        "src/pointerEvidence.js",
+        "src/editorialPointer.js",
+        "src/compose.js"
+      ],
+      "result": "Versioned document must bind actual selected source SHA-256/filename/dimensions and exact measured event fields; verified before and after composition. No independent visual attestation."
+    },
+    {
+      "gap": "Landscape capture gate rejected actual portrait native recordings",
+      "files": [
+        "src/mediaQuality.js",
+        "src/retainedIndependentOverview.js",
+        "src/compose.js"
+      ],
+      "result": "Shared portrait validation permits native pixels in sequential device inputs; primary, split and picture-in-picture capture policies remain landscape."
+    },
+    {
+      "gap": "Per-segment rounding drifted the declared edit from encoded frames",
+      "files": [
+        "src/editTimeline.js",
+        "src/compose.js",
+        "src/guidedPresentationProfile.js"
+      ],
+      "result": "Requested durations retained, actual segment/slate frame budgets normalized once, timeline ranges use integer frames, final video duration/frame rate checked."
+    }
+  ],
+  "focusedVerification": {
+    "tests": 54,
+    "pass": 54,
+    "fail": 0,
+    "skipped": 0,
+    "newNamedCases": 12,
+    "sourceStableBeforeAndAfter": true,
+    "allObservedSourceBytesMatchTestedCommit": true,
+    "details": "media-final-test-verification.json"
+  },
+  "baselineReproduction": {
+    "command": [
+      "node",
+      "/workspace/scratch/d8b5d3d3b0dd/runtime-integrity-evidence/media-baseline-diagnostics.cjs"
+    ],
+    "details": "media-baseline-diagnostics.json",
+    "log": "media-baseline-diagnostics.log",
+    "result": "All three previous behaviors independently reproduced against the preserved base revision with generated test media."
+  },
+  "renderObservation": {
+    "kind": "SYNTHETIC_TEST_MEDIA_ONLY",
+    "video": "synthetic-native-guided/synthetic-native-guided.mp4",
+    "frames": 176,
+    "frameRate": 25,
+    "durationSeconds": 7.04,
+    "width": 2560,
+    "height": 1440,
+    "nativeSourceDimensions": [
+      1080,
+      1920
+    ],
+    "sourceHashPreservation": true,
+    "pixelChecks": [
+      "native control enlarges under crop camera",
+      "added pulse absent on frame120 and present on frame121",
+      "caption pixels remain in reserved band"
+    ],
+    "audio": "Generated sine tone, not speech or voice approval",
+    "visualInspection": "Agent inspected the generated click frame for cropping, marker, cursor and subtitle placement. This is not human review of a production master."
+  },
+  "compatibility": [
+    "New compositions reject legacy hash-only pointer references. Historical source/evidence/recipes remain unchanged and must be rebound after inspecting original footage.",
+    "Requested10.5seconds becomes263frames/10.52seconds consistently; chapters/narration must follow actual frame boundaries.",
+    "At least seven outputframes per segment; requests that round shorter fail with0.28second guidance.",
+    "Sequential mode still supports one primary source and one device source with independent clocks."
+  ],
+  "qualification": {
+    "deployedFeatureExecution": "NOT_RUN",
+    "nativeWalletExecution": "NOT_RUN",
+    "narrationListeningReview": "NOT_RUN",
+    "productionMasterReview": "NOT_RUN",
+    "catalogQualificationChanged": false,
+    "qualifiedProductionDemos": 0
+  },
+  "environment": {
+    "node": "v24.19.0",
+    "ffmpeg": "ffmpeg version 6.1.1-3ubuntu5 Copyright (c) 2000-2023 the FFmpeg developers",
+    "ffprobe": "ffprobe version 6.1.1-3ubuntu5 Copyright (c) 2007-2023 the FFmpeg developers"
+  },
+  "artifactSha256": {
+    "media-final-test-verification.json": "a535b556a2becc4011e562f07a5fca7b96d9a7b81d906fb4afd9dae8f469d493",
+    "media-baseline-diagnostics.cjs": "c406eb8e1ff467a94e4fcdfb55bb3fc7fa2b7357fc7c1ae3b8e3bbe834f4ebdb",
+    "media-baseline-diagnostics.json": "f85a0e4c211a62da0e63731599c596a9d58ffc9e6fd5d0ef0b7ad60609a166c9",
+    "media-baseline-diagnostics.log": "f85a0e4c211a62da0e63731599c596a9d58ffc9e6fd5d0ef0b7ad60609a166c9",
+    "media-pointerEvidence-final.log": "b5fdc7dca1b67abf3cdfc6ecdb3ea8efb5dbea91e62b1140f9b9c20b747ca102",
+    "media-editTimeline-final.log": "de5e40075cd96868e5373402e78eb939cad91230e05520092449ef32462252ae",
+    "media-mediaQuality-final.log": "2bd219d3a889e7c8c778ef7f953478b52383d7d9094027ce742af8b8683c24b9",
+    "media-editorialPointer-final.log": "1350abb26e1335b9a3e8568f7b56694a5d13f1efcaadb205c5e4f0762724a543",
+    "media-compose-final.log": "74742df28744b9a019e729d684c247df43529e84ffa7de009dcf266a12e1394d",
+    "media-nativeGuidedComposition-final.log": "70fc95ec810ba2e72e953651fde7dce2828728e73b25ceb53b682d3b17f2abf3",
+    "media-lifecyclePresentationProfile-final.log": "46482cc348ff00268b257793851096cf1504794069a062f539e65e56f9500241",
+    "media-retainedIndependentOverview-final.log": "59e182b6d805f164db90ba49369b2d39bc6d48a518116a9b06bcaffeb1915fa3"
+  },
+  "syntheticArtifactSha256": {
+    "synthetic-native-guided/SYNTHETIC-TEST-ONLY.txt": "723590cef53b8e324348007a2011512ef38f059442a585e99950a2aa298b8a00",
+    "synthetic-native-guided/synthetic-click-frame.png": "0344b04ec32ebba6f78363e9eced60695ccfc685fe155744deabaa5e670c486d",
+    "synthetic-native-guided/synthetic-native-composition.json": "1a55423a165acf494e810c52539f2aea83201469fcf2f8c730ea2ac86f06cb71",
+    "synthetic-native-guided/synthetic-native-guided.mp4": "a1b1b915dc8dd25bfbc85ba4c8fa382a9c7aed0563f5b782107800789995f06e"
+  },
+  "postCommitWorkingTree": "Only the preexisting node_modules dependency symlink is untracked; no source edits remain."
+}

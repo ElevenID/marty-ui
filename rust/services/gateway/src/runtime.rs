@@ -24,11 +24,20 @@ use axum::{
     routing::any,
     Json, Router,
 };
+use base64::{
+    engine::general_purpose::{STANDARD, STANDARD_NO_PAD, URL_SAFE, URL_SAFE_NO_PAD},
+    Engine,
+};
 use chrono::Utc;
 use futures_core::Stream;
 use marty_passport_auth::PassportTenantCredentialSource;
 #[cfg(test)]
 use marty_passport_auth::PassportTenantKeyring;
+use marty_signing_grant::{
+    ceremony::{IssuerCsrIntent, ServiceCsrIntent},
+    minter::{GrantMinter, GrantMinting},
+    GrantBinding, GrantError, SigningOrigin,
+};
 use mmf_platform::{
     ContentTypeDecision, EntityTagDecision, EntityTagPolicy, GatewayProxy, GatewayRequest,
     GatewayResponse, HttpMethod, IdempotencyBegin, IdempotencyRequest, IdempotencyResponse,
@@ -59,9 +68,9 @@ use crate::{
     issuance_create::IssuanceCreate,
     issuance_lifecycle_contract, issuance_native,
     middleware::{
-        authenticate, AuthenticationInput, AuthenticationOutcome, AuthenticationSource,
-        GatewayHttpPolicies, GatewayIdentity, GatewayIdentityProvider, GatewayRateLimiter,
-        MipError, MIP_VERSION,
+        authenticate, permits_pairing_ticket, AuthenticationInput, AuthenticationOutcome,
+        AuthenticationSource, GatewayHttpPolicies, GatewayIdentity, GatewayIdentityProvider,
+        GatewayRateLimiter, MipError, MIP_VERSION,
     },
     organization_composition, organization_contract,
     passport_gateway::{passport_upstream_auth, PassportUpstreamAuth},
@@ -95,12 +104,17 @@ pub struct GatewayRuntimeState {
     pub did_web_authority: String,
     pub default_organization_id: Option<String>,
     pub signing_service_api_key: String,
+    pub service_sign_gateway_key: Option<String>,
+    pub service_sign_grant_minter: Option<Arc<dyn GrantMinting>>,
+    pub issuer_csr_grant_minter: Option<Arc<dyn GrantMinting>>,
+    pub issuer_sign_key: Option<String>,
     pub dsc_issue_gateway_key: Option<String>,
     pub csca_issue_gateway_key: Option<String>,
     pub issuance_service_api_key: String,
     pub passport_native_gateway_enabled: bool,
     pub passport_tenant_keys: Option<PassportTenantCredentialSource>,
     pub service_token: Option<String>,
+    pub device_registration_gateway_key: Option<String>,
     pub release_identity: ReleaseIdentity,
     pub maximum_body_bytes: usize,
 }
@@ -206,12 +220,17 @@ impl GatewayRuntimeState {
                 .map(|value| value.trim().to_owned())
                 .filter(|value| !value.is_empty()),
             signing_service_api_key,
+            service_sign_gateway_key: None,
+            service_sign_grant_minter: None,
+            issuer_csr_grant_minter: None,
+            issuer_sign_key: None,
             dsc_issue_gateway_key: None,
             csca_issue_gateway_key: None,
             issuance_service_api_key,
             passport_native_gateway_enabled: false,
             passport_tenant_keys: None,
             service_token: None,
+            device_registration_gateway_key: None,
             release_identity,
             maximum_body_bytes: DEFAULT_MAXIMUM_BODY_BYTES,
         })
@@ -230,18 +249,85 @@ impl GatewayRuntimeState {
         Ok(self)
     }
 
+    pub fn with_device_registration_gateway_key(
+        mut self,
+        key: String,
+    ) -> Result<Self, mmf_platform::PlatformError> {
+        if key.len() < 32 {
+            return Err(mmf_platform::PlatformError::InvalidConfiguration(
+                "device registration gateway key must contain at least 32 bytes".into(),
+            ));
+        }
+        self.device_registration_gateway_key = Some(key);
+        Ok(self)
+    }
+
     pub fn with_dsc_issue_gateway_key(
         mut self,
         key: Option<String>,
     ) -> Result<Self, mmf_platform::PlatformError> {
         if let Some(key) = &key {
-            if key.len() < 32 || key == &self.signing_service_api_key {
+            if key.len() < 32
+                || key == &self.signing_service_api_key
+                || self.service_sign_gateway_key.as_ref() == Some(key)
+            {
                 return Err(mmf_platform::PlatformError::InvalidConfiguration(
                     "DSC issuance credential must be distinct and at least 32 bytes".into(),
                 ));
             }
         }
         self.dsc_issue_gateway_key = key;
+        Ok(self)
+    }
+
+    pub fn with_service_sign_gateway_key(
+        mut self,
+        key: String,
+    ) -> Result<Self, mmf_platform::PlatformError> {
+        if key.len() < 32
+            || key == self.signing_service_api_key
+            || key == self.issuance_service_api_key
+            || self.service_token.as_ref() == Some(&key)
+            || self.device_registration_gateway_key.as_ref() == Some(&key)
+            || self.dsc_issue_gateway_key.as_ref() == Some(&key)
+            || self.csca_issue_gateway_key.as_ref() == Some(&key)
+        {
+            return Err(mmf_platform::PlatformError::InvalidConfiguration(
+                "service signing Gateway credential must be distinct and at least 32 bytes".into(),
+            ));
+        }
+        self.service_sign_gateway_key = Some(key);
+        Ok(self)
+    }
+
+    pub fn with_service_sign_grant_minter(mut self, minter: GrantMinter) -> Self {
+        self.service_sign_grant_minter = Some(Arc::new(minter));
+        self
+    }
+
+    pub fn with_issuer_csr_grant_minter(mut self, minter: GrantMinter) -> Self {
+        self.issuer_csr_grant_minter = Some(Arc::new(minter));
+        self
+    }
+
+    pub fn with_issuer_sign_key(
+        mut self,
+        key: String,
+    ) -> Result<Self, mmf_platform::PlatformError> {
+        if key.len() < 32
+            || key == self.signing_service_api_key
+            || key == self.issuance_service_api_key
+            || self.service_sign_gateway_key.as_ref() == Some(&key)
+            || self.service_token.as_ref() == Some(&key)
+            || self.device_registration_gateway_key.as_ref() == Some(&key)
+            || self.dsc_issue_gateway_key.as_ref() == Some(&key)
+            || self.csca_issue_gateway_key.as_ref() == Some(&key)
+        {
+            return Err(mmf_platform::PlatformError::InvalidConfiguration(
+                "issuer signing credential must be distinct and at least 32 bytes".into(),
+            ));
+        }
+        self.issuer_sign_key = Some(key);
         Ok(self)
     }
 
@@ -252,6 +338,7 @@ impl GatewayRuntimeState {
         if let Some(key) = &key {
             if key.len() < 32
                 || key == &self.signing_service_api_key
+                || self.service_sign_gateway_key.as_ref() == Some(key)
                 || self.dsc_issue_gateway_key.as_ref() == Some(key)
             {
                 return Err(mmf_platform::PlatformError::InvalidConfiguration(
@@ -871,6 +958,9 @@ async fn proxy_handler(
             )
             .into_response();
         }
+        "/v1/protocol-support" => {
+            return Json(discovery::protocol_support_catalog()).into_response();
+        }
         "/docs" | "/redoc" => return api_documentation_handler(),
         "/ready" | "/health/ready" => return readiness_handler(state).await,
         "/health/services" => return services_health_handler(state).await,
@@ -931,8 +1021,16 @@ async fn proxy_handler(
     if request.method() == "POST" && request.uri().path() == "/v1/issuance" {
         return issuance_create_handler(state, request).await;
     }
+    if request.method() == "POST"
+        && request.uri().path() == "/v1/credential-templates/issuer-options"
+    {
+        return template_issuer_options_handler(state, request).await;
+    }
     if request.method() == "POST" && request.uri().path() == "/v1/credential-templates" {
         return credential_template_create_handler(state, request).await;
+    }
+    if request.method() == "POST" && request.uri().path() == "/v1/devices/pairing-tickets" {
+        return pairing_ticket_issue_handler(state, request).await;
     }
     if request.method() == "POST" && request.uri().path() == "/v1/deployment-profiles" {
         return deployment_profile_create_handler(state, request).await;
@@ -1041,6 +1139,11 @@ async fn proxy_handler(
     let mut gateway_request = GatewayRequest::new(method, &upstream_path, now_ms());
     gateway_request.query = query_pairs(parts.uri.query());
     gateway_request.headers = request_headers(&parts.headers);
+    // Only the authorized Gateway producer may attach this proof. A public
+    // caller's header must never be forwarded to Signing Keys.
+    gateway_request
+        .headers
+        .remove(marty_signing_grant::HEADER_NAME);
     if native_passport_public {
         gateway_request.headers.remove("x-api-key");
         gateway_request.headers.remove("x-organization-id");
@@ -1187,6 +1290,53 @@ async fn proxy_handler(
         );
     }
     overrides.body = canonical_body;
+    if is_public_service_sign_path(&public_path)
+        || is_public_service_csr_path(&public_path)
+        || is_public_issuer_csr_path(&public_path)
+    {
+        let body = overrides
+            .body
+            .as_deref()
+            .or(gateway_request.body.as_deref());
+        let grant_result = if is_public_issuer_csr_path(&public_path) {
+            mint_public_issuer_csr_grant(
+                &state,
+                &identity,
+                &public_path,
+                &request_id,
+                body,
+                &overrides,
+            )
+            .await
+        } else if is_public_service_csr_path(&public_path) {
+            mint_public_service_csr_grant(
+                &state,
+                &identity,
+                &public_path,
+                &request_id,
+                body,
+                &overrides,
+            )
+            .await
+        } else {
+            mint_public_service_sign_grant(
+                &state,
+                &identity,
+                &public_path,
+                &request_id,
+                body,
+                &overrides,
+            )
+            .await
+        };
+        let grant = match grant_result {
+            Ok(grant) => grant,
+            Err(response) => return response,
+        };
+        overrides
+            .headers
+            .insert(marty_signing_grant::HEADER_NAME.into(), grant);
+    }
     match state
         .proxy
         .execute(gateway_request, &identity, &overrides)
@@ -1371,6 +1521,72 @@ async fn proxy_handler(
             response
         }
     }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PairingTicketIssueRequest {
+    organization_id: String,
+    trust_profile_id: String,
+}
+
+async fn pairing_ticket_issue_handler(
+    state: Arc<GatewayRuntimeState>,
+    request: Request,
+) -> Response {
+    let Some(actor) = request.extensions().get::<GatewayIdentity>().cloned() else {
+        return detail_response(401, "Authentication is required");
+    };
+    if !permits_pairing_ticket(&actor, Utc::now().timestamp()) {
+        return detail_response(403, "Recent user authentication is required");
+    }
+    let user_id = actor.user_id.clone();
+    let body = match to_bytes(request.into_body(), state.maximum_body_bytes).await {
+        Ok(body) => body,
+        Err(_) => return detail_response(413, "Request body too large"),
+    };
+    let Ok(input) = serde_json::from_slice::<PairingTicketIssueRequest>(&body) else {
+        return detail_response(422, "Pairing ticket request is invalid");
+    };
+    let organization_id = input.organization_id.trim();
+    if organization_id.is_empty() {
+        return detail_response(422, "organization_id is required");
+    }
+    if uuid::Uuid::parse_str(&input.trust_profile_id).is_err() {
+        return detail_response(422, "trust_profile_id is required");
+    }
+    let membership = match state
+        .memberships
+        .get_membership(&user_id, organization_id)
+        .await
+    {
+        Ok(Some(value))
+            if value.user_id == user_id
+                && value.organization_id == organization_id
+                && value.is_active() =>
+        {
+            value
+        }
+        Ok(_) => return detail_response(403, "Active organization membership is required"),
+        Err(_) => return detail_response(503, "Organization authorization is unavailable"),
+    };
+    let mut trusted = base_trusted_identity(&actor);
+    trusted.organization_id = Some(membership.organization_id);
+    let response = execute_json_proxy(
+        &state,
+        &trusted,
+        HttpMethod::Post,
+        "/v1/devices/pairing-tickets",
+        json!({"organization_id": organization_id, "trust_profile_id": input.trust_profile_id}),
+        BTreeMap::new(),
+    )
+    .await;
+    let mut response = match response {
+        Ok(response) => upstream_response(response),
+        Err(response) => response,
+    };
+    insert_header(&mut response, "cache-control", "no-store");
+    response
 }
 
 fn api_documentation_handler() -> Response {
@@ -2276,6 +2492,186 @@ async fn deployment_profile_create_handler(
     upstream_response(response)
 }
 
+async fn load_template_issuer_context(
+    state: &Arc<GatewayRuntimeState>,
+    identity: &TrustedIdentityContext,
+    input: &crate::template_issuer_options::OptionsRequest,
+) -> Result<crate::template_issuer_options::TemplateIssuerContext, Response> {
+    input
+        .validate()
+        .map_err(|error| detail_response(error.0, error.1))?;
+    if identity.organization_id.as_deref() != Some(&input.organization_id) {
+        return Err(detail_response(
+            403,
+            "Request is not authorized for this organization",
+        ));
+    }
+    let path = format!(
+        "/v1/compliance-profiles/{}",
+        utf8_percent_encode(&input.compliance_profile_id, NON_ALPHANUMERIC)
+    );
+    let response = execute_proxy_request(
+        state,
+        identity,
+        HttpMethod::Get,
+        &path,
+        Vec::new(),
+        BTreeMap::new(),
+    )
+    .await
+    .map_err(|response| {
+        detail_response(
+            if matches!(response.status().as_u16(), 403 | 404 | 422) {
+                response.status().as_u16()
+            } else {
+                503
+            },
+            "Compliance profile could not be loaded.",
+        )
+    })?;
+    let profile = response_json(&response)
+        .ok_or_else(|| detail_response(502, "Compliance profile returned invalid data."))?;
+    crate::template_issuer_options::TemplateIssuerContext::from_profile(input, &profile)
+        .map_err(|error| detail_response(error.0, error.1))
+}
+
+async fn resolve_template_issuer_binding(
+    state: &Arc<GatewayRuntimeState>,
+    context: &crate::template_issuer_options::TemplateIssuerContext,
+    issuer_did: &str,
+) -> Result<Vec<Value>, crate::template_issuer_options::OptionsError> {
+    use crate::template_issuer_options::OptionsError;
+    let mut bindings = Vec::new();
+    for format in &context.formats {
+        let response = signing_service_request(state, HttpMethod::Post, "/internal/compat/resolve-issuer-did", Some(serde_json::to_vec(&json!({
+            "organization_id":context.organization_id, "issuer_did":issuer_did,
+            "credential_format":format.signing_wire(), "key_purpose":format.issuer_key_purpose()
+        })).expect("public issuer resolution"))).await
+            .map_err(|_| OptionsError(503, "Issuer registry is unavailable."))?;
+        match response.status_code {
+            409 => {
+                return Err(OptionsError(
+                    409,
+                    "Issuer DID is ambiguous for the template. Repair its registry bindings.",
+                ))
+            }
+            400 | 404 | 422 => {
+                return Err(OptionsError(
+                    422,
+                    "Issuer DID is incompatible with the template.",
+                ))
+            }
+            status if status >= 400 => {
+                return Err(OptionsError(503, "Issuer registry is unavailable."))
+            }
+            _ => {}
+        }
+        let resolved = response_json(&response)
+            .ok_or(OptionsError(502, "Issuer registry returned invalid data."))?;
+        bindings.push(context.binding(issuer_did, *format, &resolved)?);
+    }
+    Ok(bindings)
+}
+
+async fn template_issuer_options_handler(
+    state: Arc<GatewayRuntimeState>,
+    request: Request,
+) -> Response {
+    let identity = request
+        .extensions()
+        .get::<TrustedIdentityContext>()
+        .cloned()
+        .unwrap_or_default();
+    let bytes = match to_bytes(request.into_body(), state.maximum_body_bytes).await {
+        Ok(bytes) => bytes,
+        Err(_) => return detail_response(413, "Request body too large"),
+    };
+    let input: crate::template_issuer_options::OptionsRequest = match serde_json::from_slice(&bytes)
+    {
+        Ok(input) => input,
+        Err(_) => {
+            return detail_response(422, "Issuer option request is outside the public contract.")
+        }
+    };
+    let context = match load_template_issuer_context(&state, &identity, &input).await {
+        Ok(context) => context,
+        Err(response) => return response,
+    };
+    let mut list = GatewayRequest::new(
+        HttpMethod::Get,
+        "/v1/signing-keys/issuer-identities",
+        now_ms(),
+    );
+    list.query = BTreeMap::from([
+        (
+            "organization_id".into(),
+            vec![context.organization_id.clone()],
+        ),
+        (
+            "credential_format".into(),
+            vec![context.primary.canonical().into()],
+        ),
+        (
+            "key_purpose".into(),
+            vec![context.primary.issuer_key_purpose().into()],
+        ),
+    ]);
+    let response = match state
+        .proxy
+        .execute(
+            list,
+            &identity,
+            &proxy_overrides(&state, "/v1/signing-keys/issuer-identities", &identity),
+        )
+        .await
+    {
+        Ok(response) if response.status_code < 400 => response,
+        Ok(response) if response.status_code == 409 => {
+            return detail_response(
+                409,
+                "Issuer inventory is ambiguous. Repair its registry bindings.",
+            )
+        }
+        _ => return detail_response(503, "Issuer inventory is unavailable."),
+    };
+    let body = response_json(&response);
+    let Some(identities) = body.as_ref().and_then(|body| body["identities"].as_array()) else {
+        return detail_response(502, "Issuer inventory returned invalid data.");
+    };
+    let mut dids = BTreeSet::new();
+    for identity in identities {
+        let Some(did) = identity["issuer_did"]
+            .as_str()
+            .filter(|did| did.starts_with("did:") && did.len() <= 2048)
+        else {
+            return detail_response(502, "Issuer inventory returned an invalid identity.");
+        };
+        if identity["status"] != "active"
+            || identity["key_purpose"] != context.primary.issuer_key_purpose()
+            || identity["credential_format"]
+                .as_str()
+                .and_then(|format| marty_credential_template::CredentialFormat::parse(format).ok())
+                != Some(context.primary)
+        {
+            return detail_response(502, "Issuer inventory returned an incompatible identity.");
+        }
+        dids.insert(did.to_owned());
+    }
+    let mut available = Vec::new();
+    let mut rejected = Vec::new();
+    for did in dids {
+        match resolve_template_issuer_binding(&state, &context, &did).await {
+            Ok(bindings) => available.push(json!({"issuer_did":did, "bindings":bindings})),
+            Err(error) if matches!(error.0,409|422) => rejected.push(json!({"issuer_did":did, "reason":if error.0==409 {"ambiguous_identity"} else {"incompatible_identity"}})),
+            Err(error) => return detail_response(error.0, error.1),
+        }
+    }
+    let mut result = context.describe();
+    result["identities"] = json!(available);
+    result["rejected_issuers"] = json!(rejected);
+    ([("cache-control", "no-store")], Json(result)).into_response()
+}
+
 async fn credential_template_create_handler(
     state: Arc<GatewayRuntimeState>,
     request: Request,
@@ -2323,81 +2719,39 @@ async fn credential_template_create_handler(
             return response;
         }
     }
-    let compliance_profile_id = body["compliance_profile_id"]
-        .as_str()
-        .expect("validated compliance profile");
-    let compliance_path = format!(
-        "/v1/compliance-profiles/{}",
-        utf8_percent_encode(compliance_profile_id, NON_ALPHANUMERIC)
-    );
-    let compliance = match execute_proxy_request(
-        &state,
-        &identity,
-        HttpMethod::Get,
-        &compliance_path,
-        Vec::new(),
-        BTreeMap::new(),
-    )
-    .await
-    {
-        Ok(response) => response,
+    let input: crate::template_issuer_options::OptionsRequest = match serde_json::from_value(
+        json!({
+            "organization_id":organization_id,
+            "compliance_profile_id":body["compliance_profile_id"],
+            "credential_payload_format":body.get("credential_payload_format").filter(|value| !value.is_null())
+                .or_else(|| body["supported_formats"].as_array().and_then(|values| values.first())),
+            "supported_formats":body["supported_formats"]
+        }),
+    ) {
+        Ok(input) => input,
+        Err(_) => return detail_response(422, "Template format selection is invalid."),
+    };
+    let context = match load_template_issuer_context(&state, &identity, &input).await {
+        Ok(context) => context,
         Err(response) => return response,
     };
-    let Some(compliance) = response_json(&compliance) else {
-        return detail_response(502, "Compliance profile service returned invalid data");
-    };
-    if compliance
-        .get("organization_id")
-        .and_then(Value::as_str)
-        .is_some_and(|owner| owner != organization_id)
-    {
-        return detail_response(
-            403,
-            "Access denied: compliance profile belongs to another organization",
-        );
+    if let Err(error) = context.validate_template(&body) {
+        return detail_response(error.0, error.1);
     }
     let issuer_did = body["issuer_did"]
         .as_str()
         .expect("validated DID")
         .to_owned();
-    let credential_format = credential_template_issuer_format(&body);
-    let key_purpose = issuer_key_purpose(credential_format.as_deref());
-    let resolved = match signing_service_request(
-        &state,
-        HttpMethod::Post,
-        "/internal/compat/resolve-issuer-did",
-        Some(
-            serde_json::to_vec(&json!({
-                "organization_id": organization_id, "issuer_did": issuer_did,
-                "credential_format": credential_format, "key_purpose": key_purpose
-            }))
-            .expect("resolution request"),
-        ),
-    )
-    .await
-    {
-        Ok(response) if response.status_code < 400 => response,
-        Ok(response) => return upstream_response(response),
-        Err(response) => return response,
-    };
-    let valid_identity = response_json(&resolved).is_some_and(|resolved| {
-        resolved.get("ok") == Some(&Value::Bool(true))
-            && resolved.get("organization_id").and_then(Value::as_str)
-                == Some(organization_id.as_str())
-            && resolved.get("issuer_did").and_then(Value::as_str) == Some(issuer_did.as_str())
-            && resolved.get("key_purpose").and_then(Value::as_str) == Some(key_purpose)
-            && resolved
-                .get("public_jwk")
-                .and_then(Value::as_object)
-                .is_some_and(|jwk| {
-                    !["d", "p", "q", "k"]
-                        .iter()
-                        .any(|field| jwk.contains_key(*field))
-                })
-    });
-    if !valid_identity {
-        return detail_response(422, "issuer_did must resolve to exactly one active organization-owned signing identity for this template.");
+    if let Err(error) = resolve_template_issuer_binding(&state, &context, &issuer_did).await {
+        return detail_response(error.0, error.1);
     }
+    body["credential_payload_format"] = json!(context.primary.canonical());
+    body["supported_formats"] = json!(context
+        .formats
+        .iter()
+        .map(|format| format.canonical())
+        .collect::<Vec<_>>());
+    body["issuance_protocol"] = json!(context.protocol.wire());
     body["issuer_did"] = Value::String(issuer_did);
     let response = match execute_json_proxy(
         &state,
@@ -2427,17 +2781,6 @@ async fn credential_template_create_handler(
     response.body = serde_json::to_vec(&projected).ok();
     response.headers.remove("content-length");
     upstream_response(response)
-}
-
-fn credential_template_issuer_format(body: &Value) -> Option<String> {
-    body.get("credential_payload_format")
-        .and_then(Value::as_str)
-        .or_else(|| {
-            body.get("supported_formats")
-                .and_then(Value::as_array)
-                .and_then(|values| (values.len() == 1).then(|| values[0].as_str()).flatten())
-        })
-        .and_then(crate::issuance_create::public_format)
 }
 
 fn issuer_key_purpose(credential_format: Option<&str>) -> &'static str {
@@ -2939,7 +3282,7 @@ async fn issuance_create_handler(state: Arc<GatewayRuntimeState>, request: Reque
             HttpMethod::Put,
             &registration_path,
             registration,
-            BTreeMap::from([("x-api-key".into(), state.issuance_service_api_key.clone())]),
+            BTreeMap::new(),
         )
         .await
         {
@@ -2975,14 +3318,36 @@ fn proxy_overrides(
     identity: &TrustedIdentityContext,
 ) -> ProxyOverrides {
     let mut overrides = ProxyOverrides::default();
+    if route_ownership(path).service == "device-registration" {
+        if let Some(key) = &state.device_registration_gateway_key {
+            overrides
+                .headers
+                .insert("x-service-token".into(), key.clone());
+        }
+    }
     if requires_issuance_service_auth(path) {
         overrides
             .headers
             .insert("x-api-key".into(), state.issuance_service_api_key.clone());
     }
-    // Only the exact Gateway-authorized DSC issuance action receives the
-    // internal Signing Keys credential. GatewayProxy strips caller identity
-    // and credential headers before applying these trusted overrides.
+    if (is_public_service_sign_path(path) || is_public_service_csr_path(path))
+        && identity.required_permission.as_deref() == Some("signing-key:create")
+        && identity.organization_id.is_some()
+    {
+        if let Some(key) = &state.service_sign_gateway_key {
+            overrides.headers.insert("x-api-key".into(), key.clone());
+        }
+    }
+    if is_public_issuer_csr_path(path)
+        && identity.required_permission.as_deref() == Some("signing-key:create")
+        && identity.organization_id.is_some()
+    {
+        if let Some(key) = &state.issuer_sign_key {
+            overrides.headers.insert("x-api-key".into(), key.clone());
+        }
+    }
+    // GatewayProxy strips caller identity and credential headers before
+    // applying these trusted action-specific Signing Keys credentials.
     if path == "/v1/signing-keys/issuer-identities/dsc-certificate"
         && identity.required_permission.as_deref() == Some("passport-certificate:issue")
         && identity.organization_id.is_some()
@@ -3029,6 +3394,276 @@ fn proxy_overrides(
             .insert("organization_id".into(), vec![organization_id]);
     }
     overrides
+}
+
+fn is_public_service_sign_path(path: &str) -> bool {
+    path.strip_prefix("/v1/signing-keys/services/")
+        .and_then(|tail| tail.strip_suffix("/sign"))
+        .is_some_and(|service_id| !service_id.is_empty() && !service_id.contains('/'))
+}
+
+fn is_public_service_csr_path(path: &str) -> bool {
+    path.strip_prefix("/v1/signing-keys/services/")
+        .and_then(|tail| tail.strip_suffix("/certificate-csr"))
+        .is_some_and(|service_id| !service_id.is_empty() && !service_id.contains('/'))
+}
+
+fn is_public_issuer_csr_path(path: &str) -> bool {
+    path == "/v1/signing-keys/issuer-identities/certificate-csr"
+}
+
+async fn mint_public_issuer_csr_grant(
+    state: &GatewayRuntimeState,
+    identity: &TrustedIdentityContext,
+    path: &str,
+    operation_id: &str,
+    body: Option<&[u8]>,
+    overrides: &ProxyOverrides,
+) -> Result<String, Response> {
+    let organization_id = identity
+        .organization_id
+        .as_deref()
+        .filter(|tenant| !tenant.trim().is_empty())
+        .ok_or_else(|| detail_response(403, "Trusted issuer CSR tenant is required."))?;
+    if identity.required_permission.as_deref() != Some("signing-key:create")
+        || overrides.headers.get("x-api-key") != state.issuer_sign_key.as_ref()
+    {
+        return Err(detail_response(
+            403,
+            "Issuer CSR operation is not authorized.",
+        ));
+    }
+    let request: IssuerCsrIntent = body
+        .and_then(|bytes| serde_json::from_slice(bytes).ok())
+        .ok_or_else(|| detail_response(422, "Issuer CSR request is invalid."))?;
+    if request
+        .organization_id
+        .as_deref()
+        .is_some_and(|tenant| tenant != organization_id)
+    {
+        return Err(detail_response(
+            403,
+            "Issuer CSR tenant does not match authorization.",
+        ));
+    }
+    if !request.issuer_did.starts_with("did:")
+        || !(matches!(request.key_purpose.as_str(), "csca" | "x509_doc_signer")
+            || (request.key_purpose == "mdoc_dsc"
+                && request.credential_format.eq_ignore_ascii_case("MDOC")))
+        || !matches!(request.algorithm.as_str(), "ES256" | "ES384" | "ES512")
+    {
+        return Err(detail_response(422, "Issuer CSR identity is invalid."));
+    }
+    let minter = state
+        .issuer_csr_grant_minter
+        .as_ref()
+        .ok_or_else(|| detail_response(503, "Issuer CSR grant minter is unavailable."))?;
+    let payload = request.bound_payload();
+    let binding = GrantBinding {
+        origin: SigningOrigin::GatewayIssuerDid,
+        operation_id,
+        organization_id,
+        route: path,
+        service_id: None,
+        issuer_did: Some(&request.issuer_did),
+        key_reference: None,
+        key_purpose: &request.key_purpose,
+        algorithm: &request.algorithm,
+        payload: &payload,
+    };
+    minter
+        .mint(&binding)
+        .await
+        .map_err(|error| match error {
+            GrantError::Malformed | GrantError::BindingMismatch | GrantError::Expired => {
+                detail_response(422, "Issuer CSR grant binding is invalid.")
+            }
+            _ => detail_response(503, "Issuer CSR grant minter is unavailable."),
+        })?
+        .to_header_value()
+        .map_err(|_| detail_response(503, "Issuer CSR grant minter is unavailable."))
+}
+
+async fn mint_public_service_csr_grant(
+    state: &GatewayRuntimeState,
+    identity: &TrustedIdentityContext,
+    path: &str,
+    operation_id: &str,
+    body: Option<&[u8]>,
+    overrides: &ProxyOverrides,
+) -> Result<String, Response> {
+    let organization_id = identity
+        .organization_id
+        .as_deref()
+        .filter(|tenant| !tenant.trim().is_empty())
+        .ok_or_else(|| detail_response(403, "Trusted CSR tenant is required."))?;
+    if identity.required_permission.as_deref() != Some("signing-key:create")
+        || overrides.headers.get("x-api-key") != state.service_sign_gateway_key.as_ref()
+    {
+        return Err(detail_response(403, "CSR operation is not authorized."));
+    }
+    let service_id = path
+        .strip_prefix("/v1/signing-keys/services/")
+        .and_then(|tail| tail.strip_suffix("/certificate-csr"))
+        .filter(|service_id| !service_id.is_empty() && !service_id.contains('/'))
+        .ok_or_else(|| detail_response(404, "CSR service route not found."))?;
+    let request: ServiceCsrIntent = body
+        .and_then(|bytes| serde_json::from_slice(bytes).ok())
+        .ok_or_else(|| detail_response(422, "CSR request is invalid."))?;
+    if request
+        .organization_id
+        .as_deref()
+        .is_some_and(|tenant| tenant != organization_id)
+    {
+        return Err(detail_response(
+            403,
+            "CSR tenant does not match authorization.",
+        ));
+    }
+    if request.key_reference.is_empty()
+        || request.key_reference != request.key_reference.trim()
+        || !matches!(request.algorithm.as_str(), "ES256" | "ES384" | "ES512")
+    {
+        return Err(detail_response(
+            422,
+            "CSR key reference or algorithm is invalid.",
+        ));
+    }
+    let minter = state
+        .service_sign_grant_minter
+        .as_ref()
+        .ok_or_else(|| detail_response(503, "CSR grant minter is unavailable."))?;
+    let payload = request.bound_payload();
+    let binding = GrantBinding {
+        origin: SigningOrigin::GatewayService,
+        operation_id,
+        organization_id,
+        route: path,
+        service_id: Some(service_id),
+        issuer_did: None,
+        key_reference: Some(&request.key_reference),
+        key_purpose: "x509_csr",
+        algorithm: &request.algorithm,
+        payload: &payload,
+    };
+    minter
+        .mint(&binding)
+        .await
+        .map_err(|error| match error {
+            GrantError::Malformed | GrantError::BindingMismatch | GrantError::Expired => {
+                detail_response(422, "CSR grant binding is invalid.")
+            }
+            _ => detail_response(503, "CSR grant minter is unavailable."),
+        })?
+        .to_header_value()
+        .map_err(|_| detail_response(503, "CSR grant minter is unavailable."))
+}
+
+async fn mint_public_service_sign_grant(
+    state: &GatewayRuntimeState,
+    identity: &TrustedIdentityContext,
+    path: &str,
+    operation_id: &str,
+    body: Option<&[u8]>,
+    overrides: &ProxyOverrides,
+) -> Result<String, Response> {
+    let organization_id = identity
+        .organization_id
+        .as_deref()
+        .filter(|tenant| !tenant.trim().is_empty())
+        .ok_or_else(|| detail_response(403, "Trusted signing tenant is required."))?;
+    if identity.required_permission.as_deref() != Some("signing-key:create")
+        || overrides.headers.get("x-api-key") != state.service_sign_gateway_key.as_ref()
+    {
+        return Err(detail_response(403, "Signing operation is not authorized."));
+    }
+    let service_id = path
+        .strip_prefix("/v1/signing-keys/services/")
+        .and_then(|tail| tail.strip_suffix("/sign"))
+        .filter(|service_id| !service_id.is_empty() && !service_id.contains('/'))
+        .ok_or_else(|| detail_response(404, "Signing service route not found."))?;
+    let request: Value = body
+        .and_then(|bytes| serde_json::from_slice(bytes).ok())
+        .ok_or_else(|| detail_response(422, "Signing request must be a JSON object."))?;
+    let payload = gateway_signing_payload(&request)
+        .ok_or_else(|| detail_response(422, "Signing payload is invalid."))?;
+    let request = request
+        .as_object()
+        .ok_or_else(|| detail_response(422, "Signing request must be a JSON object."))?;
+    if request
+        .get("organization_id")
+        .is_some_and(|value| value.as_str() != Some(organization_id))
+    {
+        return Err(detail_response(
+            403,
+            "Signing tenant does not match authorization.",
+        ));
+    }
+    let required = |name: &str| {
+        request
+            .get(name)
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty() && *value == value.trim())
+    };
+    let (Some(key_reference), Some(key_purpose), Some(algorithm)) = (
+        required("key_reference"),
+        required("key_purpose"),
+        required("algorithm"),
+    ) else {
+        return Err(detail_response(
+            422,
+            "Signing key, purpose and algorithm are required.",
+        ));
+    };
+    let minter = state
+        .service_sign_grant_minter
+        .as_ref()
+        .ok_or_else(|| detail_response(503, "Signing grant minter is unavailable."))?;
+    let binding = GrantBinding {
+        origin: SigningOrigin::GatewayService,
+        operation_id,
+        organization_id,
+        route: path,
+        service_id: Some(service_id),
+        issuer_did: None,
+        key_reference: Some(key_reference),
+        key_purpose,
+        algorithm,
+        payload: &payload,
+    };
+    minter
+        .mint(&binding)
+        .await
+        .map_err(|error| match error {
+            GrantError::Malformed | GrantError::BindingMismatch | GrantError::Expired => {
+                detail_response(422, "Signing grant binding is invalid.")
+            }
+            _ => detail_response(503, "Signing grant minter is unavailable."),
+        })?
+        .to_header_value()
+        .map_err(|_| detail_response(503, "Signing grant minter is unavailable."))
+}
+
+fn gateway_signing_payload(request: &Value) -> Option<Vec<u8>> {
+    let field = |name: &str| {
+        request
+            .get(name)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    };
+    let payload = if let Some(encoded) = field("payload_b64") {
+        let unpadded = encoded.trim_end_matches('=');
+        URL_SAFE_NO_PAD
+            .decode(unpadded)
+            .or_else(|_| STANDARD_NO_PAD.decode(unpadded))
+            .or_else(|_| URL_SAFE.decode(encoded))
+            .or_else(|_| STANDARD.decode(encoded))
+            .ok()?
+    } else {
+        hex::decode(field("payload_hex")?).ok()?
+    };
+    (!payload.is_empty()).then_some(payload)
 }
 
 fn compatibility_upstream_path(
@@ -3106,7 +3741,14 @@ fn compatibility_upstream_path(
 fn requires_gateway_service_token(service: &str) -> bool {
     matches!(
         service,
-        "organizations" | "credential-templates" | "trust-profiles" | "presentation-policies"
+        "organizations"
+            | "credential-templates"
+            | "trust-profiles"
+            | "presentation-policies"
+            | "compliance-profiles"
+            | "deployment-profiles"
+            | "revocation-profiles"
+            | "flows"
     )
 }
 
@@ -3143,10 +3785,17 @@ async fn internal_signing_compatibility_handler(
     state: Arc<GatewayRuntimeState>,
     request: Request,
 ) -> Response {
-    if !constant_time_header_matches(
-        request.headers().get("x-api-key"),
-        &state.signing_service_api_key,
-    ) {
+    let expected = if request.method() == axum::http::Method::POST
+        && request.uri().path() == "/internal/signing-keys/issuer-dids/sign"
+    {
+        let Some(key) = state.issuer_sign_key.as_ref() else {
+            return detail_response(401, "Invalid internal API key");
+        };
+        key
+    } else {
+        &state.signing_service_api_key
+    };
+    if !constant_time_header_matches(request.headers().get("x-api-key"), expected) {
         return detail_response(401, "Invalid internal API key");
     }
     let Some(method) = http_method(request.method().as_str()) else {
@@ -3165,9 +3814,7 @@ async fn internal_signing_compatibility_handler(
     };
     if matches!(
         &operation,
-        SigningCompatibilityOperation::FlowEnvelopeWrap
-            | SigningCompatibilityOperation::FlowEnvelopeUnwrap
-            | SigningCompatibilityOperation::PassportArtifactEncrypt
+        SigningCompatibilityOperation::PassportArtifactEncrypt
             | SigningCompatibilityOperation::PassportArtifactDecrypt
             | SigningCompatibilityOperation::PassportCallbackVerify
     ) {
@@ -3203,13 +3850,6 @@ async fn internal_signing_compatibility_handler(
             request,
         )
         .await;
-    }
-    if let SigningCompatibilityOperation::ServiceSign { service_id } = &operation {
-        let path = format!(
-            "/internal/compat/services/{}/sign",
-            utf8_percent_encode(service_id, NON_ALPHANUMERIC)
-        );
-        return forward_signing_body(&state, &organization_id, &path, request).await;
     }
     if operation == SigningCompatibilityOperation::CreateProfile {
         return forward_profile_write(
@@ -3332,11 +3972,21 @@ async fn forward_signing_compatibility_json(
     path: &str,
     body: Value,
 ) -> Response {
-    match signing_service_request(
+    forward_signing_compatibility_json_with_grant(state, path, body, None).await
+}
+
+async fn forward_signing_compatibility_json_with_grant(
+    state: &Arc<GatewayRuntimeState>,
+    path: &str,
+    body: Value,
+    grant_header: Option<&str>,
+) -> Response {
+    match signing_service_request_with_grant(
         state,
         HttpMethod::Post,
         path,
         Some(serde_json::to_vec(&body).expect("compatibility request serializes")),
+        grant_header,
     )
     .await
     {
@@ -3351,6 +4001,18 @@ async fn forward_signing_body(
     path: &str,
     request: Request,
 ) -> Response {
+    let grant_header = match request.headers().get(marty_signing_grant::HEADER_NAME) {
+        Some(value) => {
+            let Ok(value) = value.to_str() else {
+                return detail_response(422, "Signing grant header is malformed.");
+            };
+            if marty_signing_grant::GrantEnvelope::from_header_value(value).is_err() {
+                return detail_response(422, "Signing grant header is malformed.");
+            }
+            Some(value.to_owned())
+        }
+        None => None,
+    };
     let body = match to_bytes(request.into_body(), state.maximum_body_bytes).await {
         Ok(body) => body,
         Err(_) => return detail_response(413, "Request body too large"),
@@ -3360,7 +4022,7 @@ async fn forward_signing_body(
         _ => return detail_response(422, "Request body must be a JSON object."),
     };
     body["organization_id"] = Value::String(organization_id.into());
-    forward_signing_compatibility_json(state, path, body).await
+    forward_signing_compatibility_json_with_grant(state, path, body, grant_header.as_deref()).await
 }
 
 async fn forward_profile_write(
@@ -3432,19 +4094,11 @@ async fn forward_bound_envelope(
         Ok(body) => body,
         Err(_) => return detail_response(413, "Request body too large"),
     };
-    let mut body: Value = match serde_json::from_slice(&body) {
+    let body: Value = match serde_json::from_slice(&body) {
         Ok(Value::Object(body)) => Value::Object(body),
         _ => return detail_response(422, "Request body must be a JSON object."),
     };
     let path = match operation {
-        SigningCompatibilityOperation::FlowEnvelopeWrap => {
-            body["organization_id"] = Value::String(organization_id.into());
-            "/internal/flow-key-envelopes/wrap".to_owned()
-        }
-        SigningCompatibilityOperation::FlowEnvelopeUnwrap => {
-            body["organization_id"] = Value::String(organization_id.into());
-            "/internal/flow-key-envelopes/unwrap".to_owned()
-        }
         SigningCompatibilityOperation::PassportArtifactEncrypt => format!(
             "/internal/documents/{}/passport-artifacts/encrypt",
             utf8_percent_encode(organization_id, NON_ALPHANUMERIC)
@@ -3613,6 +4267,16 @@ async fn signing_service_request(
     path: &str,
     body: Option<Vec<u8>>,
 ) -> Result<GatewayResponse, Response> {
+    signing_service_request_with_grant(state, method, path, body, None).await
+}
+
+async fn signing_service_request_with_grant(
+    state: &Arc<GatewayRuntimeState>,
+    method: HttpMethod,
+    path: &str,
+    body: Option<Vec<u8>>,
+    grant_header: Option<&str>,
+) -> Result<GatewayResponse, Response> {
     let mut request =
         GatewayRequest::new(method, format!("/__gateway/signing-keys{path}"), now_ms());
     request
@@ -3624,8 +4288,20 @@ async fn signing_service_request(
             .insert("content-type".into(), "application/json".into());
     }
     request.body = body;
+    let api_key = if path == "/internal/compat/issuer-dids/sign" {
+        state
+            .issuer_sign_key
+            .as_ref()
+            .ok_or_else(|| detail_response(503, "Issuer signing credential is unavailable."))?
+    } else {
+        &state.signing_service_api_key
+    };
+    let mut headers = BTreeMap::from([("x-api-key".into(), api_key.clone())]);
+    if let Some(grant_header) = grant_header {
+        headers.insert(marty_signing_grant::HEADER_NAME.into(), grant_header.into());
+    }
     let overrides = ProxyOverrides {
-        headers: BTreeMap::from([("x-api-key".into(), state.signing_service_api_key.clone())]),
+        headers,
         ..ProxyOverrides::default()
     };
     state
@@ -3780,9 +4456,14 @@ async fn vc_api_verify_handler(state: Arc<GatewayRuntimeState>, request: Request
         .extensions
         .get::<ConnectInfo<SocketAddr>>()
         .map(|value| value.0.ip().to_string());
+    let overrides = proxy_overrides(
+        &state,
+        &format!("/v1/presentation-policies/{policy_id}/evaluate"),
+        &identity,
+    );
     let upstream = match state
         .proxy
-        .execute(upstream_request, &identity, &ProxyOverrides::default())
+        .execute(upstream_request, &identity, &overrides)
         .await
     {
         Ok(response) => response,
@@ -3955,9 +4636,34 @@ async fn vc_api_issue_handler(state: Arc<GatewayRuntimeState>, request: Request)
     else {
         return detail_response(502, "Marty issuance did not return a proof nonce");
     };
-    let proof = match marty_oid4vci::proof::create_proof_jwt(&issuer_url, &nonce) {
-        Ok(proof) => proof,
+    let proof_request = json!({
+        "organization_id": organization_id,
+        "issuer_url": issuer_url,
+        "nonce": nonce,
+    });
+    let proof_body = match serde_json::to_vec(&proof_request) {
+        Ok(body) => body,
         Err(_) => return detail_response(503, "could not generate OID4VCI holder proof"),
+    };
+    let proof_response = match signing_service_request(
+        &state,
+        HttpMethod::Post,
+        "/internal/vc-api/holder-proof",
+        Some(proof_body),
+    )
+    .await
+    {
+        Ok(response) if response.status_code == 200 => response,
+        _ => return detail_response(503, "could not generate OID4VCI holder proof"),
+    };
+    let Some(proof) = response_json(&proof_response)
+        .as_ref()
+        .and_then(|value| value.get("proof_jwt"))
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+    else {
+        return detail_response(503, "could not generate OID4VCI holder proof");
     };
     let issued = match execute_json_proxy(
         &state,
@@ -4167,6 +4873,11 @@ fn upstream_response(upstream: GatewayResponse) -> Response {
         StatusCode::from_u16(upstream.status_code).unwrap_or(StatusCode::BAD_GATEWAY);
     for (name, value) in upstream.headers {
         insert_header(&mut response, &name, &value);
+    }
+    for cookie in upstream.set_cookies {
+        if let Ok(value) = HeaderValue::from_str(&cookie) {
+            response.headers_mut().append(header::SET_COOKIE, value);
+        }
     }
     response
 }
@@ -4545,7 +5256,13 @@ fn trusted_identity(
         api_key_scopes: identity.api_key_scopes.clone(),
         organization_permissions: membership
             .map(|item| item.permissions.iter().cloned().collect())
-            .unwrap_or_default(),
+            .unwrap_or_else(|| {
+                if identity.source == AuthenticationSource::ApiKey {
+                    vec![required_permission.to_owned()]
+                } else {
+                    Vec::new()
+                }
+            }),
         organization_roles: membership
             .map(|item| item.role_names.iter().cloned().collect())
             .unwrap_or_default(),
@@ -4587,6 +5304,8 @@ fn map_failure(
 #[cfg(test)]
 mod tests {
     use super::*;
+    include!("../tests/support/template_issuer_options_behavior.rs");
+    use marty_signing_grant::{GrantClaims, GrantEnvelope};
     use std::{
         collections::BTreeSet,
         sync::atomic::{AtomicBool, Ordering},
@@ -4599,12 +5318,69 @@ mod tests {
     use mmf_security::InMemoryRateLimiter;
     use tower::ServiceExt;
 
+    #[test]
+    fn upstream_response_appends_both_auth_cookies() {
+        let response = upstream_response(GatewayResponse {
+            status_code: 302,
+            headers: BTreeMap::from([("location".into(), "/console".into())]),
+            set_cookies: vec![
+                "sessionId=synthetic; Path=/; Secure".into(),
+                "marty_impersonation_handoff=; Max-Age=0; Path=/; Secure".into(),
+            ],
+            body: None,
+            response_time_ms: None,
+            upstream_service: Some("auth".into()),
+        });
+        let cookies = response
+            .headers()
+            .get_all(header::SET_COOKIE)
+            .iter()
+            .map(|value| value.to_str().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(cookies.len(), 2);
+        assert!(cookies[0].starts_with("sessionId="));
+        assert!(cookies[1].starts_with("marty_impersonation_handoff="));
+    }
+
     use crate::{
         contract::GatewayContract,
         middleware::{ApiKeyIdentity, SessionIdentity},
         providers::HttpGatewayProvider,
         registry::StaticServiceRegistry,
     };
+
+    // Exercise Gateway's authorization and forwarding contract without a
+    // plaintext KMS endpoint. Transit mint/verify has connected OpenBao tests.
+    struct ContractGrantMinter(SigningOrigin);
+
+    #[async_trait]
+    impl GrantMinting for ContractGrantMinter {
+        async fn mint(&self, binding: &GrantBinding<'_>) -> Result<GrantEnvelope, GrantError> {
+            if binding.origin != self.0 {
+                return Err(GrantError::BindingMismatch);
+            }
+            let now = Utc::now().timestamp();
+            Ok(GrantEnvelope {
+                claims: GrantClaims {
+                    version: 1,
+                    origin: binding.origin,
+                    operation_id: binding.operation_id.to_owned(),
+                    organization_id: binding.organization_id.to_owned(),
+                    route: binding.route.to_owned(),
+                    service_id: binding.service_id.map(str::to_owned),
+                    issuer_did: binding.issuer_did.map(str::to_owned),
+                    key_reference: binding.key_reference.map(str::to_owned),
+                    key_purpose: binding.key_purpose.to_owned(),
+                    algorithm: binding.algorithm.to_owned(),
+                    payload_sha256_b64: marty_signing_grant::payload_digest(binding.payload),
+                    issued_at: now,
+                    expires_at: now + 30,
+                    nonce: "contract-only-nonce".into(),
+                },
+                hmac: "not-a-production-hmac".into(),
+            })
+        }
+    }
 
     #[test]
     fn gateway_originated_management_uses_the_selected_native_owner() {
@@ -4722,6 +5498,7 @@ mod tests {
             } else {
                 "api_key:key-1".into()
             },
+            authentication_time_unix: None,
             user_email: None,
             user_domain: None,
             session_organization_id: organization.map(str::to_owned),
@@ -4998,6 +5775,9 @@ mod tests {
             }
             if request.path.starts_with("/internal/") {
                 let expected = match instance.service_name.as_str() {
+                    "signing-keys" if request.path == "/internal/compat/issuer-dids/sign" => {
+                        Some("dedicated-issuer-sign-key-000001")
+                    }
                     "signing-keys" => Some("internal-signing-key"),
                     "issuance" | "issuance-native" => Some("issuance-service-key"),
                     "organizations" => None,
@@ -5040,6 +5820,7 @@ mod tests {
                 assert_eq!(request.header("x-api-key"), Some("issuance-service-key"));
                 return Ok(GatewayResponse {
                     status_code: 404,
+                    set_cookies: Vec::new(),
                     headers: BTreeMap::from([("content-type".into(), "application/json".into())]),
                     body: Some(br#"{"detail":"Application not found"}"#.to_vec()),
                     response_time_ms: None,
@@ -5060,6 +5841,7 @@ mod tests {
             }
             let body = match request.path.as_str() {
                 path if path.contains("presentation-policies") && path.ends_with("/evaluate") => {
+                    assert_eq!(request.header("x-service-token"), Some("s".repeat(32).as_str()));
                     br#"{"decision":"allow","result":"passed"}"#.to_vec()
                 }
                 "/v1/compliance-profiles/system/discoverable" => serde_json::to_vec(&json!({
@@ -5071,7 +5853,7 @@ mod tests {
                 }))
                 .expect("profiles"),
                 "/v1/compliance-profiles/profile%2D1" => {
-                    br#"{"id":"profile-1","organization_id":"org-1"}"#.to_vec()
+                    br#"{"id":"profile-1","organization_id":"org-1","status":"ACTIVE","credential_format":"SD_JWT_VC","issuance_protocol":"OID4VCI_PRE_AUTH"}"#.to_vec()
                 }
                 path if path.starts_with("/.well-known/openid-credential-issuer") => {
                     serde_json::to_vec(&json!({
@@ -5146,22 +5928,6 @@ mod tests {
                 {
                     br#"{"deleted":"profile-1"}"#.to_vec()
                 }
-                "/internal/flow-key-envelopes/wrap" => {
-                    let body: Value = serde_json::from_slice(
-                        request.body.as_deref().expect("flow envelope body"),
-                    )
-                    .expect("flow envelope JSON");
-                    assert_eq!(body["organization_id"], "org-1");
-                    br#"{"schema":"marty.flow-key-envelope/v1","flow_instance_id":"flow-1","ciphertext":"vault:v1:test"}"#.to_vec()
-                }
-                "/internal/flow-key-envelopes/unwrap" => {
-                    let body: Value = serde_json::from_slice(
-                        request.body.as_deref().expect("flow envelope body"),
-                    )
-                    .expect("flow envelope JSON");
-                    assert_eq!(body["organization_id"], "org-1");
-                    br#"{"schema":"marty.flow-key-envelope/v1","flow_instance_id":"flow-1","plaintext_b64":"cHJpdmF0ZS1qd2s"}"#.to_vec()
-                }
                 "/internal/documents/org%2D1/passport-artifacts/encrypt" => {
                     let body: Value = serde_json::from_slice(
                         request.body.as_deref().expect("passport artifact body"),
@@ -5226,6 +5992,7 @@ mod tests {
                         "verification_method_id": "did:web:issuer.example#issuer-key",
                         "key_purpose": "vc_jwt_issuer",
                         "algorithm": "ES256",
+                        "issuer_profile":{"organization_id":"org-1","issuer_did":"did:web:issuer.example","key_purpose":"vc_jwt_issuer","credential_format":"SD_JWT_VC","algorithm":"ES256","status":"active"},
                         "public_jwk": {"kty": "EC", "crv": "P-256", "x": "x", "y": "y"}
                     }))
                     .expect("issuer DID response")
@@ -5267,24 +6034,6 @@ mod tests {
                         "certificate_expires_at": "2027-01-01T00:00:00Z"
                     }))
                     .expect("public identity response")
-                }
-                "/internal/compat/services/service%2D1/sign" => {
-                    let body: Value =
-                        serde_json::from_slice(request.body.as_deref().expect("service sign body"))
-                            .expect("service sign JSON");
-                    assert_eq!(body["organization_id"], "org-1");
-                    assert_eq!(body["payload_b64"], "cGF5bG9hZA");
-                    serde_json::to_vec(&json!({
-                        "ok": true,
-                        "service_id": "service-1",
-                        "algorithm": "ES256",
-                        "payload_length": 7,
-                        "signature_encoding": "der",
-                        "signature_b64": "c2lnbmF0dXJl",
-                        "signature_hex": "7369676e6174757265",
-                        "signed_at": "2026-08-20T00:00:00+00:00"
-                    }))
-                    .expect("service sign response")
                 }
                 "/internal/compat/issuer-dids/sign" => {
                     let body: Value =
@@ -5427,6 +6176,7 @@ mod tests {
                     if request.method == HttpMethod::Get && request.query.contains_key("limit") {
                         return Ok(GatewayResponse {
                             status_code: 200,
+                            set_cookies: Vec::new(),
                             headers: BTreeMap::from([(
                                 "content-type".into(),
                                 "application/json".into(),
@@ -5730,6 +6480,12 @@ mod tests {
                     }))
                     .expect("presentation policy response")
                 }
+                "/v1/issuance/oid4vci-clients" => {
+                    assert_eq!(instance.service_name, issuance_native::NATIVE_SERVICE);
+                    assert_eq!(request.header("x-api-key"), Some("issuance-service-key"));
+                    serde_json::to_vec(&json!({"client_id": "official-wallet"}))
+                        .expect("client registration")
+                }
                 "/v1/issuance/initiate" => {
                     assert_eq!(request.header("x-api-key"), Some("issuance-service-key"));
                     let body: Value =
@@ -5798,7 +6554,25 @@ mod tests {
                 }))
                 .expect("issued credential"),
                 "/v1/issuance/nonce" => br#"{"c_nonce":"nonce-1"}"#.to_vec(),
-                "/v1/issuance/credential" => serde_json::to_vec(&json!({
+                "/internal/vc-api/holder-proof" => {
+                    assert_eq!(instance.service_name, "signing-keys");
+                    let body: Value = serde_json::from_slice(
+                        request.body.as_deref().expect("holder proof request body"),
+                    )
+                    .expect("holder proof request JSON");
+                    assert_eq!(body["organization_id"], "org-1");
+                    assert_eq!(body["issuer_url"], "https://issuer.example/org/org-1");
+                    assert_eq!(body["nonce"], "nonce-1");
+                    assert!(body.get("key_reference").is_none());
+                    br#"{"proof_jwt":"remotely-signed-proof"}"#.to_vec()
+                }
+                "/v1/issuance/credential" => {
+                    let request_body: Value = serde_json::from_slice(
+                        request.body.as_deref().expect("credential request body"),
+                    )
+                    .expect("credential request JSON");
+                    assert_eq!(request_body["proofs"]["jwt"][0], "remotely-signed-proof");
+                    serde_json::to_vec(&json!({
                     "credentials": [{
                         "format": "ldp_vc",
                         "credential": {
@@ -5812,12 +6586,14 @@ mod tests {
                             }
                         }
                     }]
-                }))
-                .expect("credential"),
+                    }))
+                    .expect("credential")
+                }
                 _ => br#"{"ok":true}"#.to_vec(),
             };
             Ok(GatewayResponse {
                 status_code: 200,
+                set_cookies: Vec::new(),
                 headers: BTreeMap::from([("content-type".into(), "application/json".into())]),
                 body: Some(body),
                 response_time_ms: None,
@@ -5865,6 +6641,27 @@ mod tests {
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({
                 "detail": "repository failed: password=owner-secret database=issuance"
+            })),
+        )
+            .into_response()
+    }
+
+    async fn ownerless_system_delivery_destination(request: Request) -> Response {
+        assert_eq!(
+            request.uri().path(),
+            "/v1/delivery-destinations/dd-elevenid-wallet"
+        );
+        assert_eq!(request.headers().get("x-user-id").unwrap(), "user-1");
+        assert_eq!(
+            request.headers().get("x-service-token").unwrap(),
+            "service-secret"
+        );
+        (
+            StatusCode::OK,
+            Json(json!({
+                "id": "dd-elevenid-wallet",
+                "is_system": true,
+                "organization_id": null
             })),
         )
             .into_response()
@@ -6006,6 +6803,20 @@ mod tests {
         upstream: Arc<dyn UpstreamClient>,
         passport_native: bool,
     ) -> Arc<GatewayRuntimeState> {
+        runtime_state_with_upstream_and_signing_url(
+            event_streams,
+            upstream,
+            passport_native,
+            "http://signing-keys:8080",
+        )
+    }
+
+    fn runtime_state_with_upstream_and_signing_url(
+        event_streams: Arc<dyn EventStreamProvider>,
+        upstream: Arc<dyn UpstreamClient>,
+        passport_native: bool,
+        signing_url: &str,
+    ) -> Arc<GatewayRuntimeState> {
         let routes = GatewayContract::load()
             .expect("contract")
             .runtime_route_table_with_passport_native(passport_native)
@@ -6016,6 +6827,10 @@ mod tests {
             .expect("proxy routes");
         let registry = StaticServiceRegistry::from_urls(&BTreeMap::from([
             ("auth".into(), "http://auth:8001".into()),
+            (
+                "device-registration".into(),
+                "http://device-registration:8014".into(),
+            ),
             ("applicant".into(), "http://applicant:8000".into()),
             (
                 "compliance-profiles".into(),
@@ -6033,11 +6848,12 @@ mod tests {
             ("issuance".into(), "http://issuance:8000".into()),
             ("issuance-native".into(), "http://issuance:8000".into()),
             ("organizations".into(), "http://organizations:8000".into()),
+            ("notifications".into(), "http://notifications:8000".into()),
             (
                 "presentation-policies".into(),
                 "http://presentation-policies:8080".into(),
             ),
-            ("signing-keys".into(), "http://signing-keys:8080".into()),
+            ("signing-keys".into(), signing_url.into()),
             ("trust-profiles".into(), "http://trust-profiles:8000".into()),
             (
                 "revocation-profiles".into(),
@@ -6076,6 +6892,10 @@ mod tests {
         .expect("runtime state")
         .with_service_token(Some("s".repeat(32)))
         .expect("service token")
+        .with_service_sign_gateway_key("dedicated-service-sign-gateway-key-000001".into())
+        .expect("service sign credential")
+        .with_issuer_sign_key("dedicated-issuer-sign-key-000001".into())
+        .expect("issuer sign credential")
         .with_passport_native_gateway(
             passport_native,
             passport_native.then(|| {
@@ -6101,14 +6921,38 @@ mod tests {
             request: GatewayRequest,
         ) -> Result<GatewayResponse, PlatformError> {
             let issued_credential = request.path.starts_with("/v1/issued-credentials/");
+            let notification = (instance.service_name == "notifications").then(|| {
+                if request.path.ends_with("/delivery-results") {
+                    return json!([]);
+                }
+                let mut example: Value = serde_json::from_str(include_str!(
+                    "../../../../contracts/notification-http-examples.json"
+                ))
+                .unwrap();
+                let value = &mut example["response"];
+                value["organization_id"] = json!("org-1");
+                value["target"]["organization_id"] = json!("org-1");
+                value["id"] = json!("notification-one");
+                if request.path.ends_with("/read") {
+                    value["read"] = json!(true);
+                }
+                if request.path == "/v1/notifications" {
+                    json!([value])
+                } else {
+                    value.clone()
+                }
+            });
             self.0
                 .lock()
                 .expect("owned request recorder")
                 .push((instance.service_name.clone(), request));
             Ok(GatewayResponse {
                 status_code: 200,
+                set_cookies: Vec::new(),
                 headers: BTreeMap::from([("content-type".into(), "application/json".into())]),
-                body: Some(if issued_credential {
+                body: Some(if let Some(notification) = notification {
+                    serde_json::to_vec(&notification).unwrap()
+                } else if issued_credential {
                     serde_json::to_vec(&json!({
                         "id":"credential-1","organization_id":"org-1",
                         "credential_id":"credential-1","credential_type":"EmployeeCredential",
@@ -6156,14 +7000,20 @@ mod tests {
             session: &str,
         ) -> Result<Option<SessionIdentity>, SecurityError> {
             Ok(match session {
-                "actor-session" | "actor-denied" | "actor-no-organization" => {
-                    Some(SessionIdentity {
-                        user_id: session.into(),
-                        organization_id: (session != "actor-no-organization")
-                            .then(|| "org-1".into()),
-                        ..SessionIdentity::default()
-                    })
-                }
+                "actor-session"
+                | "actor-denied"
+                | "actor-no-organization"
+                | "pairing-session"
+                | "pairing-stale" => Some(SessionIdentity {
+                    user_id: session.into(),
+                    authentication_time_unix: match session {
+                        "pairing-session" => Some(Utc::now().timestamp()),
+                        "pairing-stale" => Some(Utc::now().timestamp() - 301),
+                        _ => None,
+                    },
+                    organization_id: (session != "actor-no-organization").then(|| "org-1".into()),
+                    ..SessionIdentity::default()
+                }),
                 _ => None,
             })
         }
@@ -6204,21 +7054,21 @@ mod tests {
             user_id: &str,
             organization_id: &str,
         ) -> Result<Option<OrganizationMembership>, SecurityError> {
-            Ok(
-                (user_id == "actor-session" && organization_id == "org-1").then(|| {
-                    OrganizationMembership {
-                        user_id: user_id.into(),
-                        organization_id: organization_id.into(),
-                        status: "active".into(),
-                        role_names: BTreeSet::new(),
-                        permissions: BTreeSet::from([
-                            "integration-connector:edit".into(),
-                            "issuance:revoke".into(),
-                        ]),
-                        is_owner: false,
-                    }
-                }),
-            )
+            Ok((matches!(
+                user_id,
+                "actor-session" | "pairing-session" | "pairing-stale"
+            ) && organization_id == "org-1")
+                .then(|| OrganizationMembership {
+                    user_id: user_id.into(),
+                    organization_id: organization_id.into(),
+                    status: "active".into(),
+                    role_names: BTreeSet::new(),
+                    permissions: BTreeSet::from([
+                        "integration-connector:edit".into(),
+                        "issuance:revoke".into(),
+                    ]),
+                    is_owner: false,
+                }))
         }
     }
 
@@ -6228,7 +7078,285 @@ mod tests {
         let state_mut = Arc::get_mut(&mut state).expect("owned test state");
         state_mut.identities = Arc::new(ActorIdentityProvider);
         state_mut.memberships = Arc::new(ActorIdentityProvider);
+        state_mut.device_registration_gateway_key = Some("d".repeat(32));
         (gateway_router(state), recorder)
+    }
+
+    #[tokio::test]
+    async fn pairing_ticket_route_requires_fresh_session_and_active_tenant() {
+        let (router, recorder) = actor_test_router();
+        for (authentication, organization, expected) in [
+            (None, "org-1", StatusCode::UNAUTHORIZED),
+            (
+                Some(("cookie", "sessionId=pairing-stale")),
+                "org-1",
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                Some(("x-api-key", "actor-key")),
+                "org-1",
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                Some(("cookie", "sessionId=pairing-session")),
+                "org-other",
+                StatusCode::FORBIDDEN,
+            ),
+        ] {
+            let mut builder = Request::builder()
+                .method("POST")
+                .uri("/v1/devices/pairing-tickets")
+                .header("content-type", "application/json")
+                .header("x-user-id", "forged-user")
+                .header("x-service-token", "forged-service-token");
+            if let Some((name, value)) = authentication {
+                builder = builder.header(name, value);
+            }
+            let response = router
+                .clone()
+                .oneshot(
+                    builder
+                        .body(Body::from(
+                            json!({"organization_id":organization,"trust_profile_id":"11111111-2222-4333-8444-555555555555"}).to_string(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), expected);
+        }
+        assert!(recorder.0.lock().unwrap().is_empty());
+
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/devices/pairing-tickets")
+                    .header("content-type", "application/json")
+                    .header("cookie", "sessionId=pairing-session")
+                    .header("x-user-id", "forged-user")
+                    .header("x-service-token", "forged-service-token")
+                    .body(Body::from(r#"{"organization_id":"org-1","trust_profile_id":"11111111-2222-4333-8444-555555555555"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()["cache-control"], "no-store");
+        let calls = recorder.0.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        let (service, request) = &calls[0];
+        assert_eq!(service, "device-registration");
+        assert_eq!(request.path, "/v1/devices/pairing-tickets");
+        assert_eq!(request.header("x-user-id"), Some("pairing-session"));
+        assert_eq!(request.header("x-organization-id"), Some("org-1"));
+        assert_eq!(
+            request.header("x-service-token"),
+            Some("d".repeat(32).as_str())
+        );
+        assert_eq!(
+            serde_json::from_slice::<Value>(request.body.as_deref().unwrap()).unwrap(),
+            json!({"organization_id":"org-1","trust_profile_id":"11111111-2222-4333-8444-555555555555"})
+        );
+    }
+
+    #[tokio::test]
+    async fn public_pairing_redemption_forwards_ticket_without_client_identity_headers() {
+        let (router, recorder) = actor_test_router();
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/devices/pair")
+                    .header("content-type", "application/json")
+                    .header("x-user-id", "forged-user")
+                    .header("x-organization-id", "forged-org")
+                    .header("x-service-token", "forged-service-token")
+                    .body(Body::from(r#"{"pairing_code":"opaque-ticket","platform":"android","fcm_token":"push-token"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let calls = recorder.0.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        let (service, request) = &calls[0];
+        assert_eq!(service, "device-registration");
+        assert_eq!(request.path, "/v1/devices/pair");
+        assert_eq!(request.header("x-user-id"), None);
+        assert_eq!(request.header("x-organization-id"), None);
+        assert_eq!(
+            request.header("x-service-token"),
+            Some("d".repeat(32).as_str())
+        );
+        assert_eq!(
+            serde_json::from_slice::<Value>(request.body.as_deref().unwrap()).unwrap(),
+            json!({"pairing_code":"opaque-ticket","platform":"android","fcm_token":"push-token"})
+        );
+    }
+
+    #[tokio::test]
+    async fn public_holder_signing_forwards_bearer_without_client_identity_headers() {
+        let (router, recorder) = actor_test_router();
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/devices/holder-signatures")
+                    .header("content-type", "application/json")
+                    .header("authorization", "Bearer opaque-device-credential")
+                    .header("x-user-id", "forged-user")
+                    .header("x-organization-id", "forged-org")
+                    .header("x-service-token", "forged-service-token")
+                    .body(Body::from(
+                        r#"{"purpose":"holder_binding","payload_b64":"cHJvb2Y"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let calls = recorder.0.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        let (service, request) = &calls[0];
+        assert_eq!(service, "device-registration");
+        assert_eq!(request.path, "/v1/devices/holder-signatures");
+        assert_eq!(
+            request.header("authorization"),
+            Some("Bearer opaque-device-credential")
+        );
+        assert_eq!(request.header("x-user-id"), None);
+        assert_eq!(request.header("x-organization-id"), None);
+        assert_eq!(
+            request.header("x-service-token"),
+            Some("d".repeat(32).as_str())
+        );
+    }
+
+    #[tokio::test]
+    async fn pairing_ack_is_bearer_public_but_exact_status_requires_browser_session() {
+        let (router, recorder) = actor_test_router();
+        let ack = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/devices/pairing-ack")
+                    .header("content-type", "application/json")
+                    .header("authorization", "Bearer opaque-device-credential")
+                    .header("x-user-id", "forged-user")
+                    .header("x-service-token", "forged-service-token")
+                    .body(Body::from(r#"{"pairing_id":"exact-ticket-id"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(ack.status(), StatusCode::OK);
+        let denied = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/devices/pairing-confirmations/exact-ticket-id")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
+        let status = router
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/devices/pairing-confirmations/exact-ticket-id")
+                    .header("cookie", "sessionId=pairing-session")
+                    .header("x-user-id", "forged-user")
+                    .header("x-service-token", "forged-service-token")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(status.status(), StatusCode::OK);
+        let calls = recorder.0.lock().unwrap();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].1.path, "/v1/devices/pairing-ack");
+        assert_eq!(
+            calls[0].1.header("authorization"),
+            Some("Bearer opaque-device-credential")
+        );
+        assert_eq!(calls[0].1.header("x-user-id"), None);
+        assert_eq!(
+            calls[1].1.path,
+            "/v1/devices/pairing-confirmations/exact-ticket-id"
+        );
+        assert_eq!(calls[1].1.header("x-user-id"), Some("pairing-session"));
+    }
+
+    #[tokio::test]
+    async fn holder_rotation_forwards_only_bearer_and_replacement_to_device_registration() {
+        let (router, recorder) = actor_test_router();
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/devices/holder-credential-rotations")
+                    .header("content-type", "application/json")
+                    .header("authorization", "Bearer current-opaque-capability")
+                    .header("x-user-id", "forged-user")
+                    .header("x-service-token", "forged-service-token")
+                    .body(Body::from(
+                        r#"{"replacement_credential":"new-opaque-capability"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let calls = recorder.0.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, "device-registration");
+        assert_eq!(calls[0].1.path, "/v1/devices/holder-credential-rotations");
+        assert_eq!(
+            calls[0].1.header("authorization"),
+            Some("Bearer current-opaque-capability")
+        );
+        assert_eq!(calls[0].1.header("x-user-id"), None);
+        assert_eq!(
+            calls[0].1.header("x-service-token"),
+            Some("d".repeat(32).as_str())
+        );
+    }
+
+    #[tokio::test]
+    async fn wallet_issuer_keys_forwards_only_device_bearer() {
+        let (router, recorder) = actor_test_router();
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/devices/wallet-issuer-keys")
+                    .header("authorization", "Bearer opaque-device-credential")
+                    .header("x-user-id", "forged-user")
+                    .header("x-organization-id", "forged-org")
+                    .header("x-service-token", "forged-service-token")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let calls = recorder.0.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, "device-registration");
+        assert_eq!(calls[0].1.path, "/v1/devices/wallet-issuer-keys");
+        assert_eq!(
+            calls[0].1.header("authorization"),
+            Some("Bearer opaque-device-credential")
+        );
+        assert_eq!(calls[0].1.header("x-user-id"), None);
+        assert_eq!(calls[0].1.header("x-organization-id"), None);
+        assert_eq!(
+            calls[0].1.header("x-service-token"),
+            Some("d".repeat(32).as_str())
+        );
     }
 
     #[tokio::test]
@@ -6879,7 +8007,10 @@ mod tests {
 
     #[test]
     fn service_authenticated_proxies_receive_only_gateway_configured_credentials() {
-        let state = runtime_state();
+        let mut state = runtime_state();
+        Arc::get_mut(&mut state)
+            .expect("unique runtime state")
+            .device_registration_gateway_key = Some("d".repeat(32));
         let identity = TrustedIdentityContext::default();
         for path in [
             "/v1/organizations/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
@@ -6892,6 +8023,8 @@ mod tests {
         }
         let applicant = proxy_overrides(&state, "/v1/applicants", &identity);
         assert!(!applicant.headers.contains_key("x-service-token"));
+        let device = proxy_overrides(&state, "/v1/devices", &identity);
+        assert_eq!(device.headers["x-service-token"], "d".repeat(32));
     }
 
     #[test]
@@ -6942,6 +8075,49 @@ mod tests {
     }
 
     #[test]
+    fn scoped_api_key_forwards_only_the_authorized_permission() {
+        let identity = GatewayIdentity {
+            source: AuthenticationSource::ApiKey,
+            user_id: "key-owner".into(),
+            authentication_time_unix: None,
+            user_email: None,
+            user_domain: None,
+            session_organization_id: Some("org-1".into()),
+            api_key_id: Some("key-1".into()),
+            api_key_prefix: None,
+            api_key_scopes: vec!["applications:read".into()],
+        };
+        assert!(authorize_api_key(
+            "application:view",
+            "org-1",
+            identity.session_organization_id.as_deref(),
+            &identity.api_key_scopes,
+        )
+        .is_ok());
+        let trusted = trusted_identity(&identity, "org-1", "application:view", None);
+        assert_eq!(trusted.organization_permissions, vec!["application:view"]);
+        assert_eq!(
+            trusted.required_permission.as_deref(),
+            Some("application:view")
+        );
+        assert_eq!(trusted.organization_id.as_deref(), Some("org-1"));
+        assert!(authorize_api_key(
+            "application:approve",
+            "org-1",
+            identity.session_organization_id.as_deref(),
+            &identity.api_key_scopes,
+        )
+        .is_err());
+        assert!(authorize_api_key(
+            "application:view",
+            "foreign-org",
+            identity.session_organization_id.as_deref(),
+            &identity.api_key_scopes,
+        )
+        .is_err());
+    }
+
+    #[test]
     fn legacy_api_key_routes_prefer_the_tenant_authorized_organization() {
         let trusted_identity = TrustedIdentityContext {
             organization_id: Some("authorized-org".into()),
@@ -6950,6 +8126,7 @@ mod tests {
         let session_identity = GatewayIdentity {
             source: AuthenticationSource::Session,
             user_id: "user-1".into(),
+            authentication_time_unix: None,
             user_email: None,
             user_domain: None,
             session_organization_id: Some("stale-session-org".into()),
@@ -7063,6 +8240,11 @@ mod tests {
             .runtime_route_table()
             .unwrap();
         for (method, path) in [
+            (HttpMethod::Patch, "/v1/signing-keys/config"),
+            (
+                HttpMethod::Put,
+                "/v1/signing-keys/issuer-identities/certificate",
+            ),
             (
                 HttpMethod::Put,
                 "/v1/signing-keys/issuer-identities/csca-certificate",
@@ -7105,6 +8287,555 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn issuer_capabilities_require_membership_permission_and_trusted_proxy_scope() {
+        struct NoKeyView;
+        #[async_trait]
+        impl OrganizationMembershipProvider for NoKeyView {
+            async fn get_membership(
+                &self,
+                user: &str,
+                org: &str,
+            ) -> Result<Option<OrganizationMembership>, SecurityError> {
+                let mut membership = RuntimeProvider.get_membership(user, org).await?;
+                if let Some(value) = membership.as_mut() {
+                    value.permissions.remove("signing-key:view");
+                }
+                Ok(membership)
+            }
+        }
+        let recorder = Arc::new(ActorRecordingUpstream::default());
+        for (organization, authenticated, permitted, expected) in [
+            ("org-1", false, true, StatusCode::UNAUTHORIZED),
+            ("org-other", true, true, StatusCode::FORBIDDEN),
+            ("org-1", true, false, StatusCode::FORBIDDEN),
+            ("org-1", true, true, StatusCode::OK),
+        ] {
+            let mut state = runtime_state_with_upstream(Arc::new(NoOwner), recorder.clone());
+            if !permitted {
+                Arc::get_mut(&mut state).unwrap().memberships = Arc::new(NoKeyView);
+            }
+            let mut request = Request::builder().uri(format!(
+                "/v1/signing-keys/issuer-identities/capabilities?organization_id={organization}"
+            ));
+            if authenticated {
+                request = request.header("cookie", "sessionId=valid");
+            }
+            let response = gateway_router(state)
+                .oneshot(request.body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), expected);
+        }
+        let requests = recorder.0.lock().unwrap();
+        assert_eq!(
+            requests.len(),
+            1,
+            "unauthorized requests must never reach the service"
+        );
+        assert_eq!(requests[0].0, "signing-keys");
+        assert_eq!(
+            requests[0].1.path,
+            "/v1/signing-keys/issuer-identities/capabilities"
+        );
+        assert_eq!(requests[0].1.query["organization_id"], vec!["org-1"]);
+        let document = GatewayContract::load().unwrap().openapi_document("test");
+        assert_eq!(
+            document["paths"]["/v1/signing-keys/issuer-identities/capabilities"]["get"]
+                ["responses"]["200"]["content"]["application/json"]["schema"]["$ref"],
+            "#/components/schemas/runtime__issuer_identity_capabilities"
+        );
+    }
+
+    #[tokio::test]
+    async fn issuer_inspection_is_read_only_and_requires_tenant_view_authority() {
+        let recorder = Arc::new(ActorRecordingUpstream::default());
+        for (org, authenticated, allowed, expected) in [
+            ("org-1", false, true, StatusCode::UNAUTHORIZED),
+            ("org-other", true, true, StatusCode::FORBIDDEN),
+            ("org-1", true, false, StatusCode::FORBIDDEN),
+            ("org-1", true, true, StatusCode::OK),
+        ] {
+            let mut state = runtime_state_with_upstream(Arc::new(NoOwner), recorder.clone());
+            if allowed && org == "org-1" {
+                Arc::get_mut(&mut state).unwrap().memberships =
+                    Arc::new(ScriptedMembership("allowed"));
+            }
+            if !allowed {
+                Arc::get_mut(&mut state).unwrap().memberships = Arc::new(ActorIdentityProvider);
+            }
+            let mut request = Request::builder().uri(format!("/v1/signing-keys/issuer-identities/inspection?organization_id={org}&issuer_did=did%3Aweb%3Aissuer.example%3Aorgs%3Aacme&key_purpose=vc_jwt_issuer&credential_format=SD_JWT_VC&algorithm=ES256"));
+            if authenticated {
+                request = request.header("cookie", "sessionId=valid");
+            }
+            let response = gateway_router(state)
+                .oneshot(request.body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), expected);
+        }
+        let requests = recorder.0.lock().unwrap();
+        assert_eq!(
+            requests.len(),
+            1,
+            "Denied inspection must not reach the signer"
+        );
+        assert_eq!(requests[0].0, "signing-keys");
+        assert_eq!(requests[0].1.method, HttpMethod::Get);
+        assert_eq!(requests[0].1.query["organization_id"], vec!["org-1"]);
+        assert_eq!(
+            requests[0].1.query["issuer_did"],
+            vec!["did:web:issuer.example:orgs:acme"]
+        );
+        let openapi = GatewayContract::load().unwrap().openapi_document("test");
+        assert_eq!(
+            openapi["paths"]["/v1/signing-keys/issuer-identities/inspection"]["get"]["responses"]
+                ["200"]["content"]["application/json"]["schema"]["$ref"],
+            "#/components/schemas/runtime__issuer_identity_inspection"
+        );
+    }
+
+    struct SingleGrantMembership(&'static str);
+    #[async_trait]
+    impl OrganizationMembershipProvider for SingleGrantMembership {
+        async fn get_membership(
+            &self,
+            user_id: &str,
+            organization_id: &str,
+        ) -> Result<Option<OrganizationMembership>, SecurityError> {
+            Ok(
+                (organization_id == "org-1").then(|| OrganizationMembership {
+                    user_id: user_id.into(),
+                    organization_id: organization_id.into(),
+                    status: "active".into(),
+                    role_names: BTreeSet::new(),
+                    permissions: BTreeSet::from([self.0.into()]),
+                    is_owner: false,
+                }),
+            )
+        }
+    }
+    #[tokio::test]
+    async fn compliance_public_catalog_and_lifecycle_enforce_exact_tenant_action_before_proxy() {
+        for (method, path, permission, owner, authenticated, expected) in [
+            (
+                "GET",
+                "/v1/compliance-profiles/system/discoverable?organization_id=org-1",
+                "compliance-profile:view",
+                "org-1",
+                false,
+                StatusCode::UNAUTHORIZED,
+            ),
+            (
+                "GET",
+                "/v1/compliance-profiles/system/discoverable?organization_id=org-other",
+                "compliance-profile:view",
+                "org-1",
+                true,
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                "GET",
+                "/v1/compliance-profiles/system/discoverable?organization_id=org-1",
+                "compliance-profile:create",
+                "org-1",
+                true,
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                "GET",
+                "/v1/compliance-profiles/system/discoverable?organization_id=org-1",
+                "compliance-profile:view",
+                "org-1",
+                true,
+                StatusCode::OK,
+            ),
+            (
+                "POST",
+                "/v1/compliance-profiles/profile-one/activate",
+                "compliance-profile:create",
+                "org-1",
+                true,
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                "POST",
+                "/v1/compliance-profiles/profile-one/activate",
+                "compliance-profile:activate",
+                "org-1",
+                true,
+                StatusCode::OK,
+            ),
+            (
+                "POST",
+                "/v1/compliance-profiles/profile-one/suspend",
+                "compliance-profile:view",
+                "org-1",
+                true,
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                "POST",
+                "/v1/compliance-profiles/profile-one/suspend",
+                "compliance-profile:suspend",
+                "org-other",
+                true,
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                "POST",
+                "/v1/compliance-profiles/profile-one/suspend",
+                "compliance-profile:suspend",
+                "org-1",
+                true,
+                StatusCode::OK,
+            ),
+        ] {
+            let recorder = Arc::new(ActorRecordingUpstream::default());
+            let mut state = runtime_state_with_upstream(Arc::new(NoOwner), recorder.clone());
+            let owned = Arc::get_mut(&mut state).unwrap();
+            owned.memberships = Arc::new(SingleGrantMembership(permission));
+            owned.owners = Arc::new(ScriptedOwner(Some(owner.into())));
+            let mut request = Request::builder()
+                .method(method)
+                .uri(path)
+                .header("content-type", "application/json");
+            if authenticated {
+                request = request.header("cookie", "sessionId=valid");
+            }
+            let response = gateway_router(state)
+                .oneshot(request.body(Body::from("{}")).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                expected,
+                "{method} {path} {permission} {owner}"
+            );
+            let calls = recorder.0.lock().unwrap();
+            assert_eq!(calls.len(), usize::from(expected == StatusCode::OK));
+            if expected == StatusCode::OK {
+                assert_eq!(calls[0].0, "compliance-profiles");
+                assert_eq!(calls[0].1.header("x-user-id"), Some("user-1"));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn delivery_destinations_enforce_integration_grants_and_resource_owner_before_proxy() {
+        for (method, path, permission, owner, authenticated, expected) in [
+            (
+                "GET",
+                "/v1/delivery-destinations?organization_id=org-1",
+                "wallet:view",
+                "org-1",
+                false,
+                StatusCode::UNAUTHORIZED,
+            ),
+            (
+                "GET",
+                "/v1/delivery-destinations?organization_id=org-other",
+                "wallet:view",
+                "org-1",
+                true,
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                "GET",
+                "/v1/delivery-destinations?organization_id=org-1",
+                "integration-connector:view",
+                "org-1",
+                true,
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                "GET",
+                "/v1/delivery-destinations?organization_id=org-1",
+                "wallet:view",
+                "org-1",
+                true,
+                StatusCode::OK,
+            ),
+            (
+                "POST",
+                "/v1/delivery-destinations",
+                "wallet:view",
+                "org-1",
+                true,
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                "POST",
+                "/v1/delivery-destinations",
+                "integration-connector:create",
+                "org-1",
+                true,
+                StatusCode::OK,
+            ),
+            (
+                "PATCH",
+                "/v1/delivery-destinations/destination-one",
+                "wallet:view",
+                "org-1",
+                true,
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                "PATCH",
+                "/v1/delivery-destinations/destination-one",
+                "integration-connector:create",
+                "org-1",
+                true,
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                "PATCH",
+                "/v1/delivery-destinations/destination-one",
+                "integration-connector:edit",
+                "org-other",
+                true,
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                "PATCH",
+                "/v1/delivery-destinations/destination-one",
+                "integration-connector:edit",
+                "org-1",
+                true,
+                StatusCode::OK,
+            ),
+            (
+                "DELETE",
+                "/v1/delivery-destinations/destination-one",
+                "integration-connector:edit",
+                "org-1",
+                true,
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                "DELETE",
+                "/v1/delivery-destinations/destination-one",
+                "integration-connector:delete",
+                "org-1",
+                true,
+                StatusCode::OK,
+            ),
+        ] {
+            let recorder = Arc::new(ActorRecordingUpstream::default());
+            let mut state = runtime_state_with_upstream(Arc::new(NoOwner), recorder.clone());
+            let owned = Arc::get_mut(&mut state).unwrap();
+            owned.memberships = Arc::new(SingleGrantMembership(permission));
+            owned.owners = Arc::new(ScriptedOwner(Some(owner.into())));
+            let mut request = Request::builder()
+                .method(method)
+                .uri(path)
+                .header("content-type", "application/json");
+            if authenticated {
+                request = request.header("cookie", "sessionId=valid");
+            }
+            let response = gateway_router(state)
+                .oneshot(
+                    request
+                        .body(Body::from(r#"{"organization_id":"org-1"}"#))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                expected,
+                "{method} {path} {permission} {owner}"
+            );
+            let calls = recorder.0.lock().unwrap();
+            assert_eq!(calls.len(), usize::from(expected == StatusCode::OK));
+            if expected == StatusCode::OK {
+                assert_eq!(calls[0].0, "credential-templates");
+                assert_eq!(calls[0].1.header("x-user-id"), Some("user-1"));
+                assert_eq!(calls[0].1.header("x-organization-id"), Some("org-1"));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn authorized_system_delivery_destination_read_uses_the_selected_organization() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("owner fixture listener");
+        let origin = format!("http://{}", listener.local_addr().expect("fixture address"));
+        tokio::spawn(async move {
+            axum::serve(
+                listener,
+                Router::new().fallback(axum::routing::any(ownerless_system_delivery_destination)),
+            )
+            .await
+            .expect("owner fixture server");
+        });
+        let owners = HttpGatewayProvider::new(
+            BTreeMap::from([("credential-templates".into(), origin)]),
+            "internal-signing-key",
+            None,
+            Some("service-secret".into()),
+            Some(4_096),
+        )
+        .expect("HTTP owner provider");
+        let recorder = Arc::new(ActorRecordingUpstream::default());
+        let mut state = runtime_state_with_upstream(Arc::new(NoOwner), recorder.clone());
+        let owned = Arc::get_mut(&mut state).expect("unique runtime state");
+        owned.memberships = Arc::new(SingleGrantMembership("wallet:view"));
+        owned.owners = Arc::new(owners);
+
+        let response = gateway_router(state)
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/delivery-destinations/dd-elevenid-wallet?organization_id=org-1")
+                    .header("cookie", "sessionId=valid")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("gateway response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let calls = recorder.0.lock().expect("upstream calls");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, "credential-templates");
+        assert_eq!(calls[0].1.header("x-organization-id"), Some("org-1"));
+    }
+
+    #[tokio::test]
+    async fn explicit_notification_routes_keep_tenant_read_send_boundaries_before_proxy() {
+        for (method, path, permission, authenticated, expected) in [
+            (
+                "GET",
+                "/v1/notifications?organization_id=org-1",
+                "notification:view",
+                false,
+                StatusCode::UNAUTHORIZED,
+            ),
+            (
+                "GET",
+                "/v1/notifications?organization_id=org-other",
+                "notification:view",
+                true,
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                "GET",
+                "/v1/notifications?organization_id=org-1",
+                "notification:send",
+                true,
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                "GET",
+                "/v1/notifications?organization_id=org-1",
+                "notification:view",
+                true,
+                StatusCode::OK,
+            ),
+            (
+                "POST",
+                "/v1/notifications/send",
+                "notification:view",
+                true,
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                "POST",
+                "/v1/notifications/send",
+                "notification:send",
+                true,
+                StatusCode::OK,
+            ),
+            (
+                "GET",
+                "/v1/notifications/notification-one/delivery-results?organization_id=org-1",
+                "notification:view",
+                true,
+                StatusCode::OK,
+            ),
+            (
+                "PATCH",
+                "/v1/notifications/notification-one/read?organization_id=org-other",
+                "notification:view",
+                true,
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                "PATCH",
+                "/v1/notifications/notification-one/read?organization_id=org-1",
+                "notification:view",
+                true,
+                StatusCode::OK,
+            ),
+        ] {
+            let recorder = Arc::new(ActorRecordingUpstream::default());
+            let mut state = runtime_state_with_upstream(Arc::new(NoOwner), recorder.clone());
+            Arc::get_mut(&mut state).unwrap().memberships =
+                Arc::new(SingleGrantMembership(permission));
+            let mut request = Request::builder()
+                .method(method)
+                .uri(path)
+                .header("content-type", "application/json");
+            if authenticated {
+                request = request.header("cookie", "sessionId=valid");
+            }
+            let response = gateway_router(state).oneshot(request.body(Body::from(r#"{"organization_id":"org-1","title":"Local fixture","target":{"channels":["SSE"]}}"#)).unwrap()).await.unwrap();
+            let actual = response.status();
+            let body = to_bytes(response.into_body(), 65536).await.unwrap();
+            assert_eq!(
+                actual,
+                expected,
+                "{method} {path} {permission}: {}",
+                String::from_utf8_lossy(&body)
+            );
+            let calls = recorder.0.lock().unwrap();
+            assert_eq!(calls.len(), usize::from(expected == StatusCode::OK));
+            if expected == StatusCode::OK {
+                assert_eq!(calls[0].0, "notifications");
+                assert_eq!(calls[0].1.header("x-user-id"), Some("user-1"));
+                assert_eq!(calls[0].1.header("x-organization-id"), Some("org-1"));
+            }
+        }
+    }
+
+    #[test]
+    fn public_service_signing_receives_dedicated_key_only_after_gateway_authorization() {
+        let state = runtime_state();
+        let path = "/v1/signing-keys/services/service-1/sign";
+        assert!(is_public_service_sign_path(path));
+        assert!(!is_public_service_sign_path(
+            "/v1/signing-keys/services/service-1/rotate"
+        ));
+        assert!(!is_public_service_sign_path(
+            "/v1/signing-keys/services/a/b/sign"
+        ));
+        let mut identity = TrustedIdentityContext {
+            organization_id: Some("org-1".into()),
+            ..TrustedIdentityContext::default()
+        };
+        assert!(!proxy_overrides(&state, path, &identity)
+            .headers
+            .contains_key("x-api-key"));
+        identity.required_permission = Some("signing-key:create".into());
+        assert_eq!(
+            proxy_overrides(&state, path, &identity)
+                .headers
+                .get("x-api-key"),
+            state.service_sign_gateway_key.as_ref()
+        );
+        let mut missing_credential = runtime_state();
+        Arc::get_mut(&mut missing_credential)
+            .unwrap()
+            .service_sign_gateway_key = None;
+        assert!(!proxy_overrides(&missing_credential, path, &identity)
+            .headers
+            .contains_key("x-api-key"));
+        identity.organization_id = None;
+        assert!(!proxy_overrides(&state, path, &identity)
+            .headers
+            .contains_key("x-api-key"));
+    }
+
+    #[tokio::test]
     async fn signing_mutations_require_session_and_forward_trusted_scope() {
         let recorder = Arc::new(ActorRecordingUpstream::default());
         let router = gateway_router(runtime_state_with_upstream(
@@ -7133,7 +8864,8 @@ mod tests {
                 let mut builder = Request::builder()
                     .method("POST")
                     .uri(path)
-                    .header("content-type", "application/json");
+                    .header("content-type", "application/json")
+                    .header(marty_signing_grant::HEADER_NAME, "forged-grant");
                 if authenticated {
                     builder = builder.header("cookie", "sessionId=valid");
                 }
@@ -7153,6 +8885,326 @@ mod tests {
             assert_eq!(forwarded.method, HttpMethod::Post);
             assert_eq!(forwarded.path, path);
             assert_eq!(forwarded.query["organization_id"], vec!["org-1"]);
+            assert!(!forwarded
+                .headers
+                .contains_key(marty_signing_grant::HEADER_NAME));
+            assert_eq!(
+                serde_json::from_slice::<Value>(forwarded.body.as_deref().unwrap()).unwrap(),
+                body
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn authorized_public_signing_cannot_forward_without_a_scoped_minter() {
+        let recorder = Arc::new(ActorRecordingUpstream::default());
+        let router = gateway_router(runtime_state_with_upstream(
+            Arc::new(NoOwner),
+            recorder.clone(),
+        ));
+        let request = Request::builder()
+            .method("POST")
+            .uri("/v1/signing-keys/services/service-1/sign")
+            .header("content-type", "application/json")
+            .header("cookie", "sessionId=valid")
+            .header(marty_signing_grant::HEADER_NAME, "forged-grant")
+            .body(Body::from(
+                json!({
+                    "payload_b64": "cGF5bG9hZA",
+                    "key_reference": "issuer-key-1",
+                    "key_purpose": "vc_jwt_issuer",
+                    "algorithm": "ES256"
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        let response = router.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert!(recorder.0.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn public_service_signing_mints_exact_scoped_grant_and_discards_caller_grant() {
+        let recorder = Arc::new(ActorRecordingUpstream::default());
+        let mut state = runtime_state_with_upstream(Arc::new(NoOwner), recorder.clone());
+        Arc::get_mut(&mut state).unwrap().service_sign_grant_minter =
+            Some(Arc::new(ContractGrantMinter(SigningOrigin::GatewayService)));
+        Arc::get_mut(&mut state).unwrap().issuer_csr_grant_minter = Some(Arc::new(
+            ContractGrantMinter(SigningOrigin::GatewayIssuerDid),
+        ));
+        let router = gateway_router(state);
+        let body = json!({
+            "payload_hex": "7061796c6f6164",
+            "key_reference": "issuer-key-1",
+            "key_purpose": "vc_jwt_issuer",
+            "algorithm": "ES256"
+        });
+        let request = Request::builder()
+            .method("POST")
+            .uri("/v1/signing-keys/services/service-1/sign")
+            .header("content-type", "application/json")
+            .header("cookie", "sessionId=valid")
+            .header(marty_signing_grant::HEADER_NAME, "forged-grant")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        let response = router.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        {
+            let calls = recorder.0.lock().unwrap();
+            assert_eq!(calls.len(), 1);
+            let forwarded = &calls[0].1;
+            let header = forwarded
+                .headers
+                .get(marty_signing_grant::HEADER_NAME)
+                .expect("trusted Gateway grant");
+            assert_ne!(header, "forged-grant");
+            let grant = marty_signing_grant::GrantEnvelope::from_header_value(header).unwrap();
+            assert_eq!(grant.claims.origin, SigningOrigin::GatewayService);
+            assert_eq!(grant.claims.organization_id, "org-1");
+            assert_eq!(grant.claims.route, forwarded.path);
+            assert_eq!(grant.claims.service_id.as_deref(), Some("service-1"));
+            assert_eq!(grant.claims.key_reference.as_deref(), Some("issuer-key-1"));
+            assert_eq!(grant.claims.key_purpose, "vc_jwt_issuer");
+            assert_eq!(grant.claims.algorithm, "ES256");
+            assert_eq!(
+                grant.claims.payload_sha256_b64,
+                URL_SAFE_NO_PAD.encode(<sha2::Sha256 as sha2::Digest>::digest(b"payload"))
+            );
+            assert_eq!(
+                forwarded.headers.get("x-api-key").map(String::as_str),
+                Some("dedicated-service-sign-gateway-key-000001")
+            );
+        }
+        let csr_body = json!({
+            "country": "US",
+            "organization": "ElevenID Beta",
+            "common_name": "signer.example.test",
+            "key_reference": "issuer-key-1",
+            "algorithm": "ES256"
+        });
+        let csr_request = Request::builder()
+            .method("POST")
+            .uri("/v1/signing-keys/services/service-1/certificate-csr")
+            .header("content-type", "application/json")
+            .header("cookie", "sessionId=valid")
+            .header(marty_signing_grant::HEADER_NAME, "forged-grant")
+            .body(Body::from(csr_body.to_string()))
+            .unwrap();
+        let csr_response = router.clone().oneshot(csr_request).await.unwrap();
+        assert_eq!(csr_response.status(), StatusCode::OK);
+        {
+            let calls = recorder.0.lock().unwrap();
+            assert_eq!(calls.len(), 2);
+            let forwarded_csr = &calls[1].1;
+            let csr_header = forwarded_csr
+                .headers
+                .get(marty_signing_grant::HEADER_NAME)
+                .expect("trusted CSR grant");
+            assert_ne!(csr_header, "forged-grant");
+            let csr_grant =
+                marty_signing_grant::GrantEnvelope::from_header_value(csr_header).unwrap();
+            let csr_intent: ServiceCsrIntent = serde_json::from_value(csr_body).unwrap();
+            assert_eq!(csr_grant.claims.origin, SigningOrigin::GatewayService);
+            assert_eq!(csr_grant.claims.organization_id, "org-1");
+            assert_eq!(csr_grant.claims.route, forwarded_csr.path);
+            assert_eq!(csr_grant.claims.service_id.as_deref(), Some("service-1"));
+            assert_eq!(
+                csr_grant.claims.key_reference.as_deref(),
+                Some("issuer-key-1")
+            );
+            assert_eq!(csr_grant.claims.key_purpose, "x509_csr");
+            assert_eq!(csr_grant.claims.algorithm, "ES256");
+            assert_eq!(
+                csr_grant.claims.payload_sha256_b64,
+                marty_signing_grant::payload_digest(&csr_intent.bound_payload())
+            );
+            assert_eq!(
+                forwarded_csr.headers.get("x-api-key").map(String::as_str),
+                Some("dedicated-service-sign-gateway-key-000001")
+            );
+        }
+        let issuer_body = json!({
+            "issuer_did": "did:web:example.test:issuer",
+            "key_purpose": "csca",
+            "credential_format": "MDOC",
+            "algorithm": "ES256",
+            "country": "US",
+            "organization": "ElevenID Beta",
+            "common_name": "Pilot CSCA"
+        });
+        let issuer_request = Request::builder()
+            .method("PUT")
+            .uri("/v1/signing-keys/issuer-identities/certificate-csr")
+            .header("content-type", "application/json")
+            .header("cookie", "sessionId=valid")
+            .header(marty_signing_grant::HEADER_NAME, "forged-grant")
+            .body(Body::from(issuer_body.to_string()))
+            .unwrap();
+        let issuer_response = router.clone().oneshot(issuer_request).await.unwrap();
+        assert_eq!(issuer_response.status(), StatusCode::OK);
+        {
+            let calls = recorder.0.lock().unwrap();
+            assert_eq!(calls.len(), 3);
+            let forwarded_issuer = &calls[2].1;
+            let issuer_header = forwarded_issuer
+                .headers
+                .get(marty_signing_grant::HEADER_NAME)
+                .expect("trusted issuer CSR grant");
+            assert_ne!(issuer_header, "forged-grant");
+            let issuer_grant =
+                marty_signing_grant::GrantEnvelope::from_header_value(issuer_header).unwrap();
+            let issuer_intent: IssuerCsrIntent = serde_json::from_value(issuer_body).unwrap();
+            assert_eq!(issuer_grant.claims.origin, SigningOrigin::GatewayIssuerDid);
+            assert_eq!(issuer_grant.claims.organization_id, "org-1");
+            assert_eq!(issuer_grant.claims.route, forwarded_issuer.path);
+            assert_eq!(
+                issuer_grant.claims.issuer_did.as_deref(),
+                Some("did:web:example.test:issuer")
+            );
+            assert_eq!(issuer_grant.claims.service_id, None);
+            assert_eq!(issuer_grant.claims.key_reference, None);
+            assert_eq!(issuer_grant.claims.key_purpose, "csca");
+            assert_eq!(issuer_grant.claims.algorithm, "ES256");
+            assert_eq!(
+                issuer_grant.claims.payload_sha256_b64,
+                marty_signing_grant::payload_digest(&issuer_intent.bound_payload())
+            );
+            assert_eq!(
+                forwarded_issuer
+                    .headers
+                    .get("x-api-key")
+                    .map(String::as_str),
+                Some("dedicated-issuer-sign-key-000001")
+            );
+        }
+        let mdoc_body = json!({
+            "issuer_did": "did:web:example.test:issuer",
+            "key_purpose": "mdoc_dsc",
+            "credential_format": "MDOC",
+            "algorithm": "ES256",
+            "country": "US",
+            "organization": "ElevenID Beta",
+            "common_name": "Pilot mDL Document Signer"
+        });
+        let mdoc_request = Request::builder()
+            .method("PUT")
+            .uri("/v1/signing-keys/issuer-identities/certificate-csr")
+            .header("content-type", "application/json")
+            .header("cookie", "sessionId=valid")
+            .body(Body::from(mdoc_body.to_string()))
+            .unwrap();
+        assert_eq!(
+            router.clone().oneshot(mdoc_request).await.unwrap().status(),
+            StatusCode::OK
+        );
+        {
+            let calls = recorder.0.lock().unwrap();
+            assert_eq!(calls.len(), 4);
+            let forwarded_mdoc = &calls[3].1;
+            let mdoc_grant = marty_signing_grant::GrantEnvelope::from_header_value(
+                forwarded_mdoc
+                    .headers
+                    .get(marty_signing_grant::HEADER_NAME)
+                    .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(mdoc_grant.claims.origin, SigningOrigin::GatewayIssuerDid);
+            assert_eq!(mdoc_grant.claims.key_purpose, "mdoc_dsc");
+            assert_eq!(
+                mdoc_grant.claims.issuer_did.as_deref(),
+                Some("did:web:example.test:issuer")
+            );
+        }
+        let mut invalid_format = mdoc_body;
+        invalid_format["credential_format"] = json!("SD_JWT_VC");
+        let invalid_request = Request::builder()
+            .method("PUT")
+            .uri("/v1/signing-keys/issuer-identities/certificate-csr")
+            .header("content-type", "application/json")
+            .header("cookie", "sessionId=valid")
+            .body(Body::from(invalid_format.to_string()))
+            .unwrap();
+        assert_eq!(
+            router.oneshot(invalid_request).await.unwrap().status(),
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+    }
+
+    #[tokio::test]
+    async fn byok_registration_and_certificate_attachment_require_tenant_grant() {
+        let recorder = Arc::new(ActorRecordingUpstream::default());
+        let router = gateway_router(runtime_state_with_upstream(
+            Arc::new(NoOwner),
+            recorder.clone(),
+        ));
+        for (method, path, body) in [
+            (
+                "PATCH",
+                "/v1/signing-keys/config",
+                json!({"services": [], "default_service_id": "service-a"}),
+            ),
+            (
+                "PUT",
+                "/v1/signing-keys/issuer-identities/certificate",
+                json!({
+                    "organization_id": "org-1",
+                    "issuer_did": "did:web:issuer.example:orgs:org-1",
+                    "key_purpose": "vc_jwt_issuer",
+                    "credential_format": "SD_JWT_VC",
+                    "algorithm": "ES256",
+                    "cert_pem": "public-certificate-only"
+                }),
+            ),
+        ] {
+            let request = |authenticated, forged_key, organization_id| {
+                let mut builder = Request::builder()
+                    .method(method)
+                    .uri(format!("{path}?organization_id={organization_id}"))
+                    .header("content-type", "application/json");
+                if authenticated {
+                    builder = builder.header("cookie", "sessionId=valid");
+                }
+                if forged_key {
+                    builder = builder.header("x-api-key", "attacker-key");
+                }
+                builder.body(Body::from(body.to_string())).unwrap()
+            };
+            let before = recorder.0.lock().unwrap().len();
+            let denied = router
+                .clone()
+                .oneshot(request(false, false, "org-other"))
+                .await
+                .unwrap();
+            assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
+            assert_eq!(recorder.0.lock().unwrap().len(), before);
+            let forged = router
+                .clone()
+                .oneshot(request(true, true, "org-1"))
+                .await
+                .unwrap();
+            assert_eq!(forged.status(), StatusCode::UNAUTHORIZED);
+            assert_eq!(recorder.0.lock().unwrap().len(), before);
+            let unauthorized_tenant = router
+                .clone()
+                .oneshot(request(true, false, "org-other"))
+                .await
+                .unwrap();
+            assert_eq!(unauthorized_tenant.status(), StatusCode::FORBIDDEN);
+            assert_eq!(recorder.0.lock().unwrap().len(), before);
+
+            let accepted = router
+                .clone()
+                .oneshot(request(true, false, "org-1"))
+                .await
+                .unwrap();
+            assert_eq!(accepted.status(), StatusCode::OK);
+            let calls = recorder.0.lock().unwrap();
+            assert_eq!(calls.len(), before + 1);
+            let (service, forwarded) = &calls[before];
+            assert_eq!(service, "signing-keys");
+            assert_eq!(forwarded.path, path);
+            assert_eq!(forwarded.query["organization_id"], vec!["org-1"]);
+            assert!(!forwarded.headers.contains_key("x-api-key"));
             assert_eq!(
                 serde_json::from_slice::<Value>(forwarded.body.as_deref().unwrap()).unwrap(),
                 body
@@ -7713,6 +9765,14 @@ mod tests {
                         serde_json::to_vec(&json!({
                             "organization_id": "org-1",
                             "credential_template_id": "template-1",
+                            "authorized_client": {
+                                "client_id": "official-wallet",
+                                "jwks": {"keys": [{
+                                    "kty": "EC", "crv": "P-256", "kid": "wallet-key",
+                                    "x": "f83OJ3D2xF4A9O2jZ8M7VJQYxqvR8K0K8qZ8K0K8qZ8",
+                                    "y": "x_FEzRu9G8K0K8qZ8K0K8qZ8K0K8qZ8K0K8qZ8K0K8q"
+                                }]}
+                            },
                             "claims": {"employee_id": "123"}
                         }))
                         .expect("request JSON"),
@@ -8390,7 +10450,7 @@ mod tests {
                     .uri("/v1/credential-templates")
                     .header("cookie", "sessionId=valid")
                     .header("content-type", "application/json")
-                    .body(Body::from(br#"{"organization_id":"org-1","name":"employee","credential_type":"EmployeeCredential","vct":"EmployeeCredential","claims":[{"name":"birth_date","claim_type":"date","required":true,"selectively_disclosable":true,"namespace":"org.iso.18013.5.1"}],"supported_formats":["sd_jwt_vc"],"compliance_profile_id":"profile-1","issuer_did":"did:web:issuer.example"}"#.as_slice()))
+                    .body(Body::from(br#"{"organization_id":"org-1","name":"employee","credential_type":"EmployeeCredential","vct":"https://issuer.example/credentials/EmployeeCredential","claims":[{"name":"birth_date","claim_type":"date","required":true,"selectively_disclosable":true,"namespace":"org.iso.18013.5.1"}],"supported_formats":["sd_jwt_vc"],"compliance_profile_id":"profile-1","issuer_did":"did:web:issuer.example"}"#.as_slice()))
                     .expect("request"),
             )
             .await
@@ -8407,20 +10467,41 @@ mod tests {
     }
 
     #[test]
-    fn credential_template_issuer_format_normalizes_legacy_payload_aliases() {
+    fn template_issuer_context_normalizes_aliases_and_resolves_every_declared_format() {
         let contract: Value = serde_json::from_str(include_str!(
             "../../../../contracts/gateway-credential-template-behavior.json"
         ))
-        .expect("credential-template contract");
+        .unwrap();
         for case in contract["issuer_resolution_format_aliases"]
             .as_array()
-            .expect("format alias cases")
+            .unwrap()
         {
-            assert_eq!(
-                credential_template_issuer_format(case).as_deref(),
-                case["expected"].as_str(),
-                "{case}"
-            );
+            let input = crate::template_issuer_options::OptionsRequest {
+                organization_id: "org-1".into(),
+                compliance_profile_id: "profile-1".into(),
+                credential_payload_format: case["credential_payload_format"]
+                    .as_str()
+                    .map(str::to_owned),
+                supported_formats: case
+                    .get("supported_formats")
+                    .map(|value| serde_json::from_value(value.clone()).unwrap()),
+            };
+            let primary = marty_credential_template::CredentialFormat::parse(
+                case["expected_formats"][0].as_str().unwrap(),
+            )
+            .unwrap();
+            let profile = json!({"id":"profile-1", "organization_id":"org-1", "status":"ACTIVE",
+                "credential_format":primary.canonical(), "issuance_protocol":"OID4VCI_PRE_AUTH"});
+            let context = crate::template_issuer_options::TemplateIssuerContext::from_profile(
+                &input, &profile,
+            )
+            .unwrap();
+            let wire: Vec<_> = context
+                .formats
+                .iter()
+                .map(|format| format.signing_wire())
+                .collect();
+            assert_eq!(json!(wire), case["expected_formats"], "{case}");
         }
     }
 
@@ -8463,6 +10544,76 @@ mod tests {
         let body: Value = serde_json::from_slice(&body).expect("json");
         assert_eq!(body["verified"], true);
         assert_eq!(body["results"]["decision"], "allow");
+    }
+
+    #[test]
+    fn vc_api_verification_handoff_uses_policy_service_authentication() {
+        let state = runtime_state();
+        let identity = TrustedIdentityContext {
+            organization_id: Some("org-1".into()),
+            user_id: Some("user-1".into()),
+            ..TrustedIdentityContext::default()
+        };
+        let overrides = proxy_overrides(
+            &state,
+            "/v1/presentation-policies/policy-1/evaluate",
+            &identity,
+        );
+        assert_eq!(
+            overrides.headers.get("x-service-token"),
+            state.service_token.as_ref()
+        );
+    }
+
+    #[tokio::test]
+    async fn vc_api_documented_scope_and_input_failures_match_handlers() {
+        let document = GatewayContract::load()
+            .expect("gateway contract")
+            .openapi_document("test");
+        for (path, selection) in [
+            (
+                "/v1/vc-api/credentials/issue",
+                "credential_template_id=template-1&issuer_did=did%3Aweb%3Aissuer.example",
+            ),
+            (
+                "/v1/vc-api/credentials/verify",
+                "presentation_policy_id=policy-1",
+            ),
+            (
+                "/v1/vc-api/presentations/verify",
+                "presentation_policy_id=policy-1",
+            ),
+        ] {
+            for (query, expected) in [
+                (String::new(), StatusCode::UNPROCESSABLE_ENTITY),
+                (
+                    format!("?organization_id=org-other&{selection}"),
+                    StatusCode::FORBIDDEN,
+                ),
+                (
+                    format!("?organization_id=org-1&{selection}"),
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                ),
+            ] {
+                let response = runtime_router()
+                    .oneshot(
+                        Request::builder()
+                            .method("POST")
+                            .uri(format!("{path}{query}"))
+                            .header("cookie", "sessionId=valid")
+                            .header("content-type", "application/json")
+                            .body(Body::from("{}"))
+                            .expect("request"),
+                    )
+                    .await
+                    .expect("response");
+                assert_eq!(response.status(), expected, "{path}{query}");
+                assert!(
+                    document["paths"][path]["post"]["responses"][expected.as_str()].is_object(),
+                    "runtime status must be documented for {path}"
+                );
+            }
+        }
     }
 
     #[tokio::test]
@@ -8560,6 +10711,25 @@ mod tests {
             json!(["OPEN_BADGES_3"])
         );
 
+        let support = runtime_router()
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/protocol-support")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(support.status(), StatusCode::OK);
+        let support: Value = serde_json::from_slice(
+            &to_bytes(support.into_body(), DEFAULT_MAXIMUM_BODY_BYTES)
+                .await
+                .expect("body"),
+        )
+        .expect("json");
+        assert_eq!(support, discovery::protocol_support_catalog());
+        assert_eq!(support["entities"].as_array().map(Vec::len), Some(33));
+
         let health = runtime_router()
             .oneshot(
                 Request::builder()
@@ -8600,6 +10770,11 @@ mod tests {
         assert_eq!(openapi["openapi"], "3.1.0");
         assert_eq!(openapi["info"]["version"], "development");
         assert!(openapi["paths"]["/v1/flows/definitions"]["get"].is_object());
+        assert_eq!(
+            openapi["paths"]["/v1/protocol-support"]["get"]["responses"]["200"]["content"]
+                ["application/json"]["schema"]["$ref"],
+            "#/components/schemas/runtime__protocol_support_catalog"
+        );
 
         for path in ["/docs", "/redoc"] {
             let docs = runtime_router()
@@ -8790,55 +10965,45 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn flow_envelope_routes_replace_client_scope_with_trusted_scope() {
-        let wrapped = runtime_router()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri(
-                        "/internal/signing-keys/flow-key-envelopes/wrap?organization_id=org-1",
-                    )
-                    .header("x-api-key", "internal-signing-key")
-                    .header("content-type", "application/json")
-                    .body(Body::from(
-                        br#"{"organization_id":"attacker-org","flow_instance_id":"flow-1","plaintext_b64":"cHJpdmF0ZS1qd2s"}"#
-                            .as_slice(),
-                    ))
-                    .expect("request"),
-            )
-            .await
-            .expect("response");
-        assert_eq!(wrapped.status(), StatusCode::OK);
-        let body: Value = serde_json::from_slice(
-            &to_bytes(wrapped.into_body(), DEFAULT_MAXIMUM_BODY_BYTES)
+    async fn retired_flow_private_key_envelope_routes_are_unavailable() {
+        for action in ["wrap", "unwrap"] {
+            let response = runtime_router()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(format!(
+                            "/internal/signing-keys/flow-key-envelopes/{action}?organization_id=org-1"
+                        ))
+                        .header("x-api-key", "internal-signing-key")
+                        .header("content-type", "application/json")
+                        .body(Body::from("{}"))
+                        .expect("request"),
+                )
                 .await
-                .expect("body"),
-        )
-        .expect("wrap JSON");
-        assert_eq!(body["ciphertext"], "vault:v1:test");
+                .expect("response");
+            assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        }
+    }
 
-        let unwrapped = runtime_router()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/internal/signing-keys/flow-key-envelopes/unwrap?organization_id=org-1")
-                    .header("x-api-key", "internal-signing-key")
-                    .header("content-type", "application/json")
-                    .body(Body::from(
-                        br#"{"flow_instance_id":"flow-1","ciphertext":"vault:v1:test"}"#.as_slice(),
-                    ))
-                    .expect("request"),
-            )
-            .await
-            .expect("response");
-        assert_eq!(unwrapped.status(), StatusCode::OK);
-        let body: Value = serde_json::from_slice(
-            &to_bytes(unwrapped.into_body(), DEFAULT_MAXIMUM_BODY_BYTES)
+    #[tokio::test]
+    async fn legacy_gateway_integration_secret_routes_are_absent() {
+        for operation in ["encrypt", "decrypt"] {
+            let response = runtime_router()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(format!(
+                            "/internal/signing-keys/integration-secrets/{operation}?organization_id=org-1"
+                        ))
+                        .header("x-api-key", "internal-signing-key")
+                        .header("content-type", "application/json")
+                        .body(Body::from("{}"))
+                        .expect("request"),
+                )
                 .await
-                .expect("body"),
-        )
-        .expect("unwrap JSON");
-        assert_eq!(body["plaintext_b64"], "cHJpdmF0ZS1qd2s");
+                .expect("response");
+            assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        }
     }
 
     #[tokio::test]
@@ -9057,7 +11222,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn signing_routes_replace_body_scope_and_preserve_custody_privacy() {
+    async fn retired_service_sign_route_is_unavailable_and_did_sign_keeps_trusted_scope() {
         let direct = runtime_router()
             .oneshot(
                 Request::builder()
@@ -9072,21 +11237,30 @@ mod tests {
             )
             .await
             .expect("response");
-        assert_eq!(direct.status(), StatusCode::OK);
-        let body: Value = serde_json::from_slice(
-            &to_bytes(direct.into_body(), DEFAULT_MAXIMUM_BODY_BYTES)
-                .await
-                .expect("body"),
-        )
-        .expect("service sign JSON");
-        assert_eq!(body["service_id"], "service-1");
+        assert_eq!(direct.status(), StatusCode::NOT_FOUND);
+
+        let shared = runtime_router()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/internal/signing-keys/issuer-dids/sign?organization_id=org-1")
+                    .header("x-api-key", "internal-signing-key")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        br#"{"organization_id":"org-1","issuer_did":"did:web:issuer.example","credential_format":"dc+sd-jwt","key_purpose":"vc_jwt_issuer","algorithm":"ES256","payload_b64":"cGF5bG9hZA"}"#.as_slice(),
+                    ))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(shared.status(), StatusCode::UNAUTHORIZED);
 
         let did = runtime_router()
             .oneshot(
                 Request::builder()
                     .method("POST")
                     .uri("/internal/signing-keys/issuer-dids/sign?organization_id=org-1")
-                    .header("x-api-key", "internal-signing-key")
+                    .header("x-api-key", "dedicated-issuer-sign-key-000001")
                     .header("content-type", "application/json")
                     .body(Body::from(
                         br#"{"organization_id":"attacker","issuer_did":"did:web:issuer.example","credential_format":"dc+sd-jwt","key_purpose":"vc_jwt_issuer","algorithm":"ES256","payload_b64":"cGF5bG9hZA"}"#.as_slice(),
@@ -9104,6 +11278,66 @@ mod tests {
         .expect("DID sign JSON");
         assert!(body.get("service_id").is_none());
         assert_eq!(body["issuer_did"], "did:web:issuer.example");
+    }
+
+    #[tokio::test]
+    async fn internal_issuer_sign_relays_only_a_bounded_grant_header() {
+        let recorder = Arc::new(ActorRecordingUpstream::default());
+        let router = gateway_router(runtime_state_with_upstream(
+            Arc::new(NoOwner),
+            recorder.clone(),
+        ));
+        let grant = marty_signing_grant::GrantEnvelope {
+            claims: marty_signing_grant::GrantClaims {
+                version: 1,
+                origin: marty_signing_grant::SigningOrigin::FlowWalletRequest,
+                operation_id: "instance-1".into(),
+                organization_id: "org-1".into(),
+                route: "/internal/compat/issuer-dids/sign".into(),
+                service_id: None,
+                issuer_did: Some("did:web:issuer.example".into()),
+                key_reference: None,
+                key_purpose: "vc_jwt_issuer".into(),
+                algorithm: "ES256".into(),
+                payload_sha256_b64: marty_signing_grant::payload_digest(b"payload"),
+                issued_at: 1_700_000_000,
+                expires_at: 1_700_000_030,
+                nonce: "0123456789abcdef0123456789abcdef".into(),
+            },
+            hmac: "vault:v1:synthetic".into(),
+        };
+        let header = grant.to_header_value().unwrap();
+        let request = |header: &str| {
+            Request::builder()
+                .method("POST")
+                .uri("/internal/signing-keys/issuer-dids/sign?organization_id=org-1")
+                .header("x-api-key", "dedicated-issuer-sign-key-000001")
+                .header("content-type", "application/json")
+                .header(marty_signing_grant::HEADER_NAME, header)
+                .body(Body::from(r#"{"organization_id":"attacker","issuer_did":"did:web:issuer.example","credential_format":"dc+sd-jwt","key_purpose":"vc_jwt_issuer","algorithm":"ES256","payload_b64":"cGF5bG9hZA"}"#))
+                .unwrap()
+        };
+        let denied = router
+            .clone()
+            .oneshot(request("not-base64!"))
+            .await
+            .unwrap();
+        assert_eq!(denied.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(recorder.0.lock().unwrap().is_empty());
+        let accepted = router.oneshot(request(&header)).await.unwrap();
+        assert_eq!(accepted.status(), StatusCode::OK);
+        let calls = recorder.0.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].1.path, "/internal/compat/issuer-dids/sign");
+        assert_eq!(
+            calls[0].1.header(marty_signing_grant::HEADER_NAME),
+            Some(header.as_str())
+        );
+        assert_eq!(
+            serde_json::from_slice::<Value>(calls[0].1.body.as_deref().unwrap()).unwrap()
+                ["organization_id"],
+            "org-1"
+        );
     }
 
     #[tokio::test]

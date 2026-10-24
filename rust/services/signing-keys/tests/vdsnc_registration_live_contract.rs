@@ -14,33 +14,10 @@ use serde_json::{json, Value};
 use tower::ServiceExt;
 use uuid::Uuid;
 
-async fn disposable_redis_url() -> String {
-    let url = std::env::var("MARTY_TEST_REDIS_URL").expect("disposable Redis URL");
-    let parsed = reqwest::Url::parse(&url).expect("disposable Redis URL syntax");
-    assert!(matches!(
-        parsed.host_str(),
-        Some("127.0.0.1" | "localhost" | "::1")
-    ));
-    assert!(parsed
-        .path()
-        .trim_start_matches('/')
-        .parse::<u8>()
-        .is_ok_and(|db| db >= 13));
-    let nonce = std::env::var("MARTY_TEST_REDIS_DISPOSABLE_NONCE")
-        .expect("disposable Redis sentinel value");
-    assert!(nonce.len() >= 16, "disposable Redis sentinel is too short");
-    let client = redis::Client::open(url.as_str()).expect("disposable Redis client");
-    let mut connection = client
-        .get_multiplexed_async_connection()
-        .await
-        .expect("disposable Redis connection");
-    let observed: Option<String> = connection
-        .get("marty:tests:disposable-guard")
-        .await
-        .expect("disposable Redis sentinel read");
-    assert_eq!(observed.as_deref(), Some(nonce.as_str()));
-    url
-}
+#[path = "support/disposable_backends.rs"]
+mod disposable_backends;
+
+const EXTERNAL_KMS_ENDPOINT: &str = "https://kms.example.invalid";
 
 async fn register(app: &Router, organization_id: &str, body: Value) -> (StatusCode, Value) {
     let response = app
@@ -64,19 +41,25 @@ async fn register(app: &Router, organization_id: &str, body: Value) -> (StatusCo
 }
 
 #[tokio::test]
-#[ignore = "requires disposable MARTY_TEST_REDIS_URL"]
+#[ignore = "requires disposable Redis and OpenBao credential envelope"]
 async fn public_vdsnc_registration_preserves_registry_and_never_returns_provider_secret() {
-    let redis_url = disposable_redis_url().await;
+    let redis_url = disposable_backends::disposable_redis_url().await;
+    let envelope = disposable_backends::disposable_openbao_envelope().await;
     let organization_id = format!("rust-vdsnc-{}", Uuid::new_v4().simple());
     let other_organization_id = format!("rust-vdsnc-other-{}", Uuid::new_v4().simple());
-    let registry = RegistryStore::connect(&redis_url).await.unwrap();
+    let registry = RegistryStore::connect(&redis_url)
+        .await
+        .unwrap()
+        .with_auth_envelopes(Some(envelope));
     registry
         .save(
             &organization_id,
             &json!({
                 "services": [{
                     "id": "existing-service", "service_type": "custom-transit-compatible",
-                    "key_reference": "existing-key", "algorithms": ["ES256"]
+                    "key_reference": "existing-key", "algorithms": ["ES256"],
+                    "endpoint": EXTERNAL_KMS_ENDPOINT,
+                    "auth_reference": "existing-fixture-token"
                 }],
                 "default_service_id": "existing-service"
             }),
@@ -97,7 +80,7 @@ async fn public_vdsnc_registration_preserves_registry_and_never_returns_provider
         "country_code": " usa ",
         "authority_name": "  Test Bureau  ",
         "auth_reference": "provider-secret-never-echo",
-        "endpoint": "https://kms.example.invalid",
+        "endpoint": EXTERNAL_KMS_ENDPOINT,
         "generation": 2,
         "role": " DSC "
     });
@@ -138,6 +121,14 @@ async fn public_vdsnc_registration_preserves_registry_and_never_returns_provider
         .find(|service| service["id"] == response["service"]["id"])
         .unwrap();
     assert_eq!(registered["auth_reference"], "provider-secret-never-echo");
+    let raw: String = registry
+        .connection()
+        .get(storage_key(&organization_id))
+        .await
+        .unwrap();
+    assert!(!raw.contains("provider-secret-never-echo"));
+    assert!(!raw.contains("existing-fixture-token"));
+    assert!(raw.contains("auth_reference_envelope"));
     assert_eq!(
         registered["discovered_capabilities"]["vdsnc_namespaced_key_reference"],
         format!("cred:vdsnc:{tenant}:USA:dsc:2")
@@ -154,7 +145,8 @@ async fn public_vdsnc_registration_preserves_registry_and_never_returns_provider
         &other_organization_id,
         json!({
             "country_code": "CAN", "authority_name": "Other Bureau",
-            "key_reference": "kms-existing-can-dsc"
+            "key_reference": "kms-existing-can-dsc", "endpoint": EXTERNAL_KMS_ENDPOINT,
+            "auth_reference": "other-fixture-token"
         }),
     )
     .await;
@@ -163,11 +155,19 @@ async fn public_vdsnc_registration_preserves_registry_and_never_returns_provider
     let other_registry = registry.load(&other_organization_id).await.unwrap();
     assert_eq!(other_registry["default_service_id"], other["service"]["id"]);
     assert_eq!(other_registry["services"].as_array().unwrap().len(), 1);
+    let other_raw: String = registry
+        .connection()
+        .get(storage_key(&other_organization_id))
+        .await
+        .unwrap();
+    assert!(!other_raw.contains("other-fixture-token"));
+    assert!(other_raw.contains("auth_reference_envelope"));
 
     let (status, other_generated) = register(
         &app,
         &other_organization_id,
-        json!({"country_code": "USA", "authority_name": "Test Bureau", "generation": 2}),
+        json!({"country_code": "USA", "authority_name": "Test Bureau", "generation": 2,
+            "endpoint": EXTERNAL_KMS_ENDPOINT, "auth_reference": "other-fixture-token"}),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{other_generated}");
@@ -179,6 +179,7 @@ async fn public_vdsnc_registration_preserves_registry_and_never_returns_provider
     let before = stored;
     for invalid in [
         json!({"country_code": "U$", "authority_name": "Bureau"}),
+        json!({"country_code": "USA", "authority_name": "Bureau"}),
         json!({"country_code": "USA", "authority_name": " ", "generation": -1}),
         json!({"country_code": "USA", "authority_name": "Bureau", "private_key": "forged"}),
         json!({"country_code": "USA", "authority_name": "Bureau", "organization_id": other_organization_id}),
@@ -198,11 +199,15 @@ async fn public_vdsnc_registration_preserves_registry_and_never_returns_provider
 }
 
 #[tokio::test]
-#[ignore = "requires disposable MARTY_TEST_REDIS_URL"]
+#[ignore = "requires disposable Redis and OpenBao credential envelope"]
 async fn concurrent_vdsnc_registration_retains_both_services() {
-    let redis_url = disposable_redis_url().await;
+    let redis_url = disposable_backends::disposable_redis_url().await;
+    let envelope = disposable_backends::disposable_openbao_envelope().await;
     let organization_id = format!("rust-vdsnc-race-{}", Uuid::new_v4().simple());
-    let registry = RegistryStore::connect(&redis_url).await.unwrap();
+    let registry = RegistryStore::connect(&redis_url)
+        .await
+        .unwrap()
+        .with_auth_envelopes(Some(envelope));
     let app = router_with_dependencies(
         "test-internal-key".into(),
         Some(registry.clone()),
@@ -212,8 +217,10 @@ async fn concurrent_vdsnc_registration_retains_both_services() {
         None,
         None,
     );
-    let first = json!({"country_code": "USA", "authority_name": "First Bureau"});
-    let second = json!({"country_code": "CAN", "authority_name": "Second Bureau"});
+    let first = json!({"country_code": "USA", "authority_name": "First Bureau",
+        "endpoint": EXTERNAL_KMS_ENDPOINT, "auth_reference": "first-fixture-token"});
+    let second = json!({"country_code": "CAN", "authority_name": "Second Bureau",
+        "endpoint": EXTERNAL_KMS_ENDPOINT, "auth_reference": "second-fixture-token"});
     let (mut first_result, mut second_result) = tokio::join!(
         register(&app, &organization_id, first.clone()),
         register(&app, &organization_id, second.clone())

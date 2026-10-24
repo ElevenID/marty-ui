@@ -1,27 +1,34 @@
-"""Packaged native startup against the frozen published schema and observations."""
+"""Packaged native startup against the published schema and reviewed behavior."""
 
 import json
+import os
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 import re
+import secrets
+import shutil
 import subprocess
 import sys
 from tempfile import TemporaryDirectory
 import time
 
-from test_canvas_worker_image_entrypoint import MASTER_KEY, docker, owned_container
+from test_canvas_worker_image_entrypoint import docker, owned_container
+from with_disposable_event_stream_kms import execute as with_disposable_tls_kms
 
 
 ROOT = Path(__file__).resolve().parents[1]
 DATABASE_NAME = "canvas_published_schema_test"
 PASSWORD = "synthetic-local-only"
 SECRETS = {
-    "INTEGRATION_SECRET_MASTER_KEY": MASTER_KEY,
     "TOKEN_HMAC_KEY": "synthetic-startup-hmac-key",
     "ISSUANCE_API_KEY": "synthetic-startup-api-key",
     "SIGNING_KEYS_INTERNAL_API_KEY": "synthetic-startup-api-key",
+    "SIGNING_KEYS_ISSUER_SIGN_KEY": "synthetic-dedicated-issuer-sign-key-32-chars",
+    "SIGNING_KEYS_INTEGRATION_SECRET_KEY": "synthetic-dedicated-integration-secret-key-32-chars",
     "MARTY_DB_PASSWORD": PASSWORD,
 }
 HARDENED = ("--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges")
+OPENBAO_IMAGE = "quay.io/openbao/openbao@sha256:6c75c97223873807260352f269640935a07db0c26b3dbf12a98a36ec43ad9878"
 
 
 def contract(name):
@@ -30,6 +37,93 @@ def contract(name):
 
 def mount(path, destination):
     return ("--mount", f"type=bind,source={path},target={destination},readonly")
+
+
+def selected_pinned_dockerhub_image(reference):
+    if os.name == "nt":
+        # Windows Python cannot pass a Win32 path as a script argument to WSL bash.
+        try:
+            docker("pull", reference, timeout=120)
+            return reference
+        except subprocess.CalledProcessError:
+            mirror = f"mirror.gcr.io/library/{reference}"
+            docker("pull", mirror, timeout=120)
+            return mirror
+    return subprocess.run(
+        ["bash", str(ROOT / "scripts/ci/pull-pinned-dockerhub-image.sh"), reference],
+        check=True, capture_output=True, text=True, timeout=120,
+    ).stdout.strip()
+
+
+@contextmanager
+def owned_network():
+    name = "canvas-worker-kms-" + secrets.token_hex(8)
+    bao = os.environ["MARTY_TEST_SIGNING_KEYS_BAO_CONTAINER"]
+    docker("network", "create", "--internal", name)
+    try:
+        docker("network", "connect", "--alias", "synthetic-secret-service", name, bao)
+        yield name
+    finally:
+        subprocess.run(["docker", "network", "disconnect", "--force", name, bao],
+                       capture_output=True, check=False, timeout=20)
+        subprocess.run(["docker", "network", "rm", name],
+                       capture_output=True, check=False, timeout=20)
+
+
+def start_keyless_signer(stack, network, image):
+    redis_image = selected_pinned_dockerhub_image(
+        "redis:7.4-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99"
+    )
+    redis = stack.enter_context(owned_container(
+        "--pull=never", "--network", network, "--network-alias", "signing-redis",
+        redis_image,
+    ))
+    docker("start", redis)
+    env = {
+        "SIGNING_KEYS_INTERNAL_API_KEY": SECRETS["SIGNING_KEYS_INTERNAL_API_KEY"],
+        "SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY": "synthetic-service-sign-gateway-key-32-chars",
+        "SIGNING_KEYS_ISSUER_SIGN_KEY": SECRETS["SIGNING_KEYS_ISSUER_SIGN_KEY"],
+        "SIGNING_KEYS_INTEGRATION_SECRET_KEY": SECRETS["SIGNING_KEYS_INTEGRATION_SECRET_KEY"],
+        "SIGNING_KEYS_REDIS_URL": "redis://signing-redis:6379/2",
+        "SIGNING_KEYS_GRANT_VERIFY_TOKEN_FILE": "/verification/grant-token",
+        "ISSUER_BASE_URL": "https://issuer.example",
+        "BAO_ADDR": "https://127.0.0.1:8200",
+        "BAO_CACERT": "/verification/bao-ca.crt",
+        "BAO_TOKEN_FILE": "/verification/envelope-token",
+        "SIGNING_KEYS_INTEGRATION_SECRET_TLS_CERT_FILE": "/verification/tls.crt",
+        "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_ADDR": "https://127.0.0.1:8200",
+        "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_CA_CERT_FILE": "/verification/bao-ca.crt",
+        "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_TOKEN_FILE": "/verification/tls-token",
+        "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_KEY_NAME": os.environ["MARTY_TEST_SIGNING_KEYS_TLS_KMS_KEY_NAME"],
+        "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_KEY_VERSION": "1",
+    }
+    mounts = (
+        ("MARTY_TEST_SIGNING_KEYS_TLS_CERT", "/verification/tls.crt"),
+        ("MARTY_TEST_SIGNING_KEYS_TLS_CA", "/verification/workload-ca.crt"),
+        ("MARTY_TEST_SIGNING_KEYS_TLS_KMS_CA", "/verification/bao-ca.crt"),
+        ("MARTY_TEST_SIGNING_KEYS_TLS_KMS_TOKEN_FILE", "/verification/tls-token"),
+        ("MARTY_TEST_SIGNING_KEYS_ENVELOPE_TOKEN_FILE", "/verification/envelope-token"),
+        ("MARTY_TEST_SIGNING_KEYS_GRANT_VERIFY_TOKEN_FILE", "/verification/grant-token"),
+    )
+    signer = stack.enter_context(owned_container(
+        "--pull=never", "--network", f"container:{os.environ['MARTY_TEST_SIGNING_KEYS_BAO_CONTAINER']}",
+        *HARDENED, *environment_arguments(env),
+        *(part for source, target in mounts for part in mount(Path(os.environ[source]), target)),
+        image,
+    ))
+    docker("start", signer)
+
+    def remote_ready():
+        assert running(signer), f"Rust Signing Keys exited: {docker('logs', signer)}"
+        try:
+            docker("exec", signer, "curl", "--fail", "--silent",
+                   "--cacert", "/verification/workload-ca.crt",
+                   "https://localhost:8018/health", timeout=5)
+            return True
+        except subprocess.CalledProcessError:
+            return False
+
+    wait_for(remote_ready, "keyless Rust Signing Keys integration-secret service", 30)
 
 
 def environment_arguments(environment):
@@ -84,19 +178,22 @@ def configuration(case, mode):
         "CANVAS_SYNC_WORKER_ID": worker_id,
         "CANVAS_SYNC_WORKER_POLL_SECONDS": "60",
         "CANVAS_PILOT_ORGANIZATION_IDS": "bootstrap-org",
-        "SIGNING_KEYS_INTERNAL_URL": "http://127.0.0.1:1/internal/signing-keys",
+        "SIGNING_KEYS_INTERNAL_URL": "http://synthetic-secret-service:8017/internal/signing-keys",
+        # Startup must exercise the managed grant path. This idle-only probe
+        # has no mint authority: an unexpected sign cannot read this file.
+        "BAO_ADDR": "https://127.0.0.1:1",
+        "ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN_FILE": "/nonexistent/canvas-worker-image-grant",
+        "INTEGRATION_SECRET_KMS_URL": "https://synthetic-secret-service:8018/internal",
+        "INTEGRATION_SECRET_KMS_CA_FILE": "/synthetic-secrets/ca.crt",
         **case["environment"],
     }
     key_source = mode["key_source"]
-    assert key_source in {"direct", "file", "environment"}
+    assert key_source in {"direct", "file"}
     for name, value in SECRETS.items():
         if name == "MARTY_DB_PASSWORD":
             continue
         if key_source == "file":
             environment[f"{name}_FILE"] = f"/synthetic-secrets/{name}"
-        elif key_source == "environment" and name == "INTEGRATION_SECRET_MASTER_KEY":
-            environment[f"{name}_ENV"] = "IMAGE_SELECTED_MASTER_KEY"
-            environment["IMAGE_SELECTED_MASTER_KEY"] = value
         else:
             environment[name] = value
     assert mode["database_source"] in {"direct", "template"}
@@ -112,13 +209,17 @@ def configuration(case, mode):
     return worker_id, environment
 
 
-def assert_observation(observed, expected):
-    assert expected["exit_code_after_interrupt"] == -2
-    # Same explicit native SIGINT mapping as the existing actual-process gate.
-    assert observed == {**expected, "exit_code_after_interrupt": 130}
+def assert_observation(observed, case_name):
+    expected = contract("canvas-worker-startup-expected.json")
+    assert expected["schema"] == "marty.canvas-worker-startup-expected/v1"
+    assert expected["alive_after_idle"] is True
+    assert expected["job_count"] == 0
+    assert expected["exit_code_after_interrupt"] == 130
+    expected = {key: value for key, value in expected.items() if key != "schema"}
+    assert observed == {"name": case_name, **expected}
 
 
-def exercise(image, postgres, directory, case, mode, expected):
+def exercise(image, postgres, directory, case, mode):
     worker_id, environment = configuration(case, mode)
     with owned_container(
         "--pull=never",
@@ -160,7 +261,7 @@ def exercise(image, postgres, directory, case, mode, expected):
                 )
             ),
         }
-        assert_observation(observed, expected)
+        assert_observation(observed, case["name"])
         logs = docker("logs", worker)
         assert all(value not in logs for value in SECRETS.values()), (
             "Synthetic secret in startup logs"
@@ -168,28 +269,37 @@ def exercise(image, postgres, directory, case, mode, expected):
         print(f"Packaged worker startup {mode['name']}/{case['name']} passed")
 
 
-def run(image):
+def run(image, signing_image):
     spec = contract("canvas-worker-image-startup-scenarios.json")
     pins = contract(spec["schema_reference"])
     cases = contract(spec["startup_scenarios"])["cases"]
-    expected = {
-        case["name"]: case for case in contract(spec["startup_reference"])["cases"]
-    }
-    assert set(expected) == {case["name"] for case in cases}
+    assert len(cases) == 8
+    assert len({case["name"] for case in cases}) == len(cases)
     for pin in (pins["observed_image"], pins["observed_postgres_image"]):
         assert re.fullmatch(r"[a-z0-9./_-]+@sha256:[a-f0-9]{64}", pin)
-        docker("pull", pin, timeout=120)
-    with TemporaryDirectory(prefix="canvas-worker-image-startup-") as temporary:
-        directory = Path(temporary).resolve()
-        directory.chmod(0o755)
+    docker("pull", pins["observed_image"], timeout=120)
+    selected_postgres = selected_pinned_dockerhub_image(
+        pins["observed_postgres_image"]
+    )
+    assert selected_postgres in {
+        pins["observed_postgres_image"],
+        f"mirror.gcr.io/library/{pins['observed_postgres_image']}",
+    }
+    with TemporaryDirectory(prefix="canvas-worker-image-startup-") as temporary, owned_network() as network:
+        temporary_root = Path(temporary).resolve()
+        temporary_root.chmod(0o755)
+        directory = temporary_root / "worker-secrets"
+        directory.mkdir(mode=0o755)
         for name, value in SECRETS.items():
             path = directory / name
             path.write_text(value + "\r\n", encoding="utf-8", newline="")
             path.chmod(0o444)
+        shutil.copyfile(os.environ["MARTY_TEST_SIGNING_KEYS_TLS_CA"], directory / "ca.crt")
+        (directory / "ca.crt").chmod(0o444)
         with owned_container(
             "--pull=never",
             "--network",
-            "none",
+            network,
             "--tmpfs",
             "/var/lib/postgresql/data:rw",
             "--tmpfs",
@@ -201,7 +311,7 @@ def run(image):
                     "POSTGRES_DB": DATABASE_NAME,
                 }
             ),
-            pins["observed_postgres_image"],
+            selected_postgres,
         ) as postgres:
             docker("start", postgres)
 
@@ -243,14 +353,20 @@ def run(image):
                 assert report["status"] == "passed"
                 assert report["migration_revisions"] == pins["migration_revisions"]
                 assert report["worker_sha256"] == pins["observed_source_sha256"]
-            for mode in spec["modes"]:
-                for case in cases:
-                    exercise(
-                        image, postgres, directory, case, mode, expected[case["name"]]
-                    )
+            with ExitStack() as stack:
+                start_keyless_signer(stack, network, signing_image)
+                for mode in spec["modes"]:
+                    for case in cases:
+                        exercise(image, postgres, directory, case, mode)
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 2:
-        raise SystemExit("Expected the exact locally built issuance image")
-    run(sys.argv[1])
+    if len(sys.argv) not in (2, 3):
+        raise SystemExit("Expected the exact locally built issuance image and optional Signing Keys image")
+    signing_image = sys.argv[2] if len(sys.argv) == 3 else "marty-signing-keys:ci"
+    if "MARTY_TEST_SIGNING_KEYS_BAO_CONTAINER" not in os.environ:
+        raise SystemExit(with_disposable_tls_kms(
+            OPENBAO_IMAGE, [sys.executable, str(Path(__file__).resolve()), sys.argv[1], signing_image],
+            profile="signing-keys-image",
+        ))
+    run(sys.argv[1], signing_image)

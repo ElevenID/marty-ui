@@ -366,6 +366,24 @@ impl TrustProfileApplication {
         Ok(profile)
     }
 
+    pub async fn profile_for_gateway_api_key(
+        &self,
+        actor: &marty_api_key_policy::GatewayApiKeyActor,
+        profile_id: Uuid,
+    ) -> Result<TrustProfile, TrustProfileApplicationError> {
+        let profile = self.required_profile(profile_id).await?;
+        if !actor.authorizes(
+            &actor.principal_id(),
+            &profile.organization_id,
+            "trust-profile:view",
+        ) {
+            return Err(TrustProfileApplicationError::Forbidden(
+                "API_KEY_SCOPE_REQUIRED",
+            ));
+        }
+        Ok(profile)
+    }
+
     pub async fn update_profile(
         &self,
         user_id: &str,

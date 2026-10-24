@@ -94,6 +94,18 @@ const LIST_EVIDENCE_FACTS: &str = "SELECT
     WHERE application_id = $1
     ORDER BY created_at";
 
+// The head table is authoritative; older observations may intentionally be
+// retained without a supersession edge and must not become current by inference.
+const LIST_CURRENT_EVIDENCE_FACTS: &str = "SELECT fact.*
+    FROM issuance_service.evidence_facts AS fact
+    JOIN issuance_service.evidence_fact_heads AS head
+      ON head.organization_id = fact.organization_id
+     AND head.application_id = fact.application_id
+     AND head.logical_key = fact.logical_key
+     AND head.fact_id = fact.id
+    WHERE fact.application_id = $1
+    ORDER BY fact.created_at, fact.id";
+
 const LIST_ISSUANCE_EVENTS: &str = "SELECT
         id, transaction_id, application_id, event_type, metadata, created_at
     FROM issuance_service.issuance_events
@@ -259,6 +271,9 @@ async fn replace_application_if_revision_on<'executor, E>(
 where
     E: Executor<'executor, Database = Postgres>,
 {
+    if application_contains_private_material(application) {
+        return Err(InternalApplicationRepositoryError::Unavailable);
+    }
     let affected = sqlx::query(REPLACE_IF_REVISION)
         .bind(&application.application_template_id)
         .bind(&application.applicant_identifier)
@@ -301,6 +316,9 @@ async fn insert_evidence_fact_on<'executor, E>(
 where
     E: Executor<'executor, Database = Postgres>,
 {
+    if fact_contains_private_material(fact) {
+        return Err(InternalApplicationEvidenceRepositoryError::Unavailable);
+    }
     sqlx::query(INSERT_EVIDENCE_FACT)
         .bind(&fact.id)
         .bind(&fact.organization_id)
@@ -352,6 +370,9 @@ async fn insert_issuance_event_on<'executor, E>(
 where
     E: Executor<'executor, Database = Postgres>,
 {
+    if event_contains_private_material(event) {
+        return Err(InternalApplicationEvidenceRepositoryError::Unavailable);
+    }
     sqlx::query(INSERT_ISSUANCE_EVENT)
         .bind(&event.id)
         .bind(&event.transaction_id)
@@ -384,6 +405,9 @@ impl InternalApplicationRepository for PostgresInternalApplicationRepository {
         &self,
         application: &ApplicationRecord,
     ) -> Result<(), InternalApplicationRepositoryError> {
+        if application_contains_private_material(application) {
+            return Err(InternalApplicationRepositoryError::Unavailable);
+        }
         sqlx::query(INSERT)
             .bind(&application.id)
             .bind(&application.organization_id)
@@ -454,6 +478,20 @@ impl InternalApplicationRepository for PostgresInternalApplicationRepository {
         application_id: &str,
     ) -> Result<Vec<EvidenceFactRecord>, InternalApplicationRepositoryError> {
         sqlx::query(LIST_EVIDENCE_FACTS)
+            .bind(application_id)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(repository_error)?
+            .into_iter()
+            .map(evidence_fact_row)
+            .collect()
+    }
+
+    async fn list_current_evidence_facts_for_application(
+        &self,
+        application_id: &str,
+    ) -> Result<Vec<EvidenceFactRecord>, InternalApplicationRepositoryError> {
+        sqlx::query(LIST_CURRENT_EVIDENCE_FACTS)
             .bind(application_id)
             .fetch_all(&self.pool)
             .await
@@ -695,7 +733,7 @@ impl InternalApplicationReconciliationRepository for PostgresInternalApplication
         .await
         .map_err(|_| EvidenceReconciliationRepositoryError::Unavailable)?
         .filter(|template| template.organization_id == application.organization_id);
-        let facts = InternalApplicationRepository::list_evidence_facts_for_application(
+        let facts = InternalApplicationRepository::list_current_evidence_facts_for_application(
             self,
             &application.id,
         )
@@ -1220,11 +1258,22 @@ impl InternalApplicationOfferRepository for PostgresInternalApplicationRepositor
                     let refresh_canvas_context = canvas_bound_application(&current);
                     let mut refreshed_context = prepared.clone();
                     if refresh_canvas_context {
-                        refreshed_context.claims = existing.claims.clone();
-                        if let Some(vct) = prepared.claims.get("_vct") {
-                            refreshed_context
-                                .claims
-                                .insert("_vct".to_owned(), vct.clone());
+                        let mapped = sqlx::query_scalar::<_, bool>(
+                            "SELECT COALESCE(jsonb_array_length(claim_collection_rules::jsonb), 0) > 0
+                             FROM issuance_service.application_templates
+                             WHERE id = $1 AND organization_id = $2 FOR SHARE",
+                        )
+                        .bind(&current.application_template_id)
+                        .bind(&current.organization_id)
+                        .fetch_optional(&mut *database).await.map_err(offer_repository_error)?
+                        .ok_or(InternalApplicationOfferError::Unavailable)?;
+                        if !mapped {
+                            refreshed_context.claims = existing.claims.clone();
+                            if let Some(vct) = prepared.claims.get("_vct") {
+                                refreshed_context
+                                    .claims
+                                    .insert("_vct".to_owned(), vct.clone());
+                            }
                         }
                     }
                     let refreshed = refresh_pending_application_offer(
@@ -1295,6 +1344,9 @@ impl InternalApplicationOfferRepository for PostgresInternalApplicationRepositor
         &self,
         event: &IssuanceEventRecord,
     ) -> Result<(), InternalApplicationOfferError> {
+        if event_contains_private_material(event) {
+            return Err(InternalApplicationOfferError::Unavailable);
+        }
         sqlx::query(INSERT_ISSUANCE_EVENT)
             .bind(&event.id)
             .bind(&event.transaction_id)
@@ -1346,18 +1398,22 @@ fn canvas_account_id(fact: &EvidenceFactRecord) -> Option<String> {
 fn validate_reconciliation_write(
     write: &EvidenceReconciliationWrite,
 ) -> Result<(), EvidenceReconciliationRepositoryError> {
-    if write.events.iter().any(|event| {
-        event.application_id.as_deref() != Some(write.application.id.as_str())
-            || event
-                .metadata
-                .get("organization_id")
-                .and_then(Value::as_str)
-                != Some(write.application.organization_id.as_str())
-    }) || write.transaction.as_ref().is_some_and(|transaction| {
-        transaction.application_id.as_deref() != Some(write.application.id.as_str())
-            || transaction.organization_id != write.application.organization_id
-            || transaction.status != CredentialTransactionStatus::Pending
-    }) || write.transaction.is_some() != write.approval_snapshot.is_some()
+    if application_contains_private_material(&write.application)
+        || write.events.iter().any(event_contains_private_material)
+        || write.events.iter().any(|event| {
+            event.application_id.as_deref() != Some(write.application.id.as_str())
+                || event
+                    .metadata
+                    .get("organization_id")
+                    .and_then(Value::as_str)
+                    != Some(write.application.organization_id.as_str())
+        })
+        || write.transaction.as_ref().is_some_and(|transaction| {
+            transaction.application_id.as_deref() != Some(write.application.id.as_str())
+                || transaction.organization_id != write.application.organization_id
+                || transaction.status != CredentialTransactionStatus::Pending
+        })
+        || write.transaction.is_some() != write.approval_snapshot.is_some()
     {
         return Err(EvidenceReconciliationRepositoryError::Unavailable);
     }
@@ -1368,6 +1424,9 @@ async fn insert_reconciliation_event(
     database: &mut sqlx::Transaction<'_, Postgres>,
     event: &IssuanceEventRecord,
 ) -> Result<(), EvidenceReconciliationRepositoryError> {
+    if event_contains_private_material(event) {
+        return Err(EvidenceReconciliationRepositoryError::Unavailable);
+    }
     sqlx::query(INSERT_ISSUANCE_EVENT)
         .bind(&event.id)
         .bind(&event.transaction_id)
@@ -1425,6 +1484,36 @@ fn reconciliation_receipt_row(
 fn reconciliation_repository_error(_cause: sqlx::Error) -> EvidenceReconciliationRepositoryError {
     error!("internal Application evidence reconciliation persistence failed");
     EvidenceReconciliationRepositoryError::Unavailable
+}
+
+fn application_contains_private_material(application: &ApplicationRecord) -> bool {
+    [
+        &application.form_data,
+        &application.integration_context,
+        &application.derived_claims,
+    ]
+    .into_iter()
+    .chain(application.evidence_submissions.iter())
+    .any(marty_key_material_policy::contains_private_key_map)
+        || application
+            .review_notes
+            .as_deref()
+            .is_some_and(marty_key_material_policy::has_private_key_marker)
+}
+
+fn fact_contains_private_material(fact: &EvidenceFactRecord) -> bool {
+    [
+        &fact.scope,
+        &fact.assertion,
+        &fact.verification,
+        &fact.source,
+    ]
+    .into_iter()
+    .any(marty_key_material_policy::contains_private_key_map)
+}
+
+fn event_contains_private_material(event: &IssuanceEventRecord) -> bool {
+    marty_key_material_policy::contains_private_key_map(&event.metadata)
 }
 
 fn application_row(row: PgRow) -> Result<ApplicationRecord, InternalApplicationRepositoryError> {
@@ -1551,4 +1640,104 @@ fn evidence_repository_error(_cause: sqlx::Error) -> InternalApplicationEvidence
 fn row_error(cause: sqlx::Error) -> InternalApplicationRepositoryError {
     error!(%cause, "internal Application repository row is invalid");
     InternalApplicationRepositoryError::Unavailable
+}
+
+#[cfg(test)]
+mod custody_tests {
+    use super::*;
+    use crate::internal_application_domain::ApplicationCreate;
+    use serde_json::json;
+
+    fn application() -> ApplicationRecord {
+        ApplicationRecord::new(
+            "application-1".into(),
+            "organization-1".into(),
+            ApplicationCreate {
+                application_template_id: "template-1".into(),
+                applicant_data: Map::new(),
+                integration_context: Map::new(),
+            },
+            "applicant-1",
+            Utc::now(),
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn application_insert_rejects_private_material_before_database_access() {
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgresql://unused:unused@127.0.0.1:1/unused")
+            .unwrap();
+        let repository = PostgresInternalApplicationRepository::new(pool);
+        let mut record = application();
+        record.integration_context.insert(
+            "issuer".into(),
+            json!({"private_jwk": {"kty": "EC", "d": "synthetic"}}),
+        );
+        assert_eq!(
+            repository.insert_application(&record).await,
+            Err(InternalApplicationRepositoryError::Unavailable)
+        );
+        record.integration_context.insert(
+            "issuer".into(),
+            json!({"key_reference": "transit/keys/issuer-v4"}),
+        );
+        assert!(!application_contains_private_material(&record));
+        record.evidence_submissions.push(
+            json!({"nested": {"private_key_pem": "synthetic"}})
+                .as_object()
+                .unwrap()
+                .clone(),
+        );
+        assert!(application_contains_private_material(&record));
+    }
+
+    #[test]
+    fn evidence_and_event_records_reject_private_material() {
+        let now = Utc::now();
+        let mut fact = EvidenceFactRecord {
+            id: "fact-1".into(),
+            organization_id: "organization-1".into(),
+            application_id: "application-1".into(),
+            subject_id: "subject-1".into(),
+            provider: "provider".into(),
+            fact_type: "verified".into(),
+            scope: Map::new(),
+            assertion: Map::new(),
+            verification: Map::new(),
+            source: Map::new(),
+            requirement_id: None,
+            logical_key: "key".into(),
+            source_revision: "1".into(),
+            payload_hash: "hash".into(),
+            observed_at: now,
+            effective_at: None,
+            superseded_fact_id: None,
+            created_at: now,
+        };
+        let mut event = IssuanceEventRecord {
+            id: "event-1".into(),
+            transaction_id: None,
+            application_id: Some("application-1".into()),
+            event_type: "issued".into(),
+            metadata: Map::new(),
+            created_at: now,
+        };
+        assert!(!fact_contains_private_material(&fact));
+        assert!(!event_contains_private_material(&event));
+        fact.source
+            .insert("key_reference".into(), json!("transit/keys/issuer-v4"));
+        event
+            .metadata
+            .insert("public_jwk".into(), json!({"kty": "OKP", "x": "public"}));
+        assert!(!fact_contains_private_material(&fact));
+        assert!(!event_contains_private_material(&event));
+        fact.verification
+            .insert("private_key".into(), json!("synthetic"));
+        event
+            .metadata
+            .insert("notes".into(), json!("-----BEGIN PRIVATE KEY-----"));
+        assert!(fact_contains_private_material(&fact));
+        assert!(event_contains_private_material(&event));
+    }
 }

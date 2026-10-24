@@ -10,6 +10,7 @@ use std::{
 
 pub mod process;
 mod publication;
+pub mod secret_closure;
 pub mod transform;
 pub type Result<T> = std::result::Result<T, String>;
 pub const MARKER: &str = ".marty-selfhost-bundle.json";
@@ -19,6 +20,7 @@ const IMAGE_LOCK_NAME: &str = ".marty-selfhost-images.json";
 const MANIFEST: &str = "deploy-config/bundles/selfhost.json";
 const DEFAULT_ASSETS: &[&str] = &[
     "docker-compose.selfhost.prod.yml",
+    "docker-compose.selfhost.openbao.yml",
     "docker-compose.selfhost.bundle.override.yml",
     ".env.selfhost.production.example",
     "SELFHOST_BUNDLE.md",
@@ -26,9 +28,13 @@ const DEFAULT_ASSETS: &[&str] = &[
     "docker/nginx-selfhost.prod.conf.template",
     "docker/tunnel-nginx-proxy.edge.conf",
     "docker/openbao-init.sh",
+    "docker/openbao-selfhost.hcl",
+    "docker/openbao-selfhost-init.sh",
+    "docker/openbao-haip-workload-policy.hcl",
     "docker/secrets/selfhost.example",
     "config/keycloak",
     "scripts/bootstrap-selfhost-vault.sh",
+    "scripts/generate_selfhost_disposable_credentials.py",
     "scripts/cloudflared-selfhost.sh",
     "scripts/keycloak-selfhost-start.sh",
     "scripts/load-openbao-token-and-start.sh",
@@ -43,6 +49,8 @@ pub struct Render {
     pub env_file: String,
     pub compose_files: Vec<String>,
     pub output_file: String,
+    #[serde(default)]
+    pub openbao_compose_file: Option<String>,
     pub strip_build_blocks: bool,
     pub relativize_paths: bool,
     pub no_interpolate: bool,
@@ -56,6 +64,7 @@ impl Default for Render {
                 "docker-compose.selfhost.bundle.override.yml".into(),
             ],
             output_file: "docker-compose.yml".into(),
+            openbao_compose_file: None,
             strip_build_blocks: true,
             relativize_paths: true,
             no_interpolate: true,
@@ -74,6 +83,7 @@ struct ImageLock {
     schema: String,
     release: String,
     services: BTreeMap<String, String>,
+    openbao_didcomm_image: String,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -344,6 +354,46 @@ pub fn render_arguments(render: &Render) -> Vec<String> {
     args.extend(["config".into(), "--no-interpolate".into()]);
     args
 }
+
+fn pin_openbao_compose(source: &str, image: &str) -> Result<String> {
+    const SOURCE_IMAGE: &str = "${MARTY_OPENBAO_DIDCOMM_IMAGE:?set MARTY_OPENBAO_DIDCOMM_IMAGE to the reviewed plugin image digest}";
+    let mut document: serde_yaml::Value =
+        serde_yaml::from_str(source).map_err(|_| "OpenBao Compose is invalid YAML")?;
+    let services = document
+        .get_mut("services")
+        .and_then(serde_yaml::Value::as_mapping_mut)
+        .ok_or("OpenBao Compose has no services")?;
+    if services.len() != 4 {
+        return Err("OpenBao Compose service set changed".into());
+    }
+    for name in [
+        "openbao-tls-init",
+        "openbao",
+        "openbao-unseal",
+        "openbao-bootstrap",
+    ] {
+        let service = services
+            .get_mut(serde_yaml::Value::String(name.into()))
+            .and_then(serde_yaml::Value::as_mapping_mut)
+            .ok_or("OpenBao Compose service set changed")?;
+        if service.contains_key(serde_yaml::Value::String("build".into()))
+            || service
+                .get(serde_yaml::Value::String("image".into()))
+                .and_then(serde_yaml::Value::as_str)
+                != Some(SOURCE_IMAGE)
+        {
+            return Err("OpenBao Compose image source changed".into());
+        }
+        service.insert(
+            serde_yaml::Value::String("image".into()),
+            serde_yaml::Value::String(image.into()),
+        );
+    }
+    let pinned =
+        serde_yaml::to_string(&document).map_err(|_| "Cannot render pinned OpenBao Compose")?;
+    transform::validate_strict(&pinned)?;
+    Ok(pinned)
+}
 fn source_closure(stage: &Path, files: &[String]) -> Result<BTreeSet<PathBuf>> {
     let mut pending: Vec<_> = files.iter().map(|s| relative(s)).collect::<Result<_>>()?;
     let mut closure = BTreeSet::new();
@@ -461,6 +511,13 @@ pub fn relativize(text: &str, stage: &Path) -> Result<String> {
                         key,
                         value
                     );
+                } else if scalar.starts_with('/')
+                    || (scalar.len() >= 3
+                        && scalar.as_bytes()[0].is_ascii_alphabetic()
+                        && scalar.as_bytes()[1] == b':'
+                        && scalar.as_bytes()[2] == b'/')
+                {
+                    return Err("Rendered path escapes staged bundle".into());
                 }
             }
         }
@@ -548,7 +605,7 @@ pub fn package(
     options: &Options,
     renderer: impl FnOnce(&Path, &[String]) -> Result<String>,
 ) -> Result<Published> {
-    package_with_publication(options, renderer, None, publication::rename_noreplace)
+    package_with_publication(options, renderer, None, None, publication::rename_noreplace)
 }
 pub fn package_with_image_lock(
     options: &Options,
@@ -559,13 +616,73 @@ pub fn package_with_image_lock(
         options,
         renderer,
         Some(image_lock),
+        None,
         publication::rename_noreplace,
     )
+}
+/// Explicit nightly opt-in; stable packaging retains exact source-release equality.
+pub fn package_nightly_with_image_lock(
+    options: &Options,
+    renderer: impl FnOnce(&Path, &[String]) -> Result<String>,
+    image_lock: &Path,
+    candidate: &Path,
+) -> Result<Published> {
+    package_with_publication(
+        options,
+        renderer,
+        Some(image_lock),
+        Some(candidate),
+        publication::rename_noreplace,
+    )
+}
+
+fn validate_nightly_source(
+    repo: &Path,
+    lock_release: &str,
+    source_bytes: &[u8],
+    candidate_path: &Path,
+) -> Result<()> {
+    check_ancestors(candidate_path)?;
+    let candidate: serde_json::Value = serde_json::from_slice(
+        &fs::read(candidate_path).map_err(failure("Cannot read nightly candidate"))?,
+    )
+    .map_err(|_| "Invalid nightly candidate")?;
+    let source: serde_json::Value =
+        serde_json::from_slice(source_bytes).map_err(|_| "Invalid source lock")?;
+    let version = candidate["version"]
+        .as_str()
+        .ok_or("Missing nightly version")?;
+    let pattern =
+        regex::Regex::new(r"^([0-9]+\.[0-9]+\.[0-9]+)-nightly\.(20[0-9]{6})\.([1-9][0-9]*)$")
+            .map_err(|_| "Invalid nightly pattern")?;
+    let parts = pattern.captures(version).ok_or("Invalid nightly version")?;
+    let head = std::process::Command::new("git")
+        .args(["-C"])
+        .arg(repo)
+        .args(["rev-parse", "HEAD^{commit}"])
+        .output()
+        .map_err(failure("Cannot verify nightly source"))?;
+    let digest = format!("sha256:{:x}", Sha256::digest(source_bytes));
+    if !head.status.success()
+        || candidate["schema"] != "elevenid.nightly-installation-candidate/v1"
+        || candidate["state"] != "prepared"
+        || candidate["tag"] != format!("v{version}")
+        || candidate["claim_run_id"] != parts[3]
+        || candidate["source_sha"].as_str() != Some(String::from_utf8_lossy(&head.stdout).trim())
+        || candidate["stack_lock_sha256"] != digest
+        || source["release_state"] != "eligible"
+        || source["release"] != format!("marty-ui@{}", &parts[1])
+        || lock_release != format!("marty-ui@{version}")
+    {
+        return Err("Nightly candidate differs from source, claim or image lock".into());
+    }
+    Ok(())
 }
 fn package_with_publication(
     options: &Options,
     renderer: impl FnOnce(&Path, &[String]) -> Result<String>,
     image_lock_path: Option<&Path>,
+    nightly_candidate: Option<&Path>,
     publish: impl FnOnce(&Path, &Path) -> std::io::Result<()>,
 ) -> Result<Published> {
     check_ancestors(&options.repo)?;
@@ -611,6 +728,17 @@ fn package_with_publication(
         .iter()
         .map(|s| relative(s))
         .collect::<Result<_>>()?;
+    let openbao_compose = manifest
+        .render
+        .openbao_compose_file
+        .as_deref()
+        .map(relative)
+        .transpose()?;
+    if let Some(path) = &openbao_compose {
+        if !assets.contains(path) || path == &final_compose {
+            return Err("OpenBao Compose is not a distinct bundle asset".into());
+        }
+    }
     if image_lock_path.is_some()
         && assets
             .iter()
@@ -653,6 +781,7 @@ fn package_with_publication(
     }
     let rendered = renderer(stage.path(), &render_arguments(&manifest.render))?;
     let rendered = relativize(&transform::strip_build_blocks(&rendered), stage.path())?;
+    let rendered = transform::restore_project_scoped_resources(&rendered)?;
     let rendered = if let Some(path) = image_lock_path {
         check_ancestors(path)?;
         let bytes = fs::read(path).map_err(failure("Cannot read image lock"))?;
@@ -664,13 +793,33 @@ fn package_with_publication(
         if lock.schema != IMAGE_LOCK_SCHEMA {
             return Err("Image lock schema is unsupported".into());
         }
+        let plugin_digest = lock
+            .openbao_didcomm_image
+            .strip_prefix("ghcr.io/elevenid/marty-ui-oss/openbao-didcomm@sha256:")
+            .ok_or("Image lock has no exact OpenBao DIDComm image")?;
+        if plugin_digest.len() != 64
+            || !plugin_digest
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        {
+            return Err("Image lock has no exact OpenBao DIDComm image".into());
+        }
+        if let Some(path) = &openbao_compose {
+            let source = fs::read_to_string(stage.path().join(path))
+                .map_err(failure("Cannot read staged OpenBao Compose"))?;
+            let pinned_openbao = pin_openbao_compose(&source, &lock.openbao_didcomm_image)?;
+            fs::write(stage.path().join(path), pinned_openbao)
+                .map_err(failure("Cannot pin staged OpenBao Compose"))?;
+        }
         let source_lock_path = repo.join("release/stack-lock.json");
         check_ancestors(&source_lock_path)?;
-        let stack_lock: serde_json::Value = serde_json::from_slice(
-            &fs::read(source_lock_path).map_err(failure("Cannot read source stack lock"))?,
-        )
-        .map_err(|_| "Source stack lock is invalid JSON")?;
-        if stack_lock["release"].as_str() != Some(lock.release.as_str()) {
+        let source_bytes =
+            fs::read(source_lock_path).map_err(failure("Cannot read source stack lock"))?;
+        let stack_lock: serde_json::Value = serde_json::from_slice(&source_bytes)
+            .map_err(|_| "Source stack lock is invalid JSON")?;
+        if let Some(candidate) = nightly_candidate {
+            validate_nightly_source(&repo, &lock.release, &source_bytes, candidate)?;
+        } else if stack_lock["release"].as_str() != Some(lock.release.as_str()) {
             return Err("Image lock release differs from source stack lock".into());
         }
         let pinned = transform::pin_service_images(&rendered, &lock.services)?;
@@ -801,15 +950,16 @@ mod publication_pipeline_tests {
             package(&options, renderer).unwrap();
             options.replace = true;
             fs::write(options.repo.join("SELFHOST_BUNDLE.md"), "replacement").unwrap();
-            let error = package_with_publication(&options, renderer, None, |stage, destination| {
-                if directory {
-                    fs::create_dir(destination).unwrap();
-                } else {
-                    fs::write(destination, "foreign").unwrap();
-                }
-                publication::rename_noreplace(stage, destination)
-            })
-            .unwrap_err();
+            let error =
+                package_with_publication(&options, renderer, None, None, |stage, destination| {
+                    if directory {
+                        fs::create_dir(destination).unwrap();
+                    } else {
+                        fs::write(destination, "foreign").unwrap();
+                    }
+                    publication::rename_noreplace(stage, destination)
+                })
+                .unwrap_err();
             assert!(error.contains("staging retained"));
             let staged = fs::read_dir(owned.path())
                 .unwrap()

@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use marty_crypto::certificate::get_certificate_info;
-use mmf_platform::GrpcServerTlsMaterial;
+use mmf_platform::{KeylessGrpcTlsAcceptor, OpenBaoTlsIdentityFiles};
 use mmf_security::{
     constant_time_secret_eq, WorkloadAuthorizationDecision, WorkloadIdentityPolicy,
 };
@@ -11,7 +11,7 @@ use tonic::{
     Request, Status,
 };
 
-use crate::FlowServiceConfig;
+use crate::{FlowServiceConfig, WorkloadServerTlsFiles};
 
 pub const START_VERIFICATION_METHOD: &str = "/marty.ui.flow.v1.FlowService/StartVerification";
 pub const APPLICATION_APPROVED_METHOD: &str = "/marty.ui.flow.v1.FlowService/ApplicationApproved";
@@ -31,7 +31,7 @@ pub enum FlowGrpcSecurityError {
 pub struct FlowGrpcSecurity {
     service_token: Option<Vec<u8>>,
     workload_policy: WorkloadIdentityPolicy,
-    server_tls: Option<GrpcServerTlsMaterial>,
+    server_tls: Option<WorkloadServerTlsFiles>,
 }
 
 impl FlowGrpcSecurity {
@@ -45,17 +45,7 @@ impl FlowGrpcSecurity {
                 "service token is missing".into(),
             ));
         }
-        let server_tls = config
-            .workload_server_tls
-            .as_ref()
-            .map(|files| {
-                GrpcServerTlsMaterial::from_pem_files(
-                    &files.ca_certificate,
-                    &files.certificate,
-                    &files.private_key,
-                )
-            })
-            .transpose()?;
+        let server_tls = config.workload_server_tls.clone();
         if config.environment.is_deployed() && server_tls.is_none() {
             return Err(FlowGrpcSecurityError::Configuration(
                 "workload server TLS is missing".into(),
@@ -78,11 +68,29 @@ impl FlowGrpcSecurity {
         })
     }
 
-    #[must_use]
-    pub fn server_tls_config(&self) -> Option<tonic::transport::ServerTlsConfig> {
-        self.server_tls
-            .as_ref()
-            .map(GrpcServerTlsMaterial::server_tls_config)
+    pub async fn server_tls_acceptor(
+        &self,
+    ) -> Result<Option<KeylessGrpcTlsAcceptor>, FlowGrpcSecurityError> {
+        let Some(files) = &self.server_tls else {
+            return Ok(None);
+        };
+        let acceptor = OpenBaoTlsIdentityFiles {
+            certificate_chain_file: files.certificate.clone(),
+            kms_ca_cert_file: files.kms_ca_certificate.clone(),
+            kms_endpoint: files.kms_endpoint.clone(),
+            kms_token_file: files.kms_token_file.clone(),
+            kms_key_name: files.kms_key_name.clone(),
+            kms_key_version: files.kms_key_version,
+            request_timeout: std::time::Duration::from_secs(10),
+            max_concurrent_signs: 64,
+        }
+        .grpc_acceptor(
+            &files.ca_certificate,
+            64,
+            std::time::Duration::from_secs(15),
+        )
+        .await?;
+        Ok(Some(acceptor))
     }
 
     pub fn authenticate_service<T>(&self, request: &Request<T>) -> Result<(), Status> {
@@ -159,14 +167,7 @@ mod tests {
                 ),
             ]))
             .unwrap(),
-            server_tls: Some(
-                GrpcServerTlsMaterial::new(
-                    b"-----BEGIN CERTIFICATE-----\nca\n-----END CERTIFICATE-----".to_vec(),
-                    b"-----BEGIN CERTIFICATE-----\nserver\n-----END CERTIFICATE-----".to_vec(),
-                    b"-----BEGIN PRIVATE KEY-----\nkey\n-----END PRIVATE KEY-----".to_vec(),
-                )
-                .unwrap(),
-            ),
+            server_tls: None,
         }
     }
 
@@ -231,7 +232,7 @@ mod tests {
         ])
         .unwrap();
         let security = FlowGrpcSecurity::from_config(&config).unwrap();
-        assert!(security.server_tls_config().is_none());
+        assert!(security.server_tls.is_none());
         assert!(security.authenticate_service(&Request::new(())).is_ok());
         assert_eq!(
             security

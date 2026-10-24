@@ -71,6 +71,10 @@ pub struct PresentationPolicyHttpState {
 pub fn presentation_policy_router(state: PresentationPolicyHttpState) -> Router {
     Router::new()
         .route(
+            "/internal/v1/resource-owners/presentation-policies/{policy_id}",
+            get(policy_owner),
+        )
+        .route(
             "/v1/presentation-policies",
             get(list_policies).post(create_policy),
         )
@@ -269,10 +273,9 @@ async fn create_policy(
     headers: HeaderMap,
     Json(input): Json<CreatePolicyRequest>,
 ) -> Result<Json<Value>, PresentationPolicyHttpError> {
-    let principal = trusted_principal(&state, &headers)?;
+    let (application, principal) = trusted_application(&state, &headers)?;
     let policy = build_policy(input, Utc::now())?;
-    let policy = state
-        .application
+    let policy = application
         .create(&principal, policy)
         .await
         .map_err(application_error)?;
@@ -284,14 +287,13 @@ async fn list_policies(
     headers: HeaderMap,
     Query(query): Query<ListQuery>,
 ) -> Result<Json<Value>, PresentationPolicyHttpError> {
-    let principal = trusted_principal(&state, &headers)?;
+    let (application, principal) = trusted_application(&state, &headers)?;
     let organization_id = parse_uuid(&query.organization_id, "organization_id")?;
     let limit = query.limit.unwrap_or(100);
     if limit > 500 {
         return Err(unprocessable("limit must be less than or equal to 500"));
     }
-    let policies = state
-        .application
+    let policies = application
         .list(&principal, organization_id)
         .await
         .map_err(application_error)?;
@@ -310,9 +312,8 @@ async fn get_policy(
     headers: HeaderMap,
     Path(policy_id): Path<String>,
 ) -> Result<Json<Value>, PresentationPolicyHttpError> {
-    let principal = trusted_principal(&state, &headers)?;
-    let policy = state
-        .application
+    let (application, principal) = trusted_application(&state, &headers)?;
+    let policy = application
         .get(&principal, parse_uuid(&policy_id, "policy_id")?)
         .await
         .map_err(application_error)?;
@@ -325,15 +326,13 @@ async fn update_policy(
     Path(policy_id): Path<String>,
     Json(input): Json<UpdatePolicyRequest>,
 ) -> Result<Json<Value>, PresentationPolicyHttpError> {
-    let principal = trusted_principal(&state, &headers)?;
-    let mut policy = state
-        .application
+    let (application, principal) = trusted_application(&state, &headers)?;
+    let mut policy = application
         .get_for_update(&principal, parse_uuid(&policy_id, "policy_id")?)
         .await
         .map_err(application_error)?;
     apply_update(&mut policy, input, Utc::now())?;
-    let policy = state
-        .application
+    let policy = application
         .update(&principal, policy)
         .await
         .map_err(application_error)?;
@@ -362,12 +361,12 @@ async fn lifecycle(
     policy_id: &str,
     activate: bool,
 ) -> Result<Json<Value>, PresentationPolicyHttpError> {
-    let principal = trusted_principal(state, headers)?;
+    let (application, principal) = trusted_application(state, headers)?;
     let id = parse_uuid(policy_id, "policy_id")?;
     let result = if activate {
-        state.application.activate(&principal, id, Utc::now()).await
+        application.activate(&principal, id, Utc::now()).await
     } else {
-        state.application.suspend(&principal, id, Utc::now()).await
+        application.suspend(&principal, id, Utc::now()).await
     };
     Ok(Json(policy_response(&result.map_err(application_error)?)))
 }
@@ -377,9 +376,8 @@ async fn new_version(
     headers: HeaderMap,
     Path(policy_id): Path<String>,
 ) -> Result<Json<Value>, PresentationPolicyHttpError> {
-    let principal = trusted_principal(&state, &headers)?;
-    let policy = state
-        .application
+    let (application, principal) = trusted_application(&state, &headers)?;
+    let policy = application
         .new_version(
             &principal,
             parse_uuid(&policy_id, "policy_id")?,
@@ -396,9 +394,8 @@ async fn delete_policy(
     headers: HeaderMap,
     Path(policy_id): Path<String>,
 ) -> Result<Json<Value>, PresentationPolicyHttpError> {
-    let principal = trusted_principal(&state, &headers)?;
-    state
-        .application
+    let (application, principal) = trusted_application(&state, &headers)?;
+    application
         .delete(&principal, parse_uuid(&policy_id, "policy_id")?)
         .await
         .map_err(application_error)?;
@@ -411,9 +408,8 @@ async fn evaluate_saved(
     Path(policy_id): Path<String>,
     Json(request): Json<EvaluatePresentationRequest>,
 ) -> Result<Json<Value>, PresentationPolicyHttpError> {
-    let principal = trusted_principal(&state, &headers)?;
-    let policy = state
-        .application
+    let (application, principal) = trusted_application(&state, &headers)?;
+    let policy = application
         .get_for_evaluation(&principal, parse_uuid(&policy_id, "policy_id")?)
         .await
         .map_err(application_error)?;
@@ -425,10 +421,9 @@ async fn evaluate_inline(
     headers: HeaderMap,
     Json(input): Json<InlineEvaluationRequest>,
 ) -> Result<Json<Value>, PresentationPolicyHttpError> {
-    let principal = trusted_principal(&state, &headers)?;
+    let (application, principal) = trusted_application(&state, &headers)?;
     let organization_id = parse_uuid(&input.organization_id, "organization_id")?;
-    state
-        .application
+    application
         .authorize_inline_evaluation(&principal, organization_id)
         .await
         .map_err(application_error)?;
@@ -518,7 +513,7 @@ pub fn evaluate_verified_facts_for_policy(
     let output = evaluate_verified_facts_json(&verified.to_string()).map_err(domain_error)?;
     let native: Value = serde_json::from_str(&output)
         .map_err(|_| service_unavailable("PRESENTATION_POLICY.INVALID_NATIVE_RESULT"))?;
-    Ok(project_evaluation(native, request))
+    Ok(project_evaluation(native, request, &verified))
 }
 
 fn build_policy(
@@ -934,6 +929,7 @@ fn service_policy(policy: &PresentationPolicy) -> Value {
             "min_satisfied": alternative.min_satisfied
         })).collect::<Vec<_>>(),
         "trust_profile_id": policy.trust_profile_id.map(|id| id.to_string()),
+        "presentation_proof_required": policy.presentation_proof_required,
         "holder_binding": {
             "required": policy.holder_binding.required,
             "binding_methods": policy.holder_binding.binding_methods,
@@ -974,7 +970,69 @@ fn service_requirement(requirement: &CredentialRequirement) -> Value {
     })
 }
 
-fn project_evaluation(native: Value, request: &EvaluatePresentationRequest) -> Value {
+/// Match evaluated requirements to exactly one trusted internal evidence row.
+/// An absent or ambiguous match cannot establish any verification check.
+fn credential_evidence<'a>(verified: &'a Value, result: &Value) -> Option<&'a Value> {
+    let template_id = result["credential_template_id"].as_str()?;
+    let issuer_id = result["issuer_id"].as_str()?;
+    let mut matches = verified["credentials"]
+        .as_array()?
+        .iter()
+        .filter(|credential| {
+            credential["issuer_id"].as_str() == Some(issuer_id)
+                && credential["credential_template_ids"]
+                    .as_array()
+                    .is_some_and(|ids| ids.iter().any(|id| id.as_str() == Some(template_id)))
+        });
+    let credential = matches.next()?;
+    matches.next().is_none().then_some(credential)
+}
+
+/// Project names, never values, from the native kernel's authenticated mdoc
+/// documents. Policy-filtered `verified_claims` cannot prove minimal disclosure.
+/// The raw wallet request and requested claim list are deliberately not inputs.
+fn authenticated_mdoc_disclosures(verified: &Value, result: &Value) -> Option<Value> {
+    if verified["presentation_verified"] != true
+        || verified["holder_binding_verified"] != true
+        || verified["holder_binding_method"] != "DEVICE_KEY"
+    {
+        return None;
+    }
+    let credential = credential_evidence(verified, result)?;
+    if credential["signature_verified"] != true || credential["credential_format"] != "mdoc" {
+        return None;
+    }
+    let documents = credential["claims"]["_mdoc"]["documents"].as_array()?;
+    if documents.len() != 1 {
+        // This is also the native mdoc kernel's authentication boundary.
+        return None;
+    }
+    let mut projected = Vec::new();
+    for document in documents {
+        let doc_type = document["doc_type"].as_str()?;
+        let namespaces = document["namespaces"].as_object()?;
+        let mut namespace_names = namespaces.keys().collect::<Vec<_>>();
+        namespace_names.sort();
+        let mut names = Map::new();
+        for namespace in namespace_names {
+            let mut claim_names = namespaces[namespace]
+                .as_object()?
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>();
+            claim_names.sort();
+            names.insert(namespace.clone(), json!(claim_names));
+        }
+        projected.push(json!({"doc_type": doc_type, "namespaces": names}));
+    }
+    Some(json!({"format": "mso_mdoc", "documents": projected}))
+}
+
+fn project_evaluation(
+    native: Value,
+    request: &EvaluatePresentationRequest,
+    verified: &Value,
+) -> Value {
     let errors = native["errors"].as_array().cloned().unwrap_or_default();
     let error_codes = errors
         .iter()
@@ -994,18 +1052,24 @@ fn project_evaluation(native: Value, request: &EvaluatePresentationRequest) -> V
                 .iter()
                 .filter_map(|error| error.get("message").cloned())
                 .collect::<Vec<_>>();
+            let evidence = credential_evidence(verified, result);
+            let status_checked = evidence.map(|credential| {
+                credential["revocation_checked_at_epoch_seconds"].as_u64().is_some()
+            });
+            let status_evidence = evidence.filter(|_| status_checked == Some(true));
             json!({
                 "credential_template_id": result["credential_template_id"],
                 "satisfied": result["satisfied"],
                 "issuer_did": result["issuer_id"],
                 "issuer_name": Value::Null,
                 "claim_results": result["claim_results"],
-                "trust_check_passed": !has_any_code(&codes, &["TrustProfileNotVerified", "IssuerNotAllowed", "IssuerTrustLevelInsufficient", "IssuerComplianceStatusMissing", "IssuerAccreditationMissing"]),
+                "authenticated_disclosures": authenticated_mdoc_disclosures(verified, result),
+                "trust_check_passed": evidence.and_then(|credential| credential["trust_profile_verified"].as_bool()).map(|verified| verified && !has_any_code(&codes, &["TrustProfileNotVerified", "IssuerNotAllowed", "IssuerTrustLevelInsufficient", "IssuerComplianceStatusMissing", "IssuerAccreditationMissing"])),
                 "freshness_check_passed": !has_any_code(&codes, &["CredentialTimestampMissing", "CredentialTimestampFuture", "CredentialStale", "RevocationEvidenceStale"]),
-                "signature_valid": !has_any_code(&codes, &["SignatureInvalid"]),
-                "revocation_checked": !has_any_code(&codes, &["RevocationCheckRequired"]),
-                "not_revoked": !has_any_code(&codes, &["CredentialRevoked", "RevocationStatusUnknown"]),
-                "revocation_status": Value::Null,
+                "signature_valid": evidence.and_then(|credential| credential["signature_verified"].as_bool()).map(|verified| verified && !has_any_code(&codes, &["SignatureInvalid"])),
+                "revocation_checked": status_checked,
+                "not_revoked": status_evidence.and_then(|credential| credential["not_revoked"].as_bool()),
+                "revocation_status": status_evidence.and_then(|credential| credential["credential_status"].as_str()),
                 "error_codes": codes,
                 "errors": messages,
                 "warnings": result["warnings"]
@@ -1111,17 +1175,66 @@ fn default_display(purpose: Option<&str>) -> DisplayMetadata {
     }
 }
 
-fn trusted_principal(
+async fn policy_owner(
+    State(state): State<PresentationPolicyHttpState>,
+    headers: HeaderMap,
+    Path(policy_id): Path<String>,
+) -> Result<Json<Value>, PresentationPolicyHttpError> {
+    authenticate_service(&state, &headers)?;
+    let policy = state
+        .application
+        .get_for_internal_service(parse_uuid(&policy_id, "policy_id")?)
+        .await
+        .map_err(application_error)?;
+    Ok(Json(
+        json!({"id": policy.id, "organization_id": policy.organization_id}),
+    ))
+}
+
+fn authenticate_service(
     state: &PresentationPolicyHttpState,
     headers: &HeaderMap,
-) -> Result<String, PresentationPolicyHttpError> {
+) -> Result<(), PresentationPolicyHttpError> {
     state
         .service_authenticator
         .authenticate(header(headers, "x-service-token"))
-        .map_err(|_| unauthorized("PRESENTATION_POLICY.SERVICE_AUTHENTICATION_REQUIRED"))?;
-    header(headers, "x-user-id")
+        .map_err(|_| unauthorized("PRESENTATION_POLICY.SERVICE_AUTHENTICATION_REQUIRED"))
+}
+
+fn trusted_application(
+    state: &PresentationPolicyHttpState,
+    headers: &HeaderMap,
+) -> Result<(PolicyApplication, String), PresentationPolicyHttpError> {
+    authenticate_service(state, headers)?;
+    if headers.contains_key("x-api-key-id") {
+        let key_id = header(headers, "x-api-key-id")
+            .ok_or_else(|| unauthorized("PRESENTATION_POLICY.AUTHENTICATION_REQUIRED"))?;
+        let key_id = Uuid::parse_str(key_id)
+            .map_err(|_| unauthorized("PRESENTATION_POLICY.AUTHENTICATION_REQUIRED"))?;
+        let organization_id = header(headers, "x-organization-id")
+            .and_then(|value| Uuid::parse_str(value).ok())
+            .ok_or_else(|| unauthorized("PRESENTATION_POLICY.AUTHENTICATION_REQUIRED"))?;
+        let scopes = header(headers, "x-api-key-scopes")
+            .unwrap_or("")
+            .split(',')
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+            .collect();
+        return Ok((
+            state
+                .application
+                .for_gateway_api_key(key_id, organization_id, scopes),
+            key_id.to_string(),
+        ));
+    }
+    if headers.contains_key("x-api-key-scopes") {
+        return Err(unauthorized("PRESENTATION_POLICY.AUTHENTICATION_REQUIRED"));
+    }
+    let principal = header(headers, "x-user-id")
         .map(str::to_owned)
-        .ok_or_else(|| unauthorized("PRESENTATION_POLICY.AUTHENTICATION_REQUIRED"))
+        .ok_or_else(|| unauthorized("PRESENTATION_POLICY.AUTHENTICATION_REQUIRED"))?;
+    Ok((state.application.as_ref().clone(), principal))
 }
 
 fn header<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
@@ -1257,6 +1370,94 @@ fn service_unavailable(detail: &str) -> PresentationPolicyHttpError {
 #[cfg(test)]
 mod error_code_projection_tests {
     use super::*;
+
+    #[test]
+    fn presentation_only_policy_keeps_its_proof_obligation_in_the_canonical_kernel() {
+        let policy = build_policy(serde_json::from_value(json!({
+            "organization_id": Uuid::from_u128(1).to_string(),
+            "name": "Holder presentation proof",
+            "holder_binding": {
+                "required": true,
+                "binding_methods": ["DEVICE_KEY"],
+                "proof_profiles": ["OID4VP_VERIFIABLE_PRESENTATION"],
+                "proof_freshness": {"challenge_required": false, "audience_binding_required": false, "replay_detection_required": false}
+            }
+        })).unwrap(), Utc::now()).unwrap();
+        let request: EvaluatePresentationRequest =
+            serde_json::from_value(json!({"vp_token": {}})).unwrap();
+        for verified in [true, false] {
+            let result = evaluate_verified_facts_for_policy(json!({
+                "credentials": [], "evaluation_time_epoch_seconds": 1_787_240_300_u64,
+                "presentation_verified": verified, "holder_binding_verified": verified,
+                "holder_binding_method": "DEVICE_KEY", "proof_profile": "OID4VP_VERIFIABLE_PRESENTATION",
+                "challenge_verified": false, "audience_verified": false, "replay_check_verified": false,
+                "proof_epoch_seconds": null, "external_authorization": null, "presentation_count": 1
+            }), &policy, &request).unwrap();
+            assert_eq!(result["decision"], if verified { "allow" } else { "deny" });
+        }
+    }
+
+    #[test]
+    fn projection_requires_actual_status_evidence_even_when_policy_allows() {
+        let request: EvaluatePresentationRequest =
+            serde_json::from_value(json!({"vp_token": {}})).unwrap();
+        let native = json!({"decision": "allow", "credential_results": [{
+            "credential_template_id": "template-1", "issuer_id": "issuer-1",
+            "satisfied": true, "errors": []
+        }]});
+        let credential = json!({
+            "credential_template_ids": ["template-1"], "issuer_id": "issuer-1",
+            "signature_verified": true, "trust_profile_verified": true,
+            "revocation_checked_at_epoch_seconds": null, "not_revoked": null
+        });
+        for (timestamp, not_revoked, status) in [
+            (Value::Null, Value::Null, Value::Null),
+            (json!(1000), json!(true), json!("active")),
+            (json!(1000), json!(false), json!("revoked")),
+            (json!(1000), Value::Null, json!("unknown")),
+        ] {
+            let mut evidence = credential.clone();
+            evidence["revocation_checked_at_epoch_seconds"] = timestamp.clone();
+            evidence["not_revoked"] = not_revoked.clone();
+            evidence["credential_status"] = status.clone();
+            let projected = project_evaluation(
+                native.clone(),
+                &request,
+                &json!({"credentials": [evidence]}),
+            );
+            let result = &projected["credential_results"][0];
+            assert_eq!(result["revocation_checked"], !timestamp.is_null());
+            assert_eq!(result["not_revoked"], not_revoked);
+            assert_eq!(result["revocation_status"], status);
+            assert_eq!(result["signature_valid"], true);
+            assert_eq!(result["trust_check_passed"], true);
+        }
+        let mut foreign = credential.clone();
+        foreign["issuer_id"] = json!("another-issuer");
+        for credentials in [
+            json!([]),
+            json!([foreign]),
+            json!([credential.clone(), credential]),
+        ] {
+            let projected = project_evaluation(
+                native.clone(),
+                &request,
+                &json!({"credentials": credentials}),
+            );
+            let result = &projected["credential_results"][0];
+            for key in [
+                "signature_valid",
+                "trust_check_passed",
+                "revocation_checked",
+                "not_revoked",
+            ] {
+                assert!(
+                    result.get(key).is_none(),
+                    "{key} was guessed from missing/ambiguous evidence"
+                );
+            }
+        }
+    }
 
     #[test]
     fn language_neutral_error_code_forms_drive_the_same_projection_flags() {

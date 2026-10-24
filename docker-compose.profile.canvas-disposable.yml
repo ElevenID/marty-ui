@@ -1,0 +1,81 @@
+# Local Canvas/Marty qualification only. Always use a unique Compose project.
+# The overlay removes the base stack's fixed host ports and container names.
+services:
+  postgres:
+    ports: !override []
+  redis:
+    ports: !override []
+  keycloak:
+    ports: !override
+      - "127.0.0.1:18180:8080"
+  mailpit:
+    ports: !override []
+  openbao:
+    ports: !override []
+  gateway:
+    ports: !override
+      - "127.0.0.1:${CANVAS_DISPOSABLE_GATEWAY_PORT:-18000}:8000"
+  auth:
+    ports: !override []
+  organization:
+    ports: !override []
+  credential-template:
+    ports: !override []
+  trust-profile:
+    ports: !override []
+  compliance-profile:
+    ports: !override []
+  applicant:
+    ports: !override []
+  notification:
+    ports: !override []
+  presentation-policy:
+    ports: !override []
+  flow:
+    ports: !override []
+  revocation-profile:
+    ports: !override []
+  device-registration:
+    ports: !override []
+  event-stream:
+    ports: !override []
+  issuance:
+    ports: !override []
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+  issuance-native:
+    ports: !override []
+  verification:
+    ports: !override []
+  deployment-profile:
+    ports: !override []
+  envoy:
+    ports: !override []
+  canvas-real:
+    container_name: ${CANVAS_DISPOSABLE_PROJECT:?set a unique Canvas qualification project}-canvas-real
+    environment:
+      CANVAS_DOMAIN: localhost:${CANVAS_DISPOSABLE_CANVAS_PORT:-18088}
+      CANVAS_REAL_LTI_ISS: http://localhost:${CANVAS_DISPOSABLE_CANVAS_PORT:-18088}
+      RAILS_HOST_WITH_PORT: localhost:${CANVAS_DISPOSABLE_CANVAS_PORT:-18088}
+    ports: !override
+      - "127.0.0.1:${CANVAS_DISPOSABLE_CANVAS_PORT:-18088}:3000"
+  issuance-canvas-localhost-bridge:
+    container_name: ${CANVAS_DISPOSABLE_PROJECT:?set a unique Canvas qualification project}-canvas-bridge
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      CANVAS_LOCALHOST_BRIDGE_LISTEN_PORT: "${CANVAS_DISPOSABLE_CANVAS_PORT:-18088}"
+      CANVAS_LOCALHOST_BRIDGE_PUBLIC_BASE: http://localhost:${CANVAS_DISPOSABLE_CANVAS_PORT:-18088}
+      CANVAS_LOCALHOST_BRIDGE_UPSTREAM: http://host.docker.internal:${CANVAS_DISPOSABLE_CANVAS_PORT:-18088}
+  canvas-sandbox:
+    container_name: ${CANVAS_DISPOSABLE_PROJECT:?set a unique Canvas qualification project}-canvas-sandbox
+    ports: !override []
+  # The Canvas profiles add only a dependency edge for nginx-proxy. This
+  # declaration makes Compose config valid without starting a public tunnel.
+  nginx-proxy:
+    image: nginx:alpine
+    profiles: [canvas-disposable-tunnel-disabled]
+
+networks:
+  marty-network:
+    name: ${CANVAS_DISPOSABLE_PROJECT:?set a unique Canvas qualification project}-network

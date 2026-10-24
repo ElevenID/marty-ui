@@ -29,6 +29,7 @@ export { default as CredentialTemplateWizard } from './templates/CredentialTempl
 // Policies
 export { default as PoliciesPage } from './policies/PoliciesPage';
 export { default as PresentationPoliciesPage } from './policies/PresentationPoliciesPage';
+export { default as ComplianceProfilePage } from './policies/ComplianceProfilePage';
 export { default as ComplianceProfilesPage } from './policies/ComplianceProfilesPage';
 export { default as PresentationPolicyWizard } from './policies/PresentationPolicyWizard';
 
@@ -37,6 +38,7 @@ export { default as DeployPage } from './deploy/DeployPage';
 export { default as DeploymentProfilesPage } from './deploy/DeploymentsPage';
 export { default as ApiKeysPage } from './deploy/ApiKeysPage';
 export { default as DidIdentitiesPage } from './deploy/DidIdentitiesPage';
+export { default as DidIdentityDetailPage } from './deploy/DidIdentityDetailPage';
 export { default as SigningKeysPage } from './deploy/SigningKeysPage';
 export { default as CanvasIntegrationsPage } from './deploy/CanvasIntegrationsPage';
 export { default as DeliveryDestinationsPage } from './connect/DeliveryDestinationsPage';

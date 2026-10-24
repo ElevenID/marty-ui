@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 from copy import deepcopy
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -12,7 +13,8 @@ import tomllib
 
 import pytest
 import yaml
-from marty_devops import DeploymentCatalog
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from packages.catalog_test_support import CatalogView
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -146,15 +148,18 @@ def test_native_worker_consumers_select_the_packaged_binary_without_changing_api
         assert "CANVAS_SYNC_PROCESSOR" not in worker["environment"]
 
 
-def test_deployments_migrate_issuance_from_the_released_credentials_image() -> None:
+def test_deployments_migrate_issuance_from_the_shared_rust_services_image() -> None:
     for path in ("docker-compose.base.yml", "docker-compose.selfhost.prod.yml"):
         services = _yaml(path)["services"]
         migration = services["issuance-migrations"]
 
-        assert migration["image"] == services["issuance"]["image"]
+        assert migration["build"] == services["issuance"]["build"]
+        assert migration["build"]["args"]["SERVICE_NAME"] == "issuance-native"
         command = str(migration["command"])
-        assert "manage_migrations.py" in command
-        assert "upgrade" in command
+        assert "marty-issuance-service" in str(
+            migration["entrypoint"] + migration["command"]
+        )
+        assert "migrate" in command
         assert migration["healthcheck"] == {"disable": True}
         assert migration["restart"] == "no"
         assert (
@@ -171,14 +176,15 @@ def test_deployments_migrate_issuance_from_the_released_credentials_image() -> N
     assert kubernetes["metadata"]["name"] == "issuance-migrations"
     container = kubernetes["spec"]["template"]["spec"]["containers"][0]
     assert container["image"] == "${MARTY_ISSUANCE_IMAGE}"
-    assert container["command"] == ["python", "manage_migrations.py", "upgrade"]
-    assert (
-        container["env"][0]["valueFrom"]["secretKeyRef"]["key"] == "DATABASE_SYNC_URL"
-    )
+    assert container["command"] == ["/usr/local/bin/marty-issuance-service", "migrate"]
+    database = next(item for item in container["env"] if item["name"] == "DATABASE_URL")
+    assert database["valueFrom"]["secretKeyRef"]["key"] == "DATABASE_SYNC_URL"
 
     deploy = (ROOT / "scripts/deploy-kubernetes.sh").read_text(encoding="utf-8")
     ui_wait = deploy.index("condition=complete job/db-migrate")
-    issuance_apply = deploy.index("06a-issuance-migrations.yaml")
+    issuance_apply = deploy.index(
+        'apply_manifest "${K8S_DIR}/06a-issuance-migrations.yaml"'
+    )
     issuance_wait = deploy.index("condition=complete job/issuance-migrations")
     assert ui_wait < issuance_apply < issuance_wait
 
@@ -218,8 +224,9 @@ def test_kubernetes_runs_headless_canvas_worker_as_its_own_deployment() -> None:
     }
     assert secret_names == {
         "DATABASE_URL": "DATABASE_URL",
-        "INTEGRATION_SECRET_MASTER_KEY": "INTEGRATION_SECRET_MASTER_KEY",
         "SIGNING_KEYS_INTERNAL_API_KEY": "SIGNING_KEYS_INTERNAL_API_KEY",
+        "SIGNING_KEYS_ISSUER_SIGN_KEY": "SIGNING_KEYS_ISSUER_SIGN_KEY",
+        "SIGNING_KEYS_INTEGRATION_SECRET_KEY": "SIGNING_KEYS_INTEGRATION_SECRET_KEY",
         "TOKEN_HMAC_KEY": "TOKEN_HMAC_KEY",
     }
     issuance = next(
@@ -245,7 +252,7 @@ def test_kubernetes_runs_headless_canvas_worker_as_its_own_deployment() -> None:
 
 
 @pytest.mark.parametrize("service", ["issuance", "issuance-migrations"])
-def test_selfhost_bundle_does_not_override_unqualified_services(service) -> None:
+def test_selfhost_bundle_pins_rust_issuance_services(service) -> None:
     # Parse nodes rather than pretending Compose's !reset is ordinary YAML.
     # The executable rendering gate separately tests actual Compose merging.
     override = yaml.compose(
@@ -256,7 +263,12 @@ def test_selfhost_bundle_does_not_override_unqualified_services(service) -> None
     assert isinstance(override, yaml.MappingNode)
     services = next(value for key, value in override.value if key.value == "services")
     assert isinstance(services, yaml.MappingNode)
-    assert service not in {key.value for key, _ in services.value}
+    selected = {key.value: value for key, value in services.value}
+    assert service in selected
+    source = (ROOT / "docker-compose.selfhost.bundle.override.yml").read_text()
+    section = "\n".join(source.split(f"  {service}:\n", 1)[1].splitlines()[:5])
+    assert "<<: *selfhost-service-image" in section
+    assert "SERVICE_NAME: issuance_native" in section
 
 
 @pytest.fixture
@@ -308,7 +320,7 @@ def test_bundle_worker_comparison_preserves_every_field(compose_worker_gate, fie
     elif field == "environment":
         worker[field]["SERVICE_NAME"] = "issuance_native"
     elif field == "secrets":
-        worker[field].remove("integration_secret_master_key")
+        worker[field].remove("issuance_api_key")
     elif field == "depends_on":
         worker[field]["issuance-migrations"]["condition"] = "service_started"
     elif field is not None:
@@ -363,38 +375,6 @@ def test_compose_renderer_only_reads_fixed_sources_without_secret_resolution(
             },
         )
     ]
-
-
-@pytest.mark.parametrize("service", ["issuance", "issuance-migrations"])
-@pytest.mark.parametrize(
-    "field",
-    [
-        None,
-        "image",
-        "entrypoint",
-        "command",
-        "environment",
-        "secrets",
-        "volumes",
-        "depends_on",
-        "healthcheck",
-        "restart",
-        "future_field",
-    ],
-)
-def test_bundle_issuance_comparison_preserves_every_field(
-    compose_worker_gate, service, field
-):
-    base = _yaml("docker-compose.selfhost.prod.yml")
-    bundle = deepcopy(base)
-    if field is not None:
-        bundle["services"][service][field] = "synthetic-unexpected-change"
-    compare = compose_worker_gate["assert_published_issuance_preserved"]
-    if field is None:
-        compare(base, bundle)
-    else:
-        with pytest.raises(AssertionError, match="complete unqualified Python"):
-            compare(base, bundle)
 
 
 @pytest.mark.parametrize("failure", ["command", "timeout", "invalid_json"])
@@ -518,7 +498,7 @@ def test_consumer_matrix_derives_all_conformance_switches_from_real_owner(
             (
                 released,
                 "docker-compose.profile.oidf-haip.yml" in files,
-                "docker-compose.profile.didcomm-authcrypt.yml" in files,
+                "docker-compose.profile.issuance-native-authcrypt.yml" in files,
             )
         )
     assert len(combinations) == 8
@@ -527,7 +507,7 @@ def test_consumer_matrix_derives_all_conformance_switches_from_real_owner(
 def test_consumer_matrix_uses_catalog_groups_files_and_profiles_without_claiming_tunnel_worker_start(
     compose_worker_gate,
 ):
-    catalog = DeploymentCatalog.load(ROOT)
+    catalog = CatalogView.load(ROOT)
     cases = {case["name"]: case for case in compose_worker_gate["catalog_cases"]()}
     required = {
         name
@@ -726,6 +706,7 @@ def test_default_run_retains_only_original_bundle_issuance_and_rust_owners(
     for name in (
         "assert_worker_preserved",
         "assert_published_issuance_preserved",
+        "assert_no_canvas_issuance_secret",
         "assert_shared_rust_services",
         "assert_consumer_matrix",
     ):
@@ -738,9 +719,59 @@ def test_default_run_retains_only_original_bundle_issuance_and_rust_owners(
     compose_worker_gate["run"]()
     assert calls == [
         "assert_worker_preserved",
+        "assert_no_canvas_issuance_secret",
         "assert_published_issuance_preserved",
         "assert_shared_rust_services",
     ]
+
+
+@pytest.mark.parametrize("regression", [None, "secret", "legacy", "unrelated"])
+def test_no_canvas_issuance_profile_preserves_runtime_except_disabled_canvas(
+    compose_worker_gate, regression
+):
+    original_service = {
+        "environment": [
+            "CANVAS_CREDENTIALS_SHARED_SECRET_FILE=/run/secrets/canvas_credentials_shared_secret",
+            "CANVAS_PORTABLE_INTEGRATION_ENABLED=true",
+            "CANVAS_LEGACY_EVENT_INGEST_ENABLED=true",
+            "CANVAS_MIRROR_WORKER_ENABLED=true",
+            "ISSUER_BASE_URL=https://issuer.example.invalid",
+        ],
+        "secrets": [
+            {"source": "marty_db_password"},
+            {"source": "canvas_credentials_shared_secret"},
+        ],
+        "restart": "unless-stopped",
+    }
+    base = {
+        "services": {name: deepcopy(original_service) for name in ("issuance", "issuance-native")}
+    }
+    preview = deepcopy(base)
+    for service in preview["services"].values():
+        service["environment"] = {
+            "CANVAS_CREDENTIALS_SHARED_SECRET_FILE": "",
+            "CANVAS_PORTABLE_INTEGRATION_ENABLED": "false",
+            "CANVAS_LEGACY_EVENT_INGEST_ENABLED": "false",
+            "CANVAS_MIRROR_WORKER_ENABLED": "false",
+            "ISSUER_BASE_URL": "https://issuer.example.invalid",
+        }
+        service["secrets"] = [{"source": "marty_db_password"}]
+    if regression == "secret":
+        preview["services"]["issuance"]["secrets"].append(
+            {"source": "canvas_credentials_shared_secret"}
+        )
+    elif regression == "legacy":
+        preview["services"]["issuance-native"]["environment"][
+            "CANVAS_LEGACY_EVENT_INGEST_ENABLED"
+        ] = "true"
+    elif regression == "unrelated":
+        preview["services"]["issuance"]["restart"] = "no"
+    compare = compose_worker_gate["assert_no_canvas_issuance_secret"]
+    if regression:
+        with pytest.raises(AssertionError, match="No-Canvas issuance"):
+            compare(base, preview)
+    else:
+        compare(base, preview)
 
 
 def test_explicit_consumer_suite_runs_all_fifteen_compositions_and_no_bundle_owner(
@@ -788,7 +819,7 @@ def test_explicit_consumer_suite_runs_all_fifteen_compositions_and_no_bundle_own
     assert len(comparisons) == len({name for name, _ in comparisons}) == 15
     assert len(scopes) == 8
     assert sum(options.get("isolated", False) for _, options in comparisons) == 8
-    assert sum(options.get("beta", False) for _, options in comparisons) == 2
+    assert sum(options.get("beta", False) for _, options in comparisons) == 10
     assert len(renders) == 21
     assert all(
         options["compose_command"] == ["/owned/pinned-compose"]
@@ -907,7 +938,7 @@ def test_ci_keeps_old_bundle_gate_and_checks_pinned_modern_binary_before_explici
 
 
 def test_canvas_worker_is_required_by_production_deployment_catalogs() -> None:
-    catalog = DeploymentCatalog.load(ROOT)
+    catalog = CatalogView.load(ROOT)
 
     for stack in ("selfhost-production", "kubernetes-production"):
         assert "canvas-sync-worker" in catalog.running_services_for_stack(stack)
@@ -978,6 +1009,96 @@ def selfhost_canvas_environment():
         ),
         "CANVAS_SYNC_WORKER_JOB_TIMEOUT_SECONDS": "600",
     }
+
+
+def test_selfhost_preflight_uses_native_profile_and_seeded_login_policy() -> None:
+    namespace = runpy.run_path(str(ROOT / "scripts/check-selfhost-production.py"))
+    assert namespace["validate_migration_profile"]({"MARTY_MIGRATION_PROFILE": "selfhost-production"}) == "profile=selfhost-production"
+    for alias in ("selfhost-prod", "selfhost_prod", "selfhostproduction", "selfhost_production"):
+        with pytest.raises(namespace["CheckError"], match=f"current={alias}"):
+            namespace["validate_migration_profile"]({"MARTY_MIGRATION_PROFILE": alias})
+    with pytest.raises(namespace["CheckError"], match="current=$"):
+        namespace["validate_migration_profile"]({})
+    assert namespace["OPEN_BADGE_LOGIN_POLICY_ID"] == "50000000-0000-0000-0000-000000000004"
+
+
+def test_selfhost_preflight_rejects_the_shipped_uppercase_secret_placeholder(tmp_path) -> None:
+    namespace = runpy.run_path(str(ROOT / "scripts/check-selfhost-production.py"))
+    token = tmp_path / "notification_openbao_token"
+    token.write_text("CHANGE_ME_notification_webhook_openbao_token\n", encoding="utf-8")
+    with pytest.raises(namespace["CheckError"], match="placeholder value"):
+        namespace["read_required_secret"](token, "notification token")
+
+
+def test_selfhost_catalog_rejects_unpinned_operator_binary(tmp_path, monkeypatch) -> None:
+    namespace = runpy.run_path(str(ROOT / "scripts/check-selfhost-production.py"))
+    binary = tmp_path / "marty-deploy"
+    binary.write_bytes(b"untrusted operator binary")
+    monkeypatch.setenv("MARTY_DEPLOY_BIN", str(binary))
+    monkeypatch.delenv("MARTY_DEPLOY_BIN_SHA256", raising=False)
+    with pytest.raises(namespace["CheckError"], match="SHA256 is required"):
+        namespace["catalog_lines"]("validate")
+    monkeypatch.setenv("MARTY_DEPLOY_BIN_SHA256", "0" * 64)
+    monkeypatch.setenv("MARTY_DEPLOY_SOURCE_SHA", "a" * 40)
+    monkeypatch.setenv("MARTY_DEPLOY_RELEASE_TAG", "v1.1.246")
+    with pytest.raises(namespace["CheckError"], match="digest mismatch"):
+        namespace["catalog_lines"]("validate")
+
+
+def test_selfhost_catalog_rejects_binary_from_another_checkout(tmp_path, monkeypatch) -> None:
+    namespace = runpy.run_path(str(ROOT / "scripts/check-selfhost-production.py"))
+    binary = tmp_path / "marty-deploy"
+    binary.write_bytes(b"fixture binary")
+    source_sha = "a" * 40
+    monkeypatch.setenv("MARTY_DEPLOY_BIN", str(binary))
+    monkeypatch.setenv("MARTY_DEPLOY_BIN_SHA256", hashlib.sha256(binary.read_bytes()).hexdigest())
+    monkeypatch.setenv("MARTY_DEPLOY_SOURCE_SHA", source_sha)
+    monkeypatch.setenv("MARTY_DEPLOY_RELEASE_TAG", "v1.1.246")
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        if "--build-identity" in command:
+            return subprocess.CompletedProcess(command, 0, f"{source_sha}:v1.1.246\n", "")
+        if command[0] == "git":
+            return subprocess.CompletedProcess(command, 0, "b" * 40 + "\n", "")
+        raise AssertionError("The catalog command must not run after a source mismatch")
+
+    monkeypatch.setattr(namespace["subprocess"], "run", fake_run)
+    with pytest.raises(namespace["CheckError"], match="differs from checkout HEAD"):
+        namespace["catalog_lines"]("validate")
+    assert len(calls) == 2
+
+
+def test_operator_wrapper_rejects_binary_from_another_checkout(tmp_path) -> None:
+    if os.name == "nt":
+        git = subprocess.run(
+            ["where.exe", "git"], check=True, capture_output=True, text=True,
+        ).stdout.splitlines()[0]
+        bash = str(Path(git).resolve().parents[1] / "bin" / "bash.exe")
+    else:
+        bash = "bash"
+    binary = tmp_path / "marty-deploy"
+    binary.write_bytes(
+        b'#!/bin/sh\nif [ "$1" = --build-identity ]; then '
+        b'printf "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:v1.1.246\\n"; '
+        b'else echo "catalog command ran"; fi\n'
+    )
+    binary.chmod(0o755)
+    env = {
+        **os.environ,
+        "MARTY_DEPLOY_BIN": str(binary),
+        "MARTY_DEPLOY_BIN_SHA256": hashlib.sha256(binary.read_bytes()).hexdigest(),
+        "MARTY_DEPLOY_SOURCE_SHA": "a" * 40,
+        "MARTY_DEPLOY_RELEASE_TAG": "v1.1.246",
+    }
+    result = subprocess.run(
+        [bash, str(ROOT / "scripts/marty-deploy.sh"), "validate"],
+        env=env, capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode != 0
+    assert "differs from checkout HEAD" in result.stderr
+    assert "catalog command ran" not in result.stdout
 
 
 def test_production_preflight_requires_a_configured_canvas_worker_processor() -> None:

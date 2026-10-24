@@ -31,6 +31,8 @@ use marty_issuance_service::oid4vci_authorization::{
     DeferredCredentialLookup, DeferredStatus, NotificationLookup, Oid4vciAuthorizationRepository,
 };
 use marty_issuance_service::oid4vci_authorization_postgres::PostgresOid4vciAuthorizationRepository;
+use marty_issuance_service::tenant_discovery::TenantDiscoveryRepository;
+use marty_issuance_service::tenant_postgres::PostgresTenantDiscoveryRepository;
 use marty_issuance_service::token_postgres::PostgresTokenExchangeRepository;
 use serde_json::json;
 use sha2::Sha256;
@@ -40,6 +42,73 @@ use url::Url;
 use uuid::Uuid;
 
 static POSTGRES_CONTRACT_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+#[tokio::test]
+async fn tenant_discovery_queries_current_status_and_tenant_boundaries() {
+    let Ok(database_url) = std::env::var("ISSUANCE_POSTGRES_TEST_URL") else {
+        return;
+    };
+    let _database_guard = POSTGRES_CONTRACT_LOCK.lock().await;
+    let url = url::Url::parse(&database_url).expect("PostgreSQL test URL");
+    assert!(
+        url.path().ends_with("_test"),
+        "dedicated test database required"
+    );
+    let pool = PgPoolOptions::new()
+        .max_connections(2)
+        .connect(&database_url)
+        .await
+        .expect("PostgreSQL test connection");
+    create_contract_schema(&pool).await;
+    for (organization, credential_type, status, name) in [
+        ("org-a", Some("DriverLicense"), "active", "Active driver"),
+        ("org-a", Some("DriverLicense"), "draft", "Draft driver"),
+        ("org-a", Some("NationalID"), "draft", "Draft ID"),
+        ("org-a", Some("Passport"), "deprecated", "Deprecated"),
+        ("org-a", Some("EmployeeBadge"), "suspended", "Suspended"),
+        ("org-a", Some("AccessPass"), "revoked", "Revoked"),
+        ("org-a", None, "active", "Missing credential type"),
+        ("org-b", Some("ForeignOnly"), "active", "Foreign tenant"),
+    ] {
+        sqlx::query(
+            "INSERT INTO credential_template_service.credential_templates
+                 (organization_id, credential_type, status, name, updated_at)
+             VALUES ($1, $2, $3, $4, clock_timestamp())",
+        )
+        .bind(organization)
+        .bind(credential_type)
+        .bind(status)
+        .bind(name)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    let repository = PostgresTenantDiscoveryRepository::new(pool.clone());
+    let templates = repository.templates("org-a").await.unwrap();
+    assert_eq!(
+        templates
+            .iter()
+            .map(|t| t.credential_type.as_str())
+            .collect::<Vec<_>>(),
+        ["DriverLicense", "NationalID"]
+    );
+    assert_eq!(templates[0].metadata.name.as_deref(), Some("Active driver"));
+    let foreign = repository.templates("org-b").await.unwrap();
+    assert_eq!(
+        foreign
+            .iter()
+            .map(|t| t.credential_type.as_str())
+            .collect::<Vec<_>>(),
+        ["ForeignOnly"]
+    );
+    assert!(repository
+        .templates("unknown-org")
+        .await
+        .unwrap()
+        .is_empty());
+    drop_contract_schema(&pool).await;
+    pool.close().await;
+}
 
 fn token_digest(key: &[u8], token: &str) -> String {
     let mut mac = Hmac::<Sha256>::new_from_slice(key).unwrap();
@@ -148,6 +217,35 @@ async fn credential_management_repository_is_concurrency_safe_and_canvas_durable
     );
     credential.status = ManagedCredentialStatus::Suspended;
     credential.status_updated_at = Utc::now();
+    let mut private_audit = audit_record(
+        CredentialLifecycleAction::Suspend,
+        ManagedCredentialStatus::Active,
+        Some("manual review"),
+    );
+    private_audit.comments = Some("{\"private_jwk\":\"private-seed\"}".to_owned());
+    assert!(repository
+        .persist(&credential, ManagedCredentialStatus::Active, &private_audit)
+        .await
+        .is_err());
+    assert_eq!(
+        sqlx::query_scalar::<_, String>(
+            "SELECT status FROM issuance_service.issued_credentials WHERE id = 'credential-managed'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        "active"
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM issuance_service.issuance_events
+             WHERE transaction_id = 'transaction-managed'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        0
+    );
     sqlx::query(
         "ALTER TABLE issuance_service.issuance_events
          ADD CONSTRAINT reject_suspended_audit CHECK (event_type <> 'credential_suspended')",
@@ -231,6 +329,22 @@ async fn credential_management_repository_is_concurrency_safe_and_canvas_durable
     assert_eq!(metadata["last_status_sync_action"], "suspend");
     assert_eq!(metadata["requested_credential_status"], "suspended");
     assert_eq!(metadata["requested_status_sync_reason"], "manual review");
+    assert!(repository
+        .synchronize_canvas(
+            &credential,
+            CredentialLifecycleAction::Suspend,
+            Some("-----BEGIN PRIVATE KEY-----private-seed-----END PRIVATE KEY-----"),
+        )
+        .await
+        .is_err());
+    let retained_metadata: serde_json::Value = sqlx::query_scalar(
+        "SELECT metadata FROM issuance_service.credential_delivery_records
+         WHERE id = 'delivery-managed'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(retained_metadata, metadata);
 
     let mut credential = credential;
     credential.status = ManagedCredentialStatus::Active;
@@ -463,6 +577,43 @@ async fn credential_repository_is_hmac_compatible_atomic_and_canvas_safe() {
         issued_at: now,
         expires_at: now + Duration::days(365),
     };
+    for (credential, notification_id) in [
+        (
+            IssuedCredential {
+                status_list_entries: vec![
+                    json!({"private_jwk": {"kty": "OKP", "d": "private-seed"}}),
+                ],
+                ..issued.clone()
+            },
+            "notification-contract",
+        ),
+        (
+            IssuedCredential {
+                credential: "{\"private_jwk\":\"private-seed\"}".to_owned(),
+                ..issued.clone()
+            },
+            "notification-contract",
+        ),
+        (
+            issued.clone(),
+            "-----BEGIN PRIVATE KEY-----private-seed-----END PRIVATE KEY-----",
+        ),
+    ] {
+        assert!(repository
+            .finalize(&claimed, &credential, notification_id)
+            .await
+            .is_err());
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT count(*) FROM issuance_service.issued_credentials WHERE id = $1",
+            )
+            .bind(credential_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+            0
+        );
+    }
     repository
         .finalize(&claimed, &issued, "notification-contract")
         .await
@@ -756,6 +907,15 @@ async fn credential_repository_is_hmac_compatible_atomic_and_canvas_safe() {
     assert_initiation_idempotency_race(&repository).await;
     assert_initiation_dependency_reads(&pool, key.as_bytes()).await;
     assert_didcomm_retry_and_lifecycle_contract(&pool, &repository, &lifecycle).await;
+    sqlx::query(
+        "UPDATE issuance_service.issuance_transactions
+         SET claims = '{\"private_jwk\":{\"kty\":\"OKP\",\"d\":\"private-seed\"}}'::jsonb
+         WHERE id = 'tx-contract'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert!(repository.transaction_by_id("tx-contract").await.is_err());
     revocation_server.abort();
     drop_contract_schema(&pool).await;
 }
@@ -862,6 +1022,23 @@ async fn assert_didcomm_retry_and_lifecycle_contract(
         message_id: "didcomm-message-contract".to_owned(),
         encrypted_message: "encrypted-didcomm-contract".to_owned(),
     };
+    let mut private_staged = staged.clone();
+    private_staged.service_endpoint =
+        "{\"kty\":\"OKP\",\"crv\":\"X25519\",\"d\":\"private-seed\"}".to_owned();
+    assert!(repository
+        .stage_delivery(&claim.transaction, &issued, &private_staged)
+        .await
+        .is_err());
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM issuance_service.issued_credentials WHERE id = $1",
+        )
+        .bind(credential_id)
+        .fetch_one(pool)
+        .await
+        .unwrap(),
+        0
+    );
     repository
         .stage_delivery(&claim.transaction, &issued, &staged)
         .await
@@ -908,6 +1085,59 @@ async fn assert_didcomm_retry_and_lifecycle_contract(
         .expect("the public pending-delivery compatibility method must remain available");
     assert_eq!(compatibility_pending.credential, issued);
     assert_eq!(compatibility_pending.delivery, staged);
+
+    sqlx::query(
+        "UPDATE issuance_service.issued_credentials
+         SET status_list_entries = '[{\"private_jwk\":{\"kty\":\"OKP\",\"d\":\"private-seed\"}}]'::jsonb
+         WHERE id = $1",
+    )
+    .bind(credential_id)
+    .execute(pool)
+    .await
+    .unwrap();
+    assert!(repository
+        .delivery_state("org-a", "tx-didcomm-contract")
+        .await
+        .is_err());
+    assert!(repository
+        .claim_transport("org-a", "tx-didcomm-contract", "did:key:holder")
+        .await
+        .is_err());
+    sqlx::query(
+        "UPDATE issuance_service.issued_credentials SET status_list_entries = '[]'::jsonb
+         WHERE id = $1",
+    )
+    .bind(credential_id)
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "UPDATE issuance_service.credential_delivery_records
+         SET metadata = jsonb_set(metadata, '{private_jwk}',
+                 '{\"kty\":\"OKP\",\"d\":\"private-seed\"}'::jsonb)
+         WHERE credential_id = $1 AND delivery_target = 'didcomm_v2'",
+    )
+    .bind(credential_id)
+    .execute(pool)
+    .await
+    .unwrap();
+    assert!(repository
+        .delivery_state("org-a", "tx-didcomm-contract")
+        .await
+        .is_err());
+    assert!(repository
+        .claim_transport("org-a", "tx-didcomm-contract", "did:key:holder")
+        .await
+        .is_err());
+    sqlx::query(
+        "UPDATE issuance_service.credential_delivery_records
+         SET metadata = metadata - 'private_jwk'
+         WHERE credential_id = $1 AND delivery_target = 'didcomm_v2'",
+    )
+    .bind(credential_id)
+    .execute(pool)
+    .await
+    .unwrap();
 
     assert!(
         lifecycle
@@ -1877,7 +2107,7 @@ async fn seed_canvas_guard_contract(pool: &sqlx::PgPool) {
                  '[{\"requirement_id\":\"score-a\",\"source\":\"canvas_rest\",\"fact_type\":\"canvas.assignment_score\",\"scope\":{\"course_id\":\"course-a\",\"activity_id\":\"activity-a\"},\"pass_rule\":{\"min_score_percent\":80},\"required\":true}]'::jsonb,
                  1, 1, '[{\"status\":\"ready\",\"blocking\":true}]'::jsonb,
                  clock_timestamp(), clock_timestamp(),
-                 '{\"id\":\"template-a\",\"organization_id\":\"org-a\",\"status\":\"active\",\"credential_type\":\"OpenBadgeCredential\",\"credential_payload_format\":\"w3c_vcdm_v2_sd_jwt\",\"revocation_profile_id\":\"status-profile-a\",\"issuer_did\":\"did:web:issuer.example\",\"issuer_algorithm\":\"ES256\"}'::jsonb,
+                 '{\"id\":\"template-a\",\"organization_id\":\"org-a\",\"status\":\"active\",\"credential_type\":\"OpenBadgeCredential\",\"credential_payload_format\":\"w3c_vcdm_v2_sd_jwt\",\"revocation_profile_id\":\"status-profile-a\",\"issuer_did\":\"did:web:issuer.example\",\"issuer_algorithm\":\"ES256\",\"claims\":[]}'::jsonb,
                  true)",
         "INSERT INTO issuance_service.evidence_facts
              (id, organization_id, application_id, subject_id, provider, fact_type,
@@ -2444,6 +2674,77 @@ async fn assert_initiation_idempotency_race(repository: &PostgresCredentialRepos
         created_at: now,
         expires_at: now + Duration::days(7),
     };
+    for (key, claims, wallet_configs) in [
+        (
+            "c".repeat(64),
+            serde_json::from_value(
+                json!({"issuer": {"private_jwk": {"kty": "EC", "d": "synthetic"}}}),
+            )
+            .unwrap(),
+            transaction.wallet_configs.clone(),
+        ),
+        (
+            "d".repeat(64),
+            transaction.claims.clone(),
+            vec![json!({"private_key_pem": "synthetic"})],
+        ),
+    ] {
+        let mut private = transaction.clone();
+        private.id = Uuid::new_v4().to_string();
+        private.pre_authorized_code = format!("pre-auth-{}", Uuid::new_v4());
+        private.idempotency_key_hash = Some(key.clone());
+        private.claims = claims;
+        private.wallet_configs = wallet_configs;
+        assert!(matches!(
+            repository.reserve_idempotently(&private).await,
+            Err(InitiationRepositoryError::Unavailable)
+        ));
+        assert!(repository
+            .recover_idempotently(
+                &private.organization_id,
+                &IdempotencyBinding {
+                    key_hash: key,
+                    request_hash: request_hash.clone(),
+                },
+            )
+            .await
+            .unwrap()
+            .is_none());
+    }
+    for (key, selective_disclosure_claims, zk_predicate_claims) in [
+        (
+            "e".repeat(64),
+            vec!["{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"d\":\"private-seed\"}".to_owned()],
+            Vec::new(),
+        ),
+        (
+            "f".repeat(64),
+            transaction.selective_disclosure_claims.clone(),
+            vec!["-----BEGIN PRIVATE KEY-----private-seed-----END PRIVATE KEY-----".to_owned()],
+        ),
+    ] {
+        let mut private = transaction.clone();
+        private.id = Uuid::new_v4().to_string();
+        private.pre_authorized_code = format!("pre-auth-{}", Uuid::new_v4());
+        private.idempotency_key_hash = Some(key.clone());
+        private.selective_disclosure_claims = selective_disclosure_claims;
+        private.zk_predicate_claims = zk_predicate_claims;
+        assert!(matches!(
+            repository.reserve_idempotently(&private).await,
+            Err(InitiationRepositoryError::Unavailable)
+        ));
+        assert!(repository
+            .recover_idempotently(
+                &private.organization_id,
+                &IdempotencyBinding {
+                    key_hash: key,
+                    request_hash: request_hash.clone(),
+                },
+            )
+            .await
+            .unwrap()
+            .is_none());
+    }
     let mut retry = transaction.clone();
     retry.id = Uuid::new_v4().to_string();
     retry.pre_authorized_code = format!("pre-auth-{}", Uuid::new_v4());
@@ -2544,7 +2845,7 @@ async fn create_contract_schema(pool: &sqlx::PgPool) {
         "CREATE TABLE issuance_service.application_templates (
             id TEXT PRIMARY KEY, organization_id TEXT NOT NULL,
             credential_template_id TEXT NOT NULL, approval_policy_set_id TEXT,
-            status TEXT NOT NULL)",
+            status TEXT NOT NULL, name TEXT, description TEXT, claim_collection_rules JSON NOT NULL DEFAULT '[]'::json, form_fields JSON NOT NULL DEFAULT '[]'::json, application_validity_days INTEGER NOT NULL DEFAULT 30)",
         "CREATE TABLE issuance_service.canvas_platforms (
             id TEXT PRIMARY KEY, organization_id TEXT NOT NULL, canvas_account_id TEXT,
             registration_status TEXT, enabled BOOLEAN NOT NULL, archived_at TIMESTAMPTZ)",
@@ -2599,6 +2900,8 @@ async fn create_contract_schema(pool: &sqlx::PgPool) {
         "CREATE TABLE credential_template_service.credential_templates (
             id BIGSERIAL PRIMARY KEY, organization_id TEXT NOT NULL, credential_type TEXT,
             status TEXT NOT NULL, issuer_did TEXT, issuer_algorithm TEXT,
+            name TEXT, description TEXT, claims JSONB, display_style JSONB,
+            vct TEXT, supported_formats JSONB,
             updated_at TIMESTAMPTZ NOT NULL)",
     ] {
         sqlx::query(statement).execute(pool).await.unwrap();

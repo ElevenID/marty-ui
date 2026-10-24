@@ -63,7 +63,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         None => return Err("deployed Verification requires Redis".into()),
     };
     runtime.mark_healthy(VerificationDependency::SessionStore)?;
-    let providers = VerificationProviders::connect_lazy(&config.providers)?;
+    let providers = VerificationProviders::connect_lazy(&config.providers).await?;
     runtime.mark_healthy(VerificationDependency::Organization)?;
     runtime.mark_healthy(VerificationDependency::CredentialTemplate)?;
     runtime.mark_healthy(VerificationDependency::PresentationPolicy)?;

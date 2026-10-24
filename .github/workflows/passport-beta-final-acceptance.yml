@@ -37,21 +37,27 @@ jobs:
       contents: read
       id-token: write
       packages: read
-    if: github.ref == 'refs/heads/main'
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: [self-hosted, linux, x64, passport-beta-wsl2]
     environment: beta-lifecycle
     timeout-minutes: 90
     env:
+      GH_TOKEN: ${{ github.token }}
       PASSPORT_DEMO_RECORDER_COMMIT: 022c8238c64972cf48873a8f4efcf73ae7329577
       PASSPORT_DEMO_RECORDER_SOURCE_TIP: 022c8238c64972cf48873a8f4efcf73ae7329577
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.ref }}
+          fetch-depth: 0
 
       - name: Verify dedicated beta runner and production baseline
         shell: bash
         run: |
           set -euo pipefail
           python3 scripts/check_passport_beta_runner.py --output "$RUNNER_TEMP/passport-beta-runner-preflight.json"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          python3 -c 'from scripts.check_passport_beta_fence_authority import protected_source; protected_source()'
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v4
         with:

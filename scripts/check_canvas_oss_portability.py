@@ -13,11 +13,17 @@ import argparse
 import hashlib
 import json
 import re
+import subprocess
 import sys
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+if __package__:
+    from .canvas_beta_topology import BETA_NETWORK, BETA_PROJECT
+else:
+    from canvas_beta_topology import BETA_NETWORK, BETA_PROJECT
 
 
 EXPECTED_MARTY_ORIGIN = "https://beta.elevenidllc.com"
@@ -40,6 +46,45 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 
 class ContractError(RuntimeError):
     pass
+
+
+def verify_base_image(lock: dict[str, Any]) -> dict[str, str]:
+    """Verify the pinned registry bytes without resolving a mutable source tag."""
+    base = lock["image"]["base_image"]
+    reference = base["reference"]
+
+    def raw(digest: str) -> dict[str, Any]:
+        try:
+            result = subprocess.run(
+                ["docker", "buildx", "imagetools", "inspect", "--raw",
+                 f"{reference}@{digest}"],
+                capture_output=True, check=True, timeout=60,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise ContractError("Cannot fetch the locked Canvas base manifest") from exc
+        _require(len(result.stdout) <= 2 * 1024 * 1024, "Base manifest exceeds size limit")
+        actual = "sha256:" + hashlib.sha256(result.stdout).hexdigest()
+        _require(actual == digest, "Canvas base manifest bytes differ from locked digest")
+        try:
+            manifest = json.loads(result.stdout)
+        except (ValueError, UnicodeDecodeError) as exc:
+            raise ContractError("Canvas base manifest is not JSON") from exc
+        _require(isinstance(manifest, dict), "Canvas base manifest must be an object")
+        return manifest
+
+    index = raw(base["index_digest"])
+    descriptors = index.get("manifests")
+    _require(isinstance(descriptors, list), "Canvas base index has no descriptors")
+    children = [item.get("digest") for item in descriptors if isinstance(item, dict)
+                and isinstance(item.get("platform"), dict)
+                and item.get("platform", {}).get("os") == "linux"
+                and item.get("platform", {}).get("architecture") == "amd64"]
+    _require(children == [base["linux_amd64_digest"]],
+             "Canvas base index must bind exactly the locked Linux/amd64 child")
+    child = raw(base["linux_amd64_digest"])
+    _require(child.get("schemaVersion") == 2 and isinstance(child.get("layers"), list)
+             and isinstance(child.get("config"), dict), "Canvas base child is not an image manifest")
+    return {name: base[name] for name in ("reference", "index_digest", "linux_amd64_digest")}
 
 
 def _load(path: Path) -> Any:
@@ -136,7 +181,7 @@ def validate_lock(lock: dict[str, Any]) -> None:
     _require(
         bool(
             re.fullmatch(
-                r"mcr\.microsoft\.com/playwright:v1\.56\.0-jammy@sha256:[0-9a-f]{64}",
+                r"mcr\.microsoft\.com/playwright:v1\.63\.0-noble@sha256:[0-9a-f]{64}",
                 str(driver.get("base_image", "")),
             )
         ),
@@ -153,12 +198,26 @@ def validate_lock(lock: dict[str, Any]) -> None:
     topology = lock.get("acceptance_topology", {})
     _require(topology.get("marty_origin") == EXPECTED_MARTY_ORIGIN, "Marty acceptance origin changed")
     _require(topology.get("canvas_origin") == EXPECTED_CANVAS_ORIGIN, "Canvas acceptance origin changed")
-    _require(topology.get("docker_network") == "marty-infra-network", "Canvas must attach to the existing beta tunnel network")
+    _require(topology.get("docker_network") == BETA_NETWORK, "Canvas must attach to the existing beta tunnel network")
     _require(topology.get("tunnel_owner") == "existing_beta_stack", "Acceptance must not start a competing tunnel")
     _require(topology.get("contract_service") == "canvas-contract", "Browser contract must be a Compose service")
     _require(topology.get("continuity_monitor_service") == "canvas-continuity-monitor", "Continuity monitor must be a Compose service")
     _require(topology.get("driver_execution") == "docker_compose_one_shot", "Browser contract must use a Compose one-shot")
     _require(topology.get("host_runtime_processes") is False, "Acceptance must not start host runtime processes")
+
+
+def validate_operator_configuration_assets(root: Path) -> None:
+    generator = (root / "scripts/canvas-oss/generate-runtime-config.mjs").read_text(encoding="utf-8")
+    contract = (root / "scripts/canvas-oss/runtime-config-contract.mjs").read_text(encoding="utf-8")
+    _require(
+        "import { CANVAS_ORIGIN, KEY_NAMES, renderRuntimeConfiguration, validateRuntimeConfiguration } from './runtime-config-contract.mjs';" in generator
+        and "const files=renderRuntimeConfiguration({" in generator
+        and "validateRuntimeConfiguration(files);" in generator
+        and "Object.entries(files)" in generator,
+        "Canvas operator generator is not bound to its shared renderer and validator",
+    )
+    _require("File.read(ENV.fetch('POSTGRES_PASSWORD_FILE')).strip" in contract,
+             "Canvas database config does not read its secret file")
 
 
 def validate_execution_assets(lock: dict[str, Any], root: Path = REPOSITORY_ROOT) -> None:
@@ -171,7 +230,7 @@ def validate_execution_assets(lock: dict[str, Any], root: Path = REPOSITORY_ROOT
     workflow = (root / ".github/workflows/canvas-oss-portability.yml").read_text(encoding="utf-8")
     image_workflow = (root / ".github/workflows/canvas-oss-image.yml").read_text(encoding="utf-8")
     source_policy = json.loads((root / "docker/canvas-oss/source-policy.json").read_text(encoding="utf-8"))
-    database_config = (root / "scripts/canvas-oss/generate-runtime-config.mjs").read_text(encoding="utf-8")
+    validate_operator_configuration_assets(root)
     _require("\n  canvas-contract:\n" in compose, "Canvas contract Compose service is missing")
     _require("\n  canvas-continuity-monitor:\n" in compose, "Canvas continuity monitor Compose service is missing")
     _require(f"dockerfile: {driver['dockerfile']}" in compose, "Canvas contract Compose Dockerfile differs from the lock")
@@ -183,13 +242,14 @@ def validate_execution_assets(lock: dict[str, Any], root: Path = REPOSITORY_ROOT
     _require("POSTGRES_PASSWORD: ${" not in compose, "Canvas PostgreSQL password is exposed through container environment")
     _require("POSTGRES_PASSWORD_FILE: /run/secrets/canvas_postgres_password" in compose, "Canvas PostgreSQL secret file is missing")
     _require(compose.count("pull_policy: never") >= 2, "Contract and monitor services must refuse registry pulls")
-    _require("File.read(ENV.fetch('POSTGRES_PASSWORD_FILE')).strip" in database_config, "Canvas database config does not read its secret file")
     _require("FROM ${CANVAS_OSS_PLAYWRIGHT_IMAGE}" in dockerfile, "Contract Dockerfile does not consume the locked Playwright image")
     _require("npm audit --audit-level=high" in dockerfile, "Contract image does not fail on high-severity npm advisories")
-    _require(package_manifest.get("dependencies") == {"@playwright/test": "1.62.1"}, "Contract package manifest is not Playwright-only")
+    _require(package_manifest.get("dependencies") == {"@playwright/test": "1.63.0"}, "Contract package manifest is not Playwright-only")
     _require("devDependencies" not in package_manifest, "Contract package manifest contains unrelated development dependencies")
-    allowed_packages = {"", "node_modules/@playwright/test", "node_modules/fsevents", "node_modules/playwright", "node_modules/playwright-core"}
+    allowed_packages = {"", "node_modules/@playwright/test", "node_modules/playwright", "node_modules/playwright-core"}
     _require(set(package_lock.get("packages", {})) == allowed_packages, "Contract package lock contains unrelated dependencies")
+    for name in ("@playwright/test", "playwright", "playwright-core"):
+        _require(package_lock["packages"][f"node_modules/{name}"].get("version") == "1.63.0", "Contract browser package versions do not match the reviewed image")
     _require("io.elevenid.canvas-oss.execution-boundary=\"docker-compose-one-shot\"" in dockerfile, "Contract image execution label is missing")
     _require(driver["base_image"] in workflow or ".contract_driver.base_image" in workflow, "Workflow does not resolve the locked Playwright image")
     _require("--profile contract run --rm --no-deps canvas-contract" in workflow, "Workflow does not run the browser contract through Compose")
@@ -485,23 +545,52 @@ def validate_runtime_binding(manifest_path: Path, context_path: Path, expected_s
     )
     records = manifest.get("images")
     _require(isinstance(records, list), "Coordinated deployment container image evidence is missing")
-    by_container = {
-        str(record.get("container")): record
-        for record in records
-        if isinstance(record, dict) and record.get("container")
-    }
+    _require(all(isinstance(record, dict) for record in records), "Invalid deployment image record")
+    compose_owned = "compose_project" in manifest
+    if compose_owned:
+        _require(manifest["compose_project"] == BETA_PROJECT, "Deployment Compose project is not beta")
+    else:
+        _require(
+            not any("compose_project" in record or "compose_service" in record for record in records),
+            "Compose image evidence requires its deployment project",
+        )
     release = str(context["release_version"])
     for service, (container, image_service) in REQUIRED_BETA_RUNTIME_IMAGES.items():
-        record = by_container.get(container)
-        _require(record is not None, f"Coordinated deployment is missing {container} image evidence")
-        expected_reference = f"elevenid-local/{image_service}:{release}"
-        _require(record.get("configured_image") == expected_reference, f"{container} is not configured from the coordinated release image")
+        matches = [record for record in records if (
+            record.get("service") == service or record.get("compose_service") == service
+        )] if compose_owned else [record for record in records if record.get("container") == container]
+        _require(matches, f"Coordinated deployment is missing {container} image evidence")
+        _require(len(matches) == 1, f"Coordinated deployment requires exactly one {container} image record")
+        record = matches[0]
         image_id = str(record.get("image_id", ""))
         _require(bool(IMAGE_DIGEST_RE.fullmatch(image_id)), f"{container} image ID is invalid")
+        expected_reference = f"elevenid-local/{image_service}:{release}"
+        if compose_owned:
+            _require(
+                record.get("compose_project") == BETA_PROJECT
+                and record.get("compose_service") == service and record.get("service") == service,
+                f"{container} Compose ownership or service role differs",
+            )
+            _require(
+                bool(re.fullmatch(r"[0-9a-f]{64}", str(record.get("container_id", ""))))
+                and record.get("running") is True,
+                f"{container} running container identity is missing",
+            )
+            environment = record.get("runtime_marker_environment", {})
+            _require(
+                isinstance(environment, dict)
+                and environment.get("MARTY_UI_SHA") == context["source_id"]
+                and environment.get("MARTY_RELEASE_VERSION") == release,
+                f"{container} runtime source or release differs",
+            )
+            # Prepared shared Rust runtimes are configured by immutable image ID;
+            # historical split images retain the coordinated release tag contract.
+            if IMAGE_DIGEST_RE.fullmatch(str(record.get("configured_image", ""))):
+                expected_reference = image_id
+        _require(record.get("configured_image") == expected_reference, f"{container} is not configured from the coordinated release image")
         _require(marker_images.get(service) == image_id, f"{container} image does not match the services release marker")
         _require(record.get("status") == "running", f"{container} was not running when deployment evidence was captured")
-    # The native worker has its own coordinated local build. Its exact running
-    # image must match its own release marker above, not the retained Python API.
+    # Each native role must match its own marker, including shared runtime images.
 
 
 def _validate_observations(catalog: dict[str, Any], observations: dict[str, Any], mode: str) -> list[dict[str, str]]:
@@ -602,6 +691,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--lock", type=Path, default=Path("deploy-config/catalog/canvas-oss.lock.json"))
     action = parser.add_mutually_exclusive_group(required=True)
     action.add_argument("--validate-config", action="store_true")
+    action.add_argument("--verify-base-image", action="store_true")
     action.add_argument("--capture-runtime-context", type=Path)
     action.add_argument("--validate-runtime-binding", type=Path)
     action.add_argument("--finalize", action="store_true")
@@ -623,7 +713,11 @@ def main() -> int:
         validate_lock(lock)
         validate_execution_assets(lock)
         validate_catalog(_load(args.config))
-        if args.capture_runtime_context:
+        if args.verify_base_image:
+            verified = verify_base_image(lock)
+            if args.output:
+                _write(args.output, verified)
+        elif args.capture_runtime_context:
             capture_runtime_context(args.capture_runtime_context)
         elif args.validate_runtime_binding:
             _require(args.runtime_context is not None, "Runtime binding validation requires --runtime-context")

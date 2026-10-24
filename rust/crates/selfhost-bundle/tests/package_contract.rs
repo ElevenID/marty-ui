@@ -82,6 +82,28 @@ fn render(stage: &Path, args: &[String]) -> marty_selfhost_bundle::Result<String
 fn opt_in_image_lock_pins_the_staged_bundle_and_rejects_release_mismatch() {
     let root = tempfile::tempdir().unwrap();
     let mut options = fixture(root.path());
+    let openbao_source = "services:\n  openbao-tls-init:\n    image: ${MARTY_OPENBAO_DIDCOMM_IMAGE:?set MARTY_OPENBAO_DIDCOMM_IMAGE to the reviewed plugin image digest}\n  openbao:\n    image: ${MARTY_OPENBAO_DIDCOMM_IMAGE:?set MARTY_OPENBAO_DIDCOMM_IMAGE to the reviewed plugin image digest}\n  openbao-unseal:\n    image: ${MARTY_OPENBAO_DIDCOMM_IMAGE:?set MARTY_OPENBAO_DIDCOMM_IMAGE to the reviewed plugin image digest}\n  openbao-bootstrap:\n    image: ${MARTY_OPENBAO_DIDCOMM_IMAGE:?set MARTY_OPENBAO_DIDCOMM_IMAGE to the reviewed plugin image digest}\n";
+    fs::write(
+        options.repo.join("docker-compose.selfhost.openbao.yml"),
+        openbao_source,
+    )
+    .unwrap();
+    let manifest_path = options.repo.join("deploy-config/bundles/selfhost.json");
+    let mut manifest: Value = serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+    manifest["assets"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("docker-compose.selfhost.openbao.yml"));
+    manifest["render"] = json!({
+        "env_file": ".env.selfhost.production.example",
+        "compose_files": ["docker-compose.selfhost.prod.yml", "docker-compose.selfhost.bundle.override.yml"],
+        "output_file": "docker-compose.yml",
+        "openbao_compose_file": "docker-compose.selfhost.openbao.yml",
+        "strip_build_blocks": true,
+        "relativize_paths": true,
+        "no_interpolate": true
+    });
+    fs::write(&manifest_path, manifest.to_string()).unwrap();
     let release_path = options.repo.join("release/stack-lock.json");
     fs::create_dir_all(release_path.parent().unwrap()).unwrap();
     fs::write(&release_path, r#"{"release":"marty-ui@1.2.3"}"#).unwrap();
@@ -90,6 +112,7 @@ fn opt_in_image_lock_pins_the_staged_bundle_and_rejects_release_mismatch() {
     let image_lock = json!({
         "schema": "marty.selfhost-image-lock/v1",
         "release": "marty-ui@1.2.3",
+        "openbao_didcomm_image": format!("ghcr.io/elevenid/marty-ui-oss/openbao-didcomm@sha256:{}", "b".repeat(64)),
         "services": {"app": image}
     });
     fs::write(&lock_path, image_lock.to_string()).unwrap();
@@ -107,6 +130,120 @@ fn opt_in_image_lock_pins_the_staged_bundle_and_rejects_release_mismatch() {
         .unwrap(),
         image_lock
     );
+    let openbao: serde_yaml::Value = serde_yaml::from_slice(
+        &fs::read(published.output.join("docker-compose.selfhost.openbao.yml")).unwrap(),
+    )
+    .unwrap();
+    let plugin = image_lock["openbao_didcomm_image"].as_str().unwrap();
+    assert_eq!(
+        openbao["services"]["openbao-tls-init"]["image"].as_str(),
+        Some(plugin)
+    );
+    assert_eq!(
+        openbao["services"]["openbao"]["image"].as_str(),
+        Some(plugin)
+    );
+    assert_eq!(
+        openbao["services"]["openbao-unseal"]["image"].as_str(),
+        Some(plugin)
+    );
+    assert_eq!(
+        openbao["services"]["openbao-bootstrap"]["image"].as_str(),
+        Some(plugin)
+    );
+
+    // Exercise actual ZIP publication through the explicit nightly path.
+    use sha2::{Digest, Sha256};
+    use std::process::Command;
+    fs::write(
+        &release_path,
+        r#"{"release":"marty-ui@1.2.3","release_state":"eligible"}"#,
+    )
+    .unwrap();
+    for args in [
+        vec!["init", "--quiet"],
+        vec!["add", "."],
+        vec![
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "--quiet",
+            "-m",
+            "fixture",
+        ],
+    ] {
+        assert!(Command::new("git")
+            .arg("-C")
+            .arg(&options.repo)
+            .args(args)
+            .status()
+            .unwrap()
+            .success());
+    }
+    let source = Command::new("git")
+        .arg("-C")
+        .arg(&options.repo)
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .unwrap();
+    let version = "1.2.3-nightly.20261024.123";
+    let candidate_path = root.path().join("candidate.json");
+    let candidate = json!({"schema":"elevenid.nightly-installation-candidate/v1", "state":"prepared",
+        "version":version,"tag":format!("v{version}"),"claim_run_id":"123",
+        "source_sha":String::from_utf8_lossy(&source.stdout).trim(),
+        "stack_lock_sha256":format!("sha256:{:x}",Sha256::digest(fs::read(&release_path).unwrap()))});
+    fs::write(&candidate_path, candidate.to_string()).unwrap();
+    let mut nightly_lock = image_lock.clone();
+    nightly_lock["release"] = json!(format!("marty-ui@{version}"));
+    fs::write(&lock_path, nightly_lock.to_string()).unwrap();
+    options.output = root.path().join("nightly-bundle");
+    options.archive = Some(root.path().join("nightly.zip"));
+    assert!(package_with_image_lock(&options, render, &lock_path)
+        .unwrap_err()
+        .contains("release differs"));
+    let published = marty_selfhost_bundle::package_nightly_with_image_lock(
+        &options,
+        render,
+        &lock_path,
+        &candidate_path,
+    )
+    .unwrap();
+    let mut zip =
+        zip::ZipArchive::new(fs::File::open(published.archive.unwrap()).unwrap()).unwrap();
+    let mut embedded = String::new();
+    zip.by_name("nightly-bundle/.marty-selfhost-images.json")
+        .unwrap()
+        .read_to_string(&mut embedded)
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&embedded).unwrap(),
+        nightly_lock
+    );
+    options.output = root.path().join("bad-nightly");
+    options.archive = None;
+    for (field, bad) in [
+        ("source_sha", "wrong"),
+        ("stack_lock_sha256", "sha256:wrong"),
+        ("claim_run_id", "124"),
+        ("version", "1.2.4-nightly.20261024.123"),
+        ("schema", "elevenid.release-transaction/v1"),
+    ] {
+        let mut invalid = candidate.clone();
+        invalid[field] = json!(bad);
+        fs::write(&candidate_path, invalid.to_string()).unwrap();
+        assert!(marty_selfhost_bundle::package_nightly_with_image_lock(
+            &options,
+            render,
+            &lock_path,
+            &candidate_path
+        )
+        .is_err());
+        assert!(!options.output.exists());
+    }
+    // Restore the stable fixture for its remaining rejection cases.
+    fs::write(&release_path, r#"{"release":"marty-ui@1.2.3"}"#).unwrap();
 
     options.output = root.path().join("rejected-bundle");
     options.archive = None;
@@ -118,8 +255,16 @@ fn opt_in_image_lock_pins_the_staged_bundle_and_rejects_release_mismatch() {
         .contains("differs from source stack lock"));
     assert!(!options.output.exists());
 
+    let mut unbound_plugin = image_lock.clone();
+    unbound_plugin
+        .as_object_mut()
+        .unwrap()
+        .remove("openbao_didcomm_image");
+    fs::write(&lock_path, unbound_plugin.to_string()).unwrap();
+    assert!(package_with_image_lock(&options, render, &lock_path).is_err());
+    assert!(!options.output.exists());
+
     fs::write(&lock_path, image_lock.to_string()).unwrap();
-    let manifest_path = options.repo.join("deploy-config/bundles/selfhost.json");
     let mut manifest: Value = serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
     manifest["render"] = json!({
         "env_file": ".env.selfhost.production.example",
@@ -209,16 +354,19 @@ fn actual_directory_and_zip_preserve_frozen_members_and_binary_content() {
     let mut directories = Vec::new();
     for i in 0..zipped.len() {
         let mut member = zipped.by_index(i).unwrap();
+        let name = member
+            .name()
+            .expect("bundle entry name is UTF-8")
+            .into_owned();
         if member.is_dir() {
-            directories.push(member.name().to_owned());
+            directories.push(name);
             continue;
         }
-        let name = member.name().to_owned();
         let mut bytes = Vec::new();
         member.read_to_end(&mut bytes).unwrap();
-        members.insert(name, hex(&bytes));
+        members.insert(name.clone(), hex(&bytes));
         #[cfg(unix)]
-        if member.name() == "bundle/scripts/launch.sh" {
+        if name == "bundle/scripts/launch.sh" {
             assert_eq!(member.unix_mode().unwrap() & 0o111, 0o111);
         }
     }
@@ -444,6 +592,20 @@ fn folded_and_list_first_paths_preserve_required_selectors_and_sibling_fields() 
     assert_eq!(volume["source"].as_str().unwrap(), "./scripts/start.sh");
     assert_eq!(volume["target"].as_str().unwrap(), "/app/start.sh");
     assert_eq!(volume["read_only"].as_bool(), Some(true));
+}
+
+#[test]
+fn rendered_host_paths_outside_stage_are_rejected() {
+    for key in ["file: ", "source: ", "- source: "] {
+        for path in [
+            "/other-stage/scripts/start.sh",
+            r"C:\other-stage\scripts\start.sh",
+            r"\\wsl.localhost\Ubuntu-24.04\other-stage\scripts\start.sh",
+        ] {
+            let input = format!("{key}{}\n", serde_json::to_string(path).unwrap());
+            assert!(marty_selfhost_bundle::relativize(&input, Path::new("/stage")).is_err());
+        }
+    }
 }
 
 #[test]

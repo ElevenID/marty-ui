@@ -28,7 +28,7 @@ def test_gateway_public_dto_shape_manifest_is_unique_and_versioned() -> None:
 
 
 def test_every_gateway_behavior_vector_has_a_declared_rust_test_owner() -> None:
-    assert len(VECTOR_TEST_OWNERS) == 23
+    assert len(VECTOR_TEST_OWNERS) == 22
     _assert_rust_behavior_vector_test_owners()
 
 
@@ -188,13 +188,49 @@ def test_vector_owner_guard_rejects_unowned_vectors_and_missing_workspace_gate(
     "old,new",
     [
         (
-            "lane: ${{ fromJSON(needs.changes.outputs.rust_matrix) }}",
+            "lane: >-\n          ${{ fromJSON(github.event_name == 'pull_request' &&",
             "lane: [canvas]",
         ),
-        ('rust_matrix=\'["canvas","contracts"]\'', "rust_matrix='[\"canvas\"]'"),
+        (
+            "github.event_name == 'pull_request' &&",
+            "github.event_name == 'merge_group' &&",
+        ),
+        (
+            "contains(github.event.pull_request.labels.*.name, 'ci-worker-diagnostic') &&",
+            "true &&",
+        ),
+        (
+            "contains(github.event.pull_request.labels.*.name, 'ci-selfhost-diagnostic') &&",
+            "true &&",
+        ),
+        (
+            "contains(github.event.pull_request.labels.*.name, 'ci-renewal-unit-diagnostic') &&",
+            "true &&",
+        ),
+        (
+            '\'["canvas","contracts","worker","selfhost","renewal-unit"]\' ||',
+            '\'["canvas","contracts","selfhost","renewal-unit"]\' ||',
+        ),
+        (
+            '\'["canvas","contracts","selfhost","renewal-unit"]\' ||',
+            '\'["renewal-unit"]\' ||',
+        ),
+        (
+            "needs.changes.outputs.rust_runtime == 'true' &&",
+            "true &&",
+        ),
+        (
+            '\'["canvas","contracts","worker","selfhost"]\' ||',
+            "'[\"worker\"]' ||",
+        ),
+        (
+            '\'["canvas","contracts","selfhost"]\' || needs.changes.outputs.rust_matrix) }}',
+            "'[\"selfhost\"]' || needs.changes.outputs.rust_matrix) }}",
+        ),
+        ('rust_matrix=\'["canvas","contracts","selfhost"]\'', "rust_matrix='[\"canvas\"]'"),
         ("rust_matrix='[\"contracts\"]'", "rust_matrix='[\"canvas\"]'"),
         (
-            "cargo test --locked --workspace --exclude marty-canvas-acceptance",
+            "cargo test --locked --workspace --exclude marty-canvas-acceptance --exclude marty-canvas-worker-acceptance",
             "cargo test --locked -p marty-canvas-acceptance",
         ),
         (
@@ -207,9 +243,9 @@ def test_vector_owner_guard_rejects_unowned_vectors_and_missing_workspace_gate(
             "      - name: Require public protocol vector test execution\n"
             "        if: matrix.lane == 'canvas'",
         ),
-        ('\'true:true:["canvas","contracts"]\'', "'true:true:[\"contracts\"]'"),
+        ('\'true:true:["canvas","contracts","selfhost"]\'', "'true:true:[\"contracts\"]'"),
         (
-            '"$RUST_MATRIX" == \'["canvas","contracts"]\' ]]',
+            '"$RUST_MATRIX" == \'["canvas","contracts","selfhost"]\' ]]',
             '"$RUST_MATRIX" == \'["contracts"]\' ]]',
         ),
     ],
@@ -224,6 +260,26 @@ def test_vector_workspace_owner_rejects_missing_contracts_or_protected_canvas(
     assert workflow.count(old) >= 1
     with pytest.raises(AssertionError, match="workspace test owner"):
         _assert_full_workspace_ci_owner(workflow.replace(old, new))
+
+
+def test_vector_workspace_owner_ignores_stale_matrix_copy_outside_strategy() -> None:
+    workflow = (
+        Path(__file__).resolve().parents[1] / ".github/workflows/ci.yml"
+    ).read_text(encoding="utf-8")
+    service_start = workflow.index("  test-rust-services:\n")
+    matrix_start = workflow.index("        lane: >-\n", service_start)
+    matrix_end = workflow.index("    permissions:\n", matrix_start)
+    selector = workflow[matrix_start:matrix_end]
+    weakened = (
+        workflow[:matrix_start]
+        + "        lane: ${{ fromJSON(needs.changes.outputs.rust_matrix) }}\n"
+        + "    env:\n"
+        + selector
+        + workflow[matrix_end:]
+    )
+    assert selector in weakened
+    with pytest.raises(AssertionError, match="workspace test owner"):
+        _assert_full_workspace_ci_owner(weakened)
 
 
 def test_vector_execution_guard_must_follow_workspace_run() -> None:

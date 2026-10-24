@@ -37,9 +37,9 @@ export async function enrollMyBiometric(data) {
   return post(`${ME_PROFILE}/biometrics`, data);
 }
 
-export async function listApplications(params = {}) {
+export async function listApplications(params = {}, options = {}) {
   const query = buildTruthyQueryString({ limit: params.limit, offset: params.offset });
-  return normalizePage(await get(withQuery(ME_APPLICATIONS, query)), params);
+  return normalizePage(await get(withQuery(ME_APPLICATIONS, query), options), params);
 }
 
 export const getMyApplications = listApplications;
@@ -145,9 +145,9 @@ export async function runApplicationExternalEvidenceApiCheck(organizationId, app
   return post(`${orgApplicantsPath(organizationId)}/${encodeURIComponent(applicationId)}/evidence/api-checks/${encodeURIComponent(checkId)}/run`, payload);
 }
 
-export async function getMyCredentials(params = {}) {
+export async function getMyCredentials(params = {}, options = {}) {
   const query = buildTruthyQueryString({ status: params.status, limit: params.limit, offset: params.offset });
-  return normalizePage(await get(withQuery('/v1/issued-credentials/mine', query)), params);
+  return normalizePage(await get(withQuery('/v1/issued-credentials/mine', query), options), params);
 }
 
 export async function getApplicantStats() {

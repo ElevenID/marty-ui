@@ -85,6 +85,34 @@ impl CanvasLtiLoginSubmission {
             client_id: non_empty(self.client_id),
         }
     }
+
+    fn validate(self, platform: &CanvasLtiPlatform) -> Result<Self, CanvasLtiLoginError> {
+        let submission = self.normalized();
+        if submission.login_hint.is_none() {
+            return Err(CanvasLtiLoginError::Invalid(
+                "Canvas LTI login requires login_hint",
+            ));
+        }
+        if submission
+            .iss
+            .as_deref()
+            .is_some_and(|issuer| Some(issuer) != platform.lti_issuer.as_deref())
+        {
+            return Err(CanvasLtiLoginError::Invalid(
+                "Canvas LTI issuer does not match platform",
+            ));
+        }
+        if submission
+            .client_id
+            .as_deref()
+            .is_some_and(|client_id| Some(client_id) != platform.lti_client_id.as_deref())
+        {
+            return Err(CanvasLtiLoginError::Invalid(
+                "Canvas LTI client_id does not match platform",
+            ));
+        }
+        Ok(submission)
+    }
 }
 
 #[derive(Debug, Error, Clone, Eq, PartialEq)]
@@ -222,28 +250,11 @@ impl CanvasLtiLoginService {
             trust,
             mode,
         } = prepared;
-        let submission = submission.normalized();
-        let login_hint = submission.login_hint.ok_or(CanvasLtiLoginError::Invalid(
-            "Canvas LTI login requires login_hint",
-        ))?;
-        if submission
-            .iss
-            .as_deref()
-            .is_some_and(|issuer| Some(issuer) != platform.lti_issuer.as_deref())
-        {
-            return Err(CanvasLtiLoginError::Invalid(
-                "Canvas LTI issuer does not match platform",
-            ));
-        }
-        if submission
-            .client_id
-            .as_deref()
-            .is_some_and(|client_id| Some(client_id) != platform.lti_client_id.as_deref())
-        {
-            return Err(CanvasLtiLoginError::Invalid(
-                "Canvas LTI client_id does not match platform",
-            ));
-        }
+        let submission = submission.validate(&platform)?;
+        let login_hint = submission
+            .login_hint
+            .clone()
+            .expect("validated login submission has a hint");
 
         let redirect_suffix = match mode {
             CanvasLtiLoginMode::Launch => "launch",
@@ -406,4 +417,72 @@ pub(crate) fn random_token() -> String {
     let mut bytes = [0_u8; 32];
     rand::rng().fill_bytes(&mut bytes);
     URL_SAFE_NO_PAD.encode(bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn login_submission_validation_preserves_the_frozen_input_matrix() {
+        let platform = CanvasLtiPlatform {
+            id: "platform-123".into(),
+            organization_id: "org-123".into(),
+            canvas_account_id: "account-123".into(),
+            canvas_base_url: None,
+            lti_client_id: Some("client-123".into()),
+            lti_deployment_id: None,
+            lti_trust_profile: String::new(),
+            lti_issuer: Some("https://canvas.instructure.com".into()),
+            lti_jwks_url: None,
+            lti_jwks_json: None,
+            lti_openid_configuration: None,
+            config_version: 1,
+            enabled: true,
+        };
+        for (name, submission, expected) in [
+            (
+                "missing hint",
+                CanvasLtiLoginSubmission::default(),
+                Err(CanvasLtiLoginError::Invalid(
+                    "Canvas LTI login requires login_hint",
+                )),
+            ),
+            (
+                "issuer mismatch",
+                CanvasLtiLoginSubmission {
+                    login_hint: Some("hint".into()),
+                    iss: Some("https://evil.example".into()),
+                    ..Default::default()
+                },
+                Err(CanvasLtiLoginError::Invalid(
+                    "Canvas LTI issuer does not match platform",
+                )),
+            ),
+            (
+                "client mismatch",
+                CanvasLtiLoginSubmission {
+                    login_hint: Some("hint".into()),
+                    client_id: Some("other-client".into()),
+                    ..Default::default()
+                },
+                Err(CanvasLtiLoginError::Invalid(
+                    "Canvas LTI client_id does not match platform",
+                )),
+            ),
+        ] {
+            assert_eq!(submission.validate(&platform), expected, "{name}");
+        }
+        let valid = CanvasLtiLoginSubmission {
+            login_hint: Some(" hint ".into()),
+            iss: Some(" https://canvas.instructure.com ".into()),
+            client_id: Some(" client-123 ".into()),
+            ..Default::default()
+        }
+        .validate(&platform)
+        .expect("trimmed matching values remain valid");
+        assert_eq!(valid.login_hint.as_deref(), Some("hint"));
+        assert_eq!(valid.iss.as_deref(), Some("https://canvas.instructure.com"));
+        assert_eq!(valid.client_id.as_deref(), Some("client-123"));
+    }
 }

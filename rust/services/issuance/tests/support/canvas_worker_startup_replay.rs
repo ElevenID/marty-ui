@@ -5,17 +5,25 @@ use serde_json::{json, Value};
 use sqlx::PgPool;
 use std::{collections::BTreeMap, time::Duration};
 
-pub async fn replay(pool: &PgPool, database_url: &str, reference: &Value) {
+pub async fn replay(pool: &PgPool, database_url: &str) {
     let scenarios: Value = serde_json::from_str(include_str!(
         "../../../../../contracts/canvas-worker-startup-scenarios.json"
     ))
     .unwrap();
     let cases = scenarios["cases"].as_array().unwrap();
-    let observations = reference["cases"].as_array().unwrap();
     assert_eq!(cases.len(), 8);
-    assert_eq!(observations.len(), cases.len());
-    for (case, expected) in cases.iter().zip(observations) {
-        assert_eq!(case["name"], expected["name"]);
+    let expected: Value = serde_json::from_str(include_str!(
+        "../../../../../contracts/canvas-worker-startup-expected.json"
+    ))
+    .unwrap();
+    assert_eq!(
+        expected["schema"],
+        "marty.canvas-worker-startup-expected/v1"
+    );
+    assert_eq!(expected["alive_after_idle"], true);
+    assert_eq!(expected["job_count"], 0);
+    assert_eq!(expected["exit_code_after_interrupt"], 130);
+    for case in cases {
         let name = case["name"].as_str().unwrap();
         eprintln!("Actual native startup case: {name}");
         let worker_id = format!("native-startup-{name}");
@@ -58,9 +66,8 @@ pub async fn replay(pool: &PgPool, database_url: &str, reference: &Value) {
             }
         };
         assert_eq!(heartbeat, expected["heartbeat"], "startup case {name}");
-        assert_eq!(
+        assert!(
             worker.0.try_wait().unwrap().is_none(),
-            expected["alive_after_idle"].as_bool().unwrap(),
             "startup case {name}"
         );
         let jobs: i64 =
@@ -68,19 +75,19 @@ pub async fn replay(pool: &PgPool, database_url: &str, reference: &Value) {
                 .fetch_one(pool)
                 .await
                 .unwrap();
-        assert_eq!(json!(jobs), expected["job_count"]);
+        assert_eq!(
+            jobs,
+            expected["job_count"].as_i64().unwrap(),
+            "startup case {name}"
+        );
         if cfg!(unix) {
             worker.signal("SIGINT");
             let status = worker.wait().await;
-            let python_return = expected["exit_code_after_interrupt"].as_i64().unwrap();
-            // subprocess reports -signal; Docker/shell and the existing native
-            // contract use 128+signal. Preserve the raw frozen Python evidence.
-            let portable_exit = if python_return < 0 {
-                128 - python_return
-            } else {
-                python_return
-            };
-            assert_eq!(status.code().map(i64::from), Some(portable_exit));
+            assert_eq!(
+                status.code().map(i64::from),
+                expected["exit_code_after_interrupt"].as_i64(),
+                "startup case {name}"
+            );
         } else {
             // Windows proves actual boot/heartbeat only. POSIX exit evidence is
             // mandatory in the configured Linux CI run, never fabricated here.

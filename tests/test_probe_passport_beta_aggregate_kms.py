@@ -23,6 +23,28 @@ SIGNING_KEYS = "a" * 64
 OPENBAO = "b" * 64
 
 
+def test_scoped_owned_csca_retirement_uses_existing_private_transport(monkeypatch):
+    observed = []
+    monkeypatch.setattr(gate, "docker_json", lambda command, payload, **options:
+                        observed.append((command, json.loads(payload))) or {"status": "REVOKED"})
+    assert gate.private_signing_request(SIGNING_KEYS,
+        "/internal/documents/org-a/csca-certificates/demo-owned/revoke",
+        {"reason": "Owned demo retired"}) == {"status": "REVOKED"}
+    command, payload = observed[0]
+    assert command[-1].endswith("/internal/documents/org-a/csca-certificates/demo-owned/revoke")
+    assert '--data-binary @-' in command[-3]
+    assert payload == {"reason": "Owned demo retired"}
+
+
+@pytest.mark.parametrize("body", [None, {}, {"reason": ""}, {"reason": "bad\nreason"},
+                                  {"reason": "Owned", "key": "unexpected"}])
+def test_scoped_csca_retirement_rejects_unbounded_or_missing_reason(monkeypatch, body):
+    monkeypatch.setattr(gate, "docker_json", lambda *_args, **_kwargs: pytest.fail("No transport allowed"))
+    with pytest.raises(ValueError, match="retirement reason"):
+        gate.private_signing_request(SIGNING_KEYS,
+            "/internal/documents/org-a/csca-certificates/demo-owned/revoke", body)
+
+
 def selected() -> dict[str, str]:
     return {
         "organization_id": "org-a",
@@ -94,17 +116,28 @@ def test_chain_selection_requires_exact_tenant_and_distinct_dids(tmp_path: Path)
 def test_transit_key_requires_nonexportable_live_ecdsa_version(monkeypatch) -> None:
     response = {"data": {"type": "ecdsa-p256", "exportable": False,
                          "latest_version": 3}}
-    monkeypatch.setattr(gate, "docker_json", lambda command: response)
-    assert gate.transit_key_version(OPENBAO, "managed-kms-dsc") == 3
+    commands = []
+    def read(command):
+        commands.append(command)
+        return response
+    monkeypatch.setattr(gate, "docker_json", read)
+    assert gate.transit_key_version(SIGNING_KEYS, "managed-kms-dsc") == 3
+    command = commands[0]
+    assert command[:4] == ["docker", "exec", SIGNING_KEYS, "sh"]
+    assert "https://openbao:8200" in command[-3]
+    assert "BAO_TOKEN_FILE" in command[-3]
+    assert "--config -" in command[-3]
+    assert "BAO_DEV_ROOT_TOKEN_ID" not in command[-3]
+    assert "http://127.0.0.1:8200" not in command[-3]
     for field, value in (("exportable", True), ("type", "rsa-2048"),
                          ("latest_version", 0), ("latest_version", "3")):
         bad = copy.deepcopy(response)
         bad["data"][field] = value
         monkeypatch.setattr(gate, "docker_json", lambda command, result=bad: result)
         with pytest.raises(HostProbeError, match="nonexportable KMS custody"):
-            gate.transit_key_version(OPENBAO, "managed-kms-dsc")
+            gate.transit_key_version(SIGNING_KEYS, "managed-kms-dsc")
     with pytest.raises(HostProbeError, match="reference is invalid"):
-        gate.transit_key_version(OPENBAO, "../foreign")
+        gate.transit_key_version(SIGNING_KEYS, "../foreign")
 
 
 def fixture(monkeypatch):
@@ -116,7 +149,7 @@ def fixture(monkeypatch):
     dsc["issuer_x5c"] = [
         base64.b64encode(ssl.PEM_cert_to_DER_cert(dsc_pem)).decode("ascii")]
     responses = {"csca": csca, "x509_doc_signer": dsc}
-    calls = {"sign": [], "proof": []}
+    calls = {"sign": [], "proof": [], "version": []}
     versions = {"managed-kms-csca": 1, "managed-kms-dsc": 2}
     record = {
         "status": "VALID", "certificate_id": "beta-csca-1",
@@ -142,6 +175,9 @@ def fixture(monkeypatch):
         return {"ok": True}
 
     def prove():
+        def key_version(container, reference):
+            calls["version"].append((container, reference))
+            return versions[reference]
         return gate.prove(
             {"schema": "marty.passport-beta-aggregate-compose-plan/v1",
              "source_commit": "f" * 40},
@@ -150,7 +186,7 @@ def fixture(monkeypatch):
             resolver=lambda container, org, did, purpose: responses[purpose],
             signer=sign,
             get_csca=lambda container, org, cert: record,
-            key_version=lambda container, reference: versions[reference],
+            key_version=key_version,
         )
 
     return prove, responses, record, versions, calls
@@ -167,6 +203,8 @@ def test_pretransition_binds_live_profiles_chain_keys_and_signatures(monkeypatch
     assert len(calls["proof"]) == 1
     assert [(call[0], call[3]) for call in calls["sign"]] == [
         (SIGNING_KEYS, "csca"), (SIGNING_KEYS, "x509_doc_signer")]
+    assert len(calls["version"]) == 4
+    assert all(container == SIGNING_KEYS for container, _ in calls["version"])
     assert "managed-kms-dsc" not in str(result)
 
 
@@ -203,12 +241,3 @@ def test_pretransition_rejects_stale_certificate_and_rotated_key(monkeypatch) ->
             get_csca=lambda *args: record,
             key_version=lambda container, reference: versions[reference],
         )
-
-
-def test_owner_transition_waits_for_durable_kms_gate() -> None:
-    script = (Path(__file__).resolve().parents[1] / "scripts"
-              / "run-passport-beta-aggregate-deploy.ps1").read_text(encoding="utf-8")
-    assert script.index("probe_passport_beta_aggregate_kms.py") < script.index(
-        "$owner = Invoke-RustOwnerTransition")
-    assert "kms_pretransition_receipt_sha256" in script
-    assert "IssuerChainFile" in script

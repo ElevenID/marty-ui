@@ -214,10 +214,10 @@ impl<'de> Deserialize<'de> for NotificationRequest {
                             }));
                         }
                         _ => {
-                            return Err(de::Error::unknown_field(
-                                &field,
-                                &["notification_id", "event", "event_description"],
-                            ));
+                            // OID4VCI 1.0 section 11.1 requires unknown
+                            // notification parameters to be ignored. Retain
+                            // duplicate/type validation for the defined fields.
+                            map.next_value::<de::IgnoredAny>()?;
                         }
                     }
                 }

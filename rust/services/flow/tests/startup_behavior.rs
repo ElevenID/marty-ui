@@ -63,10 +63,19 @@ fn baseline(environment: &str) -> BTreeMap<String, String> {
         ),
         ("DATABASE_URL".into(), "postgresql://db/flow".into()),
         ("REDIS_URL".into(), "redis://redis:6379".into()),
-        ("ORG_GRPC_TARGET".into(), "organization:9002".into()),
-        ("CT_GRPC_TARGET".into(), "credential-template:9003".into()),
-        ("PP_GRPC_TARGET".into(), "presentation-policy:9009".into()),
-        ("ISSUANCE_GRPC_TARGET".into(), "issuance:9006".into()),
+        ("ORG_GRPC_TARGET".into(), "https://organization:9002".into()),
+        (
+            "CT_GRPC_TARGET".into(),
+            "https://credential-template:9003".into(),
+        ),
+        (
+            "PP_GRPC_TARGET".into(),
+            "https://presentation-policy:9009".into(),
+        ),
+        (
+            "ISSUANCE_GRPC_TARGET".into(),
+            "https://issuance:9006".into(),
+        ),
         (
             "SIGNING_KEYS_INTERNAL_URL".into(),
             "http://signing-keys:8017".into(),
@@ -92,27 +101,60 @@ fn baseline(environment: &str) -> BTreeMap<String, String> {
         ("FLOW_WEBHOOK_SECRET".into(), "w".repeat(32)),
         ("FLOW_APPLICATION_EVENT_HMAC_KEY".into(), "a".repeat(32)),
         ("SIGNING_KEYS_INTERNAL_API_KEY".into(), "k".repeat(32)),
+        ("SIGNING_KEYS_ISSUER_SIGN_KEY".into(), "e".repeat(32)),
         ("ISSUANCE_API_KEY".into(), "i".repeat(32)),
-        ("GRPC_INSECURE_ALLOWED".into(), "true".into()),
+        ("GRPC_INSECURE_ALLOWED".into(), "false".into()),
         (
             "GRPC_WORKLOAD_TLS_CLIENT_CERT".into(),
             "/run/secrets/flow-client-cert".into(),
-        ),
-        (
-            "GRPC_WORKLOAD_TLS_CLIENT_KEY".into(),
-            "/run/secrets/flow-client-key".into(),
         ),
         (
             "GRPC_WORKLOAD_TLS_SERVER_CERT".into(),
             "/run/secrets/flow-server-cert".into(),
         ),
         (
-            "GRPC_WORKLOAD_TLS_SERVER_KEY".into(),
-            "/run/secrets/flow-server-key".into(),
-        ),
-        (
             "GRPC_WORKLOAD_TLS_CA_CERT".into(),
             "/run/secrets/workload-ca".into(),
+        ),
+        (
+            "GRPC_WORKLOAD_TLS_CLIENT_KMS_ADDR".into(),
+            "https://bao:8200".into(),
+        ),
+        (
+            "GRPC_WORKLOAD_TLS_CLIENT_KMS_CA_CERT".into(),
+            "/run/secrets/bao-ca".into(),
+        ),
+        (
+            "GRPC_WORKLOAD_TLS_CLIENT_KMS_TOKEN_FILE".into(),
+            "/run/secrets/flow-client-token".into(),
+        ),
+        (
+            "GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_NAME".into(),
+            "flow-client".into(),
+        ),
+        (
+            "GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_VERSION".into(),
+            "1".into(),
+        ),
+        (
+            "GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR".into(),
+            "https://bao:8200".into(),
+        ),
+        (
+            "GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT".into(),
+            "/run/secrets/bao-ca".into(),
+        ),
+        (
+            "GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE".into(),
+            "/run/secrets/flow-server-token".into(),
+        ),
+        (
+            "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME".into(),
+            "flow-server".into(),
+        ),
+        (
+            "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION".into(),
+            "1".into(),
         ),
     ])
 }
@@ -185,7 +227,11 @@ fn language_neutral_startup_contract_is_frozen() {
     assert_eq!(contract.schema_version, 1);
     assert_eq!(contract.deployed_environments, ["beta", "production"]);
     assert_eq!(contract.required_always, ["DATABASE_URL", "REDIS_URL"]);
-    assert_eq!(contract.required_when_deployed.len(), 22);
+    assert_eq!(contract.required_when_deployed.len(), 30);
+    assert!(!contract
+        .required_when_deployed
+        .iter()
+        .any(|name| name.starts_with("GRPC_WORKLOAD_TLS_") && name.ends_with("_KEY")));
     assert_eq!(
         contract.issuance_http_owner.beta,
         "ISSUANCE_NATIVE_SERVICE_URL_required"
@@ -276,7 +322,11 @@ fn deployed_configuration_is_complete_and_normalized() {
     assert_eq!(config.oid4vp_request_object_maximum_length, 8_192);
     assert_eq!(config.oid4vp_url_query_maximum_length, 8_192);
     assert_eq!(config.verifier_expected_origins, ["https://issuer.example"]);
-    assert_eq!(config.organization_grpc_target, "http://organization:9002");
+    assert_eq!(config.organization_grpc_target, "https://organization:9002");
+    assert_eq!(
+        config.credential_template_grpc_target,
+        "https://credential-template:9003"
+    );
     assert_eq!(config.issuance_url, "http://issuance:8006");
     assert_eq!(config.issuance_native_url, "http://issuance-native:8005");
     assert!(config.workload_client_tls.is_some());
@@ -322,19 +372,30 @@ fn deployed_configuration_fails_closed() {
         "SIGNING_KEYS_INTERNAL_API_KEY",
         "ISSUANCE_API_KEY",
         "GRPC_WORKLOAD_TLS_CLIENT_CERT",
-        "GRPC_WORKLOAD_TLS_CLIENT_KEY",
         "GRPC_WORKLOAD_TLS_SERVER_CERT",
-        "GRPC_WORKLOAD_TLS_SERVER_KEY",
         "GRPC_WORKLOAD_TLS_CA_CERT",
+        "GRPC_WORKLOAD_TLS_CLIENT_KMS_ADDR",
+        "GRPC_WORKLOAD_TLS_CLIENT_KMS_CA_CERT",
+        "GRPC_WORKLOAD_TLS_CLIENT_KMS_TOKEN_FILE",
+        "GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_NAME",
+        "GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_VERSION",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION",
     ] {
         let mut values = baseline("production");
         values.remove(required);
         let error_name = match required {
             "ORG_GRPC_TARGET" => "ORGANIZATION_GRPC_TARGET",
-            "GRPC_WORKLOAD_TLS_CLIENT_KEY" | "GRPC_WORKLOAD_TLS_CA_CERT" => {
+            "GRPC_WORKLOAD_TLS_CA_CERT" => "GRPC_WORKLOAD_TLS_CLIENT_CERT",
+            name if name.starts_with("GRPC_WORKLOAD_TLS_CLIENT_KMS_") => {
                 "GRPC_WORKLOAD_TLS_CLIENT_CERT"
             }
-            "GRPC_WORKLOAD_TLS_SERVER_KEY" => "GRPC_WORKLOAD_TLS_SERVER_CERT",
+            name if name.starts_with("GRPC_WORKLOAD_TLS_SERVER_KMS_") => {
+                "GRPC_WORKLOAD_TLS_SERVER_CERT"
+            }
             _ => required,
         };
         let expected = if required.starts_with("GRPC_WORKLOAD_TLS_") {
@@ -412,7 +473,7 @@ fn deployed_configuration_fails_closed() {
     );
 
     let mut insecure = baseline("production");
-    insecure.insert("GRPC_INSECURE_ALLOWED".into(), "false".into());
+    insecure.insert("GRPC_INSECURE_ALLOWED".into(), "true".into());
     assert_eq!(
         FlowServiceConfig::from_values(insecure),
         Err(FlowConfigError::Invalid {
@@ -500,6 +561,69 @@ fn deployed_configuration_fails_closed() {
         FlowServiceConfig::from_values(invalid_origin),
         Err(FlowConfigError::Invalid {
             name: "VERIFIER_EXPECTED_ORIGINS"
+        })
+    );
+}
+
+#[test]
+fn retired_tls_private_key_files_are_rejected() {
+    for name in [
+        "GRPC_WORKLOAD_TLS_CLIENT_KEY",
+        "GRPC_WORKLOAD_TLS_SERVER_KEY",
+    ] {
+        let mut values = baseline("production");
+        values.insert(name.into(), "/run/secrets/retired-key".into());
+        assert_eq!(
+            FlowServiceConfig::from_values(values),
+            Err(FlowConfigError::Invalid { name })
+        );
+    }
+}
+
+#[test]
+fn remote_workload_identity_requires_explicit_organization_https() {
+    let mut values = baseline("beta");
+    values.insert("ORG_GRPC_TARGET".into(), "organization:9002".into());
+    assert_eq!(
+        FlowServiceConfig::from_values(values),
+        Err(FlowConfigError::Invalid {
+            name: "ORG_GRPC_TARGET"
+        })
+    );
+}
+
+#[test]
+fn remote_workload_identity_requires_explicit_credential_template_https() {
+    let mut values = baseline("beta");
+    values.insert("CT_GRPC_TARGET".into(), "credential-template:9003".into());
+    assert_eq!(
+        FlowServiceConfig::from_values(values),
+        Err(FlowConfigError::Invalid {
+            name: "CT_GRPC_TARGET"
+        })
+    );
+}
+
+#[test]
+fn remote_workload_identity_requires_explicit_presentation_policy_https() {
+    let mut values = baseline("beta");
+    values.insert("PP_GRPC_TARGET".into(), "presentation-policy:9009".into());
+    assert_eq!(
+        FlowServiceConfig::from_values(values),
+        Err(FlowConfigError::Invalid {
+            name: "PP_GRPC_TARGET"
+        })
+    );
+}
+
+#[test]
+fn remote_workload_identity_requires_explicit_issuance_https() {
+    let mut values = baseline("beta");
+    values.insert("ISSUANCE_GRPC_TARGET".into(), "issuance:9006".into());
+    assert_eq!(
+        FlowServiceConfig::from_values(values),
+        Err(FlowConfigError::Invalid {
+            name: "ISSUANCE_GRPC_TARGET"
         })
     );
 }

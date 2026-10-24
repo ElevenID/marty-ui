@@ -88,6 +88,7 @@ const QRCodeDisplay = ({
   openLink = null,
   openLinkLabel = 'Open in Wallet',
   onOpenLink = null,
+  openingWallet = false,
   size = 256,
   title = 'Scan with Wallet',
   instructions = 'Open your digital wallet app and scan this QR code to receive your credential.',
@@ -237,6 +238,7 @@ const QRCodeDisplay = ({
               (<Box sx={{ position: 'relative' }}>
                 <img
                   src={qrPayload}
+                  data-testid="credential-offer-qr"
                   alt="Credential Offer QR Code"
                   style={{ width: effectiveSize, height: effectiveSize }}
                 />
@@ -272,6 +274,7 @@ const QRCodeDisplay = ({
               (<Box sx={{ position: 'relative' }}>
                 <QRCodeSVG
                   value={effectiveQrValue}
+                  data-testid="credential-offer-qr"
                   size={effectiveSize}
                   level={branding?.qr_error_correction || "H"}
                   includeMargin={true}
@@ -404,7 +407,7 @@ const QRCodeDisplay = ({
                   size="small"
                   startIcon={<PhoneAndroidIcon />}
                   onClick={handleOpenLink}
-                  disabled={isExpired}
+                  disabled={isExpired || openingWallet}
                 >
                   {openLinkLabel}
                 </Button>

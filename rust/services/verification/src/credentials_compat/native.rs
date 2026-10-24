@@ -251,19 +251,12 @@ const fn fact(status: VerificationCheckStatus) -> Option<bool> {
 mod tests {
     use std::sync::{Arc, Mutex};
 
-    use axum::{extract::State, http::Uri, routing::get, Json, Router};
-    use base64::{
-        engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
-        Engine as _,
-    };
-    use ed25519_dalek::{Signer as _, SigningKey};
-    use p256::ecdsa::SigningKey as P256SigningKey;
-
     use super::*;
     use crate::credentials_compat::{
         build_canonical_decision, GovernanceEngine, GovernancePurpose, IssuerResolutionError,
         OrganizationIssuerKeyResolver, Presented, ResolvedIssuerKey,
     };
+    use axum::{extract::State, http::Uri, routing::get, Json, Router};
 
     struct RejectingResolver;
 
@@ -313,6 +306,13 @@ mod tests {
             .unwrap()
     }
 
+    fn public_issuer_vectors() -> Value {
+        serde_json::from_str(include_str!(
+            "../../tests/fixtures/public_issuer_verification.json"
+        ))
+        .unwrap()
+    }
+
     #[derive(Clone)]
     struct ResolverFixture {
         response: Value,
@@ -332,49 +332,9 @@ mod tests {
     ) {
         let issuer = "did:web:issuer.example";
         let method = "did:web:issuer.example#key-1";
-        let signing_key = SigningKey::from_bytes(&[7_u8; 32]);
-        let public_jwk = serde_json::json!({
-            "kty":"OKP",
-            "crv":"Ed25519",
-            "x":URL_SAFE_NO_PAD.encode(signing_key.verifying_key().as_bytes()),
-            "kid":method,
-            "alg":"EdDSA"
-        });
-        let prepared: Value = serde_json::from_str(
-            &marty_verification::vcdm::prepare_vcdm_data_integrity_credential_json(
-                &serde_json::json!({
-                    "credential": {
-                        "@context": ["https://www.w3.org/ns/credentials/v2"],
-                        "id": "urn:uuid:org-resolved-vcdm",
-                        "type": ["VerifiableCredential"],
-                        "issuer": issuer,
-                        "validFrom": "2026-08-31T00:00:00Z",
-                        "credentialSubject": {"id":"did:example:holder"}
-                    },
-                    "issuer_did": issuer,
-                    "verification_method_id": method,
-                    "public_jwk": public_jwk
-                })
-                .to_string(),
-            )
-            .unwrap(),
-        )
-        .unwrap();
-        let signing_input = URL_SAFE_NO_PAD
-            .decode(prepared["signing_input_b64"].as_str().unwrap())
-            .unwrap();
-        let signature = signing_key.sign(&signing_input);
-        let credential: Value = serde_json::from_str(
-            &marty_verification::vcdm::complete_vcdm_data_integrity_credential_json(
-                &serde_json::json!({
-                    "prepared": prepared,
-                    "signature_b64": URL_SAFE_NO_PAD.encode(signature.to_bytes())
-                })
-                .to_string(),
-            )
-            .unwrap(),
-        )
-        .unwrap();
+        let vectors = public_issuer_vectors();
+        let credential = vectors["vcdm"]["credential"].clone();
+        let public_jwk = vectors["vcdm"]["public_jwk"].clone();
 
         let query = Arc::new(Mutex::new(None));
         let fixture = ResolverFixture {
@@ -448,43 +408,12 @@ mod tests {
 
     #[tokio::test]
     async fn valid_signed_vds_nc_projects_a_verified_credential_proof() {
-        let signing_key = P256SigningKey::from_slice(&[9_u8; 32]).unwrap();
-        let point = signing_key.verifying_key().to_encoded_point(false);
-        let public_jwk = serde_json::json!({
-            "kty":"EC",
-            "crv":"P-256",
-            "x":URL_SAFE_NO_PAD.encode(point.x().unwrap()),
-            "y":URL_SAFE_NO_PAD.encode(point.y().unwrap()),
-            "alg":"ES256"
-        });
-        let claims = serde_json::from_value(serde_json::json!({
-            "docType":"CMC",
-            "issuingCountry":"AUS",
-            "documentNumber":"X123456",
-            "surname":"EXAMPLE",
-            "givenNames":"ADA",
-            "dateOfBirth":"19900102",
-            "nationality":"AUS",
-            "gender":"F",
-            "dateOfIssue":"20260101",
-            "dateOfExpiry":"20300101"
-        }))
-        .unwrap();
-        let payload = marty_oid4vci::formats::vds_nc_profile::build_profile_payload(
-            &claims,
-            "CMC",
-            "issuer-1",
-            "issuer-1#key-1",
-            "ES256",
-        )
-        .unwrap()
-        .0;
-        let signing_input = format!("DC03AUS~{payload}");
-        let signature: p256::ecdsa::Signature = signing_key.sign(signing_input.as_bytes());
-        let barcode = format!("{signing_input}~{}", STANDARD.encode(signature.to_bytes()));
+        let vectors = public_issuer_vectors();
+        let barcode = vectors["vds_nc"]["barcode"].as_str().unwrap();
+        let public_jwk = &vectors["vds_nc"]["public_jwk"];
 
         let facts = NativeCredentialVerificationKernel
-            .verify_vds_nc(&barcode, &public_jwk)
+            .verify_vds_nc(barcode, public_jwk)
             .await;
         assert_eq!(facts.credential_proofs_valid, Some(true));
         assert_eq!(facts.trust_chain_valid, Some(true));

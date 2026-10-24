@@ -27,3 +27,7 @@ windows-sys = { version = "0.52", features = ["Win32_Foundation", "Win32_Storage
 [[bin]]
 name = "package-selfhost-bundle"
 path = "src/main.rs"
+
+[[bin]]
+name = "check-selfhost-secret-closure"
+path = "src/secret_closure_main.rs"

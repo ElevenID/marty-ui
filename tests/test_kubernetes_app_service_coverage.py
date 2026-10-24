@@ -7,8 +7,10 @@ imported protocol compliance corpus, which remains unchanged.
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from pathlib import Path
 
+import pytest
 import yaml
 
 
@@ -25,12 +27,15 @@ def _manifest_resources() -> list[dict]:
     ]
 
 
-def _resource_names(kind: str) -> set[str]:
-    return {
-        document["metadata"]["name"]
-        for document in _manifest_resources()
-        if document.get("kind") == kind
-    }
+def _production_resources(kind: str, resources: list[dict]) -> dict[str, dict]:
+    selected: dict[str, dict] = {}
+    for document in resources:
+        if document.get("kind") != kind or document["metadata"].get("namespace") != "marty-prod":
+            continue
+        name = document["metadata"]["name"]
+        assert name not in selected, f"Duplicate marty-prod {kind}: {name}"
+        selected[name] = document
+    return selected
 
 
 def _catalog_app_services() -> set[str]:
@@ -39,21 +44,16 @@ def _catalog_app_services() -> set[str]:
 
 
 def test_every_catalog_app_has_a_kubernetes_deployment() -> None:
-    assert _catalog_app_services() <= _resource_names("Deployment")
+    assert _catalog_app_services() <= _production_resources("Deployment", _manifest_resources()).keys()
 
 
 def test_every_request_serving_app_has_a_kubernetes_service() -> None:
     request_serving_apps = _catalog_app_services() - {"canvas-sync-worker"}
-    assert request_serving_apps <= _resource_names("Service")
+    assert request_serving_apps <= _production_resources("Service", _manifest_resources()).keys()
 
 
 def test_revocation_profile_uses_zero_downtime_rolling_updates() -> None:
-    deployment = next(
-        document
-        for document in _manifest_resources()
-        if document.get("kind") == "Deployment"
-        and document["metadata"]["name"] == "revocation-profile"
-    )
+    deployment = _production_resources("Deployment", _manifest_resources())["revocation-profile"]
 
     assert deployment["spec"]["strategy"] == {
         "type": "RollingUpdate",
@@ -62,11 +62,7 @@ def test_revocation_profile_uses_zero_downtime_rolling_updates() -> None:
 
 
 def test_new_internal_services_have_expected_ports_and_shared_state() -> None:
-    deployments = {
-        document["metadata"]["name"]: document
-        for document in _manifest_resources()
-        if document.get("kind") == "Deployment"
-    }
+    deployments = _production_resources("Deployment", _manifest_resources())
 
     revocation = deployments["revocation-profile"]["spec"]["template"]["spec"]["containers"][0]
     device = deployments["device-registration"]["spec"]["template"]["spec"]["containers"][0]
@@ -81,3 +77,42 @@ def test_new_internal_services_have_expected_ports_and_shared_state() -> None:
         "redis://redis:6379/5"
     )
     assert {port["containerPort"] for port in event_stream["ports"]} == {8015, 9015}
+
+
+@pytest.mark.parametrize("kind", ["Deployment", "Service"])
+def test_catalog_coverage_rejects_duplicate_production_resource(kind: str) -> None:
+    resources = _manifest_resources()
+    assert "gateway" in _production_resources(kind, resources)
+    gateway = next(
+        document
+        for document in resources
+        if document.get("kind") == kind and document["metadata"]["name"] == "gateway"
+    )
+    resources.append(deepcopy(gateway))
+    with pytest.raises(AssertionError, match=f"Duplicate marty-prod {kind}: gateway"):
+        _production_resources(kind, resources)
+
+
+@pytest.mark.parametrize("kind", ["Deployment", "Service"])
+def test_catalog_coverage_requires_production_namespace(kind: str) -> None:
+    resources = _manifest_resources()
+    required = _catalog_app_services()
+    if kind == "Service":
+        required.remove("canvas-sync-worker")
+    assert required <= _production_resources(kind, resources).keys()
+    gateway = next(
+        document
+        for document in resources
+        if document.get("kind") == kind and document["metadata"]["name"] == "gateway"
+    )
+    gateway["metadata"]["namespace"] = "other-synthetic-namespace"
+    assert not required <= _production_resources(kind, resources).keys()
+
+
+def test_catalog_coverage_ignores_unrelated_namespace_decoy() -> None:
+    resources = _manifest_resources()
+    gateway = _production_resources("Deployment", resources)["gateway"]
+    decoy = deepcopy(gateway)
+    decoy["metadata"]["namespace"] = "other-synthetic-namespace"
+    resources.append(decoy)
+    assert _production_resources("Deployment", resources)["gateway"] is gateway

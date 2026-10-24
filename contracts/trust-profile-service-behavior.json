@@ -29,6 +29,7 @@
     ["PATCH", "/v1/trust-profiles/{profile_id}/issuers/{issuer_id}"],
     ["DELETE", "/v1/trust-profiles/{profile_id}/issuers/{issuer_id}"],
     ["GET", "/internal/v1/trust-profiles/{profile_id}"],
+    ["GET", "/internal/v1/trust-profiles/{profile_id}/wallet-issuer-keys"],
     ["GET", "/internal/v1/resource-owners/trust-profiles/{profile_id}"],
     ["GET", "/internal/v1/resource-owners/issuer-entities/{issuer_entity_id}"],
     ["GET", "/v1/trust-frameworks"],

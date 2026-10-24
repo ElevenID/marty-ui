@@ -65,6 +65,7 @@ fn snapshot(auto: bool, strict: bool, fact_type: &str) -> CanvasLegacyApplicatio
             "credential_payload_format":"w3c_vcdm_v2_sd_jwt",
             "revocation_profile_id":"revocation-profile-1",
             "issuer_did":"did:web:issuer.example:orgs:org-1","issuer_algorithm":"ES256",
+            "claims":[],
             "wallet_configs":[],"selective_disclosure_fields":[],"zk_predicate_claims":[],
             "validity_rules":{"default_validity_days":365,"renewable":false,"renewal_window_days":30}
         }));

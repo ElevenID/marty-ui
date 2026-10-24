@@ -12,11 +12,13 @@ import uuid
 import pytest
 import yaml
 
-from services.passport_disposable_identity import issuer_did
+from scripts.passport_disposable_identity import issuer_did
 from scripts.check_passport_supported_producer_handoff import HandoffError, verify_handoff
 from scripts.passport_supported_infra_images import qualified_images
+from scripts.passport_remote_tls import PUBLIC_TLS_FILES
 from scripts.passport_supported_protected_producer import (
-    WORKFLOW_NAME, _application, _observe_bound_runtime, _remove_batch_state,
+    WORKFLOW_NAME, _application, _assert_disposable_schema,
+    _observe_bound_runtime, _remove_batch_state,
     produce_disposable_receipt,
 )
 from scripts.collect_passport_supported_acceptance import COMPOSE_FLAGS, COMPOSE_SERVICES
@@ -29,6 +31,25 @@ SOURCE = "a" * 40
 SERVICES = "ghcr.io/elevenid/marty-ui-oss/services@sha256:" + "b" * 64
 
 
+def write_bootstrap_output(args: list[str]) -> None:
+    if any(value.endswith(",dst=/work/output") for value in args):
+        mount = next(value for value in args if value.endswith(",dst=/work/output"))
+        output = Path(mount.removeprefix("type=bind,src=").removesuffix(
+            ",dst=/work/output"))
+        certificate = (Path(__file__).parents[1] / "rust/services/signing-keys/tests/fixtures"
+                       / "public_certificates/root-ca.pem").read_text(encoding="ascii")
+        for name in PUBLIC_TLS_FILES:
+            value = certificate if name.endswith("_cert") else f"hvs.synthetic-{name}-distinct-token"
+            (output / name).write_text(value, encoding="ascii")
+        return
+    mount = next(value for value in args if value.endswith(",dst=/work/secrets"))
+    output = Path(mount.removeprefix("type=bind,src=").removesuffix(
+        ",dst=/work/secrets"))
+    (output / "bao_token").write_text("hvs.producer-service-token")
+    (output / "callback_signer_bao_token").write_text("hvs.producer-callback-token")
+    (output / "notification_openbao_token").write_text("hvs.producer-notification-token")
+
+
 def test_producer_uses_frozen_synthetic_mrz_accepted_by_bureau() -> None:
     application = _application(29877)
     contract = json.loads((Path(__file__).parents[1] / "contracts"
@@ -37,6 +58,29 @@ def test_producer_uses_frozen_synthetic_mrz_accepted_by_bureau() -> None:
     assert application["mrz"] == frozen_mrz
     assert all(application["mrz"][field].strip()
                for field in ("line_1", "line_2"))
+
+
+def test_disposable_schema_gate_fails_closed_without_exposing_rows() -> None:
+    seen = []
+    record = {"containers": {"postgres": "c" * 64}}
+
+    def reject(args, environment, timeout):
+        seen.append((args, environment, timeout))
+        return False
+
+    with pytest.raises(ProducerError, match="private-key storage or is unavailable"):
+        _assert_disposable_schema(record, {"DOCKER_HOST": "local"}, reject)
+    args, environment, timeout = seen.pop()
+    assert args[:3] == ["docker", "exec", "c" * 64]
+    assert "ON_ERROR_STOP=1" in args
+    assert "issuer_signing_keys" in args[-1]
+    assert "jsonb_path_exists" in args[-1]
+    assert "private-key content storage" in args[-1]
+    assert "RAISE EXCEPTION" in args[-1]
+    assert environment == {"DOCKER_HOST": "local"} and timeout == 60
+    with pytest.raises(ProducerError, match="PostgreSQL container is unavailable"):
+        _assert_disposable_schema({"containers": {"postgres": "other"}}, {}, reject)
+    assert not seen
 
 
 def flow_receipt(final_native_id: str = "issuance-native") -> dict:
@@ -109,7 +153,6 @@ def plan(surface: str) -> dict:
         "expires_at": (NOW + timedelta(minutes=110)).isoformat(),
         "services_reference": SERVICES,
         "migrations_reference": "ghcr.io/elevenid/marty-ui-oss/migrations@sha256:" + "c" * 64,
-        "issuance_reference": "ghcr.io/elevenid/marty-credentials-issuance@sha256:" + "d" * 64,
         "infra_images": qualified_images(verify_registry=False),
         "owner_labels": {
             "com.marty.passport.acceptance.owner": "supported-consumer",
@@ -178,18 +221,14 @@ def test_producer_orders_real_gates_and_tears_down(
     prior_native_id = "f" * 64
     record = {"project": selected["project"],
               "containers": {"issuance-native": prior_native_id,
-                             "signing-keys": "signing-keys"}}
+                             "signing-keys": "signing-keys",
+                             "postgres": "c" * 64}}
 
     def run(args, env, timeout):
         calls.append(("run", args))
         assert env["DOCKER_HOST"] == "unix:///var/run/docker.sock"
         if args[:2] == ["docker", "run"]:
-            mount = next(value for value in args if value.endswith(",dst=/work/secrets"))
-            output = Path(mount.removeprefix("type=bind,src=").removesuffix(
-                ",dst=/work/secrets"))
-            (output / "bao_token").write_text("hvs.producer-service-token")
-            (output / "callback_signer_bao_token").write_text(
-                "hvs.producer-callback-token")
+            write_bootstrap_output(args)
         return True
 
     def setup(*args, **kwargs):
@@ -307,10 +346,17 @@ def test_producer_orders_real_gates_and_tears_down(
     assert commands[0][-9:] == ["up", "-d", "--no-deps", "--wait", "--wait-timeout", "120",
                                 "postgres", "redis", "openbao"]
     assert commands[1][:2] == ["docker", "run"]
+    assert commands[2][:2] == ["docker", "run"]
+    assert "/usr/local/bin/marty-passport-tls-bootstrap" in commands[2]
     if surface == "selfhost":
-        assert "selfhost-ceremony.yml" in " ".join(commands[2])
-        assert "--force-recreate" in commands[-1]
-        assert commands[-1][-2:] == ["gateway", "signing-keys"]
+        assert "selfhost-ceremony.yml" in " ".join(commands[3])
+        assert any("--force-recreate" in command and
+                   command[-2:] == ["gateway", "signing-keys"]
+                   for command in commands)
+    schema_checks = [command for command in commands
+                     if command[:2] == ["docker", "exec"] and "psql" in command]
+    assert len(schema_checks) == 2
+    assert all(command[2] == "c" * 64 for command in schema_checks)
     assert report["status"] == "blocked"
     assert report["rust_routes_verified"] is True
     assert report["signed_gateway_callback_verified"] is True
@@ -385,11 +431,7 @@ def test_invalid_route_proof_fails_and_cleans(tmp_path: Path,
 
     def run(args, env, timeout):
         if args[:2] == ["docker", "run"]:
-            mount = next(value for value in args if value.endswith(",dst=/work/secrets"))
-            output = Path(mount.removeprefix("type=bind,src=").removesuffix(
-                ",dst=/work/secrets"))
-            (output / "bao_token").write_text("hvs.producer-service-token")
-            (output / "callback_signer_bao_token").write_text("hvs.producer-callback-token")
+            write_bootstrap_output(args)
         return True
 
     with pytest.raises(ProducerError, match="route receipt is invalid"):
@@ -403,7 +445,8 @@ def test_invalid_route_proof_fails_and_cleans(tmp_path: Path,
             setup=setup_certificate(selected),
             record_live=lambda *args: {"project": selected["project"],
                                        "containers": {"signing-keys": "signing-keys",
-                                                      "issuance-native": "native"}},
+                                                      "issuance-native": "native",
+                                                      "postgres": "c" * 64}},
             recheck_signer=lambda *args: current_signer(),
             preflight_native=lambda *args, **kwargs: {
                 "native_container_id": "native", "native_batch_preflight_verified": True},
@@ -429,11 +472,7 @@ def test_failed_recreate_uses_plan_bound_partial_teardown(tmp_path: Path) -> Non
 
     def run(args, env, timeout):
         if args[:2] == ["docker", "run"]:
-            mount = next(value for value in args if value.endswith(",dst=/work/secrets"))
-            output = Path(mount.removeprefix("type=bind,src=").removesuffix(
-                ",dst=/work/secrets"))
-            (output / "bao_token").write_text("hvs.producer-service-token")
-            (output / "callback_signer_bao_token").write_text("hvs.producer-callback-token")
+            write_bootstrap_output(args)
         return True
 
     def fail_recreate(*args, **kwargs):
@@ -461,7 +500,8 @@ def test_failed_recreate_uses_plan_bound_partial_teardown(tmp_path: Path) -> Non
             setup=setup_certificate(selected),
             record_live=lambda *args: {"project": selected["project"],
                                        "containers": {"issuance-native": prior_native_id,
-                                                      "signing-keys": "signing-keys"}},
+                                                      "signing-keys": "signing-keys",
+                                                      "postgres": "c" * 64}},
             recheck_signer=lambda *args: current_signer(),
             preflight_native=lambda *args, **kwargs: {
                 "native_container_id": prior_native_id,
@@ -586,7 +626,7 @@ def test_hosted_handoff_binds_partial_receipt_to_plan(tmp_path: Path) -> None:
             "inspection_receipt_sha256": "f" * 64,
         },
         "runtime_edge": {"container_id": f"{7:064x}",
-                         "oci_reference": selected["infra_images"]["edge"],
+                         "oci_reference": selected["services_reference"],
                          "loopback_port": 29877},
         "blocker": "Live protected beta acceptance remains unproven",
     }

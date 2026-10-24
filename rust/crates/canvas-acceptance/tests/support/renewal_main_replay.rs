@@ -91,36 +91,61 @@ pub(super) async fn run(database_url: &str) {
     }))
     .await;
     let origin = format!("http://127.0.0.1:{}", peer.port);
-    let (http_listener, http_port) = reserve_port();
-    let (grpc_listener, grpc_port) = reserve_port();
-    let mut command = isolated_smoke_command(http_port, grpc_port);
-    command
-        .env("DATABASE_URL", database_url)
-        .env("ISSUANCE_API_KEY", API_KEY)
-        .env("GRPC_SERVICE_TOKEN", TOKEN)
-        .env("TOKEN_HMAC_KEY", "synthetic-renewal-main-hmac")
-        .env("ORG_GRPC_TARGET", &origin)
-        .env("CT_GRPC_TARGET", &origin)
-        .env("RP_GRPC_TARGET", &origin)
-        .env("CREDENTIAL_TEMPLATE_SERVICE_URL", &origin)
-        .env("REVOCATION_PROFILE_SERVICE_URL", &origin)
-        .env("SIGNING_KEYS_INTERNAL_URL", &origin)
-        .env(
-            "ISSUANCE_OFFER_TTL_MINUTES",
-            "999999999999999999999999999999",
-        );
-    drop((http_listener, grpc_listener));
-    let mut child = ChildGuard(command.spawn().unwrap());
     let client = bounded_http_client(Duration::from_secs(10));
-    assert_eq!(
-        tokio::time::timeout(
-            Duration::from_secs(10),
-            wait_for_health_with_client(http_port, &client)
-        )
-        .await
-        .unwrap(),
-        Some(json!({"status":"healthy","service":"issuance-service"}))
-    );
+    let expected_health = json!({"status":"healthy","service":"issuance-service"});
+    // The reserved port must be released before the child binds it. Another
+    // parallel fixture can claim that port in the gap; a generic healthy
+    // response then belongs to that fixture, not to this packaged process.
+    let (mut child, http_port) = {
+        let mut ready = None;
+        for attempt in 0..3 {
+            let (http_listener, http_port) = reserve_port();
+            let (grpc_listener, grpc_port) = reserve_port();
+            let mut command = isolated_smoke_command(http_port, grpc_port);
+            command
+                .env("DATABASE_URL", database_url)
+                .env("ISSUANCE_API_KEY", API_KEY)
+                .env("GRPC_SERVICE_TOKEN", TOKEN)
+                .env("TOKEN_HMAC_KEY", "synthetic-renewal-main-hmac")
+                .env("ORG_GRPC_TARGET", &origin)
+                .env("CT_GRPC_TARGET", &origin)
+                .env("RP_GRPC_TARGET", &origin)
+                .env("CREDENTIAL_TEMPLATE_SERVICE_URL", &origin)
+                .env("REVOCATION_PROFILE_SERVICE_URL", &origin)
+                .env("SIGNING_KEYS_INTERNAL_URL", &origin)
+                .env(
+                    "ISSUANCE_OFFER_TTL_MINUTES",
+                    "999999999999999999999999999999",
+                );
+            drop((http_listener, grpc_listener));
+            let mut child = ChildGuard(command.spawn().unwrap());
+            let health_result = tokio::time::timeout(Duration::from_secs(20), async {
+                loop {
+                    if let Some(value) = wait_for_health_with_client(http_port, &client).await {
+                        return Some(value);
+                    }
+                    if child.0.try_wait().unwrap().is_some() {
+                        return None;
+                    }
+                }
+            })
+            .await;
+            if health_result.as_ref().ok().and_then(|value| value.as_ref())
+                == Some(&expected_health)
+            {
+                ready = Some((child, http_port));
+                break;
+            }
+            assert!(
+                attempt < 2,
+                "packaged issuance did not become healthy after three owned port attempts (deadline exceeded: {}); observed health: {:?}; process status: {:?}",
+                health_result.is_err(),
+                health_result.ok().flatten(),
+                child.0.try_wait().unwrap()
+            );
+        }
+        ready.expect("the final port attempt must have reported its failure")
+    };
     let url = format!("http://127.0.0.1:{http_port}/v1/issued-credentials/{SOURCE}/renew");
     let initial = snapshot(&pool).await;
     for (key, tenant, status, detail) in [

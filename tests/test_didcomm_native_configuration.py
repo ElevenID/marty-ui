@@ -9,24 +9,44 @@ import yaml
 
 
 ROOT = Path(__file__).resolve().parents[1]
-AUTHCRYPT = "docker-compose.profile.didcomm-native-authcrypt.yml"
+AUTHCRYPT = "docker-compose.profile.issuance-native-authcrypt.yml"
 CONFORMANCE = "docker-compose.profile.didcomm-native-conformance.yml"
 
 
+@pytest.mark.parametrize(
+    "options, expected",
+    [({}, True), ({"create_host_path": False}, True),
+     ({"create_host_path": True}, False), ({"create_host_path": None}, False),
+     ({"create_host_path": "false"}, False), ({"create_host_path": 0}, False),
+     (None, False)],
+)
+def test_bind_no_create_uses_typed_compose_false_default(options, expected):
+    policy = runpy.run_path(
+        str(ROOT / "scripts/validate_beta_didcomm_configuration.py")
+    )
+    mount = {"type": "bind", "bind": options}
+    assert policy["bind_does_not_create_host_path"](mount) is expected
+    mount["type"] = "volume"
+    assert policy["bind_does_not_create_host_path"](mount) is False
+
+
 def _native_source(beta):
-    assert beta["services"]["issuance-native"] == {
-        "extends": {
-            "file": "docker-compose.service.issuance-native.yml",
-            "service": "issuance-native",
-        }
+    overlay = beta["services"]["issuance-native"]
+    assert set(overlay) == {"extends", "environment", "secrets"}
+    assert overlay["extends"] == {
+        "file": "docker-compose.service.issuance-native.yml",
+        "service": "issuance-native",
     }
     extraction = runpy.run_path(
         str(ROOT / "scripts/test_conformance_native_compose.py")
     )
-    return extraction["complete_common"](
+    native = extraction["complete_common"](
         yaml.safe_load((ROOT / extraction["COMMON"]).read_text()),
         yaml.safe_load((ROOT / extraction["RUNTIME"]).read_text()),
     )["services"]["issuance-native"]
+    native["environment"].update(overlay["environment"])
+    native["secrets"].extend(overlay["secrets"])
+    return native
 
 
 def test_beta_native_inherits_existing_resolver_and_endpoint_policy() -> None:
@@ -65,12 +85,12 @@ def test_beta_initiation_consumer_selection_preserves_other_owners() -> None:
     gate["assert_initiation_consumer_bindings"](model)
     assert "ISSUANCE_SERVICE_URL" not in beta["services"]["flow"]["environment"]
     base_flow = base["services"]["flow"]["environment"]
-    assert base_flow["ISSUANCE_GRPC_TARGET"] == "issuance-native:9005"
+    assert base_flow["ISSUANCE_GRPC_TARGET"] == "https://issuance-native:9005"
     assert base_flow["ISSUANCE_SERVICE_URL"] == "http://issuance:8005"
     assert base_flow["ISSUANCE_NATIVE_SERVICE_URL"] == "http://issuance-native:8005"
     production = yaml.safe_load((ROOT / "docker-compose.selfhost.prod.yml").read_text())
     assert production["services"]["flow"]["environment"]["ISSUANCE_GRPC_TARGET"] == (
-        "issuance-native:9005"
+        "https://issuance-native:9005"
     )
     assert production["services"]["flow"]["environment"]["ISSUANCE_SERVICE_URL"] == (
         "http://issuance:8005"
@@ -115,22 +135,50 @@ def test_initiation_binding_guard_rejects_consumer_drift(service, key, value) ->
 
 def test_native_authcrypt_mount_is_exact_read_only_and_explicit() -> None:
     overlay = yaml.safe_load((ROOT / AUTHCRYPT).read_text())
-    assert set(overlay) == {"services"}
+    base = yaml.safe_load((ROOT / "docker-compose.base.yml").read_text())
+    native_profile = yaml.safe_load(
+        (ROOT / "docker-compose.profile.issuance-native.yml").read_text()
+    )
+    assert set(overlay) == {"services", "x-native-issuance-policy"}
     assert set(overlay["services"]) == {"issuance-native"}
     native = overlay["services"]["issuance-native"]
-    assert set(native) == {"environment", "volumes"}
+    assert set(native) == {"environment", "volumes", "depends_on"}
     assert native["environment"] == {
-        "DIDCOMM_ENCRYPTION_POLICY_FILE": "/run/secrets/didcomm-authcrypt/didcomm-encryption-policy.json"
+        "DIDCOMM_ENCRYPTION_POLICY_FILE": "/run/secrets/didcomm-authcrypt/didcomm-encryption-policy.json",
     }
-    assert native["volumes"] == [
-        {
-            "type": "bind",
-            "source": "${DIDCOMM_ENCRYPTION_POLICY_DIR:?set DIDCOMM_ENCRYPTION_POLICY_DIR to an exact policy directory}",
-            "target": "/run/secrets/didcomm-authcrypt",
-            "read_only": True,
-            "bind": {"create_host_path": False},
-        }
+    assert [mount["target"] for mount in native["volumes"]] == [
+        "/run/secrets/didcomm-authcrypt/didcomm-encryption-policy.json",
     ]
+    assert native["volumes"][0]["read_only"] is True and native["volumes"][0][
+        "bind"
+    ] == {"create_host_path": False}
+    assert (
+        native["depends_on"]["openbao-init"]["condition"]
+        == "service_completed_successfully"
+    )
+    selected = native_profile["services"]["issuance-native"]
+    assert selected["environment"]["DIDCOMM_KMS_ADDR"] == "https://openbao:8200"
+    assert (
+        selected["environment"]["DIDCOMM_KMS_CA_CERT_FILE"] == "/bao/public-ca/ca.crt"
+    )
+    assert (
+        selected["environment"]["DIDCOMM_KMS_TOKEN_FILE"]
+        == "/bao/didcomm-issuance-token/token"
+    )
+    assert (
+        "openbao_didcomm_issuance_token:/bao/didcomm-issuance-token:ro"
+        in selected["volumes"]
+    )
+    assert (
+        base["services"]["openbao-init"]["environment"]["DIDCOMM_KMS_PLUGIN_REQUIRED"]
+        == "true"
+    )
+    assert (
+        base["services"]["openbao-init"]["environment"][
+            "BAO_DIDCOMM_ISSUANCE_TOKEN_FILE"
+        ]
+        == "/bao/didcomm-issuance-token/token"
+    )
 
 
 def test_native_conformance_trust_and_host_access_are_explicit() -> None:
@@ -176,10 +224,12 @@ def test_native_profiles_follow_the_explicit_conformance_owner() -> None:
     assert all(
         AUTHCRYPT not in part and CONFORMANCE not in part for part in legacy_command
     )
-    legacy = yaml.safe_load(
-        (ROOT / "docker-compose.profile.didcomm-authcrypt.yml").read_text()
-    )
-    assert set(legacy["services"]) == {"issuance"}
+    with pytest.raises(ValueError, match="requires the native"):
+        stack["compose_command"](
+            "marty-conformance-reference",
+            issuance_owner="legacy",
+            include_didcomm_authcrypt=True,
+        )
 
 
 def test_native_compose_gate_is_required_before_image_builds() -> None:
@@ -210,7 +260,7 @@ def test_configured_native_policy_retains_missing_issuer_fail_closed_guard() -> 
         encoding="utf-8"
     )
     loader = source.split("fn load_active_policy(", 1)[1].split(
-        "fn decode_sender_private_key(", 1
+        "fn preflight_plaintext(", 1
     )[0]
     assert "active.ok_or(NativeDidcommError::EncryptionPolicyUnavailable)" in loader
     assert "fn configured_policy_requires_the_active_issuer()" in source
@@ -219,39 +269,30 @@ def test_configured_native_policy_retains_missing_issuer_fail_closed_guard() -> 
 @pytest.mark.parametrize(
     "mutation", ("policy", "source", "writable", "auto-create", "unrelated-service")
 )
-def test_pairing_and_full_model_guards_reject_configuration_loss(mutation) -> None:
+def test_native_kms_and_full_model_guards_reject_configuration_loss(mutation) -> None:
     gate = runpy.run_path(str(ROOT / "scripts/test_didcomm_native_compose.py"))
-    previous = {
-        "services": {
-            "issuance": {
-                "environment": {
-                    "DIDCOMM_ENCRYPTION_POLICY_FILE": gate["POLICY_TARGET"]
-                    + "/didcomm-encryption-policy.json"
-                },
-                "volumes": [
-                    gate["mount"](gate["POLICY_DIRECTORY"], gate["POLICY_TARGET"])
-                ],
-            },
-            "issuance-native": {"environment": {}},
-            "gateway": {"environment": {"UNCHANGED": "synthetic"}},
-        },
-    }
+    _, _, previous = _source_initiation_model()
     expected = gate["expected_model"](previous, authcrypt=True, conformance=False)
-    gate["assert_native_policy_pairing"](expected)
+    gate["assert_native_kms_policy"](expected)
     actual = deepcopy(expected)
     native = actual["services"]["issuance-native"]
+    policy_mount = next(
+        item
+        for item in native["volumes"]
+        if item.get("target")
+        == "/run/secrets/didcomm-authcrypt/didcomm-encryption-policy.json"
+    )
     if mutation == "policy":
         native["environment"].pop("DIDCOMM_ENCRYPTION_POLICY_FILE")
     elif mutation == "source":
-        native["volumes"][0]["source"] = "synthetic-wrong-policy-directory"
+        policy_mount["source"] = "synthetic-wrong-policy-directory"
     elif mutation == "writable":
-        native["volumes"][0]["read_only"] = False
+        policy_mount["read_only"] = False
     elif mutation == "auto-create":
-        native["volumes"][0]["bind"]["create_host_path"] = True
+        policy_mount["bind"]["create_host_path"] = True
     else:
-        actual["services"]["gateway"]["environment"]["UNCHANGED"] = "changed"
+        actual["services"]["gateway"]["volumes"] = [deepcopy(policy_mount)]
     with pytest.raises(AssertionError):
         gate["assert_model"](actual, expected)
-    if mutation != "unrelated-service":
-        with pytest.raises(gate["DidcommConfigurationError"]):
-            gate["assert_native_policy_pairing"](actual)
+    with pytest.raises(gate["DidcommConfigurationError"]):
+        gate["assert_native_kms_policy"](actual)

@@ -17,12 +17,12 @@ ROOT = Path(__file__).resolve().parents[1]
 SHELL = shutil.which("pwsh") or shutil.which("powershell")
 
 
-def run_policy(body: str) -> subprocess.CompletedProcess[str]:
+def run_policy(body: str, policy_name: str = "runner-routing-label-policy.ps1") -> subprocess.CompletedProcess[str]:
     if SHELL is None:
         if os.environ.get("CI") == "true":
             pytest.fail("PowerShell is required to validate runner routing in CI")
         pytest.skip("PowerShell is unavailable on this test host")
-    policy = str(ROOT / "scripts" / "runner-routing-label-policy.ps1").replace("'", "''")
+    policy = str(ROOT / "scripts" / policy_name).replace("'", "''")
     command = f"$ErrorActionPreference = 'Stop'; . '{policy}'; {body}"
     encoded = base64.b64encode(command.encode("utf-16-le")).decode("ascii")
     return subprocess.run(
@@ -92,3 +92,85 @@ def test_new_runner_routing(labels: tuple[str, ...], expected_ok: bool) -> None:
         "Assert-NewRunnerRouting $registered 'passport-beta-wsl2'"
     )
     assert (result.returncode == 0) is expected_ok, result.stderr
+
+
+@pytest.mark.parametrize("available,expected_ok", [(80 * 1024**3, True), (80 * 1024**3 - 1, False)])
+def test_physical_capacity_boundary_uses_the_data_disk_volume(tmp_path: Path, available: int, expected_ok: bool) -> None:
+    disk = tmp_path / "controlled-data.vhdx"
+    disk.write_bytes(b"Controlled policy fixture, never a mounted virtual disk")
+    literal = str(disk).replace("'", "''")
+    body = (
+        "$global:measured = ''; "
+        "function Get-Volume { param([string]$FilePath) $global:measured=$FilePath; "
+        f"[PSCustomObject]@{{SizeRemaining=[UInt64]{available}}} "
+        "}; "
+        f"$result = Get-CanvasDockerBackingCapacity -DataDiskPath '{literal}'; "
+        "@{result=$result;measured=$global:measured} | ConvertTo-Json -Depth 4 -Compress"
+    )
+    result = run_policy(body, "runner-host-capacity-policy.ps1")
+    assert (result.returncode == 0) is expected_ok, result.stderr
+    if expected_ok:
+        response = json.loads(result.stdout)
+        assert Path(response["measured"]) == disk
+        assert response["result"]["production_demo_ready"] is False
+        assert response["result"]["physical_free_bytes"] == available
+    else:
+        assert "at least 80 GiB" in result.stderr
+
+
+@pytest.mark.parametrize("volume_expression", ["@()", "@(@{SizeRemaining=100GB},@{SizeRemaining=100GB})",
+                                                   "@{SizeRemaining=$null}", "@{SizeRemaining='100000000000'}",
+                                                   "@{SizeRemaining=$true}"])
+def test_unknown_or_ambiguous_physical_capacity_fails_closed(tmp_path: Path, volume_expression: str) -> None:
+    disk = tmp_path / "controlled-data.vhdx"
+    disk.write_bytes(b"Controlled policy fixture")
+    body = (f"function Get-Volume {{ param([string]$FilePath) {volume_expression} }}; "
+            f"Get-CanvasDockerBackingCapacity -DataDiskPath '{str(disk).replace(chr(39), chr(39)*2)}'")
+    result = run_policy(body, "runner-host-capacity-policy.ps1")
+    assert result.returncode != 0
+    assert "Cannot establish physical free space" in result.stderr
+
+
+@pytest.mark.parametrize('available,image_size,expected_ok', [
+    (20 * 1024**3, 3 * 1024**3, True),
+    (20 * 1024**3 - 1, 3 * 1024**3, False),
+    (29 * 1024**3, 15 * 1024**3, False),
+    (30 * 1024**3, 15 * 1024**3, True),
+    (80 * 1024**3, 0, False),
+])
+def test_prebuilt_runtime_capacity_uses_physical_image_bounded_reserve(tmp_path, available, image_size, expected_ok):
+    disk = tmp_path / 'controlled-data.vhdx'
+    disk.write_bytes(b'Policy fixture, never mounted')
+    literal = str(disk).replace("'", "''")
+    body = ('function Get-Volume { param([string]$FilePath) '
+            f'[PSCustomObject]@{{SizeRemaining=[UInt64]{available}}} }}; '
+            f"Get-CanvasDockerBackingCapacity -DataDiskPath '{literal}' -Mode PrebuiltRuntime "
+            f'-PrebuiltImageSizeBytes {image_size} | ConvertTo-Json -Compress')
+    result = run_policy(body, 'runner-host-capacity-policy.ps1')
+    assert (result.returncode == 0) is expected_ok, result.stderr
+    if expected_ok:
+        proof = json.loads(result.stdout)
+        assert proof['required_free_bytes'] == max(20 * 1024**3, 2 * image_size)
+        assert proof['capacity_mode'] == 'PrebuiltRuntime'
+
+
+def test_low_backing_capacity_prevents_wsl_and_github_registration(tmp_path: Path) -> None:
+    disk = tmp_path / "controlled-data.vhdx"
+    disk.write_bytes(b"Controlled policy fixture")
+    wrapper = str(ROOT / "scripts/register-canvas-oss-runner.ps1").replace("'", "''")
+    body = (
+        f"$env:ProgramData='{str(tmp_path).replace(chr(39), chr(39)*2)}'; "
+        "$global:calls=@(); "
+        "function gh { if (($args -join ' ') -ne 'auth status') {throw 'UNEXPECTED_GITHUB_OPERATION'}; "
+        "$global:calls+='auth-status'; $global:LASTEXITCODE=0 }; "
+        "function wsl.exe {$global:calls+='wsl'; throw 'WSL_MUST_NOT_BE_REACHED'}; "
+        "function Get-Volume { param([string]$FilePath) [PSCustomObject]@{SizeRemaining=1GB} }; "
+        f"try {{ & '{wrapper}' -DockerDesktopDataDiskPath '{str(disk).replace(chr(39), chr(39)*2)}'; "
+        "throw 'EXPECTED_CAPACITY_REJECTION' } catch { "
+        "@{reason=$_.Exception.Message;calls=$global:calls} | ConvertTo-Json -Compress }"
+    )
+    result = run_policy(body)
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert "at least 80 GiB" in payload["reason"]
+    assert payload["calls"] == ["auth-status"]

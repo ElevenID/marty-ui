@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import hmac
 import json
 from pathlib import Path
 import re
@@ -225,6 +224,19 @@ def verify(plan: dict[str, Any], intent: dict[str, Any],
     verify_production(plan, intent, expected_production_attachments_sha256, runner)
     old = plan.get("old_container_ids_by_service")
     targets = plan.get("target_services")
+    optional_bridge = "issuance-canvas-localhost-bridge"
+    generation = intent.get("beta_generation")
+    require(isinstance(generation, list)
+            and not any(isinstance(item, dict) and item.get("service") == optional_bridge
+                        for item in generation)
+            and isinstance(old, dict) and optional_bridge not in old
+            and isinstance(targets, list) and optional_bridge not in targets
+            and all(isinstance(plan.get(group), list)
+                    and optional_bridge not in plan[group] for group in (
+                "preserved_infrastructure", "restart_infrastructure",
+                "restart_ingress_last", "recreate_applications",
+                "recreate_ingress_last")),
+            "Optional Canvas localhost bridge survived in signed beta plan")
     require(isinstance(old, dict) and isinstance(targets, list)
             and old.get("postgres") == plan.get("postgres_container_id")
             and set(targets) == (set(old) - {"postgres"})
@@ -236,6 +248,8 @@ def verify(plan: dict[str, Any], intent: dict[str, Any],
         name = record["Config"]["Labels"]["com.docker.compose.service"]
         require(name not in observed, "Aggregate beta service is duplicated")
         observed[name] = record
+    require(optional_bridge not in observed,
+            "Optional Canvas localhost bridge survived aggregate beta deployment")
     require(set(observed) == set(targets) | {"postgres"}
             and observed["postgres"]["Id"] == old["postgres"],
             "Aggregate beta generation differs from signed plan")
@@ -284,8 +298,7 @@ def verify(plan: dict[str, Any], intent: dict[str, Any],
         else:
             require(record["Id"] != old.get(name),
                     "Stopped beta application was restarted instead of replaced")
-            expected = (plan["issuance_image"] if name == "issuance"
-                        else plan["services_image"])
+            expected = plan["services_image"]
             require(config.get("Image") == expected,
                     "Aggregate beta runtime image differs from signed release")
             expected_hashes = plan.get("service_config_hashes")
@@ -335,14 +348,31 @@ def verify(plan: dict[str, Any], intent: dict[str, Any],
     signer_env = observed["passport-callback-signer"]["Config"].get("Env")
     require(isinstance(bao_env, list) and isinstance(signer_env, list),
             "Aggregate callback KMS environment is invalid")
-    bao_tokens = [value.split("=", 1)[1] for value in bao_env
-                  if isinstance(value, str) and value.startswith("BAO_DEV_ROOT_TOKEN_ID=")]
-    signer_tokens = [value.split("=", 1)[1] for value in signer_env
-                     if isinstance(value, str) and value.startswith("BAO_TOKEN=")]
-    require(len(bao_tokens) == 1 and len(signer_tokens) == 1
-            and bool(bao_tokens[0])
-            and hmac.compare_digest(bao_tokens[0], signer_tokens[0]),
-            "Aggregate callback signer token differs from preserved OpenBao")
+    signer_values = dict(value.split("=", 1) for value in signer_env
+                         if isinstance(value, str) and "=" in value)
+    def mounted(container, name, destination, writable):
+        return any(isinstance(mount, dict)
+                   and mount.get("Type") == "volume"
+                   and mount.get("Name") == f"elevenid-beta_{name}"
+                   and mount.get("Destination") == destination
+                   and mount.get("RW") is writable
+                   for mount in container.get("Mounts", []))
+    require(not any(isinstance(value, str) and
+                    value.startswith(("BAO_DEV_ROOT_TOKEN_ID=", "BAO_TOKEN=", "VAULT_TOKEN="))
+                    for value in bao_env)
+            and observed["openbao"]["Config"].get("Cmd")
+                == ["server", "-config=/bao/config/openbao.hcl"]
+            and mounted(observed["openbao"], "openbao_data", "/bao/data", True)
+            and signer_values.get("BAO_ADDR") == "https://openbao:8200"
+            and signer_values.get("BAO_CACERT") == "/bao/public-ca/ca.crt"
+            and signer_values.get("BAO_TOKEN_FILE") == "/bao/passport-callback/token"
+            and not any(signer_values.get(name) for name in
+                        ("BAO_TOKEN", "OPENBAO_SERVICE_TOKEN", "OPENBAO_SERVICE_TOKEN_FILE"))
+            and mounted(observed["passport-callback-signer"], "openbao_public_ca",
+                        "/bao/public-ca", False)
+            and mounted(observed["passport-callback-signer"], "openbao_passport_callback",
+                        "/bao/passport-callback", False),
+            "Aggregate callback signer is not bound to scoped Raft KMS custody")
     require(not observed["passport-callback-signer"].get(
         "HostConfig", {}).get("PortBindings"),
         "Aggregate callback signer publishes a host port")

@@ -1,4 +1,4 @@
-use std::{error::Error, sync::Arc};
+use std::{error::Error, future::Future, pin::Pin, sync::Arc};
 
 use marty_flow::{
     flow_proto::flow_service_server::FlowServiceServer, flow_read_router, run_callback_dispatcher,
@@ -9,6 +9,7 @@ use marty_flow::{
 };
 use tokio::{net::TcpListener, sync::watch};
 use tokio_stream::wrappers::TcpListenerStream;
+use tokio_stream::StreamExt;
 use tonic::transport::Server;
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
@@ -39,6 +40,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
     verification.callback_max_attempts = callback_config.max_attempts;
 
     let http_state = FlowHttpState {
+        service_authenticator: config
+            .service_token
+            .clone()
+            .map(|token| {
+                mmf_security::ServiceTokenAuthenticator::new(Some(token), true).map(Arc::new)
+            })
+            .transpose()?,
         repository: connections.repository.clone(),
         providers: Arc::clone(&connections.providers),
         public_base_url: config.public_base_url.clone(),
@@ -81,22 +89,38 @@ async fn main() -> Result<(), Box<dyn Error>> {
     );
     let (health_reporter, health_service) = tonic_health::server::health_reporter();
     let flow_server = FlowServiceServer::new(grpc_service);
-    let mut grpc_builder = Server::builder();
-    if let Some(tls) = grpc_security.server_tls_config() {
-        grpc_builder = grpc_builder.tls_config(tls)?;
-    }
+    let tls_acceptor = grpc_security.server_tls_acceptor().await?;
     let (listener_shutdown_tx, listener_shutdown_rx) = watch::channel(false);
     let mut http_shutdown = listener_shutdown_rx.clone();
     let mut grpc_shutdown = listener_shutdown_rx;
     let http = http.with_graceful_shutdown(async move {
         wait_for_shutdown(&mut http_shutdown).await;
     });
-    let grpc = grpc_builder
+    let router = Server::builder()
         .add_service(health_service)
-        .add_service(flow_server)
-        .serve_with_incoming_shutdown(TcpListenerStream::new(grpc_listener), async move {
-            wait_for_shutdown(&mut grpc_shutdown).await;
-        });
+        .add_service(flow_server);
+    let grpc: Pin<Box<dyn Future<Output = Result<(), tonic::transport::Error>> + Send>> =
+        if let Some(acceptor) = tls_acceptor {
+            let incoming = TcpListenerStream::new(grpc_listener).then(move |connection| {
+                let acceptor = acceptor.clone();
+                async move {
+                    match connection {
+                        Ok(stream) => acceptor.accept(stream).await,
+                        Err(error) => Err(error),
+                    }
+                }
+            });
+            Box::pin(router.serve_with_incoming_shutdown(incoming, async move {
+                wait_for_shutdown(&mut grpc_shutdown).await;
+            }))
+        } else {
+            Box::pin(
+                router.serve_with_incoming_shutdown(
+                    TcpListenerStream::new(grpc_listener),
+                    async move { wait_for_shutdown(&mut grpc_shutdown).await },
+                ),
+            )
+        };
 
     runtime.activate()?;
     health_reporter

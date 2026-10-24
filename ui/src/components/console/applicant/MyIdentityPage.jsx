@@ -15,6 +15,7 @@
 
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useSearchParams } from 'react-router';
+import { LOGOUT_STARTED_EVENT } from '../../../services/authEvents';
 import {
   Box,
   Avatar,
@@ -685,8 +686,10 @@ function MyIdentityPage() {
   // --- Data loading ---
   useEffect(() => {
     let cancelled = false;
+    const controller = new AbortController();
 
     const load = async (showLoading = true) => {
+      if (cancelled) return;
       try {
         if (showLoading) {
           setLoading(true);
@@ -694,8 +697,8 @@ function MyIdentityPage() {
         }
 
         const [credentialResult, applicationResult] = await Promise.allSettled([
-          getMyCredentials(),
-          getMyApplications({ limit: 100 }),
+          getMyCredentials({}, { signal: controller.signal }),
+          getMyApplications({ limit: 100 }, { signal: controller.signal }),
         ]);
 
         if (cancelled) return;
@@ -761,11 +764,17 @@ function MyIdentityPage() {
     const interval = setInterval(() => load(false), 15000);
     const onFocus = () => load(false);
     window.addEventListener('focus', onFocus);
-
-    return () => {
+    const stop = () => {
       cancelled = true;
+      controller.abort();
       clearInterval(interval);
       window.removeEventListener('focus', onFocus);
+    };
+    window.addEventListener(LOGOUT_STARTED_EVENT, stop);
+
+    return () => {
+      stop();
+      window.removeEventListener(LOGOUT_STARTED_EVENT, stop);
     };
   }, [retryCount]);
 

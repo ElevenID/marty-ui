@@ -32,6 +32,10 @@ use crate::{
 #[path = "canvas_operation_http_prepared_tests.rs"]
 mod prepared_tests;
 
+#[cfg(test)]
+#[path = "canvas_operation_socket_test_io.rs"]
+pub(crate) mod socket_test_io;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum CanvasOperationHttpError {
     #[error("Provider origin is unavailable or disallowed")]
@@ -577,10 +581,10 @@ mod tests {
     // Invoked only by the owned TLS fixture; the mandatory CI invocation verifies
     // its single observation for every frozen published socket case.
     #[tokio::test]
+    #[ignore = "requires the owned loopback TLS and historical socket fixture"]
     async fn native_socket_case() {
-        let Ok(raw) = std::env::var("MARTY_CANVAS_TIMEOUT_NATIVE_CASE") else {
-            return;
-        };
+        let raw = std::env::var("MARTY_CANVAS_TIMEOUT_NATIVE_CASE")
+            .unwrap_or_else(|_| panic!("owned native Canvas socket case is absent"));
         let case: Value = serde_json::from_str(&raw).unwrap();
         let origin = std::env::var("MARTY_CANVAS_TIMEOUT_NATIVE_ORIGIN").unwrap();
         assert!(origin.starts_with("https://127.0.0.1:"));

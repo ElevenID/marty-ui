@@ -8,8 +8,9 @@
 #
 # Infrastructure services (postgres, redis, keycloak, mailpit) come from
 # docker-compose.base.yml. Every inherited host publication is loopback-only;
-# public traffic must enter through a governed edge proxy/tunnel. Only
-# application images and builds are overridden here.
+# public traffic must enter through a governed edge proxy/tunnel. The OpenBao
+# plugin image is pinned here too; it contains the TLS initializer and DIDComm
+# engine required by the base KMS graph.
 
 x-service-image: &service-image
   image: ${MARTY_SERVICES_IMAGE:?set MARTY_SERVICES_IMAGE to an immutable digest}
@@ -17,6 +18,28 @@ x-service-image: &service-image
   build: !reset null
 
 services:
+  openbao-tls-init: &openbao-plugin-image
+    image: ${MARTY_OPENBAO_DIDCOMM_IMAGE:?set MARTY_OPENBAO_DIDCOMM_IMAGE to an immutable plugin image digest}
+    pull_policy: always
+    build: !reset null
+
+  openbao:
+    <<: *openbao-plugin-image
+    build: !reset null
+
+  openbao-init:
+    <<: *openbao-plugin-image
+    build: !reset null
+
+  oidf-tls-proxy:
+    <<: *service-image
+    # Compose 2.38 does not preserve !reset inherited through an alias.
+    build: !reset null
+
+  envoy-issuance-bridge:
+    <<: *service-image
+    build: !reset null
+
   ui:
     image: ${MARTY_UI_IMAGE:?set MARTY_UI_IMAGE to an immutable UI image digest}
     pull_policy: always
@@ -44,6 +67,12 @@ services:
     entrypoint: ["/app/services/entrypoint.sh"]
     environment:
       SERVICE_NAME: verification
+
+  issuance-migrations:
+    <<: *service-image
+    build: !reset null
+    environment:
+      SERVICE_NAME: issuance_native
 
   revocation-profile-migrate:
     <<: *service-image
@@ -124,10 +153,16 @@ services:
       SERVICE_NAME: flow
 
   issuance:
-    image: ${MARTY_ISSUANCE_IMAGE:?set MARTY_ISSUANCE_IMAGE to an immutable issuance image digest}
-    pull_policy: always
+    <<: *service-image
+    build: !reset null
     environment:
-      SERVICE_NAME: issuance
+      SERVICE_NAME: issuance_native
+
+  issuance-native:
+    <<: *service-image
+    build: !reset null
+    environment:
+      SERVICE_NAME: issuance_native
 
   canvas-sync-worker:
     <<: *service-image

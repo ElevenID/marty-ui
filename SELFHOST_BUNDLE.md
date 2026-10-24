@@ -5,31 +5,50 @@ This bundle is the image-based distribution for the open-source self-host stack.
 ## What is inside the bundle
 
 - `docker-compose.yml` as the generated image-based runtime compose file operators should run
+- `docker-compose.selfhost.openbao.yml` with the Go DIDComm plugin image for the separate OpenBao Raft project
 - `.env.selfhost.production.example` with the non-secret settings contract
 - `docker/secrets/selfhost.example` as the tracked placeholder secret set
 - `config/keycloak` for the realm import and theme assets
 - `scripts/bootstrap-selfhost-vault.sh` as the operator helper for configuring an external Vault/OpenBao instance and minting the scoped runtime token
+- `scripts/generate_selfhost_disposable_credentials.py` for seventeen local-only disposable text credentials; it does not generate KMS, workload TLS, or integration secrets
+- `scripts/provision_selfhost_keycloak_kms.py` and its small HTTPS client for seven disposable Keycloak remote-key inputs; these require an already-running HTTPS OpenBao with the DIDComm plugin
+- `scripts/provision_selfhost_disposable_tls.py` and its public-output validator for 31 keyless workload TLS inputs; it uses the exact locked services image and a separate disposable OpenBao project
+- `scripts/provision_selfhost_snapshot_identity.py` and `scripts/export-selfhost-openbao.py` for a separate snapshot-read-only AppRole and rootless Raft archives; keep unseal material outside the archive
+- `scripts/provision_selfhost_snapshot_rotator.py` for rootless SecretID rotation under a distinct role that cannot read snapshots
+- `scripts/check_selfhost_root_retirement.py` for a non-retiring audit of both active and rollback KMS generations before any initial-root revocation
 - the runtime `docker/*` and `scripts/*` files still mounted by the compose stack
 
 ## Image contract
 
 The bundle is an image-only packaging format. Its image roles must be published
 and qualified together before a customer installation; the packager does not
-produce them. The v1.1.231 public release publishes `ui`, `services`, and
-`migrations` OSS images, but not this bundle's `ui-selfhost`, `db-migrate`, or
-`cloudflared-wrapper` roles. Do not treat that release as a ready-to-install
-self-host bundle.
+produce them. Experimental tester bundles, when published on the
+[releases page](https://github.com/ElevenID/marty-ui/releases), carry their own
+source-bound tester guide and checksums. Use the guide attached to the **same**
+preview as the ZIP; do not substitute a newer stable Stack release or another
+preview's source. No preview is a qualified self-host product.
 
 - `SELFHOST_IMAGE_PREFIX=ghcr.io/elevenid/marty-ui`
 - `SELFHOST_IMAGE_TAG=<released-version>`
 
-The intended UI role is `ui-selfhost`, excluding the public marketing and blog
-surface. It is not among the v1.1.231 public images.
+The distinct `ui-selfhost` image has a build-time public profile: `tester`
+(the opt-in preparation default) hides Pricing, developer/documentation and
+Demo navigation plus the public start-verifying CTA; `full` retains them for a
+future release with those destinations qualified. Both profiles retain the
+home/product informational pages and their translation files. The selected
+profile is recorded on the image label and its digest is bound by the lock.
+Neither profile changes authenticated product features. An image reference in
+an internal prepared lock does not qualify the role for customer installation.
 
 Set `SELFHOST_IMAGE_TAG` to the released immutable version you want to run. Do not use `latest` or `--build` with the bundle.
 For a digest-pinned bundle produced with `--image-lock`, the rendered Compose
 images no longer use `SELFHOST_IMAGE_TAG` or `MARTY_ISSUANCE_IMAGE`; the
 qualified image lock supplies those references instead.
+The same lock pins all four services in `docker-compose.selfhost.openbao.yml` to
+its `openbao_didcomm_image` digest. Start this separate project with the same
+external state and secret directories when using the bundled OpenBao backend;
+the main Compose project does not start OpenBao for you. The release must
+qualify both projects together before this is a supported KMS-only install.
 
 Use the image artifacts and verification evidence from the release workflow, then
 stage this bundle with `make package-selfhost-bundle` (Rust 1.95.0 and Docker
@@ -48,7 +67,8 @@ Compose service to an exact `registry/path@sha256:<64 lowercase hex>` reference.
 The JSON must use schema `marty.selfhost-image-lock/v1`, a `release` matching
 `release/stack-lock.json`, and a `services` object keyed by every rendered
 Compose service name. Packaging rejects missing/extra services, mutable image
-references, and a release mismatch, then includes the lock in the bundle as
+references, a missing exact `openbao_didcomm_image`, and a release mismatch,
+then includes the lock in the bundle as
 `.marty-selfhost-images.json`. This is a binding mechanism, not a qualification
 claim: the release process must first verify the image digests, provenance,
 signatures, licensing, and clean installed stack. No current public release
@@ -91,10 +111,82 @@ remain external; packaging does not load their values.
 	If the same stack also serves a secondary UI hostname, set `UI_ADDITIONAL_BASE_URLS` and include the same origin in `CORS_ORIGINS`; otherwise social-login callbacks from that host will fall back to `UI_BASE_URL`. Do not add a beta/staging hostname here when it has its own stack and Keycloak.
 3. Copy `docker/secrets/selfhost.example` to a directory outside the bundle and set `SELFHOST_SECRET_DIR` to that directory.
 4. Replace every required secret placeholder file.
-5. Run `scripts/bootstrap-selfhost-vault.sh` with a bootstrap `BAO_TOKEN` or `BAO_TOKEN_FILE` to configure the external Vault/OpenBao instance and write `openbao_service_token`, or place an equivalent least-privilege token in `SELFHOST_SECRET_DIR` yourself:
+   For a disposable tester installation, you may instead begin with an empty,
+   owner-private secret directory outside the bundle and run
+   `python3 scripts/generate_selfhost_disposable_credentials.py --secret-root /path/to/selfhost-secrets`
+   on Linux or a Linux WSL filesystem; native Windows cannot enforce the required private file modes.
+   It creates only seventeen local text credentials and refuses to overwrite
+   files. It writes them at `0600` before setting their final mode to `0444`;
+   the `0700` host directory keeps them private while distinct non-root
+   container UIDs can read their Compose-mounted files. Provision all remaining
+   required certificates, scoped tokens, and integration values separately;
+   this helper does not make a bundle qualified or ready to start. Never use
+   its disposable credentials for a production install.
+5. Run `scripts/bootstrap-selfhost-vault.sh` with a bootstrap `BAO_TOKEN` or `BAO_TOKEN_FILE` to configure the external Vault/OpenBao instance and write separate `openbao_service_token`, HAIP workload, and short-lived `openbao_bootstrap_token` secrets, or provision equivalent scoped tokens in `SELFHOST_SECRET_DIR` yourself. The helper keeps the host secret directory private (0700) and makes individual file-backed secrets readable by the stack's different non-root container UIDs (0444). The bootstrap token is used only by the explicit one-time `kms-initialize` role, never by ordinary database migrations or restarts:
+
+   For the bundled Raft-backed OpenBao Compose project, start `openbao`,
+   run `openbao-bootstrap` once against fresh state, then start `openbao-unseal`.
+   `openbao-bootstrap` is in the `kms-init` profile and is not part of a normal
+   `up -d`. The unseal service watches the durable Raft state and unseals
+   initialized OpenBao after subsequent server restarts using its KMS-owned
+   unseal file. It has no application secrets mount or root-token dependency.
+   Do not rerun bootstrap on a restart.
+
+```bash
+docker compose --env-file .env.selfhost.production.local -f docker-compose.selfhost.openbao.yml up -d openbao
+docker compose --env-file .env.selfhost.production.local -f docker-compose.selfhost.openbao.yml run --rm --no-deps openbao-bootstrap
+docker compose --env-file .env.selfhost.production.local -f docker-compose.selfhost.openbao.yml up -d openbao-unseal
+```
+
+   For a disposable tester install, provision the seven Keycloak remote-key
+   inputs into the **same** private `SELFHOST_SECRET_DIR` after the DIDComm
+   plugin is mounted. Set `SELFHOST_KEYCLOAK_OUTPUT_DIR` to that directory and
+   provide `BAO_ADDR`, `BAO_CACERT`, and an operator-owned `BAO_ROOT_TOKEN_FILE`.
+   On Linux or a Linux WSL filesystem with Python 3 and OpenSSL installed, run
+   `python3 scripts/provision_selfhost_keycloak_kms.py`; it refuses to
+   overwrite any of its seven targets and writes files readable by the stack's
+   non-root containers. This remains a disposable, unqualified setup path.
+   Keycloak and the workload TLS bootstrap request eight-hour credentials;
+   the Keycloak helper rejects a shorter-than-seven-hour issued token or
+   certificate. Treat **seven hours as an upper bound, not a guaranteed
+   operating window**: OpenBao may cap other workload TLS leases sooner, so
+   inspect their actual expiry and stop at the earliest one. This is not a
+   continuously running installation. The read-only expiry check in
+   `docs/selfhost-disposable-qualification-runbook.md` prints the earliest
+   workload TLS expiry without exposing token values. Before another session, stop the
+   Compose stack and its external disposable OpenBao, discard their disposable
+   state and secret roots, and start with fresh roots and a new OpenBao
+   bootstrap. Do not delete or replace live secret files, rerun this helper
+   against its existing `keycloak-pki/` mount, or claim in-place renewal.
+
+   On Linux, the disposable workload TLS helper can stage 31 public
+   certificates and scoped tokens from the same running OpenBao project. It
+   requires `sudo` to read the project's private root token and uses the
+   services image digest from `.marty-selfhost-images.json`. Provide the exact
+   OpenBao Compose project created by the preview starter and its state
+   directory (which contains `root.token` and `tls/ca.crt`):
+
+```bash
+private_root=/path/to/operator-private/new-run
+openbao_project=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["project"])' \
+  "$private_root/openbao.json")
+sudo python3 scripts/provision_selfhost_disposable_tls.py \
+  --secret-root /path/to/selfhost-secrets \
+  --openbao-state-root /path/to/openbao-state \
+  --openbao-project "$openbao_project"
+```
+
+   The helper verifies the project's running OpenBao container, locked plugin
+   image and state mount, then runs the locked Rust bootstrap on the private
+   Compose network. It refuses existing TLS targets and does not copy the
+   root token or private workload keys into the stack secret directory.
+
+   The separate `bootstrap-selfhost-vault.sh` helper runs OpenBao 2.7.1 by its immutable multi-architecture image digest (`quay.io/openbao/openbao@sha256:6d2b93856e3fcf7b18ad855a0b51eaba474dc8b79cf554379ea32034797d2acf`). This pins the helper executable, not the external OpenBao server or a qualified installed-bundle release.
+   On Linux the helper runs that CLI container as the invoking UID:GID so it can write scoped token files into a caller-owned secret directory. It restricts the output directory to mode `0700`, writes each temporary token file at `0600`, then atomically replaces any example placeholder and sets the final file to `0444` for the stack's non-root readers; existing readers of a placeholder cannot observe the new token. Do not make the secret directory world-writable or use symlinked output paths.
 
 ```bash
 BAO_ADDR=https://vault.example.com \
+BAO_CACERT=/path/to/public-vault-ca.crt \
 BAO_TOKEN_FILE=/path/to/bootstrap.token \
 SELFHOST_SECRET_DIR=/path/to/selfhost-secrets \
 ./scripts/bootstrap-selfhost-vault.sh
@@ -106,7 +198,19 @@ SELFHOST_SECRET_DIR=/path/to/selfhost-secrets \
 docker compose --env-file .env.selfhost.production.local pull
 ```
 
-7. Start the stack:
+7. On a fresh installation, run the rootless database migration, verify that
+   `db-migrate` exited zero, and explicitly provision KMS/DID keys once. The
+   privileged initializer is confined to the `kms-init` profile and is not
+   part of an ordinary `up -d`:
+
+```bash
+docker compose --env-file .env.selfhost.production.local up -d db-migrate
+docker compose --env-file .env.selfhost.production.local ps --all db-migrate
+docker compose --env-file .env.selfhost.production.local run --rm --no-deps kms-initialize
+```
+
+8. Start the stack. Later restarts use this command without re-running the
+   privileged initializer:
 
 ```bash
 docker compose --env-file .env.selfhost.production.local up -d
@@ -134,10 +238,13 @@ docker compose --env-file .env.selfhost.production.local \
 ```
 
 Compose should report the worker as disabled. This is a configuration preview,
-not a qualified no-Canvas product: issuance still carries Canvas secret,
-migration, and code dependencies. Do not use the overlay for an existing Canvas
-installation. Production use and a default switch require a pre-up migration
-check, no-Canvas startup/business evidence, and a rehearsed upgrade/rollback.
+not a qualified no-Canvas product: the overlay removes the Canvas shared secret
+from the two issuance services and forces Canvas features off, but issuance
+still carries Canvas code and migration dependencies. Do not use the overlay
+for an existing Canvas installation, or combine it with `--profile canvas` to
+enable Canvas; use the default bundle for that installation. Production use and
+a default switch require a pre-up migration check, no-Canvas startup/business
+evidence, and a rehearsed upgrade/rollback.
 
 ## Notes
 

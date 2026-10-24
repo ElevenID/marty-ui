@@ -61,6 +61,7 @@ impl Oid4vciManagementRepository for PostgresOid4vciManagementRepository {
         &self,
         client: &RegisteredClientWrite,
     ) -> Result<(), Oid4vciManagementRepositoryError> {
+        reject_private_client(client)?;
         sqlx::query(UPSERT_REGISTERED_CLIENT)
             .bind(&client.organization_id)
             .bind(&client.client_id)
@@ -175,9 +176,33 @@ fn repository_error(error: impl std::fmt::Display) -> Oid4vciManagementRepositor
     Oid4vciManagementRepositoryError
 }
 
+fn reject_private_client(
+    client: &RegisteredClientWrite,
+) -> Result<(), Oid4vciManagementRepositoryError> {
+    if marty_key_material_policy::contains_private_key(&client.jwks) {
+        return Err(Oid4vciManagementRepositoryError);
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn direct_registered_client_write_rejects_private_jwks() {
+        let mut client = RegisteredClientWrite {
+            organization_id: "org-a".into(),
+            client_id: "client-a".into(),
+            jwks: json!({"keys": [{"kty": "EC", "crv": "P-256", "d": "synthetic"}]}),
+            redirect_uris: vec![],
+            active: true,
+        };
+        assert!(reject_private_client(&client).is_err());
+        client.jwks = json!({"keys": [{"kty": "EC", "crv": "P-256", "x": "public"}]});
+        assert!(reject_private_client(&client).is_ok());
+    }
 
     #[test]
     fn writes_preserve_created_at_and_revocation_is_ordered_after_credential_work() {

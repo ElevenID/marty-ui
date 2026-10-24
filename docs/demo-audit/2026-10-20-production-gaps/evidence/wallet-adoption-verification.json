@@ -1,0 +1,126 @@
+{
+  "schemaVersion": 1,
+  "kind": "demo-wallet-session-adoption-verification",
+  "verifiedAt": "2026-10-20T04:26:54.122775+00:00",
+  "repository": "/workspace/scratch/d8b5d3d3b0dd/marty-ui-production-gaps",
+  "headBeforeCommit": "575da4f19f0aee54456701340cc1d7d6ca5553dc",
+  "status": "PASS_LOCAL_FOCUSED",
+  "scope": [
+    "D-01 passport clearance browser supplement",
+    "D-04 employee onboarding and secure access"
+  ],
+  "commands": [
+    {
+      "command": "node tests/scripts/audit-beta-employee-access.test.js",
+      "namedPassCount": 8,
+      "namedFailCount": 0,
+      "skippedCount": 0,
+      "exitCode": 0
+    },
+    {
+      "command": "node tests/scripts/audit-beta-passport-clearance.test.js",
+      "namedPassCount": 9,
+      "namedFailCount": 0,
+      "skippedCount": 0,
+      "exitCode": 0
+    },
+    {
+      "command": "node tests/scripts/demo-wallet-session.test.js",
+      "namedPassCount": 5,
+      "namedFailCount": 0,
+      "skippedCount": 0,
+      "exitCode": 0
+    },
+    {
+      "command": "git diff --check",
+      "exitCode": 0
+    }
+  ],
+  "namedPassCount": 22,
+  "namedFailCount": 0,
+  "newNamedRegressions": 6,
+  "aggregateRunnerNote": "The node --test --test-reporter=spec aggregate also exited 0 but reported three file wrappers. Named counts above are from direct per-file executions and are not double-counted.",
+  "newRegressionBoundaries": [
+    "Real driver main acquires a run-owned wallet in the exact admin/receiver context before the first product-login/configuration boundary.",
+    "The real shared wallet client recognizes the receiver page and navigates with this exact run guard; no global wallet reset is used by the fixture.",
+    "Owned application cleanup precedes wallet deletion; wallet deletion precedes both browser-context closes, browser close, and report persistence.",
+    "A lost session-creation response remains UNCONFIRMED, prevents all product actions, and cannot qualify the run.",
+    "Failed owned session deletion retains the exact open-session evidence, reports the failure, still closes both browser contexts, and leaves releaseReady false.",
+    "Session evidence does not contain the opaque authentication cookie."
+  ],
+  "callerScan": [
+    {
+      "driver": "audit-beta-credential-lifecycle.js",
+      "result": "Existing session acquisition covers both shared receiveCredential calls."
+    },
+    {
+      "driver": "audit-beta-employee-access.js",
+      "result": "Missing inherited session adoption repaired in this patch."
+    },
+    {
+      "driver": "audit-beta-passport-clearance.js",
+      "result": "Missing inherited session adoption repaired in this patch."
+    },
+    {
+      "driver": "audit-beta-private-age-proof.js",
+      "result": "Uses the direct recorder Android/Rust gateway, not this browser receiveCredential helper; no IPC/helper omission found."
+    },
+    {
+      "driver": "verify-beta-credential-login.js and audit-beta-first-party-browser-wallet.js",
+      "result": "Main D05 and retained wrapper already use a run-owned walletContext; wrapper adds no missing IPC preflight."
+    },
+    {
+      "driver": "audit-beta-membership-support.js",
+      "result": "Both D05 supporting lanes already acquire the exact walletContext; current recorder definitions supply their required evidence IPC."
+    },
+    {
+      "driver": "audit-beta-org-credential-paths.js",
+      "result": "Already acquires the context used by openIsolatedWallet."
+    },
+    {
+      "driver": "audit-beta-issuer-provider-switch.js",
+      "result": "Uses its protocol-level receive/verify path, not the browser-session registry."
+    }
+  ],
+  "changedSources": [
+    {
+      "path": "tests/scripts/audit-beta-employee-access.js",
+      "sha256": "dee62ac9d069b3b37d8802000753fe87e70aaa0048e343fdcb9e19431a42fd4e"
+    },
+    {
+      "path": "tests/scripts/audit-beta-employee-access.test.js",
+      "sha256": "7a93bfb612932209cfdf2e5bf8ba867316991bf185bbc4dea171793790979a46"
+    },
+    {
+      "path": "tests/scripts/audit-beta-passport-clearance.js",
+      "sha256": "5508b02b2eed0145fe7b739e221afa925345f8156684e351d50944baeabcba73"
+    },
+    {
+      "path": "tests/scripts/audit-beta-passport-clearance.test.js",
+      "sha256": "4edb96719d5fe31b5dbdf9c2a6f8118b8ce9fac8f380461990fc3e1b3ac58746"
+    },
+    {
+      "path": "tests/scripts/demo-wallet-driver-test-helpers.js",
+      "sha256": "77a91f39a5e2e8cb474a61c1efd0557856e0e85b5070b5b2dd580e4079125673"
+    }
+  ],
+  "sharedSourceReused": {
+    "path": "tests/scripts/demo-wallet-session.js",
+    "sha256": "97486b4056e2f5497cd711cb743c392bccc510fea30c192fcfe0828b3ad69a21",
+    "modified": false
+  },
+  "qualificationBoundary": {
+    "allFixtureRunsStopBeforeProductConfiguration": true,
+    "syntheticLocalTransportOnly": true,
+    "liveServiceRequests": 0,
+    "liveJourneyQualification": "NOT_RUN",
+    "recordedMediaQualification": "NOT_RUN",
+    "deploymentOrPublicationPerformed": false,
+    "committed": false
+  },
+  "remainingLimits": [
+    "A deployed Rust wallet with isolated_sessions v1 is required for the real D01/D04 browser journeys.",
+    "Lost acquisition or failed closure remains a failed run with retained reconciliation evidence; the driver never substitutes a shared/global reset.",
+    "The changed driver source hashes must be rebound by release/capture configuration before clean-source qualification."
+  ]
+}

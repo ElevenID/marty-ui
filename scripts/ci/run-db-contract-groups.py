@@ -25,6 +25,8 @@ FULL_QUALIFICATION_PREFLIGHT_MODES = (
 EVIDENCE_NAME = "canvas-published-preflights.sha256"
 RUN_IDENTITY = ("GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT", "GITHUB_JOB")
 TIMING_PREFIX = "MARTY_CI_PHASE_V1 "
+TARGET_TIMING_PREFIX = "MARTY_CI_TARGET_PHASE_V1 "
+TARGET_NAMES = frozenset({"composition", "flow", "worker", "selfhost"})
 TIMING_PHASES = {
     "container_startup",
     "database_readiness",
@@ -37,8 +39,16 @@ TIMING_PHASES = {
     "canvas_serial",
     "canvas_target",
     "image_pull",
+    "oracle_case",
+    "oracle_phase",
 }
 TIMING_STATUSES = {"ok", "failed"}
+TARGET_RELAY_PHASES = TIMING_PHASES - {
+    "contract",
+    "canvas_serial",
+    "canvas_target",
+    "image_pull",
+}
 REST_SCENARIOS = frozenset({"rest", "facts", "retry"})
 MATRIX_SCENARIOS = frozenset(
     {"retry-after", "validation", "roster-failure", "resources-unavailable"}
@@ -49,9 +59,6 @@ MATRIX_SCENARIOS = frozenset(
 PUBLISHED_MATRIX_SCENARIOS = frozenset(
     {
         "retry-after",
-        "validation",
-        "roster-failure",
-        "resources-unavailable",
         "resource-race",
         "deadline",
         "timeout",
@@ -59,16 +66,6 @@ PUBLISHED_MATRIX_SCENARIOS = frozenset(
         "lease-expiry",
         "dispatch",
         "mixed-roster",
-        "oauth-revocation",
-        "oauth-revocation-fence",
-        "oauth-revocation-patch",
-        "oauth-revocation-retry-after",
-        "oauth-revocation-backoff",
-        "oauth-revocation-queue",
-        "oauth-revocation-lease",
-        "oauth-revocation-selection",
-        "oauth-revocation-counters",
-        "oauth-revocation-secrets",
     }
 )
 PUBLISHED_MATRIX_PROBE_NAMES = frozenset(
@@ -91,11 +88,48 @@ SCENARIO_NAMES = REST_SCENARIOS | frozenset(
         ).read_text(encoding="utf-8")
     )["cases"]
 )
+JSON_DEPTH_ROUTE_DEPTHS = (
+    1,
+    126,
+    127,
+    128,
+    129,
+    254,
+    255,
+    256,
+    257,
+    980,
+    995,
+    1000,
+    1001,
+    1490,
+    1500,
+    1600,
+)
+JSON_DEPTH_ROUTE_CASE_NAMES = frozenset(
+    f"json_depth_route.json_depth_{shape}_{depth}_{status}"
+    for shape in ("array", "object")
+    for depth in JSON_DEPTH_ROUTE_DEPTHS
+    for status in (200, 403)
+)
+JSON_CONSUMER_SCENARIOS = json.loads(
+    (
+        Path(__file__).resolve().parents[2]
+        / "contracts/canvas-json-consumer-scenarios.json"
+    ).read_text(encoding="utf-8")
+)
+JSON_CONSUMER_CASE_NAMES = frozenset(
+    f"json_consumer.{phase}.{case['name']}"
+    for phase in ("validation", "provider")
+    for case in JSON_CONSUMER_SCENARIOS[phase]
+)
 # Fixed, test-owned repository matrices; never derive timing identities from
 # scenario payloads or include them in the fixture/cleanup phase allowlists.
 REPOSITORY_MATRIX_NAMES = frozenset(
     {
         "repository_roster_metadata",
+        "repository_roster_expired_before_write",
+        "repository_roster_expired_during_lock",
         "repository_resource_race",
         "repository_validation",
     }
@@ -151,7 +185,6 @@ TIMED_PUBLISHED_SCRIPTS = frozenset(
         "utf7_consumer",
         "validation_boundary",
         "worker_concurrent",
-        "worker_facts",
         "worker_provider_completion",
         "worker_provider_final",
         "worker_provider_generation",
@@ -160,9 +193,6 @@ TIMED_PUBLISHED_SCRIPTS = frozenset(
         "worker_provider_signals",
         "worker_reclaimers",
         "worker_reclaimers_retry",
-        "worker_rest",
-        "worker_retry",
-        "worker_startup",
     }
 )
 TIMING_NAMES = {
@@ -173,11 +203,22 @@ TIMING_NAMES = {
     | frozenset(
         {
             "published_probe",
+            "published_base_restore",
+            "status_native_seed",
             "worker_validation_template",
         }
     ),
-    "fixture_seed": FIXTURE_NAMES,
-    "scenario": SCENARIO_NAMES | REPOSITORY_MATRIX_NAMES,
+    "fixture_seed": FIXTURE_NAMES | frozenset({"status_native_seed"}),
+    "scenario": SCENARIO_NAMES | REPOSITORY_MATRIX_NAMES | JSON_DEPTH_ROUTE_CASE_NAMES,
+    "oracle_case": JSON_CONSUMER_CASE_NAMES,
+    "oracle_phase": frozenset(
+        {
+            "json_depth.setup",
+            "json_depth.validation",
+            "json_depth.provider",
+            "json_depth.encoding",
+        }
+    ),
     "cleanup": FIXTURE_NAMES | frozenset({"published_database_removal"}),
     "contract": CONTRACT_NAMES,
     "contract_phase": frozenset(
@@ -203,12 +244,14 @@ TIMING_NAMES = {
         {
             "sql_logging",
             "json_consumer",
+            "mixed_roster_reference",
+            "oauth_lease_reference",
             *PREFLIGHT_MODES,
             "mixed-roster-preflight",
             "body-timeout-preflight",
         }
     ),
-    "canvas_target": frozenset({"composition", "worker"}),
+    "canvas_target": frozenset({"composition", "flow", "worker", "selfhost"}),
     "image_pull": frozenset({"postgres", "published_probe"}),
 }
 
@@ -221,6 +264,14 @@ def _timing_path() -> Path | None:
 
 
 def _safe_phase(line: str, group: str) -> dict[str, object] | None:
+    target = None
+    if line.startswith(TARGET_TIMING_PREFIX):
+        if group != "published-canvas" or len(line) > 280:
+            return None
+        target, separator, payload = line[len(TARGET_TIMING_PREFIX) :].partition(" ")
+        if separator != " " or target not in TARGET_NAMES:
+            return None
+        line = TIMING_PREFIX + payload
     if not line.startswith(TIMING_PREFIX) or len(line) > 256:
         return None
     try:
@@ -240,6 +291,7 @@ def _safe_phase(line: str, group: str) -> dict[str, object] | None:
     if (
         not isinstance(phase, str)
         or phase not in TIMING_PHASES
+        or (target is not None and phase not in TARGET_RELAY_PHASES)
         or not isinstance(name, str)
         or name not in TIMING_NAMES[phase]
         or not 1 <= len(name) <= 96
@@ -254,7 +306,10 @@ def _safe_phase(line: str, group: str) -> dict[str, object] | None:
         or status not in TIMING_STATUSES
     ):
         return None
-    return {"schema": "marty.ci.db-phase/v1", "group": group, **value}
+    result = {"schema": "marty.ci.db-phase/v1", "group": group, **value}
+    if target is not None:
+        result["target"] = target
+    return result
 
 
 def _run_identity() -> tuple[str, ...] | None:
@@ -277,7 +332,7 @@ def _canvas_executable() -> Path:
             artifact["executable"]
             for line in source
             if (artifact := json.loads(line)).get("reason") == "compiler-artifact"
-            and "#marty-canvas-acceptance@" in artifact.get("package_id", "")
+            and "#marty-canvas-worker-acceptance@" in artifact.get("package_id", "")
             and artifact.get("target", {}).get("name")
             == "canvas_published_worker_contract"
             and artifact.get("executable") is not None
@@ -373,8 +428,9 @@ def run_groups(commands: dict[str, list[str]], directory: Path) -> dict[str, int
     timing_lock = Lock()
 
     def record(value: dict[str, object]) -> None:
+        target = f" target={value['target']}" if "target" in value else ""
         print(
-            f"[db-timing] group={value['group']} phase={value['phase']} "
+            f"[db-timing] group={value['group']}{target} phase={value['phase']} "
             f"name={value['name']} duration_ms={value['duration_ms']} status={value['status']}",
             flush=True,
         )
@@ -403,7 +459,12 @@ def run_groups(commands: dict[str, list[str]], directory: Path) -> dict[str, int
                     assert process.stdout is not None
                     for line in process.stdout:
                         log.write(line)
-                        if not line.startswith(TIMING_PREFIX.encode("ascii")):
+                        if not line.startswith(
+                            (
+                                TIMING_PREFIX.encode("ascii"),
+                                TARGET_TIMING_PREFIX.encode("ascii"),
+                            )
+                        ):
                             continue
                         try:
                             marker = line.decode("ascii").rstrip("\r\n")
@@ -449,8 +510,14 @@ def main(mode: str = "database") -> int:
     preflight_modes = (
         FULL_QUALIFICATION_PREFLIGHT_MODES if qualification == "1" else PREFLIGHT_MODES
     )
-    if mode in ("database", "canvas"):
+    if mode in ("database", "canvas", "canvas-without-selfhost"):
         published_mode = ["full-after-preflights"] if _has_preflight_evidence() else []
+        if mode == "canvas-without-selfhost":
+            published_mode = (
+                ["full-after-preflights-without-selfhost"]
+                if published_mode
+                else ["full-without-selfhost"]
+            )
         commands: dict[str, list[str]] = {
             "published-canvas": [
                 "bash",
@@ -462,19 +529,50 @@ def main(mode: str = "database") -> int:
             commands["rust-db"] = ["bash", str(scripts / "run-rust-db-contracts.sh")]
     elif mode == "rust-db":
         commands = {"rust-db": ["bash", str(scripts / "run-rust-db-contracts.sh")]}
-    elif mode == "preflights":
+    elif mode == "worker-canvas":
+        # Opt-in owner only. The normal canvas group above is unchanged.
+        published_mode = (
+            "worker-full-after-preflights"
+            if _has_preflight_evidence()
+            else "worker-full"
+        )
+        commands = {
+            "published-worker": [
+                "bash",
+                str(scripts / "run-published-canvas-contracts.sh"),
+                published_mode,
+            ]
+        }
+    elif mode == "selfhost-canvas":
+        # Additive diagnostic owner; the full Canvas group remains required.
+        commands = {
+            "published-selfhost": [
+                "bash",
+                str(scripts / "run-published-canvas-contracts.sh"),
+                "selfhost-only",
+            ]
+        }
+    elif mode in ("preflights", "worker-preflights"):
         evidence = _preflight_evidence()
         if evidence is not None:
             evidence.unlink(missing_ok=True)  # A failed rerun cannot reuse old proof.
         # Two workers overlap independent cases. Each exact preflight owns
         # its disposable Docker database and dynamically allocated HTTPS ports.
         commands = {
-            name: ["bash", str(scripts / "run-published-canvas-contracts.sh"), name]
+            name: [
+                "bash",
+                str(scripts / "run-published-canvas-contracts.sh"),
+                f"worker-{name}" if mode == "worker-preflights" else name,
+            ]
             for name in preflight_modes
         }
     else:
         raise ValueError("Unsupported contract group mode")
-    prefix = "marty-preflight-groups-" if mode == "preflights" else "marty-db-groups-"
+    prefix = (
+        "marty-preflight-groups-"
+        if mode in ("preflights", "worker-preflights")
+        else "marty-db-groups-"
+    )
     with tempfile.TemporaryDirectory(prefix=prefix) as temporary:
         directory = Path(temporary)
         results = run_groups(commands, directory)
@@ -482,9 +580,11 @@ def main(mode: str = "database") -> int:
             print(f"===== {name}: exit {status} =====", flush=True)
             print((directory / f"{name}.log").read_text(encoding="utf-8"), flush=True)
         failed = any(status != 0 for status in results.values())
-        if mode == "preflights" and set(results) != set(preflight_modes):
+        if mode in ("preflights", "worker-preflights") and set(results) != set(
+            preflight_modes
+        ):
             failed = True
-        if mode == "preflights" and not failed:
+        if mode in ("preflights", "worker-preflights") and not failed:
             try:
                 _record_preflight_evidence()
             except (OSError, ValueError, KeyError) as error:
@@ -497,6 +597,18 @@ def main(mode: str = "database") -> int:
 
 
 if __name__ == "__main__":
-    if sys.argv[1:] not in ([], ["preflights"], ["canvas"], ["rust-db"]):
-        raise SystemExit("Usage: run-db-contract-groups.py [preflights|canvas|rust-db]")
+    if sys.argv[1:] not in (
+        [],
+        ["preflights"],
+        ["canvas"],
+        ["canvas-without-selfhost"],
+        ["rust-db"],
+        ["worker-preflights"],
+        ["worker-canvas"],
+        ["selfhost-canvas"],
+    ):
+        raise SystemExit(
+            "Usage: run-db-contract-groups.py "
+            "[preflights|canvas|canvas-without-selfhost|rust-db|worker-preflights|worker-canvas|selfhost-canvas]"
+        )
     raise SystemExit(main(sys.argv[1] if sys.argv[1:] else "database"))

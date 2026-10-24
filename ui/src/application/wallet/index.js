@@ -1,16 +1,13 @@
 export {
   buildPairingState,
   buildPushRegistrationPayload,
-  createPairingCode,
   formatCountdown,
   generateWalletDeviceId,
   getWalletDeviceStorageKey,
   resolveNotificationPermissionState,
   resolveNotificationRequestOutcome,
-  resolveSimulatedPairing,
   resolveSkipNotifications,
   resolveWalletSetupComplete,
-  resolveWalletStatusResponse,
   shouldPollWalletStatus,
   shouldTickPairingCountdown,
   walletSetupDefaults,
@@ -18,7 +15,8 @@ export {
 
 export {
   getOrCreateWalletDeviceId,
-  loadWalletStatus,
+  issueRemotePairingTicket,
+  loadRemotePairingStatus,
   registerWalletPushNotifications,
 } from './walletSetupUseCases';
 

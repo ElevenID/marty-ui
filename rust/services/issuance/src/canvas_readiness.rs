@@ -1034,6 +1034,18 @@ mod tests {
     }
 
     #[test]
+    fn status_profile_readiness_rejects_a_foreign_organization() {
+        let (_, binding, template) = fixture();
+        let mut inputs = ready_inputs(template);
+        assert!(status_profile_ready(&binding, &inputs));
+        inputs.credential_status_profile.insert(
+            "organization_id".to_owned(),
+            Value::String("other-organization".to_owned()),
+        );
+        assert!(!status_profile_ready(&binding, &inputs));
+    }
+
+    #[test]
     fn complete_projection_is_ready_and_persists_an_exact_version_snapshot() {
         let (platform, mut binding, template) = fixture();
         let inputs = ready_inputs(template);

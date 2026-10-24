@@ -28,7 +28,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     run_migrations(&pool).await?;
     runtime.mark_healthy(ComplianceDependency::Schema)?;
     runtime.mark_healthy(ComplianceDependency::SystemCatalog)?;
-    let membership = tenant_membership_provider(&c)?;
+    let membership = tenant_membership_provider(&c).await?;
     runtime.mark_healthy(ComplianceDependency::Organization)?;
     let repo: Arc<dyn ComplianceRepository> = Arc::new(PostgresComplianceRepository::new(pool));
     let service = Arc::new(ComplianceService::new(repo, membership));
@@ -37,7 +37,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     runtime.mark_healthy(ComplianceDependency::HttpListener)?;
     let app = runtime
         .router()
-        .merge(compliance_router(ComplianceHttpState { service }))
+        .merge(compliance_router(
+            ComplianceHttpState::new(service).with_service_token(c.service_token.clone())?,
+        ))
         .layer(TraceLayer::new_for_http());
     let (tx, mut rx) = watch::channel(false);
     let server = axum::serve(listener, app).with_graceful_shutdown(async move {

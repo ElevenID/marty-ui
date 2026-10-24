@@ -8,10 +8,15 @@ import copy
 import hashlib
 import json
 import re
-from datetime import datetime, timezone
+import runpy
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
+
+has_hardened_core_wheels = runpy.run_path(
+    str(Path(__file__).with_name("kms_core_release.py"))
+)["has_hardened_core_wheels"]
 
 
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -21,11 +26,9 @@ REQUIRED_STACK_COMPONENTS = {
     "marty-api-core",
     "marty-blog",
     "marty-cli",
-    "marty-common",
     "marty-core-python",
     "marty-verification-python",
     "marty-iso18013-python",
-    "marty-credentials-issuance",
     "marty-integration-tests",
     "marty-ui",
 }
@@ -33,6 +36,7 @@ REQUIRED_MARTY_UI_ARTIFACTS = {
     "ghcr.io/elevenid/marty-ui-oss/ui",
     "ghcr.io/elevenid/marty-ui-oss/services",
     "ghcr.io/elevenid/marty-ui-oss/migrations",
+    "ghcr.io/elevenid/marty-ui-oss/openbao-didcomm",
 }
 FRESH_ORG_RESOURCE_TYPES = {
     "signing_service",
@@ -119,6 +123,15 @@ def validate_stack_manifest(
         _require(bool(name), "Every stack component must have a name")
         _require(name not in by_name, f"Duplicate stack component: {name}")
         _require(
+            name.lower().replace("_", "-") != "marty-common"
+            and str(component.get("repository") or "")
+            .rsplit("/", 1)[-1]
+            .lower()
+            .replace("_", "-")
+            != "marty-common",
+            "Stack manifest contains the retired marty-common component",
+        )
+        _require(
             GIT_SHA_RE.fullmatch(str(component.get("commit") or "")) is not None,
             f"Stack component {name} commit must be a full lowercase SHA",
         )
@@ -137,12 +150,30 @@ def validate_stack_manifest(
                 is not None,
                 f"Stack component {name} artifact digest is invalid",
             )
+            _require(
+                "marty-common"
+                not in str(artifact.get("uri") or "").lower().replace("_", "-"),
+                "Stack manifest contains a retired marty-common artifact",
+            )
         by_name[name] = component
 
     missing = REQUIRED_STACK_COMPONENTS - set(by_name)
     _require(
         not missing,
         f"Stack manifest is missing required components: {', '.join(sorted(missing))}",
+    )
+    _require(
+        has_hardened_core_wheels(components),
+        "Stack manifest lacks reviewed KMS-only Core wheel artifacts",
+    )
+    _require(
+        "marty-credentials-issuance" not in by_name
+        and all(
+            artifact.get("type") != "oci"
+            for name, component in by_name.items() if name != "marty-ui"
+            for artifact in component["artifacts"]
+        ),
+        "Rust-only stack manifest contains a retired external issuance image",
     )
     ui = by_name["marty-ui"]
     _require(
@@ -737,7 +768,7 @@ def promote(args: argparse.Namespace) -> None:
         "stack_generated_at": manifest.get("generated_at"),
         "components": copy.deepcopy(manifest["components"]),
         "release_ready": True,
-        "promoted_at": datetime.now(timezone.utc).isoformat(),
+        "promoted_at": datetime.now(UTC).isoformat(),
     }
     promoted["beta_evidence"] = {
         "origin": args.beta_origin,

@@ -1,0 +1,33 @@
+services:
+  postgres:
+    image: ${MARTY_RUST_CI_POSTGRES_IMAGE:?exact PostgreSQL digest required}
+    pull_policy: never
+    environment:
+      POSTGRES_DB: marty_atomic_test
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d marty_atomic_test"]
+      interval: 1s
+      timeout: 2s
+      retries: 30
+  redis:
+    image: ${MARTY_RUST_CI_REDIS_IMAGE:?exact Redis digest required}
+    pull_policy: never
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 2s
+      retries: 20
+  openbao:
+    image: quay.io/openbao/openbao@sha256:6c75c97223873807260352f269640935a07db0c26b3dbf12a98a36ec43ad9878
+    pull_policy: never
+    environment:
+      BAO_DEV_ROOT_TOKEN_ID: test-only
+      BAO_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
+    ports:
+      - "8200:8200"

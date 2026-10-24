@@ -14,6 +14,14 @@ if [ -z "${BAO_ADDR:-}" ]; then
     echo "BAO_ADDR must be set to a container-reachable external Vault/OpenBao address before startup." >&2
     exit 1
 fi
+case "${BAO_ADDR}" in
+    https://*) ;;
+    *) echo "BAO_ADDR must use HTTPS." >&2; exit 1 ;;
+esac
+if [ -z "${BAO_CACERT:-}" ] || [ ! -r "${BAO_CACERT}" ]; then
+    echo "BAO_CACERT must be a readable public CA before startup." >&2
+    exit 1
+fi
 
 if [ -n "${BAO_TOKEN_FILE:-}" ]; then
     echo "Waiting for OpenBao token file at ${BAO_TOKEN_FILE}..."
@@ -39,7 +47,7 @@ export VAULT_ADDR="${BAO_ADDR}"
 export VAULT_TOKEN="${BAO_TOKEN}"
 
 echo "Waiting for OpenBao health at ${BAO_ADDR}..."
-until curl -sf "${BAO_ADDR}/v1/sys/health" >/dev/null 2>&1; do
+until curl --cacert "${BAO_CACERT}" -sf "${BAO_ADDR}/v1/sys/health" >/dev/null 2>&1; do
     sleep 2
 done
 

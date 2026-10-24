@@ -105,25 +105,39 @@ pub(super) struct GatewayFixture {
 
 impl GatewayFixture {
     pub(super) async fn start(model: &ResolvedRuntime, port: u16) -> Self {
-        let child = model
-            .gateway_command()
+        let startup_stderr = tempfile::NamedTempFile::new().unwrap();
+        let mut command = model.gateway_command();
+        command.stderr(std::process::Stdio::from(startup_stderr.reopen().unwrap()));
+        let child = command
             .spawn()
             .expect("required isolated gateway executable");
         let client = bounded_http_client(Duration::from_secs(20));
-        let fixture = Self {
+        let mut fixture = Self {
             child,
             stop_attempted: false,
             origin: format!("http://127.0.0.1:{port}"),
             client,
         };
+        let health = tokio::time::timeout(
+            Duration::from_secs(15),
+            wait_for_health_with_client(port, &fixture.client),
+        )
+        .await
+        .unwrap();
+        let diagnostic = if health.is_none() {
+            std::fs::read_to_string(startup_stderr.path())
+                .unwrap_or_default()
+                .chars()
+                .take(2048)
+                .collect::<String>()
+        } else {
+            String::new()
+        };
         assert_eq!(
-            tokio::time::timeout(
-                Duration::from_secs(15),
-                wait_for_health_with_client(port, &fixture.client)
-            )
-            .await
-            .unwrap(),
-            Some(json!({"status":"healthy","service":"api-gateway"}))
+            health,
+            Some(json!({"status":"healthy","service":"api-gateway"})),
+            "gateway process status: {:?}; bounded synthetic stderr: {diagnostic}",
+            fixture.child.try_wait().unwrap()
         );
         let response = fixture
             .client

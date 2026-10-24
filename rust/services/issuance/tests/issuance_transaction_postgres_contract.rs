@@ -472,6 +472,22 @@ async fn transaction_contract(claims_type: &str) {
         organization_id: Some("org-a".into()),
         ..AuthorizationParameters::default()
     };
+    let mut private_par = par.clone();
+    private_par.authorization_details =
+        Some("{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"d\":\"private-seed\"}".into());
+    assert!(authorization_repository
+        .store_par(
+            "urn:ietf:params:oauth:request_uri:private",
+            &private_par,
+            90
+        )
+        .await
+        .is_err());
+    assert!(authorization_repository
+        .consume_par("urn:ietf:params:oauth:request_uri:private")
+        .await
+        .unwrap()
+        .is_none());
     assert!(authorization_repository
         .store_par("urn:ietf:params:oauth:request_uri:contract", &par, 90)
         .await
@@ -498,6 +514,38 @@ async fn transaction_contract(claims_type: &str) {
         ["https://wallet.example/callback"]
     );
     let authorization_created_at = Utc::now().timestamp();
+    assert!(authorization_repository
+        .save_authorization_session(&AuthorizationSessionWrite {
+            id: "auth-private".into(),
+            session: AuthorizationSession {
+                code: "code-private".into(),
+                client_id: "wallet-a".into(),
+                redirect_uri: None,
+                code_challenge: None,
+                code_challenge_method: None,
+                issuer_state: None,
+                credential_configuration_ids: vec![
+                    "-----BEGIN PRIVATE KEY-----private-seed-----END PRIVATE KEY-----".into(),
+                ],
+                created_at: authorization_created_at.try_into().unwrap(),
+                expires_in: 600,
+            },
+            organization_id: Some("org-a".into()),
+            scope: None,
+            state: None,
+            persisted_lifetime_seconds: 3_600,
+        })
+        .await
+        .is_err());
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM issuance_service.authorization_sessions WHERE id = 'auth-private'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        0
+    );
     authorization_repository
         .save_authorization_session(&AuthorizationSessionWrite {
             id: "auth-native".into(),
@@ -660,6 +708,23 @@ async fn transaction_contract(claims_type: &str) {
         event: NotificationEvent::Accepted,
         event_description: Some("stored by wallet".into()),
     };
+    let mut private_notification = notification.clone();
+    private_notification.notification_id = "notification-private".into();
+    private_notification.event_description = Some("{\"private_jwk\":\"private-seed\"}".into());
+    assert!(authorization_repository
+        .record_notification("tx-revoked", &private_notification)
+        .await
+        .is_err());
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM issuance_service.issuance_events
+             WHERE event_type = 'oid4vci_wallet_notification'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        0
+    );
     authorization_repository
         .record_notification("tx-revoked", &notification)
         .await

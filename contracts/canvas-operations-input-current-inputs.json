@@ -1,0 +1,14 @@
+{
+  "schema": "marty.canvas-operations-input-current-inputs/v1",
+  "purpose": "Current-checkout operations-input producer, scenario, frozen comparator, shared native HTTP request recipe, dispatch, pinned image fixture, and probe-constructor inputs only. These hashes do not attest the original historical capture, downstream image contents or migration closure, qualify a release, or authorize skipping a live oracle.",
+  "normalization": "UTF-8 text with CRLF and CR converted to LF before SHA-256",
+  "sha256": {
+    "contracts/canvas-operations-input-oracle.json": "86cfccc86988235677a731e99c530e2ac93ef0494d833abb30185512ce176a39",
+    "contracts/canvas-operations-input-scenarios.json": "d0d23fb1d3594cc08de4ee3bee942b57acea3f82b5a31193ca4841b3a416cedf",
+    "contracts/canvas-worker-consumer-range-oracle.json": "0459d9b3ae5409df9e5cb149e13167a13625518bb97dcbf8654631898cc63e0c",
+    "rust/services/issuance/tests/support/canvas_operations_input_http.rs": "94cd1fdf90ad518c84d92da2895e5d1cc57462c898f771166e5423b5c18fbade",
+    "rust/services/issuance/tests/support/canvas_published_database.rs": "8b38d0680c3a0203864163727fd0d8f540f8ac8f2372765d87cce4d95d43e9b1",
+    "scripts/prepare_canvas_published_schema.py": "8610ade9e03c08a8fb4984583b38e4cb6d2c6dfcf63258411f793414c8e9a45a",
+    "scripts/run_canvas_operations_input_oracle.py": "c23aa66d46cacba7d86d97cab6573707a7abe0cc1489bb3c2895b6247f17a0e8"
+  }
+}

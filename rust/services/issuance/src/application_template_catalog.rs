@@ -2,20 +2,16 @@ use std::{collections::BTreeSet, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use thiserror::Error;
-use tonic::{
-    metadata::AsciiMetadataValue,
-    transport::{Channel, Endpoint},
-    Code, Request,
-};
+use tonic::{metadata::AsciiMetadataValue, transport::Channel, Code, Request};
 
 use crate::{
     application_template_domain::CredentialTemplateValidationView,
     application_template_service::{ApplicationTemplateCatalog, ApplicationTemplateCatalogError},
-    config::normalize_grpc_target,
     credential_template_proto::{
         credential_template_service_client::CredentialTemplateServiceClient, GetTemplateRequest,
         TemplateResponse,
     },
+    grpc_client_channel,
 };
 
 const SERVICE_TOKEN_HEADER: &str = "x-service-token";
@@ -25,7 +21,7 @@ const SERVICE_TOKEN_HEADER: &str = "x-service-token";
 /// remains fail-closed: no unauthenticated request can be sent, and validation
 /// reports the catalog as unavailable until deployment configuration supplies
 /// the token.
-pub fn runtime_catalog(
+pub async fn runtime_catalog(
     target: &str,
     service_token: Option<&str>,
     timeout: Duration,
@@ -33,11 +29,9 @@ pub fn runtime_catalog(
     if service_token.map(str::trim).is_none_or(str::is_empty) {
         return Ok(Arc::new(UnavailableApplicationTemplateCatalog));
     }
-    Ok(Arc::new(GrpcApplicationTemplateCatalog::connect_lazy(
-        target,
-        service_token,
-        timeout,
-    )?))
+    Ok(Arc::new(
+        GrpcApplicationTemplateCatalog::connect_lazy(target, service_token, timeout).await?,
+    ))
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -74,7 +68,7 @@ impl std::fmt::Debug for GrpcApplicationTemplateCatalog {
 }
 
 impl GrpcApplicationTemplateCatalog {
-    pub fn connect_lazy(
+    pub async fn connect_lazy(
         target: &str,
         service_token: Option<&str>,
         timeout: Duration,
@@ -88,13 +82,15 @@ impl GrpcApplicationTemplateCatalog {
             .ok_or(ApplicationTemplateCatalogConfigurationError::MissingServiceToken)?
             .parse()
             .map_err(|_| ApplicationTemplateCatalogConfigurationError::InvalidServiceToken)?;
-        let target = normalize_grpc_target(target)
-            .ok_or(ApplicationTemplateCatalogConfigurationError::InvalidTarget)?;
-        let channel = Endpoint::from_shared(target)
-            .map_err(|_| ApplicationTemplateCatalogConfigurationError::InvalidTarget)?
-            .connect_timeout(timeout)
-            .timeout(timeout)
-            .connect_lazy();
+        let channel = grpc_client_channel::credential_template_channel(target, timeout)
+            .await
+            .map_err(|error| {
+                if error == "invalid gRPC target" {
+                    ApplicationTemplateCatalogConfigurationError::InvalidTarget
+                } else {
+                    ApplicationTemplateCatalogConfigurationError::InvalidTlsConfiguration
+                }
+            })?;
         Ok(Self {
             templates: CredentialTemplateServiceClient::new(channel),
             service_token,
@@ -150,6 +146,8 @@ fn response_view(
     Ok(Some(CredentialTemplateValidationView {
         organization_id: response.organization_id,
         status: response.status,
+        credential_payload_format: response.credential_payload_format,
+        issuance_protocol: response.issuance_protocol,
         revocation_profile_id: non_empty(response.revocation_profile_id),
         claims: response
             .claims
@@ -172,6 +170,8 @@ pub enum ApplicationTemplateCatalogConfigurationError {
     InvalidServiceToken,
     #[error("application-template credential catalog requires a valid gRPC target")]
     InvalidTarget,
+    #[error("application-template credential catalog gRPC TLS configuration is invalid")]
+    InvalidTlsConfiguration,
     #[error("application-template credential catalog dependency timeout must be positive")]
     InvalidTimeout,
 }
@@ -225,6 +225,8 @@ mod tests {
                     id: template_id,
                     organization_id: "org-a".to_owned(),
                     status: "ACTIVE".to_owned(),
+                    credential_payload_format: "W3C_VCDM_V2_SD_JWT".to_owned(),
+                    issuance_protocol: "OID4VCI".to_owned(),
                     revocation_profile_id: "revocation-1".to_owned(),
                     claims: vec![ClaimDefinition {
                         name: "member_number".to_owned(),
@@ -309,6 +311,7 @@ mod tests {
     #[tokio::test]
     async fn configuration_requires_authentication_and_valid_transport_settings() {
         let unavailable = runtime_catalog("credential-template:9003", None, Duration::from_secs(1))
+            .await
             .expect("missing runtime token uses a fail-closed catalog");
         assert_eq!(
             unavailable.get_strict("template-1").await,
@@ -319,7 +322,8 @@ mod tests {
                 "credential-template:9003",
                 None,
                 Duration::from_secs(1)
-            ),
+            )
+            .await,
             Err(ApplicationTemplateCatalogConfigurationError::MissingServiceToken)
         ));
         assert!(matches!(
@@ -327,7 +331,8 @@ mod tests {
                 "credential-template:9003",
                 Some("token\nvalue"),
                 Duration::from_secs(1)
-            ),
+            )
+            .await,
             Err(ApplicationTemplateCatalogConfigurationError::InvalidServiceToken)
         ));
         assert!(matches!(
@@ -335,7 +340,8 @@ mod tests {
                 "credential template:9003",
                 Some("token"),
                 Duration::from_secs(1)
-            ),
+            )
+            .await,
             Err(ApplicationTemplateCatalogConfigurationError::InvalidTarget)
         ));
         assert!(matches!(
@@ -343,7 +349,8 @@ mod tests {
                 "credential-template:9003",
                 Some("token"),
                 Duration::ZERO
-            ),
+            )
+            .await,
             Err(ApplicationTemplateCatalogConfigurationError::InvalidTimeout)
         ));
 
@@ -352,6 +359,7 @@ mod tests {
             Some("token"),
             Duration::from_secs(1),
         )
+        .await
         .expect("valid catalog");
         let request = catalog.request(GetTemplateRequest {
             template_id: "template-1".to_owned(),
@@ -372,6 +380,8 @@ mod tests {
             id: "template-1".to_owned(),
             organization_id: "org-a".to_owned(),
             status: "ACTIVE".to_owned(),
+            credential_payload_format: "W3C_VCDM_V2_SD_JWT".to_owned(),
+            issuance_protocol: "OID4VCI".to_owned(),
             revocation_profile_id: " revocation-1 ".to_owned(),
             claims: vec![
                 ClaimDefinition {
@@ -391,10 +401,30 @@ mod tests {
             Ok(Some(CredentialTemplateValidationView {
                 organization_id: "org-a".to_owned(),
                 status: "ACTIVE".to_owned(),
+                credential_payload_format: "W3C_VCDM_V2_SD_JWT".to_owned(),
+                issuance_protocol: "OID4VCI".to_owned(),
                 revocation_profile_id: Some("revocation-1".to_owned()),
                 claims: BTreeSet::from(["membership_number".to_owned()]),
             }))
         );
+    }
+
+    #[test]
+    fn response_projection_preserves_physical_passport_public_wire_format() {
+        let response = TemplateResponse {
+            id: "passport-template".to_owned(),
+            organization_id: "org-a".to_owned(),
+            status: "ACTIVE".to_owned(),
+            credential_payload_format: "icao_emrtd".to_owned(),
+            issuance_protocol: "PHYSICAL_DOCUMENT".to_owned(),
+            ..TemplateResponse::default()
+        };
+        let view = response_view("passport-template", response)
+            .expect("valid response")
+            .expect("template");
+        assert_eq!(view.credential_payload_format, "icao_emrtd");
+        assert_eq!(view.issuance_protocol, "PHYSICAL_DOCUMENT");
+        assert_eq!(view.revocation_profile_id, None);
     }
 
     #[test]
@@ -443,6 +473,7 @@ mod tests {
             Some("fixture-token"),
             Duration::from_secs(2),
         )
+        .await
         .expect("authenticated catalog");
         assert_eq!(
             catalog.get_strict("missing").await,
@@ -458,6 +489,8 @@ mod tests {
             Ok(Some(CredentialTemplateValidationView {
                 organization_id: "org-a".to_owned(),
                 status: "ACTIVE".to_owned(),
+                credential_payload_format: "W3C_VCDM_V2_SD_JWT".to_owned(),
+                issuance_protocol: "OID4VCI".to_owned(),
                 revocation_profile_id: Some("revocation-1".to_owned()),
                 claims: BTreeSet::from(["member_number".to_owned()]),
             }))
@@ -468,6 +501,7 @@ mod tests {
             Some("wrong-token"),
             Duration::from_secs(2),
         )
+        .await
         .expect("configured but unauthorized catalog");
         assert_eq!(
             unauthenticated.get_strict("template-1").await,

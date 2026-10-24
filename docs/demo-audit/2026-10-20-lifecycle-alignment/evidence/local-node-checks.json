@@ -1,0 +1,72 @@
+[
+  {
+    "file": "demo-recording.test.js",
+    "exitCode": 0,
+    "tests": 8,
+    "pass": 8,
+    "fail": 0,
+    "skipped": 0,
+    "stdout": "\u2714 release recording uses the governed 16:9 capture size (1.411308ms)\n\u2714 artifact directory honors the recorder-owned output path (0.61025ms)\n\u2714 artifact directory falls back to the timestamped audit location (0.427074ms)\n\u2714 verification display preserves the machine decision and a stable presentation test id (0.276397ms)\n\u2714 verification display fails closed without a governed identity (0.468276ms)\n\u2714 functional action runs still fail if the production control is missing (2.386848ms)\n\u2714 action cues carry measured control bounds without claiming frame or OS click timing (1.032336ms)\n\u2714 a failed click never becomes a completed action cue (0.364549ms)\n\u2139 tests 8\n\u2139 suites 0\n\u2139 pass 8\n\u2139 fail 0\n\u2139 cancelled 0\n\u2139 skipped 0\n\u2139 todo 0\n\u2139 duration_ms 14.753108\n",
+    "stderr": ""
+  },
+  {
+    "file": "beta-demo-resource-helpers.test.js",
+    "exitCode": 0,
+    "tests": 24,
+    "pass": 24,
+    "fail": 0,
+    "skipped": 0,
+    "stdout": "\u2714 requestedClaim emits the strict public presentation-policy DTO (3.035405ms)\n\u2714 compactObject removes only undefined values (0.488646ms)\n\u2714 requireJson reports bounded validation detail without leaking secret fields (1.315864ms)\n\u2714 safeErrorDetail bounds untrusted response strings (0.327353ms)\n\u2714 ensureActiveResource creates, validates, activates, and reloads one organization resource (0.779004ms)\n\u2714 ensureActiveResource fails closed for duplicate or inactive resources (0.506934ms)\n\u2714 governedIssuerTrustProfilePayload binds one exact SD-JWT issuer (0.228955ms)\n\u2714 resolveActiveIssuerDid selects one organization-owned issuance identity (0.638993ms)\n\u2714 resolveActiveIssuerDid fails closed for missing or ambiguous identities (0.698002ms)\n\u2714 ensureGovernedIssuer pins one public DID key and creates one trusted relationship (0.744362ms)\n\u2714 ensureGovernedIssuer fails closed without a pinned public key (1.568314ms)\n\u2714 conflict preflight blocks an existing application without withdrawing it (0.480254ms)\n\u2714 conflict preflight fails closed on malformed collections (0.286351ms)\n\u2714 conflict preflight checks later pages and permits only terminal or unrelated applications (0.920016ms)\n\u2714 existing draft configuration and foreign organization data never authorize activation (0.36455ms)\n\u2714 application issue response is correlated to its public transaction rather than its application id (0.517741ms)\n\u2714 console issuance retains exact transaction binding and uncertainty on mismatched responses (0.262586ms)\n\u2714 exact application and transaction selection ignores newer credentials from other runs (0.399892ms)\n\u2714 missing, ambiguous, cross-organization, or changed ownership is rejected before cleanup mutations (1.272348ms)\n\u2714 cleanup can recover an uncertain issuance only through its exact created application (0.523809ms)\n\u2714 an outstanding offer, uncertain creation, or unconfirmed reviewer lock prevents complete cleanup (0.349847ms)\n\u2714 a successful HTTP status without confirmed mutation state is not successful cleanup (0.318991ms)\n\u2714 selectOrganization persists org mode before navigating and waits for UI restoration (0.335195ms)\n\u2714 selectOrganization fails closed without an eligible organization membership (0.100241ms)\n\u2139 tests 24\n\u2139 suites 0\n\u2139 pass 24\n\u2139 fail 0\n\u2139 cancelled 0\n\u2139 skipped 0\n\u2139 todo 0\n\u2139 duration_ms 29.265038\n",
+    "stderr": ""
+  },
+  {
+    "file": "beta-demo-review-ui.test.js",
+    "exitCode": 0,
+    "tests": 3,
+    "pass": 2,
+    "fail": 0,
+    "skipped": 1,
+    "stdout": "\u2714 UI mutation evidence must match the exact origin, organization, application and method (1.319569ms)\n\u2714 successful narration requires the wallet and completed verifier decision (0.63726ms)\n\ufe63 browser recorder clicks approval and invitation, hiding the first QR frame (0.109805ms) # SKIP\n\u2139 tests 3\n\u2139 suites 0\n\u2139 pass 2\n\u2139 fail 0\n\u2139 cancelled 0\n\u2139 skipped 1\n\u2139 todo 0\n\u2139 duration_ms 54.876953\n",
+    "stderr": ""
+  },
+  {
+    "file": "audit-beta-employee-access.test.js",
+    "exitCode": 0,
+    "tests": 5,
+    "pass": 5,
+    "fail": 0,
+    "skipped": 0,
+    "stdout": "\u2714 D-04 configuration uses one exact employee credential across application, flow, and policy (2.080586ms)\n\u2714 D-04 configuration rejects drift between active release resources (0.588758ms)\n\u2714 D-04 configuration rejects semantic and approval-trigger drift (0.359612ms)\n\u2714 D-04 retains its created application ID when submission fails (0.979586ms)\n\u2714 D-04 releases its exact reviewer lock after lost acquisition or approval failure without issuing (0.661367ms)\n\u2139 tests 5\n\u2139 suites 0\n\u2139 pass 5\n\u2139 fail 0\n\u2139 cancelled 0\n\u2139 skipped 0\n\u2139 todo 0\n\u2139 duration_ms 26.739596\n",
+    "stderr": ""
+  },
+  {
+    "file": "audit-beta-passport-clearance.test.js",
+    "exitCode": 0,
+    "tests": 6,
+    "pass": 6,
+    "fail": 0,
+    "skipped": 0,
+    "stdout": "\u2714 D-01 configuration binds one exact credential across application, flow, and policy (1.952083ms)\n\u2714 D-01 fresh configuration uses target-owned issuer, trust, and revocation bindings (0.314013ms)\n\u2714 D-01 application requires exact SHA-256 evidence and gate discloses only clearance (0.283708ms)\n\u2714 D-01 configuration rejects evidence, resource, policy, and trigger drift (1.382925ms)\n\u2714 D-01 retains its created application ID when stored passport evidence fails validation (0.831874ms)\n\u2714 D-01 attempts exact lock release on approval mismatch and retains unconfirmed lock outcomes (0.671893ms)\n\u2139 tests 6\n\u2139 suites 0\n\u2139 pass 6\n\u2139 fail 0\n\u2139 cancelled 0\n\u2139 skipped 0\n\u2139 todo 0\n\u2139 duration_ms 27.319025\n",
+    "stderr": ""
+  },
+  {
+    "file": "audit-beta-issuer-provider-switch.test.js",
+    "exitCode": 0,
+    "tests": 6,
+    "pass": 6,
+    "fail": 0,
+    "skipped": 0,
+    "stdout": "\u2714 provider-switch configuration is lossless and never persists the managed projection (1.627122ms)\n\u2714 release recordings fail closed unless the ElevenID Keycloak theme rendered (0.538622ms)\n\u2714 public rebind request contains only the complete DID tuple (0.170887ms)\n\u2714 provider-switch governance uses the source template Trust Profile (0.17202ms)\n\u2714 provider-switch cleanup retires active resources in dependency order (0.620045ms)\n\u2714 provider-switch cleanup deletes a draft left by a failed setup (0.189706ms)\n\u2139 tests 6\n\u2139 suites 0\n\u2139 pass 6\n\u2139 fail 0\n\u2139 cancelled 0\n\u2139 skipped 0\n\u2139 todo 0\n\u2139 duration_ms 10.47455\n",
+    "stderr": ""
+  },
+  {
+    "file": "beta-issuer-provider-switch-contract.test.js",
+    "exitCode": 0,
+    "tests": 2,
+    "pass": 2,
+    "fail": 0,
+    "skipped": 0,
+    "stdout": "\u2714 requires every D-02 happy and failure behavior from observable evidence (1.340911ms)\n\u2714 does not accept a metadata-only switch or a failed-cutover key change (0.360613ms)\n\u2139 tests 2\n\u2139 suites 0\n\u2139 pass 2\n\u2139 fail 0\n\u2139 cancelled 0\n\u2139 skipped 0\n\u2139 todo 0\n\u2139 duration_ms 7.213504\n",
+    "stderr": ""
+  }
+]

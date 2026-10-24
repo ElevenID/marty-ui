@@ -35,6 +35,7 @@ import HubIcon from '@mui/icons-material/Hub';
 import VerifiedIcon from '@mui/icons-material/Verified';
 
 import signingKeysApi from '../../../services/signingKeysApi';
+import { authFieldsForMode, authModeHelp, isAuthComplete, isAuthModeAvailable, serializeAuthReference } from './keyManagementAuth';
 import { useWizard } from '../../../hooks/useWizard';
 import { useAsyncData } from '../../../hooks/useAsyncData';
 import { useNotifications } from '../../../hooks/useNotifications';
@@ -45,6 +46,7 @@ import {
   KEY_MANAGEMENT_PURPOSES,
   PURPOSES_REQUIRING_AUTHORITY,
   createKeyManagementServicePayload,
+  createKeyManagementRegistrationPayload,
   getServiceTypeDefinition,
   isAlgorithmAllowedForPurpose,
   normalizeKeyManagementConfig,
@@ -64,6 +66,7 @@ const CONNECTION_LABELS = {
   region: 'Region / location',
   mount: 'Transit mount',
   namespace: 'Namespace',
+  ca_cert_file: 'TLS CA certificate file',
 };
 
 function logKeyManagementWizardError(message, error) {
@@ -90,15 +93,21 @@ const getProviderRunbook = (data, definition) => {
           '# Use resulting key ARN as key reference in Marty',
         ].join('\n'),
       };
-    case 'azure':
+    case 'azure': {
+      const isManagedHsm = data.endpoint?.trim().toLowerCase().replace(/\/$/, '').endsWith('.managedhsm.azure.net');
       return {
-        docsLabel: 'Azure Key Vault key creation guide',
-        docsUrl: 'https://learn.microsoft.com/en-us/azure/key-vault/keys/quick-create-portal',
+        docsLabel: isManagedHsm ? 'Azure Managed HSM key guide' : 'Azure Key Vault key creation guide',
+        docsUrl: isManagedHsm
+          ? 'https://learn.microsoft.com/en-us/azure/key-vault/managed-hsm/key-management'
+          : 'https://learn.microsoft.com/en-us/azure/key-vault/keys/quick-create-portal',
         command: [
           'az keyvault key create \\\n  --vault-name <vault-name> \\\n  --name <marty-signing-key> \\\n  --kty EC \\\n  --curve P-256',
           '# Use key identifier URI as key reference in Marty',
-        ].join('\n'),
+        ].join('\n')
+          .replace('--vault-name <vault-name>', isManagedHsm ? '--hsm-name <hsm-name>' : '--vault-name <vault-name>')
+          .replace('--kty EC', isManagedHsm ? '--kty EC-HSM' : '--kty EC'),
       };
+    }
     case 'gcp':
       return {
         docsLabel: 'Google Cloud KMS key creation guide',
@@ -234,7 +243,6 @@ const KeyManagementServiceWizard = () => {
 
   const currentConfig = normalizeKeyManagementConfig(configData || DEFAULT_KEY_MANAGEMENT_CONFIG);
   const serviceCatalog = currentConfig.service_type_catalog;
-  const currentDefaultService = currentConfig.services.find((service) => service.id === currentConfig.default_service_id) || null;
 
   const validateStep = useCallback((stepIndex, data) => {
     const definition = getServiceTypeDefinition(serviceCatalog, data.service_type);
@@ -254,7 +262,7 @@ const KeyManagementServiceWizard = () => {
         if (definition.connection_fields.includes('mount') && !data.mount?.trim()) {
           return false;
         }
-        return Boolean(data.auth_mode);
+        return Boolean(data.auth_mode) && isAuthComplete(data.auth_mode, data.auth_fields);
       case 2:
         if (!(data.key_reference?.trim() || data.key_aliases?.trim())) {
           return false;
@@ -279,21 +287,19 @@ const KeyManagementServiceWizard = () => {
   }, [serviceCatalog]);
 
   const handleSubmit = useCallback(async (data) => {
-    const newService = createKeyManagementServicePayload(data, serviceCatalog);
-    const nextDefaultServiceId = data.make_default
-      ? newService.id
-      : (currentConfig.default_service_id || newService.id);
-
+    const newService = createKeyManagementServicePayload({
+      ...data,
+      auth_reference: serializeAuthReference(data.auth_mode, data.auth_fields),
+    }, serviceCatalog);
     await signingKeysApi.updateKeyManagementConfig({
       ...orgRequestParams,
-      services: [...currentConfig.services, newService],
-      default_service_id: nextDefaultServiceId,
+      ...createKeyManagementRegistrationPayload(currentConfig, newService, data.make_default),
     });
 
     setRegisteredService(newService);
     showNotification?.('Registered key management service.', 'success');
     return newService;
-  }, [currentConfig.default_service_id, currentConfig.services, orgRequestParams, serviceCatalog, showNotification]);
+  }, [currentConfig, orgRequestParams, serviceCatalog, showNotification]);
 
   const wizard = useWizard({
     steps: STEPS,
@@ -305,8 +311,9 @@ const KeyManagementServiceWizard = () => {
       region: '',
       mount: 'transit',
       namespace: '',
+      ca_cert_file: '',
       auth_mode: '',
-      auth_reference: '',
+      auth_fields: {},
       key_reference: '',
       key_aliases: '',
       algorithms: ['ES256'],
@@ -322,7 +329,7 @@ const KeyManagementServiceWizard = () => {
     validateStep,
     onSubmit: handleSubmit,
     onCancel: () => {
-      navigate('/console/org/deploy/key-management/services');
+      navigate('/console/org/operator/key-management/services');
     },
   });
   const updateWizardData = wizard.updateData;
@@ -342,9 +349,7 @@ const KeyManagementServiceWizard = () => {
     [selectedDefinition, wizard.data]
   );
   const registeredServiceIsManagedOpenBao = registeredService?.id === MANAGED_OPENBAO_SERVICE_ID;
-  const currentDefaultIsManagedOpenBao = currentDefaultService?.id === MANAGED_OPENBAO_SERVICE_ID;
   const issuerIdentityCreateUrl = '/console/org/deploy/issuer-identity/new';
-  const managedIssuerIdentityCreateUrl = '/console/org/deploy/issuer-identity/new';
 
   const copyText = useCallback(async (text) => {
     try {
@@ -367,8 +372,9 @@ const KeyManagementServiceWizard = () => {
         region: wizard.data.region,
         mount: wizard.data.mount,
         namespace: wizard.data.namespace,
+        ca_cert_file: wizard.data.ca_cert_file,
         auth_mode: wizard.data.auth_mode,
-        auth_reference: wizard.data.auth_reference,
+        auth_reference: serializeAuthReference(wizard.data.auth_mode, wizard.data.auth_fields),
         key_reference: wizard.data.key_reference,
         key_aliases: wizard.data.key_aliases,
         algorithms: wizard.data.algorithms,
@@ -401,15 +407,17 @@ const KeyManagementServiceWizard = () => {
     } finally {
       setPreflightLoading(false);
     }
-  }, [orgRequestParams, wizard.data.algorithms, wizard.data.auth_mode, wizard.data.auth_reference, wizard.data.endpoint, wizard.data.key_aliases, wizard.data.key_reference, wizard.data.mount, wizard.data.name, wizard.data.namespace, wizard.data.region, wizard.data.service_type]);
+  }, [orgRequestParams, wizard.data.algorithms, wizard.data.auth_mode, wizard.data.auth_fields, wizard.data.ca_cert_file, wizard.data.endpoint, wizard.data.key_aliases, wizard.data.key_reference, wizard.data.mount, wizard.data.name, wizard.data.namespace, wizard.data.region, wizard.data.service_type]);
 
   const handleSelectServiceType = (definition) => {
     setPreflightChecks([]);
     wizard.updateData({
       service_type: definition.id,
-      auth_mode: definition.auth_modes[0] || 'custom',
+      auth_mode: definition.auth_modes.find(isAuthModeAvailable) || '',
+      auth_fields: {},
       mount: definition.connection_fields.includes('mount') ? (wizard.data.mount || 'transit') : '',
       namespace: definition.connection_fields.includes('namespace') ? wizard.data.namespace : '',
+      ca_cert_file: definition.connection_fields.includes('ca_cert_file') ? wizard.data.ca_cert_file : '',
       endpoint: definition.connection_fields.includes('endpoint') ? wizard.data.endpoint : '',
       region: definition.connection_fields.includes('region') ? wizard.data.region : '',
     });
@@ -458,7 +466,7 @@ const KeyManagementServiceWizard = () => {
   );
 
   const renderConnectionField = (fieldName) => {
-    const isOptional = fieldName === 'namespace';
+    const isOptional = ['namespace', 'ca_cert_file'].includes(fieldName);
     return (
       <TextField
         key={fieldName}
@@ -466,6 +474,9 @@ const KeyManagementServiceWizard = () => {
         label={CONNECTION_LABELS[fieldName] || fieldName}
         value={wizard.data[fieldName] || ''}
         required={!isOptional}
+        helperText={fieldName === 'ca_cert_file'
+          ? 'Optional path to a CA certificate file already mounted on the signing server. Leave blank to use the system trust store.'
+          : undefined}
         onChange={(event) => wizard.updateData({ [fieldName]: event.target.value })}
       />
     );
@@ -477,7 +488,7 @@ const KeyManagementServiceWizard = () => {
         Connection details
       </Typography>
       <Typography color="text.secondary" sx={{ mb: 3 }}>
-        Tell Marty how to reach {selectedDefinition.label} and which credential reference or workload identity it should use.
+        Tell Marty how to reach {selectedDefinition.label} and which credentials or workload identity it should use.
       </Typography>
       <Box sx={{ display: 'grid', gap: 2 }}>
         <TextField
@@ -497,28 +508,37 @@ const KeyManagementServiceWizard = () => {
         />
         {selectedDefinition.connection_fields.map((fieldName) => renderConnectionField(fieldName))}
         <FormControl fullWidth>
-          <InputLabel>Authentication mode</InputLabel>
+          <InputLabel id="kms-auth-mode-label">Authentication mode</InputLabel>
           <Select
+            labelId="kms-auth-mode-label"
             label="Authentication mode"
             value={wizard.data.auth_mode || selectedDefinition.auth_modes[0] || ''}
-            onChange={(event) => wizard.updateData({ auth_mode: event.target.value })}
+            onChange={(event) => wizard.updateData({ auth_mode: event.target.value, auth_fields: {} })}
           >
             {selectedDefinition.auth_modes.map((authMode) => (
-              <MenuItem key={authMode} value={authMode}>
-                {authModeLabel(authMode)}
+              <MenuItem key={authMode} value={authMode} disabled={!isAuthModeAvailable(authMode)}>
+                {authModeLabel(authMode)}{!isAuthModeAvailable(authMode) ? ' (not yet supported)' : ''}
               </MenuItem>
             ))}
           </Select>
         </FormControl>
-        <TextField
-          fullWidth
-          label="Credential reference"
-          type="password"
-          autoComplete="new-password"
-          helperText="Use a provider identity or secret reference when supported. Token-based modes treat this value as sensitive; prefer the managed service token when available."
-          value={wizard.data.auth_reference}
-          onChange={(event) => wizard.updateData({ auth_reference: event.target.value })}
-        />
+        <Typography variant="body2" color="text.secondary">{authModeHelp(wizard.data.auth_mode)}</Typography>
+        {wizard.data.auth_mode === 'token' && (
+          <TextField
+            fullWidth required label="Transit token" type="password" autoComplete="new-password"
+            value={wizard.data.auth_fields.token || ''}
+            onChange={(event) => wizard.updateData({ auth_fields: { ...wizard.data.auth_fields, token: event.target.value } })}
+          />
+        )}
+        {authFieldsForMode(wizard.data.auth_mode).map((field) => (
+          <TextField
+            key={field.name} fullWidth required={Boolean(field.required)} label={field.label}
+            type={field.secret ? 'password' : 'text'}
+            autoComplete={field.secret ? 'new-password' : 'off'}
+            value={wizard.data.auth_fields[field.name] || ''}
+            onChange={(event) => wizard.updateData({ auth_fields: { ...wizard.data.auth_fields, [field.name]: event.target.value } })}
+          />
+        ))}
       </Box>
     </Box>
   );
@@ -738,7 +758,7 @@ const KeyManagementServiceWizard = () => {
           Authentication: {authModeLabel(wizard.data.auth_mode)}
         </Typography>
         <Typography variant="body2" sx={{ mb: 0.75 }}>
-          Credential reference: {wizard.data.auth_reference ? 'Configured (hidden)' : '-'}
+          Authentication details: {serializeAuthReference(wizard.data.auth_mode, wizard.data.auth_fields) ? 'Configured (hidden)' : 'Workload identity'}
         </Typography>
         <Typography variant="body2" sx={{ mb: 0.75 }}>
           {selectedDefinition.key_reference_label}: {wizard.data.key_reference || '-'}
@@ -777,7 +797,7 @@ const KeyManagementServiceWizard = () => {
               Validate connection
             </Typography>
             <Typography variant="body2" color="text.secondary">
-              Run preflight checks for auth reference, key reference, algorithm coverage, and signer capability before saving.
+              Run preflight checks for authentication, key reference, algorithm coverage, and signer capability before saving.
             </Typography>
           </Box>
           <Button
@@ -859,9 +879,9 @@ const KeyManagementServiceWizard = () => {
         </Box>
 
         <Alert severity="info" sx={{ mt: 2 }}>
-          Registering a service does not create a signing key. The issuer identity wizard can create keys only with the
-          Marty managed OpenBao service. For registered external KMS services, create the key in the provider first,
-          validate the key reference, then choose "Use existing key from KMS" in the issuer identity wizard.
+          Registering a service does not create a signing key. For external KMS services, create the key in the provider
+          and validate its reference first. The issuer identity form asks for the public DID and signing compatibility;
+          Marty resolves the authorized signing profile and key custody on the server.
         </Alert>
       </Paper>
     </Box>
@@ -921,8 +941,8 @@ const KeyManagementServiceWizard = () => {
 
           <Alert severity={registeredServiceIsManagedOpenBao ? 'success' : 'info'} sx={{ mt: 3 }}>
             {registeredServiceIsManagedOpenBao
-              ? 'Next, create an issuer identity and choose "Create new key in KMS". The wizard will call the signing-key create endpoint, refresh the discovered key inventory, and bind the new key to the DID identity.'
-              : 'Next, create or verify the signing key in the KMS provider you just registered, then create an issuer identity and choose "Use existing key from KMS". Console key creation is available only for the Marty managed OpenBao transit service.'}
+              ? 'Next, create an issuer identity with its public DID and signing compatibility. Marty resolves the authorized managed signing profile and provisions its key internally.'
+              : 'Next, create or verify the signing key in the KMS provider you just registered, then create an issuer identity with its public DID and signing compatibility. Marty resolves the authorized signing profile and key custody on the server.'}
           </Alert>
 
           {!registeredServiceIsManagedOpenBao && (
@@ -948,16 +968,11 @@ const KeyManagementServiceWizard = () => {
           <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} justifyContent="center" sx={{ mt: 3 }}>
             <Button
               variant="contained"
-              onClick={() => navigate(registeredServiceIsManagedOpenBao ? issuerIdentityCreateUrl : '/console/org/deploy/issuer-identity/new')}
+              onClick={() => navigate(issuerIdentityCreateUrl)}
             >
               Create issuer identity
             </Button>
-            {!registeredServiceIsManagedOpenBao && currentDefaultIsManagedOpenBao && (
-              <Button variant="outlined" onClick={() => navigate(managedIssuerIdentityCreateUrl)}>
-                Use managed OpenBao key creation
-              </Button>
-            )}
-            <Button variant="outlined" onClick={() => navigate('/console/org/deploy/key-management/services')}>
+            <Button variant="outlined" onClick={() => navigate('/console/org/operator/key-management/services')}>
               View key management
             </Button>
           </Stack>

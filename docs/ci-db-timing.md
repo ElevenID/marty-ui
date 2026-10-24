@@ -94,3 +94,43 @@ runner caches were identical. Compare later PR and merge-group runs separately
 under the same toolchain, target, features, runner class, and qualification
 tier; record cache state and required-case completion alongside elapsed time.
 The new JSONL explains the DB aggregate but does not by itself shorten it.
+
+## Opt-in immutable-base pilot (2026-10-11)
+
+`MARTY_CANVAS_REUSE_PUBLISHED_BASE_PILOT=1` is an **off-by-default pilot**.
+Routine PR, merge-group, and scheduled CI keep it off. Only an explicit
+`workflow_dispatch` boolean enables it in the Canvas database step, with
+exact ignored parity, isolation, and failed-restore checks afterward. Manual
+runs still retain full qualification. It is not a release selector. The pilot
+diagnostics run the eight-case pinned-probe baseline with reuse explicitly off,
+then compare complete pre-restore schema/data dumps from the captured base
+and an independently fresh pinned probe, excluding only their validated
+per-invocation `pg_dump` restriction keys. PostgreSQL reparses twelve pinned
+CHECK/index expressions when restoring SQL. The diagnostic requires every
+other schema and data line to match byte-for-byte, and verifies both forms of
+those twelve lines against fixed digests; unexpected differences fail closed.
+The cached restore input retains `pg_dump`'s normal random
+key. Dump contents stay in the test process; only fixed mismatch messages are
+emitted. The pilot applies only to
+`PublishedDatabase::start()` with the fixed `published_probe`
+setup. The first call still runs the exact pinned producer and validates its
+source digest and migration revisions, then captures a bounded SQL dump in
+this test process before returning that same case-owned database. Its caller
+retains verified cleanup responsibility. Later calls restore the immutable
+dump into new, separately owned tmpfs PostgreSQL containers. Scoped recovery,
+oracle-specific fixtures, recovery overlays, and their cleanup remain on the
+original path.
+PostgreSQL readiness now requires TCP `127.0.0.1`; the entrypoint's temporary
+Unix-socket initialization server can otherwise appear ready before the final
+server accepts the restore.
+
+On one local Windows/Docker Desktop host, the same ignored eight-case
+sequential migration-head test took 39.43 seconds with the switch off and
+23.22 seconds with it on. A three-case comparison was 14.90 versus
+14.05 seconds. These are local fixture measurements, not CI speedup evidence:
+the real Canvas targets run multiple tests concurrently, and runner load and
+cache state differ. The opt-in path also passed pinned-Docker revision parity,
+case-isolation, and failed-restore cleanup tests. Keep the switch off in
+routine CI and release qualification until the manual Linux full Canvas pilot
+and independent review confirm case inventory, provenance, cleanup, and
+comparable hosted wall time.

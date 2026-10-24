@@ -19,7 +19,6 @@ import FolderSharedIcon from '@mui/icons-material/FolderShared';
 import StorefrontIcon from '@mui/icons-material/Storefront';
 import SettingsIcon from '@mui/icons-material/Settings';
 import DesignServicesIcon from '@mui/icons-material/DesignServices';
-import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutlined';
 import IntegrationInstructionsIcon from '@mui/icons-material/IntegrationInstructions';
 
 /**
@@ -92,7 +91,7 @@ export const ADMIN_VENDOR_NAV = [
     label: 'Deploy',
     path: '/console/org/deploy',
     icon: CloudUploadIcon,
-    description: 'Deployment Profiles, Issuer Identity, Key Management',
+    description: 'Deployment Profiles and public Issuer Identity',
     children: [
       {
         id: 'deployment-profiles',
@@ -100,13 +99,18 @@ export const ADMIN_VENDOR_NAV = [
         path: '/console/org/deploy/profiles',
         requiredPermission: { resource: 'deployment-profile', action: 'view' },
       },
-      { id: 'issuer-identity', label: 'Issuer Identity', path: '/console/org/deploy/issuer-identity' },
-      {
-        id: 'key-management',
-        label: 'Key Management',
-        path: '/console/org/deploy/key-management',
-        requiredPermission: { resource: 'signing-key', action: 'view' },
-      },
+      { id: 'issuer-identity', label: 'Issuer Identity', path: '/console/org/deploy/issuer-identity', requiredPermission: { resource: 'signing-key', action: 'view' } },
+    ],
+  },
+  {
+    id: 'operator',
+    label: 'Operator',
+    path: '/console/org/operator',
+    icon: SettingsIcon,
+    description: 'Signing services and KMS administration',
+    requiredPermission: { resource: 'signing-key', action: 'view' },
+    children: [
+      { id: 'key-management', label: 'Key Management', path: '/console/org/operator/key-management', requiredPermission: { resource: 'signing-key', action: 'view' } },
     ],
   },
   {
@@ -119,7 +123,7 @@ export const ADMIN_VENDOR_NAV = [
       { id: 'canvas-integrations', label: 'Canvas', path: '/console/org/deploy/canvas' },
       { id: 'api-keys', label: 'API Keys', path: '/console/org/api-keys', requiredPermission: { resource: 'api-key', action: 'view' } },
       { id: 'webhooks', label: 'Webhooks', path: '/console/org/webhooks', requiredPermission: { resource: 'webhook', action: 'view' } },
-      { id: 'delivery-destinations', label: 'Delivery Destinations', path: '/console/org/connect/delivery-destinations', requiredPermission: { resource: 'delivery-destination', action: 'view' } },
+      { id: 'delivery-destinations', label: 'Delivery Destinations', path: '/console/org/connect/delivery-destinations', requiredPermission: { resource: 'wallet', action: 'view' } },
     ],
   },
   {
@@ -239,8 +243,8 @@ export const PUBLIC_NAV = [
  */
 export const DASHBOARD_QUICK_ACTIONS = {
   adminVendor: [
-    { id: 'register-signing-service', label: 'Register Signing Service', path: '/console/org/deploy/key-management/services/new', icon: CloudUploadIcon },
-    { id: 'create-issuer-identity', label: 'Set Up Issuer Identity', path: '/console/org/deploy/issuer-identity/new', icon: BadgeIcon },
+    { id: 'register-signing-service', label: 'Register Signing Service', path: '/console/org/operator/key-management/services/new', icon: CloudUploadIcon, requiredPermission: { resource: 'signing-key', action: 'create' } },
+    { id: 'create-issuer-identity', label: 'Set Up Issuer Identity', path: '/console/org/deploy/issuer-identity/new', icon: BadgeIcon, requiredPermission: { resource: 'signing-key', action: 'create' } },
     { id: 'create-trust-profile', label: 'Create Trust Profile', path: '/console/org/trust/profiles/new', icon: VerifiedUserIcon },
     { id: 'create-template', label: 'Create Credential Template', path: '/console/org/templates/credentials/new', icon: DescriptionIcon },
     { id: 'create-policy', label: 'Create Presentation Policy', path: '/console/org/policies/presentation/new', icon: PolicyIcon },

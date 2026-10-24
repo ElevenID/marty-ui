@@ -39,12 +39,15 @@ def test_canvas_postgres_contracts_are_required_in_ci() -> None:
         in text("scripts/ci/run-rust-db-contracts.sh")
     )
     assert "python3 ../scripts/ci/run-db-contract-groups.py" in workflow
-    workflow += text("scripts/ci/run-rust-db-contracts.sh")
-    assert 'startswith("canvas_")' in workflow
-    assert 'endswith("_postgres_contract")' in workflow
-    assert "canvas_*_postgres_contract-*" in workflow
-    assert workflow.count("Expected eleven issuance PostgreSQL contract") == 2
-    assert workflow.count("ten Canvas plus proof nonce") == 2
+    runner = text("scripts/ci/run-rust-db-contracts.sh")
+    resolver = text("scripts/ci/rust_contract_execution.sh")
+    assert "resolve_issuance_canvas_contracts" in workflow
+    assert "resolve_issuance_canvas_contracts" in runner
+    assert 'startswith("canvas_")' in resolver
+    assert 'endswith("_postgres_contract")' in resolver
+    assert "canvas_*_postgres_contract-*" in runner  # local no-artifact fallback
+    assert "Expected eleven issuance PostgreSQL contracts" in resolver
+    assert "ten Canvas plus proof nonce" in resolver
     manifest = text("rust/services/issuance/Cargo.toml")
     assert 'name = "canvas_mirror_postgres_contract"' in manifest
     assert 'path = "tests/canvas_mirror_postgres_contract.rs"' in manifest
@@ -55,8 +58,30 @@ def test_internal_application_postgres_contract_is_required_in_ci() -> None:
     runtime = text("scripts/ci/run-rust-db-contracts.sh")
     assert 'name = "internal_application_postgres_contract"' in manifest
     assert 'path = "tests/internal_application_postgres_contract.rs"' in manifest
-    assert "internal_application_postgres_contract-*" in runtime
+    assert (
+        "resolve_contract_executable internal_application_postgres_contract" in runtime
+    )
     assert "Expected one internal Application PostgreSQL contract executable" in runtime
+
+
+def test_signing_storage_contracts_use_guarded_disposable_redis_in_ci() -> None:
+    workflow = text(".github/workflows/ci.yml")
+    runtime = text("scripts/ci/run-rust-db-contracts.sh")
+    contract = text("rust/services/signing-keys/tests/document_storage_contract.rs")
+    issuer_contract = text(
+        "rust/services/signing-keys/tests/issuer_profile_storage_contract.rs"
+    )
+
+    assert 'redis-cli -n 14 SET marty:tests:disposable-guard "$nonce"' in workflow
+    assert 'export MARTY_TEST_REDIS_DISPOSABLE_NONCE="$nonce"' in workflow
+    assert "signing_disposable_redis_url=redis://127.0.0.1:6379/14" in runtime
+    for name in ("signing_document", "issuer_profile"):
+        assert (
+            'MARTY_TEST_REDIS_URL="$signing_disposable_redis_url" \\\n'
+            f"  run_timed {name}"
+        ) in runtime
+    assert 'std::env::var("MARTY_TEST_REDIS_DISPOSABLE_NONCE")' in contract
+    assert "disposable_backends::disposable_redis_url().await" in issuer_contract
 
 
 def test_oid4vci_migration_postgres_contract_is_required_in_real_database_ci() -> None:
@@ -65,12 +90,17 @@ def test_oid4vci_migration_postgres_contract_is_required_in_real_database_ci() -
     workflow = text(".github/workflows/ci.yml")
     assert 'name = "oid4vci_migration_postgres_contract"' in manifest
     assert 'path = "tests/oid4vci_migration_postgres_contract.rs"' in manifest
-    assert "oid4vci_migration_postgres_contract-*" in runtime
+    assert "resolve_contract_executable oid4vci_migration_postgres_contract" in runtime
     assert "Expected one Issuance OID4VCI migration PostgreSQL contract executable" in runtime
-    assert '.target.name == "oid4vci_migration_postgres_contract"' in workflow
+    assert (
+        "resolve_recorded_contract_executable marty-issuance-service "
+        "oid4vci_migration_postgres_contract"
+    ) in workflow
     assert "compiled Issuance OID4VCI migration PostgreSQL contract executable" in workflow
-    assert runtime.index("oid4vci_migration_postgres_contract-*") < runtime.index(
-        "issuance_transaction_postgres_contract-*"
+    assert runtime.index(
+        "resolve_contract_executable oid4vci_migration_postgres_contract"
+    ) < runtime.index(
+        "resolve_contract_executable issuance_transaction_postgres_contract"
     ), "the following transaction suite must recreate tables after the rollback fixture"
 
 
@@ -91,6 +121,8 @@ def test_issuance_image_smoke_uses_the_shared_migration_fixture() -> None:
     assert 'POSTGRES_PASSWORD="$postgres_password"' in smoke
     assert smoke.count('PGPASSWORD="$postgres_password"') == 3
     assert 'DATABASE_URL="postgresql://marty:${postgres_password}@issuance-postgres/marty"' in smoke
+    assert "SIGNING_KEYS_INTERNAL_URL=http://synthetic-secret-service:8017/internal/signing-keys" in smoke
+    assert "INTEGRATION_SECRET_MASTER_KEY" not in smoke
     assert "access_token_expires_at" in smoke
     assert "ux_issuance_events_oid4vci_notification_id" in smoke
 
@@ -98,15 +130,19 @@ def test_issuance_image_smoke_uses_the_shared_migration_fixture() -> None:
 def test_issuance_executable_smoke_uses_an_isolated_migrated_database() -> None:
     workflow = text(".github/workflows/ci.yml")
     executable = text("rust/services/issuance/tests/executable_smoke.rs")
-    fixture = "rust/services/issuance/tests/fixtures/oid4vci_migration_base.sql"
 
     assert "marty_issuance_executable_smoke_test" in workflow
-    assert fixture in workflow
+    assert '"rust/target/debug/$owner" migrate' in workflow
+    assert '"rust/target/debug/$owner" verify-owned-schema' in workflow
+    assert "CREATE TABLE organization_service.organizations" not in workflow
+    assert "CREATE TABLE credential_template_service.credential_templates" not in workflow
+    assert "rust/target/debug/marty-issuance-service migrate" in workflow
     assert (
         "ISSUANCE_EXECUTABLE_SMOKE_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/"
         "marty_issuance_executable_smoke_test"
     ) in workflow
-    assert executable.count('.env("DATABASE_URL", &database_url)') == 5
+    assert executable.count('.env("DATABASE_URL", &database_url)') == 6
+    assert "executable_serves_issuance_rpc_with_remote_key_mutual_tls" in executable
     assert "ISSUANCE_EXECUTABLE_SMOKE_DATABASE_URL" in executable
     assert "skipping executable smoke test" in executable
 
@@ -206,7 +242,7 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
     )
     assert (
         coverage["behavior_contract"]["commit"]
-        == "5b210bde2bee4360a9504e4c360250b54f48f5ba"
+        == "367945d4e37b93c5e3a385e60a5c417c7862dc6d"
     )
     assert discovery["schema"] == "marty.issuance-static-discovery/v1"
     assert (
@@ -215,7 +251,7 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
     )
     assert (
         coverage["tenant_behavior_contract"]["commit"]
-        == "d853a14efb5cce2894aea138e2e784735499a7fc"
+        == "8e3868bcf424838c7f47085bb7a24cca7006472c"
     )
     assert tenant["schema"] == "marty.issuance-tenant-discovery/v1"
     assert (
@@ -295,7 +331,7 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         == coverage["canvas_lti_behavior_contract"]["sha256"]
     )
     assert (
-        coverage["canvas_lti_behavior_contract"]["commit"]
+        coverage["canvas_lti_behavior_contract"]["upstream"]["commit"]
         == "82945b2ad4a12aef03389d754f2eb4ed32cb1b18"
     )
     assert canvas_lti["schema"] == "marty.issuance-canvas-lti-foundation/v1"
@@ -910,7 +946,7 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
             "http": 9,
         "grpc": 0,
         "runtime_modes": ["api", "canvas-sync-worker"],
-        "literal_environment_variables": 15,
+            "literal_environment_variables": 13,
         "dynamic_configuration_lookups": 20,
         "migration_revisions": 46,
         "migration_heads": 1,
@@ -965,8 +1001,10 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         "DIDCOMM_TLS_CA_FILE",
         "DIDCOMM_UNIVERSAL_RESOLVER_URL",
         "ENVIRONMENT",
+            "GRPC_CA_CERT",
         "GRPC_SERVICE_TOKEN",
         "GRPC_SERVICE_TOKEN_FILE",
+            "GRPC_TLS_CA_CERT",
         "INTEGRATION_SECRET_MASTER_KEY_ENV",
         "ISSUANCE_GRPC_ENABLED",
         "ISSUANCE_GRPC_PORT",
@@ -1005,6 +1043,13 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         "CANVAS_MIRROR_WORKER_RETRY_FAILED",
         "CANVAS_MIRROR_WORKER_RUN_ON_STARTUP",
         "CANVAS_PORTABLE_INTEGRATION_ENABLED",
+        "GRPC_INSECURE_ALLOWED",
+        "GRPC_TLS_CLIENT_CERT",
+        "GRPC_TLS_CLIENT_KMS_ADDR",
+        "GRPC_TLS_CLIENT_KMS_CA_CERT",
+        "GRPC_TLS_CLIENT_KMS_KEY_NAME",
+        "GRPC_TLS_CLIENT_KMS_KEY_VERSION",
+        "GRPC_TLS_CLIENT_KMS_TOKEN_FILE",
     ]
     frozen_environment_variables = set(
         surface["configuration"]["environment_variables"]
@@ -1064,7 +1109,7 @@ def test_oid4vci_coverage_mutations_break_the_enforced_provenance_or_route_floor
         assert not valid(changed)
 
 
-def test_candidate_is_path_split_without_replacing_the_python_runtime() -> None:
+def test_candidate_uses_rust_runtime_across_compose_surfaces() -> None:
     ownership = json.loads(text("docs/rust-migration-ownership.json"))
     capability = next(
         value
@@ -1092,7 +1137,7 @@ def test_candidate_is_path_split_without_replacing_the_python_runtime() -> None:
     assert "CANVAS_LTI_JWKS_TTL_MINUTES:" in beta
     assert "CANVAS_LTI_EXPERIENCE_SESSION_TTL_MINUTES:" in beta
     assert "CANVAS_OAUTH_COMPLETION_REDIRECT_URL:" in beta
-    assert "INTEGRATION_SECRET_MASTER_KEY:" in beta
+    assert "INTEGRATION_SECRET_MASTER_KEY:" not in beta
     assert "CANVAS_ALLOW_PRIVATE_BASE_URLS:" in beta
     assert "CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS:" in beta
     assert "CANVAS_PRIVATE_ORIGIN_ALLOWLIST:" in beta
@@ -1104,9 +1149,10 @@ def test_candidate_is_path_split_without_replacing_the_python_runtime() -> None:
     assert "ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005" in production
     assert "ISSUANCE_SERVICE_URL: http://issuance:8005" in production
     assert "file: docker-compose.service.issuance-native-runtime.yml" in production
-    assert "MARTY_ISSUANCE_IMAGE" in production
+    assert "MARTY_ISSUANCE_IMAGE" not in production
     assert "CANVAS_LTI_EXPERIENCE_SESSION_TTL_MINUTES:" not in production
-    assert "MARTY_ISSUANCE_IMAGE" in compose
+    assert "MARTY_ISSUANCE_IMAGE" not in compose
+    assert 'command: ["migrate"]' in compose
 
 
 def test_public_issued_credential_adapters_cut_over_without_claiming_siblings() -> None:

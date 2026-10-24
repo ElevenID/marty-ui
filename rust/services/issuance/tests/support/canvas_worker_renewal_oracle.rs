@@ -199,86 +199,107 @@ pub(super) async fn remove_write_probes(pool: &PgPool) {
 }
 
 pub async fn assert_renewal_write_failure_boundaries(pool: &PgPool) {
-    for (failed_stage, expected_attempts) in [
-        ("lease", [2_i64, 0, 0]),
-        ("target", [2, 2, 0]),
-        ("process", [2, 2, 2]),
-    ] {
-        let ControlledCycle { worker, state, .. } =
-            controlled_cycle_with_config(pool, None, renewal_config()).await;
-        let mut cycle = Box::pin(worker.run_cycle());
-        await_both_processors(cycle.as_mut(), &state).await;
-        let before: Vec<(String, DateTime<Utc>, String)> = sqlx::query_as(
-            "SELECT j.target_id, j.lease_expires_at, t.metadata->>'worker_heartbeat_at'
+    use super::canvas_worker_renewal_job_outcomes::{isolated_database, settle_group};
+
+    // Each scenario keeps the actual ten-second renewal and owns its destructive
+    // schema/probes. Do not overlap this phase with the outcome suite: three
+    // six-connection pools match that suite's existing concurrency envelope.
+    let (lease, target, process) = tokio::join!(
+        settle_group(isolated_database(pool, |pool| async move {
+            assert_write_failure_boundary(&pool, "lease", [2, 0, 0]).await;
+        })),
+        settle_group(isolated_database(pool, |pool| async move {
+            assert_write_failure_boundary(&pool, "target", [2, 2, 0]).await;
+        })),
+        settle_group(isolated_database(pool, |pool| async move {
+            assert_write_failure_boundary(&pool, "process", [2, 2, 2]).await;
+        })),
+    );
+    // Even a failed setup/body/cleanup must not cancel another owned database.
+    for result in [lease, target, process] {
+        result.unwrap_or_else(|panic| std::panic::resume_unwind(panic));
+    }
+}
+
+async fn assert_write_failure_boundary(
+    pool: &PgPool,
+    failed_stage: &str,
+    expected_attempts: [i64; 3],
+) {
+    let ControlledCycle { worker, state, .. } =
+        controlled_cycle_with_config(pool, None, renewal_config()).await;
+    let mut cycle = Box::pin(worker.run_cycle());
+    await_both_processors(cycle.as_mut(), &state).await;
+    let before: Vec<(String, DateTime<Utc>, String)> = sqlx::query_as(
+        "SELECT j.target_id, j.lease_expires_at, t.metadata->>'worker_heartbeat_at'
              FROM issuance_service.canvas_evidence_sync_jobs j
              JOIN issuance_service.canvas_evidence_sync_targets t ON t.id = j.target_id
              ORDER BY j.target_id",
-        )
-        .fetch_all(pool)
-        .await
-        .unwrap();
-        assert_eq!(before.len(), 2);
-        install_write_failure(pool, failed_stage).await;
-        await_write_failure(cycle.as_mut(), pool, expected_attempts).await;
-        assert_eq!(state.active.load(Ordering::SeqCst), 2);
-        assert_eq!(state.cleaned.load(Ordering::SeqCst), 0);
-        // Operational failure leaves processing alive; cancellation, not the
-        // renewal error, now acknowledges both owned scopes. Durable partial
-        // write and attempt assertions below are unchanged.
-        drop(cycle);
-        assert_eq!(state.active.load(Ordering::SeqCst), 0);
-        assert_eq!(state.cleaned.load(Ordering::SeqCst), 2);
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap();
+    assert_eq!(before.len(), 2);
+    install_write_failure(pool, failed_stage).await;
+    await_write_failure(cycle.as_mut(), pool, expected_attempts).await;
+    assert_eq!(state.active.load(Ordering::SeqCst), 2);
+    assert_eq!(state.cleaned.load(Ordering::SeqCst), 0);
+    // Operational failure leaves processing alive; cancellation, not the
+    // renewal error, now acknowledges both owned scopes. Durable partial
+    // write and attempt assertions below are unchanged.
+    drop(cycle);
+    assert_eq!(state.active.load(Ordering::SeqCst), 0);
+    assert_eq!(state.cleaned.load(Ordering::SeqCst), 2);
 
-        let attempts = write_attempts(pool).await;
-        for ((stage, actual), expected) in WRITE_STAGES
-            .into_iter()
-            .zip(attempts)
-            .zip(expected_attempts)
-        {
-            assert_eq!(actual, expected, "failure={failed_stage}, stage={stage}");
-        }
-        for (target_id, lease_before, heartbeat_before) in before {
-            let (lease_after, heartbeat_after, status, completed): (
-                DateTime<Utc>,
-                String,
-                String,
-                bool,
-            ) = sqlx::query_as(
-                "SELECT j.lease_expires_at, t.metadata->>'worker_heartbeat_at',
+    let attempts = write_attempts(pool).await;
+    for ((stage, actual), expected) in WRITE_STAGES
+        .into_iter()
+        .zip(attempts)
+        .zip(expected_attempts)
+    {
+        assert_eq!(actual, expected, "failure={failed_stage}, stage={stage}");
+    }
+    for (target_id, lease_before, heartbeat_before) in before {
+        let (lease_after, heartbeat_after, status, completed): (
+            DateTime<Utc>,
+            String,
+            String,
+            bool,
+        ) = sqlx::query_as(
+            "SELECT j.lease_expires_at, t.metadata->>'worker_heartbeat_at',
                         j.status, j.completed_at IS NOT NULL
                  FROM issuance_service.canvas_evidence_sync_jobs j
                  JOIN issuance_service.canvas_evidence_sync_targets t ON t.id = j.target_id
                  WHERE j.target_id = $1",
-            )
-            .bind(target_id)
-            .fetch_one(pool)
-            .await
-            .unwrap();
-            if failed_stage == "lease" {
-                assert_eq!(lease_after, lease_before);
-            } else {
-                assert!(
-                    lease_after > lease_before,
-                    "prior lease write remains committed"
-                );
-            }
-            if failed_stage == "process" {
-                assert!(
-                    DateTime::parse_from_rfc3339(&heartbeat_after).unwrap()
-                        > DateTime::parse_from_rfc3339(&heartbeat_before).unwrap(),
-                    "target heartbeat remains committed despite process heartbeat failure"
-                );
-            } else {
-                assert_eq!(heartbeat_after, heartbeat_before);
-            }
-            assert_eq!(status, "leased");
+        )
+        .bind(target_id)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        if failed_stage == "lease" {
+            assert_eq!(lease_after, lease_before);
+        } else {
             assert!(
-                !completed,
-                "renewal failure is not successful job completion"
+                lease_after > lease_before,
+                "prior lease write remains committed"
             );
         }
-        remove_write_probes(pool).await;
+        if failed_stage == "process" {
+            assert!(
+                DateTime::parse_from_rfc3339(&heartbeat_after).unwrap()
+                    > DateTime::parse_from_rfc3339(&heartbeat_before).unwrap(),
+                "target heartbeat remains committed despite process heartbeat failure"
+            );
+        } else {
+            assert_eq!(heartbeat_after, heartbeat_before);
+        }
+        assert_eq!(status, "leased");
+        assert!(
+            !completed,
+            "renewal failure is not successful job completion"
+        );
     }
+    remove_write_probes(pool).await;
 }
 
 async fn write_attempts(pool: &PgPool) -> [i64; 3] {

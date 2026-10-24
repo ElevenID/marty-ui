@@ -140,11 +140,6 @@ VECTOR_TEST_OWNERS = {
     "gateway-flow-behavior.json": VectorTestOwner(
         "rust/services/gateway/src/flow_contract.rs", "language_neutral_flow_contract"
     ),
-    "gateway-flow-key-envelope-behavior.json": VectorTestOwner(
-        "rust/services/signing-keys/src/flow_envelope.rs",
-        "envelope_round_trip_preserves_exact_binding_and_payload",
-        "contract",
-    ),
     "gateway-internal-signing-behavior.json": VectorTestOwner(
         "rust/services/gateway/src/signing_compat.rs",
         "shared_internal_signing_route_contract",
@@ -518,6 +513,22 @@ def _assert_full_workspace_ci_owner(workflow: str) -> None:
     changes = job("changes")
     service = job("test-rust-services")
     gate = job("ci-gate")
+    strategy_match = re.search(
+        r"(?ms)^    strategy:\n(.*?)(?=^    [a-z][a-z0-9-]*:\n|\Z)", service
+    )
+    matrix_match = (
+        re.search(
+            r"(?ms)^      matrix:\n(.*?)(?=^      [a-z][a-z0-9-]*:\n|\Z)",
+            strategy_match.group(1),
+        )
+        if strategy_match
+        else None
+    )
+    matrix_body = (
+        re.sub(r"(?m)^        #.*\n", "", matrix_match.group(1)).strip("\n")
+        if matrix_match
+        else ""
+    )
     workspace_step = "      - name: Run safe Rust contract groups concurrently\n"
     vector_step = (
         "      - name: Require public protocol vector test execution\n"
@@ -526,25 +537,50 @@ def _assert_full_workspace_ci_owner(workflow: str) -> None:
         "        run: python3 -m scripts.ci.check_public_vector_execution "
         '"$RUNNER_TEMP/rust-workspace.log"\n'
     )
+    diagnostic_matrix = (
+        "        lane: >-\n"
+        "          ${{ fromJSON(github.event_name == 'pull_request' &&\n"
+        "          contains(github.event.pull_request.labels.*.name, 'ci-renewal-unit-diagnostic') &&\n"
+        "          contains(github.event.pull_request.labels.*.name, 'ci-worker-diagnostic') &&\n"
+        "          needs.changes.outputs.rust_runtime == 'true' &&\n"
+        '          \'["canvas","contracts","worker","selfhost","renewal-unit"]\' ||\n'
+        "          github.event_name == 'pull_request' &&\n"
+        "          contains(github.event.pull_request.labels.*.name, 'ci-renewal-unit-diagnostic') &&\n"
+        "          needs.changes.outputs.rust_runtime == 'true' &&\n"
+        '          \'["canvas","contracts","selfhost","renewal-unit"]\' ||\n'
+        "          github.event_name == 'pull_request' &&\n"
+        "          contains(github.event.pull_request.labels.*.name, 'ci-worker-diagnostic') &&\n"
+        "          contains(github.event.pull_request.labels.*.name, 'ci-selfhost-diagnostic') &&\n"
+        "          needs.changes.outputs.rust_runtime == 'true' &&\n"
+        '          \'["canvas","contracts","worker","selfhost"]\' ||\n'
+        "          github.event_name == 'pull_request' &&\n"
+        "          contains(github.event.pull_request.labels.*.name, 'ci-worker-diagnostic') &&\n"
+        "          needs.changes.outputs.rust_runtime == 'true' &&\n"
+        '          \'["canvas","contracts","worker","selfhost"]\' ||\n'
+        "          github.event_name == 'pull_request' &&\n"
+        "          contains(github.event.pull_request.labels.*.name, 'ci-selfhost-diagnostic') &&\n"
+        "          needs.changes.outputs.rust_runtime == 'true' &&\n"
+        '          \'["canvas","contracts","selfhost"]\' || needs.changes.outputs.rust_matrix) }}'
+    )
     required = (
-        'rust_matrix=\'["canvas","contracts"]\'' in changes
+        'rust_matrix=\'["canvas","contracts","selfhost"]\'' in changes
         and "rust_matrix='[\"contracts\"]'" in changes
         and 'if [[ "${{ github.event_name }}" == merge_group ]]' in changes
         and "needs: changes" in service
         and "if: needs.changes.outputs.rust == 'true'" in service
-        and "lane: ${{ fromJSON(needs.changes.outputs.rust_matrix) }}" in service
+        and matrix_body == diagnostic_matrix
         and "cargo test --locked --workspace --no-run" in service
-        and "cargo test --locked --workspace --exclude marty-canvas-acceptance"
+        and "cargo test --locked --workspace --exclude marty-canvas-acceptance --exclude marty-canvas-worker-acceptance"
         in service
         and service.count(workspace_step) == 1
         and service.count(vector_step) == 1
         and service.index(workspace_step) < service.index(vector_step)
         and "RUST_MATRIX: ${{ needs.changes.outputs.rust_matrix }}" in gate
         and 'case "$RUST_SELECTED:$RUST_RUNTIME_SELECTED:$RUST_MATRIX" in' in gate
-        and '\'true:true:["canvas","contracts"]\'' in gate
+        and '\'true:true:["canvas","contracts","selfhost"]\'' in gate
         and "'true:false:[\"contracts\"]'" in gate
         and '[[ "$RUST_SELECTED" == true && "$RUST_RUNTIME_SELECTED" == true &&' in gate
-        and '"$RUST_MATRIX" == \'["canvas","contracts"]\' ]]' in gate
+        and '"$RUST_MATRIX" == \'["canvas","contracts","selfhost"]\' ]]' in gate
         and 'require_selected test-rust-services "$RUST_SERVICES_RESULT" "$RUST_SELECTED"'
         in gate
     )

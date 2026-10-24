@@ -30,6 +30,8 @@ pub enum PolicyRecordError {
     MalformedDocument,
     #[error("PRESENTATION_POLICY.STORAGE: legacy {field} is malformed")]
     MalformedLegacy { field: &'static str },
+    #[error("PRESENTATION_POLICY.STORAGE: private key material is not allowed")]
+    PrivateKeyMaterial,
 }
 
 impl PolicyRecord {
@@ -59,7 +61,7 @@ impl PolicyRecord {
                 "required_claims": policy.required_claims
             }),
         );
-        Ok(Self {
+        let record = Self {
             id: policy.id.to_string(),
             organization_id: policy.organization_id.to_string(),
             name: policy.name.clone(),
@@ -79,10 +81,13 @@ impl PolicyRecord {
             created_at: policy.created_at,
             updated_at: policy.updated_at,
             policy_document,
-        })
+        };
+        record.ensure_public()?;
+        Ok(record)
     }
 
     pub fn into_policy(self) -> Result<PresentationPolicy, PolicyRecordError> {
+        self.ensure_public()?;
         if self
             .policy_document
             .as_object()
@@ -161,6 +166,21 @@ impl PolicyRecord {
             "updated_at": self.updated_at
         });
         serde_json::from_value(document).map_err(|_| PolicyRecordError::MalformedDocument)
+    }
+
+    fn ensure_public(&self) -> Result<(), PolicyRecordError> {
+        if [
+            &self.policy_document,
+            &self.display_metadata,
+            &self.credential_requirements,
+            &self.alternative_requirements,
+        ]
+        .into_iter()
+        .any(marty_key_material_policy::contains_private_key)
+        {
+            return Err(PolicyRecordError::PrivateKeyMaterial);
+        }
+        Ok(())
     }
 }
 

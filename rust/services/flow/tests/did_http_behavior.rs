@@ -58,6 +58,7 @@ impl SigningIdentityProvider for Signing {
             organization_id: organization_id.into(),
             issuer_did: issuer_did.into(),
             verification_method_id: format!("{issuer_did}#key-1"),
+            signing_key_reference: "managed-key-1".into(),
             public_jwk: BTreeMap::from([
                 ("kty".into(), json!("EC")),
                 ("crv".into(), json!("P-256")),
@@ -98,6 +99,7 @@ fn router(with_provider: bool) -> axum::Router {
         ..FlowHttpVerificationOptions::default()
     };
     flow_read_router(FlowHttpState {
+        service_authenticator: None,
         repository: PostgresFlowRepository::new(pool),
         providers: Arc::new(providers),
         public_base_url: "https://issuer.example".into(),

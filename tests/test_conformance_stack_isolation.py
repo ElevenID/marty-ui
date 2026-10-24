@@ -22,7 +22,9 @@ stack = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(stack)
 
 
-def _assert_unique_yaml_keys(node: yaml.Node, path: Path, location: str = "root") -> None:
+def _assert_unique_yaml_keys(
+    node: yaml.Node, path: Path, location: str = "root"
+) -> None:
     if isinstance(node, MappingNode):
         seen: dict[str, int] = {}
         for key_node, value_node in node.value:
@@ -107,57 +109,77 @@ def test_conformance_overlay_resets_every_base_global_resource() -> None:
                 assert isinstance(reset, SequenceNode) and not reset.value
 
 
-def test_issuer_did_identity_returns_only_public_did_material(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    payload = {
+def _identity_query(monkeypatch, payload, *, project="marty-conformance-test1", service="gateway", running=True, selected=None, curl_code=0):
+    calls = []
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        if "ps" in command:
+            output = selected if selected is not None else "a" * 64
+        elif command[:3] == ["docker", "container", "inspect"]:
+            output = json.dumps([{"Config": {
+                "Labels": {"com.docker.compose.project": project, "com.docker.compose.service": service},
+                "Env": ["MARTY_ISSUER_DID=did:web:marty.example", "SIGNING_KEYS_INTERNAL_API_KEY=private-test-key"],
+            }, "State": {"Running": running}}])
+        else:
+            output = json.dumps(payload)
+        return type("Result", (), {"returncode": curl_code if "curl" in command else 0,
+                                   "stdout": output, "stderr": "private-test-key" if curl_code else ""})()
+    monkeypatch.setattr(stack.subprocess, "run", fake_run)
+    return calls
+
+
+def _public_identity():
+    return {
         "issuer_did": "did:web:marty.example",
         "verification_method_id": "did:web:marty.example#oid4vp",
         "public_jwk": {"kty": "EC", "crv": "P-256", "x": "x", "y": "y"},
-        "key_purpose": "oid4vp_request_signing",
-        "algorithm": "ES256",
+        "did_document": None,
+        "key_purpose": "oid4vp_request_signing", "algorithm": "ES256",
     }
-    captured: list[str] = []
-
-    def fake_run(command: list[str], **_kwargs: object) -> object:
-        captured.extend(command)
-        return type(
-            "Result",
-            (),
-            {"returncode": 0, "stdout": json.dumps(payload), "stderr": ""},
-        )()
-
-    monkeypatch.setattr(stack.subprocess, "run", fake_run)
-    assert stack.issuer_did_identity(["docker", "compose"]) == payload
-    rendered = " ".join(captured)
-    assert "exec -T gateway python -c" in rendered
-    assert "SIGNING_KEYS_INTERNAL_API_KEY" in rendered
-    assert "dev-signing-keys-internal-api-key" not in rendered
-    assert "OID4VP_ISSUER_PROFILE_ID" not in rendered
-    assert "/resolve-issuer-did" in rendered
 
 
-def test_issuer_did_identity_rejects_private_jwk_material(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    payload = {
-        "issuer_did": "did:web:marty.example",
-        "verification_method_id": "did:web:marty.example#oid4vp",
-        "public_jwk": {"kty": "EC", "crv": "P-256", "x": "x", "y": "y", "d": "private"},
-        "key_purpose": "oid4vp_request_signing",
-        "algorithm": "ES256",
-    }
-    monkeypatch.setattr(
-        stack.subprocess,
-        "run",
-        lambda *_args, **_kwargs: type(
-            "Result",
-            (),
-            {"returncode": 0, "stdout": json.dumps(payload), "stderr": ""},
-        )(),
-    )
+IDENTITY_COMMAND = ["docker", "compose", "--project-name", "marty-conformance-test1"]
+
+
+def test_issuer_did_identity_returns_only_public_did_material(monkeypatch):
+    payload = _public_identity()
+    calls = _identity_query(monkeypatch, {**payload, "issuer_profile": {"signing_key_reference": "private-ref"}})
+    assert stack.issuer_did_identity(IDENTITY_COMMAND) == payload
+    rendered = " ".join(" ".join(command) for command, _ in calls)
+    assert "exec -T gateway curl --config -" in rendered
+    assert "python" not in rendered and "private-test-key" not in rendered
+    assert "X-Api-Key: private-test-key" in calls[-1][1]["input"]
+    assert "/resolve-issuer-did" in calls[-1][1]["input"]
+
+
+def test_issuer_did_identity_rejects_private_jwk_material(monkeypatch):
+    payload = _public_identity()
+    payload["public_jwk"]["d"] = "private"
+    _identity_query(monkeypatch, payload)
     with pytest.raises(ValueError, match="public ES256 identity"):
-        stack.issuer_did_identity(["docker", "compose"])
+        stack.issuer_did_identity(IDENTITY_COMMAND)
+
+
+@pytest.mark.parametrize("fault", [{"project": "foreign"}, {"service": "auth"}, {"running": False}])
+def test_issuer_identity_refuses_foreign_or_inactive_containers(monkeypatch, fault):
+    calls = _identity_query(monkeypatch, _public_identity(), **fault)
+    with pytest.raises(ValueError, match="owned running container"):
+        stack.issuer_did_identity(IDENTITY_COMMAND)
+    assert len(calls) == 2 and all("curl" not in command for command, _ in calls)
+
+
+def test_issuer_identity_refuses_ambiguous_container_selection(monkeypatch):
+    calls = _identity_query(monkeypatch, _public_identity(), selected="a" * 64 + "\n" + "b" * 64)
+    with pytest.raises(ValueError, match="exactly one"):
+        stack.issuer_did_identity(IDENTITY_COMMAND)
+    assert len(calls) == 1
+
+
+def test_issuer_identity_query_failure_does_not_expose_credentials(monkeypatch):
+    _identity_query(monkeypatch, _public_identity(), curl_code=22)
+    with pytest.raises(ValueError) as failure:
+        stack.issuer_did_identity(IDENTITY_COMMAND)
+    assert "private-test-key" not in str(failure.value)
 
 
 def test_project_name_is_narrowly_scoped() -> None:
@@ -327,28 +349,61 @@ def test_didcomm_authcrypt_overlay_is_explicit_and_isolation_is_last() -> None:
     files = [
         command[index + 1] for index, value in enumerate(command) if value == "--file"
     ]
-    assert [Path(path).name for path in files[-4:]] == [
+    assert [Path(path).name for path in files[-3:]] == [
         stack.DIDCOMM_AUTHCRYPT_FILE,
-        stack.NATIVE_AUTHCRYPT_FILE,
         stack.NATIVE_CA_FILE,
         stack.ISOLATION_FILE,
     ]
 
 
-def test_didcomm_authcrypt_policy_is_mounted_only_into_issuance() -> None:
+def test_didcomm_authcrypt_rejects_legacy_issuance_owner() -> None:
+    with pytest.raises(ValueError, match="requires the native issuance owner"):
+        stack.compose_command(
+            "marty-conformance-test1",
+            issuance_owner="legacy",
+            include_didcomm_authcrypt=True,
+        )
+
+
+def test_didcomm_authcrypt_policy_is_mounted_only_into_native_issuance() -> None:
     overlay = yaml.safe_load(
         (ROOT / stack.DIDCOMM_AUTHCRYPT_FILE).read_text(encoding="utf-8")
     )
-    assert set(overlay["services"]) == {"issuance"}
-    issuance = overlay["services"]["issuance"]
+    assert set(overlay["services"]) == {"issuance-native"}
+    issuance = overlay["services"]["issuance-native"]
     assert issuance["environment"] == {
         "DIDCOMM_ENCRYPTION_POLICY_FILE": (
             "/run/secrets/didcomm-authcrypt/didcomm-encryption-policy.json"
-        )
+        ),
     }
-    assert issuance["volumes"] == [
-        "${DIDCOMM_ENCRYPTION_POLICY_DIR:?set DIDCOMM_ENCRYPTION_POLICY_DIR to an exact policy directory}:/run/secrets/didcomm-authcrypt:ro"
+    assert [mount["target"] for mount in issuance["volumes"]] == [
+        "/run/secrets/didcomm-authcrypt/didcomm-encryption-policy.json",
     ]
+    assert issuance["volumes"][0]["read_only"] is True
+    assert issuance["volumes"][0]["bind"] == {"create_host_path": False}
+    base = yaml.safe_load(
+        (ROOT / "docker-compose.base.yml").read_text(encoding="utf-8")
+    )
+    native = yaml.safe_load(
+        (ROOT / "docker-compose.profile.issuance-native.yml").read_text(
+            encoding="utf-8"
+        )
+    )["services"]["issuance-native"]
+    assert native["environment"]["DIDCOMM_KMS_ADDR"] == "https://openbao:8200"
+    assert (
+        native["environment"]["DIDCOMM_KMS_TOKEN_FILE"]
+        == "/bao/didcomm-issuance-token/token"
+    )
+    assert (
+        "openbao_didcomm_issuance_token:/bao/didcomm-issuance-token:ro"
+        in native["volumes"]
+    )
+    assert (
+        base["services"]["openbao-init"]["environment"][
+            "BAO_DIDCOMM_ISSUANCE_TOKEN_FILE"
+        ]
+        == "/bao/didcomm-issuance-token/token"
+    )
 
 
 def test_didcomm_holder_receiver_bridge_is_conformance_only() -> None:
@@ -370,10 +425,12 @@ def test_didcomm_holder_receiver_bridge_is_conformance_only() -> None:
         assert "host.docker.internal:host-gateway" not in (
             ROOT / production_file
         ).read_text(encoding="utf-8")
-        assert "DIDCOMM_TLS_CA_FILE" not in (
-            ROOT / production_file
-        ).read_text(encoding="utf-8")
-    base = yaml.safe_load((ROOT / "docker-compose.base.yml").read_text(encoding="utf-8"))
+        assert "DIDCOMM_TLS_CA_FILE" not in (ROOT / production_file).read_text(
+            encoding="utf-8"
+        )
+    base = yaml.safe_load(
+        (ROOT / "docker-compose.base.yml").read_text(encoding="utf-8")
+    )
     issuance_environment = base["services"]["issuance"]["environment"]
     assert issuance_environment["DIDCOMM_ALLOW_PRIVATE_IPS"] == (
         "${DIDCOMM_ALLOW_PRIVATE_IPS:-false}"
@@ -389,7 +446,9 @@ def test_trust_registry_private_adapter_is_conformance_only() -> None:
         "  deployment-profile:\n", 1
     )[0]
 
-    assert "TRUST_REGISTRY_PRIVATE_HOST_ALLOWLIST: trust-registry-fixture" in trust_profile
+    assert (
+        "TRUST_REGISTRY_PRIVATE_HOST_ALLOWLIST: trust-registry-fixture" in trust_profile
+    )
     assert "TRUST_REGISTRY_TLS_CA_FILE:" in trust_profile
     assert 'TRUST_REGISTRY_SYNC_POLL_SECONDS: "86400"' in trust_profile
     assert "trust-registry-conformance-root-ca.pem:ro" in trust_profile
@@ -414,7 +473,9 @@ def test_local_build_defines_ui_without_release_image_overlays() -> None:
     ]
 
     assert files[-1].endswith("docker-compose.profile.conformance.yml")
-    assert any(path.endswith("docker-compose.profile.local-build.yml") for path in files)
+    assert any(
+        path.endswith("docker-compose.profile.local-build.yml") for path in files
+    )
     assert not any(path.endswith("docker-compose.profile.ghcr.yml") for path in files)
     assert not any(
         path.endswith("docker-compose.profile.conformance-images.yml") for path in files
@@ -433,9 +494,9 @@ def test_local_ui_image_is_reproducible_and_installs_postinstall_script() -> Non
 
     assert "oven/bun:1.3.14-alpine@sha256:" in dockerfile
     assert "nginx:1.29.1-alpine@sha256:" in dockerfile
-    assert dockerfile.index("COPY scripts/patch-prerenderer-ts-deepmerge.cjs") < dockerfile.index(
-        "RUN bun install --frozen-lockfile"
-    )
+    assert dockerfile.index(
+        "COPY scripts/patch-prerenderer-ts-deepmerge.cjs"
+    ) < dockerfile.index("RUN bun install --frozen-lockfile")
     assert "node_modules" in dockerignore.splitlines()
     assert "dist" in dockerignore.splitlines()
     assert ".env" in dockerignore.splitlines()
@@ -452,59 +513,44 @@ def test_release_profile_removes_builds_and_pins_infrastructure() -> None:
     for service in (
         "postgres",
         "redis",
-        "keycloak",
         "mailpit",
-        "openbao",
         "envoy",
     ):
         section = infrastructure.split(f"  {service}:\n", 1)[1].split("\n  ", 1)[0]
         assert "@sha256:" in section
+
+    for service in ("openbao", "openbao-init"):
+        section = infrastructure.split(f"  {service}:\n", 1)[1].split("\n  ", 1)[0]
+        assert "${MARTY_OPENBAO_DIDCOMM_IMAGE:?" in section
+        assert "quay.io/openbao/openbao@" not in section
+
+    for service in ("keycloak", "keycloak-configurator"):
+        section = infrastructure.split(f"  {service}:\n", 1)[1].split("\n  ", 1)[0]
+        assert "ghcr.io/elevenid/marty-ui-oss/keycloak@${KEYCLOAK_KMS_IMAGE_DIGEST:?" in section
 
     assert "GET /ready HTTP/1.1" in infrastructure
     assert "Connection: close" in infrastructure
     assert "HTTP/1.0" not in infrastructure
 
 
-def test_local_build_requires_digest_pinned_bootstrap_artifacts(
+def test_local_build_needs_no_python_wheel_artifacts(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    for name in stack.LOCAL_BUILD_ARGS:
+    for name in ("MARTY_RS_URI", "MARTY_COMMON_URI"):
         monkeypatch.delenv(name, raising=False)
-    with pytest.raises(ValueError, match="MARTY_RS_URI"):
-        stack.local_build_arguments()
-
-    for name in stack.LOCAL_BUILD_ARGS:
-        monkeypatch.setenv(name, f"value-for-{name}")
-
-    assert stack.local_build_arguments() == [
-        "--build-arg",
-        "MARTY_RS_URI=value-for-MARTY_RS_URI",
-        "--build-arg",
-        "MARTY_RS_DIGEST=value-for-MARTY_RS_DIGEST",
-        "--build-arg",
-        "MARTY_VERIFICATION_URI=value-for-MARTY_VERIFICATION_URI",
-        "--build-arg",
-        "MARTY_VERIFICATION_DIGEST=value-for-MARTY_VERIFICATION_DIGEST",
-        "--build-arg",
-        "MARTY_ISO18013_URI=value-for-MARTY_ISO18013_URI",
-        "--build-arg",
-        "MARTY_ISO18013_DIGEST=value-for-MARTY_ISO18013_DIGEST",
-        "--build-arg",
-        "MARTY_COMMON_URI=value-for-MARTY_COMMON_URI",
-        "--build-arg",
-        "MARTY_COMMON_DIGEST=value-for-MARTY_COMMON_DIGEST",
-    ]
+    assert stack.local_build_arguments() == []
 
 
-def test_only_python_migrations_receive_verified_python_artifacts() -> None:
-    """Rust services must not inherit Python artifact inputs or runtime residue."""
+def test_rust_migrations_have_no_python_artifact_inputs() -> None:
+    """Rust services and migrations have no Python wheel build inputs."""
     compose = (ROOT / "docker-compose.base.yml").read_text(encoding="utf-8")
-    assert "x-marty-migration-build-artifacts: &marty_migration_build_artifacts" in compose
+    assert "x-marty-migration-build-artifacts" not in compose
     migration = re.search(
         r"(?ms)^  db-migrate:\n(.*?)(?=^  [a-zA-Z0-9_-]+:\n|\Z)", compose
     )
     assert migration is not None
-    assert "<<: *marty_migration_build_artifacts" in migration.group(1)
+    assert "dockerfile: services/Dockerfile.migrations" in migration.group(1)
+    assert "MARTY_RS_URI" not in migration.group(1)
 
     for service in (
         "revocation-profile-migrate",
@@ -615,12 +661,18 @@ def test_reviewer_bootstrap_requires_the_exact_existing_project(
         stack.main()
 
 
-def test_ghcr_profile_keeps_dedicated_issuance_artifact() -> None:
+def test_ghcr_profile_uses_shared_rust_image_for_issuance() -> None:
     profile = (ROOT / "docker-compose.profile.ghcr.yml").read_text(encoding="utf-8")
     base = (ROOT / "docker-compose.base.yml").read_text(encoding="utf-8")
 
-    assert "  issuance:\n    image: ${MARTY_ISSUANCE_IMAGE" in profile
-    assert "  issuance-migrations:\n    image: ${MARTY_ISSUANCE_IMAGE" in base
+    native = profile.split("  issuance-native:\n", 1)[1].split("\n  ", 1)[0]
+    alias = profile.split("  issuance:\n", 1)[1].split("\n  ", 1)[0]
+    assert "<<: *service-image" in native
+    assert "<<: *service-image" in alias
+    assert "  issuance-migrations:" in profile
+    assert "image: ${MARTY_SERVICES_IMAGE" in profile
+    assert "MARTY_ISSUANCE_IMAGE" not in base
+    assert 'command: ["migrate"]' in base
 
 
 def test_issuance_token_limiter_is_configurable_without_weakening_default() -> None:
@@ -744,73 +796,84 @@ def test_oidf_runner_can_join_only_the_project_scoped_tls_proxy_bridge() -> None
     assert "oidf-runner-network:" in proxy
     assert "OIDF_CONFORMANCE_BRIDGE_ALIAS" in proxy
     assert "OIDF_INTERNAL_TLS_PORT" in proxy
-    assert "nginx.conf.template" in proxy
+    assert "OIDF_EDGE_BIND" in proxy
+    assert "OIDF_EDGE_TLS_KMS_TOKEN_FILE" in proxy
+    assert "tls.key" not in proxy
 
 
-def test_oidf_tls_proxy_refreshes_compose_upstream_addresses() -> None:
-    config = (ROOT / "services" / "oidf-tls-proxy" / "nginx.conf.template").read_text(
+def test_oidf_tls_edge_uses_live_upstream_dns_and_shared_service_image() -> None:
+    source = (
+        ROOT / "rust/crates/passport-keyless-edge/src/bin/oidf_edge.rs"
+    ).read_text(encoding="utf-8")
+    image = (ROOT / "services/Dockerfile").read_text(encoding="utf-8")
+    build = (ROOT / "scripts/build-rust-service-binaries.sh").read_text(
         encoding="utf-8"
     )
-
-    assert "resolver 127.0.0.11 valid=5s ipv6=off;" in config
-    assert "set $gateway_upstream http://gateway:8000;" in config
-    assert "set $keycloak_upstream http://keycloak:8080;" in config
-    assert "set $ui_upstream http://ui:80;" in config
-    assert "proxy_pass $gateway_upstream;" in config
-    assert "proxy_pass $keycloak_upstream;" in config
-    assert "proxy_pass $ui_upstream;" in config
-    assert "proxy_pass http://gateway:8000;" not in config
-    assert "proxy_pass http://keycloak:8080;" not in config
-    assert "proxy_pass http://ui:80;" not in config
-
-
-def test_oidf_tls_proxy_preserves_the_complete_public_authority() -> None:
-    config = (ROOT / "services" / "oidf-tls-proxy" / "nginx.conf.template").read_text(
-        encoding="utf-8"
+    released = (ROOT / "docker-compose.profile.ghcr.yml").read_text(encoding="utf-8")
+    for peer in ("gateway:8000", "keycloak:8080", "ui:80"):
+        assert peer in source
+    assert "TcpStream::connect(upstream)" in source
+    assert "--bin marty-oidf-keyless-edge" in build
+    assert "/usr/local/bin/marty-oidf-keyless-edge" in image
+    document = yaml.compose(released)
+    edge = _mapping_value(_mapping_value(document, "services"), "oidf-tls-proxy")
+    shared = _mapping_value(document, "x-service-image")
+    assert _mapping_value(edge, "<<") is shared
+    assert _mapping_value(shared, "image").value == (
+        "${MARTY_SERVICES_IMAGE:?set MARTY_SERVICES_IMAGE to an immutable digest}"
     )
+    assert _mapping_value(shared, "pull_policy").value == "always"
+    # Older Compose loses !reset inherited through an alias. The edge must
+    # retain the shared image and explicitly reset its source build locally.
+    assert _mapping_value(edge, "build").tag == "!reset"
+    assert _mapping_value(edge, "build").value == "null"
 
-    # Nginx $host normalizes away a non-default port. DPoP signs the absolute
-    # target URI, so all upstream locations must use the original authority.
-    assert config.count("proxy_set_header Host $http_host;") == 3
-    assert config.count("proxy_set_header X-Forwarded-Host $http_host;") == 3
-    assert "proxy_set_header Host $host;" not in config
-    assert "proxy_set_header X-Forwarded-Host $host;" not in config
+
+def test_oidf_tls_edge_preserves_the_complete_public_authority() -> None:
+    source = (
+        ROOT / "rust/crates/passport-keyless-edge/src/bin/oidf_edge.rs"
+    ).read_text(encoding="utf-8")
+    # The Rust proxy test exercises a non-default public port through Gateway.
+    assert '"example.test:8443"' in source
+    assert 'headers.insert("x-forwarded-host", host)' in source
+    assert '"x-forwarded-port"' in source
+    assert "|8443|https|127.0.0.1|" in source
+    assert "gateway_upgrade_tunnels_bidirectional_bytes" in source
 
 
 def test_released_conformance_stack_serves_the_exact_ui_artifact() -> None:
     profile = (ROOT / "docker-compose.profile.ghcr.yml").read_text(encoding="utf-8")
     oidf = (ROOT / "docker-compose.profile.oidf.yml").read_text(encoding="utf-8")
-    proxy = (ROOT / "services" / "oidf-tls-proxy" / "nginx.conf.template").read_text(
+    proxy = (ROOT / "rust/crates/passport-keyless-edge/src/bin/oidf_edge.rs").read_text(
         encoding="utf-8"
     )
 
     assert "image: ${MARTY_UI_IMAGE:?" in profile
-    assert "condition: service_healthy" in profile.split("  ui:\n", 1)[1].split(
-        "\n  db-migrate:\n", 1
-    )[0]
+    assert (
+        "condition: service_healthy"
+        in profile.split("  ui:\n", 1)[1].split("\n  db-migrate:\n", 1)[0]
+    )
     assert "  ui:\n        condition: service_healthy" in oidf
-    assert "console(?:/|$)" in proxy
-    assert "locales/" in proxy
-    assert "config\\.json$" in proxy
-    assert "runtime-config\\.js$" in proxy
-    assert "startup\\.js$" in proxy
+    assert '"/console"' in proxy
+    assert '"/locales/"' in proxy
+    assert '"/config.json"' in proxy
+    assert '"/runtime-config.js"' in proxy
+    assert '"/startup.js"' in proxy
 
 
-def test_oidf_tls_proxy_rejects_legacy_tls12_cipher_suites() -> None:
-    config = (ROOT / "services" / "oidf-tls-proxy" / "nginx.conf.template").read_text(
+def test_oidf_tls_edge_requires_remote_nonexportable_signing_identity() -> None:
+    profile = (ROOT / "docker-compose.profile.oidf.yml").read_text(encoding="utf-8")
+    edge = (ROOT / "rust/crates/passport-keyless-edge/src/bin/oidf_edge.rs").read_text(
         encoding="utf-8"
     )
-
-    cipher_line = next(
-        line.strip()
-        for line in config.splitlines()
-        if line.strip().startswith("ssl_ciphers ")
+    shared = (ROOT / "rust/crates/passport-keyless-edge/src/lib.rs").read_text(
+        encoding="utf-8"
     )
-    assert "GCM" in cipher_line
-    assert "CHACHA20-POLY1305" in cipher_line
-    assert "CBC" not in cipher_line
-    assert "AES128-SHA" not in cipher_line
-    assert "ssl_prefer_server_ciphers on;" in config
+    assert 'keyless_tls_config("OIDF_EDGE")' in edge
+    assert "OpenBaoTlsIdentityFiles" in shared
+    assert "keyless_https_server_config" in shared
+    assert "OIDF_EDGE_TLS_KMS_KEY_VERSION" in profile
+    assert "tls.key" not in profile
 
 
 def test_conformance_stack_exposes_timestamped_service_logs(

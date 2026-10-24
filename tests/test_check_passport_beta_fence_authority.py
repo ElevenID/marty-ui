@@ -2,16 +2,21 @@
 
 from __future__ import annotations
 
-import json
 import hashlib
-from pathlib import Path
+import json
 import subprocess
+from pathlib import Path
 
 import pytest
 
 from scripts import check_passport_beta_fence_authority as authority
+from scripts.kms_core_release import (
+    CORE_RELEASE_URI,
+    CORE_REVISION,
+    CORE_VERSION,
+    CORE_WHEEL_PREFIXES,
+)
 from scripts.probe_passport_beta_host import HostProbeError
-
 
 HEAD = "a" * 40
 TAG_OBJECT = "b" * 40
@@ -21,6 +26,157 @@ DIGEST = "sha256:" + "e" * 64
 LEGACY_COMMIT = "85b128a85426b3f5aeaf6f948ba5dfa2836e95d8"
 LEGACY_IMAGE = ("ghcr.io/elevenid/marty-credentials-issuance@sha256:"
                 "9f15b64bc0ec7a693339cada3142b2952a575d2b50ee89230aabe078d0026176")
+
+
+def release_proof(command: list[str], ref: str, source: str,
+                  tag_object: str) -> str | None:
+    if command[-2:] == ["show", f"{source}:release/stack-lock.json"]:
+        return json.dumps({"schema": "marty.stack-lock/v1",
+                           "release": f"marty-ui@{ref.removeprefix('refs/tags/v')}",
+                           "release_state": "eligible"})
+    if command[-1] == f"repos/ElevenID/marty-ui/git/tags/{tag_object}":
+        return json.dumps({
+            "tag": ref.removeprefix("refs/tags/"),
+            "object": {"type": "commit", "sha": source},
+            "message": (f"Release-Transaction: {'e' * 64}\n"
+                        f"Claim-Run: 123\nSource-SHA: {source}\n"),
+        })
+    if command[-1] == "repos/ElevenID/marty-ui/actions/runs/123":
+        return json.dumps({
+            "id": 123, "path": ".github/workflows/prepare-stack-tag.yml",
+            "event": "workflow_dispatch", "head_branch": "main",
+            "head_sha": source, "status": "completed",
+            "conclusion": "success",
+        })
+    if command[-1] == ("repos/ElevenID/marty-ui/releases/tags/"
+                       + ref.removeprefix("refs/tags/")):
+        return json.dumps({"tag_name": ref.removeprefix("refs/tags/"),
+                           "draft": False, "prerelease": False,
+                           "published_at": "2026-10-11T16:00:00Z"})
+    return None
+
+
+@pytest.mark.parametrize("status,behind,merge_base,accepted", [
+    ("identical", 0, HEAD, True),
+    ("ahead", 0, HEAD, True),
+    ("diverged", 1, "c" * 40, False),
+    ("behind", 1, HEAD, False),
+])
+def test_release_source_must_remain_on_protected_main_history(
+    status: str, behind: int, merge_base: str, accepted: bool,
+) -> None:
+    remote = "d" * 40 if status != "identical" else HEAD
+
+    def runner(command: list[str]) -> str:
+        if command[-2:] == ["rev-parse", "HEAD"]:
+            return HEAD
+        if command[-2:] == ["branch", "--show-current"]:
+            return "main"
+        if "status" in command:
+            return ""
+        if command[-1] == "repos/ElevenID/marty-ui/branches/main":
+            return json.dumps({"protected": True, "commit": {"sha": remote}})
+        assert command[-1] == f"repos/ElevenID/marty-ui/compare/{HEAD}...{remote}"
+        return json.dumps({"status": status, "behind_by": behind,
+                           "merge_base_commit": {"sha": merge_base}})
+
+    if accepted:
+        assert authority.protected_source(runner) == HEAD
+    else:
+        with pytest.raises(HostProbeError, match="not an ancestor"):
+            authority.protected_source(runner)
+
+
+@pytest.mark.parametrize("remote_object,peeled,valid", [
+    (TAG_OBJECT, HEAD, True),
+    (HEAD, HEAD, False),
+    (TAG_OBJECT, "d" * 40, False),
+])
+def test_published_release_ref_requires_annotated_exact_source(
+    remote_object: str, peeled: str, valid: bool,
+) -> None:
+    ref = "refs/tags/v1.1.244"
+
+    def runner(command: list[str]) -> str:
+        proof = release_proof(command, ref, HEAD, TAG_OBJECT)
+        if proof is not None:
+            return proof
+        assert command == ["git", "ls-remote",
+                           "https://github.com/ElevenID/marty-ui.git",
+                           ref, f"{ref}^{{}}"]
+        return f"{remote_object}\t{ref}\n{peeled}\t{ref}^{{}}\n"
+
+    if valid:
+        assert authority.published_release_ref(ref, HEAD, runner) == TAG_OBJECT
+    else:
+        with pytest.raises(HostProbeError, match="tag differs"):
+            authority.published_release_ref(ref, HEAD, runner)
+
+
+def test_detached_release_checkout_accepts_protected_main_ancestor(monkeypatch):
+    ref = "refs/tags/v1.1.244"
+    monkeypatch.setenv("GITHUB_REF", ref)
+
+    def runner(command: list[str]) -> str:
+        proof = release_proof(command, ref, HEAD, TAG_OBJECT)
+        if proof is not None:
+            return proof
+        if command[-2:] == ["rev-parse", "HEAD"]:
+            return HEAD
+        if command[-2:] == ["branch", "--show-current"]:
+            return ""
+        if command[-2:] == ["rev-parse", ref]:
+            return TAG_OBJECT
+        if command[-2:] == ["cat-file", "-t"]:
+            raise AssertionError("Unexpected tag type command")
+        if command[-3:] == ["cat-file", "-t", ref]:
+            return "tag"
+        if command[-2:] == ["rev-parse", f"{ref}^{{commit}}"]:
+            return HEAD
+        if command[:2] == ["git", "ls-remote"]:
+            return f"{TAG_OBJECT}\t{ref}\n{HEAD}\t{ref}^{{}}\n"
+        if "status" in command:
+            return ""
+        if command[-1] == "repos/ElevenID/marty-ui/branches/main":
+            return json.dumps({"protected": True,
+                               "commit": {"sha": "d" * 40}})
+        assert command[-1] == ("repos/ElevenID/marty-ui/compare/"
+                               f"{HEAD}...{'d' * 40}")
+        return json.dumps({"status": "ahead", "behind_by": 0,
+                           "merge_base_commit": {"sha": HEAD}})
+
+    assert authority.protected_source(runner) == HEAD
+
+
+@pytest.mark.parametrize("broken,expected", [
+    ("lock", "stack lock"),
+    ("claim", "claim did not succeed"),
+])
+def test_release_ref_rejects_wrong_version_or_failed_claim(
+    broken: str, expected: str,
+) -> None:
+    ref = "refs/tags/v1.1.244"
+
+    def runner(command: list[str]) -> str:
+        if command[:2] == ["git", "ls-remote"]:
+            return f"{TAG_OBJECT}\t{ref}\n{HEAD}\t{ref}^{{}}\n"
+        if broken == "lock" and command[-2:] == [
+            "show", f"{HEAD}:release/stack-lock.json",
+        ]:
+            return json.dumps({"schema": "marty.stack-lock/v1",
+                               "release": "marty-ui@1.1.245",
+                               "release_state": "eligible"})
+        if broken == "claim" and command[-1] == (
+            "repos/ElevenID/marty-ui/actions/runs/123"
+        ):
+            return json.dumps({"id": 123, "status": "completed",
+                               "conclusion": "failure"})
+        proof = release_proof(command, ref, HEAD, TAG_OBJECT)
+        assert proof is not None
+        return proof
+
+    with pytest.raises(HostProbeError, match=expected):
+        authority.published_release_ref(ref, HEAD, runner)
 
 
 def test_deletion_lineage_requires_approved_commit_in_pr_history():
@@ -198,6 +354,15 @@ def fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     planned_dir.mkdir()
     manifest = planned_dir / "stack-manifest.json"
     def component(name: str, repository: str) -> dict:
+        if name in CORE_WHEEL_PREFIXES:
+            prefix = CORE_WHEEL_PREFIXES[name]
+            return {
+                "name": name, "repository": "ElevenID/marty-core",
+                "commit": CORE_REVISION, "version": CORE_VERSION,
+                "artifacts": [{"type": "python",
+                               "uri": f"{CORE_RELEASE_URI}{prefix}-{CORE_VERSION}-cp311.whl",
+                               "digest": DIGEST}],
+            }
         return {
             "name": name, "repository": repository, "commit": "3" * 40,
             "version": "1.0.0", "artifacts": [{
@@ -213,7 +378,6 @@ def fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
             component("marty-core-python", "ElevenID/marty-core"),
             component("marty-verification-python", "ElevenID/marty-core"),
             component("marty-iso18013-python", "ElevenID/marty-core"),
-            component("marty-common", "ElevenID/Marty"),
             component("marty-cli", "ElevenID/marty-cli"),
             component("marty-integration-tests", "ElevenID/marty-integration-tests"),
             {**component("marty-credentials-issuance", "ElevenID/marty-credentials"),
@@ -236,8 +400,12 @@ def fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     baseline_source["components"][-1]["commit"] = "9" * 40
     baseline.write_text(json.dumps(baseline_source), encoding="utf-8")
     planned = json.loads(manifest.read_text(encoding="utf-8"))
-    planned["components"][-2]["artifacts"][0]["digest"] = "sha256:" + "5" * 64
-    planned["components"][-1]["artifacts"][1]["digest"] = "sha256:" + "4" * 64
+    planned["components"] = [
+        component for component in planned["components"]
+        if component["name"] != "marty-credentials-issuance"
+    ]
+    next(artifact for artifact in planned["components"][-1]["artifacts"]
+         if artifact["uri"] == "ghcr.io/elevenid/marty-ui-oss/services")["digest"] = "sha256:" + "6" * 64
     manifest.write_text(json.dumps(planned), encoding="utf-8")
     (planned_dir / "SHA256SUMS").write_text("synthetic", encoding="utf-8")
     (baseline_dir / "SHA256SUMS").write_text("synthetic", encoding="utf-8")
@@ -285,11 +453,15 @@ def fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         "tracked": True, "custom_filter": False,
         "tag_object": TAG_OBJECT, "tag_type": "tag", "tag_commit": HEAD,
         "published_tag_object": TAG_OBJECT, "published_tag_commit": HEAD,
-        "deletion_state": "OPEN", "deletion_draft": True,
+        "deletion_state": "CLOSED", "deletion_merged": True,
+        "deletion_merge_commit": "7" * 40,
+        "credentials_main_head": "8" * 40,
+        "credentials_main_protected": True,
         "deletion_head": DELETION_HEAD,
         "deletion_history": [DELETION_HEAD], "deletion_base": "main",
         "deletion_repo": authority.DELETION_REPOSITORY,
         "deletion_merge_base": DELETION_HEAD,
+        "signed_image_merge_base": "3" * 40,
         "baseline": baseline,
         "release_files": {
             relative: "\n".join(markers)
@@ -332,27 +504,42 @@ def fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         if command[:3] == ["gh", "api", "repos/ElevenID/marty-ui/branches/main"]:
             return json.dumps({"protected": values["protected"],
                                "commit": {"sha": values["remote_head"]}})
+        if command[:3] == ["gh", "api", f"repos/ElevenID/marty-ui/compare/{HEAD}...{values['remote_head']}"]:
+            return json.dumps({"status": "identical" if values["remote_head"] == HEAD else "ahead",
+                               "behind_by": 0, "merge_base_commit": {"sha": HEAD}})
         if command[:2] == ["git", "ls-remote"]:
             return (f"{values['published_tag_object']}\trefs/tags/v1.2.3\n"
                     f"{values['published_tag_commit']}\trefs/tags/v1.2.3^{{}}")
         if command[:3] == ["gh", "api", "repos/ElevenID/marty-credentials/pulls/305"]:
             return json.dumps({
                 "number": 305, "state": values["deletion_state"].lower(),
-                "draft": values["deletion_draft"],
+                "merged": values["deletion_merged"],
+                "merged_at": "2026-10-08T00:00:00Z",
+                "merge_commit_sha": values["deletion_merge_commit"],
                 "base": {"ref": values["deletion_base"], "repo": {
                     "full_name": values["deletion_repo"]}},
                 "head": {"sha": values["deletion_head"], "repo": {
                     "full_name": values["deletion_repo"]}},
             })
+        if command[:3] == ["gh", "api", "repos/ElevenID/marty-credentials/branches/main"]:
+            return json.dumps({"protected": values["credentials_main_protected"],
+                               "commit": {"sha": values["credentials_main_head"]}})
         if command[:3] == ["gh", "api", "--paginate"]:
             return "\n".join(values["deletion_history"])
         if command[:2] == ["gh", "api"] and "/compare/" in command[2]:
             approved, current = command[2].rsplit("/", 1)[-1].split("...")
+            merge_base = (values["signed_image_merge_base"]
+                          if approved == "3" * 40
+                          and current == values["deletion_merge_commit"]
+                          else values["deletion_merge_commit"]
+                          if approved == values["deletion_merge_commit"]
+                          else values["deletion_merge_base"])
             return json.dumps({
                 "status": "identical" if approved == current else "ahead",
+                "ahead_by": 0 if approved == current else 1,
                 "behind_by": 0,
                 "base_commit": {"sha": approved},
-                "merge_base_commit": {"sha": values["deletion_merge_base"]},
+                "merge_base_commit": {"sha": merge_base},
             })
         raise AssertionError(command)
 
@@ -364,7 +551,7 @@ def fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         "beta": {
             "postgres_system_identifier": "12345", "database_oid": "87774",
             "ui_service": {"configured_image":
-                           "ghcr.io/elevenid/marty-ui-oss/ui@sha256:" + "3" * 64},
+                           "ghcr.io/elevenid/marty-ui-oss/ui@sha256:" + "5" * 64},
             "database_route": {"name": "elevenid-beta-network", "id": "a" * 64,
                                "postgres_container_id": "f" * 64},
             "postgres_runtime": {"image_id": "sha256:" + "f" * 64,
@@ -375,7 +562,7 @@ def fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     }
     target["beta"]["services"].update({
         "issuance": {"configured_image": "ghcr.io/elevenid/marty-credentials-issuance@sha256:" + "f" * 64},
-        **{name: {"configured_image": "ghcr.io/elevenid/marty-ui-oss/services@sha256:" + "2" * 64}
+        **{name: {"configured_image": "ghcr.io/elevenid/marty-ui-oss/services@sha256:" + "4" * 64}
            for name in ("gateway", "flow", "issuance-native", "signing-keys")},
     })
     return approval, manifest, values, target, runner
@@ -392,8 +579,7 @@ def test_authority_plan_binds_all_four_sources(
     assert plan["deployed_beta_baseline"]["source_commit"] == "9" * 40
     assert plan["source"]["services_image"] != plan["deployed_beta_baseline"]["services_image"]
     assert plan["source"]["signed_manifest_verified"] is True
-    assert plan["source"]["build_only_artifacts"]["MARTY_COMMON_URI"] == (
-        "https://example.test/artifact.whl")
+    assert "MARTY_COMMON_URI" not in plan["source"]["build_only_artifacts"]
     assert plan["source"]["build_only_artifacts"]["MARTY_RS_DIGEST"] == DIGEST
     assert plan["credentials_deletion_head"] == DELETION_HEAD
     assert plan["target_observation_sha256"] == OBSERVATION
@@ -484,13 +670,29 @@ def test_hidden_worktree_change_cannot_replace_verifier(
                                   lambda image, commit, version: True)
 
 
+def test_hidden_worktree_change_cannot_replace_kms_release_policy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    approval, manifest, values, target, runner = fixture(tmp_path, monkeypatch)
+    (authority.ROOT / "scripts/kms_core_release.py").write_text(
+        "altered", encoding="utf-8"
+    )
+    with pytest.raises(HostProbeError, match="content differs"):
+        authority.check_authority(approval, manifest, values["baseline"], runner, lambda: target,
+                                  lambda path, digests, commit: True,
+                                  lambda image, commit, version: True)
+
+
 @pytest.mark.parametrize("field,value", [
     ("branch", "topic"), ("status", " M script.py"),
-    ("protected", False), ("remote_head", "2" * 40),
+    ("protected", False),
     ("tracked", False), ("custom_filter", True),
     ("published_tag_object", "2" * 40),
     ("published_tag_commit", "2" * 40), ("deletion_head", "2" * 40),
-    ("deletion_draft", False),
+    ("deletion_merged", False),
+    ("credentials_main_protected", False),
+    ("deletion_merge_commit", "3" * 40),
+    ("signed_image_merge_base", "2" * 40),
 ])
 def test_authority_rejects_unapproved_source_or_deletion(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, field: str, value: object,

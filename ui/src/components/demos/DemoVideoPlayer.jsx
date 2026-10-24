@@ -29,12 +29,12 @@ function unavailableRecordingCopy(state) {
   };
 }
 
-function DemoVideoPlayer({ scenario, startSeconds = 0 }) {
+function DemoVideoPlayback({ scenario, startSeconds = 0 }) {
   const [consented, setConsented] = useState(false);
   const videoKey = `${scenario.youtube_id || 'pending'}-${startSeconds}`;
   const unavailableCopy = unavailableRecordingCopy(scenario.state);
   const embedUrl = useMemo(() => {
-    if (!scenario.youtube_id) return null;
+    if (scenario.state !== 'PUBLIC' || !scenario.youtube_id) return null;
     const params = new URLSearchParams({
       autoplay: '1',
       cc_load_policy: '1',
@@ -45,7 +45,7 @@ function DemoVideoPlayer({ scenario, startSeconds = 0 }) {
     });
     if (typeof window !== 'undefined') params.set('origin', window.location.origin);
     return `https://www.youtube-nocookie.com/embed/${scenario.youtube_id}?${params.toString()}`;
-  }, [scenario.youtube_id, startSeconds]);
+  }, [scenario.state, scenario.youtube_id, startSeconds]);
 
   return (
     <Box
@@ -119,8 +119,22 @@ function DemoVideoPlayer({ scenario, startSeconds = 0 }) {
   );
 }
 
+function DemoVideoPlayer({ scenario, startSeconds = 0 }) {
+  // Reset consent before rendering a different recording or publication state.
+  // Chapter changes keep the same recording binding and preserve consent.
+  const recordingKey = JSON.stringify([
+    scenario.slug || scenario.title,
+    scenario.scenario_revision,
+    scenario.youtube_id,
+    scenario.state,
+  ]);
+  return <DemoVideoPlayback key={recordingKey} scenario={scenario} startSeconds={startSeconds} />;
+}
+
 DemoVideoPlayer.propTypes = {
   scenario: PropTypes.shape({
+    slug: PropTypes.string,
+    scenario_revision: PropTypes.number,
     title: PropTypes.string.isRequired,
     state: PropTypes.string.isRequired,
     youtube_id: PropTypes.string,

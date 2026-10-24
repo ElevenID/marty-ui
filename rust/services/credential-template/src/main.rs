@@ -1,4 +1,4 @@
-use std::{error::Error, sync::Arc, time::Duration};
+use std::{error::Error, future::Future, pin::Pin, sync::Arc, time::Duration};
 
 use marty_credential_template::{
     application::{
@@ -12,7 +12,7 @@ use marty_credential_template::{
     http_service::{credential_template_router, CredentialTemplateHttpState},
     migration::{
         migrate_credential_template_schema, reconcile_credential_template_data,
-        CredentialTemplateDataReconciliationConfig,
+        validate_credential_template_schema, CredentialTemplateDataReconciliationConfig,
     },
     registry_application::{
         CredentialTemplateRegistryApplication, CredentialTemplateRegistryRepository,
@@ -20,10 +20,16 @@ use marty_credential_template::{
     runtime::{CredentialTemplateDependency, CredentialTemplateRuntime},
     PostgresCredentialTemplateStore,
 };
+use mmf_platform::{
+    GrpcChannelConfig, GrpcChannelFactory, GrpcTlsMaterial, GrpcTransportSecurity, GrpcTrustMode,
+    OpenBaoTlsIdentityFiles,
+};
 use mmf_security::ServiceTokenAuthenticator;
 use sqlx::postgres::PgPoolOptions;
 use tokio::{net::TcpListener, sync::watch};
 use tokio_stream::wrappers::TcpListenerStream;
+use tokio_stream::StreamExt;
+use tonic::transport::Channel;
 use tonic::transport::Server;
 use tower_http::trace::TraceLayer;
 use tracing::{error, info};
@@ -37,6 +43,27 @@ async fn main() -> Result<(), Box<dyn Error>> {
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
         )
         .init();
+
+    let arguments: Vec<String> = std::env::args().skip(1).collect();
+    if let [command] = arguments.as_slice() {
+        if command == "migrate" || command == "verify-owned-schema" {
+            let database_url = std::env::var("DATABASE_URL")?;
+            let pool = PgPoolOptions::new()
+                .max_connections(1)
+                .connect(&database_url)
+                .await?;
+            if command == "migrate" {
+                migrate_credential_template_schema(&pool).await?;
+            } else {
+                validate_credential_template_schema(&pool).await?;
+            }
+            pool.close().await;
+            return Ok(());
+        }
+    }
+    if !arguments.is_empty() {
+        return Err("unsupported Credential Template command".into());
+    }
 
     let config = CredentialTemplateServiceConfig::from_env().map_err(|error| {
         error!(%error, "invalid Credential Template configuration");
@@ -94,15 +121,45 @@ async fn main() -> Result<(), Box<dyn Error>> {
     runtime.mark_healthy(CredentialTemplateDependency::SystemCatalog)?;
 
     let control_plane: Arc<dyn CredentialTemplateControlPlane> =
-        Arc::new(NativeCredentialTemplateControlPlane::connect_lazy(
-            &config.organization_grpc_target,
-            &config.revocation_grpc_target,
-            config.service_token.as_deref(),
-            config.signing_keys_internal_url.clone(),
-            config.signing_keys_internal_api_key.as_deref(),
-            config.trust_profile_service_url.clone(),
-            config.dependency_timeout,
-        )?);
+        if let (Some(org_ca), Some(rp_ca)) = (
+            &config.organization_grpc_ca_cert,
+            &config.revocation_grpc_ca_cert,
+        ) {
+            let (organization_channel, revocation_channel) = tokio::try_join!(
+                ca_channel(
+                    &config.organization_grpc_target,
+                    org_ca,
+                    config.dependency_timeout,
+                ),
+                ca_channel(
+                    &config.revocation_grpc_target,
+                    rp_ca,
+                    config.dependency_timeout,
+                ),
+            )?;
+            let control = NativeCredentialTemplateControlPlane::with_channels(
+                organization_channel,
+                revocation_channel,
+                config.service_token.as_deref(),
+                config.signing_keys_internal_url.clone(),
+                config.signing_keys_internal_api_key.as_deref(),
+                config.trust_profile_service_url.clone(),
+                config.dependency_timeout,
+            )?;
+            control.check_organization_health().await?;
+            control.check_revocation_health().await?;
+            Arc::new(control)
+        } else {
+            Arc::new(NativeCredentialTemplateControlPlane::connect_lazy(
+                &config.organization_grpc_target,
+                &config.revocation_grpc_target,
+                config.service_token.as_deref(),
+                config.signing_keys_internal_url.clone(),
+                config.signing_keys_internal_api_key.as_deref(),
+                config.trust_profile_service_url.clone(),
+                config.dependency_timeout,
+            )?)
+        };
     runtime.mark_healthy(CredentialTemplateDependency::ControlPlane)?;
     let template_repository: Arc<dyn CredentialTemplateRepository> = store.clone();
     let registry_repository: Arc<dyn CredentialTemplateRegistryRepository> = store;
@@ -144,18 +201,57 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .layer(TraceLayer::new_for_http());
     let (health_reporter, health_service) = tonic_health::server::health_reporter();
     let grpc_server = CredentialTemplateServiceServer::new(grpc_service);
+    let tls_acceptor = if let Some(files) = &config.grpc_server_tls {
+        Some(
+            OpenBaoTlsIdentityFiles {
+                certificate_chain_file: files.certificate.clone(),
+                kms_ca_cert_file: files.kms_ca_certificate.clone(),
+                kms_endpoint: files.kms_endpoint.clone(),
+                kms_token_file: files.kms_token_file.clone(),
+                kms_key_name: files.kms_key_name.clone(),
+                kms_key_version: files.kms_key_version,
+                request_timeout: Duration::from_secs(10),
+                max_concurrent_signs: 64,
+            }
+            .grpc_acceptor_without_client_auth(64, Duration::from_secs(15))
+            .await?,
+        )
+    } else {
+        None
+    };
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let mut http_shutdown = shutdown_rx.clone();
     let mut grpc_shutdown = shutdown_rx;
     let http = axum::serve(http_listener, http_app).with_graceful_shutdown(async move {
         wait_for_shutdown(&mut http_shutdown).await;
     });
-    let grpc = Server::builder()
+    let grpc_router = Server::builder()
         .add_service(health_service)
-        .add_service(grpc_server)
-        .serve_with_incoming_shutdown(TcpListenerStream::new(grpc_listener), async move {
-            wait_for_shutdown(&mut grpc_shutdown).await;
-        });
+        .add_service(grpc_server);
+    let grpc: Pin<Box<dyn Future<Output = Result<(), tonic::transport::Error>> + Send>> =
+        if let Some(acceptor) = tls_acceptor {
+            let incoming = TcpListenerStream::new(grpc_listener).then(move |connection| {
+                let acceptor = acceptor.clone();
+                async move {
+                    match connection {
+                        Ok(stream) => acceptor.accept(stream).await,
+                        Err(error) => Err(error),
+                    }
+                }
+            });
+            Box::pin(
+                grpc_router.serve_with_incoming_shutdown(incoming, async move {
+                    wait_for_shutdown(&mut grpc_shutdown).await;
+                }),
+            )
+        } else {
+            Box::pin(
+                grpc_router.serve_with_incoming_shutdown(
+                    TcpListenerStream::new(grpc_listener),
+                    async move { wait_for_shutdown(&mut grpc_shutdown).await },
+                ),
+            )
+        };
 
     runtime.activate()?;
     health_reporter
@@ -202,6 +298,26 @@ async fn main() -> Result<(), Box<dyn Error>> {
     runtime.stop()?;
     result?;
     Ok(())
+}
+
+async fn ca_channel(
+    target: &str,
+    ca_cert: &std::path::Path,
+    timeout: Duration,
+) -> Result<Channel, Box<dyn Error>> {
+    Ok(GrpcChannelFactory::new(
+        GrpcChannelConfig {
+            target: target.into(),
+            security: GrpcTransportSecurity::ServerTls,
+            trust: GrpcTrustMode::CustomCa,
+            connect_timeout_ms: timeout.as_millis() as u64,
+            request_timeout_ms: timeout.as_millis() as u64,
+            ..GrpcChannelConfig::default()
+        },
+        GrpcTlsMaterial::from_ca_pem_file(Some(ca_cert))?,
+    )?
+    .connect()
+    .await?)
 }
 
 async fn wait_for_shutdown(shutdown: &mut watch::Receiver<bool>) {

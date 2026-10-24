@@ -841,6 +841,7 @@ def run_native(executable, qualification="1"):
                     str(executable),
                     "canvas_operation_http::tests::native_socket_case",
                     "--exact",
+                    "--ignored",
                     "--nocapture",
                     "--test-threads=1",
                 ],

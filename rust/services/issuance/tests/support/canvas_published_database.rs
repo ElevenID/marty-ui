@@ -9,6 +9,40 @@ use std::{
 use uuid::Uuid;
 
 const LABEL: &str = "com.elevenid.test.canvas-published-schema";
+const DATABASE: &str = "canvas_published_schema_test";
+const BASE_REUSE_SWITCH: &str = "MARTY_CANVAS_REUSE_PUBLISHED_BASE_PILOT";
+static PUBLISHED_BASE: tokio::sync::OnceCell<Vec<u8>> = tokio::sync::OnceCell::const_new();
+static PUBLISHED_BASE_INIT: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+fn selected_postgres_image(fixture: &Value, supplied: Option<&str>) -> Result<String, String> {
+    let canonical = fixture["observed_postgres_image"]
+        .as_str()
+        .ok_or("Missing pinned published PostgreSQL image")?;
+    let digest = canonical
+        .strip_prefix("postgres@sha256:")
+        .ok_or("Invalid pinned published PostgreSQL image")?;
+    if digest.len() != 64
+        || !digest
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err("Invalid pinned published PostgreSQL digest".into());
+    }
+    let mirrored = format!("mirror.gcr.io/library/{canonical}");
+    match supplied {
+        None => Ok(canonical.to_owned()),
+        Some(value) if value == canonical || value == mirrored => Ok(value.to_owned()),
+        Some(_) => Err("Published PostgreSQL image differs from pinned oracle".into()),
+    }
+}
+
+fn ci_postgres_image(fixture: &Value) -> Result<String, String> {
+    match std::env::var("MARTY_CANVAS_PUBLISHED_POSTGRES_IMAGE") {
+        Ok(value) => selected_postgres_image(fixture, Some(&value)),
+        Err(std::env::VarError::NotPresent) => selected_postgres_image(fixture, None),
+        Err(_) => Err("Invalid published PostgreSQL image override".into()),
+    }
+}
 
 // Fixed constructor origins only. Never print a probe argument, fixture
 // payload, Docker identity, or an unrecognized future script as a phase name.
@@ -26,7 +60,6 @@ const TIMED_PUBLISHED_SCRIPTS: &[&str] = &[
     "utf7_consumer",
     "validation_boundary",
     "worker_concurrent",
-    "worker_facts",
     "worker_provider_completion",
     "worker_provider_final",
     "worker_provider_generation",
@@ -35,9 +68,6 @@ const TIMED_PUBLISHED_SCRIPTS: &[&str] = &[
     "worker_provider_signals",
     "worker_reclaimers",
     "worker_reclaimers_retry",
-    "worker_rest",
-    "worker_retry",
-    "worker_startup",
 ];
 
 fn published_probe_timing_name(script: Option<&str>) -> String {
@@ -47,6 +77,96 @@ fn published_probe_timing_name(script: Option<&str>) -> String {
     } else {
         "published_probe".to_owned()
     }
+}
+
+// The pinned probe returns this metadata beside, never inside, its frozen
+// oracle. Validate every label against the checked-in case order before any
+// value can reach CI logs or the short-retention phase artifact.
+fn json_consumer_case_timings(report: &Value) -> Result<Vec<(String, u64)>, String> {
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../../../../contracts/canvas-json-consumer-scenarios.json"
+    ))
+    .map_err(|_| "Invalid checked-in JSON consumer scenarios")?;
+    let mut expected = Vec::new();
+    for phase in ["validation", "provider"] {
+        let cases = fixture[phase]
+            .as_array()
+            .ok_or("Invalid JSON consumer case inventory")?;
+        for case in cases {
+            let name = case["name"]
+                .as_str()
+                .ok_or("Invalid JSON consumer case name")?;
+            if name.is_empty()
+                || name.len() > 64
+                || !name
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+            {
+                return Err("Unsafe JSON consumer case name".into());
+            }
+            expected.push(format!("json_consumer.{phase}.{name}"));
+        }
+    }
+    if expected.len() != 132
+        || expected
+            .iter()
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+            != 132
+    {
+        return Err("JSON consumer case inventory changed".into());
+    }
+    let rows = report["ci_case_timing"]
+        .as_array()
+        .ok_or("Missing JSON consumer case timing")?;
+    if rows.len() != expected.len() {
+        return Err("Incomplete JSON consumer case timing".into());
+    }
+    rows.iter()
+        .zip(expected)
+        .map(|(row, name)| {
+            let object = row.as_object().ok_or("Invalid JSON consumer case timing")?;
+            if object.len() != 2 || row["name"].as_str() != Some(name.as_str()) {
+                return Err("Unexpected JSON consumer case timing identity".into());
+            }
+            let duration = row["duration_ms"]
+                .as_u64()
+                .filter(|duration| *duration <= 120_000)
+                .ok_or("Invalid JSON consumer case duration")?;
+            Ok((name, duration))
+        })
+        .collect()
+}
+
+// The published JSON-depth probe returns elapsed phases beside its frozen
+// observation. Accept only these four fixed phases, with no payload or arbitrary label.
+fn json_depth_phase_timings(report: &Value) -> Result<Vec<(&'static str, u64)>, String> {
+    let rows = report["ci_phase_timing"]
+        .as_array()
+        .ok_or("Missing JSON-depth phase timing")?;
+    let expected = [
+        "json_depth.setup",
+        "json_depth.validation",
+        "json_depth.provider",
+        "json_depth.encoding",
+    ];
+    if rows.len() != expected.len() {
+        return Err("Incomplete JSON-depth phase timing".into());
+    }
+    rows.iter()
+        .zip(expected)
+        .map(|(row, name)| {
+            let object = row.as_object().ok_or("Invalid JSON-depth phase timing")?;
+            if object.len() != 2 || row["name"].as_str() != Some(name) {
+                return Err("Unexpected JSON-depth phase timing identity".into());
+            }
+            let duration = row["duration_ms"]
+                .as_u64()
+                .filter(|duration| *duration <= 180_000)
+                .ok_or("Invalid JSON-depth phase duration")?;
+            Ok((name, duration))
+        })
+        .collect()
 }
 
 // Only fixed phase labels and elapsed time leave the fixture. Never emit its
@@ -78,6 +198,8 @@ impl PhaseTimer {
 // so the CI artifact can distinguish it from the surrounding worker target.
 pub(super) enum RepositoryMatrix {
     RosterMetadata,
+    RosterExpiredBeforeWrite,
+    RosterExpiredDuringLock,
     ResourceRace,
     Validation,
 }
@@ -85,6 +207,8 @@ pub(super) enum RepositoryMatrix {
 pub(super) fn repository_matrix_timer(matrix: RepositoryMatrix) -> PhaseTimer {
     let name = match matrix {
         RepositoryMatrix::RosterMetadata => "repository_roster_metadata",
+        RepositoryMatrix::RosterExpiredBeforeWrite => "repository_roster_expired_before_write",
+        RepositoryMatrix::RosterExpiredDuringLock => "repository_roster_expired_during_lock",
         RepositoryMatrix::ResourceRace => "repository_resource_race",
         RepositoryMatrix::Validation => "repository_validation",
     };
@@ -128,7 +252,10 @@ pub(super) fn repository_root_from(start: &Path) -> Option<&Path> {
     // Cargo's compile-time manifest path still has a fixed package suffix.
     if !start.is_absolute()
         || !(start.ends_with("rust/services/issuance")
-            || start.ends_with("rust/crates/canvas-acceptance"))
+            || start.ends_with("rust/crates/canvas-acceptance")
+            || start.ends_with("rust/crates/flow-acceptance")
+            || start.ends_with("rust/crates/canvas-worker-acceptance")
+            || start.ends_with("rust/crates/selfhost-acceptance"))
     {
         return None;
     }
@@ -159,6 +286,28 @@ fn safe_timing_diagnostics(report: &Value) -> Option<&Value> {
                 .and_then(Value::as_f64)
                 .is_some_and(|number| number.is_finite() && number.abs() <= 300.0)
         }))
+    .then_some(diagnostics)
+}
+
+fn safe_lease_observation_diagnostics(report: &Value) -> Option<&Value> {
+    if report["error_class"] != "LeaseObservationChanged" {
+        return None;
+    }
+    let diagnostics = report.get("lease_observation_diagnostics")?;
+    let fields = diagnostics.as_object()?;
+    let keys = [
+        "jobs",
+        "facts",
+        "oauth",
+        "snapshot",
+        "heartbeat",
+        "target",
+        "shape",
+    ];
+    (fields.len() == keys.len()
+        && keys
+            .iter()
+            .all(|key| fields.get(*key).and_then(Value::as_bool).is_some()))
     .then_some(diagnostics)
 }
 
@@ -196,12 +345,107 @@ pub(super) fn docker_output_with_timeout(
             }
         })?;
     if !output.status.success() {
+        if arguments.first() == Some(&"create") {
+            return Err(format!(
+                "Docker create failed ({})",
+                docker_create_failure_category(&output.stderr)
+            ));
+        }
         return Err(format!(
             "Docker {} failed",
             arguments.first().copied().unwrap_or("command")
         ));
     }
     Ok(output)
+}
+
+// Docker stderr can contain mounted paths, image coordinates, and daemon data.
+// Return only fixed categories; never include the original stream in CI logs.
+fn docker_create_failure_category(stderr: &[u8]) -> &'static str {
+    let detail = String::from_utf8_lossy(stderr).to_ascii_lowercase();
+    if detail.contains("no such image") || detail.contains("image not found") {
+        "image_unavailable"
+    } else if detail.contains("cannot connect to the docker daemon")
+        || detail.contains("is the docker daemon running")
+    {
+        "daemon_unavailable"
+    } else if detail.contains("no space left on device") {
+        "storage_exhausted"
+    } else if detail.contains("cannot allocate memory")
+        || detail.contains("resource temporarily unavailable")
+    {
+        "runtime_capacity"
+    } else if detail.contains("port is already allocated")
+        || detail.contains("address already in use")
+    {
+        "port_conflict"
+    } else if detail.contains("permission denied") {
+        "permission_denied"
+    } else {
+        "unknown"
+    }
+}
+
+// Plain SQL stays in this test process only. The pinned probe has completed
+// and its migration revisions/source digest have been checked before capture.
+// There is no cross-run cache, shared Docker volume, or deployment database.
+fn dump_published_base(postgres: &str) -> Result<Vec<u8>, String> {
+    dump_published_base_with_restrict_key(postgres, false)
+}
+
+fn dump_published_base_with_restrict_key(
+    postgres: &str,
+    deterministic_restrict_key: bool,
+) -> Result<Vec<u8>, String> {
+    let mut args = vec![
+        "exec",
+        postgres,
+        "pg_dump",
+        "--no-owner",
+        "--no-privileges",
+        "--format=plain",
+        "-U",
+        "oracle",
+        "-d",
+        DATABASE,
+    ];
+    if deterministic_restrict_key {
+        // pg_dump 15.17 emits a random psql restriction key by default.
+        // A fixed key is diagnostic-only, never used for the restore input.
+        args.push("--restrict-key=MartyCanvasParityDiagnostic20261018");
+    }
+    let output = docker_output_with_timeout(&args, Duration::from_secs(120), 64 * 1024 * 1024)?;
+    if output.stdout.is_empty() {
+        return Err("Pinned published base dump is empty".into());
+    }
+    Ok(output.stdout)
+}
+
+fn restore_published_base(postgres: &str, base: &[u8]) -> Result<(), String> {
+    use super::bounded_fixture_command::run;
+    let output = run(
+        Command::new("docker").args([
+            "exec",
+            "--interactive",
+            postgres,
+            "psql",
+            "-X",
+            "-v",
+            "ON_ERROR_STOP=1",
+            "-U",
+            "oracle",
+            "-d",
+            DATABASE,
+        ]),
+        Some(base),
+        Duration::from_secs(120),
+        8 * 1024 * 1024,
+    )
+    .map_err(|_| "Pinned published base restore unavailable or exceeded bounds")?;
+    if !output.status.success() {
+        return Err("Pinned published base restore failed".into());
+    }
+    Ok(())
 }
 
 pub(super) fn inspect(id: &str) -> Result<Value, String> {
@@ -269,8 +513,9 @@ fn checked_borrowed_url(info: &Value, id: &str, scope: &str) -> Result<String, S
         "../../../../../contracts/canvas-worker-consumer-range-oracle.json"
     ))
     .unwrap();
+    let postgres_image = ci_postgres_image(&fixture)?;
     if info["State"]["Running"] != true
-        || info["Config"]["Image"] != fixture["observed_postgres_image"]
+        || info["Config"]["Image"].as_str() != Some(postgres_image.as_str())
     {
         return Err("Owned database must retain its running pinned image".into());
     }
@@ -346,6 +591,7 @@ fn checked_recovery_rows(scope: Uuid, rows: &[(String, Value)]) -> Result<Vec<St
         "../../../../../contracts/canvas-worker-consumer-range-oracle.json"
     ))
     .unwrap();
+    let postgres_image = ci_postgres_image(&fixture)?;
     let scope = scope.to_string();
     let mut postgres = None;
     let mut probe = None;
@@ -354,7 +600,7 @@ fn checked_recovery_rows(scope: Uuid, rows: &[(String, Value)]) -> Result<Vec<St
         if info["Id"] != *id || info["Config"]["Labels"][LABEL] != scope {
             return Err(error.into());
         }
-        if info["Config"]["Image"] == fixture["observed_postgres_image"] {
+        if info["Config"]["Image"].as_str() == Some(postgres_image.as_str()) {
             checked_database_storage(info, id, &scope)?;
             if postgres.replace(id.clone()).is_some()
                 || info["HostConfig"]["Tmpfs"]
@@ -494,7 +740,61 @@ impl PublishedDatabase {
     }
 
     pub async fn start() -> Result<Self, String> {
+        if std::env::var(BASE_REUSE_SWITCH).as_deref() == Ok("1") {
+            // Only the exact default constructor can use this immutable base.
+            // Scoped recovery and every oracle/recovery overlay retain the
+            // original published process, resource identity, and cleanup path.
+            if let Some(base) = PUBLISHED_BASE.get() {
+                return Self::start_from_published_base(base).await;
+            }
+            // A process that needs only one database must not create a second
+            // container merely to cache its already-migrated first database.
+            // Serialize only initial capture; later restores remain concurrent.
+            let initialization = PUBLISHED_BASE_INIT.lock().await;
+            if let Some(base) = PUBLISHED_BASE.get() {
+                drop(initialization);
+                return Self::start_from_published_base(base).await;
+            }
+            let owned =
+                Self::start_probe_with_scope(None, None, false, Uuid::new_v4(), "published_probe")
+                    .await?;
+            let postgres = owned
+                .postgres
+                .as_deref()
+                .ok_or("Missing pinned base database")?;
+            let base = match dump_published_base(postgres) {
+                Ok(base) => base,
+                Err(error) => {
+                    owned.close_verified()?;
+                    return Err(error);
+                }
+            };
+            if PUBLISHED_BASE.set(base).is_err() {
+                owned.close_verified()?;
+                return Err("Published base was initialized concurrently".into());
+            }
+            drop(initialization);
+            return Ok(owned);
+        }
         Self::start_probe(None).await
+    }
+
+    async fn start_from_published_base(base: &[u8]) -> Result<Self, String> {
+        Self::start_from_published_base_with_scope(Uuid::new_v4(), base).await
+    }
+
+    async fn start_from_published_base_with_scope(
+        scope: Uuid,
+        base: &[u8],
+    ) -> Result<Self, String> {
+        let owned = Self::start_empty_postgres(scope).await?;
+        let postgres = owned.postgres.as_deref().ok_or("Missing owned database")?;
+        // Distinguish restoring the in-process base from running the pinned
+        // published migration probe. Both previously shared one timing name.
+        let timing = PhaseTimer::start("migration_seed", "published_base_restore");
+        restore_published_base(postgres, base)?;
+        timing.success();
+        Ok(owned)
     }
 
     pub async fn start_for_worker_validation_template() -> Result<Self, String> {
@@ -653,6 +953,64 @@ impl PublishedDatabase {
         .await
     }
 
+    /// Experimental native-test initializer: preserve the pinned migrations
+    /// and recovery overlay, but do not execute the independent Python oracle.
+    pub async fn start_with_status_native_seed() -> Result<Self, String> {
+        let owned = Self::start_probe_with_migration_named(
+            None,
+            None,
+            true,
+            Some("status_native_seed".into()),
+        )
+        .await?;
+        let seed_timing = PhaseTimer::start("fixture_seed", "status_native_seed");
+        static SCENARIOS: std::sync::OnceLock<Value> = std::sync::OnceLock::new();
+        let scenarios = SCENARIOS.get_or_init(|| {
+            serde_json::from_str(include_str!(
+                "../../../../../contracts/canvas-issued-review-scenarios.json"
+            ))
+            .expect("Invalid owned status scenario fixture")
+        });
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&owned.url)
+            .await
+            .map_err(|_| "Owned status fixture connection failed")?;
+        let mut transaction = pool
+            .begin()
+            .await
+            .map_err(|_| "Owned status fixture transaction failed")?;
+        for statement in scenarios["seed"]
+            .as_array()
+            .ok_or("Missing owned status scenario seed")?
+        {
+            sqlx::query(
+                statement
+                    .as_str()
+                    .ok_or("Invalid owned status scenario statement")?,
+            )
+            .execute(&mut *transaction)
+            .await
+            .map_err(|_| "Owned status fixture seed failed")?;
+        }
+        sqlx::query(
+            "INSERT INTO issuance_service.credential_delivery_records \
+             (id,credential_id,transaction_id,organization_id,delivery_target,delivery_mode,status,metadata) \
+             VALUES ('delivery-provider','credential-review','transaction-review','org-review', \
+             'canvas_credentials','mirror','delivered','{}')",
+        )
+        .execute(&mut *transaction)
+        .await
+        .map_err(|_| "Owned status delivery seed failed")?;
+        transaction
+            .commit()
+            .await
+            .map_err(|_| "Owned status fixture commit failed")?;
+        pool.close().await;
+        seed_timing.success();
+        Ok(owned)
+    }
+
     pub async fn start_with_utf7_consumer() -> Result<Self, String> {
         Self::start_probe_with_migration(
             Some((
@@ -695,42 +1053,6 @@ impl PublishedDatabase {
         .await
     }
 
-    pub async fn start_with_worker_startup() -> Result<Self, String> {
-        Self::start_probe(Some((
-            "worker_startup",
-            "worker-startup",
-            "worker_startup",
-            "MARTY_CANVAS_WORKER_STARTUP_ORACLE=1",
-        )))
-        .await
-    }
-
-    pub async fn start_with_worker_rest() -> Result<Self, String> {
-        Self::start_probe_with_extra(
-            Some((
-                "worker_rest",
-                "worker-rest",
-                "worker_rest",
-                "MARTY_CANVAS_WORKER_REST_ORACLE=1",
-            )),
-            Some("canvas-issued-review-scenarios.json"),
-        )
-        .await
-    }
-
-    pub async fn start_with_worker_facts() -> Result<Self, String> {
-        Self::start_probe_with_extra(
-            Some((
-                "worker_facts",
-                "worker-facts",
-                "worker_facts",
-                "MARTY_CANVAS_WORKER_FACTS_ORACLE=1",
-            )),
-            Some("canvas-issued-review-scenarios.json"),
-        )
-        .await
-    }
-
     pub async fn start_with_worker_provider_signal(signal: &str) -> Result<Self, String> {
         if !matches!(signal, "SIGINT" | "SIGTERM" | "SIGKILL") {
             return Err("unsupported owned worker signal".into());
@@ -755,76 +1077,6 @@ impl PublishedDatabase {
             "worker_retry_after",
             "worker-retry-after",
             "MARTY_CANVAS_WORKER_RETRY_AFTER_CASE",
-        )
-        .await
-    }
-
-    pub async fn start_with_worker_oauth_revocation(case: &str) -> Result<Self, String> {
-        Self::start_with_worker_case(
-            case,
-            include_str!("../../../../../contracts/canvas-worker-oauth-revocation-scenarios.json"),
-            "worker_oauth_revocation",
-            "worker-oauth-revocation",
-            "MARTY_CANVAS_WORKER_OAUTH_REVOCATION_CASE",
-        )
-        .await
-    }
-
-    pub async fn start_with_worker_oauth_revocation_fence(case: &str) -> Result<Self, String> {
-        Self::start_with_worker_case(
-            case,
-            include_str!(
-                "../../../../../contracts/canvas-worker-oauth-revocation-fence-scenarios.json"
-            ),
-            "worker_oauth_revocation",
-            "worker-oauth-revocation-fence",
-            "MARTY_CANVAS_WORKER_OAUTH_REVOCATION_FENCE_CASE",
-        )
-        .await
-    }
-
-    pub async fn start_with_worker_oauth_revocation_patch(case: &str) -> Result<Self, String> {
-        Self::start_with_worker_case(
-            case,
-            include_str!(
-                "../../../../../contracts/canvas-worker-oauth-revocation-patch-scenarios.json"
-            ),
-            "worker_oauth_revocation",
-            "worker-oauth-revocation-patch",
-            "MARTY_CANVAS_WORKER_OAUTH_REVOCATION_PATCH_CASE",
-        )
-        .await
-    }
-
-    pub async fn start_with_worker_oauth_revocation_retry_after(
-        case: &str,
-    ) -> Result<Self, String> {
-        Self::start_with_worker_case(
-            case,
-            include_str!("../../../../../contracts/canvas-worker-oauth-revocation-retry-after-scenarios.json"),
-            "worker_oauth_revocation", "worker-oauth-revocation-retry-after",
-            "MARTY_CANVAS_WORKER_OAUTH_REVOCATION_RETRY_AFTER_CASE",
-        ).await
-    }
-
-    pub async fn start_with_worker_validation(case: &str) -> Result<Self, String> {
-        Self::start_with_worker_case(
-            case,
-            include_str!("../../../../../contracts/canvas-worker-validation-scenarios.json"),
-            "worker_validation",
-            "worker-validation",
-            "MARTY_CANVAS_WORKER_VALIDATION_CASE",
-        )
-        .await
-    }
-
-    pub async fn start_with_worker_roster_failure(case: &str) -> Result<Self, String> {
-        Self::start_with_worker_case(
-            case,
-            include_str!("../../../../../contracts/canvas-worker-roster-failure-scenarios.json"),
-            "worker_roster_failure",
-            "worker-roster-failure",
-            "MARTY_CANVAS_WORKER_ROSTER_FAILURE_CASE",
         )
         .await
     }
@@ -901,19 +1153,6 @@ impl PublishedDatabase {
         .await
     }
 
-    pub async fn start_with_worker_resources_unavailable(case: &str) -> Result<Self, String> {
-        Self::start_with_worker_case(
-            case,
-            include_str!(
-                "../../../../../contracts/canvas-worker-resources-unavailable-scenarios.json"
-            ),
-            "worker_resources_unavailable",
-            "worker-resources-unavailable",
-            "MARTY_CANVAS_WORKER_RESOURCES_UNAVAILABLE_CASE",
-        )
-        .await
-    }
-
     pub async fn start_with_worker_resource_race(case: &str) -> Result<Self, String> {
         Self::start_with_worker_case(
             case,
@@ -921,84 +1160,6 @@ impl PublishedDatabase {
             "worker_resource_race",
             "worker-resource-race",
             "MARTY_CANVAS_WORKER_RESOURCE_RACE_CASE",
-        )
-        .await
-    }
-
-    pub async fn start_with_worker_oauth_revocation_queue(case: &str) -> Result<Self, String> {
-        Self::start_with_worker_case(
-            case,
-            include_str!(
-                "../../../../../contracts/canvas-worker-oauth-revocation-queue-scenarios.json"
-            ),
-            "worker_oauth_revocation",
-            "worker-oauth-revocation-queue",
-            "MARTY_CANVAS_WORKER_OAUTH_REVOCATION_QUEUE_CASE",
-        )
-        .await
-    }
-
-    pub async fn start_with_worker_oauth_revocation_counters(case: &str) -> Result<Self, String> {
-        Self::start_with_worker_case(
-            case,
-            include_str!(
-                "../../../../../contracts/canvas-worker-oauth-revocation-counters-scenarios.json"
-            ),
-            "worker_oauth_revocation",
-            "worker-oauth-revocation-counters",
-            "MARTY_CANVAS_WORKER_OAUTH_REVOCATION_COUNTERS_CASE",
-        )
-        .await
-    }
-
-    pub async fn start_with_worker_oauth_revocation_secrets(case: &str) -> Result<Self, String> {
-        Self::start_with_worker_case(
-            case,
-            include_str!(
-                "../../../../../contracts/canvas-worker-oauth-revocation-secrets-scenarios.json"
-            ),
-            "worker_oauth_revocation",
-            "worker-oauth-revocation-secrets",
-            "MARTY_CANVAS_WORKER_OAUTH_REVOCATION_SECRETS_CASE",
-        )
-        .await
-    }
-
-    pub async fn start_with_worker_oauth_revocation_selection(case: &str) -> Result<Self, String> {
-        Self::start_with_worker_case(
-            case,
-            include_str!(
-                "../../../../../contracts/canvas-worker-oauth-revocation-selection-scenarios.json"
-            ),
-            "worker_oauth_revocation",
-            "worker-oauth-revocation-selection",
-            "MARTY_CANVAS_WORKER_OAUTH_REVOCATION_SELECTION_CASE",
-        )
-        .await
-    }
-
-    pub async fn start_with_worker_oauth_revocation_lease(case: &str) -> Result<Self, String> {
-        Self::start_with_worker_case(
-            case,
-            include_str!(
-                "../../../../../contracts/canvas-worker-oauth-revocation-lease-scenarios.json"
-            ),
-            "worker_oauth_revocation",
-            "worker-oauth-revocation-lease",
-            "MARTY_CANVAS_WORKER_OAUTH_REVOCATION_LEASE_CASE",
-        )
-        .await
-    }
-
-    pub async fn start_with_worker_oauth_revocation_backoff(case: &str) -> Result<Self, String> {
-        Self::start_with_worker_case(
-            case,
-            include_str!(
-                "../../../../../contracts/canvas-worker-oauth-revocation-backoff-scenarios.json"
-            ),
-            "worker_oauth_revocation",
-            "worker-oauth-revocation-backoff",
-            "MARTY_CANVAS_WORKER_OAUTH_REVOCATION_BACKOFF_CASE",
         )
         .await
     }
@@ -1138,19 +1299,6 @@ impl PublishedDatabase {
         .await
     }
 
-    pub async fn start_with_worker_retry() -> Result<Self, String> {
-        Self::start_probe_with_extra(
-            Some((
-                "worker_retry",
-                "worker-retry",
-                "worker_retry",
-                "MARTY_CANVAS_WORKER_RETRY_ORACLE=1",
-            )),
-            Some("canvas-issued-review-scenarios.json"),
-        )
-        .await
-    }
-
     pub async fn start_with_validation_boundary() -> Result<Self, String> {
         Self::start_probe(Some((
             "validation_boundary",
@@ -1240,17 +1388,12 @@ impl PublishedDatabase {
         .await
     }
 
-    async fn start_probe_with_scope(
-        oracle: Option<(&str, &str, &str, &str)>,
-        extra_fixture: Option<&'static str>,
-        recovery_schema: bool,
-        scope: Uuid,
-        timing_name: impl Into<String>,
-    ) -> Result<Self, String> {
+    async fn start_empty_postgres(scope: Uuid) -> Result<Self, String> {
         let fixture: Value = serde_json::from_str(include_str!(
             "../../../../../contracts/canvas-worker-consumer-range-oracle.json"
         ))
         .unwrap();
+        let postgres_image = ci_postgres_image(&fixture)?;
         let mut owned = Self {
             scope: scope.to_string(),
             postgres: None,
@@ -1277,7 +1420,7 @@ impl PublishedDatabase {
             "POSTGRES_PASSWORD=synthetic-local-only",
             "--env",
             "POSTGRES_DB=canvas_published_schema_test",
-            fixture["observed_postgres_image"].as_str().unwrap(),
+            &postgres_image,
         ])?;
         Self::accept_id(&postgres)?;
         owned.postgres = Some(postgres.clone());
@@ -1290,6 +1433,8 @@ impl PublishedDatabase {
                 "exec",
                 &postgres,
                 "pg_isready",
+                "-h",
+                "127.0.0.1",
                 "-U",
                 "oracle",
                 "-d",
@@ -1314,6 +1459,23 @@ impl PublishedDatabase {
         }
         readiness_timing.success();
         owned.url = format!("postgresql://oracle:synthetic-local-only@127.0.0.1:{port}/canvas_published_schema_test");
+        Ok(owned)
+    }
+
+    async fn start_probe_with_scope(
+        oracle: Option<(&str, &str, &str, &str)>,
+        extra_fixture: Option<&'static str>,
+        recovery_schema: bool,
+        scope: Uuid,
+        timing_name: impl Into<String>,
+    ) -> Result<Self, String> {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../../../contracts/canvas-worker-consumer-range-oracle.json"
+        ))
+        .unwrap();
+        let mut owned = Self::start_empty_postgres(scope).await?;
+        let postgres = owned.postgres.as_deref().ok_or("Missing owned database")?;
+        let label = format!("{LABEL}={}", owned.scope);
         let root = repository_root();
         // Mount only the two public test inputs, not the checkout or its Git
         // configuration. The native client connects through an owned loopback
@@ -1380,15 +1542,8 @@ impl PublishedDatabase {
         );
         let worker_https = matches!(
             script,
-            "worker_rest"
-                | "worker_facts"
-                | "worker_oauth_revocation"
-                | "worker_retry"
-                | "worker_retry_after"
-                | "worker_validation"
-                | "worker_roster_failure"
+            "worker_retry_after"
                 | "worker_resource_race"
-                | "worker_resources_unavailable"
                 | "worker_mixed_roster"
                 | "worker_dispatch"
                 | "worker_deadline"
@@ -1466,9 +1621,20 @@ impl PublishedDatabase {
                 ]
                 .into_iter()
                 .map(|name| {
+                    // The body-timeout and lease-expiry references were captured
+                    // before the stock-request expectation helper was added to
+                    // the shared HTTPS fixture. Bind their exact published input
+                    // without changing either frozen observation corpus.
+                    let source = if name == "canvas_worker_https_fixture.py"
+                        && matches!(script, "worker_body_timeout" | "worker_lease_expiry")
+                    {
+                        "canvas_worker_https_fixture_published.py"
+                    } else {
+                        name
+                    };
                     format!(
                         "type=bind,source={},target=/verification/scripts/{name},readonly",
-                        root.join("scripts").join(name).display()
+                        root.join("scripts").join(source).display()
                     )
                 })
                 .collect()
@@ -1477,14 +1643,8 @@ impl PublishedDatabase {
             };
         if matches!(
             script,
-            "worker_facts"
-                | "worker_retry"
-                | "worker_oauth_revocation"
-                | "worker_retry_after"
-                | "worker_validation"
-                | "worker_roster_failure"
+            "worker_retry_after"
                 | "worker_resource_race"
-                | "worker_resources_unavailable"
                 | "worker_mixed_roster"
                 | "worker_dispatch"
                 | "worker_deadline"
@@ -1604,12 +1764,6 @@ impl PublishedDatabase {
                 "scripts/run_canvas_worker_provider_signals_oracle.py",
                 "scripts/run_canvas_worker_provider_recovery_oracle.py",
             ],
-            "worker_resources_unavailable" => &[
-                "contracts/canvas-worker-validation-scenarios.json",
-                "scripts/run_canvas_worker_provider_signals_oracle.py",
-                "scripts/run_canvas_worker_provider_recovery_oracle.py",
-            ],
-            "worker_roster_failure" => &["contracts/canvas-worker-retry-scenarios.json"],
             "worker_resource_race" => &[
                 "contracts/canvas-worker-retry-scenarios.json",
                 "scripts/run_canvas_worker_provider_signals_oracle.py",
@@ -1622,35 +1776,6 @@ impl PublishedDatabase {
             ],
             "worker_provider_generation" | "worker_provider_completion" => {
                 &["contracts/canvas-worker-provider-final-scenarios.json"]
-            }
-            "worker_oauth_revocation" if scenario == "worker-oauth-revocation-counters" => &[
-                "contracts/canvas-worker-oauth-revocation-scenarios.json",
-                "contracts/canvas-worker-oauth-revocation-fence-scenarios.json",
-                "scripts/run_canvas_worker_single_cycle.py",
-            ],
-            "worker_oauth_revocation"
-                if matches!(
-                    scenario,
-                    "worker-oauth-revocation-fence"
-                        | "worker-oauth-revocation-secrets"
-                        | "worker-oauth-revocation-patch"
-                        | "worker-oauth-revocation-retry-after"
-                        | "worker-oauth-revocation-backoff"
-                        | "worker-oauth-revocation-queue"
-                ) =>
-            {
-                &["contracts/canvas-worker-oauth-revocation-scenarios.json"]
-            }
-            "worker_oauth_revocation"
-                if matches!(
-                    scenario,
-                    "worker-oauth-revocation-lease" | "worker-oauth-revocation-selection"
-                ) =>
-            {
-                &[
-                    "contracts/canvas-worker-oauth-revocation-scenarios.json",
-                    "contracts/canvas-worker-oauth-revocation-queue-scenarios.json",
-                ]
             }
             "worker_reclaimers" => &[
                 "contracts/canvas-worker-provider-final-scenarios.json",
@@ -1753,7 +1878,10 @@ impl PublishedDatabase {
                     let timing = safe_timing_diagnostics(&report)
                         .map(|value| format!(", timing_diagnostics={value}"))
                         .unwrap_or_default();
-                    return Err(format!("Published probe failed: class={}, frames={}{timing} (exception messages suppressed)",
+                    let lease_observation = safe_lease_observation_diagnostics(&report)
+                        .map(|value| format!(", lease_observation_diagnostics={value}"))
+                        .unwrap_or_default();
+                    return Err(format!("Published probe failed: class={}, frames={}{timing}{lease_observation} (exception messages suppressed)",
                         report["error_class"], report["frames"]));
                 }
                 break;
@@ -1779,12 +1907,37 @@ impl PublishedDatabase {
         }
         eprintln!("Published migrations verified; organization dependency is synthetic-minimal");
         if oracle.is_some() {
-            owned.oracle = Some(
-                report
-                    .get(report_key)
-                    .ok_or("Missing published behavior oracle")?
-                    .clone(),
-            );
+            let observation = report
+                .get(report_key)
+                .ok_or("Missing published behavior oracle")?;
+            owned.oracle = Some(if matches!(script, "json_consumer" | "json_depth") {
+                observation
+                    .get("oracle")
+                    .ok_or("Missing published JSON oracle")?
+                    .clone()
+            } else {
+                observation.clone()
+            });
+        }
+        if script == "json_consumer" {
+            let observation = report
+                .get(report_key)
+                .ok_or("Missing published JSON consumer diagnostics")?;
+            for (name, duration) in json_consumer_case_timings(observation)? {
+                eprintln!(
+                    "MARTY_CI_PHASE_V1 {{\"phase\":\"oracle_case\",\"name\":\"{name}\",\"duration_ms\":{duration},\"status\":\"ok\"}}"
+                );
+            }
+        }
+        if script == "json_depth" {
+            let observation = report
+                .get(report_key)
+                .ok_or("Missing published JSON-depth diagnostics")?;
+            for (name, duration) in json_depth_phase_timings(observation)? {
+                eprintln!(
+                    "MARTY_CI_PHASE_V1 {{\"phase\":\"oracle_phase\",\"name\":\"{name}\",\"duration_ms\":{duration},\"status\":\"ok\"}}"
+                );
+            }
         }
         migration_timing.success();
         Ok(owned)

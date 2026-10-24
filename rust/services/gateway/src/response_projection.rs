@@ -232,7 +232,26 @@ pub fn project(
     path: &str,
     mut response: GatewayResponse,
 ) -> Result<GatewayResponse, ProjectionError> {
-    if response.status_code >= 400 || response.status_code == 204 {
+    if response.status_code >= 400 {
+        // MMF adds MIP correlation metadata to upstream errors. Wallet-facing
+        // OAuth errors retain their protocol fields and correlation headers,
+        // without the MIP-only JSON extension rejected by strict conformance.
+        if crate::contract::oid4vci_protocol_route(path) {
+            if let Some(body) = response.body.as_deref() {
+                if let Ok(Value::Object(mut error)) = serde_json::from_slice::<Value>(body) {
+                    if error.get("error").is_some_and(Value::is_string)
+                        && error.remove("message_id").is_some()
+                    {
+                        response.body =
+                            Some(serde_json::to_vec(&error).map_err(|_| ProjectionError)?);
+                        response.headers.remove("content-length");
+                    }
+                }
+            }
+        }
+        return Ok(response);
+    }
+    if response.status_code == 204 {
         return Ok(response);
     }
     let Some(kind) = projection_for(method, path) else {
@@ -362,6 +381,7 @@ mod tests {
     fn response(value: &Value) -> GatewayResponse {
         GatewayResponse {
             status_code: 200,
+            set_cookies: Vec::new(),
             headers: BTreeMap::from([
                 ("content-type".into(), "application/json".into()),
                 ("content-length".into(), "999".into()),
@@ -369,6 +389,86 @@ mod tests {
             body: Some(serde_json::to_vec(value).expect("fixture JSON")),
             response_time_ms: None,
             upstream_service: Some("issuance".into()),
+        }
+    }
+
+    #[test]
+    fn oid4vci_errors_preserve_protocol_fields_and_correlation_headers() {
+        let input = serde_json::json!({
+            "error": "invalid_proof", "error_description": "Proof rejected",
+            "error_uri": "https://issuer.example/errors/proof",
+            "c_nonce": "fresh-nonce", "message_id": "request-1"
+        });
+        let mut expected = input.clone();
+        expected.as_object_mut().unwrap().remove("message_id");
+        for path in [
+            "/v1/issuance/token",
+            "/v1/issuance/credential",
+            "/v1/issuance/nonce",
+            "/v1/issuance/notification",
+            "/v1/issuance/deferred-credential",
+            "/v1/issuance/authorize",
+            "/v1/issuance/par",
+            "/v1/issuance/offers/tx-1",
+        ] {
+            let mut upstream = response(&input);
+            upstream.status_code = 400;
+            upstream.headers.extend(BTreeMap::from([
+                ("x-message-id".into(), "request-1".into()),
+                ("www-authenticate".into(), "DPoP".into()),
+                ("dpop-nonce".into(), "nonce-1".into()),
+                ("cache-control".into(), "no-store".into()),
+            ]));
+            let headers = upstream.headers.clone();
+            let projected = project(HttpMethod::Post, path, upstream).unwrap();
+            assert_eq!(projected.status_code, 400);
+            assert_eq!(
+                serde_json::from_slice::<Value>(projected.body.as_deref().unwrap()).unwrap(),
+                expected
+            );
+            for (key, value) in &headers {
+                if key != "content-length" {
+                    assert_eq!(projected.headers.get(key), Some(value));
+                }
+            }
+            assert!(!projected.headers.contains_key("content-length"));
+        }
+    }
+
+    #[test]
+    fn oid4vci_error_projection_does_not_change_management_or_non_oauth_errors() {
+        let input = serde_json::json!({"error": "invalid_request", "message_id": "request-1"});
+        for path in [
+            "/v1/issuance",
+            "/v1/issuance/credentials",
+            "/v1/issuance/token-settings",
+            "/v1/issuance/offers/tx-1/admin",
+            "/v1/issuance/offers/",
+        ] {
+            assert!(!crate::contract::oid4vci_protocol_route(path));
+            assert!(crate::contract::route_ownership(path).requires_authentication);
+            let mut upstream = response(&input);
+            upstream.status_code = 400;
+            let projected = project(HttpMethod::Post, path, upstream.clone()).unwrap();
+            assert_eq!(projected.body, upstream.body);
+            assert_eq!(projected.headers, upstream.headers);
+        }
+        for body in [
+            br#"{"detail":"unavailable","message_id":"request-1"}"#.as_slice(),
+            br#"{"error":false,"message_id":"request-1"}"#,
+            b"not JSON",
+        ] {
+            let mut upstream = response(&input);
+            upstream.status_code = 502;
+            upstream.body = Some(body.to_vec());
+            let projected = project(
+                HttpMethod::Post,
+                "/v1/issuance/credential",
+                upstream.clone(),
+            )
+            .unwrap();
+            assert_eq!(projected.body, upstream.body);
+            assert_eq!(projected.headers, upstream.headers);
         }
     }
 

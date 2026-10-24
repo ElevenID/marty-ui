@@ -1,0 +1,2147 @@
+{
+  "schema": "marty.canvas-real-seed-behavior/v1",
+  "source": "55bb69973:scripts/seed_canvas_real.py",
+  "api_corrections": {
+    "program_binding_rejected_fields": [
+      "flow_mode",
+      "direct_issue_enabled",
+      "issuer_mode",
+      "enabled"
+    ],
+    "platform_rejected_fields": [
+      "organization_id",
+      "canvas_account_id",
+      "lti_issuer",
+      "lti_jwks_url",
+      "lti_jwks_json",
+      "lti_jwks_fetched_at",
+      "lti_jwks_expires_at",
+      "lti_openid_configuration"
+    ],
+    "accepted_binding_requirements": [
+      {
+        "requirement_id": null,
+        "source": "ags_result",
+        "fact_type": "canvas.quiz_score",
+        "scope": {"course_id": "42", "activity_id": "9", "module_id": null, "line_item_url": null, "resource_id": null},
+        "pass_rule": {"min_score_percent": 80},
+        "required": true
+      },
+      {
+        "requirement_id": null,
+        "source": "canvas_rest",
+        "fact_type": "canvas.course_completion",
+        "scope": {"course_id": "42", "activity_id": "9", "module_id": null, "line_item_url": null, "resource_id": null},
+        "pass_rule": {"completed": true},
+        "required": true
+      }
+    ],
+    "reason": "The Rust issuance CanvasProgramBindingRequest denies these historical Python payload fields; binding activation uses separate validation and activation endpoints."
+  },
+  "gateway_seed": {
+    "operations": [
+      {
+        "method": "GET",
+        "url": "http://localhost:8000/v1/integrations/canvas/platforms?organization_id=org-1",
+        "payload": null
+      },
+      {
+        "method": "POST",
+        "url": "http://localhost:8000/v1/integrations/canvas/platforms",
+        "payload": {
+          "organization_id": "org-1",
+          "canvas_account_id": "account-1",
+          "display_name": "Canvas Demo",
+          "canvas_base_url": "https://canvas.example",
+          "lti_client_id": "client-1",
+          "lti_deployment_id": "deployment-1",
+          "enabled": true
+        }
+      },
+      {
+        "method": "POST",
+        "url": "http://localhost:8000/v1/integrations/canvas/platforms/platform-1/sandbox-probe",
+        "payload": {}
+      },
+      {
+        "method": "GET",
+        "url": "http://localhost:8000/v1/integrations/canvas/platforms?organization_id=org-1",
+        "payload": null
+      },
+      {
+        "method": "PUT",
+        "url": "http://localhost:8000/v1/integrations/canvas/platforms/platform-1",
+        "payload": {
+          "organization_id": "org-1",
+          "canvas_account_id": "account-1",
+          "display_name": "Canvas Demo",
+          "canvas_base_url": "https://canvas.example",
+          "lti_client_id": "client-1",
+          "lti_deployment_id": "deployment-1",
+          "enabled": true,
+          "lti_issuer": "https://canvas.example",
+          "lti_jwks_json": {
+            "keys": []
+          }
+        }
+      },
+      {
+        "method": "POST",
+        "url": "http://localhost:8000/v1/integrations/canvas/platforms/platform-1/sandbox-probe",
+        "payload": {}
+      },
+      {
+        "method": "GET",
+        "url": "http://localhost:8000/v1/integrations/canvas/program-bindings?organization_id=org-1&platform_id=platform-1&application_template_id=at-1",
+        "payload": null
+      },
+      {
+        "method": "POST",
+        "url": "http://localhost:8000/v1/integrations/canvas/platforms/platform-1/program-bindings",
+        "payload": {
+          "application_template_id": "at-1",
+          "credential_template_id": "ct-1",
+          "display_name": "Program Demo",
+          "flow_mode": "elevenid_orchestrated_canvas_evidence",
+          "direct_issue_enabled": false,
+          "auto_approve_on_evidence": true,
+          "evidence_requirements": [
+            {
+              "evidence_type": "EXTERNAL_FACT",
+              "provider": "canvas",
+              "fact_type": "canvas.quiz_score",
+              "verification_method": "SIGNED_AGS_SCORE",
+              "scope": {
+                "course_id": "42",
+                "quiz_id": "9"
+              },
+              "auto_issue_on_permit": true,
+              "pass_rule": {
+                "path": "assertion.score_percent",
+                "operator": ">=",
+                "value": 80
+              }
+            }
+          ],
+          "canvas_scope": {
+            "course_id": "42",
+            "quiz_id": "9"
+          },
+          "delivery_mode": "wallet_plus_canvas_mirror",
+          "issuer_mode": "org_managed",
+          "approval_policy_set_id": null,
+          "deployment_profile_id": null,
+          "feature_flags": {
+            "enable_canvas_evidence": true,
+            "enable_canvas_lti": true,
+            "enable_canvas_mirror_publish": true,
+            "enable_canvas_mirror_ops": true,
+            "enable_canvas_deep_linking": true,
+            "enable_canvas_ags": true,
+            "enable_canvas_nrps": true
+          },
+          "enabled": true
+        }
+      },
+      {
+        "method": "GET",
+        "url": "http://localhost:8000/v1/integrations/canvas/program-bindings?organization_id=org-1&platform_id=platform-1&application_template_id=at-1",
+        "payload": null
+      },
+      {
+        "method": "PUT",
+        "url": "http://localhost:8000/v1/integrations/canvas/program-bindings/binding-1",
+        "payload": {
+          "application_template_id": "at-1",
+          "credential_template_id": "ct-1",
+          "display_name": "Program Demo",
+          "flow_mode": "elevenid_orchestrated_canvas_evidence",
+          "direct_issue_enabled": false,
+          "auto_approve_on_evidence": true,
+          "evidence_requirements": [
+            {
+              "evidence_type": "EXTERNAL_FACT",
+              "provider": "canvas",
+              "fact_type": "canvas.course_completion",
+              "verification_method": "SIGNED_WEBHOOK",
+              "scope": {
+                "course_id": "42",
+                "quiz_id": "9"
+              },
+              "auto_issue_on_permit": true,
+              "pass_rule": {
+                "path": "assertion.completed",
+                "operator": "equals",
+                "value": true
+              }
+            }
+          ],
+          "canvas_scope": {
+            "course_id": "42",
+            "quiz_id": "9"
+          },
+          "delivery_mode": "wallet_only",
+          "issuer_mode": "org_managed",
+          "approval_policy_set_id": null,
+          "deployment_profile_id": null,
+          "feature_flags": {
+            "enable_canvas_evidence": true,
+            "enable_canvas_lti": true,
+            "enable_canvas_mirror_publish": false,
+            "enable_canvas_mirror_ops": false,
+            "enable_canvas_deep_linking": true,
+            "enable_canvas_ags": true,
+            "enable_canvas_nrps": true
+          },
+          "enabled": true
+        }
+      }
+    ],
+    "actions": [
+      "created",
+      "updated",
+      "created",
+      "updated"
+    ],
+    "scope": {
+      "course_id": "42",
+      "quiz_id": "9",
+      "assignment_id": "0"
+    },
+    "remote_signing": {
+      "provider": "gateway-signing-key-registry",
+      "issuer_profile_id": "ip-marty-vc-jwt-issuer",
+      "issuer_did": "did:web:beta.elevenidllc.com:orgs:marty",
+      "verification_method_id": "did:web:beta.elevenidllc.com:orgs:marty#cred-issuer-marty-es256",
+      "signing_service_id": "managed-openbao-transit",
+      "signing_key_reference": "cred-issuer-marty-es256",
+      "key_purpose": "vc_jwt_issuer",
+      "credential_formats": [
+        "sd_jwt_vc",
+        "jwt_vc_json"
+      ],
+      "secret_boundary": {
+        "issuer_private_key_location": "external_remote_key_store",
+        "beta_elevenidllc_com_private_key_material": "not_present",
+        "canvas_private_key_material": "not_present"
+      },
+      "resolver": {
+        "url": "http://signing-keys:8000/issuer-context",
+        "api_key_source": "SIGNING_KEYS_INTERNAL_API_KEY"
+      }
+    }
+  },
+  "database_behavior": {
+    "template_seed": "single_transaction",
+    "issuer_profile_id": "ip-marty-vc-jwt-issuer",
+    "signing_service_id": "managed-openbao-transit"
+  },
+  "unfrozen_groups": [
+    "cli_printed_summary",
+    "live_canvas_demo_journey"
+  ],
+  "database_seed": {
+    "modern_schema": {
+      "writes": [
+        {
+          "table": "credential_templates",
+          "has_remote_signing_columns": false,
+          "payload": {
+            "id": "ct-1",
+            "organization_id": "org-1",
+            "name": "Interoperable Credentials Foundations Badge",
+            "description": "Open Badge 3.0 credential for completing the Interoperable Credentials Foundations learning check in Canvas.",
+            "status": "active",
+            "credential_type": "OpenBadgeCredential",
+            "vct": "https://beta.elevenidllc.com/credentials/canvas-interoperability-foundations-badge",
+            "doctype": "org.openbadges.v3",
+            "claims": [
+              {
+                "name": "email",
+                "display_name": "Learner email",
+                "claim_type": "string",
+                "required": true,
+                "selectively_disclosable": true
+              },
+              {
+                "name": "given_name",
+                "display_name": "Given name",
+                "claim_type": "string",
+                "required": true,
+                "selectively_disclosable": true
+              },
+              {
+                "name": "family_name",
+                "display_name": "Family name",
+                "claim_type": "string",
+                "required": true,
+                "selectively_disclosable": true
+              },
+              {
+                "name": "achievement_id",
+                "display_name": "Achievement ID",
+                "claim_type": "string",
+                "required": true,
+                "selectively_disclosable": false
+              },
+              {
+                "name": "achievement_name",
+                "display_name": "Achievement",
+                "claim_type": "string",
+                "required": true,
+                "selectively_disclosable": true
+              },
+              {
+                "name": "achievement_description",
+                "display_name": "Achievement description",
+                "claim_type": "string",
+                "required": true,
+                "selectively_disclosable": true
+              },
+              {
+                "name": "achievement_criteria",
+                "display_name": "Achievement criteria",
+                "claim_type": "string",
+                "required": true,
+                "selectively_disclosable": false
+              },
+              {
+                "name": "badge_image_url",
+                "display_name": "Badge image",
+                "claim_type": "image",
+                "required": true,
+                "selectively_disclosable": false
+              },
+              {
+                "name": "course_name",
+                "display_name": "Canvas course",
+                "claim_type": "string",
+                "required": true,
+                "selectively_disclosable": true
+              },
+              {
+                "name": "quiz_name",
+                "display_name": "Canvas quiz",
+                "claim_type": "string",
+                "required": true,
+                "selectively_disclosable": true
+              },
+              {
+                "name": "score_percent",
+                "display_name": "Score percent",
+                "claim_type": "number",
+                "required": true,
+                "selectively_disclosable": true
+              },
+              {
+                "name": "completion_date",
+                "display_name": "Completion date",
+                "claim_type": "date",
+                "required": true,
+                "selectively_disclosable": true
+              },
+              {
+                "name": "institution_name",
+                "display_name": "Institution",
+                "claim_type": "string",
+                "required": true,
+                "selectively_disclosable": true
+              },
+              {
+                "name": "certificate_id",
+                "display_name": "Certificate ID",
+                "claim_type": "string",
+                "required": true,
+                "selectively_disclosable": true
+              },
+              {
+                "name": "organization_id",
+                "display_name": "Issuer organization",
+                "claim_type": "string",
+                "required": true,
+                "selectively_disclosable": false
+              },
+              {
+                "name": "achievement",
+                "display_name": "Open Badge achievement",
+                "claim_type": "object",
+                "required": true,
+                "selectively_disclosable": false
+              },
+              {
+                "name": "result",
+                "display_name": "Canvas quiz result",
+                "claim_type": "object",
+                "required": true,
+                "selectively_disclosable": true
+              },
+              {
+                "name": "learning_context",
+                "display_name": "Canvas learning context",
+                "claim_type": "object",
+                "required": true,
+                "selectively_disclosable": true
+              }
+            ],
+            "privacy_posture": "selective_disclosure",
+            "selective_disclosure_fields": [
+              "email",
+              "given_name",
+              "family_name",
+              "achievement_name",
+              "achievement_description",
+              "course_name",
+              "quiz_name",
+              "score_percent",
+              "completion_date",
+              "institution_name",
+              "certificate_id",
+              "result",
+              "learning_context"
+            ],
+            "zk_predicate_claims": [],
+            "derived_attributes": [],
+            "display_style": {
+              "background_color": "#0B5F7A",
+              "text_color": "#ffffff",
+              "icon": "award",
+              "logo_url": "https://beta.elevenidllc.com/credentials/canvas-interoperability-foundations-badge/image.svg"
+            },
+            "validity_rules": {
+              "duration": "P1Y",
+              "renewal_required": false
+            },
+            "issuer_requirements": {
+              "allowed_issuer_dids": [
+                "did:web:beta.elevenidllc.com:orgs:marty"
+              ],
+              "trust_tier_required": "organization_managed_remote_signing",
+              "audit_level_required": "standard"
+            },
+            "supported_formats": [
+              "sd_jwt_vc"
+            ],
+            "credential_payload_format": "w3c_vcdm_v2_sd_jwt",
+            "wallet_configs": [
+              {
+                "wallet_id": "waltid",
+                "deep_link_scheme": "openid-credential-offer://",
+                "format_variant": null
+              },
+              {
+                "wallet_id": "spruceid",
+                "deep_link_scheme": "spruceid://",
+                "format_variant": "dc+sd-jwt"
+              }
+            ],
+            "key_access_mode": "REMOTE_SIGNING",
+            "issuer_key_id": "cred-issuer-marty-es256",
+            "issuer_algorithm": "ES256",
+            "remote_signing_config": {
+              "provider": "gateway-signing-key-registry",
+              "issuer_profile_id": "ip-marty-vc-jwt-issuer",
+              "issuer_did": "did:web:beta.elevenidllc.com:orgs:marty",
+              "verification_method_id": "did:web:beta.elevenidllc.com:orgs:marty#cred-issuer-marty-es256",
+              "signing_service_id": "managed-openbao-transit",
+              "signing_key_reference": "cred-issuer-marty-es256",
+              "key_purpose": "vc_jwt_issuer",
+              "credential_formats": [
+                "sd_jwt_vc",
+                "jwt_vc_json"
+              ],
+              "secret_boundary": {
+                "issuer_private_key_location": "external_remote_key_store",
+                "beta_elevenidllc_com_private_key_material": "not_present",
+                "canvas_private_key_material": "not_present"
+              },
+              "resolver": {
+                "url": "http://signing-keys:8000/issuer-context",
+                "api_key_source": "SIGNING_KEYS_INTERNAL_API_KEY"
+              }
+            },
+            "version": 1
+          }
+        },
+        {
+          "table": "application_templates",
+          "has_remote_signing_columns": false,
+          "payload": {
+            "id": "at-1",
+            "organization_id": "org-1",
+            "name": "Interoperable Credentials Foundations Application",
+            "description": "Canvas-started application workflow for the interoperability Open Badge demonstration.",
+            "credential_template_id": "ct-1",
+            "form_fields": [
+              {
+                "name": "email",
+                "label": "Email",
+                "type": "email",
+                "required": true
+              },
+              {
+                "name": "given_name",
+                "label": "Given name",
+                "type": "text",
+                "required": true
+              },
+              {
+                "name": "family_name",
+                "label": "Family name",
+                "type": "text",
+                "required": true
+              },
+              {
+                "name": "course_name",
+                "label": "Canvas course",
+                "type": "text",
+                "required": true
+              },
+              {
+                "name": "quiz_name",
+                "label": "Canvas quiz",
+                "type": "text",
+                "required": true
+              },
+              {
+                "name": "score_percent",
+                "label": "Score percent",
+                "type": "number",
+                "required": true
+              }
+            ],
+            "evidence_requirements": [
+              {
+                "id": "canvas-quiz-score",
+                "label": "Canvas quiz score",
+                "evidence_type": "EXTERNAL_FACT",
+                "provider": "canvas",
+                "fact_type": "canvas.quiz_score",
+                "verification_method": "SIGNED_AGS_SCORE",
+                "scope": {},
+                "pass_rule": {
+                  "path": "assertion.score_percent",
+                  "operator": ">=",
+                  "value": 80
+                },
+                "required": true,
+                "auto_issue_on_permit": true
+              }
+            ],
+            "claim_collection_rules": [],
+            "required_checks": [],
+            "approval_strategy": "policy",
+            "approval_policy_set_id": null,
+            "application_validity_days": 30,
+            "auto_approval_rules": [],
+            "ui_config": {
+              "scenario": "canvas_mip_quiz_open_badge",
+              "provider": "canvas",
+              "fact_type": "canvas.quiz_score",
+              "scope": {},
+              "delivery_mode": "wallet_plus_canvas_mirror",
+              "issuer_mode": "org_managed",
+              "issuer_did": "did:web:beta.elevenidllc.com:orgs:marty",
+              "open_badge": {
+                "vct": "https://beta.elevenidllc.com/credentials/canvas-interoperability-foundations-badge",
+                "name": "Interoperable Credentials Foundations Badge",
+                "image": "https://beta.elevenidllc.com/credentials/canvas-interoperability-foundations-badge/image.svg",
+                "criteria": "https://beta.elevenidllc.com/credentials/canvas-interoperability-foundations-badge/criteria"
+              }
+            },
+            "notification_config": {},
+            "status": "active"
+          }
+        }
+      ],
+      "transaction": {
+        "begun": true,
+        "committed": true,
+        "disposed": true
+      }
+    },
+    "legacy_remote_columns": {
+      "writes": [
+        {
+          "table": "credential_templates",
+          "has_remote_signing_columns": true,
+          "payload": {
+            "id": "ct-1",
+            "organization_id": "org-1",
+            "name": "Interoperable Credentials Foundations Badge",
+            "description": "Open Badge 3.0 credential for completing the Interoperable Credentials Foundations learning check in Canvas.",
+            "status": "active",
+            "credential_type": "OpenBadgeCredential",
+            "vct": "https://beta.elevenidllc.com/credentials/canvas-interoperability-foundations-badge",
+            "doctype": "org.openbadges.v3",
+            "claims": [
+              {
+                "name": "email",
+                "display_name": "Learner email",
+                "claim_type": "string",
+                "required": true,
+                "selectively_disclosable": true
+              },
+              {
+                "name": "given_name",
+                "display_name": "Given name",
+                "claim_type": "string",
+                "required": true,
+                "selectively_disclosable": true
+              },
+              {
+                "name": "family_name",
+                "display_name": "Family name",
+                "claim_type": "string",
+                "required": true,
+                "selectively_disclosable": true
+              },
+              {
+                "name": "achievement_id",
+                "display_name": "Achievement ID",
+                "claim_type": "string",
+                "required": true,
+                "selectively_disclosable": false
+              },
+              {
+                "name": "achievement_name",
+                "display_name": "Achievement",
+                "claim_type": "string",
+                "required": true,
+                "selectively_disclosable": true
+              },
+              {
+                "name": "achievement_description",
+                "display_name": "Achievement description",
+                "claim_type": "string",
+                "required": true,
+                "selectively_disclosable": true
+              },
+              {
+                "name": "achievement_criteria",
+                "display_name": "Achievement criteria",
+                "claim_type": "string",
+                "required": true,
+                "selectively_disclosable": false
+              },
+              {
+                "name": "badge_image_url",
+                "display_name": "Badge image",
+                "claim_type": "image",
+                "required": true,
+                "selectively_disclosable": false
+              },
+              {
+                "name": "course_name",
+                "display_name": "Canvas course",
+                "claim_type": "string",
+                "required": true,
+                "selectively_disclosable": true
+              },
+              {
+                "name": "quiz_name",
+                "display_name": "Canvas quiz",
+                "claim_type": "string",
+                "required": true,
+                "selectively_disclosable": true
+              },
+              {
+                "name": "score_percent",
+                "display_name": "Score percent",
+                "claim_type": "number",
+                "required": true,
+                "selectively_disclosable": true
+              },
+              {
+                "name": "completion_date",
+                "display_name": "Completion date",
+                "claim_type": "date",
+                "required": true,
+                "selectively_disclosable": true
+              },
+              {
+                "name": "institution_name",
+                "display_name": "Institution",
+                "claim_type": "string",
+                "required": true,
+                "selectively_disclosable": true
+              },
+              {
+                "name": "certificate_id",
+                "display_name": "Certificate ID",
+                "claim_type": "string",
+                "required": true,
+                "selectively_disclosable": true
+              },
+              {
+                "name": "organization_id",
+                "display_name": "Issuer organization",
+                "claim_type": "string",
+                "required": true,
+                "selectively_disclosable": false
+              },
+              {
+                "name": "achievement",
+                "display_name": "Open Badge achievement",
+                "claim_type": "object",
+                "required": true,
+                "selectively_disclosable": false
+              },
+              {
+                "name": "result",
+                "display_name": "Canvas quiz result",
+                "claim_type": "object",
+                "required": true,
+                "selectively_disclosable": true
+              },
+              {
+                "name": "learning_context",
+                "display_name": "Canvas learning context",
+                "claim_type": "object",
+                "required": true,
+                "selectively_disclosable": true
+              }
+            ],
+            "privacy_posture": "selective_disclosure",
+            "selective_disclosure_fields": [
+              "email",
+              "given_name",
+              "family_name",
+              "achievement_name",
+              "achievement_description",
+              "course_name",
+              "quiz_name",
+              "score_percent",
+              "completion_date",
+              "institution_name",
+              "certificate_id",
+              "result",
+              "learning_context"
+            ],
+            "zk_predicate_claims": [],
+            "derived_attributes": [],
+            "display_style": {
+              "background_color": "#0B5F7A",
+              "text_color": "#ffffff",
+              "icon": "award",
+              "logo_url": "https://beta.elevenidllc.com/credentials/canvas-interoperability-foundations-badge/image.svg"
+            },
+            "validity_rules": {
+              "duration": "P1Y",
+              "renewal_required": false
+            },
+            "issuer_requirements": {
+              "allowed_issuer_dids": [
+                "did:web:beta.elevenidllc.com:orgs:marty"
+              ],
+              "trust_tier_required": "organization_managed_remote_signing",
+              "audit_level_required": "standard"
+            },
+            "supported_formats": [
+              "sd_jwt_vc"
+            ],
+            "credential_payload_format": "w3c_vcdm_v2_sd_jwt",
+            "wallet_configs": [
+              {
+                "wallet_id": "waltid",
+                "deep_link_scheme": "openid-credential-offer://",
+                "format_variant": null
+              },
+              {
+                "wallet_id": "spruceid",
+                "deep_link_scheme": "spruceid://",
+                "format_variant": "dc+sd-jwt"
+              }
+            ],
+            "key_access_mode": "REMOTE_SIGNING",
+            "issuer_key_id": "cred-issuer-marty-es256",
+            "issuer_algorithm": "ES256",
+            "remote_signing_config": {
+              "provider": "gateway-signing-key-registry",
+              "issuer_profile_id": "ip-marty-vc-jwt-issuer",
+              "issuer_did": "did:web:beta.elevenidllc.com:orgs:marty",
+              "verification_method_id": "did:web:beta.elevenidllc.com:orgs:marty#cred-issuer-marty-es256",
+              "signing_service_id": "managed-openbao-transit",
+              "signing_key_reference": "cred-issuer-marty-es256",
+              "key_purpose": "vc_jwt_issuer",
+              "credential_formats": [
+                "sd_jwt_vc",
+                "jwt_vc_json"
+              ],
+              "secret_boundary": {
+                "issuer_private_key_location": "external_remote_key_store",
+                "beta_elevenidllc_com_private_key_material": "not_present",
+                "canvas_private_key_material": "not_present"
+              },
+              "resolver": {
+                "url": "http://signing-keys:8000/issuer-context",
+                "api_key_source": "SIGNING_KEYS_INTERNAL_API_KEY"
+              }
+            },
+            "version": 1
+          }
+        },
+        {
+          "table": "application_templates",
+          "has_remote_signing_columns": false,
+          "payload": {
+            "id": "at-1",
+            "organization_id": "org-1",
+            "name": "Interoperable Credentials Foundations Application",
+            "description": "Canvas-started application workflow for the interoperability Open Badge demonstration.",
+            "credential_template_id": "ct-1",
+            "form_fields": [
+              {
+                "name": "email",
+                "label": "Email",
+                "type": "email",
+                "required": true
+              },
+              {
+                "name": "given_name",
+                "label": "Given name",
+                "type": "text",
+                "required": true
+              },
+              {
+                "name": "family_name",
+                "label": "Family name",
+                "type": "text",
+                "required": true
+              },
+              {
+                "name": "course_name",
+                "label": "Canvas course",
+                "type": "text",
+                "required": true
+              },
+              {
+                "name": "quiz_name",
+                "label": "Canvas quiz",
+                "type": "text",
+                "required": true
+              },
+              {
+                "name": "score_percent",
+                "label": "Score percent",
+                "type": "number",
+                "required": true
+              }
+            ],
+            "evidence_requirements": [
+              {
+                "id": "canvas-quiz-score",
+                "label": "Canvas quiz score",
+                "evidence_type": "EXTERNAL_FACT",
+                "provider": "canvas",
+                "fact_type": "canvas.quiz_score",
+                "verification_method": "SIGNED_AGS_SCORE",
+                "scope": {
+                  "course_id": "42",
+                  "quiz_id": "9"
+                },
+                "pass_rule": {
+                  "path": "assertion.score_percent",
+                  "operator": ">=",
+                  "value": 80
+                },
+                "required": true,
+                "auto_issue_on_permit": true
+              }
+            ],
+            "claim_collection_rules": [],
+            "required_checks": [],
+            "approval_strategy": "policy",
+            "approval_policy_set_id": null,
+            "application_validity_days": 30,
+            "auto_approval_rules": [],
+            "ui_config": {
+              "scenario": "canvas_mip_quiz_open_badge",
+              "provider": "canvas",
+              "fact_type": "canvas.quiz_score",
+              "scope": {
+                "course_id": "42",
+                "quiz_id": "9"
+              },
+              "delivery_mode": "wallet_plus_canvas_mirror",
+              "issuer_mode": "org_managed",
+              "issuer_did": "did:web:beta.elevenidllc.com:orgs:marty",
+              "open_badge": {
+                "vct": "https://beta.elevenidllc.com/credentials/canvas-interoperability-foundations-badge",
+                "name": "Interoperable Credentials Foundations Badge",
+                "image": "https://beta.elevenidllc.com/credentials/canvas-interoperability-foundations-badge/image.svg",
+                "criteria": "https://beta.elevenidllc.com/credentials/canvas-interoperability-foundations-badge/criteria"
+              }
+            },
+            "notification_config": {},
+            "status": "active"
+          }
+        }
+      ],
+      "transaction": {
+        "begun": true,
+        "committed": true,
+        "disposed": true
+      }
+    }
+  },
+  "demo_evidence": {
+    "operations": [
+      {
+        "method": "POST",
+        "url": "http://issuance:8008/internal/applications",
+        "payload": {
+          "application_template_id": "at-1",
+          "applicant_data": {
+            "_credential_type": "OpenBadgeCredential",
+            "_vct": "https://beta.elevenidllc.com/credentials/canvas-interoperability-foundations-badge",
+            "email": "learner@example.com",
+            "given_name": "First",
+            "family_name": "Last",
+            "achievement_id": "https://beta.elevenidllc.com/credentials/canvas-interoperability-foundations-badge#achievement",
+            "achievement_name": "Interoperable Credentials Foundations Badge",
+            "achievement_description": "Open Badge 3.0 credential for completing the Interoperable Credentials Foundations learning check in Canvas.",
+            "achievement_criteria": "Complete the Canvas learning activity and earn at least 80% on the interoperability quiz. ElevenID issues the credential from the Marty organization using the canonical DID issuer and remote signing service.",
+            "badge_image_url": "https://beta.elevenidllc.com/credentials/canvas-interoperability-foundations-badge/image.svg",
+            "course_name": "Canvas Course",
+            "quiz_name": "Canvas Quiz",
+            "score_percent": 92,
+            "completion_date": "2025-04-05",
+            "institution_name": "Marty Organization",
+            "certificate_id": "interoperable-credentials-foundations-2025-04-05",
+            "organization_id": "org-1",
+            "achievement": {
+              "id": "https://beta.elevenidllc.com/credentials/canvas-interoperability-foundations-badge#achievement",
+              "type": [
+                "Achievement"
+              ],
+              "name": "Interoperable Credentials Foundations Badge",
+              "description": "Open Badge 3.0 credential for completing the Interoperable Credentials Foundations learning check in Canvas.",
+              "criteria": {
+                "id": "https://beta.elevenidllc.com/credentials/canvas-interoperability-foundations-badge/criteria",
+                "narrative": "Complete the Canvas learning activity and earn at least 80% on the interoperability quiz. ElevenID issues the credential from the Marty organization using the canonical DID issuer and remote signing service."
+              },
+              "image": {
+                "id": "https://beta.elevenidllc.com/credentials/canvas-interoperability-foundations-badge/image.svg",
+                "type": "Image",
+                "caption": "Interoperable Credentials Foundations Badge"
+              },
+              "alignment": [
+                {
+                  "targetName": "Open Badges 3.0",
+                  "targetDescription": "Portable achievement credential carried as a verifiable credential."
+                },
+                {
+                  "targetName": "Marty Identity Protocol",
+                  "targetDescription": "MIP-governed issuance, status-list allocation, and destination projection."
+                }
+              ]
+            },
+            "result": {
+              "type": [
+                "Result"
+              ],
+              "source": "Canvas AGS score",
+              "score": 92,
+              "maximumScore": 100,
+              "passingScore": 80,
+              "resultDescription": "Completed Canvas Quiz with a score of 92%."
+            },
+            "learning_context": {
+              "provider": "canvas",
+              "course": {
+                "id": "42",
+                "name": "Canvas Course"
+              },
+              "activity": {
+                "id": "9",
+                "type": "quiz",
+                "name": "Canvas Quiz"
+              },
+              "canvas_account_id": "account-1"
+            }
+          },
+          "integration_context": {
+            "scenario": "canvas_mip_quiz_open_badge",
+            "credential_type": "OpenBadgeCredential",
+            "credential_vct": "https://beta.elevenidllc.com/credentials/canvas-interoperability-foundations-badge",
+            "delivery_mode": "wallet_plus_canvas_mirror",
+            "delivery": {
+              "mode": "wallet_plus_canvas_mirror"
+            },
+            "open_badge": {
+              "vct": "https://beta.elevenidllc.com/credentials/canvas-interoperability-foundations-badge",
+              "name": "Interoperable Credentials Foundations Badge",
+              "image": "https://beta.elevenidllc.com/credentials/canvas-interoperability-foundations-badge/image.svg",
+              "criteria": "https://beta.elevenidllc.com/credentials/canvas-interoperability-foundations-badge/criteria"
+            },
+            "canvas": {
+              "canvas_account_id": "account-1",
+              "canvas_course_id": "42",
+              "canvas_quiz_id": "9",
+              "learner_email": "learner@example.com"
+            },
+            "issuer": {
+              "mode": "org_managed",
+              "issuer_did": "did:web:beta.elevenidllc.com:orgs:marty",
+              "signing_service_id": "managed-openbao-transit",
+              "signing_key_reference": "cred-issuer-marty-es256"
+            }
+          }
+        },
+        "timeout": 20
+      },
+      {
+        "method": "POST",
+        "url": "http://localhost:8000/v1/integrations/canvas/ags/score-events",
+        "payload": {
+          "canvas_event_id": "canvas-demo-ags-application-1-abc12345",
+          "application_id": "application-1",
+          "organization_id": "org-1",
+          "credential_template_id": "ct-1",
+          "canvas_account_id": "account-1",
+          "canvas_course_id": "42",
+          "canvas_course_name": "Canvas Course",
+          "canvas_user_id": "77",
+          "canvas_enrollment_id": "88",
+          "learner_email": "learner@example.com",
+          "learner_name": "First Last",
+          "evidence_type": "canvas.quiz_score",
+          "canvas_quiz_id": "9",
+          "line_item_label": "Canvas Quiz",
+          "activity_progress": "Completed",
+          "grading_progress": "FullyGraded",
+          "submitted": true,
+          "completed": true,
+          "passed": true,
+          "score_given": 92,
+          "score_maximum": 100,
+          "score_percent": 92,
+          "graded_at": "2025-04-05"
+        },
+        "signed": true,
+        "timeout": 20
+      }
+    ]
+  },
+  "signed_ags_wire": {
+    "method": "POST",
+    "url": "https://gateway.example/ags",
+    "body": "{\"a\":{\"x\":1,\"y\":2},\"z\":2}",
+    "headers": {
+      "accept": "application/json",
+      "content-type": "application/json",
+      "x-canvas-timestamp": "1743811200",
+      "x-canvas-signature-256": "sha256=0d18ba0e129f2b9b9485b22c45c71998f2f33c603119ad95b367582ceb387145"
+    },
+    "timeout": 20
+  },
+  "wallet_claim": {
+    "operations": [
+      {
+        "method": "GET",
+        "url": "http://localhost:8000/v1/issuance/offers/tx-1",
+        "payload": null,
+        "headers": null,
+        "timeout": 20
+      },
+      {
+        "method": "POST",
+        "url": "http://localhost:8000/v1/issuance/token",
+        "form": {
+          "grant_type": "urn:ietf:params:oauth:grant-type:pre-authorized_code",
+          "pre-authorized_code": "offer-code"
+        },
+        "headers": null,
+        "timeout": 20
+      },
+      {
+        "method": "POST",
+        "url": "http://localhost:8000/v1/issuance/credential",
+        "payload": {
+          "format": "vc+sd-jwt",
+          "credential_configuration_id": "OpenBadgeCredential#sd-jwt",
+          "proofs": {
+            "jwt": [
+              "signed-proof"
+            ]
+          }
+        },
+        "headers": {
+          "Authorization": "Bearer test-access-token"
+        },
+        "timeout": 60
+      }
+    ],
+    "proofs": [
+      {
+        "audience": "https://marty.example/org/org-1",
+        "nonce": "test-nonce"
+      }
+    ],
+    "result": {
+      "transaction_id": "tx-1",
+      "credential_format": "vc+sd-jwt",
+      "credential_size": 24,
+      "credential_hash": "256d04db4e5e4ac308751ed0885b722b758630567c53a7125ed9fbd068e5c3f6",
+      "notification_id": "notify-1"
+    }
+  },
+  "mirror_and_issuer_context": {
+    "operations": [
+      {
+        "method": "POST",
+        "url": "http://localhost:8000/v1/issuance/delivery-records/canvas-credentials/run-automation-cycle?organization_id=org-1&limit=25&retry_failed=true",
+        "payload": {},
+        "headers": {
+          "X-API-Key": "test-gateway-key"
+        },
+        "timeout": 60
+      },
+      {
+        "method": "GET",
+        "url": "http://signing-keys:8000/issuer-context?organization_id=org-1&credential_format=sd_jwt_vc&key_purpose=vc_jwt_issuer",
+        "payload": null,
+        "headers": {
+          "X-API-Key": "test-signing-key"
+        },
+        "timeout": 20
+      }
+    ],
+    "mirror": {
+      "processed_count": 1,
+      "publish": {
+        "delivered_count": 1
+      }
+    },
+    "issuer_context": {
+      "issuer_profile_id": "profile-1",
+      "issuer_did": "did:web:marty.example",
+      "signing_service_id": "managed-openbao-transit",
+      "signing_key_reference": "key-ref",
+      "verification_method_id": "did:web:marty.example#key-ref"
+    }
+  },
+  "canvas_core_rest": {
+    "operations": [
+      {
+        "method": "GET",
+        "url": "http://canvas:8088/api/v1/accounts/1/courses?search_term=Marty+Course",
+        "payload": null,
+        "form": null
+      },
+      {
+        "method": "POST",
+        "url": "http://canvas:8088/api/v1/accounts/1/courses",
+        "payload": null,
+        "form": {
+          "course[name]": "Marty Course",
+          "course[course_code]": "MARTY-101",
+          "course[sis_course_id]": "marty-course",
+          "offer": "true"
+        }
+      },
+      {
+        "method": "GET",
+        "url": "http://canvas:8088/api/v1/accounts/1/users?search_term=learner%40example.com",
+        "payload": null,
+        "form": null
+      },
+      {
+        "method": "POST",
+        "url": "http://canvas:8088/api/v1/accounts/1/users",
+        "payload": null,
+        "form": {
+          "user[name]": "Test Learner",
+          "pseudonym[unique_id]": "learner@example.com",
+          "pseudonym[password]": "test-learner-password",
+          "communication_channel[type]": "email",
+          "communication_channel[address]": "learner@example.com",
+          "skip_confirmation": "true"
+        }
+      },
+      {
+        "method": "GET",
+        "url": "http://canvas:8088/api/v1/courses/42/enrollments?user_id%5B%5D=77&type%5B%5D=StudentEnrollment",
+        "payload": null,
+        "form": null
+      },
+      {
+        "method": "POST",
+        "url": "http://canvas:8088/api/v1/courses/42/enrollments",
+        "payload": null,
+        "form": {
+          "enrollment[user_id]": "77",
+          "enrollment[type]": "StudentEnrollment",
+          "enrollment[enrollment_state]": "active",
+          "notify": "false"
+        }
+      },
+      {
+        "method": "GET",
+        "url": "http://canvas:8088/api/v1/accounts/1/courses?search_term=Marty+Course",
+        "payload": null,
+        "form": null
+      },
+      {
+        "method": "GET",
+        "url": "http://canvas:8088/api/v1/accounts/1/users?search_term=learner%40example.com",
+        "payload": null,
+        "form": null
+      },
+      {
+        "method": "GET",
+        "url": "http://canvas:8088/api/v1/courses/42/enrollments?user_id%5B%5D=77&type%5B%5D=StudentEnrollment",
+        "payload": null,
+        "form": null
+      }
+    ],
+    "created": {
+      "course": {
+        "id": 42,
+        "name": "Marty Course",
+        "course_code": "MARTY-101"
+      },
+      "learner": {
+        "id": 77,
+        "name": "Test Learner",
+        "login_id": "learner@example.com"
+      },
+      "enrollment": {
+        "id": 88,
+        "user_id": 77
+      }
+    },
+    "existing": {
+      "course": {
+        "id": 42,
+        "sis_course_id": "marty-course"
+      },
+      "learner": {
+        "id": 77,
+        "login_id": "learner@example.com"
+      },
+      "enrollment": {
+        "id": 88,
+        "user_id": 77
+      }
+    }
+  },
+  "canvas_launch_surface_rest": {
+    "operations": [
+      {
+        "method": "GET",
+        "url": "http://canvas:8088/api/v1/courses/42/modules",
+        "payload": null,
+        "form": null
+      },
+      {
+        "method": "POST",
+        "url": "http://canvas:8088/api/v1/courses/42/modules",
+        "payload": null,
+        "form": {
+          "module[name]": "Credential Launch",
+          "module[published]": "true"
+        }
+      },
+      {
+        "method": "GET",
+        "url": "http://canvas:8088/api/v1/courses/42/modules/10/items",
+        "payload": null,
+        "form": null
+      },
+      {
+        "method": "POST",
+        "url": "http://canvas:8088/api/v1/courses/42/modules/10/items",
+        "payload": null,
+        "form": {
+          "module_item[title]": "Launch Credential",
+          "module_item[type]": "ExternalTool",
+          "module_item[external_url]": "https://marty.example/launch",
+          "module_item[new_tab]": "false",
+          "module_item[published]": "true",
+          "module_item[completion_requirement][type]": "must_view",
+          "module_item[content_id]": "99"
+        }
+      },
+      {
+        "method": "GET",
+        "url": "http://canvas:8088/api/v1/courses/42/quizzes?search_term=Credential+Quiz",
+        "payload": null,
+        "form": null
+      },
+      {
+        "method": "POST",
+        "url": "http://canvas:8088/api/v1/courses/42/quizzes",
+        "payload": null,
+        "form": {
+          "quiz[title]": "Credential Quiz",
+          "quiz[description]": "Quiz description",
+          "quiz[quiz_type]": "assignment",
+          "quiz[published]": "true",
+          "quiz[points_possible]": "100",
+          "quiz[allowed_attempts]": "1",
+          "quiz[scoring_policy]": "keep_highest"
+        }
+      },
+      {
+        "method": "GET",
+        "url": "http://canvas:8088/api/v1/courses/42/modules/10/items",
+        "payload": null,
+        "form": null
+      },
+      {
+        "method": "POST",
+        "url": "http://canvas:8088/api/v1/courses/42/modules/10/items",
+        "payload": null,
+        "form": {
+          "module_item[title]": "Credential Quiz",
+          "module_item[type]": "Quiz",
+          "module_item[content_id]": "12",
+          "module_item[published]": "true",
+          "module_item[completion_requirement][type]": "must_submit"
+        }
+      },
+      {
+        "method": "GET",
+        "url": "http://canvas:8088/api/v1/courses/42/assignments?search_term=Credential+Assignment",
+        "payload": null,
+        "form": null
+      },
+      {
+        "method": "POST",
+        "url": "http://canvas:8088/api/v1/courses/42/assignments",
+        "payload": null,
+        "form": {
+          "assignment[name]": "Credential Assignment",
+          "assignment[published]": "true",
+          "assignment[points_possible]": "100",
+          "assignment[grading_type]": "points",
+          "assignment[submission_types][]": [
+            "external_tool"
+          ],
+          "assignment[external_tool_tag_attributes][url]": "https://marty.example/launch",
+          "assignment[external_tool_tag_attributes][new_tab]": "false"
+        }
+      },
+      {
+        "method": "GET",
+        "url": "http://canvas:8088/api/v1/courses/42/modules",
+        "payload": null,
+        "form": null
+      },
+      {
+        "method": "GET",
+        "url": "http://canvas:8088/api/v1/courses/42/modules/10/items",
+        "payload": null,
+        "form": null
+      },
+      {
+        "method": "PUT",
+        "url": "http://canvas:8088/api/v1/courses/42/modules/10/items/11",
+        "payload": null,
+        "form": {
+          "module_item[title]": "Launch Credential",
+          "module_item[external_url]": "https://marty.example/launch",
+          "module_item[new_tab]": "false",
+          "module_item[published]": "true",
+          "module_item[content_id]": "99"
+        }
+      },
+      {
+        "method": "GET",
+        "url": "http://canvas:8088/api/v1/courses/42/quizzes?search_term=Credential+Quiz",
+        "payload": null,
+        "form": null
+      },
+      {
+        "method": "GET",
+        "url": "http://canvas:8088/api/v1/courses/42/modules/10/items",
+        "payload": null,
+        "form": null
+      },
+      {
+        "method": "GET",
+        "url": "http://canvas:8088/api/v1/courses/42/assignments?search_term=Credential+Assignment",
+        "payload": null,
+        "form": null
+      },
+      {
+        "method": "PUT",
+        "url": "http://canvas:8088/api/v1/courses/42/assignments/14",
+        "payload": null,
+        "form": {
+          "assignment[name]": "Credential Assignment",
+          "assignment[published]": "true",
+          "assignment[points_possible]": "100",
+          "assignment[grading_type]": "points",
+          "assignment[submission_types][]": [
+            "external_tool"
+          ],
+          "assignment[external_tool_tag_attributes][url]": "https://marty.example/launch",
+          "assignment[external_tool_tag_attributes][new_tab]": "false"
+        }
+      }
+    ],
+    "created": {
+      "module": {
+        "action": "created",
+        "module": {
+          "id": 10,
+          "name": "Credential Launch"
+        }
+      },
+      "tool_item": {
+        "action": "created",
+        "item": {
+          "id": 11,
+          "title": "Launch Credential",
+          "url": "https://marty.example/launch",
+          "published": true
+        }
+      },
+      "quiz": {
+        "action": "created",
+        "quiz": {
+          "id": 12,
+          "title": "Credential Quiz"
+        }
+      },
+      "quiz_item": {
+        "action": "created",
+        "item": {
+          "id": 13,
+          "title": "Credential Quiz"
+        }
+      },
+      "assignment": {
+        "action": "created",
+        "assignment": {
+          "id": 14,
+          "name": "Credential Assignment"
+        }
+      }
+    },
+    "existing": {
+      "module": {
+        "action": "existing",
+        "module": {
+          "id": 10,
+          "name": "Credential Launch"
+        }
+      },
+      "tool_item": {
+        "action": "updated",
+        "item": {
+          "id": 11,
+          "title": "Launch Credential",
+          "url": "https://marty.example/launch",
+          "published": true
+        }
+      },
+      "quiz": {
+        "action": "existing",
+        "quiz": {
+          "id": 12,
+          "title": "Credential Quiz"
+        }
+      },
+      "quiz_item": {
+        "action": "existing",
+        "item": {
+          "id": 13,
+          "title": "Credential Quiz"
+        }
+      },
+      "assignment": {
+        "action": "updated",
+        "assignment": {
+          "id": 14,
+          "name": "Credential Assignment"
+        }
+      }
+    }
+  },
+  "canvas_module_item_retries": {
+    "forms": [
+      {
+        "module_item[title]": "Credential Quiz",
+        "module_item[type]": "Quiz",
+        "module_item[content_id]": "12",
+        "module_item[published]": "true",
+        "module_item[completion_requirement][type]": "must_submit"
+      },
+      {
+        "module_item[title]": "Credential Quiz",
+        "module_item[type]": "Quiz",
+        "module_item[content_id]": "12",
+        "module_item[published]": "true"
+      },
+      {
+        "module_item[title]": "Credential Quiz",
+        "module_item[type]": "Quiz",
+        "module_item[published]": "true",
+        "module_item[completion_requirement][type]": "must_submit"
+      }
+    ],
+    "result": {
+      "id": 13
+    }
+  },
+  "canvas_rails_lti": {
+    "operations": [
+      {
+        "command": [
+          "docker",
+          "exec",
+          "-i",
+          "-e",
+          "CANVAS_LTI_SETUP_B64=<payload>",
+          "stack_marty-canvas-real",
+          "bash",
+          "-lc",
+          "cat >/tmp/ensure_canvas_lti_setup.rb; cd /usr/src/app; bin/rails runner -e production /tmp/ensure_canvas_lti_setup.rb"
+        ],
+        "payload": {
+          "account_id": "1",
+          "admin_email": "admin@example.com",
+          "client_id": "client-1",
+          "notes": "ElevenID LTI Integration - client-1",
+          "redirect_uri": "https://marty.example/v1/integrations/canvas/lti/platforms/platform-1/experience",
+          "scopes": [
+            "https://purl.imsglobal.org/spec/lti-ags/scope/lineitem",
+            "https://purl.imsglobal.org/spec/lti-ags/scope/lineitem.readonly",
+            "https://purl.imsglobal.org/spec/lti-ags/scope/result.readonly",
+            "https://purl.imsglobal.org/spec/lti-nrps/scope/contextmembership.readonly"
+          ]
+        },
+        "script_sha256": "0b88b6d5ba5859125eafac85c1466f414a8a357c4694fd0750dcc9dfcd63e5a0",
+        "timeout": 180
+      },
+      {
+        "command": [
+          "docker",
+          "exec",
+          "-i",
+          "-e",
+          "CANVAS_LTI_SETUP_B64=<payload>",
+          "stack_marty-canvas-real",
+          "bash",
+          "-lc",
+          "cat >/tmp/ensure_canvas_lti_setup.rb; cd /usr/src/app; bin/rails runner -e production /tmp/ensure_canvas_lti_setup.rb"
+        ],
+        "payload": {
+          "public_host": "canvas.example"
+        },
+        "script_sha256": "0b88b6d5ba5859125eafac85c1466f414a8a357c4694fd0750dcc9dfcd63e5a0",
+        "timeout": 180
+      },
+      {
+        "command": [
+          "docker",
+          "exec",
+          "-i",
+          "-e",
+          "CANVAS_LTI_SETUP_B64=<payload>",
+          "stack_marty-canvas-real",
+          "bash",
+          "-lc",
+          "cat >/tmp/ensure_canvas_lti_setup.rb; cd /usr/src/app; bin/rails runner -e production /tmp/ensure_canvas_lti_setup.rb"
+        ],
+        "payload": {
+          "account_id": "1",
+          "course_id": "42",
+          "client_id": "client-1",
+          "display_name": "Canvas Demo",
+          "tool_domain": "marty.example",
+          "tool_url": "https://marty.example/v1/integrations/canvas/lti/platforms/platform-1/experience-login"
+        },
+        "script_sha256": "0b88b6d5ba5859125eafac85c1466f414a8a357c4694fd0750dcc9dfcd63e5a0",
+        "timeout": 180
+      }
+    ],
+    "developer_key": {
+      "action": "created",
+      "key": {
+        "id": 5,
+        "action": "created",
+        "name": "client-1",
+        "global_id": "client-1"
+      }
+    },
+    "public_domain": {
+      "action": "updated",
+      "domain": "canvas.example",
+      "accounts": [
+        {
+          "id": 1
+        }
+      ]
+    },
+    "external_tool": {
+      "action": "created",
+      "tool": {
+        "id": 99,
+        "action": "created",
+        "name": "Canvas Demo"
+      }
+    }
+  },
+  "canvas_admin_bootstrap": {
+    "initial_data": {
+      "operations": [
+        {
+          "command": [
+            "docker",
+            "exec",
+            "-e",
+            "CANVAS_ADMIN_EMAIL=admin@example.com",
+            "stack_marty-canvas-real",
+            "bash",
+            "-lc",
+            "cd /usr/src/app && bin/rails runner -e production 'email=ENV.fetch(\"CANVAS_ADMIN_EMAIL\"); puts(Pseudonym.where(unique_id: email).exists? ? \"yes\" : \"no\")'"
+          ],
+          "input": null,
+          "timeout": 90
+        },
+        {
+          "command": [
+            "docker",
+            "exec",
+            "-i",
+            "stack_marty-canvas-real",
+            "bash",
+            "-lc",
+            "cd /usr/src/app && bundle exec rake db:load_initial_data RAILS_ENV=production"
+          ],
+          "input": "admin@example.com\nadmin@example.com\ntest-admin-password\ntest-admin-password\nMarty Canvas Test\n3\n",
+          "timeout": 240
+        },
+        {
+          "command": [
+            "docker",
+            "exec",
+            "-e",
+            "CANVAS_ADMIN_EMAIL=admin@example.com",
+            "stack_marty-canvas-real",
+            "bash",
+            "-lc",
+            "cd /usr/src/app && bin/rails runner -e production 'email=ENV.fetch(\"CANVAS_ADMIN_EMAIL\"); puts(Pseudonym.where(unique_id: email).exists? ? \"yes\" : \"no\")'"
+          ],
+          "input": null,
+          "timeout": 90
+        }
+      ],
+      "result": true
+    },
+    "mint_token": {
+      "operations": [
+        {
+          "command": [
+            "docker",
+            "exec",
+            "-e",
+            "CANVAS_ADMIN_EMAIL=admin@example.com",
+            "stack_marty-canvas-real",
+            "bash",
+            "-lc",
+            "cd /usr/src/app && bin/rails runner -e production 'email=ENV.fetch(\"CANVAS_ADMIN_EMAIL\"); puts(Pseudonym.where(unique_id: email).exists? ? \"yes\" : \"no\")'"
+          ],
+          "input": null,
+          "timeout": 90
+        },
+        {
+          "command": [
+            "docker",
+            "exec",
+            "-i",
+            "-e",
+            "CANVAS_ADMIN_TOKEN_SETUP_B64=<payload>",
+            "stack_marty-canvas-real",
+            "bash",
+            "-lc",
+            "cat >/tmp/mint_canvas_admin_token.rb; cd /usr/src/app; bin/rails runner -e production /tmp/mint_canvas_admin_token.rb"
+          ],
+          "input": "<token-script>",
+          "timeout": 120,
+          "script_sha256": "2427376a2b5c58594a4cbd8c423f1b5b44c0096d853da54ae2a20df679c06dfd",
+          "payload": {
+            "admin_email": "admin@example.com"
+          }
+        }
+      ],
+      "result": "test-admin-token"
+    }
+  },
+  "canvas_cli_config": {
+    "connector": {
+      "issuance_base_url": "http://localhost:8000",
+      "issuance_api_key": "test-gateway-key",
+      "internal_issuance_base_url": "http://issuance:8008",
+      "internal_issuance_api_key": "test-issuance-key",
+      "organization_id": "00000000-0000-0000-0000-000000000001",
+      "canvas_account_id": "canvas-real-account-1",
+      "credential_template_id": "50000000-0000-0000-0000-000000000041",
+      "application_template_id": "0ab66d45-0d84-5fbd-837f-25788d3227a1",
+      "display_name": "Canvas Real LMS",
+      "canvas_base_url": "http://localhost:8088",
+      "lti_tool_base_url": "http://localhost:8000",
+      "lti_client_id": "canvas-real-client-id",
+      "lti_deployment_id": "canvas-real-deployment-id",
+      "probe_after_upsert": true,
+      "program_binding_seed_enabled": true,
+      "program_binding_display_name": "Marty Canvas Experiment",
+      "program_binding_evidence_type": "canvas.quiz_score",
+      "program_binding_delivery_mode": "wallet_plus_canvas_mirror",
+      "program_binding_auto_approve": true,
+      "program_binding_direct_issue": false,
+      "program_binding_score_threshold": 80,
+      "open_badge_scenario_enabled": true,
+      "demo_application_seed_enabled": true,
+      "demo_evidence_event_enabled": false,
+      "demo_wallet_claim_enabled": true,
+      "demo_mirror_publish_enabled": true,
+      "signing_keys_internal_base_url": "http://localhost:8000/internal/signing-keys",
+      "signing_keys_internal_api_key": "dev-signing-keys-internal-api-key"
+    },
+    "canvas": {
+      "enabled": false,
+      "api_base_url": "http://localhost:8088",
+      "browser_base_url": "http://localhost:8088",
+      "admin_token": "",
+      "admin_email": "admin@example.com",
+      "admin_password": "readystack123",
+      "account_id": "1",
+      "container_name": "marty-canvas-real",
+      "course_name": "ElevenID LTI Test Course",
+      "course_code": "ELEVENID-LTI-101",
+      "course_sis_id": "elevenid_lti_test",
+      "learner_name": "ElevenID Test Learner",
+      "learner_email": "learner+elevenid@example.edu",
+      "learner_password": "ChangeMe123!",
+      "launch_seed_enabled": true,
+      "launch_module_name": "ElevenID Credential Launch",
+      "launch_item_title": "Launch ElevenID Credential Issuance",
+      "launch_assignment_name": "ElevenID Credential Issuance",
+      "quiz_seed_enabled": true,
+      "quiz_title": "Interoperable Credentials Foundations Quiz",
+      "quiz_description": "Demo quiz used to issue an ElevenID Open Badge through MIP policy and remote DID signing.",
+      "quiz_passing_score_percent": 92,
+      "quiz_points_possible": 100
+    }
+  },
+  "canvas_transition": {
+    "summary": {
+      "application": {
+        "application_id": "application-1",
+        "application_status": "approved",
+        "issuance_transaction_id": "tx-1",
+        "credential_type": "OpenBadgeCredential",
+        "credential_template_id": "ct-1",
+        "transaction_status": "issued",
+        "issuer_profile_id": "profile-1",
+        "issuer_mode": "org_managed",
+        "issuer_did_override": "did:web:marty.example",
+        "signing_service_id": "managed-openbao-transit",
+        "delivery_mode": "wallet_plus_canvas_mirror",
+        "credential_payload_format": "vc+sd-jwt",
+        "has_pre_auth_code": true
+      },
+      "latest_fact": {
+        "provider": "canvas",
+        "fact_type": "canvas.quiz_score",
+        "scope": {},
+        "assertion": {
+          "score_percent": 92
+        },
+        "verification": {
+          "status": "verified"
+        },
+        "created_at": "2025-04-05T00:00:00Z"
+      },
+      "issued_credential": {
+        "id": "credential-1",
+        "subject_did": "did:example:learner",
+        "issuer_did": "did:web:marty.example",
+        "revocation_profile_id": "rev-1",
+        "status_list_entries": [],
+        "status": "active",
+        "issued_at": "2025-04-05T00:00:00Z",
+        "expires_at": null
+      },
+      "delivery_records": [
+        {
+          "id": "delivery-1",
+          "delivery_target": "canvas_credentials",
+          "delivery_mode": "wallet_plus_canvas_mirror",
+          "status": "delivered",
+          "external_credential_id": "badge-1",
+          "external_issuer_id": null,
+          "last_error": null,
+          "metadata": {
+            "provider": "canvas_credentials_api"
+          },
+          "updated_at": "2025-04-05T00:00:00Z"
+        }
+      ],
+      "canvas_mirror_delivery_records": 1
+    },
+    "queries": [
+      {
+        "query": "SELECT a.id AS application_id, a.status AS application_status, a.issuance_transaction_id, t.credential_type, t.credential_template_id, t.status AS transaction_status, t.issuer_profile_id, t.issuer_mode, t.issuer_did_override, t.signing_service_id, t.delivery_mode, t.credential_payload_format, t.pre_auth_code IS NOT NULL AS has_pre_auth_code FROM issuance_service.applications a LEFT JOIN issuance_service.issuance_transactions t ON t.id = a.issuance_transaction_id WHERE a.id = :application_id",
+        "params": {
+          "application_id": "application-1"
+        }
+      },
+      {
+        "query": "SELECT provider, fact_type, scope, assertion, verification, created_at FROM issuance_service.evidence_facts WHERE application_id = :application_id ORDER BY created_at DESC LIMIT 1",
+        "params": {
+          "application_id": "application-1"
+        }
+      },
+      {
+        "query": "SELECT id, subject_did, issuer_did, revocation_profile_id, status_list_entries, status, issued_at, expires_at FROM issuance_service.issued_credentials WHERE transaction_id = :transaction_id ORDER BY issued_at DESC LIMIT 1",
+        "params": {
+          "transaction_id": "tx-1"
+        }
+      },
+      {
+        "query": "SELECT id, delivery_target, delivery_mode, status, external_credential_id, external_issuer_id, last_error, metadata, updated_at FROM issuance_service.credential_delivery_records WHERE transaction_id = :transaction_id ORDER BY created_at ASC",
+        "params": {
+          "transaction_id": "tx-1"
+        }
+      },
+      {
+        "query": "SELECT COUNT(*) FROM issuance_service.credential_delivery_records WHERE transaction_id = :transaction_id AND delivery_target = 'canvas_credentials'",
+        "params": {
+          "transaction_id": "tx-1"
+        }
+      }
+    ]
+  },
+  "canvas_lms_summary": {
+    "complete": {
+      "public_domain": {
+        "action": "updated",
+        "domain": "canvas.example",
+        "accounts": []
+      },
+      "developer_key": {
+        "id": 5,
+        "name": "client-1",
+        "client_id": "client-1",
+        "action": "created",
+        "owner_binding_account_id": 1,
+        "owner_binding_workflow_state": "on",
+        "requested_binding_account_id": 1,
+        "requested_binding_workflow_state": "on"
+      },
+      "course": {
+        "id": 42,
+        "name": "Marty Course",
+        "course_code": "MARTY-101",
+        "sis_course_id": "marty-course"
+      },
+      "learner": {
+        "id": 77,
+        "name": "Test Learner",
+        "login_id": "learner@example.com"
+      },
+      "enrollment": {
+        "id": 88,
+        "user_id": 77
+      },
+      "external_tool": {
+        "id": 99,
+        "name": "Canvas Demo",
+        "deployment_id": "deployment-1",
+        "action": "created"
+      },
+      "launch_surface": {
+        "module": {
+          "id": 10,
+          "name": "Credential Launch",
+          "action": "created"
+        },
+        "module_item": {
+          "id": 11,
+          "title": "Launch Credential",
+          "html_url": "https://canvas.example/items/11",
+          "action": "created"
+        },
+        "assignment": {
+          "id": 14,
+          "name": "Credential Assignment",
+          "html_url": "https://canvas.example/assignments/14",
+          "action": "created"
+        }
+      },
+      "quiz": {
+        "id": 12,
+        "title": "Credential Quiz",
+        "html_url": "https://canvas.example/quizzes/12",
+        "action": "created",
+        "module_item": {
+          "id": 13,
+          "title": "Credential Quiz",
+          "html_url": "https://canvas.example/items/13",
+          "action": "created"
+        }
+      }
+    },
+    "assignment_error": {
+      "public_domain": {
+        "action": "updated",
+        "domain": "canvas.example",
+        "accounts": []
+      },
+      "developer_key": {
+        "id": 5,
+        "name": "client-1",
+        "client_id": "client-1",
+        "action": "created",
+        "owner_binding_account_id": 1,
+        "owner_binding_workflow_state": "on",
+        "requested_binding_account_id": 1,
+        "requested_binding_workflow_state": "on"
+      },
+      "course": {
+        "id": 42,
+        "name": "Marty Course",
+        "course_code": "MARTY-101",
+        "sis_course_id": "marty-course"
+      },
+      "learner": {
+        "id": 77,
+        "name": "Test Learner",
+        "login_id": "learner@example.com"
+      },
+      "enrollment": {
+        "id": 88,
+        "user_id": 77
+      },
+      "external_tool": {
+        "id": 99,
+        "name": "Canvas Demo",
+        "deployment_id": "deployment-1",
+        "action": "created"
+      },
+      "launch_surface": {
+        "module": {
+          "id": 10,
+          "name": "Credential Launch",
+          "action": "created"
+        },
+        "module_item": {
+          "id": 11,
+          "title": "Launch Credential",
+          "html_url": "https://canvas.example/items/11",
+          "action": "created"
+        },
+        "assignment_error": "Canvas assignment seed failed (422)"
+      },
+      "quiz": {
+        "id": 12,
+        "title": "Credential Quiz",
+        "html_url": "https://canvas.example/quizzes/12",
+        "action": "created",
+        "module_item": {
+          "id": 13,
+          "title": "Credential Quiz",
+          "html_url": "https://canvas.example/items/13",
+          "action": "created"
+        }
+      }
+    },
+    "quiz_error": {
+      "public_domain": {
+        "action": "updated",
+        "domain": "canvas.example",
+        "accounts": []
+      },
+      "developer_key": {
+        "id": 5,
+        "name": "client-1",
+        "client_id": "client-1",
+        "action": "created",
+        "owner_binding_account_id": 1,
+        "owner_binding_workflow_state": "on",
+        "requested_binding_account_id": 1,
+        "requested_binding_workflow_state": "on"
+      },
+      "course": {
+        "id": 42,
+        "name": "Marty Course",
+        "course_code": "MARTY-101",
+        "sis_course_id": "marty-course"
+      },
+      "learner": {
+        "id": 77,
+        "name": "Test Learner",
+        "login_id": "learner@example.com"
+      },
+      "enrollment": {
+        "id": 88,
+        "user_id": 77
+      },
+      "external_tool": {
+        "id": 99,
+        "name": "Canvas Demo",
+        "deployment_id": "deployment-1",
+        "action": "created"
+      },
+      "launch_surface": {
+        "module": {
+          "id": 10,
+          "name": "Credential Launch",
+          "action": "created"
+        },
+        "module_item": {
+          "id": 11,
+          "title": "Launch Credential",
+          "html_url": "https://canvas.example/items/11",
+          "action": "created"
+        },
+        "assignment": {
+          "id": 14,
+          "name": "Credential Assignment",
+          "html_url": "https://canvas.example/assignments/14",
+          "action": "created"
+        }
+      },
+      "quiz": {
+        "error": "Canvas quiz seed failed (422)"
+      }
+    }
+  },
+  "canvas_secret_fallback": {
+    "operations": [
+      {
+        "command": [
+          "docker",
+          "inspect",
+          "--format",
+          "{{json .Config.Env}}",
+          "marty-issuance"
+        ],
+        "timeout": 20
+      }
+    ],
+    "secret": "test-shared-secret"
+  },
+  "canvas_transition_print": {
+    "summary": {
+      "application": {
+        "application_id": "application-1",
+        "application_status": "approved",
+        "issuance_transaction_id": "tx-1",
+        "credential_type": "OpenBadgeCredential",
+        "credential_template_id": "ct-1",
+        "transaction_status": "issued",
+        "issuer_profile_id": "profile-1",
+        "issuer_mode": "org_managed",
+        "issuer_did_override": "did:web:marty.example",
+        "signing_service_id": "managed-openbao-transit",
+        "delivery_mode": "wallet_plus_canvas_mirror",
+        "credential_payload_format": "vc+sd-jwt",
+        "has_pre_auth_code": true
+      },
+      "latest_fact": {
+        "provider": "canvas",
+        "fact_type": "canvas.quiz_score",
+        "scope": {},
+        "assertion": {
+          "score_percent": 92
+        },
+        "verification": {
+          "status": "verified"
+        },
+        "created_at": "2025-04-05T00:00:00Z"
+      },
+      "issued_credential": {
+        "id": "credential-1",
+        "subject_did": "did:example:learner",
+        "issuer_did": "did:web:marty.example",
+        "revocation_profile_id": "rev-1",
+        "status_list_entries": [
+          {
+            "index": 5,
+            "status_list_uri": "https://status.example/list/1"
+          }
+        ],
+        "status": "active",
+        "issued_at": "2025-04-05T00:00:00Z",
+        "expires_at": null
+      },
+      "delivery_records": [
+        {
+          "id": "delivery-1",
+          "delivery_target": "canvas_credentials",
+          "delivery_mode": "wallet_plus_canvas_mirror",
+          "status": "delivered",
+          "external_credential_id": "badge-1",
+          "external_issuer_id": null,
+          "last_error": null,
+          "metadata": {
+            "provider": "canvas_credentials_api",
+            "credential_url": "https://canvas.example/credentials/badge-1"
+          },
+          "updated_at": "2025-04-05T00:00:00Z"
+        }
+      ],
+      "canvas_mirror_delivery_records": 1
+    },
+    "lines": [
+      "  OK MIP transition verified",
+      "    evidence_provider:   canvas",
+      "    evidence_fact_type:  canvas.quiz_score",
+      "    evidence_status:     verified via None",
+      "    score_percent:       92",
+      "    application_status:  approved",
+      "    transaction_id:      tx-1",
+      "    transaction_status:  issued",
+      "    credential_type:     OpenBadgeCredential",
+      "    issuer_profile_id:   profile-1",
+      "    issuer_did:          did:web:marty.example",
+      "    signing_service_id:  managed-openbao-transit",
+      "    delivery_mode:       wallet_plus_canvas_mirror",
+      "    canvas_platform_id:  None",
+      "    canvas_binding_id:   None",
+      "    mirror_records:      1",
+      "    issued_credential:   credential-1",
+      "    credential_status:   active",
+      "    revocation_profile:  rev-1",
+      "    status_list_index:   5",
+      "    status_list_uri:     https://status.example/list/1",
+      "    subject_did:         did:example:learner",
+      "    delivery_record:    canvas_credentials status=delivered external=badge-1",
+      "      canvas_display:   https://canvas.example/credentials/badge-1",
+      "      console_provenance: https://marty.example/console/org/operate/verify?external_credential_id=badge-1&canvas_account_id=account-1&organization_id=org-1",
+      "    offer_endpoint:      https://marty.example/v1/issuance/offers/tx-1"
+    ]
+  },
+  "canvas_cli_journey_order": {
+    "steps": [
+      {
+        "step": "templates",
+        "scope": null
+      },
+      {
+        "step": "platform"
+      },
+      {
+        "step": "jwks_refresh"
+      },
+      {
+        "step": "templates",
+        "scope": {}
+      },
+      {
+        "step": "binding",
+        "scope": {}
+      },
+      {
+        "step": "issuer_context"
+      }
+    ]
+  }
+}

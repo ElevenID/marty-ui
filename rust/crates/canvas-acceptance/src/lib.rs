@@ -1,1 +1,1 @@
-//! Ownership boundary for published Canvas worker and composition acceptance.
+//! Ownership boundary for published Canvas composition acceptance.

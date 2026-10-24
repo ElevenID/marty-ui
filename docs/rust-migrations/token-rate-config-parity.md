@@ -9,22 +9,19 @@ deployment selection, or production configuration.
 `contracts/token-rate-python-reference.json` contains 40 independently replayed
 cases from protected Credentials commit
 `ddd6b4e4383fe1000e3255f3e4237dc5b6020a2a`. Its source table records exact Git blob
-and SHA-256 identities for the issuance API routes and main middleware. The capture
-executes unchanged AST-selected configuration, limiter, enforcer and request-ID
-middleware; synthetic environment and clock replace external inputs. No operator
-environment files, key material, database, socket or live deployment are accessed.
+and SHA-256 identities for the issuance API routes and main middleware.
+The historical capture executed unchanged AST-selected configuration, limiter, enforcer and request-ID
+middleware; synthetic environment and clock replaced external inputs. No operator
+environment files, key material, database, socket or live deployment were accessed.
 
-Run the explicit reference gate with CPython 3.12 and its capture-only dependencies:
-
-```text
-python scripts/capture_token_rate_reference.py <credentials-checkout> --check
-```
+The capture generator has been retired and remains in Git history. Current CI
+uses the frozen corpus and native limiter/transport tests.
 
 The qualified local reference runtime is CPython 3.12.10, FastAPI 0.135.3,
 Starlette 1.0.0 and HTTPX 0.28.1, with the default 4,300-digit integer policy.
 Ordinary repository guards import only the standard library and pytest; they do
-not reinstall the retired application runtime. The capture reads immutable Git
-objects, not the checkout's dirty or current source. It writes nothing.
+not reinstall the retired application runtime. The historical capture read
+immutable Git objects.
 
 The reference HTTP cases exercise the real default FastAPI error stack around a
 named stand-in successful endpoint, not token business logic or a deployed service.

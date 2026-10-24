@@ -173,6 +173,25 @@ impl ResourceOwnerProvider for HttpGatewayProvider {
         let body = self.bounded_body(response).await?;
         let value: serde_json::Value = serde_json::from_slice(&body)
             .map_err(|_| SecurityError::InvalidAuthenticationResult)?;
+        // System catalog entries deliberately have no tenant owner. Keep normal
+        // gateway membership/scope authorization and native immutability; do not
+        // mistake these explicit catalog shapes for failed owner lookups.
+        let ownerless_system_catalog_entry = service == "compliance-profiles"
+            || (service == "credential-templates"
+                && path
+                    .strip_prefix("/v1/delivery-destinations/")
+                    .filter(|id| !id.is_empty() && !id.contains('/'))
+                    .is_some_and(|id| {
+                        value.get("id").and_then(serde_json::Value::as_str) == Some(id)
+                    }));
+        if ownerless_system_catalog_entry
+            && value.get("is_system").and_then(serde_json::Value::as_bool) == Some(true)
+            && value
+                .get("organization_id")
+                .is_none_or(serde_json::Value::is_null)
+        {
+            return Ok(None);
+        }
         let organization_id = value
             .get("organization_id")
             .and_then(serde_json::Value::as_str)
@@ -411,6 +430,7 @@ impl GatewayIdentityProvider for GrpcIdentityProvider {
         }
         Ok(Some(SessionIdentity {
             user_id: user.user_id,
+            authentication_time_unix: response.authentication_time_unix,
             email: optional_string(user.email),
             username: optional_string(user.username),
             given_name: optional_string(user.given_name),
@@ -670,6 +690,7 @@ mod tests {
         match request.uri().path() {
             "/health" => (StatusCode::OK, Json(json!({"status": "healthy"}))),
             "/internal/v1/resource-owners/trust-profiles/profile-1"
+            | "/internal/v1/resource-owners/presentation-policies/policy-1"
                 if request
                     .headers()
                     .get("x-api-key")
@@ -709,7 +730,43 @@ mod tests {
             {
                 (StatusCode::OK, Json(json!({"organization_id": "org-2"})))
             }
+            "/v1/delivery-destinations/dd-elevenid-wallet" => (
+                StatusCode::OK,
+                Json(json!({
+                    "id": "dd-elevenid-wallet",
+                    "is_system": true,
+                    "organization_id": null
+                })),
+            ),
+            "/v1/delivery-destinations/tenant-ownerless" => (
+                StatusCode::OK,
+                Json(json!({
+                    "id": "tenant-ownerless",
+                    "is_system": false,
+                    "organization_id": null
+                })),
+            ),
+            "/v1/delivery-destinations/malformed" => {
+                (StatusCode::OK, Json(json!({"unexpected": true})))
+            }
+            "/v1/delivery-destinations/mismatched" => (
+                StatusCode::OK,
+                Json(json!({
+                    "id": "dd-elevenid-wallet",
+                    "is_system": true,
+                    "organization_id": null
+                })),
+            ),
             "/malformed" => (StatusCode::OK, Json(json!({"unexpected": true}))),
+            "/system-profile" => (StatusCode::OK, Json(json!({"is_system": true}))),
+            "/system-profile-null" => (
+                StatusCode::OK,
+                Json(json!({"is_system": true, "organization_id": null})),
+            ),
+            "/tenant-profile-null" => (
+                StatusCode::OK,
+                Json(json!({"is_system": false, "organization_id": null})),
+            ),
             _ => (StatusCode::NOT_FOUND, Json(json!({"detail": "not found"}))),
         }
     }
@@ -725,6 +782,139 @@ mod tests {
                 .expect("fixture server");
         });
         format!("http://{address}")
+    }
+
+    #[tokio::test]
+    async fn presentation_policy_owner_lookup_uses_authenticated_http_projection() {
+        let provider = HttpGatewayProvider::new(
+            BTreeMap::from([("presentation-policies".into(), fixture_url().await)]),
+            "internal-secret",
+            None,
+            Some("service-secret".into()),
+            Some(4096),
+        )
+        .unwrap();
+        let lookup =
+            crate::authorization::resolve_resource_lookup("/v1/presentation-policies/policy-1")
+                .unwrap();
+        let context = ResourceOwnerContext {
+            headers: BTreeMap::from([
+                ("x-api-key-id".into(), "key-1".into()),
+                ("x-api-key-scopes".into(), "templates:read".into()),
+                ("x-organization-id".into(), "org-1".into()),
+            ]),
+        };
+        assert_eq!(
+            provider
+                .resolve_organization(lookup.service, &lookup.path, &context)
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("org-1")
+        );
+        // Owner resolution is independent of actor grants; gateway authorization
+        // subsequently returns403 for this actor's absent trust:read scope.
+        assert!(crate::authorization::authorize_api_key(
+            "presentation-policy:view",
+            "org-1",
+            Some("org-1"),
+            &["templates:read".into()]
+        )
+        .is_err());
+    }
+
+    #[tokio::test]
+    async fn system_compliance_owner_is_explicit_without_relaxing_other_owner_contracts() {
+        let url = fixture_url().await;
+        let provider = HttpGatewayProvider::new(
+            BTreeMap::from([
+                ("compliance-profiles".into(), url.clone()),
+                ("trust-profiles".into(), url),
+            ]),
+            "internal-secret",
+            None,
+            None,
+            Some(4096),
+        )
+        .unwrap();
+        for path in ["/system-profile", "/system-profile-null"] {
+            assert_eq!(
+                provider
+                    .resolve_organization(
+                        "compliance-profiles",
+                        path,
+                        &ResourceOwnerContext::default()
+                    )
+                    .await
+                    .unwrap(),
+                None
+            );
+            assert!(provider
+                .resolve_organization("trust-profiles", path, &ResourceOwnerContext::default())
+                .await
+                .is_err());
+        }
+        for path in ["/tenant-profile-null", "/malformed"] {
+            assert!(provider
+                .resolve_organization(
+                    "compliance-profiles",
+                    path,
+                    &ResourceOwnerContext::default()
+                )
+                .await
+                .is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn system_delivery_destination_is_ownerless_without_relaxing_other_catalog_entries() {
+        let url = fixture_url().await;
+        let provider = HttpGatewayProvider::new(
+            BTreeMap::from([
+                ("credential-templates".into(), url.clone()),
+                ("trust-profiles".into(), url),
+            ]),
+            "internal-secret",
+            None,
+            None,
+            Some(4096),
+        )
+        .unwrap();
+        let system_path = "/v1/delivery-destinations/dd-elevenid-wallet";
+        assert_eq!(
+            provider
+                .resolve_organization(
+                    "credential-templates",
+                    system_path,
+                    &ResourceOwnerContext::default()
+                )
+                .await
+                .unwrap(),
+            None
+        );
+        assert!(provider
+            .resolve_organization(
+                "trust-profiles",
+                system_path,
+                &ResourceOwnerContext::default()
+            )
+            .await
+            .is_err());
+        for path in [
+            "/v1/delivery-destinations/tenant-ownerless",
+            "/v1/delivery-destinations/malformed",
+            "/v1/delivery-destinations/mismatched",
+            "/system-profile-null",
+        ] {
+            assert!(provider
+                .resolve_organization(
+                    "credential-templates",
+                    path,
+                    &ResourceOwnerContext::default()
+                )
+                .await
+                .is_err());
+        }
     }
 
     #[tokio::test]

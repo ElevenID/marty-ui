@@ -23,22 +23,31 @@ impl RuntimeEnvironment {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WorkloadServerTlsFiles {
     pub certificate: PathBuf,
-    pub private_key: PathBuf,
     pub ca_certificate: PathBuf,
+    pub kms_endpoint: String,
+    pub kms_ca_certificate: PathBuf,
+    pub kms_token_file: PathBuf,
+    pub kms_key_name: String,
+    pub kms_key_version: u32,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PresentationPolicyServiceConfig {
+    pub did_resolution_base_urls: Vec<String>,
+    pub did_web_allowed_hosts: Vec<String>,
     pub environment: RuntimeEnvironment,
     pub http_addr: SocketAddr,
     pub grpc_addr: SocketAddr,
     pub database_url: String,
     pub database_max_connections: u32,
     pub organization_grpc_target: String,
+    pub organization_grpc_ca_cert: Option<PathBuf>,
     pub trust_profile_url: String,
     pub credential_status_url_template: String,
     pub service_token: Option<String>,
     pub issuance_api_key: Option<String>,
+    pub signing_registry_url: String,
+    pub signing_registry_api_key: Option<String>,
     pub dependency_timeout: Duration,
     pub workload_server_tls: Option<WorkloadServerTlsFiles>,
     pub release_version: String,
@@ -59,17 +68,20 @@ pub enum PresentationPolicyConfigError {
 
 impl PresentationPolicyServiceConfig {
     pub fn from_env() -> Result<Self, PresentationPolicyConfigError> {
-        let mut values = std::env::vars().collect::<BTreeMap<_, _>>();
-        for name in ["GRPC_SERVICE_TOKEN", "ISSUANCE_API_KEY"] {
-            load_secret(&mut values, name)?;
-        }
-        Self::from_values(values)
+        Self::from_values(std::env::vars())
     }
 
     pub fn from_values(
         values: impl IntoIterator<Item = (String, String)>,
     ) -> Result<Self, PresentationPolicyConfigError> {
-        let values = values.into_iter().collect::<BTreeMap<_, _>>();
+        let mut values = values.into_iter().collect::<BTreeMap<_, _>>();
+        for name in [
+            "GRPC_SERVICE_TOKEN",
+            "ISSUANCE_API_KEY",
+            "SIGNING_KEYS_INTERNAL_API_KEY",
+        ] {
+            load_secret(&mut values, name)?;
+        }
         let environment = environment(value(&values, "ENVIRONMENT").unwrap_or("development"))?;
         let http_addr = listener(
             &values,
@@ -102,6 +114,16 @@ impl PresentationPolicyServiceConfig {
         }
         let organization_grpc_target =
             grpc_target(value(&values, "ORG_GRPC_TARGET").unwrap_or("organization:9002"))?;
+        let organization_grpc_ca_cert = value(&values, "ORG_GRPC_CA_CERT").map(PathBuf::from);
+        if environment.is_deployed() && organization_grpc_ca_cert.is_none() {
+            return Err(PresentationPolicyConfigError::Missing {
+                name: "ORG_GRPC_CA_CERT",
+            });
+        }
+        if organization_grpc_ca_cert.is_some() && !organization_grpc_target.starts_with("https://")
+        {
+            return Err(invalid("ORG_GRPC_TARGET"));
+        }
         let trust_profile_url = service_url(
             value(&values, "TRUST_PROFILE_SERVICE_URL").unwrap_or("http://trust-profile:8004"),
             "TRUST_PROFILE_SERVICE_URL",
@@ -125,17 +147,76 @@ impl PresentationPolicyServiceConfig {
             secret(&values, "ISSUANCE_API_KEY", environment)?
         };
         let workload_server_tls = workload_server_tls(&values, environment)?;
+        let signing_registry_url = service_url(
+            value(&values, "SIGNING_KEYS_SERVICE_URL").unwrap_or("http://signing-keys:8017"),
+            "SIGNING_KEYS_SERVICE_URL",
+        )?;
+        let registry_endpoint =
+            Url::parse(&signing_registry_url).map_err(|_| invalid("SIGNING_KEYS_SERVICE_URL"))?;
+        if !registry_endpoint.username().is_empty()
+            || registry_endpoint.password().is_some()
+            || registry_endpoint.query().is_some()
+            || registry_endpoint.fragment().is_some()
+            || registry_endpoint.path() != "/"
+        {
+            return Err(invalid("SIGNING_KEYS_SERVICE_URL"));
+        }
+        // Match the registry owner's 16-byte minimum, including development.
+        // Other service secrets retain their independent 32-byte policy.
+        let signing_registry_api_key = value(&values, "SIGNING_KEYS_INTERNAL_API_KEY")
+            .map(|key| {
+                if key.len() < 16 {
+                    Err(PresentationPolicyConfigError::SecretTooShort {
+                        name: "SIGNING_KEYS_INTERNAL_API_KEY",
+                        minimum: 16,
+                    })
+                } else {
+                    Ok(key.to_owned())
+                }
+            })
+            .transpose()?;
+        let did_resolution_base_urls = value(&values, "DID_RESOLUTION_BASE_URL")
+            .unwrap_or("")
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        for base in &did_resolution_base_urls {
+            let parsed = Url::parse(base).map_err(|_| invalid("DID_RESOLUTION_BASE_URL"))?;
+            if !matches!(parsed.scheme(), "http" | "https")
+                || parsed.host_str().is_none()
+                || !parsed.username().is_empty()
+                || parsed.password().is_some()
+                || parsed.query().is_some()
+                || parsed.fragment().is_some()
+            {
+                return Err(invalid("DID_RESOLUTION_BASE_URL"));
+            }
+        }
+        let did_web_allowed_hosts = value(&values, "DID_WEB_ALLOWED_HOSTS")
+            .unwrap_or("")
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+            .collect();
         Ok(Self {
+            did_resolution_base_urls,
+            did_web_allowed_hosts,
             environment,
             http_addr,
             grpc_addr,
             database_url,
             database_max_connections,
             organization_grpc_target,
+            organization_grpc_ca_cert,
             trust_profile_url,
             credential_status_url_template,
             service_token,
             issuance_api_key,
+            signing_registry_url,
+            signing_registry_api_key,
             dependency_timeout: Duration::from_secs(number(
                 &values,
                 "PRESENTATION_POLICY_DEPENDENCY_TIMEOUT_SECONDS",
@@ -173,9 +254,16 @@ fn workload_server_tls(
 ) -> Result<Option<WorkloadServerTlsFiles>, PresentationPolicyConfigError> {
     let names = [
         "GRPC_WORKLOAD_TLS_SERVER_CERT",
-        "GRPC_WORKLOAD_TLS_SERVER_KEY",
         "GRPC_WORKLOAD_TLS_CA_CERT",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION",
     ];
+    if values.contains_key("GRPC_WORKLOAD_TLS_SERVER_KEY") {
+        return Err(invalid("GRPC_WORKLOAD_TLS_SERVER_KEY"));
+    }
     let configured = names
         .iter()
         .filter(|name| value(values, name).is_some())
@@ -192,8 +280,16 @@ fn workload_server_tls(
     }
     Ok(Some(WorkloadServerTlsFiles {
         certificate: PathBuf::from(required(values, names[0])?),
-        private_key: PathBuf::from(required(values, names[1])?),
-        ca_certificate: PathBuf::from(required(values, names[2])?),
+        ca_certificate: PathBuf::from(required(values, names[1])?),
+        kms_endpoint: required(values, names[2])?,
+        kms_ca_certificate: PathBuf::from(required(values, names[3])?),
+        kms_token_file: PathBuf::from(required(values, names[4])?),
+        kms_key_name: required(values, names[5])?,
+        kms_key_version: required(values, names[6])?
+            .parse::<u32>()
+            .ok()
+            .filter(|version| *version > 0)
+            .ok_or_else(|| invalid(names[6]))?,
     }))
 }
 
@@ -310,6 +406,9 @@ fn load_secret(
     };
     let secret =
         fs::read_to_string(path).map_err(|_| PresentationPolicyConfigError::SecretFile { name })?;
+    if secret.trim().is_empty() {
+        return Err(PresentationPolicyConfigError::SecretFile { name });
+    }
     values.insert(name.into(), secret.trim().into());
     Ok(())
 }

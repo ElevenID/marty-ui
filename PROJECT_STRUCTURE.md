@@ -41,8 +41,6 @@ marty-ui/
 │   └── services/
 │       └── flow/       # canonical Flow HTTP, gRPC, persistence and migrations
 ├── packages/
-│   ├── marty_common/
-│   └── marty_proto/
 ├── proto/
 ├── ui/
 │   ├── package.json
@@ -52,9 +50,8 @@ marty-ui/
 ├── config/
 ├── scripts/
 ├── tests/
-├── k8s/
-│   └── oracle/
-└── wheels/
+└── k8s/
+    └── oracle/
 ```
 
 ### Key areas
@@ -62,7 +59,7 @@ marty-ui/
 - `services/` - Python services still awaiting whole-service Rust cutover
 - `rust/services/` - canonical Rust service executables, including Flow
 - `marty-common` - released shared Python infrastructure maintained in `ElevenID/Marty`
-- `packages/marty_proto/` + `proto/` - gRPC definitions and generated stubs
+- `proto/` - canonical gRPC definitions; `make proto-gen` regenerates the Envoy descriptor
 - `ui/` - Vite/React frontend
 - `docker-compose*.yml` - local stack orchestration
 - `scripts/` - local tooling, setup, tunnel, and support workflows

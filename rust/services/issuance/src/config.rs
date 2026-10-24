@@ -1,6 +1,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     net::{IpAddr, SocketAddr},
+    path::PathBuf,
     time::Duration,
 };
 
@@ -23,16 +24,11 @@ pub struct PassportNativeConfig {
     pub managed_issuer_signing_enabled: bool,
     pub kms_artifacts_enabled: bool,
     pub kms_callbacks_enabled: bool,
-    pub artifact_key: Option<String>,
-    pub signer_url: Option<String>,
-    pub signer_api_key: Option<String>,
     pub bureau_url: Option<String>,
     pub bureau_api_key: Option<String>,
     pub bureau_provider_profile_id: Option<String>,
     pub beta_reconciliation_enabled: bool,
     pub beta_reconciliation_operator_token: Option<String>,
-    pub bureau_webhook_secret: Option<String>,
-    pub self_signed_test_enabled: bool,
 }
 
 impl std::fmt::Debug for PassportNativeConfig {
@@ -50,9 +46,6 @@ impl std::fmt::Debug for PassportNativeConfig {
             )
             .field("kms_artifacts_enabled", &self.kms_artifacts_enabled)
             .field("kms_callbacks_enabled", &self.kms_callbacks_enabled)
-            .field("artifact_key_configured", &self.artifact_key.is_some())
-            .field("signer_url_configured", &self.signer_url.is_some())
-            .field("signer_api_key_configured", &self.signer_api_key.is_some())
             .field("bureau_url_configured", &self.bureau_url.is_some())
             .field("bureau_api_key_configured", &self.bureau_api_key.is_some())
             .field(
@@ -67,11 +60,6 @@ impl std::fmt::Debug for PassportNativeConfig {
                 "beta_reconciliation_operator_token_configured",
                 &self.beta_reconciliation_operator_token.is_some(),
             )
-            .field(
-                "bureau_webhook_secret_configured",
-                &self.bureau_webhook_secret.is_some(),
-            )
-            .field("self_signed_test_enabled", &self.self_signed_test_enabled)
             .finish()
     }
 }
@@ -82,26 +70,11 @@ impl PassportNativeConfig {
         tenant_keys_configured: bool,
     ) -> Result<Self, MmfError> {
         let enabled = environment_flag(values, "PASSPORT_NATIVE_HTTP_ENABLED");
-        let self_signed_test_enabled =
-            environment_flag(values, "PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED");
-        if !enabled {
-            return Ok(Self {
-                enabled,
-                internal_service_auth_enabled: false,
-                managed_issuer_signing_enabled: false,
-                kms_artifacts_enabled: false,
-                kms_callbacks_enabled: false,
-                artifact_key: None,
-                signer_url: None,
-                signer_api_key: None,
-                bureau_url: None,
-                bureau_api_key: None,
-                bureau_provider_profile_id: None,
-                beta_reconciliation_enabled: false,
-                beta_reconciliation_operator_token: None,
-                bureau_webhook_secret: None,
-                self_signed_test_enabled,
-            });
+        if environment_flag(values, "PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED") {
+            return Err(MmfError::new(
+                ErrorCode::Configuration,
+                "self-signed passport signing is forbidden",
+            ));
         }
         let configured = |name: &str| {
             values
@@ -111,16 +84,46 @@ impl PassportNativeConfig {
                 .filter(|value| !value.is_empty())
                 .map(str::to_owned)
         };
-        let kms_artifacts_enabled = environment_flag(values, "PASSPORT_KMS_ARTIFACTS_ENABLED");
-        if kms_artifacts_enabled
-            && (configured("PHYSICAL_DOCUMENT_ARTIFACT_KEY").is_some()
-                || configured("PHYSICAL_DOCUMENT_ARTIFACT_KEY_FILE").is_some())
+        if values.contains_key("PHYSICAL_DOCUMENT_ARTIFACT_KEY")
+            || values.contains_key("PHYSICAL_DOCUMENT_ARTIFACT_KEY_FILE")
         {
             return Err(MmfError::new(
                 ErrorCode::Configuration,
-                "KMS passport artifact mode cannot be combined with PHYSICAL_DOCUMENT_ARTIFACT_KEY",
+                "local passport artifact-key configuration is forbidden",
             ));
         }
+        if values.contains_key("PERSONALIZATION_BUREAU_WEBHOOK_SECRET")
+            || values.contains_key("PERSONALIZATION_BUREAU_WEBHOOK_SECRET_FILE")
+        {
+            return Err(MmfError::new(
+                ErrorCode::Configuration,
+                "local passport callback-secret configuration is forbidden",
+            ));
+        }
+        if values.contains_key("ICAO_DOCUMENT_SIGNER_URL")
+            || values.contains_key("ICAO_DOCUMENT_SIGNER_API_KEY")
+            || values.contains_key("ICAO_DOCUMENT_SIGNER_API_KEY_FILE")
+        {
+            return Err(MmfError::new(
+                ErrorCode::Configuration,
+                "external passport signer configuration is forbidden; use managed issuer signing",
+            ));
+        }
+        if !enabled {
+            return Ok(Self {
+                enabled,
+                internal_service_auth_enabled: false,
+                managed_issuer_signing_enabled: false,
+                kms_artifacts_enabled: false,
+                kms_callbacks_enabled: false,
+                bureau_url: None,
+                bureau_api_key: None,
+                bureau_provider_profile_id: None,
+                beta_reconciliation_enabled: false,
+                beta_reconciliation_operator_token: None,
+            });
+        }
+        let kms_artifacts_enabled = environment_flag(values, "PASSPORT_KMS_ARTIFACTS_ENABLED");
         let kms_callbacks_enabled = environment_flag(values, "PASSPORT_KMS_CALLBACKS_ENABLED");
         let bureau_provider_profile_id = configured("PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID");
         let bureau_url = configured("PERSONALIZATION_BUREAU_URL");
@@ -156,15 +159,6 @@ impl PassportNativeConfig {
                 "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID exceeds 128 bytes",
             ));
         }
-        if kms_callbacks_enabled
-            && (configured("PERSONALIZATION_BUREAU_WEBHOOK_SECRET").is_some()
-                || configured("PERSONALIZATION_BUREAU_WEBHOOK_SECRET_FILE").is_some())
-        {
-            return Err(MmfError::new(
-                ErrorCode::Configuration,
-                "KMS passport callback mode cannot be combined with PERSONALIZATION_BUREAU_WEBHOOK_SECRET",
-            ));
-        }
         if kms_callbacks_enabled && bureau_url.is_some() && bureau_provider_profile_id.is_none() {
             return Err(MmfError::new(
                 ErrorCode::Configuration,
@@ -183,16 +177,11 @@ impl PassportNativeConfig {
             ),
             kms_artifacts_enabled,
             kms_callbacks_enabled,
-            artifact_key: secret_value(values, "PHYSICAL_DOCUMENT_ARTIFACT_KEY")?,
-            signer_url: configured("ICAO_DOCUMENT_SIGNER_URL"),
-            signer_api_key: secret_value(values, "ICAO_DOCUMENT_SIGNER_API_KEY")?,
             bureau_url,
             bureau_api_key: secret_value(values, "PERSONALIZATION_BUREAU_API_KEY")?,
             bureau_provider_profile_id,
             beta_reconciliation_enabled,
             beta_reconciliation_operator_token,
-            bureau_webhook_secret: secret_value(values, "PERSONALIZATION_BUREAU_WEBHOOK_SECRET")?,
-            self_signed_test_enabled,
         };
         let production = values
             .get("ENVIRONMENT")
@@ -216,21 +205,6 @@ impl PassportNativeConfig {
                 "beta passport bureau simulator cannot be selected as a production provider",
             ));
         }
-        if config.managed_issuer_signing_enabled
-            && (config.signer_url.is_some() || config.self_signed_test_enabled)
-        {
-            return Err(MmfError::new(
-                ErrorCode::Configuration,
-                "managed passport issuer signing cannot be combined with remote or self-signed signing",
-            ));
-        }
-        if config.self_signed_test_enabled && config.signer_url.is_none() {
-            #[cfg(not(feature = "passport-self-signed-test"))]
-            return Err(MmfError::new(
-                ErrorCode::Configuration,
-                "self-signed passport test mode requires the passport-self-signed-test build feature",
-            ));
-        }
         // Tenant authentication is mandatory even for the diagnostic capability
         // route. Missing providers are represented as blockers there, matching
         // the released Python surface; provider-backed operations remain 503.
@@ -245,10 +219,22 @@ impl PassportNativeConfig {
 }
 
 #[derive(Clone, Eq, PartialEq)]
+pub struct IssuanceWorkloadServerTlsFiles {
+    pub ca_certificate: PathBuf,
+    pub certificate: PathBuf,
+    pub kms_endpoint: String,
+    pub kms_ca_certificate: PathBuf,
+    pub kms_token_file: PathBuf,
+    pub kms_key_name: String,
+    pub kms_key_version: u32,
+}
+
+#[derive(Clone, Eq, PartialEq)]
 pub struct IssuanceServiceConfig {
     pub http_addr: SocketAddr,
     pub grpc_addr: SocketAddr,
     pub grpc_enabled: bool,
+    pub workload_server_tls: Option<IssuanceWorkloadServerTlsFiles>,
     pub release_version: String,
     pub build_revision: String,
     pub issuer_base_url: String,
@@ -258,13 +244,14 @@ pub struct IssuanceServiceConfig {
     pub issuer_display_name: String,
     pub cors_allowed_origins: Vec<String>,
     pub database_url: String,
-    pub integration_secret_master_key: Option<String>,
     pub token_hmac_key: Option<String>,
     pub issuance_api_key: Option<String>,
     pub passport_tenant_keys: Option<PassportTenantKeyring>,
     pub passport_native: PassportNativeConfig,
     pub signing_keys_internal_url: url::Url,
     pub signing_keys_internal_api_key: Option<String>,
+    pub integration_secret_api_key: Option<String>,
+    pub issuer_sign_key: Option<String>,
     pub revocation_profile_service_url: url::Url,
     pub internal_service_token: Option<String>,
     pub organization_grpc_target: String,
@@ -324,6 +311,10 @@ impl std::fmt::Debug for IssuanceServiceConfig {
             .field("http_addr", &self.http_addr)
             .field("grpc_addr", &self.grpc_addr)
             .field("grpc_enabled", &self.grpc_enabled)
+            .field(
+                "workload_server_tls_configured",
+                &self.workload_server_tls.is_some(),
+            )
             .field("release_version", &self.release_version)
             .field("build_revision", &self.build_revision)
             .field("issuer_base_url", &self.issuer_base_url)
@@ -342,10 +333,6 @@ impl std::fmt::Debug for IssuanceServiceConfig {
             .field("issuer_display_name", &self.issuer_display_name)
             .field("cors_allowed_origins", &self.cors_allowed_origins)
             .field("database_url_configured", &!self.database_url.is_empty())
-            .field(
-                "integration_secret_master_key_configured",
-                &self.integration_secret_master_key.is_some(),
-            )
             .field("token_hmac_key_configured", &self.token_hmac_key.is_some())
             .field(
                 "issuance_api_key_configured",
@@ -360,6 +347,10 @@ impl std::fmt::Debug for IssuanceServiceConfig {
             .field(
                 "signing_keys_internal_api_key_configured",
                 &self.signing_keys_internal_api_key.is_some(),
+            )
+            .field(
+                "issuer_sign_key_configured",
+                &self.issuer_sign_key.is_some(),
             )
             .field(
                 "revocation_profile_service_url",
@@ -583,15 +574,27 @@ impl IssuanceServiceConfig {
                 "TOKEN_HMAC_KEY or TOKEN_HMAC_KEY_FILE is required",
             ));
         }
-        if config.integration_secret_master_key.is_none() {
+        if config.signing_keys_internal_api_key.is_none() {
             return Err(MmfError::new(
                 ErrorCode::Configuration,
-                "INTEGRATION_SECRET_MASTER_KEY or INTEGRATION_SECRET_MASTER_KEY_FILE is required",
+                "SIGNING_KEYS_INTERNAL_API_KEY or ISSUANCE_API_KEY is required",
             ));
         }
-        validate_production_grpc_service_token(
+        if config.integration_secret_api_key.is_none() {
+            return Err(MmfError::new(
+                ErrorCode::Configuration,
+                "SIGNING_KEYS_INTEGRATION_SECRET_KEY is required for integration secrets",
+            ));
+        }
+        if config.issuer_sign_key.is_none() {
+            return Err(MmfError::new(
+                ErrorCode::Configuration,
+                "SIGNING_KEYS_ISSUER_SIGN_KEY is required for issuer signing",
+            ));
+        }
+        validate_grpc_service_token(
             config.internal_service_token.as_deref(),
-            &std::env::var("ENVIRONMENT").unwrap_or_else(|_| "development".to_owned()),
+            config.grpc_enabled,
         )?;
         Ok(config)
     }
@@ -754,15 +757,70 @@ impl IssuanceServiceConfig {
         let passport_native =
             PassportNativeConfig::from_values(&values, passport_tenant_keys.is_some())?;
         let token_hmac_key = secret_value(&values, "TOKEN_HMAC_KEY")?;
-        let integration_secret_key_name = values
-            .get("INTEGRATION_SECRET_MASTER_KEY_ENV")
-            .map(String::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .unwrap_or("INTEGRATION_SECRET_MASTER_KEY");
-        let integration_secret_master_key = secret_value(&values, integration_secret_key_name)?;
+        if [
+            "INTEGRATION_SECRET_MASTER_KEY",
+            "INTEGRATION_SECRET_MASTER_KEY_FILE",
+            "INTEGRATION_SECRET_MASTER_KEY_ENV",
+        ]
+        .iter()
+        .any(|name| values.contains_key(*name))
+        {
+            return Err(MmfError::new(
+                ErrorCode::Configuration,
+                "legacy integration-secret master-key configuration is forbidden",
+            ));
+        }
         let signing_keys_internal_api_key = secret_value(&values, "SIGNING_KEYS_INTERNAL_API_KEY")?
             .or_else(|| issuance_api_key.clone());
+        if values.contains_key("SIGNING_KEYS_INTEGRATION_SECRET_KEY")
+            && values.contains_key("SIGNING_KEYS_INTEGRATION_SECRET_KEY_FILE")
+        {
+            return Err(MmfError::new(
+                ErrorCode::Configuration,
+                "SIGNING_KEYS_INTEGRATION_SECRET_KEY must use one secret source",
+            ));
+        }
+        let integration_secret_api_key =
+            secret_value(&values, "SIGNING_KEYS_INTEGRATION_SECRET_KEY")?;
+        if integration_secret_api_key.as_ref().is_some_and(|key| {
+            key.len() < 32
+                || signing_keys_internal_api_key.as_ref() == Some(key)
+                || issuance_api_key.as_ref() == Some(key)
+        }) {
+            return Err(MmfError::new(
+                ErrorCode::Configuration,
+                "SIGNING_KEYS_INTEGRATION_SECRET_KEY must be distinct and at least 32 characters",
+            ));
+        }
+        if integration_secret_api_key
+            .as_deref()
+            .is_some_and(has_placeholder_prefix)
+        {
+            return Err(MmfError::new(
+                ErrorCode::Configuration,
+                "SIGNING_KEYS_INTEGRATION_SECRET_KEY must not be a placeholder",
+            ));
+        }
+        if values.contains_key("SIGNING_KEYS_ISSUER_SIGN_KEY")
+            && values.contains_key("SIGNING_KEYS_ISSUER_SIGN_KEY_FILE")
+        {
+            return Err(MmfError::new(
+                ErrorCode::Configuration,
+                "SIGNING_KEYS_ISSUER_SIGN_KEY must use one secret source",
+            ));
+        }
+        let issuer_sign_key = secret_value(&values, "SIGNING_KEYS_ISSUER_SIGN_KEY")?;
+        if issuer_sign_key.as_ref().is_some_and(|key| {
+            key.len() < 32
+                || signing_keys_internal_api_key.as_ref() == Some(key)
+                || issuance_api_key.as_ref() == Some(key)
+                || integration_secret_api_key.as_ref() == Some(key)
+        }) {
+            return Err(MmfError::new(
+                ErrorCode::Configuration,
+                "SIGNING_KEYS_ISSUER_SIGN_KEY must be distinct and at least 32 characters",
+            ));
+        }
         if values
             .get("GRPC_SERVICE_TOKEN")
             .is_some_and(|value| !value.trim().is_empty())
@@ -778,6 +836,15 @@ impl IssuanceServiceConfig {
         let internal_service_token = secret_value(&values, "GRPC_SERVICE_TOKEN")?
             .map(|value| value.trim().to_owned())
             .filter(|value| !value.is_empty());
+        if issuer_sign_key
+            .as_ref()
+            .is_some_and(|key| internal_service_token.as_ref() == Some(key))
+        {
+            return Err(MmfError::new(
+                ErrorCode::Configuration,
+                "SIGNING_KEYS_ISSUER_SIGN_KEY must differ from GRPC_SERVICE_TOKEN",
+            ));
+        }
         if passport_native.internal_service_auth_enabled
             && internal_service_token
                 .as_deref()
@@ -964,6 +1031,11 @@ impl IssuanceServiceConfig {
             .map_or("development", String::as_str)
             .trim()
             .to_ascii_lowercase();
+        let workload_server_tls = issuance_workload_server_tls(
+            &values,
+            settings.server.grpc_enabled,
+            matches!(environment.as_str(), "production" | "prod" | "beta"),
+        )?;
         let canvas_local_admin_token =
             if environment_flag(&values, "CANVAS_ALLOW_LOCAL_ADMIN_TOKEN_FALLBACK")
                 && !matches!(environment.as_str(), "production" | "prod")
@@ -978,6 +1050,7 @@ impl IssuanceServiceConfig {
             http_addr,
             grpc_addr,
             grpc_enabled: settings.server.grpc_enabled,
+            workload_server_tls,
             release_version: settings.build.release_version,
             build_revision: settings.build.revision,
             issuer_base_url,
@@ -987,13 +1060,14 @@ impl IssuanceServiceConfig {
             issuer_display_name: settings.discovery.issuer_display_name,
             cors_allowed_origins: settings.server.cors_allowed_origins,
             database_url,
-            integration_secret_master_key,
             token_hmac_key,
             issuance_api_key,
             passport_tenant_keys,
             passport_native,
             signing_keys_internal_url,
             signing_keys_internal_api_key,
+            integration_secret_api_key,
+            issuer_sign_key,
             revocation_profile_service_url,
             internal_service_token,
             organization_grpc_target,
@@ -1418,6 +1492,64 @@ fn optional_trimmed(value: Option<String>) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
+fn issuance_workload_server_tls(
+    values: &BTreeMap<String, String>,
+    grpc_enabled: bool,
+    deployed: bool,
+) -> Result<Option<IssuanceWorkloadServerTlsFiles>, MmfError> {
+    let invalid = |message: &str| MmfError::new(ErrorCode::Configuration, message);
+    if values.contains_key("GRPC_WORKLOAD_TLS_SERVER_KEY") {
+        return Err(invalid("Issuance TLS private-key files are retired"));
+    }
+    const NAMES: [&str; 7] = [
+        "GRPC_WORKLOAD_TLS_SERVER_CERT",
+        "GRPC_WORKLOAD_TLS_CA_CERT",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION",
+    ];
+    let get = |name: &str| optional_environment_value(values, name);
+    let configured = NAMES.iter().filter(|name| get(name).is_some()).count();
+    if configured == 0 && !(deployed && grpc_enabled) {
+        return Ok(None);
+    }
+    if configured != NAMES.len() {
+        return Err(invalid(
+            "Issuance gRPC requires complete remote TLS identity",
+        ));
+    }
+    let endpoint = get(NAMES[2]).unwrap_or_default();
+    let parsed =
+        url::Url::parse(&endpoint).map_err(|_| invalid("Issuance TLS KMS origin is invalid"))?;
+    if parsed.scheme() != "https"
+        || parsed.host_str().is_none()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.path() != "/"
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+    {
+        return Err(invalid("Issuance TLS KMS origin must be HTTPS"));
+    }
+    let version = get(NAMES[6])
+        .unwrap_or_default()
+        .parse::<u32>()
+        .ok()
+        .filter(|version| *version > 0)
+        .ok_or_else(|| invalid("Issuance TLS KMS key version is invalid"))?;
+    Ok(Some(IssuanceWorkloadServerTlsFiles {
+        certificate: PathBuf::from(get(NAMES[0]).unwrap_or_default()),
+        ca_certificate: PathBuf::from(get(NAMES[1]).unwrap_or_default()),
+        kms_endpoint: endpoint,
+        kms_ca_certificate: PathBuf::from(get(NAMES[3]).unwrap_or_default()),
+        kms_token_file: PathBuf::from(get(NAMES[4]).unwrap_or_default()),
+        kms_key_name: get(NAMES[5]).unwrap_or_default(),
+        kms_key_version: version,
+    }))
+}
+
 fn optional_environment_value(values: &BTreeMap<String, String>, name: &str) -> Option<String> {
     optional_trimmed(values.get(name).cloned())
 }
@@ -1539,23 +1671,9 @@ fn secret_value(values: &BTreeMap<String, String>, name: &str) -> Result<Option<
     Ok(Some(value.to_owned()))
 }
 
-fn validate_production_grpc_service_token(
-    token: Option<&str>,
-    environment: &str,
-) -> Result<(), MmfError> {
-    if ["development", "dev", "local", "test"]
-        .contains(&environment.trim().to_ascii_lowercase().as_str())
-    {
-        return Ok(());
-    }
-    let token = token.ok_or_else(|| {
-        MmfError::new(
-            ErrorCode::Configuration,
-            "GRPC_SERVICE_TOKEN is required outside development environments",
-        )
-    })?;
-    let normalized = token.to_ascii_lowercase();
-    if [
+fn has_placeholder_prefix(value: &str) -> bool {
+    let normalized = value.to_ascii_lowercase();
+    [
         "change-me",
         "change_me",
         "changeme",
@@ -1564,16 +1682,28 @@ fn validate_production_grpc_service_token(
     ]
     .iter()
     .any(|prefix| normalized.starts_with(prefix))
-    {
+}
+
+fn validate_grpc_service_token(token: Option<&str>, grpc_enabled: bool) -> Result<(), MmfError> {
+    if !grpc_enabled {
+        return Ok(());
+    }
+    let token = token.ok_or_else(|| {
+        MmfError::new(
+            ErrorCode::Configuration,
+            "GRPC_SERVICE_TOKEN is required when gRPC is enabled",
+        )
+    })?;
+    if has_placeholder_prefix(token) {
         return Err(MmfError::new(
             ErrorCode::Configuration,
-            "GRPC_SERVICE_TOKEN must not be a placeholder in production",
+            "GRPC_SERVICE_TOKEN must not be a placeholder",
         ));
     }
     if token.chars().count() < 32 {
         return Err(MmfError::new(
             ErrorCode::Configuration,
-            "GRPC_SERVICE_TOKEN must contain at least 32 characters in production",
+            "GRPC_SERVICE_TOKEN must contain at least 32 characters",
         ));
     }
     Ok(())
@@ -1584,9 +1714,7 @@ mod tests {
     use crate::canvas_network_timeout::CanvasNetworkTimeout;
     use mmf_core::ErrorCode;
 
-    use super::{
-        validate_production_grpc_service_token, IssuanceServiceConfig, PassportNativeConfig,
-    };
+    use super::{validate_grpc_service_token, IssuanceServiceConfig, PassportNativeConfig};
 
     #[test]
     fn production_passport_refuses_beta_simulator_without_qualifying_an_external_provider() {
@@ -1628,6 +1756,38 @@ mod tests {
             .iter()
             .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
             .collect()
+    }
+
+    fn remote_server_tls_values() -> Vec<(String, String)> {
+        values(&[
+            ("GRPC_WORKLOAD_TLS_SERVER_CERT", "issuance-public.pem"),
+            ("GRPC_WORKLOAD_TLS_CA_CERT", "workload-public-ca.pem"),
+            ("GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR", "https://bao:8200"),
+            ("GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT", "bao-public-ca.pem"),
+            ("GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE", "scoped-token"),
+            ("GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME", "issuance-server"),
+            ("GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION", "1"),
+        ])
+    }
+
+    #[test]
+    fn deployed_grpc_requires_remote_tls_and_rejects_private_key_files() {
+        let deployed = values(&[("ENVIRONMENT", "beta")]);
+        assert!(IssuanceServiceConfig::from_values(deployed.clone())
+            .unwrap_err()
+            .to_string()
+            .contains("complete remote TLS identity"));
+        let mut configured = deployed;
+        configured.extend(remote_server_tls_values());
+        assert!(IssuanceServiceConfig::from_values(configured.clone())
+            .unwrap()
+            .workload_server_tls
+            .is_some());
+        configured.push(("GRPC_WORKLOAD_TLS_SERVER_KEY".into(), "private.pem".into()));
+        assert!(IssuanceServiceConfig::from_values(configured)
+            .unwrap_err()
+            .to_string()
+            .contains("private-key files are retired"));
     }
 
     #[test]
@@ -1704,7 +1864,6 @@ mod tests {
             config.canvas_oauth_completion_redirect_url,
             "https://beta.elevenidllc.com/console/integrations/canvas"
         );
-        assert!(config.integration_secret_master_key.is_none());
         assert_eq!(
             config.canvas_lti_experience_code_ttl,
             std::time::Duration::from_secs(60)
@@ -1740,6 +1899,24 @@ mod tests {
     }
 
     #[test]
+    fn no_canvas_issuance_accepts_absent_canvas_secret_without_disabling_issuance() {
+        let config = IssuanceServiceConfig::from_values(values(&[
+            ("CANVAS_PORTABLE_INTEGRATION_ENABLED", "false"),
+            ("CANVAS_LEGACY_EVENT_INGEST_ENABLED", "false"),
+            ("CANVAS_MIRROR_WORKER_ENABLED", "false"),
+            ("CANVAS_CREDENTIALS_SHARED_SECRET_FILE", ""),
+            ("ISSUER_BASE_URL", "https://issuer.example.invalid"),
+        ]))
+        .expect("no-Canvas issuance configuration");
+        assert!(!config.canvas_portable_enabled);
+        assert!(!config.canvas_legacy_event_ingest_enabled);
+        assert!(!config.canvas_mirror_automation.enabled);
+        assert!(config.canvas_credentials_shared_secret.is_none());
+        assert!(config.canvas_credentials_shared_secret_file.is_none());
+        assert_eq!(config.issuer_base_url, "https://issuer.example.invalid");
+    }
+
+    #[test]
     fn passport_tenant_keys_are_validated_and_redacted() {
         let secret = "a".repeat(32);
         let json = format!("{{\"org-1\":\"{secret}\"}}");
@@ -1772,13 +1949,14 @@ mod tests {
         assert!(!config.passport_native.managed_issuer_signing_enabled);
         assert!(!config.passport_native.kms_artifacts_enabled);
         assert!(!config.passport_native.kms_callbacks_enabled);
-        assert!(config.passport_native.artifact_key.is_none());
-        let disabled = IssuanceServiceConfig::from_values(values(&[(
+        let forbidden = IssuanceServiceConfig::from_values(values(&[(
             "PHYSICAL_DOCUMENT_ARTIFACT_KEY_FILE",
             "nonexistent-passport-key-file",
         )]))
-        .unwrap();
-        assert!(!disabled.passport_native.enabled);
+        .unwrap_err();
+        assert!(forbidden
+            .to_string()
+            .contains("local passport artifact-key configuration is forbidden"));
 
         let error =
             IssuanceServiceConfig::from_values(values(&[("PASSPORT_NATIVE_HTTP_ENABLED", "true")]))
@@ -1787,23 +1965,19 @@ mod tests {
         assert!(error.to_string().contains("PASSPORT_TENANT_API_KEYS"));
 
         let secret = "a".repeat(32);
-        let fernet_key = fernet::Fernet::generate_key();
         let complete = values(&[
             ("PASSPORT_NATIVE_HTTP_ENABLED", "true"),
+            ("PASSPORT_KMS_ARTIFACTS_ENABLED", "true"),
             (
                 "PASSPORT_TENANT_API_KEYS",
                 &format!("{{\"org-a\":\"{secret}\"}}"),
             ),
-            ("PHYSICAL_DOCUMENT_ARTIFACT_KEY", &fernet_key),
-            ("ICAO_DOCUMENT_SIGNER_URL", "https://signer.example.test"),
-            ("ICAO_DOCUMENT_SIGNER_API_KEY", "signer-secret"),
             ("PERSONALIZATION_BUREAU_URL", "https://bureau.example.test"),
             ("PERSONALIZATION_BUREAU_API_KEY", "bureau-secret"),
             (
                 "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID",
                 "provider-reference",
             ),
-            ("PERSONALIZATION_BUREAU_WEBHOOK_SECRET", "webhook-secret"),
         ]);
         let config = IssuanceServiceConfig::from_values(complete.clone()).unwrap();
         assert!(config.passport_native.enabled);
@@ -1812,18 +1986,11 @@ mod tests {
             Some("provider-reference")
         );
         let debug = format!("{config:?}");
-        for secret in [
-            &secret[..],
-            &fernet_key,
-            "signer-secret",
-            "bureau-secret",
-            "webhook-secret",
-        ] {
+        for secret in [&secret[..], "bureau-secret"] {
             assert!(!debug.contains(secret));
         }
         for name in [
-            "PHYSICAL_DOCUMENT_ARTIFACT_KEY",
-            "ICAO_DOCUMENT_SIGNER_URL",
+            "PASSPORT_KMS_ARTIFACTS_ENABLED",
             "PERSONALIZATION_BUREAU_URL",
         ] {
             let missing = complete
@@ -1836,20 +2003,11 @@ mod tests {
         }
         let anonymous_providers = complete
             .into_iter()
-            .filter(|(name, _)| {
-                ![
-                    "ICAO_DOCUMENT_SIGNER_API_KEY",
-                    "PERSONALIZATION_BUREAU_API_KEY",
-                    "PERSONALIZATION_BUREAU_WEBHOOK_SECRET",
-                ]
-                .contains(&name.as_str())
-            })
+            .filter(|(name, _)| !["PERSONALIZATION_BUREAU_API_KEY"].contains(&name.as_str()))
             .collect::<Vec<_>>();
         let anonymous = IssuanceServiceConfig::from_values(anonymous_providers).unwrap();
         assert!(anonymous.passport_native.enabled);
-        assert!(anonymous.passport_native.signer_api_key.is_none());
         assert!(anonymous.passport_native.bureau_api_key.is_none());
-        assert!(anonymous.passport_native.bureau_webhook_secret.is_none());
 
         let too_long = IssuanceServiceConfig::from_values(values(&[
             ("PASSPORT_NATIVE_HTTP_ENABLED", "true"),
@@ -1912,6 +2070,7 @@ mod tests {
                 "passport-beta-bureau",
             ),
         ]);
+        beta.extend(remote_server_tls_values());
         assert!(
             IssuanceServiceConfig::from_values(beta.clone())
                 .unwrap()
@@ -1958,14 +2117,14 @@ mod tests {
     #[test]
     fn managed_passport_signing_is_explicit_and_excludes_legacy_signers() {
         let tenant_keys = format!("{{\"org-a\":\"{}\"}}", "a".repeat(32));
-        let values = values(&[
+        let configured = values(&[
             ("PASSPORT_NATIVE_HTTP_ENABLED", "true"),
             ("PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED", "true"),
             ("PASSPORT_TENANT_API_KEYS", &tenant_keys),
         ]);
-        let config = IssuanceServiceConfig::from_values(values.clone()).unwrap();
+        let config = IssuanceServiceConfig::from_values(configured.clone()).unwrap();
         assert!(config.passport_native.managed_issuer_signing_enabled);
-        let mut conflicting = values;
+        let mut conflicting = configured;
         conflicting.push((
             "ICAO_DOCUMENT_SIGNER_URL".into(),
             "https://signer.example.test".into(),
@@ -1973,7 +2132,18 @@ mod tests {
         assert!(IssuanceServiceConfig::from_values(conflicting)
             .unwrap_err()
             .to_string()
-            .contains("cannot be combined"));
+            .contains("external passport signer configuration is forbidden"));
+        for name in [
+            "ICAO_DOCUMENT_SIGNER_API_KEY",
+            "ICAO_DOCUMENT_SIGNER_API_KEY_FILE",
+        ] {
+            let mut disabled = values(&[]);
+            disabled.push((name.into(), String::new()));
+            assert!(IssuanceServiceConfig::from_values(disabled)
+                .unwrap_err()
+                .to_string()
+                .contains("external passport signer configuration is forbidden"));
+        }
     }
 
     #[test]
@@ -2005,20 +2175,25 @@ mod tests {
         ]);
         let config = IssuanceServiceConfig::from_values(values.clone()).unwrap();
         assert!(config.passport_native.kms_artifacts_enabled);
-        assert!(config.passport_native.artifact_key.is_none());
         for (name, value) in [
             ("PHYSICAL_DOCUMENT_ARTIFACT_KEY", "must-never-enter-process"),
+            ("PHYSICAL_DOCUMENT_ARTIFACT_KEY", ""),
             (
                 "PHYSICAL_DOCUMENT_ARTIFACT_KEY_FILE",
                 "nonexistent-passport-key-file",
             ),
+            ("PHYSICAL_DOCUMENT_ARTIFACT_KEY_FILE", ""),
         ] {
             let mut conflicting = values.clone();
             conflicting.push((name.into(), value.into()));
             let error = IssuanceServiceConfig::from_values(conflicting).unwrap_err();
             assert_eq!(error.code, ErrorCode::Configuration);
-            assert!(error.to_string().contains("cannot be combined"));
-            assert!(!error.to_string().contains(value));
+            assert!(error
+                .to_string()
+                .contains("artifact-key configuration is forbidden"));
+            if !value.is_empty() {
+                assert!(!error.to_string().contains(value));
+            }
         }
     }
 
@@ -2032,20 +2207,38 @@ mod tests {
         ]);
         let config = IssuanceServiceConfig::from_values(values.clone()).unwrap();
         assert!(config.passport_native.kms_callbacks_enabled);
-        assert!(config.passport_native.bureau_webhook_secret.is_none());
         for (name, value) in [
             ("PERSONALIZATION_BUREAU_WEBHOOK_SECRET", "must-never-load"),
+            ("PERSONALIZATION_BUREAU_WEBHOOK_SECRET", ""),
             (
                 "PERSONALIZATION_BUREAU_WEBHOOK_SECRET_FILE",
                 "nonexistent-webhook-key-file",
             ),
+            ("PERSONALIZATION_BUREAU_WEBHOOK_SECRET_FILE", ""),
         ] {
             let mut conflicting = values.clone();
             conflicting.push((name.into(), value.into()));
             let error = IssuanceServiceConfig::from_values(conflicting).unwrap_err();
             assert_eq!(error.code, ErrorCode::Configuration);
-            assert!(error.to_string().contains("cannot be combined"));
-            assert!(!error.to_string().contains(value));
+            assert!(error
+                .to_string()
+                .contains("callback-secret configuration is forbidden"));
+            if !value.is_empty() {
+                assert!(!error.to_string().contains(value));
+            }
+        }
+    }
+
+    #[test]
+    fn disabled_passport_rejects_retired_local_key_selectors() {
+        for name in [
+            "PHYSICAL_DOCUMENT_ARTIFACT_KEY",
+            "PHYSICAL_DOCUMENT_ARTIFACT_KEY_FILE",
+            "PERSONALIZATION_BUREAU_WEBHOOK_SECRET",
+            "PERSONALIZATION_BUREAU_WEBHOOK_SECRET_FILE",
+        ] {
+            let error = IssuanceServiceConfig::from_values(values(&[(name, "")])).unwrap_err();
+            assert_eq!(error.code, ErrorCode::Configuration, "{name}");
         }
     }
 
@@ -2057,10 +2250,9 @@ mod tests {
         ]))
         .unwrap_err();
         assert_eq!(error.code, ErrorCode::Configuration);
-        #[cfg(not(feature = "passport-self-signed-test"))]
-        assert!(error.to_string().contains("passport-self-signed-test"));
-        #[cfg(feature = "passport-self-signed-test")]
-        assert!(error.to_string().contains("PASSPORT_TENANT_API_KEYS"));
+        assert!(error
+            .to_string()
+            .contains("self-signed passport signing is forbidden"));
     }
 
     #[test]
@@ -2651,7 +2843,7 @@ mod tests {
     }
 
     #[test]
-    fn grpc_service_token_configuration_preserves_the_fail_closed_python_boundary() {
+    fn grpc_service_token_configuration_fails_closed_when_listener_enabled() {
         let conflict = IssuanceServiceConfig::from_values(values(&[
             ("GRPC_SERVICE_TOKEN", "direct-token"),
             ("GRPC_SERVICE_TOKEN_FILE", "mounted-token"),
@@ -2664,18 +2856,40 @@ mod tests {
             "too-short",
         ] {
             assert_eq!(
-                validate_production_grpc_service_token(Some(token), "production")
-                    .expect_err("weak production service token")
+                validate_grpc_service_token(Some(token), true)
+                    .expect_err("weak service token")
                     .code,
                 ErrorCode::Configuration
             );
         }
-        assert!(validate_production_grpc_service_token(
+        assert!(validate_grpc_service_token(
             Some("production-service-token-with-at-least-32-bytes"),
-            "production"
+            true
         )
         .is_ok());
-        assert!(validate_production_grpc_service_token(None, "test").is_ok());
+        assert_eq!(
+            validate_grpc_service_token(None, true)
+                .expect_err("enabled gRPC requires a service token")
+                .code,
+            ErrorCode::Configuration
+        );
+        assert!(validate_grpc_service_token(None, false).is_ok());
+    }
+
+    #[test]
+    fn integration_secret_api_key_rejects_placeholder_when_grpc_is_disabled() {
+        let error = IssuanceServiceConfig::from_values(values(&[
+            ("ISSUANCE_GRPC_ENABLED", "false"),
+            (
+                "SIGNING_KEYS_INTEGRATION_SECRET_KEY",
+                "change-me-synthetic-placeholder-integration-key",
+            ),
+        ]))
+        .expect_err("placeholder integration secret key must fail independently of gRPC");
+        assert_eq!(error.code, ErrorCode::Configuration);
+        assert!(error
+            .message
+            .contains("SIGNING_KEYS_INTEGRATION_SECRET_KEY"));
     }
 
     #[test]
@@ -2953,28 +3167,25 @@ mod tests {
     }
 
     #[test]
-    fn canvas_oauth_configuration_preserves_secret_indirection_and_redaction() {
-        let config = IssuanceServiceConfig::from_values(values(&[
-            (
-                "INTEGRATION_SECRET_MASTER_KEY_ENV",
-                "ROTATED_INTEGRATION_KEY",
-            ),
-            ("ROTATED_INTEGRATION_KEY", "base64-encryption-key"),
-            (
-                "CANVAS_OAUTH_COMPLETION_REDIRECT_URL",
-                "https://ui.example/console/integrations/canvas?source=oauth",
-            ),
-        ]))
+    fn canvas_oauth_configuration_rejects_legacy_master_key() {
+        let config = IssuanceServiceConfig::from_values(values(&[(
+            "CANVAS_OAUTH_COMPLETION_REDIRECT_URL",
+            "https://ui.example/console/integrations/canvas?source=oauth",
+        )]))
         .expect("Canvas OAuth configuration");
-        assert_eq!(
-            config.integration_secret_master_key.as_deref(),
-            Some("base64-encryption-key")
-        );
         assert_eq!(
             config.canvas_oauth_completion_redirect_url,
             "https://ui.example/console/integrations/canvas?source=oauth"
         );
-        assert!(!format!("{config:?}").contains("base64-encryption-key"));
+        for forbidden in [
+            "INTEGRATION_SECRET_MASTER_KEY",
+            "INTEGRATION_SECRET_MASTER_KEY_FILE",
+            "INTEGRATION_SECRET_MASTER_KEY_ENV",
+        ] {
+            assert!(
+                IssuanceServiceConfig::from_values(values(&[(forbidden, "synthetic")])).is_err()
+            );
+        }
     }
 
     #[test]
@@ -2993,12 +3204,14 @@ mod tests {
         assert!(diagnostic.contains("canvas_local_admin_token_configured: true"));
         assert!(!diagnostic.contains("local-simulator-token"));
 
-        let production = IssuanceServiceConfig::from_values(values(&[
+        let mut production_values = values(&[
             ("ENVIRONMENT", "production"),
             ("CANVAS_ALLOW_LOCAL_ADMIN_TOKEN_FALLBACK", "true"),
             ("CANVAS_ADMIN_API_TOKEN", "must-not-load"),
-        ]))
-        .expect("production ignores local fallback");
+        ]);
+        production_values.extend(remote_server_tls_values());
+        let production = IssuanceServiceConfig::from_values(production_values)
+            .expect("production ignores local fallback");
         assert!(production.canvas_local_admin_token.is_none());
 
         let disabled = IssuanceServiceConfig::from_values(values(&[

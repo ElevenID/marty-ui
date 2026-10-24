@@ -3,7 +3,7 @@
 **Last Updated:** April 11, 2026  
 **Scope:** Post-login organization console, operational readiness, and launch validation for the current implementation in `marty-ui`
 
-This document is the current go/no-go checklist for shipping the recent console enhancements. It complements `IMPLEMENTATION_PROGRESS.md`, which tracks implementation history and workstream progress.
+This document is the current go/no-go checklist for shipping the recent console enhancements. Implementation history is available in Git.
 
 ---
 

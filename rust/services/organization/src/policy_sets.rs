@@ -13,12 +13,35 @@ use crate::postgres::RepositoryError;
 pub const ORGANIZATION_CEDAR_SCHEMA: &str = r#"
 namespace MIP {
   type ApprovalContext = { all_required_evidence_satisfied: Bool };
-  entity User;
+  type VerificationContext = {
+    revocation_checked: Bool,
+    is_revoked: Bool,
+    is_expired: Bool,
+    issuer_trust_level: Long
+  };
+  entity Role;
+  entity User in [Role];
   entity Application;
+  entity Credential;
+  entity Flow;
   action "applications:approve" appliesTo {
     principal: [User],
     resource: [Application],
     context: ApprovalContext
+  };
+  action "credentials:verify" appliesTo {
+    principal: [User],
+    resource: [Credential],
+    context: VerificationContext
+  };
+  action "credentials:read" appliesTo {
+    principal: [User], resource: [Credential], context: {}
+  };
+  action "flows:read" appliesTo {
+    principal: [User], resource: [Flow], context: {}
+  };
+  action "applications:read" appliesTo {
+    principal: [User], resource: [Application], context: {}
   };
 }
 "#;

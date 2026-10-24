@@ -60,6 +60,7 @@ pub const NATIVE_SETTINGS: &[&str] = &[
 ];
 pub const INHERITED_SETTINGS: &[&str] = &[
     "ENVIRONMENT",
+    "GRPC_INSECURE_ALLOWED",
     "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID",
     "PASSPORT_NATIVE_HTTP_ENABLED",
     "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED",
@@ -97,8 +98,9 @@ pub const SECRET_SETTINGS: &[&str] = &[
     "DATABASE_URL",
     "ISSUANCE_API_KEY",
     "TOKEN_HMAC_KEY",
-    "INTEGRATION_SECRET_MASTER_KEY",
     "SIGNING_KEYS_INTERNAL_API_KEY",
+    "SIGNING_KEYS_ISSUER_SIGN_KEY",
+    "SIGNING_KEYS_INTEGRATION_SECRET_KEY",
     "GRPC_SERVICE_TOKEN",
     "CANVAS_CREDENTIALS_SHARED_SECRET",
 ];
@@ -109,7 +111,6 @@ pub const SHARED_BINDINGS: &[&str] = &[
     "ORG_GRPC_TARGET",
     "CT_GRPC_TARGET",
     "RP_GRPC_TARGET",
-    "SIGNING_KEYS_INTERNAL_URL",
 ];
 const MOUNTS: [(&str, &str, &str, &str, &str); 2] = [
     (
@@ -140,9 +141,9 @@ pub fn selected(values: &Environment) -> Result<bool> {
     match values
         .get("K8S_ISSUANCE_NATIVE_ENABLED")
         .map(String::as_str)
-        .unwrap_or("false")
+        .unwrap_or("true")
     {
-        "false" => Ok(false),
+        "false" => Err(REFUSAL),
         "true" => Ok(true),
         _ => Err(REFUSAL),
     }
@@ -311,6 +312,27 @@ fn index(resources: &[Value], kind: &str, name: &str) -> Result<usize> {
     Ok(matches[0])
 }
 
+/// Require the live route owner and its KMS custody policy before an image-only
+/// update can retain or replace the Rust issuance alias.
+pub fn selected_passport_config(snapshot: &Value, namespace: &str) -> Result<()> {
+    require(snapshot["kind"] == "List" && !namespace.is_empty())?;
+    let resources = snapshot["items"].as_array().ok_or(REFUSAL)?;
+    let config = &resources[index(resources, "ConfigMap", "marty-config")?];
+    require(config["metadata"]["namespace"] == namespace)?;
+    for key in [
+        "PASSPORT_NATIVE_GATEWAY_ENABLED",
+        "PASSPORT_NATIVE_FLOW_ENABLED",
+        "PASSPORT_NATIVE_HTTP_ENABLED",
+        "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED",
+        "PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED",
+        "PASSPORT_KMS_ARTIFACTS_ENABLED",
+        "PASSPORT_KMS_CALLBACKS_ENABLED",
+    ] {
+        require(config["data"][key] == "true")?;
+    }
+    Ok(())
+}
+
 fn container<'a>(value: &'a Value, name: &str) -> Result<&'a Value> {
     let containers = value
         .pointer("/spec/template/spec/containers")
@@ -370,7 +392,9 @@ fn issuance_consumer_bindings(resources: &[Value], selected: bool) -> Result<()>
         require(flow.get("ISSUANCE_NATIVE_SERVICE_URL") == Some(&&native))?;
         require(
             flow.get("ISSUANCE_GRPC_TARGET")
-                == Some(&&json!({"name":"ISSUANCE_GRPC_TARGET","value":"issuance-native:9005"})),
+                == Some(
+                    &&json!({"name":"ISSUANCE_GRPC_TARGET","value":"https://issuance-native:9005"}),
+                ),
         )?;
     } else {
         for values in [&auth, &applicant, &policy] {
@@ -381,7 +405,9 @@ fn issuance_consumer_bindings(resources: &[Value], selected: bool) -> Result<()>
         require(flow.get("ISSUANCE_NATIVE_SERVICE_URL") == Some(&&native_ref))?;
         require(
             flow.get("ISSUANCE_GRPC_TARGET")
-                == Some(&&json!({"name":"ISSUANCE_GRPC_TARGET","value":"issuance:9005"})),
+                == Some(
+                    &&json!({"name":"ISSUANCE_GRPC_TARGET","value":"https://issuance-native:9005"}),
+                ),
         )?;
     }
     let gateway = environment(container(
@@ -452,7 +478,7 @@ fn native_template(resources: &[Value]) -> Result<()> {
                 == Some(&json!({"app":"issuance-native"})),
     )?;
     let owner = container(deployment, "issuance-native")?;
-    closed_runtime_pod(deployment, owner)?;
+    closed_runtime_pod(deployment, owner, true)?;
     require(owner["envFrom"] == json!([{"configMapRef":{"name":"issuance-native-config"}}]))?;
     let env = environment(owner)?;
     let mut expected = BTreeMap::new();
@@ -466,6 +492,42 @@ fn native_template(resources: &[Value]) -> Result<()> {
         "ISSUER_BASE_URL",
         config_ref("ISSUER_BASE_URL", "PUBLIC_API_URL"),
     );
+    expected.insert(
+        "DIDCOMM_KMS_ADDR",
+        config_ref("DIDCOMM_KMS_ADDR", "BAO_ADDR"),
+    );
+    expected.insert("BAO_ADDR", config_ref("BAO_ADDR", "BAO_ADDR"));
+    for (name, key) in [
+        ("GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR", "ISSUANCE_TLS_KMS_ADDR"),
+        (
+            "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME",
+            "ISSUANCE_TLS_KMS_KEY_NAME",
+        ),
+        (
+            "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION",
+            "ISSUANCE_TLS_KMS_KEY_VERSION",
+        ),
+    ] {
+        expected.insert(name, config_ref(name, key));
+    }
+    for (name, path) in [
+        (
+            "ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN_FILE",
+            "credential",
+        ),
+        ("ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN_FILE", "canvas"),
+        ("ISSUANCE_READINESS_SIGN_GRANT_MINT_TOKEN_FILE", "readiness"),
+        ("ISSUANCE_PASSPORT_SIGN_GRANT_MINT_TOKEN_FILE", "passport"),
+    ] {
+        expected.insert(
+            name,
+            json!({"name":name,"value":format!("/run/secrets/issuance-sign-grants/{path}")}),
+        );
+    }
+    expected.insert(
+        "DIDCOMM_KMS_TOKEN_FILE",
+        json!({"name":"DIDCOMM_KMS_TOKEN_FILE","value":"/run/secrets/didcomm-kms/token"}),
+    );
     expected.insert("CANVAS_CREDENTIALS_API_TOKEN",json!({"name":"CANVAS_CREDENTIALS_API_TOKEN","valueFrom":{"secretKeyRef":{"name":"marty-secrets","key":"CANVAS_CREDENTIALS_API_TOKEN","optional":true}}}));
     expected.insert("PERSONALIZATION_BUREAU_API_KEY",json!({"name":"PERSONALIZATION_BUREAU_API_KEY","valueFrom":{"secretKeyRef":{"name":"marty-secrets","key":"PERSONALIZATION_BUREAU_API_KEY","optional":true}}}));
     for (name, value) in [
@@ -473,12 +535,44 @@ fn native_template(resources: &[Value]) -> Result<()> {
         ("ISSUANCE_SERVICE_PORT", "8005"),
         ("ISSUANCE_GRPC_ENABLED", "true"),
         ("ISSUANCE_GRPC_PORT", "9005"),
-        ("ORG_GRPC_TARGET", "organization:9002"),
-        ("CT_GRPC_TARGET", "credential-template:9003"),
-        ("RP_GRPC_TARGET", "revocation-profile:9013"),
+        ("ORG_GRPC_TARGET", "https://organization:9002"),
+        ("CT_GRPC_TARGET", "https://credential-template:9003"),
+        ("RP_GRPC_TARGET", "https://revocation-profile:9013"),
+        (
+            "GRPC_WORKLOAD_TLS_SERVER_CERT",
+            "/run/secrets/issuance-server-tls/tls.crt",
+        ),
+        (
+            "GRPC_WORKLOAD_TLS_CA_CERT",
+            "/run/secrets/issuance-server-tls/ca.crt",
+        ),
+        (
+            "GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT",
+            "/run/secrets/issuance-server-kms/ca.crt",
+        ),
+        (
+            "DIDCOMM_KMS_CA_CERT_FILE",
+            "/run/secrets/issuance-server-kms/ca.crt",
+        ),
+        (
+            "GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE",
+            "/run/secrets/issuance-server-kms/token",
+        ),
+        (
+            "GRPC_TLS_CA_CERT",
+            "/run/secrets/integration-secret-ca/ca.crt",
+        ),
         (
             "SIGNING_KEYS_INTERNAL_URL",
             "http://gateway:8000/internal/signing-keys",
+        ),
+        (
+            "INTEGRATION_SECRET_KMS_URL",
+            "https://signing-keys:8018/internal",
+        ),
+        (
+            "INTEGRATION_SECRET_KMS_CA_FILE",
+            "/run/secrets/integration-secret-ca/ca.crt",
         ),
     ] {
         expected.insert(name, json!({"name":name,"value":value}));
@@ -498,59 +592,83 @@ fn native_template(resources: &[Value]) -> Result<()> {
     Ok(())
 }
 
-fn closed_runtime_pod(deployment: &Value, owner: &Value) -> Result<()> {
+fn closed_runtime_pod(deployment: &Value, owner: &Value, didcomm_token: bool) -> Result<()> {
     require(deployment["apiVersion"] == "apps/v1")?;
-    require_keys(
-        owner,
-        &[
-            "name",
-            "image",
-            "imagePullPolicy",
-            "command",
-            "args",
-            "envFrom",
-            "env",
-            "ports",
-            "resources",
-            "livenessProbe",
-            "readinessProbe",
-        ],
-    )?;
+    let mut owner_keys = vec![
+        "name",
+        "image",
+        "imagePullPolicy",
+        "command",
+        "args",
+        "envFrom",
+        "env",
+        "ports",
+        "resources",
+        "livenessProbe",
+        "readinessProbe",
+    ];
+    owner_keys.push("volumeMounts");
+    require_keys(owner, &owner_keys)?;
     require(
         owner["command"] == json!(["/app/services/entrypoint.sh"])
             && owner["args"] == json!([])
             && owner["image"] == "${MARTY_SERVICES_IMAGE}"
             && owner["imagePullPolicy"] == "Always",
     )?;
-    for probe in ["livenessProbe", "readinessProbe"] {
-        require_keys(
-            &owner[probe],
-            &["httpGet", "initialDelaySeconds", "periodSeconds"],
-        )?;
-    }
+    require_keys(
+        &owner["livenessProbe"],
+        &["httpGet", "initialDelaySeconds", "periodSeconds"],
+    )?;
+    require_keys(
+        &owner["readinessProbe"],
+        if didcomm_token {
+            &["httpGet", "initialDelaySeconds", "periodSeconds"]
+        } else {
+            &[
+                "exec",
+                "initialDelaySeconds",
+                "periodSeconds",
+                "timeoutSeconds",
+            ]
+        },
+    )?;
     let pod = deployment.pointer("/spec/template/spec").ok_or(REFUSAL)?;
     require(
         pod["serviceAccountName"] == "marty-app"
             && pod["imagePullSecrets"] == json!([{"name":"ocir-secret"}]),
     )?;
-    require_keys(
-        pod,
-        &[
-            "serviceAccountName",
-            "automountServiceAccountToken",
-            "imagePullSecrets",
-            "containers",
-        ],
-    )?;
+    let mut pod_keys = vec![
+        "serviceAccountName",
+        "automountServiceAccountToken",
+        "imagePullSecrets",
+        "containers",
+    ];
+    pod_keys.push("volumes");
+    require_keys(pod, &pod_keys)?;
     require(
         pod["automountServiceAccountToken"] == false
             && pod["containers"].as_array().is_some_and(|v| v.len() == 1),
     )?;
-    require(
-        pod.get("volumes").is_none()
-            && owner.get("volumeMounts").is_none()
-            && pod.get("hostNetwork").is_none(),
-    )?;
+    require(pod.get("hostNetwork").is_none())?;
+    if didcomm_token {
+        require(
+            owner["volumeMounts"]
+                == json!([{"name":"issuance-server-tls","mountPath":"/run/secrets/issuance-server-tls","readOnly":true},{"name":"issuance-server-kms","mountPath":"/run/secrets/issuance-server-kms","readOnly":true},{"name":"didcomm-kms-token","mountPath":"/run/secrets/didcomm-kms","readOnly":true},{"name":"integration-secret-ca","mountPath":"/run/secrets/integration-secret-ca","readOnly":true},{"name":"issuance-sign-grants","mountPath":"/run/secrets/issuance-sign-grants","readOnly":true}]),
+        )?;
+        require(
+            pod["volumes"]
+                == json!([{"name":"issuance-server-tls","secret":{"secretName":"issuance-server-tls"}},{"name":"issuance-server-kms","secret":{"secretName":"issuance-server-kms"}},{"name":"didcomm-kms-token","secret":{"secretName":"marty-secrets","items":[{"key":"DIDCOMM_ISSUANCE_OPENBAO_TOKEN","path":"token"}]}},{"name":"integration-secret-ca","secret":{"secretName":"signing-keys-integration-secret-ca"}},{"name":"issuance-sign-grants","secret":{"secretName":"marty-secrets","items":[{"key":"ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN","path":"credential"},{"key":"ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN","path":"canvas"},{"key":"ISSUANCE_READINESS_SIGN_GRANT_MINT_TOKEN","path":"readiness"},{"key":"ISSUANCE_PASSPORT_SIGN_GRANT_MINT_TOKEN","path":"passport"}]}}]),
+        )?;
+    } else {
+        require(
+            owner["volumeMounts"]
+                == json!([{"name":"integration-secret-tls","mountPath":"/run/secrets/integration-secret-tls","readOnly":true},{"name":"integration-secret-ca","mountPath":"/run/secrets/integration-secret-ca","readOnly":true},{"name":"signing-keys-tls-kms","mountPath":"/run/secrets/signing-keys-tls-kms","readOnly":true},{"name":"signing-grant-verify","mountPath":"/run/secrets/signing-grant-verify","readOnly":true}]),
+        )?;
+        require(
+            pod["volumes"]
+                == json!([{"name":"integration-secret-tls","secret":{"secretName":"signing-keys-integration-secret-server-tls"}},{"name":"integration-secret-ca","secret":{"secretName":"signing-keys-integration-secret-ca"}},{"name":"signing-keys-tls-kms","secret":{"secretName":"signing-keys-tls-kms"}},{"name":"signing-grant-verify","secret":{"secretName":"marty-secrets","items":[{"key":"SIGNING_KEYS_GRANT_VERIFY_TOKEN","path":"token"}]}}]),
+        )?;
+    }
     Ok(())
 }
 
@@ -565,31 +683,89 @@ fn signing_template(resources: &[Value]) -> Result<()> {
                 == Some(&json!({"app":"signing-keys"})),
     )?;
     let owner = container(deployment, "signing-keys")?;
-    closed_runtime_pod(deployment, owner)?;
+    closed_runtime_pod(deployment, owner, false)?;
     require(owner["envFrom"] == json!([]))?;
     let mut expected = BTreeMap::new();
     for (name, value) in [
         ("SERVICE_NAME", "signing-keys"),
         ("SIGNING_KEYS_SERVICE_PORT", "8017"),
         ("SIGNING_KEYS_REDIS_URL", "redis://redis:6379/2"),
+        (
+            "SIGNING_KEYS_INTEGRATION_SECRET_TLS_CERT_FILE",
+            "/run/secrets/integration-secret-tls/tls.crt",
+        ),
+        (
+            "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_CA_CERT_FILE",
+            "/run/secrets/signing-keys-tls-kms/ca.crt",
+        ),
+        (
+            "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_TOKEN_FILE",
+            "/run/secrets/signing-keys-tls-kms/token",
+        ),
+        ("BAO_CACERT", "/run/secrets/signing-keys-tls-kms/ca.crt"),
+        (
+            "SIGNING_KEYS_GRANT_VERIFY_TOKEN_FILE",
+            "/run/secrets/signing-grant-verify/token",
+        ),
     ] {
         expected.insert(name, json!({"name":name,"value":value}));
     }
-    for name in ["SIGNING_KEYS_INTERNAL_API_KEY", "OPENBAO_SERVICE_TOKEN"] {
+    expected.insert(
+        "SIGNING_KEYS_INTERNAL_API_KEY",
+        secret_ref("SIGNING_KEYS_INTERNAL_API_KEY"),
+    );
+    for name in [
+        "SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY",
+        "SIGNING_KEYS_ISSUER_SIGN_KEY",
+        "SIGNING_KEYS_INTEGRATION_SECRET_KEY",
+    ] {
         expected.insert(name, secret_ref(name));
+    }
+    // Dedicated Device Registration -> Signing Keys service authorization for
+    // holder-key cleanup; this is not private signing material.
+    expected.insert(
+        "DEVICE_REGISTRATION_SIGNING_KEYS_KEY",
+        secret_ref("DEVICE_REGISTRATION_SIGNING_KEYS_KEY"),
+    );
+    expected.insert("OPENBAO_SERVICE_TOKEN", json!({"name":"OPENBAO_SERVICE_TOKEN","valueFrom":{"secretKeyRef":{"name":"marty-secrets","key":"SIGNING_KEYS_OPENBAO_TOKEN"}}}));
+    for (name, key) in [
+        (
+            "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_ADDR",
+            "SIGNING_KEYS_TLS_KMS_ADDR",
+        ),
+        (
+            "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_KEY_NAME",
+            "SIGNING_KEYS_TLS_KMS_KEY_NAME",
+        ),
+        (
+            "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_KEY_VERSION",
+            "SIGNING_KEYS_TLS_KMS_KEY_VERSION",
+        ),
+    ] {
+        expected.insert(name, config_ref(name, key));
     }
     for name in ["BAO_ADDR", "PUBLIC_DOMAIN"] {
         expected.insert(name, config_ref(name, name));
     }
+    expected.insert(
+        "ISSUER_BASE_URL",
+        config_ref("ISSUER_BASE_URL", "PUBLIC_API_URL"),
+    );
     let env = environment(owner)?;
     require(env.len() == expected.len() && expected.iter().all(|(k, v)| env.get(k) == Some(&v)))?;
-    require(owner["ports"] == json!([{"name":"http","containerPort":8017}]))?;
-    for probe in ["livenessProbe", "readinessProbe"] {
-        require(owner[probe]["httpGet"] == json!({"path":"/health","port":8017}))?;
-    }
+    require(
+        owner["ports"]
+            == json!([{"name":"http","containerPort":8017},{"name":"secret-tls","containerPort":8018}]),
+    )?;
+    require(owner["livenessProbe"]["httpGet"] == json!({"path":"/health","port":8017}))?;
+    require(owner["readinessProbe"]["exec"]["command"] == json!([
+        "/bin/sh", "-c",
+        "curl -fsS http://127.0.0.1:8017/health >/dev/null && curl -fsS --cacert /run/secrets/integration-secret-ca/ca.crt --resolve signing-keys:8018:127.0.0.1 https://signing-keys:8018/health >/dev/null"
+    ]))?;
+    require(owner["readinessProbe"]["timeoutSeconds"] == 8)?;
     require(
         service["spec"]
-            == json!({"type":"ClusterIP","selector":{"app":"signing-keys"},"ports":[{"name":"http","port":8017,"targetPort":8017}]}),
+            == json!({"type":"ClusterIP","selector":{"app":"signing-keys"},"ports":[{"name":"http","port":8017,"targetPort":8017},{"name":"secret-tls","port":8018,"targetPort":8018}]}),
     )?;
     Ok(())
 }
@@ -610,6 +786,16 @@ fn pair_settings(legacy: &mut Value, native: &mut Value, values: &Environment) -
     for &name in SECRET_SETTINGS {
         require(explicit.contains_key(name))?;
     }
+    require(
+        explicit.get("SIGNING_KEYS_INTERNAL_URL")
+            == Some(
+                &json!({"name":"SIGNING_KEYS_INTERNAL_URL","value":"http://gateway:8000/internal/signing-keys"}),
+            )
+            && environment(native)?.get("SIGNING_KEYS_INTERNAL_URL")
+                == Some(
+                    &&json!({"name":"SIGNING_KEYS_INTERNAL_URL","value":"http://gateway:8000/internal/signing-keys"}),
+                ),
+    )?;
     for &name in INHERITED_SETTINGS
         .iter()
         .chain(SECRET_SETTINGS)
@@ -742,7 +928,7 @@ pub fn compose(
     replace_env(
         flow,
         "ISSUANCE_GRPC_TARGET",
-        json!({"name":"ISSUANCE_GRPC_TARGET","value":"issuance-native:9005"}),
+        json!({"name":"ISSUANCE_GRPC_TARGET","value":"https://issuance-native:9005"}),
     )?;
     replace_env(
         flow,
@@ -788,6 +974,8 @@ pub fn compose(
         values,
     )?;
     let legacy_owner = container_mut(&mut result[legacy_index], "issuance")?;
+    require(legacy_owner["command"] == json!(["/usr/local/bin/marty-issuance-service"]))?;
+    legacy_owner["image"] = json!(image);
     append_env(legacy_owner, "DIDCOMM_DELIVERY_OWNER", "native")?;
     append_env(legacy_owner, "ISSUANCE_NATIVE_SERVICE_URL", NATIVE_URL)?;
     require(legacy_owner["livenessProbe"]["httpGet"]["path"] == "/health")?;
@@ -864,6 +1052,7 @@ pub fn check_update(actual: &Value, expected: &Value, namespace: &str) -> Result
         ("Deployment", "issuance"),
         ("Deployment", "signing-keys"),
         ("Service", "issuance-native"),
+        ("Service", "issuance"),
         ("Service", "signing-keys"),
         ("ConfigMap", "issuance-native-config"),
     ] {
@@ -908,10 +1097,23 @@ pub fn check_update(actual: &Value, expected: &Value, namespace: &str) -> Result
                 }
             }
             "Deployment" if name == "issuance" => {
+                require(
+                    observed["spec"]["selector"] == target["spec"]["selector"]
+                        && observed.pointer("/spec/template/metadata/labels")
+                            == target.pointer("/spec/template/metadata/labels"),
+                )?;
+                require(normalized_pod(observed)? == normalized_pod(target)?)?;
                 let observed_owner = container(observed, name)?;
                 let target_owner = container(target, name)?;
                 let observed_env = environment(observed_owner)?;
                 let target_env = environment(target_owner)?;
+                require(
+                    observed_owner["command"] == json!(["/usr/local/bin/marty-issuance-service"])
+                        && observed_owner["command"] == target_owner["command"]
+                        && observed_owner["args"] == target_owner["args"],
+                )?;
+                services_image(observed_owner["image"].as_str().ok_or(REFUSAL)?)?;
+                services_image(target_owner["image"].as_str().ok_or(REFUSAL)?)?;
                 require(observed_owner["envFrom"] == target_owner["envFrom"])?;
                 require(
                     observed_owner["livenessProbe"]["httpGet"]["path"]
@@ -928,12 +1130,21 @@ pub fn check_update(actual: &Value, expected: &Value, namespace: &str) -> Result
                     .chain(INHERITED_SETTINGS)
                     .chain(OPTIONAL_SETTINGS)
                     .chain(SHARED_BINDINGS)
-                    .chain(["DIDCOMM_DELIVERY_OWNER", "ISSUANCE_NATIVE_SERVICE_URL"].iter())
+                    .chain(
+                        [
+                            "DIDCOMM_DELIVERY_OWNER",
+                            "ISSUANCE_NATIVE_SERVICE_URL",
+                            "SERVICE_NAME",
+                            "MARTY_SCHEMA_STARTUP_MODE",
+                            "CANVAS_MIRROR_WORKER_ENABLED",
+                        ]
+                        .iter(),
+                    )
                 {
                     require(observed_env.get(setting) == target_env.get(setting))?;
                 }
-                // The old image, unrelated fields and unrelated mounts remain
-                // its independent owner. Only paired DIDComm mounts are fenced.
+                // The digest can advance, but the Rust command and shared
+                // service-image family cannot change during an image update.
                 for (_, volume, _, path, setting) in MOUNTS {
                     require(observed_env.get(setting) == target_env.get(setting))?;
                     for (observed_values, target_values, key, wanted) in [
@@ -1016,7 +1227,8 @@ fn normalized_pod(deployment: &Value) -> Result<Value> {
     let owner = &mut owners[0];
     require(
         (deployment["metadata"]["name"] == "issuance-native"
-            || deployment["metadata"]["name"] == "signing-keys")
+            || deployment["metadata"]["name"] == "signing-keys"
+            || deployment["metadata"]["name"] == "issuance")
             && owner["name"] == deployment["metadata"]["name"],
     )?;
     services_image(owner["image"].as_str().ok_or(REFUSAL)?)?;
@@ -1033,12 +1245,25 @@ fn normalized_pod(deployment: &Value) -> Result<Value> {
     for name in ["livenessProbe", "readinessProbe"] {
         for (key, value) in [
             ("successThreshold", 1),
-            ("failureThreshold", 3),
-            ("timeoutSeconds", 1),
+            (
+                "failureThreshold",
+                if deployment["metadata"]["name"] == "issuance" && name == "livenessProbe" {
+                    5
+                } else {
+                    3
+                },
+            ),
         ] {
             remove_default(&mut owner[name], key, json!(value))?;
         }
-        remove_default(&mut owner[name]["httpGet"], "scheme", json!("HTTP"))?;
+        if owner[name]["timeoutSeconds"] == 1 {
+            remove_default(&mut owner[name], "timeoutSeconds", json!(1))?;
+        }
+        if let Some(http_get) = owner[name].get_mut("httpGet") {
+            remove_default(http_get, "scheme", json!("HTTP"))?;
+        } else {
+            require(owner[name].get("exec").is_some())?;
+        }
     }
     Ok(pod)
 }

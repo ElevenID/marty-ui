@@ -37,6 +37,12 @@ static APPENDED_DISCOVERY: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^/org/([^/]+)(?:/(waltid|credential-manager|apple-wallet))?/\.well-known/(openid-credential-issuer|oauth-authorization-server)$")
         .expect("static appended discovery regex")
 });
+static PROTOCOL_SUPPORT_CATALOG: LazyLock<Value> = LazyLock::new(|| {
+    serde_json::from_str(include_str!(
+        "../../../../contracts/protocol-support-catalog.json"
+    ))
+    .expect("valid protocol support catalog")
+});
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct WellKnownProxyPlan {
@@ -314,6 +320,11 @@ pub fn release_document(identity: &ReleaseIdentity) -> Value {
 }
 
 #[must_use]
+pub fn protocol_support_catalog() -> Value {
+    PROTOCOL_SUPPORT_CATALOG.clone()
+}
+
+#[must_use]
 pub fn openid_configuration(base_url: &str) -> Value {
     let base = base_url.trim_end_matches('/');
     json!({
@@ -509,5 +520,67 @@ mod tests {
             normalize_issuer_metadata(&contract.issuer_metadata.input, Some("waltid")),
             contract.issuer_metadata.waltid_expected
         );
+    }
+
+    #[test]
+    fn protocol_support_catalog_is_explicit_and_matches_registered_routes() {
+        let catalog = protocol_support_catalog();
+        assert_eq!(catalog["schema_version"], 1);
+        assert_eq!(
+            catalog["protocol_revision"].as_str(),
+            Some(crate::openapi::protocol_revision())
+        );
+        assert_eq!(catalog["discovery_path"], "/v1/protocol-support");
+        let contract = crate::contract::GatewayContract::load().expect("gateway contract");
+        let routes = contract
+            .routes
+            .iter()
+            .map(|route| route.path.as_str())
+            .collect::<BTreeSet<_>>();
+        let entities = catalog["entities"].as_array().expect("entities");
+        let ids = entities
+            .iter()
+            .map(|entity| entity["id"].as_str().expect("entity id"))
+            .collect::<BTreeSet<_>>();
+        assert_eq!(ids.len(), entities.len(), "support ids must be unique");
+        for entity in entities {
+            let support = entity["support_level"].as_str().expect("support level");
+            let api_paths = entity["api_paths"].as_array().expect("api paths");
+            let ui_paths = entity["ui_paths"].as_array().expect("ui paths");
+            if support == "unsupported" {
+                assert!(api_paths.is_empty(), "{}", entity["id"]);
+                assert!(ui_paths.is_empty(), "{}", entity["id"]);
+                assert!(entity["owner_service"].is_null(), "{}", entity["id"]);
+                assert_eq!(entity["qualification"], "not_applicable");
+            }
+            for path in api_paths {
+                let path = path.as_str().expect("API path");
+                assert!(routes.contains(path), "unregistered support path: {path}");
+            }
+            for reference in entity["schema_refs"].as_array().expect("schema refs") {
+                let pointer = reference
+                    .as_str()
+                    .expect("schema ref")
+                    .strip_prefix('#')
+                    .expect("local schema ref");
+                let document = json!({"components":{"schemas":crate::openapi::schemas()}});
+                assert!(
+                    document.pointer(pointer).is_some(),
+                    "unresolved support schema: {}",
+                    reference
+                );
+            }
+        }
+        for required in [
+            "machine-identity",
+            "machine-authentication-policy",
+            "authorization-decision-receipt",
+        ] {
+            let entity = entities
+                .iter()
+                .find(|entity| entity["id"] == required)
+                .expect("required unsupported entry");
+            assert_eq!(entity["support_level"], "unsupported");
+        }
     }
 }

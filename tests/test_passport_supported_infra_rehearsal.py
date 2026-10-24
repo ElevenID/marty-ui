@@ -16,7 +16,7 @@ from scripts.passport_supported_infra_rehearsal import (
     rehearse_infrastructure,
 )
 from scripts.passport_supported_infra_images import qualified_images
-from services.passport_disposable_identity import managed_key_reference
+from scripts.passport_disposable_identity import managed_key_reference
 from scripts.passport_supported_provisioning_producer import (
     INFRA_WORKFLOW_REF, ProducerError,
 )
@@ -38,8 +38,6 @@ def plan() -> dict:
         "services_reference": SERVICES,
         "migrations_reference": (
             "ghcr.io/elevenid/marty-ui-oss/migrations@sha256:" + "c" * 64),
-        "issuance_reference": (
-            "ghcr.io/elevenid/marty-credentials-issuance@sha256:" + "d" * 64),
         "infra_images": qualified_images(verify_registry=False),
         "owner_labels": {
             "com.marty.passport.acceptance.owner": "supported-consumer",
@@ -73,6 +71,8 @@ def test_infra_rehearsal_starts_only_private_infra_and_always_cleans(
                 "hvs.disposable-service-token", encoding="ascii")
             (output_dir / "callback_signer_bao_token").write_text(
                 "hvs.disposable-callback-token", encoding="ascii")
+            (output_dir / "notification_openbao_token").write_text(
+                "hvs.disposable-notification-token", encoding="ascii")
         return True
 
     def teardown(*args, **kwargs) -> bool:

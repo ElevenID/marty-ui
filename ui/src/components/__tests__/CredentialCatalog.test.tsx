@@ -4,10 +4,11 @@ import { render, screen, waitFor, within } from '@test/utils';
 import CredentialCatalog from '../applicant/CredentialCatalog';
 import { storeCanvasLtiSession } from '../../services/canvasLtiExperience';
 
-const { mockNavigate, mockGet, mockGetApplicantByUser, mockAuthState } = vi.hoisted(() => ({
+const { mockNavigate, mockGet, mockGetApplicantByUser, mockAuthState, mockPreview } = vi.hoisted(() => ({
   mockNavigate: vi.fn(),
   mockGet: vi.fn(),
   mockGetApplicantByUser: vi.fn(),
+  mockPreview: { isPreview: false },
   mockAuthState: {
     organizationId: 'org-1' as string | null,
     organizationName: 'Acme Org' as string | null,
@@ -37,7 +38,7 @@ vi.mock('../../hooks/useAuth', () => ({
 }));
 
 vi.mock('../../contexts/PreviewContext', () => ({
-  usePreview: () => ({ isPreview: false }),
+  usePreview: () => mockPreview,
 }));
 
 vi.mock('../../services/api', () => ({
@@ -52,8 +53,35 @@ vi.mock('../../services/applicantApi', () => ({
 }));
 
 describe('CredentialCatalog', () => {
+  it('shows API wallet requirements and credential validity without inventing interoperability or processing promises', async () => {
+    mockGet.mockImplementation((endpoint: string) => {
+      if (endpoint.includes('/v1/credential-templates')) return Promise.resolve([{
+        id: 'actual', name: 'Tenant membership', credential_type: 'org.iso.18013.5.1.mDL', status: 'ACTIVE',
+        revocation_profile_id: 'revocation-1', credential_payload_format: 'SD_JWT_VC', issuance_protocol: 'OID4VCI_PRE_AUTH',
+        claims: [{ name: 'member_id', required: true, display: { label: 'Member ID' } }], validity_rules: { ttl_seconds: 86400 },
+      }]);
+      if (endpoint.includes('/v1/application-templates')) return Promise.resolve([
+        { id: 'application-actual', credential_template_id: 'actual', organization_id: 'org-1', status: 'ACTIVE' },
+      ]);
+      return Promise.resolve({ items: [] });
+    });
+    const { user } = render(<CredentialCatalog />);
+    const card = await screen.findByTestId('credential-card-actual');
+    expect(card).toHaveTextContent('Wallet support required: SD-JWT VC with OID4VCI_PRE_AUTH.');
+    expect(card).not.toHaveTextContent(/Apple|Google|Instant|business days|Works with/);
+    await user.click(within(card).getByTestId('credential-details-btn'));
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog).toHaveTextContent('SD-JWT VC');
+    expect(dialog).toHaveTextContent('OID4VCI_PRE_AUTH');
+    expect(dialog).toHaveTextContent('catalog.detailsDialog.validity');
+    expect(dialog).toHaveTextContent('1 day');
+    expect(dialog).toHaveTextContent('Member ID');
+    expect(dialog).not.toHaveTextContent(/Apple|Google|Instant|business days|processingTime|Works with/);
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
+    mockPreview.isPreview = false;
     sessionStorage.clear();
     storeCanvasLtiSession({
       session_token: 'canvas-session-token',
@@ -111,10 +139,11 @@ describe('CredentialCatalog', () => {
       }
 
       if (endpoint.includes('/v1/application-templates')) {
+        const organization_id = new URL(endpoint, 'https://fixture.invalid').searchParams.get('organization_id');
         return Promise.resolve([
-          { id: 'app-tpl-1', credential_template_id: 'cfg-1', status: 'ACTIVE' },
-          { id: 'app-tpl-2', credential_template_id: 'cfg-2', status: 'ACTIVE' },
-          { id: 'app-tpl-incomplete', credential_template_id: 'cfg-incomplete', status: 'ACTIVE' },
+          { id: 'app-tpl-1', organization_id, credential_template_id: 'cfg-1', status: 'ACTIVE' },
+          { id: 'app-tpl-2', organization_id, credential_template_id: 'cfg-2', status: 'ACTIVE' },
+          { id: 'app-tpl-incomplete', organization_id, credential_template_id: 'cfg-incomplete', status: 'ACTIVE' },
         ]);
       }
 
@@ -157,6 +186,17 @@ describe('CredentialCatalog', () => {
     });
 
     expect(mockGet).toHaveBeenCalledWith('/v1/credential-templates?organization_id=fallback%20org%2F1&status=active');
+  });
+
+  it('opens a preview using the resolved Application Template ID instead of the Credential Template ID', async () => {
+    mockPreview.isPreview = true;
+    mockPathname = '/applicant/preview/catalog';
+    const { user } = render(<CredentialCatalog />);
+    const card = await screen.findByTestId('credential-card-cfg-1');
+    await user.click(within(card).getByTestId('apply-btn'));
+    expect(mockNavigate).toHaveBeenCalledWith('/applicant/preview/applications/app-tpl-1?organization_id=org-1', {
+      state: expect.objectContaining({ applicationTemplate: expect.objectContaining({ id: 'app-tpl-1', credential_template_id: 'cfg-1', organization_id: 'org-1' }) }),
+    });
   });
 
   it('loads credentials, marks existing applications, filters, and navigates with serializable state', async () => {

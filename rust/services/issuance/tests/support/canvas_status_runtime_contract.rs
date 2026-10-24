@@ -1,5 +1,6 @@
 //! Real configuration, tenant vault, credential/delivery persistence and HTTP.
 //! Only canonical status publication is controlled; the mirror uses a local server.
+use super::issuance_process::remote_integration_secret;
 use async_trait::async_trait;
 use axum::{
     extract::State,
@@ -19,7 +20,7 @@ use marty_issuance_service::{
         ManagedCredential,
     },
     credential_management_postgres::PostgresCredentialManagementRepository,
-    integration_secret::{IntegrationSecretCipher, NewIntegrationSecret},
+    integration_secret::NewIntegrationSecret,
 };
 use serde_json::{json, Value};
 use sqlx::PgPool;
@@ -27,6 +28,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex,
 };
+use std::time::Instant;
 
 struct RuntimeState {
     pool: PgPool,
@@ -1318,6 +1320,7 @@ async fn run_body(
     let mut count = 0;
     for (case, observation) in cases.iter().zip(observations) {
         assert_eq!(case["name"], observation["name"]);
+        let case_started = depth.then(Instant::now);
         *state.response_override.lock().unwrap() = Some(case.clone());
         let routes = observation["credential_routes"].as_array().unwrap();
         assert_eq!(routes.len(), 3);
@@ -1518,6 +1521,19 @@ async fn run_body(
                 *state.response_override.lock().unwrap() = Some(case.clone());
             }
         }
+        if let Some(started) = case_started {
+            // Only the frozen synthetic case ID and elapsed time leave this
+            // test. The CI collector allowlists every emitted identity.
+            eprintln!(
+                "MARTY_CI_PHASE_V1 {}",
+                json!({
+                    "phase": "scenario",
+                    "name": format!("json_depth_route.{}", case["name"].as_str().unwrap()),
+                    "duration_ms": u64::try_from(started.elapsed().as_millis()).unwrap(),
+                    "status": "ok",
+                })
+            );
+        }
     }
     assert_eq!(count, expected_cases * 3);
     assert_eq!(
@@ -1627,10 +1643,9 @@ struct RuntimeDependencies {
 }
 
 async fn start_dependencies(pool: &PgPool, responses: Responses) -> RuntimeDependencies {
-    let vault = Arc::new(PostgresIntegrationSecretVault::new(
+    let vault = Arc::new(PostgresIntegrationSecretVault::new_remote(
         pool.clone(),
-        IntegrationSecretCipher::from_base64("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
-            .unwrap(),
+        remote_integration_secret::cipher(),
     ));
     vault
         .save(NewIntegrationSecret {
@@ -1777,10 +1792,6 @@ pub async fn run_canvas_mirror_automation_main_lifecycle(pool: &PgPool, database
             "GRPC_SERVICE_TOKEN",
             "synthetic-main-service-token-at-least-32-bytes",
         )
-        .env(
-            "INTEGRATION_SECRET_MASTER_KEY",
-            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
-        )
         .env("CANVAS_PORTABLE_INTEGRATION_ENABLED", "true")
         .env("CANVAS_PILOT_ORGANIZATION_IDS", "org-review")
         .env("CANVAS_CREDENTIALS_PROVIDER", "bridge")
@@ -1819,12 +1830,10 @@ pub async fn run_canvas_mirror_automation_main_lifecycle(pool: &PgPool, database
         stdout
     });
     let client = bounded_http_client(Duration::from_secs(5));
-    let health = tokio::time::timeout(
-        Duration::from_secs(10),
-        wait_for_health_with_client(http_port, &client),
-    )
-    .await
-    .expect("packaged automation readiness deadline");
+    let health = wait_for_owned_review_health(Duration::from_secs(10), || {
+        wait_for_health_with_client(http_port, &client)
+    })
+    .await;
     assert_eq!(
         health,
         Some(json!({"status":"healthy","service":"issuance-service"}))
@@ -1994,10 +2003,6 @@ pub(super) async fn run_review_operations_main_with_transport<F>(
         .env(
             "GRPC_SERVICE_TOKEN",
             "synthetic-main-service-token-at-least-32-bytes",
-        )
-        .env(
-            "INTEGRATION_SECRET_MASTER_KEY",
-            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
         )
         .env(
             "REVOCATION_PROFILE_SERVICE_URL",

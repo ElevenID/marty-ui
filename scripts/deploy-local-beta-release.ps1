@@ -19,9 +19,13 @@ param(
 
     [string]$TunnelEnvFile,
 
+    [string]$TunnelTokenEnvFile,
+
     [string]$GeneratedEnvFile,
 
     [switch]$OfficialStackRelease,
+
+    [switch]$UsePreparedLocalImages,
 
     [string]$RecorderRevision,
 
@@ -30,6 +34,9 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+if ($OfficialStackRelease -and $UsePreparedLocalImages) {
+    throw "Prepared local images cannot be used with OfficialStackRelease"
+}
 if ($EnablePassportPhysicalProvider -and -not $EnablePassportNative) {
     throw "Physical provider beta mode requires -EnablePassportNative"
 }
@@ -45,8 +52,12 @@ if (Get-Variable PSNativeCommandUseErrorActionPreference -ErrorAction SilentlyCo
 $script:RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 . (Join-Path $PSScriptRoot "beta-worker-launch-contract.ps1")
 . (Join-Path $PSScriptRoot "beta-application-image-plan.ps1")
+. (Join-Path $PSScriptRoot "beta-state-volume-plan.ps1")
+. (Join-Path $PSScriptRoot "beta-native-probes.ps1")
+. (Join-Path $PSScriptRoot "beta-migration-image-plan.ps1")
 . (Join-Path $PSScriptRoot "beta-didcomm-configuration.ps1")
 . (Join-Path $PSScriptRoot "beta-passport-configuration.ps1")
+. (Join-Path $PSScriptRoot "beta-tunnel-configuration.ps1")
 $script:WorkspaceRoot = (Resolve-Path (Join-Path $script:RepoRoot "..")).Path
 $script:ArtifactRoot = (Resolve-Path (Join-Path $script:RepoRoot "tests\artifacts")).Path
 $script:ArtifactDir = (Resolve-Path $ArtifactDir).Path
@@ -65,6 +76,11 @@ $script:EnvFiles = @($TunnelEnvFile, $GeneratedEnvFile)
 foreach ($envFile in $script:EnvFiles) {
     if (-not (Test-Path -LiteralPath $envFile -PathType Leaf)) { throw "Required beta environment file is missing: $envFile" }
 }
+if ([string]::IsNullOrWhiteSpace($TunnelTokenEnvFile)) {
+    throw "TunnelTokenEnvFile must name the active protected beta connector environment file"
+}
+$betaTunnelBinding = Get-BetaTunnelInputBinding -RepoRoot $script:RepoRoot `
+    -CredentialEnvFile $TunnelTokenEnvFile
 $script:ComposeFiles = @(
     (Join-Path $script:RepoRoot "docker-compose.base.yml"),
     (Join-Path $script:RepoRoot "docker-compose.beta.yml"),
@@ -105,6 +121,8 @@ $script:ApplicationServices = @(
     "gateway"
 )
 $script:SelectedApplicationServices = @($script:ApplicationServices)
+$script:PreparedPassportServicesImage = ""
+$script:BetaCallbackNetworkAttachment = $null
 if ($EnablePassportNative) {
     if ($EnablePassportPhysicalProvider) {
         $script:SelectedApplicationServices += "passport-callback-signer-supported"
@@ -215,6 +233,40 @@ function Get-DotEnvValue([string]$Path, [string]$Name) {
     $value = ($line -split "=", 2)[1]
     if ([string]::IsNullOrWhiteSpace($value)) { throw "Required beta setting is empty: $Name" }
     return $value
+}
+
+function Assert-BetaOpenBaoRaftCustody {
+    $containers = @(docker ps --filter "label=com.docker.compose.project=$script:BetaProject" `
+        --filter "label=com.docker.compose.service=openbao" --format '{{.ID}}')
+    if ($LASTEXITCODE -ne 0 -or $containers.Count -ne 1 -or -not $containers[0]) {
+        throw "Exactly one preserved beta OpenBao container is required"
+    }
+    $details = @(docker inspect $containers[0] | ConvertFrom-Json)
+    if ($LASTEXITCODE -ne 0 -or $details.Count -ne 1) {
+        throw "Preserved beta OpenBao inspection failed"
+    }
+    $node = $details[0]
+    $command = @($node.Config.Cmd)
+    $hasRaftState = @($node.Mounts | Where-Object {
+        $_.Type -eq "volume" -and $_.Name -eq "${script:BetaProject}_openbao_data" `
+            -and $_.Destination -eq "/bao/data" -and $_.RW -eq $true
+    }).Count -eq 1
+    $hasDevSecret = @($node.Config.Env | Where-Object {
+        $_ -match '^(BAO_DEV_ROOT_TOKEN_ID|BAO_TOKEN|VAULT_TOKEN)='
+    }).Count -gt 0
+    if ($command.Count -ne 2 -or $command[0] -ne "server" `
+        -or $command[1] -ne "-config=/bao/config/openbao.hcl" `
+        -or -not $hasRaftState -or $hasDevSecret) {
+        throw "Beta OpenBao must use preserved Raft state without dev-root custody"
+    }
+}
+
+function Assert-BetaKeycloakDatabaseRemoteProviders {
+    $postgres = Get-ComposeContainerId -Service "postgres"
+    if (-not $postgres) { throw "Beta PostgreSQL is required for Keycloak custody verification" }
+    $sql = Get-Content -LiteralPath (Join-Path $script:RepoRoot "scripts/sql/keycloak-kms-only-verify.sql") -Raw
+    $sql | docker exec -i $postgres psql -U postgres -d keycloak -v ON_ERROR_STOP=1 -q
+    if ($LASTEXITCODE -ne 0) { throw "Beta Keycloak database failed the KMS-only provider gate" }
 }
 
 function Get-ComposeContainerId {
@@ -363,7 +415,10 @@ function Assert-BetaCallbackSignerNetwork {
         $beforeRaw = & docker network inspect $name
         if ($LASTEXITCODE -ne 0) { throw "Isolated beta callback network is unavailable" }
         $before = @(($beforeRaw -join "`n") | ConvertFrom-Json)
-        if ($before.Count -ne 1 -or $before[0].Internal -ne $true) {
+        if ($before.Count -ne 1 -or $before[0].Internal -ne $true -or
+            $before[0].Name -cne $name -or
+            $before[0].Labels.'com.docker.compose.project' -cne $script:BetaProject -or
+            $before[0].Labels.'com.docker.compose.network' -cne 'passport-callback-signing') {
             throw "Isolated beta callback network is unavailable"
         }
         $beforeMembers = @($before[0].Containers.PSObject.Properties.Name)
@@ -372,6 +427,10 @@ function Assert-BetaCallbackSignerNetwork {
         }
         if ($ids["openbao"] -notin $beforeMembers) {
             Invoke-Checked -FilePath docker -Arguments @("network", "connect", "--alias", "openbao", $name, $ids["openbao"])
+            $script:BetaCallbackNetworkAttachment = @{
+                network_id = [string]$before[0].Id
+                container_id = $ids["openbao"]
+            }
         }
     }
     $networkRaw = & docker network inspect $name
@@ -393,14 +452,21 @@ function Assert-BetaCallbackSignerNetwork {
     }
 }
 
-function Assert-BetaVolume([string]$Name) {
-    $raw = & docker volume inspect $Name
-    if ($LASTEXITCODE -ne 0) { throw "Required beta volume is absent: $Name" }
-    $volume = ($raw -join "`n") | ConvertFrom-Json
-    if ($volume.Count -ne 1 -or $volume[0].Labels.'com.docker.compose.project' -ne $script:BetaProject) {
-        throw "Refusing volume outside $($script:BetaProject): $Name"
+function Restore-BetaCallbackNetworkAttachment {
+    # Undo only the edge this invocation added; never detach a baseline member.
+    if (-not $script:BetaCallbackNetworkAttachment) { return }
+    $edge = $script:BetaCallbackNetworkAttachment
+    $raw = & docker network inspect 'elevenid-beta-passport-callback-signing'
+    if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect added callback network edge for recovery' }
+    $network = @(($raw -join "`n") | ConvertFrom-Json)
+    if ($network.Count -ne 1 -or $network[0].Id -cne $edge.network_id -or
+        $network[0].Labels.'com.docker.compose.project' -cne $script:BetaProject) {
+        throw 'Callback network identity changed; preserve it for explicit recovery'
     }
-    return $Name
+    if ($edge.container_id -in @($network[0].Containers.PSObject.Properties.Name)) {
+        Invoke-Checked -FilePath docker -Arguments @('network', 'disconnect', $edge.network_id, $edge.container_id)
+    }
+    $script:BetaCallbackNetworkAttachment = $null
 }
 
 function Get-FileSha256([string]$Path) {
@@ -425,7 +491,8 @@ function Get-OfficialReleasePlan {
         --manifest $manifestPath `
         --checksums $checksumsPath `
         --recorder-revision $RecorderRevision `
-        --expected-ui-revision (git -C $script:RepoRoot rev-parse HEAD) 2>&1
+        --expected-ui-revision (git -C $script:RepoRoot rev-parse HEAD) `
+        --rust-only 2>&1
     if ($LASTEXITCODE -ne 0) {
         throw "Official stack release validation failed: $($output -join ' ')"
     }
@@ -482,16 +549,46 @@ function Assert-OfficialImageLabels(
     [string]$Reference,
     [string]$Role,
     [string]$ExpectedVersion,
-    [string]$ExpectedRevision
+    [string]$ExpectedRevision,
+    [string]$InputKind = "Official"
 ) {
-    $version = & docker image inspect $Reference --format '{{index .Config.Labels "org.opencontainers.image.version"}}'
-    if ($LASTEXITCODE -ne 0 -or $version -ne $ExpectedVersion) {
-        throw "Official $Role image version label does not match the stack release"
+    $labelJson = & docker image inspect $Reference --format '{{json .Config.Labels}}'
+    if ($LASTEXITCODE -ne 0) { throw "$InputKind $Role image labels are unavailable" }
+    try { $labels = ($labelJson -join "`n") | ConvertFrom-Json }
+    catch { throw "$InputKind $Role image labels are invalid" }
+    $version = if ($null -ne $labels) { $labels.PSObject.Properties['org.opencontainers.image.version'] } else { $null }
+    if ($null -eq $version -or [string]$version.Value -cne $ExpectedVersion) {
+        throw "$InputKind $Role image version label does not match the stack release"
     }
-    $revision = & docker image inspect $Reference --format '{{index .Config.Labels "org.opencontainers.image.revision"}}'
-    if ($LASTEXITCODE -ne 0 -or $revision -ne $ExpectedRevision) {
-        throw "Official $Role image revision label does not match the stack release"
+    $revision = if ($null -ne $labels) { $labels.PSObject.Properties['org.opencontainers.image.revision'] } else { $null }
+    if ($null -eq $revision -or [string]$revision.Value -cne $ExpectedRevision) {
+        throw "$InputKind $Role image revision label does not match the stack release"
     }
+}
+
+function Get-PreparedLocalBetaImage([string]$Reference, [string]$Role) {
+    # Freeze the tag first, then validate metadata through that immutable ID.
+    $id = & docker image inspect $Reference --format '{{.Id}}'
+    if ($LASTEXITCODE -ne 0 -or $id -cnotmatch '^sha256:[0-9a-f]{64}$') {
+        throw "Prepared local $Role image is unavailable"
+    }
+    Assert-OfficialImageLabels -Reference $id -Role $Role -ExpectedVersion $releaseVersion `
+        -ExpectedRevision $sourceId -InputKind "Prepared local"
+    $platform = & docker image inspect $id --format '{{.Os}}/{{.Architecture}}'
+    if ($LASTEXITCODE -ne 0 -or $platform -cne "linux/amd64") {
+        throw "Prepared local $Role image must be Linux/amd64"
+    }
+    if ($Role -eq "UI") {
+        $markerText = & docker run --rm --network none --read-only --entrypoint cat $id /usr/share/nginx/html/marty-ui-release.json
+        if ($LASTEXITCODE -ne 0) { throw "Prepared local UI release marker is missing" }
+        try { $marker = ($markerText -join "`n") | ConvertFrom-Json }
+        catch { throw "Prepared local UI release marker is invalid" }
+        if ($marker.component -cne "ui" -or $marker.release_version -cne $releaseVersion -or
+            $marker.marty_ui_sha -cne $sourceId) {
+            throw "Prepared local UI served marker does not match the source snapshot"
+        }
+    }
+    return [string]$id
 }
 
 function Initialize-DurableRuntimeConfig([string]$SourceRevision) {
@@ -519,10 +616,16 @@ function Initialize-DurableRuntimeConfig([string]$SourceRevision) {
         "docker/init-databases.sh",
         "config/keycloak",
         "scripts/setup-keycloak.sh",
+        "docker/openbao-selfhost.hcl",
         "docker/openbao-init.sh",
+        "docker/openbao-selfhost-init.sh",
+        "docker/openbao-haip-workload-policy.hcl",
         "config/envoy/envoy.yaml",
         "config/envoy/proto_descriptor.pb",
-        "docker/canvas-localhost-bridge/server.py",
+        "docker/canvas-localhost-bridge/Cargo.toml",
+        "docker/canvas-localhost-bridge/Cargo.lock",
+        "docker/canvas-localhost-bridge/Dockerfile",
+        "docker/canvas-localhost-bridge/src/main.rs",
         "config/canvas/production-local.rb",
         "config/canvas/dynamic_settings.local.yml",
         "config/canvas/session_store.local.yml",
@@ -669,12 +772,16 @@ function New-BetaStateBackup {
     )
 
     New-Item -ItemType Directory -Path $Destination -Force | Out-Null
+    Protect-BetaStateBackupDirectory -Path $Destination
+    if ($SafeRelease -cnotmatch '^[A-Za-z0-9][A-Za-z0-9_.-]+$') { throw 'Invalid beta backup name' }
     $postgres = Get-ComposeContainerId -Service "postgres"
     $applicant = Get-ComposeContainerId -Service "applicant"
     $redis = Get-ComposeContainerId -Service "redis"
-    foreach ($required in @($postgres, $applicant, $redis)) { if (-not $required) { throw "Beta backup requires the running state services" } }
-    $applicantVolume = Assert-BetaVolume "elevenid-beta_applicant_data"
-    $openBaoVolume = Assert-BetaVolume "elevenid-beta_openbao_data"
+    $openbao = Get-ComposeContainerId -Service "openbao"
+    foreach ($required in @($postgres, $applicant, $redis, $openbao)) { if (-not $required) { throw "Beta backup requires the running state services" } }
+    Assert-BetaStateVolumePlan -Expected $script:StateVolumePlan -SameContainers
+    $applicantVolume = ($script:StateVolumePlan | Where-Object logical_name -eq 'applicant_data').volume_name
+    $openBaoVolume = ($script:StateVolumePlan | Where-Object logical_name -eq 'openbao_data').volume_name
     Invoke-Checked -FilePath docker -Arguments @("exec", $postgres, "sh", "-lc", "pg_dump -U postgres -Fc -d marty -f /tmp/$SafeRelease-marty.dump && pg_dump -U postgres -Fc -d keycloak -f /tmp/$SafeRelease-keycloak.dump && pg_dumpall -U postgres --globals-only -f /tmp/$SafeRelease-globals.sql")
     Invoke-Checked -FilePath docker -Arguments @("cp", "${postgres}:/tmp/$SafeRelease-marty.dump", (Join-Path $Destination "postgres-marty.dump"))
     Invoke-Checked -FilePath docker -Arguments @("cp", "${postgres}:/tmp/$SafeRelease-keycloak.dump", (Join-Path $Destination "postgres-keycloak.dump"))
@@ -686,7 +793,14 @@ function New-BetaStateBackup {
         throw "Authenticated beta Redis snapshot failed"
     }
     Invoke-Checked -FilePath docker -Arguments @("cp", "${redis}:/data/dump.rdb", (Join-Path $Destination "redis-dump.rdb"))
-    Invoke-Checked -FilePath docker -Arguments @("run", "--rm", "--mount", "type=volume,src=$openBaoVolume,dst=/source,readonly", "--mount", "type=bind,src=$Destination,dst=/backup", $script:VolumeHelperImage, "sh", "-lc", "cd /source && tar -czf /backup/openbao-data.tar.gz .")
+    # A live Raft directory copy is not a consistent database backup. Keep the
+    # token inside its owning node and retain a native snapshot plus static custody.
+    $raftFile = "/tmp/$SafeRelease-openbao-raft.snap"
+    $raftCommand = 'BAO_TOKEN=$(cat /bao/data/root.token) BAO_ADDR=https://127.0.0.1:8200 BAO_CACERT=/bao/data/tls/ca.crt bao operator raft snapshot save ' + $raftFile
+    Invoke-Checked -FilePath docker -Arguments @('exec', $openbao, 'sh', '-ec', $raftCommand)
+    Invoke-Checked -FilePath docker -Arguments @('cp', "${openbao}:$raftFile", (Join-Path $Destination 'openbao-raft.snap'))
+    Invoke-Checked -FilePath docker -Arguments @('exec', $openbao, 'rm', '-f', $raftFile)
+    Invoke-Checked -FilePath docker -Arguments @("run", "--rm", "--mount", "type=volume,src=$openBaoVolume,dst=/source,readonly", "--mount", "type=bind,src=$Destination,dst=/backup", $script:VolumeHelperImage, "sh", "-lc", "cd /source && test -d raft && tar -czf /backup/openbao-data.tar.gz --exclude=./raft .")
 
     $files = @(Get-ChildItem -LiteralPath $Destination -File | Sort-Object Name | ForEach-Object {
         [ordered]@{ name = $_.Name; size = $_.Length; sha256 = Get-FileSha256 $_.FullName }
@@ -695,6 +809,8 @@ function New-BetaStateBackup {
         schema_version = 1
         phase = $Phase
         application_writers_stopped = $WritersStopped
+        state_volumes = $script:StateVolumePlan
+        openbao_backup = 'native-raft-snapshot-and-static-custody'
         created_at = (Get-Date).ToUniversalTime().ToString("o")
         files = $files
     } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $ManifestPath -Encoding utf8
@@ -735,6 +851,7 @@ if ($OfficialStackRelease) {
     }
     $officialPlan = Get-OfficialReleasePlan
     $sourceManifest = $officialPlan.source_manifest
+    $env:MARTY_KEYCLOAK_KMS_IMAGE = [string]$officialPlan.images.keycloak.reference
 }
 else {
     if (-not [string]::IsNullOrWhiteSpace($RecorderRevision)) {
@@ -750,11 +867,16 @@ else {
     if ($sourceManifest.source_kind -ne "local-worktree-snapshot" -or $sourceManifest.promotion_eligible -ne $false) {
         throw "Local source manifest must be a non-promotable worktree snapshot"
     }
+    $env:MARTY_KEYCLOAK_KMS_IMAGE = Get-DotEnvValue -Path $GeneratedEnvFile -Name "MARTY_KEYCLOAK_KMS_IMAGE"
 }
+if ($env:MARTY_KEYCLOAK_KMS_IMAGE -cnotmatch '^ghcr\.io/elevenid/marty-ui-oss/keycloak@sha256:[0-9a-f]{64}$') {
+    throw "Beta Keycloak requires the pinned remote-key image digest"
+}
+$env:KEYCLOAK_KMS_IMAGE_DIGEST = ($env:MARTY_KEYCLOAK_KMS_IMAGE -split '@', 2)[1]
 $martyDbPassword = Get-DotEnvValue -Path $GeneratedEnvFile -Name "MARTY_DB_PASSWORD"
 $redisPassword = Get-DotEnvValue -Path $GeneratedEnvFile -Name "REDIS_PASSWORD"
 $encodedRedisPassword = [Uri]::EscapeDataString($redisPassword)
-$baoDevRootToken = Get-DotEnvValue -Path $GeneratedEnvFile -Name "BAO_DEV_ROOT_TOKEN"
+Assert-BetaOpenBaoRaftCustody
 $grpcServiceToken = Get-DotEnvValue -Path $GeneratedEnvFile -Name "GRPC_SERVICE_TOKEN"
 if ($grpcServiceToken.Length -lt 32 -or $grpcServiceToken -match '^(?i:change[-_]?me|changeme|replace[-_]?me)') {
     throw "GRPC_SERVICE_TOKEN must be a non-placeholder value of at least 32 characters"
@@ -763,7 +885,11 @@ $requiredFlowSecrets = @(
     "FLOW_WEBHOOK_SECRET",
     "FLOW_APPLICATION_EVENT_HMAC_KEY",
     "ISSUANCE_API_KEY",
-    "SIGNING_KEYS_INTERNAL_API_KEY"
+    "SIGNING_KEYS_INTERNAL_API_KEY",
+    "SIGNING_KEYS_ISSUER_SIGN_KEY",
+    "SIGNING_KEYS_INTEGRATION_SECRET_KEY",
+    "DEVICE_REGISTRATION_GATEWAY_KEY",
+    "DEVICE_REGISTRATION_SIGNING_KEYS_KEY"
 )
 if ($EnablePassportNative -and $EnablePassportPhysicalProvider) {
     $requiredFlowSecrets += @(
@@ -776,6 +902,11 @@ foreach ($name in $requiredFlowSecrets) {
     if ($secret.Length -lt 32 -or $secret -match '^(?i:change[-_]?me|changeme|replace[-_]?me)') {
         throw "$name must be a non-placeholder value of at least 32 characters"
     }
+}
+$deviceGatewayKey = Get-DotEnvValue -Path $GeneratedEnvFile -Name "DEVICE_REGISTRATION_GATEWAY_KEY"
+$deviceSigningKey = Get-DotEnvValue -Path $GeneratedEnvFile -Name "DEVICE_REGISTRATION_SIGNING_KEYS_KEY"
+if ($deviceSigningKey -eq $deviceGatewayKey -or $deviceSigningKey -eq $grpcServiceToken) {
+    throw "DEVICE_REGISTRATION_SIGNING_KEYS_KEY must differ from device and gRPC credentials"
 }
 $operatorGatewayKeys = @{}
 if ($EnablePassportNative) {
@@ -834,24 +965,42 @@ if ($EnablePassportNative) {
         throw "Beta DSC and CSCA operator credentials must differ"
     }
 }
+foreach ($envFile in $script:EnvFiles) {
+    foreach ($line in Get-Content -LiteralPath $envFile) {
+        if ($line -match '^(SIGNING_KEYS_WORKLOAD_SERVER_KEY_FILE|SIGNING_KEYS_INTEGRATION_SECRET_TLS_KEY_FILE|AUTH_WORKLOAD_SERVER_KEY_FILE|GATEWAY_WORKLOAD_CLIENT_KEY_FILE|ENVOY_ISSUANCE_CLIENT_KEY_FILE)=') {
+            throw "Beta workload TLS private-key files are retired; use remote KMS signers"
+        }
+    }
+}
 $workloadIdentityPathNames = @(
     "MARTY_WORKLOAD_IDENTITY_CA_CERT_FILE",
+    "SIGNING_KEYS_WORKLOAD_SERVER_CERT_FILE",
+    "SIGNING_KEYS_TLS_KMS_TOKEN_FILE",
+    "ES_WORKLOAD_SERVER_CERT_FILE",
+    "ES_TLS_KMS_TOKEN_FILE",
     "PP_WORKLOAD_SERVER_CERT_FILE",
-    "PP_WORKLOAD_SERVER_KEY_FILE",
+    "OPENBAO_TLS_CA_CERT_FILE",
+    "PP_TLS_KMS_TOKEN_FILE",
     "FLOW_WORKLOAD_CLIENT_CERT_FILE",
-    "FLOW_WORKLOAD_CLIENT_KEY_FILE",
+    "FLOW_CLIENT_TLS_KMS_TOKEN_FILE",
     "FLOW_WORKLOAD_SERVER_CERT_FILE",
-    "FLOW_WORKLOAD_SERVER_KEY_FILE",
+    "FLOW_SERVER_TLS_KMS_TOKEN_FILE",
     "AUTH_WORKLOAD_CLIENT_CERT_FILE",
-    "AUTH_WORKLOAD_CLIENT_KEY_FILE",
-    "APPLICANT_WORKLOAD_CLIENT_CERT_FILE",
-    "APPLICANT_WORKLOAD_CLIENT_KEY_FILE",
+    "AUTH_TLS_KMS_TOKEN_FILE",
+    "AUTH_WORKLOAD_SERVER_CERT_FILE",
+    "AUTH_SERVER_TLS_KMS_TOKEN_FILE",
+    "GATEWAY_WORKLOAD_CLIENT_CERT_FILE",
+    "GATEWAY_TLS_KMS_TOKEN_FILE",
+    "ISSUANCE_WORKLOAD_SERVER_CERT_FILE",
+    "ISSUANCE_TLS_KMS_TOKEN_FILE",
+    "ENVOY_ISSUANCE_CLIENT_CERT_FILE",
+    "ENVOY_ISSUANCE_TLS_KMS_TOKEN_FILE",
     "VERIFICATION_WORKLOAD_CLIENT_CERT_FILE",
-    "VERIFICATION_WORKLOAD_CLIENT_KEY_FILE",
-    "DEPLOYMENT_PROFILE_WORKLOAD_CLIENT_CERT_FILE",
-    "DEPLOYMENT_PROFILE_WORKLOAD_CLIENT_KEY_FILE",
+    "VERIFICATION_TLS_KMS_TOKEN_FILE",
     "COMPLIANCE_PROFILE_WORKLOAD_CLIENT_CERT_FILE",
-    "COMPLIANCE_PROFILE_WORKLOAD_CLIENT_KEY_FILE"
+    "COMPLIANCE_PROFILE_TLS_KMS_TOKEN_FILE",
+    "DEPLOYMENT_PROFILE_WORKLOAD_CLIENT_CERT_FILE",
+    "DEPLOYMENT_PROFILE_TLS_KMS_TOKEN_FILE"
 )
 $workloadIdentityPaths = @{}
 foreach ($name in $workloadIdentityPathNames) {
@@ -860,6 +1009,19 @@ foreach ($name in $workloadIdentityPathNames) {
         throw "$name does not identify a readable workload identity file"
     }
     $workloadIdentityPaths[$name] = (Resolve-Path -LiteralPath $path).Path
+}
+$bridgeKmsAddress = Get-DotEnvValue -Path $GeneratedEnvFile -Name "ENVOY_ISSUANCE_TLS_KMS_ADDR"
+$bridgeKmsUri = $null
+if (-not [Uri]::TryCreate($bridgeKmsAddress, [UriKind]::Absolute, [ref]$bridgeKmsUri) -or
+    $bridgeKmsUri.Scheme -ne "https" -or -not $bridgeKmsUri.Host -or
+    $bridgeKmsUri.UserInfo -or $bridgeKmsUri.Query -or $bridgeKmsUri.Fragment) {
+    throw "ENVOY_ISSUANCE_TLS_KMS_ADDR must be a trusted HTTPS OpenBao origin"
+}
+$null = Get-DotEnvValue -Path $GeneratedEnvFile -Name "ENVOY_ISSUANCE_TLS_KMS_KEY_NAME"
+$bridgeKeyVersion = Get-DotEnvValue -Path $GeneratedEnvFile -Name "ENVOY_ISSUANCE_TLS_KMS_KEY_VERSION"
+$parsedBridgeVersion = 0
+if (-not [int]::TryParse($bridgeKeyVersion, [ref]$parsedBridgeVersion) -or $parsedBridgeVersion -le 0) {
+    throw "ENVOY_ISSUANCE_TLS_KMS_KEY_VERSION must be a positive integer"
 }
 if ($EnablePassportNative) {
     foreach ($purpose in @("DSC", "CSCA")) {
@@ -883,19 +1045,67 @@ if (-not (Get-Command openssl -ErrorAction SilentlyContinue)) {
 }
 $workloadCa = $workloadIdentityPaths["MARTY_WORKLOAD_IDENTITY_CA_CERT_FILE"]
 $workloadLeafNames = @(
+    "SIGNING_KEYS_WORKLOAD_SERVER_CERT_FILE",
+    "ES_WORKLOAD_SERVER_CERT_FILE",
     "PP_WORKLOAD_SERVER_CERT_FILE",
     "FLOW_WORKLOAD_CLIENT_CERT_FILE",
     "FLOW_WORKLOAD_SERVER_CERT_FILE",
+    "ISSUANCE_WORKLOAD_SERVER_CERT_FILE",
     "AUTH_WORKLOAD_CLIENT_CERT_FILE",
-    "APPLICANT_WORKLOAD_CLIENT_CERT_FILE",
     "VERIFICATION_WORKLOAD_CLIENT_CERT_FILE",
+    "COMPLIANCE_PROFILE_WORKLOAD_CLIENT_CERT_FILE",
     "DEPLOYMENT_PROFILE_WORKLOAD_CLIENT_CERT_FILE",
-    "COMPLIANCE_PROFILE_WORKLOAD_CLIENT_CERT_FILE"
+    "ENVOY_ISSUANCE_CLIENT_CERT_FILE"
 )
 foreach ($name in $workloadLeafNames) {
     $certificate = $workloadIdentityPaths[$name]
     Invoke-Checked -FilePath openssl -Arguments @("x509", "-checkend", "3600", "-noout", "-in", $certificate)
     Invoke-Checked -FilePath openssl -Arguments @("verify", "-CAfile", $workloadCa, $certificate)
+}
+foreach ($identity in @(
+    @{ Name = "Auth"; File = "AUTH_WORKLOAD_CLIENT_CERT_FILE"; Uri = "URI:spiffe://marty.internal/service/auth" },
+    @{ Name = "Verification"; File = "VERIFICATION_WORKLOAD_CLIENT_CERT_FILE"; Uri = "URI:spiffe://marty.internal/service/verification" },
+    @{ Name = "Flow"; File = "FLOW_WORKLOAD_CLIENT_CERT_FILE"; Uri = "URI:spiffe://marty.internal/service/flow" },
+    @{ Name = "Envoy Issuance bridge"; File = "ENVOY_ISSUANCE_CLIENT_CERT_FILE"; Uri = "URI:spiffe://marty.internal/service/envoy-issuance-bridge" },
+    @{ Name = "Compliance Profile"; File = "COMPLIANCE_PROFILE_WORKLOAD_CLIENT_CERT_FILE"; Uri = "URI:spiffe://marty.internal/service/compliance-profile" },
+    @{ Name = "Deployment Profile"; File = "DEPLOYMENT_PROFILE_WORKLOAD_CLIENT_CERT_FILE"; Uri = "URI:spiffe://marty.internal/service/deployment-profile" }
+)) {
+    $certificate = $workloadIdentityPaths[$identity.File]
+    $subjectAltName = & openssl x509 -noout -ext subjectAltName -in $certificate
+    if ($LASTEXITCODE -ne 0 -or ($subjectAltName -join "`n") -notmatch [regex]::Escape($identity.Uri)) {
+        throw "$($identity.Name) workload certificate must contain the expected SPIFFE URI SAN"
+    }
+    $extendedKeyUsage = & openssl x509 -noout -ext extendedKeyUsage -in $certificate
+    if ($LASTEXITCODE -ne 0 -or ($extendedKeyUsage -join "`n") -notmatch "TLS Web Client Authentication") {
+        throw "$($identity.Name) workload certificate must permit client authentication"
+    }
+}
+$flowServerCertificate = $workloadIdentityPaths["FLOW_WORKLOAD_SERVER_CERT_FILE"]
+$flowServerSan = & openssl x509 -noout -ext subjectAltName -in $flowServerCertificate
+if ($LASTEXITCODE -ne 0 -or ($flowServerSan -join "`n") -notmatch [regex]::Escape("DNS:flow")) {
+    throw "Flow server certificate must contain the flow DNS SAN"
+}
+$flowServerEku = & openssl x509 -noout -ext extendedKeyUsage -in $flowServerCertificate
+if ($LASTEXITCODE -ne 0 -or ($flowServerEku -join "`n") -notmatch "TLS Web Server Authentication") {
+    throw "Flow server certificate must permit server authentication"
+}
+$issuanceServerCertificate = $workloadIdentityPaths["ISSUANCE_WORKLOAD_SERVER_CERT_FILE"]
+$issuanceServerSan = & openssl x509 -noout -ext subjectAltName -in $issuanceServerCertificate
+if ($LASTEXITCODE -ne 0 -or ($issuanceServerSan -join "`n") -notmatch [regex]::Escape("DNS:issuance-native")) {
+    throw "Issuance server certificate must contain the issuance-native DNS SAN"
+}
+$issuanceServerEku = & openssl x509 -noout -ext extendedKeyUsage -in $issuanceServerCertificate
+if ($LASTEXITCODE -ne 0 -or ($issuanceServerEku -join "`n") -notmatch "TLS Web Server Authentication") {
+    throw "Issuance server certificate must permit server authentication"
+}
+$eventServerCertificate = $workloadIdentityPaths["ES_WORKLOAD_SERVER_CERT_FILE"]
+$eventServerSan = & openssl x509 -noout -ext subjectAltName -in $eventServerCertificate
+if ($LASTEXITCODE -ne 0 -or ($eventServerSan -join "`n") -notmatch [regex]::Escape("DNS:event-stream")) {
+    throw "Event Stream server certificate must contain the event-stream DNS SAN"
+}
+$eventServerEku = & openssl x509 -noout -ext extendedKeyUsage -in $eventServerCertificate
+if ($LASTEXITCODE -ne 0 -or ($eventServerEku -join "`n") -notmatch "TLS Web Server Authentication") {
+    throw "Event Stream server certificate must permit server authentication"
 }
 $repositoryNames = @($sourceManifest.repositories.PSObject.Properties.Name | Sort-Object)
 $componentEntries = @($sourceManifest.component_revisions)
@@ -951,13 +1161,15 @@ function Get-StackArtifact([string]$Name, [string]$Type, [string]$SourceReposito
         Digest = [string]$artifact[0].digest
     }
 }
-$martyCommon = Get-StackArtifact "marty-common" "python"
-$martyRs = Get-StackArtifact "marty-core-python" "python" "marty-core"
-$martyVerification = Get-StackArtifact "marty-verification-python" "python" "marty-core"
-$martyIso18013 = Get-StackArtifact "marty-iso18013-python" "python" "marty-core"
+# Official releases retain wheel provenance admission. Local native services
+# consume the source-pinned Rust SDK; these unused wheels are never build inputs.
+if ($OfficialStackRelease) {
+    $martyRs = Get-StackArtifact "marty-core-python" "python" "marty-core"
+    $martyVerification = Get-StackArtifact "marty-verification-python" "python" "marty-core"
+    $martyIso18013 = Get-StackArtifact "marty-iso18013-python" "python" "marty-core"
+}
 $martyApiCore = Get-StackArtifact "marty-api-core" "npm" "marty-cli"
 $martyBlog = Get-StackArtifact "marty-blog" "npm" "marty-blog"
-$martyIssuance = Get-StackArtifact "marty-credentials-issuance" "oci" "marty-credentials"
 
 $backupDir = Join-Path $script:ArtifactDir "backup"
 $preflightBackupDir = Join-Path $script:ArtifactDir "preflight-backup"
@@ -965,7 +1177,38 @@ $logsDir = Join-Path $script:ArtifactDir "logs"
 $sourceKind = [string]$sourceManifest.source_kind
 $promotionEligible = [bool]$sourceManifest.promotion_eligible
 $releaseInput = if ($OfficialStackRelease) { "official attested stack release" } else { "local coordinated worktree snapshot" }
-$plannedImageStep = if ($OfficialStackRelease) { "pull and verify digest-only official images" } else { "build migration, application, and UI images" }
+$plannedImageStep = if ($OfficialStackRelease) { "pull and verify digest-only official images" } elseif ($UsePreparedLocalImages) { "reuse verified local migration, application, and UI images" } else { "build migration, application, and UI images" }
+
+# Planning must report the same existing-state blockers as execution. Recheck
+# under the deployment lock below before any mutable operation or image use.
+. (Join-Path $PSScriptRoot "beta-passport-fence-legacy-boundary.ps1")
+$preflightPostgres = Get-ComposeContainerId -Service "postgres"
+if (-not $preflightPostgres) { throw "Beta PostgreSQL container is unavailable" }
+Assert-LegacyBetaDatabaseUnfenced -PostgresContainer $preflightPostgres
+$script:StateVolumePlan = @(Get-BetaStateVolumePlan)
+$migrationAdminFiles = @($script:EnvFiles | Where-Object {
+    @(Select-String -LiteralPath $_ -Pattern '^MARTY_ORG_ADMIN_EMAIL=').Count -gt 0
+})
+if ($migrationAdminFiles.Count -eq 0) { throw 'MARTY_ORG_ADMIN_EMAIL must be configured for native migrations' }
+$migrationAdminEmail = (Get-DotEnvValue -Path $migrationAdminFiles[-1] -Name 'MARTY_ORG_ADMIN_EMAIL').Trim().Trim('"').Trim("'")
+if ($migrationAdminEmail -cnotmatch '^[A-Za-z0-9._+%\-]+@[A-Za-z0-9.\-]+$') { throw 'Invalid migration admin email' }
+if ($UsePreparedLocalImages) {
+    $preparedServicesForValidation = Get-PreparedLocalBetaImage "elevenid-local/services:$releaseVersion" "services"
+    if ($EnablePassportNative -and -not $EnablePassportPhysicalProvider) {
+        $script:PreparedPassportServicesImage = $preparedServicesForValidation
+        # Freeze the already source/role/architecture-verified immutable image
+        # before the simulator profile and application image plan are validated.
+        $env:MARTY_SERVICES_IMAGE = $script:PreparedPassportServicesImage
+    }
+    $null = Get-PreparedLocalBetaImage "elevenid-local/db-migrate:$releaseVersion" "migrations"
+    $null = Get-PreparedLocalBetaImage "elevenid-local/ui:$releaseVersion" "UI"
+}
+Assert-BetaDidcommConfiguration -RepoRoot $script:RepoRoot -EnvFiles $script:EnvFiles `
+    -ComposeFiles $script:ComposeFiles -AuthcryptEnabled ([bool]$EnableDidcommAuthcrypt)
+Assert-BetaPassportConfiguration -RepoRoot $script:RepoRoot -EnvFiles $script:EnvFiles `
+    -ComposeFiles $script:ComposeFiles -PassportEnabled ([bool]$EnablePassportNative) `
+    -PhysicalProvider ([bool]$EnablePassportPhysicalProvider) `
+    -PreparedServicesImage $script:PreparedPassportServicesImage
 
 Write-Step "Beta release plan"
 Write-Host "Release: $releaseVersion"
@@ -990,6 +1233,7 @@ if ($PlanOnly) {
         source_kind = $sourceKind
         release_input = $releaseInput
         promotion_eligible = $promotionEligible
+        prepared_local_images = [bool]$UsePreparedLocalImages
         beta_origin = $BetaOrigin
         portable_canvas_enabled = [bool]$EnablePortableCanvas
         didcomm_authcrypt_enabled = [bool]$EnableDidcommAuthcrypt
@@ -1032,6 +1276,15 @@ function Assert-MaintenanceContainersRestored([string[]]$ExpectedContainers) {
 . (Join-Path $PSScriptRoot "beta-deployment-lock.ps1")
 $betaDeploymentLock = Enter-BetaDeploymentLock
 try {
+Assert-BetaStateVolumePlan -Expected $script:StateVolumePlan -SameContainers
+$stateVolumeOverride = Join-Path $script:ArtifactDir 'beta-state-volumes.json'
+Write-Utf8Text -Path $stateVolumeOverride -Content ((ConvertTo-BetaStateVolumeOverride -Plan $script:StateVolumePlan) + "`n")
+$script:ComposeFiles += $stateVolumeOverride
+$betaTunnelOverride = Join-Path $script:ArtifactDir "beta-tunnel.private-input.yml"
+$null = Get-BetaTunnelInputBinding -RepoRoot $script:RepoRoot `
+    -CredentialEnvFile $TunnelTokenEnvFile -Expected $betaTunnelBinding `
+    -OverrideOutput $betaTunnelOverride
+$script:ComposeFiles += $betaTunnelOverride
 . (Join-Path $PSScriptRoot "beta-passport-fence-legacy-boundary.ps1")
 $legacyPostgres = Get-ComposeContainerId -Service "postgres"
 if (-not $legacyPostgres) { throw "Beta PostgreSQL container is unavailable" }
@@ -1045,13 +1298,21 @@ $applicationImageArguments = @{
     Services = $script:SelectedApplicationServices
     ReleaseVersion = $releaseVersion
     OfficialStackRelease = [bool]$OfficialStackRelease
-    IssuanceReference = "$($martyIssuance.Uri)@$($martyIssuance.Digest)"
-    IssuanceDigest = [string]$martyIssuance.Digest
 }
 if ($OfficialStackRelease) {
-    $applicationImageArguments.IssuanceDigest = [string]$officialPlan.images.issuance.digest
     $applicationImageArguments.ServicesReference = [string]$officialPlan.images.services.reference
     $applicationImageArguments.ServicesDigest = [string]$officialPlan.images.services.digest
+}
+if ($UsePreparedLocalImages) {
+    $preparedServices = Get-PreparedLocalBetaImage "elevenid-local/services:$releaseVersion" "services"
+    if ($script:PreparedPassportServicesImage -and $preparedServices -cne $script:PreparedPassportServicesImage) {
+        throw "Prepared local passport services image changed after validation"
+    }
+    $migrationImage = Get-PreparedLocalBetaImage "elevenid-local/db-migrate:$releaseVersion" "migrations"
+    $uiImage = Get-PreparedLocalBetaImage "elevenid-local/ui:$releaseVersion" "UI"
+    $prepared = @{}
+    foreach ($service in $script:SelectedApplicationServices) { $prepared[$service] = $preparedServices }
+    $applicationImageArguments.PreparedImages = $prepared
 }
 $applicationImagePlan = @(New-BetaApplicationImagePlan @applicationImageArguments)
 $releaseCompose = @(ConvertTo-BetaApplicationImageLines -Plan $applicationImagePlan)
@@ -1077,15 +1338,14 @@ Write-Host "Runtime configuration: $script:RuntimeConfigRoot"
 
 Write-Step "Preflight running beta topology"
 Invoke-Checked -FilePath docker -Arguments @("info", "--format", "{{.ServerVersion}}")
-$env:MARTY_COMMON_URI = $martyCommon.Uri
-$env:MARTY_COMMON_DIGEST = $martyCommon.Digest
-$env:MARTY_RS_URI = $martyRs.Uri
-$env:MARTY_RS_DIGEST = $martyRs.Digest
-$env:MARTY_VERIFICATION_URI = $martyVerification.Uri
-$env:MARTY_VERIFICATION_DIGEST = $martyVerification.Digest
-$env:MARTY_ISO18013_URI = $martyIso18013.Uri
-$env:MARTY_ISO18013_DIGEST = $martyIso18013.Digest
-$env:MARTY_ISSUANCE_IMAGE = "$($martyIssuance.Uri)@$($martyIssuance.Digest)"
+$runningCanvasBridge = @(& docker ps `
+    --filter "label=com.docker.compose.project=$script:BetaProject" `
+    --filter "label=com.docker.compose.service=issuance-canvas-localhost-bridge" `
+    --format '{{.ID}}')
+if ($LASTEXITCODE -ne 0) { throw "Could not inspect optional Canvas localhost bridge before beta release" }
+if ($runningCanvasBridge.Count -ne 0) {
+    throw "Stop the optional Canvas localhost bridge before beta release; this public-Canvas deployment does not recreate it with issuance"
+}
 if ($OfficialStackRelease) {
     $env:MARTY_SERVICES_IMAGE = [string]$officialPlan.images.services.reference
 }
@@ -1100,7 +1360,9 @@ Assert-BetaDidcommConfiguration -RepoRoot $script:RepoRoot -EnvFiles $script:Env
     -ComposeFiles $script:ComposeFiles -AuthcryptEnabled ([bool]$EnableDidcommAuthcrypt)
 Assert-BetaPassportConfiguration -RepoRoot $script:RepoRoot -EnvFiles $script:EnvFiles `
     -ComposeFiles $script:ComposeFiles -PassportEnabled ([bool]$EnablePassportNative) `
-    -PhysicalProvider ([bool]$EnablePassportPhysicalProvider)
+    -PhysicalProvider ([bool]$EnablePassportPhysicalProvider) `
+    -PreparedServicesImage $script:PreparedPassportServicesImage
+Assert-BetaKeycloakDatabaseRemoteProviders
 if ($EnablePassportNative) {
     $existingPassportServices = @{}
     foreach ($passportService in @("passport-beta-bureau", "passport-callback-signer")) {
@@ -1183,16 +1445,17 @@ if ($EnablePassportNative) {
 if ($OfficialStackRelease) {
     $migrationImage = [string]$officialPlan.images.migrations.reference
     $uiImage = [string]$officialPlan.images.ui.reference
-    foreach ($image in @($env:MARTY_SERVICES_IMAGE, $migrationImage, $uiImage, $env:MARTY_ISSUANCE_IMAGE)) {
+    Invoke-Checked -FilePath gh -Arguments @(
+        "attestation", "verify", "oci://$env:MARTY_KEYCLOAK_KMS_IMAGE",
+        "--repo", "ElevenID/marty-ui", "--source-digest", $sourceId,
+        "--source-ref", "refs/heads/main", "--deny-self-hosted-runners"
+    )
+    foreach ($image in @($env:MARTY_SERVICES_IMAGE, $migrationImage, $uiImage, $env:MARTY_KEYCLOAK_KMS_IMAGE)) {
         Invoke-Checked -FilePath docker -Arguments @("pull", $image)
     }
     Assert-OfficialImageLabels -Reference $env:MARTY_SERVICES_IMAGE -Role "services" -ExpectedVersion $releaseVersion -ExpectedRevision $sourceId
     Assert-OfficialImageLabels -Reference $migrationImage -Role "migrations" -ExpectedVersion $releaseVersion -ExpectedRevision $sourceId
     Assert-OfficialImageLabels -Reference $uiImage -Role "UI" -ExpectedVersion $releaseVersion -ExpectedRevision $sourceId
-    Assert-OfficialImageLabels -Reference $env:MARTY_ISSUANCE_IMAGE -Role "issuance" -ExpectedVersion "v$($martyIssuance.Version)" -ExpectedRevision $martyIssuance.Commit
-}
-else {
-    Invoke-Checked -FilePath docker -Arguments @("pull", $env:MARTY_ISSUANCE_IMAGE)
 }
 foreach ($service in @("postgres", "redis", "openbao", "keycloak", "applicant", "gateway")) {
     $container = Get-ComposeContainerId -Service $service
@@ -1216,20 +1479,12 @@ New-BetaStateBackup `
     -WritersStopped $false `
     -RedisPassword $redisPassword
 
-if (-not $OfficialStackRelease) {
+if (-not $OfficialStackRelease -and -not $UsePreparedLocalImages) {
     Write-Step "Build immutable migration image"
     $migrationImage = "elevenid-local/db-migrate:$releaseVersion"
     Invoke-Checked -FilePath docker -Arguments @(
         "build", "--file", (Join-Path $script:RepoRoot "services\Dockerfile.migrations"),
         "--build-arg", "MARTY_RELEASE_VERSION=$releaseVersion", "--build-arg", "MARTY_UI_SHA=$sourceId",
-        "--build-arg", "MARTY_COMMON_VERSION=$($martyCommon.Version)", "--build-arg", "MARTY_COMMON_URI=$($martyCommon.Uri)",
-        "--build-arg", "MARTY_COMMON_DIGEST=$($martyCommon.Digest)",
-        "--build-arg", "MARTY_RS_VERSION=$($martyRs.Version)", "--build-arg", "MARTY_RS_URI=$($martyRs.Uri)",
-        "--build-arg", "MARTY_RS_DIGEST=$($martyRs.Digest)",
-        "--build-arg", "MARTY_VERIFICATION_VERSION=$($martyVerification.Version)", "--build-arg", "MARTY_VERIFICATION_URI=$($martyVerification.Uri)",
-        "--build-arg", "MARTY_VERIFICATION_DIGEST=$($martyVerification.Digest)",
-        "--build-arg", "MARTY_ISO18013_VERSION=$($martyIso18013.Version)", "--build-arg", "MARTY_ISO18013_URI=$($martyIso18013.Uri)",
-        "--build-arg", "MARTY_ISO18013_DIGEST=$($martyIso18013.Digest)",
         "--tag", $migrationImage, "--label", "org.opencontainers.image.version=$releaseVersion",
         "--label", "org.opencontainers.image.revision=$sourceId", $script:RepoRoot
     )
@@ -1237,7 +1492,7 @@ if (-not $OfficialStackRelease) {
 
 $env:MARTY_RELEASE_VERSION = $releaseVersion
 $env:MARTY_UI_SHA = $sourceId
-if (-not $OfficialStackRelease) {
+if (-not $OfficialStackRelease -and -not $UsePreparedLocalImages) {
     Write-Step "Build marker-bearing application images"
     $applicationBuildArguments = @(
         "build", "--build-arg", "MARTY_RELEASE_VERSION=$releaseVersion", "--build-arg", "MARTY_UI_SHA=$sourceId"
@@ -1268,6 +1523,32 @@ else {
     $script:ComposeFiles += $verificationImageOverride
 }
 
+# Freeze one-shot roles as well as application roles. Otherwise Compose can
+# rebuild a default migration image despite UsePreparedLocalImages.
+$migrationImage = & docker image inspect $migrationImage --format '{{.Id}}'
+if ($LASTEXITCODE -ne 0 -or $migrationImage -cnotmatch '^sha256:[0-9a-f]{64}$') { throw 'Migration image is unavailable' }
+$migrationRoleImages = @{}
+foreach ($role in @('issuance-native', 'revocation-profile')) {
+    $entry = @($applicationImagePlan | Where-Object service -eq $role)
+    if ($entry.Count -ne 1) { throw "Missing migration runtime role: $role" }
+    $id = & docker image inspect $entry[0].effective_reference --format '{{.Id}}'
+    if ($LASTEXITCODE -ne 0 -or $id -cnotmatch '^sha256:[0-9a-f]{64}$') { throw "Migration runtime image is unavailable: $role" }
+    $migrationRoleImages[$role] = $id
+}
+$migrationOverride = Join-Path $script:ArtifactDir 'native-migration-images.yml'
+$migrationLines = @(ConvertTo-BetaMigrationImageLines -MigrationImage $migrationImage `
+    -IssuanceImage $migrationRoleImages['issuance-native'] -RevocationImage $migrationRoleImages['revocation-profile'])
+Write-Utf8Text -Path $migrationOverride -Content (($migrationLines -join "`n") + "`n")
+$script:ComposeFiles += $migrationOverride
+Write-Utf8Text -Path (Join-Path $script:ArtifactDir 'native-migration-image-plan.json') -Content (([ordered]@{
+    source_id = $sourceId
+    kms_initialization_enabled = $false
+    db_migrate = $migrationImage
+    issuance_migrations = $migrationRoleImages['issuance-native']
+    revocation_profile_migrate = $migrationRoleImages['revocation-profile']
+    compose_override_sha256 = Get-FileSha256 $migrationOverride
+} | ConvertTo-Json) + "`n")
+
 Write-Step "Rehearse one-way migration on isolated beta copy"
 $copySuffix = $sourceId.Substring(0, 12)
 $copyContainer = "elevenid-beta-copy-$copySuffix"
@@ -1277,6 +1558,7 @@ $copyPassword = -join ((1..32) | ForEach-Object { '{0:x}' -f (Get-Random -Maximu
 $copyRedisPassword = -join ((1..32) | ForEach-Object { '{0:x}' -f (Get-Random -Maximum 16) })
 $encodedCopyRedisPassword = [Uri]::EscapeDataString($copyRedisPassword)
 $copyBaoToken = -join ((1..40) | ForEach-Object { '{0:x}' -f (Get-Random -Maximum 16) })
+$copyBaoImage = "quay.io/openbao/openbao@sha256:6c75c97223873807260352f269640935a07db0c26b3dbf12a98a36ec43ad9878"
 $rehearsalContainers = @($copyContainer, $copyOpenBaoContainer, $copyRedisContainer)
 try {
     foreach ($candidate in $rehearsalContainers) {
@@ -1286,57 +1568,84 @@ try {
         }
     }
     Invoke-Checked -FilePath docker -Arguments @("run", "--detach", "--name", $copyContainer, "--network", $script:BetaNetwork, "--env", "POSTGRES_PASSWORD=$copyPassword", "postgres:15-alpine")
-    Invoke-Checked -FilePath docker -Arguments @("run", "--detach", "--name", $copyOpenBaoContainer, "--network", $script:BetaNetwork, "--env", "BAO_DEV_ROOT_TOKEN_ID=$copyBaoToken", "--env", "BAO_DEV_LISTEN_ADDRESS=0.0.0.0:8200", "quay.io/openbao/openbao:2", "server", "-dev")
+    Invoke-Checked -FilePath docker -Arguments @("run", "--detach", "--name", $copyOpenBaoContainer, "--network", $script:BetaNetwork, "--tmpfs", "/tmp/bao-tls:rw,mode=1777", "--env", "BAO_DEV_ROOT_TOKEN_ID=$copyBaoToken", "--env", "BAO_DEV_LISTEN_ADDRESS=0.0.0.0:8200", $copyBaoImage, "server", "-dev", "-dev-tls", "-dev-tls-cert-dir=/tmp/bao-tls")
     Invoke-Checked -FilePath docker -Arguments @(
         "run", "--detach", "--name", $copyRedisContainer, "--network", $script:BetaNetwork,
         "redis:7-alpine", "redis-server", "--requirepass", $copyRedisPassword
     )
     $ready = $false
     foreach ($attempt in 1..60) {
-        docker exec $copyContainer pg_isready -U postgres | Out-Null
-        if ($LASTEXITCODE -eq 0) { $ready = $true; break }
+        $probe = Invoke-BetaDockerReadinessProbe -Arguments @('exec', $copyContainer, 'pg_isready', '-U', 'postgres')
+        if ($probe.exit_code -eq 0) { $ready = $true; break }
         Start-Sleep -Seconds 2
     }
     if (-not $ready) { throw "Rehearsal PostgreSQL did not become ready" }
     $redisReady = $false
     $openBaoReady = $false
     foreach ($attempt in 1..60) {
-        $redisPing = docker exec $copyRedisContainer redis-cli --no-auth-warning -a $copyRedisPassword ping 2>$null
-        if ($LASTEXITCODE -eq 0 -and $redisPing -eq "PONG") { $redisReady = $true }
-        docker exec $copyOpenBaoContainer bao status -address=http://127.0.0.1:8200 2>$null | Out-Null
-        if ($LASTEXITCODE -eq 0) { $openBaoReady = $true }
+        $redisProbe = Invoke-BetaDockerReadinessProbe -Arguments @('exec', $copyRedisContainer, 'redis-cli', '--no-auth-warning', '-a', $copyRedisPassword, 'ping')
+        if ($redisProbe.exit_code -eq 0 -and $redisProbe.output -contains 'PONG') { $redisReady = $true }
+        $baoProbe = Invoke-BetaDockerReadinessProbe -Arguments @('exec', $copyOpenBaoContainer, 'bao', 'status', '-address=https://127.0.0.1:8200', '-ca-cert=/tmp/bao-tls/vault-ca.pem')
+        if ($baoProbe.exit_code -eq 0) { $openBaoReady = $true }
         if ($redisReady -and $openBaoReady) { break }
         Start-Sleep -Seconds 2
     }
     if (-not $redisReady) { throw "Rehearsal Redis did not become ready" }
     if (-not $openBaoReady) { throw "Rehearsal OpenBao did not become ready" }
+    $copyCaPath = Join-Path $logsDir "openbao-copy-public-ca.crt"
+    # Docker's archive/cp API cannot read this tmpfs mount on the beta host.
+    $copyCaContent = Read-BetaContainerPublicCertificate -Container $copyOpenBaoContainer -Path '/tmp/bao-tls/vault-ca.pem'
+    Write-Utf8Text -Path $copyCaPath -Content $copyCaContent
+    $copyCaMount = "type=bind,src=$copyCaPath,dst=/bao-public-ca/ca.crt,readonly"
+    Invoke-Checked -FilePath docker -Arguments @(
+        "run", "--rm", "--network", "container:$copyOpenBaoContainer",
+        "--mount", $copyCaMount,
+        "--env", "BAO_ADDR=https://localhost:8200",
+        "--env", "BAO_CACERT=/bao-public-ca/ca.crt",
+        "--env", "BAO_TOKEN=$copyBaoToken",
+        "--mount", "type=bind,src=$((Resolve-Path (Join-Path $script:RepoRoot 'docker/openbao-init.sh')).Path),dst=/scripts/openbao-init.sh,readonly",
+        "--entrypoint", "/bin/sh", $copyBaoImage, "/scripts/openbao-init.sh"
+    )
+    $copyNotificationToken = & docker run --rm --network "container:$copyOpenBaoContainer" `
+        --mount $copyCaMount `
+        --env "BAO_ADDR=https://localhost:8200" --env "BAO_CACERT=/bao-public-ca/ca.crt" --env "BAO_TOKEN=$copyBaoToken" `
+        $copyBaoImage bao token create -policy=notification-webhook-service -no-default-policy -orphan -ttl=2h -renewable=false -field=token
+    if ($LASTEXITCODE -ne 0 -or -not $copyNotificationToken) { throw "Rehearsal Notification token creation failed" }
     Invoke-Checked -FilePath docker -Arguments @("exec", $copyContainer, "psql", "-U", "postgres", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-c", "CREATE ROLE marty LOGIN PASSWORD '$copyPassword';")
     Invoke-Checked -FilePath docker -Arguments @("exec", $copyContainer, "createdb", "-U", "postgres", "-O", "marty", "marty")
     Invoke-Checked -FilePath docker -Arguments @("cp", (Join-Path $preflightBackupDir "postgres-marty.dump"), "${copyContainer}:/tmp/marty.dump")
     Invoke-Checked -FilePath docker -Arguments @("exec", $copyContainer, "pg_restore", "-U", "postgres", "-d", "marty", "--no-owner", "--role=marty", "/tmp/marty.dump")
     $copyUrl = "postgresql://marty:$copyPassword@${copyContainer}:5432/marty"
+    Invoke-ComposeLogged -Arguments @('run', '--rm', '--no-deps', '--env', "DATABASE_URL=$copyUrl", 'revocation-profile-migrate') `
+        -LogPath (Join-Path $logsDir 'revocation-migration-rehearsal.log') -FailureMessage 'Native revocation migration rehearsal failed'
     $rehearsalArguments = @(
-        "run", "--rm", "--network", $script:BetaNetwork,
+        "run", "--rm", "--network", "container:$copyOpenBaoContainer",
+        "--mount", $copyCaMount,
         "--env", "DATABASE_URL=$copyUrl",
+        "--env", "MARTY_DB_PASSWORD=$copyPassword",
+        "--env", "MARTY_ORG_ADMIN_EMAIL=$migrationAdminEmail",
         "--env", "PUBLIC_API_URL=$BetaOrigin",
         "--env", "MARTY_MIGRATION_PROFILE=beta",
-        "--env", "MARTY_KMS_BOOTSTRAP_ENABLED=true",
-        "--env", "BAO_ADDR=http://${copyOpenBaoContainer}:8200",
-        "--env", "BAO_TOKEN=$copyBaoToken",
+        "--env", "MARTY_KMS_BOOTSTRAP_ENABLED=false",
+        "--env", "BAO_ADDR=https://localhost:8200",
+        "--env", "BAO_CACERT=/bao-public-ca/ca.crt",
+        "--env", "NOTIFICATION_OPENBAO_CA_CERT_FILE=/bao-public-ca/ca.crt",
+        "--env", "NOTIFICATION_OPENBAO_TOKEN=$copyNotificationToken",
         "--env", "REDIS_URL=redis://:${encodedCopyRedisPassword}@${copyRedisContainer}:6379",
         "--env", "MARTY_ORG_ID=$PilotOrganizationId"
     )
-    $rehearsalArguments += @($migrationImage, "python", "/app/services/run_all_migrations.py")
+    $rehearsalArguments += @($migrationImage)
     Invoke-DockerLogged -Arguments $rehearsalArguments -LogPath (Join-Path $logsDir "migration-rehearsal.log") -FailureMessage "Migration rehearsal failed"
-    $verifyArguments = @("run", "--rm", "--network", $script:BetaNetwork, "--env", "DATABASE_URL=$copyUrl", "--env", "PUBLIC_API_URL=$BetaOrigin", "--env", "MARTY_MIGRATION_PROFILE=beta", "--env", "MARTY_KMS_BOOTSTRAP_ENABLED=false", $migrationImage, "python", "/app/services/run_all_migrations.py", "--verify-only")
+    $verifyArguments = @("run", "--rm", "--network", "container:$copyOpenBaoContainer", "--mount", $copyCaMount, "--env", "DATABASE_URL=$copyUrl", "--env", "PUBLIC_API_URL=$BetaOrigin", "--env", "MARTY_MIGRATION_PROFILE=beta", "--env", "MARTY_KMS_BOOTSTRAP_ENABLED=false", "--env", "BAO_ADDR=https://localhost:8200", "--env", "BAO_CACERT=/bao-public-ca/ca.crt", $migrationImage, "/usr/local/bin/marty-migration-bootstrap", "--verify-only")
     Invoke-DockerLogged -Arguments $verifyArguments -LogPath (Join-Path $logsDir "migration-rehearsal-verify.log") -FailureMessage "Migration rehearsal verification failed"
-    $copyIssuanceUrl = "postgresql+asyncpg://marty:$copyPassword@${copyContainer}:5432/marty"
+    $copyIssuanceUrl = "postgresql://marty:$copyPassword@${copyContainer}:5432/marty"
+    $rehearsalIssuanceVerify = @("run", "--rm", "--no-deps", "--env", "DATABASE_URL=$copyIssuanceUrl", "issuance-migrations")
     Invoke-ComposeLogged `
         -Arguments @("run", "--rm", "--no-deps", "--env", "DATABASE_URL=$copyIssuanceUrl", "issuance-migrations") `
         -LogPath (Join-Path $logsDir "issuance-migration-rehearsal.log") `
         -FailureMessage "Issuance migration rehearsal failed"
     Invoke-ComposeLogged `
-        -Arguments @("run", "--rm", "--no-deps", "--env", "DATABASE_URL=$copyIssuanceUrl", "issuance-migrations", "python", "manage_migrations.py", "current") `
+        -Arguments $rehearsalIssuanceVerify `
         -LogPath (Join-Path $logsDir "issuance-migration-rehearsal-verify.log") `
         -FailureMessage "Issuance migration rehearsal verification failed"
     foreach ($verificationPass in 1..2) {
@@ -1353,7 +1662,7 @@ finally {
     }
 }
 
-if (-not $OfficialStackRelease) {
+if (-not $OfficialStackRelease -and -not $UsePreparedLocalImages) {
     Write-Step "Build marker-bearing public UI image"
     $uiImage = "elevenid-local/ui:$releaseVersion"
     Invoke-Checked -FilePath docker -Arguments @(
@@ -1438,13 +1747,16 @@ Assert-BetaDidcommConfiguration -RepoRoot $script:RepoRoot -EnvFiles $script:Env
     -ComposeFiles $script:ComposeFiles -AuthcryptEnabled ([bool]$EnableDidcommAuthcrypt)
 Assert-BetaPassportConfiguration -RepoRoot $script:RepoRoot -EnvFiles $script:EnvFiles `
     -ComposeFiles $script:ComposeFiles -PassportEnabled ([bool]$EnablePassportNative) `
-    -PhysicalProvider ([bool]$EnablePassportPhysicalProvider)
+    -PhysicalProvider ([bool]$EnablePassportPhysicalProvider) `
+    -PreparedServicesImage $script:PreparedPassportServicesImage
 $canvasLtiIssuerDid = $null
 $maintenanceServices = $script:SelectedApplicationServices + $script:InfrastructureWriterServices + @("ui-prod")
 $maintenanceContainers = @($preDeployContainers | Where-Object { $_.running -and $_.service -in $maintenanceServices } | ForEach-Object { $_.container_id })
 $liveMutationStarted = $false
 $maintenanceStarted = $false
 try {
+    $null = Get-BetaTunnelInputBinding -RepoRoot $script:RepoRoot `
+        -CredentialEnvFile $TunnelTokenEnvFile -Expected $betaTunnelBinding
     Start-BetaMutation
     $maintenanceStarted = $true
     if ($maintenanceContainers.Count -gt 0) {
@@ -1469,56 +1781,43 @@ try {
         -Phase "maintenance_quiesced" `
         -WritersStopped $true `
         -RedisPassword $redisPassword
-    $restoreScript = Join-Path $script:RepoRoot "scripts\restore-local-beta-release.ps1"
-    "& `"$restoreScript`" -ArtifactDir `"$script:ArtifactDir`" -TunnelEnvFile `"$TunnelEnvFile`" -GeneratedEnvFile `"$GeneratedEnvFile`" -ConfirmBetaRestore" | Set-Content -LiteralPath (Join-Path $script:ArtifactDir "supervised-recovery.txt") -Encoding utf8
-
-    Write-Step "Reconcile beta OpenBao state from release configuration"
-    $liveMutationStarted = $true
-    Invoke-ComposeLogged `
-        -Arguments @("run", "--rm", "--no-deps", "openbao-init") `
-        -LogPath (Join-Path $logsDir "openbao-init-live.log") `
-        -FailureMessage "Beta OpenBao reconciliation failed"
+    Write-Step "Verify preserved beta OpenBao readiness"
+    $baoContainer = Get-ComposeContainerId -Service 'openbao'
+    $baoStatus = Invoke-BetaDockerReadinessProbe -Arguments @('exec', $baoContainer, 'bao', 'status', '-address=https://127.0.0.1:8200', '-ca-cert=/bao/data/tls/ca.crt')
+    if ($baoStatus.exit_code -ne 0) { throw 'Preserved beta OpenBao is not ready' }
 
     $env:MARTY_MIGRATION_PROFILE = "beta"
     $env:PUBLIC_API_URL = $BetaOrigin
-    $previousBaoToken = $env:BAO_TOKEN
-    try {
-        $env:BAO_TOKEN = $baoDevRootToken
-        $migrationArguments = @(
-            "run", "--rm", "--network", $script:BetaNetwork,
-            "--env", "DATABASE_URL=postgresql://marty:${martyDbPassword}@postgres:5432/marty",
-            "--env", "PUBLIC_API_URL=$BetaOrigin",
-            "--env", "MARTY_MIGRATION_PROFILE=beta",
-            "--env", "MARTY_KMS_BOOTSTRAP_ENABLED=true",
-            "--env", "BAO_ADDR=http://openbao:8200",
-            "--env", "BAO_TOKEN",
-            "--env", "REDIS_URL=redis://:${encodedRedisPassword}@redis:6379",
-            "--env", "MARTY_ORG_ID=$PilotOrganizationId"
-        )
-        $migrationArguments += @($migrationImage, "python", "/app/services/run_all_migrations.py")
-        $liveMutationStarted = $true
-        Invoke-DockerLogged -Arguments $migrationArguments -LogPath (Join-Path $logsDir "migration-live.log") -FailureMessage "Live migration failed"
-        $liveIssuanceUrl = "postgresql+asyncpg://marty:${martyDbPassword}@postgres:5432/marty"
-        Invoke-ComposeLogged `
-            -Arguments @("run", "--rm", "--no-deps", "--env", "DATABASE_URL=$liveIssuanceUrl", "issuance-migrations") `
-            -LogPath (Join-Path $logsDir "issuance-migration-live.log") `
-            -FailureMessage "Live issuance migration failed"
-        Invoke-ComposeLogged `
-            -Arguments @("run", "--rm", "--no-deps", "--env", "DATABASE_URL=$liveIssuanceUrl", "issuance-migrations", "python", "manage_migrations.py", "current") `
-            -LogPath (Join-Path $logsDir "issuance-migration-live-verify.log") `
-            -FailureMessage "Live issuance migration verification failed"
-        Invoke-VerificationMigration -Image $verificationMigrationImage `
-            -DatabaseUrl "postgresql://marty:${martyDbPassword}@postgres:5432/marty" `
-            -LogPath (Join-Path $logsDir "verification-migration-live.log")
-    }
-    finally {
-        if ($null -eq $previousBaoToken) {
-            Remove-Item Env:\BAO_TOKEN -ErrorAction SilentlyContinue
-        }
-        else {
-            $env:BAO_TOKEN = $previousBaoToken
-        }
-    }
+    $liveDatabaseUrl = "postgresql://marty:${martyDbPassword}@postgres:5432/marty"
+    $liveMutationStarted = $true
+    Invoke-ComposeLogged -Arguments @('run', '--rm', '--no-deps', '--env', "DATABASE_URL=$liveDatabaseUrl", 'revocation-profile-migrate') `
+        -LogPath (Join-Path $logsDir 'revocation-migration-live.log') -FailureMessage 'Native revocation migration failed'
+    $migrationArguments = @(
+        "run", "--rm", "--no-deps",
+        "--env", "DATABASE_URL=$liveDatabaseUrl",
+        "--env", "PUBLIC_API_URL=$BetaOrigin",
+        "--env", "MARTY_MIGRATION_PROFILE=beta",
+        "--env", "MARTY_KMS_BOOTSTRAP_ENABLED=false",
+        "--env", "REDIS_URL=redis://:${encodedRedisPassword}@redis:6379",
+        "--env", "MARTY_ORG_ID=$PilotOrganizationId",
+        "db-migrate"
+    )
+    $liveMutationStarted = $true
+    Invoke-ComposeLogged -Arguments $migrationArguments `
+        -LogPath (Join-Path $logsDir "migration-live.log") `
+        -FailureMessage "Live migration failed"
+    $liveIssuanceVerify = @("run", "--rm", "--no-deps", "--env", "DATABASE_URL=$liveDatabaseUrl", "issuance-migrations")
+    Invoke-ComposeLogged `
+        -Arguments @("run", "--rm", "--no-deps", "--env", "DATABASE_URL=$liveDatabaseUrl", "issuance-migrations") `
+        -LogPath (Join-Path $logsDir "issuance-migration-live.log") `
+        -FailureMessage "Live issuance migration failed"
+    Invoke-ComposeLogged `
+        -Arguments $liveIssuanceVerify `
+        -LogPath (Join-Path $logsDir "issuance-migration-live-verify.log") `
+        -FailureMessage "Live issuance migration verification failed"
+    Invoke-VerificationMigration -Image $verificationMigrationImage `
+        -DatabaseUrl $liveDatabaseUrl `
+        -LogPath (Join-Path $logsDir "verification-migration-live.log")
 
     if ($EnablePortableCanvas) {
         Write-Step "Bind Canvas LTI signing to the seeded issuer DID"
@@ -1539,19 +1838,33 @@ try {
     Write-Step "Recreate infrastructure writers from release configuration"
     Invoke-Compose -Arguments (@("up", "--detach", "--no-build", "--no-deps", "--force-recreate") + $script:InfrastructureWriterServices)
     Wait-ForServiceHealth $script:InfrastructureWriterServices
+    Invoke-ComposeLogged `
+        -Arguments @("run", "--rm", "--no-deps", "keycloak-configurator") `
+        -LogPath (Join-Path $logsDir "keycloak-configurator-kms.log") `
+        -FailureMessage "Beta Keycloak remote-key configuration failed"
+    Assert-BetaKeycloakDatabaseRemoteProviders
 
     Write-Step "Recreate application containers from coordinated images"
     $remainingServices = @($script:SelectedApplicationServices)
-    if ($EnablePassportNative) {
+    if ($EnablePassportNative -and -not $EnablePassportPhysicalProvider) {
+        # Reuse only the scoped callback path. The selfhost entrypoint refuses
+        # initialized Raft and must never be replayed on preserved beta state.
+        Assert-BetaOpenBaoRaftCustody
+        Invoke-ComposeLogged `
+            -Arguments @('run', '--rm', '--no-deps', '--entrypoint', '/bin/sh',
+                '--env', 'BAO_PASSPORT_CALLBACK_OPERATOR_TOKEN_FILE=/bao/data/root.token',
+                'openbao-init', '/scripts/openbao-init.sh', '--passport-callback-only') `
+            -LogPath (Join-Path $logsDir 'passport-callback-provision-live.log') `
+            -FailureMessage 'Scoped passport callback provisioning failed'
         $callbackServices = @("passport-callback-signer", "passport-beta-bureau")
         Invoke-Compose -Arguments (@("up", "--detach", "--no-build", "--no-deps", "--force-recreate") + $callbackServices)
-        Wait-ForServiceHealth $callbackServices
         Assert-BetaCallbackSignerNetwork -AttachOpenBao
+        Wait-ForServiceHealth $callbackServices
         $remainingServices = @($remainingServices | Where-Object { $_ -notin $callbackServices })
     }
     Invoke-Compose -Arguments (@("up", "--detach", "--no-build", "--no-deps", "--force-recreate") + $remainingServices)
     Wait-ForServiceHealth $script:SelectedApplicationServices
-    if ($EnablePassportNative) { Assert-BetaCallbackSignerNetwork }
+    if ($EnablePassportNative -and -not $EnablePassportPhysicalProvider) { Assert-BetaCallbackSignerNetwork }
 
     Write-Step "Recreate public UI from immutable image"
     $env:MARTY_UI_RELEASE_IMAGE = $uiImage
@@ -1562,6 +1875,8 @@ try {
     Wait-ForServiceHealth @("ui-prod") -Ui
 }
 catch {
+    try { Restore-BetaCallbackNetworkAttachment }
+    catch { Write-Warning "Callback network recovery requires explicit inspection: $($_.Exception.Message)" }
     if ($maintenanceStarted -and -not $liveMutationStarted) {
         Start-ContainersBestEffort $maintenanceContainers
         try {
@@ -1570,11 +1885,11 @@ catch {
             Write-Warning "Deployment failed before live mutation. The exact previously running beta container set was restored."
         }
         catch {
-            Write-Warning "Automatic beta recovery could not verify the exact prior container set. The mutation marker remains; inspect beta state and use supervised restore. $($_.Exception.Message)"
+            Write-Warning "Automatic beta recovery could not verify the exact prior container set. The mutation marker remains; inspect beta state before retrying. $($_.Exception.Message)"
         }
     }
     else {
-        Write-Warning "Deployment failed after live mutation began. Run the supervised beta-only command in $script:ArtifactDir\supervised-recovery.txt before resuming service."
+        Write-Warning "Deployment failed after live mutation began. Keep beta in maintenance and preserve the snapshot and jobs. This local runner cannot resume or restore the mutated state; do not rerun it. Diagnose beta state and prepare a reviewed Rust-only forward repair before resuming passport writes."
     }
     throw
 }

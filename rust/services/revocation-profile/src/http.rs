@@ -80,6 +80,15 @@ impl InternalServiceAuth {
             ))
         }
     }
+
+    fn authorize_required(&self, headers: &HeaderMap) -> Result<(), ApiError> {
+        if self.expected_token.is_none() {
+            return Err(ApiError::Unauthorized(
+                "Internal service token is not configured".into(),
+            ));
+        }
+        self.authorize(headers)
+    }
 }
 
 #[derive(Clone)]
@@ -118,6 +127,7 @@ impl RevocationProfileHttp {
 
     pub fn router(self) -> Router {
         Router::new()
+            .route("/internal/v1/resource-owners/revocation-profiles/{profile_id}", get(resource_owner))
             .route(
                 "/v1/revocation-profiles",
                 post(create_profile).get(list_profiles),
@@ -125,6 +135,10 @@ impl RevocationProfileHttp {
             .route(
                 "/v1/revocation-profiles/{profile_id}",
                 get(get_profile).delete(delete_profile),
+            )
+            .route(
+                "/internal/revocation-profiles/{profile_id}/issuance-context",
+                get(get_internal_issuance_context),
             )
             .route(
                 "/v1/revocation-profiles/{profile_id}/activate",
@@ -179,12 +193,51 @@ impl RevocationProfileHttp {
         organization_id: &str,
         action: &str,
     ) -> Result<(), ApiError> {
+        let is_key =
+            headers.contains_key("x-api-key-id") || headers.contains_key("x-api-key-scopes");
+        if is_key {
+            self.internal_auth.authorize_required(headers)?;
+            let header = |name: &str| {
+                headers
+                    .get(name)
+                    .and_then(|value| value.to_str().ok())
+                    .map(str::trim)
+                    .unwrap_or_default()
+            };
+            let actor = marty_api_key_policy::GatewayApiKeyActor::parse(
+                header("x-api-key-id"),
+                header("x-organization-id"),
+                header("x-api-key-scopes"),
+            )
+            .map_err(|_| ApiError::Unauthorized("Invalid gateway principal".into()))?;
+            return if actor.authorizes(
+                &actor.principal_id(),
+                organization_id,
+                &format!("{RESOURCE}:{action}"),
+            ) {
+                Ok(())
+            } else {
+                Err(ApiError::Authorization(AuthorizationError::Denied))
+            };
+        }
         let user_id = current_user_id(headers)?;
         self.authorization
             .require_permission(user_id, organization_id, RESOURCE, action)
             .await
             .map_err(ApiError::Authorization)
     }
+}
+
+async fn resource_owner(
+    State(state): State<RevocationProfileHttp>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    state.internal_auth.authorize_required(&headers)?;
+    let profile = state.service.get(&id).await?;
+    Ok(Json(
+        json!({"id": profile.id, "organization_id": profile.organization_id}),
+    ))
 }
 
 #[derive(Debug, Deserialize)]
@@ -537,6 +590,13 @@ struct IssuerConfigResponse {
 }
 
 #[derive(Debug, Serialize)]
+struct IssuanceReadinessProfileResponse {
+    id: String,
+    organization_id: String,
+    status: String,
+}
+
+#[derive(Debug, Serialize)]
 struct ProfileResponse {
     id: String,
     organization_id: String,
@@ -706,6 +766,20 @@ async fn get_profile(
         .authorize(&headers, &profile.organization_id, "view")
         .await?;
     Ok(Json(ProfileResponse::from_profile(&state.service, profile)))
+}
+
+async fn get_internal_issuance_context(
+    State(state): State<RevocationProfileHttp>,
+    Path(profile_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<IssuanceReadinessProfileResponse>, ApiError> {
+    state.internal_auth.authorize_required(&headers)?;
+    let profile = state.service.get(&profile_id).await?;
+    Ok(Json(IssuanceReadinessProfileResponse {
+        id: profile.id,
+        organization_id: profile.organization_id,
+        status: profile.status.as_str().to_ascii_uppercase(),
+    }))
 }
 
 async fn activate_profile(
@@ -1261,7 +1335,8 @@ fn parse_timing_mode(value: &str) -> Result<RevocationTimingMode, ApiError> {
 
 fn current_user_id(headers: &HeaderMap) -> Result<&str, ApiError> {
     headers
-        .get("x-user-id")
+        .get("x-api-key-id")
+        .or_else(|| headers.get("x-user-id"))
         .and_then(|value| value.to_str().ok())
         .filter(|value| !value.trim().is_empty())
         .ok_or_else(|| {
@@ -1394,6 +1469,120 @@ mod tests {
         RevocationProfileHttp::new(service, authorization).router()
     }
 
+    #[tokio::test]
+    async fn gateway_reader_requires_service_auth_and_scope_without_becoming_a_human_member() {
+        const ORG: &str = "20000000-0000-4000-8000-000000000001";
+        const KEY: &str = "10000000-0000-4000-8000-000000000001";
+        let authorization = Arc::new(RecordingAuthorization {
+            denied: true,
+            ..Default::default()
+        });
+        let service = RevocationProfileService::new(
+            Arc::new(InMemoryProfileRepository::default()),
+            Arc::new(InMemoryStatusRepository::default()),
+            "https://status.example.com",
+        )
+        .unwrap();
+        let profile = service
+            .create(NewProfile {
+                organization_id: ORG.into(),
+                name: "Scoped reader".into(),
+                description: None,
+                issuer_config: None,
+                verifier_config: None,
+                automation_config: None,
+                supported_formats: None,
+            })
+            .await
+            .unwrap();
+        let token = "s".repeat(32);
+        let app = RevocationProfileHttp::new(service.clone(), authorization.clone())
+            .with_internal_service_token(Some(token.clone()))
+            .unwrap()
+            .router();
+        for (suffix, scopes, organization, supplied, expected) in [
+            ("", "trust:read", ORG, token.as_str(), StatusCode::OK),
+            ("", "trust:read", ORG, "", StatusCode::UNAUTHORIZED),
+            ("", "trust:read", ORG, "wrong", StatusCode::UNAUTHORIZED),
+            (
+                "",
+                "templates:read",
+                ORG,
+                token.as_str(),
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                "",
+                "trust:read",
+                "20000000-0000-4000-8000-000000000002",
+                token.as_str(),
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                "/activate",
+                "trust:read",
+                ORG,
+                token.as_str(),
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                "/activate",
+                "trust:write",
+                ORG,
+                token.as_str(),
+                StatusCode::FORBIDDEN,
+            ),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(if suffix.is_empty() { "GET" } else { "POST" })
+                        .uri(format!("/v1/revocation-profiles/{}{suffix}", profile.id))
+                        .header("x-service-token", supplied)
+                        .header("x-api-key-id", KEY)
+                        .header("x-api-key-scopes", scopes)
+                        .header("x-organization-id", organization)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                expected,
+                "{suffix} {scopes} {organization}"
+            );
+        }
+        assert!(authorization.calls.lock().unwrap().is_empty());
+        for (supplied, expected) in [
+            ("", StatusCode::UNAUTHORIZED),
+            (token.as_str(), StatusCode::OK),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(format!(
+                            "/internal/v1/resource-owners/revocation-profiles/{}",
+                            profile.id
+                        ))
+                        .header("x-service-token", supplied)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), expected);
+            if expected == StatusCode::OK {
+                assert_eq!(
+                    json_response(response).await,
+                    json!({"id": profile.id, "organization_id": ORG})
+                );
+            }
+        }
+    }
+
     async fn json_response(response: Response) -> Value {
         let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
@@ -1414,6 +1603,7 @@ mod tests {
                 json!({
                     "organization_id": "org-1",
                     "name": "Canonical revocation profile",
+                    "supported_formats": ["JSON_LD"],
                     "revocation_mechanism": ["OCSP", "BITSTRING_STATUS_LIST"],
                     "mechanism_priority": ["OCSP", "BITSTRING_STATUS_LIST"],
                     "check_mode": "OFFLINE_GRACE",
@@ -1551,6 +1741,8 @@ mod tests {
         )
         .unwrap();
         let token = "s".repeat(48);
+        let app_without_service_token =
+            RevocationProfileHttp::new(service.clone(), authorization.clone()).router();
         let app = RevocationProfileHttp::new(service, authorization)
             .with_internal_service_token(Some(token.clone()))
             .unwrap()
@@ -1568,6 +1760,63 @@ mod tests {
         let response = app.clone().oneshot(create).await.unwrap();
         let body = json_response(response).await;
         let profile_id = body["id"].as_str().unwrap().to_string();
+
+        let public_read_with_service_token = Request::builder()
+            .method("GET")
+            .uri(format!("/v1/revocation-profiles/{profile_id}"))
+            .header(SERVICE_TOKEN_HEADER, &token)
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.clone()
+                .oneshot(public_read_with_service_token)
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        let internal_read_uri =
+            format!("/internal/revocation-profiles/{profile_id}/issuance-context");
+        let unconfigured_read = Request::builder()
+            .method("GET")
+            .uri(&internal_read_uri)
+            .header(SERVICE_TOKEN_HEADER, &token)
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app_without_service_token
+                .oneshot(unconfigured_read)
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        for supplied_token in [None, Some("wrong-token")] {
+            let mut request = Request::builder().method("GET").uri(&internal_read_uri);
+            if let Some(supplied_token) = supplied_token {
+                request = request.header(SERVICE_TOKEN_HEADER, supplied_token);
+            }
+            assert_eq!(
+                app.clone()
+                    .oneshot(request.body(Body::empty()).unwrap())
+                    .await
+                    .unwrap()
+                    .status(),
+                StatusCode::UNAUTHORIZED
+            );
+        }
+        let internal_read = Request::builder()
+            .method("GET")
+            .uri(&internal_read_uri)
+            .header(SERVICE_TOKEN_HEADER, &token)
+            .body(Body::empty())
+            .unwrap();
+        let response = app.clone().oneshot(internal_read).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            json_response(response).await,
+            json!({"id": profile_id, "organization_id": "org-1", "status": "DRAFT"})
+        );
 
         let legacy_allocate_uri =
             format!("/internal/revocation-profiles/{profile_id}/allocate-index");

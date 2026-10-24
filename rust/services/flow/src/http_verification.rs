@@ -1,5 +1,6 @@
+use crate::http_read::FlowRequestState;
 use axum::{
-    extract::{Form, Path, Query, State},
+    extract::{Form, Path, Query},
     http::{header, HeaderMap, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -99,7 +100,7 @@ pub(crate) fn flow_verification_routes() -> Router<FlowHttpState> {
 }
 
 async fn oid4vp_did_document(
-    State(state): State<FlowHttpState>,
+    FlowRequestState(state): FlowRequestState,
 ) -> Result<Response, FlowHttpError> {
     let options = &state.verification;
     let signing =
@@ -147,7 +148,7 @@ async fn oid4vp_did_document(
 }
 
 async fn start_verification(
-    State(state): State<FlowHttpState>,
+    FlowRequestState(state): FlowRequestState,
     headers: HeaderMap,
     Json(payload): Json<Value>,
 ) -> Result<Json<Value>, FlowHttpError> {
@@ -171,7 +172,7 @@ async fn start_verification(
 }
 
 async fn start_siop(
-    State(state): State<FlowHttpState>,
+    FlowRequestState(state): FlowRequestState,
     headers: HeaderMap,
     Json(payload): Json<Value>,
 ) -> Result<Json<Value>, FlowHttpError> {
@@ -252,7 +253,7 @@ struct RequestObjectForm {
 }
 
 async fn get_request_object(
-    State(state): State<FlowHttpState>,
+    FlowRequestState(state): FlowRequestState,
     Path(instance_id): Path<String>,
     Query(query): Query<RequestObjectQuery>,
 ) -> Result<Response, FlowHttpError> {
@@ -267,7 +268,7 @@ async fn get_request_object(
 }
 
 async fn post_request_object(
-    State(state): State<FlowHttpState>,
+    FlowRequestState(state): FlowRequestState,
     Path(instance_id): Path<String>,
     Query(query): Query<RequestObjectQuery>,
     Form(form): Form<RequestObjectForm>,
@@ -374,7 +375,7 @@ struct DirectPostForm {
 }
 
 async fn submit_direct_post(
-    State(state): State<FlowHttpState>,
+    FlowRequestState(state): FlowRequestState,
     Path(instance_id): Path<String>,
     Form(form): Form<DirectPostForm>,
 ) -> Result<Json<Value>, FlowHttpError> {
@@ -419,6 +420,7 @@ async fn direct_post_input(
         ));
     }
     if let Some(response) = response {
+        reject_unactionable_encrypted_submission(state, &instance).await?;
         let decrypted =
             decrypt_verification_response(&state.providers, &instance, &response).await?;
         let vp_token = decrypted.get("vp_token").cloned().ok_or_else(|| {
@@ -457,7 +459,7 @@ async fn direct_post_input(
 }
 
 async fn submit_dc_api(
-    State(state): State<FlowHttpState>,
+    FlowRequestState(state): FlowRequestState,
     Path(instance_id): Path<String>,
     headers: HeaderMap,
     Json(payload): Json<Value>,
@@ -478,6 +480,7 @@ async fn submit_dc_api(
         .and_then(Value::as_str)
         .map(str::to_owned)
     {
+        reject_unactionable_encrypted_submission(&state, &instance).await?;
         data = decrypt_verification_response(&state.providers, &instance, &response).await?;
         response_mode = Some(DC_API_RESPONSE_MODE);
     }
@@ -633,7 +636,7 @@ async fn commit_verification(
 }
 
 async fn submit_siop(
-    State(state): State<FlowHttpState>,
+    FlowRequestState(state): FlowRequestState,
     Json(payload): Json<Value>,
 ) -> Result<Json<Value>, FlowHttpError> {
     let request: SiopSubmitRequest = parse_request(payload)?;
@@ -706,6 +709,38 @@ async fn persist_expired(
     } else {
         Err(replay_conflict())
     }
+}
+
+async fn reject_unactionable_encrypted_submission(
+    state: &FlowHttpState,
+    instance: &crate::FlowInstanceRecord,
+) -> Result<(), FlowHttpError> {
+    use marty_verification::flow::FlowInstanceStatus;
+
+    if instance.status == FlowInstanceStatus::Cancelled {
+        return Err(FlowVerificationSubmissionError::InvalidState.into());
+    }
+    if !matches!(
+        instance.status,
+        FlowInstanceStatus::AwaitingWallet | FlowInstanceStatus::InProgress
+    ) {
+        return Ok(());
+    }
+    let now = Utc::now().max(instance.updated_at + Duration::microseconds(1));
+    if instance
+        .expires_at
+        .is_none_or(|expires_at| now < expires_at)
+    {
+        return Ok(());
+    }
+    let mut expired = instance.clone();
+    crate::verification_submission::expire_submission(&mut expired, now, "submission_expired")?;
+    persist_expired(state, &expired, instance.status, instance.updated_at).await?;
+    Err(FlowHttpError::new(
+        StatusCode::GONE,
+        "verification_submission_expired",
+        "Verification transaction has expired",
+    ))
 }
 
 fn token_string(value: Value) -> Result<String, FlowHttpError> {

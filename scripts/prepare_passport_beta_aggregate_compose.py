@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import hmac
 import json
 import os
 from pathlib import Path
@@ -42,20 +41,20 @@ except ImportError:
 
 
 SERVICES_IMAGE = "ghcr.io/elevenid/marty-ui-oss/services@sha256:"
-ISSUANCE_IMAGE = "ghcr.io/elevenid/marty-credentials-issuance@sha256:"
 UI_IMAGE = "ghcr.io/elevenid/marty-ui-oss/ui@sha256:"
 SIGNED_APPLICATIONS = frozenset({
     "auth", "organization", "credential-template", "trust-profile", "applicant",
     "notification", "compliance-profile", "presentation-policy", "deployment-profile",
     "signing-keys", "flow", "verification", "revocation-profile",
     "device-registration", "event-stream", "issuance-native", "canvas-sync-worker",
-    "gateway", "passport-callback-signer", "passport-beta-bureau",
+    "gateway", "passport-callback-signer", "passport-beta-bureau", "canvas-sandbox",
 })
 # Gateway binds only the beta host loopback port in this render. Start it with
 # Rust applications so private Flow routes can be proved while the public edge
 # remains stopped.
 INGRESS = frozenset({"cloudflared", "nginx-proxy", "envoy", "waltid-nginx"})
 NEW_SERVICES = frozenset({"passport-callback-signer", "passport-beta-bureau"})
+OPTIONAL_LOCALHOST_BRIDGE = "issuance-canvas-localhost-bridge"
 TRANSITION_SQL_FILES = {
     "transition_sql_sha256": "passport-beta-rust-owner-transition.sql",
     "rust_owner_verify_sql_sha256": "passport-beta-rust-owner-verify.sql",
@@ -80,17 +79,9 @@ RUNTIME_ENV = {
                         "PASSPORT_KMS_ARTIFACTS_ENABLED": "true",
                         "PASSPORT_KMS_CALLBACKS_ENABLED": "true",
                         "MARTY_SCHEMA_STARTUP_MODE": "validate",
-                        "PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED": "false",
-                        "PHYSICAL_DOCUMENT_ARTIFACT_KEY": "",
-                        "PHYSICAL_DOCUMENT_ARTIFACT_KEY_FILE": "",
-                        "ICAO_DOCUMENT_SIGNER_URL": "",
-                        "ICAO_DOCUMENT_SIGNER_API_KEY": "",
-                        "ICAO_DOCUMENT_SIGNER_API_KEY_FILE": "",
                         "PERSONALIZATION_BUREAU_URL": "http://passport-beta-bureau:8020",
                         "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID": "passport-beta-bureau",
                         "PERSONALIZATION_BUREAU_API_KEY_FILE": "",
-                        "PERSONALIZATION_BUREAU_WEBHOOK_SECRET": "",
-                        "PERSONALIZATION_BUREAU_WEBHOOK_SECRET_FILE": "",
                         "PASSPORT_TENANT_API_KEYS": "",
                         "PASSPORT_TENANT_API_KEYS_FILE": ""},
     "passport-callback-signer": {"PASSPORT_CALLBACK_SIGNER_ENABLED": "true"},
@@ -208,9 +199,35 @@ def image_override(handoff: dict[str, Any]) -> str:
         rows.extend((f"  {name}:", "    image: ${MARTY_SERVICES_IMAGE}",
                      "    environment:",
                      f"      SERVICE_NAME: {name.replace('-', '_')}"))
-    rows.extend(("  issuance:", "    image: ${MARTY_ISSUANCE_IMAGE}"))
-    require(handoff.get("services_image") and handoff.get("issuance_image"),
-            "Signed aggregate image references are absent")
+        if name == "canvas-sandbox":
+            rows.extend(("    build: !reset null",
+                         "    entrypoint: [/usr/local/bin/marty-canvas-sandbox]",
+                         "    command: []"))
+        if name == "issuance-native":
+            rows.extend(("      ENVIRONMENT: beta",
+                         "      GRPC_INSECURE_ALLOWED: 'true'"))
+    # Keep the alias and migrator on the same signed Rust services artifact.
+    rows.extend(("  issuance:", "    image: ${MARTY_SERVICES_IMAGE}",
+                 "    build: !reset null",
+                 "    entrypoint: [/usr/local/bin/marty-issuance-service]",
+                 "    command: []", "    environment:",
+                 "      SERVICE_NAME: issuance_native",
+                 "      ENVIRONMENT: beta",
+                 "      GRPC_INSECURE_ALLOWED: 'true'",
+                 "      MARTY_SCHEMA_STARTUP_MODE: validate",
+                 "      CANVAS_MIRROR_WORKER_ENABLED: 'false'",
+                 "  issuance-migrations:",
+                 "    image: ${MARTY_SERVICES_IMAGE}", "    build: !reset null",
+                 "    entrypoint: [/usr/local/bin/marty-issuance-service]",
+                 "    command: [verify-owned-schema]", "    environment:",
+                 "      SERVICE_NAME: issuance_native",
+                 "      DATABASE_URL: postgresql://marty:${MARTY_DB_PASSWORD:-marty_dev_password}@postgres:5432/marty",
+                 "    depends_on:",
+                 "      organization: {condition: service_healthy}",
+                 "      credential-template: {condition: service_healthy}"))
+    require(handoff.get("services_image")
+            and handoff.get("issuance_image") == handoff["services_image"],
+            "Signed aggregate Rust image reference is absent or inconsistent")
     return "\n".join(rows) + "\n"
 
 
@@ -235,7 +252,6 @@ def render_candidate(handoff: dict[str, Any]) -> tuple[dict[str, Any], dict[str,
                           **build_only,
                           "MARTY_DOCS_IMAGE": docs_image,
                           "MARTY_SERVICES_IMAGE": handoff["services_image"],
-                          "MARTY_ISSUANCE_IMAGE": handoff["issuance_image"],
                           "MARTY_UI_RELEASE_IMAGE": handoff["ui_image"],
                           "MARTY_NETWORK_NAME": "elevenid-beta-network"}
     env_args = [part for relative in ENV_FILES
@@ -302,7 +318,7 @@ def preflight_maintenance_compose(stack_manifest: Path, source_commit: str,
             and CONTAINER.fullmatch(docs_container_id) is not None
             and DIGEST.fullmatch(docs_image_id) is not None,
             "Beta maintenance preflight identities are invalid")
-    signed = manifest_source(stack_manifest, source_commit)
+    signed = manifest_source(stack_manifest, source_commit, rust_only=True)
     docs = inspect(docs_container_id, run)
     config = docs.get("Config")
     labels = config.get("Labels") if isinstance(config, dict) else None
@@ -317,7 +333,7 @@ def preflight_maintenance_compose(stack_manifest: Path, source_commit: str,
             "Preserved beta docs image changed before maintenance")
     handoff = {
         "services_image": signed["services_image"],
-        "issuance_image": signed["issuance_image"],
+        "issuance_image": signed["services_image"],
         "ui_image": f"{UI_IMAGE}{signed['oci_digests']['ghcr.io/elevenid/marty-ui-oss/ui'].split(':', 1)[1]}",
         "build_only_artifacts": signed["build_only_artifacts"],
         "docs_image": docs_image,
@@ -343,9 +359,7 @@ def prepare(handoff: dict[str, Any], maintenance_intent: dict[str, Any],
             and DIGEST.fullmatch(str(handoff.get("services_image", "")).split("@")[-1])
                 is not None
             and str(handoff.get("services_image", "")).startswith(SERVICES_IMAGE)
-            and str(handoff.get("issuance_image", "")).startswith(ISSUANCE_IMAGE)
-            and DIGEST.fullmatch(str(handoff.get("issuance_image", "")).split("@")[-1])
-                is not None
+            and handoff.get("issuance_image") == handoff["services_image"]
             and str(handoff.get("ui_image", "")).startswith(UI_IMAGE)
             and DIGEST.fullmatch(str(handoff.get("ui_image", "")).split("@")[-1])
                 is not None,
@@ -383,6 +397,8 @@ def prepare(handoff: dict[str, Any], maintenance_intent: dict[str, Any],
                 and item["service"] not in previous,
                 "Beta maintenance generation has ambiguous services")
         previous[item["service"]] = item["container_id"]
+    require(OPTIONAL_LOCALHOST_BRIDGE not in previous,
+            "Optional Canvas localhost bridge cannot enter signed aggregate beta generation")
     require("postgres" in previous
             and (SIGNED_APPLICATIONS - NEW_SERVICES | {"issuance"}).issubset(previous)
             and not (NEW_SERVICES & previous.keys()),
@@ -402,6 +418,14 @@ def prepare(handoff: dict[str, Any], maintenance_intent: dict[str, Any],
         env = environment(service)
         require(env.get("SERVICE_NAME") == name.replace("-", "_"),
                 f"Rendered beta service dispatch differs: {name}")
+        if name == "issuance-native":
+            for key in ("PHYSICAL_DOCUMENT_ARTIFACT_KEY",
+                        "PHYSICAL_DOCUMENT_ARTIFACT_KEY_FILE",
+                        "PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED",
+                        "PERSONALIZATION_BUREAU_WEBHOOK_SECRET",
+                        "PERSONALIZATION_BUREAU_WEBHOOK_SECRET_FILE"):
+                require(key not in env,
+                        f"Rendered beta Rust selector differs: {name}.{key}")
         for key, expected in RUNTIME_ENV.get(name, {}).items():
             require(env.get(key) == expected,
                     f"Rendered beta Rust selector differs: {name}.{key}")
@@ -421,7 +445,7 @@ def prepare(handoff: dict[str, Any], maintenance_intent: dict[str, Any],
             and signing_network.get("name") == "elevenid-beta-passport-callback-signing"
             and signing_network.get("internal") is True,
             "Passport callback signing network is not isolated")
-    for name in SIGNED_APPLICATIONS - {"issuance-native", "canvas-sync-worker"}:
+    for name in SIGNED_APPLICATIONS - {"issuance-native", "canvas-sync-worker", "canvas-sandbox"}:
         require(not services[name].get("entrypoint") and not services[name].get("command"),
                 f"Rendered beta service overrides signed dispatch: {name}")
     require(services["issuance-native"].get("entrypoint")
@@ -432,10 +456,37 @@ def prepare(handoff: dict[str, Any], maintenance_intent: dict[str, Any],
             == ["/usr/local/bin/marty-canvas-sync-worker"]
             and not services["canvas-sync-worker"].get("entrypoint"),
             "Canvas worker command differs")
+    sandbox = services["canvas-sandbox"]
+    require(sandbox.get("entrypoint") == ["/usr/local/bin/marty-canvas-sandbox"]
+            and sandbox.get("command") == []
+            and not sandbox.get("build")
+            and sandbox.get("healthcheck", {}).get("test")
+                == ["CMD", "curl", "-fsS", "http://localhost:8017/health"],
+            "Rendered beta Canvas sandbox is not the signed Rust runtime")
     issuance = services.get("issuance")
     require(isinstance(issuance, dict)
-            and issuance.get("image") == handoff["issuance_image"],
-            "Rendered beta issuance image differs from signed release")
+            and issuance.get("image") == handoff["services_image"]
+            and issuance.get("entrypoint")
+                == ["/usr/local/bin/marty-issuance-service"]
+            and issuance.get("command") == []
+            and environment(issuance).get("SERVICE_NAME") == "issuance_native"
+            and environment(issuance).get("MARTY_SCHEMA_STARTUP_MODE") == "validate"
+            and environment(issuance).get("CANVAS_MIRROR_WORKER_ENABLED") == "false",
+            "Rendered beta issuance image differs from signed Rust release")
+    migrations = services.get("issuance-migrations")
+    require(isinstance(migrations, dict)
+            and migrations.get("image") == handoff["services_image"]
+            and migrations.get("entrypoint")
+                == ["/usr/local/bin/marty-issuance-service"]
+            and migrations.get("command") == ["verify-owned-schema"]
+            and environment(migrations).get("SERVICE_NAME") == "issuance_native"
+            and str(environment(migrations).get("DATABASE_URL", "")).startswith(
+                "postgresql://")
+            and migrations.get("depends_on", {}).get("organization", {}).get("condition")
+                == "service_healthy"
+            and migrations.get("depends_on", {}).get("credential-template", {}).get("condition")
+                == "service_healthy",
+            "Rendered beta issuance migrator differs from signed Rust release")
     for name in ("passport-provider-ingress", "passport-callback-signer-supported"):
         require(name not in services,
                 "External physical provider profile entered synthetic beta Compose")
@@ -554,8 +605,8 @@ def verify_render_plan(recorded: dict[str, Any]) -> dict[str, Any]:
             "ui_render_sha256": fresh["ui_render_sha256"]}
 
 
-def verify_preserved_openbao_token(recorded: dict[str, Any]) -> dict[str, Any]:
-    """Match the new signer token to the still-running beta OpenBao without logging it."""
+def verify_preserved_openbao_custody(recorded: dict[str, Any]) -> dict[str, Any]:
+    """Bind the next signer to the preserved Raft state without reading a secret."""
     verify_render_plan(recorded)
     rendered, _, _ = render_candidate(recorded)
     old = recorded.get("old_container_ids_by_service")
@@ -569,16 +620,30 @@ def verify_preserved_openbao_token(recorded: dict[str, Any]) -> dict[str, Any]:
             and isinstance(raw_env, list)
             and all(isinstance(value, str) and "=" in value for value in raw_env),
             "Preserved OpenBao environment is invalid")
-    token_rows = [value.split("=", 1)[1] for value in raw_env
-                  if value.startswith("BAO_DEV_ROOT_TOKEN_ID=")]
     services = rendered.get("services")
+    require(isinstance(services, dict), "Rendered beta service graph is invalid")
     signer = services.get("passport-callback-signer") if isinstance(services, dict) else None
-    signer_token = environment(signer).get("BAO_TOKEN") if isinstance(signer, dict) else None
-    require(len(token_rows) == 1 and bool(token_rows[0])
-            and isinstance(signer_token, str) and bool(signer_token)
-            and hmac.compare_digest(token_rows[0], signer_token),
-            "New callback signer token differs from preserved OpenBao")
-    return {"schema": "marty.passport-beta-openbao-token-check/v1", "verified": True,
+    bootstrap = services.get("openbao-init")
+    require(isinstance(signer, dict) and isinstance(bootstrap, dict),
+            "Rendered beta KMS roles are incomplete")
+    signer_env = environment(signer)
+    bootstrap_env = environment(bootstrap)
+    require(not any(row.startswith(("BAO_DEV_ROOT_TOKEN_ID=", "BAO_TOKEN=", "VAULT_TOKEN="))
+                    for row in raw_env)
+            and config.get("Cmd") == ["server", "-config=/bao/config/openbao.hcl"]
+            and any(isinstance(mount, dict)
+                    and mount.get("Type") == "volume"
+                    and mount.get("Destination") == "/bao/data"
+                    and mount.get("Name") == "elevenid-beta_openbao_data"
+                    for mount in bao.get("Mounts", []))
+            and signer_env.get("BAO_ADDR") == "https://openbao:8200"
+            and signer_env.get("BAO_CACERT") == "/bao/public-ca/ca.crt"
+            and signer_env.get("BAO_TOKEN_FILE") == "/bao/passport-callback/token"
+            and not signer_env.get("BAO_TOKEN")
+            and bootstrap_env.get("BAO_PASSPORT_CALLBACK_TOKEN_FILE")
+                == "/bao/passport-callback/token",
+            "Preserved OpenBao is not the scoped Raft callback KMS")
+    return {"schema": "marty.passport-beta-openbao-custody-check/v1", "verified": True,
             "source_commit": recorded["source_commit"]}
 
 
@@ -593,10 +658,10 @@ def verify_resume_plan(
                 and recorded[field] == file_sha256(ROOT / "scripts/sql" / filename),
                 f"Aggregate resume Rust owner SQL changed: {filename}")
     source = recorded["source_commit"]
-    signed = manifest_source(stack_manifest, source)
+    signed = manifest_source(stack_manifest, source, rust_only=True)
     require(signed["manifest_sha256"] == recorded.get("stack_manifest_sha256")
             and signed["services_image"] == recorded.get("services_image")
-            and signed["issuance_image"] == recorded.get("issuance_image")
+            and signed["services_image"] == recorded.get("issuance_image")
             and (UI_IMAGE + signed["oci_digests"]["ghcr.io/elevenid/marty-ui-oss/ui"].split(":", 1)[1])
                 == recorded.get("ui_image")
             and file_sha256(fence_receipt) == recorded.get("fence_receipt_sha256")
@@ -738,8 +803,7 @@ def verify_resume_plan(
                     require(state.get("Running") is False,
                             "Stopped old beta application restarted during resume")
                 else:
-                    expected = (recorded["issuance_image"] if service == "issuance"
-                                else recorded["services_image"])
+                    expected = recorded["services_image"]
                     config = container.get("Config")
                     require(isinstance(config, dict)
                             and config.get("Image") == expected,
@@ -860,6 +924,9 @@ def verify_resume_plan(
 
 
 def main() -> None:
+    raise SystemExit(
+        "Historical passport beta aggregate Compose path is retired; use fresh Rust deployment"
+    )
     parser = argparse.ArgumentParser()
     parser.add_argument("--stack-manifest", required=True, type=Path)
     parser.add_argument("--fence-receipt", type=Path)
@@ -870,7 +937,7 @@ def main() -> None:
     parser.add_argument("--preflight-maintenance-docs-image")
     parser.add_argument("--verify-plan", type=Path)
     parser.add_argument("--verify-render-plan", type=Path)
-    parser.add_argument("--verify-openbao-token", type=Path)
+    parser.add_argument("--verify-openbao-custody", type=Path)
     parser.add_argument("--verify-resume-plan", type=Path)
     args = parser.parse_args()
     try:
@@ -906,13 +973,13 @@ def main() -> None:
             result = verify_resume_plan(recorded, intent, args.stack_manifest,
                                         args.fence_receipt, args.maintenance_receipt,
                                         args.native_receipt)
-        elif args.verify_openbao_token:
+        elif args.verify_openbao_custody:
             require(all((args.fence_receipt, args.maintenance_receipt,
                          args.native_receipt)),
                     "Aggregate Compose receipts are absent")
-            recorded = json.loads(args.verify_openbao_token.read_text(encoding="utf-8"))
+            recorded = json.loads(args.verify_openbao_custody.read_text(encoding="utf-8"))
             require(isinstance(recorded, dict), "Recorded Compose plan is invalid")
-            result = verify_preserved_openbao_token(recorded)
+            result = verify_preserved_openbao_custody(recorded)
         elif args.verify_render_plan:
             require(all((args.fence_receipt, args.maintenance_receipt,
                          args.native_receipt)),

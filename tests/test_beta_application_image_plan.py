@@ -7,6 +7,7 @@ from pathlib import Path
 import runpy
 import shutil
 import subprocess
+import tempfile
 
 import pytest
 
@@ -38,6 +39,8 @@ def synthetic_base():
         "future_field": {"preserved": True},
         "build": {"context": ".", "args": {"SERVICE_NAME": "unchanged"}},
     }
+
+
     services = {
         name: deepcopy(common)
         for name in (
@@ -51,10 +54,32 @@ def synthetic_base():
     services["canvas-sync-worker"]["command"] = [
         "/usr/local/bin/marty-canvas-sync-worker",
     ]
+    services["issuance"]["build"] = {
+        "context": ".", "dockerfile": "services/Dockerfile",
+        "args": {"SERVICE_NAME": "issuance-native"},
+    }
     return {
         "services": services,
         "secrets": {"synthetic-key": {"file": "synthetic-file"}},
     }
+
+
+@pytest.mark.parametrize("mode", ["local", "official"])
+def test_beta_issuance_stays_rust_owned_even_with_retired_selector(gate, mode):
+    case = gate["inputs"](mode)
+    case["rust_issuance"] = False
+    with tempfile.TemporaryDirectory() as directory:
+        report = gate["exercise"](Path(directory), [case])[0]
+    assert not report["caught"]
+    alias = next(row for row in report["plan"] if row["service"] == "issuance")
+    assert alias["artifact_role"] == ("services" if mode == "official" else "local")
+    assert alias["image_expression"] == (
+        "${MARTY_SERVICES_IMAGE}" if mode == "official"
+        else f"elevenid-local/issuance:{gate['RELEASE']}"
+    )
+    assert alias["build_eligible"] is (mode == "local")
+    assert any("issuance-migrations:" in line for line in report["lines"])
+    assert any("marty-issuance-service" in line for line in report["lines"])
 
 
 @pytest.mark.parametrize("mode", ["local", "official"])
@@ -63,18 +88,43 @@ def test_expected_projection_preserves_all_nonselection_fields(gate, mode):
     names = [name for name in base["services"] if name != "issuance-migrations"]
     actual = gate["expected_model"](base, names, mode)
     assert base == synthetic_base()
-    assert (
-        actual["services"]["issuance-migrations"]
-        == base["services"]["issuance-migrations"]
+    migrator = deepcopy(base["services"]["issuance-migrations"])
+    migrator["image"] = actual["services"]["issuance"]["image"]
+    migrator.pop("build")
+    migrator["entrypoint"] = ["/usr/local/bin/marty-issuance-service"]
+    migrator["command"] = ["migrate"]
+    migrator["environment"].update(
+        SERVICE_NAME="issuance_native",
+        DATABASE_URL="postgresql://marty:${MARTY_DB_PASSWORD:-marty_dev_password}@postgres:5432/marty",
     )
+    migrator["depends_on"].update({
+        "organization": {"condition": "service_healthy", "required": True},
+        "credential-template": {"condition": "service_healthy", "required": True},
+    })
+    assert actual["services"]["issuance-migrations"] == migrator
     for name in names:
         original = deepcopy(base["services"][name])
         projected = deepcopy(actual["services"][name])
         del original["image"], projected["image"]
+        if name == "issuance":
+            if mode == "official":
+                assert "build" not in projected
+                original.pop("build")
+            else:
+                assert projected["build"] == {
+                    "context": ".",
+                    "dockerfile": "services/Dockerfile",
+                    "args": ["SERVICE_NAME=issuance-native"],
+                }
+                projected["build"] = original["build"]
+            projected["entrypoint"] = original["entrypoint"]
+            projected["command"] = original["command"]
+            assert projected["environment"].pop("SERVICE_NAME") == "issuance_native"
+            assert projected["environment"].pop("MARTY_SCHEMA_STARTUP_MODE") == "validate"
+            assert projected["environment"].pop("CANVAS_MIRROR_WORKER_ENABLED") == "false"
         if mode == "official" and name not in gate["EXTERNAL"]:
-            assert projected["environment"].pop("SERVICE_NAME") == name.replace(
-                "-", "_"
-            )
+            if name != "issuance":
+                assert projected["environment"].pop("SERVICE_NAME") == name.replace("-", "_")
         assert projected == original
 
 
@@ -101,9 +151,10 @@ def test_complete_model_comparison_rejects_worker_field_loss_without_private_out
     del actual["services"]["canvas-sync-worker"][field]
     with pytest.raises(AssertionError) as error:
         gate["assert_model"](actual, expected)
-    assert (
-        str(error.value) == "Generated beta overlay changed the complete runtime model"
+    assert str(error.value).startswith(
+        "Generated beta overlay changed the complete runtime model"
     )
+    assert "canvas-sync-worker" in str(error.value)
     assert "synthetic-private-value" not in str(error.value)
 
 
@@ -152,6 +203,46 @@ def test_ci_requires_executable_powershell():
     ), "CI must run executable PowerShell image-plan controls"
 
 
+def test_prepared_local_images_are_pinned_complete_and_never_official(tmp_path):
+    powershell = shutil.which("pwsh") or shutil.which("powershell")
+    if not powershell:
+        pytest.skip("PowerShell is required for image-plan controls")
+    helper = str(ROOT / "scripts/beta-application-image-plan.ps1").replace("'", "''")
+    harness = tmp_path / "prepared.ps1"
+    harness.write_text(f". '{helper}'\n" + r'''
+$ErrorActionPreference='Stop'
+function docker { throw 'Docker is forbidden in a pure projection' }
+$id='sha256:'+('a'*64)
+$common=@{Services=@('issuance','canvas-sync-worker'); ReleaseVersion='developer'; OfficialStackRelease=$false}
+$valid=@{'issuance'=$id; 'canvas-sync-worker'=$id}
+$plan=@(New-BetaApplicationImagePlan @common -PreparedImages $valid)
+if ($plan.Count -ne 2) { throw 'missing service' }
+foreach ($entry in $plan) {
+    if ($entry.image_expression -ne $id -or $entry.known_digest -ne $id -or
+        $entry.build_eligible -or -not $entry.selector_present -or $entry.artifact_role -ne 'local') {
+        throw 'prepared images were not pinned as local non-build inputs'
+    }
+}
+$lines=@(ConvertTo-BetaApplicationImageLines -Plan $plan)
+if ('      SERVICE_NAME: canvas_sync_worker' -notin $lines -or
+    '      SERVICE_NAME: issuance_native' -notin $lines) { throw 'shared selectors lost' }
+$rejected=0
+foreach ($bad in @(@{'issuance'=$id}, @{'issuance'=$id; 'canvas-sync-worker'='mutable:tag'})) {
+    try { $null=New-BetaApplicationImagePlan @common -PreparedImages $bad }
+    catch { $rejected++ }
+}
+$common.OfficialStackRelease=$true
+try { $null=New-BetaApplicationImagePlan @common -PreparedImages $valid }
+catch { $rejected++ }
+if ($rejected -ne 3) { throw 'invalid or official inputs were admitted' }
+Write-Output 'PREPARED_LOCAL_PLAN_OK'
+''', encoding="utf8")
+    result = subprocess.run([powershell, "-NoProfile", "-NonInteractive", "-File", str(harness)],
+                            capture_output=True, text=True, timeout=10, check=False)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "PREPARED_LOCAL_PLAN_OK" in result.stdout
+
+
 @pytest.fixture
 def exercise(gate, tmp_path):
     if not (
@@ -174,17 +265,12 @@ def test_actual_plan_covers_inventory_builds_selectors_and_evidence(
     assert len(names) == len(set(names)) == 19
     assert {item["service"] for item in report["plan"]} == set(names)
     native = set(names) - gate["EXTERNAL"]
-    assert len(native) == 18
-    assert gate["EXTERNAL"] == {"issuance"}
+    assert len(native) == 19
+    assert gate["EXTERNAL"] == set()
     assert "canvas-sync-worker" in native
     assert set(report["build_services"]) == (native if mode == "local" else set())
     for item in report["plan"]:
-        external = item["service"] in gate["EXTERNAL"]
-        if external:
-            assert item["image_expression"] == "${MARTY_ISSUANCE_IMAGE}"
-            assert item["effective_reference"] == gate["ISSUANCE_IMAGE"]
-            assert item["artifact_role"] == "issuance"
-        elif mode == "official":
+        if mode == "official":
             assert item["image_expression"] == "${MARTY_SERVICES_IMAGE}"
             assert item["effective_reference"] == gate["SERVICES_IMAGE"]
             assert item["artifact_role"] == "services"
@@ -195,17 +281,15 @@ def test_actual_plan_covers_inventory_builds_selectors_and_evidence(
             )
             assert item["image_expression"] == item["effective_reference"]
             assert item["artifact_role"] == "local"
-        has_selector = mode == "official" and not external
+        has_selector = mode == "official"
         assert item["selector_present"] is has_selector
         assert item["selector"] == (
-            item["service"].replace("-", "_") if has_selector else None
+            ("issuance_native" if item["service"] == "issuance"
+             else item["service"].replace("-", "_")) if has_selector else None
         )
-        assert item["build_eligible"] is (mode == "local" and not external)
+        assert item["build_eligible"] is (mode == "local")
         assert item["known_digest"] == (
-            gate["ISSUANCE_DIGEST"]
-            if external and mode == "official"
-            else gate["SERVICES_DIGEST"]
-            if mode == "official"
+            gate["SERVICES_DIGEST"] if mode == "official"
             else None
         )
     assert set(report["digests"]) == set(names)
@@ -269,9 +353,6 @@ def test_independent_projection_rejects_retagged_evidence_and_missing_build(
     [
         ("release", "release\nsynthetic-private-value"),
         ("release", "release:synthetic-private-value"),
-        ("issuance_reference", "synthetic.invalid/issuance:latest"),
-        ("issuance_reference", "synthetic.invalid/issuance@sha256:" + "f" * 64),
-        ("issuance_digest", "sha256:" + "f" * 64),
         ("services_reference", "synthetic.invalid/services:latest"),
         ("services_digest", "sha256:" + "f" * 64),
         (
@@ -429,10 +510,22 @@ $loops=@($ast.FindAll({param($n) $n -is [Management.Automation.Language.ForEachS
     }
     profile_append = "(Join-Path $script:RepoRoot $profile)"
     assert set(attached) == {
+        "$stateVolumeOverride",
+        "$migrationOverride",
+        "$betaTunnelOverride",
         "$releaseComposeFile",
         "$verificationImageOverride",
         profile_append,
     }
+    tunnel_calls = [item for item in commands if item["name"] == "Get-BetaTunnelInputBinding"]
+    binding = next(item for item in tunnel_calls if item["assignment"] == "$betaTunnelBinding")
+    private_render = next(item for item in tunnel_calls if "-OverrideOutput $betaTunnelOverride" in item["text"])
+    final_check = max((item for item in tunnel_calls if "-Expected $betaTunnelBinding" in item["text"]),
+                      key=lambda item: item["offset"])
+    assert binding["offset"] < private_render["offset"] < attached["$betaTunnelOverride"]["offset"]
+    assert attached["$betaTunnelOverride"]["offset"] < min(item["offset"] for item in commands if item["name"] == "Get-ServiceRecords")
+    assert final_check["offset"] < one("Start-BetaMutation")["offset"]
+    assert "-OverrideOutput" not in final_check["text"]
     profile_loops = [
         item for item in report["loops"] if item["condition"] == "$didcommProfiles"
     ]

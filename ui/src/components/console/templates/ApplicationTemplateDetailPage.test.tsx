@@ -10,13 +10,20 @@ const {
   mockDeprecate,
   mockGet,
   mockValidate,
+  scope,
+  permissions,
 } = vi.hoisted(() => ({
   mockActivate: vi.fn(),
   mockDelete: vi.fn(),
   mockDeprecate: vi.fn(),
   mockGet: vi.fn(),
   mockValidate: vi.fn(),
+  scope: { activeOrgId: 'org-1' },
+  permissions: { can: vi.fn((_resource: string, _action: string) => true), isLoading: false },
 }));
+
+vi.mock('../../../contexts/ConsoleContext', () => ({ useConsole: () => scope }));
+vi.mock('../../../hooks/usePermissions', () => ({ usePermissions: () => permissions }));
 
 vi.mock('../../../services/applicationTemplatesApi', () => ({
   activateApplicationTemplate: mockActivate,
@@ -28,6 +35,7 @@ vi.mock('../../../services/applicationTemplatesApi', () => ({
 
 const draft = {
   id: 'application-template-1',
+  organization_id: 'org-1',
   name: 'Membership application',
   status: 'DRAFT',
   credential_template_id: 'credential-template-1',
@@ -50,10 +58,31 @@ function renderPage() {
 describe('ApplicationTemplateDetailPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    scope.activeOrgId = 'org-1';
+    permissions.can.mockReturnValue(true);
     mockGet.mockResolvedValue(draft);
     mockValidate.mockResolvedValue({ valid: true, errors: [] });
     mockActivate.mockResolvedValue({ ...draft, status: 'ACTIVE' });
     mockDeprecate.mockResolvedValue({ ...draft, status: 'DEPRECATED' });
+  });
+
+  it('rejects an existing foreign template before validation or actions', async () => {
+    mockGet.mockResolvedValue({ ...draft, organization_id: 'org-2' });
+    renderPage();
+    expect(await screen.findByRole('alert')).toHaveTextContent(/selected organization/i);
+    expect(screen.queryByText(draft.name)).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /preview/i })).not.toBeInTheDocument();
+    expect(mockValidate).not.toHaveBeenCalled();
+  });
+
+  it('lets a viewer inspect without making lifecycle requests', async () => {
+    permissions.can.mockImplementation((_resource, action) => action === 'view');
+    renderPage();
+    expect(await screen.findByRole('heading', { name: draft.name })).toBeInTheDocument();
+    expect(mockValidate).not.toHaveBeenCalled();
+    expect(screen.queryByRole('link', { name: /edit/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /validate|activate|delete/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /preview/i })).toHaveAttribute('href', expect.stringContaining('organization_id=org-1'));
   });
 
   it('validates drafts before exposing activation', async () => {

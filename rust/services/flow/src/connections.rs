@@ -1,6 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
 use marty_schema_startup::SchemaStartupMode;
+use marty_signing_grant::{minter::GrantMinter, SigningOrigin};
 use redis::aio::ConnectionManager;
 use sqlx::{postgres::PgPoolOptions, PgPool};
 use thiserror::Error;
@@ -109,10 +110,28 @@ async fn connect_providers(
         presentation_policy_mtls,
     )?;
 
-    let signing = Arc::new(HttpSigningProvider::new(
-        &config.signing_keys_url,
-        required_secret(&config.signing_keys_api_key, "signing keys API key")?,
-    )?);
+    let grant_bao_addr = config.sign_grant_bao_addr.as_deref().ok_or_else(|| {
+        FlowConnectionError::Configuration("BAO_ADDR is required for signing grants".into())
+    })?;
+    let grant_token_file = config.sign_grant_mint_token_file.clone().ok_or_else(|| {
+        FlowConnectionError::Configuration(
+            "FLOW_SIGN_GRANT_MINT_TOKEN_FILE is required for signing grants".into(),
+        )
+    })?;
+    let grant_minter = GrantMinter::for_managed_openbao(
+        grant_bao_addr,
+        SigningOrigin::FlowWalletRequest,
+        grant_token_file,
+    )
+    .map_err(|error| FlowConnectionError::Configuration(error.to_string()))?;
+    let signing = Arc::new(
+        HttpSigningProvider::new(
+            &config.signing_keys_url,
+            required_secret(&config.signing_keys_api_key, "signing keys API key")?,
+            required_secret(&config.issuer_sign_key, "issuer signing API key")?,
+        )?
+        .with_grant_minter(grant_minter),
+    );
     signing.health_check().await?;
     runtime.mark_healthy(FlowDependency::SigningKeys)?;
 
@@ -132,6 +151,7 @@ async fn connect_providers(
     runtime.mark_healthy(FlowDependency::ReferenceCatalog)?;
 
     Ok(FlowProviderRegistry {
+        gateway_api_key_actor: None,
         tenant_membership: Some(Arc::new(grpc.tenant_membership)),
         credential_template: Some(Arc::new(grpc.credential_template)),
         presentation_policy: Some(Arc::new(grpc.presentation_policy)),
@@ -264,7 +284,18 @@ mod physical_provider_tests {
 fn redis_database_url(value: &str, database: u8) -> Result<String, FlowConnectionError> {
     let mut url = Url::parse(value)
         .map_err(|_| FlowConnectionError::Configuration("Redis URL is invalid".into()))?;
-    url.set_path(&format!("/{database}"));
+    if url.scheme() == "unix" {
+        if url.host_str().is_some() || !url.path().starts_with('/') {
+            return Err(FlowConnectionError::Configuration(
+                "Redis Unix socket must be local and absolute".into(),
+            ));
+        }
+        url.query_pairs_mut()
+            .clear()
+            .append_pair("db", &database.to_string());
+    } else {
+        url.set_path(&format!("/{database}"));
+    }
     Ok(url.into())
 }
 
@@ -288,5 +319,10 @@ mod tests {
             "redis://user:secret@redis:6379/3"
         );
         assert!(redis_database_url("not a URL", 3).is_err());
+        assert_eq!(
+            redis_database_url("unix:///run/marty-redis/redis.sock", 3).unwrap(),
+            "unix:///run/marty-redis/redis.sock?db=3"
+        );
+        assert!(redis_database_url("unix://remote/run/redis.sock", 3).is_err());
     }
 }

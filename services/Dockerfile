@@ -6,6 +6,28 @@ RUN --mount=type=cache,id=marty-public-cargo-registry,target=/usr/local/cargo/re
     --mount=type=cache,id=marty-public-cargo-git,target=/usr/local/cargo/git,sharing=locked \
     cargo install cargo-chef --locked --version 0.1.78
 
+# Match the pinned mold version used by host CI. These build-only binaries are
+# never copied into the public runtime image. Keep the linker flag on the
+# common base so cargo-chef cook and the final binary build share one profile.
+ARG TARGETARCH
+RUN set -eu; \
+    case "$TARGETARCH" in \
+      amd64) target=x86_64; checksum=a3696680d99e692970590a178bc3a33d78d60d1c6dc9db7a11b557b02b751f5d ;; \
+      arm64) target=aarch64; checksum=946de2774b06a71346bd59b55fddba610b65b8d93c3a4a1559cc84e103472710 ;; \
+      *) echo "Unsupported public linker architecture: $TARGETARCH" >&2; exit 2 ;; \
+    esac; \
+    archive=/tmp/mold.tar.gz; \
+    curl --fail --location --retry 3 --silent --show-error \
+      "https://github.com/rui314/mold/releases/download/v2.41.0/mold-2.41.0-${target}-linux.tar.gz" \
+      --output "$archive" \
+    && printf '%s  %s\n' "$checksum" "$archive" | sha256sum --check --status \
+    && tar -xzf "$archive" -C /tmp \
+    && install "/tmp/mold-2.41.0-${target}-linux/bin/mold" /usr/local/bin/mold \
+    && ln -s mold /usr/local/bin/ld.mold \
+    && rm -rf "/tmp/mold-2.41.0-${target}-linux" "$archive" \
+    && mold --version | grep -Eq '^mold 2[.]41[.]0 [(].*compatible with GNU ld[)]$'
+ENV RUSTFLAGS="-C link-arg=-fuse-ld=mold"
+
 WORKDIR /build/rust
 
 FROM rust-service-base AS rust-service-planner
@@ -34,7 +56,6 @@ COPY --chmod=644 scripts/ci/public-sccache-stats.awk /usr/local/bin/public-sccac
 FROM rust-service-cache AS rust-service-dependencies
 
 COPY --from=rust-service-planner /build/rust/recipe.json recipe.json
-COPY --from=rust-service-planner /build/rust/third_party /build/rust/third_party
 COPY proto /build/proto
 RUN --mount=type=cache,id=marty-public-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,id=marty-public-cargo-git,target=/usr/local/cargo/git,sharing=locked \
@@ -51,20 +72,13 @@ COPY contracts /build/contracts
 COPY services/auth/assets /build/services/auth/assets
 COPY --chmod=755 scripts/build-rust-service-binaries.sh /usr/local/bin/build-rust-service-binaries
 
-# Preserve the exact public release binary list and profile. The opt-in image
-# builds the same list with its feature once, without first compiling the
-# default binaries. Both modes reuse the cooked dependency layer.
-ARG PASSPORT_SELF_SIGNED_TEST=false
+# Preserve the exact public release binary list and KMS-only profile.
 RUN --mount=type=cache,id=marty-public-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,id=marty-public-cargo-git,target=/usr/local/cargo/git,sharing=locked \
     --mount=type=secret,id=sccache_token \
     --mount=type=secret,id=sccache_url \
     --mount=type=secret,id=sccache_mode \
-    case "$PASSPORT_SELF_SIGNED_TEST" in \
-      false) run-public-rust-build build-rust-service-binaries default ;; \
-      true) run-public-rust-build build-rust-service-binaries passport-self-signed-test ;; \
-      *) echo "PASSPORT_SELF_SIGNED_TEST must be true or false" >&2; exit 2 ;; \
-    esac
+    run-public-rust-build build-rust-service-binaries default
 
 FROM debian:bookworm-slim@sha256:abd67ffcfa541b485a3dff59865ab629aa048a6c613e639d36e7456b0b229241
 
@@ -106,8 +120,13 @@ COPY --from=rust-service-builder /build/rust/target/release/marty-device-registr
 COPY --from=rust-service-builder /build/rust/target/release/marty-verification-service /usr/local/bin/marty-verification-service
 COPY --from=rust-service-builder /build/rust/target/release/marty-issuance-service /usr/local/bin/marty-issuance-service
 COPY --from=rust-service-builder /build/rust/target/release/marty-canvas-sync-worker /usr/local/bin/marty-canvas-sync-worker
+COPY --from=rust-service-builder /build/rust/target/release/marty-canvas-sandbox /usr/local/bin/marty-canvas-sandbox
 COPY --from=rust-service-builder /build/rust/target/release/marty-passport-beta-bureau /usr/local/bin/marty-passport-beta-bureau
 COPY --from=rust-service-builder /build/rust/target/release/marty-passport-provider-ingress /usr/local/bin/marty-passport-provider-ingress
+COPY --from=rust-service-builder /build/rust/target/release/marty-passport-keyless-edge /usr/local/bin/marty-passport-keyless-edge
+COPY --from=rust-service-builder /build/rust/target/release/marty-oidf-keyless-edge /usr/local/bin/marty-oidf-keyless-edge
+COPY --from=rust-service-builder /build/rust/target/release/marty-keyless-grpc-bridge /usr/local/bin/marty-keyless-grpc-bridge
+COPY --from=rust-service-builder /build/rust/target/release/marty-passport-tls-bootstrap /usr/local/bin/marty-passport-tls-bootstrap
 COPY --from=rust-service-builder /build/rust/target/release/marty-deployment-profile /usr/local/bin/marty-deployment-profile
 COPY --from=rust-service-builder /build/rust/target/release/marty-compliance-profile /usr/local/bin/marty-compliance-profile
 RUN chmod +x /app/services/entrypoint.sh /app/load-secrets-env.sh

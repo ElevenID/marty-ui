@@ -1371,17 +1371,26 @@ async fn start_native(database_url: &str, enabled: bool) -> (ChildGuard, u16) {
         )
         .env("CANVAS_PILOT_ORGANIZATION_IDS", "org-review");
     drop(http_reservation);
-    let child = ChildGuard(command.spawn().unwrap());
+    let mut child = ChildGuard(command.spawn().unwrap());
     let client = bounded_http_client(Duration::from_secs(2));
-    let health = tokio::time::timeout(
-        Duration::from_secs(10),
-        wait_for_health_with_client(http_port, &client),
-    )
+    // Under the parallel published-schema suite, process startup may outlast
+    // one bounded health-poll cycle. Keep a separate fixture readiness bound
+    // and fail early when the owned process actually exits.
+    let health = tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            if let Some(status) = child.0.try_wait().expect("inspect issuance process") {
+                panic!("issuance exited before readiness: {status}");
+            }
+            if let Some(health) = wait_for_health_with_client(http_port, &client).await {
+                break health;
+            }
+        }
+    })
     .await
-    .unwrap();
+    .expect("issuance fixture did not become healthy within 30 seconds");
     assert_eq!(
         health,
-        Some(json!({"status":"healthy","service":"issuance-service"}))
+        json!({"status":"healthy","service":"issuance-service"})
     );
     (child, http_port)
 }

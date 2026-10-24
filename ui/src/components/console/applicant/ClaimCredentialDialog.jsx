@@ -19,7 +19,7 @@
  *   offerData     {Object}  — pre-loaded offer: { offer_url, credential_offer_uris, expires_at }
  */
 
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   Dialog,
   DialogTitle,
@@ -33,14 +33,11 @@ import {
   CardContent,
   Collapse,
   Chip,
-  Checkbox,
   CircularProgress,
-  LinearProgress,
   Radio,
   Typography,
   useMediaQuery,
   useTheme,
-  FormControlLabel,
 } from '@mui/material';
 import EmailIcon from '@mui/icons-material/Email';
 import WalletIcon from '@mui/icons-material/AccountBalanceWallet';
@@ -53,163 +50,174 @@ import LockIcon from '@mui/icons-material/Lock';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 
 import OID4VCIInviteDisplay from '../../issuance/OID4VCIInviteDisplay';
-import { generateIssuanceOffer } from '../../../services/credentialsApi';
+import { generateIssuanceOffer, normalizeApplicationOffer } from '../../../services/credentialsApi';
+import { getApplication } from '../../../services/applicantApi';
 import { useAuth } from '../../../hooks/useAuth';
 import useWalletPreferences from '../../../hooks/useWalletPreferences';
+import useWalletOpenLink from '../../../hooks/useWalletOpenLink';
 import {
   ANY_OID4VCI_WALLET_ID,
   buildClaimWalletOptions,
   getWalletOfferDialogError,
-  resolveClaimWalletDeliveryDestinationId,
   resolveClaimWalletSelection,
   selectedClaimWalletIds,
   walletSupportsBrowserLaunch,
 } from '../../../application/applications';
-import { buildWalletOpenLink, listWallets } from '../../../services/walletRegistryApi';
+import { listWallets } from '../../../services/walletRegistryApi';
 import {
   createCredentialOfferTransport,
   resolvePreferredCredentialOfferTransport,
 } from '../../../services/walletTransportService';
-import { listDeliveryDestinations } from '../../../services/deliveryDestinationsApi';
+const EMPTY_ITEMS = [];
+const TERMINAL_CLAIM_STATES = new Set(['CLAIMED', 'EXPIRED', 'BLOCKED']);
 
-const ELEVENID_WALLET_DESTINATION_ID = 'dd-elevenid-wallet';
-const COMPATIBLE_WALLET_DESTINATION_ID = 'dd-oid4vci-compatible-wallet';
-const CANVAS_CREDENTIALS_DESTINATION_ID = 'dd-canvas-credentials-institutional';
-
-export default function ClaimCredentialDialog({ open, onClose, applicationId, offerData, organizationId }) {
+export default function ClaimCredentialDialog({ open, onClose, applicationId, offerData, organizationId, generateOffer = generateIssuanceOffer, readApplication = getApplication }) {
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
   const { user } = useAuth();
   const { walletIds: preferredWallets, setWalletIds } = useWalletPreferences(user?.user_id);
-  const [registryWallets, setRegistryWallets] = useState([]);
-  const [deliveryDestinations, setDeliveryDestinations] = useState([]);
-  const [destinationsLoading, setDestinationsLoading] = useState(false);
-  const [destinationError, setDestinationError] = useState(null);
-  const [selectedWalletId, setSelectedWalletId] = useState(ANY_OID4VCI_WALLET_ID);
-  const [canvasConsent, setCanvasConsent] = useState(true);
+  const resolvedOrganizationId = organizationId || offerData?.organization_id || null;
+  const scopeKey = JSON.stringify([applicationId || null, resolvedOrganizationId, user?.user_id || null]);
+  const [registry, setRegistry] = useState(null);
+  const registryWallets = registry?.scopeKey === scopeKey ? registry.items : EMPTY_ITEMS;
+  const [walletSelection, setWalletSelection] = useState(null);
 
-  const [liveOffer, setLiveOffer] = useState(offerData);
-  const [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState(null);
+  const [preloadedOffer, setPreloadedOffer] = useState(offerData);
+  const [offerAttempt, setOfferAttempt] = useState(0);
+  const [offerRequest, setOfferRequest] = useState(null);
+  const pendingOffers = useRef(new Map());
   const [emailTab, setEmailTab] = useState(false);
   const [emailValue, setEmailValue] = useState('');
-  const [emailSent, setEmailSent] = useState(false);
+  const [emailDraftRequested, setEmailDraftRequested] = useState(false);
   const walletOptions = useMemo(() => buildClaimWalletOptions({ registryWallets }), [registryWallets]);
+  const selectedWalletId = walletSelection?.scopeKey === scopeKey && walletOptions.some((wallet) => wallet.id === walletSelection.id)
+    ? walletSelection.id
+    : resolveClaimWalletSelection({ preferredWallets, walletOptions });
   const selectedWallet = useMemo(
     () => walletOptions.find((wallet) => wallet.id === selectedWalletId) || walletOptions[0] || null,
     [selectedWalletId, walletOptions],
   );
   const selectedWalletName = selectedWallet?.name || 'Any OID4VCI Wallet';
   const selectedWalletIdList = useMemo(() => selectedClaimWalletIds(selectedWalletId), [selectedWalletId]);
-  const selectedWalletDestinationId = resolveClaimWalletDeliveryDestinationId(selectedWalletId, {
-    compatibleDestinationId: COMPATIBLE_WALLET_DESTINATION_ID,
-    elevenIdDestinationId: ELEVENID_WALLET_DESTINATION_ID,
-  });
-
   const handleSelectWallet = useCallback((walletId) => {
     const nextWalletId = walletId || ANY_OID4VCI_WALLET_ID;
-    setSelectedWalletId(nextWalletId);
+    setWalletSelection({ scopeKey, id: nextWalletId });
     if (nextWalletId !== ANY_OID4VCI_WALLET_ID) {
       setWalletIds([nextWalletId]);
     }
-  }, [setWalletIds]);
+  }, [setWalletIds, scopeKey]);
 
   useEffect(() => {
     if (open) {
-      setLiveOffer(applicationId ? null : offerData);
-      setRefreshing(false);
-      setError(null);
+      setPreloadedOffer(applicationId ? null : offerData);
       setEmailTab(false);
-      setEmailSent(false);
+      setEmailDraftRequested(false);
       setEmailValue(user?.email || '');
-      setCanvasConsent(true);
+    } else {
+      setWalletSelection(null);
     }
-  }, [open, applicationId, user?.email]); // eslint-disable-line react-hooks/exhaustive-deps -- keep active QR stable while parent data refreshes
-
-  useEffect(() => {
-    if (!open || walletOptions.length === 0) return;
-    const nextSelection = resolveClaimWalletSelection({ preferredWallets, walletOptions });
-    setSelectedWalletId((current) => {
-      const currentStillAvailable = walletOptions.some((wallet) => wallet.id === current);
-      const hasPreferredSelection = preferredWallets.some((walletId) => walletOptions.some((wallet) => wallet.id === walletId));
-      if (!currentStillAvailable) return nextSelection;
-      if (current === ANY_OID4VCI_WALLET_ID && hasPreferredSelection) return nextSelection;
-      return current;
-    });
-  }, [open, preferredWallets, walletOptions]);
+  }, [open, scopeKey, user?.email]); // eslint-disable-line react-hooks/exhaustive-deps -- keep active QR stable while parent data refreshes
 
   // Load the global catalogue plus overrides for the active organization.
   useEffect(() => {
-    const orgId = organizationId || offerData?.organization_id || null;
-    listWallets(true, orgId)
-      .then((w) => setRegistryWallets(Array.isArray(w) ? w : []))
-      .catch(() => {});
-  }, [organizationId, offerData?.organization_id]);
-
-  useEffect(() => {
-    if (!open) return;
-    const orgId = organizationId || offerData?.organization_id;
-    if (!orgId) {
-      setDeliveryDestinations([]);
+    if (!open) {
+      setRegistry(null);
       return;
     }
-    let cancelled = false;
-    setDestinationsLoading(true);
-    setDestinationError(null);
-    listDeliveryDestinations({ activeOnly: true, organizationId: orgId })
+    let active = true;
+    listWallets(true, resolvedOrganizationId)
       .then((items) => {
-        if (!cancelled) setDeliveryDestinations(Array.isArray(items) ? items : []);
+        if (active) setRegistry({ scopeKey, items: Array.isArray(items) ? items : [] });
       })
-      .catch((err) => {
-        if (!cancelled) {
-          setDeliveryDestinations([]);
-          setDestinationError(err?.message || 'Could not load delivery destinations.');
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setDestinationsLoading(false);
+      .catch(() => {
+        if (active) setRegistry({ scopeKey, items: [] });
       });
-    return () => { cancelled = true; };
-  }, [open, organizationId, offerData?.organization_id]);
+    return () => { active = false; };
+  }, [open, resolvedOrganizationId, scopeKey]);
 
-  const canvasDestination = useMemo(() => (
-    deliveryDestinations.find((destination) => (
-      destination.id === CANVAS_CREDENTIALS_DESTINATION_ID
-      || (destination.provider === 'canvas_credentials' && destination.mode === 'organization_mirror')
-    )) || null
-  ), [deliveryDestinations]);
+  const canGenerateWalletOffer = registry?.scopeKey === scopeKey;
+  const offerKey = JSON.stringify([scopeKey, offerAttempt]);
+  const currentOffer = offerRequest?.key === offerKey ? offerRequest : null;
+  const liveOffer = applicationId ? (canGenerateWalletOffer ? currentOffer?.data || null : null) : preloadedOffer;
+  const refreshing = Boolean(applicationId && open && canGenerateWalletOffer && (!currentOffer || currentOffer.status === 'loading'));
+  const error = currentOffer?.error || null;
+  const handleRegenerate = useCallback(() => setOfferAttempt((attempt) => attempt + 1), []);
 
-  const canvasDestinationReady = Boolean(canvasDestination?.is_enabled !== false && canvasDestination);
-  const canGenerateWalletOffer = true;
-
-  const handleRegenerate = useCallback(async () => {
-    if (!applicationId || !canGenerateWalletOffer) return;
-    setRefreshing(true);
-    setError(null);
-    try {
-      const selectedDestinationIds = [selectedWalletDestinationId];
-      if (canvasConsent && canvasDestinationReady) {
-        selectedDestinationIds.push(canvasDestination.id || CANVAS_CREDENTIALS_DESTINATION_ID);
-      }
-      const fresh = await generateIssuanceOffer(applicationId, {
-        delivery_destination_ids: Array.from(new Set(selectedDestinationIds.filter(Boolean))),
-        canvas_credentials_consent: Boolean(canvasConsent && canvasDestinationReady),
-      });
-      setLiveOffer(fresh);
-    } catch (err) {
-      setError(getWalletOfferDialogError(err));
-    } finally {
-      setRefreshing(false);
-    }
-  }, [applicationId, canGenerateWalletOffer, selectedWalletDestinationId, canvasConsent, canvasDestinationReady, canvasDestination]);
-
-  // OID4VCI pre-authorized codes are single-use. A previous wallet attempt can
-  // consume a code even when its offer has not expired, so mint a fresh offer on
-  // every claim dialog open instead of trusting cached application metadata.
+  // The Rust claim endpoint owns offer reuse and renewal. Wallet selection only
+  // chooses a link/transport; the endpoint does not support holder destination or
+  // Canvas mirror options. Reopening this dialog shares an in-flight request for
+  // the same application/organization/holder, then uses the server's current offer.
   useEffect(() => {
-    if (!open || !applicationId || !canGenerateWalletOffer) return;
-    handleRegenerate();
-  }, [open, applicationId, canGenerateWalletOffer, handleRegenerate]);
+    if (!open) {
+      setOfferRequest(null);
+      return;
+    }
+    if (!applicationId || !canGenerateWalletOffer) return;
+    let active = true;
+    setOfferRequest({ key: offerKey, status: 'loading' });
+    let request = pendingOffers.current.get(scopeKey);
+    if (!request) {
+      request = generateOffer(applicationId).finally(() => {
+        if (pendingOffers.current.get(scopeKey) === request) pendingOffers.current.delete(scopeKey);
+      });
+      pendingOffers.current.set(scopeKey, request);
+    }
+    request.then((data) => {
+      if (active) setOfferRequest({ key: offerKey, status: 'ready', data });
+    }).catch((err) => {
+      if (active) setOfferRequest({ key: offerKey, status: 'error', error: getWalletOfferDialogError(err) });
+    });
+    return () => { active = false; };
+  }, [open, applicationId, canGenerateWalletOffer, offerKey, scopeKey, generateOffer]);
+
+  // A wallet can finish on another device without closing this dialog. Observe
+  // the authenticated application projection; browser return and polling never
+  // request issuance. Keep one read active and discard work from an old scope.
+  useEffect(() => {
+    if (!open || !applicationId || currentOffer?.status !== 'ready') return;
+    let active = true;
+    let reading = false;
+    let timer;
+    let terminal = TERMINAL_CLAIM_STATES.has(String(currentOffer.data?.claim_state || '').toUpperCase());
+    const schedule = () => {
+      clearTimeout(timer);
+      if (active && !terminal) timer = setTimeout(refreshStatus, 2000);
+    };
+    async function refreshStatus() {
+      if (!active || reading) return;
+      if (document.visibilityState === 'hidden') { schedule(); return; }
+      clearTimeout(timer);
+      reading = true;
+      try {
+        const application = await readApplication(applicationId);
+        if (!active) return;
+        if (application?.id !== applicationId
+          || (resolvedOrganizationId && application.organization_id !== resolvedOrganizationId)) {
+          throw new Error('Claim status does not belong to the current application');
+        }
+        terminal = TERMINAL_CLAIM_STATES.has(String(application.claim_state || '').toUpperCase());
+        setOfferRequest({ key: offerKey, status: 'ready', data: normalizeApplicationOffer(application) });
+      } catch {
+        if (active) {
+          terminal = true;
+          setOfferRequest({ key: offerKey, status: 'error', error: 'Could not confirm the current claim status. Try again.' });
+        }
+      } finally {
+        reading = false;
+        schedule();
+      }
+    }
+    const onReturn = () => { if (document.visibilityState !== 'hidden') refreshStatus(); };
+    window.addEventListener('focus', onReturn);
+    document.addEventListener('visibilitychange', onReturn);
+    schedule();
+    return () => {
+      active = false;
+      clearTimeout(timer);
+      window.removeEventListener('focus', onReturn);
+      document.removeEventListener('visibilitychange', onReturn);
+    };
+  }, [open, applicationId, resolvedOrganizationId, offerKey, currentOffer?.status, readApplication]); // eslint-disable-line react-hooks/exhaustive-deps -- one read loop per offer attempt
 
   // Build per-wallet offer data.
   // Keep backend-provided wallet URIs, then synthesize the selected wallet from
@@ -277,32 +285,22 @@ export default function ClaimCredentialDialog({ open, onClose, applicationId, of
 
   const offerUrl = liveOffer?.offer_url || null;
   const primaryOfferUrl = preferredTransport.offerUri || offerUrl;
-  const isExpired = liveOffer?.status === 'expired';
-  const loadingInitialOffer = canGenerateWalletOffer && (refreshing || (applicationId && liveOffer === null)) && !primaryOfferUrl && !error;
-  const notGenerated = canGenerateWalletOffer && !loadingInitialOffer && liveOffer != null && !primaryOfferUrl && !error;
-  const showContent = canGenerateWalletOffer && !loadingInitialOffer && !notGenerated && !!primaryOfferUrl && !isExpired && !error;
+  const isExpired = String(liveOffer?.status || '').toUpperCase() === 'EXPIRED'
+    || String(liveOffer?.claim_state || '').toUpperCase() === 'EXPIRED';
+  const isClaimed = String(liveOffer?.claim_state || '').toUpperCase() === 'CLAIMED';
+  const isBlocked = String(liveOffer?.claim_state || '').toUpperCase() === 'BLOCKED';
+  const loadingInitialOffer = Boolean(applicationId && (refreshing || liveOffer === null) && !primaryOfferUrl && !error);
+  const notGenerated = !loadingInitialOffer && liveOffer != null && !primaryOfferUrl && !isExpired && !isClaimed && !isBlocked && !error;
+  const showContent = !loadingInitialOffer && !notGenerated && !!primaryOfferUrl && !isExpired && !isClaimed && !isBlocked && !error;
 
-  // Deep link handler for mobile
-  const handleOpenInWallet = async () => {
-    if (!primaryOfferUrl) return;
-
-    const fallbackOpenLink = preferredTransport.transport?.openUri || preferredTransport.transport?.innerUri || primaryOfferUrl;
-
-    if (!preferredTransport.walletId || !preferredTransport.transport?.innerUri) {
-      window.location.href = fallbackOpenLink;
-      return;
-    }
-
-    try {
-      const response = await buildWalletOpenLink(preferredTransport.walletId, {
-        innerUri: preferredTransport.transport.innerUri,
-        platform: preferredTransport.transport.platform,
-      });
-      window.location.href = response?.open_uri || fallbackOpenLink;
-    } catch {
-      window.location.href = fallbackOpenLink;
-    }
-  };
+  const { openingWallet, openWallet } = useWalletOpenLink({
+    active: open && showContent,
+    requestScopeKey: offerKey,
+    walletId: preferredTransport.walletId,
+    innerUri: preferredTransport.transport?.innerUri,
+    platform: preferredTransport.transport?.platform,
+    fallbackOpenLink: preferredTransport.transport?.openUri || preferredTransport.transport?.innerUri || primaryOfferUrl,
+  });
 
   const handleEmailSelf = () => {
     const to = user?.email || emailValue;
@@ -312,7 +310,7 @@ export default function ClaimCredentialDialog({ open, onClose, applicationId, of
       `Your credential is ready to add to your wallet.\n\nOpen the link on your phone:\n\n${primaryOfferUrl}`
     );
     window.open(`mailto:${to}?subject=${subject}&body=${body}`, '_blank');
-    setEmailSent(true);
+    setEmailDraftRequested(true);
   };
 
   return (
@@ -323,6 +321,7 @@ export default function ClaimCredentialDialog({ open, onClose, applicationId, of
       fullWidth
       fullScreen={isMobile}
       data-testid="credential-claim-dialog"
+      data-application-id={applicationId}
     >
       <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1, pb: 1 }}>
         <WalletIcon color="primary" />
@@ -330,13 +329,12 @@ export default function ClaimCredentialDialog({ open, onClose, applicationId, of
         <Chip label={selectedWalletName} color="primary" variant="outlined" size="small" sx={{ ml: 'auto' }} />
         {isExpired && <Chip label="Expired" color="error" size="small" sx={{ ml: 'auto' }} />}
         {showContent && <Chip label="Ready" color="success" size="small" />}
+        {isClaimed && <Chip label="Claimed" color="success" size="small" />}
         {error && <Chip label="Error" color="error" size="small" />}
       </DialogTitle>
 
       <DialogContent dividers>
         <Stack spacing={1.25} sx={{ mb: 2 }} data-testid="wallet-selector" role="radiogroup" aria-label="Choose wallet">
-          {destinationsLoading && <LinearProgress />}
-          {destinationError && <Alert severity="info">{destinationError}</Alert>}
           {walletOptions.map((option) => {
             const selected = option.id === selectedWalletId;
             const isCompatibleWallet = option.id === ANY_OID4VCI_WALLET_ID;
@@ -395,32 +393,11 @@ export default function ClaimCredentialDialog({ open, onClose, applicationId, of
           })}
         </Stack>
 
-        {canvasDestinationReady && (
-          <FormControlLabel
-            sx={{ mb: 1.5, alignItems: 'flex-start' }}
-            control={
-              <Checkbox
-                checked={canvasConsent}
-                onChange={(event) => setCanvasConsent(event.target.checked)}
-                size="small"
-              />
-            }
-            label={
-              <Box>
-                <Typography variant="body2">Also show this badge in Canvas Credentials</Typography>
-                <Typography variant="caption" color="text.secondary">
-                  Your organization manages this destination; only the public badge verification view is published.
-                </Typography>
-              </Box>
-            }
-          />
-        )}
-
         {loadingInitialOffer && (
           <Stack spacing={2} alignItems="center" sx={{ py: 4 }}>
             <CircularProgress />
             <Typography variant="body2" color="text.secondary" textAlign="center">
-              Generating a fresh wallet invite...
+              Preparing your wallet invite...
             </Typography>
           </Stack>
         )}
@@ -447,6 +424,9 @@ export default function ClaimCredentialDialog({ open, onClose, applicationId, of
           </Alert>
         )}
 
+        {isClaimed && <Alert severity="success">Your credential has been claimed. You can close this dialog.</Alert>}
+        {isBlocked && <Alert severity="warning">{liveOffer.claim_blocker?.message || 'This credential cannot be claimed right now.'}</Alert>}
+
         {/* ── Expired ── */}
         {canGenerateWalletOffer && isExpired && (
           <Alert
@@ -470,11 +450,13 @@ export default function ClaimCredentialDialog({ open, onClose, applicationId, of
             {isMobile && (
               <Stack spacing={2} sx={{ mb: 2 }}>
                 <Button
+                  data-testid="wallet-open-link"
                   variant="contained"
                   size="large"
                   fullWidth
                   startIcon={<PhoneAndroidIcon />}
-                  onClick={handleOpenInWallet}
+                  onClick={openWallet}
+                  disabled={openingWallet}
                   sx={{ py: 1.5, fontSize: '1rem', borderRadius: 2 }}
                 >
                   {selectedWalletId === ANY_OID4VCI_WALLET_ID ? 'Open Wallet' : `Open ${selectedWalletName}`}
@@ -493,6 +475,8 @@ export default function ClaimCredentialDialog({ open, onClose, applicationId, of
               onRegenerate={applicationId ? handleRegenerate : undefined}
               loading={refreshing}
               showDeepLink={!isMobile}
+              active={open && showContent}
+              requestScopeKey={offerKey}
               allowedWalletIds={selectedWalletIdList.length > 0 ? selectedWalletIdList : null}
               showDefaultWalletTab={selectedWalletId === ANY_OID4VCI_WALLET_ID}
               title={
@@ -519,7 +503,7 @@ export default function ClaimCredentialDialog({ open, onClose, applicationId, of
                   color="inherit"
                   startIcon={<EmailIcon fontSize="small" />}
                   endIcon={emailTab ? <ExpandLessIcon /> : <ExpandMoreIcon />}
-                  onClick={() => { setEmailTab((v) => !v); setEmailSent(false); }}
+                  onClick={() => { setEmailTab((v) => !v); setEmailDraftRequested(false); }}
                   sx={{ textTransform: 'none', color: 'text.secondary', mt: 1 }}
                 >
                   Email link
@@ -548,17 +532,17 @@ export default function ClaimCredentialDialog({ open, onClose, applicationId, of
                       <Button
                         variant="contained"
                         size="small"
-                        startIcon={emailSent ? <CheckCircleIcon /> : <EmailIcon />}
+                        startIcon={emailDraftRequested ? <CheckCircleIcon /> : <EmailIcon />}
                         onClick={handleEmailSelf}
-                        disabled={!(user?.email) || emailSent}
-                        color={emailSent ? 'success' : 'primary'}
+                        disabled={!(user?.email) || emailDraftRequested}
+                        color={emailDraftRequested ? 'success' : 'primary'}
                       >
-                        {emailSent ? 'Sent!' : 'Send'}
+                        {emailDraftRequested ? 'Draft requested' : 'Open email draft'}
                       </Button>
                     </Stack>
-                    {emailSent && (
-                      <Alert severity="success" sx={{ mt: 1 }}>
-                        Email sent — open the link on your phone to add the credential to your wallet.
+                    {emailDraftRequested && (
+                      <Alert severity="info" sx={{ mt: 1 }}>
+                        Complete and send the message in your email app, then open the link on your phone.
                       </Alert>
                     )}
                   </Box>
@@ -575,7 +559,7 @@ export default function ClaimCredentialDialog({ open, onClose, applicationId, of
                 </Typography>
               </Stack>
               <Typography variant="caption" color="text.secondary" display="block" textAlign="center">
-                Your credential is cryptographically signed and stored in your wallet, not our database.
+                The issuer signs the credential before it is delivered to your wallet.
               </Typography>
             </Box>
           </>

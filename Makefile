@@ -25,8 +25,8 @@
 	proto-gen grpc-health \
 	package-selfhost-bundle \
 	selfhost-prod-openbao-up selfhost-prod-openbao-down selfhost-prod-openbao-ps selfhost-prod-openbao-logs \
-	selfhost-prod-openbao-bootstrap selfhost-prod-openbao-export \
-	selfhost-prod-config selfhost-prod-check selfhost-prod-bootstrap selfhost-prod-up \
+	selfhost-prod-openbao-bootstrap selfhost-prod-openbao-export selfhost-prod-openbao-rotate-tls \
+	selfhost-prod-config selfhost-prod-check selfhost-prod-up \
 	selfhost-prod-down selfhost-prod-restart selfhost-prod-ps selfhost-prod-logs \
 	selfhost-prod-beta-tunnel-up selfhost-prod-beta-tunnel-stop selfhost-prod-beta-tunnel-ps selfhost-prod-beta-tunnel-logs \
 	deploy-catalog-validate deploy-stack-plan selfhost-prod-plan selfhost-prod-beta-tunnel-plan \
@@ -64,14 +64,13 @@ CANVAS_SANDBOX_COMPOSE := $(TUNNEL_COMPOSE) -f docker-compose.profile.canvas-san
 CANVAS_REAL_COMPOSE := $(TUNNEL_COMPOSE) -f docker-compose.profile.canvas-real.yml
 CANVAS_EXPERIMENTS_COMPOSE := $(TUNNEL_COMPOSE) -f docker-compose.profile.canvas-real.yml -f docker-compose.profile.canvas-sandbox.yml
 WALTID_SERVICES := waltid-wallet-api waltid-web-wallet waltid-nginx
-WHEELS_SCRIPT := ./scripts/build-rust-wheels.sh
 SETUP_LOCAL_SCRIPT := ./scripts/setup-local.sh
 SELFHOST_ENV_FILE ?= .env.selfhost.production.local
 -include $(SELFHOST_ENV_FILE)
 SELFHOST_PROD_COMPOSE := $(COMPOSE) --env-file $(SELFHOST_ENV_FILE) -f docker-compose.selfhost.prod.yml
 SELFHOST_PROD_BETA_COMPOSE := $(SELFHOST_PROD_COMPOSE) --profile beta-tunnel
 SELFHOST_OPENBAO_COMPOSE := $(COMPOSE) --env-file $(SELFHOST_ENV_FILE) -f docker-compose.selfhost.openbao.yml
-SELFHOST_OPENBAO_LOG_SERVICES := openbao openbao-bootstrap
+SELFHOST_OPENBAO_LOG_SERVICES := openbao openbao-unseal
 SELFHOST_PROD_LOG_SERVICES := edge cloudflared gateway keycloak
 SELFHOST_PROD_BETA_TUNNEL_SERVICES := tunnel-nginx-proxy cloudflared-beta
 SELFHOST_SECRET_DIR ?=
@@ -116,7 +115,7 @@ beta-env-init: ## Initialize the dedicated beta env file from .env when missing
 	fi
 
 beta-experiments-plan: ## Render the beta Canvas experiments deployment plan
-	@python scripts/marty-deploy.py plan tunnel-beta-experiments
+	@sh scripts/marty-deploy.sh plan tunnel-beta-experiments
 
 beta-experiments-config: ## Validate beta experiments compose files
 	@echo "$(BLUE)Validating beta experiments compose files...$(NC)"
@@ -151,31 +150,26 @@ beta-logs: logs ## Follow beta development stack logs
 
 beta-clean: clean ## Stop the beta development stack and remove volumes
 
-build-wheels: ## Build native Rust wheels for local Python development (optional)
-	@echo "$(BLUE)Building native Rust wheels for local development...$(NC)"
-	@bash $(WHEELS_SCRIPT)
-	@echo "$(GREEN)✓ Native wheels built successfully$(NC)"
-
 package-selfhost-bundle: ## Stage the image-based open-source self-host bundle in dist/selfhost-bundle
 	@echo "$(BLUE)Staging open-source self-host bundle...$(NC)"
 	@cargo +1.95.0 run --manifest-path rust/Cargo.toml -p marty-selfhost-bundle --bin package-selfhost-bundle --locked -- --repo-root . $(SELFHOST_BUNDLE_ARGS)
 	@echo "$(GREEN)✓ Open-source self-host bundle staged$(NC)"
 
 deploy-catalog-validate: ## Validate deployment metadata catalogs, stacks, and bundles
-	@python scripts/marty-deploy.py validate
+	@sh scripts/marty-deploy.sh validate
 
 deploy-stack-plan: ## Render a redacted deployment plan (STACK=<name>)
 	@if [ -z "$(STACK)" ]; then \
 		echo "$(RED)❌ Error: STACK is required (example: make deploy-stack-plan STACK=selfhost-production)$(NC)"; \
 		exit 1; \
 	fi
-	@python scripts/marty-deploy.py plan "$(STACK)"
+	@sh scripts/marty-deploy.sh plan "$(STACK)"
 
 selfhost-prod-plan: ## Render the self-host production deployment plan
-	@python scripts/marty-deploy.py plan selfhost-production
+	@sh scripts/marty-deploy.sh plan selfhost-production
 
 selfhost-prod-beta-tunnel-plan: ## Render the self-host beta tunnel deployment plan
-	@python scripts/marty-deploy.py plan selfhost-beta-tunnel
+	@sh scripts/marty-deploy.sh plan selfhost-beta-tunnel
 
 selfhost-prod-openbao-up: ## Start the standalone self-host OpenBao deployment
 	@echo "$(BLUE)Starting self-host OpenBao...$(NC)"
@@ -193,10 +187,17 @@ selfhost-prod-openbao-ps: ## Show the standalone self-host OpenBao container sta
 selfhost-prod-openbao-logs: ## Follow logs for the standalone self-host OpenBao deployment
 	@$(SELFHOST_OPENBAO_COMPOSE) logs -f $(SELFHOST_OPENBAO_LOG_SERVICES)
 
-selfhost-prod-openbao-bootstrap: ## Re-run the standalone OpenBao bootstrap helper
+selfhost-prod-openbao-bootstrap: ## Initialize a fresh standalone OpenBao state once
 	@echo "$(BLUE)Running self-host OpenBao bootstrap...$(NC)"
-	@$(SELFHOST_OPENBAO_COMPOSE) run --rm openbao-bootstrap
+	@$(SELFHOST_OPENBAO_COMPOSE) up -d openbao
+	@$(SELFHOST_OPENBAO_COMPOSE) run --rm --no-deps openbao-bootstrap
+	@$(SELFHOST_OPENBAO_COMPOSE) up -d --wait openbao-unseal
 	@echo "$(GREEN)✓ Self-host OpenBao bootstrap completed$(NC)"
+
+selfhost-prod-openbao-rotate-tls: ## Renew the KMS-owned listener identity, restart and unseal OpenBao
+	@$(SELFHOST_OPENBAO_COMPOSE) run --rm openbao-tls-init -rotate
+	@$(SELFHOST_OPENBAO_COMPOSE) restart openbao
+	@$(SELFHOST_OPENBAO_COMPOSE) up -d --wait openbao openbao-unseal
 
 selfhost-prod-openbao-export: ## Export the standalone OpenBao state archive
 	@echo "$(BLUE)Exporting self-host OpenBao state...$(NC)"
@@ -212,9 +213,6 @@ selfhost-prod-config: ## Validate the self-host production compose files
 selfhost-prod-check: ## Validate tunnel token, OpenBao state, and main self-host compose health
 	@echo "$(BLUE)Checking self-host production deployment state...$(NC)"
 	@python scripts/check-selfhost-production.py --env-file "$(SELFHOST_ENV_FILE)"
-
-selfhost-prod-bootstrap: selfhost-prod-openbao-up selfhost-prod-up ## Start OpenBao and the immutable self-host stack
-	@echo "$(GREEN)✓ Self-host production bootstrap complete$(NC)"
 
 selfhost-prod-up: selfhost-prod-config ## Start the self-host production stack from released images
 	@echo "$(BLUE)Starting self-host production stack...$(NC)"
@@ -381,7 +379,7 @@ services-migrate-production: ## Run db-migrate with the production profile
 
 seed-demo-vendor-fixtures: ## Explicitly seed demo vendor org/catalog/template fixtures
 	@echo "$(BLUE)Seeding demo vendor fixtures...$(NC)"
-	@PYTHONIOENCODING=utf-8 MARTY_MIGRATION_PROFILE=$(if $(MARTY_MIGRATION_PROFILE),$(MARTY_MIGRATION_PROFILE),beta) python scripts/seed_demo_vendor_fixtures.py --env-file "$(BETA_ENV_FILE)"
+	@MARTY_MIGRATION_PROFILE=$(if $(MARTY_MIGRATION_PROFILE),$(MARTY_MIGRATION_PROFILE),beta) $(BASE_COMPOSE) run --build --rm --no-deps -e DATABASE_HOST=postgres -e DATABASE_PORT=5432 db-migrate /usr/local/bin/marty-demo-vendor-seed
 	@echo "$(GREEN)✓ Demo vendor fixtures seeded$(NC)"
 
 dev-db-reset: ## Drop local state volumes, rebuild infra, skip historical demo migrations, then apply explicit demo fixture seeds
@@ -474,10 +472,10 @@ test: ## Run gRPC adapter and factory unit tests
 	@cd services && python -m pytest -v --tb=short
 	@echo "$(GREEN)✓ Tests passed$(NC)"
 
-proto-gen: ## Regenerate Python proto stubs from .proto definitions
-	@echo "$(BLUE)Generating Python proto stubs...$(NC)"
-	@python scripts/compile_protos.py
-	@echo "$(GREEN)✓ Proto stubs generated$(NC)"
+proto-gen: ## Regenerate the Envoy descriptor from canonical .proto definitions
+	@echo "$(BLUE)Generating Envoy descriptor...$(NC)"
+	@uv run --no-project --with-requirements requirements-proto.txt python scripts/compile_protos.py
+	@echo "$(GREEN)✓ Envoy descriptor generated$(NC)"
 
 grpc-health: ## Check gRPC health status of all gRPC-enabled services
 	@echo "$(BLUE)Checking gRPC service health...$(NC)"
@@ -545,15 +543,8 @@ tunnel-keycloak-restart: ## Restart Keycloak with tunnel overrides (then runs se
 
 setup-keycloak: ## Patch Keycloak with env-var credentials (Google IdP, redirect URIs)
 	@echo "$(BLUE)⚙️  Running Keycloak configurator...$(NC)"
-	@set -o pipefail; MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' docker run --rm \
-		--entrypoint bash \
-		--network marty-infra-network \
-		--env-file "$(BETA_ENV_FILE)" \
-		-e KC_URL=http://marty-keycloak:8080 \
-		-e KCADM_PATH=/opt/keycloak/bin/kcadm.sh \
-		-v "$(CURDIR)/scripts/setup-keycloak.sh:/scripts/setup-keycloak.sh:ro" \
-		quay.io/keycloak/keycloak:25.0 \
-		/scripts/setup-keycloak.sh 2>&1 | sed 's/^/  /'
+	@set -o pipefail; MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' \
+		$(TUNNEL_COMPOSE) run --rm --no-deps keycloak-configurator 2>&1 | sed 's/^/  /'
 	@echo "$(GREEN)✅ Keycloak configured$(NC)"
 
 tunnel-full-restart: tunnel-keycloak-restart tunnel-auth-restart ## Restart all tunnel-sensitive services
@@ -736,10 +727,10 @@ canvas-real-status: ## Show real Canvas LMS status
 
 canvas-real-seed: ## Seed ElevenID Canvas platform/binding (and optional Canvas test course/user)
 	@echo "$(BLUE)Seeding real Canvas LMS + ElevenID platform/binding...$(NC)"
-	@PYTHONIOENCODING=utf-8 python scripts/seed_canvas_real.py --env-file "$(BETA_ENV_FILE)"
+	@bash scripts/run-canvas-real-seed.sh "$(BETA_ENV_FILE)"
 	@echo "$(GREEN)✓ Canvas seed completed$(NC)"
 
-canvas-real-bootstrap: canvas-real-up canvas-real-seed ## Start real Canvas and run the seed script
+canvas-real-bootstrap: canvas-real-up canvas-real-seed ## Start real Canvas and run the Rust seed
 	@echo "$(GREEN)✓ Canvas real bootstrap complete$(NC)"
 
 deploy-prod: ## Deploy with secrets from OCI Vault (no .env.production needed)

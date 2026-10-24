@@ -9,13 +9,16 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
+marty-api-key-policy = { path = "../../crates/api-key-policy" }
+marty-issuer-key-resolution = { path = "../../crates/issuer-key-resolution" }
 async-trait.workspace = true
 axum.workspace = true
 base64.workspace = true
 chrono.workspace = true
 hex.workspace = true
 marty-crypto.workspace = true
-marty-oid4vci = { workspace = true, features = ["wallet"] }
+marty-key-material-policy = { path = "../../crates/key-material-policy" }
+marty-oid4vci = { workspace = true, features = ["verifier", "sd_jwt"] }
 marty-oid4vp-contract = { path = "../../crates/oid4vp-contract" }
 marty-verification.workspace = true
 mmf-core.workspace = true
@@ -23,7 +26,6 @@ mmf-platform.workspace = true
 mmf-runtime.workspace = true
 mmf-security.workspace = true
 prost.workspace = true
-p256.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -42,6 +44,7 @@ url.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+ed25519-dalek.workspace = true
 serde_json.workspace = true
 tower.workspace = true
 

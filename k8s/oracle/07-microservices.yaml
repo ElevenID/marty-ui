@@ -48,10 +48,54 @@ spec:
                 secretKeyRef:
                   name: marty-secrets
                   key: GRPC_SERVICE_TOKEN
+            - name: DEVICE_REGISTRATION_GATEWAY_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: DEVICE_REGISTRATION_GATEWAY_KEY
             - name: GATEWAY_PORT
               value: "8000"
+            - name: GATEWAY_SIGN_GRANT_MINT_TOKEN_FILE
+              value: /var/run/secrets/marty/gateway-sign-grant/token
+            - name: GATEWAY_ISSUER_CSR_GRANT_MINT_TOKEN_FILE
+              value: /var/run/secrets/marty/gateway-issuer-csr-grant/token
             - name: AUTH_GRPC_TARGET
-              value: "auth:9001"
+              value: "https://auth:9001"
+            - name: GRPC_INSECURE_ALLOWED
+              value: "false"
+            - name: GRPC_TLS_CA_CERT
+              value: /var/run/secrets/marty/org-workload/ca.crt
+            - name: GRPC_WORKLOAD_TLS_CLIENT_CERT
+              value: /var/run/secrets/marty/gateway-auth-tls/tls.crt
+            - name: GRPC_WORKLOAD_TLS_CA_CERT
+              value: /var/run/secrets/marty/gateway-auth-tls/ca.crt
+            - name: GRPC_WORKLOAD_TLS_CLIENT_KMS_ADDR
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: GATEWAY_TLS_KMS_ADDR
+            - name: GRPC_WORKLOAD_TLS_CLIENT_KMS_CA_CERT
+              value: /var/run/secrets/marty/gateway-auth-kms/ca.crt
+            - name: GRPC_WORKLOAD_TLS_CLIENT_KMS_TOKEN_FILE
+              value: /var/run/secrets/marty/gateway-auth-kms/token
+            - name: GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_NAME
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: GATEWAY_TLS_KMS_KEY_NAME
+            - name: GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_VERSION
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: GATEWAY_TLS_KMS_KEY_VERSION
+            - name: ORG_GRPC_TARGET
+              value: "https://organization:9002"
+            - name: ORG_GRPC_CA_CERT
+              value: /var/run/secrets/marty/org-workload/ca.crt
+            - name: ES_GRPC_TARGET
+              value: "https://event-stream:9015"
+            - name: ES_GRPC_CA_CERT
+              value: /var/run/secrets/marty/org-workload/ca.crt
             - name: ISSUANCE_API_KEY
               valueFrom:
                 secretKeyRef:
@@ -106,6 +150,16 @@ spec:
                 secretKeyRef:
                   name: marty-secrets
                   key: SIGNING_KEYS_INTERNAL_API_KEY
+            - name: SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY
+            - name: SIGNING_KEYS_ISSUER_SIGN_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: SIGNING_KEYS_ISSUER_SIGN_KEY
             - name: DEPLOYMENT_PROFILE_SERVICE_URL
               valueFrom:
                 configMapKeyRef:
@@ -150,6 +204,44 @@ spec:
               port: 8000
             initialDelaySeconds: 10
             periodSeconds: 10
+          volumeMounts:
+            - name: gateway-auth-tls
+              mountPath: /var/run/secrets/marty/gateway-auth-tls
+              readOnly: true
+            - name: gateway-auth-kms
+              mountPath: /var/run/secrets/marty/gateway-auth-kms
+              readOnly: true
+            - name: org-workload-tls
+              mountPath: /var/run/secrets/marty/org-workload
+              readOnly: true
+            - name: gateway-sign-grant
+              mountPath: /var/run/secrets/marty/gateway-sign-grant
+              readOnly: true
+            - name: gateway-issuer-csr-grant
+              mountPath: /var/run/secrets/marty/gateway-issuer-csr-grant
+              readOnly: true
+      volumes:
+        - name: gateway-auth-tls
+          secret:
+            secretName: gateway-auth-tls
+        - name: gateway-auth-kms
+          secret:
+            secretName: gateway-auth-kms
+        - name: org-workload-tls
+          secret:
+            secretName: org-workload-tls
+        - name: gateway-sign-grant
+          secret:
+            secretName: marty-secrets
+            items:
+              - key: GATEWAY_SIGN_GRANT_MINT_TOKEN
+                path: token
+        - name: gateway-issuer-csr-grant
+          secret:
+            secretName: marty-secrets
+            items:
+              - key: GATEWAY_ISSUER_CSR_GRANT_MINT_TOKEN
+                path: token
 ---
 apiVersion: v1
 kind: Service
@@ -225,12 +317,56 @@ spec:
                   key: DATABASE_SYNC_URL
             - name: GRPC_WORKLOAD_TLS_CLIENT_CERT
               value: /var/run/secrets/marty/workload/tls.crt
-            - name: GRPC_WORKLOAD_TLS_CLIENT_KEY
-              value: /var/run/secrets/marty/workload/tls.key
+            - name: GRPC_WORKLOAD_TLS_CLIENT_KMS_ADDR
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: AUTH_TLS_KMS_ADDR
+            - name: GRPC_WORKLOAD_TLS_CLIENT_KMS_CA_CERT
+              value: /var/run/secrets/marty/auth-tls-kms/ca.crt
+            - name: GRPC_WORKLOAD_TLS_CLIENT_KMS_TOKEN_FILE
+              value: /var/run/secrets/marty/auth-tls-kms/token
+            - name: GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_NAME
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: AUTH_TLS_KMS_KEY_NAME
+            - name: GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_VERSION
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: AUTH_TLS_KMS_KEY_VERSION
+            - name: GRPC_WORKLOAD_TLS_SERVER_CERT
+              value: /var/run/secrets/marty/auth-server-tls/tls.crt
+            - name: GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: AUTH_SERVER_TLS_KMS_ADDR
+            - name: GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT
+              value: /var/run/secrets/marty/auth-server-kms/ca.crt
+            - name: GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE
+              value: /var/run/secrets/marty/auth-server-kms/token
+            - name: GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: AUTH_SERVER_TLS_KMS_KEY_NAME
+            - name: GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: AUTH_SERVER_TLS_KMS_KEY_VERSION
             - name: GRPC_WORKLOAD_TLS_CA_CERT
               value: /var/run/secrets/marty/workload/ca.crt
             - name: AUTH_SERVICE_PORT
               value: "8001"
+            - name: FLOW_GRPC_TARGET
+              value: "https://flow:9011"
+            - name: ES_GRPC_TARGET
+              value: "https://event-stream:9015"
+            - name: ORG_GRPC_TARGET
+              value: "https://organization:9002"
             - name: UI_BASE_URL
               valueFrom:
                 configMapKeyRef:
@@ -319,8 +455,17 @@ spec:
                   name: marty-config
                   key: ISSUANCE_NATIVE_SERVICE_URL
           volumeMounts:
+            - name: auth-server-tls
+              mountPath: /var/run/secrets/marty/auth-server-tls
+              readOnly: true
+            - name: auth-server-kms
+              mountPath: /var/run/secrets/marty/auth-server-kms
+              readOnly: true
             - name: auth-workload-tls
               mountPath: /var/run/secrets/marty/workload
+              readOnly: true
+            - name: auth-tls-kms
+              mountPath: /var/run/secrets/marty/auth-tls-kms
               readOnly: true
           resources:
             requests:
@@ -342,9 +487,18 @@ spec:
             initialDelaySeconds: 10
             periodSeconds: 10
       volumes:
+        - name: auth-server-tls
+          secret:
+            secretName: auth-server-tls
+        - name: auth-server-kms
+          secret:
+            secretName: auth-server-kms
         - name: auth-workload-tls
           secret:
             secretName: auth-workload-tls
+        - name: auth-tls-kms
+          secret:
+            secretName: auth-tls-kms
 ---
 apiVersion: v1
 kind: Service
@@ -406,8 +560,31 @@ spec:
               value: "8002"
             - name: ORG_GRPC_PORT
               value: "9002"
+            - name: GRPC_WORKLOAD_TLS_SERVER_CERT
+              value: /var/run/secrets/marty/org-workload/tls.crt
+            - name: GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: ORG_TLS_KMS_ADDR
+            - name: GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT
+              value: /var/run/secrets/marty/org-tls-kms/ca.crt
+            - name: GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE
+              value: /var/run/secrets/marty/org-tls-kms/token
+            - name: GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: ORG_TLS_KMS_KEY_NAME
+            - name: GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: ORG_TLS_KMS_KEY_VERSION
             - name: ES_GRPC_TARGET
-              value: "event-stream:9015"
+              value: "https://event-stream:9015"
+            - name: ES_GRPC_CA_CERT
+              value: /var/run/secrets/marty/org-workload/ca.crt
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
@@ -428,6 +605,13 @@ spec:
                 configMapKeyRef:
                   name: marty-config
                   key: ORGANIZATION_CREATION_ENABLED
+          volumeMounts:
+            - name: org-workload-tls
+              mountPath: /var/run/secrets/marty/org-workload
+              readOnly: true
+            - name: org-tls-kms
+              mountPath: /var/run/secrets/marty/org-tls-kms
+              readOnly: true
           resources:
             requests:
               memory: "256Mi"
@@ -447,6 +631,13 @@ spec:
               port: 8002
             initialDelaySeconds: 10
             periodSeconds: 10
+      volumes:
+        - name: org-workload-tls
+          secret:
+            secretName: org-workload-tls
+        - name: org-tls-kms
+          secret:
+            secretName: org-tls-kms
 ---
 apiVersion: v1
 kind: Service
@@ -513,6 +704,35 @@ spec:
                   key: SIGNING_KEYS_INTERNAL_API_KEY
             - name: CREDENTIAL_TEMPLATE_SERVICE_PORT
               value: "8003"
+            - name: ORG_GRPC_TARGET
+              value: https://organization:9002
+            - name: ORG_GRPC_CA_CERT
+              value: /var/run/secrets/marty/ct-workload/ca.crt
+            - name: RP_GRPC_TARGET
+              value: https://revocation-profile:9013
+            - name: RP_GRPC_CA_CERT
+              value: /var/run/secrets/marty/ct-workload/ca.crt
+            - name: GRPC_WORKLOAD_TLS_SERVER_CERT
+              value: /var/run/secrets/marty/ct-workload/tls.crt
+            - name: GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: CT_TLS_KMS_ADDR
+            - name: GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT
+              value: /var/run/secrets/marty/ct-tls-kms/ca.crt
+            - name: GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE
+              value: /var/run/secrets/marty/ct-tls-kms/token
+            - name: GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: CT_TLS_KMS_KEY_NAME
+            - name: GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: CT_TLS_KMS_KEY_VERSION
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
@@ -523,6 +743,13 @@ spec:
                 secretKeyRef:
                   name: marty-secrets
                   key: RABBITMQ_URL
+          volumeMounts:
+            - name: ct-workload-tls
+              mountPath: /var/run/secrets/marty/ct-workload
+              readOnly: true
+            - name: ct-tls-kms
+              mountPath: /var/run/secrets/marty/ct-tls-kms
+              readOnly: true
           resources:
             requests:
               memory: "256Mi"
@@ -542,6 +769,13 @@ spec:
               port: 8003
             initialDelaySeconds: 10
             periodSeconds: 10
+      volumes:
+        - name: ct-workload-tls
+          secret:
+            secretName: ct-workload-tls
+        - name: ct-tls-kms
+          secret:
+            secretName: ct-tls-kms
 ---
 apiVersion: v1
 kind: Service
@@ -605,6 +839,10 @@ spec:
                   key: SIGNING_KEYS_INTERNAL_API_KEY
             - name: TRUST_PROFILE_SERVICE_PORT
               value: "8004"
+            - name: ORG_GRPC_TARGET
+              value: "https://organization:9002"
+            - name: ORG_GRPC_CA_CERT
+              value: /var/run/secrets/marty/org-workload/ca.crt
             - name: DID_RESOLUTION_BASE_URL
               value: "http://gateway:8000"
             - name: DID_PUBLIC_FALLBACK_ENABLED
@@ -633,6 +871,14 @@ spec:
               port: 8004
             initialDelaySeconds: 10
             periodSeconds: 10
+          volumeMounts:
+            - name: org-workload-tls
+              mountPath: /var/run/secrets/marty/org-workload
+              readOnly: true
+      volumes:
+        - name: org-workload-tls
+          secret:
+            secretName: org-workload-tls
 ---
 apiVersion: v1
 kind: Service
@@ -648,7 +894,7 @@ spec:
     app: trust-profile
 ---
 # ================================================================
-# 6. Issuance (:8005) — built from marty-credentials repo
+# 6. Issuance (:8005) — shared native Rust services image
 # ================================================================
 apiVersion: apps/v1
 kind: Deployment
@@ -675,13 +921,19 @@ spec:
         - name: issuance
           image: ${MARTY_ISSUANCE_IMAGE}
           imagePullPolicy: Always
+          command: ['/usr/local/bin/marty-issuance-service']
           envFrom:
             - configMapRef:
                 name: marty-config
           ports:
             - containerPort: 8005
-            - containerPort: 9005
           env:
+            - name: SERVICE_NAME
+              value: issuance_native
+            - name: MARTY_SCHEMA_STARTUP_MODE
+              value: validate
+            - name: CANVAS_MIRROR_WORKER_ENABLED
+              value: "false"
             - name: GRPC_SERVICE_TOKEN
               valueFrom:
                 secretKeyRef:
@@ -689,20 +941,26 @@ spec:
                   key: GRPC_SERVICE_TOKEN
             - name: ISSUANCE_SERVICE_PORT
               value: "8005"
+            - name: ISSUANCE_GRPC_ENABLED
+              value: "false"
             - name: ISSUANCE_API_KEY
               valueFrom:
                 secretKeyRef:
                   name: marty-secrets
                   key: ISSUANCE_API_KEY
             - name: ORG_GRPC_TARGET
-              value: "organization:9002"
+              value: "https://organization:9002"
             - name: CT_GRPC_TARGET
-              value: "credential-template:9003"
+              value: "https://credential-template:9003"
+            - name: RP_GRPC_TARGET
+              value: "https://revocation-profile:9013"
+            - name: GRPC_TLS_CA_CERT
+              value: /var/run/secrets/marty/ct-workload/ca.crt
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
                   name: marty-secrets
-                  key: DATABASE_URL
+                  key: DATABASE_SYNC_URL
             - name: RABBITMQ_URL
               valueFrom:
                 secretKeyRef:
@@ -718,11 +976,6 @@ spec:
                 secretKeyRef:
                   name: marty-secrets
                   key: TOKEN_HMAC_KEY
-            - name: INTEGRATION_SECRET_MASTER_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: marty-secrets
-                  key: INTEGRATION_SECRET_MASTER_KEY
             - name: CANVAS_CREDENTIALS_SHARED_SECRET
               valueFrom:
                 secretKeyRef:
@@ -867,6 +1120,31 @@ spec:
                 secretKeyRef:
                   name: marty-secrets
                   key: SIGNING_KEYS_INTERNAL_API_KEY
+            - name: SIGNING_KEYS_ISSUER_SIGN_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: SIGNING_KEYS_ISSUER_SIGN_KEY
+            - name: SIGNING_KEYS_INTEGRATION_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: SIGNING_KEYS_INTEGRATION_SECRET_KEY
+            - name: ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN_FILE
+              value: /var/run/secrets/marty/issuance-sign-grants/credential
+            - name: ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN_FILE
+              value: /var/run/secrets/marty/issuance-sign-grants/canvas
+            - name: ISSUANCE_READINESS_SIGN_GRANT_MINT_TOKEN_FILE
+              value: /var/run/secrets/marty/issuance-sign-grants/readiness
+            - name: ISSUANCE_PASSPORT_SIGN_GRANT_MINT_TOKEN_FILE
+              value: /var/run/secrets/marty/issuance-sign-grants/passport
+          volumeMounts:
+            - name: ct-workload-tls
+              mountPath: /var/run/secrets/marty/ct-workload
+              readOnly: true
+            - name: issuance-sign-grants
+              mountPath: /var/run/secrets/marty/issuance-sign-grants
+              readOnly: true
           resources:
             requests:
               memory: "512Mi"
@@ -887,6 +1165,22 @@ spec:
               port: 8005
             initialDelaySeconds: 30
             periodSeconds: 15
+      volumes:
+        - name: ct-workload-tls
+          secret:
+            secretName: ct-workload-tls
+        - name: issuance-sign-grants
+          secret:
+            secretName: marty-secrets
+            items:
+              - key: ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN
+                path: credential
+              - key: ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN
+                path: canvas
+              - key: ISSUANCE_READINESS_SIGN_GRANT_MINT_TOKEN
+                path: readiness
+              - key: ISSUANCE_PASSPORT_SIGN_GRANT_MINT_TOKEN
+                path: passport
 ---
 apiVersion: v1
 kind: Service
@@ -894,13 +1188,11 @@ metadata:
   name: issuance
   namespace: marty-prod
 spec:
+  type: ClusterIP
   ports:
     - port: 8005
       targetPort: 8005
       name: http
-    - port: 9005
-      targetPort: 9005
-      name: grpc
   selector:
     app: issuance
 ---
@@ -954,18 +1246,36 @@ spec:
                 secretKeyRef:
                   name: marty-secrets
                   key: TOKEN_HMAC_KEY
-            - name: INTEGRATION_SECRET_MASTER_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: marty-secrets
-                  key: INTEGRATION_SECRET_MASTER_KEY
             - name: SIGNING_KEYS_INTERNAL_URL
               value: "http://gateway:8000/internal/signing-keys"
+            - name: INTEGRATION_SECRET_KMS_URL
+              value: "https://signing-keys:8018/internal"
+            - name: INTEGRATION_SECRET_KMS_CA_FILE
+              value: /run/secrets/integration-secret-ca/ca.crt
             - name: SIGNING_KEYS_INTERNAL_API_KEY
               valueFrom:
                 secretKeyRef:
                   name: marty-secrets
                   key: SIGNING_KEYS_INTERNAL_API_KEY
+            - name: SIGNING_KEYS_ISSUER_SIGN_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: SIGNING_KEYS_ISSUER_SIGN_KEY
+            - name: SIGNING_KEYS_INTEGRATION_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: SIGNING_KEYS_INTEGRATION_SECRET_KEY
+            - name: ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN_FILE
+              value: /var/run/secrets/marty/issuance-canvas-sign-grant/token
+          volumeMounts:
+            - name: integration-secret-ca
+              mountPath: /run/secrets/integration-secret-ca
+              readOnly: true
+            - name: issuance-canvas-sign-grant
+              mountPath: /var/run/secrets/marty/issuance-canvas-sign-grant
+              readOnly: true
           resources:
             requests:
               memory: "256Mi"
@@ -973,6 +1283,16 @@ spec:
             limits:
               memory: "512Mi"
               cpu: "500m"
+      volumes:
+        - name: integration-secret-ca
+          secret:
+            secretName: signing-keys-integration-secret-ca
+        - name: issuance-canvas-sign-grant
+          secret:
+            secretName: marty-secrets
+            items:
+              - key: ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN
+                path: token
 ---
 # ================================================================
 # 6b. Verification (:8012)
@@ -1018,16 +1338,33 @@ spec:
               value: "8012"
             - name: GRPC_WORKLOAD_TLS_CLIENT_CERT
               value: /var/run/secrets/marty/workload/tls.crt
-            - name: GRPC_WORKLOAD_TLS_CLIENT_KEY
-              value: /var/run/secrets/marty/workload/tls.key
+            - name: GRPC_WORKLOAD_TLS_KMS_ADDR
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: VERIFICATION_TLS_KMS_ADDR
+            - name: GRPC_WORKLOAD_TLS_KMS_CA_CERT
+              value: /var/run/secrets/marty/verification-tls-kms/ca.crt
+            - name: GRPC_WORKLOAD_TLS_KMS_TOKEN_FILE
+              value: /var/run/secrets/marty/verification-tls-kms/token
+            - name: GRPC_WORKLOAD_TLS_KMS_KEY_NAME
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: VERIFICATION_TLS_KMS_KEY_NAME
+            - name: GRPC_WORKLOAD_TLS_KMS_KEY_VERSION
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: VERIFICATION_TLS_KMS_KEY_VERSION
             - name: GRPC_WORKLOAD_TLS_CA_CERT
               value: /var/run/secrets/marty/workload/ca.crt
             - name: PP_GRPC_TARGET
-              value: "presentation-policy:9009"
+              value: "https://presentation-policy:9009"
             - name: ORG_GRPC_TARGET
-              value: "organization:9002"
+              value: "https://organization:9002"
             - name: CT_GRPC_TARGET
-              value: "credential-template:9003"
+              value: "https://credential-template:9003"
             - name: VERIF_GRPC_PORT
               value: "9017"
             - name: VERIF_GRPC_ENABLED
@@ -1042,6 +1379,9 @@ spec:
           volumeMounts:
             - name: verification-workload-tls
               mountPath: /var/run/secrets/marty/workload
+              readOnly: true
+            - name: verification-tls-kms
+              mountPath: /var/run/secrets/marty/verification-tls-kms
               readOnly: true
           resources:
             requests:
@@ -1066,6 +1406,9 @@ spec:
         - name: verification-workload-tls
           secret:
             secretName: verification-workload-tls
+        - name: verification-tls-kms
+          secret:
+            secretName: verification-tls-kms
 ---
 apiVersion: v1
 kind: Service
@@ -1136,14 +1479,12 @@ spec:
                 secretKeyRef:
                   name: marty-secrets
                   key: FLOW_APPLICATION_EVENT_HMAC_KEY
-            - name: GRPC_WORKLOAD_TLS_CLIENT_CERT
-              value: /var/run/secrets/marty/workload/tls.crt
-            - name: GRPC_WORKLOAD_TLS_CLIENT_KEY
-              value: /var/run/secrets/marty/workload/tls.key
-            - name: GRPC_WORKLOAD_TLS_CA_CERT
-              value: /var/run/secrets/marty/workload/ca.crt
             - name: APPLICANT_SERVICE_PORT
               value: "8006"
+            - name: ES_GRPC_TARGET
+              value: "https://event-stream:9015"
+            - name: ES_GRPC_CA_CERT
+              value: /var/run/secrets/marty/es-workload/ca.crt
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
@@ -1171,8 +1512,8 @@ spec:
           volumeMounts:
             - name: applicant-data
               mountPath: /app/data
-            - name: applicant-workload-tls
-              mountPath: /var/run/secrets/marty/workload
+            - name: es-workload-tls
+              mountPath: /var/run/secrets/marty/es-workload
               readOnly: true
           livenessProbe:
             httpGet:
@@ -1190,9 +1531,9 @@ spec:
         - name: applicant-data
           persistentVolumeClaim:
             claimName: applicant-data
-        - name: applicant-workload-tls
+        - name: es-workload-tls
           secret:
-            secretName: applicant-workload-tls
+            secretName: es-workload-tls
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -1302,6 +1643,8 @@ spec:
                   key: SMTP_PASSWORD
             - name: NOTIFICATION_OPENBAO_TOKEN_FILE
               value: /run/secrets/notification_openbao_token
+            - name: NOTIFICATION_OPENBAO_CA_CERT_FILE
+              value: /run/secrets/openbao_tls_ca_cert
           volumeMounts:
             - name: notification-openbao-token
               mountPath: /run/secrets
@@ -1332,6 +1675,8 @@ spec:
             items:
               - key: NOTIFICATION_OPENBAO_TOKEN
                 path: notification_openbao_token
+              - key: OPENBAO_TLS_CA_CERT
+                path: openbao_tls_ca_cert
 ---
 apiVersion: v1
 kind: Service
@@ -1383,6 +1728,8 @@ spec:
           ports:
             - containerPort: 8008
           env:
+            - name: GRPC_INSECURE_ALLOWED
+              value: "false"
             - name: GRPC_SERVICE_TOKEN
               valueFrom:
                 secretKeyRef:
@@ -1392,10 +1739,29 @@ spec:
               value: "8008"
             - name: GRPC_WORKLOAD_TLS_CLIENT_CERT
               value: /var/run/secrets/marty/workload/tls.crt
-            - name: GRPC_WORKLOAD_TLS_CLIENT_KEY
-              value: /var/run/secrets/marty/workload/tls.key
+            - name: GRPC_WORKLOAD_TLS_KMS_ADDR
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: COMPLIANCE_PROFILE_TLS_KMS_ADDR
+            - name: GRPC_WORKLOAD_TLS_KMS_CA_CERT
+              value: /var/run/secrets/marty/compliance-profile-tls-kms/ca.crt
+            - name: GRPC_WORKLOAD_TLS_KMS_TOKEN_FILE
+              value: /var/run/secrets/marty/compliance-profile-tls-kms/token
+            - name: GRPC_WORKLOAD_TLS_KMS_KEY_NAME
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: COMPLIANCE_PROFILE_TLS_KMS_KEY_NAME
+            - name: GRPC_WORKLOAD_TLS_KMS_KEY_VERSION
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: COMPLIANCE_PROFILE_TLS_KMS_KEY_VERSION
             - name: GRPC_WORKLOAD_TLS_CA_CERT
               value: /var/run/secrets/marty/workload/ca.crt
+            - name: ORG_GRPC_TARGET
+              value: https://organization:9002
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
@@ -1409,6 +1775,9 @@ spec:
           volumeMounts:
             - name: compliance-profile-workload-tls
               mountPath: /var/run/secrets/marty/workload
+              readOnly: true
+            - name: compliance-profile-tls-kms
+              mountPath: /var/run/secrets/marty/compliance-profile-tls-kms
               readOnly: true
           resources:
             requests:
@@ -1433,6 +1802,9 @@ spec:
         - name: compliance-profile-workload-tls
           secret:
             secretName: compliance-profile-workload-tls
+        - name: compliance-profile-tls-kms
+          secret:
+            secretName: compliance-profile-tls-kms
 ---
 apiVersion: v1
 kind: Service
@@ -1489,12 +1861,40 @@ spec:
                   key: GRPC_SERVICE_TOKEN
             - name: GRPC_WORKLOAD_TLS_SERVER_CERT
               value: /var/run/secrets/marty/workload/tls.crt
-            - name: GRPC_WORKLOAD_TLS_SERVER_KEY
-              value: /var/run/secrets/marty/workload/tls.key
+            - name: GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: PP_TLS_KMS_ADDR
+            - name: GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT
+              value: /var/run/secrets/marty/pp-tls-kms/ca.crt
+            - name: GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE
+              value: /var/run/secrets/marty/pp-tls-kms/token
+            - name: GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: PP_TLS_KMS_KEY_NAME
+            - name: GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: PP_TLS_KMS_KEY_VERSION
             - name: GRPC_WORKLOAD_TLS_CA_CERT
+              value: /var/run/secrets/marty/workload/ca.crt
+            - name: ORG_GRPC_TARGET
+              value: https://organization:9002
+            - name: ORG_GRPC_CA_CERT
               value: /var/run/secrets/marty/workload/ca.crt
             - name: PRESENTATION_POLICY_SERVICE_PORT
               value: "8009"
+            - name: SIGNING_KEYS_SERVICE_URL
+              value: http://signing-keys:8017
+            - name: SIGNING_KEYS_INTERNAL_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: SIGNING_KEYS_INTERNAL_API_KEY
             - name: DID_RESOLUTION_BASE_URL
               value: "http://gateway:8000"
             - name: DID_PUBLIC_FALLBACK_ENABLED
@@ -1517,6 +1917,9 @@ spec:
           volumeMounts:
             - name: presentation-policy-workload-tls
               mountPath: /var/run/secrets/marty/workload
+              readOnly: true
+            - name: pp-tls-kms
+              mountPath: /var/run/secrets/marty/pp-tls-kms
               readOnly: true
           resources:
             requests:
@@ -1541,6 +1944,9 @@ spec:
         - name: presentation-policy-workload-tls
           secret:
             secretName: presentation-policy-workload-tls
+        - name: pp-tls-kms
+          secret:
+            secretName: pp-tls-kms
 ---
 apiVersion: v1
 kind: Service
@@ -1592,6 +1998,8 @@ spec:
           ports:
             - containerPort: 8010
           env:
+            - name: GRPC_INSECURE_ALLOWED
+              value: "false"
             - name: GRPC_SERVICE_TOKEN
               valueFrom:
                 secretKeyRef:
@@ -1601,10 +2009,29 @@ spec:
               value: "8010"
             - name: GRPC_WORKLOAD_TLS_CLIENT_CERT
               value: /var/run/secrets/marty/workload/tls.crt
-            - name: GRPC_WORKLOAD_TLS_CLIENT_KEY
-              value: /var/run/secrets/marty/workload/tls.key
+            - name: GRPC_WORKLOAD_TLS_KMS_ADDR
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: DEPLOYMENT_PROFILE_TLS_KMS_ADDR
+            - name: GRPC_WORKLOAD_TLS_KMS_CA_CERT
+              value: /var/run/secrets/marty/deployment-profile-tls-kms/ca.crt
+            - name: GRPC_WORKLOAD_TLS_KMS_TOKEN_FILE
+              value: /var/run/secrets/marty/deployment-profile-tls-kms/token
+            - name: GRPC_WORKLOAD_TLS_KMS_KEY_NAME
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: DEPLOYMENT_PROFILE_TLS_KMS_KEY_NAME
+            - name: GRPC_WORKLOAD_TLS_KMS_KEY_VERSION
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: DEPLOYMENT_PROFILE_TLS_KMS_KEY_VERSION
             - name: GRPC_WORKLOAD_TLS_CA_CERT
               value: /var/run/secrets/marty/workload/ca.crt
+            - name: ORG_GRPC_TARGET
+              value: https://organization:9002
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
@@ -1618,6 +2045,9 @@ spec:
           volumeMounts:
             - name: deployment-profile-workload-tls
               mountPath: /var/run/secrets/marty/workload
+              readOnly: true
+            - name: deployment-profile-tls-kms
+              mountPath: /var/run/secrets/marty/deployment-profile-tls-kms
               readOnly: true
           resources:
             requests:
@@ -1642,6 +2072,9 @@ spec:
         - name: deployment-profile-workload-tls
           secret:
             secretName: deployment-profile-workload-tls
+        - name: deployment-profile-tls-kms
+          secret:
+            secretName: deployment-profile-tls-kms
 ---
 apiVersion: v1
 kind: Service
@@ -1691,6 +2124,8 @@ spec:
             - containerPort: 8011
             - containerPort: 9011
           env:
+            - name: GRPC_INSECURE_ALLOWED
+              value: "false"
             - name: GRPC_SERVICE_TOKEN
               valueFrom:
                 secretKeyRef:
@@ -1698,12 +2133,46 @@ spec:
                   key: GRPC_SERVICE_TOKEN
             - name: GRPC_WORKLOAD_TLS_CLIENT_CERT
               value: /var/run/secrets/marty/workload/tls.crt
-            - name: GRPC_WORKLOAD_TLS_CLIENT_KEY
-              value: /var/run/secrets/marty/workload/tls.key
+            - name: GRPC_WORKLOAD_TLS_CLIENT_KMS_ADDR
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: FLOW_CLIENT_TLS_KMS_ADDR
+            - name: GRPC_WORKLOAD_TLS_CLIENT_KMS_CA_CERT
+              value: /var/run/secrets/marty/flow-client-tls-kms/ca.crt
+            - name: GRPC_WORKLOAD_TLS_CLIENT_KMS_TOKEN_FILE
+              value: /var/run/secrets/marty/flow-client-tls-kms/token
+            - name: GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_NAME
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: FLOW_CLIENT_TLS_KMS_KEY_NAME
+            - name: GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_VERSION
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: FLOW_CLIENT_TLS_KMS_KEY_VERSION
             - name: GRPC_WORKLOAD_TLS_SERVER_CERT
               value: /var/run/secrets/marty/flow-server-workload/tls.crt
-            - name: GRPC_WORKLOAD_TLS_SERVER_KEY
-              value: /var/run/secrets/marty/flow-server-workload/tls.key
+            - name: GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: FLOW_SERVER_TLS_KMS_ADDR
+            - name: GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT
+              value: /var/run/secrets/marty/flow-server-tls-kms/ca.crt
+            - name: GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE
+              value: /var/run/secrets/marty/flow-server-tls-kms/token
+            - name: GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: FLOW_SERVER_TLS_KMS_KEY_NAME
+            - name: GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: FLOW_SERVER_TLS_KMS_KEY_VERSION
             - name: GRPC_WORKLOAD_TLS_CA_CERT
               value: /var/run/secrets/marty/workload/ca.crt
             - name: FLOW_WEBHOOK_SECRET
@@ -1716,10 +2185,33 @@ spec:
                 secretKeyRef:
                   name: marty-secrets
                   key: FLOW_APPLICATION_EVENT_HMAC_KEY
+            - name: SIGNING_KEYS_INTERNAL_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: SIGNING_KEYS_INTERNAL_API_KEY
+            - name: SIGNING_KEYS_ISSUER_SIGN_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: SIGNING_KEYS_ISSUER_SIGN_KEY
+            - name: ISSUANCE_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: ISSUANCE_API_KEY
             - name: FLOW_SERVICE_PORT
               value: "8011"
+            - name: FLOW_SIGN_GRANT_MINT_TOKEN_FILE
+              value: /var/run/secrets/marty/flow-sign-grant/token
+            - name: ORG_GRPC_TARGET
+              value: https://organization:9002
+            - name: CT_GRPC_TARGET
+              value: https://credential-template:9003
+            - name: PP_GRPC_TARGET
+              value: https://presentation-policy:9009
             - name: ISSUANCE_GRPC_TARGET
-              value: "issuance:9005"
+              value: "https://issuance-native:9005"
             - name: ISSUANCE_SERVICE_URL
               valueFrom:
                 configMapKeyRef:
@@ -1754,8 +2246,17 @@ spec:
             - name: flow-workload-tls
               mountPath: /var/run/secrets/marty/workload
               readOnly: true
+            - name: flow-client-tls-kms
+              mountPath: /var/run/secrets/marty/flow-client-tls-kms
+              readOnly: true
             - name: flow-server-workload-tls
               mountPath: /var/run/secrets/marty/flow-server-workload
+              readOnly: true
+            - name: flow-server-tls-kms
+              mountPath: /var/run/secrets/marty/flow-server-tls-kms
+              readOnly: true
+            - name: flow-sign-grant
+              mountPath: /var/run/secrets/marty/flow-sign-grant
               readOnly: true
           resources:
             requests:
@@ -1780,9 +2281,21 @@ spec:
         - name: flow-workload-tls
           secret:
             secretName: flow-workload-tls
+        - name: flow-client-tls-kms
+          secret:
+            secretName: flow-client-tls-kms
         - name: flow-server-workload-tls
           secret:
             secretName: flow-server-workload-tls
+        - name: flow-server-tls-kms
+          secret:
+            secretName: flow-server-tls-kms
+        - name: flow-sign-grant
+          secret:
+            secretName: marty-secrets
+            items:
+              - key: FLOW_SIGN_GRANT_MINT_TOKEN
+                path: token
 ---
 apiVersion: v1
 kind: Service
@@ -1851,6 +2364,29 @@ spec:
               value: "8013"
             - name: RP_GRPC_PORT
               value: "9013"
+            - name: RP_GRPC_ENABLED
+              value: "true"
+            - name: GRPC_WORKLOAD_TLS_SERVER_CERT
+              value: /var/run/secrets/marty/rp-workload/tls.crt
+            - name: GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: RP_TLS_KMS_ADDR
+            - name: GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT
+              value: /var/run/secrets/marty/rp-tls-kms/ca.crt
+            - name: GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE
+              value: /var/run/secrets/marty/rp-tls-kms/token
+            - name: GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: RP_TLS_KMS_KEY_NAME
+            - name: GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: RP_TLS_KMS_KEY_VERSION
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
@@ -1859,7 +2395,16 @@ spec:
             - name: REDIS_URL
               value: "redis://redis:6379/4"
             - name: ORG_GRPC_TARGET
-              value: "organization:9002"
+              value: "https://organization:9002"
+            - name: ORG_GRPC_CA_CERT
+              value: /var/run/secrets/marty/rp-workload/ca.crt
+          volumeMounts:
+            - name: rp-workload-tls
+              mountPath: /var/run/secrets/marty/rp-workload
+              readOnly: true
+            - name: rp-tls-kms
+              mountPath: /var/run/secrets/marty/rp-tls-kms
+              readOnly: true
           resources:
             requests:
               memory: "256Mi"
@@ -1879,6 +2424,13 @@ spec:
               port: 8013
             initialDelaySeconds: 10
             periodSeconds: 10
+      volumes:
+        - name: rp-workload-tls
+          secret:
+            secretName: rp-workload-tls
+        - name: rp-tls-kms
+          secret:
+            secretName: rp-tls-kms
 ---
 apiVersion: v1
 kind: Service
@@ -1935,6 +2487,18 @@ spec:
                 secretKeyRef:
                   name: marty-secrets
                   key: GRPC_SERVICE_TOKEN
+            - name: DEVICE_REGISTRATION_GATEWAY_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: DEVICE_REGISTRATION_GATEWAY_KEY
+            - name: DEVICE_REGISTRATION_SIGNING_KEYS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: DEVICE_REGISTRATION_SIGNING_KEYS_KEY
+            - name: SIGNING_KEYS_HOLDER_ORIGIN
+              value: http://signing-keys:8017
             - name: DEVICE_REGISTRATION_SERVICE_PORT
               value: "8014"
             - name: DATABASE_URL
@@ -1945,7 +2509,13 @@ spec:
             - name: REDIS_URL
               value: "redis://redis:6379/5"
             - name: ORG_GRPC_TARGET
-              value: "organization:9002"
+              value: "https://organization:9002"
+            - name: ORG_GRPC_CA_CERT
+              value: /var/run/secrets/marty/org-workload/ca.crt
+          volumeMounts:
+            - name: org-workload-tls
+              mountPath: /var/run/secrets/marty/org-workload
+              readOnly: true
           resources:
             requests:
               memory: "256Mi"
@@ -1965,6 +2535,10 @@ spec:
               port: 8014
             initialDelaySeconds: 10
             periodSeconds: 10
+      volumes:
+        - name: org-workload-tls
+          secret:
+            secretName: org-workload-tls
 ---
 apiVersion: v1
 kind: Service
@@ -2025,6 +2599,27 @@ spec:
               value: "true"
             - name: EVENT_STREAM_GRPC_PORT
               value: "9015"
+            - name: GRPC_WORKLOAD_TLS_SERVER_CERT
+              value: /var/run/secrets/marty/es-workload/tls.crt
+            - name: GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: ES_TLS_KMS_ADDR
+            - name: GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT
+              value: /var/run/secrets/marty/es-tls-kms/ca.crt
+            - name: GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE
+              value: /var/run/secrets/marty/es-tls-kms/token
+            - name: GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: ES_TLS_KMS_KEY_NAME
+            - name: GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: ES_TLS_KMS_KEY_VERSION
           resources:
             requests:
               memory: "128Mi"
@@ -2044,6 +2639,20 @@ spec:
               port: 8015
             initialDelaySeconds: 10
             periodSeconds: 10
+          volumeMounts:
+            - name: es-workload-tls
+              mountPath: /var/run/secrets/marty/es-workload
+              readOnly: true
+            - name: es-tls-kms
+              mountPath: /var/run/secrets/marty/es-tls-kms
+              readOnly: true
+      volumes:
+        - name: es-workload-tls
+          secret:
+            secretName: es-workload-tls
+        - name: es-tls-kms
+          secret:
+            secretName: es-tls-kms
 ---
 apiVersion: v1
 kind: Service

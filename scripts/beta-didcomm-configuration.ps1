@@ -2,8 +2,7 @@
 function Get-BetaDidcommProfiles {
     param([bool]$Enabled)
     if ($Enabled) {
-        "docker-compose.profile.didcomm-authcrypt.yml"
-        "docker-compose.profile.didcomm-native-authcrypt.yml"
+        "docker-compose.profile.issuance-native-authcrypt.yml"
     }
 }
 

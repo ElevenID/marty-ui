@@ -1,4 +1,5 @@
-use std::{error::Error, sync::Arc, time::Duration};
+use marty_signing_grant::SigningOrigin;
+use std::{error::Error, future::Future, path::PathBuf, pin::Pin, sync::Arc, time::Duration};
 
 use marty_issuance_service::issuance_proto::issuance_service_server::IssuanceServiceServer;
 use marty_issuance_service::{
@@ -89,6 +90,8 @@ use marty_issuance_service::{
     credential_management_postgres::PostgresCredentialManagementRepository,
     credential_postgres::PostgresCredentialRepository,
     credential_renewal::CredentialRenewalService,
+    dependency_probe,
+    didcomm_remote_kms::RemoteDidcommKms,
     dpop::MartyDpopProofVerifier,
     ephemeral_postgres::PostgresProofNonceRepository,
     http::{
@@ -109,7 +112,7 @@ use marty_issuance_service::{
     initiation_didcomm_http::InitiationDidcommHttpService,
     initiation_http::InitiationHttpService,
     initiation_response::InitiationOfferProjector,
-    integration_secret::IntegrationSecretCipher,
+    integration_secret_kms::KmsIntegrationSecretCipher,
     internal_application_approval::{
         CompositeInternalApplicationApprover, CompositeInternalApplicationTransactionPreparer,
         OrdinaryInternalApplicationApprover,
@@ -138,6 +141,7 @@ use marty_issuance_service::{
     resource_owner::ResourceOwnerService,
     resource_owner_postgres::PostgresResourceOwnerRepository,
     retention::{PostgresRetentionRepository, RetentionService},
+    signing_grant_config::managed_grant_minter,
     signing_policy::HttpProofPolicyResolver,
     tenant_discovery::TenantDiscoveryService,
     tenant_postgres::PostgresTenantDiscoveryRepository,
@@ -147,14 +151,17 @@ use marty_issuance_service::{
     transaction_postgres::PostgresTransactionReadRepository,
     transaction_reads::TransactionReadService,
     transport::TransportPolicy,
-    validate_embedded_contract, IssuanceRuntime, IssuanceServiceConfig,
+    IssuanceRuntime, IssuanceServiceConfig,
 };
 use marty_oid4vci::discovery::StaticDiscoveryDocuments;
 use marty_schema_startup::SchemaStartupMode;
+use mmf_platform::OpenBaoTlsIdentityFiles;
+use sqlx::ConnectOptions;
 use tokio::{net::TcpListener, sync::watch};
 use tokio_stream::wrappers::TcpListenerStream;
+use tokio_stream::StreamExt;
 use tonic::transport::Server;
-use tracing::{error, info};
+use tracing::{debug, error, info};
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
@@ -165,10 +172,51 @@ async fn main() -> Result<(), Box<dyn Error>> {
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
         )
         .init();
-    validate_embedded_contract().map_err(|error| {
-        error!(%error, "invalid embedded issuance migration contract");
-        error
-    })?;
+    let mut arguments = std::env::args().skip(1);
+    match (arguments.next().as_deref(), arguments.next()) {
+        (Some("migrate"), None) => {
+            let database_url = std::env::var("DATABASE_URL")?;
+            let options = database_url
+                .parse::<sqlx::postgres::PgConnectOptions>()?
+                .disable_statement_logging();
+            let pool = sqlx::postgres::PgPoolOptions::new()
+                .max_connections(1)
+                .connect_with(options)
+                .await?;
+            migration::migrate_owned_schema(&pool).await?;
+            pool.close().await;
+            return Ok(());
+        }
+        (Some("verify-owned-schema"), None) => {
+            let database_url = std::env::var("DATABASE_URL")?;
+            let options = database_url
+                .parse::<sqlx::postgres::PgConnectOptions>()?
+                .disable_statement_logging();
+            let pool = sqlx::postgres::PgPoolOptions::new()
+                .max_connections(1)
+                .connect_with(options)
+                .await?;
+            migration::verify_owned_schema(&pool).await?;
+            pool.close().await;
+            return Ok(());
+        }
+        (Some("probe-dependencies"), None) => {
+            let config = IssuanceServiceConfig::from_env()?;
+            dependency_probe::probe(&config)
+                .await
+                .map_err(std::io::Error::other)?;
+            println!("{{\"schema\":\"marty.issuance-dependency-probe/v1\",\"verified\":true}}");
+            return Ok(());
+        }
+        (None, None) => {}
+        _ => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "issuance service accepts only migrate, verify-owned-schema or probe-dependencies subcommands",
+            )
+            .into());
+        }
+    }
     let config = IssuanceServiceConfig::from_env().map_err(|error| {
         error!(%error, "invalid issuance configuration");
         error
@@ -262,13 +310,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
         Arc::new(SecureProofNonceGenerator),
     );
     let canvas_lti_repository = Arc::new(PostgresCanvasLtiLoginRepository::new(pool.clone()));
-    let integration_secret_cipher = IntegrationSecretCipher::from_base64(
+    let integration_secret_cipher = KmsIntegrationSecretCipher::from_environment(
         config
-            .integration_secret_master_key
+            .integration_secret_api_key
             .as_deref()
-            .expect("from_env requires INTEGRATION_SECRET_MASTER_KEY"),
+            .expect("from_env requires integration-secret authentication"),
     )?;
-    let integration_secret_vault = Arc::new(PostgresIntegrationSecretVault::new(
+    let mut integration_secret_connection = pool.acquire().await?;
+    integration_secret_cipher
+        .verify_storage(&mut integration_secret_connection)
+        .await?;
+    drop(integration_secret_connection);
+    let integration_secret_vault = Arc::new(PostgresIntegrationSecretVault::new_remote(
         pool.clone(),
         integration_secret_cipher,
     ));
@@ -393,7 +446,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         issuer_resolver.clone(),
         Arc::new(SecureCanvasAwardApprovalSeedGenerator),
         canvas_lti_clock.clone(),
-        config.canvas_readiness_max_age,
+        canvas_guard_config.clone(),
     ));
     let canvas_application_approval = CanvasApplicationApprovalService::new(
         canvas_approval_repository,
@@ -451,10 +504,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
             config.signing_keys_internal_api_key.as_deref(),
             config.dependency_timeout,
         )?),
-        Arc::new(HttpCanvasLtiToolSignatureProvider::new(
+        Arc::new(HttpCanvasLtiToolSignatureProvider::new_with_grant(
             config.signing_keys_internal_url.clone(),
-            config.signing_keys_internal_api_key.as_deref(),
+            config.issuer_sign_key.as_deref(),
             config.dependency_timeout,
+            managed_grant_minter(SigningOrigin::IssuanceCanvas)?,
         )?),
     ));
     let canvas_readiness = Arc::new(CanvasReadinessRuntime::new(
@@ -465,13 +519,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
         Arc::new(HttpCanvasReadinessDocumentProvider::new(
             &config.credential_template_service_url,
             config.revocation_profile_service_url.clone(),
+            config.internal_service_token.as_deref(),
             config.dependency_timeout,
         )?),
-        Arc::new(LiveCanvasReadinessChallengeProvider::new(
+        Arc::new(LiveCanvasReadinessChallengeProvider::new_with_grant(
             canvas_lti_tool_signer.clone(),
             config.signing_keys_internal_url.clone(),
             config.signing_keys_internal_api_key.as_deref(),
+            config.issuer_sign_key.as_deref(),
             config.dependency_timeout,
+            managed_grant_minter(SigningOrigin::IssuanceReadiness)?,
         )?),
         config.canvas_portable_enabled,
         config.canvas_pilot_organizations.clone(),
@@ -518,10 +575,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
         pool.clone(),
         token_hmac_key,
     ));
-    let credential_builder = Arc::new(HttpCredentialBuilder::new(
+    let credential_builder = Arc::new(HttpCredentialBuilder::new_with_grant(
         config.signing_keys_internal_url.clone(),
-        config.signing_keys_internal_api_key.as_deref(),
+        config.issuer_sign_key.as_deref(),
         config.dependency_timeout,
+        managed_grant_minter(SigningOrigin::IssuanceCredential)?,
     )?);
     let credential_lifecycle = Arc::new(PostgresCredentialLifecycle::new(
         pool.clone(),
@@ -530,17 +588,37 @@ async fn main() -> Result<(), Box<dyn Error>> {
         config.dependency_timeout,
         canvas_guard_config.clone(),
     )?);
+    let mut didcomm_envelope = NativeDidcommEnvelope::new(
+        config.didcomm_universal_resolver_url.as_deref(),
+        config.didcomm_did_web_internal_base_url.as_deref(),
+        config.didcomm_encryption_policy_file.as_deref(),
+    );
+    let kms_addr = std::env::var("DIDCOMM_KMS_ADDR").ok();
+    let kms_token_file = std::env::var("DIDCOMM_KMS_TOKEN_FILE").ok();
+    let kms_ca_file = std::env::var("DIDCOMM_KMS_CA_CERT_FILE").ok();
+    match (kms_addr, kms_token_file, kms_ca_file) {
+        (Some(addr), Some(token_file), ca_file) if !addr.is_empty() && !token_file.is_empty() => {
+            didcomm_envelope = didcomm_envelope
+                .with_remote_kms(RemoteDidcommKms::new(
+                    &addr,
+                    PathBuf::from(token_file),
+                    ca_file.map(PathBuf::from),
+                )?);
+        }
+        (None, None, None) => {}
+        _ => {
+            return Err(
+                "DIDCOMM_KMS_ADDR and DIDCOMM_KMS_TOKEN_FILE must be configured together; a CA requires both".into(),
+            )
+        }
+    }
     let didcomm_delivery = Arc::new(NativeInitiationDidcommDelivery::new(
         NativeInitiationDidcommPorts {
             repository: credential_repository.clone(),
             issuer_resolver: issuer_resolver.clone(),
             builder: credential_builder.clone(),
             lifecycle: credential_lifecycle.clone(),
-            envelope: Arc::new(NativeDidcommEnvelope::new(
-                config.didcomm_universal_resolver_url.as_deref(),
-                config.didcomm_did_web_internal_base_url.as_deref(),
-                config.didcomm_encryption_policy_file.as_deref(),
-            )),
+            envelope: Arc::new(didcomm_envelope),
             endpoints: Arc::new(DidcommEndpointValidator::new(
                 config.didcomm_allow_private_ips,
             )),
@@ -554,21 +632,24 @@ async fn main() -> Result<(), Box<dyn Error>> {
         didcomm_delivery.clone(),
         config.issuance_api_key.as_deref(),
     );
-    let initiation_control_plane = Arc::new(NativeInitiationControlPlane::connect_lazy(
-        &config.organization_grpc_target,
-        &config.credential_template_grpc_target,
-        &config.revocation_profile_grpc_target,
-        config.credential_template_service_url.clone(),
-        config.internal_service_token.as_deref(),
-        config.dependency_timeout,
-    )?);
+    let initiation_control_plane = Arc::new(
+        NativeInitiationControlPlane::connect_lazy(
+            &config.organization_grpc_target,
+            &config.credential_template_grpc_target,
+            &config.revocation_profile_grpc_target,
+            config.internal_service_token.as_deref(),
+            config.dependency_timeout,
+        )
+        .await?,
+    );
     let application_templates = ApplicationTemplateService::new(
         Arc::new(PostgresApplicationTemplateRepository::new(pool.clone())),
         runtime_catalog(
             &config.credential_template_grpc_target,
             config.internal_service_token.as_deref(),
             config.dependency_timeout,
-        )?,
+        )
+        .await?,
         Arc::new(SystemApplicationTemplateClock),
         config.issuance_api_key.as_deref(),
     );
@@ -771,6 +852,24 @@ async fn main() -> Result<(), Box<dyn Error>> {
     } else {
         None
     };
+    let tls_acceptor = if let Some(tls) = &config.workload_server_tls {
+        Some(
+            OpenBaoTlsIdentityFiles {
+                certificate_chain_file: tls.certificate.clone(),
+                kms_ca_cert_file: tls.kms_ca_certificate.clone(),
+                kms_endpoint: tls.kms_endpoint.clone(),
+                kms_token_file: tls.kms_token_file.clone(),
+                kms_key_name: tls.kms_key_name.clone(),
+                kms_key_version: tls.kms_key_version,
+                request_timeout: Duration::from_secs(10),
+                max_concurrent_signs: 64,
+            }
+            .grpc_acceptor(&tls.ca_certificate, 64, Duration::from_secs(15))
+            .await?,
+        )
+    } else {
+        None
+    };
     let transport = TransportPolicy::new(config.cors_allowed_origins.clone());
     let app = router_with_all_services(runtime.state(), discovery, transport, {
         let services = IssuanceServices::new(
@@ -835,19 +934,49 @@ async fn main() -> Result<(), Box<dyn Error>> {
     .with_graceful_shutdown(async move {
         wait_for_shutdown(&mut http_shutdown).await;
     });
-    let grpc = async move {
-        let Some(grpc_listener) = grpc_listener else {
-            wait_for_shutdown(&mut grpc_shutdown).await;
-            return Ok(());
-        };
-        Server::builder()
-            .add_service(health_service)
-            .add_service(grpc_server)
-            .serve_with_incoming_shutdown(TcpListenerStream::new(grpc_listener), async move {
+    // Poll the TLS-enabled server behind a heap boundary: the combined HTTP
+    // and gRPC future otherwise overflows the Windows executable main stack.
+    let grpc: Pin<Box<dyn Future<Output = Result<(), tonic::transport::Error>> + Send>> =
+        Box::pin(async move {
+            let Some(grpc_listener) = grpc_listener else {
                 wait_for_shutdown(&mut grpc_shutdown).await;
-            })
-            .await
-    };
+                return Ok(());
+            };
+            let router = Server::builder()
+                .add_service(health_service)
+                .add_service(grpc_server);
+            if let Some(acceptor) = tls_acceptor {
+                let incoming = TcpListenerStream::new(grpc_listener).then(move |connection| {
+                    let acceptor = acceptor.clone();
+                    async move {
+                        match connection {
+                            Ok(stream) => match acceptor.accept(stream).await {
+                                Ok(encrypted) => Ok(encrypted),
+                                Err(error) => {
+                                    debug!(%error, "Issuance workload TLS handshake rejected");
+                                    Err(error)
+                                }
+                            },
+                            Err(error) => Err(error),
+                        }
+                    }
+                });
+                router
+                    .serve_with_incoming_shutdown(incoming, async move {
+                        wait_for_shutdown(&mut grpc_shutdown).await;
+                    })
+                    .await
+            } else {
+                router
+                    .serve_with_incoming_shutdown(
+                        TcpListenerStream::new(grpc_listener),
+                        async move {
+                            wait_for_shutdown(&mut grpc_shutdown).await;
+                        },
+                    )
+                    .await
+            }
+        });
     runtime.activate()?;
     let canvas_mirror_worker = spawn_canvas_mirror_automation(
         Arc::new(canvas_mirror),

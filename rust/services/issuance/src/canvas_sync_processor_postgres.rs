@@ -12,6 +12,7 @@ use uuid::Uuid;
 use crate::{
     canvas_award_candidate_postgres::{record_fact_and_policy, CanvasSyncCommitFence},
     canvas_lti_bootstrap::CanvasLtiBootstrapApplication,
+    canvas_roster_patch::roster_cursor_patch,
     canvas_sync_lease::{lease_lost, CanvasSyncLease},
     canvas_sync_processor::{
         application_unavailable, platform_reconfigured, CanvasAuthoritativeObservation,
@@ -160,7 +161,8 @@ impl CanvasSyncProcessorRepository for PostgresCanvasSyncProcessorRepository {
             sqlx::query_scalar::<_, Value>(
                 "SELECT jsonb_build_object(
                     'id', id, 'organization_id', organization_id,
-                    'approval_policy_set_id', approval_policy_set_id, 'status', status)
+                    'approval_policy_set_id', approval_policy_set_id, 'status', status,
+                    'claim_collection_rules', claim_collection_rules)
                  FROM issuance_service.application_templates
                  WHERE id = $1 AND organization_id = $2",
             )
@@ -245,6 +247,9 @@ impl CanvasSyncProcessorRepository for PostgresCanvasSyncProcessorRepository {
         resources: &CanvasSyncResources,
         fact: &Value,
     ) -> Result<CanvasFactCommit, CanvasSyncProcessingError> {
+        if marty_key_material_policy::contains_private_key(fact) {
+            return Err(unavailable());
+        }
         let lease = self.lease.clone().ok_or_else(lease_lost)?;
         let application = resources.application.as_ref().ok_or_else(unavailable)?;
         let template = resources
@@ -311,13 +316,16 @@ impl CanvasSyncProcessorRepository for PostgresCanvasSyncProcessorRepository {
         checked: &[String],
         policy_allowed: bool,
     ) -> Result<bool, CanvasSyncProcessingError> {
-        let mut transaction = self.begin_write(target).await?;
-        let application = resources.application.as_ref().ok_or_else(stale)?;
         let patch = json!({
             "last_evidence_sync_at": Utc::now(),
             "last_evidence_policy_allowed": policy_allowed,
             "last_evidence_requirements_checked": checked,
         });
+        if marty_key_material_policy::contains_private_key(&patch) {
+            return Err(unavailable());
+        }
+        let mut transaction = self.begin_write(target).await?;
+        let application = resources.application.as_ref().ok_or_else(stale)?;
         lock_current_scope(&mut transaction, target, resources).await?;
         lock_current_application(&mut transaction, application).await?;
         let result = sqlx::query(
@@ -469,6 +477,11 @@ impl CanvasSyncProcessorRepository for PostgresCanvasSyncProcessorRepository {
         requirement_id: &str,
         observation: &CanvasAuthoritativeObservation,
     ) -> Result<bool, CanvasSyncProcessingError> {
+        if marty_key_material_policy::contains_private_key_map(&observation.assertion)
+            || marty_key_material_policy::contains_private_key_map(&observation.source_payload)
+        {
+            return Err(unavailable());
+        }
         let canonical = crate::canvas_award_candidate::python_canonical_json(&json!({
             "assertion": observation.assertion,
             "payload": observation.source_payload,
@@ -587,21 +600,12 @@ impl CanvasSyncProcessorRepository for PostgresCanvasSyncProcessorRepository {
         next_cursor: usize,
         roster_size: usize,
     ) -> Result<(), CanvasSyncProcessingError> {
-        let mut patch = json!({
-            "roster_cursor": next_cursor,
-            "roster_size": roster_size,
-            "roster_cycle_completed_at": (next_cursor == 0).then(Utc::now),
-        });
-        // The worker passes its target snapshot from before touching the run's
-        // heartbeat. Published roster progress restores these two snapshot keys,
-        // including their absence, rather than retaining this run's heartbeat.
-        // Reconcile only those keys: unrelated metadata may have changed since
-        // the snapshot and must retain its current transactional value.
-        for key in ["worker_id", "worker_heartbeat_at"] {
-            if let Some(value) = target.metadata.get(key) {
-                patch[key] = value.clone();
-            }
-        }
+        let patch = roster_cursor_patch(
+            &target.metadata,
+            next_cursor,
+            roster_size,
+            (next_cursor == 0).then(Utc::now),
+        );
         let mut transaction = self.begin_write(target).await?;
         lock_current_scope(&mut transaction, target, resources).await?;
         let result = sqlx::query(

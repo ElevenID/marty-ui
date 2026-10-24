@@ -382,6 +382,11 @@ fn proof(kind: &str, inputs: &Value) -> String {
     let audience = match kind {
         "wrong_audience" => "https://issuer.example/org/other",
         "prefixed_audience" => "https://issuer.example/evil/org/org-a",
+        "alternate_scheme_audience" => "http://issuer.example/org/org-a",
+        "alternate_host_audience" => "https://other.example/org/org-a",
+        "alternate_port_audience" => "https://issuer.example:444/org/org-a",
+        "userinfo_audience" => "https://issuer.example@other.example/org/org-a",
+        "relative_audience" => "/org/org-a",
         _ => inputs["proof_audience"].as_str().unwrap(),
     };
     let mut payload = json!({"aud": audience});

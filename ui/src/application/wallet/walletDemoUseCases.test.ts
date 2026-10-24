@@ -50,4 +50,33 @@ describe('walletDemoUseCases', () => {
       nonce: null,
     });
   });
+  it('does not fabricate inventory on an empty, failed or malformed response', async () => {
+    await expect(loadWalletDemoCredentials({ loadCredentials: async () => ({ credentials: [] }) }))
+      .resolves.toEqual({ credentials: [], error: null });
+    for (const loadCredentials of [async () => { throw new Error('offline'); }, async () => ({})]) {
+      const result = await loadWalletDemoCredentials({ loadCredentials });
+      expect(result.credentials).toEqual([]);
+      expect(result.error).toBeTruthy();
+    }
+  });
+
+  it('preserves credentials when the service rejects deletion', async () => {
+    const credentials = [{ id: 'cred-1' }];
+    const result = await deleteWalletDemoCredential({
+      credentialId: 'cred-1', credentials,
+      deleteCredential: async () => { throw new Error('forbidden'); },
+    });
+    expect(result.credentials).toEqual(credentials);
+    expect(result.error).toBeTruthy();
+  });
+
+  it('never submits malformed presentation input', async () => {
+    const createPresentation = vi.fn();
+    const result = await createWalletDemoPresentation({
+      selectedCredential: { id: 'cred-1' }, presentationRequest: 'not-json', createPresentation,
+    });
+    expect(result.success).toBe(false);
+    expect(createPresentation).not.toHaveBeenCalled();
+  });
+
 });

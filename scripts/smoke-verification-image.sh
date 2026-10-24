@@ -20,6 +20,10 @@ case "$mode" in
 esac
 
 repository_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+postgres_image="$(bash "$repository_root/scripts/ci/pull-pinned-dockerhub-image.sh" \
+  postgres:15-alpine@sha256:3d0f7584ed7d04e27fa050d6683a74746608faf21f202be78460d679cc56461f)"
+redis_image="$(bash "$repository_root/scripts/ci/pull-pinned-dockerhub-image.sh" \
+  redis:7-alpine@sha256:e7723ff73d963f5cc6d9c4643ea3d989527a402a319239054e9472a7fb9219a2)"
 suffix="${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-1}-${mode}-$$"
 network="verification-ci-${suffix}"
 postgres="verification-postgres-${suffix}"
@@ -40,13 +44,13 @@ docker run --detach \
   --env POSTGRES_USER=marty \
   --env POSTGRES_PASSWORD=marty-test \
   --env POSTGRES_DB=marty \
-  postgres:15-alpine@sha256:3d0f7584ed7d04e27fa050d6683a74746608faf21f202be78460d679cc56461f \
+  "$postgres_image" \
   >/dev/null
 docker run --detach \
   --name "$redis" \
   --network "$network" \
   --network-alias verification-redis \
-  redis:7-alpine@sha256:e7723ff73d963f5cc6d9c4643ea3d989527a402a319239054e9472a7fb9219a2 \
+  "$redis_image" \
   >/dev/null
 for attempt in {1..60}; do
   if docker exec "$postgres" pg_isready --username marty --dbname marty >/dev/null \

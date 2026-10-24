@@ -30,6 +30,7 @@ const CryptoValidityStep = ({ data, onChange }) => {
   const { t } = useTranslation('console');
   const { activeOrgId } = useConsole();
   const organizationId = activeOrgId;
+  const needsRevocation = data._issuer_selection?.requirements?.revocation_profile !== false;
 
   const { data: revocationProfilesData, error: revocationProfilesError } = useAsyncData(
     () => {
@@ -151,7 +152,8 @@ const CryptoValidityStep = ({ data, onChange }) => {
           })}
         </Typography>
       </Box>
-      <FormControl fullWidth required error={!data.revocation_profile_id} sx={{ mt: 3 }}>
+      {!needsRevocation && <Alert severity="info" sx={{ mt: 3 }}>This issuance protocol does not use a digital Revocation Profile.</Alert>}
+      {needsRevocation && <FormControl fullWidth required error={!data.revocation_profile_id} sx={{ mt: 3 }}>
         <InputLabel id="credential-template-revocation-profile-label">
           {t('wizards.credentialTemplate.cryptoValidityStep.revocationProfile.label')}
         </InputLabel>
@@ -186,7 +188,7 @@ const CryptoValidityStep = ({ data, onChange }) => {
             Create Revocation Profile
           </Button>
         )}
-      </FormControl>
+      </FormControl>}
     </Box>
   );
 };
