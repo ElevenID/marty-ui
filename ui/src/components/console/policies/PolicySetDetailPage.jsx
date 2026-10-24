@@ -54,8 +54,12 @@ function ScopedPolicySet({ organizationId, policySetId, canView, canActivate, ca
       if (operation === 'archive' && fresh.status !== 'ACTIVE') throw new Error('The Policy Set is no longer active.');
       const result = operation === 'edit' ? await updatePolicySetMetadata(organizationId, policySetId, patch)
         : await (operation === 'activate' ? activatePolicySet : archivePolicySet)(organizationId, policySetId);
-      const scoped = requirePolicySet(result, organizationId, policySetId);
-      if (mounted.current) { setPolicySet(scoped); setAction(null); }
+      requirePolicySet(result, organizationId, policySetId);
+      if (!mounted.current || !grants.current.canView || grants.current.grantsLoading) return;
+      // Read the persisted snapshot: mutation timestamps can have finer
+      // precision than storage, and another writer may already have updated it.
+      const stored = requirePolicySet(await getPolicySet(organizationId, policySetId), organizationId, policySetId);
+      if (mounted.current) { setPolicySet(stored); setAction(null); }
     } catch (cause) {
       if (mounted.current) { setAction(null); setRequiresRefresh(true); setError(`${cause.message || 'Request failed.'} Refresh before making another change.`); }
     } finally { if (mounted.current) setBusy(false); }

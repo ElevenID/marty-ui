@@ -135,6 +135,23 @@ describe('Policy Set scoped consumer journeys', () => {
     expect(screen.queryByRole('button', { name: 'Edit metadata' })).not.toBeInTheDocument()
   })
 
+  it('reads the persisted snapshot after a mutation before the next lifecycle preflight', async () => {
+    server.use(http.patch('*/v1/policy-sets/:id', async ({ request }) => {
+      const body = await request.json(); record = { ...record, ...body as object, updated_at: '2026-10-24T16:01:00.123456Z' }
+      return HttpResponse.json({ ...record, updated_at: '2026-10-24T16:01:00.123456789Z' })
+    }))
+    const { user } = renderPage(); await screen.findByRole('heading', { name: record.name })
+    await user.click(screen.getByRole('button', { name: 'Edit metadata' }))
+    await user.clear(screen.getByLabelText('Description')); await user.type(screen.getByLabelText('Description'), 'Changed')
+    await user.click(screen.getByRole('button', { name: 'Save changes' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: 'Activate', exact: true }))
+    await user.click(screen.getByRole('button', { name: 'Confirm activation' }))
+    expect(await screen.findByText('ACTIVE', { exact: true })).toBeInTheDocument()
+    expect(writes).toHaveLength(1)
+    expect(writes[0].path).toBe('/v1/policy-sets/set-1/activate')
+  })
+
   it('refuses a lifecycle operation if the scoped preflight has changed', async () => {
     const { user } = renderPage(); await screen.findByRole('heading', { name: record.name })
     await user.click(screen.getByRole('button', { name: 'Activate', exact: true }))
