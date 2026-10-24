@@ -88,6 +88,7 @@ describe('Policy Set scoped consumer journeys', () => {
     const { user } = renderPage(); await screen.findByRole('heading', { name: record.name })
     expect(screen.queryByRole('button', { name: 'Edit metadata' })).not.toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Activate', exact: true })); expect(writes).toEqual([])
+    expect(screen.getByRole('dialog')).toHaveTextContent('archives any previously active Policy Set of the same type')
     await user.click(screen.getByRole('button', { name: 'Confirm activation' }))
     await user.click(await screen.findByRole('button', { name: 'Archive', exact: true }))
     await user.click(screen.getByRole('button', { name: 'Confirm archive' }))

@@ -89,7 +89,7 @@ function ScopedPolicySet({ organizationId, policySetId, canView, canActivate, ca
       <DialogContent>{action === 'edit' ? <Stack spacing={2} sx={{ pt: 1 }}>
         <TextField required label="Name" value={name} disabled={busy} onChange={(event) => setName(event.target.value)} slotProps={{ htmlInput: { maxLength: 128 } }} />
         <TextField label="Description" value={description} disabled={busy} multiline minRows={2} onChange={(event) => setDescription(event.target.value)} slotProps={{ htmlInput: { maxLength: 1024 } }} />
-      </Stack> : <DialogContentText>{action === 'activate' ? 'Activate these Cedar policies for the selected organization. Review their permissions and conditions before applying them.' : 'Archive this Policy Set so it no longer contributes to authorization decisions for the selected organization.'}</DialogContentText>}</DialogContent>
+      </Stack> : <DialogContentText>{action === 'activate' ? 'Mark this Policy Set active for the selected organization. This archives any previously active Policy Set of the same type. Enforcement depends on the consuming workflow.' : 'Mark this Policy Set archived. Workflows that consume active Policy Sets will no longer select it.'}</DialogContentText>}</DialogContent>
       <DialogActions><Button disabled={busy} onClick={() => setAction(null)}>Back</Button><Button onClick={confirm} disabled={disabled || (action === 'edit' && (!name.trim() || !Object.keys(patch).length))}>{action === 'edit' ? 'Save changes' : action === 'activate' ? 'Confirm activation' : 'Confirm archive'}</Button></DialogActions>
     </Dialog>
   </Container>;

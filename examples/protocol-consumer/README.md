@@ -91,6 +91,10 @@ and draft creation requires `policy-set:create`. The existing gateway uses
 separate `policy-set:validate`, `policy-set:activate` and `policy-set:archive`
 grants for those operations. The wizard validates before creating and therefore
 requires both create and validate permission.
+Activation archives the previously active Policy Set of the same type in that
+organization. A workflow must consume the selected Policy Set to evaluate its
+Cedar statements; activation alone does not demonstrate a runtime decision or
+replace the gateway's membership grants.
 Activation and archive require explicit confirmation in the console. Their
 fresh scoped read prevents acting on an already changed snapshot; it is not
 an atomic version precondition. The server remains the authorization and
