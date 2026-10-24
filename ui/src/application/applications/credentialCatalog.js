@@ -5,92 +5,48 @@ import LoginIcon from '@mui/icons-material/Login';
 import CredentialIcon from '@mui/icons-material/CardMembership';
 import BusinessIcon from '@mui/icons-material/Business';
 
+// Type metadata controls presentation only; protocol requirements come from the API.
 export const CREDENTIAL_CATALOG_TYPES = {
   passport: {
-    description: 'ICAO 9303 compliant digital travel credential with NFC capability',
     icon: PassportIcon,
     category: 'travel',
-    processingTime: '5-10 business days',
-    requirements: ['Government-issued ID', 'Proof of citizenship', 'Biometric photo'],
   },
   drivers_license: {
-    description: 'ISO/IEC 18013-5 compliant mobile driving license',
     icon: DLIcon,
     category: 'identity',
-    processingTime: '3-5 business days',
-    requirements: ['Current driver\'s license', 'Proof of residence', 'Biometric photo'],
   },
   travel_visa: {
-    description: 'Digitally issued travel visa credential for approved applicants',
     icon: PassportIcon,
     category: 'travel',
-    processingTime: '5-10 business days',
-    requirements: ['Valid passport', 'Proof of travel intent'],
   },
   access_badge: {
-    description: 'Corporate access badge — verifiable proof of employment, department, and building access. Issued instantly to your wallet.',
     icon: BusinessIcon,
     category: 'enterprise',
-    processingTime: 'Instant upon issuance',
-    requirements: ['Active ElevenID account'],
-    format: 'vc+sd-jwt',
-    standard: 'W3C Verifiable Credential',
-    worksWithLabel: 'Web & VC wallets',
   },
   national_id: {
-    description: 'National identity credential for verified applicants',
     icon: CredentialIcon,
     category: 'identity',
-    processingTime: '5-10 business days',
-    requirements: ['Government-issued ID', 'Biometric photo'],
   },
   dtc: {
-    description: 'Digital Travel Credential per ICAO DTC specification',
     icon: PassportIcon,
     category: 'travel',
-    processingTime: '3-5 business days',
-    requirements: ['Valid passport', 'Biometric photo'],
   },
   open_badge: {
-    description: 'Open Badge 3.0 membership badge — verified organization membership proof for passwordless login/sign-in with your wallet.',
     icon: CredentialIcon,
     category: 'identity',
-    processingTime: 'Instant upon issuance',
-    requirements: ['Active ElevenID account'],
-    format: 'vc+sd-jwt',
-    standard: '1EdTech Open Badges 3.0',
-    worksWithLabel: 'Web & VC wallets',
     searchAliases: ['open badge login', 'open badge login credential', 'achievement credential', 'passwordless sign-in', 'membership badge'],
   },
   MemberCredential: {
-    description: 'Log in securely using your wallet — no password required. W3C Verifiable Credential in SD-JWT format, compatible with web and VC wallets.',
     icon: LoginIcon,
     category: 'identity',
-    processingTime: 'Instant upon issuance',
-    requirements: ['Active ElevenID account'],
-    format: 'vc+sd-jwt',
-    standard: 'W3C Verifiable Credentials',
-    worksWithLabel: 'Web & VC wallets',
   },
   'org.iso.18013.5.1.mDL': {
-    description: 'Mobile-first membership identity in mDoc format — compatible with Apple & Google Wallet style experiences. Issued instantly.',
     icon: DLIcon,
     category: 'identity',
-    processingTime: 'Instant upon issuance',
-    requirements: ['Active ElevenID account'],
-    format: 'mDoc (ISO 18013-5)',
-    standard: 'ISO/IEC 18013-5',
-    worksWithLabel: 'Mobile wallets (Apple / Google)',
   },
   'com.elevenid.member_credential': {
-    description: 'Membership ID in mDoc format — same identity data as the Login Credential, packaged for Apple & Google Wallet style experiences.',
     icon: BadgeIcon,
     category: 'identity',
-    processingTime: 'Instant upon issuance',
-    requirements: ['Active ElevenID account'],
-    format: 'mDoc (ISO 18013-5)',
-    standard: 'ISO/IEC 18013-5',
-    worksWithLabel: 'Mobile wallets (Apple / Google)',
   },
 };
 
@@ -109,21 +65,29 @@ export function mapCredentialTemplateToCatalogItem(template, organizationName) {
   const claims = Array.isArray(template?.claims) ? template.claims : [];
   const claimRequirements = claims
     .filter((claim) => claim?.required)
-    .map((claim) => claim?.display_name || claim?.name)
+    .map((claim) => claim?.display?.label || claim?.display_name || claim?.name)
     .filter(Boolean);
-  const processingDays = template?.validity_rules?.default_validity_days;
+  const ttlSeconds = template?.validity_rules?.ttl_seconds;
+  const validityLabel = typeof ttlSeconds === 'number' && Number.isSafeInteger(ttlSeconds) && ttlSeconds > 0
+    ? (ttlSeconds % 86400 === 0
+      ? `${ttlSeconds / 86400} ${ttlSeconds === 86400 ? 'day' : 'days'}`
+      : `${ttlSeconds} seconds`)
+    : null;
+  const formatLabels = { SD_JWT_VC: 'SD-JWT VC', MDOC: 'mDoc', VC_JWT: 'VC-JWT', JSON_LD: 'JSON-LD VC' };
+  const apiFormat = typeof template.credential_payload_format === 'string' ? template.credential_payload_format.trim() : '';
+  const format = apiFormat ? (formatLabels[apiFormat] || apiFormat) : null;
+  const issuanceProtocol = typeof template.issuance_protocol === 'string' ? template.issuance_protocol.trim() || null : null;
+  const walletIssuance = issuanceProtocol === 'OID4VCI_PRE_AUTH' || issuanceProtocol === 'OID4VCI_AUTH_CODE';
 
   return {
     id: template.id,
     credentialType: template.credential_type,
     name: template.name,
-    description: template.description || meta.description || template.name,
+    description: template.description || template.name,
     icon: meta.icon || CredentialIcon,
     category: meta.category || 'identity',
-    processingTime: processingDays
-      ? `${processingDays} day validity`
-      : (meta.processingTime || '3-5 business days'),
-    requirements: claimRequirements.length > 0 ? claimRequirements : (meta.requirements || []),
+    validityLabel,
+    requirements: claimRequirements,
     requiredFields: claims.filter((claim) => claim?.required).map((claim) => claim?.name).filter(Boolean),
     optionalFields: claims.filter((claim) => !claim?.required).map((claim) => claim?.name).filter(Boolean),
     customFields: [],
@@ -133,9 +97,10 @@ export function mapCredentialTemplateToCatalogItem(template, organizationName) {
     vendorName: organizationName || 'Issuer',
     templateVersion: template.version,
     visibility: 'organization',
-    format: meta.format || null,
-    standard: meta.standard || null,
-    worksWithLabel: meta.worksWithLabel || null,
+    format,
+    issuanceProtocol,
+    standard: null,
+    walletRequirements: format && walletIssuance ? `Wallet support required: ${format} with ${issuanceProtocol}.` : null,
     searchAliases: meta.searchAliases || [],
   };
 }
@@ -186,7 +151,7 @@ export function filterCredentialCatalogItems(credentials = [], { searchTerm = ''
       credential.credentialType,
       credential.standard,
       credential.format,
-      credential.worksWithLabel,
+      credential.issuanceProtocol,
       ...aliases,
     ].filter(Boolean).join(' ').toLowerCase();
     const matchesSearch = searchableText.includes(normalizedSearch);

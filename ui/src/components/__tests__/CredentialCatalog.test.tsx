@@ -53,6 +53,32 @@ vi.mock('../../services/applicantApi', () => ({
 }));
 
 describe('CredentialCatalog', () => {
+  it('shows API wallet requirements and credential validity without inventing interoperability or processing promises', async () => {
+    mockGet.mockImplementation((endpoint: string) => {
+      if (endpoint.includes('/v1/credential-templates')) return Promise.resolve([{
+        id: 'actual', name: 'Tenant membership', credential_type: 'org.iso.18013.5.1.mDL', status: 'ACTIVE',
+        revocation_profile_id: 'revocation-1', credential_payload_format: 'SD_JWT_VC', issuance_protocol: 'OID4VCI_PRE_AUTH',
+        claims: [{ name: 'member_id', required: true, display: { label: 'Member ID' } }], validity_rules: { ttl_seconds: 86400 },
+      }]);
+      if (endpoint.includes('/v1/application-templates')) return Promise.resolve([
+        { id: 'application-actual', credential_template_id: 'actual', organization_id: 'org-1', status: 'ACTIVE' },
+      ]);
+      return Promise.resolve({ items: [] });
+    });
+    const { user } = render(<CredentialCatalog />);
+    const card = await screen.findByTestId('credential-card-actual');
+    expect(card).toHaveTextContent('Wallet support required: SD-JWT VC with OID4VCI_PRE_AUTH.');
+    expect(card).not.toHaveTextContent(/Apple|Google|Instant|business days|Works with/);
+    await user.click(within(card).getByTestId('credential-details-btn'));
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog).toHaveTextContent('SD-JWT VC');
+    expect(dialog).toHaveTextContent('OID4VCI_PRE_AUTH');
+    expect(dialog).toHaveTextContent('catalog.detailsDialog.validity');
+    expect(dialog).toHaveTextContent('1 day');
+    expect(dialog).toHaveTextContent('Member ID');
+    expect(dialog).not.toHaveTextContent(/Apple|Google|Instant|business days|processingTime|Works with/);
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     mockPreview.isPreview = false;

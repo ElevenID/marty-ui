@@ -639,9 +639,9 @@ const CredentialCatalog = () => {
                         <Chip label={credential.format} size="small" variant="outlined" color="info" />
                       )}
                     </Box>
-                    {credential.worksWithLabel && (
+                    {credential.walletRequirements && (
                       <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>
-                        Works with: {credential.worksWithLabel}
+                        {credential.walletRequirements}
                       </Typography>
                     )}
                     {getApplicationStatus(credential.id)}
@@ -691,20 +691,25 @@ const CredentialCatalog = () => {
                   {selectedCredential.format && (
                     <Chip label={selectedCredential.format} size="small" variant="outlined" />
                   )}
-                  {selectedCredential.worksWithLabel && (
-                    <Chip label={`Works with: ${selectedCredential.worksWithLabel}`} size="small" variant="outlined" />
+                  {selectedCredential.issuanceProtocol && (
+                    <Chip label={selectedCredential.issuanceProtocol} size="small" variant="outlined" />
                   )}
                 </Box>
               )}
               
               <Divider sx={{ my: 2 }} />
               
-              <Typography variant="subtitle2" gutterBottom>
-                {t('catalog.detailsDialog.processingTime')}
-              </Typography>
-              <Typography variant="body2" color="text.secondary" paragraph>
-                {selectedCredential.processingTime}
-              </Typography>
+              {selectedCredential.walletRequirements && (
+                <Typography variant="body2" color="text.secondary" paragraph>{selectedCredential.walletRequirements}</Typography>
+              )}
+              {selectedCredential.validityLabel && (
+                <>
+                  <Typography variant="subtitle2" gutterBottom>
+                    {t('catalog.detailsDialog.validity', { defaultValue: 'Credential validity' })}
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary" paragraph>{selectedCredential.validityLabel}</Typography>
+                </>
+              )}
               
               <Typography variant="subtitle2" gutterBottom>
                 {t('catalog.detailsDialog.requirements')}
