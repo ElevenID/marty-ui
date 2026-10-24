@@ -344,13 +344,18 @@ const CredentialCatalog = () => {
    * Handle credential application
    */
   const handleApply = (credential) => {
-    const navigation = buildCredentialApplicationNavigationState(credential, {
-      currentPathname: location.pathname,
-      isPreview,
-      canvasLtiContext: canvasLtiNavigationContext,
-      canvasLtiSession,
-    });
-    navigate(navigation.path, { state: navigation.state });
+    try {
+      const navigation = buildCredentialApplicationNavigationState(credential, {
+        currentPathname: location.pathname,
+        isPreview,
+        organizationId: effectiveOrganizationId,
+        canvasLtiContext: canvasLtiNavigationContext,
+        canvasLtiSession,
+      });
+      navigate(navigation.path, { state: navigation.state });
+    } catch (error) {
+      setCatalogLoadError(error);
+    }
   };
 
   /**

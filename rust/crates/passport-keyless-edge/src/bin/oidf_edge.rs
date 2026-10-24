@@ -39,6 +39,9 @@ impl Default for EdgeState {
 }
 
 fn ui_path(path: &str) -> bool {
+    if path == "/applicant/preview" || path.starts_with("/applicant/preview/") {
+        return true;
+    }
     if path == "/" || path == "/console" || path.starts_with("/console/") {
         return true;
     }
@@ -282,6 +285,72 @@ mod tests {
         ] {
             assert_eq!(target(path, &state), "gateway:8000", "{path}");
         }
+    }
+
+    #[tokio::test]
+    async fn preview_navigation_reaches_ui_while_template_api_stays_on_gateway() {
+        async fn ui(request: Request<Body>) -> String {
+            format!("ui|{}", request.uri())
+        }
+        async fn api(request: Request<Body>) -> String {
+            format!("api|{}", request.uri())
+        }
+        let ui_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let ui_address = ui_listener.local_addr().unwrap();
+        let ui_task = tokio::spawn(async move {
+            axum::serve(ui_listener, Router::new().fallback(any(ui)))
+                .await
+                .unwrap();
+        });
+        let api_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let api_address = api_listener.local_addr().unwrap();
+        let api_task = tokio::spawn(async move {
+            axum::serve(api_listener, Router::new().fallback(any(api)))
+                .await
+                .unwrap();
+        });
+        let edge_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let edge_address = edge_listener.local_addr().unwrap();
+        let edge_task = tokio::spawn(async move {
+            axum::serve(
+                edge_listener,
+                Router::new()
+                    .fallback(any(proxy))
+                    .with_state(EdgeState {
+                        gateway: api_address.to_string(),
+                        keycloak: api_address.to_string(),
+                        ui: ui_address.to_string(),
+                    })
+                    .into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .await
+            .unwrap();
+        });
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        for (path, expected) in [
+            (
+                "/applicant/preview/applications/template-1?organization_id=org-1",
+                "ui",
+            ),
+            ("/applicant/preview/credentials/template-1", "ui"),
+            ("/applicant/preview-elsewhere/template-1", "api"),
+            (
+                "/v1/application-templates/template-1?organization_id=org-1",
+                "api",
+            ),
+            ("/v1/applicants/me", "api"),
+        ] {
+            let response = client
+                .get(format!("http://{edge_address}{path}"))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(response.text().await.unwrap(), format!("{expected}|{path}"));
+        }
+        edge_task.abort();
+        ui_task.abort();
+        api_task.abort();
     }
 
     #[tokio::test]

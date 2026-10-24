@@ -13,6 +13,24 @@ import {
 } from './credentialCatalog';
 
 describe('credentialCatalog helpers', () => {
+  it('routes preview through the resolved application, scoped to its owner, without live launch state', () => {
+    const result = buildCredentialApplicationNavigationState({ id: 'credential-1', application_template_id: 'application-1',
+      application_template: { id: 'application-1', organization_id: 'org-1', credential_template_id: 'credential-1' } }, {
+      isPreview: true, organizationId: 'org-1', canvasLtiContext: { state: 'stale-launch' }, canvasLtiSession: { state: 'stale-launch' },
+    });
+    expect(result.path).toBe('/applicant/preview/applications/application-1?organization_id=org-1');
+    expect(result.state.applicationTemplate.id).toBe('application-1');
+    expect(result.state).not.toHaveProperty('canvasLtiSession');
+  });
+
+  it.each(['missing', 'foreign', 'wrong-credential'])('rejects a %s preview application binding', (kind) => {
+    const application = { id: 'application-1', organization_id: kind === 'foreign' ? 'org-2' : 'org-1',
+      credential_template_id: kind === 'wrong-credential' ? 'credential-2' : 'credential-1' };
+    expect(() => buildCredentialApplicationNavigationState({ id: 'credential-1',
+      application_template: kind === 'missing' ? null : application }, { isPreview: true, organizationId: 'org-1' })).toThrow(/Application Template/);
+    expect(() => resolveCredentialApplicationPath({ credentialId: 'credential-1', isPreview: true })).toThrow(/Application Template is required/);
+  });
+
   it('builds translated categories', () => {
     const t = vi.fn((key) => key);
     expect(getCredentialCatalogCategories(t)).toEqual([
@@ -189,8 +207,9 @@ describe('credentialCatalog helpers', () => {
     expect(resolveCredentialApplicationPath({
       credentialId: 'cfg-1',
       currentPathname: '/applicant/preview/catalog',
+      applicationTemplateId: 'application-1',
       isPreview: true,
-    })).toBe('/applicant/preview/applications/cfg-1');
+    })).toBe('/applicant/preview/applications/application-1');
 
     expect(resolveCredentialApplicationPath({
       credentialId: 'cfg-1',
