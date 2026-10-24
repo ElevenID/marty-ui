@@ -93,6 +93,11 @@ REQUIRED_ENVIRONMENT = (
     "CREDENTIAL_TEMPLATE_SERVICE_URL",
     "REVOCATION_PROFILE_SERVICE_URL",
 )
+CONTROL_PLANE_TARGETS = {
+    "ORG_GRPC_TARGET": "https://organization:9002",
+    "CT_GRPC_TARGET": "https://credential-template:9003",
+    "RP_GRPC_TARGET": "https://revocation-profile:9013",
+}
 TOKEN_CONSUMERS = (
     "gateway",
     "auth",
@@ -263,6 +268,12 @@ def validate_model(
             require(
                 isinstance(env.get(key), str) and bool(env[key].strip()),
                 "Mandatory native issuance configuration is missing",
+            )
+        for owner in (env, previous):
+            require(
+                owner.get("GRPC_TLS_CA_CERT") == "/run/secrets/workload_identity_ca_cert"
+                and all(owner.get(key) == target for key, target in CONTROL_PLANE_TARGETS.items()),
+                "Issuance control-plane TLS targets or public CA are incomplete",
             )
         token = env.get("GRPC_SERVICE_TOKEN")
         require(

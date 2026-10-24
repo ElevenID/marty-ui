@@ -34,6 +34,19 @@ describe('VerificationResultSummary', () => {
     expect(screen.getByText('org.iso.18013.5.1: age_over_21, birth_date')).toBeInTheDocument();
   });
 
+  it('shows an omitted status check neutrally without inventing a passed check', () => {
+    render(<VerificationResultSummary session={{
+      status: 'COMPLETED', result: {
+        decision: 'allow', credential_results: [{
+          trust_check_passed: true, signature_valid: true, revocation_checked: false,
+        }],
+      },
+    }} />);
+    expect(screen.getByText('Not checked')).toBeInTheDocument();
+    expect(screen.queryByText('Failed')).not.toBeInTheDocument();
+    expect(screen.getAllByText('Passed')).toHaveLength(2);
+  });
+
   it('does not infer minimal disclosure or issuer trust from an allowed filtered claim result', () => {
     render(<VerificationResultSummary session={{
       status: 'COMPLETED', result: { decision: 'allow', verified_claims: { age_over_21: true } },

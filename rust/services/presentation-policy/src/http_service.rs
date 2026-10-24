@@ -929,6 +929,7 @@ fn service_policy(policy: &PresentationPolicy) -> Value {
             "min_satisfied": alternative.min_satisfied
         })).collect::<Vec<_>>(),
         "trust_profile_id": policy.trust_profile_id.map(|id| id.to_string()),
+        "presentation_proof_required": policy.presentation_proof_required,
         "holder_binding": {
             "required": policy.holder_binding.required,
             "binding_methods": policy.holder_binding.binding_methods,
@@ -969,6 +970,24 @@ fn service_requirement(requirement: &CredentialRequirement) -> Value {
     })
 }
 
+/// Match evaluated requirements to exactly one trusted internal evidence row.
+/// An absent or ambiguous match cannot establish any verification check.
+fn credential_evidence<'a>(verified: &'a Value, result: &Value) -> Option<&'a Value> {
+    let template_id = result["credential_template_id"].as_str()?;
+    let issuer_id = result["issuer_id"].as_str()?;
+    let mut matches = verified["credentials"]
+        .as_array()?
+        .iter()
+        .filter(|credential| {
+            credential["issuer_id"].as_str() == Some(issuer_id)
+                && credential["credential_template_ids"]
+                    .as_array()
+                    .is_some_and(|ids| ids.iter().any(|id| id.as_str() == Some(template_id)))
+        });
+    let credential = matches.next()?;
+    matches.next().is_none().then_some(credential)
+}
+
 /// Project names, never values, from the native kernel's authenticated mdoc
 /// documents. Policy-filtered `verified_claims` cannot prove minimal disclosure.
 /// The raw wallet request and requested claim list are deliberately not inputs.
@@ -979,24 +998,10 @@ fn authenticated_mdoc_disclosures(verified: &Value, result: &Value) -> Option<Va
     {
         return None;
     }
-    let template_id = result["credential_template_id"].as_str()?;
-    let issuer_id = result["issuer_id"].as_str()?;
-    let matches = verified["credentials"]
-        .as_array()?
-        .iter()
-        .filter(|credential| {
-            credential["signature_verified"] == true
-                && credential["credential_format"] == "mdoc"
-                && credential["issuer_id"].as_str() == Some(issuer_id)
-                && credential["credential_template_ids"]
-                    .as_array()
-                    .is_some_and(|ids| ids.iter().any(|id| id.as_str() == Some(template_id)))
-        })
-        .collect::<Vec<_>>();
-    let [credential] = matches.as_slice() else {
-        // Ambiguous credentials must not look like complete disclosure evidence.
+    let credential = credential_evidence(verified, result)?;
+    if credential["signature_verified"] != true || credential["credential_format"] != "mdoc" {
         return None;
-    };
+    }
     let documents = credential["claims"]["_mdoc"]["documents"].as_array()?;
     if documents.len() != 1 {
         // This is also the native mdoc kernel's authentication boundary.
@@ -1047,6 +1052,11 @@ fn project_evaluation(
                 .iter()
                 .filter_map(|error| error.get("message").cloned())
                 .collect::<Vec<_>>();
+            let evidence = credential_evidence(verified, result);
+            let status_checked = evidence.map(|credential| {
+                credential["revocation_checked_at_epoch_seconds"].as_u64().is_some()
+            });
+            let status_evidence = evidence.filter(|_| status_checked == Some(true));
             json!({
                 "credential_template_id": result["credential_template_id"],
                 "satisfied": result["satisfied"],
@@ -1054,12 +1064,12 @@ fn project_evaluation(
                 "issuer_name": Value::Null,
                 "claim_results": result["claim_results"],
                 "authenticated_disclosures": authenticated_mdoc_disclosures(verified, result),
-                "trust_check_passed": !has_any_code(&codes, &["TrustProfileNotVerified", "IssuerNotAllowed", "IssuerTrustLevelInsufficient", "IssuerComplianceStatusMissing", "IssuerAccreditationMissing"]),
+                "trust_check_passed": evidence.and_then(|credential| credential["trust_profile_verified"].as_bool()).map(|verified| verified && !has_any_code(&codes, &["TrustProfileNotVerified", "IssuerNotAllowed", "IssuerTrustLevelInsufficient", "IssuerComplianceStatusMissing", "IssuerAccreditationMissing"])),
                 "freshness_check_passed": !has_any_code(&codes, &["CredentialTimestampMissing", "CredentialTimestampFuture", "CredentialStale", "RevocationEvidenceStale"]),
-                "signature_valid": !has_any_code(&codes, &["SignatureInvalid"]),
-                "revocation_checked": !has_any_code(&codes, &["RevocationCheckRequired"]),
-                "not_revoked": !has_any_code(&codes, &["CredentialRevoked", "RevocationStatusUnknown"]),
-                "revocation_status": Value::Null,
+                "signature_valid": evidence.and_then(|credential| credential["signature_verified"].as_bool()).map(|verified| verified && !has_any_code(&codes, &["SignatureInvalid"])),
+                "revocation_checked": status_checked,
+                "not_revoked": status_evidence.and_then(|credential| credential["not_revoked"].as_bool()),
+                "revocation_status": status_evidence.and_then(|credential| credential["credential_status"].as_str()),
                 "error_codes": codes,
                 "errors": messages,
                 "warnings": result["warnings"]
@@ -1360,6 +1370,94 @@ fn service_unavailable(detail: &str) -> PresentationPolicyHttpError {
 #[cfg(test)]
 mod error_code_projection_tests {
     use super::*;
+
+    #[test]
+    fn presentation_only_policy_keeps_its_proof_obligation_in_the_canonical_kernel() {
+        let policy = build_policy(serde_json::from_value(json!({
+            "organization_id": Uuid::from_u128(1).to_string(),
+            "name": "Holder presentation proof",
+            "holder_binding": {
+                "required": true,
+                "binding_methods": ["DEVICE_KEY"],
+                "proof_profiles": ["OID4VP_VERIFIABLE_PRESENTATION"],
+                "proof_freshness": {"challenge_required": false, "audience_binding_required": false, "replay_detection_required": false}
+            }
+        })).unwrap(), Utc::now()).unwrap();
+        let request: EvaluatePresentationRequest =
+            serde_json::from_value(json!({"vp_token": {}})).unwrap();
+        for verified in [true, false] {
+            let result = evaluate_verified_facts_for_policy(json!({
+                "credentials": [], "evaluation_time_epoch_seconds": 1_787_240_300_u64,
+                "presentation_verified": verified, "holder_binding_verified": verified,
+                "holder_binding_method": "DEVICE_KEY", "proof_profile": "OID4VP_VERIFIABLE_PRESENTATION",
+                "challenge_verified": false, "audience_verified": false, "replay_check_verified": false,
+                "proof_epoch_seconds": null, "external_authorization": null, "presentation_count": 1
+            }), &policy, &request).unwrap();
+            assert_eq!(result["decision"], if verified { "allow" } else { "deny" });
+        }
+    }
+
+    #[test]
+    fn projection_requires_actual_status_evidence_even_when_policy_allows() {
+        let request: EvaluatePresentationRequest =
+            serde_json::from_value(json!({"vp_token": {}})).unwrap();
+        let native = json!({"decision": "allow", "credential_results": [{
+            "credential_template_id": "template-1", "issuer_id": "issuer-1",
+            "satisfied": true, "errors": []
+        }]});
+        let credential = json!({
+            "credential_template_ids": ["template-1"], "issuer_id": "issuer-1",
+            "signature_verified": true, "trust_profile_verified": true,
+            "revocation_checked_at_epoch_seconds": null, "not_revoked": null
+        });
+        for (timestamp, not_revoked, status) in [
+            (Value::Null, Value::Null, Value::Null),
+            (json!(1000), json!(true), json!("active")),
+            (json!(1000), json!(false), json!("revoked")),
+            (json!(1000), Value::Null, json!("unknown")),
+        ] {
+            let mut evidence = credential.clone();
+            evidence["revocation_checked_at_epoch_seconds"] = timestamp.clone();
+            evidence["not_revoked"] = not_revoked.clone();
+            evidence["credential_status"] = status.clone();
+            let projected = project_evaluation(
+                native.clone(),
+                &request,
+                &json!({"credentials": [evidence]}),
+            );
+            let result = &projected["credential_results"][0];
+            assert_eq!(result["revocation_checked"], !timestamp.is_null());
+            assert_eq!(result["not_revoked"], not_revoked);
+            assert_eq!(result["revocation_status"], status);
+            assert_eq!(result["signature_valid"], true);
+            assert_eq!(result["trust_check_passed"], true);
+        }
+        let mut foreign = credential.clone();
+        foreign["issuer_id"] = json!("another-issuer");
+        for credentials in [
+            json!([]),
+            json!([foreign]),
+            json!([credential.clone(), credential]),
+        ] {
+            let projected = project_evaluation(
+                native.clone(),
+                &request,
+                &json!({"credentials": credentials}),
+            );
+            let result = &projected["credential_results"][0];
+            for key in [
+                "signature_valid",
+                "trust_check_passed",
+                "revocation_checked",
+                "not_revoked",
+            ] {
+                assert!(
+                    result.get(key).is_none(),
+                    "{key} was guessed from missing/ambiguous evidence"
+                );
+            }
+        }
+    }
 
     #[test]
     fn language_neutral_error_code_forms_drive_the_same_projection_flags() {

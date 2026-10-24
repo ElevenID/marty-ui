@@ -266,7 +266,7 @@ func decryptHaipResponse(ctx context.Context, req *logical.Request, d *framework
 		PublicKey: ecdsa.PublicKey{Curve: elliptic.P256(), X: new(big.Int).SetBytes(key.PublicX), Y: new(big.Int).SetBytes(key.PublicY)},
 		D:         new(big.Int).SetBytes(key.PrivateKey),
 	}
-	parsed, err := jose.ParseEncrypted(compact, []jose.KeyAlgorithm{jose.ECDH_ES}, []jose.ContentEncryption{jose.A256GCM})
+	parsed, err := jose.ParseEncrypted(compact, []jose.KeyAlgorithm{jose.ECDH_ES}, haipContentEncryptionAlgorithms)
 	if err != nil {
 		return logical.ErrorResponse("invalid HAIP response JWE"), logical.ErrInvalidRequest
 	}
@@ -279,6 +279,19 @@ func decryptHaipResponse(ctx context.Context, req *logical.Request, d *framework
 		"tenant": tenant, "flow": flow, "version": version,
 		"plaintext_base64": base64.StdEncoding.EncodeToString(plaintext),
 	}}, nil
+}
+
+// HAIP section 5 requires both GCM sizes. Use one allowlist for protected
+// header validation and the cryptographic parser, retaining direct ECDH-ES.
+var haipContentEncryptionAlgorithms = []jose.ContentEncryption{jose.A128GCM, jose.A256GCM}
+
+func supportedHaipContentEncryption(value string) bool {
+	for _, algorithm := range haipContentEncryptionAlgorithms {
+		if string(algorithm) == value {
+			return true
+		}
+	}
+	return false
 }
 
 func validateHaipJWE(compact, kid string) error {
@@ -308,7 +321,7 @@ func validateHaipJWE(compact, kid string) error {
 	_ = json.Unmarshal(header["alg"], &alg)
 	_ = json.Unmarshal(header["enc"], &enc)
 	_ = json.Unmarshal(header["kid"], &declaredKid)
-	if alg != "ECDH-ES" || enc != "A256GCM" || (declaredKid != "" && declaredKid != kid) {
+	if alg != "ECDH-ES" || !supportedHaipContentEncryption(enc) || (declaredKid != "" && declaredKid != kid) {
 		return errors.New("unsupported HAIP algorithms or key ID")
 	}
 	var epk map[string]json.RawMessage

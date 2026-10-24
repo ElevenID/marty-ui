@@ -1448,6 +1448,7 @@ mod tests {
                 json!({
                     "organization_id": "org-1",
                     "name": "Canonical revocation profile",
+                    "supported_formats": ["JSON_LD"],
                     "revocation_mechanism": ["OCSP", "BITSTRING_STATUS_LIST"],
                     "mechanism_priority": ["OCSP", "BITSTRING_STATUS_LIST"],
                     "check_mode": "OFFLINE_GRACE",

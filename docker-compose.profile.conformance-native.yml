@@ -4,7 +4,7 @@ x-conformance-grpc-auth: &conformance-grpc-auth
 services:
   issuance-native:
     extends:
-      file: docker-compose.service.issuance-native.yml
+      file: docker-compose.service.issuance-native-runtime.yml
       service: issuance-native
     image: ${MARTY_CONFORMANCE_PROJECT:?set the exact conformance project}-issuance-native
     entrypoint: ["/app/services/entrypoint.sh"]

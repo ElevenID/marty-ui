@@ -228,7 +228,7 @@ impl GatewayContract {
         })?;
         table.add(RouteConfig {
             name: "internal:issuance-native:oid4vci-client-management".into(),
-            pattern: "/__gateway/issuance-native/v1/issuance/oid4vci-clients".into(),
+            pattern: OID4VCI_CLIENT_MANAGEMENT_PROXY_PATH.into(),
             match_type: RouteMatchType::Exact,
             upstream_service: issuance_native::NATIVE_SERVICE.into(),
             methods: BTreeSet::from([HttpMethod::Put]),
@@ -550,12 +550,15 @@ pub fn route_for(
     table.find(&GatewayRequest::new(method, path, 0))
 }
 
+const OID4VCI_CLIENT_MANAGEMENT_PROXY_PATH: &str =
+    "/__gateway/issuance-native/v1/issuance/oid4vci-clients";
+
 /// Preserve the legacy gateway's service credential boundary for direct
 /// issuance management and wallet routes while leaving browser/webhook Canvas
 /// protocol entry points credential-free.
 #[must_use]
 pub fn requires_issuance_service_auth(path: &str) -> bool {
-    route_ownership(path).service == "issuance"
+    (route_ownership(path).service == "issuance" || path == OID4VCI_CLIENT_MANAGEMENT_PROXY_PATH)
         && path != "/v1/issuance/authorize"
         && path != "/v1/passport/webhooks/personalization"
         && !CANVAS_PUBLIC.iter().any(|pattern| pattern.is_match(path))
@@ -691,6 +694,22 @@ static APPENDED_DISCOVERY_PUBLIC: LazyLock<Regex> = LazyLock::new(|| {
 static DID_WEB_PUBLIC: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^/orgs/[^/]+/did\.json$").expect("static DID Web route regex"));
 
+pub(crate) fn oid4vci_protocol_route(path: &str) -> bool {
+    matches!(
+        path,
+        "/v1/issuance/offers"
+            | "/v1/issuance/token"
+            | "/v1/issuance/credential"
+            | "/v1/issuance/nonce"
+            | "/v1/issuance/notification"
+            | "/v1/issuance/deferred-credential"
+            | "/v1/issuance/authorize"
+            | "/v1/issuance/par"
+    ) || path
+        .strip_prefix("/v1/issuance/offers/")
+        .is_some_and(|id| !id.is_empty() && !id.contains('/'))
+}
+
 fn public_route(path: &str) -> bool {
     path == "/openapi.json"
         || path == "/docs"
@@ -714,19 +733,8 @@ fn public_route(path: &str) -> bool {
         || path.starts_with("/v1/trust-registry")
         || APPENDED_DISCOVERY_PUBLIC.is_match(path)
         || DID_WEB_PUBLIC.is_match(path)
-        || [
-            "/v1/issuance/offers",
-            "/v1/issuance/token",
-            "/v1/issuance/credential",
-            "/v1/issuance/nonce",
-            "/v1/issuance/notification",
-            "/v1/issuance/deferred-credential",
-            "/v1/issuance/authorize",
-            "/v1/issuance/par",
-            "/v1/flows/siop/submit",
-        ]
-        .iter()
-        .any(|prefix| path.starts_with(prefix))
+        || oid4vci_protocol_route(path)
+        || path.starts_with("/v1/flows/siop/submit")
         || CANVAS_PUBLIC.iter().any(|pattern| pattern.is_match(path))
         || WALLET_PUBLIC.is_match(path)
         || STATUS_PUBLIC.is_match(path)

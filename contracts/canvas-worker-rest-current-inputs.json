@@ -7,11 +7,11 @@
     "contracts/canvas-worker-rest-oracle.json": "64b3e5a748fab30dcdb27a4ce4d4f9415e54cc73beaa6bbe4f56680a9ee07afc",
     "contracts/canvas-worker-rest-scenarios.json": "ab9e1f28a23a4db50982a8e64b01a6fb14d67d47f8c1ead9f255247e8ecb7e52",
     "contracts/fixtures/canvas_worker_test_trust.py": "b336dde49675e5e96f6d96e32016ed82e1a9f886df8617eb6456b7ac691314eb",
-    "rust/services/issuance/tests/support/canvas_worker_rest_replay.rs": "c66bc8e4c9f68004c3387f6d16fd29a82a90f1c91b5e456f917db8aebf7977b4",
+    "rust/services/issuance/tests/support/canvas_worker_rest_replay.rs": "dc8b90aba7f60b5fec3ac05f5285a22b3637e80082d737bb6af5285f2147762f",
     "rust/services/issuance/tests/support/remote_integration_secret.rs": "4a8338ffddf9a0f0d76624ee23aa05f2a125115c2891e47dd11ff6a9c9c61fcd",
     "scripts/canvas_worker_https_fixture.py": "940b5203e7d5e914060993f868c69c3d63760df181a80414133b2e08bb93e6b8",
     "scripts/prepare_canvas_published_schema.py": "8610ade9e03c08a8fb4984583b38e4cb6d2c6dfcf63258411f793414c8e9a45a",
     "scripts/test_canvas_lti_https.py": "27db81b0baf4c5a53ce574ff59bff2754e5f294c7d23adff339fe5e8d36c828d",
-    "scripts/test_canvas_worker_rest_https.py": "8fa841216f87ebbd2850181eb46d6dec73e6485de519f0c26b4aecbec1f8416d"
+    "scripts/test_canvas_worker_rest_https.py": "8ed29a6346ec9eb9a1ea7d2f9576bd46e929d81cc111396fdb3653a4ac95f3f2"
   }
 }

@@ -46,6 +46,16 @@ Released startup rejects any remaining source build in the rendered graph,
 and the isolated executable probe checks both issuance and bridge linkage.
 These startup checks do not establish a protocol pass.
 
+Local execution then exposed a second startup defect: Compose restarted
+`openbao-init` after the disposable KMS bootstrap had completed. The production
+initializer correctly refused the already-initialized Raft state. Native resume
+now verifies the exact project, service, image and successful completion of both
+bootstrap jobs, plus the running healthy OpenBao container. It explicitly starts
+the selected runtime graph with `--no-deps`, preserving migration and health
+ordering while leaving those verified bootstrap services untouched. Missing,
+foreign, failed or unhealthy custody prevents startup. Fresh runs still execute
+the original strict ceremony; its fresh-state guard is unchanged.
+
 The reusable suite verifies product `cd.yml` provenance, exact protected-main
 source, independent manifest digest and all five KMS image roles. It does not
 require a public release or modify the ordinary reviewed release pin. Its
@@ -65,6 +75,15 @@ Old five-gate transactions cannot qualify or resume under this new policy;
 they remain historical evidence and must not be rewritten as passing it.
 
 Source checks and synthetic unit controls do not establish an official pass.
+Local feedback also found that the old conformance composition mixed a workload
+CA with plaintext control-plane targets. Conformance now layers the existing
+beta workload configuration before the protocol and isolation overlays, reusing
+its remote KMS TLS identities, authenticated Redis and gRPC bindings. The native
+selection extends only the neutral executable definition so it cannot overwrite
+those deployed bindings with development settings. Both issuance owners must
+retain the scoped HTTPS control-plane targets and public CA. The shared harness
+generates disposable Redis and device credentials alongside its other run inputs.
+
 The adapter and product gate must complete protected integration and a real
 candidate execution before claiming release qualification. Keep beta runtime,
 disposable conformance stacks, demo acceptance and editorial review distinct.
