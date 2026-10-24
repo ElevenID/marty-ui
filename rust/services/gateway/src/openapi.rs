@@ -33,6 +33,10 @@ pub fn schemas() -> Value {
         "../../../../contracts/wallet-compatibility-response.json"
     ))
     .expect("native derived wallet compatibility schema");
+    schemas["runtime__protocol_support_catalog"] = serde_json::from_str(include_str!(
+        "../../../../contracts/protocol-support-catalog-schema.json"
+    ))
+    .expect("protocol support catalog schema");
     let compliance: Value = serde_json::from_str(include_str!(
         "../../../../contracts/compliance-profile-http-schemas.json"
     ))
@@ -68,6 +72,20 @@ fn schema(name: &str) -> Value {
 
 pub fn describe_operation(operation: &mut Value, method: HttpMethod, path: &str, status: u16) {
     use HttpMethod::{Get, Patch, Post};
+    if method == Get && path == "/v1/protocol-support" {
+        operation["summary"] = json!("Discover product support for protocol abstractions");
+        operation["description"] = json!("Public gateway-owned catalog of product consumer surfaces. Implemented, derived, partial and unsupported are distinct; qualification state and limitations prevent route presence or protocol vocabulary from being presented as end-to-end support.");
+        operation["responses"][status.to_string()]["content"] = json!({
+            "application/json": {
+                "schema": {"$ref":"#/components/schemas/runtime__protocol_support_catalog"},
+                "example": serde_json::from_str::<Value>(include_str!("../../../../contracts/protocol-support-catalog.json")).expect("support catalog example")
+            }
+        });
+        operation["x-marty-protocol-support"] = json!("implemented");
+        operation["x-marty-request-schema-documented"] = json!(true);
+        operation["x-marty-response-schema-documented"] = json!(true);
+        return;
+    }
     if path.starts_with("/v1/notifications") && path != "/v1/notifications/events/push" {
         describe_notification(operation, method, path, status);
         return;

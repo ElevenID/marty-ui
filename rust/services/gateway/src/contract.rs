@@ -13,7 +13,7 @@ use serde_json::{json, Map, Value};
 
 use crate::issuance_native;
 
-pub const EXPECTED_ROUTE_COUNT: usize = 460;
+pub const EXPECTED_ROUTE_COUNT: usize = 461;
 
 #[derive(Debug, Deserialize)]
 pub struct GatewayContract {
@@ -693,6 +693,7 @@ static DID_WEB_PUBLIC: LazyLock<Regex> =
 
 fn public_route(path: &str) -> bool {
     path == "/openapi.json"
+        || path == "/v1/protocol-support"
         || path == "/docs"
         || path == "/redoc"
         || path == "/ready"
@@ -734,6 +735,7 @@ fn public_route(path: &str) -> bool {
 
 fn gateway_owned(path: &str) -> bool {
     path == "/openapi.json"
+        || path == "/v1/protocol-support"
         || path == "/v1/credential-templates/issuer-options"
         || path == "/docs"
         || path == "/redoc"
@@ -1122,6 +1124,25 @@ mod tests {
             "organization_id"
         );
         assert!(document.to_string().find("commerce").is_none());
+    }
+
+    #[test]
+    fn protocol_support_catalog_is_public_gateway_owned_discovery() {
+        let ownership = route_ownership("/v1/protocol-support");
+        assert_eq!(ownership.service, "gateway");
+        assert!(ownership.gateway_owned);
+        assert!(!ownership.requires_authentication);
+        let contract = GatewayContract::load().expect("gateway contract");
+        let route = route_for(
+            &contract.runtime_route_table().expect("runtime routes"),
+            HttpMethod::Get,
+            "/v1/protocol-support",
+        )
+        .expect("support route");
+        assert_eq!(route.route.upstream_service, "gateway");
+        let operation = &contract.openapi_document("test")["paths"]["/v1/protocol-support"]["get"];
+        assert_eq!(operation["security"], json!([]));
+        assert_eq!(operation["x-marty-protocol-support"], "implemented");
     }
 
     #[test]

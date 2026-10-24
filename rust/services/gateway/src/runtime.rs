@@ -958,6 +958,9 @@ async fn proxy_handler(
             )
             .into_response();
         }
+        "/v1/protocol-support" => {
+            return Json(discovery::protocol_support_catalog()).into_response();
+        }
         "/docs" | "/redoc" => return api_documentation_handler(),
         "/ready" | "/health/ready" => return readiness_handler(state).await,
         "/health/services" => return services_health_handler(state).await,
@@ -10621,6 +10624,25 @@ mod tests {
             json!(["OPEN_BADGES_3"])
         );
 
+        let support = runtime_router()
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/protocol-support")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(support.status(), StatusCode::OK);
+        let support: Value = serde_json::from_slice(
+            &to_bytes(support.into_body(), DEFAULT_MAXIMUM_BODY_BYTES)
+                .await
+                .expect("body"),
+        )
+        .expect("json");
+        assert_eq!(support, discovery::protocol_support_catalog());
+        assert_eq!(support["entities"].as_array().map(Vec::len), Some(33));
+
         let health = runtime_router()
             .oneshot(
                 Request::builder()
@@ -10661,6 +10683,11 @@ mod tests {
         assert_eq!(openapi["openapi"], "3.1.0");
         assert_eq!(openapi["info"]["version"], "development");
         assert!(openapi["paths"]["/v1/flows/definitions"]["get"].is_object());
+        assert_eq!(
+            openapi["paths"]["/v1/protocol-support"]["get"]["responses"]["200"]["content"]
+                ["application/json"]["schema"]["$ref"],
+            "#/components/schemas/runtime__protocol_support_catalog"
+        );
 
         for path in ["/docs", "/redoc"] {
             let docs = runtime_router()

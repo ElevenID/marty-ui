@@ -337,8 +337,11 @@ function ApiDocumentation() {
               <Button variant="outlined" size="small" component="a" href="/openapi.json" target="_blank" rel="noopener noreferrer">
                 Try /openapi.json
               </Button>
-              <Button variant="outlined" size="small" component="a" href="http://localhost:8000/docs" target="_blank" rel="noopener noreferrer">
-                Local gateway docs
+              <Button variant="outlined" size="small" component="a" href="/v1/protocol-support" target="_blank" rel="noopener noreferrer">
+                Protocol support catalog
+              </Button>
+              <Button variant="outlined" size="small" component="a" href="/redoc" target="_blank" rel="noopener noreferrer">
+                Gateway ReDoc
               </Button>
             </Stack>
             {specUrlInUse && (

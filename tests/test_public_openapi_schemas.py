@@ -257,3 +257,133 @@ def test_notification_http_schemas_match_native_examples_and_embedded_target_bou
     delivery.validate({"notification_id": "notification-1", "channel": "SSE", "success": False, "attempted_at": examples["response"]["created_at"], "should_retry": True})
     with pytest.raises(jsonschema.ValidationError):
         delivery.validate({"notification_id": "notification-1", "channel": "SSE", "success": "true"})
+
+
+def test_protocol_support_catalog_is_strict_and_bound_to_real_api_and_ui_routes():
+    schema = json.loads(
+        (ROOT / "contracts/protocol-support-catalog-schema.json").read_text()
+    )
+    catalog = json.loads(
+        (ROOT / "contracts/protocol-support-catalog.json").read_text()
+    )
+    jsonschema.Draft202012Validator(
+        schema, format_checker=jsonschema.FormatChecker()
+    ).validate(catalog)
+    assert catalog["protocol_revision"] == json.loads(
+        (ROOT / "contracts/gateway-public-openapi-schemas.json").read_text()
+    )["protocol_revision"]
+    routes = {
+        route["path"]
+        for route in json.loads(
+            (ROOT / "contracts/gateway-routes.json").read_text()
+        )["routes"]
+    }
+    console = (ROOT / "ui/src/apps/console/ConsoleRoutes.jsx").read_text()
+    ids = set()
+    for entity in catalog["entities"]:
+        assert entity["id"] not in ids
+        ids.add(entity["id"])
+        assert set(entity["api_paths"]) <= routes
+        for ui_path in entity["ui_paths"]:
+            if ui_path.startswith("/console/org/"):
+                expected = f'path="{ui_path.removeprefix("/console/org/")}"'
+            elif ui_path.startswith("/console/applicant/"):
+                expected = f'path="{ui_path.removeprefix("/console/applicant/")}"'
+            else:
+                expected = f'path="{ui_path}"'
+            assert expected in console, (entity["id"], ui_path)
+    assert ids == {
+        "applicant",
+        "application-template",
+        "authorization-decision-receipt",
+        "compliance-profile",
+        "credential-template",
+        "delivery-destination-profile",
+        "deployment-profile",
+        "device-registration",
+        "didcomm-delivery",
+        "flow-definition",
+        "flow-execution",
+        "issued-credential",
+        "issuer-entity",
+        "issuer-identity",
+        "key-attestation-policy",
+        "machine-authentication-policy",
+        "machine-identity",
+        "notification",
+        "notification-target",
+        "organization",
+        "organization-trust-profile",
+        "policy-set",
+        "presentation-policy",
+        "revocation-profile",
+        "scim",
+        "subscription",
+        "trust-framework",
+        "trust-profile",
+        "trust-profile-issuer",
+        "trust-registry",
+        "verification-decision-result",
+        "wallet-profile",
+        "wallet-registry",
+    }
+    assert {
+        "machine-identity",
+        "machine-authentication-policy",
+        "authorization-decision-receipt",
+    } == {
+        entity["id"]
+        for entity in catalog["entities"]
+        if entity["support_level"] == "unsupported"
+    }
+
+
+def test_protocol_support_schema_rejects_false_unsupported_and_extra_claims():
+    schema = json.loads(
+        (ROOT / "contracts/protocol-support-catalog-schema.json").read_text()
+    )
+    catalog = json.loads(
+        (ROOT / "contracts/protocol-support-catalog.json").read_text()
+    )
+    validator = jsonschema.Draft202012Validator(schema)
+    machine = next(
+        entity for entity in catalog["entities"] if entity["id"] == "machine-identity"
+    )
+    for field, value in [
+        ("api_paths", ["/v1/machine-identities"]),
+        ("ui_paths", ["/console/org/machines"]),
+        ("schema_refs", ["#/components/schemas/schemas__machine_identity"]),
+        ("owner_service", "machines"),
+    ]:
+        mutated = deepcopy(catalog)
+        target = next(
+            entity
+            for entity in mutated["entities"]
+            if entity["id"] == machine["id"]
+        )
+        target[field] = value
+        with pytest.raises(jsonschema.ValidationError):
+            validator.validate(mutated)
+    mutated = deepcopy(catalog)
+    mutated["entities"][0]["release_ready"] = True
+    with pytest.raises(jsonschema.ValidationError):
+        validator.validate(mutated)
+
+
+def test_ai_consumer_page_uses_gateway_discovery_instead_of_unverified_cli_claims():
+    page = (ROOT / "ui/src/components/pages/AiCapabilityPage.jsx").read_text()
+    docs = (ROOT / "ui/src/components/ApiDocumentation.jsx").read_text()
+    assert '/v1/protocol-support' in page
+    assert '/openapi.json' in page
+    assert 'href="/v1/protocol-support"' in docs
+    assert 'href="/openapi.json"' in docs
+    assert 'href="/redoc"' in docs
+    assert 'localhost:8000/docs' not in docs
+    for unverified_claim in (
+        '@elevenid/marty-cli',
+        'marty verify start',
+        'marty creds issue',
+        'All commands support',
+        'primary interface for AI agents',
+    ):
+        assert unverified_claim not in page
