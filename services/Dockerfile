@@ -56,7 +56,6 @@ COPY --chmod=644 scripts/ci/public-sccache-stats.awk /usr/local/bin/public-sccac
 FROM rust-service-cache AS rust-service-dependencies
 
 COPY --from=rust-service-planner /build/rust/recipe.json recipe.json
-COPY --from=rust-service-planner /build/rust/third_party /build/rust/third_party
 COPY proto /build/proto
 RUN --mount=type=cache,id=marty-public-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,id=marty-public-cargo-git,target=/usr/local/cargo/git,sharing=locked \
