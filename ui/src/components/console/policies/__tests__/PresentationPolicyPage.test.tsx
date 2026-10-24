@@ -78,7 +78,7 @@ describe('scoped presentation policy detail and metadata editing', () => {
     await user.clear(description); await user.type(description, 'Updated metadata')
     await user.click(screen.getByRole('button', { name: 'Save changes' }))
     expect(await screen.findByRole('heading', { name: profile.name })).toBeInTheDocument()
-    expect(requests[0].body).toEqual({ description: 'Updated metadata' })
+    expect(requests[0].body).toEqual({ organization_id: 'org-1', description: 'Updated metadata' })
     expect(profile).toEqual({ ...initial, description: 'Updated metadata' })
   })
 

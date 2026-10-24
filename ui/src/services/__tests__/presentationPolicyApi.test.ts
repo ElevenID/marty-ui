@@ -276,6 +276,7 @@ describe('presentationPolicyApi', () => {
       const result = await updatePresentationPolicy(1, updates)
 
       expect(receivedData).toEqual({
+        organization_id: 'org-1',
         name: 'Updated Policy Name',
       })
       expect(result.name).toBe(updates.name)
@@ -291,9 +292,8 @@ describe('presentationPolicyApi', () => {
       }
       let current = structuredClone(initial)
       server.use(http.patch('http://localhost:8000/v1/presentation-policies/:id', async ({ request }) => {
-        expect(new URL(request.url).searchParams.get('organization_id')).toBe('org-1')
         const body = await request.json()
-        expect(body).toEqual({ description: '' })
+        expect(body).toEqual({ organization_id: 'org-1', description: '' })
         current = { ...current, ...body as object }
         return HttpResponse.json(current)
       }))
@@ -307,7 +307,7 @@ describe('presentationPolicyApi', () => {
         freshness: { require_not_revoked: true, max_age_seconds: 0 },
       }
       server.use(http.patch('http://localhost:8000/v1/presentation-policies/:id', async ({ request }) => {
-        expect(await request.json()).toEqual(changes)
+        expect(await request.json()).toEqual({ organization_id: 'org-1', ...changes })
         return HttpResponse.json({ id: 'policy', ...changes })
       }))
       await updatePresentationPolicy('policy', { organization_id: 'org-1', ...changes })

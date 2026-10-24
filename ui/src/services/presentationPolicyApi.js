@@ -713,7 +713,7 @@ export async function getPresentationPolicy(id, scope = null) {
 export async function updatePresentationPolicy(id, data) {
   const organizationId = requireOrganizationId(data);
   const { organization_id: _organizationId, freshness_requirements, ...payload } = data;
-  // PATCH is a native sparse update, not a new policy. Never manufacture
+  // PATCH is a sparse update, not a new policy. Never manufacture
   // requirements or binding defaults for an unrelated metadata edit.
   if (typeof payload.holder_binding === 'string') {
     payload.holder_binding = normalizeHolderBindingPayload(payload.holder_binding);
@@ -721,8 +721,11 @@ export async function updatePresentationPolicy(id, data) {
   if (freshness_requirements !== undefined && payload.freshness === undefined) {
     payload.freshness = normalizeFreshnessPayload({ freshness_requirements });
   }
-  const query = new URLSearchParams({ organization_id: organizationId });
-  const result = await patch(`${PRESENTATION_POLICY_BASE}/${encodeURIComponent(id)}?${query}`, payload);
+  // The public gateway authenticates body scope, then removes it before
+  // forwarding to the native update contract.
+  const result = await patch(`${PRESENTATION_POLICY_BASE}/${encodeURIComponent(id)}`, {
+    organization_id: organizationId, ...payload,
+  });
   return normalizePresentationPolicy(result);
 }
 
