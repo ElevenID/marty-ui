@@ -216,6 +216,18 @@ static SPECIAL_RULES: LazyLock<Vec<RouteRule>> = LazyLock::new(|| {
             "verification",
         ),
         rule(
+            r"^/v1/delivery-destinations(?:/[^/]+)?$",
+            &[
+                ("GET", "wallet:view"),
+                ("HEAD", "wallet:view"),
+                ("OPTIONS", "wallet:view"),
+                ("POST", "integration-connector:create"),
+                ("PATCH", "integration-connector:edit"),
+                ("DELETE", "integration-connector:delete"),
+            ],
+            "delivery-destination",
+        ),
+        rule(
             r"^/v1/wallet-registry(?:/|$)",
             &[
                 ("GET", "wallet:view"),
@@ -302,6 +314,16 @@ static SPECIAL_RULES: LazyLock<Vec<RouteRule>> = LazyLock::new(|| {
             r"^/v1/integrations/canvas/canvas-credentials/validate$",
             &[("POST", "integration-connector:view")],
             "integration-connector",
+        ),
+        rule(
+            r"^/v1/compliance-profiles/[^/]+/activate$",
+            &[("POST", "compliance-profile:activate")],
+            "compliance-profile",
+        ),
+        rule(
+            r"^/v1/compliance-profiles/[^/]+/suspend$",
+            &[("POST", "compliance-profile:suspend")],
+            "compliance-profile",
         ),
         rule(
             r"^/v1/credential-templates/[^/]+/activate$",
@@ -775,7 +797,11 @@ pub fn resolve_resource_lookup(path: &str) -> Option<ResourceLookup> {
     let segment = &captures[1];
     let id = &captures[2];
     let (service, template, reserved): (&str, &str, &[&str]) = match segment {
-        "credential-templates" => ("credential-templates", "/v1/credential-templates/{id}", &[]),
+        "credential-templates" => (
+            "credential-templates",
+            "/v1/credential-templates/{id}",
+            &["issuer-options"],
+        ),
         "trust-profiles" => (
             "trust-profiles",
             "/internal/v1/resource-owners/trust-profiles/{id}",
@@ -845,6 +871,11 @@ pub fn resolve_resource_lookup(path: &str) -> Option<ResourceLookup> {
             "credential-templates",
             "/v1/wallet-registry/{id}",
             &["resolve"],
+        ),
+        "delivery-destinations" => (
+            "credential-templates",
+            "/v1/delivery-destinations/{id}",
+            &[],
         ),
         // Notification resources deliberately require an explicit authorized
         // organization selector; unscoped owner lookup is unsafe here.
@@ -962,6 +993,40 @@ mod tests {
             "../../../../contracts/gateway-authorization-behavior.json"
         ))
         .expect("valid gateway authorization contract")
+    }
+
+    #[test]
+    fn delivery_grants_exist_in_the_organization_catalog_and_keep_api_key_reads_separate() {
+        let catalog: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../contracts/organization-permission-catalog.json"
+        ))
+        .unwrap();
+        for (method, permission) in [
+            ("GET", "wallet:view"),
+            ("POST", "integration-connector:create"),
+            ("PATCH", "integration-connector:edit"),
+            ("DELETE", "integration-connector:delete"),
+        ] {
+            let required =
+                resolve_action(method, "/v1/delivery-destinations/destination-one").unwrap();
+            assert_eq!(required.permission, permission);
+            assert!(catalog["permissions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|item| format!(
+                    "{}:{}",
+                    item["resource"].as_str().unwrap(),
+                    item["action"].as_str().unwrap()
+                ) == permission));
+        }
+        assert!(api_key_allowed("wallet:view", &["wallet:read".into()]));
+        for action in ["create", "edit", "delete"] {
+            let permission = format!("integration-connector:{action}");
+            assert!(!api_key_allowed(&permission, &["wallet:read".into()]));
+            assert!(!api_key_allowed(&permission, &["integrations:read".into()]));
+            assert!(api_key_allowed(&permission, &["integrations:write".into()]));
+        }
     }
 
     #[test]
@@ -1163,5 +1228,32 @@ mod tests {
                 .permission,
             "compliance-profile:view"
         );
+    }
+    #[test]
+    fn compliance_lifecycle_uses_native_actions_and_readers_never_gain_writes() {
+        for action in ["activate", "suspend"] {
+            let path = format!("/v1/compliance-profiles/profile-one/{action}");
+            let requirement = resolve_action("POST", &path).unwrap();
+            assert_eq!(
+                requirement.permission,
+                format!("compliance-profile:{action}")
+            );
+            assert_eq!(
+                resolve_resource_lookup(&path).unwrap().path,
+                "/v1/compliance-profiles/profile-one"
+            );
+            assert!(!api_key_allowed(
+                requirement.permission,
+                &["compliance:read".into()]
+            ));
+            assert!(!api_key_allowed(
+                requirement.permission,
+                &["templates:write".into()]
+            ));
+            assert!(api_key_allowed(
+                requirement.permission,
+                &["compliance:write".into()]
+            ));
+        }
     }
 }

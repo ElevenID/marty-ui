@@ -15,6 +15,10 @@
     {"method":"POST","path":"/v1/vc-api/credentials/issue","permission":"issuance:initiate","resource":"issuance"},
     {"method":"POST","path":"/v1/vc-api/credentials/verify","permission":"verification:execute","resource":"verification"},
     {"method":"POST","path":"/v1/vc-api/presentations/verify","permission":"verification:execute","resource":"verification"},
+    {"method":"GET","path":"/v1/delivery-destinations/destination-1","permission":"wallet:view","resource":"delivery-destination"},
+    {"method":"POST","path":"/v1/delivery-destinations","permission":"integration-connector:create","resource":"delivery-destination"},
+    {"method":"PATCH","path":"/v1/delivery-destinations/destination-1","permission":"integration-connector:edit","resource":"delivery-destination"},
+    {"method":"DELETE","path":"/v1/delivery-destinations/destination-1","permission":"integration-connector:delete","resource":"delivery-destination"},
     {"method":"GET","path":"/v1/wallet-registry/example","permission":"wallet:view","resource":"wallet"},
     {"method":"DELETE","path":"/v1/wallet-registry/example","permission":"wallet:write","resource":"wallet"},
     {"method":"GET","path":"/v1/signing-keys/services/example","permission":"signing-key:view","resource":"signing-key"},
@@ -90,6 +94,7 @@
     {"method":"GET","path":"/health","permission":null,"resource":null}
   ],
   "lookup_cases": [
+    {"path":"/v1/delivery-destinations/destination-1","service":"credential-templates","lookup_path":"/v1/delivery-destinations/destination-1"},
     {"path":"/v1/integrations/canvas/platforms/p1/readiness","service":"issuance","lookup_path":"/v1/integrations/canvas/platforms/p1"},
     {"path":"/v1/integrations/canvas/program-bindings/b1/activate","service":"issuance","lookup_path":"/v1/integrations/canvas/program-bindings/b1"},
     {"path":"/v1/flows/definitions/f1/activate","service":"flows","lookup_path":"/v1/flows/definitions/f1"},

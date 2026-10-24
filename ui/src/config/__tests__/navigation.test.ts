@@ -52,3 +52,15 @@ describe('findActiveNavItem', () => {
     })
   })
 })
+
+
+describe('public and operator navigation', () => {
+  it('keeps public issuer identities in Deploy and KMS administration in Operator', () => {
+    const deploy = ADMIN_VENDOR_NAV.find((item) => item.id === 'deploy');
+    expect(deploy?.children?.map((item) => item.id)).toEqual(['deployment-profiles', 'issuer-identity']);
+    expect(findActiveNavItem(ADMIN_VENDOR_NAV, '/console/org/operator/key-management/services/new')).toMatchObject({
+      parent: expect.objectContaining({ id: 'operator', requiredPermission: { resource: 'signing-key', action: 'view' } }),
+      child: expect.objectContaining({ id: 'key-management' }),
+    });
+  });
+});

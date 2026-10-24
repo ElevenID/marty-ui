@@ -38,6 +38,7 @@ pub fn api_key_allowed(required_permission: &str, scopes: &[String]) -> bool {
         return false;
     };
     match resource {
+        "compliance-profile" if action == "suspend" => scopes.contains("compliance:write"),
         "wallet" => match action {
             "view" => scopes.contains("wallet:read") || scopes.contains("wallet:write"),
             "write" => scopes.contains("wallet:write"),

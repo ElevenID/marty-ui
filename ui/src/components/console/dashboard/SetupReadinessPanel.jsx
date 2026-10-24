@@ -46,10 +46,10 @@ const getResourceConfig = (t) => ({
     tooltip: t('setupReadiness.complianceProfile.tooltip'),
   },
   issuer: {
-    label: 'Issuer Identity / KMS',
+    label: 'Issuer Identity',
     icon: CloudUploadIcon,
     path: '/console/org/deploy/issuer-identity',
-    tooltip: 'Issuer identity and signing services required for production issuance.',
+    tooltip: 'An active public issuer DID is required for issuance setup. Inspect its publication and managed signer before issuing.',
   },
   applicationTemplate: {
     label: 'Application Template',
@@ -66,7 +66,7 @@ const getResourceConfig = (t) => ({
   physicalCapability: {
     label: 'Physical Issuance Capability',
     icon: SecurityIcon,
-    path: '/console/org/deploy/key-management',
+    path: '/console/org/operator/key-management',
     tooltip: 'Requires document signing, encrypted artifact storage, and a configured personalization bureau.',
   },
   deliveryDestination: {

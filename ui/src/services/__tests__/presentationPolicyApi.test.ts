@@ -36,6 +36,33 @@ describe('presentationPolicyApi', () => {
   })
 
   describe('Trust Profile sparse updates', () => {
+    it('retains DID controls when converting trusted issuer selections to sources', async () => {
+      const controls = { organization_id: 'org-1', verification_method_ids: ['did:web:issuer.example#key'],
+        did_resolution: { resolver_type: 'ORGANIZATION_REGISTRY', allow_public_fallback: false, cache_ttl_seconds: 0 } }
+      let received: any
+      server.use(http.patch('*/v1/trust-profiles/profile-1', async ({ request }) => {
+        received = await request.json()
+        return HttpResponse.json({ id: 'profile-1', ...received })
+      }))
+      await updateTrustProfile('profile-1', { trusted_issuers: [{ did: 'did:web:issuer.example', ...controls }] })
+      expect(received.trust_sources).toEqual([{ source_type: 'PINNED_ISSUER', issuer_did: 'did:web:issuer.example', description: null, ...controls }])
+    })
+
+    it('preserves explicit DID resolution controls without custody fields', async () => {
+      const source = {
+        source_type: 'PINNED_ISSUER', issuer_did: 'did:web:issuer.example', organization_id: 'org-1',
+        verification_method_ids: ['did:web:issuer.example#key'],
+        did_resolution: { resolver_type: 'ORGANIZATION_REGISTRY', allow_public_fallback: false, cache_ttl_seconds: 0 },
+      }
+      let received: unknown
+      server.use(http.patch('*/v1/trust-profiles/profile-1', async ({ request }) => {
+        received = await request.json()
+        return HttpResponse.json({ id: 'profile-1', trust_sources: [source] })
+      }))
+      await updateTrustProfile('profile-1', { trust_sources: [{ ...source, kms_provider: 'private' }] })
+      expect(received).toEqual({ trust_sources: [source] })
+    })
+
     it.each([
       [{ name: 'Renamed' }, { name: 'Renamed' }],
       [{ description: '' }, { description: '' }],
@@ -732,6 +759,7 @@ describe('presentationPolicyApi', () => {
         compliance_profile_id: '123e4567-e89b-12d3-a456-426614174000',
         supported_wallet_ids: ['removed-wallet-selection'],
         issuance_protocol: 'oid4vci',
+        _issuer_selection: { organization_id: 'org-1', issuer_did: 'did:web:issuer.example.com' },
         wallet_configs: [{ wallet_id: 'removed-wallet-config' }],
         claims: [],
         validity_rules: {
@@ -749,7 +777,8 @@ describe('presentationPolicyApi', () => {
         not_before_offset_seconds: 900,
       })
       expect(receivedData).not.toHaveProperty('supported_wallet_ids')
-      expect(receivedData).not.toHaveProperty('issuance_protocol')
+      expect(receivedData.issuance_protocol).toBe('oid4vci')
+      expect(receivedData).not.toHaveProperty('_issuer_selection')
       expect(receivedData).not.toHaveProperty('wallet_configs')
     })
 

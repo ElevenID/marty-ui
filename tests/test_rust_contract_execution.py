@@ -1177,6 +1177,7 @@ def test_obligation_wrapper_reaps_owned_harness_and_descendant(
     environment.update(
         TMPDIR=str(temporary),
         MARTY_TEST_REDIS_URL="redis://owned-test-only",
+        MARTY_TEST_REDIS_DISPOSABLE_NONCE="owned-test-sentinel",
         MARTY_SIGNAL_PID_DIR=str(tmp_path),
         MARTY_SIGNAL_PYTHON=sys.executable,
     )
@@ -1294,6 +1295,7 @@ def test_db_inventory_preserves_child_failure_and_saves_observed_outcomes(
 
     monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
     monkeypatch.setenv("MARTY_TEST_REDIS_URL", "private-credential-value")
+    monkeypatch.setenv("MARTY_TEST_REDIS_DISPOSABLE_NONCE", "owned-test-sentinel")
     monkeypatch.setattr(INVENTORY, "artifact_identity", lambda *args, **kwargs: {})
     monkeypatch.setattr(
         INVENTORY, "expected_cases", lambda *args, **kwargs: ({"happy"}, set())
@@ -1745,6 +1747,7 @@ def test_db_inventory_missing_result_log_fails_closed_and_cleans_temp_directory(
 
     monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
     monkeypatch.setenv("MARTY_TEST_REDIS_URL", "owned-fixture")
+    monkeypatch.setenv("MARTY_TEST_REDIS_DISPOSABLE_NONCE", "owned-test-sentinel")
     monkeypatch.setattr(INVENTORY, "artifact_identity", lambda *args, **kwargs: {})
     monkeypatch.setattr(
         INVENTORY, "expected_cases", lambda *args, **kwargs: ({"happy"}, set())
@@ -1765,6 +1768,7 @@ def test_db_inventory_records_real_failed_case_without_repeating_it(
     monkeypatch.delenv("RUNNER_TEMP", raising=False)
     monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
     monkeypatch.setenv("MARTY_TEST_REDIS_URL", "owned-fixture")
+    monkeypatch.setenv("MARTY_TEST_REDIS_DISPOSABLE_NONCE", "owned-test-sentinel")
     monkeypatch.setenv("MARTY_LIBTEST_FORCE_FAILURE", "1")
     assert (
         INVENTORY.run_contract(
@@ -1809,6 +1813,7 @@ def test_db_inventory_is_run_bound_and_excludes_runtime_values(
     for key, value in zip(INVENTORY.RUN_IDENTITY, ("123", "2", "contracts", "a" * 40)):
         monkeypatch.setenv(key, value)
     monkeypatch.setenv("MARTY_TEST_REDIS_URL", "redis://secret-value-never-recorded")
+    monkeypatch.setenv("MARTY_TEST_REDIS_DISPOSABLE_NONCE", "sentinel-value-never-recorded")
     assert (
         INVENTORY.run_contract("issuer_profile", [str(executable), "happy", "--exact"])
         == 0
@@ -1827,6 +1832,8 @@ def test_db_inventory_is_run_bound_and_excludes_runtime_values(
     )
     assert record["runtime_inputs"][0]["name"] == "MARTY_TEST_REDIS_URL"
     assert record["runtime_inputs"][0]["owner"] == INVENTORY.RUNNER_OWNER
+    assert record["runtime_inputs"][1]["name"] == "MARTY_TEST_REDIS_DISPOSABLE_NONCE"
+    assert "sentinel-value-never-recorded" not in output.read_text()
     assert (
         "secret-value-never-recorded"
         not in output.read_text() + capsys.readouterr().out

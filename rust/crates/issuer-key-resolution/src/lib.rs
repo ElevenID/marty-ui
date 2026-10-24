@@ -1,4 +1,7 @@
 pub mod custody;
+pub mod governed;
+pub mod policy;
+pub mod registry;
 
 use std::collections::BTreeSet;
 
@@ -53,23 +56,41 @@ impl NativeIssuerKeyResolver {
             .allow_did_web_hosts(allowed_hosts);
         Self { resolver }
     }
-}
 
-#[async_trait]
-impl IssuerKeyResolver for NativeIssuerKeyResolver {
-    async fn resolve(&self, did: &str) -> Result<IssuerKeyResolution, IssuerKeyResolutionError> {
+    /// Resolve public assertion material for an already authorized public-DID
+    /// lookup. Organization-registry policy must be enforced by the caller.
+    pub async fn resolve_pinned(
+        &self,
+        did: &str,
+        verification_method_ids: &[String],
+    ) -> Result<IssuerKeyResolution, IssuerKeyResolutionError> {
+        policy::validate_source_controls(did, None, verification_method_ids)?;
         let resolution = self
             .resolver
             .resolve_with_metadata(did)
             .await
             .map_err(classify_resolution_error)?;
-        let verification_keys = assertion_verification_keys(&resolution.document)?;
+        if resolution.document.id != did {
+            return Err(IssuerKeyResolutionError::Invalid);
+        }
+        let verification_keys = policy::pin_assertion_keys(
+            did,
+            verification_method_ids,
+            &assertion_verification_keys(&resolution.document)?,
+        )?;
         Ok(IssuerKeyResolution {
             verification_keys,
             source: resolution.source,
             retrieved_at: resolution.retrieved_at,
             content_sha256: resolution.content_sha256,
         })
+    }
+}
+
+#[async_trait]
+impl IssuerKeyResolver for NativeIssuerKeyResolver {
+    async fn resolve(&self, did: &str) -> Result<IssuerKeyResolution, IssuerKeyResolutionError> {
+        self.resolve_pinned(did, &[]).await
     }
 }
 
@@ -283,11 +304,14 @@ mod tests {
     #[tokio::test]
     async fn native_resolver_uses_the_configured_internal_did_web_route() {
         let document = serde_json::to_value(document()).unwrap();
+        let requests = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let observed_requests = requests.clone();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let application = Router::new().route(
             "/orgs/acme/did.json",
             get(move || {
+                observed_requests.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 let document = document.clone();
                 async move { Json(document) }
             }),
@@ -312,6 +336,28 @@ mod tests {
             "did:web:issuer.example:orgs:acme#issuer-key"
         );
         assert_eq!(resolved.content_sha256.len(), 64);
+        let pinned = resolver
+            .resolve_pinned(
+                "did:web:issuer.example:orgs:acme",
+                &["did:web:issuer.example:orgs:acme#issuer-key".into()],
+            )
+            .await
+            .unwrap();
+        assert_eq!(pinned.verification_keys, resolved.verification_keys);
+        // An authentication-only key is not authorized to assert credentials,
+        // even when the caller explicitly pins that method.
+        assert_eq!(
+            resolver
+                .resolve_pinned(
+                    "did:web:issuer.example:orgs:acme",
+                    &["did:web:issuer.example:orgs:acme#login-key".into()],
+                )
+                .await,
+            Err(IssuerKeyResolutionError::Invalid)
+        );
+        // Each call fetches fresh public material, including repeated requests
+        // for the same DID. No local cache can exceed a source TTL of zero.
+        assert_eq!(requests.load(std::sync::atomic::Ordering::SeqCst), 3);
         server.abort();
     }
 }

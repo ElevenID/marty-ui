@@ -1,4 +1,4 @@
-import { Box, Typography, Paper, Grid, Chip, Button } from '@mui/material';
+import { Box, Typography, Paper, Grid, Button } from '@mui/material';
 import { SEOHead } from '../seo';
 import { softwareApplicationSchema, breadcrumbListSchema } from '../seo/structuredData';
 import SmartToyIcon from '@mui/icons-material/SmartToy';
@@ -7,8 +7,8 @@ import SecurityIcon from '@mui/icons-material/Security';
 import IntegrationInstructionsIcon from '@mui/icons-material/IntegrationInstructions';
 import SchemaIcon from '@mui/icons-material/Schema';
 import PolicyIcon from '@mui/icons-material/Policy';
-import TerminalIcon from '@mui/icons-material/Terminal';
 import { useNavigate } from 'react-router';
+import ProtocolSupportCatalog from './ProtocolSupportCatalog';
 
 const capabilities = [
   {
@@ -24,7 +24,7 @@ const capabilities = [
   {
     icon: <PolicyIcon sx={{ fontSize: 40 }} />,
     title: 'Trust Policy Evaluation',
-    description: 'Evaluate trust policies against credential presentations. Supports minimum disclosure, zero-knowledge predicates, and compliance rules.',
+    description: 'Evaluate credential presentations through explicit presentation policies and the trust and compliance constraints exposed by the deployment.',
   },
   {
     icon: <SchemaIcon sx={{ fontSize: 40 }} />,
@@ -33,44 +33,11 @@ const capabilities = [
   },
 ];
 
-const cliCommands = [
-  {
-    command: 'marty verify start',
-    description: 'Start a credential verification session using a trust profile and presentation policy',
-    example: 'marty verify start --trust-profile eudi-pid --credential ./cred.json',
-  },
-  {
-    command: 'marty creds issue',
-    description: 'Issue a verifiable credential or Open Badge from a credential template',
-    example: 'marty creds issue --template university-degree --subject ./subject.json',
-  },
-  {
-    command: 'marty trust list',
-    description: 'List all trust profiles configured in your organization',
-    example: 'marty trust list --json',
-  },
-  {
-    command: 'marty ct inspect',
-    description: 'Inspect a credential template to view its schema and configuration',
-    example: 'marty ct inspect <template-id> --json',
-  },
-  {
-    command: 'marty compliance list',
-    description: 'List compliance profiles and their regulatory mappings',
-    example: 'marty compliance list --json',
-  },
-  {
-    command: 'marty flows list',
-    description: 'List active identity flows and their current status',
-    example: 'marty flows list --json',
-  },
-];
-
 const useCases = [
-  { title: 'Verify student credentials', description: 'An AI coding assistant runs marty verify to check a student\'s Open Badge before generating an enrollment integration.' },
-  { title: 'Automate credential issuance', description: 'A CI/CD pipeline uses marty creds issue to automatically issue completion badges after a training course.' },
-  { title: 'Query trust registries', description: 'An AI agent runs marty trust list --json to discover which issuers are trusted before processing a credential.' },
-  { title: 'Inspect credential schemas', description: 'A developer copilot runs marty ct inspect to understand a credential template before generating integration code.' },
+  { title: 'Gate integrations by support level', description: 'Read the protocol catalog before presenting a workflow so unsupported and partial concepts stay explicit.' },
+  { title: 'Generate HTTP clients', description: 'Use the gateway-generated OpenAPI document as the source for operations and public request and response schemas.' },
+  { title: 'Build tenant workflows', description: 'Follow the catalog API paths into authenticated organization-scoped template, profile, issuance, and verification operations.' },
+  { title: 'Explain product limits', description: 'Show the catalog limitations next to derived or partial features instead of treating every protocol concept as implemented.' },
 ];
 
 function AiCapabilityPage() {
@@ -80,13 +47,13 @@ function AiCapabilityPage() {
     <Box>
       <SEOHead
         title="AI-Accessible Identity Infrastructure — ElevenID"
-        description="ElevenID provides programmable identity infrastructure for AI agents. Use the Marty CLI to verify credentials, issue badges, and evaluate trust policies from any AI coding assistant or automation pipeline."
+        description="ElevenID provides gateway-owned discovery and OpenAPI contracts for credential, identity, trust, issuance, and verification integrations."
         canonicalPath="/ai"
-        keywords={['AI identity verification', 'AI agent credentials', 'verifiable credentials CLI', 'verifiable credentials API', 'AI trust infrastructure', 'credential verification AI', 'developer CLI identity']}
+        keywords={['AI identity verification', 'AI agent credentials', 'verifiable credentials API', 'AI trust infrastructure', 'credential verification AI', 'identity API discovery']}
         structuredData={[
           softwareApplicationSchema({
             name: 'ElevenID AI Integration',
-            description: 'AI-accessible identity infrastructure for verifying credentials, issuing badges, and evaluating trust policies via CLI and REST API.',
+            description: 'Programmable identity infrastructure with gateway-owned support discovery and a generated REST API contract.',
             applicationCategory: 'SecurityApplication',
           }),
           breadcrumbListSchema([
@@ -107,15 +74,15 @@ function AiCapabilityPage() {
           Identity Infrastructure for AI Systems
         </Typography>
         <Typography variant="h6" sx={{ maxWidth: 800, mx: 'auto', opacity: 0.95 }}>
-          ElevenID allows AI systems to verify credentials and identity claims
-          through a programmable trust infrastructure. AI agents interact with ElevenID
-          through the Marty CLI and REST API.
+          ElevenID exposes credential and identity workflows through a programmable REST API.
+          The gateway publishes the exact supported protocol concepts, routes, schemas, and
+          qualification limits for this deployment.
         </Typography>
       </Box>
 
       {/* Capabilities */}
       <Typography variant="h4" component="h2" gutterBottom fontWeight="bold" sx={{ mb: 3 }}>
-        What AI Systems Can Do
+        What API Consumers Can Do
       </Typography>
       <Grid container spacing={3} sx={{ mb: 6 }}>
         {capabilities.map((cap) => (
@@ -135,15 +102,15 @@ function AiCapabilityPage() {
       </Typography>
       <Grid container spacing={3} sx={{ mb: 6 }}>
         {[
-          { icon: <TerminalIcon />, name: 'Marty CLI', description: 'The primary interface for AI agents. Developer copilots and automation tools use the CLI to run identity operations from the terminal.', link: null },
-          { icon: <IntegrationInstructionsIcon />, name: 'REST API', description: 'Standard HTTP endpoints for all operations. Full OpenAPI specification available for automated integration.', link: '/docs' },
+          { icon: <VerifiedIcon />, name: 'Support Catalog', description: 'Public deployment-specific support states, API paths, UI paths, schema references, and known limits.', link: '/v1/protocol-support' },
+          { icon: <IntegrationInstructionsIcon />, name: 'REST API', description: 'Canonical HTTP endpoints with operation-level support and qualification limits published by the gateway.', link: '/docs' },
           { icon: <SchemaIcon />, name: 'OpenAPI Spec', description: 'Canonical public API description generated by the gateway from its route contract.', link: '/openapi.json' },
         ].map((iface) => (
           <Grid item xs={12} sm={4} key={iface.name}>
             <Paper
               elevation={1}
               sx={{ p: 3, height: '100%', cursor: iface.link ? 'pointer' : 'default' }}
-              onClick={() => iface.link && (iface.link.startsWith('/openapi') ? window.open(iface.link, '_blank') : navigate(iface.link))}
+              onClick={() => iface.link && (iface.link === '/docs' ? navigate(iface.link) : window.open(iface.link, '_blank'))}
             >
               <Box sx={{ color: 'primary.main', mb: 1 }}>{iface.icon}</Box>
               <Typography variant="h6" gutterBottom fontWeight="bold">{iface.name}</Typography>
@@ -153,70 +120,29 @@ function AiCapabilityPage() {
         ))}
       </Grid>
 
-      {/* CLI Commands */}
-      <Typography variant="h4" component="h2" gutterBottom fontWeight="bold" sx={{ mb: 3 }}>
-        Marty CLI for AI Agents
+      <Typography variant="h4" component="h2" gutterBottom fontWeight="bold" sx={{ mb: 1 }}>
+        Protocol Consumer Support
       </Typography>
-      <Typography variant="body1" color="text.secondary" sx={{ mb: 1 }}>
-        AI coding assistants like GitHub Copilot, Cursor, and Windsurf can run Marty CLI commands
-        directly from the terminal. All commands support <code>--json</code> output for structured parsing.
+      <Typography variant="body1" color="text.secondary" sx={{ mb: 3 }}>
+        Use the gateway-owned catalog to distinguish direct product support from derived views, partial surfaces, and protocol concepts that are not implemented by this product candidate.
       </Typography>
-      <Paper elevation={0} sx={{ p: 3, mb: 3, bgcolor: 'grey.50', borderRadius: 2, border: '1px solid', borderColor: 'divider' }}>
-        <Typography variant="subtitle2" color="text.secondary" gutterBottom>Quick Start</Typography>
-        <Box component="pre" sx={{ fontFamily: 'monospace', fontSize: '0.875rem', overflow: 'auto', m: 0 }}>
-{`# Install and authenticate
-npm install -g @elevenid/marty-cli
-marty init
-marty auth login
-
-# Enable shell completions
-marty completion zsh >> ~/.zshrc`}
-        </Box>
-      </Paper>
       <Box sx={{ mb: 6 }}>
-        {cliCommands.map((cmd) => (
-          <Paper key={cmd.command} elevation={0} sx={{ p: 2.5, mb: 2, border: '1px solid', borderColor: 'divider', borderRadius: 2 }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-              <Chip label="cli" size="small" color="primary" variant="outlined" />
-              <Typography variant="subtitle1" fontWeight="bold" fontFamily="monospace">{cmd.command}</Typography>
-            </Box>
-            <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>{cmd.description}</Typography>
-            <Box component="pre" sx={{ fontFamily: 'monospace', fontSize: '0.8rem', color: 'text.secondary', m: 0, p: 1, bgcolor: 'grey.50', borderRadius: 1 }}>
-              {cmd.example}
-            </Box>
-          </Paper>
-        ))}
+        <ProtocolSupportCatalog />
       </Box>
 
-      {/* Example Agent Workflow */}
+      {/* Gateway discovery */}
       <Typography variant="h4" component="h2" gutterBottom fontWeight="bold" sx={{ mb: 3 }}>
-        Example: AI Agent Verification Workflow
+        Discover Before Integrating
       </Typography>
-      <Typography variant="body1" color="text.secondary" sx={{ mb: 2 }}>
-        A developer asks their AI assistant: &quot;Verify this credential against our EUDI trust profile.&quot;
+      <Typography variant="body1" color="text.secondary" sx={{ mb: 1 }}>
+        Fetch the public support catalog first, then use the generated OpenAPI document for the
+        selected operation. Treat each catalog limitation as part of the deployment contract.
       </Typography>
-      <Paper elevation={0} sx={{ p: 3, mb: 2, bgcolor: 'grey.50', borderRadius: 2, border: '1px solid', borderColor: 'divider' }}>
-        <Typography variant="subtitle2" color="text.secondary" gutterBottom>Agent runs</Typography>
-        <Box component="pre" sx={{ fontFamily: 'monospace', fontSize: '0.875rem', overflow: 'auto', m: 0 }}>
-{`marty verify start \\
-  --trust-profile eudi-pid \\
-  --credential ./credential.json \\
-  --json`}
-        </Box>
-      </Paper>
       <Paper elevation={0} sx={{ p: 3, mb: 6, bgcolor: 'grey.50', borderRadius: 2, border: '1px solid', borderColor: 'divider' }}>
-        <Typography variant="subtitle2" color="text.secondary" gutterBottom>Response</Typography>
+        <Typography variant="subtitle2" color="text.secondary" gutterBottom>Public discovery</Typography>
         <Box component="pre" sx={{ fontFamily: 'monospace', fontSize: '0.875rem', overflow: 'auto', m: 0 }}>
-{`{
-  "verified": true,
-  "trustProfile": "eudi-pid",
-  "checks": [
-    { "name": "signature", "passed": true },
-    { "name": "expiration", "passed": true },
-    { "name": "revocation", "passed": true },
-    { "name": "issuer_trust", "passed": true }
-  ]
-}`}
+{`curl -fsS "$MARTY_BASE_URL/v1/protocol-support"
+curl -fsS "$MARTY_BASE_URL/openapi.json"`}
         </Box>
       </Paper>
 
@@ -240,13 +166,13 @@ marty completion zsh >> ~/.zshrc`}
         p: 4, textAlign: 'center', mb: 4, borderRadius: 2,
         background: 'linear-gradient(135deg, #f5f5f5 0%, #e8eaf6 100%)',
       }}>
-        <TerminalIcon sx={{ fontSize: 48, color: 'primary.main', mb: 2 }} />
+        <IntegrationInstructionsIcon sx={{ fontSize: 48, color: 'primary.main', mb: 2 }} />
         <Typography variant="h5" gutterBottom fontWeight="bold">
-          Get Started with the Marty CLI
+          Build from the Gateway Contract
         </Typography>
         <Typography variant="body1" color="text.secondary" sx={{ mb: 3, maxWidth: 600, mx: 'auto' }}>
-          Install the CLI, authenticate, and start running identity operations
-          from your terminal or AI coding assistant.
+          Discover the supported protocol surface, inspect the generated schemas, and authenticate
+          only when the selected operation requires an organization-scoped workflow.
         </Typography>
         <Box sx={{ display: 'flex', gap: 2, justifyContent: 'center', flexWrap: 'wrap' }}>
           <Button variant="contained" size="large" onClick={() => navigate('/docs')}>

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Alert,
   Box,
@@ -23,16 +23,16 @@ import AddIcon from '@mui/icons-material/Add';
 import LocalShippingIcon from '@mui/icons-material/LocalShipping';
 
 import { ResourcePage } from '../../common';
-import { useAuth } from '../../../hooks/useAuth';
+import { usePermissions } from '../../../hooks/usePermissions';
 import { useConsole } from '../../../contexts/ConsoleContext';
 import { createDeliveryDestination, listDeliveryDestinations } from '../../../services/deliveryDestinationsApi';
 
 const INITIAL_FORM = { name: '', description: '' };
 
-function DeliveryDestinationsPage() {
-  const { organizationId: authOrganizationId } = useAuth();
-  const { activeOrgId } = useConsole();
-  const organizationId = activeOrgId;
+function DeliveryDestinations({ organizationId, canCreate }) {
+  const mounted = useRef(false);
+  const generation = useRef(0);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const [destinations, setDestinations] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -41,21 +41,28 @@ function DeliveryDestinationsPage() {
   const [saving, setSaving] = useState(false);
 
   const load = useCallback(async () => {
-    if (!organizationId) return;
+    const request = ++generation.current;
     setLoading(true);
     setError('');
     try {
-      setDestinations(await listDeliveryDestinations({ organizationId, activeOnly: false }));
+      const result = await listDeliveryDestinations({ organizationId, activeOnly: false });
+      if (!mounted.current || request !== generation.current) return;
+      if (!Array.isArray(result) || !result.every((destination) => typeof destination?.id === 'string'
+        && (destination.is_system === true ? destination.organization_id == null : destination.organization_id === organizationId))) {
+        throw new Error('Destination inventory is invalid or outside the selected organization.');
+      }
+      setDestinations(result);
     } catch (cause) {
-      setError(cause.message || 'Delivery destinations could not be loaded.');
+      if (mounted.current && request === generation.current) setError(cause.message || 'Delivery destinations could not be loaded.');
     } finally {
-      setLoading(false);
+      if (mounted.current && request === generation.current) setLoading(false);
     }
   }, [organizationId]);
 
   useEffect(() => { load(); }, [load]);
 
   const createPhysicalDestination = async () => {
+    if (!canCreate) return;
     setSaving(true);
     setError('');
     try {
@@ -72,35 +79,37 @@ function DeliveryDestinationsPage() {
         setup_requirements: ['Personalization bureau service configured and approved'],
         is_enabled: true,
       });
+      if (!mounted.current) return;
       setDialogOpen(false);
       setForm(INITIAL_FORM);
       await load();
     } catch (cause) {
-      setError(cause.message || 'The production destination could not be created.');
+      if (mounted.current) setError(cause.message || 'The production destination could not be created.');
     } finally {
-      setSaving(false);
+      if (mounted.current) setSaving(false);
     }
   };
 
   return (
     <ResourcePage
       title="Delivery Destinations"
-      description="Approved wallet, connector, and physical production destinations available to flows."
+      description="Configured wallet, connector, and physical production destinations available to flows."
       breadcrumbs={[
         { label: 'Console', path: '/console' },
         { label: 'Connect', path: '/console/org/connect' },
         { label: 'Delivery Destinations', path: '/console/org/connect/delivery-destinations' },
       ]}
-      actions={(
+      actions={canCreate && (
         <Button variant="contained" startIcon={<AddIcon />} onClick={() => setDialogOpen(true)}>
           Add Production Destination
         </Button>
       )}
     >
-      {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
+      {error && <Alert severity="error" sx={{ mb: 2 }}>{error}<Button onClick={load}>Reload destinations</Button></Alert>}
+      <Alert severity="info" sx={{ mb: 2 }}>Destination configuration does not establish approval, successful delivery or wallet interoperability.</Alert>
       {loading ? (
         <Box sx={{ display: 'flex', justifyContent: 'center', py: 8 }}><CircularProgress /></Box>
-      ) : destinations.length === 0 ? (
+      ) : error ? null : destinations.length === 0 ? (
         <Paper variant="outlined" sx={{ p: 4, textAlign: 'center' }}>
           <LocalShippingIcon color="action" sx={{ fontSize: 40 }} />
           <Typography variant="h6" sx={{ mt: 1 }}>No delivery destinations</Typography>
@@ -143,6 +152,16 @@ function DeliveryDestinationsPage() {
       </Dialog>
     </ResourcePage>
   );
+}
+
+function DeliveryDestinationsPage() {
+  const { activeOrgId } = useConsole();
+  const { can, isLoading } = usePermissions();
+  if (!activeOrgId) return <Alert severity="error">Select an organization before loading delivery destinations.</Alert>;
+  if (isLoading) return <CircularProgress />;
+  if (!can('wallet', 'view')) return <Alert severity="error">You do not have permission to view delivery destinations.</Alert>;
+  const canCreate = can('integration-connector', 'create');
+  return <DeliveryDestinations key={`${activeOrgId}:${canCreate}`} organizationId={activeOrgId} canCreate={canCreate} />;
 }
 
 export default DeliveryDestinationsPage;

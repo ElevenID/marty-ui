@@ -103,6 +103,7 @@ def test_worker_fixture_integrity_and_process_containment_have_linux_ci_dependen
         if "uv pip install --system pytest" in line
     )
     assert {"pytest", "pytest-xdist==3.8.0", "sqlalchemy", "playwright"} <= set(command.split())
+    assert "'jsonschema[format]>=4.23'" in command.split()
     browser = steps["Install Python browser transport runtime"]
     assert browser["run"] == "python -m playwright install --with-deps --only-shell chromium"
     assert browser["if"] == steps["Run repository release checks"]["if"]
@@ -5106,9 +5107,19 @@ def test_ephemeral_ci_reads_only_shared_python_and_browser_caches() -> None:
         if step.get("name") == "Warm shared Python dependencies"
     )
     assert warm_install["if"] == "steps.uv-cache.outputs.cache-hit != 'true'"
+    protocol_install = next(
+        step
+        for step in ci["jobs"]["public-protocol-contract"]["steps"]
+        if step.get("name") == "Install contract-check dependencies"
+    )
+    format_aware_install = (
+        "uv pip install --system -r requirements-services.txt "
+        "'jsonschema[format]>=4.23'"
+    )
+    assert protocol_install["run"] == format_aware_install
     assert (
         warm_install["run"]
-        == "uv pip install --system -r requirements-services.txt jsonschema"
+        == format_aware_install
     )
 
     browser_steps = ci["jobs"]["test-credential-lifecycle-browser"]["steps"]
@@ -5920,3 +5931,16 @@ def test_native_kms_audit_changes_keep_contracts_ci_selected(tmp_path: Path) -> 
         tmp_path, include_rust_plan=True)[0]
     assert selected["rust"] == "true"
     assert "contracts" in json.loads(selected["rust_matrix"])
+
+
+def test_registry_source_render_uses_pinned_renderer_without_changing_docker_plugin() -> None:
+    _, ci = _workflow(CI_PATH)
+    steps = ci["jobs"]["test-release-contracts"]["steps"]
+    prepare = next(step for step in steps if step.get("name") == "Prepare source-only deployment registry renderer")
+    release = next(step for step in steps if step.get("name") == "Run repository release checks")
+    assert steps.index(prepare) < steps.index(release)
+    assert prepare["if"] == release["if"]
+    assert prepare["run"] == "bash scripts/ci/install-compose-renderer.sh"
+    assert release["env"]["MARTY_COMPOSE_RENDERER"] == "${{ runner.temp }}/compose-render-v5.4.0"
+    assert release["run"] == "python -m pytest tests -n 2 -v --tb=short --durations=20"
+    assert not prepare.get("continue-on-error", False)

@@ -26,6 +26,7 @@ import { Link, useNavigate } from 'react-router';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
 
 import { useAuth } from '../../hooks/useAuth';
+import { usePermissions } from '../../hooks/usePermissions';
 import { useConsole } from '../../contexts/ConsoleContext';
 import { useDashboardData } from '../../hooks/useDashboardData';
 import { useSSE } from '../../hooks/useSSE';
@@ -223,6 +224,7 @@ function QuickActionCard({ action, disabled, tooltip, onClick }) {
 function ConsoleDashboard() {
   const { t } = useTranslation('console');
   const navigate = useNavigate();
+  const { can, isLoading: permissionsLoading } = usePermissions();
   const {
     user,
     organizationName: authOrganizationName,
@@ -268,8 +270,9 @@ function ConsoleDashboard() {
   const visibleQuickActions = useMemo(() => {
     return DASHBOARD_QUICK_ACTIONS.adminVendor.filter(
       (action) => quickActionVisibility[action.id]?.visible === true
+        && (!action.requiredPermission || (!permissionsLoading && can(action.requiredPermission.resource, action.requiredPermission.action)))
     );
-  }, [quickActionVisibility]);
+  }, [quickActionVisibility, can, permissionsLoading]);
 
   // Handle environment change
   const handleEnvironmentChange = async (newEnv) => {
@@ -289,7 +292,7 @@ function ConsoleDashboard() {
   const handleQuickAction = (actionId) => {
     switch (actionId) {
       case 'register-signing-service':
-        navigate('/console/org/deploy/key-management/services/new');
+        navigate('/console/org/operator/key-management/services/new');
         break;
       case 'create-issuer-identity':
         navigate('/console/org/deploy/issuer-identity/new');

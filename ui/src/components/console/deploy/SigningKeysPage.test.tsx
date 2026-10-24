@@ -374,7 +374,7 @@ describe('SigningKeysPage', () => {
     })
   })
 
-  it('org admins can register additional key management services without signing-key:create', async () => {
+  it('does not infer configuration grants from an admin role name', async () => {
     mockCan.mockReturnValue(false)
     mockRoles.mockReturnValue([
       { id: 'role-admin', name: 'admin', display_name: 'Administrator' },
@@ -427,11 +427,11 @@ describe('SigningKeysPage', () => {
       expect(screen.getByText('Elevenidllc managed OpenBao transit')).toBeInTheDocument()
     })
 
-    expect(screen.getByRole('button', { name: 'Register key management service' })).toBeEnabled()
-    expect(screen.getByRole('button', { name: 'Make default' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Register key management service' })).toBeDisabled()
+    expect(screen.queryByRole('button', { name: 'Make default' })).not.toBeInTheDocument()
   })
 
-  it('bootstrapped org_admin role strings can register key management services', async () => {
+  it('does not infer configuration grants from an org_admin role string', async () => {
     mockCan.mockReturnValue(false)
     mockRoles.mockReturnValue(['org_admin'])
 
@@ -443,10 +443,10 @@ describe('SigningKeysPage', () => {
       expect(screen.getByText('Elevenidllc managed OpenBao transit')).toBeInTheDocument()
     })
 
-    expect(screen.getByRole('button', { name: 'Register key management service' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'Register key management service' })).toBeDisabled()
   })
 
-  it('non-admin users can inspect the service registry and still open registration wizard entry', async () => {
+  it('metadata readers can inspect services but cannot register or mutate them', async () => {
     mockCan.mockReturnValue(false)
     mockRoles.mockReturnValue([])
 
@@ -458,8 +458,8 @@ describe('SigningKeysPage', () => {
       expect(screen.getByText('Elevenidllc managed OpenBao transit')).toBeInTheDocument()
     })
 
-    expect(screen.getByRole('button', { name: 'Register key management service' })).toBeEnabled()
-    expect(screen.getByText('Service registration is available from this page. Updating or removing existing services may still require elevated permissions.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Register key management service' })).toBeDisabled()
+    expect(screen.getByText('You can view key management. Registering, updating, rotating, or removing services requires signing-key create permission.')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Make default' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Remove' })).not.toBeInTheDocument()
   })

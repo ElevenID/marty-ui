@@ -34,6 +34,67 @@
       "type": "string",
       "x-marty-source-schema": "enums/approval-strategies.json"
     },
+    "enums__channel_types": {
+      "$defs": {
+        "values": {
+          "EMAIL": {
+            "delivery": "Asynchronous; no delivery guarantee beyond SMTP acceptance",
+            "description": "SMTP email delivery",
+            "platforms": [
+              "any"
+            ],
+            "real_time": false,
+            "use_case": "Status updates (approved, rejected), audit notifications"
+          },
+          "FCM": {
+            "delivery": "Asynchronous push; device must be registered with FCM token",
+            "description": "Firebase Cloud Messaging \u2014 push notifications for iOS and Android",
+            "platforms": [
+              "ios",
+              "android"
+            ],
+            "real_time": true
+          },
+          "SMS": {
+            "delivery": "Best-effort; subject to carrier routing",
+            "description": "SMS gateway delivery",
+            "platforms": [
+              "mobile"
+            ],
+            "real_time": false,
+            "use_case": "Fallback for mobile; OTP codes; critical alerts"
+          },
+          "SSE": {
+            "delivery": "Long-lived HTTP connection; events pushed from server to browser",
+            "description": "Server-Sent Events \u2014 real-time web notifications over HTTP",
+            "platforms": [
+              "web"
+            ],
+            "real_time": true
+          },
+          "WEBHOOK": {
+            "auth": "HMAC-SHA256 signature in X-MIP-Signature header",
+            "delivery": "Synchronous HTTP POST; receiving server must return 2xx",
+            "description": "HTTP POST to a server-side callback URL",
+            "platforms": [
+              "server"
+            ],
+            "real_time": true
+          }
+        }
+      },
+      "description": "Notification delivery channel types",
+      "enum": [
+        "FCM",
+        "SSE",
+        "WEBHOOK",
+        "EMAIL",
+        "SMS"
+      ],
+      "title": "ChannelType",
+      "type": "string",
+      "x-marty-source-schema": "enums/channel-types.json"
+    },
     "enums__credential_formats": {
       "$defs": {
         "values": {
@@ -508,6 +569,70 @@
       "title": "IssuanceProtocol",
       "type": "string",
       "x-marty-source-schema": "enums/issuance-protocols.json"
+    },
+    "enums__notification_delivery_evidence_types": {
+      "$defs": {
+        "values": {
+          "DESTINATION_ACCEPTED": {
+            "description": "The protocol-defined final destination accepted the message, such as a successful webhook endpoint"
+          },
+          "NONE": {
+            "description": "No acceptance or delivery receipt was established"
+          },
+          "PROVIDER_ACCEPTED": {
+            "description": "A push or messaging provider accepted the message"
+          },
+          "RECIPIENT_DELIVERED": {
+            "description": "A channel-specific delivery receipt confirmed recipient or device delivery"
+          },
+          "TRANSPORT_ACCEPTED": {
+            "description": "A transport relay accepted responsibility, such as SMTP DATA acceptance"
+          }
+        }
+      },
+      "description": "Strongest receipt actually established for one notification delivery attempt",
+      "enum": [
+        "NONE",
+        "TRANSPORT_ACCEPTED",
+        "PROVIDER_ACCEPTED",
+        "DESTINATION_ACCEPTED",
+        "RECIPIENT_DELIVERED"
+      ],
+      "title": "NotificationDeliveryEvidenceType",
+      "type": "string",
+      "x-marty-source-schema": "enums/notification-delivery-evidence-types.json"
+    },
+    "enums__notification_delivery_states": {
+      "$defs": {
+        "values": {
+          "ACCEPTED": {
+            "description": "An intermediary or destination accepted the message without confirmed recipient delivery"
+          },
+          "ATTEMPTED": {
+            "description": "The transport attempt started but produced no stronger receipt"
+          },
+          "DELIVERED": {
+            "description": "The channel-specific final delivery boundary confirmed delivery"
+          },
+          "FAILED": {
+            "description": "The attempt produced a classified failure"
+          },
+          "UNKNOWN": {
+            "description": "The attempt outcome is ambiguous, for example after loss of acknowledgement"
+          }
+        }
+      },
+      "description": "Truthful lifecycle state for one notification delivery attempt",
+      "enum": [
+        "ATTEMPTED",
+        "ACCEPTED",
+        "DELIVERED",
+        "FAILED",
+        "UNKNOWN"
+      ],
+      "title": "NotificationDeliveryState",
+      "type": "string",
+      "x-marty-source-schema": "enums/notification-delivery-states.json"
     },
     "enums__revocation_methods": {
       "$defs": {
@@ -5098,6 +5223,405 @@
       "title": "Lane",
       "type": "object",
       "x-marty-source-schema": "schemas/lane.json"
+    },
+    "schemas__notification_delivery_result": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "else": {
+            "not": {
+              "required": [
+                "delivered_at"
+              ]
+            },
+            "properties": {
+              "success": {
+                "const": false
+              }
+            }
+          },
+          "if": {
+            "properties": {
+              "delivery_state": {
+                "const": "DELIVERED"
+              }
+            },
+            "required": [
+              "delivery_state"
+            ]
+          },
+          "then": {
+            "not": {
+              "required": [
+                "error_code"
+              ]
+            },
+            "properties": {
+              "evidence_type": {
+                "enum": [
+                  "DESTINATION_ACCEPTED",
+                  "RECIPIENT_DELIVERED"
+                ]
+              },
+              "should_retry": {
+                "const": false
+              },
+              "success": {
+                "const": true
+              }
+            },
+            "required": [
+              "delivered_at"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "delivery_state": {
+                "const": "ACCEPTED"
+              }
+            },
+            "required": [
+              "delivery_state"
+            ]
+          },
+          "then": {
+            "not": {
+              "required": [
+                "error_code"
+              ]
+            },
+            "properties": {
+              "evidence_type": {
+                "enum": [
+                  "TRANSPORT_ACCEPTED",
+                  "PROVIDER_ACCEPTED"
+                ]
+              },
+              "should_retry": {
+                "const": false
+              }
+            },
+            "required": [
+              "accepted_at"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "delivery_state": {
+                "const": "FAILED"
+              }
+            },
+            "required": [
+              "delivery_state"
+            ]
+          },
+          "then": {
+            "not": {
+              "required": [
+                "accepted_at"
+              ]
+            },
+            "properties": {
+              "evidence_type": {
+                "const": "NONE"
+              }
+            },
+            "required": [
+              "error_code"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "delivery_state": {
+                "enum": [
+                  "ATTEMPTED",
+                  "UNKNOWN"
+                ]
+              }
+            },
+            "required": [
+              "delivery_state"
+            ]
+          },
+          "then": {
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "accepted_at"
+                  ]
+                },
+                {
+                  "required": [
+                    "error_code"
+                  ]
+                }
+              ]
+            },
+            "properties": {
+              "evidence_type": {
+                "const": "NONE"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "retry_after"
+            ]
+          },
+          "then": {
+            "properties": {
+              "should_retry": {
+                "const": true
+              }
+            },
+            "required": [
+              "should_retry"
+            ]
+          }
+        }
+      ],
+      "description": "Immutable, privacy-bounded evidence for one notification delivery attempt",
+      "properties": {
+        "accepted_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "attempted_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "channel": {
+          "$ref": "#/components/schemas/enums__channel_types"
+        },
+        "delivered_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "delivery_state": {
+          "$ref": "#/components/schemas/enums__notification_delivery_states"
+        },
+        "error_code": {
+          "maxLength": 64,
+          "minLength": 1,
+          "pattern": "^[A-Z][A-Z0-9_]{0,63}$",
+          "type": "string"
+        },
+        "evidence_type": {
+          "$ref": "#/components/schemas/enums__notification_delivery_evidence_types"
+        },
+        "notification_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "provider_message_id": {
+          "description": "Opaque provider correlation identifier; never an address, token, credential, or message body",
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/+\\-]{0,127}$",
+          "type": "string"
+        },
+        "retry_after": {
+          "maximum": 86400,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "should_retry": {
+          "type": "boolean"
+        },
+        "success": {
+          "description": "Compatibility projection; true only for delivery_state DELIVERED",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "notification_id",
+        "channel",
+        "delivery_state",
+        "evidence_type",
+        "success",
+        "attempted_at"
+      ],
+      "title": "NotificationDeliveryResult",
+      "type": "object",
+      "x-marty-source-schema": "schemas/notification-delivery-result.json"
+    },
+    "schemas__notification_payload": {
+      "additionalProperties": false,
+      "description": "Message content and routing metadata for multi-channel identity event notification",
+      "properties": {
+        "body": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "type": "string"
+        },
+        "collapse_key": {
+          "maxLength": 64,
+          "type": "string"
+        },
+        "correlation_id": {
+          "type": "string"
+        },
+        "created_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "data": {
+          "description": "Must not contain raw credential material; use offer URIs only",
+          "type": "object"
+        },
+        "event_type": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "priority": {
+          "enum": [
+            "LOW",
+            "NORMAL",
+            "HIGH",
+            "CRITICAL"
+          ],
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/components/schemas/schemas__notification_target"
+        },
+        "title": {
+          "maxLength": 256,
+          "minLength": 1,
+          "type": "string"
+        },
+        "ttl_seconds": {
+          "default": 86400,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "body",
+        "event_type",
+        "priority",
+        "target",
+        "created_at"
+      ],
+      "title": "NotificationPayload",
+      "type": "object",
+      "x-marty-source-schema": "schemas/notification-payload.json"
+    },
+    "schemas__notification_target": {
+      "additionalProperties": false,
+      "anyOf": [
+        {
+          "required": [
+            "organization_id"
+          ]
+        },
+        {
+          "required": [
+            "user_id"
+          ]
+        },
+        {
+          "properties": {
+            "device_tokens": {
+              "minItems": 1
+            }
+          },
+          "required": [
+            "device_tokens"
+          ]
+        },
+        {
+          "properties": {
+            "webhook_endpoints": {
+              "minItems": 1
+            }
+          },
+          "required": [
+            "webhook_endpoints"
+          ]
+        },
+        {
+          "properties": {
+            "email_addresses": {
+              "minItems": 1
+            }
+          },
+          "required": [
+            "email_addresses"
+          ]
+        }
+      ],
+      "description": "Multi-channel message delivery targeting configuration",
+      "properties": {
+        "channels": {
+          "items": {
+            "enum": [
+              "FCM",
+              "SSE",
+              "WEBHOOK",
+              "EMAIL",
+              "SMS"
+            ],
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "device_tokens": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "email_addresses": {
+          "items": {
+            "format": "email",
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "organization_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "user_id": {
+          "type": "string"
+        },
+        "webhook_endpoints": {
+          "items": {
+            "format": "uri",
+            "pattern": "^https://",
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "channels"
+      ],
+      "title": "NotificationTarget",
+      "type": "object",
+      "x-marty-source-schema": "schemas/notification-target.json"
     },
     "schemas__organization": {
       "additionalProperties": false,

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { http, HttpResponse } from 'msw'
 import { server } from '@test/mocks/server'
 
-import { createComplianceProfile, listComplianceProfiles } from '../complianceProfilesApi'
+import { createComplianceProfile, listComplianceProfiles, getSystemPresets, activateComplianceProfile, suspendComplianceProfile, validateIssuerArtifacts } from '../complianceProfilesApi'
 
 describe('complianceProfilesApi', () => {
   it('creates compliance profiles with explicit idempotency and trimmed organization context', async () => {
@@ -87,3 +87,31 @@ describe('complianceProfilesApi', () => {
     expect(requested).toBe(false)
   })
 })
+
+
+describe('compliance catalog and lifecycle client', () => {
+  it('uses the actual shared catalog route and refuses organization rows disguised as presets', async () => {
+    let result: unknown = [{ id: 'preset', is_system: true, status: 'ACTIVE', discoverable: true }];
+    server.use(http.get('*/v1/compliance-profiles/system/discoverable', ({ request }) => {
+      expect([...new URL(request.url).searchParams]).toEqual([['organization_id', 'org-a']]); return HttpResponse.json(result);
+    }));
+    expect(await getSystemPresets({ organization_id: 'org-a' })).toEqual(result);
+    result = [{ id: 'wrong', is_system: true, organization_id: 'other', status: 'ACTIVE', discoverable: true }];
+    await expect(getSystemPresets({ organization_id: 'org-a' })).rejects.toThrow(/invalid system/);
+    await expect(getSystemPresets()).rejects.toMatchObject({ code: 'ORG_REQUIRED' });
+  });
+  it.each([['activate', activateComplianceProfile], ['suspend', suspendComplianceProfile]] as const)('uses the supported %s route with an encoded profile ID', async (action, execute) => {
+    let called = false;
+    server.use(http.post('*/v1/compliance-profiles/*', async ({ request }) => {
+      expect(new URL(request.url).pathname).toBe('/v1/compliance-profiles/profile%2Fone/' + action);
+      expect(await request.json()).toEqual({}); called = true; return HttpResponse.json({ status: 'ACTIVE' });
+    }));
+    await execute('profile/one'); expect(called).toBe(true);
+  });
+  it('reports absent artifact validation locally without sending private selectors to a nonexistent API', async () => {
+    let called = false;
+    server.use(http.post('*/v1/compliance-profiles/*', () => { called = true; return HttpResponse.json({}); }));
+    await expect(validateIssuerArtifacts()).rejects.toMatchObject({ code: 'UNSUPPORTED_OPERATION', status: 501 });
+    expect(called).toBe(false);
+  });
+});

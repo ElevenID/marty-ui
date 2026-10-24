@@ -19,13 +19,14 @@ import SyncAltIcon from '@mui/icons-material/SyncAlt';
 import WalletIcon from '@mui/icons-material/AccountBalanceWallet';
 import WarningIcon from '@mui/icons-material/Warning';
 import { Link, useParams } from 'react-router';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { ResourcePage } from '../../common';
 import { useAsyncData } from '../../../hooks/useAsyncData';
-import { useAuth } from '../../../hooks/useAuth';
+import { usePermissions } from '../../../hooks/usePermissions';
 import { useConsole } from '../../../contexts/ConsoleContext';
 import { getCredentialTemplate } from '../../../services/presentationPolicyApi';
+import TemplateWalletCompatibility from './TemplateWalletCompatibility';
 import {
   createDeliveryDestination,
   listDeliveryDestinations,
@@ -151,6 +152,8 @@ function DestinationCard({
   destinationBusy,
   onCreateCanvasDestination,
   onToggleCanvasDestination,
+  canCreateDestination,
+  canEditDestination,
 }) {
   const isCanvas = destination.provider === 'canvas_credentials' || destination.id === CANVAS_DESTINATION_ID;
   const destinationEnabled = destination.is_enabled !== false;
@@ -177,7 +180,7 @@ function DestinationCard({
           </Stack>
           <Chip
             size="small"
-            label={configured ? 'Ready' : 'Setup needed'}
+            label={configured && destinationEnabled ? 'Configured' : 'Setup needed'}
             color={configured ? 'success' : 'warning'}
             icon={configured ? <CheckCircleIcon /> : <WarningIcon />}
           />
@@ -245,6 +248,7 @@ function DestinationCard({
               <Typography variant="body2" sx={{ fontWeight: 700 }}>
                 Mirror health
               </Typography>
+              {mirrorHealth ? <>
               <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
                 <Chip
                   size="small"
@@ -288,10 +292,11 @@ function DestinationCard({
                   Canvas mirror drift needs attention. Use Canvas setup to run the automation cycle or retry failed syncs.
                 </Alert>
               ) : null}
+              </> : <Typography variant="body2">Delivery observations are unavailable.</Typography>}
             </Stack>
             <Box>
               <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
-                {!orgCanvasDestination ? (
+                {!orgCanvasDestination && canCreateDestination ? (
                   <Button
                     size="small"
                     variant="outlined"
@@ -300,7 +305,7 @@ function DestinationCard({
                   >
                     Add org destination
                   </Button>
-                ) : (
+                ) : orgCanvasDestination && canEditDestination ? (
                   <Button
                     size="small"
                     variant="outlined"
@@ -309,7 +314,7 @@ function DestinationCard({
                   >
                     {orgCanvasDestination.is_enabled === false ? 'Enable destination' : 'Disable destination'}
                   </Button>
-                )}
+                ) : null}
                 <Button component={Link} to="/console/org/deploy/canvas" size="small" endIcon={<OpenInNewIcon />}>
                   Manage Canvas platforms
                 </Button>
@@ -322,11 +327,9 @@ function DestinationCard({
   );
 }
 
-function CredentialTemplateDetailPage() {
-  const { templateId } = useParams();
-  const { organizationId: authOrganizationId } = useAuth();
-  const { activeOrgId } = useConsole();
-  const organizationId = activeOrgId;
+function CredentialTemplateDetail({ templateId, organizationId, canViewDestinations, canViewCanvas, canCreateDestination, canEditDestination }) {
+  const mounted = useRef(false);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const [activeTab, setActiveTab] = useState('overview');
   const [destinationBusy, setDestinationBusy] = useState(false);
   const [destinationError, setDestinationError] = useState(null);
@@ -335,7 +338,15 @@ function CredentialTemplateDetailPage() {
     data: template,
     loading: templateLoading,
     error: templateError,
-  } = useAsyncData(() => (templateId ? getCredentialTemplate(templateId) : Promise.resolve(null)), [templateId]);
+  } = useAsyncData(async () => {
+    const result = await getCredentialTemplate(templateId);
+    if (result?.id !== templateId || result?.organization_id !== organizationId) {
+      throw new Error('Credential template is outside the selected organization.');
+    }
+    return result;
+  }, [templateId, organizationId]);
+  const destinationsVisible = Boolean(template && activeTab === 'destinations' && canViewDestinations);
+  const canvasVisible = destinationsVisible && canViewCanvas;
 
   const {
     data: destinationsData = [],
@@ -343,32 +354,40 @@ function CredentialTemplateDetailPage() {
     reload: reloadDestinations,
   } = useAsyncData(
     () => {
-      if (!organizationId) {
-        throw new Error('Select an organization before loading delivery destinations.');
-      }
-      return listDeliveryDestinations({ organizationId, activeOnly: false });
+      if (!destinationsVisible) return Promise.resolve([]);
+      return listDeliveryDestinations({ organizationId, activeOnly: false }).then((result) => {
+        if (!Array.isArray(result) || !result.every((destination) => typeof destination?.id === 'string'
+          && (destination.is_system === true ? destination.organization_id == null : destination.organization_id === organizationId))) {
+          throw new Error('Destination inventory is invalid or outside the selected organization.');
+        }
+        return result;
+      });
     },
-    [organizationId],
+    [organizationId, destinationsVisible],
   );
 
   const { data: bindingsData = [], error: bindingsError } = useAsyncData(
     () => {
-      if (!organizationId) {
-        throw new Error('Select an organization before loading Canvas program bindings.');
-      }
-      return listCanvasProgramBindings({ organizationId });
+      if (!canvasVisible) return Promise.resolve([]);
+      return listCanvasProgramBindings({ organizationId }).then((result) => {
+        if (!Array.isArray(result) || !result.every((binding) => binding?.organization_id === organizationId)) {
+          throw new Error('Canvas bindings are outside the selected organization.');
+        }
+        return result;
+      });
     },
-    [organizationId],
+    [organizationId, canvasVisible],
   );
 
   const { data: mirrorHealth = null, error: mirrorHealthError } = useAsyncData(
     () => {
-      if (!organizationId) {
-        throw new Error('Select an organization before loading Canvas mirror health.');
-      }
-      return getCanvasMirrorHealth(organizationId);
+      if (!canvasVisible) return Promise.resolve(null);
+      return getCanvasMirrorHealth(organizationId).then((result) => {
+        if (result?.organization_id !== organizationId) throw new Error('Canvas delivery observations are outside the selected organization.');
+        return result;
+      });
     },
-    [organizationId],
+    [organizationId, canvasVisible],
   );
 
   const destinations = Array.isArray(destinationsData) ? destinationsData : [];
@@ -393,31 +412,34 @@ function CredentialTemplateDetailPage() {
   ];
 
   const createCanvasDestination = async () => {
+    if (!canCreateDestination) return;
     setDestinationBusy(true);
     setDestinationError(null);
     try {
       await createDeliveryDestination(canvasCredentialsDestinationPayload(organizationId));
+      if (!mounted.current) return;
       await reloadDestinations();
     } catch (err) {
-      setDestinationError(err);
+      if (mounted.current) setDestinationError(err);
     } finally {
-      setDestinationBusy(false);
+      if (mounted.current) setDestinationBusy(false);
     }
   };
 
   const toggleCanvasDestination = async () => {
-    if (!orgCanvasDestination) return;
+    if (!orgCanvasDestination || !canEditDestination) return;
     setDestinationBusy(true);
     setDestinationError(null);
     try {
       await updateDeliveryDestination(orgCanvasDestination.id, {
         is_enabled: orgCanvasDestination.is_enabled === false,
       });
+      if (!mounted.current) return;
       await reloadDestinations();
     } catch (err) {
-      setDestinationError(err);
+      if (mounted.current) setDestinationError(err);
     } finally {
-      setDestinationBusy(false);
+      if (mounted.current) setDestinationBusy(false);
     }
   };
 
@@ -443,10 +465,11 @@ function CredentialTemplateDetailPage() {
         <Tabs value={activeTab} onChange={(_event, value) => setActiveTab(value)}>
           <Tab value="overview" label="Overview" />
           <Tab value="destinations" label="Destinations" />
+          <Tab value="wallet" label="Wallet profile" />
         </Tabs>
       </Box>
 
-      {activeTab === 'overview' ? (
+      {!template ? null : activeTab === 'wallet' ? <TemplateWalletCompatibility template={template} organizationId={organizationId} /> : activeTab === 'overview' ? (
         <Paper variant="outlined" sx={{ p: 3, borderRadius: 1 }}>
           <Stack spacing={2}>
             <Stack direction="row" spacing={1.5} alignItems="center">
@@ -483,11 +506,13 @@ function CredentialTemplateDetailPage() {
             </Box>
           </Stack>
         </Paper>
-      ) : (
+      ) : !canViewDestinations ? <Alert severity="error">You do not have permission to view delivery destinations.</Alert> : (
         <Stack spacing={2}>
           <Alert severity="info">
             Destinations describe where an issued credential can be claimed or mirrored. Canvas Credentials is an organization-managed destination, not a holder wallet.
+            Configuration does not establish successful delivery or wallet interoperability.
           </Alert>
+          {!canViewCanvas && <Alert severity="info">Canvas binding and delivery observations require integration-connector:view permission.</Alert>}
           {destinationError ? (
             <Alert severity="error">
               {destinationError?.message || String(destinationError)}
@@ -519,6 +544,8 @@ function CredentialTemplateDetailPage() {
                 destinationBusy={destinationBusy}
                 onCreateCanvasDestination={createCanvasDestination}
                 onToggleCanvasDestination={toggleCanvasDestination}
+                canCreateDestination={canCreateDestination}
+                canEditDestination={canEditDestination}
               />
             ))}
             {!orderedDestinations.length && !destinationsError ? (
@@ -534,6 +561,22 @@ function CredentialTemplateDetailPage() {
       )}
     </ResourcePage>
   );
+}
+
+function CredentialTemplateDetailPage() {
+  const { templateId } = useParams();
+  const { activeOrgId } = useConsole();
+  const { can, isLoading } = usePermissions();
+  if (!activeOrgId) return <Alert severity="error">Select an organization before loading a credential template.</Alert>;
+  if (isLoading) return <LinearProgress />;
+  if (!can('credential-template', 'view')) return <Alert severity="error">You do not have permission to view credential templates.</Alert>;
+  const grants = {
+    canViewDestinations: can('wallet', 'view'),
+    canViewCanvas: can('integration-connector', 'view'),
+    canCreateDestination: can('integration-connector', 'create'),
+    canEditDestination: can('integration-connector', 'edit'),
+  };
+  return <CredentialTemplateDetail key={`${activeOrgId}:${templateId}:${Object.values(grants).join(':')}`} organizationId={activeOrgId} templateId={templateId} {...grants} />;
 }
 
 export default CredentialTemplateDetailPage;

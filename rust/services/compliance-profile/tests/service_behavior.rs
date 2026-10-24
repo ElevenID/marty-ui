@@ -244,3 +244,175 @@ async fn http_surface_rejects_removed_fields_and_put_alias() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
 }
+
+async fn http_json(
+    app: axum::Router,
+    method: &str,
+    path: &str,
+    body: Value,
+) -> (StatusCode, Value) {
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(method)
+                .uri(path)
+                .header("content-type", "application/json")
+                .header("x-user-id", "user-1")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    (status, serde_json::from_slice(&bytes).unwrap())
+}
+
+#[tokio::test]
+async fn actual_http_public_examples_and_sparse_edits_preserve_all_stored_policy() {
+    let example: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/compliance-profile-http-examples.json"
+    ))
+    .unwrap();
+    let (service, repository) = harness();
+    let app = compliance_router(ComplianceHttpState { service });
+    let (status, created) = http_json(
+        app.clone(),
+        "POST",
+        "/v1/compliance-profiles",
+        example["create"].clone(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let mut expected = example["response"].clone();
+    for field in ["id", "created_at", "updated_at"] {
+        expected[field] = created[field].clone();
+    }
+    assert_eq!(
+        created, expected,
+        "The shared schema example must match actual native HTTP serialization"
+    );
+    let id = created["id"].as_str().unwrap();
+    let path = format!("/v1/compliance-profiles/{id}");
+    let original = serde_json::to_value(repository.get(id).await.unwrap().unwrap()).unwrap();
+    let (status, edited) =
+        http_json(app.clone(), "PATCH", &path, json!({"name":"Renamed only"})).await;
+    assert_eq!(status, StatusCode::OK);
+    expected["name"] = json!("Renamed only");
+    expected["updated_at"] = edited["updated_at"].clone();
+    assert_eq!(edited, expected);
+    let saved = serde_json::to_value(repository.get(id).await.unwrap().unwrap()).unwrap();
+    for (field, value) in original.as_object().unwrap() {
+        if !["name", "updated_at"].contains(&field.as_str()) {
+            assert_eq!(&saved[field], value, "Sparse edit changed {field}");
+        }
+    }
+    let (status, read) = http_json(app.clone(), "GET", &path, Value::Null).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(read, edited);
+    let (status, _) = http_json(
+        app.clone(),
+        "PATCH",
+        &path,
+        json!({"name":"Must not persist", "age_verification":{"minimum_age":151}}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        serde_json::to_value(repository.get(id).await.unwrap().unwrap()).unwrap(),
+        saved
+    );
+    let (status, active) =
+        http_json(app.clone(), "POST", &format!("{path}/activate"), json!({})).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(active["status"], "ACTIVE");
+    let (status, suspended) =
+        http_json(app.clone(), "POST", &format!("{path}/suspend"), json!({})).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(suspended["status"], "SUSPENDED");
+    let (status, removed) = http_json(app, "DELETE", &path, Value::Null).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(removed, json!({"success":true}));
+    assert!(repository.get(id).await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn native_readers_cannot_edit_or_transition_the_public_profile() {
+    let (owner, repository) = harness();
+    let created = owner.create(request(), "user-1").await.unwrap();
+    let service = Arc::new(ComplianceService::new(
+        repository.clone(),
+        Arc::new(Memberships {
+            permissions: BTreeSet::from(["compliance-profile:view".into()]),
+        }),
+    ));
+    let app = compliance_router(ComplianceHttpState { service });
+    let path = format!("/v1/compliance-profiles/{}", created.id);
+    for (method, suffix, body) in [
+        ("POST", "/activate", json!({})),
+        ("POST", "/suspend", json!({})),
+        ("PATCH", "", json!({"name":"Forbidden"})),
+        ("DELETE", "", Value::Null),
+    ] {
+        assert_eq!(
+            http_json(app.clone(), method, &format!("{path}{suffix}"), body)
+                .await
+                .0,
+            StatusCode::FORBIDDEN
+        );
+    }
+    assert_eq!(
+        repository.get(&created.id).await.unwrap().unwrap().name,
+        created.name
+    );
+}
+
+fn schema_tracks_native_serialized_fields(value: &Value, schema: &Value) {
+    if value.is_null() {
+        return;
+    }
+    let schema = schema
+        .get("anyOf")
+        .and_then(Value::as_array)
+        .and_then(|variants| variants.iter().find(|v| v["type"] != "null"))
+        .unwrap_or(schema);
+    if let (Some(object), Some(properties)) = (value.as_object(), schema["properties"].as_object())
+    {
+        assert_eq!(
+            object.keys().collect::<BTreeSet<_>>(),
+            properties.keys().collect::<BTreeSet<_>>(),
+            "Native request/schema field drift"
+        );
+        for (key, member) in object {
+            schema_tracks_native_serialized_fields(member, &properties[key]);
+        }
+    }
+    if let Some(items) = value.as_array() {
+        for item in items {
+            schema_tracks_native_serialized_fields(item, &schema["items"]);
+        }
+    }
+}
+#[test]
+fn public_request_schema_inventory_tracks_every_native_dto_and_nested_field() {
+    let schemas: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/compliance-profile-http-schemas.json"
+    ))
+    .unwrap();
+    schema_tracks_native_serialized_fields(
+        &serde_json::to_value(request()).unwrap(),
+        &schemas["runtime__compliance_profile_create_request"],
+    );
+    // Populate every nested update section using a native create serialization;
+    // root-only schema checks would miss privacy and requirement DTO drift.
+    let mut fields = serde_json::to_value(request()).unwrap();
+    fields.as_object_mut().unwrap().remove("organization_id");
+    fields.as_object_mut().unwrap().remove("system_profile");
+    let update: UpdateComplianceProfileRequest = serde_json::from_value(fields).unwrap();
+    schema_tracks_native_serialized_fields(
+        &serde_json::to_value(update).unwrap(),
+        &schemas["runtime__compliance_profile_update_request"],
+    );
+}
