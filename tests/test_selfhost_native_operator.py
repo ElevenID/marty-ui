@@ -58,14 +58,17 @@ def test_ca_issuer_abnormal_exit_is_sanitized_recovery(monkeypatch, code):
 
 @pytest.mark.parametrize("payload", [b'{"value":', b'null', b'{"value":null}', b'{"value":"wrong-pki-v9"}'])
 def test_ca_issuer_malformed_delivery_requires_recovery(monkeypatch, payload, tmp_path):
+    from importlib import import_module
     from types import SimpleNamespace
-    from scripts import selfhost_native_operator as native
+    monkeypatch.syspath_prepend(str(ROOT / "scripts"))
     import provision_selfhost_ca_rotation_identity as rotation
+    # Exercise the adapter module actually imported by the sibling CLI. Mixing
+    # package and sibling imports would create two distinct exception classes.
+    native = import_module(rotation.network_operation.__module__)
     monkeypatch.setattr(native, "operator_bytes", lambda *args, **kwargs: payload)
-    monkeypatch.setattr(rotation, "network_operation", lambda *args, **kwargs:
-                        native.network_operation(SimpleNamespace(endpoint="https://unused", ca=tmp_path, token=""), "ca-issuer"))
-    with pytest.raises(native.OperatorCleanupError, match="^CA issuer staging requires operator recovery$"):
-        rotation.stage_issuer(object(), tmp_path, tmp_path, "workload", 2)
+    bao = SimpleNamespace(endpoint="https://unused", ca=tmp_path, token="")
+    with pytest.raises(rotation.OperatorCleanupError, match="^CA issuer staging requires operator recovery$"):
+        rotation.stage_issuer(bao, tmp_path, tmp_path, "workload", 2)
 
 
 @pytest.mark.parametrize("kind", ["RSA", "EC", "ED25519"])
