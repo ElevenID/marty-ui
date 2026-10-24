@@ -170,7 +170,7 @@ function ApiDocumentation() {
         <Typography variant="h3" component="h1" fontWeight="bold" gutterBottom>
           Verifiable Credential API Documentation
         </Typography>
-        <Typography variant="body1" color="text.secondary" paragraph sx={{ maxWidth: 900 }}>
+        <Typography component="p" variant="body1" color="text.secondary" sx={{ maxWidth: 900, mb: 2 }}>
           <strong>ElevenID LLC implements digital identity as governed configuration.</strong>{' '}
           Instead of hard-coding trust, disclosure, and verification logic into applications, 
           ElevenID LLC models identity using five composable primitives—then executes them consistently 
@@ -211,7 +211,7 @@ function ApiDocumentation() {
             Choose Your Path
           </Typography>
           <Grid container spacing={2} sx={{ mb: 3 }}>
-            <Grid item xs={12} md={4}>
+            <Grid size={{ xs: 12, md: 4 }}>
               <Card elevation={1} sx={{ height: '100%' }}>
                 <CardContent>
                   <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
@@ -230,7 +230,7 @@ function ApiDocumentation() {
                 </CardContent>
               </Card>
             </Grid>
-            <Grid item xs={12} md={4}>
+            <Grid size={{ xs: 12, md: 4 }}>
               <Card elevation={1} sx={{ height: '100%' }}>
                 <CardContent>
                   <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
@@ -248,7 +248,7 @@ function ApiDocumentation() {
                 </CardContent>
               </Card>
             </Grid>
-            <Grid item xs={12} md={4}>
+            <Grid size={{ xs: 12, md: 4 }}>
               <Card elevation={1} sx={{ height: '100%' }}>
                 <CardContent>
                   <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
