@@ -26,6 +26,20 @@ pub(crate) const LIST_CURRENT_FACTS: &str = "SELECT jsonb_build_object(
     WHERE head.organization_id = $1 AND head.application_id = $2
     ORDER BY fact.observed_at, fact.created_at, fact.id";
 
+pub(crate) const LOAD_CANVAS_POLICY_SET: &str = "SELECT jsonb_build_object(
+        'id', id, 'status', status, 'policy_type', policy_type,
+        'cedar_policies', cedar_policies
+    ) FROM organization_service.policy_sets
+    WHERE organization_id = $1::uuid AND id = $2::uuid";
+
+pub(crate) fn canvas_approval_policy_set_id(
+    binding: &Map<String, Value>,
+    template: &Map<String, Value>,
+) -> Option<String> {
+    optional_text(binding.get("approval_policy_set_id"))
+        .or_else(|| optional_text(template.get("approval_policy_set_id")))
+}
+
 #[derive(Clone, Debug)]
 pub struct CanvasGuardConfig {
     pub enabled: bool,
@@ -124,12 +138,11 @@ impl PostgresCanvasIssuanceGuard {
         let binding = binding.unwrap_or_else(|| json!({}));
         let application_template = application_template.unwrap_or_else(|| json!({}));
         let policy_set_id = binding
-            .get("approval_policy_set_id")
-            .or_else(|| application_template.get("approval_policy_set_id"))
-            .and_then(Value::as_str)
-            .filter(|value| !value.trim().is_empty());
+            .as_object()
+            .zip(application_template.as_object())
+            .and_then(|(binding, template)| canvas_approval_policy_set_id(binding, template));
         let policy_set = if let Some(policy_set_id) = policy_set_id {
-            self.load_policy_set(organization_id, policy_set_id)
+            self.load_policy_set(organization_id, &policy_set_id)
                 .await
                 .map_err(|_| "canvas_guard_dependency_unavailable")?
         } else {
@@ -243,18 +256,11 @@ impl PostgresCanvasIssuanceGuard {
         organization_id: &str,
         policy_set_id: &str,
     ) -> Result<Option<Value>, sqlx::Error> {
-        sqlx::query_scalar(
-            "SELECT jsonb_build_object(
-                 'id', id, 'status', status, 'policy_type', policy_type,
-                 'cedar_policies', cedar_policies
-             )
-             FROM organization_service.policy_sets
-             WHERE organization_id = $1 AND id = $2",
-        )
-        .bind(organization_id)
-        .bind(policy_set_id)
-        .fetch_optional(&self.pool)
-        .await
+        sqlx::query_scalar(LOAD_CANVAS_POLICY_SET)
+            .bind(organization_id)
+            .bind(policy_set_id)
+            .fetch_optional(&self.pool)
+            .await
     }
 }
 
@@ -325,6 +331,53 @@ pub fn evaluate_canvas_guard_snapshot(
         return Err("canvas_resolved_issuer_context_mismatch");
     }
 
+    evaluate_canvas_current_evidence(snapshot, config, now)?;
+    if template
+        .get("claim_collection_rules")
+        .and_then(Value::as_array)
+        .is_some_and(|rules| !rules.is_empty())
+    {
+        // Time-derived claims retain the original reservation clock; current
+        // evidence is still checked against the live signing-time clock above.
+        let projected = crate::canvas_claim_projection::project_canvas_claims(
+            application,
+            template,
+            binding,
+            &snapshot.evidence_facts,
+            transaction.created_at,
+            now,
+            config.evidence_max_age,
+        )?;
+        if projected
+            .iter()
+            .any(|(name, value)| transaction.claims.get(name) != Some(value))
+            || transaction
+                .claims
+                .keys()
+                .any(|name| name != "_vct" && !projected.contains_key(name))
+        {
+            return Err("canvas_claim_projection_changed");
+        }
+    }
+    Ok(())
+}
+
+fn evaluate_canvas_current_evidence(
+    snapshot: &CanvasGuardSnapshot,
+    config: &CanvasGuardConfig,
+    now: DateTime<Utc>,
+) -> Result<(), &'static str> {
+    let application = object(&snapshot.application, "canvas_application_not_found")?;
+    let template = object(
+        &snapshot.application_template,
+        "canvas_application_not_found",
+    )?;
+    let binding = object(&snapshot.binding, "canvas_application_not_found")?;
+    let canvas = application
+        .get("integration_context")
+        .and_then(|context| context.get("canvas"))
+        .and_then(Value::as_object)
+        .ok_or("canvas_application_not_found")?;
     let requirements = validated_requirements(binding)?;
     let required = requirements
         .iter()
@@ -360,33 +413,6 @@ pub fn evaluate_canvas_guard_snapshot(
     if decision.get("allowed").and_then(Value::as_bool) != Some(true) {
         return Err("current_evidence_policy_denied");
     }
-    if template
-        .get("claim_collection_rules")
-        .and_then(Value::as_array)
-        .is_some_and(|rules| !rules.is_empty())
-    {
-        // Time-derived claims retain the original reservation clock; current
-        // evidence is still checked against the live signing-time clock above.
-        let projected = crate::canvas_claim_projection::project_canvas_claims(
-            application,
-            template,
-            binding,
-            &snapshot.evidence_facts,
-            transaction.created_at,
-            now,
-            config.evidence_max_age,
-        )?;
-        if projected
-            .iter()
-            .any(|(name, value)| transaction.claims.get(name) != Some(value))
-            || transaction
-                .claims
-                .keys()
-                .any(|name| name != "_vct" && !projected.contains_key(name))
-        {
-            return Err("canvas_claim_projection_changed");
-        }
-    }
     Ok(())
 }
 
@@ -394,9 +420,9 @@ pub fn evaluate_canvas_guard_snapshot(
 /// snapshot used by the pre-signing guard before a management approval is
 /// allowed to reserve an issuance transaction.
 ///
-/// Evidence and policy are deliberately evaluated by the canonical
-/// pre-signing guard after approval. Manual approval only establishes the
-/// claimable transaction; it does not bypass the later issuance decision.
+/// Current evidence and policy must permit reservation. The same kernel runs
+/// again at signing so a later grade, policy or freshness change still denies
+/// credential issuance.
 pub fn evaluate_canvas_approval_snapshot(
     organization_id: &str,
     application_id: &str,
@@ -411,7 +437,8 @@ pub fn evaluate_canvas_approval_snapshot(
         config,
         now,
         "pending",
-    )
+    )?;
+    evaluate_canvas_current_evidence(snapshot, config, now)
 }
 
 /// Re-evaluate the same Canvas ownership and readiness snapshot when an
@@ -1221,6 +1248,84 @@ mod tests {
             })],
             policy_set: None,
         }
+    }
+
+    #[test]
+    fn manual_reservation_and_signing_share_current_evidence_denial_and_recovery() {
+        let good = snapshot();
+        for fault in [
+            "low-score",
+            "missing",
+            "unverified",
+            "stale",
+            "wrong-scope",
+            "missing-policy",
+            "denied-policy",
+        ] {
+            let mut state = good.clone();
+            match fault {
+                "low-score" => state.evidence_facts[0]["assertion"]["score_percent"] = json!(40),
+                "missing" => state.evidence_facts.clear(),
+                "unverified" => {
+                    state.evidence_facts[0]["verification"]["status"] = json!("UNVERIFIED")
+                }
+                "stale" => {
+                    state.evidence_facts[0]["observed_at"] =
+                        json!((now() - chrono::Duration::seconds(901)).to_rfc3339())
+                }
+                "wrong-scope" => {
+                    state.evidence_facts[0]["scope"]["course_id"] = json!("foreign-course")
+                }
+                "missing-policy" | "denied-policy" => {
+                    state.application_template["approval_policy_set_id"] = json!("selected-policy");
+                    if fault == "denied-policy" {
+                        state.policy_set = Some(
+                            json!({"id":"selected-policy","status":"active", "policy_type":"CUSTOM", "cedar_policies":"forbid(principal, action, resource);"}),
+                        );
+                    }
+                }
+                _ => unreachable!(),
+            }
+            let signing =
+                evaluate_canvas_guard_snapshot(&transaction(), &issuer(), &state, &config(), now());
+            assert!(signing.is_err(), "{fault}");
+            state.application["status"] = json!("pending");
+            let approval = evaluate_canvas_approval_snapshot(
+                "org-1",
+                "application-1",
+                &state,
+                &config(),
+                now(),
+            );
+            assert_eq!(approval, signing, "{fault}");
+        }
+        let mut pending = good;
+        pending.application["status"] = json!("pending");
+        assert_eq!(
+            evaluate_canvas_approval_snapshot("org-1", "application-1", &pending, &config(), now()),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn null_binding_policy_uses_the_selected_template_policy() {
+        let binding = json!({"approval_policy_set_id":null});
+        let template = json!({"approval_policy_set_id":"template-policy"});
+        assert_eq!(
+            canvas_approval_policy_set_id(
+                binding.as_object().unwrap(),
+                template.as_object().unwrap()
+            ),
+            Some("template-policy".to_owned())
+        );
+        let binding = json!({"approval_policy_set_id":" binding-policy "});
+        assert_eq!(
+            canvas_approval_policy_set_id(
+                binding.as_object().unwrap(),
+                template.as_object().unwrap()
+            ),
+            Some("binding-policy".to_owned())
+        );
     }
 
     #[test]

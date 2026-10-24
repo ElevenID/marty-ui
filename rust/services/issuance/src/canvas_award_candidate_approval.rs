@@ -95,6 +95,7 @@ pub trait CanvasAwardApprovalSeedGenerator: Send + Sync {
 
 #[derive(Clone, PartialEq)]
 pub struct CanvasApplicationApprovalSnapshot {
+    pub policy_set: Option<Value>,
     pub evidence_facts: Vec<Value>,
     pub application: Map<String, Value>,
     pub application_template: Map<String, Value>,
@@ -322,7 +323,7 @@ impl CanvasApplicationApprovalService {
             platform: Value::Object(snapshot.platform.clone()),
             binding: Value::Object(snapshot.binding.clone()),
             evidence_facts: snapshot.evidence_facts.clone(),
-            policy_set: None,
+            policy_set: snapshot.policy_set.clone(),
         };
         let now = self.clock.now();
         if let Err(code) = evaluate_canvas_approval_snapshot(
@@ -413,7 +414,7 @@ impl CanvasApplicationApprovalService {
             platform: Value::Object(snapshot.platform.clone()),
             binding: Value::Object(snapshot.binding.clone()),
             evidence_facts: snapshot.evidence_facts.clone(),
-            policy_set: None,
+            policy_set: snapshot.policy_set.clone(),
         };
         let now = self.clock.now();
         if let Err(code) = evaluate_canvas_offer_snapshot(
