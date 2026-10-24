@@ -19,6 +19,7 @@ import subprocess
 import tempfile
 import time
 from urllib.error import HTTPError, URLError
+from pinned_openbao_image import require_pinned_openbao
 from selfhost_openbao_client import Bao, public_key_der
 from provision_selfhost_disposable_tls import KEY_METADATA_FILE, verified_key_metadata
 
@@ -142,11 +143,7 @@ def run(args: list[str], timeout: int = 30) -> str:
 
 
 def require_pinned_image(image: str) -> None:
-    """Acquire a pinned image before the bounded container startup."""
-    try:
-        run(["docker", "image", "inspect", image], timeout=20)
-    except RuntimeError:
-        run(["docker", "pull", image], timeout=180)
+    require_pinned_openbao(image)
 
 
 def validate_selfhost_tls_output_inventory(output: Path, secrets: set[str]) -> None:
