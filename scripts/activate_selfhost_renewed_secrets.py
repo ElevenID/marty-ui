@@ -9,7 +9,6 @@ journeys, trust retirement, or zero-downtime service continuity.
 from __future__ import annotations
 
 import argparse
-import base64
 import json
 import os
 from pathlib import Path
@@ -24,16 +23,13 @@ if os.name == "posix":
 
 sys.dont_write_bytecode = True
 from selfhost_operator_inputs import private_file as private_file  # noqa: E402
-from selfhost_native_operator import operator_bytes  # noqa: E402
-from passport_remote_tls import SELFHOST_CERT_FILES  # noqa: E402
+from selfhost_native_operator import network_operation  # noqa: E402
 from selfhost_openbao_client import (  # noqa: E402
-    Bao, certificate_public_key_der, public_key_der, require_ca_rotation_authority,
+    Bao, require_ca_rotation_authority,
     require_renewal_authority,
 )
-from provision_selfhost_disposable_tls import ENV_PREFIX_ROLE, KEY_NAMES  # noqa: E402
-from provision_selfhost_keycloak_kms import PURPOSES, REALMS, jwe_policy, signing_policy  # noqa: E402
 from stage_selfhost_renewed_secrets import (  # noqa: E402
-    RENEWED_TOKEN_FILES, bounded_file, entries, public_trust_overlap,
+    RENEWED_TOKEN_FILES, bounded_file, entries,
     verify_generations,
 )
 
@@ -46,24 +42,6 @@ COMPLETED_SERVICES = frozenset({
 })
 OPTIONAL_EDGE_SERVICES = frozenset({"cloudflared", "cloudflared-beta", "tunnel-nginx-proxy",
                                     "kms-initialize"})
-TLS_CERT_BY_ROLE = {
-    "signing-keys-server": "signing_keys_workload_server_cert",
-    "gateway-client": "gateway_workload_client_cert",
-    "auth-client": "auth_workload_client_cert",
-    "auth-server": "auth_workload_server_cert",
-    "compliance-profile-client": "compliance_profile_workload_client_cert",
-    "deployment-profile-client": "deployment_profile_workload_client_cert",
-    "organization-server": "org_workload_server_cert",
-    "event-stream-server": "es_workload_server_cert",
-    "notification-server": "notification_workload_server_cert",
-    "revocation-profile-server": "rp_workload_server_cert",
-    "credential-template-server": "ct_workload_server_cert",
-    "issuance-server": "issuance_workload_server_cert",
-    "flow-client": "flow_workload_client_cert",
-    "flow-server": "flow_workload_server_cert",
-    "pp-server": "pp_workload_server_cert",
-    "verification-client": "verification_workload_client_cert",
-}
 
 
 def checked_overlap_mounts(enabled: bool, workload: str | None,
@@ -254,165 +232,23 @@ def secret_mounts(project: str, secret_root: Path, services: set[str],
     return mount_count
 
 
-def checked_certificate_lifetime(certificate: str, minimum_ttl: int) -> None:
-    try:
-        valid = json.loads(operator_bytes(Path(__file__).resolve().parents[1], "operator",
-                                         "certificate-lifetime", str(minimum_ttl),
-                                         input=certificate.encode("ascii")))
-    except RuntimeError as error:
-        raise ValueError("renewed certificate validity is invalid") from error
-    if valid is not True:
-        raise ValueError("renewed certificate is outside the required validity overlap")
-
-
-def checked_certificate_chain(path: Path, issuer: str) -> None:
-    try:
-        operator_bytes(Path(__file__).resolve().parents[1], "operator", "certificate-chain",
-                       input=json.dumps({"certificate": path.read_text(encoding="ascii"),
-                                         "issuer": issuer}).encode("ascii"))
-    except (OSError, RuntimeError) as error:
-        raise ValueError("renewed certificate is not signed by its OpenBao issuer") from error
-
-
 def checked_certificates(bao: Bao, old: Path, new: Path, minimum_ttl: int,
                          *, replacement: tuple[Bao, str, str] | None = None,
                          retiring: bool = False) -> None:
-    if retiring and replacement is None:
-        raise ValueError("CA trust retirement requires live replacement issuers")
-    if (set(TLS_CERT_BY_ROLE) != set(KEY_NAMES)
-            or set(TLS_CERT_BY_ROLE.values()) != SELFHOST_CERT_FILES - {"workload_identity_ca_cert"}):
-        raise ValueError("self-host TLS role and certificate inventory drifted")
-    issuers = {
-        "workload_identity_ca_cert": bao.request("GET", "workload-pki/cert/ca")
-        .get("data", {}).get("certificate"),
-        "keycloak": bao.request("GET", "keycloak-pki/cert/ca")
-        .get("data", {}).get("certificate"),
-    }
-    new_issuers = issuers
+    context = None
     if replacement is not None:
-        ca_bao, workload_mount, keycloak_mount = replacement
-        new_issuers = {
-            "workload_identity_ca_cert": ca_bao.request(
-                "GET", f"{workload_mount}/cert/ca").get("data", {}).get("certificate"),
-            "keycloak": ca_bao.request(
-                "GET", f"{keycloak_mount}/cert/ca").get("data", {}).get("certificate"),
-        }
-        if new_issuers["keycloak"] == issuers["keycloak"]:
-            raise ValueError("replacement Keycloak issuer did not change")
-    if any(not isinstance(issuer, str)
-           for issuer in (*issuers.values(), *new_issuers.values())):
-        raise ValueError("renewed OpenBao issuer is absent")
-    for issuer in (new_issuers.values() if retiring else
-                   (*issuers.values(), *new_issuers.values())):
-        checked_certificate_lifetime(issuer, minimum_ttl)
-    old_ca = issuers["workload_identity_ca_cert"]
-    new_ca = new_issuers["workload_identity_ca_cert"]
-    bundle = (public_trust_overlap(old_ca.encode("ascii"), new_ca.encode("ascii"))
-              .decode("ascii") if replacement is not None else old_ca)
-    if retiring:
-        generations = ((old, new_issuers, bundle),
-                       (new, new_issuers, new_ca.rstrip("\n") + "\n"))
-    elif replacement is not None:
-        generations = ((old, issuers, old_ca), (new, new_issuers, bundle))
-    else:
-        generations = ((old, issuers, old_ca), (new, issuers, old_ca))
-    for root, active_issuers, expected_ca in generations:
-        workload_ca = (root / "workload_identity_ca_cert").read_text(encoding="ascii")
-        if workload_ca != expected_ca:
-            raise ValueError("workload issuer differs from the mounted trust anchor")
-        for role, cert_name in TLS_CERT_BY_ROLE.items():
-            key_name = KEY_NAMES[role]
-            metadata = bao.request("GET", f"transit/keys/{key_name}").get("data", {})
-            if (metadata.get("type") != "ecdsa-p256"
-                    or metadata.get("exportable") is not False
-                    or metadata.get("allow_plaintext_backup") is not False
-                    or metadata.get("latest_version") != 1):
-                raise ValueError("workload signer lost version-one non-exportable custody")
-            public_key = metadata.get("keys", {}).get("1", {}).get("public_key")
-            if not isinstance(public_key, str):
-                raise ValueError("workload signer public key is absent")
-            certificate_path = root / cert_name
-            certificate = certificate_path.read_text(encoding="ascii")
-            checked_certificate_lifetime(certificate, minimum_ttl)
-            checked_certificate_chain(certificate_path, active_issuers["workload_identity_ca_cert"])
-            if certificate_public_key_der(certificate) != public_key_der(public_key):
-                raise ValueError("workload certificate differs from its remote signer")
-        for realm in REALMS:
-            key_name = f"keycloak-{realm}-rs256"
-            metadata = bao.request("GET", f"transit/keys/{key_name}").get("data", {})
-            if (metadata.get("type") != "rsa-2048"
-                    or metadata.get("exportable") is not False
-                    or metadata.get("allow_plaintext_backup") is not False
-                    or metadata.get("latest_version") != 1):
-                raise ValueError("Keycloak signer lost version-one non-exportable custody")
-            public_key = metadata.get("keys", {}).get("1", {}).get("public_key")
-            if not isinstance(public_key, str):
-                raise ValueError("Keycloak signer public key is absent")
-            certificate_path = root / f"keycloak_{realm}_rs256_cert"
-            certificate = certificate_path.read_text(encoding="ascii")
-            checked_certificate_lifetime(certificate, minimum_ttl)
-            checked_certificate_chain(certificate_path, active_issuers["keycloak"])
-            if certificate_public_key_der(certificate) != public_key_der(public_key):
-                raise ValueError("Keycloak certificate differs from its remote signer")
+        authority, workload, keycloak = replacement
+        context = {"endpoint": authority.endpoint, "ca": str(authority.ca), "token": authority.token,
+                   "workload_mount": workload, "keycloak_mount": keycloak}
+    network_operation(bao, "activation-certificates", old=str(old), new=str(new),
+                      minimum_ttl=minimum_ttl, replacement=context, retiring=retiring)
 
 
 def checked_tokens(bao: Bao, old: Path, new: Path, minimum_ttl: int,
                    *, require_orphan_new: bool,
                    require_orphan_old: bool = False) -> None:
-    for root, require_orphan in ((old, require_orphan_old or
-                                 (old == new and require_orphan_new)),
-                                 (new, require_orphan_new)):
-        for name in sorted(RENEWED_TOKEN_FILES):
-            token = (root / name).read_text(encoding="ascii").strip()
-            response = bao.request("POST", "auth/token/lookup", {"token": token})
-            data = response.get("data", {})
-            if (not isinstance(data, dict) or not isinstance(data.get("policies"), list)
-                    or len(data["policies"]) != 1 or data["policies"][0] == "default"
-                    or type(data.get("ttl")) is not int or data["ttl"] < minimum_ttl
-                    or data["ttl"] > 8 * 60 * 60):
-                raise ValueError("renewed OpenBao token has invalid scope or lifetime")
-            if (require_orphan
-                    and (data.get("orphan") is not True
-                         or data.get("path") != "auth/token/create/selfhost-renew-leaf")):
-                raise ValueError("renewed OpenBao token still depends on bootstrap root")
-            policy_name = data["policies"][0]
-            if not isinstance(policy_name, str) or not re.fullmatch(r"[a-z0-9-]{1,160}", policy_name):
-                raise ValueError("renewed OpenBao policy reference is invalid")
-            policy = bao.request("GET", f"sys/policies/acl/{policy_name}").get("data", {}).get("policy")
-            if name.endswith("_tls_kms_token"):
-                prefix = name.removesuffix("_tls_kms_token").upper()
-                key = KEY_NAMES[ENV_PREFIX_ROLE[prefix]]
-                expected = (f'path "transit/keys/{key}" {{ capabilities = ["read"] }}\n'
-                            f'path "transit/sign/{key}" {{ capabilities = ["update"] }}')
-                signature = bao.request("POST", f"transit/sign/{key}", {
-                    "input": base64.b64encode(b"activation-scope").decode("ascii"),
-                    "key_version": 1,
-                }, token=token).get("data", {}).get("signature")
-                if policy != expected or not isinstance(signature, str) or not signature.startswith("vault:v1:"):
-                    raise ValueError("renewed TLS token cannot use its exact versioned signer")
-            elif name == "keycloak_signing_kms_token":
-                if policy != signing_policy():
-                    raise ValueError("Keycloak signing policy changed before activation")
-                for realm in REALMS:
-                    signature = bao.request("POST", f"transit/sign/keycloak-{realm}-rs256", {
-                        "input": base64.b64encode(b"activation-scope").decode("ascii"),
-                        "hash_algorithm": "sha2-256", "signature_algorithm": "pkcs1v15",
-                        "key_version": 1,
-                    }, token=token).get("data", {}).get("signature")
-                    if not isinstance(signature, str) or not signature.startswith("vault:v1:"):
-                        raise ValueError("Keycloak signing token cannot use version-one signer")
-            else:
-                match = re.fullmatch(r"keycloak_(master|11id)_(cookie|ciba)_token", name)
-                if match is None or match.group(1) not in REALMS or match.group(2) not in PURPOSES:
-                    raise ValueError("unknown Keycloak renewal token")
-                realm, purpose = match.groups()
-                key_path = f"didcomm/keycloak/keys/{realm}/{purpose}"
-                version = bao.request("GET", key_path).get("data", {}).get("version")
-                if not isinstance(version, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", version):
-                    raise ValueError("Keycloak JWE version changed before activation")
-                if (policy != jwe_policy(realm, purpose, version)
-                        or bao.request("GET", key_path, token=token).get("data", {}).get("version") != version):
-                    raise ValueError("Keycloak JWE token cannot read its exact versioned key")
+    network_operation(bao, "activation-tokens", old=str(old), new=str(new), minimum_ttl=minimum_ttl,
+                      require_orphan_new=require_orphan_new, require_orphan_old=require_orphan_old)
 
 
 def recreate(command: list[str], services: set[str], model: dict, *, cwd: Path,

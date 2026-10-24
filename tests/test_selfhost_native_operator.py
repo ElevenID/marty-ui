@@ -16,7 +16,8 @@ ROOT = Path(__file__).resolve().parents[1]
                                             ("approle-login", 300), ("approle-policy", 300),
                                             ("approle-rotate", None), ("approle-retire", None),
                                             ("leaf-refresh", None), ("keycloak-token", None),
-                                            ("keycloak-provision", None)])
+                                            ("keycloak-provision", None), ("ca-issuer", None),
+                                            ("renewal-inventory", 600)])
 def test_native_transactions_cannot_be_killed_during_cleanup(monkeypatch, operation, timeout):
     from types import SimpleNamespace
     from scripts import selfhost_native_operator as native
@@ -43,6 +44,32 @@ def test_keycloak_abnormal_exit_is_sanitized_recovery(monkeypatch, code, operati
         returncode=code, stdout=b"", stderr=b"sensitive-crash-detail"))
     with pytest.raises(native.OperatorCleanupError, match="^Keycloak provisioning requires operator recovery$"):
         native.operator_bytes(ROOT, "operator", operation, input=b"{}")
+
+
+@pytest.mark.parametrize("code", [-15, 101, 3221225477])
+def test_ca_issuer_abnormal_exit_is_sanitized_recovery(monkeypatch, code):
+    from types import SimpleNamespace
+    from scripts import selfhost_native_operator as native
+    monkeypatch.setattr(native, "operator_command", lambda *_: ["native-operator"])
+    monkeypatch.setattr(native.subprocess, "run", lambda *_, **kwargs: SimpleNamespace(
+        returncode=code, stdout=b"", stderr=b"sensitive-crash-detail"))
+    with pytest.raises(native.OperatorCleanupError, match="^CA issuer staging requires operator recovery$"):
+        native.operator_bytes(ROOT, "operator", "ca-issuer", input=b"{}")
+
+
+@pytest.mark.parametrize("payload", [b'{"value":', b'null', b'{"value":null}', b'{"value":"wrong-pki-v9"}'])
+def test_ca_issuer_malformed_delivery_requires_recovery(monkeypatch, payload, tmp_path):
+    from importlib import import_module
+    from types import SimpleNamespace
+    monkeypatch.syspath_prepend(str(ROOT / "scripts"))
+    import provision_selfhost_ca_rotation_identity as rotation
+    # Exercise the adapter module actually imported by the sibling CLI. Mixing
+    # package and sibling imports would create two distinct exception classes.
+    native = import_module(rotation.network_operation.__module__)
+    monkeypatch.setattr(native, "operator_bytes", lambda *args, **kwargs: payload)
+    bao = SimpleNamespace(endpoint="https://unused", ca=tmp_path, token="")
+    with pytest.raises(rotation.OperatorCleanupError, match="^CA issuer staging requires operator recovery$"):
+        rotation.stage_issuer(bao, tmp_path, tmp_path, "workload", 2)
 
 
 @pytest.mark.parametrize("kind", ["RSA", "EC", "ED25519"])
