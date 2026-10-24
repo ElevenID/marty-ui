@@ -4275,6 +4275,7 @@ dependencies = [
  "flate2",
  "libc",
  "marty-crypto",
+ "marty-managed-key-reference",
  "marty-openbao-http",
  "marty-selfhost-identity",
  "reqwest",
@@ -4723,6 +4724,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "marty-managed-key-reference"
+version = "0.1.0"
+dependencies = [
+ "uuid",
+]
+
+[[package]]
 name = "marty-notification"
 version = "0.1.0"
 dependencies = [
@@ -5128,6 +5136,7 @@ dependencies = [
  "marty-didcomm",
  "marty-holder-key-reference",
  "marty-key-material-policy",
+ "marty-managed-key-reference",
  "marty-oid4vci",
  "marty-oid4vp-contract",
  "marty-openbao-http",

@@ -6,15 +6,14 @@ from __future__ import annotations
 import argparse
 import os
 import re
-import stat
 import sys
 import uuid
 from pathlib import Path
 from urllib.error import HTTPError
 
 from provision_selfhost_disposable_tls import read_protected_root_token, verified_openbao_owner
-from provision_selfhost_custody_signer import refresh_scoped_token
-from selfhost_native_operator import OperatorCleanupError
+from selfhost_operator_inputs import refresh_scoped_token, private_operator_directory, write_owned
+from selfhost_native_operator import OperatorCleanupError, network_operation
 from selfhost_openbao_client import Bao
 from selfhost_managed_reference import managed_reference
 
@@ -25,13 +24,7 @@ SIGNER = "selfhost-qualification-custody-v1"
 
 
 def private_directory(path: Path) -> Path:
-    if (not path.is_absolute() or path.is_symlink() or not path.is_dir()
-            or stat.S_IMODE(path.stat().st_mode) != 0o700):
-        raise ValueError("operator directory must be an existing private directory")
-    resolved = path.resolve()
-    if resolved.is_relative_to(SOURCE_ROOT):
-        raise ValueError("operator directory must be outside the source checkout")
-    return resolved
+    return private_operator_directory(path, SOURCE_ROOT)
 
 
 def policy_for(org: str, slug: str, did: str) -> tuple[str, tuple[str, ...]]:
@@ -55,16 +48,7 @@ def policy_for(org: str, slug: str, did: str) -> tuple[str, tuple[str, ...]]:
 
 
 def write_token(path: Path, value: str, owner: os.stat_result) -> None:
-    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-                         0o600)
-    try:
-        with os.fdopen(descriptor, "w", encoding="ascii") as stream:
-            stream.write(value)
-            os.fchown(stream.fileno(), owner.st_uid, owner.st_gid)
-            os.fchmod(stream.fileno(), 0o400)
-    except Exception:
-        path.unlink(missing_ok=True)
-        raise
+    write_owned(path, value, 0o400, owner)
 
 
 def provision(endpoint: str, state_root: Path, output_root: Path,
@@ -127,19 +111,7 @@ def provision(endpoint: str, state_root: Path, output_root: Path,
         raise ValueError("OpenBao audit token is absent")
     try:
         scoped = Bao(endpoint, ca_file, token)
-        metadata = scoped.request("GET", "auth/token/lookup-self").get("data", {})
-        if (metadata.get("policies") != [POLICY] or metadata.get("orphan") is not True
-                or type(metadata.get("ttl")) is not int
-                or not 0 < metadata["ttl"] <= 3600):
-            raise ValueError("OpenBao audit token is not orphaned, scoped or short-lived")
-        forbidden = (f"transit/sign/{SIGNER}", f"transit/export/signing-key/{SIGNER}",
-                     "auth/token/create", f"sys/policies/acl/{POLICY}")
-        access = scoped.request("POST", "sys/capabilities-self", {
-            "paths": [*paths, *forbidden],
-        })
-        if (any(access.get(path) != ["read"] for path in paths)
-                or any(access.get(path) not in (["deny"], []) for path in forbidden)):
-            raise ValueError("OpenBao audit token has excess or missing capabilities")
+        network_operation(scoped, "leaf-check", kind="audit", paths=paths)
         if refresh_token:
             refresh_scoped_token(
                 bao, token_file, token,

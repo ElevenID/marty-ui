@@ -668,6 +668,7 @@ pub mod ca_issuer;
 pub mod generation;
 pub mod keycloak;
 pub mod keycloak_provision;
+pub mod leaf_tokens;
 pub mod operator;
 pub mod operator_certificates;
 mod operator_files;
