@@ -14,6 +14,7 @@ import DiscoverOrganizationsPage from '../../components/pages/DiscoverOrganizati
 import JoinOrganizationPage from '../../components/pages/JoinOrganizationPage';
 import CreateOrganizationPage from '../../components/organizations/CreateOrganizationPage';
 import OrgConsoleUnavailable from '../../components/console/OrgConsoleUnavailable';
+import PresentationPolicyPage from '../../components/console/policies/PresentationPolicyPage';
 import { useAuth } from '../../hooks/useAuth';
 import { usePermissions } from '../../hooks/usePermissions';
 import { useConsole, getDefaultLandingPath } from '../../contexts/ConsoleContext';
@@ -187,6 +188,8 @@ function ConsoleRoutes() {
         <Route path="policies" element={<PoliciesPage />} />
         <Route path="policies/presentation" element={<PresentationPoliciesPage />} />
         <Route path="policies/presentation/new" element={<PresentationPolicyWizard />} />
+        <Route path="policies/presentation/:policyId/edit" element={<PresentationPolicyPage mode="edit" />} />
+        <Route path="policies/presentation/:policyId" element={<PresentationPolicyPage />} />
         <Route path="policies/compliance" element={<ComplianceProfilesPage />} />
         <Route path="policies/compliance/new" element={<ComplianceProfilePage mode="create" />} />
         <Route path="policies/compliance/:profileId" element={<ComplianceProfilePage />} />

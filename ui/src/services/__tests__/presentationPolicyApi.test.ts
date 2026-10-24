@@ -275,13 +275,42 @@ describe('presentationPolicyApi', () => {
 
       const result = await updatePresentationPolicy(1, updates)
 
-      expect(receivedData).toMatchObject({
-        organization_id: 'org-1',
+      expect(receivedData).toEqual({
         name: 'Updated Policy Name',
-        required_claims: [],
-        accepted_credential_types: [],
       })
       expect(result.name).toBe(updates.name)
+    })
+
+    it('preserves omitted security sections in a scoped metadata PATCH', async () => {
+      const initial = {
+        id: 'policy', organization_id: 'org-1', name: 'Protected policy', description: 'Previous',
+        required_claims: [{ claim_name: 'member_id' }], accepted_credential_types: ['Membership'],
+        credential_requirements: [{ credential_template_id: 'template', trust_profile_id: 'trust' }],
+        holder_binding: { required: true, binding_methods: ['CREDENTIAL_KEY'] },
+        freshness: { require_not_revoked: true, max_age_seconds: 300 },
+      }
+      let current = structuredClone(initial)
+      server.use(http.patch('http://localhost:8000/v1/presentation-policies/:id', async ({ request }) => {
+        expect(new URL(request.url).searchParams.get('organization_id')).toBe('org-1')
+        const body = await request.json()
+        expect(body).toEqual({ description: '' })
+        current = { ...current, ...body as object }
+        return HttpResponse.json(current)
+      }))
+      await updatePresentationPolicy('policy', { organization_id: 'org-1', description: '' })
+      expect(current).toEqual({ ...initial, description: '' })
+    })
+
+    it('retains explicitly supplied false, zero and empty canonical update fields', async () => {
+      const changes = {
+        holder_binding: { required: false }, required_claims: [],
+        freshness: { require_not_revoked: true, max_age_seconds: 0 },
+      }
+      server.use(http.patch('http://localhost:8000/v1/presentation-policies/:id', async ({ request }) => {
+        expect(await request.json()).toEqual(changes)
+        return HttpResponse.json({ id: 'policy', ...changes })
+      }))
+      await updatePresentationPolicy('policy', { organization_id: 'org-1', ...changes })
     })
 
     it('should delete policy', async () => {
