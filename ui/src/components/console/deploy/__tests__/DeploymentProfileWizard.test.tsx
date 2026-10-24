@@ -394,6 +394,49 @@ describe('DeploymentProfileWizard', () => {
     expect(screen.getByTestId('wizard.deployment.next')).toBeDisabled()
   })
 
+  it('loads later-page active resources before reconciling selections, including after navigating back', async () => {
+    const user = userEvent.setup()
+    const offsets: Record<string, number[]> = { policies: [], templates: [], flows: [] }
+    const active = {
+      policies: { ...mockPolicies.valid, id: 'policy-later', name: 'Later policy' },
+      templates: { id: 'template-later', name: 'Later membership', organization_id: 'org-1', status: 'ACTIVE' },
+      flows: { id: 'flow-later', name: 'Later issuance', organization_id: 'org-1', status: 'ACTIVE', credential_template_id: 'template-later', trust_profile_id: 'trust-1' },
+    }
+    for (const [kind, path] of [['policies', 'presentation-policies'], ['templates', 'credential-templates'], ['flows', 'flows/definitions']] as const) {
+      server.use(http.get(`http://localhost:8000/v1/${path}`, ({ request }) => {
+        const query = new URL(request.url).searchParams
+        expect(query.get('organization_id')).toBe('org-1'); expect(query.get('limit')).toBe('100')
+        const offset = Number(query.get('offset')); offsets[kind].push(offset)
+        return HttpResponse.json(offset === 0
+          ? Array.from({ length: 100 }, (_, index) => ({ id: `${kind}-${index}`, organization_id: 'org-1', status: 'DRAFT' }))
+          : [active[kind]])
+      }))
+    }
+    render(<DeploymentProfileWizard />)
+    await goToRuntimeSettings(user)
+    await waitFor(() => expect(screen.getByTestId('wizard.deployment.next')).not.toBeDisabled())
+    expect(screen.getByTestId('deployment-default-policy-select')).toHaveTextContent('Later policy')
+    await user.click(screen.getByRole('checkbox', { name: 'Later membership' }))
+    await user.click(screen.getByRole('checkbox', { name: /Later issuance/ }))
+    await user.click(screen.getByTestId('wizard.deployment.next'))
+    await user.click(screen.getByTestId('wizard.deployment.back'))
+    await waitFor(() => expect(screen.getByTestId('wizard.deployment.next')).not.toBeDisabled())
+    expect(screen.getByRole('checkbox', { name: 'Later membership' })).toBeChecked()
+    expect(screen.getByRole('checkbox', { name: /Later issuance/ })).toBeChecked()
+    for (const pages of Object.values(offsets)) expect(pages).toEqual([0, 100, 0, 100])
+  })
+
+  it('rejects repeated catalog pages instead of accepting a partial discovery result', async () => {
+    const user = userEvent.setup()
+    server.use(http.get('http://localhost:8000/v1/credential-templates', () => HttpResponse.json(
+      Array.from({ length: 100 }, (_, index) => ({ id: `template-${index}`, name: `Template ${index}`, organization_id: 'org-1', status: 'ACTIVE' }))
+    )))
+    render(<DeploymentProfileWizard />); await goToRuntimeSettings(user)
+    expect(await screen.findByRole('alert')).toHaveTextContent('catalog changed while loading')
+    expect(screen.getByTestId('wizard.deployment.next')).toBeDisabled()
+    expect(screen.queryByRole('checkbox', { name: 'Template 0' })).not.toBeInTheDocument()
+  })
+
   it('should handle API errors', async () => {
     const user = userEvent.setup()
     render(<DeploymentProfileWizard />)

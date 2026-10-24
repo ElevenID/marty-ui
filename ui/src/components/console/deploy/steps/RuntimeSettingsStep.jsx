@@ -35,6 +35,26 @@ const isActivePolicy = (policy) => (
   || policy?.is_active === true
 );
 
+const PAGE_SIZE = 100;
+const MAX_CATALOG_PAGES = 100;
+async function loadCatalog(fetchPage, organizationId, label) {
+  const items = [];
+  const seen = new Set();
+  for (let page = 0; page < MAX_CATALOG_PAGES; page += 1) {
+    const batch = await fetchPage({ organization_id: organizationId, limit: PAGE_SIZE, offset: page * PAGE_SIZE });
+    if (!Array.isArray(batch) || batch.length > PAGE_SIZE
+      || batch.some((item) => !item || !item.id || item.organization_id !== organizationId)) {
+      throw new Error(`${label} catalog is malformed or outside the selected organization.`);
+    }
+    for (const item of batch) {
+      if (seen.has(item.id)) throw new Error(`${label} catalog changed while loading. Refresh before selecting resources.`);
+      seen.add(item.id); items.push(item);
+    }
+    if (batch.length < PAGE_SIZE) return items.filter(isActivePolicy);
+  }
+  throw new Error(`${label} catalog exceeds the console's 10,000-resource discovery limit. No partial catalog was selected.`);
+}
+
 const RuntimeSettingsStep = ({ data, onChange }) => {
   const { t } = useTranslation('console');
   const navigate = useNavigate();
@@ -44,17 +64,12 @@ const RuntimeSettingsStep = ({ data, onChange }) => {
       if (!activeOrgId) {
         throw new Error('Select an organization before loading presentation policies.');
       }
-      const scope = { organization_id: activeOrgId };
       const [policies, templates, flows] = await Promise.all([
-        listPresentationPolicies(scope), listCredentialTemplates(scope), listFlows(scope),
+        loadCatalog(listPresentationPolicies, activeOrgId, 'Policy'),
+        loadCatalog(listCredentialTemplates, activeOrgId, 'Credential template'),
+        loadCatalog(listFlows, activeOrgId, 'Flow'),
       ]);
-      const ownedActive = (items, label) => {
-        if (!Array.isArray(items) || items.some((item) => !item || !item.id || item.organization_id !== activeOrgId)) {
-          throw new Error(`${label} catalog is malformed or outside the selected organization.`);
-        }
-        return items.filter(isActivePolicy);
-      };
-      return { policies: ownedActive(policies, 'Policy'), templates: ownedActive(templates, 'Credential template'), flows: ownedActive(flows, 'Flow') };
+      return { policies, templates, flows };
     },
     [activeOrgId]
   );
