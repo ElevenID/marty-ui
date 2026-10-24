@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router';
 import {
   Alert,
@@ -22,6 +22,7 @@ import SaveIcon from '@mui/icons-material/Save';
 
 import { useConsole } from '../../../contexts/ConsoleContext';
 import { createFlow, getFlowCapabilities } from '../../../services/flowsApi';
+import { listCredentialTemplates } from '../../../services/presentationPolicyApi';
 
 const NEW_STEP = { action: '', description: '', step_id: '' };
 
@@ -33,10 +34,16 @@ function buildTransitions(steps) {
   }));
 }
 
-const CustomFlowBuilder = () => {
+const CustomFlowBuilderForm = ({ organizationId }) => {
   const navigate = useNavigate();
-  const { activeOrgId: organizationId } = useConsole();
+  const mounted = useRef(true);
   const [capabilities, setCapabilities] = useState(null);
+  const [capabilityError, setCapabilityError] = useState('');
+  const [capabilityAttempt, setCapabilityAttempt] = useState(0);
+  const [applicationApproved, setApplicationApproved] = useState(false);
+  const [templates, setTemplates] = useState({ items: [], loading: false, error: '' });
+  const [templateAttempt, setTemplateAttempt] = useState(0);
+  const [templateId, setTemplateId] = useState('');
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({
@@ -52,21 +59,65 @@ const CustomFlowBuilder = () => {
   });
 
   useEffect(() => {
-    getFlowCapabilities().then(setCapabilities).catch((cause) => setError(cause.message));
+    mounted.current = true;
+    return () => { mounted.current = false; };
   }, []);
 
-  const valid = useMemo(() => {
-    const ids = form.steps.map((step) => step.step_id);
-    return Boolean(
+  useEffect(() => {
+    let current = true;
+    setCapabilities(null); setCapabilityError('');
+    getFlowCapabilities().then((value) => { if (current) setCapabilities(value); })
+      .catch((cause) => { if (current) setCapabilityError(cause.message || 'Flow capabilities could not be loaded.'); });
+    return () => { current = false; };
+  }, [capabilityAttempt]);
+
+  useEffect(() => {
+    let current = true;
+    setTemplateId('');
+    setTemplates({ items: [], loading: applicationApproved && Boolean(organizationId), error: '' });
+    if (applicationApproved && organizationId) {
+      (async () => {
+        const items = []; const seen = new Set();
+        for (let offset = 0; current; offset += 100) {
+          const page = await listCredentialTemplates({ organization_id: organizationId, limit: 100, offset });
+          if (!current) return;
+          if (!Array.isArray(page)) throw new Error('Credential template catalog is malformed.');
+          for (const item of page) {
+            if (!item?.id || seen.has(item.id)) throw new Error('Credential template pagination did not advance.');
+            seen.add(item.id); items.push(item);
+          }
+          if (page.length < 100) break;
+        }
+        if (current) setTemplates({ items: items.filter((item) => item.organization_id === organizationId
+          && String(item.status).toUpperCase() === 'ACTIVE' && item.issuance_protocol === 'OID4VCI_PRE_AUTH'
+          && item.trust_profile_id), loading: false, error: '' });
+      })().catch((cause) => {
+        if (current) setTemplates({ items: [], loading: false, error: cause.message || 'Credential templates could not be loaded.' });
+      });
+    }
+    return () => { current = false; };
+  }, [applicationApproved, organizationId, templateAttempt]);
+
+  const applicationSupported = capabilities?.flow_types?.includes('custom')
+    && capabilities?.standard_flow_types?.includes('oid4vci_pre_authorized') && capabilities?.triggers?.includes('WEBHOOK');
+  const selectedTemplate = templates.items.find((item) => item.id === templateId);
+  const effectiveSteps = applicationApproved ? [{ action: 'issuance.issue', description: '', step_id: 'issue' }] : form.steps;
+
+  const ids = effectiveSteps.map((step) => step.step_id);
+  const valid = Boolean(
       organizationId
+      && !saving
+      && capabilities?.flow_types?.includes('custom')
+      && capabilities?.standard_flow_types?.includes(form.baseType)
+      && (applicationApproved || capabilities?.triggers?.includes('API_CALL'))
+      && (!applicationApproved || (applicationSupported && !templates.loading && !templates.error && selectedTemplate))
       && form.name.trim()
       && form.extensionUri.includes(':')
       && form.extensionVersion.trim()
-      && form.steps.length
-      && form.steps.every((step) => /^[a-z][a-z0-9_-]*$/.test(step.step_id) && /^[a-z][a-z0-9_.:-]*$/.test(step.action))
+      && effectiveSteps.length
+      && effectiveSteps.every((step) => /^[a-z][a-z0-9_-]*$/.test(step.step_id) && /^[a-z][a-z0-9_.:-]*$/.test(step.action))
       && ids.length === new Set(ids).size
     );
-  }, [form, organizationId]);
 
   const updateStep = (index, updates) => {
     setForm((current) => ({
@@ -87,28 +138,31 @@ const CustomFlowBuilder = () => {
         flow_type: 'custom',
         approval_strategy: 'AUTO',
         hooks: {},
-        trigger: { trigger_type: 'API_CALL', config: {} },
+        trigger: applicationApproved
+          ? { trigger_type: 'WEBHOOK', config: { event_type: 'APPLICATION_APPROVED' } }
+          : { trigger_type: 'API_CALL', config: {} },
+        ...(applicationApproved ? { credential_template_id: selectedTemplate.id, trust_profile_id: selectedTemplate.trust_profile_id } : {}),
         deployment_profile_ids: [],
         extension: {
           extension_uri: form.extensionUri.trim(),
           extension_version: form.extensionVersion.trim(),
           extends_flow_type: form.baseType,
-          entry_step_id: form.steps[0].step_id,
-          steps: form.steps.map((step) => ({
+          entry_step_id: effectiveSteps[0].step_id,
+          steps: effectiveSteps.map((step) => ({
             step_id: step.step_id,
             action: step.action,
             ...(step.description.trim() ? { description: step.description.trim() } : {}),
             config: {},
           })),
-          transitions: buildTransitions(form.steps),
+          transitions: buildTransitions(effectiveSteps),
           config: {},
         },
       });
-      navigate(`/console/org/flows/definitions/${flow.id}`);
+      if (mounted.current) navigate(`/console/org/flows/definitions/${flow.id}`);
     } catch (cause) {
-      setError(cause.message || 'Custom flow could not be created.');
+      if (mounted.current) setError(cause.message || 'Custom flow could not be created.');
     } finally {
-      setSaving(false);
+      if (mounted.current) setSaving(false);
     }
   };
 
@@ -120,14 +174,28 @@ const CustomFlowBuilder = () => {
       <Typography variant="h4" gutterBottom>Custom flow extension</Typography>
       <Typography color="text.secondary" sx={{ mb: 3 }}>MIP 0.4 extension envelope</Typography>
       {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
+      {capabilityError && <Alert severity="error" sx={{ mb: 2 }} action={<Button onClick={() => setCapabilityAttempt((n) => n + 1)}>Retry capabilities</Button>}>{capabilityError}</Alert>}
 
       <Paper variant="outlined" sx={{ p: { xs: 2, sm: 3 } }}>
         <Stack spacing={2.5}>
+          <FormControl fullWidth>
+            <InputLabel id="custom-flow-setup-label">Flow setup</InputLabel>
+            <Select labelId="custom-flow-setup-label" label="Flow setup" value={applicationApproved ? 'application-approved' : 'api'} disabled={saving}
+              onChange={(event) => {
+                const approved = event.target.value === 'application-approved';
+                setApplicationApproved(approved); setTemplateId('');
+                if (approved) setForm((value) => ({ ...value, baseType: 'oid4vci_pre_authorized' }));
+              }}>
+              <MenuItem value="api">Custom API flow</MenuItem>
+              <MenuItem value="application-approved" disabled={!applicationSupported}>Approved application issuance</MenuItem>
+            </Select>
+          </FormControl>
+          {applicationApproved && <Alert severity="info">Issue the selected credential after a trusted application approval. This flow uses the applicant service approval event; creating a draft does not issue a credential.</Alert>}
           <TextField required label="Flow name" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} />
           <TextField multiline minRows={2} label="Description" value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} />
           <FormControl fullWidth>
-            <InputLabel>Extends standard flow</InputLabel>
-            <Select value={form.baseType} label="Extends standard flow" onChange={(event) => setForm({ ...form, baseType: event.target.value })}>
+            <InputLabel id="custom-flow-base-label">Extends standard flow</InputLabel>
+            <Select labelId="custom-flow-base-label" value={form.baseType} label="Extends standard flow" disabled={applicationApproved || saving} onChange={(event) => setForm({ ...form, baseType: event.target.value })}>
               {(capabilities?.standard_flow_types || []).map((flowType) => <MenuItem key={flowType} value={flowType}>{flowType}</MenuItem>)}
             </Select>
           </FormControl>
@@ -136,7 +204,17 @@ const CustomFlowBuilder = () => {
             <TextField fullWidth required label="Version" value={form.extensionVersion} onChange={(event) => setForm({ ...form, extensionVersion: event.target.value })} />
           </Stack>
 
-          <Box>
+          {applicationApproved ? <Box>
+            {templates.error && <Alert severity="error" action={<Button onClick={() => setTemplateAttempt((n) => n + 1)}>Retry templates</Button>}>{templates.error}</Alert>}
+            <FormControl fullWidth required sx={{ mt: 2 }} disabled={templates.loading || saving || Boolean(templates.error)}>
+              <InputLabel id="approved-flow-template-label">Credential template</InputLabel>
+              <Select labelId="approved-flow-template-label" label="Credential template" value={templateId} onChange={(event) => setTemplateId(event.target.value)}>
+                {templates.items.map((item) => <MenuItem key={item.id} value={item.id}>{item.name || item.id}</MenuItem>)}
+              </Select>
+            </FormControl>
+            {!templates.loading && !templates.error && templates.items.length === 0 && <Alert severity="warning" sx={{ mt: 2 }}>No active pre-authorized credential template with a trust profile is available in this organization.</Alert>}
+            <Typography sx={{ mt: 2 }}>Step: Issue credential</Typography>
+          </Box> : <Box>
             <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1.5 }}>
               <Typography variant="subtitle1">Steps</Typography>
               <Button size="small" startIcon={<AddIcon />} onClick={() => setForm({ ...form, steps: [...form.steps, { ...NEW_STEP }] })}>Add step</Button>
@@ -157,7 +235,7 @@ const CustomFlowBuilder = () => {
                 </Stack>
               ))}
             </Stack>
-          </Box>
+          </Box>}
 
           <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}>
             <Button variant="contained" startIcon={<SaveIcon />} disabled={!valid || saving} onClick={save}>
@@ -170,4 +248,7 @@ const CustomFlowBuilder = () => {
   );
 };
 
-export default CustomFlowBuilder;
+export default function CustomFlowBuilder() {
+  const { activeOrgId: organizationId } = useConsole();
+  return <CustomFlowBuilderForm key={organizationId || 'no-organization'} organizationId={organizationId} />;
+}

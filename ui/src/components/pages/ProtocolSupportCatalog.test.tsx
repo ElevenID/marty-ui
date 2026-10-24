@@ -29,6 +29,8 @@ describe('ProtocolSupportCatalog', () => {
     expect(screen.getByText('Machine Identity')).toBeInTheDocument();
     expect(screen.getByText('Machine Authentication Policy')).toBeInTheDocument();
     expect(screen.getByText('Authorization Decision Receipt')).toBeInTheDocument();
+    expect(screen.getByText(/Organization-scoped registry resolution and pinned assertion methods are exposed/)).toBeInTheDocument();
+    expect(screen.queryByText(/separate integration branch/)).not.toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'machine-readable catalog' })).toHaveAttribute('href', '/v1/protocol-support');
   });
 

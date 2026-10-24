@@ -152,6 +152,99 @@ fn opt_in_image_lock_pins_the_staged_bundle_and_rejects_release_mismatch() {
         Some(plugin)
     );
 
+    // Exercise actual ZIP publication through the explicit nightly path.
+    use sha2::{Digest, Sha256};
+    use std::process::Command;
+    fs::write(
+        &release_path,
+        r#"{"release":"marty-ui@1.2.3","release_state":"eligible"}"#,
+    )
+    .unwrap();
+    for args in [
+        vec!["init", "--quiet"],
+        vec!["add", "."],
+        vec![
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "--quiet",
+            "-m",
+            "fixture",
+        ],
+    ] {
+        assert!(Command::new("git")
+            .arg("-C")
+            .arg(&options.repo)
+            .args(args)
+            .status()
+            .unwrap()
+            .success());
+    }
+    let source = Command::new("git")
+        .arg("-C")
+        .arg(&options.repo)
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .unwrap();
+    let version = "1.2.3-nightly.20261024.123";
+    let candidate_path = root.path().join("candidate.json");
+    let candidate = json!({"schema":"elevenid.nightly-installation-candidate/v1", "state":"prepared",
+        "version":version,"tag":format!("v{version}"),"claim_run_id":"123",
+        "source_sha":String::from_utf8_lossy(&source.stdout).trim(),
+        "stack_lock_sha256":format!("sha256:{:x}",Sha256::digest(fs::read(&release_path).unwrap()))});
+    fs::write(&candidate_path, candidate.to_string()).unwrap();
+    let mut nightly_lock = image_lock.clone();
+    nightly_lock["release"] = json!(format!("marty-ui@{version}"));
+    fs::write(&lock_path, nightly_lock.to_string()).unwrap();
+    options.output = root.path().join("nightly-bundle");
+    options.archive = Some(root.path().join("nightly.zip"));
+    assert!(package_with_image_lock(&options, render, &lock_path)
+        .unwrap_err()
+        .contains("release differs"));
+    let published = marty_selfhost_bundle::package_nightly_with_image_lock(
+        &options,
+        render,
+        &lock_path,
+        &candidate_path,
+    )
+    .unwrap();
+    let mut zip =
+        zip::ZipArchive::new(fs::File::open(published.archive.unwrap()).unwrap()).unwrap();
+    let mut embedded = String::new();
+    zip.by_name("nightly-bundle/.marty-selfhost-images.json")
+        .unwrap()
+        .read_to_string(&mut embedded)
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&embedded).unwrap(),
+        nightly_lock
+    );
+    options.output = root.path().join("bad-nightly");
+    options.archive = None;
+    for (field, bad) in [
+        ("source_sha", "wrong"),
+        ("stack_lock_sha256", "sha256:wrong"),
+        ("claim_run_id", "124"),
+        ("version", "1.2.4-nightly.20261024.123"),
+        ("schema", "elevenid.release-transaction/v1"),
+    ] {
+        let mut invalid = candidate.clone();
+        invalid[field] = json!(bad);
+        fs::write(&candidate_path, invalid.to_string()).unwrap();
+        assert!(marty_selfhost_bundle::package_nightly_with_image_lock(
+            &options,
+            render,
+            &lock_path,
+            &candidate_path
+        )
+        .is_err());
+        assert!(!options.output.exists());
+    }
+    // Restore the stable fixture for its remaining rejection cases.
+    fs::write(&release_path, r#"{"release":"marty-ui@1.2.3"}"#).unwrap();
+
     options.output = root.path().join("rejected-bundle");
     options.archive = None;
     let mut wrong_release = image_lock.clone();
