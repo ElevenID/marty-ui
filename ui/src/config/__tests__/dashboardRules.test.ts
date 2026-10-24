@@ -24,6 +24,7 @@ const templateIssuerFields = {
 }
 
 const readyTrustDependencies = {
+  complianceProfiles: [{ id: 'compliance-1', status: 'ACTIVE' }],
   signingKeys: [{ id: 'key_1', name: 'Issuer Key' }],
   issuerIdentities: [activeIssuerIdentity],
   keyManagementConfig: {
@@ -34,10 +35,11 @@ const readyTrustDependencies = {
 
 describe('dashboardRules', () => {
   describe('computeSetupReadiness', () => {
-    it('should surface missing active compliance profiles when lifecycle reports none', () => {
+    it('blocks an empty native catalog even when lifecycle metadata names a profile', () => {
       const data = {
         ...readyTrustDependencies,
-        lifecycle: { complianceProfiles: [] },
+        complianceProfiles: [],
+        lifecycle: { complianceProfiles: ['ENTERPRISE_VC'] },
         trustProfiles: [],
         templates: [],
         policies: [],
@@ -57,10 +59,10 @@ describe('dashboardRules', () => {
       ]))
     })
 
-    it('should mark compliance ready when lifecycle reports an active profile', () => {
+    it('uses native active profiles even when lifecycle metadata is empty', () => {
       const data = {
         ...readyTrustDependencies,
-        lifecycle: { complianceProfiles: ['ENTERPRISE_VC'] },
+        lifecycle: { complianceProfiles: [] },
         trustProfiles: [],
         templates: [],
         policies: [],
@@ -73,6 +75,26 @@ describe('dashboardRules', () => {
 
       expect(result.compliance.state).toBe(ReadinessState.READY)
       expect(result.compliance.message).toContain('1 active Compliance Profile')
+    })
+
+    it('requires explicit native ACTIVE status and does not count drafts or legacy strings', () => {
+      const result = computeSetupReadiness({
+        ...readyTrustDependencies,
+        complianceProfiles: [{ id: 'draft', status: 'DRAFT' }, { id: 'unknown' }, 'ENTERPRISE_VC'],
+      })
+      expect(result.compliance.state).toBe(ReadinessState.BLOCKED)
+      expect(result.compliance.message).toBe('No active Compliance Profiles')
+    })
+
+    it('surfaces catalog load failures and ignores unrelated lifecycle failures', () => {
+      const result = computeSetupReadiness({
+        ...readyTrustDependencies,
+        resourceErrors: { complianceProfiles: { message_id: 'profiles-unavailable' } },
+      })
+      expect(result.compliance.state).toBe(ReadinessState.BLOCKED)
+      expect(result.compliance.message).toContain('profiles-unavailable')
+      expect(computeSetupReadiness({ ...readyTrustDependencies, dashboardErrors: { lifecycle: new Error('unavailable') } }).compliance.state)
+        .toBe(ReadinessState.READY)
     })
 
     it('should return all MISSING when org is empty', () => {

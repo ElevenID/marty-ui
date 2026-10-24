@@ -3,6 +3,7 @@ import { act, renderHook } from '@testing-library/react'
 import { useDashboardData } from '../useDashboardData'
 
 const {
+  mockListComplianceProfiles,
   mockListTrustProfiles,
   mockListCredentialTemplates,
   mockListApplicationTemplates,
@@ -25,6 +26,7 @@ const {
   mockUseAuth,
   mockUseConsole,
 } = vi.hoisted(() => ({
+  mockListComplianceProfiles: vi.fn(),
   mockListTrustProfiles: vi.fn(),
   mockListCredentialTemplates: vi.fn(),
   mockListApplicationTemplates: vi.fn(),
@@ -53,6 +55,10 @@ vi.mock('../../services/presentationPolicyApi', () => ({
   listCredentialTemplates: (...args: unknown[]) => mockListCredentialTemplates(...args),
   listPresentationPolicies: (...args: unknown[]) => mockListPresentationPolicies(...args),
   listRevocationProfiles: (...args: unknown[]) => mockListRevocationProfiles(...args),
+}))
+
+vi.mock('../../services/complianceProfilesApi', () => ({
+  listComplianceProfiles: (...args: unknown[]) => mockListComplianceProfiles(...args),
 }))
 
 vi.mock('../../services/applicationTemplatesApi', () => ({
@@ -115,6 +121,7 @@ describe('useDashboardData', () => {
 
     mockUseAuth.mockReturnValue({ organizationId: 'auth_org' })
     mockUseConsole.mockReturnValue({ activeOrgId: 'org_live' })
+    mockListComplianceProfiles.mockResolvedValue([])
     mockListTrustProfiles.mockResolvedValue([])
     mockListCredentialTemplates.mockResolvedValue([])
     mockListApplicationTemplates.mockResolvedValue([])
@@ -226,6 +233,7 @@ describe('useDashboardData', () => {
     expect(mockListSigningKeys).not.toHaveBeenCalled()
     expect(mockListApplicationTemplates).toHaveBeenCalledWith('org_live')
     expect(mockListRevocationProfiles).toHaveBeenCalledWith({ organization_id: 'org_live' })
+    expect(mockListComplianceProfiles).toHaveBeenCalledWith({ organization_id: 'org_live', limit: 100, offset: 0 })
     expect(mockListPublicIssuerIdentities).toHaveBeenCalledWith({ organization_id: 'org_live' })
     expect(mockGetKeyManagementConfig).not.toHaveBeenCalled()
     expect(result.current.data).not.toHaveProperty('signingKeys')
@@ -255,7 +263,31 @@ describe('useDashboardData', () => {
     expect(result.current.data).not.toHaveProperty('signingKeys')
     expect(result.current.data.teamData).toBeNull()
     expect(mockListTrustProfiles).not.toHaveBeenCalled()
+    expect(mockListComplianceProfiles).not.toHaveBeenCalled()
     expect(mockListApiKeys).not.toHaveBeenCalled()
     expect(mockGetTeamSnapshot).not.toHaveBeenCalled()
+  })
+
+  it('loads native profiles beyond the first page independently of lifecycle metadata', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => ({ status: 'healthy' }) }))
+    const first = Array.from({ length: 100 }, (_, index) => ({ id: `draft-${index}`, status: 'DRAFT' }))
+    const active = { id: 'active-profile', organization_id: 'org_live', status: 'ACTIVE' }
+    mockListComplianceProfiles.mockResolvedValueOnce(first).mockResolvedValueOnce([active])
+    const { result } = renderHook(() => useDashboardData())
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve() })
+    expect(mockListComplianceProfiles).toHaveBeenLastCalledWith({ organization_id: 'org_live', limit: 100, offset: 100 })
+    expect(result.current.data.complianceProfiles).toEqual([...first, active])
+    expect(result.current.data.lifecycle.complianceProfiles).toEqual([])
+    expect(result.current.data.resourceErrors.complianceProfiles).toBeNull()
+  })
+
+  it('reports a failed profile page without exposing an incomplete catalog as ready', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => ({ status: 'healthy' }) }))
+    mockListComplianceProfiles.mockResolvedValueOnce(Array.from({ length: 100 }, (_, index) => ({ id: `profile-${index}`, status: 'ACTIVE' })))
+      .mockRejectedValueOnce(new Error('profile page unavailable'))
+    const { result } = renderHook(() => useDashboardData())
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve() })
+    expect(result.current.data.complianceProfiles).toEqual([])
+    expect(result.current.data.resourceErrors.complianceProfiles?.message).toBe('profile page unavailable')
   })
 })
