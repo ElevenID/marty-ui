@@ -203,11 +203,20 @@ pub(crate) fn add_public_native_extensions(table: &mut RouteTable) -> Result<(),
     validate_native_extensions(&coverage)
         .map_err(|error| PlatformError::InvalidConfiguration(error.into()))?;
     for extension in coverage.native_extension_http {
-        // Reuse the exact validated route object, including method, upstream,
-        // authentication and tags; do not maintain a second extension list.
+        // Reuse the validated native route and the public gateway's canonical
+        // ownership policy. The upstream selector's authentication-free metadata
+        // is not an authorization policy for newly registered public routes.
         let request = GatewayRequest::new(extension.method, extension.path, 0);
         let matched = NATIVE_ROUTES.find(&request)?;
-        table.add(matched.route.clone())?;
+        let mut route = matched.route.clone();
+        route.auth_required =
+            crate::contract::route_ownership(&route.pattern).requires_authentication;
+        route.authentication_type = if route.auth_required {
+            AuthenticationType::Jwt
+        } else {
+            AuthenticationType::None
+        };
+        table.add(route)?;
     }
     Ok(())
 }
@@ -373,6 +382,19 @@ mod tests {
     fn canvas_revocation_recovery_is_an_explicit_native_post_extension() {
         let path = "/v1/integrations/canvas/evidence-policy-reviews/review-1/reconcile-revocation";
         assert!(is_native_http(HttpMethod::Post, path));
+        let contract = crate::contract::GatewayContract::load().unwrap();
+        for table in [
+            contract.route_table().unwrap(),
+            contract.proxy_route_table().unwrap(),
+        ] {
+            let request = GatewayRequest::new(HttpMethod::Post, path, 0);
+            let matched = table.find(&request).unwrap();
+            assert_eq!(matched.route.upstream_service, NATIVE_SERVICE);
+            assert!(matched.route.auth_required);
+            assert_eq!(matched.route.authentication_type, AuthenticationType::Jwt);
+        }
+        assert!(!crate::authorization::skips_tenant_authorization(path));
+        assert!(crate::contract::requires_issuance_service_auth(path));
         for method in [HttpMethod::Get, HttpMethod::Put, HttpMethod::Delete] {
             assert!(!is_native_http(method, path));
         }
