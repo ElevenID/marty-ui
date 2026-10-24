@@ -1,11 +1,29 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { runCanvasCapture, requireJobBinding, requireIssuedBinding, requireCaptureMutationReconciliation } = require('./canvas-capture-sequence');
+const { runCanvasCapture, requireJobBinding, requireIssuedBinding, requireCaptureMutationReconciliation,
+  requireCaptureWindow } = require('./canvas-capture-sequence');
 const stock = require('./run-canvas-oss-standard-contract');
 const APP = '10000000-0000-4000-8000-000000000001';
 const scope = { application_id: APP, organization_id: 'org', binding_id: 'binding',
   platform_id: 'platform', credential_template_id: 'template' };
+
+test('capture landmarks bind the owned wallet only to receipt/verification and reject foreign windows', () => {
+  const canvasPage = {}, walletPage = {}, popup = {}, foreign = {};
+  const owned = { canvasPage, walletPage, popups: [popup] };
+  assert.equal(requireCaptureWindow(walletPage, 'wallet-receipt-and-verification', owned).walletPage, true);
+  assert.equal(requireCaptureWindow(canvasPage, 'approved-still-unsigned', owned).initialPage, true);
+  assert.equal(requireCaptureWindow(popup, 'correction-review-open', owned).observedPopup, true);
+  assert.throws(() => requireCaptureWindow(walletPage, 'approved-still-unsigned', owned));
+  for (const page of [canvasPage, popup, foreign, undefined]) {
+    assert.throws(() => requireCaptureWindow(page, 'wallet-receipt-and-verification', owned));
+  }
+  assert.throws(() => requireCaptureWindow(foreign, 'approved-still-unsigned', owned));
+  assert.throws(() => requireCaptureWindow(walletPage, 'wallet-receipt-and-verification',
+    { ...owned, popups: [popup, {}, {}] }));
+  assert.throws(() => requireCaptureWindow(undefined, 'wallet-receipt-and-verification',
+    { ...owned, walletPage: undefined }));
+});
 
 test('foreign, stale, replayed and unsuccessful terminal jobs cannot bind a capture', () => {
   const job = { ...scope, id: 'job', status: 'succeeded', created_at: new Date(10000).toISOString() };

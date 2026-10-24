@@ -13,6 +13,17 @@ const headFingerprint = event => hash(event.headRevisions.map(({ requirementId, 
 const same = (actual, expected, label) => assert.equal(String(actual || ''), String(expected), label);
 const enc = encodeURIComponent;
 
+function requireCaptureWindow(page, phase, { canvasPage, walletPage, popups }) {
+  const observation = { popupCount: popups.length, initialPage: page === canvasPage,
+    observedPopup: popups.includes(page), walletPage: page === walletPage };
+  const expectedPage = phase === 'wallet-receipt-and-verification'
+    ? Boolean(walletPage) && page === walletPage
+    : Boolean(canvasPage) && (page === canvasPage || popups.includes(page));
+  assert.ok(page && popups.length <= 2 && expectedPage,
+    'Uncaptured or unexpected Canvas launch window');
+  return observation;
+}
+
 function requireJobBinding(sync, scope, seen, after) {
   const job = sync?.job;
   same(job?.id, sync?.body?.sync?.job_id, 'Enqueued and completed jobs must match');
@@ -365,4 +376,5 @@ async function runCanvasCapture({ setup, page, adminPage, walletPage, scenario,
   return { page, applicationId, transactionId, credentialId };
 }
 
-module.exports = { requireJobBinding, requireIssuedBinding, requireCaptureMutationReconciliation, runCanvasCapture, readLearnerStatus };
+module.exports = { requireJobBinding, requireIssuedBinding, requireCaptureMutationReconciliation,
+  requireCaptureWindow, runCanvasCapture, readLearnerStatus };

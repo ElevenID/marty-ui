@@ -7,7 +7,7 @@ const assert = require('node:assert/strict');
 const { randomUUID, createHash } = require('node:crypto');
 const { chromium } = require('@playwright/test');
 const stock = require('./run-canvas-oss-standard-contract');
-const { runCanvasCapture, requireCaptureMutationReconciliation } = require('./canvas-capture-sequence');
+const { runCanvasCapture, requireCaptureMutationReconciliation, requireCaptureWindow } = require('./canvas-capture-sequence');
 const { acquireWalletSession } = require('./demo-wallet-session');
 const { login, selectOrg } = require('./audit-beta-credential-lifecycle');
 const { VIDEO_SIZE, finalizeVideo, showStep, showVerificationResult } = require('./demo-recording');
@@ -162,10 +162,7 @@ async function main() {
     evidence.bindPage(walletPage);
     if (recording) videos.set(`${scenario}-wallet.webm`, walletPage.video());
     const checkpoint = async (page, phase, facts) => {
-      report.windowObservation = { popupCount: popups.length,
-        initialPage: page === canvasPage, observedPopup: popups.includes(page) };
-      assert.ok(popups.length <= 2 && (page === canvasPage || popups.includes(page)),
-        'Uncaptured or unexpected Canvas launch window');
+      report.windowObservation = requireCaptureWindow(page, phase, { canvasPage, walletPage, popups });
       report.landmarks ||= [];
       report.landmarks.push({ phase, observedAt: new Date().toISOString(), facts,
         alignment: 'DRIVER_LANDMARK_ONLY_REQUIRES_MEASURED_SOURCE_FRAMES' });
@@ -237,12 +234,11 @@ async function main() {
     for (const context of contexts) await cleanup('recording-context', () => context.close());
     for (const [file, video] of videos) await cleanup('recording-finalization', () => finalizeVideo(video, dir, file));
     if (browser) await cleanup('browser', () => browser.close());
-    report.cleanup = { complete: cleanupComplete };
     report.completedAt = new Date().toISOString();
     report.status = complete ? 'PASS' : 'FAIL';
     report.functionalReady = complete;
     report.operations_verified = complete;
-    report.cleanup = {complete:complete && report.resourceRetirementConfirmed === true};
+    report.cleanup = { complete: cleanupComplete && report.resourceRetirementConfirmed === true };
     report.releaseReady = complete && !overlay;
     if (overlay) {
       report.qualification = 'LOCAL_MIXED_RUNTIME_FUNCTIONAL_OPERATIONS';
