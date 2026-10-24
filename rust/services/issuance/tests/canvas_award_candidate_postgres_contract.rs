@@ -1974,6 +1974,184 @@ async fn head_id(pool: &sqlx::PgPool) -> String {
     .unwrap()
 }
 
+// Real database recovery proof; external status publication is deliberately
+// controlled here and must not be reported as KMS or demo qualification.
+#[derive(Default)]
+struct ReviewRecoveryPublication {
+    fail: std::sync::atomic::AtomicBool,
+    calls: AtomicUsize,
+}
+
+#[async_trait]
+impl marty_issuance_service::credential_management::CredentialStatusPublisher
+    for ReviewRecoveryPublication
+{
+    async fn publish(
+        &self,
+        credential: &marty_issuance_service::credential_management::ManagedCredential,
+        action: marty_issuance_service::credential_management::CredentialLifecycleAction,
+        reason: Option<&str>,
+    ) -> Result<(), marty_issuance_service::credential_management::CredentialManagementPortError>
+    {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        assert_eq!(credential.id, "review-recovery-credential");
+        assert_eq!(action.as_str(), "revoke");
+        assert_eq!(reason, Some("original revocation reason"));
+        if self.fail.load(Ordering::SeqCst) {
+            return Err(
+                marty_issuance_service::credential_management::CredentialManagementPortError(
+                    "controlled publication failure".into(),
+                ),
+            );
+        }
+        Ok(())
+    }
+}
+
+#[derive(Default)]
+struct ReviewRecoveryEvents(AtomicUsize);
+
+#[async_trait]
+impl marty_issuance_service::credential_management::CredentialLifecycleEventSink
+    for ReviewRecoveryEvents
+{
+    async fn emit(
+        &self,
+        _: marty_issuance_service::credential_management::CredentialLifecycleEvent,
+    ) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+#[tokio::test]
+async fn revoked_canvas_review_recovery_is_scoped_durable_and_retries_publication() {
+    use marty_issuance_service::{
+        canvas_review_resolution::{CanvasReviewResolver, ReviewAction},
+        credential_management::CredentialManagementService,
+        credential_management_postgres::PostgresCredentialManagementRepository,
+    };
+    let Some(url) = database_url() else {
+        return;
+    };
+    let pool = PgPoolOptions::new()
+        .max_connections(3)
+        .connect(&url)
+        .await
+        .unwrap();
+    setup_schema(&pool).await;
+    for statement in [
+        "CREATE TABLE issuance_service.issued_credentials (
+            id text PRIMARY KEY, transaction_id text NOT NULL, organization_id text NOT NULL,
+            credential_template_id text NOT NULL, issuer_did text, status text NOT NULL,
+            status_updated_at timestamptz NOT NULL, revoked boolean NOT NULL,
+            revoked_at timestamptz, revocation_reason text, revocation_profile_id text,
+            status_list_entries json NOT NULL)",
+        "CREATE TABLE issuance_service.credential_delivery_records (
+            credential_id text, organization_id text, delivery_target text,
+            metadata jsonb, updated_at timestamptz)",
+        "INSERT INTO issuance_service.applications
+            (id,organization_id,application_template_id,applicant_identifier,form_data,integration_context,status)
+            VALUES ('review-recovery-application','review-recovery-org','template','learner','{}','{}','credentialed')",
+        "INSERT INTO issuance_service.issued_credentials VALUES
+            ('review-recovery-credential','transaction','review-recovery-org','template',NULL,'revoked',
+             clock_timestamp(),true,clock_timestamp(),'original revocation reason',NULL,'[]')",
+        "INSERT INTO issuance_service.evidence_policy_reviews
+            (id,organization_id,application_id,credential_id,binding_id,status,prior_decision,current_decision,created_at,updated_at)
+            VALUES ('review-recovery','review-recovery-org','review-recovery-application','review-recovery-credential',
+                    'binding','open','{}','{}',clock_timestamp(),clock_timestamp()),
+                   ('unrelated-review','foreign-org','unrelated-application','unrelated-credential',
+                    'foreign-binding','open','{}','{}',clock_timestamp(),clock_timestamp())",
+    ] { sqlx::query(statement).execute(&pool).await.unwrap(); }
+    let publication = Arc::new(ReviewRecoveryPublication::default());
+    let events = Arc::new(ReviewRecoveryEvents::default());
+    let lifecycle = CredentialManagementService::new(
+        Arc::new(PostgresCredentialManagementRepository::new(pool.clone())),
+        publication.clone(),
+        events.clone(),
+    );
+    let resolver = CanvasReviewResolver::new(pool.clone(), Some(Arc::new(lifecycle)));
+    assert!(
+        resolver
+            .resolve(
+                "foreign-org",
+                "review-recovery",
+                ReviewAction::Revoke,
+                Some("cleanup"),
+                Some("actor")
+            )
+            .await
+            .is_err()
+    );
+    assert_eq!(publication.calls.load(Ordering::SeqCst), 0);
+    publication.fail.store(true, Ordering::SeqCst);
+    assert!(
+        resolver
+            .resolve(
+                "review-recovery-org",
+                "review-recovery",
+                ReviewAction::Revoke,
+                Some("cleanup"),
+                Some("actor")
+            )
+            .await
+            .is_err()
+    );
+    let current: Value = sqlx::query_scalar("SELECT to_jsonb(r) FROM issuance_service.evidence_policy_reviews r WHERE id='review-recovery'")
+        .fetch_one(&pool).await.unwrap();
+    assert_eq!(current["status"], "open");
+    assert!(
+        current["resolution_claim_token"].is_null(),
+        "failed publication releases the exact claim for retry"
+    );
+    assert_eq!(table_count(&pool, "issuance_events").await, 0);
+    publication.fail.store(false, Ordering::SeqCst);
+    let resolved = resolver
+        .resolve(
+            "review-recovery-org",
+            "review-recovery",
+            ReviewAction::Revoke,
+            Some("cleanup"),
+            Some("actor"),
+        )
+        .await;
+    assert!(
+        resolved.is_ok(),
+        "existing revoked credential must not strand its review"
+    );
+    let resolved = resolved.ok().unwrap();
+    assert_eq!(resolved["status"], "revoked");
+    assert_eq!(resolved["resolution_action"], "revoke");
+    assert_eq!(resolved["resolved_by"], "actor");
+    assert!(resolved["resolution_claim_token"].is_null());
+    assert_eq!(table_count(&pool, "issuance_events").await, 1);
+    assert_eq!(publication.calls.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        events.0.load(Ordering::SeqCst),
+        0,
+        "no duplicate credential event"
+    );
+    assert!(
+        resolver
+            .resolve(
+                "review-recovery-org",
+                "review-recovery",
+                ReviewAction::Revoke,
+                Some("cleanup"),
+                Some("actor")
+            )
+            .await
+            .is_err()
+    );
+    assert_eq!(publication.calls.load(Ordering::SeqCst), 2);
+    let unrelated: String = sqlx::query_scalar(
+        "SELECT status FROM issuance_service.evidence_policy_reviews WHERE id='unrelated-review'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(unrelated, "open");
+}
+
 async fn setup_schema(pool: &sqlx::PgPool) {
     // Reuse the owner's actual DDL without adding a cross-service Rust edge.
     // The Organization migration contract runs afterward on this database.

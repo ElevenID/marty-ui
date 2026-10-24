@@ -214,11 +214,14 @@ async function main() {
     }
     if (session) await cleanup('wallet-session', () => session.close());
     const state = setup || setupState;
-    const retired = await cleanup('owned-issuance-retirement', () => stock.retireCanvasApplication({
-      marty: state.marty, applicationId, organizationId: state.organizationId,
-      credentialTemplateId: state.templates?.credential?.id, transactionId: report.transactionId,
-      reconcile: () => requireCaptureMutationReconciliation(report),
-    }));
+    const retired = await cleanup('owned-issuance-retirement', async () => {
+      report.issuanceRetirement = await stock.retireCanvasApplication({
+        marty: state.marty, applicationId, organizationId: state.organizationId,
+        credentialTemplateId: state.templates?.credential?.id, transactionId: report.transactionId,
+        bindingId: state.binding?.id,
+        reconcile: () => requireCaptureMutationReconciliation(report),
+      });
+    });
     report.resourceRetirementConfirmed = retired;
     let disconnected = retired;
     if (retired && state.marty && state.platformId && state.oauthConnected) disconnected = await cleanup('oauth-disconnect', async () => {

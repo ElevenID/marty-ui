@@ -205,7 +205,7 @@ async function retireOwnedCanvasFixtures({ owned, runSuffix, canvasOrigin, accou
 }
 
 async function retireCanvasApplication({ marty, organizationId, applicationId,
-  credentialTemplateId, transactionId, reconcile = () => {} }) {
+  credentialTemplateId, transactionId, bindingId, reconcile = () => {} }) {
   reconcile();
   if (!applicationId) return;
   for (const id of [organizationId, applicationId, credentialTemplateId]) {
@@ -216,6 +216,7 @@ async function retireCanvasApplication({ marty, organizationId, applicationId,
   assert.ok(Array.isArray(records));
   const owned = records.filter(record => record.application_id === applicationId);
   assert.ok(owned.length <= 1, 'Canvas application has duplicate credential custody');
+  // Validate all credential custody before touching either lifecycle or reviews.
   for (const record of owned) {
     assert.match(transactionId || '', /^[a-f0-9-]{36}$/i);
     same(record.organization_id, organizationId, 'credential organization');
@@ -223,10 +224,56 @@ async function retireCanvasApplication({ marty, organizationId, applicationId,
     same(record.flow_execution_id, transactionId, 'credential transaction');
     const id = record.credential_id || record.id;
     assert.ok(typeof id === 'string' && id.length > 0);
-    await marty.post(`/v1/issued-credentials/${enc(id)}/revoke`, { reason: 'Run-owned Canvas capture cleanup' }, [200]);
+  }
+  const reviewsPath = `/v1/integrations/canvas/evidence-policy-reviews?organization_id=${enc(organizationId)}&status=open&limit=500`;
+  const openReviews = async () => {
+    const reviews = await marty.get(reviewsPath);
+    // The production collection is bounded, without pagination. A full page
+    // cannot prove absence; retain custody for an operator instead of guessing.
+    assert.ok(Array.isArray(reviews) && reviews.length < 500, 'Canvas correction inventory is incomplete');
+    for (const review of reviews) {
+      same(review.organization_id, organizationId, 'review organization');
+      assert.equal(review.status, 'open');
+    }
+    return reviews.filter(review => review.application_id === applicationId);
+  };
+  const reviews = await openReviews();
+  assert.ok(reviews.length <= 1, 'Canvas application has duplicate open correction reviews');
+  for (const review of reviews) {
+    assert.match(review.id || '', /^[a-f0-9-]{36}$/i);
+    assert.match(bindingId || '', /^[a-f0-9-]{36}$/i);
+    same(review.binding_id, bindingId, 'review binding');
+    assert.equal(owned.length, 1, 'Canvas correction lacks an owned issued credential');
+    same(review.credential_id, owned[0].credential_id || owned[0].id, 'review credential');
+  }
+  for (const review of reviews) {
+    // Existing Rust resolver owns both the credential lifecycle transition and
+    // the durable review disposition/audit event. Never dismiss a failure or
+    // edit queue rows directly merely to make cleanup appear successful.
+    const result = await marty.post(`/v1/integrations/canvas/evidence-policy-reviews/${enc(review.id)}/resolve`,
+      { action: 'revoke', note: 'Run-owned Canvas capture cleanup' }, [200]);
+    for (const field of ['id', 'organization_id', 'application_id', 'credential_id', 'binding_id']) {
+      same(result[field], review[field], `resolved review ${field}`);
+    }
+    assert.equal(result.status, 'revoked');
+    assert.equal(result.resolution_action, 'revoke');
+  }
+  for (const record of owned) {
+    const id = record.credential_id || record.id;
+    if (!reviews.length) {
+      // Public credential revocation deliberately rejects AlreadyRevoked. The
+      // transaction owner provides idempotent publication/Canvas recovery.
+      const route = String(record.status).toUpperCase() === 'REVOKED'
+        ? `/v1/issuance/${enc(transactionId)}/revoke`
+        : `/v1/issued-credentials/${enc(id)}/revoke`;
+      await marty.post(route, { reason: 'Run-owned Canvas capture cleanup' }, [200]);
+    }
     const current = await marty.get(`/v1/issued-credentials/${enc(id)}`);
     same(current.organization_id, organizationId, 'retired credential organization');
     same(current.application_id, applicationId, 'retired credential application');
+    same(current.credential_id || current.id, id, 'retired credential');
+    same(current.credential_template_id, credentialTemplateId, 'retired credential template');
+    same(current.flow_execution_id, transactionId, 'retired credential transaction');
     assert.equal(String(current.status).toUpperCase(), 'REVOKED');
   }
   if (!owned.length && transactionId) {
@@ -246,6 +293,10 @@ async function retireCanvasApplication({ marty, organizationId, applicationId,
     exact(current);
     assert.equal(String(current.status).toLowerCase(), 'revoked');
   }
+  assert.equal((await openReviews()).length, 0, 'Canvas correction review remains open after retirement');
+  return { scope: 'OWNED_CANVAS_APPLICATION_RETIREMENT', applicationId,
+    credentialIds: owned.map(record => record.credential_id || record.id),
+    correctionReviewIds: reviews.map(review => review.id), complete: true };
 }
 
 module.exports = { requireOwnedLedger, requireCanvasExternalToolKey, findCanvasInventoryRecord,

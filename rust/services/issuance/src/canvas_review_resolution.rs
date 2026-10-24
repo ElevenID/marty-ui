@@ -11,7 +11,9 @@ use std::sync::Arc;
 use crate::{
     canvas_award_candidate_postgres::{insert_event, LOCK_APPLICATION},
     canvas_operations::OperationsError,
-    credential_management::{CredentialLifecycleAction, CredentialManagementService},
+    credential_management::{
+        CredentialLifecycleAction, CredentialManagementError, CredentialManagementService,
+    },
     python_value::strip,
 };
 
@@ -69,16 +71,29 @@ impl CanvasReviewLifecycle for CredentialManagementService {
         action: CredentialLifecycleAction,
         reason: &str,
     ) -> Result<(), OperationsError> {
-        CredentialManagementService::transition(
+        let result = CredentialManagementService::transition(
             self,
             credential,
             Some(organization),
             action,
             Some(reason),
         )
-        .await
-        .map(|_| ())
-        .map_err(OperationsError::Lifecycle)
+        .await;
+        let result = match result {
+            // A prior attempt or administrator may have revoked the credential
+            // before the review disposition committed. Reuse the lifecycle
+            // owner's publication/Canvas reconciliation before finalizing the
+            // still-open review. The initial transition retains tenant and
+            // public reason validation; other errors are never suppressed.
+            Err(CredentialManagementError::AlreadyRevoked)
+                if action == CredentialLifecycleAction::Revoke =>
+            {
+                self.reconcile_revocation(credential, Some(organization), Some(reason))
+                    .await
+            }
+            other => other,
+        };
+        result.map(|_| ()).map_err(OperationsError::Lifecycle)
     }
 }
 

@@ -771,6 +771,81 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn canvas_review_reconciles_previously_revoked_credentials_without_duplicate_events() {
+        use crate::canvas_review_resolution::CanvasReviewLifecycle;
+
+        let harness = Harness::new(ManagedCredentialStatus::Revoked);
+        let result = CanvasReviewLifecycle::transition(
+            &harness.service(),
+            "org-a",
+            "credential-a",
+            CredentialLifecycleAction::Revoke,
+            "Run-owned Canvas capture cleanup",
+        )
+        .await;
+        assert!(
+            result.is_ok(),
+            "an open review can finish after prior credential revocation"
+        );
+        assert_eq!(
+            *harness.calls.lock().expect("calls"),
+            ["load", "load", "publish:revoke", "canvas:revoke"]
+        );
+        assert!(harness.events.lock().expect("events").is_empty());
+        assert!(harness.audits.lock().expect("audits").is_empty());
+    }
+
+    #[tokio::test]
+    async fn canvas_review_revocation_recovery_keeps_tenant_reason_and_publication_fences() {
+        use crate::canvas_review_resolution::CanvasReviewLifecycle;
+
+        for (organization, reason, publication_failure) in [
+            ("foreign-org", "cleanup".to_owned(), false),
+            ("org-a", "x".repeat(MAX_REASON_CHARACTERS + 1), false),
+            ("org-a", "cleanup".to_owned(), true),
+        ] {
+            let harness = Harness::new(ManagedCredentialStatus::Revoked);
+            if publication_failure {
+                *harness
+                    .publication_failure
+                    .lock()
+                    .expect("publication failure") = Some("offline".to_owned());
+            }
+            assert!(CanvasReviewLifecycle::transition(
+                &harness.service(),
+                organization,
+                "credential-a",
+                CredentialLifecycleAction::Revoke,
+                &reason,
+            )
+            .await
+            .is_err());
+            let expected = if publication_failure {
+                vec!["load", "load", "publish:revoke"]
+            } else {
+                vec!["load"]
+            };
+            assert_eq!(*harness.calls.lock().expect("calls"), expected);
+            assert!(harness.events.lock().expect("events").is_empty());
+        }
+        // The public lifecycle endpoint continues to reject repeated revocation.
+        let harness = Harness::new(ManagedCredentialStatus::Revoked);
+        assert_eq!(
+            harness
+                .service()
+                .transition(
+                    "credential-a",
+                    Some("org-a"),
+                    CredentialLifecycleAction::Revoke,
+                    Some("cleanup")
+                )
+                .await
+                .expect_err("public repeated revoke"),
+            CredentialManagementError::AlreadyRevoked
+        );
+    }
+
+    #[tokio::test]
     async fn mutations_follow_the_frozen_publication_and_event_order() {
         let cases = [
             (

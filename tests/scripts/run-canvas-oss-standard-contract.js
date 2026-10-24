@@ -2245,8 +2245,9 @@ async function main() {
     adminContext ||= preparationState.adminContext;
     learnerContext ||= preparationState.learnerContext;
     try {
-      await retireCanvasApplication({ marty, organizationId: preparationState.organizationId,
+      const issuanceRetirement = await retireCanvasApplication({ marty, organizationId: preparationState.organizationId,
         applicationId: preparationState.applicationId, credentialTemplateId: preparationState.templates?.credential?.id,
+        bindingId: preparationState.binding?.id,
         transactionId: preparationState.transactionId, reconcile() {
           assert.ok(!preparationState.approvalInFlight, 'Unknown Canvas approval requires reconciliation');
         } });
@@ -2259,6 +2260,7 @@ async function main() {
       if (marty && platformId) await marty.delete(`/v1/integrations/canvas/platforms/${encodeURIComponent(platformId)}`, [204]);
       if (marty && integrationSecretId) await marty.delete(`/v1/integrations/canvas/integration-secrets/${encodeURIComponent(integrationSecretId)}`, [204]);
       const retired = await retireCanvasSetupFixtures(preparationState, true, !preparationState.oauthConnected);
+      retired.issuanceRetirement = issuanceRetirement;
       fs.writeFileSync(path.join(path.dirname(args.observations), 'owned-canvas-cleanup.json'),
         JSON.stringify(retired, null, 2) + '\n', { flag: 'wx' });
     } catch (error) {

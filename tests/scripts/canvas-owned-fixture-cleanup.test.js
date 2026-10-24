@@ -144,3 +144,82 @@ test('a foreign issued credential is never revoked', async () => {
     } }));
   assert.equal(revocations, 0);
 });
+
+function applicationFixture() {
+  const id = value => `${value}0000000-0000-0000-0000-000000000000`;
+  const record = { credential_id: `urn:uuid:${id('5')}`, organization_id: id('1'),
+    application_id: id('2'), credential_template_id: id('3'), flow_execution_id: id('4'), status: 'ACTIVE' };
+  const review = { id: id('6'), organization_id: id('1'), application_id: id('2'),
+    credential_id: record.credential_id, binding_id: id('7'), status: 'open' };
+  const unrelated = { ...review, id: id('8'), application_id: id('9') };
+  const state = { reviews: [review, unrelated], calls: [], record, retainReview: false };
+  const input = { organizationId: id('1'), applicationId: id('2'), credentialTemplateId: id('3'),
+    transactionId: id('4'), bindingId: id('7'), marty: {
+      async get(route) {
+        state.calls.push(['GET', route]);
+        if (route.startsWith('/v1/issued-credentials?')) return [record];
+        if (route.startsWith('/v1/integrations/canvas/evidence-policy-reviews?')) return state.reviews;
+        assert.equal(route, `/v1/issued-credentials/${encodeURIComponent(record.credential_id)}`);
+        return record;
+      },
+      async post(route, body) {
+        state.calls.push(['POST', route, body]);
+        record.status = 'REVOKED';
+        if (route.endsWith('/resolve')) {
+          assert.equal(route, `/v1/integrations/canvas/evidence-policy-reviews/${review.id}/resolve`);
+          assert.equal(body.action, 'revoke');
+          if (!state.retainReview) state.reviews = state.reviews.filter(row => row.id !== review.id);
+          return { ...review, status: 'revoked', resolution_action: 'revoke' };
+        }
+        return record;
+      },
+    } };
+  return { state, input, review, unrelated };
+}
+
+test('failed capture retires its correction through the Rust lifecycle resolver and preserves unrelated reviews', async () => {
+  const f = applicationFixture();
+  const receipt = await retireCanvasApplication(f.input);
+  assert.deepEqual(receipt.correctionReviewIds, [f.review.id]);
+  assert.equal(receipt.complete, true);
+  assert.deepEqual(f.state.reviews, [f.unrelated]);
+  assert.equal(f.state.calls.filter(([method]) => method === 'POST').length, 1);
+});
+
+for (const [name, change] of [
+  ['foreign review organization', f => { f.review.organization_id = 'foreign'; }],
+  ['foreign review binding', f => { f.review.binding_id = 'foreign'; }],
+  ['foreign review credential', f => { f.review.credential_id = 'foreign'; }],
+  ['missing binding custody', f => { delete f.input.bindingId; }],
+  ['duplicate open correction', f => { f.state.reviews.push({ ...f.review }); }],
+  ['full bounded inventory', f => { f.state.reviews = Array(500).fill(f.unrelated); }],
+  ['review without owned credential', f => {
+    const get = f.input.marty.get;
+    f.input.marty.get = route => route.startsWith('/v1/issued-credentials?') ? [] : get(route);
+  }],
+]) {
+  test(`correction retirement rejects ${name} before any lifecycle mutation`, async () => {
+    const f = applicationFixture(); change(f);
+    await assert.rejects(retireCanvasApplication(f.input));
+    assert.equal(f.state.calls.filter(([method]) => method === 'POST').length, 0);
+  });
+}
+
+test('a successful resolver response cannot hide an open review in fresh inventory', async () => {
+  const f = applicationFixture(); f.state.retainReview = true;
+  await assert.rejects(retireCanvasApplication(f.input), /remains open/);
+});
+
+test('cleanup without an open review still revokes through the credential owner', async () => {
+  const f = applicationFixture(); f.state.reviews = [f.unrelated];
+  const receipt = await retireCanvasApplication(f.input);
+  assert.deepEqual(receipt.correctionReviewIds, []);
+  assert.equal(f.state.calls.find(([method]) => method === 'POST')[1],
+    `/v1/issued-credentials/${encodeURIComponent(f.state.record.credential_id)}/revoke`);
+});
+
+test('repeated cleanup reconciles a revoked credential through the idempotent transaction owner', async () => {
+  const f = applicationFixture(); f.state.reviews = [f.unrelated]; f.state.record.status = 'REVOKED';
+  await retireCanvasApplication(f.input);
+  assert.equal(f.state.calls.find(([method]) => method === 'POST')[1], `/v1/issuance/${f.input.transactionId}/revoke`);
+});
