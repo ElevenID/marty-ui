@@ -50,6 +50,8 @@ import {
   enqueueCurrentCanvasLtiEvidenceSync,
   getCurrentCanvasLtiExperience,
   getCurrentCanvasLtiEvidenceStatus,
+  generateCurrentCanvasLtiClaim,
+  getCurrentCanvasLtiClaim,
 } from '../../services/canvasLtiExperience';
 import { APPLY_LOCATION_STATE_STORAGE_KEY } from '../../application/routing';
 import {
@@ -212,7 +214,7 @@ function formatEvidenceRequirement(requirement) {
   };
 }
 
-export default function ApplicationForm() {
+export default function ApplicationForm({ previewContext = null } = {}) {
   const { t } = useTranslation('applicant');
   const { credentialType: credentialConfigId } = useParams();
   const navigate = useNavigate();
@@ -222,11 +224,13 @@ export default function ApplicationForm() {
   const hasRegisteredWallet = preferredWallets.length > 0;
   const { isPreview } = usePreview?.() || { isPreview: false };
   const fileInputRefs = useRef({});
-  const [initialApplyState] = useState(() => location.state || readStoredApplyLocationState());
-  const canvasLtiState = useMemo(() => new URLSearchParams(location.search).get('canvas_lti_state') || '', [location.search]);
+  const [initialApplyState] = useState(() => (
+    isPreview && previewContext ? previewContext : location.state || readStoredApplyLocationState()
+  ));
+  const canvasLtiState = useMemo(() => isPreview ? '' : new URLSearchParams(location.search).get('canvas_lti_state') || '', [isPreview, location.search]);
   const canvasApplicationTemplateIdFromUrl = useMemo(
-    () => new URLSearchParams(location.search).get('application_template_id') || '',
-    [location.search]
+    () => isPreview ? '' : new URLSearchParams(location.search).get('application_template_id') || '',
+    [isPreview, location.search]
   );
 
   const [activeStep, setActiveStep] = useState(0);
@@ -309,7 +313,7 @@ export default function ApplicationForm() {
   );
   const applicationOrganizationId = isCanvasLtiApplication
     ? (canvasIssuerOrganizationId || organizationId)
-    : organizationId;
+    : (applicationTemplate?.organization_id || organizationId);
 
   const getCredentialTemplate = async (templateId) => get(`/v1/credential-templates/${templateId}`);
   const getApplicationTemplate = async (templateId) => get(`/v1/application-templates/${templateId}`);
@@ -469,9 +473,19 @@ export default function ApplicationForm() {
 
     let alive = true;
     let timer = null;
+    let reading = false;
+    let refreshAfterRead = false;
     const activeStatuses = new Set(['queued', 'running', 'retrying']);
 
     async function loadCanvasEvidenceStatus() {
+      if (!alive) return;
+      if (reading) {
+        refreshAfterRead = true;
+        return;
+      }
+      if (timer) window.clearTimeout(timer);
+      timer = null;
+      reading = true;
       try {
         const status = await getCurrentCanvasLtiEvidenceStatus();
         if (!alive) return;
@@ -482,15 +496,31 @@ export default function ApplicationForm() {
         }
       } catch (err) {
         if (alive) {
+          // A return from a wallet is not a receipt. Drop the old claim action
+          // when the server cannot confirm the current application state.
+          setCanvasEvidenceStatus(null);
           setCanvasSyncError(err?.message || 'Canvas evidence status could not be loaded.');
+        }
+      } finally {
+        reading = false;
+        if (alive && refreshAfterRead) {
+          refreshAfterRead = false;
+          loadCanvasEvidenceStatus();
         }
       }
     }
 
+    const onBrowserReturn = () => {
+      if (document.visibilityState !== 'hidden') loadCanvasEvidenceStatus();
+    };
     loadCanvasEvidenceStatus();
+    window.addEventListener('focus', onBrowserReturn);
+    document.addEventListener('visibilitychange', onBrowserReturn);
     return () => {
       alive = false;
       if (timer) window.clearTimeout(timer);
+      window.removeEventListener('focus', onBrowserReturn);
+      document.removeEventListener('visibilitychange', onBrowserReturn);
     };
   }, [
     isCanvasLtiApplication,
@@ -595,6 +625,7 @@ export default function ApplicationForm() {
   const shouldShowStepper = !(isCanvasLtiApplication && steps.length === 1);
 
   const handleAutoApply = async () => {
+    if (isPreview) { setSubmitted(true); return; }
     setAutoApplying(true);
     setError(null);
     try {
@@ -658,6 +689,7 @@ export default function ApplicationForm() {
   };
 
   const submitApplicationForm = async (duplicateApplicationAction = null) => {
+    if (isPreview) { setSubmitted(true); return; }
     setSubmitting(true);
     setError(null);
 
@@ -728,6 +760,13 @@ export default function ApplicationForm() {
     setApplicationId(boundApplicationId);
     setAutoOfferData(null);
     setClaimDialogOpen(true);
+  };
+
+  const handleCanvasClaimClose = () => {
+    setClaimDialogOpen(false);
+    // Reload the read-only projection, including a canceled or unfinished
+    // handoff, without queuing another evidence job or generating an offer.
+    setCanvasSyncPollVersion((version) => version + 1);
   };
 
   const handleUseExistingApplication = () => {
@@ -1204,7 +1243,7 @@ export default function ApplicationForm() {
     const heroTitle = credentialConfig?.display_name || credentialConfig?.name || fallbackTitle;
     const heroDescription = credentialConfig?.description || 'Add this credential to a compatible wallet.';
     const ctaLabel = isMdocCredential ? 'Get Membership ID' : 'Add to Wallet';
-    const ctaSubtext = [credentialConfig?.processingTime || 'Instant', credentialConfig?.format || credentialConfig?.standard]
+    const ctaSubtext = [credentialConfig?.format, credentialConfig?.issuanceProtocol]
       .filter(Boolean)
       .join(' - ');
 
@@ -1282,6 +1321,7 @@ export default function ApplicationForm() {
 
             {/* CTA button */}
             <Button
+              data-testid="credential-claim-action"
               variant="contained"
               size="large"
               fullWidth
@@ -1313,6 +1353,7 @@ export default function ApplicationForm() {
           }}
           applicationId={applicationId}
           offerData={autoOfferData}
+          organizationId={applicationOrganizationId}
           autoOpenWallet={isOpenBadgeCredential}
         />
       </Container>
@@ -1399,10 +1440,12 @@ export default function ApplicationForm() {
       {isCanvasLtiApplication ? (
         <ClaimCredentialDialog
           open={claimDialogOpen}
-          onClose={() => setClaimDialogOpen(false)}
+          onClose={handleCanvasClaimClose}
+          generateOffer={generateCurrentCanvasLtiClaim}
+          readApplication={getCurrentCanvasLtiClaim}
           applicationId={applicationId || canvasLtiBootstrap?.application_id || canvasLtiSession?.application_id}
           offerData={autoOfferData}
-          organizationId={canvasIssuerOrganizationId}
+          organizationId={applicationOrganizationId}
         />
       ) : null}
     </Container>

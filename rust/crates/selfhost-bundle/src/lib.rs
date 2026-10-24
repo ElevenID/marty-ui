@@ -10,6 +10,7 @@ use std::{
 
 pub mod process;
 mod publication;
+pub mod secret_closure;
 pub mod transform;
 pub type Result<T> = std::result::Result<T, String>;
 pub const MARKER: &str = ".marty-selfhost-bundle.json";
@@ -362,10 +363,15 @@ fn pin_openbao_compose(source: &str, image: &str) -> Result<String> {
         .get_mut("services")
         .and_then(serde_yaml::Value::as_mapping_mut)
         .ok_or("OpenBao Compose has no services")?;
-    if services.len() != 3 {
+    if services.len() != 4 {
         return Err("OpenBao Compose service set changed".into());
     }
-    for name in ["openbao-tls-init", "openbao", "openbao-bootstrap"] {
+    for name in [
+        "openbao-tls-init",
+        "openbao",
+        "openbao-unseal",
+        "openbao-bootstrap",
+    ] {
         let service = services
             .get_mut(serde_yaml::Value::String(name.into()))
             .and_then(serde_yaml::Value::as_mapping_mut)
@@ -505,6 +511,13 @@ pub fn relativize(text: &str, stage: &Path) -> Result<String> {
                         key,
                         value
                     );
+                } else if scalar.starts_with('/')
+                    || (scalar.len() >= 3
+                        && scalar.as_bytes()[0].is_ascii_alphabetic()
+                        && scalar.as_bytes()[1] == b':'
+                        && scalar.as_bytes()[2] == b'/')
+                {
+                    return Err("Rendered path escapes staged bundle".into());
                 }
             }
         }
@@ -592,7 +605,7 @@ pub fn package(
     options: &Options,
     renderer: impl FnOnce(&Path, &[String]) -> Result<String>,
 ) -> Result<Published> {
-    package_with_publication(options, renderer, None, publication::rename_noreplace)
+    package_with_publication(options, renderer, None, None, publication::rename_noreplace)
 }
 pub fn package_with_image_lock(
     options: &Options,
@@ -603,13 +616,73 @@ pub fn package_with_image_lock(
         options,
         renderer,
         Some(image_lock),
+        None,
         publication::rename_noreplace,
     )
+}
+/// Explicit nightly opt-in; stable packaging retains exact source-release equality.
+pub fn package_nightly_with_image_lock(
+    options: &Options,
+    renderer: impl FnOnce(&Path, &[String]) -> Result<String>,
+    image_lock: &Path,
+    candidate: &Path,
+) -> Result<Published> {
+    package_with_publication(
+        options,
+        renderer,
+        Some(image_lock),
+        Some(candidate),
+        publication::rename_noreplace,
+    )
+}
+
+fn validate_nightly_source(
+    repo: &Path,
+    lock_release: &str,
+    source_bytes: &[u8],
+    candidate_path: &Path,
+) -> Result<()> {
+    check_ancestors(candidate_path)?;
+    let candidate: serde_json::Value = serde_json::from_slice(
+        &fs::read(candidate_path).map_err(failure("Cannot read nightly candidate"))?,
+    )
+    .map_err(|_| "Invalid nightly candidate")?;
+    let source: serde_json::Value =
+        serde_json::from_slice(source_bytes).map_err(|_| "Invalid source lock")?;
+    let version = candidate["version"]
+        .as_str()
+        .ok_or("Missing nightly version")?;
+    let pattern =
+        regex::Regex::new(r"^([0-9]+\.[0-9]+\.[0-9]+)-nightly\.(20[0-9]{6})\.([1-9][0-9]*)$")
+            .map_err(|_| "Invalid nightly pattern")?;
+    let parts = pattern.captures(version).ok_or("Invalid nightly version")?;
+    let head = std::process::Command::new("git")
+        .args(["-C"])
+        .arg(repo)
+        .args(["rev-parse", "HEAD^{commit}"])
+        .output()
+        .map_err(failure("Cannot verify nightly source"))?;
+    let digest = format!("sha256:{:x}", Sha256::digest(source_bytes));
+    if !head.status.success()
+        || candidate["schema"] != "elevenid.nightly-installation-candidate/v1"
+        || candidate["state"] != "prepared"
+        || candidate["tag"] != format!("v{version}")
+        || candidate["claim_run_id"] != parts[3]
+        || candidate["source_sha"].as_str() != Some(String::from_utf8_lossy(&head.stdout).trim())
+        || candidate["stack_lock_sha256"] != digest
+        || source["release_state"] != "eligible"
+        || source["release"] != format!("marty-ui@{}", &parts[1])
+        || lock_release != format!("marty-ui@{version}")
+    {
+        return Err("Nightly candidate differs from source, claim or image lock".into());
+    }
+    Ok(())
 }
 fn package_with_publication(
     options: &Options,
     renderer: impl FnOnce(&Path, &[String]) -> Result<String>,
     image_lock_path: Option<&Path>,
+    nightly_candidate: Option<&Path>,
     publish: impl FnOnce(&Path, &Path) -> std::io::Result<()>,
 ) -> Result<Published> {
     check_ancestors(&options.repo)?;
@@ -740,11 +813,13 @@ fn package_with_publication(
         }
         let source_lock_path = repo.join("release/stack-lock.json");
         check_ancestors(&source_lock_path)?;
-        let stack_lock: serde_json::Value = serde_json::from_slice(
-            &fs::read(source_lock_path).map_err(failure("Cannot read source stack lock"))?,
-        )
-        .map_err(|_| "Source stack lock is invalid JSON")?;
-        if stack_lock["release"].as_str() != Some(lock.release.as_str()) {
+        let source_bytes =
+            fs::read(source_lock_path).map_err(failure("Cannot read source stack lock"))?;
+        let stack_lock: serde_json::Value = serde_json::from_slice(&source_bytes)
+            .map_err(|_| "Source stack lock is invalid JSON")?;
+        if let Some(candidate) = nightly_candidate {
+            validate_nightly_source(&repo, &lock.release, &source_bytes, candidate)?;
+        } else if stack_lock["release"].as_str() != Some(lock.release.as_str()) {
             return Err("Image lock release differs from source stack lock".into());
         }
         let pinned = transform::pin_service_images(&rendered, &lock.services)?;
@@ -875,15 +950,16 @@ mod publication_pipeline_tests {
             package(&options, renderer).unwrap();
             options.replace = true;
             fs::write(options.repo.join("SELFHOST_BUNDLE.md"), "replacement").unwrap();
-            let error = package_with_publication(&options, renderer, None, |stage, destination| {
-                if directory {
-                    fs::create_dir(destination).unwrap();
-                } else {
-                    fs::write(destination, "foreign").unwrap();
-                }
-                publication::rename_noreplace(stage, destination)
-            })
-            .unwrap_err();
+            let error =
+                package_with_publication(&options, renderer, None, None, |stage, destination| {
+                    if directory {
+                        fs::create_dir(destination).unwrap();
+                    } else {
+                        fs::write(destination, "foreign").unwrap();
+                    }
+                    publication::rename_noreplace(stage, destination)
+                })
+                .unwrap_err();
             assert!(error.contains("staging retained"));
             let staged = fs::read_dir(owned.path())
                 .unwrap()

@@ -13,7 +13,9 @@ use crate::{
         CanvasLtiExperienceSessionContext, CanvasLtiExperienceSessionError,
         CanvasLtiExperienceSessionService,
     },
-    canvas_lti_launch::{CanvasLtiAgsServiceUrlValidator, CanvasLtiClock},
+    canvas_lti_launch::{
+        canvas_course_id_from_signed_claims, CanvasLtiAgsServiceUrlValidator, CanvasLtiClock,
+    },
     canvas_lti_tool_signing::{
         CanvasLtiSigningKind, CanvasLtiToolJwtSigner, CanvasLtiToolSigningError,
     },
@@ -620,10 +622,6 @@ fn deep_linking_custom_values(
     context: &CanvasLtiExperienceSessionContext,
     requirement: Option<&Value>,
 ) -> Map<String, Value> {
-    let canvas = context
-        .verified_launch
-        .get("context")
-        .and_then(Value::as_object);
     let mut raw = vec![
         (
             "canvas_account_id",
@@ -647,9 +645,11 @@ fn deep_linking_custom_values(
         ),
         (
             "canvas_course_id",
-            canvas
-                .and_then(|value| value.get("id").or_else(|| value.get("context_id")))
-                .and_then(python_string),
+            canvas_course_id_from_signed_claims(
+                context.verified_launch.get("raw_claims"),
+                context.verified_launch.get("context"),
+            )
+            .and_then(python_string),
         ),
     ];
     if let Some(requirement) = requirement {

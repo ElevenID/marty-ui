@@ -65,10 +65,15 @@
     "sha256": "efa4fd2857dd6e2a41d6c0fa1e4909b5614075a5d01b5dcf9694a6d4d7229d52"
   },
   "canvas_lti_behavior_contract": {
-    "repository": "ElevenID/marty-credentials",
+    "repository": "ElevenID/marty-ui",
     "path": "contracts/issuance-canvas-lti-foundation.json",
-    "commit": "82945b2ad4a12aef03389d754f2eb4ed32cb1b18",
-    "sha256": "1f9bdc801552ac6ba51df91bc62663096cbf89b3f4544c7588eb8c4323ea91de"
+    "upstream": {
+      "repository": "ElevenID/marty-credentials",
+      "path": "contracts/issuance-canvas-lti-foundation.json",
+      "commit": "82945b2ad4a12aef03389d754f2eb4ed32cb1b18",
+      "sha256": "abfa1773c5dcc44101e099c89b2ac11070607dc54fc3dd16e909e216c302add2"
+    },
+    "sha256": "7b5dc5bfcda5b9525a664cbca6412b4c6268db7180bc23df9d901aee1a5b3fe9"
   },
   "canvas_oauth_behavior_contract": {
     "repository": "ElevenID/marty-credentials",
@@ -877,6 +882,26 @@
       "path": "/v1/issuance/organizations/{organization_id}/retention/purge",
       "operation": "purge_organization_retention_data",
       "retention_behavior_contract": true
+    }
+  ],
+  "native_extension_http": [
+    {
+      "method": "GET",
+      "path": "/v1/integrations/canvas/lti/experience-sessions/current/claim",
+      "operation": "read_canvas_learner_claim",
+      "owner": "issuance-native",
+      "source": "rust/services/issuance/src/canvas_lti_claim.rs",
+      "behavior_test": "rust/services/issuance/tests/support/canvas_claim_behavior.rs",
+      "adaptation": "Native-only session-scoped Canvas claim; not part of the frozen legacy HTTP surface."
+    },
+    {
+      "method": "POST",
+      "path": "/v1/integrations/canvas/lti/experience-sessions/current/claim",
+      "operation": "create_canvas_learner_claim",
+      "owner": "issuance-native",
+      "source": "rust/services/issuance/src/canvas_lti_claim.rs",
+      "behavior_test": "rust/services/issuance/tests/support/canvas_claim_behavior.rs",
+      "adaptation": "Native-only session-scoped Canvas claim; not part of the frozen legacy HTTP surface."
     }
   ],
   "native_grpc": [

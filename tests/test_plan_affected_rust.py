@@ -689,7 +689,6 @@ class AffectedRustPlannerTests(unittest.TestCase):
             "rust/crates/canvas-demo-seed/src/run.rs",
             "rust/crates/canvas-demo-seed/assets/canvas_lti_setup.rb",
             "rust/crates/canvas-demo-seed/assets/mint_canvas_admin_token.rb",
-            "rust/crates/demo-vendor-seed/src/lib.rs",
         ):
             with self.subTest(changed=changed):
                 result = planner.plan([changed], metadata, ROOT)
@@ -700,6 +699,59 @@ class AffectedRustPlannerTests(unittest.TestCase):
                 self.assertEqual(edge["consumer"], "db-migrate")
                 self.assertTrue(all(item["present"] for item in edge["witnesses"]))
                 self.assertEqual(len(edge["witnesses"]), 5)
+
+    def test_demo_vendor_seed_records_direct_and_cargo_packaged_consumers(self) -> None:
+        metadata = planner.cargo_metadata()
+        for changed in (
+            "rust/crates/demo-vendor-seed/src/main.rs",
+            "rust/crates/demo-vendor-seed/src/lib.rs",
+        ):
+            with self.subTest(changed=changed):
+                result = planner.plan([changed], metadata, ROOT)
+                self.assertTrue(result["all"])
+                self.assertIn("packaged-executable/runtime", result["reason"])
+                edges = {
+                    edge["producer"]: edge
+                    for edge in result["observed_packaged_runtime_consumers"]
+                }
+                self.assertEqual(
+                    set(edges), {"marty-demo-vendor-seed", "marty-canvas-demo-seed"}
+                )
+                direct = edges["marty-demo-vendor-seed"]
+                self.assertEqual(direct["consumer"], "explicit-demo-fixture-seed")
+                self.assertEqual(len(direct["witnesses"]), 4)
+                self.assertTrue(all(item["present"] for item in direct["witnesses"]))
+
+    def test_demo_vendor_seed_missing_packaging_witness_stays_broad(self) -> None:
+        metadata = planner.cargo_metadata()
+        original_read = planner._read_packaged_witness
+        witnesses = planner.PACKAGED_RUNTIME_PRODUCERS["marty-demo-vendor-seed"][
+            "witnesses"
+        ]
+        for relative, marker in witnesses:
+            for missing_file in (False, True):
+
+                def changed_read(path):
+                    if path == ROOT / relative:
+                        if missing_file:
+                            return ""
+                        return original_read(path).replace(marker, "removed-witness")
+                    return original_read(path)
+
+                with self.subTest(
+                    relative=relative, marker=marker, missing=missing_file
+                ):
+                    with patch.object(planner, "_read_packaged_witness", changed_read):
+                        result = planner.plan(
+                            ["rust/crates/demo-vendor-seed/src/main.rs"], metadata, ROOT
+                        )
+                    self.assertTrue(result["all"])
+                    direct = next(
+                        edge
+                        for edge in result["observed_packaged_runtime_consumers"]
+                        if edge["producer"] == "marty-demo-vendor-seed"
+                    )
+                    self.assertFalse(all(item["present"] for item in direct["witnesses"]))
 
     def test_canvas_seed_mixed_service_change_retains_existing_runtime_edges(
         self,
@@ -744,6 +796,175 @@ class AffectedRustPlannerTests(unittest.TestCase):
                     self.assertTrue(result["all"])
                     [edge] = result["observed_packaged_runtime_consumers"]
                     self.assertFalse(all(item["present"] for item in edge["witnesses"]))
+
+    def test_canvas_sandbox_crate_and_embedded_pages_keep_runtime_broad(self) -> None:
+        metadata = planner.cargo_metadata()
+        for changed in (
+            "rust/crates/canvas-sandbox/src/main.rs",
+            "rust/crates/canvas-sandbox/src/auth_form.html",
+        ):
+            with self.subTest(changed=changed):
+                result = planner.plan([changed], metadata, ROOT)
+                self.assertTrue(result["all"])
+                self.assertIn("packaged-executable/runtime", result["reason"])
+                [edge] = result["observed_packaged_runtime_consumers"]
+                self.assertEqual(edge["producer"], "marty-canvas-sandbox")
+                self.assertEqual(edge["consumer"], "canvas-sandbox")
+                self.assertEqual(len(edge["witnesses"]), 6)
+                self.assertTrue(all(item["present"] for item in edge["witnesses"]))
+
+    def test_canvas_sandbox_changed_packaging_witness_stays_broad(self) -> None:
+        metadata = planner.cargo_metadata()
+        original_read = planner._read_packaged_witness
+        witnesses = planner.PACKAGED_RUNTIME_PRODUCERS["marty-canvas-sandbox"][
+            "witnesses"
+        ]
+        for relative, marker in witnesses:
+            for missing_file in (False, True):
+
+                def changed_read(path):
+                    if path == ROOT / relative:
+                        if missing_file:
+                            return ""
+                        return original_read(path).replace(marker, "removed-witness")
+                    return original_read(path)
+
+                with self.subTest(
+                    relative=relative, marker=marker, missing=missing_file
+                ):
+                    with patch.object(planner, "_read_packaged_witness", changed_read):
+                        result = planner.plan(
+                            ["rust/crates/canvas-sandbox/src/main.rs"], metadata, ROOT
+                        )
+                    self.assertTrue(result["all"])
+                    [edge] = result["observed_packaged_runtime_consumers"]
+                    self.assertFalse(all(item["present"] for item in edge["witnesses"]))
+
+    def test_keyless_crates_keep_packaged_runtime_consumers_broad(self) -> None:
+        metadata = planner.cargo_metadata()
+        cases = (
+            (
+                "marty-keyless-grpc-bridge",
+                "rust/crates/keyless-grpc-bridge/src/main.rs",
+                "envoy-issuance-bridge",
+                3,
+            ),
+            (
+                "marty-passport-keyless-edge",
+                "rust/crates/passport-keyless-edge/src/main.rs",
+                "passport/oidf-keyless-edges",
+                8,
+            ),
+            (
+                "marty-passport-keyless-edge",
+                "rust/crates/passport-keyless-edge/src/bin/oidf_edge.rs",
+                "passport/oidf-keyless-edges",
+                8,
+            ),
+            (
+                "marty-passport-keyless-edge",
+                "rust/crates/passport-keyless-edge/src/bin/bootstrap.rs",
+                "passport/oidf-keyless-edges",
+                8,
+            ),
+        )
+        for producer, changed, consumer, count in cases:
+            with self.subTest(changed=changed):
+                result = planner.plan([changed], metadata, ROOT)
+                self.assertTrue(result["all"])
+                self.assertIn("packaged-executable/runtime", result["reason"])
+                [edge] = result["observed_packaged_runtime_consumers"]
+                self.assertEqual(edge["producer"], producer)
+                self.assertEqual(edge["consumer"], consumer)
+                self.assertEqual(len(edge["witnesses"]), count)
+                self.assertTrue(all(item["present"] for item in edge["witnesses"]))
+
+    def test_keyless_packaging_witness_drift_stays_broad(self) -> None:
+        metadata = planner.cargo_metadata()
+        cases = (
+            ("marty-keyless-grpc-bridge", "rust/crates/keyless-grpc-bridge/src/main.rs"),
+            (
+                "marty-passport-keyless-edge",
+                "rust/crates/passport-keyless-edge/src/main.rs",
+            ),
+        )
+        original_read = planner._read_packaged_witness
+        for producer, changed in cases:
+            witnesses = planner.PACKAGED_RUNTIME_PRODUCERS[producer]["witnesses"]
+            for relative, marker in witnesses:
+                for missing_file in (False, True):
+
+                    def changed_read(path):
+                        if path == ROOT / relative:
+                            if missing_file:
+                                return ""
+                            return original_read(path).replace(marker, "removed-witness")
+                        return original_read(path)
+
+                    with self.subTest(
+                        producer=producer,
+                        relative=relative,
+                        marker=marker,
+                        missing=missing_file,
+                    ):
+                        with patch.object(
+                            planner, "_read_packaged_witness", changed_read
+                        ):
+                            result = planner.plan([changed], metadata, ROOT)
+                        self.assertTrue(result["all"])
+                        [edge] = result["observed_packaged_runtime_consumers"]
+                        self.assertFalse(
+                            all(item["present"] for item in edge["witnesses"])
+                        )
+
+    def test_service_image_binary_crates_have_packaged_runtime_edges(self) -> None:
+        metadata = planner.cargo_metadata()
+        build_script = (ROOT / "scripts/build-rust-service-binaries.sh").read_text(
+            encoding="utf-8"
+        )
+        built_packages = set(re.findall(r"-p (marty-[a-z0-9-]+)\b", build_script))
+        image_source = (ROOT / "services/Dockerfile").read_text(encoding="utf-8")
+        shipped_binaries = set(
+            re.findall(
+                r"COPY --from=rust-service-builder /build/rust/target/release/"
+                r"(marty-[a-z0-9-]+) /usr/local/bin/marty-[a-z0-9-]+",
+                image_source,
+            )
+        )
+        self.assertTrue(
+            {
+                "marty-canvas-sandbox",
+                "marty-keyless-grpc-bridge",
+                "marty-passport-keyless-edge",
+            }.issubset(built_packages)
+        )
+        crate_binaries = [
+            (package["name"], target["src_path"])
+            for package in metadata["packages"]
+            if package["id"] in metadata["workspace_members"]
+            and package["name"] in built_packages
+            and Path(package["manifest_path"]).parent.parent
+            == ROOT / "rust" / "crates"
+            for target in package["targets"]
+            if "bin" in target["kind"] and target["name"] in shipped_binaries
+        ]
+        self.assertTrue(crate_binaries)
+        for producer, source in crate_binaries:
+            relative = Path(source).relative_to(ROOT).as_posix()
+            with self.subTest(producer=producer, source=relative):
+                result = planner.plan([relative], metadata, ROOT)
+                self.assertTrue(result["all"])
+                self.assertIn("packaged-executable/runtime", result["reason"])
+                edges = [
+                    edge
+                    for edge in result["observed_packaged_runtime_consumers"]
+                    if edge["producer"] == producer
+                ]
+                self.assertEqual(len(edges), 1)
+                self.assertTrue(edges[0]["witnesses"])
+                self.assertTrue(
+                    all(witness["present"] for witness in edges[0]["witnesses"])
+                )
 
     def test_packaged_witness_reader_is_bounded_and_closes_owned_descriptor(
         self,
@@ -1575,6 +1796,7 @@ class AffectedRustPlannerTests(unittest.TestCase):
             )
 
         source_paths = {
+            "rust/services/trust-profile/src/issuer_keys.rs",
             "rust/services/gateway/src/runtime.rs",
             "contracts/gateway-routes.json",
             "docker-compose.base.yml",
@@ -1586,6 +1808,10 @@ class AffectedRustPlannerTests(unittest.TestCase):
             path: (ROOT / path).read_text(encoding="utf-8") for path in source_paths
         }
         witnesses = [
+            (
+                "rust/services/trust-profile/src/issuer_keys.rs",
+                "pub use marty_issuer_key_resolution::*;",
+            ),
             (
                 "rust/services/gateway/src/runtime.rs",
                 'request.uri().path() == "/.well-known/did.json"',
@@ -1745,11 +1971,13 @@ class AffectedRustPlannerTests(unittest.TestCase):
                 direct_dependencies = {
                     dep["name"] for dep in packages["marty-gateway"]["dependencies"]
                 }
-                # These Gateway upstreams are HTTP runtime edges, not Cargo
-                # dependencies. The Signing Keys dev-only edge was removed
-                # when its cross-service proof moved to service-acceptance;
-                # the non-Cargo route observation above must still fail closed.
-                self.assertNotIn(producer, direct_dependencies)
+                # Native template compatibility reuses the credential-template
+                # format parser through Cargo. That typed edge does not retire
+                # the independently observed HTTP upstream or narrow the plan.
+                if producer == "marty-credential-template":
+                    self.assertIn(producer, direct_dependencies)
+                else:
+                    self.assertNotIn(producer, direct_dependencies)
 
     def test_base_compose_wires_every_configured_gateway_upstream(self) -> None:
         # An in-container localhost default cannot reach a sibling service.
@@ -3806,6 +4034,10 @@ class AffectedRustPlannerTests(unittest.TestCase):
                 "rust/Cargo.lock",
                 "rust/third_party/ssi-jwt/src/lib.rs",
                 "rust/deleted-crate/fixture.json",
+                "rust/acceptance/support/base_runtime_redis.rs",
+                "rust/acceptance/support/didcomm_gateway_replay.rs",
+                "rust/acceptance/support/didcomm_native_grpc_fixture.rs",
+                "rust/acceptance/support/issuance_named_peers.rs",
                 "contracts/canvas-worker-oracle.json",
                 "proto/candidate.proto",
                 "services/Dockerfile",

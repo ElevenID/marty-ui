@@ -12,9 +12,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+if __package__:
+    from .canvas_beta_topology import BETA_NETWORK
+else:
+    from canvas_beta_topology import BETA_NETWORK
+
 
 PROJECT = "canvas-oss-portability"
-EXTERNAL_TUNNEL_NETWORK = "marty-infra-network"
+EXTERNAL_TUNNEL_NETWORK = BETA_NETWORK
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 COMPOSE_FILE = REPOSITORY_ROOT / "docker-compose.canvas-oss-acceptance.yml"
 PROJECT_LABEL = "com.docker.compose.project"

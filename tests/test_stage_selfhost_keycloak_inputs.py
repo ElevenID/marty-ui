@@ -17,6 +17,42 @@ import provision_selfhost_disposable_tls as tls  # noqa: E402
 IMAGE = "ghcr.io/elevenid/marty-ui-oss/openbao-didcomm@sha256:" + "a" * 64
 OPERATOR = 1000
 OPENBAO = 1001
+REAL_OPERATOR_ENVIRONMENT = bridge.authenticated_operator_environment
+
+
+@pytest.fixture(autouse=True)
+def isolated_handoff_preflight(monkeypatch):
+    # Transfer tests isolate ownership; the real native identity is checked below.
+    monkeypatch.setattr(bridge, "authenticated_operator_environment", lambda _source: {
+        "MARTY_DEPLOY_BIN": "/reviewed/marty-deploy", "MARTY_DEPLOY_BIN_SHA256": "a" * 64,
+        "MARTY_DEPLOY_SOURCE_SHA": "b" * 40, "MARTY_DEPLOY_RELEASE_TAG": "v1.2.3"})
+
+
+def test_real_installed_native_identity_survives_root_environment(tmp_path, monkeypatch):
+    if not os.environ.get("MARTY_DEPLOY_BIN"):
+        pytest.skip("requires qualified native operator")
+    monkeypatch.setenv("UNRELATED_PRIVATE_ENV", "must-not-forward")
+    native_env = REAL_OPERATOR_ENVIRONMENT(tmp_path)
+    assert set(native_env) == {"MARTY_DEPLOY_BIN", "MARTY_DEPLOY_BIN_SHA256",
+                               "MARTY_DEPLOY_SOURCE_SHA", "MARTY_DEPLOY_RELEASE_TAG"}
+    source = Path(__file__).resolve().parents[1]
+    if (source / ".git").exists():
+        assert REAL_OPERATOR_ENVIRONMENT(source) == native_env
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(tmp_path), "-c", "user.name=Native operator test",
+                    "-c", "user.email=native-operator@example.invalid", "commit", "--allow-empty",
+                    "-q", "-m", "foreign source checkpoint"], check=True, capture_output=True)
+    with pytest.raises(RuntimeError, match="source differs from checkout HEAD"):
+        REAL_OPERATOR_ENVIRONMENT(tmp_path)
+    monkeypatch.setenv("MARTY_DEPLOY_BIN_SHA256", "0" * 64)
+    with pytest.raises(RuntimeError, match="digest mismatch"):
+        REAL_OPERATOR_ENVIRONMENT(tmp_path)
+
+
+def test_root_environment_requires_installed_native_operator(tmp_path, monkeypatch):
+    monkeypatch.delenv("MARTY_DEPLOY_BIN", raising=False)
+    with pytest.raises(ValueError, match="signed marty-deploy"):
+        REAL_OPERATOR_ENVIRONMENT(tmp_path)
 
 
 def staged(tmp_path: Path) -> Path:
@@ -62,7 +98,11 @@ def test_moves_only_scoped_outputs_to_operator_directory(
     monkeypatch.setattr(tls, "openbao_network", lambda *_args, **_kwargs: "owned-network")
 
     def fake_run(_args: list[str], **kwargs: object) -> subprocess.CompletedProcess:
+        assert kwargs["timeout"] is None
         env = kwargs["env"]
+        assert env["MARTY_DEPLOY_BIN"] == "/reviewed/marty-deploy"
+        assert env["MARTY_DEPLOY_BIN_SHA256"] == "a" * 64
+        assert "UNRELATED_PRIVATE_ENV" not in env
         output = Path(env["SELFHOST_KEYCLOAK_OUTPUT_DIR"])
         assert output.parent == Path("/tmp")
         for name in bridge.OUTPUTS:
@@ -175,3 +215,27 @@ def test_partial_transfer_failure_removes_all_operator_outputs(
     assert calls == 2
     assert not any((root / "secrets" / name).exists() for name in bridge.OUTPUTS)
     assert (root / "openbao-state" / "root.token").exists()
+
+
+@pytest.mark.parametrize("code", [3, -15, 101])
+def test_uncertain_mint_reports_recovery_without_transfer(tmp_path, monkeypatch, code):
+    require_root_linux()
+    root = staged(tmp_path)
+    monkeypatch.setattr(tls, "exact_images", lambda _bundle: ("services", IMAGE))
+    monkeypatch.setattr(tls, "openbao_network", lambda *_args, **_kwargs: "owned-network")
+    monkeypatch.setattr(bridge.subprocess, "run", lambda command, **kwargs:
+                        subprocess.CompletedProcess(command, code, "", "sensitive-detail"))
+    with pytest.raises(bridge.OperatorCleanupError, match="^Keycloak provisioning requires operator recovery$"):
+        bridge.stage(root, OPERATOR)
+    assert not any((root / "secrets" / name).exists() for name in bridge.OUTPUTS)
+
+
+def test_cli_keeps_recovery_exit_three(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(sys, "argv", ["stage", "--private-root", str(tmp_path)])
+    monkeypatch.setenv("SUDO_UID", "1000")
+
+    def uncertain(*args):
+        raise bridge.OperatorCleanupError("Keycloak provisioning requires operator recovery")
+    monkeypatch.setattr(bridge, "stage", uncertain)
+    assert bridge.main() == 3
+    assert capsys.readouterr().err.strip() == "Keycloak provisioning requires operator recovery"

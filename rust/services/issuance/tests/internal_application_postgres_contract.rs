@@ -774,6 +774,31 @@ async fn internal_application_repository_round_trips_filters_and_compares_exact_
         canvas_refreshed.claims.get("_vct"),
         Some(&json!("https://credentials.example/new"))
     );
+    sqlx::query("UPDATE issuance_service.application_templates SET claim_collection_rules=$1 WHERE id=$2")
+        .bind(json!([{"claim_name":"name","source":"SYSTEM","source_config":{"system_field":"constant","value":"Current mapped learner"}}]))
+        .bind(&canvas_current.application_template_id).execute(&pool).await.unwrap();
+    canvas_refresh
+        .claims
+        .insert("name".into(), json!("Current mapped learner"));
+    let mapped_offer = repository
+        .reserve_or_refresh_offer(
+            &canvas_current,
+            &canvas_refresh,
+            observed_at + Duration::minutes(11),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(mapped_offer.claims, canvas_refresh.claims);
+    assert_eq!(mapped_offer.id, canvas_reserved.id);
+    assert_eq!(
+        mapped_offer.pre_authorized_code,
+        canvas_reserved.pre_authorized_code
+    );
+    assert_eq!(mapped_offer.created_at, canvas_reserved.created_at);
+    assert_eq!(mapped_offer.expires_at, canvas_reserved.expires_at);
+    sqlx::query("UPDATE issuance_service.application_templates SET claim_collection_rules='[]'::json WHERE id=$1")
+        .bind(&canvas_current.application_template_id).execute(&pool).await.unwrap();
 
     let mut offer_rollback = application_fixture(&application, "application-offer-rollback");
     offer_rollback.status = ApplicationStatus::Approved;
@@ -1098,12 +1123,45 @@ async fn internal_application_repository_round_trips_filters_and_compares_exact_
     reconciliation_updated
         .integration_context
         .insert("policy".to_owned(), json!({"allowed": true}));
+    let mut current_fact = None;
+    for (id, score) in [
+        ("fact-reconciliation-old", 80),
+        ("fact-reconciliation-current", 92),
+    ] {
+        let mut fact = evidence_fact_fixture(id, &reconciliation_application, reconciliation_time);
+        fact.provider = "canvas".into();
+        fact.fact_type = "canvas.assignment_score".into();
+        fact.requirement_id = Some("grade".into());
+        fact.logical_key = "reconciliation-grade".into();
+        fact.assertion = Map::from_iter([("score_percent".into(), json!(score))]);
+        // Keep both immutable observations, without a supersession edge;
+        // only the explicit head may enter projection and reservation.
+        repository
+            .commit_conflict_evidence(
+                &reconciliation_application.id,
+                &reconciliation_application.organization_id,
+                &fact,
+                &[],
+            )
+            .await
+            .unwrap();
+        current_fact = Some(fact);
+    }
+    assert_eq!(
+        repository
+            .list_evidence_facts_for_application(&reconciliation_application.id)
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
     let reconciliation_runtime = InternalApplicationReconciliationRepository::snapshot(
         &repository,
         &reconciliation_application,
     )
     .await
     .expect("reconciliation runtime snapshot");
+    assert_eq!(reconciliation_runtime.facts, vec![current_fact.unwrap()]);
     let reconciliation_snapshot = reconciliation_approval_snapshot(&reconciliation_runtime);
     let reconciliation_events = ["evidence_policy_permitted", "approval_issuance_succeeded"]
         .into_iter()
@@ -1363,6 +1421,7 @@ fn reconciliation_approval_snapshot(
     let template = snapshot.template.as_ref().expect("reconciliation template");
     let binding = snapshot.binding.as_ref().expect("reconciliation binding");
     CanvasApplicationApprovalSnapshot {
+        evidence_facts: Vec::new(),
         application: json!({
             "id": application.id,
             "organization_id": application.organization_id,
@@ -1378,6 +1437,9 @@ fn reconciliation_approval_snapshot(
         .expect("approval application")
         .clone(),
         application_template: json!({
+            "claim_collection_rules":template.claim_collection_rules,
+            "form_fields":template.form_fields,"name":template.name,"description":template.description,
+            "application_validity_days":template.application_validity_days,
             "id": template.id,
             "organization_id": template.organization_id,
             "credential_template_id": template.credential_template_id,

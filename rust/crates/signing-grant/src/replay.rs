@@ -161,7 +161,7 @@ impl ConsumedGrant {
             || intent.route != "/v1/signing-keys/issuer-identities/certificate-csr"
             || intent.service_id.is_some()
             || intent.key_reference.is_some()
-            || !matches!(intent.key_purpose, "csca" | "x509_doc_signer")
+            || !matches!(intent.key_purpose, "csca" | "x509_doc_signer" | "mdoc_dsc")
             || bound_input(&self.claims, intent, chrono::Utc::now().timestamp()).is_err()
             || actual.organization_id != intent.organization_id
             || actual.route != intent.route
@@ -294,6 +294,39 @@ mod tests {
         assert!(!approved.authorizes(&FinalSignBinding {
             payload: b"changed CSR bytes",
             ..actual
+        }));
+        let mut mdoc_claims = claims.clone();
+        mdoc_claims.key_purpose = "mdoc_dsc".into();
+        let mdoc_intent = GrantBinding {
+            origin: SigningOrigin::GatewayIssuerDid,
+            operation_id: "gateway-csr-1",
+            organization_id: "tenant-1",
+            route,
+            service_id: None,
+            issuer_did: Some(&csr.issuer_did),
+            key_reference: None,
+            key_purpose: "mdoc_dsc",
+            algorithm: "ES256",
+            payload: &payload,
+        };
+        let mdoc_actual = FinalSignBinding {
+            key_purpose: "mdoc_dsc",
+            ..actual
+        };
+        let mdoc_approval = ConsumedGrant {
+            claims: mdoc_claims.clone(),
+        }
+        .approve_issuer_csr(&mdoc_intent, &mdoc_actual)
+        .expect("managed mdoc DSC CSR approval");
+        assert!(mdoc_approval.authorizes(&mdoc_actual));
+        let mdoc_approval = ConsumedGrant {
+            claims: mdoc_claims,
+        }
+        .approve_issuer_csr(&mdoc_intent, &mdoc_actual)
+        .expect("managed mdoc DSC CSR approval");
+        assert!(!mdoc_approval.authorizes(&FinalSignBinding {
+            key_reference: Some("other-key"),
+            ..mdoc_actual
         }));
         assert!(ConsumedGrant { claims }
             .approve_issuer_csr(

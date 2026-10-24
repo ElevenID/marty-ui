@@ -333,6 +333,129 @@ fn router() -> axum::Router {
     })
 }
 
+#[tokio::test]
+async fn delegated_destination_read_enforces_service_actor_scope_and_tenant() {
+    const ORG: &str = "20000000-0000-4000-8000-000000000001";
+    const OTHER: &str = "20000000-0000-4000-8000-000000000002";
+    const KEY: &str = "10000000-0000-4000-8000-000000000001";
+    let repository = Arc::new(Repository::default());
+    let registry = Arc::new(Registry::default());
+    let system = system_delivery_destination_catalog(Utc::now()).remove(0);
+    let mut tenant = system.clone();
+    tenant.id = "delegated-tenant".into();
+    tenant.organization_id = Some(ORG.into());
+    tenant.is_system = false;
+    let mut ownerless = tenant.clone();
+    ownerless.id = "delegated-ownerless".into();
+    ownerless.organization_id = None;
+    for entry in [&system, &tenant, &ownerless] {
+        registry.save_destination(entry).await.unwrap();
+    }
+    for configured in [true, false] {
+        let control_plane = Arc::new(ControlPlane);
+        let app = credential_template_router(CredentialTemplateHttpState {
+            application: Arc::new(CredentialTemplateApplication::new(
+                repository.clone(),
+                control_plane.clone(),
+            )),
+            registry_application: Arc::new(CredentialTemplateRegistryApplication::new(
+                repository.clone(),
+                registry.clone(),
+                control_plane,
+            )),
+            service_authenticator: Arc::new(
+                ServiceTokenAuthenticator::new(configured.then(|| TOKEN.to_owned()), configured)
+                    .unwrap(),
+            ),
+            environment: RuntimeEnvironment::Test,
+        });
+        for (id, token, key, organization, scopes, expected) in [
+            (
+                tenant.id.as_str(),
+                Some(TOKEN),
+                KEY,
+                ORG,
+                "wallet:read",
+                200,
+            ),
+            (
+                system.id.as_str(),
+                Some(TOKEN),
+                KEY,
+                ORG,
+                "wallet:write",
+                200,
+            ),
+            (
+                ownerless.id.as_str(),
+                Some(TOKEN),
+                KEY,
+                ORG,
+                "wallet:read",
+                403,
+            ),
+            (
+                tenant.id.as_str(),
+                Some(TOKEN),
+                KEY,
+                OTHER,
+                "admin:full",
+                403,
+            ),
+            (tenant.id.as_str(), None, KEY, ORG, "wallet:read", 401),
+            (
+                tenant.id.as_str(),
+                Some("incorrect"),
+                KEY,
+                ORG,
+                "wallet:read",
+                401,
+            ),
+            (
+                tenant.id.as_str(),
+                Some(TOKEN),
+                "malformed",
+                ORG,
+                "wallet:read",
+                401,
+            ),
+            (
+                tenant.id.as_str(),
+                Some(TOKEN),
+                KEY,
+                "invalid",
+                "wallet:read",
+                401,
+            ),
+            (system.id.as_str(), Some(TOKEN), KEY, ORG, "trust:read", 403),
+            (system.id.as_str(), Some(TOKEN), KEY, ORG, "", 403),
+        ] {
+            let mut request = Request::builder()
+                .uri(format!("/v1/delivery-destinations/{id}"))
+                .header("x-api-key-id", key)
+                .header("x-organization-id", organization)
+                .header("x-api-key-scopes", scopes)
+                .header("x-user-id", "user-1");
+            if let Some(token) = token {
+                request = request.header("x-service-token", token);
+            }
+            let response = app
+                .clone()
+                .oneshot(request.body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status().as_u16(),
+                if configured { expected } else { 401 },
+                "destination {id}"
+            );
+            if response.status().is_success() {
+                assert_eq!(json_body(response).await["id"], id);
+            }
+        }
+    }
+}
+
 fn create_body() -> Value {
     json!({
         "organization_id":"org-1",
@@ -751,6 +874,60 @@ async fn template_compatibility_and_delivery_destination_routes_are_complete() {
     let compatibility = json_body(response).await;
     assert_eq!(compatibility["credential_format"], "SD_JWT_VC");
     assert_eq!(compatibility["name"], "Generic SD-JWT VC Wallet");
+    let mut expected: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/wallet-compatibility-example.json"
+    ))
+    .unwrap();
+    for field in ["created_at", "updated_at"] {
+        chrono::DateTime::parse_from_rfc3339(compatibility[field].as_str().unwrap()).unwrap();
+        expected[field] = compatibility[field].clone();
+    }
+    assert_eq!(compatibility, expected);
+
+    // The generic profile retains COMPLIANCE-1, so a matching organization
+    // override must apply through the real HTTP owner, not only the merge helper.
+    let response = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/v1/wallet-registry",
+            json!({
+                "organization_id":"org-1", "name":"Campus Wallet",
+                "credential_format":"SD_JWT_VC", "issuance_protocol":"OID4VCI_PRE_AUTH",
+                "compliance_profile_code":"COMPLIANCE-1", "wallet_apps":["Campus Wallet"],
+                "deep_link_pattern":"campus://open?inner={inner_uri_encoded}"
+            }),
+            true,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let created_override = json_body(response).await;
+    let override_id = created_override["id"].as_str().unwrap();
+    let response = app
+        .clone()
+        .oneshot(request(
+            "GET",
+            &format!("/v1/credential-templates/{template_id}/wallet-compatibility"),
+            json!({}),
+            true,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let merged = json_body(response).await;
+    expected["id"] = json!(override_id);
+    expected["organization_id"] = json!("org-1");
+    expected["name"] = json!("Campus Wallet");
+    expected["is_override"] = json!(true);
+    expected["override_precedence"] = json!(50);
+    expected["applied_override_ids"] = json!([override_id]);
+    expected["wallet_apps"] = json!(["EUDI Wallet", "OID4VCI-compatible wallets", "Campus Wallet"]);
+    expected["deep_link_pattern"] = json!("campus://open?inner={inner_uri_encoded}");
+    for field in ["created_at", "updated_at"] {
+        expected[field] = created_override[field].clone();
+    }
+    assert_eq!(merged, expected);
 
     let response = app
         .clone()

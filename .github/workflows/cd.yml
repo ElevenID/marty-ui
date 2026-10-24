@@ -751,6 +751,129 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
+  prepare-official-candidate:
+    needs: [resolve-transaction, record-digests]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    outputs:
+      manifest_sha256: ${{ steps.manifest.outputs.sha256 }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: stack-release-digests-${{ github.run_id }}
+          path: transaction
+      - name: Build exact pre-publication manifest
+        id: manifest
+        env:
+          SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          manifest_timestamp="$(git show -s --format=%cI "$SOURCE_SHA")"
+          python scripts/build_product_stack_manifest.py \
+            --lock release/stack-lock.json --transaction transaction/release-transaction.json \
+            --generated-at "$manifest_timestamp" --output stack-manifest.json
+          echo "sha256=sha256:$(sha256sum stack-manifest.json | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+        with:
+          subject-path: stack-manifest.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: stack-release-official-candidate-${{ github.run_id }}
+          path: stack-manifest.json
+          if-no-files-found: error
+          retention-days: 90
+
+  official-interoperability:
+    name: Collect seven official candidate lanes
+    needs: [resolve-transaction, prepare-official-candidate]
+    permissions:
+      contents: read
+      packages: read
+      attestations: read
+    uses: ElevenID/marty-integration-tests/.github/workflows/official-interoperability.yml@1e646774e43d41868e1e927c48b492d23678dda7
+    with:
+      lane: all
+      collect_only: true
+      review_recipient: ${{ vars.OFFICIAL_REVIEW_RECIPIENT }}
+      candidate_artifact: stack-release-official-candidate-${{ github.run_id }}
+      candidate_manifest_sha256: ${{ needs.prepare-official-candidate.outputs.manifest_sha256 }}
+      candidate_tag: ${{ needs.resolve-transaction.outputs.tag }}
+      harness_revision: 1e646774e43d41868e1e927c48b492d23678dda7
+
+  official-gate-evidence:
+    needs: [resolve-transaction, prepare-official-candidate, official-interoperability]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    env:
+      SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
+      HARNESS_SHA: 1e646774e43d41868e1e927c48b492d23678dda7
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+        with:
+          toolchain: 1.95.0
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: stack-release-official-candidate-${{ github.run_id }}
+          path: candidate
+      - name: Build the shared official evidence validator
+        shell: bash
+        run: >-
+          cargo build --locked --manifest-path rust/Cargo.toml -p marty-release-evidence
+          --bin validate-official-suite --target-dir official-gate-tools
+      - name: Freeze or revalidate the complete same-run official evidence
+        id: freeze
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: >-
+          python scripts/official_review_gate.py snapshot
+          --validator official-gate-tools/debug/validate-official-suite
+          --manifest candidate/stack-manifest.json
+          --source "$SOURCE_SHA" --harness "$HARNESS_SHA"
+          --run-id "$GITHUB_RUN_ID" --current-attempt "$GITHUB_RUN_ATTEMPT"
+      - name: Preserve immutable review inputs before requiring approval
+        if: steps.freeze.outputs.frozen_new == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: official-review-input-${{ github.run_id }}
+          path: official-review-input/
+          if-no-files-found: error
+          retention-days: 90
+      - name: Qualify raw suite results and exact protected-main reviews
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: >-
+          python scripts/official_review_gate.py qualify
+          --validator official-gate-tools/debug/validate-official-suite
+          --manifest candidate/stack-manifest.json
+          --source "$SOURCE_SHA" --harness "$HARNESS_SHA"
+          --run-id "$GITHUB_RUN_ID" --current-attempt "$GITHUB_RUN_ATTEMPT"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: stack-release-official-gate-${{ github.run_id }}
+          path: |
+            official-interoperability.json
+            official-review-input/
+            official-review-authorization/
+          if-no-files-found: error
+          retention-days: 90
+
   public-stack-smoke:
     needs: [resolve-transaction, validate-stack, build-ui, build-services, build-openbao-didcomm, build-keycloak, record-digests]
     runs-on: ubuntu-latest
@@ -1296,6 +1419,8 @@ jobs:
       attestations: read
       contents: read
       packages: read
+    env:
+      CARGO_PROFILE_DEV_DEBUG: 0
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -1308,6 +1433,11 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ github.token }}
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+        with:
+          toolchain: 1.95.0
+      - name: Prepare source-matched Rust KMS operator for image qualification
+        run: cargo build --locked --manifest-path rust/Cargo.toml -p marty-deployment-catalog --bin marty-deploy
       - name: Verify and exercise the exact published OpenBao DIDComm image
         env:
           GH_TOKEN: ${{ github.token }}
@@ -1323,7 +1453,7 @@ jobs:
             --source-ref refs/heads/main --deny-self-hosted-runners
           docker pull "$image"
           docker run --rm --entrypoint /bin/sh "$image" -ec \
-            'test -x /plugins/openbao-didcomm-authcrypt'
+            'test -x /plugins/openbao-didcomm-authcrypt && test -x /usr/local/bin/selfhost-tls-init && test -x /usr/local/bin/selfhost-unseal'
           export MARTY_OPENBAO_PROBE_IMAGE="$image"
           python scripts/probe_didcomm_issuance_token.py
           python scripts/probe_didcomm_openbao_ha.py
@@ -1394,7 +1524,7 @@ jobs:
           retention-days: 90
 
   qualify-release:
-    needs: [resolve-transaction, record-digests, public-stack-smoke, verifier-differential, native-schema-image-qualification, didcomm-plugin-image-qualification, keycloak-kms-image-qualification]
+    needs: [resolve-transaction, record-digests, public-stack-smoke, verifier-differential, native-schema-image-qualification, didcomm-plugin-image-qualification, keycloak-kms-image-qualification, official-gate-evidence]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -1429,6 +1559,10 @@ jobs:
         with:
           name: stack-release-keycloak-kms-gate-${{ github.run_id }}
           path: gates/keycloak
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: stack-release-official-gate-${{ github.run_id }}
+          path: gates/official
       - name: Persist exact gate evidence
         shell: bash
         run: |
@@ -1441,6 +1575,7 @@ jobs:
             native_digest="sha256:$(sha256sum gates/native/native-schema.json | cut -d' ' -f1)"
             didcomm_digest="sha256:$(sha256sum gates/didcomm/didcomm-plugin.json | cut -d' ' -f1)"
             keycloak_digest="sha256:$(sha256sum gates/keycloak/keycloak-kms.json | cut -d' ' -f1)"
+            official_digest="sha256:$(sha256sum gates/official/official-interoperability.json | cut -d' ' -f1)"
             python scripts/release_transaction.py qualify \
               --input transaction/release-transaction.json \
               --gate "public_stack=$GITHUB_RUN_ID:$public_digest" \
@@ -1448,6 +1583,7 @@ jobs:
               --gate "native_schema=$GITHUB_RUN_ID:$native_digest" \
               --gate "didcomm_plugin=$GITHUB_RUN_ID:$didcomm_digest" \
               --gate "keycloak_kms=$GITHUB_RUN_ID:$keycloak_digest" \
+              --gate "official_interoperability=$GITHUB_RUN_ID:$official_digest" \
               --output release-transaction.json
           fi
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -1888,10 +2024,10 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends musl-tools
+          sudo apt-get install -y --no-install-recommends musl-tools cmake
           source scripts/ci/rust_contract_execution.sh
           run_timed deployment_catalog_release cargo test --locked --manifest-path rust/Cargo.toml -p marty-deployment-catalog
-          cargo build --locked --release --target "$TARGET" --manifest-path rust/Cargo.toml \
+          env "CC_${TARGET//-/_}=musl-gcc" cargo build --locked --release --target "$TARGET" --manifest-path rust/Cargo.toml \
             -p marty-deployment-catalog --bin marty-deploy
           asset="marty-deploy-linux-$ARCH"
           cp "rust/target/$TARGET/release/marty-deploy" "$asset"
@@ -1914,7 +2050,7 @@ jobs:
           retention-days: 90
 
   publish-manifest:
-    needs: [resolve-transaction, validate-stack, build-ui, build-services, build-openbao-didcomm, build-keycloak, qualify-release, build-operator-catalog]
+    needs: [resolve-transaction, validate-stack, build-ui, build-services, build-openbao-didcomm, build-keycloak, qualify-release, build-operator-catalog, prepare-official-candidate]
     runs-on: ubuntu-latest
     environment: stack-release
     env:
@@ -2139,56 +2275,19 @@ jobs:
           image: ${{ env.KEYCLOAK_IMAGE }}@${{ needs.build-keycloak.outputs.digest }}
           format: cyclonedx-json
           output-file: marty-ui-keycloak-sbom.cdx.json
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: stack-release-official-candidate-${{ github.run_id }}
+          path: official-candidate
       - name: Add immutable UI evidence
         env:
-          LOCK_FILE: release/stack-lock.json
-          UI_DIGEST: ${{ needs.build-ui.outputs.digest }}
-          SERVICES_DIGEST: ${{ needs.build-services.outputs.services_digest }}
-          MIGRATIONS_DIGEST: ${{ needs.build-services.outputs.migrations_digest }}
-          OPENBAO_DIDCOMM_DIGEST: ${{ needs.build-openbao-didcomm.outputs.digest }}
-          KEYCLOAK_DIGEST: ${{ needs.build-keycloak.outputs.digest }}
-          SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
-          VERSION: ${{ needs.validate-stack.outputs.version }}
+          EXPECTED_MANIFEST_SHA256: ${{ needs.prepare-official-candidate.outputs.manifest_sha256 }}
         shell: bash
         run: |
-          jq \
-            --arg sha "$SOURCE_SHA" \
-            --arg version "$VERSION" \
-            --arg ui_digest "$UI_DIGEST" \
-            --arg services_digest "$SERVICES_DIGEST" \
-            --arg migrations_digest "$MIGRATIONS_DIGEST" \
-            --arg openbao_didcomm_digest "$OPENBAO_DIDCOMM_DIGEST" \
-            --arg keycloak_digest "$KEYCLOAK_DIGEST" '
-            .components += [{
-              name: "marty-ui",
-              repository: "ElevenID/marty-ui",
-              version: $version,
-              commit: $sha,
-              artifacts: [
-                {type: "oci", uri: "ghcr.io/elevenid/marty-ui-oss/ui", digest: $ui_digest,
-                 sbom: ("https://github.com/ElevenID/marty-ui/releases/download/v" + $version + "/marty-ui-sbom.cdx.json"),
-                 provenance: "https://github.com/ElevenID/marty-ui/attestations"},
-                {type: "oci", uri: "ghcr.io/elevenid/marty-ui-oss/services", digest: $services_digest,
-                 sbom: ("https://github.com/ElevenID/marty-ui/releases/download/v" + $version + "/marty-ui-services-sbom.cdx.json"),
-                 provenance: "https://github.com/ElevenID/marty-ui/attestations"},
-                {type: "oci", uri: "ghcr.io/elevenid/marty-ui-oss/migrations", digest: $migrations_digest,
-                 sbom: ("https://github.com/ElevenID/marty-ui/releases/download/v" + $version + "/marty-ui-migrations-sbom.cdx.json"),
-                 provenance: "https://github.com/ElevenID/marty-ui/attestations"},
-                {type: "oci", uri: "ghcr.io/elevenid/marty-ui-oss/openbao-didcomm", digest: $openbao_didcomm_digest,
-                 sbom: ("https://github.com/ElevenID/marty-ui/releases/download/v" + $version + "/marty-ui-openbao-didcomm-sbom.cdx.json"),
-                 provenance: "https://github.com/ElevenID/marty-ui/attestations"},
-                {type: "oci", uri: "ghcr.io/elevenid/marty-ui-oss/keycloak", digest: $keycloak_digest,
-                 sbom: ("https://github.com/ElevenID/marty-ui/releases/download/v" + $version + "/marty-ui-keycloak-sbom.cdx.json"),
-                 provenance: "https://github.com/ElevenID/marty-ui/attestations"}
-              ]
-            }]
-          ' "$LOCK_FILE" > release/complete-stack-lock.json
-          # A resume must reproduce the public manifest byte-for-byte. Anchor
-          # its timestamp to the immutable source commit, not runner wall time.
-          manifest_timestamp="$(git show -s --format=%cI "$SOURCE_SHA")"
-          python scripts/build_stack_manifest.py \
-            --lock release/complete-stack-lock.json \
-            --generated-at "$manifest_timestamp" --output stack-manifest.json
+          set -euo pipefail
+          actual="sha256:$(sha256sum official-candidate/stack-manifest.json | cut -d' ' -f1)"
+          test "$actual" = "$EXPECTED_MANIFEST_SHA256"
+          cp official-candidate/stack-manifest.json stack-manifest.json
           cp transaction/release-transaction.json release-transaction.json
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6
       - name: Sign and checksum manifest evidence

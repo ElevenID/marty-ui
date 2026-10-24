@@ -343,6 +343,42 @@ async fn issuer_profile_creates_managed_key_then_resolves_and_signs_without_a_lo
     .await;
     assert_eq!(status, StatusCode::OK, "{resolved}");
     assert_eq!(resolved["public_jwk"]["crv"], "Ed25519");
+    let inspection_path = format!("/v1/signing-keys/issuer-identities/inspection?organization_id={organization_id}&issuer_did={did}&key_purpose=vc_jwt_issuer&credential_format=SD_JWT_VC&algorithm=EdDSA");
+    let inspect = async |path: &str| {
+        let response = app
+            .clone()
+            .oneshot(Request::get(path).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let status = response.status();
+        if status == StatusCode::OK {
+            assert_eq!(response.headers()["cache-control"], "no-store");
+        }
+        let body: Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        (status, body)
+    };
+    let (status, inspection) = inspect(&inspection_path).await;
+    assert_eq!(status, StatusCode::OK, "{inspection}");
+    assert_eq!(inspection["managed_signer"]["status"], "matched");
+    assert_eq!(inspection["registry"]["source"], "scoped_document");
+    assert_eq!(inspection["registry"]["document"]["id"], did);
+    assert_eq!(inspection["managed_signer"]["assertion_authorized"], true);
+    assert_eq!(
+        inspection["public_resolution"]["status"], "unavailable",
+        "Reserved example host must not be reported as public publication"
+    );
+    assert_eq!(inspection["assertion_ready"], false);
+    assert_eq!(
+        inspect(&inspection_path.replace(
+            &format!("organization_id={organization_id}"),
+            "organization_id=another-tenant"
+        ))
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
     let (status, signed) = json_route(
         &app,
         "POST",
@@ -366,6 +402,7 @@ async fn issuer_profile_creates_managed_key_then_resolves_and_signs_without_a_lo
         &signed,
         &did_document.document,
         &public_did,
+        &inspection,
     ] {
         for secret in [&endpoint[..], "test-only", reference] {
             assert!(
@@ -377,6 +414,10 @@ async fn issuer_profile_creates_managed_key_then_resolves_and_signs_without_a_lo
     keys.lock()
         .unwrap()
         .insert(reference.to_owned(), "ed25519-rotated".into());
+    let (status, stale_inspection) = inspect(&inspection_path).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(stale_inspection["managed_signer"]["status"], "mismatch");
+    assert_eq!(stale_inspection["assertion_ready"], false);
     let (status, stale) = json_route(
         &app,
         "POST",
@@ -393,6 +434,13 @@ async fn issuer_profile_creates_managed_key_then_resolves_and_signs_without_a_lo
     .await;
     assert_eq!(status, StatusCode::UNAUTHORIZED, "{stale}");
     keys.lock().unwrap().remove(reference);
+    let (status, unavailable_inspection) = inspect(&inspection_path).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        unavailable_inspection["managed_signer"]["status"],
+        "unavailable"
+    );
+    assert_eq!(unavailable_inspection["assertion_ready"], false);
     let (status, missing) = json_route(
         &app,
         "POST",

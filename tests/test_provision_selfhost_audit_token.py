@@ -1,5 +1,6 @@
 """Disposable audit access is exact, short-lived and recoverable."""
 
+import json
 import os
 import stat
 import sys
@@ -10,6 +11,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import provision_selfhost_audit_token as audit  # noqa: E402
+import provision_selfhost_audit_identity as audit_identity  # noqa: E402
+import provision_selfhost_custody_signer as signer  # noqa: E402
 
 
 ORG = "00000000-0000-0000-0000-000000000001"
@@ -148,6 +151,102 @@ def test_existing_output_refuses_to_create_token(
     with pytest.raises(ValueError, match="input or output"):
         audit.provision("https://127.0.0.1:18200", state, output, ORG, SLUG, DID,
                         "marty-selfhost-openbao-qualification")
+
+
+def test_refresh_refuses_root_authority_before_reading_saved_token(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    if os.name != "posix":
+        pytest.skip("POSIX private-file behavior")
+    monkeypatch.setattr(audit.os, "geteuid", lambda: 0)
+    private = tmp_path / "private"
+    state = private / "openbao-state"
+    output = private / "secrets"
+    (state / "tls").mkdir(parents=True)
+    output.mkdir()
+    state.chmod(0o700)
+    output.chmod(0o700)
+    (state / "tls" / "ca.crt").write_text("ca", encoding="ascii")
+    (output / "selfhost_audit_token").write_text("old", encoding="ascii")
+    monkeypatch.setattr(audit, "verified_openbao_owner", lambda *_args: "locked-image")
+    monkeypatch.setattr(audit, "read_protected_root_token",
+                        lambda _path: pytest.fail("root token was read"))
+    monkeypatch.setattr(audit, "Bao", lambda *_args: pytest.fail("Bao was used"))
+    with pytest.raises(ValueError, match="audit identity is required"):
+        audit.provision("https://127.0.0.1:18200", state, output, ORG, SLUG, DID,
+                        "marty-selfhost-openbao-qualification", refresh_token=True)
+    assert (output / "selfhost_audit_token").read_text() == "old"
+
+
+def test_rootless_refresh_replaces_old_orphan_without_saved_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    if os.name != "posix":
+        pytest.skip("POSIX private-file behavior")
+    monkeypatch.setattr(audit.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(audit.os, "fchown", lambda *_args: None)
+    private = tmp_path / "private"
+    state = private / "openbao-state"
+    output = private / "secrets"
+    identity = private / "audit-identity"
+    (state / "tls").mkdir(parents=True)
+    output.mkdir()
+    identity.mkdir()
+    for path in (state, output, identity):
+        path.chmod(0o700)
+    (state / "tls" / "ca.crt").write_text("ca", encoding="ascii")
+    token_file = output / "selfhost_audit_token"
+    token_file.write_text("old", encoding="ascii")
+    monkeypatch.setattr(audit, "verified_openbao_owner", lambda *_args: "locked-image")
+    monkeypatch.setattr(audit, "read_protected_root_token",
+                        lambda _path: pytest.fail("root token was read"))
+    monkeypatch.setattr(audit_identity, "checked_login", lambda *_args: "operator")
+    monkeypatch.setattr(audit_identity, "mint", lambda *_args: "new")
+    _, allowed = audit.policy_for(ORG, SLUG, DID)
+    revoked = []
+
+    class FakeBao:
+        def __init__(self, endpoint, ca, token):
+            self.endpoint = endpoint
+            self.ca = ca
+            self.token = token
+
+        def request(self, method, path, body=None):
+            if path == "auth/token/lookup-self":
+                assert self.token == "new"
+                return {"data": {"policies": [audit.POLICY],
+                                 "orphan": True, "ttl": 3599}}
+            if path == "sys/capabilities-self":
+                assert self.token == "new"
+                return {item: (["read"] if item in allowed else ["deny"])
+                        for item in body["paths"]}
+            if path == "auth/token/revoke-self":
+                revoked.append(self.token)
+                return {}
+            raise AssertionError(path)
+
+    monkeypatch.setattr(audit, "Bao", FakeBao)
+
+    def refresh(_root, *args, input):
+        assert args[:2] == ("operator", "leaf-refresh")
+        credentials = json.loads(input)
+        assert credentials == {"old_token": "old", "new_token": "new",
+                               "operator_token": "operator"}
+        assert token_file.read_text() == "old"
+        assert token_file.with_name(token_file.name + ".new").read_text() == "new"
+        revoked.append(credentials["old_token"])
+        return b""
+
+    # HTTP revocation and failure semantics are covered through actual native
+    # HTTPS in test_selfhost_native_rotation; this test owns provisioning order.
+    monkeypatch.setattr(signer, "operator_bytes", refresh)
+    audit.provision("https://127.0.0.1:18200", state, output, ORG, SLUG, DID,
+                    "marty-selfhost-openbao-qualification", refresh_token=True,
+                    identity_root=identity)
+    assert token_file.read_text() == "new"
+    assert stat.S_IMODE(token_file.stat().st_mode) == 0o400
+    assert revoked == ["old"]
+    assert not (state / "root.token").exists()
 
 
 def test_rejects_foreign_binding_before_reading_root_token(

@@ -94,6 +94,18 @@ const LIST_EVIDENCE_FACTS: &str = "SELECT
     WHERE application_id = $1
     ORDER BY created_at";
 
+// The head table is authoritative; older observations may intentionally be
+// retained without a supersession edge and must not become current by inference.
+const LIST_CURRENT_EVIDENCE_FACTS: &str = "SELECT fact.*
+    FROM issuance_service.evidence_facts AS fact
+    JOIN issuance_service.evidence_fact_heads AS head
+      ON head.organization_id = fact.organization_id
+     AND head.application_id = fact.application_id
+     AND head.logical_key = fact.logical_key
+     AND head.fact_id = fact.id
+    WHERE fact.application_id = $1
+    ORDER BY fact.created_at, fact.id";
+
 const LIST_ISSUANCE_EVENTS: &str = "SELECT
         id, transaction_id, application_id, event_type, metadata, created_at
     FROM issuance_service.issuance_events
@@ -475,6 +487,20 @@ impl InternalApplicationRepository for PostgresInternalApplicationRepository {
             .collect()
     }
 
+    async fn list_current_evidence_facts_for_application(
+        &self,
+        application_id: &str,
+    ) -> Result<Vec<EvidenceFactRecord>, InternalApplicationRepositoryError> {
+        sqlx::query(LIST_CURRENT_EVIDENCE_FACTS)
+            .bind(application_id)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(repository_error)?
+            .into_iter()
+            .map(evidence_fact_row)
+            .collect()
+    }
+
     async fn list_events_for_application(
         &self,
         application_id: &str,
@@ -707,7 +733,7 @@ impl InternalApplicationReconciliationRepository for PostgresInternalApplication
         .await
         .map_err(|_| EvidenceReconciliationRepositoryError::Unavailable)?
         .filter(|template| template.organization_id == application.organization_id);
-        let facts = InternalApplicationRepository::list_evidence_facts_for_application(
+        let facts = InternalApplicationRepository::list_current_evidence_facts_for_application(
             self,
             &application.id,
         )
@@ -1232,11 +1258,22 @@ impl InternalApplicationOfferRepository for PostgresInternalApplicationRepositor
                     let refresh_canvas_context = canvas_bound_application(&current);
                     let mut refreshed_context = prepared.clone();
                     if refresh_canvas_context {
-                        refreshed_context.claims = existing.claims.clone();
-                        if let Some(vct) = prepared.claims.get("_vct") {
-                            refreshed_context
-                                .claims
-                                .insert("_vct".to_owned(), vct.clone());
+                        let mapped = sqlx::query_scalar::<_, bool>(
+                            "SELECT COALESCE(jsonb_array_length(claim_collection_rules::jsonb), 0) > 0
+                             FROM issuance_service.application_templates
+                             WHERE id = $1 AND organization_id = $2 FOR SHARE",
+                        )
+                        .bind(&current.application_template_id)
+                        .bind(&current.organization_id)
+                        .fetch_optional(&mut *database).await.map_err(offer_repository_error)?
+                        .ok_or(InternalApplicationOfferError::Unavailable)?;
+                        if !mapped {
+                            refreshed_context.claims = existing.claims.clone();
+                            if let Some(vct) = prepared.claims.get("_vct") {
+                                refreshed_context
+                                    .claims
+                                    .insert("_vct".to_owned(), vct.clone());
+                            }
                         }
                     }
                     let refreshed = refresh_pending_application_offer(

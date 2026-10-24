@@ -27,10 +27,12 @@ from probe_didcomm_openbao_ha import (
     IMAGE,
     ROOT,
     docker,
+    docker_host_path,
     prepare_image,
     request,
     require_status,
     wait_for,
+    wait_for_active_node,
 )
 from with_disposable_event_stream_kms import execute as with_disposable_tls_kms
 
@@ -269,10 +271,11 @@ def build_rust() -> Path:
             record_preparation_timing(phase, status, started)
             if cache_available:
                 cache_available = record_preparation_cache(phase)
-    binary = (
-        rust
-        / "target/debug"
-        / ("marty-signing-keys.exe" if os.name == "nt" else "marty-signing-keys")
+    target = Path(os.environ.get("CARGO_TARGET_DIR", rust / "target"))
+    if not target.is_absolute():
+        target = rust / target
+    binary = target / "debug" / (
+        "marty-signing-keys.exe" if os.name == "nt" else "marty-signing-keys"
     )
     if not binary.is_file():
         raise RuntimeError("Candidate Signing Keys binary is missing")
@@ -363,7 +366,7 @@ def start_bao(name: str, volume: str, ca_file: Path) -> str:
         "-v",
         f"{volume}:/bao/data",
         "-v",
-        f"{config}:/bao/config/openbao.hcl:ro",
+        f"{docker_host_path(config)}:/bao/config/openbao.hcl:ro",
         IMAGE,
         "server",
         "-config=/bao/config/openbao.hcl",
@@ -378,7 +381,7 @@ def start_bao(name: str, volume: str, ca_file: Path) -> str:
     return base
 
 
-def bootstrap_bao(name: str, state: str, runtime: str) -> None:
+def bootstrap_bao(name: str, state: str, runtime: str, *, expect_refusal: bool = False) -> None:
     result = subprocess.run(
         [
             "docker",
@@ -397,11 +400,11 @@ def bootstrap_bao(name: str, state: str, runtime: str) -> None:
             "-v",
             f"{runtime}:/bao/runtime",
             "-v",
-            f"{ROOT / 'docker/openbao-init.sh'}:/scripts/openbao-init.sh:ro",
+            f"{docker_host_path(ROOT / 'docker/openbao-init.sh')}:/scripts/openbao-init.sh:ro",
             "-v",
-            f"{ROOT / 'docker/openbao-selfhost-init.sh'}:/scripts/openbao-selfhost-init.sh:ro",
+            f"{docker_host_path(ROOT / 'docker/openbao-selfhost-init.sh')}:/scripts/openbao-selfhost-init.sh:ro",
             "-v",
-            f"{ROOT / 'docker/openbao-haip-workload-policy.hcl'}:/scripts/openbao-haip-workload-policy.hcl:ro",
+            f"{docker_host_path(ROOT / 'docker/openbao-haip-workload-policy.hcl')}:/scripts/openbao-haip-workload-policy.hcl:ro",
             "--entrypoint",
             "/bin/sh",
             IMAGE,
@@ -411,6 +414,11 @@ def bootstrap_bao(name: str, state: str, runtime: str) -> None:
         timeout=300,
         check=False,
     )
+    if expect_refusal:
+        if (result.returncode == 0 or
+                b"requires fresh, uninitialized Raft state" not in result.stderr):
+            raise RuntimeError("Initialized OpenBao did not refuse privileged rebootstrap")
+        return
     if result.returncode:
         raise RuntimeError("Disposable OpenBao bootstrap failed")
 
@@ -677,34 +685,52 @@ def flow_haip_phase(
             "MARTY_TEST_SIGNING_KEYS_URL"
         ].replace("127.0.0.1", "host.docker.internal")
         container_environment["MARTY_TEST_HAIP_FLOW_INPUT"] = f"/out/{input_path.name}"
-        result = subprocess.run(
-            [
-                "docker",
-                "run",
-                "--rm",
-                "--add-host",
-                "host.docker.internal:host-gateway",
-                "--label",
-                "marty.disposable=kms-coordinated-restore",
-                "-v",
-                f"{ROOT / 'openbao/didcomm-authcrypt'}:/src:ro",
-                "-v",
-                f"{input_path.parent}:/out",
-                "-w",
-                "/src",
-                "-e",
-                "MARTY_TEST_SIGNING_KEYS_URL",
-                "-e",
-                "MARTY_TEST_SIGNING_KEYS_API_KEY",
-                "-e",
-                "MARTY_TEST_HAIP_FLOW_INPUT",
-                GO_IMAGE,
-                *go_test,
-            ],
-            env=container_environment,
-            timeout=300,
-            check=False,
+        inherited = container_environment.get("WSLENV", "")
+        forwarded = ("MARTY_TEST_SIGNING_KEYS_URL", "MARTY_TEST_SIGNING_KEYS_API_KEY",
+                     "MARTY_TEST_HAIP_FLOW_INPUT")
+        container_environment["WSLENV"] = ":".join(
+            part for part in (inherited, *forwarded) if part
         )
+        output_volume = f"kms-restore-haip-output-{uuid.uuid4().hex[:12]}"
+        docker("volume", "create", "--label",
+               "marty.disposable=kms-coordinated-restore", output_volume)
+        try:
+            result = subprocess.run(
+                [
+                    "docker",
+                    "run",
+                    "--rm",
+                    "--add-host",
+                    "host.docker.internal:host-gateway",
+                    "--label",
+                    "marty.disposable=kms-coordinated-restore",
+                    "-v",
+                    f"{docker_host_path(ROOT / 'openbao/didcomm-authcrypt')}:/src:ro",
+                    "-v",
+                    f"{output_volume}:/out",
+                    "-w",
+                    "/src",
+                    "-e",
+                    "MARTY_TEST_SIGNING_KEYS_URL",
+                    "-e",
+                    "MARTY_TEST_SIGNING_KEYS_API_KEY",
+                    "-e",
+                    "MARTY_TEST_HAIP_FLOW_INPUT",
+                    GO_IMAGE,
+                    *go_test,
+                ],
+                env=container_environment,
+                timeout=300,
+                check=False,
+            )
+            if result.returncode == 0:
+                response = docker("run", "--rm", "-v", f"{output_volume}:/out:ro",
+                                  "--entrypoint", "/bin/cat", GO_IMAGE,
+                                  f"/out/{input_path.name}")
+                input_path.write_text(response + "\n", encoding="utf-8")
+        finally:
+            subprocess.run(["docker", "volume", "rm", "-f", output_volume],
+                           capture_output=True, timeout=30, check=False)
     if result.returncode or not input_path.is_file():
         raise RuntimeError("Disposable Go holder HAIP response generation failed")
     for target, database in (
@@ -799,9 +825,9 @@ def run() -> None:
             unseal = read_volume_file(state, "unseal.key")
             token = read_volume_file(runtime, "signing_keys_openbao_token")
             didcomm_token = read_volume_file(runtime, "didcomm_issuance_openbao_token")
-            bootstrap_bao(bao_name, state, runtime)
+            bootstrap_bao(bao_name, state, runtime, expect_refusal=True)
             if read_volume_file(runtime, "didcomm_issuance_openbao_token") != didcomm_token:
-                raise RuntimeError("Idempotent OpenBao bootstrap replaced the DIDComm Issuance token")
+                raise RuntimeError("Refused rebootstrap changed the DIDComm Issuance token")
             version = "0" * 32
             expected_capabilities = {
                 f"didcomm/keys/synthetic/issuer/versions/{version}": ["read"],
@@ -836,21 +862,13 @@ def run() -> None:
             )
             live_issuance_signing_phase(bao_url, token, source_ca)
             live_didcomm_phase()
-            init_material = json.loads(read_volume_file(state, "selfhost-init.json"))
-            if unseal != init_material["unseal_keys_b64"][0]:
-                raise RuntimeError(
-                    "Disposable OpenBao unseal file differs from init material"
-                )
             host_state = temp / "state"
             host_state.mkdir()
             (host_state / "tls").mkdir()
             shutil.copyfile(source_ca, host_state / "tls" / "ca.crt")
-            for name, value in (
-                ("selfhost-init.json", read_volume_file(state, "selfhost-init.json")),
-                ("root.token", root),
-                ("unseal.key", unseal),
-            ):
-                (host_state / name).write_text(value, encoding="utf-8")
+            root_file = host_state / "root.token"
+            root_file.write_text(root, encoding="utf-8")
+            root_file.chmod(0o600)
             containers.append(pg_name)
             database_url, _ = start_postgres(pg_name, pg_data)
             docker(
@@ -907,16 +925,22 @@ def run() -> None:
                 raise RuntimeError(
                     "Disposable source OpenBao did not unseal with saved key"
                 )
-            wait_for(
-                "source Raft leader after unseal",
-                lambda: (
-                    request(bao_url, "GET", "sys/leader", token=root,
-                            ca_file=source_ca)[1].get("is_self")
-                    is True
-                ),
-            )
+            wait_for_active_node(bao_url, ca_file=source_ca,
+                                 operation="source Raft leader after unseal")
 
             export_dir = temp / "exports"
+            export_dir.mkdir(mode=0o700)
+            snapshot_identity = temp / "snapshot-identity"
+            snapshot_identity.mkdir(mode=0o700)
+            provision = subprocess.run(
+                [sys.executable, str(ROOT / "scripts/provision_selfhost_snapshot_identity.py"),
+                 "--bao-addr", bao_url, "--bao-ca", str(source_ca),
+                 "--root-token-file", str(root_file), "--output", str(snapshot_identity)],
+                capture_output=True, timeout=60, check=False,
+            )
+            if provision.returncode:
+                raise RuntimeError("Coordinated snapshot identity provisioning failed")
+            root_file.unlink()
             result = subprocess.run(
                 [
                     sys.executable,
@@ -927,6 +951,8 @@ def run() -> None:
                     str(export_dir),
                     "--bao-url",
                     bao_url,
+                    "--snapshot-identity-dir",
+                    str(snapshot_identity),
                 ],
                 capture_output=True,
                 timeout=300,
@@ -936,24 +962,22 @@ def run() -> None:
                 raise RuntimeError("Coordinated OpenBao snapshot export failed")
             archive = next(export_dir.glob("*.zip"))
             with zipfile.ZipFile(archive) as bundle:
+                if any(name.startswith("recovery/") for name in bundle.namelist()):
+                    raise RuntimeError("Coordinated snapshot contains root or unseal files")
                 snapshot = bundle.read("raft.snap")
                 manifest = json.loads(bundle.read("manifest.json"))
             if hashlib.sha256(snapshot).hexdigest() != manifest["snapshot_sha256"]:
                 raise RuntimeError("Coordinated OpenBao snapshot hash mismatch")
-            docker(
-                "exec",
-                pg_name,
-                "pg_dump",
-                "-Fc",
-                "-U",
-                "postgres",
-                "-d",
-                DATABASE,
-                "-f",
-                "/tmp/kms.dump",
-            )
             dump = temp / "kms.dump"
-            docker("cp", f"{pg_name}:/tmp/kms.dump", str(dump))
+            with dump.open("wb") as stream:
+                saved = subprocess.run(
+                    ["docker", "exec", pg_name, "pg_dump", "-Fc", "-U",
+                     "postgres", "-d", DATABASE],
+                    stdout=stream, stderr=subprocess.PIPE, timeout=120,
+                    check=False,
+                )
+            if saved.returncode or not dump.stat().st_size:
+                raise RuntimeError("Disposable pg_dump failed")
             docker("rm", "-f", pg_name)
             containers.remove(pg_name)
             docker("stop", bao_name)
@@ -961,24 +985,13 @@ def run() -> None:
 
             containers.append(pg_name)
             restored_database_url, _ = start_postgres(pg_name, restored_pg)
-            docker("cp", str(dump), f"{pg_name}:/tmp/kms.dump")
-            restored = subprocess.run(
-                [
-                    "docker",
-                    "exec",
-                    pg_name,
-                    "pg_restore",
-                    "-U",
-                    "postgres",
-                    "-d",
-                    DATABASE,
-                    "/tmp/kms.dump",
-                ],
-                capture_output=True,
-                text=True,
-                timeout=120,
-                check=False,
-            )
+            with dump.open("rb") as stream:
+                restored = subprocess.run(
+                    ["docker", "exec", "-i", pg_name, "pg_restore", "-U",
+                     "postgres", "-d", DATABASE],
+                    stdin=stream, capture_output=True, text=True,
+                    timeout=120, check=False,
+                )
             if restored.returncode:
                 raise RuntimeError(
                     f"Disposable pg_restore failed: {restored.stderr[-1200:]}"
@@ -1003,16 +1016,8 @@ def run() -> None:
                 ca_file=restored_ca,
             )
             new_root = initialized["root_token"]
-            wait_for(
-                "replacement Raft leader",
-                lambda: (
-                    request(restored_bao_url, "GET", "sys/leader", token=new_root,
-                            ca_file=restored_ca)[
-                        1
-                    ].get("is_self")
-                    is True
-                ),
-            )
+            wait_for_active_node(restored_bao_url, ca_file=restored_ca,
+                                 operation="replacement Raft leader")
             snapshot_request = urllib.request.Request(
                 restored_bao_url + "/v1/sys/storage/raft/snapshot-force",
                 data=snapshot,
@@ -1071,16 +1076,8 @@ def run() -> None:
                     raise RuntimeError(
                         f"Restored OpenBao unseal failed: health {health}, status {unseal_status}"
                     )
-            wait_for(
-                "restored Raft leader",
-                lambda: (
-                    request(restored_bao_url, "GET", "sys/leader", token=root,
-                            ca_file=restored_ca)[1].get(
-                        "is_self"
-                    )
-                    is True
-                ),
-            )
+            wait_for_active_node(restored_bao_url, ca_file=restored_ca,
+                                 operation="restored Raft leader")
             signing_process, signing_url, secret_url = start_signing(
                 binary,
                 restored_bao_url,

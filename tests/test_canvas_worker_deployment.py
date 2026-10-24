@@ -819,7 +819,7 @@ def test_explicit_consumer_suite_runs_all_fifteen_compositions_and_no_bundle_own
     assert len(comparisons) == len({name for name, _ in comparisons}) == 15
     assert len(scopes) == 8
     assert sum(options.get("isolated", False) for _, options in comparisons) == 8
-    assert sum(options.get("beta", False) for _, options in comparisons) == 2
+    assert sum(options.get("beta", False) for _, options in comparisons) == 10
     assert len(renders) == 21
     assert all(
         options["compose_command"] == ["/owned/pinned-compose"]

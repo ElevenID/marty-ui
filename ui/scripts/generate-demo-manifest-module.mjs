@@ -4,6 +4,28 @@ import { fileURLToPath } from 'node:url';
 import { generatedTextMatches } from './generated-text.mjs';
 
 const uiRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const walletSchemaSource = path.join(uiRoot, '..', 'deploy-config', 'schemas', 'stack-demo-manifest.schema.json');
+const walletSchemaOutput = path.join(uiRoot, 'src', 'generated', 'demoWalletSchema.generated.json');
+if (fs.existsSync(walletSchemaSource)) {
+  const schema = JSON.parse(fs.readFileSync(walletSchemaSource, 'utf8'));
+  const walletSchema = {
+    ...schema.$defs.scenario.properties.wallets.items,
+    $defs: { stringList: schema.$defs.stringList },
+  };
+  const generated = `${JSON.stringify(walletSchema, null, 2)}\n`;
+  if (process.argv.includes('--check')) {
+    if (!fs.existsSync(walletSchemaOutput) || !generatedTextMatches(fs.readFileSync(walletSchemaOutput, 'utf8'), generated)) {
+      throw new Error('Generated demo wallet schema is stale. Run the generator and commit its output.');
+    }
+  } else {
+    fs.mkdirSync(path.dirname(walletSchemaOutput), { recursive: true });
+    fs.writeFileSync(walletSchemaOutput, generated, 'utf8');
+  }
+} else {
+  // UI images copy only ui/. Their committed, source-checked projection keeps
+  // wallet validation self-contained without widening the image build context.
+  JSON.parse(fs.readFileSync(walletSchemaOutput, 'utf8'));
+}
 const manifestRoot = path.join(uiRoot, 'public', 'demos', 'manifests');
 const outputPath = path.join(uiRoot, 'src', 'generated', 'demoManifests.generated.js');
 const index = JSON.parse(fs.readFileSync(path.join(manifestRoot, 'index.json'), 'utf8'));

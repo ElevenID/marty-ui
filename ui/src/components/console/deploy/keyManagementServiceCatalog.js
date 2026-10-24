@@ -7,7 +7,7 @@ const DEFAULT_KEY_MANAGEMENT_SERVICE_TYPE_CATALOG = [
     protocol: 'vault-transit',
     category: 'service-hsm',
     auth_modes: ['token'],
-    connection_fields: ['endpoint', 'mount', 'namespace'],
+    connection_fields: ['endpoint', 'mount', 'namespace', 'ca_cert_file'],
     key_reference_label: 'Transit key name',
     supports_inventory: true,
   },
@@ -19,7 +19,7 @@ const DEFAULT_KEY_MANAGEMENT_SERVICE_TYPE_CATALOG = [
     protocol: 'vault-transit',
     category: 'service-hsm',
     auth_modes: ['token'],
-    connection_fields: ['endpoint', 'mount', 'namespace'],
+    connection_fields: ['endpoint', 'mount', 'namespace', 'ca_cert_file'],
     key_reference_label: 'Transit key name',
     supports_inventory: true,
   },
@@ -67,7 +67,7 @@ const DEFAULT_KEY_MANAGEMENT_SERVICE_TYPE_CATALOG = [
     protocol: 'vault-transit-compatible',
     category: 'custom',
     auth_modes: ['token'],
-    connection_fields: ['endpoint', 'mount', 'namespace'],
+    connection_fields: ['endpoint', 'mount', 'namespace', 'ca_cert_file'],
     key_reference_label: 'Key reference',
     supports_inventory: false,
   },
@@ -81,6 +81,7 @@ export const KEY_PURPOSE_ALGORITHM_CONSTRAINTS = {
   x509_doc_signer: ['ES256', 'ES384', 'RS256', 'EdDSA'],
   holder_binding: ['ES256', 'EdDSA'],
   presentation_signing: ['ES256', 'EdDSA'],
+  oid4vp_request_signing: ['ES256'],
   vdsnc_signing: ['ES256', 'ES384', 'EdDSA'],
   csca: ['ES256', 'ES384', 'ES512', 'RS256', 'EdDSA'],
   jwks_signing: ['ES256', 'ES384', 'RS256', 'EdDSA'],
@@ -92,6 +93,7 @@ export const KEY_MANAGEMENT_PURPOSES = [
   { value: 'x509_doc_signer', label: 'X.509 document signer', formats: [] },
   { value: 'holder_binding', label: 'Holder binding key', formats: ['mso_mdoc', 'zk_mdoc'] },
   { value: 'presentation_signing', label: 'Presentation signing', formats: [] },
+  { value: 'oid4vp_request_signing', label: 'OID4VP request signing', formats: ['oauth-authz-req+jwt'] },
   { value: 'vdsnc_signing', label: 'VDS-NC / travel credential signing', formats: ['vds_nc'] },
   { value: 'jwks_signing', label: 'JWKS endpoint key', formats: ['jwt_vc_json', 'dc+sd-jwt'] },
   { value: 'csca', label: 'CSCA / IACA root authority', formats: [] },
@@ -162,6 +164,16 @@ export const parseListInput = (value) => {
   return deduped
 }
 
+// The native transit transport already accepts an optional mounted CA file.
+// Older server catalogs omit it; retain the same control for those responses.
+const connectionFieldsForService = (entry) => {
+  const fields = parseListInput(entry.connection_fields)
+  if (['vault-transit', 'vault-transit-compatible'].includes(entry.protocol) && !fields.includes('ca_cert_file')) {
+    fields.push('ca_cert_file')
+  }
+  return fields
+}
+
 export const normalizeServiceTypeCatalog = (catalog) => {
   const rawCatalog = Array.isArray(catalog) && catalog.length > 0
     ? catalog
@@ -177,7 +189,7 @@ export const normalizeServiceTypeCatalog = (catalog) => {
       protocol: normalizeString(entry.protocol) || 'custom',
       category: normalizeString(entry.category) || 'custom',
       auth_modes: parseListInput(entry.auth_modes),
-      connection_fields: parseListInput(entry.connection_fields),
+      connection_fields: connectionFieldsForService(entry),
       key_reference_label: normalizeString(entry.key_reference_label) || 'Key reference',
       supports_inventory: Boolean(entry.supports_inventory),
     }))
@@ -221,6 +233,7 @@ export const normalizeKeyManagementService = (service, catalog) => {
     region: normalizeString(service.region),
     mount: normalizeString(service.mount),
     namespace: normalizeString(service.namespace),
+    ca_cert_file: normalizeString(service.ca_cert_file),
     auth_mode: normalizeString(service.auth_mode) || definition.auth_modes[0] || 'custom',
     auth_reference: normalizeString(service.auth_reference),
     key_reference: keyReference,
@@ -261,6 +274,9 @@ export const normalizeKeyManagementService = (service, catalog) => {
   }
 }
 
+const cloneConfigMap = (value) => value && typeof value === 'object' && !Array.isArray(value)
+  ? structuredClone(value) : {}
+
 export const normalizeKeyManagementConfig = (data) => {
   const normalized = data && typeof data === 'object' ? data : {}
   const serviceTypeCatalog = normalizeServiceTypeCatalog(normalized.service_type_catalog)
@@ -285,7 +301,65 @@ export const normalizeKeyManagementConfig = (data) => {
     default_service_id: defaultServiceId,
     service_type_catalog: serviceTypeCatalog,
     services,
+    key_reference_purposes: cloneConfigMap(normalized.key_reference_purposes),
+    type_defaults: cloneConfigMap(normalized.type_defaults),
+    format_defaults: cloneConfigMap(normalized.format_defaults),
   }
+}
+
+export const createKeyManagementConfigUpdate = (config, changes = {}) => {
+  const current = normalizeKeyManagementConfig(config)
+  const services = changes.services ?? current.services
+  const defaultServiceId = Object.hasOwn(changes, 'default_service_id')
+    ? changes.default_service_id : current.default_service_id
+  if (defaultServiceId !== null && !services.some((service) => service.id === defaultServiceId)) {
+    throw new Error('Default signing service must be registered')
+  }
+  return {
+    services,
+    default_service_id: defaultServiceId,
+    key_reference_purposes: current.key_reference_purposes,
+    type_defaults: current.type_defaults,
+    format_defaults: current.format_defaults,
+  }
+}
+
+export const createKeyManagementRemovalPayload = (config, serviceId) => {
+  const current = normalizeKeyManagementConfig(config)
+  if (!current.services.some((service) => service.id === serviceId)) {
+    throw new Error('Removed signing service must be registered')
+  }
+  const services = current.services.filter((service) => service.id !== serviceId)
+  const payload = createKeyManagementConfigUpdate(current, {
+    services,
+    default_service_id: current.default_service_id === serviceId
+      ? services[0]?.id || null : current.default_service_id,
+  })
+  delete payload.key_reference_purposes[serviceId]
+  for (const routing of [payload.type_defaults, payload.format_defaults]) {
+    for (const [purpose, boundService] of Object.entries(routing)) {
+      if (boundService === serviceId) delete routing[purpose]
+    }
+  }
+  return payload
+}
+
+export const createKeyManagementRegistrationPayload = (config, newService, makeDefault = false) => {
+  const current = normalizeKeyManagementConfig(config)
+  if (!newService?.id || current.services.some((service) => service.id === newService.id)
+    || Object.hasOwn(current.key_reference_purposes, newService.id)) {
+    throw new Error('New signing service must have a fresh identity')
+  }
+  const reference = normalizeString(newService.key_reference).trim()
+  const purposes = [...new Set(Array.isArray(newService.key_purposes) ? newService.key_purposes : [])]
+  // Only the explicit selected key receives its explicitly selected purposes.
+  // Aliases and other services are never granted permissions by inference.
+  const payload = createKeyManagementConfigUpdate(current, {
+    services: [...current.services, newService],
+    default_service_id: makeDefault ? newService.id : (current.default_service_id || newService.id),
+  })
+  if (reference && purposes.length) payload.key_reference_purposes[newService.id] = { [reference]: purposes }
+  return payload
 }
 
 export const getDefaultKeyManagementService = (config) => {
@@ -324,6 +398,7 @@ export const createKeyManagementServicePayload = (wizardData, catalog) => {
       region: wizardData.region,
       mount: wizardData.mount,
       namespace: wizardData.namespace,
+      ca_cert_file: wizardData.ca_cert_file,
       auth_mode: wizardData.auth_mode,
       auth_reference: wizardData.auth_reference,
       key_reference: wizardData.key_reference,
@@ -359,5 +434,8 @@ export default {
   getServiceTypeDefinition,
   getDefaultKeyManagementService,
   createKeyManagementServicePayload,
+  createKeyManagementRegistrationPayload,
+  createKeyManagementConfigUpdate,
+  createKeyManagementRemovalPayload,
   parseListInput,
 }

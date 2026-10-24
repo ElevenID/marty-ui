@@ -4,7 +4,6 @@ use async_trait::async_trait;
 use base64::{engine::general_purpose::STANDARD, Engine};
 use reqwest::{redirect::Policy, Client, StatusCode};
 use serde_json::{Map, Value};
-use sha2::{Digest, Sha256, Sha384, Sha512};
 use sqlx::{PgPool, Row};
 use tonic::{metadata::AsciiMetadataValue, transport::Channel, Code, Request};
 
@@ -555,6 +554,7 @@ impl InitiationRelatedResourceValidator for HttpInitiationRelatedResourceValidat
             Value::Array(values) => values.iter().collect(),
             value => vec![value],
         };
+        let mut resource_contents = Map::new();
         for resource in resources {
             let object = resource.as_object().ok_or_else(|| {
                 InitiationDependencyError::Invalid("invalid_related_resource".into())
@@ -571,9 +571,12 @@ impl InitiationRelatedResourceValidator for HttpInitiationRelatedResourceValidat
                 ));
             }
             let content = self.fetch(resource_id).await?;
-            verify_sri(object.get("digestSRI").and_then(Value::as_str), &content)?;
+            resource_contents.insert(
+                resource_id.to_owned(),
+                Value::String(STANDARD.encode(content)),
+            );
         }
-        Ok(())
+        validate_resource_digests(credential, resource_contents)
     }
 }
 
@@ -584,6 +587,13 @@ fn template_from_grpc(
     if template.id != requested_id {
         return Err(InitiationDependencyError::Invalid(
             "credential template identity mismatch".into(),
+        ));
+    }
+    // Historical template reads remain available. New initiation, including
+    // queued Flow events, must not turn a retired template into fresh authority.
+    if !template.status.eq_ignore_ascii_case("ACTIVE") {
+        return Err(InitiationDependencyError::Invalid(
+            "credential template must be active for issuance initiation".into(),
         ));
     }
     let wallet_configs = if template.wallet_configs_json.trim().is_empty() {
@@ -619,32 +629,15 @@ fn template_from_grpc(
     })
 }
 
-fn verify_sri(value: Option<&str>, content: &[u8]) -> Result<(), InitiationDependencyError> {
-    let value = value
-        .ok_or_else(|| InitiationDependencyError::Invalid("invalid_related_resource".into()))?;
-    let (algorithm, encoded) = value
-        .split_once('-')
-        .ok_or_else(|| InitiationDependencyError::Invalid("invalid_related_resource".into()))?;
-    let expected = STANDARD
-        .decode(encoded)
-        .map_err(|_| InitiationDependencyError::Invalid("invalid_related_resource".into()))?;
-    let actual = match algorithm {
-        "sha256" => Sha256::digest(content).to_vec(),
-        "sha384" => Sha384::digest(content).to_vec(),
-        "sha512" => Sha512::digest(content).to_vec(),
-        _ => {
-            return Err(InitiationDependencyError::Invalid(
-                "invalid_related_resource".into(),
-            ))
-        }
-    };
-    if expected == actual {
-        Ok(())
-    } else {
-        Err(InitiationDependencyError::Invalid(
-            "related_resource_digest_mismatch".into(),
-        ))
-    }
+fn validate_resource_digests(
+    credential: &Value,
+    resource_contents: Map<String, Value>,
+) -> Result<(), InitiationDependencyError> {
+    marty_verification::vcdm::validate_vcdm_related_resource_digests_json(
+        &serde_json::json!({"credential": credential, "resource_contents": resource_contents})
+            .to_string(),
+    )
+    .map_err(InitiationDependencyError::Invalid)
 }
 
 async fn channel(target: &str, timeout: Duration) -> Result<Channel, InitiationDependencyError> {
@@ -680,6 +673,41 @@ fn positive_or(value: i64, fallback: i64) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn initiation_template_requires_active_status_and_exact_identity() {
+        let template = |status: &str| TemplateResponse {
+            id: "template-1".into(),
+            organization_id: "org-1".into(),
+            status: status.into(),
+            credential_type: "EmployeeCredential".into(),
+            issuer_did: "did:web:issuer.example".into(),
+            issuer_algorithm: "ES256".into(),
+            ..Default::default()
+        };
+        for status in ["ACTIVE", "active"] {
+            assert_eq!(
+                template_from_grpc("template-1", template(status))
+                    .unwrap()
+                    .credential_type,
+                "EmployeeCredential"
+            );
+        }
+        for status in ["DEPRECATED", "DRAFT", "", "unknown"] {
+            assert_eq!(
+                template_from_grpc("template-1", template(status)),
+                Err(InitiationDependencyError::Invalid(
+                    "credential template must be active for issuance initiation".into()
+                ))
+            );
+        }
+        assert_eq!(
+            template_from_grpc("another-template", template("ACTIVE")),
+            Err(InitiationDependencyError::Invalid(
+                "credential template identity mismatch".into()
+            ))
+        );
+    }
     use crate::config::normalize_grpc_target;
     use axum::{http::HeaderMap, response::Json, routing::get, Router};
     use serde_json::json;
@@ -760,22 +788,59 @@ mod tests {
     }
 
     #[test]
-    fn sri_accepts_sha_variants_and_rejects_mismatch() {
+    fn related_resource_digests_use_shared_vcdm_vectors() {
+        let fixtures: Value =
+            serde_json::from_str(marty_verification::vcdm::issuance_behavior_fixture_json())
+                .unwrap();
+        for case in fixtures["digest_cases"].as_array().unwrap() {
+            let result = validate_resource_digests(
+                &case["credential"],
+                case["resource_contents"].as_object().unwrap().clone(),
+            );
+            assert_eq!(
+                result.is_ok(),
+                case["expected_error"].is_null(),
+                "{}",
+                case["name"]
+            );
+        }
+    }
+
+    #[test]
+    fn related_resource_transport_enforces_all_declared_digests() {
+        use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+        use sha2::{Digest, Sha256, Sha384, Sha512};
+
         let content = b"official context bytes";
-        for (name, digest) in [
+        let resource_id = "https://resources.example/context.json";
+        let contents = Map::from_iter([(
+            resource_id.to_owned(),
+            Value::String(STANDARD.encode(content)),
+        )]);
+        let multibase = format!("u{}", URL_SAFE_NO_PAD.encode(Sha256::digest(content)));
+        for (algorithm, digest) in [
             ("sha256", Sha256::digest(content).to_vec()),
             ("sha384", Sha384::digest(content).to_vec()),
             ("sha512", Sha512::digest(content).to_vec()),
         ] {
-            let sri = format!("{name}-{}", STANDARD.encode(digest));
-            verify_sri(Some(&sri), content).unwrap();
+            let mut credential = json!({"relatedResource": {
+                "id": resource_id,
+                "digestSRI": format!("{algorithm}-{}", STANDARD.encode(digest)),
+                "digestMultibase": multibase,
+            }});
+            validate_resource_digests(&credential, contents.clone()).unwrap();
+            // A valid SRI digest must not mask a bad additional digest.
+            credential["relatedResource"]["digestMultibase"] = json!("uincorrect");
+            assert_eq!(
+                validate_resource_digests(&credential, contents.clone()),
+                Err(InitiationDependencyError::Invalid(
+                    "related_resource_digest_mismatch".into()
+                ))
+            );
         }
-        assert_eq!(
-            verify_sri(Some("sha256-d3Jvbmc="), content),
-            Err(InitiationDependencyError::Invalid(
-                "related_resource_digest_mismatch".into()
-            ))
-        );
+        let credential =
+            json!({"relatedResource": {"id": resource_id, "digestMultibase": multibase}});
+        validate_resource_digests(&credential, contents).unwrap();
     }
 
     #[tokio::test]

@@ -358,7 +358,8 @@ def test_operator_release_builds_native_arches_and_verifies_provenance() -> None
         "operator_release_require_remote_allowlist",
         "operator_release_require_checksum_names",
         "cosign verify-blob",
-        '--certificate-identity "https://github.com/$repo/.github/workflows/cd.yml@refs/heads/main"',
+        'signer_workflow=cd.yml',
+        '--certificate-identity "https://github.com/$repo/.github/workflows/$signer_workflow@refs/heads/main"',
         '--source-digest "$source_sha" --source-ref refs/heads/main',
         'test "$("$stage/$asset" --build-identity)" = "$source_sha:$tag"',
     ):
@@ -693,9 +694,9 @@ def test_verifier_release_lineage_uses_hardened_core_and_native_issuance() -> No
     lock = json.loads(_text("release/stack-lock.json"))
     components = {component["name"]: component for component in lock["components"]}
 
-    assert lock["release"] == "marty-ui@1.1.259"
+    assert lock["release"] == "marty-ui@1.1.263"
     assert lock["release_state"] == "eligible"
-    stack_tag_gate.require_release_eligible(ROOT, "v1.1.259")
+    stack_tag_gate.require_release_eligible(ROOT, "v1.1.263")
     workflow = _text(".github/workflows/cd.yml")
     assert 'manifest_timestamp="$(git show -s --format=%cI "$SOURCE_SHA")"' in workflow
     assert '--generated-at "$manifest_timestamp" --output stack-manifest.json' in workflow

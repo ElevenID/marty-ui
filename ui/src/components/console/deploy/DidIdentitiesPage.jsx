@@ -31,20 +31,12 @@ import RefreshIcon from '@mui/icons-material/Refresh';
 import SwapHorizIcon from '@mui/icons-material/SwapHoriz';
 import UploadFileOutlinedIcon from '@mui/icons-material/UploadFileOutlined';
 
-import signingKeysApi from '../../../services/signingKeysApi';
+import issuerIdentitiesApi from '../../../services/issuerIdentitiesApi';
 import { createIdempotencyKey } from '../../../services/idempotency';
 import { useConsole } from '../../../contexts/ConsoleContext';
 import { useNotifications } from '../../../hooks/useNotifications';
 import { usePermissions } from '../../../hooks/usePermissions';
 
-const PUBLIC_CREDENTIAL_FORMATS = [
-  'SD_JWT_VC',
-  'VC_JWT',
-  'JSON_LD',
-  'MDOC',
-  'ZK_MDOC',
-  'ICAO_EMRTD',
-];
 const CSR_ALGORITHMS = new Set(['ES256', 'ES384', 'ES512']);
 const dscPendingKey = (organizationId, issuerDid) =>
   `passport-dsc-pending:${encodeURIComponent(organizationId)}:${encodeURIComponent(issuerDid)}`;
@@ -82,6 +74,9 @@ export default function DidIdentitiesPage() {
   const { can, isLoading: permissionsLoading } = usePermissions();
   const canIssueCsca = !permissionsLoading && can('passport-certificate', 'issue-csca');
   const canIssueDsc = !permissionsLoading && can('passport-certificate', 'issue');
+  const canView = !permissionsLoading && can('signing-key', 'view');
+  const canManage = !permissionsLoading && can('signing-key', 'create');
+  const canRetire = !permissionsLoading && can('signing-key', 'delete');
   const [identities, setIdentities] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -105,11 +100,18 @@ export default function DidIdentitiesPage() {
   const loadRequestRef = useRef(0);
   useLayoutEffect(() => {
     issueEpochRef.current += 1;
+    setIdentities([]);
+    setRetiring(null);
+    setRebinding(null);
+    setCertifying(null);
+    setCsrPem('');
+    setSubmitting(false);
     setIssuing(null);
     setIssuedCertificate(null);
     setIssueError('');
     setIssueSubmitting(false);
     setIssuePendingRetry(false);
+    return () => { issueEpochRef.current += 1; loadRequestRef.current += 1; };
   }, [activeOrgId]);
   const csrSupported = certifying && CSR_ALGORITHMS.has(certifying.algorithm);
   const issueValidityDays = Number(issueForm.validity_days);
@@ -189,10 +191,10 @@ export default function DidIdentitiesPage() {
         setIssuePendingRetry(true);
       }
       const result = csca
-        ? await signingKeysApi.issueCscaSelfSignedCertificate({
+        ? await issuerIdentitiesApi.issueCscaSelfSignedCertificate({
           ...subject, issuer_did: issuing.issuer_did, certificate_id: issueForm.certificate_id.trim(),
         })
-        : await signingKeysApi.issueDscCertificate(dscRequest);
+        : await issuerIdentitiesApi.issueDscCertificate(dscRequest);
       if (issueEpoch === issueEpochRef.current) {
         if (dscRequest) {
           try {
@@ -223,20 +225,13 @@ export default function DidIdentitiesPage() {
       return;
     }
     setLoading(true);
+    setIdentities([]);
     setError('');
     try {
-      const results = await Promise.all(PUBLIC_CREDENTIAL_FORMATS.map(async (credentialFormat) => {
-        const response = await signingKeysApi.listPublicIssuerIdentities({
-          organization_id: activeOrgId,
-          credential_format: credentialFormat,
-        });
-        const values = Array.isArray(response?.identities) ? response.identities : [];
-        return values.map((identity) => ({ ...identity, credential_format: credentialFormat, organization_id: activeOrgId }));
-      }));
+      const response = await issuerIdentitiesApi.listPublicIssuerIdentities({ organization_id: activeOrgId });
       if (requestId !== loadRequestRef.current) return;
-      const unique = new Map();
-      results.flat().forEach((identity) => unique.set(identityKey(identity), identity));
-      setIdentities([...unique.values()].sort((left, right) => identityKey(left).localeCompare(identityKey(right))));
+      setIdentities(response.identities.map((identity) => ({ ...identity, organization_id: activeOrgId }))
+        .sort((left, right) => identityKey(left).localeCompare(identityKey(right))));
     } catch (requestError) {
       if (requestId !== loadRequestRef.current) return;
       setError(
@@ -264,21 +259,24 @@ export default function DidIdentitiesPage() {
   };
 
   const retireIdentity = async () => {
-    if (!retiring || !activeOrgId) return;
+    if (!retiring || !activeOrgId || retiring.organization_id !== activeOrgId || !canRetire) return;
+    const actionEpoch = issueEpochRef.current;
     setSubmitting(true);
     setError('');
     try {
-      await signingKeysApi.deleteIssuerIdentity({
+      await issuerIdentitiesApi.deleteIssuerIdentity({
         organization_id: activeOrgId,
         issuer_did: retiring.issuer_did,
         key_purpose: retiring.key_purpose,
         credential_format: retiring.credential_format,
         algorithm: retiring.algorithm,
       });
+      if (actionEpoch !== issueEpochRef.current) return;
       showNotification?.('Issuer identity retired.', 'success');
       setRetiring(null);
       await load();
     } catch (requestError) {
+      if (actionEpoch !== issueEpochRef.current) return;
       setError(
         requestError?.response?.error?.message
         || requestError?.response?.detail
@@ -286,22 +284,24 @@ export default function DidIdentitiesPage() {
         || 'Issuer identity could not be retired.',
       );
     } finally {
-      setSubmitting(false);
+      if (actionEpoch === issueEpochRef.current) setSubmitting(false);
     }
   };
 
   const rebindIdentity = async () => {
-    if (!rebinding || !activeOrgId) return;
+    if (!rebinding || !activeOrgId || rebinding.organization_id !== activeOrgId || !canManage) return;
+    const actionEpoch = issueEpochRef.current;
     setSubmitting(true);
     setError('');
     try {
-      const result = await signingKeysApi.rebindIssuerIdentity({
+      const result = await issuerIdentitiesApi.rebindIssuerIdentity({
         organization_id: activeOrgId,
         issuer_did: rebinding.issuer_did,
         key_purpose: rebinding.key_purpose,
         credential_format: rebinding.credential_format,
         algorithm: rebinding.algorithm,
       });
+      if (actionEpoch !== issueEpochRef.current) return;
       showNotification?.(
         result?.changed
           ? 'Issuer identity moved to the default signing service.'
@@ -311,6 +311,7 @@ export default function DidIdentitiesPage() {
       setRebinding(null);
       await load();
     } catch (requestError) {
+      if (actionEpoch !== issueEpochRef.current) return;
       setError(
         requestError?.response?.error?.message
         || requestError?.response?.detail
@@ -318,13 +319,14 @@ export default function DidIdentitiesPage() {
         || 'Issuer identity could not be moved to the default signing service.',
       );
     } finally {
-      setSubmitting(false);
+      if (actionEpoch === issueEpochRef.current) setSubmitting(false);
     }
   };
 
   const attachCertificate = async () => {
-    if (!certifying || !activeOrgId || !certificate.cert_pem.trim()
+    if (!certifying || !activeOrgId || certifying.organization_id !== activeOrgId || !canManage || !certificate.cert_pem.trim()
       || (certifying.key_purpose === 'csca' && !certificate.certificate_id.trim())) return;
+    const actionEpoch = issueEpochRef.current;
     setSubmitting(true);
     setError('');
     try {
@@ -337,21 +339,24 @@ export default function DidIdentitiesPage() {
         cert_chain_pem: certificate.cert_chain_pem.trim(),
       };
       if (certifying.key_purpose === 'csca') {
-        await signingKeysApi.enrollCscaCertificate({
+        await issuerIdentitiesApi.enrollCscaCertificate({
           ...publicCertificate,
           certificate_id: certificate.certificate_id.trim(),
         });
+        if (actionEpoch !== issueEpochRef.current) return;
         showNotification?.('Public CSCA trust anchor enrolled.', 'success');
       } else {
-        await signingKeysApi.storeIssuerIdentityCertificate({
+        await issuerIdentitiesApi.storeIssuerIdentityCertificate({
           ...publicCertificate,
           key_purpose: certifying.key_purpose,
         });
+        if (actionEpoch !== issueEpochRef.current) return;
         showNotification?.('Document signer certificate attached to issuer identity.', 'success');
       }
       setCertifying(null);
       setCertificate({ certificate_id: '', cert_pem: '', cert_chain_pem: '' });
     } catch (requestError) {
+      if (actionEpoch !== issueEpochRef.current) return;
       setError(
         requestError?.response?.error?.message
         || requestError?.response?.detail
@@ -361,17 +366,18 @@ export default function DidIdentitiesPage() {
           : 'Document signer certificate could not be attached.'),
       );
     } finally {
-      setSubmitting(false);
+      if (actionEpoch === issueEpochRef.current) setSubmitting(false);
     }
   };
 
   const generateCsr = async () => {
-    if (!csrSupported || !activeOrgId || !csrSubject.country.trim()
+    if (!csrSupported || !canManage || certifying?.organization_id !== activeOrgId || !activeOrgId || !csrSubject.country.trim()
       || !csrSubject.organization.trim() || !csrSubject.common_name.trim()) return;
+    const actionEpoch = issueEpochRef.current;
     setSubmitting(true);
     setError('');
     try {
-      const result = await signingKeysApi.generateIssuerIdentityCsr({
+      const result = await issuerIdentitiesApi.generateIssuerIdentityCsr({
         organization_id: activeOrgId,
         issuer_did: certifying.issuer_did,
         key_purpose: certifying.key_purpose,
@@ -381,9 +387,11 @@ export default function DidIdentitiesPage() {
         organization: csrSubject.organization.trim(),
         common_name: csrSubject.common_name.trim(),
       });
+      if (actionEpoch !== issueEpochRef.current) return;
       setCsrPem(result?.csr_pem || '');
       showNotification?.('KMS-backed certificate request generated.', 'success');
     } catch (requestError) {
+      if (actionEpoch !== issueEpochRef.current) return;
       setError(
         requestError?.response?.error?.message
         || requestError?.response?.detail
@@ -391,7 +399,7 @@ export default function DidIdentitiesPage() {
         || 'Certificate request could not be generated.',
       );
     } finally {
-      setSubmitting(false);
+      if (actionEpoch === issueEpochRef.current) setSubmitting(false);
     }
   };
 
@@ -415,7 +423,7 @@ export default function DidIdentitiesPage() {
           <Button
             variant="contained"
             startIcon={<AddIcon />}
-            disabled={!activeOrgId}
+            disabled={!activeOrgId || !canManage}
             onClick={() => navigate('/console/org/deploy/issuer-identity/new')}
           >
             Create identity
@@ -424,8 +432,8 @@ export default function DidIdentitiesPage() {
       </Stack>
 
       <Alert severity="info" sx={{ mb: 3 }}>
-        Runtime callers select an issuer with organization, DID, purpose, credential format, and algorithm.
-        Marty resolves exactly one active issuer profile and signs through managed custody; ambiguity or tenant mismatch fails closed.
+        Identities expose public DIDs, purposes, formats and algorithms. Templates select a compatible DID;
+        Marty keeps signing custody private and rejects ambiguous or unauthorized bindings.
       </Alert>
       {error && <Alert severity="error" sx={{ mb: 3 }}>{error}</Alert>}
 
@@ -449,7 +457,7 @@ export default function DidIdentitiesPage() {
               <TableRow>
                 <TableCell colSpan={6} align="center">
                   <Typography color="text.secondary" sx={{ py: 4 }}>
-                    No active issuer identities are compatible with the supported credential formats.
+                    No active issuer identities are available for this organization.
                   </Typography>
                 </TableCell>
               </TableRow>
@@ -471,13 +479,17 @@ export default function DidIdentitiesPage() {
                 <TableCell>{identity.algorithm}</TableCell>
                 <TableCell><Chip size="small" color="success" label={identity.status} /></TableCell>
                 <TableCell align="right">
+                  <Button disabled={!canView || identity.organization_id !== activeOrgId} onClick={() => navigate({
+                    pathname: '/console/org/deploy/issuer-identity/inspect',
+                    search: `?${new URLSearchParams(Object.fromEntries(['organization_id', 'issuer_did', 'key_purpose', 'credential_format', 'algorithm'].map((field) => [field, identity[field]])))}`,
+                  })}>Inspect identity</Button>
                   {identity.organization_id === activeOrgId && identity.credential_format === 'ICAO_EMRTD' && identity.key_purpose === 'csca' && identity.algorithm === 'ES256' && identity.status === 'active' && canIssueCsca && (
                     <Button size="small" onClick={() => openIssuance(identity)}>Issue CSCA</Button>
                   )}
                   {identity.organization_id === activeOrgId && identity.credential_format === 'ICAO_EMRTD' && identity.key_purpose === 'x509_doc_signer' && identity.algorithm === 'ES256' && identity.status === 'active' && canIssueDsc && (
                     <Button size="small" onClick={() => openIssuance(identity)}>Issue DSC</Button>
                   )}
-                  {identity.credential_format === 'ICAO_EMRTD' && identity.key_purpose === 'x509_doc_signer' && (
+                  {canManage && identity.credential_format === 'ICAO_EMRTD' && identity.key_purpose === 'x509_doc_signer' && (
                     <Tooltip title="Attach document signer certificate">
                       <IconButton
                         onClick={() => {
@@ -492,7 +504,7 @@ export default function DidIdentitiesPage() {
                       </IconButton>
                     </Tooltip>
                   )}
-                  {identity.key_purpose === 'csca' && (
+                  {canManage && identity.key_purpose === 'csca' && (
                     <Tooltip title="Enroll public CSCA trust anchor">
                       <IconButton
                         onClick={() => {
@@ -507,16 +519,16 @@ export default function DidIdentitiesPage() {
                       </IconButton>
                     </Tooltip>
                   )}
-                  <Tooltip title="Move to default signing service">
+                  {canManage && <Tooltip title="Move to default signing service">
                     <IconButton onClick={() => setRebinding(identity)} aria-label="Move identity to default signing service">
                       <SwapHorizIcon />
                     </IconButton>
-                  </Tooltip>
-                  <Tooltip title="Retire identity">
+                  </Tooltip>}
+                  {canRetire && <Tooltip title="Retire identity">
                     <IconButton color="error" onClick={() => setRetiring(identity)} aria-label="Retire identity">
                       <DeleteOutlineIcon />
                     </IconButton>
-                  </Tooltip>
+                  </Tooltip>}
                 </TableCell>
               </TableRow>
             ))}

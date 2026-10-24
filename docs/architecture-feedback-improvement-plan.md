@@ -1,6 +1,40 @@
 # Architecture and development-feedback improvement tracker
 
-Status: active requirements and queue, 2026-10-17.
+Status: active requirements and queue, 2026-10-20.
+
+October 24 nightly publication: `feat/nightly-publication`, owned by the primary
+release worker, starts at protected main
+`6f63c66915bfa265f0683e2451dabb4e9503fab7`. The user authorized completing
+nightly publication for installation testing. Claim run `40114393354` passed,
+but existing intake emits evidence only. The next action is to connect a
+validated nightly claim to shared image builds and prerelease publication,
+retaining stable official qualification. The isolated
+`worktrees/nightly-publication` checkout is removed after verified merge or
+parked after a published checkpoint if an external gate blocks delivery.
+
+October 21 maintenance reconciliation: Adam Burdett's integration writer is
+resuming the existing `selfhost-log-boundary-20261004` checkout on
+`reconcile/selfhost-log-boundary-20261021`, based on published main
+`e02276e92775c330a0c52280b6eca91d34358dca`. The useful portion of local
+`ec53f05348ee70f59cde87c82780071eead599da` is a delayed-startup-log marker
+retry, ported to the maintained self-host acceptance owner. Reads and polling
+share a five-second budget, while the existing owned-command runner retains
+its separate bounded shutdown. Secret exposure, empty secrets, invalid UTF-8
+and Docker failures are not retried; late success is rejected. This changes
+no production runtime or CI selector. The exact self-host test roster grows
+from twelve to seventeen without dropping any existing case; function-scoped
+connectivity and mutation checks preserve the fail-closed source guard.
+Exact-candidate
+checks, independent review and protected merge remain the next action; remove
+this sole integration checkout after accepted merge and verified consumer cleanup.
+
+October 20 release-path checkpoint: exact-main full CI
+[39425370404](https://github.com/ElevenID/marty-ui/actions/runs/39425370404)
+passed at `d74f0133d2b6f0056b79a9f145842791bc1f04f8`; its Canvas job took
+34m54s. This validates that the current full tier still executes, not a
+before/after speedup. The separate `v1.1.260-selfhost-preview.1` handoff is
+public but remains an unsupported, unqualified manual-install preview; its
+archive verification is not installed-product qualification.
 
 October 18 checkpoint: #1393 and #1394 are merged after protected CI. The
 unfiltered Issuance-library diagnostic in #1397 passed its PR run with 594
@@ -442,6 +476,64 @@ other runner/cache conditions. The reviewed next maintenance change enables
 reuse only for the Canvas CI database step; separate pinned-reference and
 native process obligations, full tiers and protected gates remain unchanged.
 
+The next A0 Canvas inventory slice observes each acceptance target's direct
+Rust `#[path]` and `include!` modules plus literal `include_str!`/`include_bytes!`
+fixtures, recording checkout-relative paths and exact hashes (95 composition,
+50 worker inputs in the reviewed tree). Bounded count checks reject the tested
+non-literal `#[path]`/`include!`/embedded-file forms; missing files and
+out-of-checkout paths fail the evidence recorder before test execution. This is
+observed first-hop visibility, not a complete Rust parser: other module forms,
+nested imports, generated/runtime files,
+external images, assertion reachability and full source closure remain open.
+No Canvas test or qualification tier is skipped.
+
+The follow-up reuses that bounded Rust first-hop collector for the Flow and
+self-host acceptance targets (9 and 10 source inputs in the reviewed tree).
+Their run-bound records now name direct `#[path]`/`include!` Rust modules and
+literal embedded fixtures alongside the existing renderer/runner evidence.
+This does not establish nested-module or runtime-input closure, nor prove that
+all future Rust module syntaxes are recognized. It does not change acceptance
+selection or the required CI lanes.
+
+The Canvas first-hop inventory landed in
+[#1439](https://github.com/ElevenID/marty-ui/pull/1439) as
+`c084fc0fe4c06da59fad5e3261290482d1301c19`; the Flow/self-host extension
+landed in [#1440](https://github.com/ElevenID/marty-ui/pull/1440) as
+`537884a37e2387a85a72caa08d611318fe234732`. Both are diagnostic input
+visibility, not evidence of complete source closure, changed CI selection, or
+a measured turnaround reduction.
+
+The next A0 slice records the Rust compiler depfile adjacent to each of the
+four acceptance test executables in the fresh same-run Cargo target directory, hashing its in-checkout source and embedded
+file inputs without relying on a second hand-maintained module list. A local
+Rust 1.95 package-scoped compile of `marty-platform-clock` confirmed that the
+actual Cargo depfile names both `src/lib.rs` and its embedded public JSON
+fixture; the recorder also parsed that actual depfile. The compiler record is
+target-scoped diagnostic evidence, not authenticated provenance or complete
+closure: it does not enumerate source in dependent crates, cannot guarantee
+coverage of generated files, and does not cover runtime inputs or reached
+assertions. `transitive_source_closure`
+remains incomplete, and no test selection or qualification gate changes.
+
+October 20 A5 diagnostic gap: the first exact-main full run
+[39408962399](https://github.com/ElevenID/marty-ui/actions/runs/39408962399)
+had one substantive test failure,
+`worker_lease_expiry_reference_matches_published_process`, in its 33m55s
+Canvas job; 125 worker cases passed and two were ignored. The aggregate CI
+gate failed consequentially. The frozen
+published-process oracle rejected a PostgreSQL waiter in `assert_blocker` at
+line 494 during `renewal_lock_early_release`. Its safe failure report contains
+only the exception class and frames, so it cannot distinguish the count,
+worker-query match, and PID conditions in that composite assertion. Identical
+source passed the independent full rerun
+[39413856660](https://github.com/ElevenID/marty-ui/actions/runs/39413856660)
+(Canvas 34m54s); the later current-main full run above also passed. The
+intermittent cause is therefore unproven. Do not relax the real-time lock,
+expiry, or process assertions, rewrite the pinned historical capture source,
+or claim successful reuse. A separate current-input diagnostic should classify
+only bounded, non-secret blocker states before any future oracle change; keep
+the frozen corpus and its source hashes independent.
+
 October 18 A6 evidence: [UI #1413](https://github.com/ElevenID/marty-ui/pull/1413)
 landed sanitized per-phase sccache telemetry and identified 355 Rust misses in
 the OpenBao recovery preparation. The trusted-main workspace warmer hit its own
@@ -486,6 +578,30 @@ The October 20 shadow replay over `5be7d6754..52e9c3c9a` also remained broad:
 the exact planning document is an external/unknown input to Cargo metadata.
 That conservative fallback is correct until a non-Cargo/document consumer
 proof exists; the #1429 CI plan was not narrowed by its Rust source ownership.
+
+The October 20 shadow-planner audit found a packaged runtime edge absent from
+Cargo's reverse dependency graph: changing `marty-canvas-sandbox` source or
+embedded pages previously returned only that crate, although the binary is
+built and shipped by the sandbox image, service images, and Canvas profile.
+The planner now records six source-backed packaging/use witnesses and keeps
+these inputs broad even if a witness disappears. This corrects shadow evidence
+only; live CI selection and its required checks are unchanged. No speedup is
+claimed until the full non-Cargo graph is qualified.
+
+The October 20 packaged-runtime audit also found that Cargo reverse edges
+alone returned narrow results for the `marty-keyless-grpc-bridge` and
+`marty-passport-keyless-edge` crates. The service-image build copies their
+executables, while Compose runs the Envoy-to-Issuance bridge and the Passport
+and OIDF keyless edges. The shadow planner now records the source-backed
+build, image and runtime witnesses, including the packaged passport TLS
+bootstrap binary, and keeps these changes broad if a witness disappears.
+This is input evidence, not a live CI selector change or measured speedup.
+
+The next A3 shadow audit records the direct `marty-demo-vendor-seed` binary
+consumer as well as its Cargo-dependent Canvas seed: the migrations image builds
+and copies the binary, and the explicit `seed-demo-vendor-fixtures` Make target
+invokes it through `db-migrate`. The existing full fallback remains in place
+even if a packaging witness disappears; no live check is skipped.
 
 A6 narrow PR pilot: a change containing only the two verified Issuance
 `canvas_sync_worker_{retry,renewal}_tests.rs` leaves selects the existing

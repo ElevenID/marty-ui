@@ -844,3 +844,95 @@ async fn operation_response_keeps_decoded_body_byte_limit_attached() {
         }
     }
 }
+
+#[test]
+fn stock_canvas_submission_uses_exact_assignment_denominator() {
+    let mut submission =
+        json!({"id": 9, "assignment_id": 42, "score": 19, "workflow_state": "graded"});
+    // Stock single-submission JSON lacks the assignment object.
+    assert_eq!(
+        rest_assertion("canvas.assignment_score", &submission)["score_percent"],
+        Value::Null
+    );
+    bind_submission_assignment(&mut submission, "42", json!({"id":42,"points_possible":20}))
+        .unwrap();
+    assert_eq!(
+        rest_assertion("canvas.assignment_score", &submission)["score_percent"],
+        json!(95.0)
+    );
+    assert_eq!(
+        normalized_rest_payload(&submission)["points_possible"],
+        json!(20)
+    );
+    assert_eq!(
+        bind_submission_assignment(
+            &mut submission,
+            "42",
+            json!({"id":43,"points_possible":100})
+        ),
+        Err(CanvasProviderReadError::Unavailable)
+    );
+    assert_eq!(
+        bind_submission_assignment(
+            &mut submission,
+            "43",
+            json!({"id":43,"points_possible":100})
+        ),
+        Err(CanvasProviderReadError::Unavailable)
+    );
+}
+
+#[test]
+fn stock_canvas_bulk_progress_joins_user_display_id_and_nested_progress() {
+    let rows = vec![
+        json!({"id":7,"progress":{"requirement_count":3,"requirement_completed_count":3}}),
+        json!({"id":8,"progress":{"requirement_count":3,"requirement_completed_count":2}}),
+    ];
+    let by_user = validated_course_completion_by_user(rows).unwrap();
+    assert_eq!(
+        rest_assertion("canvas.course_completion", &by_user["7"])["completed"],
+        json!(true)
+    );
+    assert_eq!(
+        rest_assertion("canvas.course_completion", &by_user["8"])["completed"],
+        json!(false)
+    );
+    assert_eq!(
+        validated_course_completion_by_user(vec![json!({"id":7,"progress":null})]),
+        Err(CanvasProviderReadError::Unavailable)
+    );
+    let empty = validated_course_completion_by_user(vec![json!({"id":7,"progress":{}})]).unwrap();
+    assert_eq!(
+        rest_assertion("canvas.course_completion", &empty["7"])["completed"],
+        json!(false)
+    );
+}
+
+#[test]
+fn recovered_course_progress_uses_fresh_observation_order() {
+    let stale_completion = json!({
+        "completed_at": "2026-10-21T02:59:28Z",
+        "requirement_count": 2,
+        "requirement_completed_count": 2
+    });
+    assert_eq!(
+        rest_effective_at("canvas.course_completion", &stale_completion),
+        None
+    );
+    let mut revised = stale_completion.clone();
+    revised["updated_at"] = json!("2026-10-21T03:00:28Z");
+    assert_eq!(
+        rest_effective_at("canvas.course_completion", &revised),
+        timestamp(revised.get("updated_at"))
+    );
+    revised["updated_at"] = json!("invalid");
+    assert_eq!(
+        rest_effective_at("canvas.course_completion", &revised),
+        None
+    );
+    assert!(rest_effective_at(
+        "canvas.assignment_score",
+        &json!({"graded_at": "2026-10-21T03:00:28Z"})
+    )
+    .is_some());
+}

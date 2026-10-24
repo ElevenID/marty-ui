@@ -99,6 +99,7 @@ fn router(with_provider: bool) -> axum::Router {
         ..FlowHttpVerificationOptions::default()
     };
     flow_read_router(FlowHttpState {
+        service_authenticator: None,
         repository: PostgresFlowRepository::new(pool),
         providers: Arc::new(providers),
         public_base_url: "https://issuer.example".into(),

@@ -1,6 +1,7 @@
-//! One-shot disposable passport TLS provisioning. Leaf private keys remain
-//! non-exportable OpenBao Transit keys; only public certs and scoped tokens
-//! are written to the project output directory.
+//! One-shot keyless TLS provisioning and isolated renewal staging. Leaf
+//! private keys remain non-exportable OpenBao Transit keys; only public
+//! certificates and scoped tokens are written to an empty output directory.
+//! Renewal output is not activated by this binary.
 
 use std::{
     env,
@@ -9,11 +10,13 @@ use std::{
     fs::OpenOptions,
     io::Write,
     path::{Path, PathBuf},
+    time::Duration,
 };
 
 use base64::{engine::general_purpose::STANDARD, Engine};
 use futures_util::StreamExt;
 use marty_openbao_http::OpenBaoHttp;
+use mmf_platform::OpenBaoTlsIdentityFiles;
 use reqwest::{Method, StatusCode};
 use serde_json::{json, Value};
 
@@ -34,115 +37,55 @@ struct Role {
 enum Profile {
     Passport,
     Selfhost,
+    SelfhostRenew,
 }
 
-struct SelfhostRole {
-    name: &'static str,
-    key_name: &'static str,
-    cert_file: &'static str,
-    token_file: &'static str,
+impl Profile {
+    fn is_selfhost(self) -> bool {
+        matches!(self, Self::Selfhost | Self::SelfhostRenew)
+    }
 }
 
-// Names here are the disposable self-host contract in the production Compose
-// catalog. The keys live only in this install's private OpenBao instance.
-const SELFHOST_ROLES: &[SelfhostRole] = &[
-    SelfhostRole {
-        name: "signing-keys-server",
-        key_name: "workload-tls-signing-keys-server",
-        cert_file: "signing_keys_workload_server_cert",
-        token_file: "signing_keys_tls_kms_token",
-    },
-    SelfhostRole {
-        name: "gateway-client",
-        key_name: "workload-tls-gateway-auth-client",
-        cert_file: "gateway_workload_client_cert",
-        token_file: "gateway_tls_kms_token",
-    },
-    SelfhostRole {
-        name: "auth-client",
-        key_name: "workload-tls-auth-client",
-        cert_file: "auth_workload_client_cert",
-        token_file: "auth_tls_kms_token",
-    },
-    SelfhostRole {
-        name: "auth-server",
-        key_name: "workload-tls-auth-server",
-        cert_file: "auth_workload_server_cert",
-        token_file: "auth_server_tls_kms_token",
-    },
-    SelfhostRole {
-        name: "compliance-profile-client",
-        key_name: "workload-tls-compliance-profile-client",
-        cert_file: "compliance_profile_workload_client_cert",
-        token_file: "compliance_profile_tls_kms_token",
-    },
-    SelfhostRole {
-        name: "deployment-profile-client",
-        key_name: "workload-tls-deployment-profile-client",
-        cert_file: "deployment_profile_workload_client_cert",
-        token_file: "deployment_profile_tls_kms_token",
-    },
-    SelfhostRole {
-        name: "organization-server",
-        key_name: "workload-tls-organization-server",
-        cert_file: "org_workload_server_cert",
-        token_file: "org_tls_kms_token",
-    },
-    SelfhostRole {
-        name: "event-stream-server",
-        key_name: "workload-tls-event-stream-server",
-        cert_file: "es_workload_server_cert",
-        token_file: "es_tls_kms_token",
-    },
-    SelfhostRole {
-        name: "notification-server",
-        key_name: "workload-tls-notification-server",
-        cert_file: "notification_workload_server_cert",
-        token_file: "notification_tls_kms_token",
-    },
-    SelfhostRole {
-        name: "revocation-profile-server",
-        key_name: "workload-tls-revocation-profile-server",
-        cert_file: "rp_workload_server_cert",
-        token_file: "rp_tls_kms_token",
-    },
-    SelfhostRole {
-        name: "credential-template-server",
-        key_name: "workload-tls-credential-template-server",
-        cert_file: "ct_workload_server_cert",
-        token_file: "ct_tls_kms_token",
-    },
-    SelfhostRole {
-        name: "issuance-server",
-        key_name: "workload-tls-issuance-server",
-        cert_file: "issuance_workload_server_cert",
-        token_file: "issuance_tls_kms_token",
-    },
-    SelfhostRole {
-        name: "flow-client",
-        key_name: "workload-tls-flow-client",
-        cert_file: "flow_workload_client_cert",
-        token_file: "flow_client_tls_kms_token",
-    },
-    SelfhostRole {
-        name: "flow-server",
-        key_name: "workload-tls-flow-server",
-        cert_file: "flow_workload_server_cert",
-        token_file: "flow_server_tls_kms_token",
-    },
-    SelfhostRole {
-        name: "pp-server",
-        key_name: "workload-tls-presentation-policy-server",
-        cert_file: "pp_workload_server_cert",
-        token_file: "pp_tls_kms_token",
-    },
-    SelfhostRole {
-        name: "verification-client",
-        key_name: "workload-tls-verification-client",
-        cert_file: "verification_workload_client_cert",
-        token_file: "verification_tls_kms_token",
-    },
-];
+fn selected_workload_pki_mount(
+    profile: Profile,
+    requested: Option<&str>,
+) -> Result<&str, Box<dyn Error>> {
+    match (profile, requested) {
+        (Profile::SelfhostRenew, None | Some("workload-pki")) => Ok("workload-pki"),
+        (Profile::SelfhostRenew, Some(mount)) => {
+            let version = mount
+                .strip_prefix("workload-pki-v")
+                .ok_or("replacement workload PKI mount is invalid")?;
+            let parsed = version
+                .parse::<u16>()
+                .map_err(|_| "replacement workload PKI version is invalid")?;
+            if !(2..=8).contains(&parsed) || parsed.to_string() != version {
+                return Err("replacement workload PKI version is invalid".into());
+            }
+            Ok(mount)
+        }
+        (_, None) => Ok("workload-pki"),
+        (_, Some(_)) => Err("workload PKI mount selection is renewal-only".into()),
+    }
+}
+
+fn renewal_authority(mount: &str) -> (&'static str, &'static str, &'static str) {
+    if mount == "workload-pki" {
+        (
+            "selfhost-kms-renewal",
+            "auth/selfhost-renew/login",
+            "BAO_RENEWAL_TOKEN_FILE",
+        )
+    } else {
+        (
+            "selfhost-kms-ca-rotation",
+            "auth/selfhost-ca-rotation/login",
+            "BAO_CA_ROTATION_TOKEN_FILE",
+        )
+    }
+}
+
+use marty_selfhost_identity::{SelfhostRole, SELFHOST_ROLES};
 
 const SELFHOST_KEY_METADATA_FILE: &str = "selfhost-tls-kms-roles.json";
 
@@ -153,7 +96,7 @@ fn checked_transit_key_metadata(metadata: &Value, profile: Profile) -> Result<()
     {
         return Err("disposable Transit key is exportable or wrong type".into());
     }
-    if profile == Profile::Selfhost && data(metadata, "latest_version")?.as_u64() != Some(1) {
+    if profile.is_selfhost() && data(metadata, "latest_version")?.as_u64() != Some(1) {
         return Err("disposable Transit key is not version 1".into());
     }
     Ok(())
@@ -168,6 +111,38 @@ fn selfhost_key_metadata() -> Value {
             "version": 1,
         })).collect::<Vec<_>>(),
     })
+}
+
+fn checked_existing_role(metadata: &Value, role: &Role) -> Result<(), Box<dyn Error>> {
+    let fields = metadata
+        .get("data")
+        .ok_or("existing workload PKI role has no metadata")?;
+    let expected_uri_sans: Vec<_> = role
+        .uri_sans
+        .split(',')
+        .filter(|value| !value.is_empty())
+        .collect();
+    let actual_uri_sans: Vec<_> = fields["allowed_uri_sans"]
+        .as_array()
+        .ok_or("existing workload PKI role has no URI SAN constraint")?
+        .iter()
+        .map(|value| value.as_str().ok_or("invalid workload PKI URI SAN"))
+        .collect::<Result<_, _>>()?;
+    if fields["allow_any_name"] != true
+        || fields["allow_localhost"] != true
+        || fields["allow_ip_sans"] != true
+        || fields["server_flag"] != role.server
+        || fields["client_flag"] != role.client
+        || fields["key_type"] != "ec"
+        || fields["key_bits"] != 256
+        || fields["max_ttl"] != 86400
+        || fields["use_csr_common_name"] != false
+        || fields["use_csr_sans"] != false
+        || actual_uri_sans != expected_uri_sans
+    {
+        return Err("existing workload PKI role differs from the reviewed contract".into());
+    }
+    Ok(())
 }
 
 const ROLES: &[Role] = &[
@@ -350,7 +325,7 @@ fn selfhost_role(name: &str) -> Option<&'static SelfhostRole> {
 fn selected_roles(profile: Profile) -> impl Iterator<Item = &'static Role> {
     ROLES.iter().filter(move |role| match profile {
         Profile::Passport => !matches!(role.name, "verification-client" | "notification-server"),
-        Profile::Selfhost => selfhost_role(role.name).is_some(),
+        Profile::Selfhost | Profile::SelfhostRenew => selfhost_role(role.name).is_some(),
     })
 }
 
@@ -379,7 +354,14 @@ fn write_new(path: &Path, contents: &str) -> Result<(), Box<dyn Error>> {
     if contents.contains("PRIVATE KEY") || contents.contains('\0') {
         return Err("OpenBao returned private or invalid material".into());
     }
-    let mut output = OpenOptions::new().write(true).create_new(true).open(path)?;
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut output = options.open(path)?;
     output.write_all(contents.as_bytes())?;
     output.sync_all()?;
     Ok(())
@@ -387,7 +369,7 @@ fn write_new(path: &Path, contents: &str) -> Result<(), Box<dyn Error>> {
 
 struct Bao {
     transport: OpenBaoHttp,
-    root_token: String,
+    authority_token: String,
 }
 
 impl Bao {
@@ -402,7 +384,7 @@ impl Bao {
             .transport
             .client()
             .request(method, format!("{}/v1/{path}", self.transport.origin()))
-            .header("X-Vault-Token", token.unwrap_or(&self.root_token));
+            .header("X-Vault-Token", token.unwrap_or(&self.authority_token));
         if let Some(body) = body {
             request = request.json(&body);
         }
@@ -445,7 +427,34 @@ async fn provision(
     output: &Path,
     project: &str,
     profile: Profile,
+    endpoint: &str,
+    ca_file: &Path,
+    renewal_pki_mount: &str,
 ) -> Result<(), Box<dyn Error>> {
+    if profile == Profile::SelfhostRenew {
+        let (expected_policy, expected_path, _) = renewal_authority(renewal_pki_mount);
+        let lookup = bao
+            .checked(
+                Method::POST,
+                "auth/token/lookup",
+                Some(json!({"token": bao.authority_token})),
+                None,
+            )
+            .await?;
+        let policies = data(&lookup, "policies")?
+            .as_array()
+            .ok_or("renewal authority policies are invalid")?;
+        let remaining = data(&lookup, "ttl")?
+            .as_u64()
+            .ok_or("renewal authority TTL is invalid")?;
+        if policies.len() != 1
+            || policies[0] != expected_policy
+            || value(&lookup, "path")? != expected_path
+            || !(3600..=28800).contains(&remaining)
+        {
+            return Err("renewal authority is not the scoped AppRole token".into());
+        }
+    }
     let pki_mount = match profile {
         Profile::Passport => {
             bao.checked(
@@ -464,29 +473,64 @@ async fn provision(
                 .await?;
             "workload-pki"
         }
+        Profile::SelfhostRenew => {
+            bao.checked(Method::GET, "sys/mounts/transit", None, None)
+                .await?;
+            let mount = bao
+                .checked(
+                    Method::GET,
+                    &format!("sys/mounts/{renewal_pki_mount}"),
+                    None,
+                    None,
+                )
+                .await?;
+            if value(&mount, "type")? != "pki" {
+                return Err("renewal issuer mount is not PKI".into());
+            }
+            renewal_pki_mount
+        }
     };
-    bao.checked(
-        Method::POST,
-        &format!("sys/mounts/{pki_mount}"),
-        Some(json!({"type":"pki"})),
-        None,
-    )
-    .await?;
+    if profile != Profile::SelfhostRenew {
+        let mount_config = if profile == Profile::Selfhost {
+            json!({"type":"pki", "config":{"max_lease_ttl":"8760h"}})
+        } else {
+            json!({"type":"pki"})
+        };
+        bao.checked(
+            Method::POST,
+            &format!("sys/mounts/{pki_mount}"),
+            Some(mount_config),
+            None,
+        )
+        .await?;
+    }
     let ca_name = match profile {
         Profile::Passport => "Marty disposable passport workload CA",
         Profile::Selfhost => "Marty disposable self-host workload CA",
+        Profile::SelfhostRenew => "",
     };
-    let ca = bao
-        .checked(
+    let ca = if profile == Profile::SelfhostRenew {
+        // Read the exact issuer selected by the validated renewal ceremony.
+        // This producer neither creates a CA nor activates a new trust anchor.
+        bao.checked(Method::GET, &format!("{pki_mount}/cert/ca"), None, None)
+            .await?
+    } else {
+        let ca_ttl = if profile == Profile::Selfhost {
+            "8760h"
+        } else {
+            "48h"
+        };
+        bao.checked(
             Method::POST,
             &format!("{pki_mount}/root/generate/internal"),
             Some(json!({
-                "common_name": ca_name, "ttl": "48h",
+                "common_name": ca_name, "ttl": ca_ttl,
                 "key_type": "ec", "key_bits": 256,
             })),
             None,
         )
-        .await?;
+        .await?
+    };
     if data(&ca, "private_key").is_ok() {
         return Err("OpenBao exported the CA key".into());
     }
@@ -502,39 +546,64 @@ async fn provision(
         let selfhost = selfhost_role(role.name);
         let key = match profile {
             Profile::Passport => format!("{project}-{}", role.name),
-            Profile::Selfhost => selfhost
+            Profile::Selfhost | Profile::SelfhostRenew => selfhost
                 .ok_or("self-host TLS role is unmapped")?
                 .key_name
                 .to_owned(),
         };
-        bao.checked(
-            Method::POST,
-            &format!("transit/keys/{key}"),
-            Some(json!({
-                "type": "ecdsa-p256", "exportable": false, "allow_plaintext_backup": false,
-            })),
-            None,
-        )
-        .await?;
+        if profile != Profile::SelfhostRenew {
+            bao.checked(
+                Method::POST,
+                &format!("transit/keys/{key}"),
+                Some(json!({
+                    "type": "ecdsa-p256", "exportable": false, "allow_plaintext_backup": false,
+                })),
+                None,
+            )
+            .await?;
+        }
         let metadata = bao
             .checked(Method::GET, &format!("transit/keys/{key}"), None, None)
             .await?;
         checked_transit_key_metadata(&metadata, profile)?;
-        bao.checked(
-            Method::POST,
-            &format!("{pki_mount}/roles/{}", role.name),
-            // Transit emits a CSR with its own SAN. Use the explicit, role-scoped
-            // names below so the issued certificate covers the Docker peer name.
-            Some(json!({
-                "allow_any_name": true, "allow_localhost": true, "allow_ip_sans": true,
-                "allowed_uri_sans": role.uri_sans,
-                "server_flag": role.server, "client_flag": role.client,
-                "key_type": "ec", "key_bits": 256, "max_ttl": "24h",
-                "use_csr_common_name": false, "use_csr_sans": false,
-            })),
-            None,
-        )
-        .await?;
+        if profile == Profile::SelfhostRenew && pki_mount == "workload-pki" {
+            let existing_role = bao
+                .checked(
+                    Method::GET,
+                    &format!("{pki_mount}/roles/{}", role.name),
+                    None,
+                    None,
+                )
+                .await?;
+            checked_existing_role(&existing_role, role)?;
+        } else {
+            bao.checked(
+                Method::POST,
+                &format!("{pki_mount}/roles/{}", role.name),
+                // Transit emits a CSR with its own SAN. Use the explicit, role-scoped
+                // names below so the issued certificate covers the Docker peer name.
+                Some(json!({
+                    "allow_any_name": true, "allow_localhost": true, "allow_ip_sans": true,
+                    "allowed_uri_sans": role.uri_sans,
+                    "server_flag": role.server, "client_flag": role.client,
+                    "key_type": "ec", "key_bits": 256, "max_ttl": "24h",
+                    "use_csr_common_name": false, "use_csr_sans": false,
+                })),
+                None,
+            )
+            .await?;
+            if profile == Profile::SelfhostRenew {
+                let configured = bao
+                    .checked(
+                        Method::GET,
+                        &format!("{pki_mount}/roles/{}", role.name),
+                        None,
+                        None,
+                    )
+                    .await?;
+                checked_existing_role(&configured, role)?;
+            }
+        }
         let csr = bao
             .checked(
                 Method::POST,
@@ -545,7 +614,7 @@ async fn provision(
             .await?;
         let ttl = match profile {
             Profile::Passport => "1h",
-            Profile::Selfhost => "8h",
+            Profile::Selfhost | Profile::SelfhostRenew => "8h",
         };
         let mut request = json!({"csr":value(&csr, "csr")?,
                                  "common_name":role.common_name,"ttl":ttl});
@@ -575,31 +644,50 @@ async fn provision(
         }
         let cert_file = match profile {
             Profile::Passport => format!("{}_cert", role.file_prefix),
-            Profile::Selfhost => selfhost
+            Profile::Selfhost | Profile::SelfhostRenew => selfhost
                 .ok_or("self-host TLS role is unmapped")?
                 .cert_file
                 .to_owned(),
         };
-        write_new(&output.join(cert_file), cert)?;
+        write_new(&output.join(&cert_file), cert)?;
         let policy_name = match profile {
             Profile::Passport => key.clone(),
-            Profile::Selfhost => format!("{project}-{key}"),
+            Profile::Selfhost | Profile::SelfhostRenew => format!("{project}-{key}"),
         };
         let policy = format!(
             "path \"transit/keys/{key}\" {{ capabilities = [\"read\"] }}\n\
              path \"transit/sign/{key}\" {{ capabilities = [\"update\"] }}"
         );
-        bao.checked(
-            Method::PUT,
-            &format!("sys/policies/acl/{policy_name}"),
-            Some(json!({"policy":policy})),
-            None,
-        )
-        .await?;
+        if profile == Profile::SelfhostRenew {
+            let current = bao
+                .checked(
+                    Method::GET,
+                    &format!("sys/policies/acl/{policy_name}"),
+                    None,
+                    None,
+                )
+                .await?;
+            if value(&current, "policy")? != policy {
+                return Err("existing TLS signer policy differs from the reviewed scope".into());
+            }
+        } else {
+            bao.checked(
+                Method::PUT,
+                &format!("sys/policies/acl/{policy_name}"),
+                Some(json!({"policy":policy})),
+                None,
+            )
+            .await?;
+        }
+        let create_path = if profile == Profile::SelfhostRenew {
+            "auth/token/create/selfhost-renew-leaf"
+        } else {
+            "auth/token/create"
+        };
         let issued = bao
             .checked(
                 Method::POST,
-                "auth/token/create",
+                create_path,
                 Some(json!({
                     "policies":[policy_name], "no_default_policy":true, "ttl":ttl,
                 })),
@@ -611,17 +699,67 @@ async fn provision(
             .and_then(|auth| auth.get("client_token"))
             .and_then(Value::as_str)
             .ok_or("OpenBao scoped token is missing")?;
-        if token == bao.root_token || token.len() < 20 {
+        if token == bao.authority_token || token.len() < 20 {
             return Err("OpenBao scoped token is invalid".into());
         }
         let token_file = match profile {
             Profile::Passport => format!("{}_kms_token", role.file_prefix),
-            Profile::Selfhost => selfhost
+            Profile::Selfhost | Profile::SelfhostRenew => selfhost
                 .ok_or("self-host TLS role is unmapped")?
                 .token_file
                 .to_owned(),
         };
-        write_new(&output.join(token_file), token)?;
+        if profile == Profile::SelfhostRenew {
+            let lookup = bao
+                .checked(
+                    Method::POST,
+                    "auth/token/lookup",
+                    Some(json!({"token": token})),
+                    None,
+                )
+                .await?;
+            let scopes = data(&lookup, "policies")?
+                .as_array()
+                .ok_or("renewed TLS token policies are invalid")?;
+            let remaining = data(&lookup, "ttl")?
+                .as_u64()
+                .ok_or("renewed TLS token TTL is invalid")?;
+            if scopes.len() != 1
+                || scopes[0] != policy_name
+                || !(3600..=28800).contains(&remaining)
+                || data(&lookup, "orphan")?.as_bool() != Some(true)
+                || value(&lookup, "path")? != "auth/token/create/selfhost-renew-leaf"
+            {
+                return Err("renewed TLS token has unexpected authority or lifetime".into());
+            }
+            let proof = bao
+                .checked(
+                    Method::POST,
+                    &format!("transit/sign/{key}"),
+                    Some(json!({"input": STANDARD.encode(b"renewal-key-scope"),
+                                "key_version": 1})),
+                    Some(token),
+                )
+                .await?;
+            if !value(&proof, "signature")?.starts_with("vault:v1:") {
+                return Err("renewed TLS token used a different signer version".into());
+            }
+            write_new(&output.join(&token_file), token)?;
+            OpenBaoTlsIdentityFiles {
+                certificate_chain_file: output.join(&cert_file),
+                kms_ca_cert_file: ca_file.to_owned(),
+                kms_endpoint: endpoint.to_owned(),
+                kms_token_file: output.join(&token_file),
+                kms_key_name: key.clone(),
+                kms_key_version: 1,
+                request_timeout: Duration::from_secs(5),
+                max_concurrent_signs: 1,
+            }
+            .connect()
+            .await?;
+        } else {
+            write_new(&output.join(&token_file), token)?;
+        }
         if first_token.is_none() {
             first_token = Some(token.to_owned());
         }
@@ -639,7 +777,7 @@ async fn provision(
     if status != StatusCode::FORBIDDEN {
         return Err("disposable TLS signer token crossed key scope".into());
     }
-    if profile == Profile::Selfhost {
+    if profile.is_selfhost() {
         write_new(
             &output.join(SELFHOST_KEY_METADATA_FILE),
             &selfhost_key_metadata().to_string(),
@@ -652,9 +790,16 @@ async fn provision(
 async fn main() -> Result<(), Box<dyn Error>> {
     let profile = match env::var("MARTY_TLS_BOOTSTRAP_PROFILE").as_deref() {
         Ok("selfhost-disposable") => Profile::Selfhost,
+        Ok("selfhost-renew") => Profile::SelfhostRenew,
         Ok("passport") | Err(_) => Profile::Passport,
-        Ok(_) => return Err("unknown disposable TLS bootstrap profile".into()),
+        Ok(_) => return Err("unknown TLS bootstrap profile".into()),
     };
+    let requested_mount = match env::var("MARTY_SELFHOST_WORKLOAD_PKI_MOUNT") {
+        Ok(mount) => Some(mount),
+        Err(env::VarError::NotPresent) => None,
+        Err(error) => return Err(error.into()),
+    };
+    let renewal_pki_mount = selected_workload_pki_mount(profile, requested_mount.as_deref())?;
     if profile == Profile::Selfhost
         && env::var("MARTY_SELFHOST_DISPOSABLE_OPENBAO").as_deref() != Ok("1")
     {
@@ -671,6 +816,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
             "MARTY_SELFHOST_PROJECT",
             "SELFHOST_TLS_OUTPUT_DIR",
             "marty-selfhost-disposable-",
+        ),
+        Profile::SelfhostRenew => (
+            "MARTY_SELFHOST_PROJECT",
+            "SELFHOST_TLS_OUTPUT_DIR",
+            "marty-selfhost-",
         ),
     };
     let project = required(project_name)?;
@@ -699,16 +849,21 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     }
     let ca_file = required("BAO_CACERT")?;
-    let root_token = fs::read_to_string(required("BAO_ROOT_TOKEN_FILE")?)?;
-    let root_token = root_token.trim().to_owned();
+    let token_variable = match profile {
+        Profile::SelfhostRenew => renewal_authority(renewal_pki_mount).2,
+        Profile::Passport | Profile::Selfhost => "BAO_ROOT_TOKEN_FILE",
+    };
+    let authority_token = fs::read_to_string(required(token_variable)?)?;
+    let authority_token = authority_token.trim().to_owned();
     let valid_token = match profile {
         Profile::Passport => {
-            root_token.len() == 64 && root_token.bytes().all(|byte| byte.is_ascii_hexdigit())
+            authority_token.len() == 64
+                && authority_token.bytes().all(|byte| byte.is_ascii_hexdigit())
         }
-        Profile::Selfhost => {
-            root_token.len() >= 20
-                && root_token.len() <= 256
-                && root_token.bytes().all(|byte| byte.is_ascii_graphic())
+        Profile::Selfhost | Profile::SelfhostRenew => {
+            authority_token.len() >= 20
+                && authority_token.len() <= 256
+                && authority_token.bytes().all(|byte| byte.is_ascii_graphic())
         }
     };
     if !valid_token {
@@ -720,9 +875,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
             Some(Path::new(&ca_file)),
             std::time::Duration::from_secs(10),
         )?,
-        root_token,
+        authority_token,
     };
-    provision(&bao, &output, &project, profile).await?;
+    provision(
+        &bao,
+        &output,
+        &project,
+        profile,
+        &endpoint,
+        Path::new(&ca_file),
+        renewal_pki_mount,
+    )
+    .await?;
     Ok(())
 }
 
@@ -730,6 +894,40 @@ async fn main() -> Result<(), Box<dyn Error>> {
 mod tests {
     use super::*;
     use std::collections::BTreeSet;
+
+    #[test]
+    fn replacement_workload_issuer_mount_is_explicit_and_versioned() {
+        assert_eq!(
+            selected_workload_pki_mount(Profile::SelfhostRenew, None).unwrap(),
+            "workload-pki"
+        );
+        assert_eq!(
+            selected_workload_pki_mount(Profile::SelfhostRenew, Some("workload-pki-v2")).unwrap(),
+            "workload-pki-v2"
+        );
+        assert_eq!(
+            selected_workload_pki_mount(Profile::SelfhostRenew, Some("workload-pki-v8")).unwrap(),
+            "workload-pki-v8"
+        );
+        assert_eq!(renewal_authority("workload-pki").0, "selfhost-kms-renewal");
+        assert_eq!(
+            renewal_authority("workload-pki-v2").0,
+            "selfhost-kms-ca-rotation"
+        );
+        for invalid in [
+            "",
+            "workload-pki-next",
+            "workload-pki-v1",
+            "workload-pki-v02",
+            "workload-pki-v9",
+            "workload-pki-v10000",
+            "workload-pki-v2/roles/admin",
+        ] {
+            assert!(selected_workload_pki_mount(Profile::SelfhostRenew, Some(invalid)).is_err());
+        }
+        assert!(selected_workload_pki_mount(Profile::Selfhost, Some("workload-pki-v2")).is_err());
+        assert!(selected_workload_pki_mount(Profile::Passport, Some("workload-pki-v2")).is_err());
+    }
 
     #[test]
     fn selfhost_tls_outputs_and_keys_match_deployment_inputs() {
@@ -792,5 +990,53 @@ mod tests {
         assert_eq!(manifest["roles"].as_array().unwrap().len(), 16);
         assert!(!manifest.to_string().contains("token"));
         assert!(!manifest.to_string().contains("PRIVATE KEY"));
+    }
+
+    #[test]
+    fn renewal_refuses_broadened_or_changed_existing_role() {
+        let role = ROLES
+            .iter()
+            .find(|role| role.name == "flow-client")
+            .unwrap();
+        let original = json!({"data": {
+            "allow_any_name": true, "allow_localhost": true,
+            "allow_ip_sans": true,
+            "allowed_uri_sans": ["spiffe://marty.internal/service/flow"],
+            "server_flag": false, "client_flag": true,
+            "key_type": "ec", "key_bits": 256, "max_ttl": 86400,
+            "use_csr_common_name": false, "use_csr_sans": false,
+        }});
+        assert!(checked_existing_role(&original, role).is_ok());
+        for (field, changed) in [
+            ("allowed_uri_sans", json!(["*"])),
+            ("server_flag", json!(true)),
+            ("key_bits", json!(384)),
+            ("max_ttl", json!(2592000)),
+            ("use_csr_sans", json!(true)),
+        ] {
+            let mut altered = original.clone();
+            altered["data"][field] = changed;
+            assert!(checked_existing_role(&altered, role).is_err(), "{field}");
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn scoped_token_output_is_private_from_creation() {
+        use std::os::unix::fs::PermissionsExt;
+        let path = std::env::temp_dir().join(format!(
+            "marty-tls-output-mode-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        write_new(&path, "synthetic scoped token").unwrap();
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        fs::remove_file(path).unwrap();
     }
 }

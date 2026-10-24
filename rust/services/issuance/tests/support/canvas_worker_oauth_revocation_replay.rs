@@ -337,7 +337,8 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, name: &str,
         // comparator's available_at. The parent owns the emitted HTTP date
         // and verifies all actual timing evidence, including bounded cases.
         canvas_worker_rest_replay::print_retry_timing(pool,
-            "SELECT revoke_retry_at,updated_at FROM issuance_service.canvas_oauth_connections WHERE id='worker-rest-connection'"
+            "SELECT revoke_retry_at,updated_at FROM issuance_service.canvas_oauth_connections WHERE id='worker-rest-connection'",
+            (retry_window_start, retry_window_end),
         ).await;
         Value::Null
     } else if fence.is_some() {

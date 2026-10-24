@@ -13,7 +13,7 @@ use serde_json::{json, Map, Value};
 
 use crate::issuance_native;
 
-pub const EXPECTED_ROUTE_COUNT: usize = 450;
+pub const EXPECTED_ROUTE_COUNT: usize = 461;
 
 #[derive(Debug, Deserialize)]
 pub struct GatewayContract {
@@ -168,6 +168,7 @@ impl GatewayContract {
                 }]),
             })?;
         }
+        issuance_native::add_public_native_extensions(&mut table)?;
         Ok(table)
     }
 
@@ -227,7 +228,7 @@ impl GatewayContract {
         })?;
         table.add(RouteConfig {
             name: "internal:issuance-native:oid4vci-client-management".into(),
-            pattern: "/__gateway/issuance-native/v1/issuance/oid4vci-clients".into(),
+            pattern: OID4VCI_CLIENT_MANAGEMENT_PROXY_PATH.into(),
             match_type: RouteMatchType::Exact,
             upstream_service: issuance_native::NATIVE_SERVICE.into(),
             methods: BTreeSet::from([HttpMethod::Put]),
@@ -404,6 +405,12 @@ impl GatewayContract {
             } else {
                 json!([])
             };
+            crate::openapi::describe_operation(
+                &mut operation,
+                route.method,
+                &route.path,
+                route.status_code,
+            );
             path_item.insert(method_name(route.method).to_ascii_lowercase(), operation);
         }
         json!({
@@ -414,7 +421,9 @@ impl GatewayContract {
                 "description": "Canonical public HTTP surface for the Marty Rust service platform."
             },
             "paths": paths,
+            "x-marty-protocol-revision": crate::openapi::protocol_revision(),
             "components": {
+                "schemas": crate::openapi::schemas(),
                 "securitySchemes": {
                     "bearerAuth": {"type": "http", "scheme": "bearer", "bearerFormat": "JWT"},
                     "apiKeyAuth": {"type": "apiKey", "in": "header", "name": "X-API-Key"},
@@ -541,12 +550,15 @@ pub fn route_for(
     table.find(&GatewayRequest::new(method, path, 0))
 }
 
+const OID4VCI_CLIENT_MANAGEMENT_PROXY_PATH: &str =
+    "/__gateway/issuance-native/v1/issuance/oid4vci-clients";
+
 /// Preserve the legacy gateway's service credential boundary for direct
 /// issuance management and wallet routes while leaving browser/webhook Canvas
 /// protocol entry points credential-free.
 #[must_use]
 pub fn requires_issuance_service_auth(path: &str) -> bool {
-    route_ownership(path).service == "issuance"
+    (route_ownership(path).service == "issuance" || path == OID4VCI_CLIENT_MANAGEMENT_PROXY_PATH)
         && path != "/v1/issuance/authorize"
         && path != "/v1/passport/webhooks/personalization"
         && !CANVAS_PUBLIC.iter().any(|pattern| pattern.is_match(path))
@@ -617,7 +629,7 @@ static CANVAS_PUBLIC: LazyLock<Vec<Regex>> = LazyLock::new(|| {
         r"^/v1/integrations/canvas/lti/config/[^/]+/?$",
         r"^/v1/integrations/canvas/lti/platforms/[^/]+/(?:login|experience-login|launch|experience)/?$",
         r"^/v1/integrations/canvas/oauth/callback/?$",
-        r"^/v1/integrations/canvas/lti/experience-sessions/(?:exchange|current(?:/(?:bootstrap|evidence-sync|evidence-status|deep-linking-response))?)/?$",
+        r"^/v1/integrations/canvas/lti/experience-sessions/(?:exchange|current(?:/(?:bootstrap|evidence-sync|evidence-status|deep-linking-response|claim))?)/?$",
     ]
     .into_iter()
     .map(|pattern| Regex::new(pattern).expect("static Canvas route regex"))
@@ -682,8 +694,25 @@ static APPENDED_DISCOVERY_PUBLIC: LazyLock<Regex> = LazyLock::new(|| {
 static DID_WEB_PUBLIC: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^/orgs/[^/]+/did\.json$").expect("static DID Web route regex"));
 
+pub(crate) fn oid4vci_protocol_route(path: &str) -> bool {
+    matches!(
+        path,
+        "/v1/issuance/offers"
+            | "/v1/issuance/token"
+            | "/v1/issuance/credential"
+            | "/v1/issuance/nonce"
+            | "/v1/issuance/notification"
+            | "/v1/issuance/deferred-credential"
+            | "/v1/issuance/authorize"
+            | "/v1/issuance/par"
+    ) || path
+        .strip_prefix("/v1/issuance/offers/")
+        .is_some_and(|id| !id.is_empty() && !id.contains('/'))
+}
+
 fn public_route(path: &str) -> bool {
     path == "/openapi.json"
+        || path == "/v1/protocol-support"
         || path == "/docs"
         || path == "/redoc"
         || path == "/ready"
@@ -705,19 +734,8 @@ fn public_route(path: &str) -> bool {
         || path.starts_with("/v1/trust-registry")
         || APPENDED_DISCOVERY_PUBLIC.is_match(path)
         || DID_WEB_PUBLIC.is_match(path)
-        || [
-            "/v1/issuance/offers",
-            "/v1/issuance/token",
-            "/v1/issuance/credential",
-            "/v1/issuance/nonce",
-            "/v1/issuance/notification",
-            "/v1/issuance/deferred-credential",
-            "/v1/issuance/authorize",
-            "/v1/issuance/par",
-            "/v1/flows/siop/submit",
-        ]
-        .iter()
-        .any(|prefix| path.starts_with(prefix))
+        || oid4vci_protocol_route(path)
+        || path.starts_with("/v1/flows/siop/submit")
         || CANVAS_PUBLIC.iter().any(|pattern| pattern.is_match(path))
         || WALLET_PUBLIC.is_match(path)
         || STATUS_PUBLIC.is_match(path)
@@ -725,6 +743,8 @@ fn public_route(path: &str) -> bool {
 
 fn gateway_owned(path: &str) -> bool {
     path == "/openapi.json"
+        || path == "/v1/protocol-support"
+        || path == "/v1/credential-templates/issuer-options"
         || path == "/docs"
         || path == "/redoc"
         || path.starts_with("/.well-known/")
@@ -801,6 +821,58 @@ const fn method_name(method: HttpMethod) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn policy_suspension_requires_tenant_bound_write_scope() {
+        use crate::authorization::{
+            api_key_allowed, authorize_api_key, resolve_action, OrganizationMembership,
+        };
+        let path = "/v1/presentation-policies/policy-one/suspend";
+        let table = GatewayContract::load()
+            .unwrap()
+            .proxy_route_table()
+            .unwrap();
+        let route = route_for(&table, HttpMethod::Post, path).unwrap();
+        assert_eq!(route.route.upstream_service, "presentation-policies");
+        assert!(route.route.auth_required);
+        let permission = resolve_action("POST", path).unwrap();
+        assert_eq!(permission.permission, "presentation-policy:edit");
+        let mut membership = OrganizationMembership {
+            user_id: "editor".into(),
+            organization_id: "org-one".into(),
+            status: "active".into(),
+            role_names: Default::default(),
+            permissions: ["presentation-policy:edit".into()].into(),
+            is_owner: false,
+        };
+        assert!(membership.allows(permission.permission));
+        membership.permissions = ["presentation-policy:view".into()].into();
+        assert!(!membership.allows(permission.permission));
+        assert!(api_key_allowed(
+            permission.permission,
+            &["trust:write".into()]
+        ));
+        assert!(!api_key_allowed(
+            permission.permission,
+            &["trust:read".into()]
+        ));
+        assert!(!api_key_allowed(permission.permission, &[]));
+        assert!(authorize_api_key(
+            permission.permission,
+            "org-one",
+            Some("other-org"),
+            &["trust:write".into()]
+        )
+        .is_err());
+        assert!(authorize_api_key(
+            permission.permission,
+            "org-one",
+            Some("org-one"),
+            &["trust:write".into()]
+        )
+        .is_ok());
+        assert!(route_for(&table, HttpMethod::Get, path).is_err());
+    }
 
     #[test]
     fn passport_route_table_opt_in_changes_only_frozen_public_owners() {
@@ -938,7 +1010,10 @@ mod tests {
     fn frozen_route_and_middleware_contract_builds_one_mmf_table() {
         let contract = GatewayContract::load().expect("gateway contract");
         let table = contract.route_table().expect("route table");
-        assert_eq!(table.routes().len(), EXPECTED_ROUTE_COUNT);
+        assert_eq!(
+            table.routes().len(),
+            EXPECTED_ROUTE_COUNT + issuance_native::NATIVE_EXTENSION_ROUTE_COUNT
+        );
         assert_eq!(
             route_for(&table, HttpMethod::Get, "/v1/auth/session/validate")
                 .expect("catch-all auth route")
@@ -960,10 +1035,60 @@ mod tests {
     }
 
     #[test]
+    fn notification_routes_describe_native_operations_instead_of_a_management_catch_all() {
+        let contract = GatewayContract::load().unwrap();
+        let routes = contract.route_table().unwrap();
+        for (method, path) in [
+            (HttpMethod::Post, "/v1/notifications/send"),
+            (HttpMethod::Get, "/v1/notifications/unread/count"),
+            (
+                HttpMethod::Get,
+                "/v1/notifications/notification-one/delivery-results",
+            ),
+            (HttpMethod::Patch, "/v1/notifications/notification-one/read"),
+            (
+                HttpMethod::Delete,
+                "/v1/notifications/notification-one/read",
+            ),
+            (HttpMethod::Post, "/v1/notifications/read-all"),
+        ] {
+            assert_eq!(
+                route_for(&routes, method, path)
+                    .unwrap()
+                    .route
+                    .upstream_service,
+                "notifications"
+            );
+        }
+        for (method, path) in [
+            (HttpMethod::Post, "/v1/notifications"),
+            (HttpMethod::Put, "/v1/notifications/notification-one"),
+            (HttpMethod::Post, "/v1/notifications/rules"),
+            (HttpMethod::Patch, "/v1/notifications/rules/rule-one"),
+            (HttpMethod::Patch, "/v1/notifications/preferences"),
+        ] {
+            assert!(
+                route_for(&routes, method, path).is_err(),
+                "{method:?} {path}"
+            );
+        }
+    }
+
+    #[test]
     fn openapi_is_derived_from_every_schema_visible_route() {
         let contract = GatewayContract::load().expect("gateway contract");
         let document = contract.openapi_document("1.2.3");
         assert_eq!(document["openapi"], "3.1.0");
+        assert_eq!(
+            document["paths"]["/v1/organizations/{org_id}"]["patch"]["requestBody"]["content"]
+                ["application/json"]["schema"]["$ref"],
+            "#/components/schemas/schemas__organization_update_request"
+        );
+        assert_eq!(
+            document["paths"]["/v1/trust-profiles/{profile_id}"]["get"]
+                ["x-marty-response-schema-documented"],
+            true
+        );
         assert_eq!(document["info"]["title"], "Marty API Gateway");
         assert_eq!(document["info"]["version"], "1.2.3");
         let paths = document["paths"].as_object().expect("OpenAPI paths");
@@ -1010,19 +1135,44 @@ mod tests {
     }
 
     #[test]
+    fn protocol_support_catalog_is_public_gateway_owned_discovery() {
+        let ownership = route_ownership("/v1/protocol-support");
+        assert_eq!(ownership.service, "gateway");
+        assert!(ownership.gateway_owned);
+        assert!(!ownership.requires_authentication);
+        let contract = GatewayContract::load().expect("gateway contract");
+        let route = route_for(
+            &contract.runtime_route_table().expect("runtime routes"),
+            HttpMethod::Get,
+            "/v1/protocol-support",
+        )
+        .expect("support route");
+        assert_eq!(route.route.upstream_service, "gateway");
+        let operation = &contract.openapi_document("test")["paths"]["/v1/protocol-support"]["get"];
+        assert_eq!(operation["security"], json!([]));
+        assert_eq!(operation["x-marty-protocol-support"], "implemented");
+    }
+
+    #[test]
     fn internal_proxy_routes_do_not_mutate_public_contract() {
         let contract = GatewayContract::load().expect("gateway contract");
-        assert_eq!(contract.route_table().expect("public").routes().len(), 450);
+        assert_eq!(
+            contract.route_table().expect("public").routes().len(),
+            EXPECTED_ROUTE_COUNT + issuance_native::NATIVE_EXTENSION_ROUTE_COUNT
+        );
         assert_eq!(
             contract
                 .runtime_route_table()
                 .expect("runtime")
                 .routes()
                 .len(),
-            453
+            EXPECTED_ROUTE_COUNT + issuance_native::NATIVE_EXTENSION_ROUTE_COUNT + 3
         );
         let proxy = contract.proxy_route_table().expect("proxy");
-        assert_eq!(proxy.routes().len(), 466);
+        assert_eq!(
+            proxy.routes().len(),
+            EXPECTED_ROUTE_COUNT + issuance_native::NATIVE_EXTENSION_ROUTE_COUNT + 16
+        );
         assert_eq!(
             route_for(
                 &proxy,
@@ -1145,6 +1295,49 @@ mod tests {
     }
 
     #[test]
+    fn offline_audit_routes_require_authenticated_organization_ingestion_scope() {
+        use crate::authorization::{api_key_allowed, authorize_api_key, resolve_action};
+        let org = "28d552e4-4a94-4fd6-9b60-55e5e9ccb1a3";
+        let base = format!("/v1/organizations/{org}/offline-verification-events");
+        let table = GatewayContract::load()
+            .unwrap()
+            .proxy_route_table()
+            .unwrap();
+        for (method, path) in [
+            (HttpMethod::Get, base.clone()),
+            (HttpMethod::Post, base.clone()),
+            (
+                HttpMethod::Get,
+                format!("{base}/10b796cf-17c0-4f71-bd4e-2ec62089c0b2"),
+            ),
+        ] {
+            let route = route_for(&table, method, &path).expect("public audit ingestion route");
+            assert_eq!(route.route.upstream_service, "organizations");
+            assert!(route.route.auth_required);
+            let method_name = if method == HttpMethod::Get {
+                "GET"
+            } else {
+                "POST"
+            };
+            let permission =
+                resolve_action(method_name, &path).expect("explicit ingestion authorization");
+            assert_eq!(permission.permission, "audit:ingest");
+        }
+        assert!(api_key_allowed("audit:ingest", &["audit:write".into()]));
+        for scopes in [vec![], vec!["audit:read".into()], vec!["admin:full".into()]] {
+            assert!(!api_key_allowed("audit:ingest", &scopes));
+        }
+        assert!(authorize_api_key("audit:ingest", org, Some(org), &["audit:write".into()]).is_ok());
+        assert!(authorize_api_key(
+            "audit:ingest",
+            org,
+            Some("another-org"),
+            &["audit:write".into()]
+        )
+        .is_err());
+    }
+
+    #[test]
     fn d11_routes_resolve_only_through_the_public_gateway_contract() {
         let proxy = GatewayContract::load()
             .expect("gateway contract")
@@ -1216,6 +1409,63 @@ mod tests {
                 .unwrap_or_else(|_| panic!("missing D-11 route {method:?} {path}"));
             assert_eq!(matched.route.upstream_service, service, "{method:?} {path}");
             assert!(!path.contains("/internal/"), "{path}");
+        }
+    }
+
+    #[test]
+    fn canvas_claim_routes_only_current_session_to_native_authorization() {
+        let path = "/v1/integrations/canvas/lti/experience-sessions/current/claim";
+        assert_eq!(route_ownership(path).service, "issuance");
+        assert!(!route_ownership(path).requires_authentication);
+        assert!(crate::authorization::skips_tenant_authorization(path));
+        for foreign in [
+            "/v1/integrations/canvas/lti/experience-sessions/other/claim",
+            "/v1/integrations/canvas/lti/experience-sessions/current/claim/other",
+        ] {
+            assert!(route_ownership(foreign).requires_authentication);
+            assert!(!crate::authorization::skips_tenant_authorization(foreign));
+        }
+    }
+
+    #[test]
+    fn canvas_claim_is_registered_in_actual_public_and_proxy_dispatch_tables() {
+        let contract = GatewayContract::load().unwrap();
+        assert_eq!(contract.routes.len(), EXPECTED_ROUTE_COUNT);
+        let path = "/v1/integrations/canvas/lti/experience-sessions/current/claim";
+        assert!(!contract.routes.iter().any(|route| route.path == path));
+        for table in [
+            contract.route_table().unwrap(),
+            contract.proxy_route_table().unwrap(),
+        ] {
+            for method in [HttpMethod::Get, HttpMethod::Post] {
+                let matched = route_for(&table, method, path)
+                    .expect("native extension must be registered before authentication dispatch");
+                assert_eq!(matched.route.pattern, path);
+                assert_eq!(
+                    matched.route.upstream_service,
+                    issuance_native::NATIVE_SERVICE
+                );
+                assert!(
+                    !matched.route.auth_required,
+                    "native handler authenticates the Canvas session bearer"
+                );
+                assert!(matched.route.rewrite_path.is_none());
+                for foreign in [
+                    "/v1/integrations/canvas/lti/experience-sessions/foreign/claim",
+                    "/v1/integrations/canvas/lti/experience-sessions/current/claim/other",
+                    "/v1/integrations/canvas/lti/experience-sessions/current/claim-other",
+                ] {
+                    assert!(route_for(&table, method, foreign).is_err());
+                }
+            }
+            for method in [
+                HttpMethod::Put,
+                HttpMethod::Patch,
+                HttpMethod::Delete,
+                HttpMethod::Options,
+            ] {
+                assert!(route_for(&table, method, path).is_err());
+            }
         }
     }
 

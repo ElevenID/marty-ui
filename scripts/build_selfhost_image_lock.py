@@ -41,6 +41,7 @@ EXACT_IMAGE = re.compile(
 )
 DEDICATED_SERVICES = {
     "db-migrate": "db-migrate",
+    "kms-initialize": "db-migrate",
     "ui": "ui-selfhost",
     "cloudflared": "cloudflared-wrapper",
     "cloudflared-beta": "cloudflared-wrapper",

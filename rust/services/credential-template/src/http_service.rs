@@ -905,12 +905,35 @@ async fn get_delivery_destination(
     headers: HeaderMap,
     Path(destination_id): Path<String>,
 ) -> Result<Json<Value>, CredentialTemplateHttpError> {
-    let user_id = trusted_user_id(&state, &headers)?;
-    let entry = state
-        .registry_application
-        .get_destination(&user_id, &destination_id)
-        .await
-        .map_err(application_error)?;
+    let entry = if headers.contains_key("x-api-key-id") || headers.contains_key("x-api-key-scopes")
+    {
+        if !state.service_authenticator.is_configured() {
+            return Err(unauthorized(
+                "CREDENTIAL_TEMPLATE.SERVICE_AUTHENTICATION_REQUIRED",
+            ));
+        }
+        state
+            .service_authenticator
+            .authenticate(header(&headers, "x-service-token"))
+            .map_err(|_| unauthorized("CREDENTIAL_TEMPLATE.SERVICE_AUTHENTICATION_REQUIRED"))?;
+        let actor = marty_api_key_policy::GatewayApiKeyActor::parse(
+            header(&headers, "x-api-key-id").unwrap_or_default(),
+            header(&headers, "x-organization-id").unwrap_or_default(),
+            header(&headers, "x-api-key-scopes").unwrap_or_default(),
+        )
+        .map_err(|_| unauthorized("CREDENTIAL_TEMPLATE.INVALID_GATEWAY_PRINCIPAL"))?;
+        state
+            .registry_application
+            .get_destination_for_gateway_api_key(&actor, &destination_id)
+            .await
+    } else {
+        let user_id = trusted_user_id(&state, &headers)?;
+        state
+            .registry_application
+            .get_destination(&user_id, &destination_id)
+            .await
+    }
+    .map_err(application_error)?;
     Ok(Json(destination_response(&entry)))
 }
 

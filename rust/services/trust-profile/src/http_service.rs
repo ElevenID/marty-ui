@@ -153,6 +153,9 @@ struct TrustSourceInput {
     url: Option<String>,
     certificate_pem: Option<String>,
     issuer_did: Option<String>,
+    organization_id: Option<String>,
+    verification_method_ids: Option<Vec<String>>,
+    did_resolution: Option<marty_issuer_key_resolution::policy::DidResolutionPolicy>,
     purposes: Option<Vec<TrustPurpose>>,
     description: Option<String>,
     registry_sync: Option<RegistrySyncConfigInput>,
@@ -388,11 +391,31 @@ async fn get_profile(
     headers: HeaderMap,
     Path(profile_id): Path<String>,
 ) -> Result<Json<Value>, TrustProfileHttpError> {
-    let user_id = trusted_user(&state, &headers)?;
-    let profile = state
-        .application
-        .profile(&user_id, uuid(&profile_id, "profile_id")?)
-        .await
+    let profile =
+        if headers.contains_key("x-api-key-id") || headers.contains_key("x-api-key-scopes") {
+            if !state.service_authenticator.is_configured() {
+                return Err(unauthorized(
+                    "TRUST_PROFILE.SERVICE_AUTHENTICATION_REQUIRED",
+                ));
+            }
+            internal_service(&state, &headers)?;
+            let actor = marty_api_key_policy::GatewayApiKeyActor::parse(
+                header(&headers, "x-api-key-id").unwrap_or_default(),
+                header(&headers, "x-organization-id").unwrap_or_default(),
+                header(&headers, "x-api-key-scopes").unwrap_or_default(),
+            )
+            .map_err(|_| unauthorized("TRUST_PROFILE.INVALID_GATEWAY_PRINCIPAL"))?;
+            state
+                .application
+                .profile_for_gateway_api_key(&actor, uuid(&profile_id, "profile_id")?)
+                .await
+        } else {
+            let user_id = trusted_user(&state, &headers)?;
+            state
+                .application
+                .profile(&user_id, uuid(&profile_id, "profile_id")?)
+                .await
+        }
         .map_err(application_error)?;
     Ok(Json(profile_response(&profile)))
 }
@@ -1425,6 +1448,9 @@ fn public_trust_source(source: &TrustSource) -> Value {
         "url": source.url,
         "certificate_pem": source.certificate_pem,
         "issuer_did": source.issuer_did,
+        "organization_id": source.extensions.get("organization_id"),
+        "verification_method_ids": source.extensions.get("verification_method_ids"),
+        "did_resolution": source.extensions.get("did_resolution"),
         "purposes": source.purposes,
         "description": source.description,
         "pinned_certificates": source.pinned_certificates,
@@ -1510,6 +1536,31 @@ fn valid_verification_keys(value: &Value) -> Result<(), TrustProfileHttpError> {
 
 fn trust_source(input: TrustSourceInput) -> Result<TrustSource, TrustProfileHttpError> {
     let source_type = source_type(&input.source_type)?;
+    let mut extensions = Map::new();
+    if input.organization_id.is_some()
+        || input.verification_method_ids.is_some()
+        || input.did_resolution.is_some()
+    {
+        let did = input
+            .issuer_did
+            .as_deref()
+            .ok_or_else(|| unprocessable("DID resolution controls require issuer_did"))?;
+        marty_issuer_key_resolution::policy::validate_source_controls(
+            did,
+            input.organization_id.as_deref(),
+            input.verification_method_ids.as_deref().unwrap_or_default(),
+        )
+        .map_err(|_| unprocessable("DID resolution controls are invalid"))?;
+        if let Some(organization_id) = input.organization_id {
+            extensions.insert("organization_id".into(), json!(organization_id));
+        }
+        if let Some(methods) = input.verification_method_ids {
+            extensions.insert("verification_method_ids".into(), json!(methods));
+        }
+        if let Some(policy) = input.did_resolution {
+            extensions.insert("did_resolution".into(), json!(policy));
+        }
+    }
     let registry_sync = input.registry_sync.map(|config| {
         json!({
             "protocol": config.protocol,
@@ -1544,7 +1595,7 @@ fn trust_source(input: TrustSourceInput) -> Result<TrustSource, TrustProfileHttp
         registry_sequence: 0,
         registry_entries: Map::new(),
         registry_last_synced_at: None,
-        extensions: Map::new(),
+        extensions,
     })
 }
 

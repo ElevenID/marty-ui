@@ -42,6 +42,7 @@ const CLAIM_SOURCES: &[&str] = &[
     "SYSTEM",
 ];
 const SYSTEM_FIELDS: &[&str] = &[
+    "canvas.course_name",
     "applicant.user_id",
     "applicant.email",
     "applicant.given_name",
@@ -880,6 +881,11 @@ pub fn validate_application_template(
                 "UNKNOWN_FIELD",
                 "Claim source must reference a configured form field.",
             );
+        } else if source == "EVIDENCE_EXTRACTION"
+            && !marty_claim_collection::valid_evidence_config(source_config)
+        {
+            add("claim_mappings", format!("claim_collection_rules.{index}.source_config"), "INVALID",
+                "Evidence mappings require an unambiguous requirement or fact type and a public fact JSON pointer.");
         } else if source == "SYSTEM" {
             let system_field = text(source_config.get("system_field"));
             if !SYSTEM_FIELDS.contains(&system_field.as_str()) {

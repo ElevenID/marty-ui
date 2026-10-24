@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@test/utils';
+import { act, fireEvent, render, screen, waitFor } from '@test/utils';
 
 import ApplicationForm from '../applicant/ApplicationForm';
 import { storeCanvasLtiSession } from '../../services/canvasLtiExperience';
@@ -21,7 +21,9 @@ const {
   mockListApplicantApplicationsForProfile,
   mockSupersedeApplication,
   mockWalletPreferenceState,
+  mockAuthState,
   mockLocationState,
+  mockPreview,
 } = vi.hoisted(() => ({
   mockNavigate: vi.fn(),
   mockGet: vi.fn(),
@@ -39,6 +41,8 @@ const {
   mockListApplicantApplicationsForProfile: vi.fn(),
   mockSupersedeApplication: vi.fn(),
   mockWalletPreferenceState: { walletIds: ['wallet-1'] as string[] },
+  mockAuthState: { organizationId: 'org-1' },
+  mockPreview: { isPreview: false },
   mockLocationState: {
     params: { credentialType: undefined as string | undefined },
     location: {
@@ -92,12 +96,12 @@ vi.mock('../../hooks/useAuth', () => ({
       organization_name: 'Acme Org',
       roles: ['applicant'],
     },
-    organizationId: 'org-1',
+    organizationId: mockAuthState.organizationId,
   }),
 }));
 
 vi.mock('../../contexts/PreviewContext', () => ({
-  usePreview: () => ({ isPreview: false }),
+  usePreview: () => mockPreview,
 }));
 
 vi.mock('../../services/api', () => ({
@@ -127,8 +131,13 @@ vi.mock('../../hooks/useWalletPreferences', () => ({
 }));
 
 vi.mock('../console/applicant/ClaimCredentialDialog', () => ({
-  default: ({ open, applicationId, offerData }: { open: boolean; applicationId: string; offerData: any }) => (
-    open ? <div data-testid="claim-credential-dialog">{applicationId}:{offerData?.offer_url}</div> : null
+  default: ({ open, onClose, applicationId, offerData, organizationId }: { open: boolean; onClose: () => void; applicationId: string; offerData: any; organizationId?: string }) => (
+    open ? (
+      <div data-testid="claim-credential-dialog" data-organization-id={organizationId}>
+        {applicationId}:{offerData?.offer_url}
+        <button onClick={onClose}>Close claim dialog</button>
+      </div>
+    ) : null
   ),
 }));
 
@@ -175,9 +184,28 @@ function canvasApplicationLocationState() {
   };
 }
 
+function canvasClaimStatus(claimed = false) {
+  return {
+    application_status: claimed ? 'claimed' : 'approved',
+    sync: { status: 'succeeded' },
+    evidence: {
+      required_count: 1,
+      current_authoritative_count: 1,
+      verified_authoritative_count: 1,
+      verified_required_count: 1,
+      status: 'verified',
+    },
+    policy: { status: 'permitted' },
+    claim: claimed
+      ? { status: 'claimed', unsigned: false, available: false }
+      : { status: 'ready_to_claim', unsigned: true, available: true },
+  };
+}
+
 describe('ApplicationForm', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockPreview.isPreview = false;
     sessionStorage.clear();
     storeCanvasLtiSession({
       session_token: 'canvas-session-token',
@@ -226,6 +254,52 @@ describe('ApplicationForm', () => {
       offer_expires_at: '2026-03-17T00:00:00.000Z',
     });
     mockWalletPreferenceState.walletIds = ['wallet-1'];
+    mockAuthState.organizationId = 'org-1';
+  });
+
+  it.each([false, true])('simulates preview submission without applicant, credential or evidence writes (one click=%s)', async (oneClick) => {
+    mockPreview.isPreview = true;
+    mockLocationState.location.search = '?canvas_lti_state=stale-launch&application_template_id=stale-template';
+    const { user } = render(<ApplicationForm previewContext={{
+      credential: { id: 'preview-credential', credential_type: oneClick ? 'MemberCredential' : 'EmployeeCredential',
+        required_fields: [], optional_fields: [], custom_fields: [], field_validation_rules: {} },
+      applicationTemplate: { id: 'preview-template', name: 'Actual preview template', credential_template_id: 'preview-credential',
+        status: 'DRAFT', form_fields: oneClick ? [{ field_id: 'email', field_type: 'EMAIL', required: true }] : [], evidence_requirements: [] },
+    }} />);
+    expect(screen.getByText('Actual preview template')).toBeInTheDocument();
+    expect(screen.queryByText('ElevenID Login Credential')).not.toBeInTheDocument();
+    expect(mockGet).not.toHaveBeenCalled();
+    if (oneClick) {
+      expect(screen.queryByText(/^Instant/)).not.toBeInTheDocument();
+      await user.click(screen.getByRole('button', { name: 'Add to Wallet' }));
+    } else {
+      if (screen.queryByTestId('next-step-btn')) await user.click(screen.getByTestId('next-step-btn'));
+      await user.click(screen.getByTestId('accept-terms-checkbox'));
+      await user.click(screen.getByTestId('submit-application-btn'));
+    }
+    expect(await screen.findByTestId('application-submitted')).toHaveTextContent('applicationForm.success.previewTitle');
+    for (const mutation of [mockCreateApplicant, mockCreateApplication, mockSubmitApplication,
+      mockSubmitApplicationEvidence, mockUpdateApplicantProfile, mockEnrollBiometric, mockGenerateIssuanceOffer, mockPost]) {
+      expect(mutation).not.toHaveBeenCalled();
+    }
+  });
+
+  it('submits a live application to its API-provided issuer organization rather than the user home organization', async () => {
+    mockAuthState.organizationId = 'home-org';
+    mockLocationState.location.state = {
+      credential: { id: 'issuer-credential', credential_type: 'EmployeeCredential', required_fields: [], optional_fields: [], custom_fields: [] },
+      applicationTemplate: { id: 'issuer-application', organization_id: 'issuer-org', credential_template_id: 'issuer-credential',
+        name: 'Issuer application', status: 'ACTIVE', form_fields: [{ field_id: 'member_id', label: 'Member ID', field_type: 'TEXT', required: true }], evidence_requirements: [] },
+    };
+    const { user } = render(<ApplicationForm />);
+    await user.type(screen.getByRole('textbox', { name: /member id/i }), 'SYNTHETIC-ISSUER-MEMBER');
+    if (screen.queryByTestId('next-step-btn')) await user.click(screen.getByTestId('next-step-btn'));
+    await user.click(screen.getByTestId('accept-terms-checkbox'));
+    await user.click(screen.getByTestId('submit-application-btn'));
+    await waitFor(() => expect(mockCreateApplication).toHaveBeenCalledWith(expect.objectContaining({
+      organization_id: 'issuer-org', application_template_id: 'issuer-application',
+      form_data: { member_id: 'SYNTHETIC-ISSUER-MEMBER' },
+    })));
   });
 
   it('explains Canvas-only credential applications with launch context and completion checks', async () => {
@@ -340,8 +414,12 @@ describe('ApplicationForm', () => {
     expect(screen.queryByText('must-not-render')).not.toBeInTheDocument();
   });
 
-  it('queues a learner refresh and opens claim only when the server marks it available', async () => {
+  it.each([
+    { context: 'Canvas issuer organization', issuerOrganizationId: 'org-canvas-issuer', expectedOrganizationId: 'org-canvas-issuer' },
+    { context: 'authenticated organization fallback', issuerOrganizationId: undefined, expectedOrganizationId: 'org-1' },
+  ])('queues a learner refresh and opens a server-authorized claim in the $context', async ({ issuerOrganizationId, expectedOrganizationId }) => {
     mockLocationState.location = canvasApplicationLocationState();
+    mockLocationState.location.state.canvasLtiSession.organization_id = issuerOrganizationId;
     let queued = false;
     const readyStatus = {
       application_status: 'approved',
@@ -397,6 +475,99 @@ describe('ApplicationForm', () => {
     mockGet.mockResolvedValue(readyStatus);
     await user.click(screen.getByTestId('canvas-claim-action'));
     expect(screen.getByTestId('claim-credential-dialog')).toHaveTextContent('application-canvas-1');
+    expect(screen.getByTestId('claim-credential-dialog')).toHaveAttribute('data-organization-id', expectedOrganizationId);
+  });
+
+  it('refreshes Canvas claim status after closing the dialog without issuing again', async () => {
+    mockLocationState.location = canvasApplicationLocationState();
+    mockGet.mockResolvedValue(canvasClaimStatus());
+    const { user } = render(<ApplicationForm />);
+    await user.click(await screen.findByTestId('canvas-claim-action'));
+    expect(screen.getByTestId('claim-credential-dialog')).toHaveTextContent('application-canvas-1');
+
+    mockGet.mockResolvedValue(canvasClaimStatus(true));
+    await user.click(screen.getByRole('button', { name: 'Close claim dialog' }));
+
+    expect(await screen.findByTestId('canvas-claim-complete')).toHaveTextContent('This Canvas badge has been claimed.');
+    expect(screen.queryByTestId('canvas-claim-action')).not.toBeInTheDocument();
+    expect(mockPost).not.toHaveBeenCalled();
+    expect(mockGenerateIssuanceOffer).not.toHaveBeenCalled();
+  });
+
+  it.each(['focus', 'visibilitychange'])('refreshes the current Canvas claim on browser %s return', async (event) => {
+    mockLocationState.location = canvasApplicationLocationState();
+    mockGet.mockResolvedValue(canvasClaimStatus());
+    const { user } = render(<ApplicationForm />);
+    await user.click(await screen.findByTestId('canvas-claim-action'));
+
+    mockGet.mockResolvedValue(canvasClaimStatus(true));
+    fireEvent(event === 'focus' ? window : document, new Event(event));
+
+    expect(await screen.findByTestId('canvas-claim-complete')).toBeInTheDocument();
+    expect(screen.getByTestId('claim-credential-dialog')).toHaveTextContent('application-canvas-1');
+    expect(mockPost).not.toHaveBeenCalled();
+    expect(mockGenerateIssuanceOffer).not.toHaveBeenCalled();
+  });
+
+  it('does not treat closing a canceled wallet claim as successful issuance', async () => {
+    mockLocationState.location = canvasApplicationLocationState();
+    mockGet.mockResolvedValue(canvasClaimStatus());
+    const { user } = render(<ApplicationForm />);
+    await user.click(await screen.findByTestId('canvas-claim-action'));
+    const readsBeforeClose = mockGet.mock.calls.length;
+    await user.click(screen.getByRole('button', { name: 'Close claim dialog' }));
+
+    await waitFor(() => expect(mockGet.mock.calls.length).toBeGreaterThan(readsBeforeClose));
+    expect(screen.getByTestId('canvas-ready-to-claim')).toBeInTheDocument();
+    expect(screen.queryByTestId('canvas-claim-complete')).not.toBeInTheDocument();
+    expect(mockPost).not.toHaveBeenCalled();
+    expect(mockGenerateIssuanceOffer).not.toHaveBeenCalled();
+  });
+
+  it('clears stale Canvas claim availability when the return status read fails', async () => {
+    mockLocationState.location = canvasApplicationLocationState();
+    mockGet.mockResolvedValue(canvasClaimStatus());
+    const { user } = render(<ApplicationForm />);
+    await user.click(await screen.findByTestId('canvas-claim-action'));
+
+    mockGet.mockRejectedValue(new Error('Canvas launch session expired. Reopen from Canvas.'));
+    await user.click(screen.getByRole('button', { name: 'Close claim dialog' }));
+
+    expect(await screen.findByTestId('canvas-evidence-sync-error')).toHaveTextContent('Canvas launch session expired. Reopen from Canvas.');
+    expect(screen.queryByTestId('canvas-ready-to-claim')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('canvas-claim-complete')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('canvas-authoritative-evidence-verified')).not.toBeInTheDocument();
+    expect(mockPost).not.toHaveBeenCalled();
+  });
+
+  it('discards a late claim read after leaving the Canvas application and removes return listeners', async () => {
+    mockLocationState.location = canvasApplicationLocationState();
+    mockGet.mockResolvedValue(canvasClaimStatus());
+    const first = render(<ApplicationForm />);
+    await first.user.click(await screen.findByTestId('canvas-claim-action'));
+
+    let finishOldRead!: (value: ReturnType<typeof canvasClaimStatus>) => void;
+    mockGet.mockImplementation(() => new Promise((resolve) => { finishOldRead = resolve; }));
+    const readsBeforeClose = mockGet.mock.calls.length;
+    await first.user.click(screen.getByRole('button', { name: 'Close claim dialog' }));
+    await waitFor(() => expect(mockGet.mock.calls.length).toBeGreaterThan(readsBeforeClose));
+    first.unmount();
+    const readsAfterUnmount = mockGet.mock.calls.length;
+    fireEvent(window, new Event('focus'));
+    fireEvent(document, new Event('visibilitychange'));
+    expect(mockGet).toHaveBeenCalledTimes(readsAfterUnmount);
+
+    mockLocationState.location = canvasApplicationLocationState();
+    mockLocationState.location.state.canvasLtiBootstrap.application_id = 'application-canvas-2';
+    mockGet.mockResolvedValue(canvasClaimStatus());
+    const second = render(<ApplicationForm />);
+    await second.user.click(await screen.findByTestId('canvas-claim-action'));
+    await act(async () => { finishOldRead(canvasClaimStatus(true)); });
+
+    expect(screen.getByTestId('claim-credential-dialog')).toHaveTextContent('application-canvas-2');
+    expect(screen.getByTestId('canvas-ready-to-claim')).toBeInTheDocument();
+    expect(screen.queryByTestId('canvas-claim-complete')).not.toBeInTheDocument();
+    expect(mockPost).not.toHaveBeenCalled();
   });
 
   it('does not load org-scoped templates for Canvas LTI learners', async () => {
@@ -496,6 +667,25 @@ describe('ApplicationForm', () => {
       expect(mockGenerateIssuanceOffer).not.toHaveBeenCalled();
       expect(screen.getByTestId('claim-credential-dialog')).toHaveTextContent('application-1:');
     });
+  });
+
+  it('keeps one-click membership wallet selection in the application organization before an offer exists', async () => {
+    mockAuthState.organizationId = 'org-membership';
+    mockWalletPreferenceState.walletIds = [];
+    mockLocationState.location.state.credential.credential_type = 'open_badge';
+
+    const { user } = render(<ApplicationForm />);
+    await user.click(screen.getByTestId('credential-claim-action'));
+
+    const dialog = await screen.findByTestId('claim-credential-dialog');
+    expect(mockCreateApplication).toHaveBeenCalledWith(expect.objectContaining({
+      organization_id: 'org-membership',
+      application_template_id: 'app-template-1',
+    }));
+    expect(mockSubmitApplication).toHaveBeenCalledWith('application-1');
+    expect(mockGenerateIssuanceOffer).not.toHaveBeenCalled();
+    expect(dialog).toHaveTextContent('application-1:');
+    expect(dialog).toHaveAttribute('data-organization-id', 'org-membership');
   });
 
   it('uploads required evidence through the same public API before browser submission', async () => {

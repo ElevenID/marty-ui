@@ -11,7 +11,7 @@
  *   3. The IssuingSection component picks it up automatically.
  */
 
-import { generateIssuanceOffer } from '../services/credentialsApi';
+import { issueOrganizationApplication } from '../services/applicantApi';
 import OID4VCIInviteDisplay from '../components/issuance/OID4VCIInviteDisplay';
 
 // ── Protocol definitions ────────────────────────────────────────────────────
@@ -36,7 +36,21 @@ const ISSUANCE_PROTOCOLS = [
      * @param {string} applicationId
      * @returns {Promise<Object>}
      */
-    generateOffer: (applicationId) => generateIssuanceOffer(applicationId),
+    // This registry is used by the organization reviewer, not the applicant.
+    // Keep the organization boundary explicit; never fall back to self-claim.
+    generateOffer: async (applicationId, { organizationId } = {}) => {
+      const data = await issueOrganizationApplication(organizationId, applicationId);
+      return {
+        ...data,
+        offer_url: data.credential_offer_uri || data.offer_url || null,
+        expires_at: data.offer_expires_at || data.expires_at || null,
+        // The Applicant response status describes the application, not the QR
+        // invitation. Expiry is evaluated separately by the invite display.
+        status: data.credential_offer_uri || data.offer_url
+          || Object.values(data.credential_offer_uris || {}).some((uri) => typeof uri === 'string' && uri.trim())
+          ? 'active' : 'pending',
+      };
+    },
     /**
      * React component that renders the invite once the offer is available.
      * Receives props: { offerData, onRegenerate, loading }

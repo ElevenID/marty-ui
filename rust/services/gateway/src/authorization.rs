@@ -216,6 +216,18 @@ static SPECIAL_RULES: LazyLock<Vec<RouteRule>> = LazyLock::new(|| {
             "verification",
         ),
         rule(
+            r"^/v1/delivery-destinations(?:/[^/]+)?$",
+            &[
+                ("GET", "wallet:view"),
+                ("HEAD", "wallet:view"),
+                ("OPTIONS", "wallet:view"),
+                ("POST", "integration-connector:create"),
+                ("PATCH", "integration-connector:edit"),
+                ("DELETE", "integration-connector:delete"),
+            ],
+            "delivery-destination",
+        ),
+        rule(
             r"^/v1/wallet-registry(?:/|$)",
             &[
                 ("GET", "wallet:view"),
@@ -304,6 +316,16 @@ static SPECIAL_RULES: LazyLock<Vec<RouteRule>> = LazyLock::new(|| {
             "integration-connector",
         ),
         rule(
+            r"^/v1/compliance-profiles/[^/]+/activate$",
+            &[("POST", "compliance-profile:activate")],
+            "compliance-profile",
+        ),
+        rule(
+            r"^/v1/compliance-profiles/[^/]+/suspend$",
+            &[("POST", "compliance-profile:suspend")],
+            "compliance-profile",
+        ),
+        rule(
             r"^/v1/credential-templates/[^/]+/activate$",
             &[("POST", "credential-template:activate")],
             "credential-template",
@@ -322,6 +344,11 @@ static SPECIAL_RULES: LazyLock<Vec<RouteRule>> = LazyLock::new(|| {
             r"^/v1/revocation-profiles/[^/]+/activate$",
             &[("POST", "revocation-profile:activate")],
             "revocation-profile",
+        ),
+        rule(
+            r"^/v1/presentation-policies/[^/]+/suspend$",
+            &[("POST", "presentation-policy:edit")],
+            "presentation-policy",
         ),
         rule(
             r"^/v1/issued-credentials/[^/]+/(?:revoke|suspend|reinstate)$",
@@ -389,6 +416,18 @@ static SPECIAL_RULES: LazyLock<Vec<RouteRule>> = LazyLock::new(|| {
         rule(
             r"^/v1/organizations/[^/]+/applicants/[^/]+/reject$",
             &[("POST", "application:reject")],
+            "application",
+        ),
+        rule(
+            r"^/v1/organizations/[^/]+/applicants(?:/[^/]+)?$",
+            &[
+                ("GET", "application:view"),
+                ("HEAD", "application:view"),
+                ("OPTIONS", "application:view"),
+                ("POST", "application:review"),
+                ("PATCH", "application:review"),
+                ("DELETE", "application:review"),
+            ],
             "application",
         ),
         rule(
@@ -544,6 +583,11 @@ static SPECIAL_RULES: LazyLock<Vec<RouteRule>> = LazyLock::new(|| {
         rule(
             r"^/v1/organizations/[a-f0-9\-]{36}/audit-events/export$",
             &[("GET", "audit:export")],
+            "audit",
+        ),
+        rule(
+            r"^/v1/organizations/[a-f0-9\-]{36}/offline-verification-events(?:/[^/]+)?$",
+            &[("GET", "audit:ingest"), ("POST", "audit:ingest")],
             "audit",
         ),
         rule(
@@ -745,7 +789,10 @@ pub fn resolve_resource_lookup(path: &str) -> Option<ResourceLookup> {
     if let Some(captures) = FLOW_RESOURCE.captures(path) {
         return Some(ResourceLookup {
             service: "flows",
-            path: format!("/v1/flows/{}/{}", &captures[1], &captures[2]),
+            path: format!(
+                "/internal/v1/resource-owners/flows/{}/{}",
+                &captures[1], &captures[2]
+            ),
         });
     }
 
@@ -753,7 +800,11 @@ pub fn resolve_resource_lookup(path: &str) -> Option<ResourceLookup> {
     let segment = &captures[1];
     let id = &captures[2];
     let (service, template, reserved): (&str, &str, &[&str]) = match segment {
-        "credential-templates" => ("credential-templates", "/v1/credential-templates/{id}", &[]),
+        "credential-templates" => (
+            "credential-templates",
+            "/v1/credential-templates/{id}",
+            &["issuer-options"],
+        ),
         "trust-profiles" => (
             "trust-profiles",
             "/internal/v1/resource-owners/trust-profiles/{id}",
@@ -764,14 +815,26 @@ pub fn resolve_resource_lookup(path: &str) -> Option<ResourceLookup> {
             "/internal/v1/resource-owners/issuer-entities/{id}",
             &[],
         ),
-        "compliance-profiles" => ("compliance-profiles", "/v1/compliance-profiles/{id}", &[]),
+        "compliance-profiles" => (
+            "compliance-profiles",
+            "/internal/v1/resource-owners/compliance-profiles/{id}",
+            &["system"],
+        ),
         "presentation-policies" => (
             "presentation-policies",
-            "/v1/presentation-policies/{id}",
+            "/internal/v1/resource-owners/presentation-policies/{id}",
             &["evaluate"],
         ),
-        "deployment-profiles" => ("deployment-profiles", "/v1/deployment-profiles/{id}", &[]),
-        "revocation-profiles" => ("revocation-profiles", "/v1/revocation-profiles/{id}", &[]),
+        "deployment-profiles" => (
+            "deployment-profiles",
+            "/internal/v1/resource-owners/deployment-profiles/{id}",
+            &[],
+        ),
+        "revocation-profiles" => (
+            "revocation-profiles",
+            "/internal/v1/resource-owners/revocation-profiles/{id}",
+            &[],
+        ),
         "flows" => (
             "flows",
             "/v1/flows/{id}",
@@ -820,6 +883,11 @@ pub fn resolve_resource_lookup(path: &str) -> Option<ResourceLookup> {
             "/v1/wallet-registry/{id}",
             &["resolve"],
         ),
+        "delivery-destinations" => (
+            "credential-templates",
+            "/v1/delivery-destinations/{id}",
+            &[],
+        ),
         // Notification resources deliberately require an explicit authorized
         // organization selector; unscoped owner lookup is unsafe here.
         "webhooks" | "subscriptions" | "notifications" => return None,
@@ -856,7 +924,7 @@ static SKIP_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
         r"^/v1/integrations/canvas/lti/config/[^/]+/?$",
         r"^/v1/integrations/canvas/lti/platforms/[^/]+/(?:login|experience-login|launch|experience)/?$",
         r"^/v1/integrations/canvas/oauth/callback/?$",
-        r"^/v1/integrations/canvas/lti/experience-sessions/(?:exchange|current(?:/(?:bootstrap|evidence-sync|evidence-status|deep-linking-response))?)/?$",
+        r"^/v1/integrations/canvas/lti/experience-sessions/(?:exchange|current(?:/(?:bootstrap|evidence-sync|evidence-status|deep-linking-response|claim))?)/?$",
         r"^/health",
         r"^/(?:openapi\.json|docs|redoc)$",
         r"^/\.well-known/",
@@ -872,96 +940,7 @@ pub fn skips_tenant_authorization(path: &str) -> bool {
     SKIP_PATTERNS.iter().any(|pattern| pattern.is_match(path))
 }
 
-pub fn api_key_allowed(required_permission: &str, scopes: &[String]) -> bool {
-    let scopes = scopes.iter().map(String::as_str).collect::<BTreeSet<_>>();
-    // DSC issuance requires a tenant-bound human operator grant. API keys,
-    // including broad legacy scopes, must not mint document certificates.
-    if matches!(
-        required_permission,
-        "passport-certificate:issue" | "passport-certificate:issue-csca"
-    ) {
-        return false;
-    }
-    if scopes.contains("admin:full") {
-        return true;
-    }
-    if required_permission == "webhook:test" {
-        return scopes.contains("webhooks:write");
-    }
-    if required_permission == "notification:send" {
-        return scopes.contains("notifications:send");
-    }
-    if required_permission == "application:approve" {
-        return scopes.contains("applications:approve") || scopes.contains("applications:write");
-    }
-
-    let Some((resource, action)) = required_permission.split_once(':') else {
-        return false;
-    };
-    match resource {
-        "wallet" => match action {
-            "view" => scopes.contains("wallet:read") || scopes.contains("wallet:write"),
-            "write" => scopes.contains("wallet:write"),
-            _ => false,
-        },
-        "signing-key" => match action {
-            "view" => scopes.contains("keys:read") || scopes.contains("keys:write"),
-            "activate" | "archive" | "create" | "delete" | "edit" | "rotate" | "update"
-            | "validate" | "write" => scopes.contains("keys:write"),
-            _ => false,
-        },
-        "flow-instance" => scopes.contains("flows:execute") || scopes.contains("flows:write"),
-        "flow-definition" if matches!(action, "view" | "read" | "list") => {
-            scopes.contains("flows:read")
-                || scopes.contains("flows:write")
-                || scopes.contains("flows:execute")
-        }
-        "flow-definition" => scopes.contains("flows:write"),
-        "api-key" => false,
-        "verification" => scopes.contains("flows:execute") || scopes.contains("credentials:read"),
-        "issued-credential" if matches!(action, "issue" | "create") => {
-            scopes.contains("credentials:issue")
-        }
-        "issued-credential" if matches!(action, "revoke" | "delete") => {
-            scopes.contains("credentials:revoke")
-        }
-        "issued-credential" => {
-            scopes.contains("credentials:read") || scopes.contains("credentials:issue")
-        }
-        "issuance" if action == "initiate" => scopes.contains("credentials:issue"),
-        "issuance" if action == "revoke" => scopes.contains("credentials:revoke"),
-        "issuance" => scopes.contains("credentials:read") || scopes.contains("credentials:issue"),
-        _ => mapped_api_key_scope(resource, action, &scopes),
-    }
-}
-
-fn mapped_api_key_scope(resource: &str, action: &str, scopes: &BTreeSet<&str>) -> bool {
-    let (read_scope, write_scope) = match resource {
-        "credential-template" => ("templates:read", "templates:write"),
-        "application-template" | "application" => ("applications:read", "applications:write"),
-        "trust-profile" | "issuer-entity" | "presentation-policy" => ("trust:read", "trust:write"),
-        "compliance-profile" => ("compliance:read", "compliance:write"),
-        "deployment-profile" => ("deployment:read", "deployment:write"),
-        "webhook" => ("webhooks:read", "webhooks:write"),
-        "notification" => ("notifications:read", "notifications:send"),
-        "team" => ("users:read", "users:invite"),
-        "role" => ("roles:read", "roles:write"),
-        "policy-set" => ("trust:read", "trust:admin"),
-        "organization" => ("users:read", "users:invite"),
-        "integration-connector" => ("integrations:read", "integrations:write"),
-        _ => return false,
-    };
-    if matches!(action, "view" | "read" | "list") {
-        scopes.contains(read_scope) || scopes.contains(write_scope)
-    } else if matches!(
-        action,
-        "create" | "edit" | "delete" | "write" | "activate" | "archive" | "validate"
-    ) {
-        scopes.contains(write_scope)
-    } else {
-        false
-    }
-}
+pub use marty_api_key_policy::api_key_allowed;
 
 #[cfg(test)]
 mod tests {
@@ -1025,6 +1004,40 @@ mod tests {
             "../../../../contracts/gateway-authorization-behavior.json"
         ))
         .expect("valid gateway authorization contract")
+    }
+
+    #[test]
+    fn delivery_grants_exist_in_the_organization_catalog_and_keep_api_key_reads_separate() {
+        let catalog: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../contracts/organization-permission-catalog.json"
+        ))
+        .unwrap();
+        for (method, permission) in [
+            ("GET", "wallet:view"),
+            ("POST", "integration-connector:create"),
+            ("PATCH", "integration-connector:edit"),
+            ("DELETE", "integration-connector:delete"),
+        ] {
+            let required =
+                resolve_action(method, "/v1/delivery-destinations/destination-one").unwrap();
+            assert_eq!(required.permission, permission);
+            assert!(catalog["permissions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|item| format!(
+                    "{}:{}",
+                    item["resource"].as_str().unwrap(),
+                    item["action"].as_str().unwrap()
+                ) == permission));
+        }
+        assert!(api_key_allowed("wallet:view", &["wallet:read".into()]));
+        for action in ["create", "edit", "delete"] {
+            let permission = format!("integration-connector:{action}");
+            assert!(!api_key_allowed(&permission, &["wallet:read".into()]));
+            assert!(!api_key_allowed(&permission, &["integrations:read".into()]));
+            assert!(api_key_allowed(&permission, &["integrations:write".into()]));
+        }
     }
 
     #[test]
@@ -1097,6 +1110,70 @@ mod tests {
     }
 
     #[test]
+    fn presentation_policy_owner_lookup_uses_internal_projection_and_preserves_scopes() {
+        let lookup = resolve_resource_lookup(
+            "/v1/presentation-policies/11111111-1111-1111-1111-111111111111",
+        )
+        .unwrap();
+        assert_eq!(lookup.service, "presentation-policies");
+        assert_eq!(
+            lookup.path,
+            "/internal/v1/resource-owners/presentation-policies/11111111-1111-1111-1111-111111111111"
+        );
+        assert!(resolve_resource_lookup("/v1/presentation-policies/evaluate").is_none());
+        assert!(api_key_allowed(
+            "presentation-policy:view",
+            &["trust:read".into()]
+        ));
+        assert!(!api_key_allowed(
+            "presentation-policy:edit",
+            &["trust:read".into()]
+        ));
+        assert!(!api_key_allowed(
+            "presentation-policy:view",
+            &["templates:read".into()]
+        ));
+        assert!(authorize_api_key(
+            "presentation-policy:view",
+            "org-1",
+            Some("org-1"),
+            &["trust:read".into()]
+        )
+        .is_ok());
+        assert!(authorize_api_key(
+            "presentation-policy:view",
+            "org-2",
+            Some("org-1"),
+            &["trust:read".into()]
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn consumer_profile_ownership_uses_service_only_projections_instead_of_human_reads() {
+        for resource in [
+            "compliance-profiles",
+            "deployment-profiles",
+            "revocation-profiles",
+            "flows/definitions",
+            "flows/instances",
+        ] {
+            let lookup = resolve_resource_lookup(&format!(
+                "/v1/{resource}/11111111-1111-4111-8111-111111111111"
+            ))
+            .unwrap();
+            assert_eq!(
+                lookup.path,
+                format!(
+                    "/internal/v1/resource-owners/{resource}/11111111-1111-4111-8111-111111111111"
+                )
+            );
+        }
+        assert!(resolve_resource_lookup("/v1/flows/capabilities").is_none());
+        assert!(resolve_resource_lookup("/v1/compliance-profiles/system/discoverable").is_none());
+    }
+
+    #[test]
     fn organization_id_matches_published_lowercase_shape() {
         let id = "11111111-1111-1111-1111-111111111111";
         assert_eq!(
@@ -1148,5 +1225,70 @@ mod tests {
             ),
             Err(TenantAuthorizationFailure::ApiKeyOrganizationMismatch)
         );
+    }
+
+    #[test]
+    fn applicant_read_key_cannot_review_or_approve() {
+        let collection = "/v1/organizations/org-1/applicants";
+        let item = "/v1/organizations/org-1/applicants/app-1";
+        let read_scopes = ["applications:read".to_owned()];
+        for path in [collection, item] {
+            let permission = resolve_action("GET", path)
+                .expect("applicant read route")
+                .permission;
+            assert_eq!(permission, "application:view");
+            assert!(api_key_allowed(permission, &read_scopes));
+            for method in ["POST", "PATCH", "DELETE"] {
+                if let Some(write) = resolve_action(method, path) {
+                    assert!(!api_key_allowed(write.permission, &read_scopes));
+                }
+            }
+        }
+        let approve = resolve_action("POST", "/v1/organizations/org-1/applicants/app-1/approve")
+            .expect("approval route");
+        assert_eq!(approve.permission, "application:approve");
+        assert!(!api_key_allowed(approve.permission, &read_scopes));
+    }
+
+    #[test]
+    fn compliance_system_catalog_is_not_a_resource_id() {
+        assert!(resolve_resource_lookup("/v1/compliance-profiles/system/discoverable").is_none());
+        assert!(resolve_resource_lookup(
+            "/v1/compliance-profiles/10000000-0000-0000-0000-000000000003"
+        )
+        .is_some());
+        assert_eq!(
+            resolve_action("GET", "/v1/compliance-profiles/system/discoverable")
+                .unwrap()
+                .permission,
+            "compliance-profile:view"
+        );
+    }
+    #[test]
+    fn compliance_lifecycle_uses_native_actions_and_readers_never_gain_writes() {
+        for action in ["activate", "suspend"] {
+            let path = format!("/v1/compliance-profiles/profile-one/{action}");
+            let requirement = resolve_action("POST", &path).unwrap();
+            assert_eq!(
+                requirement.permission,
+                format!("compliance-profile:{action}")
+            );
+            assert_eq!(
+                resolve_resource_lookup(&path).unwrap().path,
+                "/internal/v1/resource-owners/compliance-profiles/profile-one"
+            );
+            assert!(!api_key_allowed(
+                requirement.permission,
+                &["compliance:read".into()]
+            ));
+            assert!(!api_key_allowed(
+                requirement.permission,
+                &["templates:write".into()]
+            ));
+            assert!(api_key_allowed(
+                requirement.permission,
+                &["compliance:write".into()]
+            ));
+        }
     }
 }

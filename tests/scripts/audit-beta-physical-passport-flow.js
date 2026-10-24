@@ -90,6 +90,14 @@ function requireDirectBetaTransport(environment) {
     'Protected passport recording requires direct beta TLS and DNS');
 }
 
+function requireRecordingMode(environment) {
+  if (environment.RECORD_VIDEO !== '1') {
+    const error = new Error('D-12 does not support functional reruns: its protected receipt requires negative-run videos and privacy scans bound to those exact videos. Use RECORD_VIDEO=1 for the ordinary recorded workflow.');
+    error.code = 'PASSPORT_RECORDING_REQUIRED';
+    throw error;
+  }
+}
+
 function sha256(filePath) {
   return createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
 }
@@ -531,6 +539,7 @@ async function revealRedactedPage(page, privatePlan) {
 }
 
 async function main() {
+  requireRecordingMode(process.env);
   requireDirectBetaTransport(process.env);
   const artifactDir = createArtifactDir(ROOT, 'beta-passport-simulator-demo');
   const deploymentDir = process.env.PASSPORT_BETA_ARTIFACT_DIR;
@@ -541,7 +550,7 @@ async function main() {
   const email = process.env.TEST_VENDOR_EMAIL || process.env.TEST_ADMIN_EMAIL;
   const password = process.env.TEST_VENDOR_PASSWORD || process.env.TEST_ADMIN_PASSWORD;
   requireProof(deploymentDir && email && password && privatePlanFile
-    && apiKey && process.env.RECORD_VIDEO === '1',
+    && apiKey,
   'Beta deployment, private handoff, operator session, and recorder inputs are required');
   const deployment = readJson(path.join(deploymentDir, 'aggregate-deployment.json'));
   const privatePlan = readPrivatePlan(privatePlanFile, artifactDir);
@@ -658,12 +667,13 @@ async function main() {
 }
 
 if (require.main === module) {
-  main().catch(() => {
-    console.error('Passport simulator demo blocked; inspect protected run state');
+  main().catch((error) => {
+    console.error(error.code === 'PASSPORT_RECORDING_REQUIRED'
+      ? error.message : 'Passport simulator demo blocked; inspect protected run state');
     process.exitCode = 1;
   });
 }
 
 module.exports = { protectedReceipt, verifyNegativeMedia, readPrivatePlan,
   validatePreliminary, validateLiveInstance, hideRecordedPage, revealRedactedPage,
-  requireDirectBetaTransport };
+  requireDirectBetaTransport, requireRecordingMode };

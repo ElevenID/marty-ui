@@ -14,6 +14,7 @@ fn router() -> axum::Router {
         .connect_lazy("postgresql://localhost/flow")
         .expect("lazy pool");
     flow_read_router(FlowHttpState {
+        service_authenticator: None,
         repository: PostgresFlowRepository::new(pool),
         providers: Arc::new(FlowProviderRegistry::default()),
         public_base_url: "https://verifier.example".into(),

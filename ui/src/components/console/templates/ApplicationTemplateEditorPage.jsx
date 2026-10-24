@@ -11,6 +11,7 @@ import DeleteIcon from '@mui/icons-material/Delete';
 import SaveIcon from '@mui/icons-material/Save';
 
 import { useConsole } from '../../../contexts/ConsoleContext';
+import { usePermissions } from '../../../hooks/usePermissions';
 import { listCredentialTemplates } from '../../../services/presentationPolicyApi';
 import { listPolicySets } from '../../../services/policySetsApi';
 import {
@@ -32,7 +33,7 @@ const SYSTEM_CLAIM_SOURCES = [
   'applicant.user_id', 'applicant.email', 'applicant.given_name', 'applicant.family_name',
   'application.id', 'application.reference_number', 'application.organization_id',
   'current.date', 'current.datetime', 'validity.expiry_date',
-  'template.name', 'template.description', 'constant',
+  'template.name', 'template.description', 'canvas.course_name', 'constant',
 ];
 
 function normalizeFieldType(value) {
@@ -87,12 +88,8 @@ function FieldOptionsEditor({ options, onChange }) {
   );
 }
 
-export default function ApplicationTemplateEditorPage() {
+function ApplicationTemplateEditorContent({ organizationId, templateId, advanced }) {
   const navigate = useNavigate();
-  const { templateId } = useParams();
-  const [searchParams] = useSearchParams();
-  const advanced = searchParams.get('mode') === 'advanced';
-  const { activeOrgId: organizationId } = useConsole();
   const [data, setData] = useState(EMPTY);
   const [credentialTemplates, setCredentialTemplates] = useState([]);
   const [approvalPolicySets, setApprovalPolicySets] = useState([]);
@@ -100,6 +97,7 @@ export default function ApplicationTemplateEditorPage() {
   const [loading, setLoading] = useState(Boolean(templateId));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [resourceReady, setResourceReady] = useState(!templateId);
 
   useEffect(() => {
     let active = true;
@@ -111,15 +109,22 @@ export default function ApplicationTemplateEditorPage() {
     }
     Promise.all([
       listCredentialTemplates({ organization_id: organizationId }),
-      templateId ? getApplicationTemplate(templateId) : Promise.resolve(null),
+      templateId ? getApplicationTemplate(templateId, organizationId) : Promise.resolve(null),
     ]).then(([templates, existing]) => {
       if (!active) return;
+      if (!Array.isArray(templates) || templates.some((item) => item.organization_id !== organizationId)) {
+        throw new Error('Credential Templates are not available in the selected organization.');
+      }
       setCredentialTemplates(templates.filter((item) => (
         String(item.status || '').toUpperCase() === 'ACTIVE'
         && Boolean(item.revocation_profile_id)
       )));
       if (existing) {
+        if (existing.id !== templateId || existing.organization_id !== organizationId) {
+          throw new Error('This Application Template is not available in the selected organization.');
+        }
         setData({ ...EMPTY, ...existing });
+        setResourceReady(true);
         if (String(existing.status || '').toUpperCase() !== 'DRAFT') {
           setError('Only draft Application Templates can be edited.');
         }
@@ -169,13 +174,20 @@ export default function ApplicationTemplateEditorPage() {
     )),
   }));
 
+  const updateEvidenceSource = (index, key, value) => {
+    const sourceConfig = { ...data.claim_collection_rules[index].source_config };
+    if (value) sourceConfig[key] = value;
+    else delete sourceConfig[key];
+    updateClaimRule(index, { source_config: sourceConfig });
+  };
+
   const save = async () => {
     const invalidEvidence = data.evidence_requirements.some((item) => (
       !item.evidence_id || !item.description || !item.evidence_type
       || (['EXTERNAL_FACT', 'EXTERNAL_API'].includes(item.evidence_type) && (!item.provider || !item.fact_type))
       || (item.evidence_type === 'EXTERNAL_API' && !item.api?.url)
     ));
-    if (!organizationId || !data.name.trim() || !data.credential_template_id || data.form_fields.length === 0) {
+    if (!resourceReady || !organizationId || !data.name.trim() || !data.credential_template_id || data.form_fields.length === 0) {
       setError('Name, active Credential Template, and at least one form field are required.');
       return;
     }
@@ -216,6 +228,7 @@ export default function ApplicationTemplateEditorPage() {
   };
 
   if (loading) return <Box sx={{ display: 'flex', justifyContent: 'center', py: 10 }}><CircularProgress /></Box>;
+  if (!resourceReady) return <Alert severity="error">{error || 'Application Template unavailable.'}</Alert>;
 
   return (
     <Container maxWidth="md" sx={{ py: 4 }}>
@@ -360,6 +373,23 @@ export default function ApplicationTemplateEditorPage() {
                         )}
                         <IconButton aria-label={`Delete ${rule.claim_name || 'claim rule'}`} onClick={() => setData((current) => ({ ...current, claim_collection_rules: current.claim_collection_rules.filter((_, ruleIndex) => ruleIndex !== index) }))}><DeleteIcon /></IconButton>
                       </Stack>
+                      {rule.source === 'EVIDENCE_EXTRACTION' && (
+                        <Stack spacing={1} sx={{ mt: 1.5 }}>
+                          <Typography variant="body2">Use a verified evidence fact. Specify a requirement ID, a fact type, or both; exactly one fact must match.</Typography>
+                          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
+                            <TextField label="Evidence requirement ID" value={rule.source_config?.requirement_id || ''} onChange={(event) => updateEvidenceSource(index, 'requirement_id', event.target.value)} sx={{ flex: 1 }} />
+                            <TextField label="Evidence fact type" placeholder="canvas.quiz_score" value={rule.source_config?.fact_type || ''} onChange={(event) => updateEvidenceSource(index, 'fact_type', event.target.value)} sx={{ flex: 1 }} />
+                            <FormControl sx={{ minWidth: 180 }}>
+                              <InputLabel id={`application-claim-evidence-format-${index}-label`}>Evidence format</InputLabel>
+                              <Select id={`application-claim-evidence-format-${index}`} labelId={`application-claim-evidence-format-${index}-label`} label="Evidence format" value={rule.source_config?.format || ''} onChange={(event) => updateEvidenceSource(index, 'format', event.target.value)}>
+                                <MenuItem value="">Original value</MenuItem>
+                                <MenuItem value="date">Date (YYYY-MM-DD)</MenuItem>
+                              </Select>
+                            </FormControl>
+                          </Stack>
+                          <TextField required label="Evidence value path" placeholder="/assertion/score" helperText="JSON pointer under /assertion, /scope, /effective_at or /observed_at. Missing or ambiguous evidence leaves the claim unavailable." value={rule.source_config?.json_pointer || ''} onChange={(event) => updateEvidenceSource(index, 'json_pointer', event.target.value)} />
+                        </Stack>
+                      )}
                     </Paper>
                   ))}
                 </Stack>
@@ -380,4 +410,16 @@ export default function ApplicationTemplateEditorPage() {
       </Box>
     </Container>
   );
+}
+
+export default function ApplicationTemplateEditorPage() {
+  const { activeOrgId } = useConsole();
+  const { templateId } = useParams();
+  const [searchParams] = useSearchParams();
+  const { can, isLoading } = usePermissions();
+  if (!activeOrgId) return <Alert severity="error">Select an organization before editing Application Templates.</Alert>;
+  if (isLoading) return <CircularProgress />;
+  const action = templateId ? 'edit' : 'create';
+  if (!can('application-template', action)) return <Alert severity="error">You do not have permission to {action} Application Templates.</Alert>;
+  return <ApplicationTemplateEditorContent key={`${activeOrgId}:${templateId || 'new'}`} organizationId={activeOrgId} templateId={templateId} advanced={searchParams.get('mode') === 'advanced'} />;
 }

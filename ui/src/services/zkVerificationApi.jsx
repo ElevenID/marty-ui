@@ -60,6 +60,22 @@ export const getVerificationFlowInstance = async (instanceId) => {
   }
 };
 
+/** Get the measured terminal result; the instance list carries status only. */
+export const getVerificationFlowResult = async (instanceId) => {
+  try {
+    const response = await apiClient.get(`${FLOW_PATH}/instances/${encodeURIComponent(instanceId)}/result`);
+    if (response.data?.instance_id !== instanceId) {
+      throw new Error('Verification result belongs to a different session');
+    }
+    return response.data;
+  } catch (error) {
+    throw handleApiError(error);
+  }
+};
+
+// The QR polling and history views share the same correlated result reader.
+export const getVerificationResult = getVerificationFlowResult;
+
 /**
  * Submit a VP token to complete verification flow
  *
@@ -120,6 +136,8 @@ export default {
   getVerificationRequest,
   submitVerification,
   getVerificationFlowInstance,
+  getVerificationFlowResult,
+  getVerificationResult,
   evaluatePresentation,
   evaluateInline,
   // Legacy

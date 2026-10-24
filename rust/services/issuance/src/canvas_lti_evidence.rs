@@ -288,6 +288,16 @@ impl CanvasLtiEvidenceService {
         &self,
         session_token: &str,
     ) -> Result<CanvasLtiEvidenceScope, CanvasLtiEvidenceError> {
+        self.resolve_session_scope(session_token)
+            .await
+            .map(|(_, scope)| scope)
+    }
+
+    pub(crate) async fn resolve_session_scope(
+        &self,
+        session_token: &str,
+    ) -> Result<(CanvasLtiExperienceSessionContext, CanvasLtiEvidenceScope), CanvasLtiEvidenceError>
+    {
         let context = self
             .sessions
             .load(session_token)
@@ -321,7 +331,7 @@ impl CanvasLtiEvidenceService {
         ) {
             return Err(CanvasLtiEvidenceError::PilotDisabled);
         }
-        Ok(scope)
+        Ok((context, scope))
     }
 
     async fn status_for_scope(

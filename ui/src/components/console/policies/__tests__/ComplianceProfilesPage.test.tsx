@@ -5,6 +5,7 @@ import { renderWithRouter } from '@test/utils'
 import ComplianceProfilesPage from '../ComplianceProfilesPage'
 
 const listComplianceProfiles = vi.fn()
+vi.mock('../../../../hooks/usePermissions', () => ({ usePermissions: () => ({ can: () => true, isLoading: false }) }))
 
 const translations: Record<string, string> = {
   'policies.presentationPolicies': 'Presentation Policies',
@@ -66,7 +67,7 @@ describe('ComplianceProfilesPage', () => {
     renderWithRouter(<ComplianceProfilesPage />)
 
     await waitFor(() => {
-      expect(listComplianceProfiles).toHaveBeenCalledWith({ organization_id: 'org-123' })
+      expect(listComplianceProfiles).toHaveBeenCalledWith({ organization_id: 'org-123', limit: 50, offset: 0 })
     })
 
     expect(await screen.findByText('Enterprise VC Baseline')).toBeInTheDocument()
@@ -76,3 +77,11 @@ describe('ComplianceProfilesPage', () => {
     expect(screen.getByText('Organization')).toBeInTheDocument()
   })
 })
+
+
+it('does not present a foreign organization inventory', async () => {
+  listComplianceProfiles.mockResolvedValue([{ id: 'foreign', organization_id: 'other', name: 'Foreign profile' }]);
+  renderWithRouter(<ComplianceProfilesPage />);
+  expect(await screen.findByRole('alert')).toHaveTextContent('outside the selected organization');
+  expect(screen.queryByText('Foreign profile')).not.toBeInTheDocument();
+});

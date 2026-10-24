@@ -1007,22 +1007,16 @@ $dataTargets=@($restore.FindAll({ param($node)
     $node.Left.VariablePath.UserPath -cin @('postgres', 'redisVolumeName', 'applicantVolumeName')
 },$true) | Where-Object { -not (Inside-Function $_) })
 $dataValidations=@($commands | Where-Object {
-    $_.GetCommandName() -cin @('Get-ServiceContainer', 'Assert-BetaVolume')
+    $_.GetCommandName() -ceq 'Assert-BetaStateVolumePlan'
 })
-if ($dataTargets.Count -ne 3 -or $dataValidations.Count -ne 3) { throw 'Data targets must have unique preflight resolutions' }
+if ($dataTargets.Count -ne 3 -or $dataValidations.Count -ne 1) { throw 'Data targets must have one shared ownership preflight' }
 $fenceGuards=@($commands | Where-Object {
     $_.GetCommandName() -eq 'Assert-LegacyBetaDatabaseUnfenced'
 })
 if ($fenceGuards.Count -ne 1) { throw 'Restore must have one passport fence guard' }
 $targetReport=@($dataTargets | ForEach-Object {
-    $validation=@($_.Right.FindAll({ param($node)
-        $node -is [Management.Automation.Language.CommandAst]
-    },$true))
-    if ($validation.Count -ne 1) { throw 'Data target must use one existing identity validator' }
     @{
         variable=$_.Left.VariablePath.UserPath; end=$_.Extent.EndOffset
-        validator=$validation[0].GetCommandName()
-        arguments=@($validation[0].CommandElements | Select-Object -Skip 1 | ForEach-Object { $_.Value })
     }
 })
 $deploy=Read-Ast (Join-Path $Root 'scripts/deploy-local-beta-release.ps1')
@@ -1049,6 +1043,7 @@ $condition=$conditions[0]
     fence_guard=$fenceGuards[0].Extent.StartOffset
     first_mutation=$mutations[0].Extent.StartOffset
     data_targets=$targetReport
+    data_validation=$dataValidations[0].Extent.EndOffset
     first_mutation_arguments=@($mutations[0].FindAll({ param($node)
         $node -is [Management.Automation.Language.StringConstantExpressionAst]
     },$true) | ForEach-Object { $_.Value })
@@ -1090,13 +1085,8 @@ $condition=$conditions[0]
     assert "stop" in report["first_mutation_arguments"]
     targets = {target["variable"]: target for target in report["data_targets"]}
     assert len(targets) == 3
-    for name, validator, argument in (
-        ("postgres", "Get-ServiceContainer", "postgres"),
-        ("redisVolumeName", "Assert-BetaVolume", "elevenid-beta_redis_data"),
-        ("applicantVolumeName", "Assert-BetaVolume", "elevenid-beta_applicant_data"),
-    ):
-        assert targets[name]["validator"] == validator
-        assert targets[name]["arguments"] == [argument]
+    assert report['data_validation'] < report['first_mutation']
+    for name in ('postgres', 'redisVolumeName', 'applicantVolumeName'):
         assert targets[name]["end"] < report["first_mutation"]
     assert report["capture_function"] == "Get-ServiceRecords"
     assert report["capture_guard"] == {

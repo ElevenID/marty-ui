@@ -21,6 +21,7 @@ RUN --mount=type=cache,target=/root/.npm \
 COPY --chown=pwuser:pwuser tests/scripts/run-canvas-oss-standard-contract.js ./scripts/run-canvas-oss-standard-contract.js
 COPY --chown=pwuser:pwuser tests/scripts/run-canvas-oss-standard-contract.test.js ./scripts/run-canvas-oss-standard-contract.test.js
 COPY --chown=pwuser:pwuser scripts/canvas-oss/beta-continuity-monitor.mjs ./scripts/beta-continuity-monitor.mjs
+COPY --chown=pwuser:pwuser tests/scripts/smoke-canvas-contract-runtime.js ./scripts/smoke-canvas-contract-runtime.js
 
 RUN install -d -o pwuser -g pwuser -m 0700 /artifacts
 
@@ -28,5 +29,7 @@ USER pwuser
 ENV CI=true \
     HOME=/home/pwuser \
     PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+
+RUN node scripts/smoke-canvas-contract-runtime.js
 
 CMD ["node", "scripts/run-canvas-oss-standard-contract.js", "--observations", "/artifacts/observations.json", "--video", "/artifacts/video/canvas-oss-portability.webm"]

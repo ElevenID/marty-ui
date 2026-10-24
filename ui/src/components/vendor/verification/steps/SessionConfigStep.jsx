@@ -22,6 +22,7 @@ function SessionConfigStep({ value, onChange, issuerIdentities = [] }) {
       </Typography>
 
       <TextField
+        inputProps={{ 'data-testid': 'verification-purpose-input' }}
         label="Verification Purpose"
         placeholder="e.g. Age verification for service access"
         fullWidth

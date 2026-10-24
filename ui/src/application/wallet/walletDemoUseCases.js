@@ -29,7 +29,7 @@ export async function loadWalletDemoCredentials({
     };
   } catch (error) {
     return {
-      credentials: resolveWalletCredentials({}),
+      credentials: [],
       error: getErrorMessage(error) || 'Failed to load credentials',
     };
   }
@@ -48,7 +48,7 @@ export async function deleteWalletDemoCredential({
     };
   } catch (error) {
     return {
-      credentials: resolveWalletDelete(credentials, credentialId),
+      credentials,
       error: getErrorMessage(error) || 'Failed to delete credential',
     };
   }

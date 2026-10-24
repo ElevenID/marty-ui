@@ -107,6 +107,7 @@ impl InternalApplicationReconciliationPreparer for FixedPreparer {
         Ok(PreparedEvidenceReconciliationIssuance {
             transaction: transaction(&snapshot.application, now),
             approval_snapshot: CanvasApplicationApprovalSnapshot {
+                evidence_facts: Vec::new(),
                 application: approval_application(&snapshot.application),
                 application_template: json!({
                     "id": "template-1",

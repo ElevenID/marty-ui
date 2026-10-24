@@ -107,11 +107,18 @@ const TrustProfileWizard = () => {
       certificate_pem: i.certificate_pem,
       description: i.description || i.name || null,
     }));
+    const controlledDidSources = didIssuers
+      .filter((issuer) => ['organization_id', 'verification_method_ids', 'did_resolution'].some((field) => issuer[field] !== undefined))
+      .map((issuer) => ({
+        source_type: 'PINNED_ISSUER', issuer_did: issuer.did,
+        ...Object.fromEntries(['organization_id', 'verification_method_ids', 'did_resolution']
+          .filter((field) => issuer[field] !== undefined).map((field) => [field, issuer[field]])),
+      }));
 
     const profile = await createTrustProfile({
       ...data,
-      // DID issuers are linked through the normalized IssuerEntity relationship
-      // after the profile exists. Do not also encode them as embedded trust sources.
+      // Relationships retain issuer lifecycle/accreditation. Explicit DID source
+      // controls separately govern resolution and cannot be dropped at creation.
       trusted_issuers: [],
       organization_id: effectiveOrganizationId,
       status: data.activate_immediately ? 'active' : 'draft',
@@ -121,6 +128,7 @@ const TrustProfileWizard = () => {
         ...(data.trust_sources || []),
         ...(data.registry_sources || []),
         ...certTrustSources,
+        ...controlledDidSources,
       ],
     });
 

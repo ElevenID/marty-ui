@@ -686,10 +686,17 @@ fn oid4vci_configuration(
                 serde_json::json!({"type":["VerifiableCredential",credential_type]}),
             );
         }
-        CredentialFormat::JsonLd
-        | CredentialFormat::ZkMdoc
-        | CredentialFormat::VdsNc
-        | CredentialFormat::IcaoEmrtd => {
+        CredentialFormat::JsonLd => {
+            configuration.insert("format".to_owned(), Value::String("ldp_vc".to_owned()));
+            configuration.insert(
+                "credential_definition".to_owned(),
+                serde_json::json!({
+                    "@context": ["https://www.w3.org/ns/credentials/v2"],
+                    "type": ["VerifiableCredential", credential_type]
+                }),
+            );
+        }
+        CredentialFormat::ZkMdoc | CredentialFormat::VdsNc | CredentialFormat::IcaoEmrtd => {
             return Ok(None);
         }
     }

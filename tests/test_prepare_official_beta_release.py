@@ -152,6 +152,13 @@ def _write_release(tmp_path: Path, manifest: dict) -> tuple[Path, Path]:
     return manifest_path, checksums
 
 
+def _rust_manifest() -> dict:
+    manifest = _manifest()
+    manifest["components"] = [component for component in manifest["components"]
+                              if component["name"] != "marty-credentials-issuance"]
+    return manifest
+
+
 def test_prepares_digest_only_official_beta_inputs(tmp_path: Path) -> None:
     manifest_path, checksums = _write_release(tmp_path, _manifest())
     plan = prepare_release(
@@ -372,7 +379,7 @@ def test_conformance_reuses_manifest_binding_and_verifies_its_source_floor(
 
     from scripts.conformance_native import verify_release
 
-    manifest, checksums = _write_release(tmp_path, _manifest())
+    manifest, checksums = _write_release(tmp_path, _rust_manifest())
     calls = []
     coverage = {
         "schema": "marty.issuance-native-coverage/v1",
@@ -477,7 +484,7 @@ def test_conformance_reuses_manifest_binding_and_verifies_its_source_floor(
     image = "ghcr.io/elevenid/marty-ui-oss/services@" + SERVICES_DIGEST
     plan = verify_release(manifest, checksums, UI_SHA, image, runner=runner)
     assert plan == validate_release_inputs(
-        manifest, checksums, expected_ui_revision=UI_SHA
+        manifest, checksums, expected_ui_revision=UI_SHA, rust_only=True
     )
     assert calls == [
         [
@@ -503,6 +510,66 @@ def test_conformance_reuses_manifest_binding_and_verifies_its_source_floor(
             image,
             runner=lambda *_, **__: SimpleNamespace(returncode=1, stdout=""),
         )
+
+
+def test_native_conformance_rejects_legacy_manifest_before_attestation(tmp_path: Path) -> None:
+    from scripts.conformance_native import verify_release
+
+    manifest, checksums = _write_release(tmp_path, _manifest())
+
+    def unexpected_command(*_, **__):
+        pytest.fail("Legacy native manifest must be rejected before attestation")
+
+    with pytest.raises(ValueError, match="qualification failed at manifest validation"):
+        verify_release(manifest, checksums, UI_SHA,
+                       "ghcr.io/elevenid/marty-ui-oss/services@" + SERVICES_DIGEST,
+                       runner=unexpected_command)
+
+
+def test_native_conformance_rechecks_rust_only_policy_after_attestation(tmp_path: Path) -> None:
+    from types import SimpleNamespace
+
+    from scripts.conformance_native import verify_release
+
+    manifest, checksums = _write_release(tmp_path, _rust_manifest())
+    calls = []
+
+    def replace_after_attestation(command, **_):
+        calls.append(command)
+        assert command[:3] == ["gh", "attestation", "verify"]
+        _write_release(tmp_path, _manifest())
+        return SimpleNamespace(returncode=0, stdout="")
+
+    with pytest.raises(ValueError, match="qualification failed at manifest revalidation"):
+        verify_release(manifest, checksums, UI_SHA,
+                       "ghcr.io/elevenid/marty-ui-oss/services@" + SERVICES_DIGEST,
+                       runner=replace_after_attestation)
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize(("command", "stage", "code"), [
+    ("gh", "manifest attestation", 4),
+    ("git", "native capability source", 128),
+])
+def test_native_preflight_reports_failed_stage_without_command_output(
+    tmp_path: Path, command: str, stage: str, code: int,
+) -> None:
+    from types import SimpleNamespace
+
+    from scripts.conformance_native import verify_release
+
+    manifest, checksums = _write_release(tmp_path, _rust_manifest())
+
+    def runner(args, **options):
+        assert options["stderr"] == subprocess.DEVNULL
+        return SimpleNamespace(returncode=code if args[0] == command else 0,
+                               stdout="sensitive command output must stay suppressed")
+
+    with pytest.raises(ValueError, match=f"failed at {stage} \\(exit {code}\\)") as failure:
+        verify_release(manifest, checksums, UI_SHA,
+                       "ghcr.io/elevenid/marty-ui-oss/services@" + SERVICES_DIGEST,
+                       runner=runner)
+    assert "sensitive" not in str(failure.value)
 
 
 def test_rejects_tampered_or_mismatched_release_inputs(tmp_path: Path) -> None:

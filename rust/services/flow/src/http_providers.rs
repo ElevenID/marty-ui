@@ -28,6 +28,7 @@ struct RequestContext<'a> {
     principal_id: Option<&'a str>,
     organization_id: Option<&'a str>,
     grant: Option<&'a str>,
+    gateway_api_key_actor: Option<&'a marty_api_key_policy::GatewayApiKeyActor>,
 }
 
 #[derive(Clone)]
@@ -188,6 +189,14 @@ impl BoundedHttpClient {
         if let Some(service_token) = &self.service_token {
             request = request.header("X-Service-Token", service_token);
         }
+        if let Some(actor) = context.gateway_api_key_actor {
+            if self.service_token.is_none() {
+                return Err(invalid_config(self.provider));
+            }
+            request = request
+                .header("X-API-Key-ID", actor.principal_id())
+                .header("X-API-Key-Scopes", actor.scopes_csv());
+        }
         if let Some(principal_id) = context.principal_id {
             request = request.header("X-User-ID", principal_id);
         }
@@ -313,6 +322,32 @@ impl FlowReferenceProvider for HttpFlowReferenceProvider {
         principal_id: &str,
         organization_id: &str,
     ) -> Result<FlowReference, FlowProviderError> {
+        self.resolve_scoped(kind, reference_id, principal_id, organization_id, None)
+            .await
+    }
+
+    async fn resolve_for_actor(
+        &self,
+        kind: FlowReferenceKind,
+        reference_id: &str,
+        principal_id: &str,
+        organization_id: &str,
+        actor: Option<&marty_api_key_policy::GatewayApiKeyActor>,
+    ) -> Result<FlowReference, FlowProviderError> {
+        self.resolve_scoped(kind, reference_id, principal_id, organization_id, actor)
+            .await
+    }
+}
+
+impl HttpFlowReferenceProvider {
+    async fn resolve_scoped(
+        &self,
+        kind: FlowReferenceKind,
+        reference_id: &str,
+        principal_id: &str,
+        organization_id: &str,
+        actor: Option<&marty_api_key_policy::GatewayApiKeyActor>,
+    ) -> Result<FlowReference, FlowProviderError> {
         if reference_id.trim().is_empty()
             || reference_id.len() > 255
             || principal_id.trim().is_empty()
@@ -336,34 +371,49 @@ impl FlowReferenceProvider for HttpFlowReferenceProvider {
             }
             FlowReferenceKind::DeliveryDestination => {
                 self.delivery_destinations
-                    .json_as(
+                    .json_with_context(
                         Method::GET,
                         &format!("v1/delivery-destinations/{encoded}"),
                         &[],
                         None,
-                        Some(principal_id),
+                        RequestContext {
+                            principal_id: Some(principal_id),
+                            organization_id: Some(organization_id),
+                            gateway_api_key_actor: actor,
+                            ..RequestContext::default()
+                        },
                     )
                     .await?
             }
             FlowReferenceKind::TrustProfile => {
                 self.trust_profiles
-                    .json_as(
+                    .json_with_context(
                         Method::GET,
                         &format!("v1/trust-profiles/{encoded}"),
                         &[],
                         None,
-                        Some(principal_id),
+                        RequestContext {
+                            principal_id: Some(principal_id),
+                            organization_id: Some(organization_id),
+                            gateway_api_key_actor: actor,
+                            ..RequestContext::default()
+                        },
                     )
                     .await?
             }
             FlowReferenceKind::DeploymentProfile => {
                 self.deployment_profiles
-                    .json_as(
+                    .json_with_context(
                         Method::GET,
                         &format!("v1/deployment-profiles/{encoded}"),
                         &[],
                         None,
-                        Some(principal_id),
+                        RequestContext {
+                            principal_id: Some(principal_id),
+                            organization_id: Some(organization_id),
+                            gateway_api_key_actor: actor,
+                            ..RequestContext::default()
+                        },
                     )
                     .await?
             }
@@ -983,6 +1033,77 @@ mod tests {
             "organization_id": "org-1",
             "status": "active",
         }))
+    }
+
+    #[tokio::test]
+    async fn reference_delegation_preserves_authenticated_key_scope_without_using_the_operator_key()
+    {
+        const KEY: &str = "10000000-0000-4000-8000-000000000001";
+        const ORG: &str = "20000000-0000-4000-8000-000000000001";
+        async fn resolver(
+            State(captured): State<CapturedRead>,
+            headers: HeaderMap,
+            uri: Uri,
+        ) -> Json<Value> {
+            let id = uri.path().rsplit('/').next().unwrap().to_string();
+            *captured.lock().unwrap() = Some((headers, uri));
+            Json(json!({"id": id, "organization_id": ORG, "status":"ACTIVE"}))
+        }
+        let captured = CapturedRead::default();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let app = Router::new()
+            .route("/v1/deployment-profiles/{id}", get(resolver))
+            .with_state(captured.clone());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let token = "s".repeat(32);
+        let actor = marty_api_key_policy::GatewayApiKeyActor::parse(
+            KEY,
+            ORG,
+            "flows:write,deployment:read",
+        )
+        .unwrap();
+        let provider = HttpFlowReferenceProvider::new(
+            &base,
+            &"a".repeat(32),
+            &base,
+            &base,
+            &base,
+            Some(&token),
+        )
+        .unwrap();
+        let result = provider
+            .resolve_for_actor(
+                FlowReferenceKind::DeploymentProfile,
+                "deployment-1",
+                KEY,
+                ORG,
+                Some(&actor),
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.organization_id.as_deref(), Some(ORG));
+        let (headers, _) = captured.lock().unwrap().take().unwrap();
+        assert_eq!(headers["x-service-token"], token);
+        assert_eq!(headers["x-api-key-id"], KEY);
+        assert_eq!(headers["x-api-key-scopes"], "flows:write,deployment:read");
+        assert_eq!(headers["x-organization-id"], ORG);
+        assert!(headers.get("x-api-key").is_none());
+        let unconfigured =
+            HttpFlowReferenceProvider::new(&base, &"a".repeat(32), &base, &base, &base, None)
+                .unwrap();
+        assert!(unconfigured
+            .resolve_for_actor(
+                FlowReferenceKind::DeploymentProfile,
+                "deployment-1",
+                KEY,
+                ORG,
+                Some(&actor)
+            )
+            .await
+            .is_err());
+        assert!(captured.lock().unwrap().is_none());
+        server.abort();
     }
 
     async fn physical_capture(

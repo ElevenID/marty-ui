@@ -73,7 +73,7 @@
         "compose_service": {"const": "canvas-contract"},
         "image_id": {"type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$"},
         "source_sha": {"type": ["string", "null"], "pattern": "^[0-9a-f]{40}$"},
-        "base_image": {"type": "string", "pattern": "^mcr\\.microsoft\\.com/playwright:v1\\.56\\.0-jammy@sha256:[0-9a-f]{64}$"},
+        "base_image": {"type": "string", "pattern": "^mcr\\.microsoft\\.com/playwright:v1\\.63\\.0-noble@sha256:[0-9a-f]{64}$"},
         "secret_transport": {"const": "compose_secret_files"},
         "host_browser_processes": {"const": false}
       }

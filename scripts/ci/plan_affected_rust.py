@@ -31,6 +31,92 @@ SELFHOST_CLEANUP_RELATIVE = "../../canvas-acceptance/tests/support/owned_cleanup
 # Cargo reverse edges cannot represent that artifact/runtime relationship.
 # These witnesses explain a full shadow fallback; they never authorize a skip.
 PACKAGED_RUNTIME_PRODUCERS = {
+    "marty-canvas-sandbox": {
+        "consumer_kind": "packaged-executable/runtime",
+        "consumer": "canvas-sandbox",
+        "witnesses": (
+            (
+                "docker/canvas-sandbox/Dockerfile",
+                "cargo build --locked --release -p marty-canvas-sandbox",
+            ),
+            (
+                "docker/canvas-sandbox/Dockerfile",
+                "COPY --from=builder /tmp/marty-canvas-sandbox /usr/local/bin/marty-canvas-sandbox",
+            ),
+            (
+                "docker-compose.profile.canvas-sandbox.yml",
+                "  canvas-sandbox:\n    build:\n      context: .\n      dockerfile: docker/canvas-sandbox/Dockerfile",
+            ),
+            (
+                "services/Dockerfile",
+                "COPY --from=rust-service-builder /build/rust/target/release/marty-canvas-sandbox /usr/local/bin/marty-canvas-sandbox",
+            ),
+            (
+                "rust/services/Dockerfile.ci",
+                "COPY --from=builder /build/rust/target/release/marty-canvas-sandbox /usr/local/bin/marty-canvas-sandbox",
+            ),
+            (
+                "scripts/qualify-canvas-seed-disposable.sh",
+                "up --build -d gateway issuance signing-keys canvas-real canvas-sandbox issuance-canvas-localhost-bridge",
+            ),
+        ),
+    },
+    "marty-keyless-grpc-bridge": {
+        "consumer_kind": "packaged-executable/runtime",
+        "consumer": "envoy-issuance-bridge",
+        "witnesses": (
+            (
+                "scripts/build-rust-service-binaries.sh",
+                "-p marty-keyless-grpc-bridge --bin marty-keyless-grpc-bridge",
+            ),
+            (
+                "services/Dockerfile",
+                "COPY --from=rust-service-builder /build/rust/target/release/marty-keyless-grpc-bridge /usr/local/bin/marty-keyless-grpc-bridge",
+            ),
+            (
+                "docker-compose.base.yml",
+                '    entrypoint: ["/usr/local/bin/marty-keyless-grpc-bridge"]',
+            ),
+        ),
+    },
+    "marty-passport-keyless-edge": {
+        "consumer_kind": "packaged-executable/runtime",
+        "consumer": "passport/oidf-keyless-edges",
+        "witnesses": (
+            (
+                "scripts/build-rust-service-binaries.sh",
+                "-p marty-passport-keyless-edge --bin marty-passport-keyless-edge --bin marty-passport-tls-bootstrap --bin marty-oidf-keyless-edge",
+            ),
+            (
+                "services/Dockerfile",
+                "COPY --from=rust-service-builder /build/rust/target/release/marty-passport-keyless-edge /usr/local/bin/marty-passport-keyless-edge",
+            ),
+            (
+                "services/Dockerfile",
+                "COPY --from=rust-service-builder /build/rust/target/release/marty-oidf-keyless-edge /usr/local/bin/marty-oidf-keyless-edge",
+            ),
+            (
+                "services/Dockerfile",
+                "COPY --from=rust-service-builder /build/rust/target/release/marty-passport-tls-bootstrap /usr/local/bin/marty-passport-tls-bootstrap",
+            ),
+            (
+                "scripts/passport_supported_provisioning_producer.py",
+                '"--entrypoint", "/usr/local/bin/marty-passport-tls-bootstrap",',
+            ),
+            (
+                "docker-compose.passport-supported-disposable.yml",
+                "    entrypoint: [/usr/local/bin/marty-passport-keyless-edge]",
+            ),
+            (
+                "docker-compose.profile.oidf.yml",
+                "        SERVICE_NAME: oidf-keyless-edge",
+            ),
+            (
+                "services/entrypoint.sh",
+                "\texec /usr/local/bin/marty-oidf-keyless-edge",
+            ),
+        ),
+    },
     "marty-canvas-demo-seed": {
         "consumer_kind": "packaged-executable/runtime",
         "consumer": "db-migrate",
@@ -54,6 +140,28 @@ PACKAGED_RUNTIME_PRODUCERS = {
             (
                 "scripts/run-canvas-real-seed.sh",
                 "  db-migrate /usr/local/bin/marty-canvas-demo-seed --env-file /dev/null",
+            ),
+        ),
+    },
+    "marty-demo-vendor-seed": {
+        "consumer_kind": "packaged-executable/runtime",
+        "consumer": "explicit-demo-fixture-seed",
+        "witnesses": (
+            (
+                "services/Dockerfile.migrations",
+                "&& cargo build --locked --release -p marty-demo-vendor-seed --bin marty-demo-vendor-seed",
+            ),
+            (
+                "services/Dockerfile.migrations",
+                "COPY --from=rust-migration-builder /build/rust/target/release/marty-demo-vendor-seed /usr/local/bin/marty-demo-vendor-seed",
+            ),
+            (
+                "docker-compose.base.yml",
+                "  db-migrate:\n    build:\n      context: .\n      dockerfile: services/Dockerfile.migrations",
+            ),
+            (
+                "Makefile",
+                "db-migrate /usr/local/bin/marty-demo-vendor-seed",
             ),
         ),
     },
@@ -336,7 +444,7 @@ OBSERVED_NON_CARGO_CONSUMERS = {
             "runtime_evidence": "rust/services/trust-profile/src/main.rs",
             "runtime_marker": "NativeIssuerKeyResolver::new(",
             "registration_marker": ".with_issuer_key_resolver(issuer_key_resolver)",
-            "request_evidence": "rust/services/trust-profile/src/issuer_keys.rs",
+            "request_evidence": "rust/crates/issuer-key-resolution/src/lib.rs",
             "client_marker": ".with_did_web_internal_base_urls(internal_base_urls)",
             "request_marker": ".resolve_with_metadata(did)",
             "deployment_evidence": "docker-compose.base.yml",
@@ -441,7 +549,7 @@ OBSERVED_NON_CARGO_CONSUMERS = {
             "callsite_marker": ".require_active(user_id, organization_id)",
             "provider_evidence": "rust/services/organization/src/grpc_service.rs",
             "provider_handler_marker": "async fn get_member(",
-            "provider_marker": ".get_membership(&input.user_id, organization_id)",
+            "provider_marker": ".principal_membership(&input.user_id, organization_id)",
             "provider_registration_evidence": "rust/services/organization/src/main.rs",
             "provider_registration_marker": "OrganizationServiceServer::new(grpc_service)",
             "deployment_evidence": "docker-compose.base.yml",
@@ -462,7 +570,7 @@ OBSERVED_NON_CARGO_CONSUMERS = {
             "shared_request_evidence": "rust/services/flow/src/grpc_providers.rs",
             "request_marker": ".get_member(self.auth.request(GetMemberRequest {",
             "provider_evidence": "rust/services/organization/src/grpc_service.rs",
-            "provider_marker": ".get_membership(&input.user_id, organization_id)",
+            "provider_marker": ".principal_membership(&input.user_id, organization_id)",
         },
         {
             "package": "marty-deployment-profile",
@@ -478,7 +586,7 @@ OBSERVED_NON_CARGO_CONSUMERS = {
             "shared_request_evidence": "rust/services/flow/src/grpc_providers.rs",
             "request_marker": ".get_member(self.auth.request(GetMemberRequest {",
             "provider_evidence": "rust/services/organization/src/grpc_service.rs",
-            "provider_marker": ".get_membership(&input.user_id, organization_id)",
+            "provider_marker": ".principal_membership(&input.user_id, organization_id)",
         },
         {
             "package": "marty-revocation-profile",
@@ -491,7 +599,7 @@ OBSERVED_NON_CARGO_CONSUMERS = {
             "connection_marker": "OrganizationServiceClient::new(channel)",
             "request_marker": "client.get_member(request).await",
             "provider_evidence": "rust/services/organization/src/grpc_service.rs",
-            "provider_marker": ".get_membership(&input.user_id, organization_id)",
+            "provider_marker": ".principal_membership(&input.user_id, organization_id)",
         },
         {
             "package": "marty-presentation-policy",
@@ -504,7 +612,7 @@ OBSERVED_NON_CARGO_CONSUMERS = {
             "connection_marker": "OrganizationServiceClient::new(channel)",
             "request_marker": "client.get_member(request).await",
             "provider_evidence": "rust/services/organization/src/grpc_service.rs",
-            "provider_marker": ".get_membership(&input.user_id, organization_id)",
+            "provider_marker": ".principal_membership(&input.user_id, organization_id)",
         },
         {
             # Issuance initiation validates the organization through a real
@@ -535,7 +643,7 @@ OBSERVED_NON_CARGO_CONSUMERS = {
             "request_evidence": "rust/services/flow/src/grpc_providers.rs",
             "request_marker": ".get_member(self.auth.request(GetMemberRequest {",
             "provider_evidence": "rust/services/organization/src/grpc_service.rs",
-            "provider_marker": ".get_membership(&input.user_id, organization_id)",
+            "provider_marker": ".principal_membership(&input.user_id, organization_id)",
         },
         {
             "package": "marty-credential-template",
@@ -578,7 +686,7 @@ OBSERVED_NON_CARGO_CONSUMERS = {
             "provider_evidence": "rust/services/organization/src/grpc_service.rs",
             "provider_auth_marker": "self.authenticate(&request)?;",
             "add_provider_marker": ".add_member_direct(AddMemberDirectCommand {",
-            "member_provider_marker": ".get_membership(&input.user_id, organization_id)",
+            "member_provider_marker": ".principal_membership(&input.user_id, organization_id)",
             "organization_provider_marker": ".get_organization(organization_id)",
             "provider_registration_evidence": "rust/services/organization/src/main.rs",
             "provider_registration_marker": "OrganizationServiceServer::new(grpc_service)",
@@ -611,7 +719,7 @@ OBSERVED_NON_CARGO_CONSUMERS = {
             "callsite_marker": '.require_permission(user_id, organization_id, "trust-profile", "view")',
             "provider_evidence": "rust/services/organization/src/grpc_service.rs",
             "provider_authentication_marker": "self.authenticate(&request)?;",
-            "provider_marker": ".get_membership(&input.user_id, organization_id)",
+            "provider_marker": ".principal_membership(&input.user_id, organization_id)",
             "provider_registration_evidence": "rust/services/organization/src/main.rs",
             "provider_registration_marker": "OrganizationServiceServer::new(grpc_service)",
             "deployment_evidence": "docker-compose.base.yml",
@@ -633,7 +741,7 @@ OBSERVED_NON_CARGO_CONSUMERS = {
             "callsite_marker": ".membership(principal_id, organization_id)",
             "identity_marker": "response.user_id.is_empty() || response.organization_id.is_empty()",
             "provider_evidence": "rust/services/organization/src/grpc_service.rs",
-            "provider_marker": ".get_membership(&input.user_id, organization_id)",
+            "provider_marker": ".principal_membership(&input.user_id, organization_id)",
         },
     ],
     "marty-credential-template": [
@@ -704,7 +812,15 @@ OBSERVED_NON_CARGO_CONSUMERS = {
             "http_request_marker": '"v1/delivery-destinations/{encoded}"',
             "http_response_marker": "if response.id != reference_id {",
             "http_callsite_evidence": "rust/services/flow/src/reference_validation.rs",
-            "http_callsite_marker": ".resolve(kind, reference_id, principal_id, organization_id)",
+            "http_callsite_marker": (
+                ".resolve_for_actor(\n"
+                "                kind,\n"
+                "                reference_id,\n"
+                "                principal_id,\n"
+                "                organization_id,\n"
+                "                providers.gateway_api_key_actor.as_ref(),\n"
+                "            )"
+            ),
             "http_provider_evidence": "rust/services/credential-template/src/http_service.rs",
             "http_provider_marker": '"/v1/delivery-destinations/{destination_id}"',
         },
@@ -892,7 +1008,15 @@ OBSERVED_NON_CARGO_CONSUMERS = {
             "http_request_marker": '"v1/application-templates/{encoded}"',
             "http_response_marker": "if response.id != reference_id {",
             "http_callsite_evidence": "rust/services/flow/src/reference_validation.rs",
-            "http_callsite_marker": ".resolve(kind, reference_id, principal_id, organization_id)",
+            "http_callsite_marker": (
+                ".resolve_for_actor(\n"
+                "                kind,\n"
+                "                reference_id,\n"
+                "                principal_id,\n"
+                "                organization_id,\n"
+                "                providers.gateway_api_key_actor.as_ref(),\n"
+                "            )"
+            ),
             "http_provider_evidence": "rust/services/issuance/src/application_template_http.rs",
             "http_provider_marker": '"/v1/application-templates/{template_id}"',
         },
@@ -1028,7 +1152,15 @@ OBSERVED_NON_CARGO_CONSUMERS = {
             "request_marker": '"v1/trust-profiles/{encoded}"',
             "response_marker": "if response.id != reference_id {",
             "callsite_evidence": "rust/services/flow/src/reference_validation.rs",
-            "callsite_marker": ".resolve(kind, reference_id, principal_id, organization_id)",
+            "callsite_marker": (
+                ".resolve_for_actor(\n"
+                "                kind,\n"
+                "                reference_id,\n"
+                "                principal_id,\n"
+                "                organization_id,\n"
+                "                providers.gateway_api_key_actor.as_ref(),\n"
+                "            )"
+            ),
             "provider_evidence": "rust/services/trust-profile/src/http_service.rs",
             "provider_marker": '"/v1/trust-profiles/{profile_id}"',
         },
@@ -1066,7 +1198,15 @@ OBSERVED_NON_CARGO_CONSUMERS = {
             "request_marker": '"v1/deployment-profiles/{encoded}"',
             "response_marker": "if response.id != reference_id {",
             "callsite_evidence": "rust/services/flow/src/reference_validation.rs",
-            "callsite_marker": ".resolve(kind, reference_id, principal_id, organization_id)",
+            "callsite_marker": (
+                ".resolve_for_actor(\n"
+                "                kind,\n"
+                "                reference_id,\n"
+                "                principal_id,\n"
+                "                organization_id,\n"
+                "                providers.gateway_api_key_actor.as_ref(),\n"
+                "            )"
+            ),
             "provider_evidence": "rust/services/deployment-profile/src/http.rs",
             "provider_marker": '"/v1/deployment-profiles/{profile_id}"',
         },
@@ -1474,7 +1614,7 @@ next(
         "grpc_connection_marker": "OrganizationServiceClient::new(organizations)",
         "grpc_request_marker": "self.organizations.lock().await.get_member(request).await",
         "grpc_provider_evidence": "rust/services/organization/src/grpc_service.rs",
-        "grpc_provider_marker": ".get_membership(&input.user_id, organization_id)",
+        "grpc_provider_marker": ".principal_membership(&input.user_id, organization_id)",
     }
 )
 

@@ -71,7 +71,7 @@ function NavigationHarness() {
       <Routes>
         <Route path="/console/org" element={<div>Dashboard Page</div>} />
         <Route path="/console/org/deploy" element={<div>Deploy Page</div>} />
-        <Route path="/console/org/deploy/key-management" element={<div>Key Management Page</div>} />
+        <Route path="/console/org/operator/key-management" element={<div>Key Management Page</div>} />
         <Route path="/console/org/trust/profiles/new" element={<div>New Trust Profile Page</div>} />
         <Route path="/console/organizations" element={<div>My Organizations Page</div>} />
         <Route path="/console/org/team" element={<div>Team Page</div>} />
@@ -122,11 +122,11 @@ describe('SidebarNavigation', () => {
       expect(screen.getByText('Notifications Page')).toBeInTheDocument()
     })
 
-    await user.click(screen.getByRole('button', { name: 'Deploy' }))
+    await user.click(screen.getByRole('button', { name: 'Operator' }))
     await user.click(screen.getByRole('link', { name: 'Key Management' }))
 
     await waitFor(() => {
-      expect(screen.getByTestId('location')).toHaveTextContent('/console/org/deploy/key-management')
+      expect(screen.getByTestId('location')).toHaveTextContent('/console/org/operator/key-management')
       expect(screen.getByText('Key Management Page')).toBeInTheDocument()
     })
 
@@ -137,6 +137,13 @@ describe('SidebarNavigation', () => {
       expect(screen.getByText('Audit Page')).toBeInTheDocument()
     })
   })
+
+  it('hides the operator section when signing-key metadata permission is absent', () => {
+    mockCan.mockImplementation((resource: string) => resource !== 'signing-key');
+    renderWithoutRouter(<MemoryRouter initialEntries={['/console/org']}><NavigationHarness /></MemoryRouter>);
+    expect(screen.queryByRole('button', { name: 'Operator' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Key Management' })).not.toBeInTheDocument();
+  });
 
   it('navigates parent sections in collapsed icon mode', async () => {
     window.localStorage.setItem('sidebar-collapsed', 'true')

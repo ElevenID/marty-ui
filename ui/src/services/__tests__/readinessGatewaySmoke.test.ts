@@ -85,6 +85,15 @@ describe('readiness gateway smoke', () => {
     expect(environment).toBe('staging')
   })
 
+  it('accepts an explicitly unset organization environment without inventing a configured value', async () => {
+    server.use(
+      http.get('*/v1/organizations/:orgId/environment', ({ params }) =>
+        HttpResponse.json({ organization_id: params.orgId, environment: null }))
+    )
+
+    await expect(getOrganizationEnvironment('org_fresh')).resolves.toBeNull()
+  })
+
   it('updates organization environment through the gateway v1 route', async () => {
     const requestedPaths: string[] = []
 
@@ -171,6 +180,7 @@ describe('readiness gateway smoke', () => {
         identities: [{
           issuer_did: 'did:web:issuer.example.com',
           key_purpose: 'vc_jwt_issuer',
+          credential_format: 'SD_JWT_VC',
           algorithm: 'ES256',
           status: 'active',
         }],
@@ -233,6 +243,7 @@ describe('readiness gateway smoke', () => {
       identities: [{
         issuer_did: 'did:web:issuer.example.com',
         key_purpose: 'vc_jwt_issuer',
+          credential_format: 'SD_JWT_VC',
         algorithm: 'ES256',
         status: 'active',
       }],
@@ -321,6 +332,7 @@ describe('readiness gateway smoke', () => {
       organization_id: 'org_live',
       issuer_did: 'did:web:issuer.example.com:orgs:live',
       key_purpose: 'vc_jwt_issuer',
+          credential_format: 'SD_JWT_VC',
       credential_format: 'SD_JWT_VC',
       algorithm: 'ES256',
       issuer_profile_id: 'must-not-cross',
@@ -347,6 +359,7 @@ describe('readiness gateway smoke', () => {
         organization_id: 'org_live',
         issuer_did: 'did:web:issuer.example.com:orgs:live',
         key_purpose: 'vc_jwt_issuer',
+          credential_format: 'SD_JWT_VC',
         credential_format: 'SD_JWT_VC',
         algorithm: 'ES256',
       })

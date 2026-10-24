@@ -18,6 +18,336 @@ type JsonObject = Map<String, Value>;
 type VerifiedJwtMaterial = (CredentialVerificationEvidence, Option<JsonObject>);
 type OpenBadgeDocument = (JsonObject, JsonObject);
 
+struct DataIntegrityDocument<'a> {
+    is_presentation: bool,
+    credentials: Vec<&'a JsonObject>,
+}
+
+/// Resolves public signature keys through deployment-bounded transport. This does
+/// not alter the policy's trust profile or mark any issuer as trusted.
+pub struct ResolvingCredentialKernel {
+    resolver: std::sync::Arc<dyn marty_issuer_key_resolution::IssuerKeyResolver>,
+    registry: Option<
+        std::sync::Arc<dyn marty_issuer_key_resolution::governed::OrganizationIssuerResolver>,
+    >,
+}
+
+impl ResolvingCredentialKernel {
+    async fn prepare_document_sources(
+        &self,
+        context: &mut CredentialVerificationContext,
+    ) -> Result<(), &'static str> {
+        let Some(profile) = context.trust_profile.as_ref() else {
+            return Ok(());
+        };
+        let credentials: Vec<_> = match context.format {
+            DetectedCredentialFormat::OpenbadgeV3 => {
+                // Resolve the exact credential the Open Badge verifier will consume,
+                // including its supported VP and assertion aliases. Never inspect
+                // an outer envelope or reinterpret a field inside the selected VC.
+                vec![open_badge_credential(&context.token, "credential")
+                    .map_err(|_| "Invalid Open Badge credential selection")?]
+            }
+            DetectedCredentialFormat::W3cVcdmDi => {
+                let document = context
+                    .token
+                    .as_object()
+                    .ok_or("Invalid Data Integrity document")?;
+                data_integrity_document(document)?.credentials
+            }
+            _ => return Ok(()),
+        };
+        let mut resolved_methods = Vec::new();
+        let mut governed_issuers = Vec::new();
+        for credential in credentials {
+            let Some(issuer) = issuer_id(credential) else {
+                continue;
+            };
+            let sources: Vec<_> = profile
+                .document
+                .get("trust_sources")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter(|source| source.get("enabled") != Some(&Value::Bool(false)))
+                .filter(|source| source.get("issuer_did").and_then(Value::as_str) == Some(issuer))
+                .collect();
+            if sources.is_empty() {
+                continue;
+            }
+            if sources.len() != 1 {
+                return Err("Ambiguous issuer DID trust sources");
+            }
+            governed_issuers.push(issuer.to_owned());
+            let proofs = match credential.get("proof") {
+                Some(Value::Array(values)) => values.iter().collect::<Vec<_>>(),
+                Some(value) => vec![value],
+                None => return Err("Issuer DID assertion proof is required"),
+            };
+            if proofs.is_empty() {
+                return Err("Issuer DID assertion proof is required");
+            }
+            for proof in proofs {
+                if proof.get("proofPurpose").and_then(Value::as_str) != Some("assertionMethod") {
+                    return Err("Issuer DID assertion proof is required");
+                }
+                let method = proof
+                    .get("verificationMethod")
+                    .and_then(Value::as_str)
+                    .ok_or("Issuer DID signing method is required")?;
+                let algorithm = if proof.get("cryptosuite").and_then(Value::as_str)
+                    == Some("eddsa-rdfc-2022")
+                {
+                    "EdDSA".to_owned()
+                } else {
+                    proof
+                        .get("jws")
+                        .and_then(Value::as_str)
+                        .and_then(|jws| jws.split('.').next())
+                        .and_then(decode_jwt_object)
+                        .and_then(|h| h.get("alg").and_then(Value::as_str).map(str::to_owned))
+                        .ok_or("Unsupported issuer DID proof algorithm")?
+                };
+                let key = self
+                    .resolve_source_key(sources[0], issuer, method, "JSON_LD", &algorithm)
+                    .await?;
+                let entry = json!({"id":method,"controller":issuer,"public_jwk":key});
+                if let Some(existing) = resolved_methods
+                    .iter()
+                    .find(|entry: &&Value| entry.get("id").and_then(Value::as_str) == Some(method))
+                {
+                    if existing != &entry {
+                        return Err("Issuer DID method changed during verification");
+                    }
+                } else {
+                    resolved_methods.push(entry);
+                }
+            }
+        }
+        if !governed_issuers.is_empty() {
+            let profile = context
+                .trust_profile
+                .as_mut()
+                .ok_or("Trust profile is unavailable")?;
+            let mut methods = profile
+                .document
+                .get("resolved_verification_methods")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            methods.retain(|entry| {
+                !entry
+                    .get("controller")
+                    .and_then(Value::as_str)
+                    .is_some_and(|issuer| governed_issuers.iter().any(|value| value == issuer))
+            });
+            methods.extend(resolved_methods);
+            profile.document["resolved_verification_methods"] = Value::Array(methods);
+        }
+        Ok(())
+    }
+    async fn resolve_source_key(
+        &self,
+        source: &Value,
+        issuer: &str,
+        method: &str,
+        format: &str,
+        algorithm: &str,
+    ) -> Result<Value, &'static str> {
+        let organization_id = match source.get("organization_id") {
+            Some(Value::String(value)) => Some(value.clone()),
+            Some(_) => return Err("Invalid issuer organization scope"),
+            None => None,
+        };
+        let policy =
+            serde_json::from_value(source.get("did_resolution").cloned().unwrap_or_else(|| {
+                if organization_id.is_some() {
+                    json!({})
+                } else {
+                    json!({"resolver_type":"PUBLIC_DID"})
+                }
+            }))
+            .map_err(|_| "Invalid issuer DID resolution policy")?;
+        let pins = source
+            .get("verification_method_ids")
+            .map(|value| serde_json::from_value::<Vec<String>>(value.clone()))
+            .transpose()
+            .map_err(|_| "Invalid issuer DID method pins")?
+            .unwrap_or_default();
+        let request = marty_issuer_key_resolution::governed::IssuerResolutionRequest {
+            organization_id,
+            issuer_did: issuer.into(),
+            verification_method_ids: pins,
+            credential_format: format.into(),
+            key_purpose: "vc_jwt_issuer".into(),
+            algorithm: algorithm.into(),
+            policy,
+        };
+        let material = if request
+            .policy
+            .registry_first(request.organization_id.as_deref())
+        {
+            let registry = self
+                .registry
+                .as_ref()
+                .ok_or("Organization issuer registry is unavailable")?;
+            marty_issuer_key_resolution::governed::resolve_governed_issuer(
+                &request,
+                registry.as_ref(),
+                self.resolver.as_ref(),
+            )
+            .await
+        } else {
+            marty_issuer_key_resolution::policy::validate_source_controls(
+                &request.issuer_did,
+                None,
+                &request.verification_method_ids,
+            )
+            .map_err(|_| "Invalid issuer DID method pins")?;
+            self.resolver
+                .resolve(issuer)
+                .await
+                .and_then(|mut material| {
+                    material.verification_keys =
+                        marty_issuer_key_resolution::policy::pin_assertion_keys(
+                            issuer,
+                            &request.verification_method_ids,
+                            &material.verification_keys,
+                        )?;
+                    Ok(material)
+                })
+        }
+        .map_err(|_| "Issuer DID trust resolution failed")?;
+        let mut keys = material
+            .verification_keys
+            .into_iter()
+            .filter(|key| key.get("kid").and_then(Value::as_str) == Some(method));
+        let key = keys
+            .next()
+            .ok_or("Issuer DID signing method is not authorized")?;
+        if keys.next().is_some() {
+            return Err("Issuer DID signing method is not authorized");
+        }
+        Ok(key)
+    }
+    pub fn new(
+        resolver: std::sync::Arc<dyn marty_issuer_key_resolution::IssuerKeyResolver>,
+    ) -> Self {
+        Self {
+            resolver,
+            registry: None,
+        }
+    }
+
+    pub fn with_registry(
+        mut self,
+        registry: std::sync::Arc<
+            dyn marty_issuer_key_resolution::governed::OrganizationIssuerResolver,
+        >,
+    ) -> Self {
+        self.registry = Some(registry);
+        self
+    }
+}
+
+#[async_trait]
+impl CredentialVerificationKernel for ResolvingCredentialKernel {
+    async fn verify(
+        &self,
+        context: &CredentialVerificationContext,
+    ) -> Result<CredentialVerificationEvidence, PresentationVerificationError> {
+        let mut resolved = context.clone();
+        // The public request map cannot supply this field. Clear even caller
+        // hints so this adapter only admits its own bounded resolver result.
+        resolved.resolved_issuer_public_jwk = None;
+        if context.token.is_object()
+            && matches!(
+                context.format,
+                DetectedCredentialFormat::W3cVcdmDi | DetectedCredentialFormat::OpenbadgeV3
+            )
+        {
+            if let Err(reason) = self.prepare_document_sources(&mut resolved).await {
+                return Ok(rejected(reason));
+            }
+        }
+        if matches!(
+            context.format,
+            DetectedCredentialFormat::W3cVc
+                | DetectedCredentialFormat::OpenbadgeV3
+                | DetectedCredentialFormat::SdJwt
+        ) {
+            if let Some(token) = context.token.as_str() {
+                if let Some((issuer, kid)) = jwt_selector(token) {
+                    let sources: Vec<_> = context
+                        .trust_profile
+                        .as_ref()
+                        .and_then(|p| p.document.get("trust_sources"))
+                        .and_then(Value::as_array)
+                        .into_iter()
+                        .flatten()
+                        .filter(|source| source.get("enabled") != Some(&Value::Bool(false)))
+                        .filter(|source| {
+                            source.get("issuer_did").and_then(Value::as_str)
+                                == Some(issuer.as_str())
+                        })
+                        .collect();
+                    if !sources.is_empty() {
+                        let Some(kid) = kid else {
+                            return Ok(rejected("Issuer DID signing method is required"));
+                        };
+                        if sources.len() != 1 {
+                            return Ok(rejected("Ambiguous issuer DID trust sources"));
+                        }
+                        let algorithm = token
+                            .split('.')
+                            .next()
+                            .and_then(decode_jwt_object)
+                            .and_then(|h| h.get("alg").and_then(Value::as_str).map(str::to_owned));
+                        let Some(algorithm) = algorithm else {
+                            return Ok(rejected("Issuer algorithm is required"));
+                        };
+                        let format = if context.format == DetectedCredentialFormat::SdJwt {
+                            "SD_JWT_VC"
+                        } else {
+                            "VC_JWT"
+                        };
+                        let key = match self
+                            .resolve_source_key(sources[0], &issuer, &kid, format, &algorithm)
+                            .await
+                        {
+                            Ok(key) => key,
+                            Err(reason) => return Ok(rejected(reason)),
+                        };
+                        resolved.resolved_issuer_public_jwk = Some(key);
+                        return RustCredentialKernel.verify(&resolved).await;
+                    }
+                }
+                if governed_public_jwk(context, token).is_none() {
+                    if let Some((issuer, Some(kid))) = jwt_selector(token) {
+                        if issuer.starts_with("did:web:") && kid.starts_with(&format!("{issuer}#"))
+                        {
+                            if let Ok(material) = self.resolver.resolve(&issuer).await {
+                                let matches: Vec<_> = material
+                                    .verification_keys
+                                    .iter()
+                                    .filter(|key| {
+                                        key.get("kid").and_then(Value::as_str) == Some(kid.as_str())
+                                    })
+                                    .filter(|key| key.as_object().is_some_and(public_jwk))
+                                    .collect();
+                                if matches.len() == 1 {
+                                    resolved.resolved_issuer_public_jwk = Some(matches[0].clone());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        RustCredentialKernel.verify(&resolved).await
+    }
+}
+
 /// Direct adapter over the canonical Marty Rust credential verifiers.
 #[derive(Clone, Debug, Default)]
 pub struct RustCredentialKernel;
@@ -294,7 +624,11 @@ async fn verify_vc_jwt_material(
 ) -> Result<VerifiedJwtMaterial, PresentationVerificationError> {
     let token = token_string(&context.token)?;
     let mut request = json!({"token": token});
-    if let Some(public_jwk) = governed_public_jwk(context, token) {
+    if let Some(public_jwk) = context
+        .resolved_issuer_public_jwk
+        .clone()
+        .or_else(|| governed_public_jwk(context, token))
+    {
         request["issuer_public_jwk"] = public_jwk;
     }
     let raw = if open_badge_v3 {
@@ -338,6 +672,45 @@ async fn verify_vc_jwt_material(
     Ok((evidence, Some(credential.clone())))
 }
 
+fn data_integrity_document(
+    document: &JsonObject,
+) -> Result<DataIntegrityDocument<'_>, &'static str> {
+    let has_type = |expected: &str| match document.get("type") {
+        Some(Value::String(value)) => value == expected,
+        Some(Value::Array(values)) => values.iter().any(|value| value.as_str() == Some(expected)),
+        _ => false,
+    };
+    let is_presentation = has_type("VerifiablePresentation");
+    let is_credential = has_type("VerifiableCredential");
+    if is_presentation == is_credential {
+        return Err(
+            "Document must identify exactly one Data Integrity credential or presentation type",
+        );
+    }
+    if is_credential {
+        return Ok(DataIntegrityDocument {
+            is_presentation: false,
+            credentials: vec![document],
+        });
+    }
+    let credentials = match document.get("verifiableCredential") {
+        None => Vec::new(),
+        Some(Value::Array(values)) => values
+            .iter()
+            .map(|value| {
+                value
+                    .as_object()
+                    .ok_or("Data Integrity presentation credentials must be objects")
+            })
+            .collect::<Result<Vec<_>, _>>()?,
+        Some(_) => return Err("Data Integrity presentation credentials must be an array"),
+    };
+    Ok(DataIntegrityDocument {
+        is_presentation: true,
+        credentials,
+    })
+}
+
 async fn verify_data_integrity(
     context: &CredentialVerificationContext,
 ) -> Result<CredentialVerificationEvidence, PresentationVerificationError> {
@@ -345,6 +718,7 @@ async fn verify_data_integrity(
         .token
         .as_object()
         .ok_or_else(|| invalid_input("Data Integrity presentation must be a JSON object"))?;
+    let selected = data_integrity_document(document).map_err(invalid_input)?;
     let request = json!({
         "document": document,
         "expected_challenge": context.nonce,
@@ -356,33 +730,67 @@ async fn verify_data_integrity(
     let raw =
         marty_verification::vcdm::verify_vcdm_data_integrity_json_async(&request.to_string()).await;
     let result = internal_json(&raw, "VCDM Data Integrity")?;
+    data_integrity_evidence_for_selected(context, &selected, &result)
+}
+
+#[cfg(test)]
+fn data_integrity_evidence(
+    context: &CredentialVerificationContext,
+    document: &Map<String, Value>,
+    result: &Value,
+) -> Result<CredentialVerificationEvidence, PresentationVerificationError> {
+    let selected = data_integrity_document(document).map_err(invalid_native)?;
+    data_integrity_evidence_for_selected(context, &selected, result)
+}
+
+fn data_integrity_evidence_for_selected(
+    context: &CredentialVerificationContext,
+    selected: &DataIntegrityDocument<'_>,
+    result: &Value,
+) -> Result<CredentialVerificationEvidence, PresentationVerificationError> {
     if result.get("valid").and_then(Value::as_bool) != Some(true) {
-        return Ok(rejected_counted(
-            "VCDM Data Integrity",
-            error_count(&result),
-        ));
+        return Ok(rejected_counted("VCDM Data Integrity", error_count(result)));
     }
     let is_presentation = result.get("kind").and_then(Value::as_str) == Some("presentation");
+    if is_presentation != selected.is_presentation {
+        return Err(invalid_native(
+            "Data Integrity verifier kind did not match the selected document type",
+        ));
+    }
     let credential_count = result
         .get("verified_credentials")
         .and_then(Value::as_u64)
         .and_then(|value| usize::try_from(value).ok())
         .unwrap_or(1);
+    if is_presentation && context.presentation_only {
+        // The native VCDM kernel has verified the holder proof and every
+        // embedded credential. A presentation-only policy does not invent a
+        // credential, issuer, claims, or a trust relationship when none exists.
+        return Ok(CredentialVerificationEvidence {
+            verified: true,
+            presentation_verified: true,
+            presentation_count: Some(1),
+            holder_binding_verified: true,
+            holder_binding_method: Some("DEVICE_KEY".into()),
+            proof_profile: Some("OID4VP_VERIFIABLE_PRESENTATION".into()),
+            challenge_verified: context.nonce.is_some(),
+            audience_verified: context.audience.is_some(),
+            algorithm: result
+                .get("algorithm")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            ..Default::default()
+        });
+    }
     let credential = if is_presentation {
-        let credentials = document
-            .get("verifiableCredential")
-            .and_then(Value::as_array)
-            .ok_or_else(|| invalid_native("Verified presentation omitted credentials"))?;
-        if credentials.len() != 1 {
+        if selected.credentials.len() != 1 {
             return Ok(rejected(
                 "Presentation must contain exactly one independently verified credential",
             ));
         }
-        credentials[0]
-            .as_object()
-            .ok_or_else(|| invalid_native("Verified credential was not an object"))?
+        selected.credentials[0]
     } else {
-        document
+        selected.credentials[0]
     };
     let mut evidence = credential_evidence(
         credential,
@@ -409,7 +817,11 @@ fn verify_sd_jwt(
     context: &CredentialVerificationContext,
 ) -> Result<CredentialVerificationEvidence, PresentationVerificationError> {
     let token = token_string(&context.token)?;
-    let Some(public_jwk) = governed_public_jwk(context, token) else {
+    let Some(public_jwk) = context
+        .resolved_issuer_public_jwk
+        .clone()
+        .or_else(|| governed_public_jwk(context, token))
+    else {
         return Ok(rejected(
             "No governed issuer public JWK is available for SD-JWT",
         ));
@@ -795,18 +1207,26 @@ fn open_badge_document(
     token: &Value,
     default_key: &str,
 ) -> Result<OpenBadgeDocument, PresentationVerificationError> {
-    let object = token
-        .as_object()
-        .ok_or_else(|| invalid_input("Open Badge presentation must be a JSON object"))?;
-    let store = object
+    let credential = open_badge_credential(token, default_key)?.clone();
+    let store = token
         .get("document_store")
-        .or_else(|| object.get("documentStore"))
+        .or_else(|| token.get("documentStore"))
         .and_then(Value::as_object)
         .cloned()
         .unwrap_or_default();
+    Ok((credential, store))
+}
+
+fn open_badge_credential<'a>(
+    token: &'a Value,
+    default_key: &str,
+) -> Result<&'a JsonObject, PresentationVerificationError> {
+    let object = token
+        .as_object()
+        .ok_or_else(|| invalid_input("Open Badge presentation must be a JSON object"))?;
     for key in [default_key, "credential", "assertion"] {
         if let Some(value) = object.get(key).and_then(Value::as_object) {
-            return Ok((value.clone(), store));
+            return Ok(value);
         }
     }
     if let Some(vp) = object.get("vp").and_then(Value::as_object).or(Some(object)) {
@@ -818,14 +1238,14 @@ fn open_badge_document(
                     ));
                 }
                 if let Some(credential) = credentials[0].as_object() {
-                    return Ok((credential.clone(), store));
+                    return Ok(credential);
                 }
             } else if let Some(credential) = value.as_object() {
-                return Ok((credential.clone(), store));
+                return Ok(credential);
             }
         }
     }
-    Ok((object.clone(), store))
+    Ok(object)
 }
 
 fn apply_open_badge_status(evidence: &mut CredentialVerificationEvidence, result: &Value) {
@@ -1140,6 +1560,8 @@ mod tests {
 
     fn context(document: Value) -> CredentialVerificationContext {
         CredentialVerificationContext {
+            presentation_only: false,
+            resolved_issuer_public_jwk: None,
             format: DetectedCredentialFormat::SdJwt,
             token: Value::Null,
             nonce: None,
@@ -1150,6 +1572,46 @@ mod tests {
                 organization_id: Uuid::from_u128(2),
                 document,
             }),
+        }
+    }
+
+    #[test]
+    fn data_integrity_evidence_keeps_presentation_and_credential_obligations_separate() {
+        let document = json!({
+            "@context": ["https://www.w3.org/ns/credentials/v2"],
+            "type": ["VerifiablePresentation"]
+        });
+        let mut context = context(json!({}));
+        context.format = DetectedCredentialFormat::W3cVcdmDi;
+        let verified = json!({"valid": true, "kind": "presentation", "verified_credentials": 0});
+        for with_empty_array in [false, true] {
+            let mut document = document.clone();
+            if with_empty_array {
+                document["verifiableCredential"] = json!([]);
+            }
+            let document = document.as_object().unwrap();
+            context.presentation_only = false;
+            assert!(
+                !data_integrity_evidence(&context, document, &verified)
+                    .unwrap()
+                    .verified
+            );
+            context.presentation_only = true;
+            let evidence = data_integrity_evidence(&context, document, &verified).unwrap();
+            assert!(evidence.verified);
+            assert!(evidence.presentation_verified);
+            assert!(evidence.holder_binding_verified);
+            assert_eq!(evidence.presentation_count, Some(1));
+            assert!(evidence.issuer_id.is_none());
+            assert!(evidence.credential_id.is_none());
+            assert!(evidence.claims.is_empty());
+            let invalid =
+                json!({"valid": false, "kind": "presentation", "errors": ["invalid proof"]});
+            assert!(
+                !data_integrity_evidence(&context, document, &invalid)
+                    .unwrap()
+                    .verified
+            );
         }
     }
 
@@ -1194,6 +1656,19 @@ mod tests {
         let selected = governed_public_jwk(&context(profile.clone()), &token).unwrap();
         assert_eq!(selected["kid"], kid);
         assert!(selected.get("d").is_none());
+
+        let mut unnamed = profile.clone();
+        unnamed["issuer_relationships"][0]["verification_keys"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("kid");
+        assert!(governed_public_jwk(&context(unnamed.clone()), &token).is_some());
+        let second_key = unnamed["issuer_relationships"][0]["verification_keys"][0].clone();
+        unnamed["issuer_relationships"][0]["verification_keys"]
+            .as_array_mut()
+            .unwrap()
+            .push(second_key);
+        assert!(governed_public_jwk(&context(unnamed), &token).is_none());
 
         let mut ambiguous = profile.clone();
         let relationship = ambiguous["issuer_relationships"][0].clone();

@@ -19,22 +19,26 @@ import AddIcon from '@mui/icons-material/Add';
 import PolicyIcon from '@mui/icons-material/Policy';
 
 import { useConsole } from '../../../contexts/ConsoleContext';
+import { usePermissions } from '../../../hooks/usePermissions';
 import { listPolicySets } from '../../../services/policySetsApi';
 import { ResourcePage } from '../../common';
+import { requirePolicySetList } from './policySetGuards';
 
-const PolicySetsPage = () => {
-  const { activeOrgId: organizationId } = useConsole();
+const ScopedPolicySets = ({ organizationId, canView, canCreate, grantsLoading }) => {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [revision, setRevision] = useState(0);
 
   useEffect(() => {
-    if (!organizationId) return;
-    listPolicySets(organizationId)
-      .then(setItems)
-      .catch((cause) => setError(cause.message))
-      .finally(() => setLoading(false));
-  }, [organizationId]);
+    let current = true;
+    setItems([]); setError(''); setLoading(true);
+    if (canView && !grantsLoading) listPolicySets(organizationId)
+      .then((records) => { const scoped = requirePolicySetList(records, organizationId); if (current) setItems(scoped); })
+      .catch((cause) => { if (current) setError(cause.message || 'Policy Sets could not be loaded.'); })
+      .finally(() => { if (current) setLoading(false); });
+    return () => { current = false; };
+  }, [organizationId, canView, grantsLoading, revision]);
 
   return (
     <ResourcePage
@@ -45,16 +49,19 @@ const PolicySetsPage = () => {
         { label: 'Govern', path: '/console/org/govern' },
         { label: 'Policy Sets', path: '/console/org/policies/sets' },
       ]}
-      actions={<Button component={RouterLink} to="/console/org/policies/sets/new" variant="contained" startIcon={<AddIcon />}>Create Policy Set</Button>}
+      actions={<Stack direction="row" spacing={1}>
+        {canView && <Button disabled={grantsLoading} onClick={() => setRevision((value) => value + 1)}>Refresh</Button>}
+        {canCreate && !grantsLoading && <Button component={RouterLink} to="/console/org/policies/sets/new" variant="contained" startIcon={<AddIcon />}>Create Policy Set</Button>}
+      </Stack>}
     >
       {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
-      {loading ? (
+      {grantsLoading ? <CircularProgress /> : !canView ? <Alert severity="warning">You do not have permission to view Policy Sets in this organization.</Alert> : loading ? (
         <Box sx={{ display: 'flex', justifyContent: 'center', py: 8 }}><CircularProgress /></Box>
-      ) : items.length === 0 ? (
+      ) : error ? null : items.length === 0 ? (
         <Paper variant="outlined" sx={{ p: 4, textAlign: 'center' }}>
           <PolicyIcon color="action" sx={{ fontSize: 40 }} />
           <Typography variant="h6" sx={{ mt: 1 }}>No Policy Sets</Typography>
-          <Button component={RouterLink} to="/console/org/policies/sets/new" startIcon={<AddIcon />} sx={{ mt: 2 }}>Create Policy Set</Button>
+          {canCreate && <Button component={RouterLink} to="/console/org/policies/sets/new" startIcon={<AddIcon />} sx={{ mt: 2 }}>Create Policy Set</Button>}
         </Paper>
       ) : (
         <Paper variant="outlined">
@@ -77,4 +84,10 @@ const PolicySetsPage = () => {
   );
 };
 
-export default PolicySetsPage;
+export default function PolicySetsPage() {
+  const { activeOrgId: organizationId } = useConsole();
+  const { can, isLoading } = usePermissions();
+  if (!organizationId) return <Alert severity="info">Select an organization to inspect its Policy Sets.</Alert>;
+  return <ScopedPolicySets key={organizationId} organizationId={organizationId} canView={can('policy-set', 'view')}
+    canCreate={can('policy-set', 'create')} grantsLoading={isLoading} />;
+}

@@ -9,6 +9,19 @@ import { apiClient } from './api';
 const BASE = '/v1/wallet-registry';
 
 /**
+ * Read the owning template's derived primary-format profile and applied overrides.
+ * The service authorizes membership using the template ID. This is configuration,
+ * not evidence that a listed wallet has passed interoperability tests.
+ */
+export const getTemplateWalletCompatibility = async (templateId) => {
+  if (typeof templateId !== 'string' || !templateId.trim()) {
+    throw new Error('A credential template ID is required.');
+  }
+  const response = await apiClient.get(`/v1/credential-templates/${encodeURIComponent(templateId)}/wallet-compatibility`);
+  return response.data;
+};
+
+/**
  * List all active wallets in the registry.
  * @param {boolean} [activeOnly=true] - If true, only return active wallet entries.
  * @param {string|null} [organizationId=null] - Include overrides for this authorized organization.

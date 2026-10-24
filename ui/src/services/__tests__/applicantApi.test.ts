@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { http, HttpResponse } from 'msw'
 import { server } from '@test/mocks/server'
 
@@ -13,6 +13,30 @@ import {
 } from '../applicantApi'
 
 describe('applicantApi', () => {
+  it('passes cancellation through the real API client for both inventory requests', async () => {
+    const controller = new AbortController()
+    const signals: AbortSignal[] = []
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation((_url, options) => (
+      new Promise((_resolve, reject) => {
+        const signal = options?.signal as AbortSignal
+        signals.push(signal)
+        signal.addEventListener('abort', () => reject(new DOMException('Cancelled', 'AbortError')))
+      })
+    ))
+    try {
+      const results = Promise.allSettled([
+        getMyCredentials({}, { signal: controller.signal }),
+        getMyApplications({}, { signal: controller.signal }),
+      ])
+      await vi.waitFor(() => expect(signals).toHaveLength(2))
+      expect(signals.every(signal => signal === controller.signal)).toBe(true)
+      controller.abort()
+      expect((await results).every(result => result.status === 'rejected')).toBe(true)
+    } finally {
+      fetchSpy.mockRestore()
+    }
+  })
+
   it('loads current applicant applications from the canonical self-service route', async () => {
     const requestedPaths: string[] = []
 

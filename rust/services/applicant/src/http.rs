@@ -4,7 +4,7 @@ use crate::{
     ReviewerLock, VettingCheck, LOCK_TTL_SECONDS, MAX_EVIDENCE_BYTES,
 };
 use axum::{
-    body::Body,
+    body::{Body, Bytes},
     extract::{Path, Query, State},
     http::{header, HeaderMap, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
@@ -155,6 +155,7 @@ impl From<ServiceError> for ApiError {
             | ServiceError::ReviewerLockRequired
             | ServiceError::ConcurrentModification
             | ServiceError::InvalidApplicationState(_)
+            | ServiceError::WithdrawalRequiresIssuanceReconciliation
             | ServiceError::InactiveEvidence
             | ServiceError::NoActiveFlow
             | ServiceError::Domain(ApplicantError::Locked(_)) => StatusCode::CONFLICT,
@@ -253,6 +254,43 @@ struct EvidenceRequest {
 #[serde(deny_unknown_fields)]
 struct WithdrawRequest {
     reason: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(transparent)]
+struct ClaimRequest(Map<String, Value>);
+
+impl ClaimRequest {
+    fn parse(body: &[u8]) -> Result<Self, ApiError> {
+        let request = if body.is_empty() {
+            Self::default()
+        } else {
+            serde_json::from_slice::<Self>(body).map_err(|error| {
+                if error.is_syntax() || error.is_eof() {
+                    ApiError::new(StatusCode::BAD_REQUEST, json!({
+                        "error":"INVALID_CLAIM_JSON", "message":"Claim request must contain valid JSON."
+                    }))
+                } else { Self::unsupported() }
+            })?
+        };
+        if request.0.is_empty() {
+            Ok(request)
+        } else {
+            Err(Self::unsupported())
+        }
+    }
+
+    fn unsupported() -> ApiError {
+        // Never silently accept a consent or destination choice that the
+        // applicant-to-Flow production path cannot apply. Do not echo inputs.
+        ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            json!({
+                "error":"CLAIM_OPTIONS_UNSUPPORTED",
+                "message":"Claim accepts an empty JSON object. Delivery destination selection and Canvas mirroring are not supported by this claim path."
+            }),
+        )
+    }
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -727,33 +765,16 @@ async fn claim(
     State(state): State<HttpState>,
     headers: HeaderMap,
     Path(application_id): Path<String>,
+    body: Bytes,
 ) -> Result<Json<Value>, ApiError> {
     let (application, _) = state
         .service
         .self_application(&user(&headers)?, &application_id)
         .await?;
-    let application = sync_issuance(&state, &application).await?;
-    let has_offer = application
-        .system_data
-        .get("credential_offer_uri")
-        .and_then(Value::as_str)
-        .is_some_and(|value| !value.is_empty())
-        || application
-            .system_data
-            .get("credential_offer_uris")
-            .and_then(Value::as_object)
-            .is_some_and(|value| !value.is_empty());
-    let valid_expiry = application
-        .system_data
-        .get("offer_expires_at")
-        .and_then(Value::as_str)
-        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
-        .is_some_and(|expiry| expiry > Utc::now());
-    if application.claim_state == crate::ClaimState::OfferReady && has_offer && valid_expiry {
-        return Ok(Json(application_json(&application)));
-    }
+    ClaimRequest::parse(&body)?;
+    sync_issuance(&state, &application).await?;
     Ok(Json(application_json(
-        &state.service.issue(&application_id, Utc::now()).await?,
+        &state.service.claim(&application_id, Utc::now()).await?,
     )))
 }
 
@@ -763,7 +784,7 @@ async fn organization_queue(
     Path(organization_id): Path<String>,
     Query(page): Query<Page>,
 ) -> Result<Json<Value>, ApiError> {
-    organization_identity(&headers, &organization_id, "application:review")?;
+    organization_identity(&headers, &organization_id, "application:view")?;
     let mut values = state
         .service
         .applications_for_organization(&organization_id)
@@ -787,7 +808,7 @@ async fn organization_application(
     headers: HeaderMap,
     Path((organization_id, application_id)): Path<(String, String)>,
 ) -> Result<Json<Value>, ApiError> {
-    organization_identity(&headers, &organization_id, "application:review")?;
+    organization_identity(&headers, &organization_id, "application:view")?;
     let (application, applicant) = state
         .service
         .organization_application(&organization_id, &application_id)
@@ -1253,15 +1274,22 @@ async fn sync_issuance(
     state: &HttpState,
     application: &Application,
 ) -> Result<Application, ApiError> {
-    let transaction_id = application
+    let expected_transaction_id = application
         .system_data
         .get("issuance_transaction_id")
-        .and_then(Value::as_str)
-        .filter(|value| !value.is_empty() && !value.starts_with("local-"));
+        .and_then(Value::as_str);
+    let transaction_id =
+        expected_transaction_id.filter(|value| !value.is_empty() && !value.starts_with("local-"));
     let Some(transaction_id) = transaction_id else {
         return state
             .service
-            .reconcile_issuance(&application.id, None, None, Utc::now())
+            .reconcile_issuance(
+                &application.id,
+                expected_transaction_id,
+                None,
+                None,
+                Utc::now(),
+            )
             .await
             .map_err(Into::into);
     };
@@ -1282,7 +1310,13 @@ async fn sync_issuance(
     if response.status() == StatusCode::NOT_FOUND {
         return state
             .service
-            .reconcile_issuance(&application.id, None, None, Utc::now())
+            .reconcile_issuance(
+                &application.id,
+                expected_transaction_id,
+                None,
+                None,
+                Utc::now(),
+            )
             .await
             .map_err(Into::into);
     }
@@ -1306,7 +1340,13 @@ async fn sync_issuance(
         .map(|value| value.with_timezone(&Utc));
     state
         .service
-        .reconcile_issuance(&application.id, status, issued_at, Utc::now())
+        .reconcile_issuance(
+            &application.id,
+            expected_transaction_id,
+            status,
+            issued_at,
+            Utc::now(),
+        )
         .await
         .map_err(Into::into)
 }
@@ -1418,6 +1458,7 @@ fn application_json(value: &Application) -> Value {
         "status": value.status,
         "claim_state": value.claim_state,
         "claim_blocker": value.claim_blocker,
+        "claim_capabilities": crate::issuance::CLAIM_CAPABILITIES,
         "created_at": value.created_at.to_rfc3339(),
         "submitted_at": value.submitted_at.map(|date| date.to_rfc3339()),
         "reviewed_at": value.reviewed_at.map(|date| date.to_rfc3339()),

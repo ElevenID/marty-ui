@@ -6,16 +6,30 @@ function New-BetaApplicationImagePlan {
         [Parameter(Mandatory = $true)][string]$ReleaseVersion,
         [Parameter(Mandatory = $true)][bool]$OfficialStackRelease,
         [string]$ServicesReference = "",
-        [string]$ServicesDigest = ""
+        [string]$ServicesDigest = "",
+        [hashtable]$PreparedImages = $null
     )
 
+    $prepared = $null -ne $PreparedImages
+    if ($prepared) {
+        if ($OfficialStackRelease) { throw "Prepared local images cannot be official release inputs" }
+        if ($PreparedImages.Count -ne $Services.Count) { throw "Prepared images must cover the exact service set" }
+        foreach ($service in $Services) {
+            if (-not $PreparedImages.ContainsKey($service) -or
+                [string]$PreparedImages[$service] -cnotmatch '^sha256:[0-9a-f]{64}$') {
+                throw "Prepared image ID is missing or invalid: $service"
+            }
+        }
+    }
     foreach ($service in $Services) {
-        $selectorPresent = $OfficialStackRelease
-        $imageExpression = if ($OfficialStackRelease) { '${MARTY_SERVICES_IMAGE}' }
+        $selectorPresent = $OfficialStackRelease -or $prepared
+        $imageExpression = if ($prepared) { [string]$PreparedImages[$service] }
+            elseif ($OfficialStackRelease) { '${MARTY_SERVICES_IMAGE}' }
             else { "elevenid-local/${service}:${ReleaseVersion}" }
         $effectiveReference = if ($OfficialStackRelease) { $ServicesReference }
             else { $imageExpression }
-        $knownDigest = if ($OfficialStackRelease) {
+        $knownDigest = if ($prepared) { [string]$PreparedImages[$service] }
+        elseif ($OfficialStackRelease) {
             $ServicesDigest
         } else { $null }
         [pscustomobject][ordered]@{
@@ -28,7 +42,7 @@ function New-BetaApplicationImagePlan {
                 if ($service -eq "issuance") { "issuance_native" }
                 else { $service -replace '-', '_' }
             } else { $null }
-            build_eligible = -not $OfficialStackRelease
+            build_eligible = -not $OfficialStackRelease -and -not $prepared
             known_digest = $knownDigest
         }
     }

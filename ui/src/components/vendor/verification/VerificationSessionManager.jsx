@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Box,
   Paper,
@@ -33,9 +33,9 @@ import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ErrorIcon from '@mui/icons-material/Error';
 import HourglassTopIcon from '@mui/icons-material/HourglassTop';
 import { useNotifications } from '../../../hooks/useNotifications';
-import { startVerificationFlow } from '../../../services/zkVerificationApi';
+import { startVerificationFlow, getVerificationFlowResult } from '../../../services/zkVerificationApi';
 import { listFlowExecutions } from '../../../services/flowsApi';
-import { listPublicIssuerIdentities } from '../../../services/signingKeysApi';
+import { listPublicIssuerIdentities } from '../../../services/issuerIdentitiesApi';
 import PolicySelectStep from './steps/PolicySelectStep';
 import SessionConfigStep from './steps/SessionConfigStep';
 import QRDisplayStep from './steps/QRDisplayStep';
@@ -101,7 +101,7 @@ function isVerificationFlowInstance(session = {}) {
   ));
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+// â”€â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function StatusChip({ status }) {
   const normalized = normalizeSessionStatus(status);
@@ -125,7 +125,7 @@ function TabPanel({ children, value, index }) {
 }
 
 function formatDate(iso) {
-  if (!iso) return '—';
+  if (!iso) return 'â€”';
   return new Date(iso).toLocaleString();
 }
 
@@ -155,8 +155,18 @@ function VerificationSessionManager({ organizationId }) {
   // Detail drawer state
   const [detailSession, setDetailSession] = useState(null);
   const [detailOpen, setDetailOpen] = useState(false);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState(null);
+  const detailRequest = useRef(0);
 
-  // ── Data fetching ─────────────────────────────────────────────────────────
+  useEffect(() => {
+    detailRequest.current += 1;
+    setDetailOpen(false);
+    setDetailSession(null);
+    return () => { detailRequest.current += 1; };
+  }, [organizationId]);
+
+  // â”€â”€ Data fetching â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   const fetchSessions = useCallback(async () => {
     if (!organizationId) {
@@ -226,12 +236,12 @@ function VerificationSessionManager({ organizationId }) {
     fetchVerifierIssuerDid();
   }, [fetchVerifierIssuerDid]);
 
-  // ── Filtered session lists ────────────────────────────────────────────────
+  // â”€â”€ Filtered session lists â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   const activeSessions  = sessions.filter((s) => ACTIVE_STATUSES.includes(normalizeSessionStatus(s.status)));
   const historySessions = sessions.filter((s) => HISTORY_STATUSES.includes(normalizeSessionStatus(s.status)));
 
-  // ── Wizard handlers ───────────────────────────────────────────────────────
+  // â”€â”€ Wizard handlers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   const openWizard = () => {
     setWizardStep(0);
@@ -248,7 +258,7 @@ function VerificationSessionManager({ organizationId }) {
 
   const handleWizardNext = async () => {
     if (wizardStep === 1) {
-      // Step 1 → 2: create the session
+      // Step 1 â†’ 2: create the session
       setWizardLoading(true);
       setWizardError(null);
       try {
@@ -282,24 +292,47 @@ function VerificationSessionManager({ organizationId }) {
   const handleWizardBack = () => setWizardStep((s) => s - 1);
 
   const handleVerificationComplete = (completedSession) => {
-    showSuccess(`Verification ${completedSession.status}`);
+    if (String(completedSession?.status || '').toLowerCase() === 'completed'
+      && String(completedSession?.result || '').toLowerCase() === 'passed'
+      && String(completedSession?.decision || '').toLowerCase() === 'allow') {
+      showSuccess('Verification completed');
+    }
     fetchSessions();
   };
 
-  // ── Detail handlers ───────────────────────────────────────────────────────
+  // â”€â”€ Detail handlers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   const openDetail = async (session) => {
+    const request = ++detailRequest.current;
     setDetailSession(session);
     setDetailOpen(true);
-
+    setDetailError(null);
+    const needsResult = ['completed', 'failed'].includes(normalizeSessionStatus(session.status));
+    setDetailLoading(needsResult);
+    if (!needsResult) return;
+    try {
+      const result = await getVerificationFlowResult(session.session_id);
+      if (result?.instance_id !== session.session_id) {
+        throw new Error('Verification result belongs to a different session');
+      }
+      if (detailRequest.current !== request) return;
+      setDetailSession({ ...session, result });
+    } catch (err) {
+      if (detailRequest.current === request) {
+        setDetailError(err.message || 'Failed to load the verification result');
+      }
+    } finally {
+      if (detailRequest.current === request) setDetailLoading(false);
+    }
   };
 
   const closeDetail = () => {
+    detailRequest.current += 1;
     setDetailOpen(false);
     setDetailSession(null);
   };
 
-  // ── Render ────────────────────────────────────────────────────────────────
+  // â”€â”€ Render â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   const renderSessionTable = (rows) => (
     <TableContainer>
@@ -325,7 +358,7 @@ function VerificationSessionManager({ organizationId }) {
             </TableRow>
           ) : (
             rows.map((session) => (
-              <TableRow key={session.session_id} hover>
+              <TableRow key={session.session_id} data-flow-instance-id={session.session_id} hover>
                 <TableCell>
                   <Tooltip title={formatSessionReference(session.session_id)}>
                     <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>
@@ -333,7 +366,7 @@ function VerificationSessionManager({ organizationId }) {
                     </Typography>
                   </Tooltip>
                 </TableCell>
-                <TableCell>{session.purpose || '—'}</TableCell>
+                <TableCell>{session.purpose || 'â€”'}</TableCell>
                 <TableCell><StatusChip status={session.status} /></TableCell>
                 <TableCell>{formatDate(session.created_at)}</TableCell>
                 <TableCell>{formatDate(session.updated_at)}</TableCell>
@@ -389,6 +422,7 @@ function VerificationSessionManager({ organizationId }) {
             </span>
           </Tooltip>
           <Button
+            data-testid="verification-new-session"
             variant="contained"
             startIcon={<AddIcon />}
             onClick={openWizard}
@@ -498,6 +532,7 @@ function VerificationSessionManager({ organizationId }) {
           )}
           {wizardStep < 2 && (
             <Button
+              data-testid={wizardStep === 1 ? 'verification-start-session' : 'verification-next-step'}
               variant="contained"
               onClick={handleWizardNext}
               disabled={
@@ -526,11 +561,6 @@ function VerificationSessionManager({ organizationId }) {
       >
         <DialogTitle>
           Session Details
-          {detailSession && (
-            <Typography variant="caption" display="block" color="text.secondary">
-              {detailSession.session_id}
-            </Typography>
-          )}
         </DialogTitle>
         <DialogContent>
           {detailSession && (
@@ -553,7 +583,9 @@ function VerificationSessionManager({ organizationId }) {
                 </Box>
               )}
 
-              {normalizeSessionStatus(detailSession.status) !== 'pending' && (
+              {detailLoading && <CircularProgress size={24} aria-label="Loading verification result" />}
+              {detailError && <Alert severity="error">{detailError}</Alert>}
+              {!detailLoading && !detailError && normalizeSessionStatus(detailSession.status) !== 'pending' && (
                 <VerificationResultSummary session={detailSession} />
               )}
 
@@ -564,6 +596,14 @@ function VerificationSessionManager({ organizationId }) {
                 <br />
                 <Typography variant="caption" color="text.secondary">
                   Updated: {formatDate(detailSession.updated_at)}
+                </Typography>
+              </Box>
+              <Box component="details">
+                <Box component="summary" sx={{ cursor: 'pointer', typography: 'body2', color: 'text.secondary' }}>
+                  Session reference
+                </Box>
+                <Typography component="p" variant="caption" color="text.secondary" sx={{ mt: 1, overflowWrap: 'anywhere' }}>
+                  Session ID: {detailSession.session_id}
                 </Typography>
               </Box>
             </Box>

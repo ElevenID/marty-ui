@@ -176,7 +176,7 @@ impl NativePresentationControlPlane {
                     Code::NotFound | Code::InvalidArgument | Code::Unknown
                 ) =>
             {
-                return Err("membership required".into())
+                return Err("membership required".into());
             }
             Err(_) => return Err("organization membership service unavailable".into()),
         };
@@ -207,13 +207,8 @@ impl PolicyAuthorization for NativePresentationControlPlane {
         action: &'static str,
     ) -> Result<(), String> {
         let member = self.membership(principal_id, organization_id).await?;
-        let permission = match action {
-            "view" | "evaluate" => "presentation-policy:view",
-            "create" => "presentation-policy:create",
-            "edit" | "activate" | "suspend" | "version" => "presentation-policy:edit",
-            "delete" => "presentation-policy:delete",
-            _ => return Err("unsupported presentation-policy action".into()),
-        };
+        let permission = crate::application::action_permission(action)
+            .ok_or_else(|| "unsupported presentation-policy action".to_owned())?;
         if member.is_owner
             || member.has_org_console_access
             || member.permissions.iter().any(|value| value == permission)
@@ -656,11 +651,16 @@ fn project_verification_methods(
                 .as_object()
                 .filter(|key| is_public_jwk(key))
                 .ok_or_else(|| failed("Trust Profile contains invalid public verification key"))?;
-            let id = key
-                .get("kid")
-                .and_then(Value::as_str)
+            // RFC 7517 section 4.5 makes a JWK kid optional. Keep unnamed
+            // governed keys for the existing JOSE key selector, without
+            // inventing a DID verification-method identity for them.
+            let Some(id) = key.get("kid") else {
+                continue;
+            };
+            let id = id
+                .as_str()
                 .filter(|value| !value.trim().is_empty())
-                .ok_or_else(|| failed("Trust Profile verification key omitted kid"))?;
+                .ok_or_else(|| failed("Trust Profile verification key has invalid kid"))?;
             methods.push(serde_json::json!({
                 "id": id,
                 "controller": controller,
@@ -828,6 +828,37 @@ fn failed(detail: &str) -> PresentationVerificationError {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn governed_jose_key_without_kid_does_not_invent_a_did_method() {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/presentation-control-plane-behavior.json"
+        ))
+        .unwrap();
+        let mut profile = fixture["trust_profile"].as_object().unwrap().clone();
+        let key = profile.get_mut("issuer_relationships").unwrap()[0]["verification_keys"][0]
+            .as_object_mut()
+            .unwrap();
+        key.remove("kid");
+        let pinned = profile["issuer_relationships"][0]["verification_keys"][0].clone();
+        project_verification_methods(&mut profile).unwrap();
+        assert_eq!(profile["resolved_verification_methods"], json!([]));
+        assert_eq!(
+            profile["issuer_relationships"][0]["verification_keys"][0],
+            pinned
+        );
+
+        let mut private = profile.clone();
+        private.get_mut("issuer_relationships").unwrap()[0]["verification_keys"][0]["d"] =
+            json!("private");
+        assert!(project_verification_methods(&mut private).is_err());
+        for malformed in [Value::Null, json!(42), json!("")] {
+            let mut invalid = profile.clone();
+            invalid.get_mut("issuer_relationships").unwrap()[0]["verification_keys"][0]["kid"] =
+                malformed;
+            assert!(project_verification_methods(&mut invalid).is_err());
+        }
+    }
 
     #[test]
     fn authenticated_mdoc_direct_anchors_are_explicit_and_format_scoped() {

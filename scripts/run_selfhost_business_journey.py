@@ -51,7 +51,7 @@ JOURNEY_INPUTS = ("SELFHOST_GATEWAY_URL", "SELFHOST_KEYCLOAK_URL",
                   "SELFHOST_ISSUER_DID", "SELFHOST_VERIFIER_DID")
 COMPLETED = frozenset({"db-migrate", "issuance-migrations", "revocation-profile-migrate",
                        "keycloak-configurator"})
-NOT_LOCAL = BETA_SERVICES | {"cloudflared"}
+NOT_LOCAL = BETA_SERVICES | {"cloudflared", "kms-initialize"}
 LOCAL_SERVICES = EXPECTED_SERVICES - NOT_LOCAL
 LOCAL_SECRET_NAMES = frozenset(
     secret for service in LOCAL_SERVICES
@@ -512,6 +512,33 @@ def empty_project(compose: list[str], install_root: Path,
         raise ValueError("qualification Docker project still contains containers")
 
 
+def initialize_kms(compose: list[str], install_root: Path, secret_root: Path,
+                   environment: dict[str, str]) -> None:
+    bootstrap = secret_root / "openbao_bootstrap_token"
+    if (bootstrap.is_symlink() or not bootstrap.is_file()
+            or not 20 <= bootstrap.stat().st_size <= 2048
+            or (os.name == "posix" and
+                (stat.S_IMODE(secret_root.stat().st_mode) != 0o700 or
+                 stat.S_IMODE(bootstrap.stat().st_mode) & 0o022))):
+        raise ValueError("one-time KMS bootstrap token is absent")
+    command([*compose, "up", "-d", "--no-build", "db-migrate"],
+            cwd=install_root, env=environment, timeout=300)
+    deadline = time.monotonic() + 300
+    while True:
+        status = parse_status(command([*compose, "ps", "--all", "--format", "json"],
+                                      cwd=install_root, env=environment))
+        migration = [item for item in status if item.get("Service") == "db-migrate"]
+        if len(migration) == 1 and migration[0].get("State") == "exited":
+            if migration[0].get("ExitCode") != 0:
+                raise ValueError("rootless database migration failed before KMS initialization")
+            break
+        if time.monotonic() >= deadline:
+            raise ValueError("rootless database migration did not complete")
+        time.sleep(5)
+    command([*compose, "run", "--rm", "--no-deps", "kms-initialize"],
+            cwd=install_root, env=environment, timeout=600)
+
+
 def installed_journey(compose: list[str], install_root: Path, state_root: Path,
                       compose_model_path: Path, secret_root: Path,
                       model: dict, integration_checkout: Path,
@@ -536,9 +563,11 @@ def installed_journey(compose: list[str], install_root: Path, state_root: Path,
         # A temporary empty Docker config prevents borrowing operator registry
         # credentials. Every pulled image has already been matched to the lock.
         with measured(diagnostics, "image_pull"):
-            command([*compose, "pull", *selected], cwd=install_root,
+            command([*compose, "pull", *selected, "kms-initialize"], cwd=install_root,
                     env=environment, timeout=1200)
         started = True
+        with measured(diagnostics, "kms_initialize"):
+            initialize_kms(compose, install_root, secret_root, environment)
         with measured(diagnostics, "startup"):
             # Compose can report an initially unhealthy dependency while Rust
             # services are still connecting to freshly started peers. Retry

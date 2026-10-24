@@ -13,13 +13,14 @@ import sys
 import time
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse
 
 
 ROOT = Path(__file__).resolve().parents[1]
 PROJECT = re.compile(r"^marty-conformance-[a-z0-9](?:[a-z0-9-]{1,46}[a-z0-9])?$")
 BASE_FILES = (
     "docker-compose.base.yml",
+    "docker-compose.beta.yml",
     "docker-compose.profile.oidf.yml",
 )
 GHCR_FILE = "docker-compose.profile.ghcr.yml"
@@ -38,6 +39,7 @@ ONE_SHOT_SERVICES = {
     "keycloak-configurator",
     "openbao-init",
 }
+KMS_BOOTSTRAP_SERVICES = {"openbao-tls-init", "openbao-init", "openbao"}
 PUBLIC_JWK_PRIVATE_PARAMETERS = {"d", "p", "q", "dp", "dq", "qi", "oth", "k"}
 
 
@@ -74,8 +76,7 @@ def compose_command(
     if use_ghcr:
         # The released image overlay must follow the OIDF source-build
         # definition so its build reset also applies to the keyless edge.
-        files.insert(2, GHCR_FILE)
-        files.insert(3, IMMUTABLE_INFRA_FILE)
+        files.extend((GHCR_FILE, IMMUTABLE_INFRA_FILE))
     else:
         # The base stack defines the source-built Rust services. The UI is
         # deliberately supplied by a mode-specific profile because released
@@ -281,69 +282,71 @@ def project_container_ids(project: str) -> list[str]:
 def issuer_did_identity(command: list[str]) -> dict[str, Any]:
     """Resolve the conformance verifier's public DID through the org registry.
 
-    The query executes inside the gateway container, so the internal API key is
-    read from that service's environment and is never copied to the host command
-    line or output. Profile IDs and KMS routing stay inside the gateway.
+    The query executes with curl inside the exact owned running gateway. Read its
+    runtime environment in memory and pass the credential only through stdin,
+    never command arguments or output. Return only public DID material.
     """
-    script = """
-import json
-import os
-import urllib.parse
-import urllib.request
-
-organization_id = os.environ.get("MARTY_ORG_ID", "00000000-0000-0000-0000-000000000001")
-issuer_did = (
-    os.environ.get("OID4VP_ISSUER_DID")
-    or os.environ.get("MARTY_ISSUER_DID")
-    or ""
-).strip()
-if not issuer_did:
-    public_domain = os.environ.get("PUBLIC_DOMAIN", "").strip()
-    if not public_domain:
-        public_url = os.environ.get("PUBLIC_API_URL", "http://localhost:8000")
-        public_domain = urllib.parse.urlparse(public_url).netloc
-    did_authority = public_domain.strip().strip("/").replace(":", "%3A").replace("/", ":")
-    org_slug = os.environ.get("MARTY_ORG_SLUG", "marty").strip() or "marty"
-    issuer_did = f"did:web:{did_authority}:orgs:{org_slug}"
-api_key = os.environ["SIGNING_KEYS_INTERNAL_API_KEY"]
-query = urllib.parse.urlencode({
-    "organization_id": organization_id,
-    "issuer_did": issuer_did,
-    "key_purpose": "oid4vp_request_signing",
-    "algorithm": "ES256",
-})
-request = urllib.request.Request(
-    f"http://127.0.0.1:8000/internal/signing-keys/resolve-issuer-did?{query}",
-    headers={"X-Api-Key": api_key, "Accept": "application/json"},
-)
-with urllib.request.urlopen(request, timeout=15) as response:
-    payload = json.loads(response.read().decode("utf-8"))
-if payload.get("issuer_did") != issuer_did:
-    raise RuntimeError("issuer DID response did not match the configured public identity")
-public_identity = {
-    "issuer_did": payload.get("issuer_did"),
-    "verification_method_id": payload.get("verification_method_id"),
-    "public_jwk": payload.get("public_jwk"),
-    "did_document": payload.get("did_document"),
-    "key_purpose": payload.get("key_purpose"),
-    "algorithm": payload.get("algorithm"),
-}
-print(json.dumps(public_identity, separators=(",", ":"), sort_keys=True))
-""".strip()
+    project = validate_project(command[command.index("--project-name") + 1])
+    selected = subprocess.run(
+        [*command, "ps", "--all", "--quiet", "gateway"],
+        cwd=ROOT, capture_output=True, text=True, check=False, timeout=30,
+    )
+    ids = selected.stdout.split()
+    if selected.returncode or len(ids) != 1 or not re.fullmatch(r"[a-f0-9]{64}", ids[0]):
+        raise ValueError("gateway identity query requires exactly one scoped container")
+    inspected = subprocess.run(
+        ["docker", "container", "inspect", ids[0]],
+        capture_output=True, text=True, check=False, timeout=30,
+    )
+    try:
+        rows = json.loads(inspected.stdout)
+        if inspected.returncode or len(rows) != 1:
+            raise ValueError("gateway inspection failed")
+        row = rows[0]
+        labels = row["Config"]["Labels"]
+        if (labels.get("com.docker.compose.project") != project
+                or labels.get("com.docker.compose.service") != "gateway"
+                or row["State"].get("Running") is not True):
+            raise ValueError("gateway container is foreign or inactive")
+        values = dict(item.split("=", 1) for item in row["Config"]["Env"])
+        api_key = values["SIGNING_KEYS_INTERNAL_API_KEY"]
+        if not api_key or "\n" in api_key or "\r" in api_key:
+            raise ValueError("gateway credential is invalid")
+    except (KeyError, TypeError, json.JSONDecodeError, ValueError) as error:
+        raise ValueError("gateway identity query requires its owned running container") from error
+    issuer_did = (values.get("OID4VP_ISSUER_DID") or values.get("MARTY_ISSUER_DID") or "").strip()
+    if not issuer_did:
+        domain = values.get("PUBLIC_DOMAIN", "").strip()
+        if not domain:
+            domain = urlparse(values.get("PUBLIC_API_URL", "http://localhost:8000")).netloc
+        authority = domain.strip("/").replace(":", "%3A").replace("/", ":")
+        issuer_did = f"did:web:{authority}:orgs:{values.get('MARTY_ORG_SLUG', 'marty').strip() or 'marty'}"
+    query = urlencode({
+        "organization_id": values.get("MARTY_ORG_ID", "00000000-0000-0000-0000-000000000001"),
+        "issuer_did": issuer_did, "key_purpose": "oid4vp_request_signing", "algorithm": "ES256",
+    })
+    # The native image supplies curl, not a Python interpreter. Keep credentials
+    # in memory/stdin; neither the Docker/curl argv nor errors contain the key.
+    curl_config = "\n".join([
+        "url = " + json.dumps("http://127.0.0.1:8000/internal/signing-keys/resolve-issuer-did?" + query),
+        "header = " + json.dumps("X-Api-Key: " + api_key),
+        'header = "Accept: application/json"', "silent", "show-error", "fail", "max-time = 15", "",
+    ])
     completed = subprocess.run(
-        [*command, "exec", "-T", "gateway", "python", "-c", script],
-        cwd=ROOT,
-        capture_output=True,
-        text=True,
-        check=False,
+        [*command, "exec", "-T", "gateway", "curl", "--config", "-"],
+        cwd=ROOT, input=curl_config, capture_output=True, text=True, check=False, timeout=30,
     )
     if completed.returncode:
-        detail = completed.stderr.strip() or "gateway identity query failed"
-        raise ValueError(f"could not resolve issuer DID identity: {detail}")
+        raise ValueError("could not resolve issuer DID identity: gateway identity query failed")
     try:
-        identity = json.loads(completed.stdout)
-    except json.JSONDecodeError as exc:
-        raise ValueError("issuer DID identity response was not JSON") from exc
+        payload = json.loads(completed.stdout)
+        if payload.get("issuer_did") != issuer_did:
+            raise ValueError("issuer DID response did not match the configured public identity")
+        identity = {name: payload.get(name) for name in (
+            "issuer_did", "verification_method_id", "public_jwk", "did_document", "key_purpose", "algorithm",
+        )}
+    except (AttributeError, json.JSONDecodeError) as error:
+        raise ValueError("issuer DID identity response was not JSON") from error
     public_jwk = identity.get("public_jwk") if isinstance(identity, dict) else None
     if (
         not isinstance(identity, dict)
@@ -446,6 +449,83 @@ def emit_service_logs(command: list[str]) -> int:
     ).returncode
 
 
+def runtime_up_arguments(
+    command: list[str], config: dict[str, Any], project: str, *, resume: bool,
+    runner=None,
+) -> list[str]:
+    """Resume verified KMS custody without repeating its fresh-Raft ceremony."""
+    arguments = ["up", "--detach", "--no-build"]
+    if not resume:
+        return arguments
+    runner = runner or subprocess.run
+    try:
+        image_ids: dict[str, str] = {}
+        for service in sorted(KMS_BOOTSTRAP_SERVICES):
+            image = config["services"][service]["image"]
+            if image not in image_ids:
+                resolved = runner(
+                    ["docker", "image", "inspect", "--format", "{{.Id}}", image],
+                    capture_output=True, text=True, check=False, timeout=30,
+                )
+                image_id = resolved.stdout.strip()
+                if resolved.returncode or not re.fullmatch(r"sha256:[0-9a-f]{64}", image_id):
+                    raise ValueError("KMS bootstrap configured image cannot be resolved")
+                image_ids[image] = image_id
+            selected = runner(
+                ["docker", "ps", "--all", "--no-trunc", "--quiet", "--filter",
+                 f"label=com.docker.compose.project={project}", "--filter",
+                 f"label=com.docker.compose.service={service}"],
+                capture_output=True, text=True, check=False, timeout=30,
+            )
+            ids = selected.stdout.split()
+            if (selected.returncode or len(ids) != 1
+                    or not re.fullmatch(r"[0-9a-f]{64}", ids[0])):
+                raise ValueError("KMS bootstrap ownership is missing or ambiguous")
+            inspected = runner(
+                ["docker", "container", "inspect", ids[0]],
+                capture_output=True, text=True, check=False, timeout=30,
+            )
+            if inspected.returncode:
+                raise ValueError("KMS bootstrap identity cannot be inspected")
+            rows = json.loads(inspected.stdout)
+            if not isinstance(rows, list) or len(rows) != 1:
+                raise ValueError("KMS bootstrap identity is ambiguous")
+            row = rows[0]
+            labels = row["Config"].get("Labels") or {}
+            state = row["State"]
+            if (row["Id"] != ids[0]
+                    or labels.get("com.docker.compose.project") != project
+                    or labels.get("com.docker.compose.service") != service
+                    or row["Config"]["Image"] != image
+                    or row["Image"] != image_ids[image]
+                    or state.get("OOMKilled") is not False):
+                raise ValueError("KMS bootstrap identity differs from the exact project")
+            if service == "openbao":
+                complete = (state.get("Status") == "running"
+                            and state.get("Running") is True
+                            and state.get("Health", {}).get("Status") == "healthy")
+            else:
+                complete = (state.get("Status") == "exited"
+                            and state.get("ExitCode") == 0)
+            if not complete:
+                raise ValueError("KMS bootstrap is incomplete or unhealthy; use a fresh disposable project")
+        profiles = {command[i + 1] for i, part in enumerate(command[:-1])
+                    if part == "--profile"}
+        services = [name for name, service in config["services"].items()
+                    if name not in KMS_BOOTSTRAP_SERVICES
+                    and (not service.get("profiles")
+                         or "*" in profiles or profiles.intersection(service["profiles"]))]
+        if not services:
+            raise ValueError("KMS resume has no selected runtime services")
+        # Every runtime service remains explicitly selected, preserving its
+        # migration/health ordering. --no-deps prevents Compose from starting
+        # the completed bootstrap dependencies again, or recreating OpenBao.
+        return [*arguments, "--no-deps", *sorted(services)]
+    except (KeyError, TypeError, AttributeError, OSError,
+            subprocess.SubprocessError, json.JSONDecodeError):
+        raise ValueError("KMS bootstrap resume verification failed") from None
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -487,7 +567,7 @@ def main() -> int:
     parser.add_argument(
         "--resume",
         action="store_true",
-        help="resume only the exact project after an interrupted up command",
+        help="resume the exact project after verifying successful KMS bootstrap",
     )
     parser.add_argument(
         "command",
@@ -591,7 +671,7 @@ def main() -> int:
                 # Keycloak configuration is intentionally a one-shot service.
                 # Compose's --wait treats its successful exit as an error even
                 # after every long-running service becomes healthy.
-                [*command, "up", "--detach", "--no-build"],
+                [*command, *runtime_up_arguments(command, config, project, resume=args.resume)],
                 cwd=ROOT,
                 check=False,
             )
@@ -616,7 +696,8 @@ def main() -> int:
                 return pulled.returncode
             native["probe_image"](native_image, project, plan=native_plan)
         up_result = subprocess.run(
-            [*command, "up", "--detach", "--no-build"], cwd=ROOT, check=False
+            [*command, *runtime_up_arguments(command, config, project, resume=args.resume)],
+            cwd=ROOT, check=False
         )
         if up_result.returncode:
             return up_result.returncode

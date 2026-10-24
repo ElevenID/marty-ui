@@ -191,7 +191,7 @@ def test_manifest_creation_rejects_dirty_coordinated_repository(tmp_path: Path) 
         raise AssertionError("Expected dirty coordinated source to fail manifest creation")
 
 
-def test_manifest_creation_rejects_clean_unlanded_commit(tmp_path: Path) -> None:
+def test_developer_snapshot_accepts_clean_branch_and_still_binds_exact_commit(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     for name in REPOSITORIES:
@@ -201,10 +201,27 @@ def test_manifest_creation_rejects_clean_unlanded_commit(tmp_path: Path) -> None
     git(verifier, "add", "tracked.txt")
     git(verifier, "commit", "-qm", "unlanded")
 
-    with pytest.raises(RuntimeError, match="not at protected origin/main: marty-verifier"):
-        create_manifest(
-            workspace,
-            "mip-0.5.0-local-test",
-            tmp_path / "manifest.json",
-            tmp_path / "snapshots",
-        )
+    output = tmp_path / "manifest.json"
+    manifest = create_manifest(workspace, "local-branch", output, tmp_path / "snapshots")
+    record = manifest["repositories"]["marty-verifier"]
+    assert record["head_sha"] != record["protected_main_sha"]
+    assert set(verify_manifest(workspace, output)) == set(REPOSITORIES)
+    # Fetching a newer main cannot invalidate unchanged local source.
+    git(verifier, "update-ref", "refs/remotes/origin/main", "HEAD")
+    assert set(verify_manifest(workspace, output)) == set(REPOSITORIES)
+    # Even a content-identical commit must not silently replace the recorded one.
+    git(verifier, "commit", "--allow-empty", "-qm", "different identity")
+    with pytest.raises(RuntimeError, match="Snapshot commit changed: marty-verifier"):
+        verify_manifest(workspace, output)
+
+
+@pytest.mark.parametrize("field,value", [
+    ("source_kind", "official-release"), ("promotion_eligible", True), ("release_ready", True),
+])
+def test_developer_verification_rejects_promotion_claims(tmp_path, field, value):
+    manifest = {"source_kind": "local-worktree-snapshot", "promotion_eligible": False,
+                "release_ready": False, field: value}
+    output = tmp_path / "manifest.json"
+    output.write_text(json.dumps(manifest), encoding="utf8")
+    with pytest.raises(RuntimeError, match="must remain local and non-promotable"):
+        verify_manifest(tmp_path, output)

@@ -1,9 +1,11 @@
-"""Replay frozen mixed-roster transports around natural native worker cycles.
+"""Replay mixed-roster state with stock Canvas HTTP around native worker cycles.
 
 The Rust child owns the actual worker, isolated database and durable assertions.
 This parent owns only synthetic provider responses and test-harness markers; it
 never changes a worker clock, schedule, job, lease or candidate row. The signer
 is a synthetic transport fixture, not remote-signing or crypto qualification.
+The published reference retains historical HTTP requests; current native reads
+use Canvas's separate submission and assignment endpoints.
 """
 
 import copy
@@ -53,6 +55,27 @@ def validate_matrix(matrix, reference):
             assert isinstance(observation[field], list), (
                 "Mixed-roster transport reference must contain exact lists"
             )
+
+
+def stock_canvas_observation(observation, stage):
+    """Keep published durable outcomes while checking current stock Canvas HTTP."""
+    expected = copy.deepcopy(observation)
+    requests = []
+    suffix = "?include%5B%5D=assignment"
+    for request in expected["requests"]:
+        path = request["path"]
+        if "/api/v1/courses/42/assignments/9/submissions/" not in path:
+            requests.append(request)
+            continue
+        assert path.endswith(suffix), "Published submission route changed"
+        requests.append({**request, "path": path.removesuffix(suffix)})
+        if not stage.get("error"):
+            requests.append({
+                **request,
+                "path": "/api/v1/courses/42/assignments/9",
+            })
+    expected["requests"] = requests
+    return expected
 
 
 def assert_transport(fixture, observation):
@@ -121,14 +144,21 @@ def remaining_timeout(deadline, maximum):
 
 def run_case(executable, matrix, case, reference):
     assert case["name"] == reference["case"]
-    observations = reference["observations"]
+    observations = [
+        stock_canvas_observation(observation, stage)
+        for stage, observation in zip(
+            case["stages"], reference["observations"], strict=True
+        )
+    ]
     assert [stage["name"] for stage in case["stages"]] == [
         observation["name"] for observation in observations
     ]
     assert observations, "Mixed-roster replay must execute at least one stage"
     snapshots = []
     deadline = time.monotonic() + CASE_TIMEOUT_SECONDS
-    with MixedRosterHttpsFixture(matrix) as fixture, ExitStack() as output_owner:
+    with MixedRosterHttpsFixture(
+        matrix, submission_contract="stock_assignment"
+    ) as fixture, ExitStack() as output_owner:
         certificate_root = Path(fixture.certificates.name)
         empty_ca_directory = certificate_root / "empty-ca-directory"
         empty_ca_directory.mkdir()

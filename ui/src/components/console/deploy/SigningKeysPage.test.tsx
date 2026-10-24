@@ -277,6 +277,53 @@ describe('SigningKeysPage', () => {
     expect(screen.getByRole('button', { name: 'Remove' })).toBeInTheDocument()
   })
 
+  const configureExplicitRouting = () => {
+    const config = {
+      services: [
+        { id: 'first', name: 'First signer', service_type: 'openbao-transit', managed: true, read_only: true },
+        { id: 'second', name: 'Second signer', service_type: 'openbao-transit', managed: false, read_only: false },
+      ],
+      default_service_id: 'first',
+      key_reference_purposes: { first: { one: ['vc_jwt_issuer'] }, second: { two: ['oid4vp_request_signing'] } },
+      type_defaults: { vc_jwt_issuer: 'first', oid4vp_request_signing: 'second' },
+      format_defaults: { JWT: 'first', SD_JWT_VC: 'second' },
+    }
+    mockGetKeyManagementConfig.mockResolvedValue(config)
+    return config
+  }
+
+  it('preserves explicit routing maps when Make default is clicked', async () => {
+    const config = configureExplicitRouting()
+    const { user } = renderWithRouter(<SigningKeysPage />, {
+      initialEntries: ['/console/org/deploy/key-management'],
+    })
+    await user.click(await screen.findByRole('button', { name: 'Make default' }))
+    await waitFor(() => expect(mockUpdateKeyManagementConfig).toHaveBeenCalledWith(expect.objectContaining({
+      organization_id: 'org-123', default_service_id: 'second',
+      key_reference_purposes: config.key_reference_purposes,
+      type_defaults: config.type_defaults, format_defaults: config.format_defaults,
+    })))
+  })
+
+  it('prunes only removed-service bindings when Remove is clicked', async () => {
+    configureExplicitRouting()
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    try {
+      const { user } = renderWithRouter(<SigningKeysPage />, {
+        initialEntries: ['/console/org/deploy/key-management'],
+      })
+      await user.click(await screen.findByRole('button', { name: 'Remove' }))
+      await waitFor(() => expect(mockUpdateKeyManagementConfig).toHaveBeenCalledWith(expect.objectContaining({
+        organization_id: 'org-123', default_service_id: 'first',
+        services: [expect.objectContaining({ id: 'first' })],
+        key_reference_purposes: { first: { one: ['vc_jwt_issuer'] } },
+        type_defaults: { vc_jwt_issuer: 'first' }, format_defaults: { JWT: 'first' },
+      })))
+    } finally {
+      confirm.mockRestore()
+    }
+  })
+
   it('reports rotation completion after rotating a service key', async () => {
     vi.spyOn(window, 'confirm').mockImplementation(() => true)
     configureRotatableService()
@@ -327,7 +374,7 @@ describe('SigningKeysPage', () => {
     })
   })
 
-  it('org admins can register additional key management services without signing-key:create', async () => {
+  it('does not infer configuration grants from an admin role name', async () => {
     mockCan.mockReturnValue(false)
     mockRoles.mockReturnValue([
       { id: 'role-admin', name: 'admin', display_name: 'Administrator' },
@@ -380,11 +427,11 @@ describe('SigningKeysPage', () => {
       expect(screen.getByText('Elevenidllc managed OpenBao transit')).toBeInTheDocument()
     })
 
-    expect(screen.getByRole('button', { name: 'Register key management service' })).toBeEnabled()
-    expect(screen.getByRole('button', { name: 'Make default' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Register key management service' })).toBeDisabled()
+    expect(screen.queryByRole('button', { name: 'Make default' })).not.toBeInTheDocument()
   })
 
-  it('bootstrapped org_admin role strings can register key management services', async () => {
+  it('does not infer configuration grants from an org_admin role string', async () => {
     mockCan.mockReturnValue(false)
     mockRoles.mockReturnValue(['org_admin'])
 
@@ -396,10 +443,10 @@ describe('SigningKeysPage', () => {
       expect(screen.getByText('Elevenidllc managed OpenBao transit')).toBeInTheDocument()
     })
 
-    expect(screen.getByRole('button', { name: 'Register key management service' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'Register key management service' })).toBeDisabled()
   })
 
-  it('non-admin users can inspect the service registry and still open registration wizard entry', async () => {
+  it('metadata readers can inspect services but cannot register or mutate them', async () => {
     mockCan.mockReturnValue(false)
     mockRoles.mockReturnValue([])
 
@@ -411,8 +458,8 @@ describe('SigningKeysPage', () => {
       expect(screen.getByText('Elevenidllc managed OpenBao transit')).toBeInTheDocument()
     })
 
-    expect(screen.getByRole('button', { name: 'Register key management service' })).toBeEnabled()
-    expect(screen.getByText('Service registration is available from this page. Updating or removing existing services may still require elevated permissions.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Register key management service' })).toBeDisabled()
+    expect(screen.getByText('You can view key management. Registering, updating, rotating, or removing services requires signing-key create permission.')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Make default' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Remove' })).not.toBeInTheDocument()
   })

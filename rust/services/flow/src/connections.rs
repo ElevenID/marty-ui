@@ -151,6 +151,7 @@ async fn connect_providers(
     runtime.mark_healthy(FlowDependency::ReferenceCatalog)?;
 
     Ok(FlowProviderRegistry {
+        gateway_api_key_actor: None,
         tenant_membership: Some(Arc::new(grpc.tenant_membership)),
         credential_template: Some(Arc::new(grpc.credential_template)),
         presentation_policy: Some(Arc::new(grpc.presentation_policy)),

@@ -446,7 +446,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         issuer_resolver.clone(),
         Arc::new(SecureCanvasAwardApprovalSeedGenerator),
         canvas_lti_clock.clone(),
-        config.canvas_readiness_max_age,
+        canvas_guard_config.clone(),
     ));
     let canvas_application_approval = CanvasApplicationApprovalService::new(
         canvas_approval_repository,

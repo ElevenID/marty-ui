@@ -62,9 +62,17 @@ def test_instructor_resource_launch_requires_the_stock_canvas_assignment_ui() ->
     implementation = driver.split("async function launchStaffResource", 1)[1].split(
         "function validateReadinessSnapshot", 1
     )[0]
-    assert "/assignments`" in implementation
-    assert "getByRole('link', { name: assignmentName, exact: true })" in implementation
-    assert "waitForEvent('page'" in implementation
+    assert "openCanvasAssignmentResource(page, adminCanvas, fixtures, externalAssignment, martyOrigin)" in implementation
+    shared_launch = driver.split("async function openCanvasAssignmentResource", 1)[1].split(
+        "async function launchStaffResource", 1
+    )[0]
+    assert "/assignments`" in shared_launch
+    assert "getByRole('link', { name: assignmentName, exact: true })" in shared_launch
+    assert "waitForEvent('page'" in shared_launch
+    assert "frame === page.mainFrame()" in shared_launch
+    assert "new URL(frame.url()).origin === martyOrigin" in shared_launch
+    assert "Canvas launch verified" in shared_launch
+    assert "requireCondition(verification.verified" in shared_launch
     assert "sessionless" not in driver.lower()
 
 
@@ -75,10 +83,11 @@ def test_learner_launch_requires_the_stock_canvas_assignment_ui() -> None:
     implementation = driver.split("async function launchLearnerResource", 1)[1].split(
         "async function reloadLearnerExperience", 1
     )[0]
-    assert "/assignments`" in implementation
-    assert "getByRole('link', { name: assignmentName, exact: true })" in implementation
+    assert "openCanvasAssignmentResource(page, learnerCanvas, fixtures, externalAssignment, martyOrigin)" in implementation
+    assert "launch.surface.getByTestId('canvas-lti-continue').click()" in implementation
+    assert "'/lti/experience-sessions/current/bootstrap'" in implementation
+    assert "bootstrapResponse" in implementation
     assert "sessionlessLaunch" not in implementation
-    assert "waitForEvent('page'" in implementation
 
 
 def test_live_contract_races_approval_and_requires_one_claim_transaction() -> None:
@@ -134,8 +143,8 @@ def test_contract_driver_base_and_compose_boundary_are_locked() -> None:
     driver = lock["contract_driver"]
     topology = lock["acceptance_topology"]
     assert driver["base_image"] == (
-        "mcr.microsoft.com/playwright:v1.56.0-jammy@"
-        "sha256:8901203e4be3245885e0c0c58a3098d21a0892e17525bb32ce66ae37033434af"
+        "mcr.microsoft.com/playwright:v1.63.0-noble@"
+        "sha256:bc6ab0d6d44ff4826e4cb8c1e6d801e185bfc42bb0753f8e2a30efc70db054c7"
     )
     assert driver["compose_service"] == "canvas-contract"
     assert driver["monitor_service"] == "canvas-continuity-monitor"
@@ -242,8 +251,8 @@ def test_runner_setup_is_explicit_ephemeral_and_fail_closed() -> None:
     for tool in ("gh", "jq", "node", "python3"):
         assert f'"{tool}"' in preflight
     assert "/var/run/docker.sock" in preflight
-    assert "zero self-hosted runners" in docs
-    assert "not ready to run it yet" in docs
+    assert "zero registered Canvas runners after each job" in docs
+    assert "until then scheduled triggers exit" in docs
     assert "all remain Docker Compose services" in docs
     assert "no second Docker daemon" in docs
 

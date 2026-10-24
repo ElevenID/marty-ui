@@ -16,6 +16,9 @@ use uuid::Uuid;
 #[path = "support/disposable_backends.rs"]
 mod disposable_backends;
 
+#[path = "support/issuer_capabilities.rs"]
+mod issuer_capabilities;
+
 #[tokio::test]
 #[ignore = "requires MARTY_TEST_REDIS_URL"]
 async fn redis_round_trip_preserves_profile_crud_selection_and_tenant_scope() {

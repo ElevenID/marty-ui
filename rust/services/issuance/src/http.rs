@@ -1253,6 +1253,10 @@ fn router_with_optional_services(
                 post(process_canvas_nrps_membership_event),
             );
     }
+    let canvas_claim = services
+        .canvas_lti_evidence
+        .clone()
+        .zip(services.internal_applications.clone());
     let api = api.merge(oauth).with_state(IssuanceState {
         documents: discovery,
         tenant: services.tenant,
@@ -1278,6 +1282,11 @@ fn router_with_optional_services(
         canvas_lti_evidence_sync: services.canvas_lti_evidence_sync,
         canvas_lti_tool_signer: services.canvas_lti_tool_signer,
     });
+    let api = if let Some((evidence, applications)) = canvas_claim {
+        api.merge(crate::canvas_lti_claim::router(evidence, applications))
+    } else {
+        api
+    };
     let api = if let Some(operations) = services.canvas_operations {
         api.merge(crate::canvas_operations::candidate_router(operations))
     } else {
@@ -1306,7 +1315,7 @@ fn router_with_optional_services(
     let api = if let Some(passport) = services.passport {
         api.merge(crate::passport_http::router(passport))
     } else {
-        api
+        api.merge(crate::passport_http::disabled_router())
     };
     let api = if let Some(application_templates) = services.application_templates {
         api.merge(crate::application_template_http::router(

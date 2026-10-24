@@ -33,8 +33,26 @@ services:
       start_period: 20s
     restart: unless-stopped
 
+  openbao-unseal:
+    image: ${MARTY_OPENBAO_DIDCOMM_IMAGE:?set MARTY_OPENBAO_DIDCOMM_IMAGE to the reviewed plugin image digest}
+    entrypoint: ["/usr/local/bin/selfhost-unseal"]
+    environment:
+      BAO_ADDR: https://openbao:8200
+      BAO_CACERT: /bao/data/tls/ca.crt
+      BAO_UNSEAL_KEY_FILE: /bao/data/unseal.key
+    volumes:
+      - type: bind
+        source: ${SELFHOST_OPENBAO_STATE_DIR:-../marty-selfhost-prod/openbao/state}
+        target: /bao/data
+        read_only: true
+    depends_on:
+      openbao:
+        condition: service_started
+    restart: unless-stopped
+
   openbao-bootstrap:
     image: ${MARTY_OPENBAO_DIDCOMM_IMAGE:?set MARTY_OPENBAO_DIDCOMM_IMAGE to the reviewed plugin image digest}
+    profiles: ["kms-init"]
     entrypoint: ["/bin/sh", "/scripts/openbao-selfhost-init.sh"]
     environment:
       BAO_ADDR: https://openbao:8200

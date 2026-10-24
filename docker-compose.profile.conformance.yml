@@ -135,6 +135,12 @@ services:
   verification:
     container_name: !reset null
     ports: !reset []
+    environment:
+      # Preserve this suite's existing protocol boundary. Beta also enables a
+      # separate Credentials compatibility adapter with its own governance;
+      # these OID4VC/VC-API lanes do not exercise or qualify that adapter.
+      VERIFICATION_CREDENTIALS_COMPAT_ENABLED: "false"
+      VERIFICATION_GOVERNANCE_JSON: ""
   envoy:
     container_name: !reset null
     ports: !reset []

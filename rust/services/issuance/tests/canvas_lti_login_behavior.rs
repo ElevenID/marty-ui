@@ -291,6 +291,8 @@ async fn form_experience_login_uses_the_experience_callback_and_last_duplicate_v
 
 #[tokio::test]
 async fn frozen_login_failures_preserve_status_and_detail() {
+    // Source-owned validation cases cannot replace route/no-write checks: the
+    // route must actually invoke validation for present-hint submissions.
     struct Case {
         name: &'static str,
         platform: Option<CanvasLtiPlatform>,

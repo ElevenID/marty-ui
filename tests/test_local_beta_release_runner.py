@@ -32,9 +32,10 @@ def test_local_release_runner_is_backup_and_rehearsal_gated() -> None:
     assert "elevenid-beta-copy-" in script
     assert "migration-rehearsal.log" in script
     assert "--verify-only" in script
-    assert script.count("MARTY_KMS_BOOTSTRAP_ENABLED=true") == 2
+    assert "MARTY_KMS_BOOTSTRAP_ENABLED=true" not in script
+    assert script.count("MARTY_KMS_BOOTSTRAP_ENABLED=false") == 3
     assert '"REDIS_URL=redis://:${encodedRedisPassword}@redis:6379"' in script
-    assert '"db-migrate", "/usr/local/bin/marty-migration-bootstrap"' in script
+    assert re.search(r'"db-migrate"\s*\)', script)
     assert '"BAO_ADDR=http://openbao:8200"' not in script
     assert "CANVAS_LTI_TOOL_ISSUER_DID = $canvasLtiIssuerDid" in script
     assert '"did:web:${betaHost}:orgs:marty"' in script
@@ -155,6 +156,15 @@ def test_beta_runtime_bind_mounts_survive_release_worktree_removal() -> None:
             line.lstrip().startswith("- ./") for line in compose.splitlines()
         )
 
+    staged = set(re.findall(r'"([A-Za-z0-9_./-]+)"',
+                           deploy.split("$runtimeSources = @(", 1)[1].split("\n    )", 1)[0]))
+    for compose_path in beta_compose_paths:
+        for required in re.findall(r'\$\{MARTY_RUNTIME_CONFIG_ROOT:-\.\}/([A-Za-z0-9_./-]+)', text(compose_path)):
+            assert (ROOT / required).exists(), f"Missing source runtime input: {required}"
+            assert any(required == source or required.startswith(source + "/")
+                       or ((ROOT / required).is_dir() and source.startswith(required + "/"))
+                       for source in staged), f"Runtime input omitted from durable staging: {required}"
+
     assert "function Initialize-DurableRuntimeConfig" in deploy
     assert "rev-parse --path-format=absolute --git-common-dir" in deploy
     assert '"tests\\artifacts\\runtime-config"' in deploy
@@ -194,17 +204,15 @@ def test_keycloak_custom_theme_is_source_pinned_and_mounted_read_only() -> None:
     ).is_file()
 
 
-def test_beta_runner_reconciles_ephemeral_openbao_before_live_migrations() -> None:
+def test_beta_runner_preserves_initialized_openbao_before_live_migrations() -> None:
     script = text("scripts/deploy-local-beta-release.ps1")
 
-    step = 'Write-Step "Reconcile beta OpenBao state from release configuration"'
-    command = '-Arguments @("run", "--rm", "--no-deps", "openbao-init")'
-    migration = '"/usr/local/bin/marty-migration-bootstrap"'
+    step = 'Write-Step "Verify preserved beta OpenBao readiness"'
+    migration = '"migration-live.log"'
 
     assert step in script
-    assert command in script
-    assert '"openbao-init-live.log"' in script
-    assert "Beta OpenBao reconciliation failed" in script
+    assert '-Arguments @("run", "--rm", "--no-deps", "openbao-init")' not in script
+    assert "Preserved beta OpenBao is not ready" in script
     step_index = script.index(step)
     assert script.index(migration, step_index) > step_index
 
@@ -432,7 +440,7 @@ $default = New-BetaDeployArguments -ArtifactDir 'C:\synthetic'
 $passport = New-BetaDeployArguments -ArtifactDir 'C:\synthetic' -EnablePassportNative
 $didcomm = New-BetaDeployArguments -ArtifactDir 'C:\synthetic' -EnableDidcommAuthcrypt
 $both = New-BetaDeployArguments -ArtifactDir 'C:\synthetic' -EnablePassportNative -EnableDidcommAuthcrypt
-$official = New-BetaDeployArguments -ArtifactDir 'C:\synthetic' -OfficialStackRelease -RecorderRevision ('a' * 40) -TunnelEnvFile 'C:\tunnel.env' -GeneratedEnvFile 'C:\generated.env'
+$official = New-BetaDeployArguments -ArtifactDir 'C:\synthetic' -OfficialStackRelease -RecorderRevision ('a' * 40) -TunnelEnvFile 'C:\tunnel.env' -TunnelTokenEnvFile 'C:\private\connector.env' -GeneratedEnvFile 'C:\generated.env'
 @{ default=$default; passport=$passport; didcomm=$didcomm; both=$both; official=$official } | ConvertTo-Json -Compress -Depth 4
 """,
         encoding="utf-8",
@@ -459,6 +467,7 @@ $official = New-BetaDeployArguments -ArtifactDir 'C:\synthetic' -OfficialStackRe
     assert cases["official"]["OfficialStackRelease"] is True
     assert cases["official"]["RecorderRevision"] == "a" * 40
     assert cases["official"]["TunnelEnvFile"] == r"C:\tunnel.env"
+    assert cases["official"]["TunnelTokenEnvFile"] == r"C:\private\connector.env"
     assert cases["official"]["GeneratedEnvFile"] == r"C:\generated.env"
 
 
@@ -498,7 +507,8 @@ def test_beta_restore_is_explicit_and_project_scoped() -> None:
     assert "com.docker.compose.project" in script
     assert 'throw "Refusing container outside $project"' in script
     assert 'phase -ne "maintenance_quiesced"' in script
-    assert "elevenid-beta_redis_data" in script
+    assert "Assert-BetaStateVolumePlan -Expected $stateVolumes" in script
+    assert "type=volume,src=$redisVolumeName,dst=/data" in script
     assert '"elevenid-beta-ui"' in script
     assert "self-host production was not addressed" in script
     assert "Wait-ForServiceHealth" in script
@@ -528,12 +538,12 @@ def test_applicant_backup_and_restore_use_the_quiesced_named_volume() -> None:
     deploy = text("scripts/deploy-local-beta-release.ps1")
     restore = text("scripts/restore-local-beta-release.ps1")
 
-    assert 'Assert-BetaVolume "elevenid-beta_applicant_data"' in deploy
+    assert 'Assert-BetaStateVolumePlan -Expected $script:StateVolumePlan -SameContainers' in deploy
     assert "type=volume,src=$applicantVolume,dst=/source,readonly" in deploy
     assert "test -s /source/applicant_store.json" in deploy
     assert "${applicant}:/app/data/applicant_store.json" not in deploy
 
-    volume_restore = restore.index('Assert-BetaVolume "elevenid-beta_applicant_data"')
+    volume_restore = restore.index('Assert-BetaStateVolumePlan -Expected $stateVolumes')
     service_start = restore.index(
         'Invoke-Checked docker (Get-ComposeArgs (@("up", "--detach"'
     )
@@ -879,10 +889,10 @@ def test_beta_runner_authenticates_backups_and_uses_the_packaged_migration_path(
     assert 'throw "Authenticated beta Redis snapshot failed"' in script
     assert '"redis-server", "--requirepass", $copyRedisPassword' in script
     assert (
-        "$redisPing = docker exec $copyRedisContainer redis-cli --no-auth-warning -a $copyRedisPassword ping"
+        "$redisProbe = Invoke-BetaDockerReadinessProbe -Arguments @('exec', $copyRedisContainer, 'redis-cli', '--no-auth-warning', '-a', $copyRedisPassword, 'ping')"
         in script
     )
-    assert '$LASTEXITCODE -eq 0 -and $redisPing -eq "PONG"' in script
+    assert "$redisProbe.exit_code -eq 0 -and $redisProbe.output -contains 'PONG'" in script
     assert (
         "$encodedCopyRedisPassword = [Uri]::EscapeDataString($copyRedisPassword)"
         in script
@@ -894,7 +904,7 @@ def test_beta_runner_authenticates_backups_and_uses_the_packaged_migration_path(
     assert '"REDIS_URL=redis://:${encodedRedisPassword}@redis:6379"' in script
     assert '"REDIS_URL=redis://redis:6379"' not in script
     assert script.count("-RedisPassword $redisPassword") == 2
-    assert script.count('"/usr/local/bin/marty-migration-bootstrap"') == 3
+    assert '"/usr/local/bin/marty-migration-bootstrap", "--verify-only"' in script
     assert '"/app/run_all_migrations.py"' not in script
     assert script.count('"issuance-migrations"') == 4
     assert "issuance-migration-rehearsal.log" in script
@@ -923,7 +933,7 @@ def test_beta_runner_always_isolates_required_openbao_migration_state() -> None:
     ) in script
     assert '"BAO_DEV_ROOT_TOKEN_ID=$copyBaoToken"' in script
     assert '"BAO_ADDR=https://localhost:8200"' in script
-    assert '"${copyOpenBaoContainer}:/tmp/bao-tls/vault-ca.pem"' in script
+    assert "Read-BetaContainerPublicCertificate -Container $copyOpenBaoContainer -Path '/tmp/bao-tls/vault-ca.pem'" in script
     assert '-ca-cert=/tmp/bao-tls/vault-ca.pem' in script
     assert '"--network", "container:$copyOpenBaoContainer"' in script
     assert '"--mount", $copyCaMount' in script
@@ -933,7 +943,7 @@ def test_beta_runner_always_isolates_required_openbao_migration_state() -> None:
     assert '"NOTIFICATION_OPENBAO_TOKEN=$liveNotificationToken"' not in script
     assert script.count("-policy=notification-webhook-service -no-default-policy -orphan") == 1
     assert "$env:BAO_TOKEN = $baoDevRootToken" not in script
-    assert '"db-migrate", "/usr/local/bin/marty-migration-bootstrap"' in script
+    assert re.search(r'"db-migrate"\s*\)', script)
     assert '"BAO_ADDR=http://openbao:8200"' not in script
     assert script.count('"--env", "BAO_TOKEN"') == 0
     assert '"dev-only-token"' not in script
@@ -996,3 +1006,50 @@ def test_beta_compose_requires_credential_login_issuer_identity() -> None:
         "CREDENTIAL_LOGIN_ISSUER_DID: "
         "${MARTY_ISSUER_DID:?MARTY_ISSUER_DID must be set for beta}" in beta_compose
     )
+
+
+@pytest.mark.parametrize("official,wheel_matches,npm_matches,expected", [
+    (False, False, True, True),
+    (True, False, True, False),
+    (False, False, False, False),
+    (True, True, True, True),
+])
+def test_native_local_stack_keeps_used_artifact_and_official_wheel_provenance(
+    tmp_path: Path, official: bool, wheel_matches: bool, npm_matches: bool, expected: bool,
+) -> None:
+    shell = shutil.which("pwsh") or shutil.which("powershell.exe")
+    if not shell:
+        pytest.skip("PowerShell required for executable admission check")
+    source = text("scripts/deploy-local-beta-release.ps1")
+    block = source[source.index("function Get-StackArtifact("):source.index('$backupDir =')]
+    current, archived = "3" * 40, "1" * 40
+    components = []
+    for name in ["marty-core-python", "marty-verification-python", "marty-iso18013-python"]:
+        components.append(dict(name=name, commit=current if wheel_matches else archived,
+            version="0.2.2", artifacts=[dict(type="python", uri="https://artifact.invalid/wheel.whl", digest="sha256:" + "a" * 64)]))
+    for name in ["marty-api-core", "marty-blog"]:
+        components.append(dict(name=name, commit=current if npm_matches else archived,
+            version="0.2.2", artifacts=[dict(type="npm", uri="https://artifact.invalid/package.tgz", digest="sha256:" + "b" * 64)]))
+    fixture = tmp_path / "fixture.json"
+    fixture.write_text(json.dumps(dict(official=official, stack=dict(components=components),
+        revisions={name: current for name in ["marty-core", "marty-cli", "marty-blog"]})))
+    script = tmp_path / "admit.ps1"
+    script.write_text('''param([string]$Fixture)
+$ErrorActionPreference = "Stop"
+$data = Get-Content -LiteralPath $Fixture -Raw | ConvertFrom-Json
+$stackLock = $data.stack
+$OfficialStackRelease = [bool]$data.official
+$componentRevisions = [ordered]@{}
+foreach ($property in $data.revisions.PSObject.Properties) { $componentRevisions[$property.Name] = $property.Value }
+$martyRs = $null
+try {
+''' + block + '\n@{ wheelLoaded = ($null -ne $martyRs); apiCommit = $martyApiCore.Commit; blogCommit = $martyBlog.Commit } | ConvertTo-Json -Compress\n} catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }\n', encoding="utf8")
+    result = subprocess.run([shell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script), "-Fixture", str(fixture)],
+        capture_output=True, text=True, timeout=20)
+    if expected:
+        assert result.returncode == 0, result.stderr
+        observed = json.loads(result.stdout)
+        assert observed == dict(wheelLoaded=official, apiCommit=current, blogCommit=current)
+    else:
+        assert result.returncode != 0
+        assert "commit must match source manifest repository" in result.stderr

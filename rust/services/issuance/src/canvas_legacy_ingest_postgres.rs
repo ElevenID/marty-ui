@@ -112,7 +112,9 @@ const LOAD_TEMPLATE: &str = "SELECT jsonb_build_object(
         'id', id, 'organization_id', organization_id,
         'credential_template_id', credential_template_id,
         'approval_policy_set_id', approval_policy_set_id,
-        'evidence_requirements', evidence_requirements, 'status', status
+        'evidence_requirements', evidence_requirements, 'status', status,
+        'claim_collection_rules', claim_collection_rules, 'form_fields', form_fields,
+        'name', name, 'description', description, 'application_validity_days', application_validity_days
     ) FROM issuance_service.application_templates
     WHERE id = $1 AND organization_id = $2";
 
@@ -120,7 +122,9 @@ const LOCK_TEMPLATE: &str = "SELECT jsonb_build_object(
         'id', id, 'organization_id', organization_id,
         'credential_template_id', credential_template_id,
         'approval_policy_set_id', approval_policy_set_id,
-        'evidence_requirements', evidence_requirements, 'status', status
+        'evidence_requirements', evidence_requirements, 'status', status,
+        'claim_collection_rules', claim_collection_rules, 'form_fields', form_fields,
+        'name', name, 'description', description, 'application_validity_days', application_validity_days
     ) FROM issuance_service.application_templates
     WHERE id = $1 AND organization_id = $2 FOR SHARE";
 
@@ -549,6 +553,7 @@ async fn commit_atomic(
             let mut approval_application = commit.application.clone();
             approval_application.insert("status".to_owned(), Value::String("pending".to_owned()));
             let approval_snapshot = CanvasApplicationApprovalSnapshot {
+                evidence_facts: Vec::new(),
                 application: approval_application,
                 application_template: approval_template(template),
                 platform: snapshot.platform.clone(),
@@ -937,6 +942,11 @@ fn approval_template(template: &Map<String, Value>) -> Map<String, Value> {
             "credential_template_id",
             "approval_policy_set_id",
             "status",
+            "claim_collection_rules",
+            "form_fields",
+            "name",
+            "description",
+            "application_validity_days",
         ],
     )
 }

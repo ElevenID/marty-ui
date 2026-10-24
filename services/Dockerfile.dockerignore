@@ -28,6 +28,10 @@ services/common/
 !scripts/ci/public-sccache-stats.awk
 rust/services/*/tests
 rust/crates/*/tests
+rust/acceptance/support/base_runtime_redis.rs
+rust/acceptance/support/didcomm_gateway_replay.rs
+rust/acceptance/support/didcomm_native_grpc_fixture.rs
+rust/acceptance/support/issuance_named_peers.rs
 rust/**/target
 rust/**/.git
 rust/**/*.log

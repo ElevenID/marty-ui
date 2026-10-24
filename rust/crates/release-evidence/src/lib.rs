@@ -5,10 +5,15 @@
 
 use serde::Deserialize;
 
+pub mod age_proof;
 pub mod demo_qualification;
 pub mod deployment_bundle;
 pub mod envoy_config;
+mod json_evidence;
 pub mod kubernetes_native;
+pub mod official;
+pub mod official_review;
+pub mod signing_capability;
 
 pub const MAX_RUN_BYTES: usize = 1024 * 1024;
 const REPOSITORY: &str = "ElevenID/marty-ui";
@@ -107,6 +112,18 @@ pub fn validate_release_run(
         return Err("release run source mismatch");
     }
     Ok(run.head_sha)
+}
+
+fn is_github_login(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    !bytes.is_empty()
+        && bytes.len() <= 39
+        && bytes[0].is_ascii_alphanumeric()
+        && bytes[bytes.len() - 1].is_ascii_alphanumeric()
+        && bytes
+            .iter()
+            .all(|byte| byte.is_ascii_alphanumeric() || *byte == b'-')
+        && !value.contains("--")
 }
 
 #[cfg(test)]

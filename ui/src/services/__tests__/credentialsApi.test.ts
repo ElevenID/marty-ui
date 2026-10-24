@@ -29,48 +29,49 @@ describe('credentialsApi', () => {
   describe('issueCredential', () => {
     it('should issue credential with correct payload', async () => {
       const issuanceRequest = {
+        organization_id: 'org_123',
         credential_template_id: 'template_123',
-        flow_execution_id: 'flow_456',
-        subject_claims: {
-          given_name: 'Alice',
-          family_name: 'Smith',
-          birth_date: '1985-01-15',
-        },
-        holder_identifier: 'did:example:alice123',
-        application_data: {
-          document_number: 'D123456',
+        issuer_did: 'did:web:issuer.example',
+        credential: {
+          '@context': ['https://www.w3.org/ns/credentials/v2'],
+          type: ['VerifiableCredential'],
+          issuer: 'did:web:issuer.example',
+          credentialSubject: { id: 'did:example:alice123' },
         },
       }
 
       let receivedData: any
+      let receivedUrl: URL
       server.use(
-        http.post('http://localhost:8000/v1/credentials/issue', async ({ request }) => {
+        http.post('http://localhost:8000/v1/vc-api/credentials/issue', async ({ request }) => {
+          receivedUrl = new URL(request.url)
           receivedData = await request.json()
           return HttpResponse.json(
             {
-              credential: { id: 'cred_789', ...receivedData },
-              status: 'issued',
+              verifiableCredential: { ...receivedData.credential, proof: { cryptosuite: 'eddsa-rdfc-2022' } },
             },
-            { status: 201 }
+            { status: 200 }
           )
         })
       )
 
       const result = await issueCredential(issuanceRequest)
 
-      expect(receivedData).toEqual(issuanceRequest)
-      expect(result).toHaveProperty('credential')
-      expect(result).toHaveProperty('status')
+      expect(receivedUrl!.searchParams.get('organization_id')).toBe(issuanceRequest.organization_id)
+      expect(receivedUrl!.searchParams.get('credential_template_id')).toBe(issuanceRequest.credential_template_id)
+      expect(receivedUrl!.searchParams.get('issuer_did')).toBe(issuanceRequest.issuer_did)
+      expect(receivedData).toEqual({ credential: issuanceRequest.credential })
+      expect(result.verifiableCredential.proof.cryptosuite).toBe('eddsa-rdfc-2022')
     })
 
     it('should handle validation errors', async () => {
       server.use(
-        http.post('http://localhost:8000/v1/credentials/issue', () => {
+        http.post('http://localhost:8000/v1/vc-api/credentials/issue', () => {
           return HttpResponse.json(
             {
               error: {
                 code: 'VALIDATION_ERROR',
-                message: 'Missing subject_claims',
+                message: 'Missing credential',
               },
             },
             { status: 400 }
@@ -78,59 +79,55 @@ describe('credentialsApi', () => {
         })
       )
 
-      await expect(issueCredential({})).rejects.toThrow()
+      await expect(issueCredential({ organization_id: 'org_123', credential_template_id: 'template_123', issuer_did: 'did:web:issuer.example', credential: {} })).rejects.toThrow()
     })
   })
 
   describe('verifyCredential', () => {
     it('should verify credential', async () => {
       const verifyRequest = {
-        credential: { id: 'cred_123', proof: {} },
+        organization_id: 'org_123',
         presentation_policy_id: 'policy_456',
-        trust_profile_id: 'trust_789',
+        verifiableCredential: 'header.payload.signature',
+        options: { challenge: 'n', domain: 'aud' },
       }
 
       let receivedData: any
+      let receivedUrl: URL
       server.use(
-        http.post('http://localhost:8000/v1/credentials/verify', async ({ request }) => {
+        http.post('http://localhost:8000/v1/vc-api/credentials/verify', async ({ request }) => {
+          receivedUrl = new URL(request.url)
           receivedData = await request.json()
           return HttpResponse.json({
-            valid: true,
-            verification_result: {
-              signature_valid: true,
-              not_expired: true,
-              not_revoked: true,
-            },
+            verified: true,
+            results: { decision: 'allow' },
           })
         })
       )
 
       const result = await verifyCredential(verifyRequest)
 
-      expect(receivedData).toEqual(verifyRequest)
-      expect(result.valid).toBe(true)
-      expect(result.verification_result).toHaveProperty('signature_valid')
+      expect(receivedUrl!.searchParams.get('organization_id')).toBe(verifyRequest.organization_id)
+      expect(receivedUrl!.searchParams.get('presentation_policy_id')).toBe(verifyRequest.presentation_policy_id)
+      expect(receivedData).toEqual({ verifiableCredential: verifyRequest.verifiableCredential, options: verifyRequest.options })
+      expect(result.verified).toBe(true)
+      expect(result.results.decision).toBe('allow')
     })
 
     it('should return validation failures', async () => {
       server.use(
-        http.post('http://localhost:8000/v1/credentials/verify', () => {
+        http.post('http://localhost:8000/v1/vc-api/credentials/verify', () => {
           return HttpResponse.json({
-            valid: false,
-            verification_result: {
-              signature_valid: false,
-              not_expired: true,
-              not_revoked: true,
-              errors: ['Invalid signature'],
-            },
+            verified: false,
+            results: { decision: 'deny', errors: ['Invalid signature'] },
           })
         })
       )
 
-      const result = await verifyCredential({ credential: {} })
+      const result = await verifyCredential({ organization_id: 'org_123', presentation_policy_id: 'policy_456', verifiableCredential: 'invalid.jwt' })
 
-      expect(result.valid).toBe(false)
-      expect(result.verification_result.errors).toContain('Invalid signature')
+      expect(result.verified).toBe(false)
+      expect(result.results.errors).toContain('Invalid signature')
     })
   })
 

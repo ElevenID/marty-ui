@@ -858,7 +858,7 @@ def test_flow_inventory_real_nocapture_child_stdout_and_failure_guards(
     monkeypatch.delenv("RUNNER_TEMP", raising=False)
     monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
     original_artifact_identity = INVENTORY.artifact_identity
-    monkeypatch.setattr(INVENTORY, "artifact_identity", lambda *args: {})
+    monkeypatch.setattr(INVENTORY, "artifact_identity", lambda *args, **kwargs: {})
     monkeypatch.setattr(INVENTORY, "verify_flow_roster", lambda *_args: None)
     for item in INVENTORY.obligation("flow_acceptance")[2]:
         monkeypatch.setenv(item["name"], "private-runtime-value")
@@ -884,6 +884,9 @@ def test_flow_inventory_real_nocapture_child_stdout_and_failure_guards(
     )
     assert record["observed_renderer_python_imports"] == (
         INVENTORY.flow_renderer_python_imports()
+    )
+    assert record["observed_first_hop_rust_source_inputs"] == (
+        INVENTORY.acceptance_rust_first_hop_inputs("flow_acceptance")
     )
     assert record["transitive_source_closure"] == "incomplete"
     assert "child-inherited-stdout" in output
@@ -934,7 +937,7 @@ def test_flow_inventory_nested_libtest_summary_stays_owned(
     assert build.returncode == 0, build.stderr
     monkeypatch.delenv("RUNNER_TEMP", raising=False)
     monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
-    monkeypatch.setattr(INVENTORY, "artifact_identity", lambda *args: {})
+    monkeypatch.setattr(INVENTORY, "artifact_identity", lambda *args, **kwargs: {})
     monkeypatch.setattr(INVENTORY, "verify_flow_roster", lambda *_args: None)
     for item in INVENTORY.obligation("flow_acceptance")[2]:
         monkeypatch.setenv(item["name"], "owned-fixture")
@@ -1022,7 +1025,7 @@ def test_selfhost_inventory_real_outer_libtest_and_fail_closed(
     assert build.returncode == 0, build.stderr
     monkeypatch.delenv("RUNNER_TEMP", raising=False)
     monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
-    monkeypatch.setattr(INVENTORY, "artifact_identity", lambda *args: {})
+    monkeypatch.setattr(INVENTORY, "artifact_identity", lambda *args, **kwargs: {})
     for item in INVENTORY.obligation("selfhost_acceptance")[2]:
         monkeypatch.setenv(item["name"], "private-runtime-value")
     monkeypatch.setenv("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST", "1")
@@ -1044,18 +1047,41 @@ def test_selfhost_inventory_real_outer_libtest_and_fail_closed(
     )
     assert record["gate"] == "test-rust-services/selfhost"
     assert record["owner"] == INVENTORY.SELFHOST_OWNER
-    assert len(record["selected"]) == 12
+    assert len(record["selected"]) == 17
     assert record["selected"] == record["executed"]
-    assert record["passed"] == 12 and record["failed"] == 0
+    assert record["passed"] == 17 and record["failed"] == 0
     assert record["configured_input_identities"] == {
         "image_id": "sha256:" + "a" * 64,
         "source_revision": "b" * 40,
         "packager_sha256": INVENTORY.digest(packager),
         "compose_sha256": INVENTORY.digest(compose),
     }
+    assert record["observed_first_hop_rust_source_inputs"] == (
+        INVENTORY.acceptance_rust_first_hop_inputs("selfhost_acceptance")
+    )
+    assert record["transitive_source_closure"] == "incomplete"
     assert output.count("test result: ok.") == 1
     assert "nested child summary captured" in output
     assert "private-runtime-value" not in json.dumps(record)
+    for cardinality, ignored in [(12, set()), (16, set()), (18, set()), (17, {"case17"})]:
+        names = {f"case{number:02d}" for number in range(1, cardinality + 1)}
+        with monkeypatch.context() as scoped:
+            scoped.setattr(
+                INVENTORY,
+                "expected_cases",
+                lambda *_args, **_kwargs: (names, ignored),
+            )
+            assert INVENTORY.run_contract("selfhost_acceptance", command, "selfhost") != 0
+        rejected = capsys.readouterr().out
+        refusal = next(
+            json.loads(line.removeprefix(INVENTORY.PREFIX))
+            for line in rejected.splitlines()
+            if line.startswith(INVENTORY.PREFIX)
+        )
+        assert refusal["reason"] == "selfhost_selection_drift"
+        assert "selected" not in refusal
+        assert "observed_cases" not in refusal
+        assert "test result:" not in rejected
     assert INVENTORY.run_contract("selfhost_acceptance", command, "canvas") == 0
     assert '"gate":"test-rust-services/canvas"' in capsys.readouterr().out
     packager.write_bytes(b"mutated owned test packager")
@@ -1111,7 +1137,7 @@ def test_selfhost_runner_keeps_roster_preflight_and_both_evidence_call_sites() -
         "--name selfhost_acceptance --owner selfhost --"
     )
     assert dedicated.count('"$selfhost_executable" --nocapture --test-threads=4') == 1
-    assert dedicated.count("12 passed; 0 failed; 0 ignored;") == 1
+    assert dedicated.count("17 passed; 0 failed; 0 ignored;") == 1
     assert source.count("--name selfhost_acceptance --owner canvas --") == 1
     assert source.count('"$selfhost_executable" --nocapture --test-threads=4') == 2
     assert source.index('require_selfhost_tests "$selfhost_tests"') < source.index(
@@ -1151,6 +1177,7 @@ def test_obligation_wrapper_reaps_owned_harness_and_descendant(
     environment.update(
         TMPDIR=str(temporary),
         MARTY_TEST_REDIS_URL="redis://owned-test-only",
+        MARTY_TEST_REDIS_DISPOSABLE_NONCE="owned-test-sentinel",
         MARTY_SIGNAL_PID_DIR=str(tmp_path),
         MARTY_SIGNAL_PYTHON=sys.executable,
     )
@@ -1268,7 +1295,8 @@ def test_db_inventory_preserves_child_failure_and_saves_observed_outcomes(
 
     monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
     monkeypatch.setenv("MARTY_TEST_REDIS_URL", "private-credential-value")
-    monkeypatch.setattr(INVENTORY, "artifact_identity", lambda *args: {})
+    monkeypatch.setenv("MARTY_TEST_REDIS_DISPOSABLE_NONCE", "owned-test-sentinel")
+    monkeypatch.setattr(INVENTORY, "artifact_identity", lambda *args, **kwargs: {})
     monkeypatch.setattr(
         INVENTORY, "expected_cases", lambda *args, **kwargs: ({"happy"}, set())
     )
@@ -1494,6 +1522,72 @@ def test_canvas_published_image_pin_must_exist(tmp_path, monkeypatch) -> None:
         INVENTORY.canvas_published_image_inputs()
 
 
+@pytest.mark.parametrize(
+    ("name", "fixture"),
+    (
+        (
+            "flow_acceptance",
+            "rust/services/issuance/tests/support/canvas_published_database.rs",
+        ),
+        (
+            "selfhost_acceptance",
+            "rust/crates/canvas-acceptance/tests/support/owned_cleanup.rs",
+        ),
+        (
+            "canvas_composition_acceptance",
+            "rust/services/issuance/tests/support/canvas_published_database_diagnostic_tests.rs",
+        ),
+        (
+            "canvas_worker_acceptance",
+            "contracts/canvas-worker-body-timeout-oracle.json",
+        ),
+    ),
+)
+def test_acceptance_rust_first_hop_inputs_record_exact_source_hashes(name, fixture) -> None:
+    inputs = INVENTORY.acceptance_rust_first_hop_inputs(name)
+    paths = [item["path"] for item in inputs]
+    assert paths == sorted(set(paths))
+    assert INVENTORY.ACCEPTANCE_RUST_TEST_SOURCES[name] in paths
+    assert fixture in paths
+    if name == "canvas_composition_acceptance":
+        assert {
+            "rust/services/issuance/tests/support/bounded_fixture_command.rs",
+            "rust/services/issuance/tests/support/bounded_fixture_command_tests.rs",
+            "rust/services/issuance/tests/support/canvas_published_database.rs",
+            "rust/services/issuance/tests/support/canvas_published_database_diagnostic_tests.rs",
+        } <= set(paths)
+    assert all(
+        item["sha256"] == INVENTORY.digest(ROOT / item["path"]) for item in inputs
+    )
+
+
+@pytest.mark.parametrize(
+    "source_content",
+    (
+        '#[path = concat!("private-", "fixture.rs")]\nmod fixture;\n',
+        'include!(concat!("private-", "fixture.rs"));\n',
+    ),
+)
+def test_acceptance_rust_first_hop_inputs_reject_unrecognized_import(
+    tmp_path, monkeypatch, source_content
+) -> None:
+    source_path = INVENTORY.ACCEPTANCE_RUST_TEST_SOURCES["canvas_worker_acceptance"]
+    source = tmp_path / source_path
+    source.parent.mkdir(parents=True)
+    source.write_text(source_content, encoding="utf-8")
+    manifest = source.parent.parent / "Cargo.toml"
+    manifest.write_text(
+        '[package]\nname = "marty-canvas-worker-acceptance"\n'
+        '[[test]]\nname = "canvas_published_worker_contract"\n'
+        'path = "tests/canvas_published_worker_contract.rs"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(INVENTORY, "ROOT", tmp_path)
+    with pytest.raises(ValueError, match="acceptance_rust_source_input_drift") as error:
+        INVENTORY.acceptance_rust_first_hop_inputs("canvas_worker_acceptance")
+    assert "private-" not in str(error.value)
+
+
 def test_canvas_composition_inventory_never_records_the_kms_token(
     real_obligation_harness, monkeypatch, capsys
 ) -> None:
@@ -1520,6 +1614,10 @@ def test_canvas_composition_inventory_never_records_the_kms_token(
     )
     assert record["selected"] == record["executed"] == ["happy"]
     assert record["runtime_fixture_owner"].endswith("canvas_published_database.rs")
+    assert record["transitive_source_closure"] == "incomplete"
+    assert record["observed_first_hop_rust_source_inputs"] == (
+        INVENTORY.acceptance_rust_first_hop_inputs("canvas_composition_acceptance")
+    )
 
 
 def test_canvas_obligation_files_are_separate_for_parallel_targets(
@@ -1649,7 +1747,8 @@ def test_db_inventory_missing_result_log_fails_closed_and_cleans_temp_directory(
 
     monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
     monkeypatch.setenv("MARTY_TEST_REDIS_URL", "owned-fixture")
-    monkeypatch.setattr(INVENTORY, "artifact_identity", lambda *args: {})
+    monkeypatch.setenv("MARTY_TEST_REDIS_DISPOSABLE_NONCE", "owned-test-sentinel")
+    monkeypatch.setattr(INVENTORY, "artifact_identity", lambda *args, **kwargs: {})
     monkeypatch.setattr(
         INVENTORY, "expected_cases", lambda *args, **kwargs: ({"happy"}, set())
     )
@@ -1669,6 +1768,7 @@ def test_db_inventory_records_real_failed_case_without_repeating_it(
     monkeypatch.delenv("RUNNER_TEMP", raising=False)
     monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
     monkeypatch.setenv("MARTY_TEST_REDIS_URL", "owned-fixture")
+    monkeypatch.setenv("MARTY_TEST_REDIS_DISPOSABLE_NONCE", "owned-test-sentinel")
     monkeypatch.setenv("MARTY_LIBTEST_FORCE_FAILURE", "1")
     assert (
         INVENTORY.run_contract(
@@ -1713,6 +1813,7 @@ def test_db_inventory_is_run_bound_and_excludes_runtime_values(
     for key, value in zip(INVENTORY.RUN_IDENTITY, ("123", "2", "contracts", "a" * 40)):
         monkeypatch.setenv(key, value)
     monkeypatch.setenv("MARTY_TEST_REDIS_URL", "redis://secret-value-never-recorded")
+    monkeypatch.setenv("MARTY_TEST_REDIS_DISPOSABLE_NONCE", "sentinel-value-never-recorded")
     assert (
         INVENTORY.run_contract("issuer_profile", [str(executable), "happy", "--exact"])
         == 0
@@ -1731,6 +1832,8 @@ def test_db_inventory_is_run_bound_and_excludes_runtime_values(
     )
     assert record["runtime_inputs"][0]["name"] == "MARTY_TEST_REDIS_URL"
     assert record["runtime_inputs"][0]["owner"] == INVENTORY.RUNNER_OWNER
+    assert record["runtime_inputs"][1]["name"] == "MARTY_TEST_REDIS_DISPOSABLE_NONCE"
+    assert "sentinel-value-never-recorded" not in output.read_text()
     assert (
         "secret-value-never-recorded"
         not in output.read_text() + capsys.readouterr().out
@@ -1797,6 +1900,113 @@ def test_db_inventory_rejects_stale_foreign_ambiguous_or_missing_artifacts(
         INVENTORY.artifact_identity(
             copied, "marty-signing-keys", "registry_storage_contract"
         )
+
+
+def test_compiler_depfile_records_nested_source_and_embedded_fixture(
+    tmp_path, monkeypatch
+) -> None:
+    root = tmp_path / "checkout"
+    executable = root / "rust/target/debug/deps/flow_acceptance-abcd.exe"
+    executable.parent.mkdir(parents=True)
+    executable.write_bytes(b"test executable")
+    source = root / "rust/crates/flow-acceptance/tests/support/nested.rs"
+    source.parent.mkdir(parents=True)
+    source.write_text("// nested source\n", encoding="utf-8")
+    fixture = root / "contracts/flow-oracle.json"
+    fixture.parent.mkdir(parents=True)
+    fixture.write_text('{"public":true}\n', encoding="utf-8")
+    depfile = executable.with_suffix(".d")
+    depfile.write_text(
+        f"{depfile}: crates/flow-acceptance/tests/support/nested.rs "
+        "../contracts/flow-oracle.json\n\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(INVENTORY, "ROOT", root)
+    observed = INVENTORY.compiler_target_source_inputs(executable)
+    assert observed == {
+        "compiler_depfile_sha256": INVENTORY.digest(depfile),
+        "compiler_target_source_scope": "single_rustc_test_target",
+        "observed_compiler_target_source_inputs": [
+            {"path": "contracts/flow-oracle.json", "sha256": INVENTORY.digest(fixture)},
+            {
+                "path": "rust/crates/flow-acceptance/tests/support/nested.rs",
+                "sha256": INVENTORY.digest(source),
+            },
+        ],
+    }
+    artifacts = tmp_path / "rust-test-artifacts.json"
+    artifacts.write_text(
+        json.dumps(
+            {
+                "reason": "compiler-artifact",
+                "package_id": "path+file:///checkout#marty-flow-acceptance@0.1.0",
+                "target": {"kind": ["test"], "name": "flow_published_schema_contract"},
+                "executable": str(executable),
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
+    identity = INVENTORY.artifact_identity(
+        executable,
+        "marty-flow-acceptance",
+        "flow_published_schema_contract",
+        record_compiler_inputs=True,
+    )
+    assert identity["observed_compiler_target_source_inputs"] == observed[
+        "observed_compiler_target_source_inputs"
+    ]
+    assert identity["binding"] == "same_path"
+    alias = tmp_path / "flow-acceptance-alias"
+    shutil.copyfile(executable, alias)
+    aliased = INVENTORY.artifact_identity(
+        alias,
+        "marty-flow-acceptance",
+        "flow_published_schema_contract",
+        record_compiler_inputs=True,
+    )
+    assert aliased["binding"] == "byte_identical_copy"
+    assert aliased["observed_compiler_target_source_inputs"] == observed[
+        "observed_compiler_target_source_inputs"
+    ]
+    depfile.unlink()
+    with pytest.raises(ValueError, match="compiler_target_source_input_drift"):
+        INVENTORY.artifact_identity(
+            executable,
+            "marty-flow-acceptance",
+            "flow_published_schema_contract",
+            record_compiler_inputs=True,
+        )
+
+
+@pytest.mark.parametrize(
+    "rule",
+    [
+        "wrong-target.d: crates/flow-acceptance/tests/support/nested.rs",
+        "{depfile}: ../../private-source.rs",
+        "{depfile}: crates/flow-acceptance/tests/support/missing.rs",
+        "{depfile}: crates/flow-acceptance/tests/support/nested\\ source.rs",
+        "{depfile}: ",
+    ],
+)
+def test_compiler_depfile_rejects_unproved_or_foreign_inputs(
+    tmp_path, monkeypatch, rule
+) -> None:
+    root = tmp_path / "checkout"
+    executable = root / "rust/target/debug/deps/flow_acceptance-abcd.exe"
+    executable.parent.mkdir(parents=True)
+    executable.write_bytes(b"test executable")
+    source = root / "rust/crates/flow-acceptance/tests/support/nested.rs"
+    source.parent.mkdir(parents=True)
+    source.write_text("// nested source\n", encoding="utf-8")
+    (tmp_path / "private-source.rs").write_text("private\n", encoding="utf-8")
+    depfile = executable.with_suffix(".d")
+    depfile.write_text(rule.format(depfile=depfile) + "\n", encoding="utf-8")
+    monkeypatch.setattr(INVENTORY, "ROOT", root)
+    with pytest.raises(ValueError, match="compiler_target_source_input_drift") as error:
+        INVENTORY.compiler_target_source_inputs(executable)
+    assert "private-source" not in str(error.value)
 
 
 def test_canvas_database_contracts_use_same_run_artifact_resolver() -> None:

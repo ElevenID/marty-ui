@@ -26,6 +26,20 @@ const privacyScan = (video) => `${JSON.stringify({
   videoSha256: digest(video), frameSamplingFps: 2,
 })}\n`;
 
+test('functional mode is refused before passport artifacts or protected setup', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'passport-functional-gate-'));
+  t.after(() => fs.rmSync(root, {recursive: true, force: true}));
+  const artifactDir = path.join(root, 'unused-attempt');
+  const result = spawnSync(process.execPath, [path.join(__dirname, 'audit-beta-physical-passport-flow.js')], {
+    env: {...process.env, RECORD_VIDEO: '0', DEMO_ARTIFACT_DIR: artifactDir},
+    encoding: 'utf8', timeout: 5000,
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /D-12 does not support functional reruns.*Use RECORD_VIDEO=1/);
+  assert.equal(result.stdout, '');
+  assert.equal(fs.existsSync(artifactDir), false);
+});
+
 function fixture() {
   const artifactDir = fs.mkdtempSync(path.join(os.tmpdir(), 'passport-demo-audit-test-'));
   const stack = '{}\n';

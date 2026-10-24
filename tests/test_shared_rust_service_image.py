@@ -82,7 +82,6 @@ def test_public_builder_cooks_dependencies_before_copying_all_source() -> None:
         "COPY --from=rust-service-planner /build/rust/recipe.json recipe.json"
         in dependencies
     )
-    assert "COPY --from=rust-service-planner /build/rust/third_party" in dependencies
     assert dependencies.index(
         "cargo chef cook --locked --release --workspace"
     ) < dependencies.index("FROM rust-service-dependencies AS rust-service-builder")

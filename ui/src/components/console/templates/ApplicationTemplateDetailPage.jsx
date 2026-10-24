@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import {
   Alert, Box, Button, Chip, CircularProgress, Container, Dialog, DialogActions,
@@ -10,6 +10,8 @@ import DeleteIcon from '@mui/icons-material/Delete';
 import EditIcon from '@mui/icons-material/Edit';
 import PreviewIcon from '@mui/icons-material/Preview';
 import RuleIcon from '@mui/icons-material/Rule';
+import { useConsole } from '../../../contexts/ConsoleContext';
+import { usePermissions } from '../../../hooks/usePermissions';
 import {
   activateApplicationTemplate,
   deleteApplicationTemplate,
@@ -27,47 +29,52 @@ function evidenceLabel(requirement) {
   return requirement?.label || requirement?.evidence_type || requirement?.check_type || 'Configured evidence';
 }
 
-export default function ApplicationTemplateDetailPage() {
-  const { templateId } = useParams();
+function ApplicationTemplateDetailContent({ organizationId, templateId, can }) {
   const navigate = useNavigate();
+  const alive = useRef(false);
   const [template, setTemplate] = useState(null);
   const [validation, setValidation] = useState(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [confirmation, setConfirmation] = useState(null);
+  const inScope = useCallback((value) => value?.id === templateId && value.organization_id === organizationId, [templateId, organizationId]);
+  useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
 
   const validate = useCallback(async () => {
+    if (!can('application-template', 'create')) return null;
     setBusy(true);
     setError('');
     try {
       const result = await validateApplicationTemplate(templateId);
+      if (!alive.current) return null;
       setValidation(result);
       return result;
     } catch (reason) {
-      setError(reason.message || String(reason));
+      if (alive.current) setError(reason.message || String(reason));
       return null;
     } finally {
-      setBusy(false);
+      if (alive.current) setBusy(false);
     }
-  }, [templateId]);
+  }, [templateId, can]);
 
-  const load = useCallback(async () => {
-    setError('');
-    try {
-      const result = await getApplicationTemplate(templateId);
-      setTemplate(result);
-      if (statusOf(result) === 'DRAFT') {
-        const validationResult = await validateApplicationTemplate(templateId);
-        setValidation(validationResult);
-      } else {
-        setValidation(null);
+  useEffect(() => {
+    let current = true;
+    (async () => {
+      try {
+        const result = await getApplicationTemplate(templateId, organizationId);
+        if (!current) return;
+        if (!inScope(result)) throw new Error('This Application Template is not available in the selected organization.');
+        setTemplate(result);
+        if (statusOf(result) === 'DRAFT' && can('application-template', 'create')) {
+          const validationResult = await validateApplicationTemplate(templateId);
+          if (current) setValidation(validationResult);
+        }
+      } catch (reason) {
+        if (current) { setTemplate(null); setError(reason.message || String(reason)); }
       }
-    } catch (reason) {
-      setError(reason.message || String(reason));
-    }
-  }, [templateId]);
-
-  useEffect(() => { load(); }, [load]);
+    })();
+    return () => { current = false; };
+  }, [templateId, organizationId, inScope, can]);
 
   const errorsBySection = useMemo(() => {
     const groups = new Map();
@@ -87,39 +94,47 @@ export default function ApplicationTemplateDetailPage() {
   const isActive = status === 'ACTIVE';
 
   const activate = async () => {
+    if (!inScope(template) || !can('application-template', 'create')) return;
     const result = await validate();
     if (!result?.valid) return;
     setBusy(true);
     try {
-      setTemplate(await activateApplicationTemplate(templateId));
+      const result = await activateApplicationTemplate(templateId);
+      if (!alive.current) return;
+      if (!inScope(result)) throw new Error('The API returned an Application Template outside the selected organization.');
+      setTemplate(result);
       setValidation(null);
     } catch (reason) {
-      setError(reason.message || String(reason));
+      if (alive.current) setError(reason.message || String(reason));
     } finally {
-      setBusy(false);
+      if (alive.current) setBusy(false);
     }
   };
 
   const remove = async () => {
+    if (!inScope(template) || !can('application-template', 'delete')) return;
     setBusy(true);
     try {
       await deleteApplicationTemplate(templateId);
-      navigate('/console/org/templates/applications');
+      if (alive.current) navigate('/console/org/templates/applications');
     } catch (reason) {
-      setError(reason.message || String(reason));
-      setBusy(false);
+      if (alive.current) { setError(reason.message || String(reason)); setBusy(false); }
     }
   };
 
   const deprecate = async () => {
+    if (!inScope(template) || !can('application-template', 'create')) return;
     setBusy(true);
     try {
-      setTemplate(await deprecateApplicationTemplate(templateId));
+      const result = await deprecateApplicationTemplate(templateId);
+      if (!alive.current) return;
+      if (!inScope(result)) throw new Error('The API returned an Application Template outside the selected organization.');
+      setTemplate(result);
       setConfirmation(null);
     } catch (reason) {
-      setError(reason.message || String(reason));
+      if (alive.current) setError(reason.message || String(reason));
     } finally {
-      setBusy(false);
+      if (alive.current) setBusy(false);
     }
   };
 
@@ -136,12 +151,12 @@ export default function ApplicationTemplateDetailPage() {
             <Typography color="text.secondary">{template.description}</Typography>
           </Box>
           <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
-            {isDraft && <Button component={Link} to={`/console/org/templates/applications/${templateId}/edit`} startIcon={<EditIcon />}>Edit</Button>}
-            <Button component="a" href={`/applicant/preview/applications/${templateId}`} target="_blank" startIcon={<PreviewIcon />}>Preview</Button>
-            {isDraft && <Button startIcon={<RuleIcon />} disabled={busy} onClick={validate}>Validate</Button>}
-            {isDraft && validation?.valid && <Button variant="contained" startIcon={<CheckIcon />} disabled={busy} onClick={activate}>Activate</Button>}
-            {isDraft && <Button color="error" startIcon={<DeleteIcon />} disabled={busy} onClick={() => setConfirmation('delete')}>Delete</Button>}
-            {isActive && <Button color="warning" startIcon={<ArchiveIcon />} disabled={busy} onClick={() => setConfirmation('deprecate')}>Deprecate</Button>}
+            {isDraft && can('application-template', 'edit') && <Button component={Link} to={`/console/org/templates/applications/${templateId}/edit`} startIcon={<EditIcon />}>Edit</Button>}
+            <Button component="a" href={`/applicant/preview/applications/${templateId}?organization_id=${encodeURIComponent(organizationId)}`} target="_blank" startIcon={<PreviewIcon />}>Preview</Button>
+            {isDraft && can('application-template', 'create') && <Button startIcon={<RuleIcon />} disabled={busy} onClick={validate}>Validate</Button>}
+            {isDraft && can('application-template', 'create') && validation?.valid && <Button variant="contained" startIcon={<CheckIcon />} disabled={busy} onClick={activate}>Activate</Button>}
+            {isDraft && can('application-template', 'delete') && <Button color="error" startIcon={<DeleteIcon />} disabled={busy} onClick={() => setConfirmation('delete')}>Delete</Button>}
+            {isActive && can('application-template', 'create') && <Button color="warning" startIcon={<ArchiveIcon />} disabled={busy} onClick={() => setConfirmation('deprecate')}>Deprecate</Button>}
           </Stack>
         </Stack>
 
@@ -190,4 +205,14 @@ export default function ApplicationTemplateDetailPage() {
       </Dialog>
     </Container>
   );
+}
+
+export default function ApplicationTemplateDetailPage() {
+  const { activeOrgId } = useConsole();
+  const { templateId } = useParams();
+  const { can, isLoading } = usePermissions();
+  if (!activeOrgId) return <Alert severity="error">Select an organization before opening Application Templates.</Alert>;
+  if (isLoading) return <CircularProgress />;
+  if (!can('application-template', 'view')) return <Alert severity="error">You do not have permission to view Application Templates.</Alert>;
+  return <ApplicationTemplateDetailContent key={`${activeOrgId}:${templateId}`} organizationId={activeOrgId} templateId={templateId} can={can} />;
 }

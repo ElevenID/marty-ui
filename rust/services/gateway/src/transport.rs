@@ -67,7 +67,9 @@ impl UpstreamClient for ReqwestUpstream {
         );
         let mut url = url::Url::parse(&raw_url)
             .map_err(|error| PlatformError::Operation(error.to_string()))?;
-        {
+        // Opening the serializer creates a query delimiter even without pairs.
+        // Preserve absence for endpoints that reject caller-supplied options.
+        if request.query.values().any(|values| !values.is_empty()) {
             let mut query = url.query_pairs_mut();
             for (key, values) in &request.query {
                 for value in values {
@@ -245,6 +247,50 @@ mod tests {
         }
         assert!(ReqwestUpstream::new(1).is_ok());
         assert!(ReqwestUpstream::with_client(1, isolated_client()).is_ok());
+    }
+
+    #[tokio::test]
+    async fn upstream_preserves_query_absence_and_values() {
+        async fn query_echo(uri: axum::http::Uri) -> Json<Value> {
+            Json(json!({"query": uri.query()}))
+        }
+        let mut servers = OwnedLoopbacks::new();
+        let port = servers
+            .serve(Router::new().route("/claim", post(query_echo).get(query_echo)))
+            .await;
+        let upstream = ReqwestUpstream::with_client(1_024, isolated_client()).unwrap();
+        for method in [HttpMethod::Get, HttpMethod::Post] {
+            for (path, query, expected) in [
+                ("/claim", BTreeMap::new(), Value::Null),
+                (
+                    "/claim",
+                    BTreeMap::from([("unused".into(), Vec::new())]),
+                    Value::Null,
+                ),
+                (
+                    "/claim",
+                    BTreeMap::from([("tag".into(), vec!["".into(), "a b".into(), "x&y".into()])]),
+                    json!("tag=&tag=a+b&tag=x%26y"),
+                ),
+                (
+                    "/claim?original=present",
+                    BTreeMap::from([("tag".into(), vec!["next".into()])]),
+                    json!("original=present&tag=next"),
+                ),
+            ] {
+                let mut request = GatewayRequest::new(method, path, 0);
+                request.query = query;
+                let response = upstream
+                    .send(&instance(port, 1_000), request)
+                    .await
+                    .unwrap();
+                assert_eq!(response.status_code, 200);
+                let body: Value =
+                    serde_json::from_slice(response.body.as_deref().unwrap()).unwrap();
+                assert_eq!(body["query"], expected, "{method:?} {path}");
+            }
+        }
+        servers.close().await;
     }
 
     #[tokio::test]

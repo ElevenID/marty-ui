@@ -102,7 +102,13 @@ def test_worker_fixture_integrity_and_process_containment_have_linux_ci_dependen
         for line in installation.splitlines()
         if "uv pip install --system pytest" in line
     )
-    assert {"pytest", "pytest-xdist==3.8.0", "sqlalchemy"} <= set(command.split())
+    assert {"pytest", "pytest-xdist==3.8.0", "sqlalchemy", "playwright"} <= set(command.split())
+    assert "'jsonschema[format]>=4.23'" in command.split()
+    browser = steps["Install Python browser transport runtime"]
+    assert browser["run"] == "python -m playwright install --with-deps --only-shell chromium"
+    assert browser["if"] == steps["Run repository release checks"]["if"]
+    assert job["steps"].index(steps["Install released test dependencies"]) < job["steps"].index(browser)
+    assert job["steps"].index(browser) < job["steps"].index(steps["Run repository release checks"])
     assert (
         steps["Run repository release checks"]["run"]
         == RELEASE_TEST_COMMAND
@@ -1180,7 +1186,7 @@ def test_verified_flow_test_sources_select_only_flow_on_pr(tmp_path: Path) -> No
     for paths in (
         [flow_tests[0], "docs/architecture-feedback-improvement-plan.md"],
         [flow_tests[1], "rust/crates/flow-acceptance/Cargo.toml"],
-        [flow_tests[-1], "rust/services/issuance/tests/support/base_runtime_redis.rs"],
+        [flow_tests[-1], "rust/acceptance/support/base_runtime_redis.rs"],
         ["rust/crates/flow-acceptance/tests/support/unreviewed.rs"],
         [flow_tests[2] + "\nother"],
     ):
@@ -1471,6 +1477,7 @@ def test_pull_request_classifier_is_conservative_and_merge_queue_is_complete() -
         "test-rust-feature-probe",
         "test-rust-services",
         "test-openbao-didcomm-plugin",
+        "test-native-operator",
         "rust-lint-policy",
         "test-rust-service-images",
         "public-protocol-contract",
@@ -1518,6 +1525,7 @@ def test_ci_gate_accepts_only_planned_pr_skips_and_all_successful_merge_groups()
         "python": {"test-services"},
         "rust": {
             "test-rust-services",
+            "test-native-operator",
             "rust-lint-policy",
             "rust-supply-chain",
         },
@@ -1627,7 +1635,7 @@ def test_ci_gate_accepts_only_planned_pr_skips_and_all_successful_merge_groups()
         environment.update({key: results[name] for name, key in result_env.items()})
         values = [results[name] for name in gate["needs"]]
         environment["CI_LANE_RESULTS"] = " ".join(values[:result_count])
-        assert len(environment["CI_LANE_RESULTS"].split()) == (result_count or 17)
+        assert len(environment["CI_LANE_RESULTS"].split()) == (result_count or len(gate["needs"]))
         script = gate["steps"][0]["run"].replace("${{ github.event_name }}", event)
         return subprocess.run(
             [bash, "-c", script],
@@ -2108,6 +2116,8 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
         },
         "canvas-worker-timeout-current-inputs.json": {
             ".github/workflows/ci.yml",
+            "scripts/canvas_native_rest_contract.py",
+            "tests/test_canvas_native_rest_contract.py",
             "tests/test_canvas_worker_timeout_input_evidence.py",
             "tests/test_ci_workflow_performance.py",
         },
@@ -2586,6 +2596,12 @@ def test_runner_registration_inputs_keep_release_coverage_without_full_pr_matrix
             "scripts/setup-canvas-oss-runner.ps1",
             "tests/test_canvas_oss_acceptance_topology.py",
             "tests/test_canvas_oss_runner_quarantine.py",
+            "tests/test_runner_routing_labels.py",
+        },
+        "runner-host-capacity-policy.ps1": {
+            "scripts/check-canvas-prebuilt-backing-capacity.ps1",
+            "scripts/register-canvas-oss-runner.ps1",
+            "tests/test_runner_routing_labels.py",
         },
         "runner-routing-label-policy.ps1": {
             "scripts/register-canvas-oss-runner.ps1",
@@ -3151,8 +3167,6 @@ def test_didcomm_policy_test_sources_have_exact_release_owner(
 ) -> None:
     cases = {
         "tests/test_didcomm_native_consumer_ownership.py": 38,
-        "tests/test_didcomm_native_credentials_release.py": 21,
-        "tests/test_issuance_retention_credentials_release.py": 4,
     }
     _, workflow = _workflow(CI_PATH)
     ci_source = CI_PATH.read_text(encoding="utf-8")
@@ -3219,7 +3233,7 @@ def test_didcomm_policy_test_sources_have_exact_release_owner(
         step.get("run") == RELEASE_TEST_COMMAND for step in release["steps"]
     )
     assert "tests" in RELEASE_TEST_COMMAND.split()
-    assert sum(cases.values()) == 63
+    assert sum(cases.values()) == 38
 
 
 def test_exact_didcomm_release_pr_path_preserves_full_release_fallback(
@@ -3231,8 +3245,6 @@ def test_exact_didcomm_release_pr_path_preserves_full_release_fallback(
     )
     sources = (
         "tests/test_didcomm_native_consumer_ownership.py",
-        "tests/test_didcomm_native_credentials_release.py",
-        "tests/test_issuance_retention_credentials_release.py",
     )
 
     def classify(paths: list[str], **kwargs: object) -> dict[str, str]:
@@ -3254,6 +3266,8 @@ def test_exact_didcomm_release_pr_path_preserves_full_release_fallback(
             "contracts/didcomm-native-consumer-ownership.json",
             "docker-compose.base.yml",
             "tests/unknown_didcomm_test.py",
+            "tests/test_didcomm_native_credentials_release.py",
+            "tests/test_issuance_retention_credentials_release.py",
             "renamed/old_didcomm_test.py",
         ):
             mixed = classify([source, other])
@@ -3270,6 +3284,13 @@ def test_exact_didcomm_release_pr_path_preserves_full_release_fallback(
         no_base = classify([source], missing_base=True)
         assert no_base["didcomm_release_test_only"] == "false"
         assert no_base["all"] == "true"
+    for retired in (
+        "tests/test_didcomm_native_credentials_release.py",
+        "tests/test_issuance_retention_credentials_release.py",
+    ):
+        fallback = classify([retired])
+        assert fallback["didcomm_release_test_only"] == "false"
+        assert fallback["all"] == "true"
     assert classify([])["didcomm_release_test_only"] == "false"
 
     release = workflow["jobs"]["test-release-contracts"]
@@ -3611,8 +3632,7 @@ def test_frozen_reference_test_sources_select_only_release_on_prs(
     ):
         assert _classify_changed_path(path, tmp_path)["rust"] == "true"
     for path in (
-        "scripts/probe_kms_native_service_migrations.py",
-        "scripts/probe_kms_profile_runtime_schema.py",
+        "scripts/new-unregistered-database-probe.py",
         "tests/test_signing_response_reference_helpers.py",
         "unknown-new-input.txt",
     ):
@@ -5087,9 +5107,19 @@ def test_ephemeral_ci_reads_only_shared_python_and_browser_caches() -> None:
         if step.get("name") == "Warm shared Python dependencies"
     )
     assert warm_install["if"] == "steps.uv-cache.outputs.cache-hit != 'true'"
+    protocol_install = next(
+        step
+        for step in ci["jobs"]["public-protocol-contract"]["steps"]
+        if step.get("name") == "Install contract-check dependencies"
+    )
+    format_aware_install = (
+        "uv pip install --system -r requirements-services.txt "
+        "'jsonschema[format]>=4.23'"
+    )
+    assert protocol_install["run"] == format_aware_install
     assert (
         warm_install["run"]
-        == "uv pip install --system -r requirements-services.txt jsonschema"
+        == format_aware_install
     )
 
     browser_steps = ci["jobs"]["test-credential-lifecycle-browser"]["steps"]
@@ -5123,20 +5153,26 @@ def test_ephemeral_ci_reads_only_shared_python_and_browser_caches() -> None:
     assert "rust/**" not in warm[True]["push"]["paths"]
 
 
-def test_closed_pull_request_cache_cleanup_is_rate_limit_safe() -> None:
-    source, document = _workflow(
-        ROOT / ".github" / "workflows" / "cleanup-ci-caches.yml"
-    )
+def test_closed_pull_request_cache_cleanup_uses_reviewed_shared_owner() -> None:
+    _, document = _workflow(ROOT / ".github/workflows/cleanup-ci-caches.yml")
     cleanup = document["jobs"]["cleanup"]
-    script = cleanup["steps"][0]["with"]["script"]
-
-    assert "Promise.all" not in script
-    assert "await delay(500)" in script
-    assert "error.status === 429 || error.status === 403" in script
-    assert "const maxAttempts = 7" in script
-    assert "retry-after" in script
-    assert "2_000 * (2 ** attempt)" in script
-    assert "maxDeletions = 2000" in source
+    # Runtime queue/reopened/rate-limit cases are owned by the shared action's
+    # actions/cleanup-ci-caches/cleanup.test.cjs in ElevenID/.github.
+    assert len(cleanup["steps"]) == 1
+    step = cleanup["steps"][0]
+    assert step["uses"] == (
+        "ElevenID/.github/actions/cleanup-ci-caches@"
+        "3883ccbf1f612a43a746db1d9321015d561efeb1"
+    )
+    assert step["with"] == {
+        "max-deletions": "2000",
+        "include-queue-on-close": "true",
+    }
+    assert cleanup["permissions"] == {
+        "actions": "write", "contents": "read", "pull-requests": "read"
+    }
+    assert document[True]["pull_request"]["types"] == ["closed"]
+    assert document["concurrency"]["cancel-in-progress"] is False
 
 
 def test_compiler_cache_writes_are_reserved_for_trusted_main() -> None:
@@ -5763,54 +5799,6 @@ def test_passport_webhook_boundary_has_one_acceptance_owner_and_a_real_db_gate()
     assert "migration::migrate_passport(&pool).await.unwrap();" in source
 
 
-@pytest.mark.parametrize("event", ["pull_request", "workflow_dispatch"])
-@pytest.mark.parametrize("reopened", [False, True])
-def test_cache_cleanup_includes_queue_refs_but_preserves_active_and_main(
-    event: str, reopened: bool
-) -> None:
-    _, document = _workflow(ROOT / ".github/workflows/cleanup-ci-caches.yml")
-    script = document["jobs"]["cleanup"]["steps"][0]["with"]["script"]
-    harness = (
-        r"""
-      const deleted = [];
-      const entries = [
-        {id: 1, ref: 'refs/pull/23/merge'},
-        {id: 2, ref: 'refs/heads/gh-readonly-queue/main/pr-23-abcdef'},
-        {id: 3, ref: 'refs/heads/main'},
-        {id: 4, ref: 'refs/pull/24/merge'},
-        {id: 5, ref: 'refs/heads/gh-readonly-queue/main/pr-24-abcdef'},
-        {id: 6, ref: 'refs/heads/feature'},
-      ];
-      const github = {
-        request: async (_, params) => {
-          if (params.ref) throw new Error('ref filter hides queue caches');
-          return {data: {actions_caches: entries}};
-        },
-        rest: {
-          pulls: {get: async ({pull_number}) => ({data: {state: pull_number === 23 && !REOPENED ? 'closed' : 'open'}})},
-          actions: {deleteActionsCacheById: async ({cache_id}) => { deleted.push(cache_id); }},
-        },
-      };
-      const summary = {addHeading() {return this}, addRaw() {return this}, async write() {}};
-      const core = {info() {}, warning() {}, summary};
-      const context = {repo: {owner: 'test', repo: 'test'}, eventName: EVENT,
-        payload: {pull_request: {number: 23}}};
-      const AsyncFunction = Object.getPrototypeOf(async function() {}).constructor;
-      await new AsyncFunction('github', 'context', 'core', 'setTimeout', SCRIPT)(
-        github, context, core, callback => callback());
-      if (JSON.stringify(deleted) !== (REOPENED ? '[]' : '[1,2]')) throw new Error(JSON.stringify(deleted));
-    """.replace("EVENT", json.dumps(event))
-        .replace("REOPENED", json.dumps(reopened))
-        .replace("SCRIPT", json.dumps(script))
-    )
-    result = subprocess.run(
-        ["node", "--input-type=module", "--eval", harness],
-        capture_output=True,
-        text=True,
-    )
-    assert result.returncode == 0, result.stderr
-
-
 @pytest.mark.parametrize(
     "scenario", ["valid", "empty", "negative", "huge", "traversal", "malformed"]
 )
@@ -5914,3 +5902,45 @@ def test_renewal_write_boundaries_overlap_only_with_owned_databases() -> None:
         < owner.index("pool.close().await")
         < owner.index("DROP DATABASE {database}")
     )
+
+
+def test_native_kms_schema_acceptance_is_mandatory_in_contracts_lane() -> None:
+    _, ci = _workflow(CI_PATH)
+    steps = ci["jobs"]["test-rust-services"]["steps"]
+    gate = next(step for step in steps if step.get("name") ==
+                "Prove native migration and profile KMS custody on fresh databases")
+    assert gate["if"] == "matrix.lane == 'contracts'"
+    assert not gate.get("continue-on-error", False)
+    run = gate["run"]
+    assert "set -euo pipefail" in run
+    assert "resolve_recorded_contract_executable marty-selfhost-acceptance native_kms_schema_contract" in run
+    assert "native_owners_preserve_kms_only_custody --ignored --exact --nocapture" in run
+    for name in ("AUTH_CONTRACT", "ORGANIZATION_CONTRACT", "CREDENTIAL_TEMPLATE_CONTRACT",
+                 "PRESENTATION_POLICY_CONTRACT", "FLOW_CONTRACT", "VERIFICATION_BINARY",
+                 "DEPLOYMENT_BINARY", "COMPLIANCE_BINARY"):
+        assert "MARTY_KMS_" + name + "=" in run
+        assert "export MARTY_KMS_" + name in run
+    assert "|| true" not in run
+    workflow = CI_PATH.read_text(encoding="utf-8")
+    assert "cargo build --locked -p marty-deployment-profile -p marty-compliance-profile -p marty-verification-service --bins --message-format=json" in workflow
+
+
+def test_native_kms_audit_changes_keep_contracts_ci_selected(tmp_path: Path) -> None:
+    selected = _classify_changed_paths(
+        ["rust/crates/selfhost-acceptance/tests/native_kms_schema_contract.rs"],
+        tmp_path, include_rust_plan=True)[0]
+    assert selected["rust"] == "true"
+    assert "contracts" in json.loads(selected["rust_matrix"])
+
+
+def test_registry_source_render_uses_pinned_renderer_without_changing_docker_plugin() -> None:
+    _, ci = _workflow(CI_PATH)
+    steps = ci["jobs"]["test-release-contracts"]["steps"]
+    prepare = next(step for step in steps if step.get("name") == "Prepare source-only deployment registry renderer")
+    release = next(step for step in steps if step.get("name") == "Run repository release checks")
+    assert steps.index(prepare) < steps.index(release)
+    assert prepare["if"] == release["if"]
+    assert prepare["run"] == "bash scripts/ci/install-compose-renderer.sh"
+    assert release["env"]["MARTY_COMPOSE_RENDERER"] == "${{ runner.temp }}/compose-render-v5.4.0"
+    assert release["run"] == "python -m pytest tests -n 2 -v --tb=short --durations=20"
+    assert not prepare.get("continue-on-error", False)

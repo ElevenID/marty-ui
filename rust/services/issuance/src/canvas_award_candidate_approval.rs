@@ -13,7 +13,8 @@ use crate::{
     },
     canvas_issuance_guard::{
         credential_snapshot, evaluate_canvas_approval_snapshot, evaluate_canvas_offer_snapshot,
-        resolved_issuer_matches, CanvasGuardConfig, CanvasGuardSnapshot,
+        required_credential_claims_present, resolved_issuer_matches, CanvasGuardConfig,
+        CanvasGuardSnapshot,
     },
     canvas_lti_bootstrap::CanvasLtiBootstrapApplication,
     canvas_lti_experience::CanvasLtiExperienceSessionContext,
@@ -35,6 +36,7 @@ pub const DEFAULT_CANVAS_MANAGEMENT_REVIEW_NOTES: &str =
 
 #[derive(Clone, PartialEq)]
 pub struct CanvasAwardApprovalSnapshot {
+    pub evidence_facts: Vec<Value>,
     pub application: Map<String, Value>,
     pub application_template: Map<String, Value>,
     pub binding: Map<String, Value>,
@@ -93,6 +95,7 @@ pub trait CanvasAwardApprovalSeedGenerator: Send + Sync {
 
 #[derive(Clone, PartialEq)]
 pub struct CanvasApplicationApprovalSnapshot {
+    pub evidence_facts: Vec<Value>,
     pub application: Map<String, Value>,
     pub application_template: Map<String, Value>,
     pub platform: Map<String, Value>,
@@ -174,14 +177,14 @@ pub struct CanvasAwardCandidateApprovalService {
     issuer_resolver: Arc<dyn IssuerContextResolver>,
     seeds: Arc<dyn CanvasAwardApprovalSeedGenerator>,
     clock: Arc<dyn CanvasLtiClock>,
-    readiness_max_age: Duration,
+    guard_config: CanvasGuardConfig,
 }
 
 impl std::fmt::Debug for CanvasAwardCandidateApprovalService {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("CanvasAwardCandidateApprovalService")
-            .field("readiness_max_age", &self.readiness_max_age)
+            .field("guard_config", &self.guard_config)
             .finish_non_exhaustive()
     }
 }
@@ -193,14 +196,14 @@ impl CanvasAwardCandidateApprovalService {
         issuer_resolver: Arc<dyn IssuerContextResolver>,
         seeds: Arc<dyn CanvasAwardApprovalSeedGenerator>,
         clock: Arc<dyn CanvasLtiClock>,
-        readiness_max_age: Duration,
+        guard_config: CanvasGuardConfig,
     ) -> Self {
         Self {
             repository,
             issuer_resolver,
             seeds,
             clock,
-            readiness_max_age,
+            guard_config,
         }
     }
 
@@ -228,7 +231,7 @@ impl CanvasAwardCandidateApprovalService {
             &snapshot,
             &self.seeds.generate(),
             self.clock.now(),
-            self.readiness_max_age,
+            &self.guard_config,
         ) else {
             return Err(CanvasAwardCandidateApprovalError::ReadinessDrift);
         };
@@ -318,7 +321,7 @@ impl CanvasApplicationApprovalService {
             application_template: Value::Object(snapshot.application_template.clone()),
             platform: Value::Object(snapshot.platform.clone()),
             binding: Value::Object(snapshot.binding.clone()),
-            evidence_facts: Vec::new(),
+            evidence_facts: snapshot.evidence_facts.clone(),
             policy_set: None,
         };
         let now = self.clock.now();
@@ -337,11 +340,16 @@ impl CanvasApplicationApprovalService {
             );
             return Err(error);
         }
-        let mut transaction = plan_canvas_approval_transaction(
+        let mut transaction = plan_projected_canvas_transaction(
             &snapshot.application,
+            &snapshot.application_template,
             &snapshot.binding,
+            &snapshot.evidence_facts,
             &self.seeds.generate(),
             now,
+            canvas_claim_time(snapshot.existing_transaction.as_ref(), now),
+            self.guard_config.evidence_max_age,
+            "pending",
         )
         .ok_or_else(|| {
             warn_application_failure(
@@ -352,7 +360,12 @@ impl CanvasApplicationApprovalService {
             CanvasApplicationApprovalError::NotReady
         })?;
         if let Some(existing) = snapshot.existing_transaction.as_ref() {
-            transaction = reuse_canvas_approval_transaction(existing, &transaction, true);
+            transaction = reuse_projected_canvas_approval_transaction(
+                existing,
+                &transaction,
+                true,
+                &snapshot.application_template,
+            );
         }
         // The Python boundary intentionally collapses every KMS/provider
         // failure to one non-sensitive readiness conflict.
@@ -399,7 +412,7 @@ impl CanvasApplicationApprovalService {
             application_template: Value::Object(snapshot.application_template.clone()),
             platform: Value::Object(snapshot.platform.clone()),
             binding: Value::Object(snapshot.binding.clone()),
-            evidence_facts: Vec::new(),
+            evidence_facts: snapshot.evidence_facts.clone(),
             policy_set: None,
         };
         let now = self.clock.now();
@@ -418,11 +431,16 @@ impl CanvasApplicationApprovalService {
             );
             return Err(error);
         }
-        let mut transaction = plan_canvas_offer_transaction(
+        let mut transaction = plan_projected_canvas_transaction(
             &snapshot.application,
+            &snapshot.application_template,
             &snapshot.binding,
+            &snapshot.evidence_facts,
             &self.seeds.generate(),
             now,
+            canvas_claim_time(snapshot.existing_transaction.as_ref(), now),
+            self.guard_config.evidence_max_age,
+            "approved",
         )
         .ok_or_else(|| {
             warn_application_failure(
@@ -472,7 +490,7 @@ pub fn plan_canvas_award_approval(
     snapshot: &CanvasAwardApprovalSnapshot,
     seed: &CanvasAwardApprovalSeed,
     now: chrono::DateTime<chrono::Utc>,
-    readiness_max_age: Duration,
+    guard_config: &CanvasGuardConfig,
 ) -> Option<CredentialTransaction> {
     let current = &snapshot.application;
     let template = &snapshot.application_template;
@@ -492,11 +510,21 @@ pub fn plan_canvas_award_approval(
         || text(template.get("credential_template_id"))
             != text(binding.get("credential_template_id"))
         || (plan.canvas_user_id.is_some() && !snapshot.identity_still_linked)
-        || !canvas_auto_approval_ready(binding, now, readiness_max_age)
+        || !canvas_auto_approval_ready(binding, now, guard_config.readiness_max_age)
     {
         return None;
     }
-    plan_canvas_approval_transaction(current, binding, seed, now)
+    plan_projected_canvas_transaction(
+        current,
+        template,
+        binding,
+        &snapshot.evidence_facts,
+        seed,
+        now,
+        now,
+        guard_config.evidence_max_age,
+        "pending",
+    )
 }
 
 /// Build the canonical pending issuance transaction from the exact persisted
@@ -518,6 +546,33 @@ pub fn plan_canvas_offer_transaction(
     now: chrono::DateTime<chrono::Utc>,
 ) -> Option<CredentialTransaction> {
     plan_canvas_management_transaction(application, binding, seed, now, "approved")
+}
+
+#[allow(clippy::too_many_arguments)] // Explicit trusted inputs shared by every Canvas issuance boundary.
+pub(crate) fn plan_projected_canvas_transaction(
+    application: &Map<String, Value>,
+    template: &Map<String, Value>,
+    binding: &Map<String, Value>,
+    facts: &[Value],
+    seed: &CanvasAwardApprovalSeed,
+    now: chrono::DateTime<chrono::Utc>,
+    claims_time: chrono::DateTime<chrono::Utc>,
+    evidence_max_age: Duration,
+    required_status: &str,
+) -> Option<CredentialTransaction> {
+    let claims = crate::canvas_claim_projection::project_canvas_claims(
+        application,
+        template,
+        binding,
+        facts,
+        claims_time,
+        now,
+        evidence_max_age,
+    )
+    .ok()?;
+    let mut projected = application.clone();
+    projected.insert("form_data".into(), Value::Object(claims));
+    plan_canvas_management_transaction(&projected, binding, seed, now, required_status)
 }
 
 fn plan_canvas_management_transaction(
@@ -555,6 +610,9 @@ fn plan_canvas_management_transaction(
         .and_then(Value::as_object)
         .cloned()
         .unwrap_or_default();
+    if !required_credential_claims_present(credential, &claims) {
+        return None;
+    }
     if let Some(vct) = optional_text(credential.get("vct")) {
         claims.insert("_vct".to_owned(), Value::String(vct));
     }
@@ -644,6 +702,37 @@ pub(crate) fn plan_legacy_canvas_approval_transaction(
         },
         "pending",
     )
+}
+
+pub(crate) fn canvas_claim_time(
+    existing: Option<&CredentialTransaction>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> chrono::DateTime<chrono::Utc> {
+    existing
+        .filter(|transaction| {
+            transaction.status == CredentialTransactionStatus::Pending
+                && now <= transaction.expires_at
+        })
+        .map_or(now, |transaction| transaction.created_at)
+}
+
+pub(crate) fn reuse_projected_canvas_approval_transaction(
+    existing: &CredentialTransaction,
+    planned: &CredentialTransaction,
+    strict_context: bool,
+    template: &Map<String, Value>,
+) -> CredentialTransaction {
+    let mut transaction = reuse_canvas_approval_transaction(existing, planned, strict_context);
+    if strict_context
+        && template
+            .get("claim_collection_rules")
+            .and_then(Value::as_array)
+            .is_some_and(|rules| !rules.is_empty())
+    {
+        // A reused capability must not retain obsolete mapped grades/results.
+        transaction.claims = planned.claims.clone();
+    }
+    transaction
 }
 
 pub(crate) fn reuse_canvas_approval_transaction(
@@ -856,9 +945,7 @@ fn kms_issuer_context_matches(binding: &Map<String, Value>, issuer: &IssuerConte
         raw.and_then(|value| value.get("issuer_profile_id")),
         profile.and_then(|value| value.get("id")),
     ]);
-    let service = raw
-        .and_then(|value| value.get("service"))
-        .and_then(Value::as_object);
+    let service = crate::credential_issuer::signing_service_context(&issuer.raw_context);
     let service_id = first_text(&[
         raw.and_then(|value| value.get("signing_service_id")),
         service.and_then(|value| value.get("id")),
@@ -1112,6 +1199,7 @@ mod legacy_planner_tests {
                     "revocation_profile_id":"revocation-profile-1",
                     "issuer_did":"did:web:issuer.example:org-1",
                     "issuer_algorithm":"ES256",
+                    "claims":[],
                     "wallet_configs":[{"wallet_id":"wallet-1"}],
                     "selective_disclosure_fields":["email"],
                     "zk_predicate_claims":["age"],
@@ -1151,6 +1239,28 @@ mod legacy_planner_tests {
             transaction.claims.get("_vct"),
             Some(&json!("https://credentials.example/employee"))
         );
+
+        let mut required_binding = binding.clone();
+        required_binding
+            .get_mut("credential_template_snapshot")
+            .expect("credential snapshot")["claims"] =
+            json!([{"name":"achievement_id","required":true}]);
+        assert!(
+            plan_canvas_offer_transaction(&application, &required_binding, &seed, Utc::now())
+                .is_none()
+        );
+        let mut complete_application = application.clone();
+        complete_application
+            .get_mut("form_data")
+            .expect("application data")["achievement_id"] =
+            json!("https://credentials.example/achievements/course-42");
+        assert!(plan_canvas_offer_transaction(
+            &complete_application,
+            &required_binding,
+            &seed,
+            Utc::now()
+        )
+        .is_some());
 
         let mut existing = transaction.clone();
         existing.id = "existing-transaction".to_owned();

@@ -135,7 +135,7 @@ def record(archive: Path, lock_path: Path, transaction: Path, source_sha: str, r
         openbao_compose = yaml.safe_load(openbao_path.read_bytes())
         openbao_services = openbao_compose.get("services") if isinstance(openbao_compose, dict) else None
         if (not isinstance(openbao_services, dict)
-                or set(openbao_services) != {"openbao-tls-init", "openbao", "openbao-bootstrap"}
+                or set(openbao_services) != {"openbao-tls-init", "openbao", "openbao-unseal", "openbao-bootstrap"}
                 or any(not isinstance(service, dict) or service.get("image") != plugin
                        or "build" in service for service in openbao_services.values())):
             raise ValueError("ZIP OpenBao Compose image differs from lock")

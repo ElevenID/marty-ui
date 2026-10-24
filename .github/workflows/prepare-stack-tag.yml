@@ -65,6 +65,11 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Require an accepted official harness source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python scripts/validate_official_harness_source.py
+
       - name: Fetch exact main and reject an existing tag
         shell: bash
         env:

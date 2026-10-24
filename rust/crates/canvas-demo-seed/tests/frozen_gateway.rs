@@ -114,7 +114,7 @@ async fn optional_issuer_context_fails_closed_to_none() {
 }
 
 #[test]
-fn badge_template_payloads_match_frozen_python_contract() {
+fn badge_templates_preserve_frozen_fields_and_add_explicit_claim_sources() {
     let contract: Value = serde_json::from_str(include_str!(
         "../../../../contracts/canvas-real-seed-behavior-v1.json"
     ))
@@ -132,10 +132,36 @@ fn badge_template_payloads_match_frozen_python_contract() {
             credential_template_payload(&cfg, &issuer()),
             writes[0]["payload"]
         );
+        let mut current = application_template_payload(&cfg, &scope, &issuer());
+        let mut historical = writes[1]["payload"].clone();
+        let mappings = current
+            .as_object_mut()
+            .unwrap()
+            .remove("claim_collection_rules")
+            .unwrap();
         assert_eq!(
-            application_template_payload(&cfg, &scope, &issuer()),
-            writes[1]["payload"]
+            historical
+                .as_object_mut()
+                .unwrap()
+                .remove("claim_collection_rules"),
+            Some(json!([]))
         );
+        assert_eq!(current, historical);
+        let mappings = mappings.as_array().unwrap();
+        assert_eq!(mappings.len(), 18);
+        for claim in writes[0]["payload"]["claims"].as_array().unwrap() {
+            assert_eq!(
+                mappings
+                    .iter()
+                    .filter(|rule| rule["claim_name"] == claim["name"])
+                    .count(),
+                1
+            );
+        }
+        assert!(mappings
+            .iter()
+            .filter(|rule| rule["source"] == "EVIDENCE_EXTRACTION")
+            .all(|rule| rule["source_config"]["fact_type"] == cfg.program_binding_evidence_type));
     }
 }
 

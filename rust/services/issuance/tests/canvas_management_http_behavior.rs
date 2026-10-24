@@ -247,6 +247,7 @@ fn approval_object(value: Value) -> Map<String, Value> {
 
 fn approval_snapshot() -> CanvasApplicationApprovalSnapshot {
     CanvasApplicationApprovalSnapshot {
+        evidence_facts: Vec::new(),
         application: approval_object(json!({
             "id": "application-approval-1",
             "organization_id": "org-1",
@@ -318,6 +319,7 @@ fn approval_snapshot() -> CanvasApplicationApprovalSnapshot {
                 "issuer_did": "did:web:issuer.example.edu:orgs:org-1",
                 "issuer_algorithm": "ES256",
                 "vct": "https://credentials.example.edu/open-badge",
+                "claims": [],
                 "wallet_configs": [{"wallet_id":"wallet-1"}],
                 "selective_disclosure_fields": ["achievement"],
                 "zk_predicate_claims": [],
@@ -478,6 +480,7 @@ impl CanvasLtiProbeClient for SuccessfulProbe {
     async fn probe(
         &self,
         canvas_base_url: &str,
+        _trust_profile: &str,
         _config: &CanvasLtiJwksRefreshConfig,
     ) -> Result<CanvasLtiPlatformProbe, String> {
         Ok(successful_probe(canvas_base_url, "canvas-key"))
@@ -491,6 +494,7 @@ impl CanvasLtiProbeClient for CountingProbe {
     async fn probe(
         &self,
         canvas_base_url: &str,
+        _trust_profile: &str,
         _config: &CanvasLtiJwksRefreshConfig,
     ) -> Result<CanvasLtiPlatformProbe, String> {
         let count = self.0.fetch_add(1, Ordering::SeqCst) + 1;
@@ -508,6 +512,7 @@ impl CanvasLtiProbeClient for FailedProbe {
     async fn probe(
         &self,
         _canvas_base_url: &str,
+        _trust_profile: &str,
         _config: &CanvasLtiJwksRefreshConfig,
     ) -> Result<CanvasLtiPlatformProbe, String> {
         Err("provider metadata unavailable".to_owned())
@@ -601,6 +606,7 @@ impl CanvasLtiProbeClient for DriftProbe {
     async fn probe(
         &self,
         canvas_base_url: &str,
+        _trust_profile: &str,
         _config: &CanvasLtiJwksRefreshConfig,
     ) -> Result<CanvasLtiPlatformProbe, String> {
         let mut probe = successful_probe(canvas_base_url, "drift-key");

@@ -1,0 +1,413 @@
+name: Nightly installation release
+
+run-name: Publish installation nightly from claim ${{ inputs.claim_run_id }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      claim_run_id:
+        description: Successful Prepare nightly claim run on this exact main source
+        required: true
+        type: string
+
+concurrency:
+  group: nightly-installation-${{ inputs.claim_run_id }}
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  release-environment-preflight:
+    permissions:
+      actions: read
+      contents: read
+    uses: ./.github/workflows/release-environment-preflight.yml
+    with:
+      environment: stack-release
+
+  admit:
+    needs: release-environment-preflight
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      tag: ${{ steps.plan.outputs.tag }}
+      version: ${{ steps.plan.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12'
+      - name: Authenticate nightly claim and current main
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CLAIM_RUN_ID: ${{ inputs.claim_run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = ElevenID/marty-ui
+          test "$GITHUB_REF" = refs/heads/main
+          [[ "$CLAIM_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          test "$(git rev-parse refs/remotes/origin/main)" = "$GITHUB_SHA"
+          root="$RUNNER_TEMP/nightly-claim"
+          mkdir "$root"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$CLAIM_RUN_ID" > "$root/run.json"
+          gh run download "$CLAIM_RUN_ID" --repo "$GITHUB_REPOSITORY" \
+            --name "nightly-claim-$CLAIM_RUN_ID" --dir "$root/claim"
+          test "$(find "$root/claim" -mindepth 1 -maxdepth 1 -printf '%f:%y\n')" = nightly-claim.json:f
+          test "$(wc -c < "$root/claim/nightly-claim.json")" -le 65536
+          python scripts/nightly_release.py admit --claim "$root/claim/nightly-claim.json" \
+            --run-json "$root/run.json" --source-sha "$GITHUB_SHA" --output "$root/plan.json"
+          tag="$(jq -er .claim.tag "$root/plan.json")"
+          python scripts/check_release_absent.py --repository "$GITHUB_REPOSITORY" --tag "$tag"
+          {
+            echo "matrix=$(jq -c '{include}' "$root/plan.json")"
+            echo "tag=$tag"
+            echo "version=$(jq -er .claim.version "$root/plan.json")"
+          } >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: nightly-admitted-${{ github.run_id }}
+          path: ${{ runner.temp }}/nightly-claim/
+          if-no-files-found: error
+          retention-days: 30
+
+  build-images:
+    needs: admit
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.admit.outputs.matrix) }}
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Expose existing read-only compiler cache
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
+        with:
+          script: |
+            const token = process.env.ACTIONS_RUNTIME_TOKEN;
+            const url = process.env.ACTIONS_RESULTS_URL;
+            if (!token || !url) throw new Error('Compiler cache credentials unavailable');
+            core.setSecret(token);
+            core.exportVariable('SCCACHE_GHA_RUNTIME_TOKEN', token);
+            core.exportVariable('SCCACHE_GHA_CACHE_URL', url);
+            core.exportVariable('SCCACHE_GHA_RW_MODE', 'READ_ONLY');
+      - name: Build existing production recipe by digest
+        id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          target: ${{ matrix.target }}
+          platforms: linux/amd64
+          build-args: ${{ matrix.build_args }}
+          outputs: type=image,name=${{ matrix.image }},push-by-digest=true,name-canonical=true,push=true
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha,scope=marty-ui-public-services
+          secret-envs: |
+            sccache_token=SCCACHE_GHA_RUNTIME_TOKEN
+            sccache_url=SCCACHE_GHA_CACHE_URL
+            sccache_mode=SCCACHE_GHA_RW_MODE
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+        with:
+          subject-name: ${{ matrix.image }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6
+      - name: Sign and record exact image identity
+        env:
+          ROLE: ${{ matrix.role }}
+          IMAGE: ${{ matrix.image }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+          VERSION: ${{ needs.admit.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          cosign sign --yes "$IMAGE@$DIGEST"
+          mkdir "$RUNNER_TEMP/image-evidence"
+          jq -n --arg role "$ROLE" --arg uri "$IMAGE" --arg digest "$DIGEST" \
+            --arg source_sha "$GITHUB_SHA" --arg version "$VERSION" --arg run_id "$GITHUB_RUN_ID" \
+            '{role:$role,uri:$uri,digest:$digest,source_sha:$source_sha,version:$version,run_id:$run_id}' \
+            > "$RUNNER_TEMP/image-evidence/image.json"
+      - uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26
+        with:
+          image: ${{ matrix.image }}@${{ steps.build.outputs.digest }}
+          format: cyclonedx-json
+          output-file: ${{ runner.temp }}/image-evidence/${{ matrix.role }}.sbom.cdx.json
+          upload-artifact: false
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: nightly-image-${{ matrix.role }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/image-evidence/
+          if-no-files-found: error
+          retention-days: 30
+
+  prepare-installation:
+    needs: [admit, build-images]
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      contents: read
+      packages: read
+      attestations: read
+      id-token: write
+    env:
+      CARGO_PROFILE_RELEASE_DEBUG: '0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12'
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+        with:
+          toolchain: 1.95.0
+          targets: x86_64-unknown-linux-musl
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: nightly-admitted-${{ github.run_id }}
+          path: ${{ runner.temp }}/admitted
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: nightly-image-*-${{ github.run_id }}
+          path: ${{ runner.temp }}/images
+      - name: Verify image producers and prepare exact candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --requirement scripts/selfhost-preview-tools.requirements.txt
+          python scripts/nightly_release.py record \
+            --claim "$RUNNER_TEMP/admitted/claim/nightly-claim.json" \
+            --run-json "$RUNNER_TEMP/admitted/run.json" --source-sha "$GITHUB_SHA" \
+            --images-dir "$RUNNER_TEMP/images" --run-id "$GITHUB_RUN_ID" \
+            --output "$RUNNER_TEMP/nightly-candidate.json"
+          jq -r '.images[] | .uri + "@" + .digest' "$RUNNER_TEMP/nightly-candidate.json" |
+          while IFS= read -r image; do
+            gh attestation verify "oci://$image" --repo "$GITHUB_REPOSITORY" \
+              --source-digest "$GITHUB_SHA" --source-ref refs/heads/main \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/nightly-release.yml" \
+              --deny-self-hosted-runners
+          done
+      - name: Build existing Rust packager and Linux operator
+        env:
+          MARTY_DEPLOY_SOURCE_SHA: ${{ github.sha }}
+          MARTY_DEPLOY_RELEASE_TAG: ${{ needs.admit.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends musl-tools cmake
+          cargo build --locked --release --manifest-path rust/Cargo.toml \
+            --target-dir "$RUNNER_TEMP/tools" -p marty-selfhost-bundle --bin package-selfhost-bundle
+          cargo test --locked --manifest-path rust/Cargo.toml \
+            --target-dir "$RUNNER_TEMP/tools" -p marty-deployment-catalog
+          CC_x86_64_unknown_linux_musl=musl-gcc cargo build --locked --release \
+            --target x86_64-unknown-linux-musl --manifest-path rust/Cargo.toml \
+            --target-dir "$RUNNER_TEMP/tools" -p marty-deployment-catalog --bin marty-deploy
+      - name: Package digest-locked installation assets
+        env:
+          TAG: ${{ needs.admit.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/package_nightly_installation.py --source "$GITHUB_WORKSPACE" \
+            --candidate "$RUNNER_TEMP/nightly-candidate.json" \
+            --packager "$RUNNER_TEMP/tools/release/package-selfhost-bundle" \
+            --output "$RUNNER_TEMP/prepared"
+          python scripts/nightly_release.py manifest --candidate "$RUNNER_TEMP/nightly-candidate.json" \
+            --timestamp "$(git show -s --format=%cI HEAD)" --output "$RUNNER_TEMP/prepared/stack-manifest.json"
+          asset="$RUNNER_TEMP/prepared/marty-deploy-linux-amd64"
+          cp "$RUNNER_TEMP/tools/x86_64-unknown-linux-musl/release/marty-deploy" "$asset"
+          chmod 755 "$asset"
+          test "$("$asset" --build-identity)" = "$GITHUB_SHA:$TAG"
+          if readelf -l "$asset" | grep -q INTERP; then exit 1; fi
+          find "$RUNNER_TEMP/images" -name '*.sbom.cdx.json' -exec cp '{}' "$RUNNER_TEMP/prepared/" \;
+          # The six-file staging inventory stays separate from release signatures.
+          (cd "$RUNNER_TEMP/prepared" && sha256sum --check --strict SHA256SUMS)
+          # The extracted copy is rebuildable; only the owned ZIP is uploaded.
+      - name: Require anonymously pullable Linux amd64 installation images
+        shell: bash
+        run: |
+          set -euo pipefail
+          export DOCKER_CONFIG="$RUNNER_TEMP/anonymous-docker"
+          mkdir "$DOCKER_CONFIG"
+          python scripts/check_selfhost_locked_image_platform.py \
+            --image-lock "$RUNNER_TEMP/prepared/prepared-selfhost-images.json" \
+            --output "$RUNNER_TEMP/nightly-image-platforms.json"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: nightly-installation-candidate-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/prepared/*.json
+            ${{ runner.temp }}/prepared/*.zip
+            ${{ runner.temp }}/prepared/*.md
+            ${{ runner.temp }}/prepared/SHA256SUMS
+            ${{ runner.temp }}/prepared/marty-deploy-linux-amd64
+          if-no-files-found: error
+          retention-days: 30
+
+  runtime-happy-path:
+    needs: [admit, prepare-installation]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+      attestations: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '24'
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: nightly-installation-candidate-${{ github.run_id }}
+          path: ${{ runner.temp }}/assets
+      - name: Verify and install the immutable public test interface
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --requirement scripts/selfhost-preview-tools.requirements.txt
+          component="$(jq -c '.components[] | select(.name == "marty-integration-tests")' release/stack-lock.json)"
+          version="$(jq -er .version <<< "$component")"
+          revision="$(jq -er .commit <<< "$component")"
+          uri="$(jq -er '.artifacts[0].uri' <<< "$component")"
+          digest="$(jq -er '.artifacts[0].digest' <<< "$component")"
+          curl --fail --location --silent --show-error "$uri" --output "$RUNNER_TEMP/harness.tar.gz"
+          gh attestation verify "$RUNNER_TEMP/harness.tar.gz" --repo ElevenID/marty-integration-tests \
+            --source-ref "refs/tags/v$version" --source-digest "$revision" --deny-self-hosted-runners
+          python scripts/extract_verified_source.py --archive "$RUNNER_TEMP/harness.tar.gz" \
+            --destination "$RUNNER_TEMP/harness" --expected-root "marty-integration-tests-$version" \
+            --expected-sha256 "$digest"
+          python -m pip install "$RUNNER_TEMP/harness"
+          for name in marty-api-core marty-cli; do
+            component="$(jq -c --arg name "$name" '.components[] | select(.name == $name)' release/stack-lock.json)"
+            uri="$(jq -er '.artifacts[0].uri' <<< "$component")"
+            digest="$(jq -er '.artifacts[0].digest' <<< "$component")"
+            curl --fail --location --silent --show-error "$uri" --output "$RUNNER_TEMP/$name.tgz"
+            echo "${digest#sha256:}  $RUNNER_TEMP/$name.tgz" | sha256sum --check --strict
+            npm install --global "$RUNNER_TEMP/$name.tgz"
+          done
+      - name: Require all five runtime happy paths and owned cleanup
+        shell: bash
+        run: >-
+          python scripts/run_nightly_runtime_smoke.py --harness "$RUNNER_TEMP/harness"
+          --assets "$RUNNER_TEMP/assets" --source "$GITHUB_WORKSPACE"
+          --report "$RUNNER_TEMP/nightly-runtime.json"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: nightly-runtime-happy-path-${{ github.run_id }}
+          path: ${{ runner.temp }}/nightly-runtime.json
+          if-no-files-found: error
+          retention-days: 30
+
+  sign-release:
+    needs: [admit, prepare-installation, runtime-happy-path]
+    runs-on: ubuntu-24.04
+    environment: stack-release
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: nightly-installation-candidate-${{ github.run_id }}
+          path: ${{ runner.temp }}/publish
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: nightly-runtime-happy-path-${{ github.run_id }}
+          path: ${{ runner.temp }}/publish
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6
+      - name: Verify and sign the installation-test prerelease assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.admit.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --requirement scripts/selfhost-preview-tools.requirements.txt
+          python scripts/publish_nightly_release.py --phase sign --assets "$RUNNER_TEMP/publish" \
+            --source "$GITHUB_WORKSPACE" --tag "$TAG" --run-id "$GITHUB_RUN_ID"
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+        with:
+          subject-path: ${{ runner.temp }}/publish/*
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: nightly-publication-assets-${{ github.run_id }}
+          path: ${{ runner.temp }}/publish/
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    needs: [admit, sign-release]
+    runs-on: ubuntu-24.04
+    environment: stack-release
+    permissions:
+      contents: write
+      actions: read
+      attestations: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: nightly-publication-assets-${{ github.run_id }}
+          path: ${{ runner.temp }}/publish
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6
+      - name: Publish and verify the immutable installation-test prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.admit.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --requirement scripts/selfhost-preview-tools.requirements.txt
+          python scripts/publish_nightly_release.py --phase publish --assets "$RUNNER_TEMP/publish" \
+            --source "$GITHUB_WORKSPACE" --tag "$TAG" --run-id "$GITHUB_RUN_ID"

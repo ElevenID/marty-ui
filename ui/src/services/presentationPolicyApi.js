@@ -164,6 +164,8 @@ function trustSourcesFromTrustedIssuers(trustedIssuers = []) {
       description: issuer.description || null,
       issuer_did: issuer.issuer_did,
       source_type: 'PINNED_ISSUER',
+      ...Object.fromEntries(['organization_id', 'verification_method_ids', 'did_resolution']
+        .filter((field) => issuer[field] !== undefined).map((field) => [field, issuer[field]])),
     }));
 }
 
@@ -174,6 +176,16 @@ function normalizePublicTrustSource(source = {}) {
   if (source.url) normalized.url = String(source.url).trim();
   if (source.certificate_pem) normalized.certificate_pem = String(source.certificate_pem).trim();
   if (source.issuer_did) normalized.issuer_did = String(source.issuer_did).trim();
+  for (const field of ['organization_id', 'verification_method_ids']) {
+    if (source[field] !== undefined) normalized[field] = source[field];
+  }
+  if (source.did_resolution !== undefined) {
+    normalized.did_resolution = source.did_resolution === null ? null : Object.fromEntries(
+      ['resolver_type', 'allow_public_fallback', 'cache_ttl_seconds']
+        .filter((field) => source.did_resolution[field] !== undefined)
+        .map((field) => [field, source.did_resolution[field]])
+    );
+  }
   if (Array.isArray(source.purposes)) normalized.purposes = [...source.purposes];
   if (source.description) normalized.description = String(source.description).trim();
   if (source.registry_sync) {
@@ -240,6 +252,41 @@ function buildTrustProfilePayload(data = {}) {
     verification_policy_set_id: data.verification_policy_set_id,
     auto_generated: data.auto_generated || false,
   };
+}
+
+// PATCH must not inherit creation defaults: omitted security settings belong
+// to the stored profile. Explicit null/false/empty values remain intentional.
+function buildTrustProfilePatch(data = {}) {
+  const patch = {};
+  const fields = [
+    'name', 'description', 'compliance_status', 'trust_purposes',
+    'trusted_assertion_formats', 'revocation_policy', 'revocation_profile_id',
+    'time_policy', 'allowed_issuers', 'denied_issuers', 'system_issuer_overrides',
+    'compatible_compliance_codes', 'verification_policy_set_id', 'auto_generated',
+  ];
+  for (const field of fields) {
+    if (Object.hasOwn(data, field) && data[field] !== undefined) patch[field] = data[field];
+  }
+  const profileType = data.profile_type ?? data.framework_type;
+  if (profileType !== undefined) patch.profile_type = normalizeTrustProfileType(profileType);
+  if (data.supported_formats !== undefined) {
+    patch.supported_formats = data.supported_formats?.map(normalizeTrustProfileFormat) ?? null;
+  }
+  if (data.trust_sources !== undefined) {
+    patch.trust_sources = data.trust_sources?.map(normalizePublicTrustSource) ?? null;
+  } else if (data.trusted_issuers !== undefined) {
+    patch.trust_sources = trustSourcesFromTrustedIssuers(data.trusted_issuers);
+  }
+  // Top-level rule fields merge with the current backend rules. A nested
+  // replacement would fill omitted rule fields with defaults on deserialization.
+  for (const field of [
+    'allowed_algorithms', 'min_key_size_rsa', 'min_key_size_ec',
+    'require_key_usage', 'max_chain_depth', 'allow_self_signed',
+  ]) {
+    const value = data[field] !== undefined ? data[field] : data.validation_rules?.[field];
+    if (value !== undefined) patch[field] = value;
+  }
+  return patch;
 }
 
 function normalizeTrustProfile(data = {}) {
@@ -554,7 +601,7 @@ export function buildCredentialTemplatePayload(data = {}) {
     generate_artifacts_automatically: _generateArtifactsAutomatically,
     auto_generate_artifacts: _autoGenerateArtifacts,
     supported_wallet_ids: _supportedWalletIds,
-    issuance_protocol: _issuanceProtocol,
+    _issuer_selection: _issuerSelection,
     wallet_configs: _walletConfigs,
     compliance_profile: _embeddedComplianceProfile,
     issuer_profile_id: _issuerProfileId,
@@ -654,8 +701,9 @@ export async function listPresentationPolicies(params = {}) {
 /**
  * Get a specific presentation policy by ID
  */
-export async function getPresentationPolicy(id) {
-  const result = await get(`${PRESENTATION_POLICY_BASE}/${id}`);
+export async function getPresentationPolicy(id, scope = null) {
+  const query = scope ? `?${new URLSearchParams({ organization_id: requireOrganizationId(scope) })}` : '';
+  const result = await get(`${PRESENTATION_POLICY_BASE}/${encodeURIComponent(id)}${query}`);
   return normalizePresentationPolicy(result);
 }
 
@@ -663,7 +711,21 @@ export async function getPresentationPolicy(id) {
  * Update a presentation policy
  */
 export async function updatePresentationPolicy(id, data) {
-  const result = await patch(`${PRESENTATION_POLICY_BASE}/${id}`, buildPresentationPolicyPayload(data));
+  const organizationId = requireOrganizationId(data);
+  const { organization_id: _organizationId, freshness_requirements, ...payload } = data;
+  // PATCH is a sparse update, not a new policy. Never manufacture
+  // requirements or binding defaults for an unrelated metadata edit.
+  if (typeof payload.holder_binding === 'string') {
+    payload.holder_binding = normalizeHolderBindingPayload(payload.holder_binding);
+  }
+  if (freshness_requirements !== undefined && payload.freshness === undefined) {
+    payload.freshness = normalizeFreshnessPayload({ freshness_requirements });
+  }
+  // The public gateway authenticates body scope, then removes it before
+  // forwarding to the native update contract.
+  const result = await patch(`${PRESENTATION_POLICY_BASE}/${encodeURIComponent(id)}`, {
+    organization_id: organizationId, ...payload,
+  });
   return normalizePresentationPolicy(result);
 }
 
@@ -672,6 +734,10 @@ export async function updatePresentationPolicy(id, data) {
  */
 export async function deletePresentationPolicy(id) {
   return del(`${PRESENTATION_POLICY_BASE}/${id}`);
+}
+
+export async function suspendPresentationPolicy(id) {
+  return normalizePresentationPolicy(await post(`${PRESENTATION_POLICY_BASE}/${encodeURIComponent(id)}/suspend`, {}));
 }
 
 /**
@@ -840,7 +906,7 @@ export async function getTrustProfile(id) {
  * Update a trust profile
  */
 export async function updateTrustProfile(id, data) {
-  const result = await patch(`${TRUST_PROFILE_BASE}/${id}`, buildTrustProfilePayload(data));
+  const result = await patch(`${TRUST_PROFILE_BASE}/${id}`, buildTrustProfilePatch(data));
   return normalizeTrustProfile(result);
 }
 

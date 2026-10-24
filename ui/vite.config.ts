@@ -314,6 +314,8 @@ export default defineConfig(async ({ mode }) => {
         prerender({
           routes: prerenderRoutes,
           renderer: new PuppeteerRenderer({
+            injectProperty: '__ELEVENID_PRERENDER__',
+            inject: { demoManifests: true },
             maxConcurrentRoutes: prerenderConcurrency,
             renderAfterDocumentEvent: 'app-rendered',
             timeout: 45000,
@@ -500,6 +502,12 @@ export default defineConfig(async ({ mode }) => {
           secure: false,
         },
         // Proxy OpenAPI schema for API documentation
+        '/openapi.yaml': {
+          target: env.VITE_DEV_PROXY_TARGET || env.VITE_API_URL || 'http://127.0.0.1:8000',
+          changeOrigin: true,
+          secure: false,
+          rewrite: () => '/openapi.json',
+        },
         '/openapi.json': {
           target: env.VITE_DEV_PROXY_TARGET || env.VITE_API_URL || 'http://127.0.0.1:8000',
           changeOrigin: true,

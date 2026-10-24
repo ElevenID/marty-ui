@@ -42,10 +42,19 @@ test-user accounts as part of installed acceptance.
    bound to the original source and must not be reassigned. Consider signed
    `v1.1.257` passed an exploratory fresh 16 GiB installed business/custody
    journey, but its prepared bundle came from a failed producer and its
-   coordinated cold restore remains unrun. `v1.1.258` has a signed Stack release
-   but remains unqualified for installed handoff. Consider `v1.1.259` only after
-   its exact-main release, terminally successful bundle producer, independent
-   fresh installed journey, and restored-stack gates pass.
+   coordinated cold restore remains unrun. Signed `v1.1.258` passed its
+   exact-main release, terminally successful bundle producer, independent
+   fresh installed journey, and coordinated cold-copy restored-stack checks;
+   its installed reports remain unqualified. `v1.1.259` has an experimental
+   tester preview but no installed qualification. `v1.1.260` has a signed
+   Stack release but no installed qualification. The `v1.1.261` registry
+   coordinate is occupied without a matching Git tag. `v1.1.262` has a signed
+   Stack release but its official issuer run stopped at Compose validation;
+   it has no official conformance or installed qualification. Consider `v1.1.263` only
+   after its exact-main release, terminally successful bundle producer,
+   independent fresh installed journey, and restored-stack gates pass. A
+   continuously running beta or self-host cutover also needs a production
+   renewal and controlled reload path that crosses an actual expiry boundary.
 2. Create empty PostgreSQL/Redis/applicant and OpenBao Raft state roots and a
    private secret root. Choose the final Compose project names and loopback
    ports. Render the full

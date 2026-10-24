@@ -15,6 +15,15 @@ import (
 )
 
 func TestHaipKeyStaysInOpenBaoAndDecryptsBoundResponse(t *testing.T) {
+	for _, algorithm := range []jose.ContentEncryption{jose.A128GCM, jose.A256GCM} {
+		t.Run(string(algorithm), func(t *testing.T) {
+			testHaipBoundResponse(t, algorithm)
+		})
+	}
+}
+
+func testHaipBoundResponse(t *testing.T, algorithm jose.ContentEncryption) {
+	t.Helper()
 	ctx := context.Background()
 	storage := transactionalTestStorage(t)
 	engine, err := Factory(ctx, &logical.BackendConfig{StorageView: storage})
@@ -64,7 +73,7 @@ func TestHaipKeyStaysInOpenBaoAndDecryptsBoundResponse(t *testing.T) {
 		t.Fatal(err)
 	}
 	pub := &ecdsa.PublicKey{Curve: elliptic.P256(), X: new(big.Int).SetBytes(x), Y: new(big.Int).SetBytes(y)}
-	encrypter, err := jose.NewEncrypter(jose.A256GCM, jose.Recipient{Algorithm: jose.ECDH_ES, Key: pub}, nil)
+	encrypter, err := jose.NewEncrypter(algorithm, jose.Recipient{Algorithm: jose.ECDH_ES, Key: pub}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,6 +94,23 @@ func TestHaipKeyStaysInOpenBaoAndDecryptsBoundResponse(t *testing.T) {
 	decoded, err := base64.StdEncoding.DecodeString(opened.Data["plaintext_base64"].(string))
 	if err != nil || string(decoded) != string(plaintext) {
 		t.Fatalf("HAIP plaintext mismatch: %v", err)
+	}
+	// Retain the exact algorithm boundary: accepting both required GCM sizes
+	// must not admit other encryption modes or key agreement algorithms.
+	for _, field := range []string{"enc", "alg"} {
+		parts := strings.Split(compact, ".")
+		protected, _ := base64.RawURLEncoding.DecodeString(parts[0])
+		var header map[string]any
+		if err := json.Unmarshal(protected, &header); err != nil {
+			t.Fatal(err)
+		}
+		header[field] = "unsupported"
+		protected, _ = json.Marshal(header)
+		parts[0] = base64.RawURLEncoding.EncodeToString(protected)
+		denied := request(logical.UpdateOperation, decryptPath, map[string]any{"jwe": strings.Join(parts, ".")})
+		if denied == nil || !denied.IsError() {
+			t.Fatalf("unsupported %s was accepted", field)
+		}
 	}
 	// A competing worker may select a different advisory current version.
 	// The already-published key reference must still decrypt after that race.

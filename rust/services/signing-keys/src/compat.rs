@@ -1196,6 +1196,16 @@ impl SigningCompatibilityService {
         organization_id: &str,
         issuer_did: &str,
     ) -> Result<Value, CompatibilityError> {
+        self.load_identity_document_with_source(organization_id, issuer_did)
+            .await
+            .map(|(document, _)| document)
+    }
+
+    pub(crate) async fn load_identity_document_with_source(
+        &self,
+        organization_id: &str,
+        issuer_did: &str,
+    ) -> Result<(Value, &'static str), CompatibilityError> {
         let scoped = self
             .documents
             .load_did(
@@ -1211,7 +1221,7 @@ impl SigningCompatibilityService {
             if scoped.document.get("id").and_then(Value::as_str) != Some(issuer_did) {
                 return Err(CompatibilityError::Unavailable);
             }
-            return Ok(scoped.document);
+            return Ok((scoped.document, "scoped_document"));
         }
         let legacy = self
             .documents
@@ -1225,9 +1235,12 @@ impl SigningCompatibilityService {
             .await
             .map_err(|_| CompatibilityError::Unavailable)?;
         Ok(if legacy.found {
-            retarget_document(&legacy.document, issuer_did)
+            (
+                retarget_document(&legacy.document, issuer_did),
+                "legacy_projection",
+            )
         } else {
-            empty_did_document(issuer_did)
+            (empty_did_document(issuer_did), "empty_fallback")
         })
     }
 }
@@ -1896,7 +1909,7 @@ fn supports(service: &Map<String, Value>, field: &str, requested: &str) -> bool 
         })
 }
 
-fn select_identity_custody(
+pub(crate) fn select_identity_custody(
     registry_document: &Value,
     credential_format: &str,
     key_purpose: &str,
@@ -1944,6 +1957,18 @@ fn select_identity_custody(
                 .into(),
         )
     })?;
+    if service_id != "managed-openbao-transit" {
+        // Apply existing purpose-reservation rules before provisioning or
+        // advertising this tuple. The fallback key reference is not authority
+        // to repurpose a key reserved for another protocol.
+        profiles::validate_binding(&ValidateBindingRequest {
+            profile: json!({"key_purpose":key_purpose, "algorithm":algorithm, "signing_key_reference":key_reference}),
+            service: Value::Object(service),
+            registry: registry_document.clone(),
+        }).map_err(|_| CompatibilityError::Conflict(
+            "Configured signing identity is not authorized for the requested purpose.".into(),
+        ))?;
+    }
     Ok((service_id, key_reference))
 }
 

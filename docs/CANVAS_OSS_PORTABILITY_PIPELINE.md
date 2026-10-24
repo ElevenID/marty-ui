@@ -6,7 +6,28 @@ It is intentionally separate from `docker-compose.profile.canvas-real.yml`, the 
 
 ## Current implementation boundary
 
-The harness has an executable `readiness_only` mode, but the local host is **not ready to run it yet**. On 2026-07-15, the dedicated Ubuntu 24.04 WSL2 distribution, non-root runner account, prerequisites, and official Actions runner `2.335.1` were installed and checksum-verified. Docker Desktop integration is still intentionally disabled, zero self-hosted runners are registered for `ElevenID/marty-ui`, and the reviewed Canvas image lock remains `pending_source_build`. No successful nightly or portability run is claimed.
+The upstream source image build runs on a disposable GitHub `ubuntu-24.04` VM;
+it does not need the beta Docker socket, tunnel, credentials, or WSL runner.
+`prepare_canvas_source_builder.py` removes only a fixed inventory of unrelated
+preinstalled SDK directories on that hosted VM, then requires at least 80 GiB
+free on the actual Docker backing filesystem and 12 GiB Docker memory. It
+rejects local/self-hosted invocation before Docker access or SDK removal. Hosted
+capacity is measured, never assumed: insufficient capacity fails the source
+build. GitHub advertises only 14 GB standard-runner storage; SDK reclamation is
+an attempted workaround, not a guaranteed capacity allocation.
+
+Default-branch publication, the protected `canvas-oss-image-publish` environment,
+pristine upstream source, immutable base-image conversion, SBOM and keyless
+provenance remain required. A published digest still needs review and lock-file
+promotion. This does not qualify Canvas or relax the separate local beta
+portability runner's Docker integration and physical capacity checks.
+
+References: [GitHub runner specifications](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)
+and [Ubuntu hosted image inventory](https://github.com/actions/runner-images/blob/main/images/ubuntu/Ubuntu2404-Readme.md).
+
+The stock source image was published by [run 39527943630](https://github.com/ElevenID/marty-ui/actions/runs/39527943630), pulled locally, and promoted to `published` in the lock after registry hashes, source labels and GitHub attestation verification. The [review receipt](canvas-oss-image-review-20261020.json) records the immutable digest and verification inputs. This completes image acquisition; it does not qualify the Canvas runtime or D07/D08.
+
+The harness has an executable `readiness_only` mode. Recheck the actual host's Docker backing capacity, memory, integration and beta network/tunnel bindings before starting it; earlier host observations are not current readiness evidence. The local stock Canvas bootstrap, public LTI navigation, wallet operations and fresh negative/recovery contract still require real execution. No successful nightly or portability run is claimed.
 
 After the dedicated distro, runner binary, reviewed image digest, and coordinated beta release exist, `readiness_only` starts the honest topology, verifies the deployed beta capability and public Canvas route, and emits `status=readiness_only`; it cannot be promoted or used by the demo recorder as portability proof.
 
@@ -22,13 +43,88 @@ The reviewed lock is [canvas-oss.lock.json](../deploy-config/catalog/canvas-oss.
 - an immutable GHCR digest after it has been built and reviewed.
 - immutable Postgres, Redis, Mailpit, and edge-proxy dependency digests;
 - the upstream `instructure/ruby-passenger:3.4-jammy` index and Linux/amd64 child digests used by `Dockerfile.production`;
-- the Linux/amd64 Playwright 1.56.0 base-image digest, dedicated contract Dockerfile, Playwright-only package lock, zero-high/critical npm audit gate, Compose service identity, and secret-file transport.
+- the locked Linux/amd64 Playwright base-image digest, dedicated contract Dockerfile, Playwright-only package lock, zero-high/critical npm audit gate, Compose service identity, and secret-file transport.
 
-Run **Canvas OSS Source Image** manually on the eventual `canvas-oss-wsl2` runner. The workflow checks out the annotated upstream tag, verifies its tag object, peeled commit, and Git tree, rejects a dirty worktree, verifies the locked upstream base-image index/amd64 manifests, and applies the reviewed BuildKit source policy that converts the upstream mutable base tag to the locked Linux/amd64 digest without editing the Canvas Dockerfile. It publishes SBOM/provenance and release/ref/base labels plus the source-policy digest in a fixed image manifest. Review that manifest, then update `image.digest` and set `image.digest_state` to `published` in the lock. Acceptance rejects any image manifest whose tag, source/tree SHA, base image, source policy, labels, or output digest differs from the reviewed lock.
+Run **Canvas OSS Source Image** manually from reviewed `main` on its disposable
+GitHub `ubuntu-24.04` VM. The source builder reclaims its fixed hosted SDK inventory
+and requires measured Docker backing capacity before building; it does not use
+the local WSL runner. That runner is required separately for beta portability.
 
-Create and protect the `canvas-oss-image-publish` GitHub environment before the first image run. Limit reviewers to trusted maintainers and prevent self-review. The image workflow admits only a manual run from `ElevenID/marty-ui` `main`; all third-party Actions in the image, portability, and hosted-Canvas workflows are pinned to reviewed full commit SHAs.
+The source workflow checks out the annotated upstream tag, verifies its tag
+object, peeled commit and Git tree, rejects a dirty worktree, verifies the locked
+upstream base-image manifests, and applies the reviewed BuildKit source policy
+without editing the Canvas Dockerfile. It publishes SBOM/provenance and
+release/ref/base labels plus the source-policy digest in a fixed image manifest.
+Base verification fetches the locked index and Linux/amd64 child by digest,
+hashes their raw bytes, and checks the exact platform-to-child binding. A later
+change to the upstream tag does not select a new base or invalidate the pinned one.
+Review that manifest, then update `image.digest` and set `image.digest_state` to
+`published` in the lock. Acceptance rejects a manifest whose tag, source/tree SHA,
+base image, source policy, labels or output digest differs from that reviewed lock.
+
+Create the `canvas-oss-image-publish` GitHub environment with a custom deployment
+branch policy allowing only the `main` branch. The source image publication
+environment has no required-reviewer gate, as authorized by the maintainer;
+manual dispatch from reviewed main authorizes building and publishing the pinned
+image. A successful publication still requires manifest review and lock-file
+promotion before portability acceptance. The image workflow admits only a manual
+run from `ElevenID/marty-ui` `main`; all third-party Actions in the image,
+portability, and hosted-Canvas workflows are pinned to reviewed full commit SHAs.
 
 ## Local runner and beta prerequisites
+
+Organization's authenticated `GetMember` and `GetMemberPermissions` calls resolve
+`api_key:<id>` service principals from the live, tenant-bound key. They use the
+same scope policy as the gateway, reject expired/disabled/revoked keys, and
+intersect any explicit membership restrictions. These principals have no human
+owner role or organization-console access. Create the bounded test key through
+the native key API; do not add a demo-only human membership to make integration
+reads or approval pass. Verify both permitted tenant operations and denied
+foreign-tenant/administrative operations before the real journey.
+
+For an organization without the learning Open Badge template, the Rust
+`canvas-native-template-inputs` binary renders native credential/application
+create bodies from nonsecret JSON profile bindings on stdin. Its input fields
+are `organization_id`, `issuer_did`, `compliance_profile_id`, `trust_profile_id`,
+`revocation_profile_id` and optional `credential_template_id`. Resolve and verify
+those references through the production APIs first. The renderer shares the
+existing learning-badge definition, emits no custody configuration or Canvas
+evidence, and makes no network or database calls. Create and activate the
+credential through the native API, then render again with its returned ID to
+create the linked manual-approval application. The real program binding supplies
+the actual course/evidence requirements. Do not run the legacy database/Rails
+seeder against the stock portability instance. Template setup is not a passed
+learning or issuance scenario.
+
+For local development with the reviewed Canvas image already pulled, use
+`scripts/run-local-canvas-runtime.ps1 -ArtifactDir <new-output-directory>
+-BetaDeploymentManifest <actual-local-deployment-manifest>`. It checks the exact
+published digest, upstream/base labels, Linux/amd64 platform, beta source and
+Compose ownership, and physical free space on the Windows volume containing
+Docker Desktop's actual VHDX. Runtime reserves the larger of20GiB or twice the
+present image size; upstream source builds retain the80GiB prerequisite. The
+runtime mode cannot compile a Canvas source image or substitute an unreviewed
+image. It uses the existing Windows `desktop-linux` endpoint, so a WSL socket
+pointing at another daemon cannot silently select a different environment.
+If the Docker data disk was relocated, supply `-DockerDesktopDataDiskPath
+<actual-vhdx-path>`; the same physical-volume observer measures that file.
+
+Add `-Bootstrap` to run the existing approved stock lifecycle and start its
+isolated services. The wrapper holds the Docker runner and beta deployment
+locks. Canvas, databases, the contract browser and continuity monitor remain
+Compose containers. Bootstrap refuses existing project containers or volumes,
+records and stops only the existing lifecycle's replaceable beta Canvas
+allowlist, and requires the public tunnel alias to be unowned before startup.
+After startup, exactly one stock Compose edge must own that alias and the web
+and edge images must match their pinned runtime identities. Unknown or duplicate
+route owners fail closed; an HTTP200 response alone cannot prove stock Canvas.
+The browser, databases and monitor remain
+Compose containers. Source/image bindings, actual contract unit results, stock
+bootstrap audit, public login, beta continuity and the self-host production
+invariant are retained. Private operator keys/passwords remain under
+`~/.codex/private`. Learner/API-key inputs are deliberately empty until real
+full-contract authority is configured; unit results and bootstrap never qualify
+D07/D08. This path neither registers a GitHub runner nor claims GitHub labels.
 
 The required labels are `self-hosted`, `linux`, `x64`, and `canvas-oss-wsl2`. The overnight window is 02:00-06:00 `America/Denver`. GitHub schedules both 08:07 and 09:07 UTC and admits only the trigger that is 02:07 in Denver, so daylight-saving changes do not shift the local window. The job timeout leaves time for teardown before 06:00.
 
@@ -45,7 +141,7 @@ One-time setup (partially completed on the current host):
      -RunnerArchiveSha256 '<checksum shown by GitHub>'
    ```
 
-   The setup fails closed if Ubuntu 24.04/WSL2, a non-root default user, `gh`, `jq`, `node`, `python3`, Docker Compose v2, the Docker Desktop socket, 80 GiB free disk, 12 GiB Docker memory, `marty-infra-network`, or the existing beta tunnel is unavailable. If WSL installation requires a restart or first interactive launch, it reports that boundary and must be rerun. Enable Docker Desktop integration for `Ubuntu-24.04`; do not install a second Docker daemon inside WSL.
+   The setup fails closed if Ubuntu 24.04/WSL2, a non-root default user, `gh`, `jq`, `node`, `python3`, Docker Compose v2, the Docker Desktop socket, 80 GiB free disk, 12 GiB Docker memory, `elevenid-beta-network`, or the existing beta tunnel is unavailable. Tunnel services are discovered by the `elevenid-beta` Compose project and `nginx-proxy`/`cloudflared` service labels; both must be unique, running and attached to the exact network ID. Historical container names do not establish ownership. If WSL installation requires a restart or first interactive launch, it reports that boundary and must be rerun. Enable Docker Desktop integration for `Ubuntu-24.04`; do not install a second Docker daemon inside WSL.
 2. Authenticate Windows GitHub CLI as an account or GitHub App installation able to administer repository runners: `gh auth login`. The setup script installs the WSL `gh` binary used by workflows, but it does not register a runner.
 3. Run `.\scripts\register-canvas-oss-runner.ps1` interactively once. It requests a fresh short-lived GitHub registration token, registers `--ephemeral`, verifies server-side `self-hosted`, `linux`, `x64`, and `canvas-oss-wsl2` labels, and accepts one job in the foreground. Confirm GitHub removes it afterward.
 4. Only after that dry run succeeds, register the daily local-time task:
@@ -60,7 +156,7 @@ One-time setup (partially completed on the current host):
 
 The task follows the Windows `America/Denver` local clock. After its dry run, set repository variable `CANVAS_OSS_NIGHTLY_ENABLED=true`; until then scheduled triggers exit on GitHub-hosted infrastructure without queueing the absent local runner. An idle permanent runner is neither created nor expected; the repository normally returns to zero registered Canvas runners after each job.
 
-The runner is orchestration only. Marty, Canvas, PostgreSQL, Redis, workers, mail capture, edge routing, the Playwright contract browser, video recording, and the beta continuity monitor all remain Docker Compose services on the existing Docker Desktop daemon and `marty-infra-network`; no application, browser, demo, or data-plane service is installed natively in Windows or WSL, and no second Docker daemon is permitted. The runner does not stop Docker Desktop, start another tunnel connector, or touch a `marty-selfhost-prod` workload. It records and temporarily stops only:
+The runner is orchestration only. Marty, Canvas, PostgreSQL, Redis, workers, mail capture, edge routing, the Playwright contract browser, video recording, and the beta continuity monitor all remain Docker Compose services on the existing Docker Desktop daemon and `elevenid-beta-network`; no application, browser, demo, or data-plane service is installed natively in Windows or WSL, and no second Docker daemon is permitted. The runner does not stop Docker Desktop, start another tunnel connector, or touch a `marty-selfhost-prod` workload. It records and temporarily stops only:
 
 - `marty-canvas-real`;
 - `marty-canvas-sandbox`;
@@ -113,6 +209,9 @@ deployment wrapper itself admits only `02:00` through `05:59`
 `America/Denver`.
 
 ```powershell
+# Existing private beta TUNNEL_TOKEN file. Migrate legacy argv connectors first
+# using docs/beta-connector-credential-migration.md.
+$protectedBetaConnectorEnvFile = "C:\beta-runtime\private\connector-token.env"
 $release = "canvas-oss-beta-local-$([DateTime]::UtcNow.ToString('yyyyMMddTHHmmssZ'))"
 $artifact = Join-Path $PWD "tests\artifacts\$release"
 $snapshots = Join-Path $artifact "source-snapshots"
@@ -135,11 +234,13 @@ python .\scripts\create_local_release_manifest.py `
   -EnablePortableCanvas `
   -CanvasOrigin "https://canvas-test.elevenidllc.com" `
   -PilotOrganizationId "00000000-0000-0000-0000-000000000001" `
+  -TunnelTokenEnvFile $protectedBetaConnectorEnvFile `
   -PlanOnly
 
 # Execute only inside the approved Denver maintenance window.
 & .\scripts\deploy-canvas-oss-beta.ps1 `
   -ArtifactDir $artifact `
+  -TunnelTokenEnvFile $protectedBetaConnectorEnvFile `
   -AuditPath $audit
 
 python .\scripts\check_canvas_beta_capabilities.py `

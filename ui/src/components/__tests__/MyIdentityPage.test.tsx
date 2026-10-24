@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { render, screen } from '@test/utils'
+import { render, screen, act, waitFor } from '@test/utils'
+import { initiateLogout } from '../../services/authApi'
 
 import MyIdentityPage from '../console/applicant/MyIdentityPage'
 
@@ -27,6 +28,31 @@ vi.mock('../console/applicant/ClaimCredentialDialog', () => ({
 }))
 
 describe('MyIdentityPage', () => {
+  it('aborts inventory requests before logout submission and stops focus refreshes', async () => {
+    mockGetMyCredentials.mockImplementation(() => new Promise(() => {}))
+    mockGetMyApplications.mockImplementation(() => new Promise(() => {}))
+    const view = render(<MyIdentityPage />)
+    await waitFor(() => expect(mockGetMyCredentials).toHaveBeenCalled())
+    const signal = mockGetMyCredentials.mock.calls.at(-1)![1].signal as AbortSignal
+    const applicationSignal = mockGetMyApplications.mock.calls.at(-1)![1].signal as AbortSignal
+    expect(signal.aborted).toBe(false)
+    const submit = vi.spyOn(HTMLFormElement.prototype, 'submit').mockImplementation(() => {
+      expect(signal.aborted).toBe(true)
+      expect(applicationSignal.aborted).toBe(true)
+    })
+    try {
+      act(() => initiateLogout())
+      expect(submit).toHaveBeenCalledOnce()
+      const calls = mockGetMyCredentials.mock.calls.length
+      act(() => window.dispatchEvent(new Event('focus')))
+      expect(mockGetMyCredentials).toHaveBeenCalledTimes(calls)
+    } finally {
+      submit.mockRestore()
+      document.querySelector('form[action="/v1/auth/logout"]')?.remove()
+      view.unmount()
+    }
+  })
+
   beforeEach(() => {
     vi.clearAllMocks()
     mockGetMyCredentials.mockResolvedValue({ items: [] })

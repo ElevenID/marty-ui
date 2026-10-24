@@ -342,7 +342,7 @@ function CanvasLtiExperiencePage() {
                   ref={deepLinkingFormRef}
                   method="post"
                   action={deepLinkingSubmission.action}
-                  target="_top"
+                  target="_self"
                   aria-hidden="true"
                   style={{ display: 'none' }}
                 >

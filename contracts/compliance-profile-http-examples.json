@@ -1,0 +1,129 @@
+{
+  "create": {
+    "organization_id": "org-1",
+    "name": "Enterprise SD-JWT VC",
+    "description": "Enterprise issuance baseline",
+    "compliance_code": "ENTERPRISE_VC",
+    "credential_format": "SD_JWT_VC",
+    "issuance_protocol": "OID4VCI_PRE_AUTH",
+    "issuer_artifact_requirements": {
+      "requires_did": true,
+      "requires_jwk": true,
+      "recommended_algorithms": [
+        "ES256"
+      ]
+    },
+    "verification_policy_set_id": "policy-set-1",
+    "trust_profile_constraints": {
+      "compatible_profile_types": [
+        "CUSTOM"
+      ],
+      "required_source_types": [
+        "TRUST_LIST"
+      ],
+      "required_formats": [
+        "SD_JWT_VC"
+      ]
+    },
+    "api_surface": [
+      {
+        "rel": "issuer",
+        "path_template": "/.well-known/openid-credential-issuer",
+        "auth_required": false
+      }
+    ],
+    "frameworks": [
+      "GDPR"
+    ],
+    "data_retention": {
+      "retention_period": "1_year",
+      "retain_metadata_only": true,
+      "anonymize_after_days": 30
+    },
+    "consent_requirement": {
+      "consent_type": "explicit",
+      "consent_text": "Consent",
+      "consent_version": "2.0"
+    },
+    "audit_configuration": {
+      "audit_level": "detailed",
+      "retention_days": 730
+    },
+    "data_minimization_rules": [
+      {
+        "description": "Protect email",
+        "applies_to_claims": [
+          "email"
+        ],
+        "action": "hash",
+        "parameters": {
+          "algorithm": "sha256"
+        }
+      }
+    ],
+    "jurisdictional_constraints": [
+      {
+        "name": "EU",
+        "allowed_countries": [
+          "DE",
+          "FR"
+        ],
+        "data_residency_required": true,
+        "allowed_data_regions": [
+          "eu"
+        ]
+      }
+    ],
+    "age_verification": {
+      "enabled": true,
+      "minimum_age": 21,
+      "verification_method": "derived"
+    }
+  },
+  "response": {
+    "organization_id": "org-1",
+    "name": "Enterprise SD-JWT VC",
+    "description": "Enterprise issuance baseline",
+    "compliance_code": "ENTERPRISE_VC",
+    "credential_format": "SD_JWT_VC",
+    "issuance_protocol": "OID4VCI_PRE_AUTH",
+    "issuer_artifact_requirements": {
+      "requires_did": true,
+      "requires_jwk": true,
+      "recommended_algorithms": [
+        "ES256"
+      ],
+      "requires_x509_cert": false,
+      "cert_key_usage": []
+    },
+    "verification_policy_set_id": "policy-set-1",
+    "trust_profile_constraints": {
+      "compatible_profile_types": [
+        "CUSTOM"
+      ],
+      "required_source_types": [
+        "TRUST_LIST"
+      ],
+      "required_formats": [
+        "SD_JWT_VC"
+      ]
+    },
+    "api_surface": [
+      {
+        "rel": "issuer",
+        "path_template": "/.well-known/openid-credential-issuer",
+        "auth_required": false,
+        "method": "GET",
+        "org_scoped_path": null,
+        "response_schema_ref": null,
+        "standard_ref": null
+      }
+    ],
+    "id": "8b25cc22-c447-4e8b-8ae7-570da20c9c89",
+    "status": "DRAFT",
+    "is_system": false,
+    "discoverable": true,
+    "created_at": "2026-10-23T00:00:00Z",
+    "updated_at": "2026-10-23T00:00:00Z"
+  }
+}

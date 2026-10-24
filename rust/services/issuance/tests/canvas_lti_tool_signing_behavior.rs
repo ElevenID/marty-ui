@@ -363,6 +363,55 @@ async fn signer_rejects_incomplete_rsa_keys_and_malformed_signature_encoding() {
 }
 
 #[tokio::test]
+async fn private_key_aliases_never_reach_signing_or_public_jwks() {
+    let contract: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/issuance-canvas-lti-foundation.json"
+    ))
+    .unwrap();
+    let issuer_did = "did:web:issuer.example:canvas";
+    let kid = format!("{issuer_did}#active");
+    for field in contract["tool_signing"]["private_jwk_fields_forbidden"]
+        .as_array()
+        .unwrap()
+    {
+        for value in [Value::Null, json!(""), json!("synthetic-private-material")] {
+            let mut resolution = identity(issuer_did, &kid);
+            resolution["public_jwk"][field.as_str().unwrap()] = value.clone();
+            let resolver = Arc::new(Resolver {
+                response: Mutex::new(resolution),
+                ..Resolver::default()
+            });
+            let signatures = Arc::new(Signatures::default());
+            let tool = signer(resolver.clone(), signatures.clone());
+            assert_eq!(
+                tool.public_jwks().await.unwrap_err(),
+                CanvasLtiToolSigningError::PrivateKeyMaterial
+            );
+            assert_eq!(
+                tool.sign_jwt(&json!({}), CanvasLtiSigningKind::DeepLink, "session:nonce")
+                    .await
+                    .unwrap_err(),
+                CanvasLtiToolSigningError::PrivateKeyMaterial
+            );
+            assert!(signatures.requests.lock().unwrap().is_empty());
+
+            let mut resolution = identity(issuer_did, &kid);
+            let retired = format!("{issuer_did}#retired");
+            let mut jwk = json!({"kty": "RSA", "n": "public-modulus", "e": "AQAB"});
+            jwk[field.as_str().unwrap()] = value;
+            resolution["did_document"] = json!({
+                "verificationMethod": [{"id": retired, "publicKeyJwk": jwk}],
+                "assertionMethod": [kid, retired],
+            });
+            *resolver.response.lock().unwrap() = resolution;
+            let public = tool.public_jwks().await.unwrap();
+            assert_eq!(public["keys"].as_array().unwrap().len(), 1);
+            assert_eq!(public["keys"][0]["kid"], kid);
+        }
+    }
+}
+
+#[tokio::test]
 async fn jwks_publishes_active_then_sorted_public_assertion_methods_only() {
     let issuer_did = "did:web:issuer.example:canvas";
     let active = format!("{issuer_did}#active");

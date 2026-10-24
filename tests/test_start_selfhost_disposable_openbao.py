@@ -73,9 +73,18 @@ def model(root: Path, bundle: Path, port: int = 18200,
             bind(state, "/bao/data"),
             bind(bundle / "docker" / "openbao-selfhost.hcl", "/bao/config/openbao.hcl", True),
         ]},
+        "openbao-unseal": {"image": IMAGE, "networks": {"default": None},
+                            "entrypoint": ["/usr/local/bin/selfhost-unseal"],
+                            "restart": "unless-stopped", "depends_on": {"openbao": {
+                                "condition": "service_started", "required": True}},
+                            "environment": {
+                                "BAO_ADDR": "https://openbao:8200",
+                                "BAO_CACERT": "/bao/data/tls/ca.crt",
+                                "BAO_UNSEAL_KEY_FILE": "/bao/data/unseal.key",
+                            }, "volumes": [bind(state, "/bao/data", True)]},
         "openbao-bootstrap": {"image": IMAGE, "networks": {"default": None},
                               "entrypoint": ["/bin/sh", "/scripts/openbao-selfhost-init.sh"],
-                              "restart": "no", "depends_on": {"openbao": {
+                              "profiles": ["kms-init"], "restart": "no", "depends_on": {"openbao": {
                                   "condition": "service_started", "required": True}},
                               "environment": {
                                   "BAO_ADDR": "https://openbao:8200",
@@ -136,6 +145,16 @@ def test_model_rejects_public_port_foreign_mount_and_extra_service(tmp_path: Pat
     with pytest.raises(ValueError, match="bind mounts"):
         starter.verify_model(valid, IMAGE, root / "openbao-state", root / "secrets",
                              bundle, 18200, "marty-preview-1234567890abcdef")
+    valid = model(root, bundle)
+    valid["services"]["openbao-bootstrap"].pop("profiles")
+    with pytest.raises(ValueError, match="opt-in"):
+        starter.verify_model(valid, IMAGE, root / "openbao-state", root / "secrets",
+                             bundle, 18200, "marty-preview-1234567890abcdef")
+    valid = model(root, bundle)
+    valid["services"]["openbao-unseal"]["volumes"][0]["read_only"] = False
+    with pytest.raises(ValueError, match="bind mounts"):
+        starter.verify_model(valid, IMAGE, root / "openbao-state", root / "secrets",
+                             bundle, 18200, "marty-preview-1234567890abcdef")
 
 
 def test_start_uses_fresh_project_and_writes_no_tokens_to_report(
@@ -179,7 +198,14 @@ def test_start_uses_fresh_project_and_writes_no_tokens_to_report(
     assert "private-token" not in (root / "openbao.json").read_text(encoding="utf-8")
     assert not (root / "openbao-pending.json").exists()
     assert any("up" in command for command in commands)
+    assert any("--profile" in command and "kms-init" in command
+               for command in commands if "config" in command)
     assert any("run" in command for command in commands)
+    first_up = next(i for i, command in enumerate(commands) if "up" in command)
+    bootstrap = next(i for i, command in enumerate(commands) if "run" in command)
+    unseal_up = next(i for i, command in enumerate(commands)
+                     if "up" in command and command[-1] == "openbao-unseal")
+    assert first_up < bootstrap < unseal_up
     assert ["health-after-bootstrap"] in commands
     assert next(i for i, command in enumerate(commands) if "run" in command) < commands.index(
         ["health-after-bootstrap"])

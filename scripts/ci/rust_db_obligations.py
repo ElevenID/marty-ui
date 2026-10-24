@@ -134,6 +134,48 @@ def digest(path: Path) -> str:
     return checksum.hexdigest()
 
 
+def compiler_target_source_inputs(executable: Path) -> dict[str, object]:
+    """Observe one compiled test target's Rustc depfile, not Cargo dependencies."""
+    depfile = executable.with_suffix(".d")
+    try:
+        if depfile.is_symlink() or not depfile.is_file():
+            raise ValueError("missing compiler depfile")
+        first = depfile.read_text(encoding="utf-8").splitlines()[0]
+        target, separator, dependencies = first.partition(": ")
+        declared_target = Path(target)
+        if not declared_target.is_absolute():
+            declared_target = ROOT / "rust" / declared_target
+        if (
+            not separator
+            or declared_target.resolve(strict=True) != depfile.resolve(strict=True)
+            or "\\ " in dependencies
+            or not dependencies.strip()
+        ):
+            raise ValueError("unrecognized compiler depfile")
+        root = ROOT.resolve(strict=True)
+        paths = set()
+        for token in dependencies.split():
+            candidate = Path(token)
+            if not candidate.is_absolute():
+                candidate = ROOT / "rust" / candidate
+            if candidate.is_symlink():
+                raise ValueError("linked compiler source input")
+            resolved = candidate.resolve(strict=True)
+            if not resolved.is_file():
+                raise ValueError("invalid compiler source input")
+            paths.add(resolved.relative_to(root).as_posix())
+        return {
+            "compiler_depfile_sha256": digest(depfile),
+            "compiler_target_source_scope": "single_rustc_test_target",
+            "observed_compiler_target_source_inputs": [
+                {"path": path, "sha256": digest(ROOT / path)}
+                for path in sorted(paths)
+            ],
+        }
+    except (OSError, UnicodeError, ValueError, IndexError) as error:
+        raise ValueError("compiler_target_source_input_drift") from error
+
+
 def canvas_published_image_inputs() -> dict[str, object]:
     """Record the two immutable published-image inputs without environment data."""
     path = "contracts/canvas-worker-consumer-range-oracle.json"
@@ -171,6 +213,71 @@ def canvas_published_image_inputs() -> dict[str, object]:
     }
 
 
+ACCEPTANCE_RUST_TEST_SOURCES = {
+    "flow_acceptance": (
+        "rust/crates/flow-acceptance/tests/flow_published_schema_contract.rs"
+    ),
+    "selfhost_acceptance": (
+        "rust/crates/selfhost-acceptance/tests/selfhost_public_image_contract.rs"
+    ),
+    "canvas_composition_acceptance": (
+        "rust/crates/canvas-acceptance/tests/canvas_published_schema_contract.rs"
+    ),
+    "canvas_worker_acceptance": (
+        "rust/crates/canvas-worker-acceptance/tests/canvas_published_worker_contract.rs"
+    ),
+}
+
+
+def acceptance_rust_first_hop_inputs(name: str) -> list[dict[str, str]]:
+    """Observe direct Rust test imports and literals, not their transitive graph."""
+    source_path = ACCEPTANCE_RUST_TEST_SOURCES[name]
+    source = ROOT / source_path
+    try:
+        if source.is_symlink() or not source.is_file():
+            raise ValueError("invalid Rust test source")
+        content = source.read_text(encoding="utf-8")
+        module_paths = re.findall(r'#\s*\[\s*path\s*=\s*"([^"]+)"\s*\]', content)
+        included_source_paths = re.findall(r'\binclude!\s*\(\s*"([^"]+)"\s*\)', content)
+        literal_paths = re.findall(
+            r'\binclude_(?:str|bytes)!\s*\(\s*"([^"]+)"\s*\)', content
+        )
+        if (
+            len(module_paths) != len(re.findall(r"#\s*\[\s*path\b", content))
+            or len(included_source_paths) != len(re.findall(r"\binclude!\s*\(", content))
+            or len(literal_paths) != len(re.findall(r"\binclude_(?:str|bytes)!\s*\(", content))
+        ):
+            raise ValueError("unrecognized Rust source input")
+        package, target, _ = obligation(name)
+        manifest_path = (
+            ROOT / "rust/crates" / package.removeprefix("marty-") / "Cargo.toml"
+        )
+        manifest = tomllib.loads(manifest_path.read_text(encoding="utf-8"))
+        declared = [
+            entry for entry in manifest.get("test", []) if entry.get("name") == target
+        ]
+        if (
+            manifest["package"]["name"] != package
+            or len(declared) != 1
+            or declared[0].get("path")
+            != source.relative_to(manifest_path.parent).as_posix()
+        ):
+            raise ValueError("unrecognized acceptance test target")
+        paths = {source_path}
+        for relative in (*module_paths, *included_source_paths, *literal_paths):
+            candidate = source.parent / relative
+            if candidate.is_symlink():
+                raise ValueError("linked Rust source input")
+            resolved = candidate.resolve(strict=True)
+            path = resolved.relative_to(ROOT.resolve(strict=True))
+            if not resolved.is_file():
+                raise ValueError("invalid Rust source input")
+            paths.add(path.as_posix())
+        return [{"path": path, "sha256": digest(ROOT / path)} for path in sorted(paths)]
+    except (OSError, UnicodeError, ValueError, KeyError) as error:
+        raise ValueError("acceptance_rust_source_input_drift") from error
+
+
 def obligation(name: str) -> tuple[str, str, list[dict[str, str]]]:
     """The dispatch owner's declared inputs; environment values never leave it."""
     postgres = "ISSUANCE_POSTGRES_TEST_URL"
@@ -201,7 +308,7 @@ def obligation(name: str) -> tuple[str, str, list[dict[str, str]]]:
         "issuer_profile": (
             "marty-signing-keys",
             "issuer_profile_storage_contract",
-            ("MARTY_TEST_REDIS_URL",),
+            ("MARTY_TEST_REDIS_URL", "MARTY_TEST_REDIS_DISPOSABLE_NONCE"),
         ),
         "credential_template": (
             "marty-credential-template",
@@ -409,7 +516,12 @@ def obligation(name: str) -> tuple[str, str, list[dict[str, str]]]:
 
 
 def artifact_identity(
-    executable: Path, package: str, target: str, *, library_test: bool = False
+    executable: Path,
+    package: str,
+    target: str,
+    *,
+    library_test: bool = False,
+    record_compiler_inputs: bool = False,
 ) -> dict:
     executable_sha256 = digest(executable)
     runner_temp = os.environ.get("RUNNER_TEMP")
@@ -448,13 +560,16 @@ def artifact_identity(
         raise ValueError("missing_compiler_artifact_executable")
     if not same_path and digest(recorded_executable) != executable_sha256:
         raise ValueError("compiler_artifact_content_mismatch")
-    return {
+    identity = {
         "provenance": "same_run_compiler_artifact",
         "compiler_artifacts_sha256": digest(artifacts),
         "features": artifact.get("features", []),
         "binding": "same_path" if same_path else "byte_identical_copy",
         "executable_sha256": executable_sha256,
     }
+    if record_compiler_inputs:
+        identity.update(compiler_target_source_inputs(recorded_executable))
+    return identity
 
 
 def libtest_harness(package: str, target: str) -> dict:
@@ -1438,7 +1553,6 @@ def run_contract(name: str, command: list[str], owner: str = "contracts") -> int
             evidence["observed_renderer_python_imports"] = (
                 flow_renderer_python_imports()
             )
-            evidence["transitive_source_closure"] = "incomplete"
         if selfhost:
             evidence["direct_source_inputs"] = selfhost_source_inputs(owner)
         if canvas:
@@ -1464,6 +1578,11 @@ def run_contract(name: str, command: list[str], owner: str = "contracts") -> int
                 ):
                     raise ValueError("incomplete_canvas_worker_tier")
                 evidence["worker_tiers"] = tiers
+        if flow or selfhost or canvas:
+            evidence["observed_first_hop_rust_source_inputs"] = (
+                acceptance_rust_first_hop_inputs(name)
+            )
+            evidence["transitive_source_closure"] = "incomplete"
         evidence.update(
             name=name, package=package, target=target, runtime_inputs=inputs
         )
@@ -1475,7 +1594,12 @@ def run_contract(name: str, command: list[str], owner: str = "contracts") -> int
         evidence.update(
             artifact_identity(executable, package, target, library_test=True)
             if unit
-            else artifact_identity(executable, package, target)
+            else artifact_identity(
+                executable,
+                package,
+                target,
+                record_compiler_inputs=flow or selfhost or canvas,
+            )
         )
         # Never probe --list on custom harnesses, which may ignore the flag and
         # execute their bodies. All current dispatches use standard libtest.
@@ -1502,8 +1626,8 @@ def run_contract(name: str, command: list[str], owner: str = "contracts") -> int
             if os.environ.get("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST") != "1":
                 raise ValueError("missing_published_schema_gate")
             # The shell runner owns the exact names. This bounds its selected
-            # cardinality without maintaining a second 12-name roster here.
-            if len(expected) != 12 or ignored:
+            # cardinality without maintaining a second 17-name roster here.
+            if len(expected) != 17 or ignored:
                 raise ValueError("selfhost_selection_drift")
         evidence["selected"] = sorted(expected)
         evidence["selected_ignored"] = sorted(ignored)

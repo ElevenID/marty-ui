@@ -133,10 +133,18 @@ def checked_docker_context(plan: dict[str, Any]) -> str:
 def private_signing_request(container: str, route: str,
                             body: dict[str, Any] | None = None,
                             *, context: str | None = None) -> dict[str, Any]:
+    revoke = re.fullmatch(
+        r"/internal/documents/[A-Za-z0-9_-]{1,128}/csca-certificates/"
+        r"[A-Za-z0-9_.:-]{1,128}/revoke", route) is not None
+    if revoke:
+        require(isinstance(body, dict) and set(body) == {"reason"}
+                and isinstance(body["reason"], str) and 1 <= len(body["reason"]) <= 256
+                and not any(character in body["reason"] for character in "\r\n\0"),
+                "Private CSCA retirement reason is invalid")
     require(CONTAINER.fullmatch(container) is not None
             and (route in ("/internal/compat/resolve-issuer-did",
                            "/internal/compat/issuer-dids/sign")
-                 or re.fullmatch(
+                 or revoke or re.fullmatch(
                      r"/internal/documents/[A-Za-z0-9_-]{1,128}/csca-certificates/"
                      r"[A-Za-z0-9_.:-]{1,128}", route) is not None),
             "Private Signing Keys request input is invalid")

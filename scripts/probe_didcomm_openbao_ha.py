@@ -17,11 +17,22 @@ import time
 import urllib.error
 import urllib.request
 import uuid
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 
 IMAGE = os.environ.get("MARTY_OPENBAO_PROBE_IMAGE", "marty-openbao-ha-probe:local")
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def docker_host_path(path: Path) -> str:
+    """Translate an opt-in WSL /mnt path for Docker Desktop bind mounts."""
+    host_mnt = os.environ.get("MARTY_OPENBAO_PROBE_HOST_MNT")
+    if not host_mnt:
+        return str(path)
+    source = PurePosixPath(str(path).replace("\\", "/"))
+    if not source.is_absolute() or not source.is_relative_to("/mnt"):
+        raise ValueError("Docker host path must be under the WSL /mnt root")
+    return str(PurePosixPath(host_mnt) / source.relative_to("/mnt"))
 
 
 def prepare_image() -> None:
@@ -38,16 +49,69 @@ def prepare_image() -> None:
     )
 
 
+def docker_process(command: list[str], *, timeout: int = 90) -> subprocess.CompletedProcess[str]:
+    if not command or command[0] != "docker":
+        raise ValueError("disposable Docker command is invalid")
+    for attempt in range(3):
+        result = subprocess.run(
+            command, capture_output=True, text=True, check=False,
+            timeout=timeout,
+        )
+        # This WSL interop error occurs before docker.exe starts. Retrying any
+        # other failure could repeat a non-idempotent Docker operation.
+        if (result.returncode == 0 or not os.environ.get("WSL_INTEROP")
+                or "UtilAcceptVsock:271: accept4 failed 110" not in result.stderr
+                or attempt == 2):
+            break
+        time.sleep(1)
+    return result
+
+
 def docker(*args: str, timeout: int = 90) -> str:
-    result = subprocess.run(
-        ["docker", *args], capture_output=True, text=True, check=False, timeout=timeout
-    )
+    result = docker_process(["docker", *args], timeout=timeout)
     if result.returncode:
         raise RuntimeError(
             f"Disposable Docker operation failed: {args[0]} "
             f"(exit {result.returncode}): {result.stderr.strip()[-1200:]}"
         )
     return result.stdout.strip()
+
+
+def classify_api_error(raw: bytes, markers: dict[str, str]) -> list[str]:
+    """Return only fixed diagnostics; never reflect a key-bearing error body."""
+    try:
+        value = json.loads(raw)
+    except (ValueError, UnicodeError):
+        return ["UNCLASSIFIED_ERROR"]
+    errors = value.get("errors") if isinstance(value, dict) else None
+    if not isinstance(errors, list) or not all(isinstance(item, str) for item in errors):
+        return ["UNCLASSIFIED_ERROR"]
+    text = " ".join(errors).lower()
+    return [name for name, marker in markers.items() if marker in text] or ["UNCLASSIFIED_ERROR"]
+
+
+def classify_unseal_error(raw: bytes) -> list[str]:
+    return classify_api_error(raw, {
+        "INVALID_KEY_SIZE": "invalid key size",
+        "DECRYPTION_FAILED": "failed to decrypt",
+        "AUTHENTICATION_FAILED": "message authentication failed",
+        "INVALID_UNSEAL_KEY": "invalid key",
+        "SEAL_STATE_ERROR": "sealed",
+        "UNINITIALIZED": "not initialized",
+    })
+
+
+def classify_revocation_error(raw: bytes) -> list[str]:
+    return classify_api_error(raw, {
+        "REVOCATION_FAILED": "failed to revoke",
+        "STORAGE_WRITE_FAILED": "failed to persist",
+        "STORAGE_DELETE_FAILED": "failed to delete",
+        "NODE_NOT_ACTIVE": "not active",
+        "NODE_SEALED": "sealed",
+        "DEADLINE_EXCEEDED": "context deadline exceeded",
+        "CONTEXT_CANCELLED": "context canceled",
+        "PERMISSION_DENIED": "permission denied",
+    })
 
 
 def request(
@@ -59,6 +123,8 @@ def request(
     *,
     timeout: float = 10,
     ca_file: Path | None = None,
+    unseal_error_diagnostics: bool = False,
+    revocation_error_diagnostics: bool = False,
 ) -> tuple[int, dict]:
     payload = None if body is None else json.dumps(body).encode()
     headers = {"Content-Type": "application/json"}
@@ -73,7 +139,11 @@ def request(
             raw = response.read()
             return response.status, json.loads(raw) if raw else {}
     except urllib.error.HTTPError as error:
-        error.read()
+        raw = error.read(16 * 1024)
+        if unseal_error_diagnostics:
+            return error.code, {"error_classes": classify_unseal_error(raw)}
+        if revocation_error_diagnostics:
+            return error.code, {"error_classes": classify_revocation_error(raw)}
         return error.code, {}
 
 
@@ -88,6 +158,18 @@ def wait_for(operation: str, check, seconds: float = 30) -> object:
             pass
         time.sleep(0.25)
     raise RuntimeError(f"Disposable HA probe timed out: {operation}")
+
+
+def wait_for_active_node(base: str, *, ca_file: Path | None = None,
+                         operation: str = "active Raft leader", seconds: float = 30) -> None:
+    """Unseal completion is not write readiness; only poll public read endpoints."""
+    def active() -> bool:
+        status, leader = request(base, "GET", "sys/leader", ca_file=ca_file)
+        if status != 200 or leader.get("is_self") is not True:
+            return False
+        return request(base, "GET", "sys/health", ca_file=ca_file)[0] == 200
+
+    wait_for(operation, active, seconds=seconds)
 
 
 def require_status(
@@ -179,10 +261,7 @@ def run() -> None:
         unseal_key = initialized["keys"][0]
         root = initialized["root_token"]
         require_status(bases[0], "PUT", "sys/unseal", "", {"key": unseal_key})
-        wait_for(
-            "first leader",
-            lambda: request(bases[0], "GET", "sys/leader")[1].get("is_self"),
-        )
+        wait_for_active_node(bases[0], operation="first leader")
         for base in bases[1:]:
             require_status(
                 base,

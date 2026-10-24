@@ -2,6 +2,102 @@
 # Keep LF line endings; this script is executed directly inside Linux containers.
 set -e
 
+# Shared by initial provisioning and explicit activation on persistent Raft.
+# This path owns only the callback HMAC, its isolated policy and workload token.
+ensure_passport_callback() {
+    callback_path="transit/keys/passport-bureau-callback-marty-hmac"
+    callback_file="${BAO_PASSPORT_CALLBACK_TOKEN_FILE:-}"
+    if [ -n "${callback_file}" ] && [ -s "${callback_file}" ]; then
+        callback_token="$(tr -d '\r' < "${callback_file}")"
+        check_passport_callback_token "${callback_token}"
+    fi
+    if ! bao read -address="${BAO_ADDR}" -field=type "${callback_path}" >/dev/null 2>&1; then
+        bao write -address="${BAO_ADDR}" "${callback_path}" type=hmac key_size=32 exportable=false >/dev/null
+    fi
+    if [ "$(bao read -address="${BAO_ADDR}" -field=type "${callback_path}")" != "hmac" ] ||
+       [ "$(bao read -address="${BAO_ADDR}" -field=exportable "${callback_path}")" != "false" ]; then
+        echo "Passport callback Transit key must be a non-exportable HMAC key" >&2
+        exit 1
+    fi
+    bao policy write -address="${BAO_ADDR}" passport-callback-hmac-service - <<'CALLBACK_POLICY'
+path "transit/hmac/passport-bureau-callback-marty-hmac" {
+  capabilities = ["create", "update"]
+}
+CALLBACK_POLICY
+    if [ -n "${callback_file}" ] && [ ! -s "${callback_file}" ]; then
+        callback_new_token=""
+        callback_tmp=""
+        trap 'cleanup_passport_callback' 0
+        trap 'exit 1' 1 2 15
+        callback_token="$(bao token create -address="${BAO_ADDR}" -policy=passport-callback-hmac-service -no-default-policy -orphan -field=token 2>/dev/null)"
+        callback_new_token="${callback_token}"
+        if [ -z "${callback_token}" ]; then
+            echo "Could not create passport callback token" >&2
+            exit 1
+        fi
+        check_passport_callback_token "${callback_token}"
+        mkdir -p "$(dirname "${callback_file}")"
+        callback_tmp="$(mktemp "${callback_file}.XXXXXX")"
+        printf '%s' "${callback_token}" > "${callback_tmp}"
+        chmod 0444 "${callback_tmp}"
+        mv -f "${callback_tmp}" "${callback_file}"
+        callback_new_token=""
+        callback_tmp=""
+        trap - 0 1 2 15
+    fi
+    if [ -n "${callback_file}" ]; then chmod 0444 "${callback_file}"; fi
+    unset callback_token
+}
+
+cleanup_passport_callback() {
+    callback_exit=$?
+    if [ -n "${callback_new_token:-}" ]; then
+        if ! bao token revoke -address="${BAO_ADDR}" "${callback_new_token}" >/dev/null 2>&1; then
+            echo "Could not revoke unpublished callback token; explicit custody recovery is required" >&2
+            callback_exit=1
+        fi
+    fi
+    if [ -n "${callback_tmp:-}" ]; then rm -f "${callback_tmp}"; fi
+    return "${callback_exit}"
+}
+
+check_passport_callback_token() {
+    callback_lookup="$(bao token lookup -address="${BAO_ADDR}" -format=json "$1" 2>/dev/null)"
+    callback_compact="$(printf '%s' "${callback_lookup}" | tr -d '\r\n\t ')"
+    callback_policies="$(printf '%s' "${callback_compact}" | sed -n 's/.*"policies":\(\[[^]]*\]\).*/\1/p')"
+    callback_entity="$(printf '%s' "${callback_compact}" | sed -n 's/.*"entity_id":"\([^"]*\)".*/\1/p')"
+    if [ "${callback_policies}" != '["passport-callback-hmac-service"]' ] || [ -n "${callback_entity}" ]; then
+        echo "Passport callback token has unexpected authority; rotate it explicitly" >&2
+        exit 1
+    fi
+}
+
+if [ "${1:-}" = "--passport-callback-only" ]; then
+    if [ "$#" -ne 1 ]; then echo "Unexpected callback provisioning arguments" >&2; exit 1; fi
+    umask 077
+    if [ -n "${BAO_PASSPORT_CALLBACK_OPERATOR_TOKEN_FILE:-}" ]; then
+        BAO_TOKEN="$(cat "${BAO_PASSPORT_CALLBACK_OPERATOR_TOKEN_FILE}")"
+    fi
+    if [ -z "${BAO_TOKEN:-}" ] || [ -z "${BAO_PASSPORT_CALLBACK_TOKEN_FILE:-}" ]; then
+        echo "Scoped callback provisioning requires operator custody and workload token destination" >&2
+        exit 1
+    fi
+    case "${BAO_ADDR:-}" in https://*) ;; *) echo "Scoped callback provisioning requires TLS" >&2; exit 1 ;; esac
+    if [ "${BAO_SKIP_VERIFY:-false}" != "false" ] || [ "${VAULT_SKIP_VERIFY:-false}" != "false" ] ||
+       [ -z "${BAO_CACERT:-}" ] || ! grep -q '^-----BEGIN CERTIFICATE-----$' "${BAO_CACERT}" ||
+       grep -q 'PRIVATE KEY' "${BAO_CACERT}"; then
+        echo "Scoped callback provisioning requires verified TLS and a public CA" >&2
+        exit 1
+    fi
+    export BAO_TOKEN VAULT_TOKEN="${BAO_TOKEN}"
+    callback_status="$(bao status -address="${BAO_ADDR}" -format=json | tr -d '\r\n\t ')"
+    case "${callback_status}" in *'"initialized":true'*) ;; *) echo "Callback KMS must be initialized" >&2; exit 1 ;; esac
+    case "${callback_status}" in *'"sealed":false'*) ;; *) echo "Callback KMS must be unsealed" >&2; exit 1 ;; esac
+    ensure_passport_callback
+    exit 0
+fi
+if [ "$#" -ne 0 ]; then echo "Unexpected OpenBao initialization arguments" >&2; exit 1; fi
+
 echo "=== OpenBao Initialization ==="
 echo "Waiting for OpenBao at ${BAO_ADDR}..."
 
@@ -105,13 +201,7 @@ if [ "$(bao read -address="${BAO_ADDR}" -field=type transit/keys/passport-artifa
     echo "Passport artifact Transit key must exist as a non-exportable AES-GCM key" >&2
     exit 1
 fi
-bao write -address="${BAO_ADDR}" transit/keys/passport-bureau-callback-marty-hmac \
-    type=hmac key_size=32 exportable=false 2>/dev/null || echo "  passport-bureau-callback-marty-hmac already exists"
-if [ "$(bao read -address="${BAO_ADDR}" -field=type transit/keys/passport-bureau-callback-marty-hmac 2>/dev/null)" != "hmac" ] || \
-   [ "$(bao read -address="${BAO_ADDR}" -field=exportable transit/keys/passport-bureau-callback-marty-hmac 2>/dev/null)" != "false" ]; then
-    echo "Passport callback Transit key must exist as a non-exportable HMAC key" >&2
-    exit 1
-fi
+ensure_passport_callback
 # Signing authorization is separate from signing custody. Each producer gets
 # one HMAC key and a mint-only policy; Signing Keys receives verify-only access.
 grant_origins='gateway-service gateway-issuer-did flow-wallet issuance-credential issuance-canvas issuance-readiness issuance-passport'
@@ -437,15 +527,6 @@ if [ -n "${BAO_NOTIFICATION_TOKEN_FILE:-}" ]; then
     printf '%s\n' "${notification_token}" > "${BAO_NOTIFICATION_TOKEN_FILE}"
     chmod 0444 "${BAO_NOTIFICATION_TOKEN_FILE}"
 fi
-
-# The supported-consumer callback signer only needs to MAC canonical callback
-# bytes. It cannot verify, read/export a transit key, or use generic signing.
-echo "Writing isolated passport callback HMAC policy..."
-bao policy write -address="${BAO_ADDR}" passport-callback-hmac-service - <<'EOF'
-path "transit/hmac/passport-bureau-callback-marty-hmac" {
-  capabilities = ["create", "update"]
-}
-EOF
 
 # The supported physical-provider signer can additionally verify only scoped
 # imported provider HMACs. It cannot generate provider MACs or read/export keys.

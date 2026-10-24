@@ -83,11 +83,14 @@ vi.mock('../../services/apiKeysApi', () => ({
   listApiKeys: (...args: unknown[]) => mockListApiKeys(...args),
 }))
 
+vi.mock('../../services/issuerIdentitiesApi', () => ({
+  listPublicIssuerIdentities: (...args: unknown[]) => mockListPublicIssuerIdentities(...args),
+}))
+
 vi.mock('../../services/signingKeysApi', () => ({
   listSigningKeys: (...args: unknown[]) => mockListSigningKeys(...args),
-  listPublicIssuerIdentities: (...args: unknown[]) => mockListPublicIssuerIdentities(...args),
   getKeyManagementConfig: (...args: unknown[]) => mockGetKeyManagementConfig(...args),
-}))
+}));
 
 vi.mock('../../services/dashboardApi', () => ({
   getTeamSnapshot: (...args: unknown[]) => mockGetTeamSnapshot(...args),
@@ -220,12 +223,12 @@ describe('useDashboardData', () => {
     })
 
     expect(result.current.loading).toBe(false)
-    expect(mockListSigningKeys).toHaveBeenCalledWith({ organization_id: 'org_live', limit: 1 })
+    expect(mockListSigningKeys).not.toHaveBeenCalled()
     expect(mockListApplicationTemplates).toHaveBeenCalledWith('org_live')
     expect(mockListRevocationProfiles).toHaveBeenCalledWith({ organization_id: 'org_live' })
     expect(mockListPublicIssuerIdentities).toHaveBeenCalledWith({ organization_id: 'org_live' })
-    expect(mockGetKeyManagementConfig).toHaveBeenCalledWith({ organization_id: 'org_live' })
-    expect(result.current.data.signingKeys).toEqual([{ id: 'key_1', name: 'Issuer Key' }])
+    expect(mockGetKeyManagementConfig).not.toHaveBeenCalled()
+    expect(result.current.data).not.toHaveProperty('signingKeys')
     expect(result.current.data.issuerIdentities).toEqual([{
       issuer_did: 'did:web:issuer.example.com',
       key_purpose: 'vc_jwt_issuer',
@@ -233,7 +236,7 @@ describe('useDashboardData', () => {
       status: 'active',
     }])
     expect(result.current.data).not.toHaveProperty('issuerProfiles')
-    expect(result.current.data.keyManagementConfig.default_service_id).toBe('managed-openbao-transit')
+    expect(result.current.data).not.toHaveProperty('keyManagementConfig')
   })
 
   it('clears dashboard data and does not fetch org-scoped resources without organization context', async () => {
@@ -249,7 +252,7 @@ describe('useDashboardData', () => {
     expect(result.current.loading).toBe(false)
     expect(result.current.error).toBe('organization_id is required')
     expect(result.current.data.trustProfiles).toEqual([])
-    expect(result.current.data.signingKeys).toEqual([])
+    expect(result.current.data).not.toHaveProperty('signingKeys')
     expect(result.current.data.teamData).toBeNull()
     expect(mockListTrustProfiles).not.toHaveBeenCalled()
     expect(mockListApiKeys).not.toHaveBeenCalled()

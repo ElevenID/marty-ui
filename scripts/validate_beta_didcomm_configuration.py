@@ -29,6 +29,16 @@ def environment_mapping(value):
     raise DidcommConfigurationError("Invalid DIDComm environment model")
 
 
+def bind_does_not_create_host_path(mount):
+    """Interpret Compose's typed bind model, including 2.38's omitted false."""
+    options = mount.get("bind")
+    return (
+        mount.get("type") == "bind"
+        and isinstance(options, dict)
+        and options.get("create_host_path", False) is False
+    )
+
+
 def assert_native_kms_policy(model):
     try:
         services = model["services"]
@@ -78,7 +88,7 @@ def assert_native_kms_policy(model):
         if (
             policy_mount["type"] != "bind"
             or policy_mount["read_only"] is not True
-            or policy_mount["bind"]["create_host_path"] is not False
+            or not bind_does_not_create_host_path(policy_mount)
             or not isinstance(policy_source, str)
             or not policy_source.endswith("/didcomm-encryption-policy.json")
         ):
@@ -148,7 +158,7 @@ def assert_native_kms_policy(model):
                 and mount.get("target") == "/bao/config/didcomm-plugin.hcl"
                 and mount.get("type") == "bind"
                 and mount.get("read_only") is True
-                and mount.get("bind", {}).get("create_host_path") is False
+                and bind_does_not_create_host_path(mount)
                 and str(mount.get("source", ""))
                 .replace("\\", "/")
                 .endswith("/docker/openbao-didcomm-dev.hcl")
@@ -220,7 +230,7 @@ def assert_base_https_native_kms(model):
             not isinstance(policy_mount, dict)
             or policy_mount.get("type") != "bind"
             or policy_mount.get("read_only") is not True
-            or policy_mount.get("bind", {}).get("create_host_path") is not False
+            or not bind_does_not_create_host_path(policy_mount)
             or not str(policy_mount.get("source", ""))
             .replace("\\", "/")
             .endswith("/didcomm-encryption-policy.json")
@@ -243,6 +253,10 @@ def validate_model(model, *, authcrypt_enabled, base_https=False):
         legacy_environment = environment_mapping(
             model["services"]["issuance"]["environment"]
         )
+        if any(key in legacy_environment for key in (
+            "DIDCOMM_ENCRYPTION_POLICY_FILE", "DIDCOMM_KMS_ADDR", "DIDCOMM_KMS_TOKEN_FILE"
+        )):
+            raise DidcommConfigurationError("Legacy DIDComm key custody is forbidden")
         if legacy_environment.get("DIDCOMM_DELIVERY_OWNER") != "native":
             raise DidcommConfigurationError("Beta DIDComm delivery owner is not native")
         if legacy_environment.get("ISSUANCE_NATIVE_SERVICE_URL") != NATIVE_URL:
@@ -303,7 +317,9 @@ def validate_compose(
         if result.returncode or len(result.stdout) > MAX_MODEL_BYTES:
             raise DidcommConfigurationError("DIDComm Compose validation failed")
         model = json.loads(result.stdout)
-        validate_model(model, authcrypt_enabled=authcrypt_enabled)
+        # The default native profile now always uses the TLS/Raft OpenBao
+        # custody contract. The old dev-plugin contract is not a beta mode.
+        validate_model(model, authcrypt_enabled=authcrypt_enabled, base_https=True)
     except (OSError, subprocess.SubprocessError, UnicodeError, json.JSONDecodeError):
         raise DidcommConfigurationError("DIDComm Compose validation failed") from None
 

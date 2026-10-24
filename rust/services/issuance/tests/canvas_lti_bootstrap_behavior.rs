@@ -411,6 +411,61 @@ fn bootstrap_create_replays_identity_context_attachment_and_public_response() {
 }
 
 #[test]
+fn bootstrap_cannot_accept_caller_badge_results_or_issuer_claims() {
+    let mut forged = request();
+    for name in [
+        "achievement_id",
+        "course_name",
+        "quiz_name",
+        "score_percent",
+        "result",
+        "learning_context",
+        "certificate_id",
+        "_vct",
+    ] {
+        forged
+            .applicant_data
+            .insert(name.to_owned(), json!("caller-forged"));
+    }
+    let plan = plan_canvas_lti_experience_bootstrap(
+        &bootstrap_context(),
+        &forged,
+        true,
+        Some(true),
+        Some(&template()),
+        &[],
+        seed("application-1"),
+        now(),
+    )
+    .unwrap();
+    for name in [
+        "achievement_id",
+        "course_name",
+        "quiz_name",
+        "score_percent",
+        "result",
+        "learning_context",
+        "certificate_id",
+        "_vct",
+    ] {
+        assert!(
+            !plan
+                .application
+                .form_data
+                .as_object()
+                .unwrap()
+                .contains_key(name),
+            "{name}"
+        );
+    }
+    assert_eq!(plan.application.form_data["email"], "trusted@example.test");
+    assert_eq!(
+        plan.application.form_data["canvas_course_name"],
+        "Portable Trust 101"
+    );
+}
+
+#[test]
 fn bootstrap_resume_preserves_original_join_and_bounds_launch_history() {
     let first = plan_canvas_lti_experience_bootstrap(
         &bootstrap_context(),

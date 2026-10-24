@@ -50,6 +50,16 @@ qualification or authorize selective skips.
 
 For remaining A0 work, enumerate each group's scenario obligations and non-Cargo input closure in a reusable manifest before activating selection. The groups above deliberately remain broad where ownership has not yet been proven.
 
+The Flow, self-host and two Canvas acceptance targets now add a second Rust
+source view to their run-bound records: the Rustc depfile adjacent to the
+unique Cargo executable in the fresh same-run target directory, with its exact in-checkout source/embedded-file hashes and
+depfile hash. This observes the compiled test target, including nested modules
+that the bounded first-hop scan cannot discover. This is diagnostic evidence,
+not authenticated provenance or complete closure: it does not cover dependency
+crates' source graph or runtime provisioning, cannot guarantee coverage of
+generated files, and does not establish assertion reachability. Local runs without the Cargo artifact manifest remain
+`local_unrecorded`; no selector consumes the depfile record.
+
 The contracts lane records Cargo `compiler-artifact` events for its exact
 workspace build. Both the workflow's executable preparation and the database
 runner resolve the ten Issuance Canvas PostgreSQL targets plus the proof-nonce
@@ -355,6 +365,25 @@ assertion ran.
 Generated outputs, external package/tool versions and full child provenance
 remain outside this graph. `transitive_source_closure` stays `incomplete`, and
 no PR, merge-group or release selector changes.
+
+## Shared Flow/Canvas acceptance fixture ownership
+
+The Gateway replay and base-profile Redis helpers shared by Flow and Canvas
+acceptance live under `rust/acceptance/support`, outside Issuance's
+service-owned test tree. Both acceptance targets include each source once;
+Canvas alone registers the two selected-route unit cases and Redis helper
+unit cases. All production Docker contexts exclude the exact test-only files.
+Because this source-only
+directory has no Cargo package owner, the affected-Rust shadow planner treats
+edits to it as a full-workspace change. This corrects ownership without
+changing the executing case roster, test semantics, required gates, or a
+measured CI duration.
+
+The native gRPC issuance fixture and named control-plane/signing peers are
+also included only by the Flow and Canvas acceptance targets. Their shared
+sources now live alongside the other acceptance fixtures; no production crate
+uses them. This changes source ownership, not the binary, database, or
+network behavior exercised by either target.
 
 ## Issuance-to-Revocation Profile runtime input
 

@@ -6,8 +6,61 @@ use marty_verification::credential_format::DetectedCredentialFormat;
 use serde_json::{json, Map, Value};
 use uuid::Uuid;
 
+#[tokio::test]
+async fn scoped_did_policy_cannot_bypass_registry_using_relationship_keys_or_missing_kid() {
+    use async_trait::async_trait;
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+    use marty_issuer_key_resolution::{
+        IssuerKeyResolution, IssuerKeyResolutionError, IssuerKeyResolver,
+    };
+    use marty_presentation_policy::ResolvingCredentialKernel;
+    struct NeverPublic;
+    #[async_trait]
+    impl IssuerKeyResolver for NeverPublic {
+        async fn resolve(&self, _: &str) -> Result<IssuerKeyResolution, IssuerKeyResolutionError> {
+            panic!("scoped policy must never fall through to public resolution")
+        }
+    }
+    let issuer = "did:web:issuer.example";
+    for kid in [Some("did:web:issuer.example#key"), None] {
+        let mut header = json!({"alg":"ES256"});
+        if let Some(kid) = kid {
+            header["kid"] = json!(kid);
+        }
+        let token = format!(
+            "{}.{}.signature",
+            URL_SAFE_NO_PAD.encode(header.to_string()),
+            URL_SAFE_NO_PAD.encode(json!({"iss":issuer}).to_string())
+        );
+        let mut context = context(DetectedCredentialFormat::W3cVc, json!(token));
+        context.trust_profile = Some(ResolvedTrustProfile {
+            id: Uuid::new_v4(),
+            organization_id: Uuid::new_v4(),
+            document: json!({"status":"active", "trust_sources":[{"issuer_did":issuer,"organization_id":"org-1"}],
+                "system_issuer_overrides":{issuer:{"public_jwk":{"kty":"EC","crv":"P-256","x":"x","y":"y","kid":"did:web:issuer.example#key"}}}}),
+        });
+        let result = ResolvingCredentialKernel::new(std::sync::Arc::new(NeverPublic))
+            .verify(&context)
+            .await
+            .unwrap();
+        assert!(!result.verified);
+        assert!(result.claims.is_empty());
+        assert!(result.issuer_id.is_none());
+        assert_eq!(
+            result.failure_reason.as_deref(),
+            Some(if kid.is_some() {
+                "Organization issuer registry is unavailable"
+            } else {
+                "Issuer DID signing method is required"
+            })
+        );
+    }
+}
+
 fn context(format: DetectedCredentialFormat, token: Value) -> CredentialVerificationContext {
     CredentialVerificationContext {
+        presentation_only: false,
+        resolved_issuer_public_jwk: None,
         format,
         token,
         nonce: Some("behavioral-challenge".into()),

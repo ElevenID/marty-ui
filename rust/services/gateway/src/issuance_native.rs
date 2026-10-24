@@ -7,7 +7,8 @@
 use std::{collections::BTreeSet, sync::LazyLock};
 
 use mmf_platform::{
-    AuthenticationType, GatewayRequest, HttpMethod, RouteConfig, RouteMatchType, RouteTable,
+    AuthenticationType, GatewayRequest, HttpMethod, PlatformError, RouteConfig, RouteMatchType,
+    RouteTable,
 };
 use serde::Deserialize;
 
@@ -18,6 +19,9 @@ const ISSUED_CREDENTIAL_ADAPTER_TAG: &str = "issued-credential-adapter";
 const OID4VCI_AUTHORIZATION_TAG: &str = "oid4vci-authorization";
 const CANVAS_MIRROR_TAG: &str = "canvas-mirror";
 const RETENTION_TAG: &str = "retention";
+const NATIVE_EXTENSION_TAG: &str = "native-extension";
+pub(crate) const NATIVE_EXTENSION_ROUTE_COUNT: usize = 2;
+const CANVAS_CLAIM_PATH: &str = "/v1/integrations/canvas/lti/experience-sessions/current/claim";
 
 const CANVAS_MIRROR_BATCH_PATHS: [&str; 3] = [
     "/v1/issuance/delivery-records/canvas-credentials/process-pending",
@@ -36,6 +40,52 @@ pub fn is_canvas_mirror_public_batch(method: &str, path: &str) -> bool {
 #[derive(Debug, Deserialize)]
 struct Coverage {
     native_http: Vec<NativeHttpRoute>,
+    /// Native-only operations are separate from the frozen legacy migration
+    /// inventory; adding an endpoint must not claim historical parity.
+    #[serde(default)]
+    native_extension_http: Vec<NativeHttpExtension>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NativeHttpExtension {
+    method: HttpMethod,
+    path: String,
+    operation: String,
+    owner: String,
+    source: String,
+    behavior_test: String,
+    adaptation: String,
+}
+
+fn validate_native_extensions(coverage: &Coverage) -> Result<(), &'static str> {
+    let mut operations = BTreeSet::new();
+    for route in &coverage.native_extension_http {
+        let operation = match route.method {
+            HttpMethod::Get => "read_canvas_learner_claim",
+            HttpMethod::Post => "create_canvas_learner_claim",
+            _ => return Err("unreviewed native extension method"),
+        };
+        if route.path != CANVAS_CLAIM_PATH
+            || route.operation != operation
+            || route.owner != NATIVE_SERVICE
+            || route.source != "rust/services/issuance/src/canvas_lti_claim.rs"
+            || route.behavior_test
+                != "rust/services/issuance/tests/support/canvas_claim_behavior.rs"
+            || route.adaptation.is_empty()
+            || !operations.insert(operation)
+            || coverage
+                .native_http
+                .iter()
+                .any(|existing| existing.method == route.method && existing.path == route.path)
+        {
+            return Err("native extension differs from reviewed claim contract");
+        }
+    }
+    if operations.len() != NATIVE_EXTENSION_ROUTE_COUNT {
+        return Err("native claim extension requires both reviewed operations");
+    }
+    Ok(())
 }
 
 #[derive(Debug, Deserialize)]
@@ -64,9 +114,31 @@ static NATIVE_ROUTES: LazyLock<RouteTable> = LazyLock::new(|| {
         "../../../../contracts/issuance-native-coverage.json"
     ))
     .expect("embedded issuance native coverage contract must be valid");
+    validate_native_extensions(&coverage).expect("native extension contract must be reviewed");
     let mut table = RouteTable::default();
-    for (index, route) in coverage.native_http.into_iter().enumerate() {
+    let routes = coverage
+        .native_http
+        .into_iter()
+        .map(|route| (false, route))
+        .chain(coverage.native_extension_http.into_iter().map(|route| {
+            (
+                true,
+                NativeHttpRoute {
+                    method: route.method,
+                    path: route.path,
+                    credential_lifecycle_behavior_contract: false,
+                    issued_credential_adapter_behavior_contract: false,
+                    oid4vci_authorization_behavior_contract: false,
+                    canvas_mirror_behavior_contract: false,
+                    retention_behavior_contract: false,
+                },
+            )
+        }));
+    for (index, (extension, route)) in routes.enumerate() {
         let mut tags = BTreeSet::from(["native-migration".into()]);
+        if extension {
+            tags.insert(NATIVE_EXTENSION_TAG.into());
+        }
         if route.credential_lifecycle_behavior_contract {
             tags.insert(CREDENTIAL_LIFECYCLE_TAG.into());
         }
@@ -107,6 +179,25 @@ static NATIVE_ROUTES: LazyLock<RouteTable> = LazyLock::new(|| {
     }
     table
 });
+
+/// Register the reviewed native-only public routes as well as selecting their
+/// upstream. The frozen gateway inventory cannot register new operations.
+pub(crate) fn add_public_native_extensions(table: &mut RouteTable) -> Result<(), PlatformError> {
+    let coverage: Coverage = serde_json::from_str(include_str!(
+        "../../../../contracts/issuance-native-coverage.json"
+    ))
+    .map_err(|error| PlatformError::InvalidConfiguration(error.to_string()))?;
+    validate_native_extensions(&coverage)
+        .map_err(|error| PlatformError::InvalidConfiguration(error.into()))?;
+    for extension in coverage.native_extension_http {
+        // Reuse the exact validated route object, including method, upstream,
+        // authentication and tags; do not maintain a second extension list.
+        let request = GatewayRequest::new(extension.method, extension.path, 0);
+        let matched = NATIVE_ROUTES.find(&request)?;
+        table.add(matched.route.clone())?;
+    }
+    Ok(())
+}
 
 // The signed bureau webhook has its own HMAC-authenticated ingress boundary.
 // Keep the tenant-key selector tied to the eight caller-authenticated routes,
@@ -165,7 +256,8 @@ pub fn is_native_http(method: HttpMethod, path: &str) -> bool {
                 || matched.route.tags.contains(ISSUED_CREDENTIAL_ADAPTER_TAG)
                 || matched.route.tags.contains(OID4VCI_AUTHORIZATION_TAG)
                 || matched.route.tags.contains(CANVAS_MIRROR_TAG)
-                || matched.route.tags.contains(RETENTION_TAG);
+                || matched.route.tags.contains(RETENTION_TAG)
+                || matched.route.tags.contains(NATIVE_EXTENSION_TAG);
             !exact_shape_required
                 || (is_canonical_absolute_path(path)
                     && exact_template_shape(&matched.route.pattern, path))
@@ -212,6 +304,104 @@ pub fn upstream_service(method: HttpMethod, path: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn canvas_claim_selects_only_exact_current_session_native_extensions() {
+        let path = "/v1/integrations/canvas/lti/experience-sessions/current/claim";
+        for method in [HttpMethod::Get, HttpMethod::Post] {
+            assert!(is_native_http(method, path));
+            assert_eq!(upstream_service(method, path), NATIVE_SERVICE);
+            for near_miss in [
+                path.trim_start_matches('/').to_owned(),
+                format!("/{path}"),
+                format!("{path}/"),
+                format!("{path}/extra"),
+                format!("{path}?application_id=foreign"),
+                path.replace("/current/", "/foreign-session/"),
+                path.replace("/current/", "//"),
+                path.replace("/claim", "/claim-extra"),
+            ] {
+                assert!(
+                    !is_native_http(method, &near_miss),
+                    "{method:?} {near_miss}"
+                );
+                assert_eq!(upstream_service(method, &near_miss), LEGACY_SERVICE);
+            }
+        }
+        for method in [
+            HttpMethod::Put,
+            HttpMethod::Patch,
+            HttpMethod::Delete,
+            HttpMethod::Options,
+        ] {
+            assert!(!is_native_http(method, path));
+            assert_eq!(upstream_service(method, path), LEGACY_SERVICE);
+        }
+        let coverage: Coverage = serde_json::from_str(include_str!(
+            "../../../../contracts/issuance-native-coverage.json"
+        ))
+        .unwrap();
+        assert_eq!(coverage.native_extension_http.len(), 2);
+        assert!(coverage
+            .native_extension_http
+            .iter()
+            .all(|route| route.path == path));
+        assert!(coverage.native_http.iter().all(|route| route.path != path));
+    }
+
+    #[test]
+    fn canvas_claim_extension_contract_rejects_unreviewed_or_overlapping_routes() {
+        let frozen: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../contracts/issuance-native-coverage.json"
+        ))
+        .unwrap();
+        let rejected = |value: serde_json::Value| {
+            serde_json::from_value::<Coverage>(value).map_or(true, |coverage| {
+                validate_native_extensions(&coverage).is_err()
+            })
+        };
+        for (field, value) in [
+            ("method", "PUT"),
+            (
+                "path",
+                "/v1/integrations/canvas/lti/experience-sessions/{id}/claim",
+            ),
+            (
+                "path",
+                "/v1/integrations/canvas/lti/experience-sessions/foreign/claim",
+            ),
+            (
+                "path",
+                "/v1/integrations/canvas/lti/experience-sessions/current/claim/",
+            ),
+            ("operation", "foreign_operation"),
+            ("owner", "issuance"),
+            ("source", "foreign.rs"),
+            ("behavior_test", "foreign.rs"),
+            ("adaptation", ""),
+            ("unknown_authority", "ignored"),
+        ] {
+            let mut candidate = frozen.clone();
+            candidate["native_extension_http"][0][field] = value.into();
+            assert!(rejected(candidate), "accepted unreviewed {field}");
+        }
+        let mut missing = frozen.clone();
+        missing
+            .as_object_mut()
+            .unwrap()
+            .remove("native_extension_http");
+        assert!(rejected(missing));
+        let mut duplicate = frozen.clone();
+        duplicate["native_extension_http"][1] = duplicate["native_extension_http"][0].clone();
+        assert!(rejected(duplicate));
+        let mut overlap = frozen.clone();
+        let extension = overlap["native_extension_http"][0].clone();
+        overlap["native_http"]
+            .as_array_mut()
+            .unwrap()
+            .push(extension);
+        assert!(rejected(overlap));
+    }
 
     #[test]
     fn passport_public_classifier_selects_only_frozen_eight_routes() {

@@ -13,6 +13,7 @@ mod database;
 mod demo_evidence;
 mod issuer_profile;
 mod lms;
+mod native_templates;
 mod run;
 mod transition;
 mod wallet;
@@ -35,6 +36,7 @@ pub use demo_evidence::{
 };
 pub use issuer_profile::IssuerProfileContext;
 pub use lms::{seed_canvas_lms_objects, CanvasLmsSeedResult};
+pub use native_templates::{native_badge_templates, NativeBadgeTemplateInput};
 pub use run::run_seed;
 pub use transition::{lookup_transition, transition_display_lines, transition_summary};
 pub use wallet::{
@@ -278,18 +280,84 @@ fn badge_claims() -> Value {
     )
 }
 
+fn badge_claim_collection_rules(badge_vct: &str, fact_type: &str) -> Value {
+    let mut rules = Vec::new();
+    for name in ["email", "given_name", "family_name"] {
+        rules.push(
+            json!({"claim_name":name,"source":"FORM_FIELD","source_config":{"field_id":name}}),
+        );
+    }
+    for (name, field) in [
+        ("organization_id", "application.organization_id"),
+        ("certificate_id", "application.id"),
+        ("course_name", "canvas.course_name"),
+    ] {
+        rules.push(
+            json!({"claim_name":name,"source":"SYSTEM","source_config":{"system_field":field}}),
+        );
+    }
+    let image = format!("{badge_vct}/image.svg");
+    let criteria = format!("{badge_vct}/criteria");
+    for (name, value) in [
+        ("achievement_id", json!(badge_vct)),
+        ("achievement_name", json!(BADGE_NAME)),
+        ("achievement_description", json!(BADGE_DESCRIPTION)),
+        ("achievement_criteria", json!(criteria)),
+        ("badge_image_url", json!(image)),
+        ("institution_name", json!("ElevenID")),
+        (
+            "achievement",
+            json!({"id":badge_vct,"type":["Achievement"],"name":BADGE_NAME,
+            "description":BADGE_DESCRIPTION,"criteria":{"id":criteria},"image":{"id":image,"type":"Image"}}),
+        ),
+    ] {
+        rules.push(json!({"claim_name":name,"source":"SYSTEM","source_config":{"system_field":"constant","value":value}}));
+    }
+    for (name, pointer) in [
+        ("quiz_name", "/assertion/activity_name"),
+        ("score_percent", "/assertion/score_percent"),
+        ("completion_date", "/effective_at"),
+        ("result", "/assertion"),
+        ("learning_context", "/scope"),
+    ] {
+        let mut config = json!({"fact_type":fact_type,"json_pointer":pointer});
+        if name == "completion_date" {
+            config["format"] = json!("date");
+        }
+        rules
+            .push(json!({"claim_name":name,"source":"EVIDENCE_EXTRACTION","source_config":config}));
+    }
+    Value::Array(rules)
+}
+
 pub fn credential_template_payload(
     cfg: &GatewaySeedConfig,
     issuer: &IssuerProfileContext,
 ) -> Value {
-    let badge_vct = &cfg.badge_vct;
+    let mut payload = badge_credential_definition(&cfg.organization_id, &cfg.badge_vct);
+    payload.as_object_mut().unwrap().extend(json!({
+        "id": cfg.credential_template_id,
+        "status": "active",
+        "issuer_requirements": {"allowed_issuer_dids": [issuer.issuer_did], "trust_tier_required": "organization_managed_remote_signing", "audit_level_required": "standard"},
+        "wallet_configs": [
+            {"wallet_id": "waltid", "deep_link_scheme": "openid-credential-offer://", "format_variant": null},
+            {"wallet_id": "spruceid", "deep_link_scheme": "spruceid://", "format_variant": "dc+sd-jwt"}
+        ],
+        "key_access_mode": "REMOTE_SIGNING",
+        "issuer_key_id": issuer.signing_key_reference,
+        "issuer_algorithm": "ES256",
+        "remote_signing_config": remote_signing_config(&cfg.signing_keys_internal_base_url, issuer),
+        "version": 1
+    }).as_object().unwrap().clone());
+    payload
+}
+
+fn badge_credential_definition(organization_id: &str, badge_vct: &str) -> Value {
     let image = format!("{badge_vct}/image.svg");
     json!({
-        "id": cfg.credential_template_id,
-        "organization_id": cfg.organization_id,
+        "organization_id": organization_id,
         "name": BADGE_NAME,
         "description": BADGE_DESCRIPTION,
-        "status": "active",
         "credential_type": "OpenBadgeCredential",
         "vct": badge_vct,
         "doctype": "org.openbadges.v3",
@@ -300,18 +368,8 @@ pub fn credential_template_payload(
         "derived_attributes": [],
         "display_style": {"background_color": "#0B5F7A", "text_color": "#ffffff", "icon": "award", "logo_url": image},
         "validity_rules": {"duration": "P1Y", "renewal_required": false},
-        "issuer_requirements": {"allowed_issuer_dids": [issuer.issuer_did], "trust_tier_required": "organization_managed_remote_signing", "audit_level_required": "standard"},
         "supported_formats": ["sd_jwt_vc"],
-        "credential_payload_format": "w3c_vcdm_v2_sd_jwt",
-        "wallet_configs": [
-            {"wallet_id": "waltid", "deep_link_scheme": "openid-credential-offer://", "format_variant": null},
-            {"wallet_id": "spruceid", "deep_link_scheme": "spruceid://", "format_variant": "dc+sd-jwt"}
-        ],
-        "key_access_mode": "REMOTE_SIGNING",
-        "issuer_key_id": issuer.signing_key_reference,
-        "issuer_algorithm": "ES256",
-        "remote_signing_config": remote_signing_config(&cfg.signing_keys_internal_base_url, issuer),
-        "version": 1
+        "credential_payload_format": "w3c_vcdm_v2_sd_jwt"
     })
 }
 
@@ -330,20 +388,24 @@ pub fn open_badge_evidence_requirement(cfg: &GatewaySeedConfig, scope: &Value) -
     })
 }
 
-pub fn application_template_payload(
-    cfg: &GatewaySeedConfig,
-    scope: &Value,
-    issuer: &IssuerProfileContext,
-) -> Value {
-    let badge_vct = &cfg.badge_vct;
-    let fields = [
+fn badge_application_fields() -> [(&'static str, &'static str, &'static str); 6] {
+    [
         ("email", "Email", "email"),
         ("given_name", "Given name", "text"),
         ("family_name", "Family name", "text"),
         ("course_name", "Canvas course", "text"),
         ("quiz_name", "Canvas quiz", "text"),
         ("score_percent", "Score percent", "number"),
-    ];
+    ]
+}
+
+pub fn application_template_payload(
+    cfg: &GatewaySeedConfig,
+    scope: &Value,
+    issuer: &IssuerProfileContext,
+) -> Value {
+    let badge_vct = &cfg.badge_vct;
+    let fields = badge_application_fields();
     json!({
         "id": cfg.application_template_id,
         "organization_id": cfg.organization_id,
@@ -352,7 +414,7 @@ pub fn application_template_payload(
         "credential_template_id": cfg.credential_template_id,
         "form_fields": fields.into_iter().map(|(name, label, kind)| json!({"name": name, "label": label, "type": kind, "required": true})).collect::<Vec<_>>(),
         "evidence_requirements": [open_badge_evidence_requirement(cfg, scope)],
-        "claim_collection_rules": [],
+        "claim_collection_rules": badge_claim_collection_rules(badge_vct, &cfg.program_binding_evidence_type),
         "required_checks": [],
         "approval_strategy": "policy",
         "approval_policy_set_id": null,

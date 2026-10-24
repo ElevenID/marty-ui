@@ -146,7 +146,10 @@ describe('CanvasLtiExperiencePage', () => {
       expect(submit).toHaveBeenCalledTimes(1);
     });
 
-    const form = container.querySelector('form[target="_top"]');
+    const form = container.querySelector('form[target="_self"]');
+    // Canvas consumes the return inside the launch frame and notifies its parent chooser.
+    expect(form).toHaveAttribute('target', '_self');
+    expect(container.querySelector('form[target="_top"]')).not.toBeInTheDocument();
     expect(form).toHaveAttribute('method', 'post');
     expect(form).toHaveAttribute(
       'action',
@@ -207,7 +210,7 @@ describe('CanvasLtiExperiencePage', () => {
       ),
     ).toBeInTheDocument();
     expect(submit).not.toHaveBeenCalled();
-    expect(container.querySelector('form[target="_top"]')).not.toBeInTheDocument();
+    expect(container.querySelector('form[target="_self"]')).not.toBeInTheDocument();
 
     submit.mockRestore();
   });

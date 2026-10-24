@@ -249,6 +249,18 @@ def test_native_conformance_requires_remote_envelope_custody(fault):
         )
 
 
+@pytest.mark.parametrize("owner", ["issuance", "issuance-native"])
+@pytest.mark.parametrize("key", [*native.CONTROL_PLANE_TARGETS, "GRPC_TLS_CA_CERT"])
+def test_issuance_rejects_downgraded_control_plane(owner, key):
+    value = model()
+    value["services"][owner]["environment"][key] = (
+        native.CONTROL_PLANE_TARGETS[key].removeprefix("https://")
+        if key in native.CONTROL_PLANE_TARGETS else ""
+    )
+    with pytest.raises(ValueError):
+        native.validate_model(value, project=PROJECT, authcrypt=False, local_build=False)
+
+
 def model(*, local=False, authcrypt=False):
     env = {
         key: "synthetic"
@@ -278,6 +290,8 @@ def model(*, local=False, authcrypt=False):
         DIDCOMM_ALLOW_PRIVATE_IPS="true",
         DIDCOMM_TLS_CA_FILE=native.CA_TARGET,
     )
+    env.update(native.CONTROL_PLANE_TARGETS)
+    env["GRPC_TLS_CA_CERT"] = "/run/secrets/workload_identity_ca_cert"
     ca = {
         "type": "bind",
         "source": "/synthetic/tls/root-ca.pem",
@@ -372,6 +386,11 @@ def model(*, local=False, authcrypt=False):
         },
         "issuance": legacy,
         "issuance-native": candidate,
+        "envoy-issuance-bridge": {
+            "image": IMAGE,
+            "pull_policy": "always",
+            "entrypoint": ["/usr/local/bin/marty-keyless-grpc-bridge"],
+        },
         "gateway": {
             "image": IMAGE,
             "environment": {
@@ -442,6 +461,58 @@ def test_explicit_owner_pairs_files_and_models(local, authcrypt):
         authcrypt=authcrypt,
         local_build=local,
     )
+
+
+@pytest.mark.parametrize(
+    "fault", ["missing", "image", "pull-policy", "entrypoint", "build", "other-build"]
+)
+def test_released_bridge_rejects_unbound_or_local_runtime(fault):
+    value = model()
+    bridge = value["services"]["envoy-issuance-bridge"]
+    if fault == "missing":
+        del value["services"]["envoy-issuance-bridge"]
+    elif fault == "image":
+        bridge["image"] = "marty-envoy-bridge:latest"
+    elif fault == "pull-policy":
+        bridge["pull_policy"] = "missing"
+    elif fault == "entrypoint":
+        bridge["entrypoint"] = ["/bin/sh"]
+    elif fault == "build":
+        bridge["build"] = {"dockerfile": "services/Dockerfile"}
+    else:
+        value["services"]["new-unbound-service"] = {"build": {"context": "."}}
+    with pytest.raises(ValueError, match="bridge|source builds"):
+        native.validate_model(value, project=PROJECT, authcrypt=False, local_build=False)
+
+
+def test_native_ca_mount_accepts_compose_2382_omitted_false():
+    normalized = model()
+    mount = next(
+        item for item in normalized["services"]["issuance-native"]["volumes"]
+        if item.get("target") == native.CA_TARGET
+    )
+    mount["bind"].pop("create_host_path")
+    native.validate_model(
+        normalized, project=PROJECT, authcrypt=False, local_build=False
+    )
+
+    mount["bind"]["create_host_path"] = True
+    with pytest.raises(ValueError, match="may create a host path"):
+        native.validate_model(
+            normalized, project=PROJECT, authcrypt=False, local_build=False
+        )
+
+
+def test_native_ca_source_keeps_explicit_no_create_declaration():
+    import yaml
+
+    source = yaml.safe_load((stack.ROOT / stack.NATIVE_CA_FILE).read_text())
+    mounts = source["services"]["issuance-native"]["volumes"]
+    assert len(mounts) == 1
+    assert mounts[0]["type"] == "bind"
+    assert mounts[0]["target"] == native.CA_TARGET
+    assert mounts[0]["read_only"] is True
+    assert mounts[0]["bind"] == {"create_host_path": False}
 
 
 @pytest.mark.parametrize("owner", ["", "rust", "native-legacy", None])
@@ -604,6 +675,7 @@ def test_probe_isolated_and_cleans_exact_id_on_failure():
                 )
                 assert (
                     "/usr/local/bin/marty-issuance-service" in command[-1]
+                    and "/usr/local/bin/marty-keyless-grpc-bridge" in command[-1]
                     and "ldd" in command[-1]
                 )
                 stdout = ID
@@ -745,14 +817,15 @@ def test_shared_compose_file_is_in_checkout_packaging_boundary():
     import yaml
 
     common = "docker-compose.service.issuance-native.yml"
-    for path in (
-        "docker-compose.beta.yml",
-        "docker-compose.profile.conformance-native.yml",
+    for path, expected in (
+        ("docker-compose.beta.yml", common),
+        ("docker-compose.profile.conformance-native.yml",
+         "docker-compose.service.issuance-native-runtime.yml"),
     ):
         document = yaml.safe_load((native.ROOT / path).read_text(encoding="utf-8"))
         reference = document["services"]["issuance-native"]["extends"]["file"]
         assert (
-            reference == common
+            reference == expected
             and (native.ROOT / path).parent.joinpath(reference).is_file()
         )
     # Beta uses full, source-verified checkouts. The durable runtime-config

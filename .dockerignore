@@ -97,6 +97,11 @@ rust/services/issuance/src/python_format_tests.rs
 rust/services/issuance/src/signing_http_projection_tests.rs
 rust/services/issuance/src/signing_http_response_tests.rs
 rust/services/issuance/src/token_rate_limit_http_tests.rs
+# Shared Flow/Canvas acceptance fixture; production binaries do not compile it.
+rust/acceptance/support/base_runtime_redis.rs
+rust/acceptance/support/didcomm_gateway_replay.rs
+rust/acceptance/support/didcomm_native_grpc_fixture.rs
+rust/acceptance/support/issuance_named_peers.rs
 # Cargo auto-discovers these oid4vp-contract test targets only for `cargo test`.
 # Production Docker COPY rust does not compile or execute them.
 rust/crates/oid4vp-contract/tests/contract_vectors.rs
@@ -145,6 +150,7 @@ rust/crates/flow-acceptance/tests/support/flow_public_startup_peers.rs
 rust/crates/flow-acceptance/tests/support/flow_rendered_selection.rs
 # The self-host acceptance executable and fixture support are also test-only.
 rust/crates/selfhost-acceptance/tests/selfhost_public_image_contract.rs
+rust/crates/selfhost-acceptance/tests/native_kms_schema_contract.rs
 rust/crates/selfhost-acceptance/tests/support/selfhost_packaged_runtime.rs
 rust/crates/selfhost-acceptance/tests/support/selfhost_runtime_sidecar.rs
 # Cross-service acceptance targets are compiled from the checkout in CI, not

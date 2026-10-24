@@ -31,7 +31,7 @@ import { TrustProvider } from '../../trust';
 import { useAsyncData } from '../../../hooks/useAsyncData';
 import { useConsole } from '../../../contexts/ConsoleContext';
 import { listRevocationProfiles, listTrustProfiles } from '../../../services/presentationPolicyApi';
-import { listPublicIssuerIdentities } from '../../../services/signingKeysApi';
+import { listPublicIssuerIdentities } from '../../../services/issuerIdentitiesApi';
 
 const getBreadcrumbs = (t) => [
   { label: t('trust.breadcrumbs.console'), path: '/console' },

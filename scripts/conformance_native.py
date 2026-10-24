@@ -93,6 +93,11 @@ REQUIRED_ENVIRONMENT = (
     "CREDENTIAL_TEMPLATE_SERVICE_URL",
     "REVOCATION_PROFILE_SERVICE_URL",
 )
+CONTROL_PLANE_TARGETS = {
+    "ORG_GRPC_TARGET": "https://organization:9002",
+    "CT_GRPC_TARGET": "https://credential-template:9003",
+    "RP_GRPC_TARGET": "https://revocation-profile:9013",
+}
 TOKEN_CONSUMERS = (
     "gateway",
     "auth",
@@ -264,6 +269,12 @@ def validate_model(
                 isinstance(env.get(key), str) and bool(env[key].strip()),
                 "Mandatory native issuance configuration is missing",
             )
+        for owner in (env, previous):
+            require(
+                owner.get("GRPC_TLS_CA_CERT") == "/run/secrets/workload_identity_ca_cert"
+                and all(owner.get(key) == target for key, target in CONTROL_PLANE_TARGETS.items()),
+                "Issuance control-plane TLS targets or public CA are incomplete",
+            )
         token = env.get("GRPC_SERVICE_TOKEN")
         require(
             isinstance(token, str) and len(token.strip()) >= 32,
@@ -313,8 +324,11 @@ def validate_model(
             mounts.append(item)
         require(
             mounts[0]["source"] == mounts[1]["source"]
-            and mounts[1]["bind"]["create_host_path"] is False,
-            "Native CA mount is not paired",
+            # Compose 2.38.2 serializes a false CreateHostPath as bind: {}
+            # (including with --no-normalize). Omitted bools are false in its
+            # typed model; an explicit true must still fail this guard.
+            and POLICY["bind_does_not_create_host_path"](mounts[1]),
+            "Native CA mount is not paired or may create a host path",
         )
         POLICY["validate_model"](
             model,
@@ -336,6 +350,13 @@ def validate_model(
                 "Local native build selector is incompatible",
             )
         else:
+            unbound_builds = sorted(
+                name for name, service in services.items() if service.get("build")
+            )
+            require(
+                not unbound_builds,
+                "Released conformance contains source builds: " + ", ".join(unbound_builds),
+            )
             require(
                 not native.get("build") and native.get("pull_policy") == "always",
                 "Released native mode must not build or reuse mutable images",
@@ -352,6 +373,14 @@ def validate_model(
                 image == gateway.get("image"),
                 "Gateway/native services artifacts must be paired",
             )
+            bridge = services.get("envoy-issuance-bridge", {})
+            require(
+                bridge.get("image") == image
+                and bridge.get("pull_policy") == "always"
+                and bridge.get("entrypoint")
+                == ["/usr/local/bin/marty-keyless-grpc-bridge"],
+                "Envoy issuance bridge must use the exact services artifact and keyless entrypoint",
+            )
     except (
         KeyError,
         TypeError,
@@ -360,6 +389,12 @@ def validate_model(
         RELEASE["OfficialReleaseError"],
     ):
         raise ValueError("Invalid native conformance model") from None
+
+
+class _CommandFailed(ValueError):
+    def __init__(self, returncode: int):
+        self.returncode = returncode
+        super().__init__(f"Native conformance preflight command failed (exit {returncode})")
 
 
 def _run(command: list[str], *, runner, capture: bool = False, timeout: int = 60):
@@ -373,7 +408,8 @@ def _run(command: list[str], *, runner, capture: bool = False, timeout: int = 60
         timeout=timeout,
         check=False,
     )
-    require(result.returncode == 0, "Native conformance preflight command failed")
+    if result.returncode:
+        raise _CommandFailed(result.returncode)
     return result.stdout if capture else None
 
 
@@ -381,14 +417,16 @@ def verify_release(
     manifest: Path, checksums: Path, revision: str, image: str, *, runner=subprocess.run
 ) -> dict[str, Any]:
     """Reuse authoritative release inputs plus the existing GitHub attestation trust."""
+    stage = "manifest validation"
     try:
         plan = RELEASE["validate_release_inputs"](
-            manifest, checksums, expected_ui_revision=revision
+            manifest, checksums, expected_ui_revision=revision, rust_only=True
         )
         require(
             plan["images"]["services"]["reference"] == image,
             "Native image differs from the authenticated release",
         )
+        stage = "manifest attestation"
         _run(
             [
                 "gh",
@@ -400,13 +438,15 @@ def verify_release(
             ],
             runner=runner,
         )
+        stage = "manifest revalidation"
         require(
             RELEASE["validate_release_inputs"](
-                manifest, checksums, expected_ui_revision=revision
+                manifest, checksums, expected_ui_revision=revision, rust_only=True
             )
             == plan,
             "Release inputs changed during attestation verification",
         )
+        stage = "native capability source"
         source = _run(
             ["git", "show", f"{revision}:{CAPABILITY_PATH}"],
             runner=runner,
@@ -417,13 +457,17 @@ def verify_release(
         )
         validate_capabilities(json.loads(source))
         return plan
+    except _CommandFailed as error:
+        raise ValueError(
+            f"Native release qualification failed at {stage} (exit {error.returncode})"
+        ) from None
     except (
         OSError,
         subprocess.SubprocessError,
         RELEASE["OfficialReleaseError"],
         json.JSONDecodeError,
     ):
-        raise ValueError("Native release qualification failed") from None
+        raise ValueError(f"Native release qualification failed at {stage}") from None
 
 
 def probe_image(
@@ -481,7 +525,7 @@ def probe_image(
                 "/bin/sh",
                 image,
                 "-ec",
-                'test -x /usr/local/bin/marty-issuance-service; test -x /app/services/entrypoint.sh; native_linkage=$(ldd /usr/local/bin/marty-issuance-service); case "$native_linkage" in *"not found"*) exit 1;; esac',
+                'test -x /app/services/entrypoint.sh; for binary in /usr/local/bin/marty-issuance-service /usr/local/bin/marty-keyless-grpc-bridge; do test -x "$binary"; native_linkage=$(ldd "$binary"); case "$native_linkage" in *"not found"*) exit 1;; esac; done',
             ],
             runner=runner,
             capture=True,

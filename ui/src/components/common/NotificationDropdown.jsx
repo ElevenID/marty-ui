@@ -1,7 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import {
   Menu,
-  MenuItem,
   List,
   ListItem,
   ListItemText,
@@ -20,13 +19,15 @@ import ErrorIcon from '@mui/icons-material/Error';
 import WarningIcon from '@mui/icons-material/Warning';
 import InfoIcon from '@mui/icons-material/Info';
 import MailIcon from '@mui/icons-material/Mail';
-import DraftsIcon from '@mui/icons-material/Drafts';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import { formatDistanceToNow } from 'date-fns';
 import { useTranslation } from 'react-i18next';
 
 import notificationsApi from '../../services/notificationsApi';
 import EmptyState from './EmptyState';
+
+const isConsoleLink = (value) => typeof value === 'string' && /^\/console(?:\/|$)/.test(value)
+  && !value.includes('\\') && [...value].every((character) => character.charCodeAt(0) >= 32 && character.charCodeAt(0) !== 127);
 
 /**
  * NotificationDropdown - Dropdown menu showing recent notifications
@@ -40,41 +41,31 @@ import EmptyState from './EmptyState';
  * @param {function} onMarkAllRead - Mark all as read callback
  * @param {function} onCountChange - Callback when unread count changes
  */
-function NotificationDropdown({ anchorEl, open, onClose, onMarkAllRead, onCountChange }) {
+function ScopedNotificationDropdown({ organizationId, recipientId, anchorEl, open, onClose, onMarkAllRead, onCountChange }) {
   const { t } = useTranslation('common');
   const [notifications, setNotifications] = useState([]);
   const [loading, setLoading] = useState(false);
-
+  const [error, setError] = useState('');
+  const [attempt, setAttempt] = useState(0);
+  const mounted = useRef(false);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   useEffect(() => {
-    if (open) {
-      loadNotifications();
-    }
-  }, [open]);
-
-  const loadNotifications = async () => {
-    setLoading(true);
-    try {
-      const data = await notificationsApi.listNotifications({ limit: 10 });
-      setNotifications(Array.isArray(data) ? data : data.notifications || []);
-    } catch (err) {
-      console.error('Failed to load notifications:', err);
-    } finally {
-      setLoading(false);
-    }
-  };
-
+    let current = true;
+    if (!open) return () => { current = false; };
+    setLoading(true); setError(''); setNotifications([]);
+    notificationsApi.listNotifications({ organization_id: organizationId, recipient_id: recipientId, limit: 10 }).then((data) => {
+      if (current) setNotifications(data);
+    }).catch((failure) => { if (current) setError(failure?.message || 'Notifications could not be loaded.'); })
+      .finally(() => { if (current) setLoading(false); });
+    return () => { current = false; };
+  }, [open, organizationId, recipientId, attempt]);
   const handleMarkAsRead = async (notificationId) => {
     try {
-      await notificationsApi.markAsRead(notificationId);
-      setNotifications(prev => 
-        prev.map(n => n.id === notificationId ? { ...n, read: true } : n)
-      );
-      // Update unread count
-      const unreadCount = notifications.filter(n => !n.read && n.id !== notificationId).length;
-      onCountChange?.(unreadCount);
-    } catch (err) {
-      console.error('Failed to mark notification as read:', err);
-    }
+      await notificationsApi.markAsRead(notificationId, organizationId);
+      if (!mounted.current) return;
+      setAttempt((value) => value + 1);
+      onCountChange?.();
+    } catch (failure) { if (mounted.current) setError(failure?.message || 'Notification could not be updated.'); }
   };
 
   const getSeverityIcon = (severity) => {
@@ -129,8 +120,9 @@ function NotificationDropdown({ anchorEl, open, onClose, onMarkAllRead, onCountC
       </Box>
       <Divider />
 
+      {error && <Box sx={{ p: 2 }}><Typography color="error">{error}</Typography><Button onClick={() => setAttempt((value) => value + 1)}>Retry notifications</Button></Box>}
       {/* Content */}
-      {loading ? (
+      {error ? null : loading ? (
         <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
           <CircularProgress />
         </Box>
@@ -175,7 +167,7 @@ function NotificationDropdown({ anchorEl, open, onClose, onMarkAllRead, onCountC
                 secondary={
                   <>
                     <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-                      {notification.message}
+                      {notification.body}
                     </Typography>
                     <Typography variant="caption" color="text.disabled" sx={{ mt: 0.5, display: 'block' }}>
                       {formatDistanceToNow(new Date(notification.created_at), { addSuffix: true })}
@@ -183,11 +175,12 @@ function NotificationDropdown({ anchorEl, open, onClose, onMarkAllRead, onCountC
                   </>
                 }
               />
-              {notification.link && (
+              {isConsoleLink(notification.link) && (
                 <IconButton
                   size="small"
                   component={Link}
                   to={notification.link}
+                  aria-label="Open notification"
                   onClick={(e) => {
                     e.stopPropagation();
                     onClose();
@@ -223,4 +216,7 @@ function NotificationDropdown({ anchorEl, open, onClose, onMarkAllRead, onCountC
   );
 }
 
-export default NotificationDropdown;
+export default function NotificationDropdown(props) {
+  if (!props.organizationId || !props.recipientId) return null;
+  return <ScopedNotificationDropdown key={`${props.organizationId}:${props.recipientId}`} {...props} />;
+}

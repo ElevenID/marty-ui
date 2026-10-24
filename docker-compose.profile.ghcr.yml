@@ -31,7 +31,14 @@ services:
     <<: *openbao-plugin-image
     build: !reset null
 
-  oidf-tls-proxy: *service-image
+  oidf-tls-proxy:
+    <<: *service-image
+    # Compose 2.38 does not preserve !reset inherited through an alias.
+    build: !reset null
+
+  envoy-issuance-bridge:
+    <<: *service-image
+    build: !reset null
 
   ui:
     image: ${MARTY_UI_IMAGE:?set MARTY_UI_IMAGE to an immutable UI image digest}

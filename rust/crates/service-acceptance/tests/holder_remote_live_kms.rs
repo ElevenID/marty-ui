@@ -2,6 +2,7 @@
 
 use async_trait::async_trait;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use ecdsa_core::signature::Verifier as _;
 use ed25519_dalek::{Signature, VerifyingKey};
 use marty_device_registration::{
     control_plane::MembershipAuthorizer,
@@ -27,9 +28,8 @@ use marty_signing_keys::{
     managed_holder_http,
     managed_holder_key::OpenBaoManagedHolderKeys,
 };
-use p256::ecdsa::{
-    signature::Verifier as _, Signature as P256Signature, VerifyingKey as P256VerifyingKey,
-};
+type P256Signature = ecdsa_core::Signature<p256::NistP256>;
+type P256VerifyingKey = ecdsa_core::VerifyingKey<p256::NistP256>;
 use serde_json::json;
 use sqlx::postgres::PgPoolOptions;
 use std::sync::{

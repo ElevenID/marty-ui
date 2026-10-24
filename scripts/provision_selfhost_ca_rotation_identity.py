@@ -1,0 +1,119 @@
+#!/usr/bin/env python3
+"""Bootstrap or log in to a bounded, rootless self-host CA-rotation AppRole.
+
+Only the initial installation root may create this identity. Routine CA
+rotation uses the separate RoleID/SecretID pair and exact versioned PKI paths.
+The operator can issue public certificates but cannot export Transit keys,
+change policies or operate an unrelated mount.
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+from pathlib import Path
+import subprocess
+import sys
+from urllib.error import HTTPError
+
+sys.dont_write_bytecode = True
+from selfhost_native_operator import OperatorCleanupError, approle_operation, approle_policy, network_operation  # noqa: E402
+from selfhost_operator_inputs import private_file, write_private, snapshot_origin, private_empty_or_source  # noqa: E402
+from provision_selfhost_renewal_identity import existing_policy_names  # noqa: E402
+from selfhost_openbao_client import Bao  # noqa: E402
+
+
+AUTH_MOUNT = "selfhost-ca-rotation"
+APPROLE = "kms-ca-rotator"
+POLICY = "selfhost-kms-ca-rotation"
+ROLE_ID_FILE = "ca-rotation-role-id"
+SECRET_ID_FILE = "ca-rotation-secret-id"
+TOKEN_FILE = "ca-rotation-operator-token"
+POLICY_NAMES_FILE = "ca-rotation-leaf-policies.json"
+# Pre-authorized exact mount names; a mid-path `*` is not an OpenBao ACL glob.
+VERSIONS = range(2, 9)
+
+
+def rotation_acl(names: list[str]) -> str:
+    return approle_policy("ca-rotation", names=names)
+
+
+def checked_login(bao: Bao, identity: Path) -> str:
+    return approle_operation(bao, "login", "ca-rotation", identity)["token"]
+
+
+def bootstrap(bao: Bao, current: Path, output: Path) -> None:
+    output = private_empty_or_source(output, empty=True)
+    if output.stat().st_uid != os.getuid():
+        raise ValueError("CA-rotation identity output has an unexpected owner")
+    names = existing_policy_names(bao, current)
+    approle_operation(bao, "bootstrap", "ca-rotation", output, names=names)
+
+
+def stage_issuer(bao: Bao, identity: Path, output: Path,
+                 kind: str, version: int) -> str:
+    """Create or resume one non-exportable CA; leave leaf production to its owner."""
+    mount = network_operation(bao, "ca-issuer", identity=str(identity), output=str(output),
+                              kind=kind, version=version)
+    if mount != f"{kind}-pki-v{version}":
+        raise OperatorCleanupError("CA issuer staging requires operator recovery")
+    return mount
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--mode", choices=("bootstrap", "login", "stage-issuer"), required=True)
+    parser.add_argument("--bao-addr", required=True)
+    parser.add_argument("--bao-ca", required=True, type=Path)
+    parser.add_argument("--token-file", type=Path)
+    parser.add_argument("--current-secrets", type=Path)
+    parser.add_argument("--identity", type=Path)
+    parser.add_argument("--kind", choices=("workload", "keycloak"))
+    parser.add_argument("--version", type=int)
+    parser.add_argument("--output", required=True, type=Path)
+    args = parser.parse_args()
+    try:
+        if (os.name != "posix" or not args.bao_ca.is_absolute()
+                or args.bao_ca.is_symlink() or not args.bao_ca.is_file()):
+            raise ValueError("CA-rotation OpenBao endpoint is invalid")
+        snapshot_origin(args.bao_addr)
+        if args.mode == "bootstrap":
+            if (args.identity is not None or args.token_file is None
+                    or args.current_secrets is None or args.kind is not None
+                    or args.version is not None):
+                raise ValueError("bootstrap requires the root token and current generation")
+            token = private_file(args.token_file).strip()
+            if len(token) < 20:
+                raise ValueError("CA-rotation bootstrap root token is invalid")
+            bootstrap(Bao(args.bao_addr, args.bao_ca, token),
+                      args.current_secrets, args.output)
+        elif args.mode == "login":
+            if (args.identity is None or args.token_file is not None
+                    or args.current_secrets is not None or args.kind is not None
+                    or args.version is not None):
+                raise ValueError("login requires only the existing CA identity")
+            output = private_empty_or_source(args.output, empty=True)
+            if output.stat().st_uid != os.getuid():
+                raise ValueError("CA-rotation login output has an unexpected owner")
+            bao = Bao(args.bao_addr, args.bao_ca, "")
+            write_private(output / TOKEN_FILE, checked_login(bao, args.identity))
+        else:
+            if (args.identity is None or args.token_file is not None
+                    or args.current_secrets is not None or args.kind is None
+                    or args.version is None):
+                raise ValueError("issuer staging requires one kind, version and CA identity")
+            bao = Bao(args.bao_addr, args.bao_ca, "")
+            stage_issuer(bao, args.identity, args.output, args.kind, args.version)
+    except OperatorCleanupError as error:
+        print(str(error), file=sys.stderr)
+        return 3
+    except (OSError, ValueError, RuntimeError, HTTPError,
+            subprocess.SubprocessError) as error:
+        print(f"self-host CA-rotation identity failed: {type(error).__name__}", file=sys.stderr)
+        return 2
+    print("Scoped self-host CA-rotation identity is ready")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-import subprocess
 import sys
 
 import pytest
@@ -14,8 +13,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 from provision_selfhost_keycloak_kms import (  # noqa: E402
-    MIN_VALIDITY_SECONDS, OUTPUTS, SESSION_TTL, require_cert_lifetime,
-    require_mounts, scoped_token, write_outputs,
+    OUTPUTS, selected_pki_mount, write_outputs,
 )
 from with_disposable_event_stream_kms import PLUGIN_IMAGE  # noqa: E402
 
@@ -72,6 +70,14 @@ def test_keycloak_output_preserves_unrelated_existing_file(tmp_path: Path) -> No
     write_outputs(tmp_path, values)
     assert {path.name for path in tmp_path.iterdir()} == EXPECTED | {marker.name}
     assert marker.read_text(encoding="ascii") == "keep me"
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX private-root contract")
+def test_renewal_stages_owner_only_files(tmp_path: Path) -> None:
+    tmp_path.chmod(0o700)
+    values = {name: f"scope-{name}" for name in EXPECTED}
+    write_outputs(tmp_path, values, staged=True)
+    assert {path.stat().st_mode & 0o777 for path in tmp_path.iterdir()} == {0o600}
 
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX private-root contract")
@@ -140,55 +146,40 @@ def test_keycloak_output_rejects_native_windows(tmp_path: Path) -> None:
     assert list(tmp_path.iterdir()) == []
 
 
-class Mounts:
-    def __init__(self, didcomm: str) -> None:
-        self.didcomm = didcomm
-
-    def request(self, method: str, path: str) -> dict:
-        assert (method, path) == ("GET", "sys/mounts")
-        return {"data": {"transit/": {"type": "transit"},
-                         "didcomm/": {"type": self.didcomm}}}
-
-
-def test_keycloak_provisioning_requires_current_didcomm_plugin() -> None:
-    require_mounts(Mounts("openbao-didcomm-authcrypt"))
-    with pytest.raises(RuntimeError, match="reviewed Keycloak mounts"):
-        require_mounts(Mounts("kv"))
+def test_keycloak_provisioning_requires_pinned_didcomm_plugin() -> None:
     assert PLUGIN_IMAGE.fullmatch("marty-openbao-didcomm:ci")
     assert PLUGIN_IMAGE.fullmatch("marty-openbao-didcomm:local")
     assert not PLUGIN_IMAGE.fullmatch("ghcr.io/elevenid/marty-ui-oss/openbao-didcomm:latest")
 
 
-def test_keycloak_token_requires_a_real_session_length() -> None:
-    class TokenBao:
-        token = "disposable-root-token-long-enough"
-
-        def __init__(self, duration: int) -> None:
-            self.duration = duration
-
-        def request(self, method: str, path: str, body: dict) -> dict:
-            if path.startswith("sys/policies/acl/"):
-                assert method == "PUT"
-                return {}
-            assert (method, path) == ("POST", "auth/token/create")
-            assert body["ttl"] == SESSION_TTL == "8h"
-            assert body["no_default_policy"] is True
-            return {"auth": {"client_token": "disposable-scoped-token-long-enough",
-                             "lease_duration": self.duration}}
-
-    assert scoped_token(TokenBao(MIN_VALIDITY_SECONDS), "policy", "scope")
-    with pytest.raises(RuntimeError, match="expires before tester session"):
-        scoped_token(TokenBao(MIN_VALIDITY_SECONDS - 1), "policy", "scope")
+def test_replacement_keycloak_issuer_is_explicit_and_bounded() -> None:
+    assert selected_pki_mount(renew=True, requested=None) == "keycloak-pki"
+    assert selected_pki_mount(renew=True, requested="keycloak-pki-v2") == "keycloak-pki-v2"
+    assert selected_pki_mount(renew=True, requested="keycloak-pki-v8") == "keycloak-pki-v8"
+    for value in ("", "keycloak-pki-v1", "keycloak-pki-v02", "keycloak-pki-v9",
+                  "keycloak-pki-v2/sign/rs256"):
+        with pytest.raises(ValueError, match="mount is invalid"):
+            selected_pki_mount(renew=True, requested=value)
+    with pytest.raises(ValueError, match="renewal-only"):
+        selected_pki_mount(renew=False, requested="keycloak-pki-v2")
 
 
-def test_keycloak_certificate_requires_a_real_session_length(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    def short_cert(command: list[str], **kwargs: object) -> subprocess.CompletedProcess:
-        assert command == ["openssl", "x509", "-checkend", str(MIN_VALIDITY_SECONDS), "-noout"]
-        assert kwargs["input"] == b"public certificate"
-        return subprocess.CompletedProcess(command, 1)
+def test_cli_staging_failure_after_qualified_mint_is_exit_three(tmp_path, monkeypatch, capsys):
+    import provision_selfhost_keycloak_kms as keycloak
+    ca, token = tmp_path / "ca.crt", tmp_path / "token"
+    ca.write_text("public CA")
+    token.write_text("synthetic-operator-token-long-enough")
+    for name, value in {"BAO_ADDR": "https://synthetic.invalid", "BAO_CACERT": str(ca),
+                        "SELFHOST_KEYCLOAK_MODE": "initial", "BAO_ROOT_TOKEN_FILE": str(token),
+                        "SELFHOST_KEYCLOAK_OUTPUT_DIR": str(tmp_path)}.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.delenv("SELFHOST_KEYCLOAK_PKI_MOUNT", raising=False)
+    monkeypatch.setattr(keycloak, "require_available_private_root", lambda *_: None)
+    monkeypatch.setattr(keycloak, "KeycloakBao", lambda *_: object())
+    monkeypatch.setattr(keycloak, "provision", lambda *_, **kwargs: {"minted": "sensitive-token"})
 
-    monkeypatch.setattr("provision_selfhost_keycloak_kms.subprocess.run", short_cert)
-    with pytest.raises(RuntimeError, match="certificate expires before tester session"):
-        require_cert_lifetime("public certificate")
+    def failed_write(*args, **kwargs):
+        raise OSError("sensitive-local-path")
+    monkeypatch.setattr(keycloak, "write_outputs", failed_write)
+    assert keycloak.main() == 3
+    assert capsys.readouterr().err.strip() == "Keycloak provisioning requires operator recovery"

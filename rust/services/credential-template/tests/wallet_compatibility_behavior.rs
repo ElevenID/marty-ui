@@ -94,6 +94,41 @@ fn every_intended_derived_profile_and_fallback_is_preserved() {
 }
 
 #[test]
+fn generic_requirements_preserve_compliance_key_for_scoped_override_matching() {
+    let derived = derive_wallet_profile("SD_JWT_VC", "OID4VCI", Some(" campus_badge "));
+    assert_eq!(derived.name, "Generic SD-JWT VC Wallet");
+    assert_eq!(
+        derived.compliance_profile_code.as_deref(),
+        Some("CAMPUS_BADGE")
+    );
+    let mut matching = system_wallet_catalog(Utc::now()).remove(0);
+    matching.id = "campus-override".into();
+    matching.organization_id = Some("org-1".into());
+    matching.is_override = true;
+    matching.credential_format = Some("SD_JWT_VC".into());
+    matching.issuance_protocol = Some("OID4VCI_PRE_AUTH".into());
+    matching.compliance_profile_code = Some("CAMPUS_BADGE".into());
+    let mut other_code = matching.clone();
+    other_code.id = "different-compliance".into();
+    other_code.compliance_profile_code = Some("EUDI_PID".into());
+    let matches = matching_wallet_overrides(
+        &[matching, other_code],
+        "org-1",
+        &derived.credential_format,
+        &derived.issuance_protocol,
+        derived.compliance_profile_code.as_deref(),
+    );
+    assert_eq!(matches.len(), 1);
+    assert_eq!(matches[0].id, "campus-override");
+    let merged = merge_wallet_profile(derived, &matches, &template());
+    assert_eq!(
+        merged.derived_from.compliance_profile_code.as_deref(),
+        Some("CAMPUS_BADGE")
+    );
+    assert_eq!(merged.applied_override_ids, ["campus-override"]);
+}
+
+#[test]
 fn override_matching_and_merge_are_tenant_safe_and_deterministic() {
     let now = Utc.with_ymd_and_hms(2026, 8, 21, 12, 0, 0).unwrap();
     let mut low = system_wallet_catalog(now).remove(0);

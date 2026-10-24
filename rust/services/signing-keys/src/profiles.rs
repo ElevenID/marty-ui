@@ -28,7 +28,7 @@ const KEY_PURPOSES: &[&str] = &[
     "jwks_signing",
     "lti_tool_signing",
 ];
-const PROTOCOL_FORMATS: &[&str] = &[
+pub(crate) const PROTOCOL_FORMATS: &[&str] = &[
     "MDOC",
     "SD_JWT_VC",
     "VC_JWT",
@@ -867,7 +867,7 @@ fn profile_wire_format(profile: &Map<String, Value>) -> Option<String> {
         .or_else(|| protocol_wire_format(&string(profile, "credential_format")?))
 }
 
-fn protocol_wire_format(protocol_format: &str) -> Option<String> {
+pub(crate) fn protocol_wire_format(protocol_format: &str) -> Option<String> {
     match protocol_format
         .trim()
         .to_ascii_lowercase()

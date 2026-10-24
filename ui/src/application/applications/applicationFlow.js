@@ -180,7 +180,8 @@ function mergeFieldsByName(...fieldGroups) {
 export function normalizeApplicationTemplateToFormConfig(applicationTemplate, credentialConfig = null) {
   const baseConfig = normalizeCredentialConfigInput(credentialConfig) || {};
   const evidenceRequirements = parseListField(applicationTemplate?.evidence_requirements);
-  const templateFormFields = parseListField(applicationTemplate?.form_fields)
+  const canonicalFormFields = parseListField(applicationTemplate?.form_fields);
+  const templateFormFields = canonicalFormFields
     .map(normalizeCanonicalApplicationField)
     .filter(Boolean);
   const evidenceUploadFields = evidenceRequirements
@@ -231,7 +232,7 @@ export function normalizeApplicationTemplateToFormConfig(applicationTemplate, cr
     application_template_id: applicationTemplate?.id || baseConfig.application_template_id,
     application_template: applicationTemplate ? {
       ...applicationTemplate,
-      form_fields: templateFormFields,
+      form_fields: canonicalFormFields,
       evidence_requirements: evidenceRequirements,
     } : baseConfig.application_template,
     evidence_requirements: evidenceRequirements,

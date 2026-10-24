@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
+from types import SimpleNamespace
+from zipfile import ZipFile
 
 import pytest
 
@@ -15,11 +18,23 @@ def _load_audit_module():
     return module
 
 
+def _cleanup_fixture():
+    return {
+        "created_api_keys": [{"id": "owned-key", "organization_id": "org-fixture"}],
+        "cleanup_actions": [{"type": "revoke_api_key", "id": "owned-key",
+                             "organization_id": "org-fixture", "status": "204", "ok": "true"}],
+    }
+
+
 def _required_steps():
-    return [
+    # Report-contract fixtures only; actual ES256 response bytes are exercised
+    # by the native signing-capability suite and Python/CLI adapter test.
+    steps = [
         {"label": "auth-probe", "body_excerpt": "Dashboard"},
         {"label": "post-org-probe", "body_excerpt": "Dashboard"},
-        {"label": "kms-service-configured", "body_excerpt": "Key management"},
+        {"label": "kms-service-configured", "body_excerpt": "Key management", "signing_configuration": {
+            "organization_id": "org-fixture", "run_id": "fixture-run", "default_service_id": "service-fixture",
+        }},
         {"label": "issuer-identity-active", "body_excerpt": "Issuer identity"},
         {
             "label": "verifier-issuer-identity-active",
@@ -45,6 +60,175 @@ def _required_steps():
             "body_excerpt": "Administration denied",
         },
     ]
+    for index, (purpose, identity_label, proof_label) in enumerate([
+        ("vc_jwt_issuer", "issuer-identity-active", "issuer-signing-capability-verified"),
+        ("oid4vp_request_signing", "verifier-issuer-identity-active", "verifier-signing-capability-verified"),
+    ]):
+        identity = {"issuer_did": "did:web:issuer.unit.invalid:fixture", "key_purpose": purpose,
+                    "credential_format": "SD_JWT_VC", "algorithm": "ES256", "status": "active"}
+        next(step for step in steps if step["label"] == identity_label)["issuer_identity"] = identity
+        proof = {"schema": "marty.signing-capability/v1", "verified": True,
+                 "scope": "EXACT_PUBLIC_SERVICE_SIGNING_CAPABILITY_ONLY",
+                 "organization_id": "org-fixture", "run_id": "fixture-run", "service_id": "service-fixture",
+                 **{key: value for key, value in identity.items() if key != "status"}}
+        proof.update({key: str(index + 1) * 64 for key in (
+            "challenge_sha256", "key_binding_sha256", "public_key_sha256", "signature_sha256",
+            "service_response_sha256", "identity_response_sha256", "signing_response_sha256",
+        )})
+        steps.append({"label": proof_label, "signing_capability": proof})
+    return steps
+
+
+@pytest.mark.parametrize("record_video_env", [None, "0", "1"])
+@pytest.mark.parametrize("setup_failure", [False, True])
+def test_main_honors_recorder_video_mode_and_keeps_required_trace(
+    monkeypatch, tmp_path: Path, record_video_env: str | None, setup_failure: bool,
+) -> None:
+    audit = _load_audit_module()
+    events = []
+    contexts = []
+    trace_options = []
+    artifact_dir = tmp_path / "attempt"
+    functional = record_video_env == "0"
+
+    class Trace:
+        def start(self, **options):
+            events.append("trace-started")
+            trace_options.append(options)
+
+        def stop(self, *, path):
+            with ZipFile(path, "w") as archive:
+                archive.writestr("test.trace", '{"type":"synthetic-trace"}\n')
+
+    class Video:
+        def path(self):
+            events.append("video-finalized")
+            video = artifact_dir / "raw.webm"
+            video.write_bytes(b"\x1a\x45\xdf\xa3synthetic-video")
+            return str(video)
+
+    class Page:
+        @property
+        def video(self):
+            events.append("video-requested")
+            return Video()
+
+    class Context:
+        tracing = Trace()
+
+        def new_page(self):
+            return Page()
+
+        def close(self):
+            events.append("context-closed")
+
+    class Browser:
+        def new_context(self, **options):
+            contexts.append(options)
+            return Context()
+
+        def close(self):
+            events.append("browser-closed")
+
+    class Playwright:
+        def __enter__(self):
+            return SimpleNamespace(chromium=SimpleNamespace(launch=lambda **_options: Browser()))
+
+        def __exit__(self, *_args):
+            return False
+
+    class FixtureAudit(audit.Audit):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.steps = _required_steps()
+            self.created_api_keys = _cleanup_fixture()["created_api_keys"]
+
+        def attach_events(self):
+            pass
+
+        def snapshot(self, label, *_args, **_kwargs):
+            if label == "audit-exception":
+                self.steps.append({"label": label})
+
+        def cleanup_created_api_keys(self):
+            events.append("cleanup")
+            self.cleanup_actions = _cleanup_fixture()["cleanup_actions"]
+
+    monkeypatch.setattr(audit, "Audit", FixtureAudit)
+    monkeypatch.setattr(audit, "sync_playwright", Playwright)
+    monkeypatch.setattr(audit, "load_env_file", lambda _path: {})
+    monkeypatch.setattr(audit, "load_signing_inputs", lambda: {})
+    monkeypatch.setattr(audit, "start_recorder_capture", lambda **_kwargs: None)
+    monkeypatch.setattr(audit, "require_created_organization", lambda *_args: "org-fixture")
+    monkeypatch.setattr(audit, "fetch_json_from_page", lambda *_args: {})
+    for name in [
+        "log_in", "create_org", "create_key_service_if_possible", "create_issuer_identity",
+        "create_trust_profile", "create_revocation_profile", "create_credential_template",
+        "create_application_template", "create_policy_and_deployment", "create_flow",
+        "create_api_key", "verify_issuer_signing_capabilities", "verify_resource_inventory", "verify_unauthorized_administration_denied",
+    ]:
+        monkeypatch.setattr(audit, name, lambda *_args, step=name: events.append(step))
+    if setup_failure:
+        def failed_registration(*_args):
+            events.append("create_key_service_if_possible")
+            raise ValueError("fixture registration rejected synthetic-test-password")
+        monkeypatch.setattr(audit, "create_key_service_if_possible", failed_registration)
+    monkeypatch.setattr(audit.sys, "argv", ["beta_org_console_audit.py", "--record-video"])
+    monkeypatch.setenv("TEST_VENDOR_EMAIL", "operator@example.test")
+    monkeypatch.setenv("TEST_VENDOR_PASSWORD", "synthetic-test-password")
+    monkeypatch.setenv("DEMO_ARTIFACT_DIR", str(artifact_dir))
+    if record_video_env is None:
+        monkeypatch.delenv("RECORD_VIDEO", raising=False)
+    else:
+        monkeypatch.setenv("RECORD_VIDEO", record_video_env)
+
+    if setup_failure:
+        with pytest.raises(RuntimeError, match="fixture registration rejected") as failure:
+            audit.main()
+        assert "synthetic-test-password" not in str(failure.value)
+        assert "synthetic-test-password" not in (artifact_dir / "report.json").read_text()
+        report = json.loads((artifact_dir / "report.json").read_text())
+        assert report["releaseReady"] is False
+        assert report["release_checks"]["status"] == "blocked"
+        assert report["trace_coverage"]["status"] == "NOT_STARTED_SETUP_FAILED"
+        assert "trace-started" not in events
+        assert not (artifact_dir / "mip-primitives-management-trace.zip").exists()
+        assert "cleanup" in events and "browser-closed" in events
+        if functional:
+            assert "video-requested" not in events
+        return
+
+    assert audit.main() == 0
+    report = json.loads((artifact_dir / "report.json").read_text())
+    assert report["releaseReady"] is True
+    assert contexts[0]["ignore_https_errors"] is False
+    assert all(report["behaviorAssertions"].values())
+    assert events.index("create_key_service_if_possible") < events.index("trace-started") < events.index("create_issuer_identity")
+    assert events.index("verify_issuer_signing_capabilities") < events.index("verify_resource_inventory")
+    assert report["trace_coverage"]["omitted"] == ["authentication", "organization-creation", "kms-service-registration"]
+    assert events.index("verify_resource_inventory") < events.index("cleanup")
+    assert events.index("verify_unauthorized_administration_denied") < events.index("cleanup")
+    assert events.index("context-closed") < events.index("browser-closed")
+    assert (artifact_dir / "mip-primitives-management-trace.zip").is_file()
+    if functional:
+        assert "record_video_dir" not in contexts[0]
+        assert "record_video_size" not in contexts[0]
+        assert "video-requested" not in events
+        assert "video-finalized" not in events
+        assert not list(artifact_dir.glob("*.webm"))
+        assert report["functional_rerun"] is True
+        assert report["capture_quality"]["status"] == "NOT_CAPTURED"
+        assert report["recording"] is None
+        assert report["trace"] == "mip-primitives-management-trace.zip"
+        assert trace_options == [{"screenshots": False, "snapshots": False, "sources": False}]
+    else:
+        assert contexts[0]["record_video_dir"] == str(artifact_dir)
+        assert "video-finalized" in events
+        assert (artifact_dir / "mip-primitives-management.webm").is_file()
+        assert report["recording"] == {
+            "video": "mip-primitives-management.webm",
+            "trace": "mip-primitives-management-trace.zip",
+        }
 
 
 def test_signing_service_audit_uses_the_selected_remote_service() -> None:
@@ -80,6 +264,7 @@ def test_release_checks_block_audit_log_501() -> None:
 
     report = {
         "steps": _required_steps(),
+        **_cleanup_fixture(),
         "bad_responses": [
             {
                 "status": 501,
@@ -165,6 +350,7 @@ def test_release_checks_accept_typed_plan_entitlement_response() -> None:
 
     checks = audit.evaluate_release_checks({
         "steps": _required_steps(),
+        **_cleanup_fixture(),
         "bad_responses": [
             {
                 "status": 403,
@@ -199,6 +385,7 @@ def test_release_checks_accept_only_exact_cross_org_admin_denials() -> None:
 
     checks = audit.evaluate_release_checks({
         "steps": _required_steps(),
+        **_cleanup_fixture(),
         "bad_responses": denied,
         "failed_requests": [],
         "page_errors": [],
@@ -294,6 +481,7 @@ def test_release_checks_block_unexplained_failed_request() -> None:
 
     checks = audit.evaluate_release_checks({
         "steps": _required_steps(),
+        **_cleanup_fixture(),
         "bad_responses": [],
         "failed_requests": [
             {
@@ -320,6 +508,7 @@ def test_release_checks_accept_navigation_cancelled_org_reads() -> None:
 
     checks = audit.evaluate_release_checks({
         "steps": _required_steps(),
+        **_cleanup_fixture(),
         "bad_responses": [],
         "failed_requests": [cancelled],
         "page_errors": [],
@@ -334,6 +523,7 @@ def test_release_checks_block_cancelled_document_navigation() -> None:
 
     checks = audit.evaluate_release_checks({
         "steps": _required_steps(),
+        **_cleanup_fixture(),
         "bad_responses": [],
         "failed_requests": [
             {
@@ -616,3 +806,68 @@ def test_beta_audit_waits_for_the_exact_verifier_identity_tuple(monkeypatch) -> 
 
     assert identity == verifier_identity
     assert observed_probe == probe
+
+
+@pytest.mark.parametrize("change", ["missing", "failed", "foreign-org", "foreign-key", "contradictory", "unowned", "unknown-status", "pending"])
+def test_run_owned_key_cleanup_cannot_be_missing_failed_or_substituted(change):
+    audit = _load_audit_module()
+    report = {"steps": _required_steps(), **_cleanup_fixture()}
+    action = report["cleanup_actions"][0]
+    if change == "missing":
+        report.pop("cleanup_actions")
+    elif change == "failed":
+        action.update(status="500", ok="false")
+    elif change == "foreign-org":
+        action["organization_id"] = "another-organization"
+    elif change == "foreign-key":
+        action["id"] = "another-key"
+    elif change == "contradictory":
+        report["cleanup_actions"].append({**action, "ok": "false", "status": "500"})
+    elif change == "unowned":
+        report["created_api_keys"] = []
+    elif change == "unknown-status":
+        action["status"] = "404"
+    elif change == "pending":
+        action["status"] = "202"
+    checks = audit.evaluate_release_checks(report)
+    assert checks["status"] == "blocked"
+    assert "owned_api_key_cleanup_unverified" in {item["code"] for item in checks["blockers"]}
+
+
+def test_exact_owned_key_cleanup_succeeds_but_partial_cleanup_does_not():
+    audit = _load_audit_module()
+    report = {"steps": _required_steps(), **_cleanup_fixture()}
+    assert audit.owned_api_key_cleanup_proven(report)
+    assert audit.evaluate_release_checks(report)["status"] == "pass"
+    report["created_api_keys"].append({"id": "second-owned-key", "organization_id": "org-fixture"})
+    assert not audit.owned_api_key_cleanup_proven(report)
+
+
+@pytest.mark.parametrize("origin", ["https://beta.elevenidllc.com.attacker.invalid", "https://attacker.invalid/?beta.elevenidllc.com", "http://beta.elevenidllc.com", "https://beta.elevenidllc.com/path"])
+def test_d10_rejects_lookalike_or_noncanonical_origin_before_signer_or_browser(monkeypatch, origin):
+    audit = _load_audit_module()
+    monkeypatch.setattr(audit, "load_env_file", lambda _path: {})
+    monkeypatch.setattr(audit.sys, "argv", ["beta_org_console_audit.py", "--base-url", origin])
+    monkeypatch.setattr(audit, "load_signing_inputs", lambda: pytest.fail("signer cannot be inspected for an unapproved origin"))
+    monkeypatch.setattr(audit, "sync_playwright", lambda: pytest.fail("browser cannot start for an unapproved origin"))
+    assert audit.main() == 2
+
+
+def test_d10_recording_refuses_missing_recorder_child_client():
+    audit = _load_audit_module()
+    with pytest.raises(ValueError, match="recorder-owned live Python capture"):
+        audit.start_recorder_capture(required=True)
+
+
+def test_d10_uses_only_exact_acknowledged_inputs_for_feature_actions():
+    audit = _load_audit_module()
+    signing = {"endpoint": "https://kms.internal.company", "mount": "transit", "namespace": "",
+               "key_reference": "existing-key", "ca_cert_file": "/run/secrets/customer-ca", "validator_sha256": "a" * 64}
+    scenario = {"runId": "20261021200000-1234abcd", "recordVideo": False, "recordingPauseMs": 1300,
+                "signing": {"endpoint": signing["endpoint"], "mount": "transit", "namespace": "", "keyReference": "existing-key",
+                            "caCertFile": "/run/secrets/customer-ca", "validatorSha256": "a" * 64}}
+    capture = SimpleNamespace(inputs={"origin": "https://beta.elevenidllc.com", "scenario": scenario})
+    assert audit.bound_recorder_inputs(capture, signing, False, 1300) is scenario
+    scenario["signing"]["keyReference"] = "substituted-key"
+    with pytest.raises(ValueError, match="differ from recorder-acknowledged"):
+        audit.bound_recorder_inputs(capture, signing, False, 1300)

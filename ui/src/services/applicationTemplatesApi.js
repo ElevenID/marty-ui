@@ -35,8 +35,9 @@ export async function listApplicationTemplates(organizationId) {
 // ── Single template ───────────────────────────────────────────────────────────
 
 /** Internal helper — used by updateTemplateRequiredChecks. */
-export async function getApplicationTemplate(templateId) {
-  return get(`${API_BASE}/${templateId}`);
+export async function getApplicationTemplate(templateId, organizationId) {
+  const query = organizationId == null ? '' : `?organization_id=${encodeURIComponent(requireOrganizationId(organizationId))}`;
+  return get(`${API_BASE}/${encodeURIComponent(templateId)}${query}`);
 }
 
 export async function createApplicationTemplate(data) {

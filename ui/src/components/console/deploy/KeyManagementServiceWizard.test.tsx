@@ -1,3 +1,4 @@
+import d10Controls from '../../../../../scripts/d10_ui_controls.json'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { renderWithRouter, screen, waitFor } from '@test/utils'
 import KeyManagementServiceWizard from './KeyManagementServiceWizard'
@@ -53,6 +54,7 @@ describe('KeyManagementServiceWizard', () => {
           protocol: 'vault-transit',
           endpoint: 'http://openbao:8200',
           mount: 'transit',
+          ca_cert_file: '/run/secrets/existing-transit-ca',
           key_reference: 'cred-issuer-marty-es256',
           key_aliases: ['cred-issuer-marty-es256'],
           algorithms: ['ES256'],
@@ -102,6 +104,58 @@ describe('KeyManagementServiceWizard', () => {
     })
   })
 
+  it('D10 adapter controls match the rendered production OpenBao registration and review', async () => {
+    mockGetKeyManagementConfig.mockResolvedValue({
+      services: [{id:'previous',service_type:'openbao-transit',key_reference:'reserved-key'}],
+      default_service_id:'previous',service_type_catalog:[],
+      key_reference_purposes:{previous:{'reserved-key':['lti_tool_signing']}},
+      type_defaults:{lti_tool_signing:'previous'},format_defaults:{'jwt':'previous'},
+    })
+    const { user } = renderWithRouter(<KeyManagementServiceWizard />)
+    await user.click(await screen.findByRole(d10Controls.kmsProvider.role, { name: d10Name('kmsProvider') }))
+    await user.click(screen.getByRole(d10Controls.next.role, { name: d10Name('next') }))
+    for (const [key, value] of [
+      ['kmsServiceName', 'D10 component contract'], ['kmsUrl', 'https://kms.internal.company'],
+      ['kmsMount', 'transit'], ['kmsToken', 'generated-component-control-only'],
+      ['kmsNamespace', 'customer-namespace'], ['kmsCaFile', '/run/secrets/customer-ca'],
+    ] as const) {
+      const input = screen.getByLabelText(d10Name(key))
+      await user.clear(input)
+      await user.type(input, value)
+    }
+    expect(screen.getByLabelText(d10Name('kmsToken'))).toHaveAttribute('type', 'password')
+    await user.click(screen.getByRole(d10Controls.next.role, { name: d10Name('next') }))
+    const keyInput = screen.getByLabelText(d10Name('kmsKey'))
+    expect(keyInput).toBeRequired()
+    await user.type(keyInput, 'existing-external-key')
+    for (const key of ['kmsIssuerPurpose', 'kmsVerifierPurpose', 'kmsDefault'] as const) {
+      const control = screen.getByRole(d10Controls[key].role, { name: d10Name(key), exact: key === 'kmsDefault' })
+      if (!(control as HTMLInputElement).checked) await user.click(control)
+      expect(control).toBeChecked()
+    }
+    expect(screen.queryByRole('checkbox', { name: d10Name('kmsDefault'), exact: true })).not.toBeInTheDocument()
+    await user.click(screen.getByRole(d10Controls.next.role, { name: d10Name('next') }))
+    expect(await screen.findByRole('heading', { name: 'Review' })).toBeInTheDocument()
+    expect(screen.queryByText('generated-component-control-only')).not.toBeInTheDocument()
+    await user.click(screen.getByRole(d10Controls.kmsRegister.role, { name: d10Name('kmsRegister') }))
+    await waitFor(() => expect(mockUpdateKeyManagementConfig).toHaveBeenCalledTimes(1))
+    const payload = mockUpdateKeyManagementConfig.mock.calls[0][0]
+    expect(payload.organization_id).toBe('org-123')
+    const registered = payload.services.find((service: {name: string}) => service.name === 'D10 component contract')
+    expect(payload.default_service_id).toBe(registered.id)
+    expect(payload.key_reference_purposes).toEqual({
+      previous:{'reserved-key':['lti_tool_signing']},
+      [registered.id]:{'existing-external-key':['vc_jwt_issuer','oid4vp_request_signing']},
+    })
+    expect(payload.type_defaults).toEqual({lti_tool_signing:'previous'})
+    expect(payload.format_defaults).toEqual({'jwt':'previous'})
+    expect(screen.getByText(/then create an issuer identity with its public DID and signing compatibility/i)).toBeInTheDocument()
+    expect(screen.queryByText(/choose.*Use existing key from KMS/i)).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Use managed OpenBao key creation' })).not.toBeInTheDocument()
+    expect(registered).toMatchObject({ service_type: 'openbao-transit', key_reference: 'existing-external-key',
+      ca_cert_file: '/run/secrets/customer-ca', key_purposes: expect.arrayContaining(['vc_jwt_issuer', 'oid4vp_request_signing']) })
+  })
+
   it('registers a new AWS KMS signing service through the wizard', async () => {
     const { user } = renderWithRouter(<KeyManagementServiceWizard />, {
       initialEntries: ['/console/org/deploy/signing-keys/services/new'],
@@ -137,6 +191,7 @@ describe('KeyManagementServiceWizard', () => {
     expect(payload.organization_id).toBe('org-123')
     expect(payload.default_service_id).toBeTruthy()
     expect(payload.services).toHaveLength(2)
+    expect(payload.services[0].ca_cert_file).toBe('/run/secrets/existing-transit-ca')
     expect(payload.services[1]).toMatchObject({
       name: 'Production AWS KMS',
       service_type: 'aws-kms',
@@ -151,7 +206,7 @@ describe('KeyManagementServiceWizard', () => {
     expect(screen.getByText('Signing service registered')).toBeInTheDocument()
     expect(screen.getByText(/create or verify the signing key in the KMS provider you just registered/i)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Create issuer identity' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Use managed OpenBao key creation' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Use managed OpenBao key creation' })).not.toBeInTheDocument()
   })
 
   it('submits structured AWS credentials without exposing them in review', async () => {
@@ -199,6 +254,10 @@ describe('KeyManagementServiceWizard', () => {
 
     await user.type(screen.getByRole('textbox', { name: /service name/i }), 'Transit signer')
     await user.type(screen.getByRole('textbox', { name: /service url/i }), 'https://signer.example.com')
+    const caInput = screen.getByRole('textbox', { name: /TLS CA certificate file/i })
+    expect(caInput).not.toBeRequired()
+    await user.type(caInput, '/run/secrets/customer-transit-ca')
+    expect(screen.getByText(/already mounted on the signing server/i)).toBeInTheDocument()
     const mountInput = screen.getByRole('textbox', { name: /transit mount/i })
     await user.clear(mountInput)
     await user.type(mountInput, 'marty-transit')
@@ -227,12 +286,16 @@ describe('KeyManagementServiceWizard', () => {
       organization_id: 'org-123',
       service_type: 'custom-transit-compatible',
       endpoint: 'https://signer.example.com',
+      ca_cert_file: '/run/secrets/customer-transit-ca',
       mount: 'marty-transit',
       auth_reference: 'vault-token',
       key_reference: 'cred-issuer-prod',
     }))
     expect(await screen.findByText('Provider connectivity')).toBeInTheDocument()
     expect(screen.getByText('Connected to signer endpoint.')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Register service' }))
+    await waitFor(() => expect(mockUpdateKeyManagementConfig).toHaveBeenCalledTimes(1))
+    expect(mockUpdateKeyManagementConfig.mock.calls[0][0].services[1].ca_cert_file).toBe('/run/secrets/customer-transit-ca')
   })
 
   it('disables incompatible key purposes for selected algorithms', async () => {
@@ -282,3 +345,8 @@ describe('KeyManagementServiceWizard', () => {
     expect(screen.getByRole('checkbox', { name: /VC JWT \/ SD-JWT issuer/i })).toBeDisabled()
   })
 })
+
+const d10Name = (key: keyof typeof d10Controls) => {
+  const definition = d10Controls[key] as { regex?: string; name?: string }
+  return definition.regex ? new RegExp(definition.regex, 'i') : definition.name!
+}

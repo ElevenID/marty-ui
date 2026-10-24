@@ -4,14 +4,20 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { randomUUID } = require('node:crypto');
 const { chromium } = require('@playwright/test');
+const { createDemoLiveEvidence, acknowledgeDemoInputs } = require('./demo-live-evidence');
+const { createOwnedActiveConfiguration, retireOwnedConfiguration } = require('./demo-owned-configuration');
+const { acquireWalletSession } = require('./demo-wallet-session');
 
 const {
   ensureActiveRevocationProfile,
+  createLifecycleRecording,
   findCredentialRow,
   getCredentialStatus,
   login,
   performLifecycleAction,
+  requireLifecycleActionEvidence,
   receiveCredential,
   selectOrg,
   verify,
@@ -26,23 +32,30 @@ const {
   browserJson,
   cleanupApplicationCredential,
   compactObject,
+  createOwnedApplication,
   ensureActiveResource,
   ensureApplicantProfile,
   ensureGovernedIssuer,
   findCurrentCredential,
   governedIssuerTrustProfilePayload,
+  issueOwnedApplication,
   requestedClaim,
   requireJson,
+  requireNoConflictingApplications,
+  requireOwnedApplication,
   resolveActiveIssuerDid,
-  withdrawConflictingApplications,
+  submitOwnedApplication,
 } = require('./beta-demo-resource-helpers');
 const { employeeAccessBehaviorAssertions } = require('./beta-employee-access-contract');
+const { approveThroughConsole, issueThroughConsole, requireVerificationDecision } = require('./beta-demo-review-ui');
 const { loadEnvFile, redact } = require('./verify-beta-waltid-acceptance');
 const {
   VIDEO_SIZE,
   createArtifactDir,
+  createActionRecording,
   finalizeVideo,
   showStep,
+  showVerificationResult,
 } = require('./demo-recording');
 
 const ROOT = path.resolve(__dirname, '..', '..');
@@ -50,6 +63,7 @@ loadEnvFile(path.join(ROOT, '.env.tunnel.beta.local'));
 loadEnvFile(path.join(ROOT, '.env'));
 
 const BETA_ORIGIN = process.env.BETA_ORIGIN || 'https://beta.elevenidllc.com';
+const TEST_WALLET_ORIGIN = process.env.MARTY_TEST_WALLET_ORIGIN || 'http://127.0.0.1:8787';
 const ORG_ID = process.env.BETA_AUDIT_ORG_ID || DEFAULT_BETA_ORGANIZATION_ID;
 const SOURCE_TEMPLATE_ID = process.env.BETA_AUDIT_TEMPLATE_ID
   || DEFAULT_LIFECYCLE_SOURCE_TEMPLATE_ID;
@@ -273,7 +287,7 @@ function requireConfigurationBinding(configuration) {
   return configuration;
 }
 
-async function ensureConfiguration(page, stamp) {
+async function ensureConfiguration(page, stamp, ownedResources) {
   const source = await requireJson(
     page,
     `/v1/credential-templates/${encodeURIComponent(SOURCE_TEMPLATE_ID)}`,
@@ -302,7 +316,7 @@ async function ensureConfiguration(page, stamp) {
   if (!revocationProfile.ok || !revocationProfile.id) {
     throw new Error(`D-04 target revocation profile unavailable: ${revocationProfile.error || 'unknown error'}`);
   }
-  const credential = await ensureActiveResource(page, {
+  const credential = await createOwnedActiveConfiguration(page, ownedResources, {
     organizationId: ORG_ID,
     collectionPath: '/v1/credential-templates',
     name: RESOURCE_NAMES.credential,
@@ -314,7 +328,7 @@ async function ensureConfiguration(page, stamp) {
     ),
     idempotencyKey: 'demo-d04-employee-credential-v3',
   });
-  const application = await ensureActiveResource(page, {
+  const application = await createOwnedActiveConfiguration(page, ownedResources, {
     organizationId: ORG_ID,
     collectionPath: '/v1/application-templates',
     name: RESOURCE_NAMES.application,
@@ -322,14 +336,14 @@ async function ensureConfiguration(page, stamp) {
     idempotencyKey: 'demo-d04-employee-application-v1',
     validate: true,
   });
-  const policy = await ensureActiveResource(page, {
+  const policy = await createOwnedActiveConfiguration(page, ownedResources, {
     organizationId: ORG_ID,
     collectionPath: '/v1/presentation-policies',
     name: RESOURCE_NAMES.policy,
     payload: employeePolicyPayload(credential),
     idempotencyKey: 'demo-d04-employee-access-policy-v1',
   });
-  const flow = await ensureActiveResource(page, {
+  const flow = await createOwnedActiveConfiguration(page, ownedResources, {
     organizationId: ORG_ID,
     collectionPath: '/v1/flows/definitions',
     name: RESOURCE_NAMES.flow,
@@ -349,8 +363,8 @@ async function ensureConfiguration(page, stamp) {
   return requireConfigurationBinding({ credential, application, policy, flow });
 }
 
-async function createAndSubmitApplication(page, applicationTemplateId, employeeId) {
-  const formData = {
+function employeeFormData(employeeId) {
+  return {
     employee_id: employeeId,
     given_name: process.env.TEST_APPLICANT_FIRST_NAME || 'Jamie',
     family_name: process.env.TEST_APPLICANT_LAST_NAME || 'Lee',
@@ -358,43 +372,59 @@ async function createAndSubmitApplication(page, applicationTemplateId, employeeI
     access_level: 'Beta Facility',
     employment_status: 'Active',
   };
-  const created = await requireJson(page, '/v1/me/applications', {
-    method: 'POST',
-    body: JSON.stringify({
-      organization_id: ORG_ID,
-      application_template_id: applicationTemplateId,
-      form_data: formData,
-      integration_context: {},
-    }),
-  }, 'Create employee application');
-  const submitted = await requireJson(
-    page,
-    `/v1/me/applications/${encodeURIComponent(created.id)}/submit`,
-    { method: 'POST' },
-    'Submit employee application',
-  );
+}
+
+async function createAndSubmitApplication(page, ownedResources, employeeId, formData = employeeFormData(employeeId)) {
+  if (formData.employee_id !== employeeId) throw new Error('Employee fixture ID does not match this run');
+  const created = await createOwnedApplication(page, ownedResources, {
+    formData, label: 'Create employee application',
+  });
+  const submitted = await submitOwnedApplication(page, ownedResources, 'Submit employee application');
   return { created, submitted, formData };
 }
 
-async function approveAndIssue(page, applicationId) {
+async function approveAndIssue(page, ownedResources, { recording } = {}) {
+  const applicationId = ownedResources.applicationId;
   const root = `/v1/organizations/${encodeURIComponent(ORG_ID)}/applicants/${encodeURIComponent(applicationId)}`;
-  const lock = await requireJson(page, `${root}/lock`, { method: 'POST' }, 'Acquire reviewer lock');
-  const approved = await requireJson(page, `${root}/approve`, {
-    method: 'POST',
-    body: JSON.stringify({ notes: 'D-04 release qualification approval' }),
-  }, 'Approve employee application');
-  await requireJson(page, `${root}/lock`, { method: 'DELETE' }, 'Release reviewer lock');
-  const issued = await requireJson(page, `${root}/issue`, { method: 'POST' }, 'Issue employee credential');
-  return { lock, approved, issued };
+  requireOwnedApplication(await requireJson(page, root), ownedResources);
+  let lock;
+  let approved;
+  ownedResources.uncertainMutations ||= [];
+  ownedResources.uncertainMutations.push({ operation: 'reviewer_lock' });
+  try {
+    lock = await requireJson(page, `${root}/lock`, { method: 'POST' }, 'Acquire reviewer lock');
+    if (!lock?.id || lock.organization_id !== ORG_ID || lock.applicant_id !== applicationId) {
+      throw new Error('Reviewer lock does not match the exact employee application');
+    }
+    approved = recording
+      ? await approveThroughConsole(page, ownedResources, recording,
+        'Synthetic scenario: the new employee has been approved for facility access.')
+      : requireOwnedApplication(await requireJson(page, `${root}/approve`, {
+        method: 'POST',
+        body: JSON.stringify({ notes: 'D-04 release qualification approval' }),
+      }, 'Approve employee application'), ownedResources);
+    if (approved.status !== 'APPROVED') throw new Error('Employee application approval did not reach APPROVED');
+  } finally {
+    const released = await requireJson(page, `${root}/lock`, { method: 'DELETE' }, 'Release reviewer lock');
+    if (released?.released !== true) throw new Error('Reviewer lock release was not confirmed');
+    ownedResources.uncertainMutations = ownedResources.uncertainMutations
+      .filter(({ operation }) => operation !== 'reviewer_lock');
+  }
+  const { issued, transaction } = await issueOwnedApplication(page, ownedResources, 'Issue employee credential', {
+    requestIssue: recording ? (endpoint) => issueThroughConsole(page, recording, endpoint) : undefined,
+  });
+  return { lock, approved, issued, transaction };
 }
 
-async function cleanup(page, applicationId, credentialId) {
-  return cleanupApplicationCredential(page, {
-    organizationId: ORG_ID,
-    applicationId,
-    credentialId,
-    reason: 'D-04 release qualification cleanup',
-  });
+async function cleanup(page, ownedResources) {
+  const result = await cleanupApplicationCredential(page, ownedResources, 'D-04 release qualification cleanup', { cancelPendingOffer: true });
+  if (!result.ok) return result;
+  try { result.configuration = await retireOwnedConfiguration(page, ownedResources); }
+  catch (error) {
+    result.configuration = { ok: false, retired: ownedResources.configurationRetirement || [], error: redact(error.message) };
+  }
+  result.ok = result.configuration.ok === true;
+  return result;
 }
 
 async function showEmployeeStep(page, title, detail) {
@@ -404,7 +434,7 @@ async function showEmployeeStep(page, title, detail) {
   });
 }
 
-async function main() {
+async function runEmployeeDemo(evidence) {
   const adminEmail = process.env.TEST_VENDOR_EMAIL || process.env.TEST_ADMIN_EMAIL;
   const adminPassword = process.env.TEST_VENDOR_PASSWORD || process.env.TEST_ADMIN_PASSWORD;
   const applicantEmail = process.env.TEST_APPLICANT_EMAIL || process.env.TEST_APPLICANT1_EMAIL;
@@ -414,15 +444,29 @@ async function main() {
   }
   if (!VERIFIER_DID) throw new Error('BETA_AUDIT_VERIFIER_DID is required');
 
-  const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\..+/, '').toLowerCase();
-  const startedAt = new Date(Date.now() - 5_000).toISOString();
+  const stamp = `${new Date().toISOString().replace(/[-:]/g, '').replace(/\..+/, '').toLowerCase()}-${randomUUID()}`;
   const artifactDir = createArtifactDir(ROOT, `beta-employee-access-${stamp}`);
   const employeeId = `EMP-D04-${stamp}`;
+  const input = await acknowledgeDemoInputs(artifactDir, 'employee-run-input.json', {
+    schemaVersion: 1, runId: stamp, organizationId: ORG_ID, sourceTemplateId: SOURCE_TEMPLATE_ID,
+    verifierDid: VERIFIER_DID, formData: employeeFormData(employeeId),
+  }, evidence);
+  const ownedResources = {
+    organizationId: ORG_ID,
+    runId: stamp,
+    applicationId: null,
+    transactionId: null,
+    credentialId: null,
+    uncertainMutations: [],
+  };
   const report = {
     createdAt: new Date().toISOString(),
     organizationId: ORG_ID,
+    ownedResources,
     pageErrors: [],
     unexpectedResponses: [],
+    finalizationFailures: [],
+    releaseReady: false,
   };
   const browser = await chromium.launch({
     headless: HEADLESS,
@@ -433,22 +477,45 @@ async function main() {
   let adminContext;
   let applicantContext;
   let adminPage;
+  let adminVideo;
+  let walletVideo;
+  let walletSession;
+  let walletAcquisitionAttempted = false;
   let applicationId;
   let credentialId;
   let cleanupComplete = false;
+  let journeyComplete = false;
+  let journeyReady = false;
   try {
     adminContext = await browser.newContext({
       viewport: VIDEO_SIZE,
       ignoreHTTPSErrors: LOCAL_BETA_PROXY,
       ...(RECORD_VIDEO ? { recordVideo: { dir: artifactDir, size: VIDEO_SIZE } } : {}),
     });
+    // receiveCredential uses this exact context. Establish ownership before
+    // any configuration, application or issuance mutation can begin.
+    walletAcquisitionAttempted = true;
+    walletSession = await acquireWalletSession(adminContext, { origin: TEST_WALLET_ORIGIN, runId: stamp });
+    report.walletSession = walletSession.evidence;
     applicantContext = await browser.newContext({ viewport: VIDEO_SIZE, ignoreHTTPSErrors: LOCAL_BETA_PROXY });
     const page = await adminContext.newPage();
     adminPage = page;
+    const recording = createActionRecording({
+      enabled: RECORD_VIDEO, scenario: 'employee-onboarding-secure-access', pageName: 'application',
+      onEvent: (events) => { report.recordingActions = events; },
+    });
+    report.demonstrationBoundary = {
+      data: 'SYNTHETIC_EMPLOYEE', setup: 'AUTHENTICATED_PUBLIC_API',
+      applicationSubmission: 'AUTHENTICATED_PUBLIC_API', reviewerActions: 'REAL_ADMIN_UI',
+      verification: 'REAL_WALLET_PRESENTATION_WITH_API_RESULT',
+    };
     const walletPage = await adminContext.newPage();
+    evidence.bindPage(page);
+    evidence.bindPage(walletPage);
     const applicantPage = await applicantContext.newPage();
-    const adminVideo = page.video();
-    const walletVideo = walletPage.video();
+    evidence.bindPage(applicantPage);
+    adminVideo = page.video();
+    walletVideo = walletPage.video();
     page.on('pageerror', (error) => report.pageErrors.push(redact(error.message)));
     page.on('response', (response) => {
       if (!response.url().startsWith(BETA_ORIGIN) || response.status() < 400) return;
@@ -464,7 +531,9 @@ async function main() {
     await login(page, adminEmail, adminPassword);
     report.orgSelection = await selectOrg(page);
     if (!report.orgSelection.ok) throw new Error(`Cannot select organization ${ORG_ID}`);
-    const configuration = await ensureConfiguration(page, stamp);
+    const configuration = await ensureConfiguration(page, stamp, ownedResources);
+    ownedResources.applicationTemplateId = configuration.application.id;
+    ownedResources.credentialTemplateId = configuration.credential.id;
     report.configuration = {
       credentialTemplateId: configuration.credential.id,
       applicationTemplateId: configuration.application.id,
@@ -476,20 +545,21 @@ async function main() {
     };
 
     await login(applicantPage, applicantEmail, applicantPassword);
-    await ensureApplicantProfile(applicantPage, {
+    const applicantProfile = await ensureApplicantProfile(applicantPage, {
       email: applicantEmail,
       givenName: process.env.TEST_APPLICANT_FIRST_NAME || 'Jamie',
       familyName: process.env.TEST_APPLICANT_LAST_NAME || 'Lee',
     });
-    report.preflightCleanup = await withdrawConflictingApplications(applicantPage, page, {
+    ownedResources.applicantId = applicantProfile?.id;
+    report.applicationPreflight = await requireNoConflictingApplications(applicantPage, {
       organizationId: ORG_ID,
       credentialTemplateId: configuration.credential.id,
-      reason: 'D-04 interrupted release qualification cleanup',
     });
     const application = await createAndSubmitApplication(
       applicantPage,
-      configuration.application.id,
+      ownedResources,
       employeeId,
+      input.formData,
     );
     applicationId = application.created.id;
     report.application = {
@@ -504,9 +574,9 @@ async function main() {
       timeout: 60_000,
     });
     await page.getByText(employeeId).first().waitFor({ state: 'visible', timeout: 30_000 });
-    await showEmployeeStep(page, 'Employee application submitted', 'A real applicant submitted the employee fields and the organization review queue requires a decision.');
+    await showEmployeeStep(page, 'Review the new employee', 'A synthetic employee application was submitted through the applicant API. The administrator now reviews it in the console.');
 
-    const approval = await approveAndIssue(page, applicationId);
+    const approval = await approveAndIssue(page, ownedResources, { recording });
     report.application.lockAcquired = Boolean(approval.lock?.id);
     report.application.approvalOk = String(approval.approved?.status || '').toUpperCase() === 'APPROVED';
     report.application.approvedStatus = approval.approved?.status || null;
@@ -515,22 +585,23 @@ async function main() {
       || null;
     report.issuance = {
       issueOk: Boolean(offerUri),
+      transactionId: approval.transaction.id,
       vct: configuration.credential.vct,
     };
-    await page.reload({ waitUntil: 'domcontentloaded' });
-    await showEmployeeStep(page, 'Employee approved and credential offered', 'The reviewer lock, approval transition, and application-bound Rust issuance flow all completed.');
     if (!offerUri) throw new Error('Employee issuance returned no credential offer');
+    await showEmployeeStep(page, 'Employee approved and invited', 'The administrator confirmed approval and created a wallet invitation for this employee.');
 
     const walletReceipt = await receiveCredential(walletPage, offerUri, configuration.credential.vct);
     report.issuance.walletReceived = walletReceipt.ok;
+    report.issuance.walletReceiveStatus = walletReceipt.status;
+    if (!walletReceipt.ok) throw new Error('Employee wallet did not accept the credential');
     const credential = await findCurrentCredential(page, {
-      organizationId: ORG_ID,
-      credentialTemplateId: configuration.credential.id,
-      startedAt,
+      ...ownedResources,
       waitFor,
     });
     if (!credential?.id) throw new Error('Issued employee credential was not discoverable');
     credentialId = credential.id;
+    ownedResources.credentialId = credentialId;
     report.issuance.credentialId = credentialId;
     await showEmployeeStep(page, 'Employee credential received', 'The holder accepted the real OpenID4VCI offer for the D-04 employee credential.');
 
@@ -544,6 +615,13 @@ async function main() {
       credentialStatus: activeStatus.lifecycleStatus,
       result: activeVerification.result,
     };
+    requireVerificationDecision(activeVerification, 'allow');
+    if (!activeStatus.ok || activeStatus.status !== 200 || String(activeStatus.lifecycleStatus).toUpperCase() !== 'ACTIVE') {
+      throw new Error('Employee credential is not active with successful current-state evidence');
+    }
+    await showVerificationResult(page, activeVerification.result, {
+      enabled: RECORD_VIDEO, actor: 'Marty status-aware verifier', testId: 'D04-ACTIVE-ACCESS', evaluatedState: 'ACTIVE',
+    });
     await showEmployeeStep(page, 'Active employee access allowed', 'The status-aware access policy returned an explicit allow decision for the active credential.');
 
     await page.goto(`${BETA_ORIGIN}/console/org/operate/issuance`, {
@@ -555,7 +633,11 @@ async function main() {
       page,
       row,
       'suspend',
-      'D-04 employee access suspension qualification',
+      'Synthetic scenario: temporarily pause the employee access during a security investigation.',
+      createLifecycleRecording(page, {
+        enabled: RECORD_VIDEO, scenario: 'employee-onboarding-secure-access', pageName: 'application',
+        onEvent: (events) => { report.suspensionRecordingActions = events; },
+      }),
     );
     const suspendedStatus = await getCredentialStatus(page, credentialId);
     const suspendedVerification = await verify(page, walletPage, 'D-04 suspended employee access', {
@@ -568,49 +650,85 @@ async function main() {
       credentialStatus: suspendedStatus.lifecycleStatus,
       result: suspendedVerification.result,
     };
+    requireLifecycleActionEvidence('suspend', { ...suspended, current: suspendedStatus, verification: suspendedVerification });
+    await showVerificationResult(page, suspendedVerification.result, {
+      enabled: RECORD_VIDEO, actor: 'Marty status-aware verifier', testId: 'D04-SUSPENDED-ACCESS', evaluatedState: 'SUSPENDED',
+    });
     await showEmployeeStep(page, 'Suspended employee access denied', 'The same credential now receives an explicit deny decision because its lifecycle status is suspended.');
 
     report.behaviorAssertions = employeeAccessBehaviorAssertions(report);
-    report.cleanup = await cleanup(page, applicationId, credentialId);
-    cleanupComplete = report.cleanup.credentialRevoked && report.cleanup.applicationWithdrawn;
-    report.releaseReady = Boolean(
+    report.cleanup = await cleanup(page, ownedResources);
+    cleanupComplete = report.cleanup.ok === true;
+    journeyReady = Boolean(
       report.configuration.allActive
       && Object.values(report.behaviorAssertions).every((passed) => passed === true)
       && report.cleanup.credentialRevoked
-      && report.cleanup.applicationWithdrawn
+      && report.cleanup.applicationHistoryPreserved
+      && cleanupComplete
       && report.pageErrors.length === 0
       && report.unexpectedResponses.length === 0
     );
-    report.finishedAt = new Date().toISOString();
-    await applicantContext.close();
-    applicantContext = null;
-    await adminContext.close();
-    adminContext = null;
-    if (RECORD_VIDEO) {
-      report.recordings = {
-        application: path.relative(
-          ROOT,
-          await finalizeVideo(adminVideo, artifactDir, 'employee-onboarding-secure-access.webm'),
-        ),
-        wallet: path.relative(
-          ROOT,
-          await finalizeVideo(walletVideo, artifactDir, 'employee-onboarding-secure-access-wallet.webm'),
-        ),
-      };
-    }
-    fs.writeFileSync(path.join(artifactDir, 'report.json'), JSON.stringify(report, null, 2));
-    console.log(JSON.stringify(report, null, 2));
-    if (!report.releaseReady) process.exitCode = 1;
+    journeyComplete = true;
+  } catch (error) {
+    report.error = redact(error.stack || error.message || String(error));
+    report.releaseReady = false;
+    throw error;
   } finally {
-    if (!cleanupComplete && adminPage && (applicationId || credentialId)) {
-      await cleanup(adminPage, applicationId, credentialId)
+    if (!cleanupComplete && adminPage) {
+      await cleanup(adminPage, ownedResources)
         .then((result) => { report.cleanup = result; })
         .catch((error) => { report.cleanupError = redact(error.message || String(error)); });
     }
-    if (applicantContext) await applicantContext.close().catch(() => {});
-    if (adminContext) await adminContext.close().catch(() => {});
-    await browser.close();
+    let walletClosed = false;
+    if (walletSession) {
+      try { await walletSession.close(); walletClosed = walletSession.evidence.closed === true; }
+      catch (error) {
+        report.finalizationFailures.push({ operation: 'wallet_session_close', error: redact(error.message || String(error)) });
+      }
+    } else if (walletAcquisitionAttempted) {
+      report.finalizationFailures.push({ operation: 'wallet_session_acquisition', outcome: 'UNCONFIRMED' });
+    }
+    // Session deletion needs the live browser context's cookie and run guard.
+    // Always finish it before closing contexts or finalizing their videos.
+    for (const [operation, context] of [['applicant_context_close', applicantContext], ['admin_context_close', adminContext]]) {
+      if (!context) continue;
+      try { await context.close(); }
+      catch (error) { report.finalizationFailures.push({ operation, error: redact(error.message || String(error)) }); }
+    }
+    if (RECORD_VIDEO && journeyComplete) {
+      try {
+        report.recordings = {
+          application: path.relative(ROOT, await finalizeVideo(adminVideo, artifactDir, 'employee-onboarding-secure-access.webm')),
+          wallet: path.relative(ROOT, await finalizeVideo(walletVideo, artifactDir, 'employee-onboarding-secure-access-wallet.webm')),
+        };
+      } catch (error) {
+        report.finalizationFailures.push({ operation: 'video_finalization', error: redact(error.message || String(error)) });
+      }
+    }
+    await browser.close().catch((error) => {
+      report.closeError = redact(error.message || String(error));
+      report.finalizationFailures.push({ operation: 'browser_close', error: report.closeError });
+    });
+    report.releaseReady = Boolean(journeyReady && walletClosed
+      && report.cleanup?.ok === true && !report.cleanupError && report.finalizationFailures.length === 0);
+    if (report.releaseReady) {
+      try { await evidence.complete(); }
+      catch (error) {
+        report.releaseReady = false;
+        report.finalizationFailures.push({ operation: 'live_evidence_completion', error: redact(error.message) });
+      }
+    }
+    report.finishedAt = new Date().toISOString();
+    fs.writeFileSync(path.join(artifactDir, 'report.json'), JSON.stringify(report, null, 2));
+    console.log(JSON.stringify(report, null, 2));
+    if (!report.releaseReady) process.exitCode = 1;
   }
+}
+
+async function main() {
+  const evidence = await createDemoLiveEvidence();
+  try { return await runEmployeeDemo(evidence); }
+  finally { evidence.close(); }
 }
 
 if (require.main === module) {
@@ -621,10 +739,13 @@ if (require.main === module) {
 }
 
 module.exports = {
+  approveAndIssue,
+  createAndSubmitApplication,
   employeeApplicationTemplatePayload,
   employeeCredentialPayload,
   employeeFlowPayload,
   employeePolicyPayload,
   employeeTrustProfilePayload,
+  main,
   requireConfigurationBinding,
 };
