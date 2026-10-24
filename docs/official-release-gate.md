@@ -2,8 +2,9 @@
 
 Product CD prepares and attests the exact five-role manifest from its durable
 digest transaction before version-tag promotion. It calls the shared official
-suite at immutable integration main source `7b0a46e57ac254067c5069654498327f3ff366d6`,
-including the product's KMS-only setup. All seven lanes must succeed.
+suite at the immutable accepted integration-main source pinned in `cd.yml`,
+including the product's shared KMS-only setup. All seven lanes must collect
+complete evidence, and the independent Rust gate must qualify it before promotion.
 
 The no-write release claim checks that the literal harness pin is an ancestor
 of integration `main`, and matches the caller's `harness_revision`. Pin the
@@ -61,12 +62,63 @@ source, independent manifest digest and all five KMS image roles. It does not
 require a public release or modify the ordinary reviewed release pin. Its
 sanitized summaries explicitly identify an unpublished candidate.
 
-The Rust `validate-official-suite` verifier requires seven distinct successful
-lane summaries from the current release run and attempt, bound to the same
-source, manifest and harness. Missing, mismatched, failed, entirely skipped,
-pre-activation and empty official evidence fail closed. The digest of the
-allowlisted receipt becomes required `official_interoperability` transaction
-evidence. The current-run public summaries are retained alongside that receipt.
+The shared Rust `validate-official-suite` verifier requires seven distinct lane
+summaries bound to one source, manifest, harness and originating release-run
+attempt. Missing, mismatched, failed, skipped JUnit, pre-activation and empty
+evidence fail closed. OIDF permits only explicitly declared optional skips;
+every selected module must finish. Local/native runtime overlays cannot qualify
+the release image even when their functional checks pass.
+
+The reusable product call explicitly collects raw evidence; its successful job
+means collection completed, not that every official result was `PASSED`.
+Standalone and scheduled suite calls still enforce their original raw exits.
+The independent candidate gate rejects genuine protocol/process failures and
+incomplete plans. Complete `REVIEW` cases can instead produce an immutable
+`official-review-input-<run-id>` artifact before the qualification step fails
+closed awaiting disposition. It contains only the exact candidate manifest,
+sanitized summaries, origin attempt and canonical `review-request.json`.
+Raw exports, API readbacks and screenshot pixels must remain private.
+The shared harness encrypts the actual images and unchanged exports to the
+public `OFFICIAL_REVIEW_RECIPIENT` repository variable before upload. Only the
+ciphertext and public-safe delivery receipt are stored as
+`official-review-private-<lane>-<run-id>-<origin-attempt>`. The decryption identity
+stays with the operator's secure local credentials; product signing keys remain
+in remote KMS custody. Follow the integration harness's `conformance/README.md`
+to open the exact packet against its frozen public summary. The viewer verifies
+all bytes and image bindings before writing images/HTML; it does not write raw
+plaintext exports or approve cases. Every actual image still needs review; a
+hash alone is not an accepted disposition.
+
+After reviewing every pending case, submit a normal reviewed change at
+`release/official-reviews/<run-id>-<origin-attempt>.json`. That record uses
+`marty.official-review-disposition/v1`, the exact SHA-256 of `review-request.json`
+(with the `sha256:` prefix), the same numeric run ID/origin attempt, a reviewer
+with kind `human` or `delegated_codex` and `github_login`, an overall `verdict`,
+and a `cases` array. Every case copies its exact `lane` and `module` object from
+`pending`, adding its own `verdict`. All verdicts must be `accepted`; omitted,
+duplicated, rejected, changed-image or foreign cases fail. A pending template,
+an arbitrary local file, or an artifact-supplied approval is not authorization.
+Do not identify delegated Codex review as human review.
+
+The workflow resolves protected `main` through the authenticated GitHub API and
+reads the record only at that immutable commit. It does not trust a candidate
+branch, alternate host/ref or a self-reported approval flag. The resulting gate
+receipt binds the accepted main commit, record/request digests and reviewed
+case count. Original stock `REVIEW` results and exports stay unchanged. This is
+review disposition for the selected interoperability evidence, not paid OIDF
+certification or demo editorial/publication approval.
+
+Retry only the failed `official-gate-evidence` job after the record reaches
+protected main. It restores the same frozen seven-lane evidence and originating
+attempt, revalidates all bytes and reads the latest main record. No app image or
+protocol replay is needed for that review-only retry. An expired/ambiguous
+snapshot, changed candidate, changed evidence, or a newer lane run fails closed;
+start a new qualification run instead of falling back to an older approval.
+A rejection on current main cannot fall back to an older accepted record.
+
+The digest of the allowlisted receipt becomes required
+`official_interoperability` transaction evidence. The frozen public summaries
+and authenticated disposition inputs are retained alongside that receipt.
 
 Publication copies the exact tested manifest bytes and checks their independent
 producer digest. It does not regenerate a potentially different manifest.

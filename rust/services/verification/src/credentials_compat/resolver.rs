@@ -3,7 +3,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use marty_didcomm::{DidDocument, DidResolver, VerificationMethod};
-use p256::elliptic_curve::sec1::ToEncodedPoint;
+use p256::elliptic_curve::sec1::ToSec1Point;
 use reqwest::{Client, StatusCode};
 use serde::Deserialize;
 use serde_json::{Map, Value};
@@ -249,7 +249,7 @@ fn repair_compressed_p256_jwk(jwk: &mut Map<String, Value>) -> Option<()> {
     }
     let compressed = URL_SAFE_NO_PAD.decode(string(jwk, "x")).ok()?;
     let key = p256::PublicKey::from_sec1_bytes(&compressed).ok()?;
-    let point = key.to_encoded_point(false);
+    let point = key.to_sec1_point(false);
     jwk.insert(
         "x".into(),
         Value::String(URL_SAFE_NO_PAD.encode(point.x()?)),
