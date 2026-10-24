@@ -262,7 +262,7 @@ mod diagnostic_tests {
     }
 
     #[tokio::test]
-    #[ignore = "opt-in pinned Docker image pilot; run alone with MARTY_CANVAS_REUSE_PUBLISHED_BASE_PILOT=1"]
+    #[ignore = "pinned Docker diagnostic; run alone with MARTY_CANVAS_REUSE_PUBLISHED_BASE=1"]
     async fn immutable_published_base_keeps_revision_parity_and_case_isolation() {
         assert_eq!(std::env::var(BASE_REUSE_SWITCH).as_deref(), Ok("1"));
         let first = PublishedDatabase::start().await.unwrap();
@@ -310,7 +310,7 @@ mod diagnostic_tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    #[ignore = "opt-in pinned Docker pilot; run this exact test alone with MARTY_CANVAS_REUSE_PUBLISHED_BASE_PILOT=1"]
+    #[ignore = "pinned Docker diagnostic; run this exact test alone with MARTY_CANVAS_REUSE_PUBLISHED_BASE=1"]
     async fn concurrent_published_base_keeps_eight_cases_isolated() {
         assert_eq!(std::env::var(BASE_REUSE_SWITCH).as_deref(), Ok("1"));
         let fixture: Value = serde_json::from_str(include_str!(
@@ -396,7 +396,7 @@ mod diagnostic_tests {
     }
 
     #[tokio::test]
-    #[ignore = "opt-in pinned Docker image pilot; run alone with MARTY_CANVAS_REUSE_PUBLISHED_BASE_PILOT=1"]
+    #[ignore = "pinned Docker diagnostic; run alone with MARTY_CANVAS_REUSE_PUBLISHED_BASE=1"]
     async fn failed_published_base_restore_removes_only_its_owned_container() {
         assert_eq!(std::env::var(BASE_REUSE_SWITCH).as_deref(), Ok("1"));
         let scope = Uuid::new_v4();

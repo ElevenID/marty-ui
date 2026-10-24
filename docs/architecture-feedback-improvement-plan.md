@@ -442,7 +442,7 @@ third-party package bytes or prove conditional execution, generated outputs,
 external tools or assertion reachability; retain
 `transitive_source_closure=incomplete` and the unchanged protected gates.
 
-October 20 A0 Canvas follow-up (local review): the last successful main full
+October 20 A0 Canvas follow-up: the last successful main full
 run `39231230045` lasted 41m18s; Canvas was 40.8m, with 22.57m database
 contracts, 8.17m four-case preflight and 7.45m compilation. Routine #1428 PR
 run `39225063739` had a 22.4m Canvas job: 10.15m database contracts, 2.05m
@@ -452,9 +452,29 @@ qualification tiers, not a controlled speedup comparison. The full tier's
 distinct; the reference's 365.3s probe timer is nested, not extra work. The
 reference is serial to protect its 10s child-interrupt bound. Routine PR CI
 already omits the long historical tier, so reference reuse would not shorten
-its feedback. The next reviewed A0 change records the exact pinned published
-image refs and selected PostgreSQL registry in each Canvas acceptance record;
-it does not skip tests or establish historical evidence reuse.
+its feedback. [#1429](https://github.com/ElevenID/marty-ui/pull/1429)
+merged as `52e9c3c9a` after passing targeted tests, independent review, full PR
+CI `39392901208`, and protected merge-group CI `39395522416`. It records the
+exact pinned published image refs and runner-exported PostgreSQL registry in
+each Canvas acceptance record; it does not skip tests or establish historical
+evidence reuse. No measured speedup is claimed.
+
+The routine #1428 artifact's 409s Bookworm container compile did not use the
+host sccache wrapper; its host cache counters cannot describe that isolated
+compile. The same routine Canvas group recorded 78 pinned-probe migration
+seeds and 107 PostgreSQL readiness rows, but their overlapping durations are
+not additive. Seven inspected successful manual runs skipped the opt-in
+migrated-base diagnostics. The [manual full-Canvas pilot 39395651084](https://github.com/ElevenID/marty-ui/actions/runs/39395651084)
+passed on the same Rust source `5be7d6754` as switch-off full-main baseline
+`39231230045`. The `published-canvas` group took 1,203.1s versus 1,353.9s
+(150.8s, 11.1% less); its step took 1,204s versus 1,354s. The exact 135
+composition, 133 worker, and 9 DB-contract cases completed in both runs;
+all five added parity/isolation/failure diagnostics passed. The whole Canvas
+job improved by only 56s (2,395s versus 2,451s), with 58s added diagnostics
+and 26s more compile time. This is same-source evidence, not a guarantee under
+other runner/cache conditions. The reviewed next maintenance change enables
+reuse only for the Canvas CI database step; separate pinned-reference and
+native process obligations, full tiers and protected gates remain unchanged.
 
 The next A0 Canvas inventory slice observes each acceptance target's direct
 Rust `#[path]` and `include!` modules plus literal `include_str!`/`include_bytes!`
@@ -553,6 +573,11 @@ Issuance role at Gateway; production keeps managed passport signing off unless
 explicitly enabled. The source-backed planner tests check the routes, grant
 origin and production key bindings. This changes no live selector, and A3
 non-Cargo closure remains open.
+
+The October 20 shadow replay over `5be7d6754..52e9c3c9a` also remained broad:
+the exact planning document is an external/unknown input to Cargo metadata.
+That conservative fallback is correct until a non-Cargo/document consumer
+proof exists; the #1429 CI plan was not narrowed by its Rust source ownership.
 
 The October 20 shadow-planner audit found a packaged runtime edge absent from
 Cargo's reverse dependency graph: changing `marty-canvas-sandbox` source or

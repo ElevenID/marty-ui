@@ -19,7 +19,7 @@ on:
   workflow_dispatch:
     inputs:
       canvas_migrated_base_pilot:
-        description: 'Opt in to isolated Canvas migrated-base reuse qualification'
+        description: 'Run extra Canvas migrated-base parity diagnostics'
         required: false
         type: boolean
         default: false
@@ -1940,7 +1940,7 @@ jobs:
         shell: bash
         env:
           MARTY_CANVAS_OPENBAO_IMAGE: marty-openbao-didcomm:canvas
-          MARTY_CANVAS_REUSE_PUBLISHED_BASE_PILOT: ${{ github.event_name == 'workflow_dispatch' && inputs.canvas_migrated_base_pilot && matrix.lane == 'canvas' && '1' || '0' }}
+          MARTY_CANVAS_REUSE_PUBLISHED_BASE: ${{ matrix.lane == 'canvas' && '1' || '0' }}
         run: |
           set -euo pipefail
           if [[ "${{ matrix.lane }}" == contracts ]]; then
@@ -1984,7 +1984,7 @@ jobs:
         working-directory: rust
         shell: bash
         env:
-          MARTY_CANVAS_REUSE_PUBLISHED_BASE_PILOT: '1'
+          MARTY_CANVAS_REUSE_PUBLISHED_BASE: '1'
           MARTY_CANVAS_PUBLISHED_SCHEMA_TEST: '1'
         run: |
           set -euo pipefail
@@ -2003,7 +2003,7 @@ jobs:
             | select(.executable != null) | .executable
           ' "$RUNNER_TEMP/rust-test-artifacts.json" | sort -u)
           [[ ${#executables[@]} == 1 && -x "${executables[0]}" ]]
-          MARTY_CANVAS_REUSE_PUBLISHED_BASE_PILOT=0 python3 \
+          MARTY_CANVAS_REUSE_PUBLISHED_BASE=0 python3 \
             ../scripts/ci/run-exact-ignored-canvas-test.py "${executables[0]}" \
             canvas_published_database::diagnostic_tests::eight_fixed_published_databases_keep_migration_heads
           for test_name in \

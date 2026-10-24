@@ -1,4 +1,4 @@
-"""Keep the migrated-base pilot manual-only without changing Canvas gates."""
+"""Keep Canvas reuse scoped and extra diagnostics manual-only."""
 
 import importlib.util
 import subprocess
@@ -9,8 +9,9 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/ci.yml"
-SWITCH = "MARTY_CANVAS_REUSE_PUBLISHED_BASE_PILOT"
+SWITCH = "MARTY_CANVAS_REUSE_PUBLISHED_BASE"
 DIAGNOSTICS = ROOT / "rust/services/issuance/tests/support/canvas_published_database_diagnostic_tests.rs"
+DATABASE = ROOT / "rust/services/issuance/tests/support/canvas_published_database.rs"
 EXACT_RUNNER = ROOT / "scripts/ci/run-exact-ignored-canvas-test.py"
 
 
@@ -26,7 +27,7 @@ def test_pilot_requires_explicit_manual_boolean_and_retains_full_qualification()
     workflow = _workflow()
     events = workflow.get("on", workflow.get(True))
     assert events["workflow_dispatch"]["inputs"]["canvas_migrated_base_pilot"] == {
-        "description": "Opt in to isolated Canvas migrated-base reuse qualification",
+        "description": "Run extra Canvas migrated-base parity diagnostics",
         "required": False,
         "type": "boolean",
         "default": False,
@@ -39,7 +40,7 @@ def test_pilot_requires_explicit_manual_boolean_and_retains_full_qualification()
     )
 
 
-def test_only_canvas_database_step_receives_opt_in_and_remains_required() -> None:
+def test_only_canvas_database_step_enables_reuse_and_remains_required() -> None:
     steps = _steps()
     group = next(
         step
@@ -50,11 +51,7 @@ def test_only_canvas_database_step_receives_opt_in_and_remains_required() -> Non
     assert not group.get("continue-on-error", False)
     assert group["env"] == {
         "MARTY_CANVAS_OPENBAO_IMAGE": "marty-openbao-didcomm:canvas",
-        SWITCH: (
-            "${{ github.event_name == 'workflow_dispatch' && "
-            "inputs.canvas_migrated_base_pilot && matrix.lane == 'canvas' "
-            "&& '1' || '0' }}"
-        )
+        SWITCH: "${{ matrix.lane == 'canvas' && '1' || '0' }}",
     }
     assert "run-db-contract-groups.py worker-canvas" in group["run"]
     assert "run-db-contract-groups.py selfhost-canvas" in group["run"]
@@ -65,6 +62,13 @@ def test_only_canvas_database_step_receives_opt_in_and_remains_required() -> Non
         if step is not group
         and step.get("name") != "Verify opted-in Canvas migrated-base parity and isolation"
     )
+
+
+def test_canvas_runner_and_database_use_the_same_reuse_switch() -> None:
+    source = DATABASE.read_text(encoding="utf-8")
+    assert f'const BASE_REUSE_SWITCH: &str = "{SWITCH}";' in source
+    assert 'std::env::var(BASE_REUSE_SWITCH).as_deref() == Ok("1")' in source
+    assert "MARTY_CANVAS_REUSE_PUBLISHED_BASE_PILOT" not in source
 
 
 def test_manual_pilot_runs_exact_ignored_parity_isolation_and_failure_checks() -> None:

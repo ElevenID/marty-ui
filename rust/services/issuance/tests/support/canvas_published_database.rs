@@ -10,7 +10,7 @@ use uuid::Uuid;
 
 const LABEL: &str = "com.elevenid.test.canvas-published-schema";
 const DATABASE: &str = "canvas_published_schema_test";
-const BASE_REUSE_SWITCH: &str = "MARTY_CANVAS_REUSE_PUBLISHED_BASE_PILOT";
+const BASE_REUSE_SWITCH: &str = "MARTY_CANVAS_REUSE_PUBLISHED_BASE";
 static PUBLISHED_BASE: tokio::sync::OnceCell<Vec<u8>> = tokio::sync::OnceCell::const_new();
 static PUBLISHED_BASE_INIT: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 

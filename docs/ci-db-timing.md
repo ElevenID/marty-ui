@@ -95,15 +95,20 @@ under the same toolchain, target, features, runner class, and qualification
 tier; record cache state and required-case completion alongside elapsed time.
 The new JSONL explains the DB aggregate but does not by itself shorten it.
 
-## Opt-in immutable-base pilot (2026-10-11)
+## Canvas immutable-base reuse
 
-`MARTY_CANVAS_REUSE_PUBLISHED_BASE_PILOT=1` is an **off-by-default pilot**.
-Routine PR, merge-group, and scheduled CI keep it off. Only an explicit
-`workflow_dispatch` boolean enables it in the Canvas database step, with
-exact ignored parity, isolation, and failed-restore checks afterward. Manual
-runs still retain full qualification. It is not a release selector. The pilot
-diagnostics run the eight-case pinned-probe baseline with reuse explicitly off,
-then compare complete pre-restore schema/data dumps from the captured base
+`MARTY_CANVAS_REUSE_PUBLISHED_BASE=1` is enabled only in the Canvas database
+step for PR, merge-group, scheduled, and manual CI; every other matrix lane
+keeps it off. The existing `canvas_migrated_base_pilot` manual input now runs
+additional exact parity, isolation, and failed-restore diagnostics after the
+normal full Canvas suite. It is not a release or test-selection switch. The pinned migration/seed probe
+runs once per test process; later default-constructor cases restore that base
+into fresh owned containers. Case assertions still run against isolated
+databases, but repeated per-case execution of the migration producer is
+intentionally consolidated. Scoped recovery and oracle-overlay constructors
+retain their original setup paths.
+Those diagnostics run the eight-case pinned-probe baseline with reuse
+explicitly off, then compare complete pre-restore schema/data dumps from the captured base
 and an independently fresh pinned probe, excluding only their validated
 per-invocation `pg_dump` restriction keys. PostgreSQL reparses twelve pinned
 CHECK/index expressions when restoring SQL. The diagnostic requires every
@@ -130,7 +135,16 @@ sequential migration-head test took 39.43 seconds with the switch off and
 14.05 seconds. These are local fixture measurements, not CI speedup evidence:
 the real Canvas targets run multiple tests concurrently, and runner load and
 cache state differ. The opt-in path also passed pinned-Docker revision parity,
-case-isolation, and failed-restore cleanup tests. Keep the switch off in
-routine CI and release qualification until the manual Linux full Canvas pilot
-and independent review confirm case inventory, provenance, cleanup, and
-comparable hosted wall time.
+case-isolation, and failed-restore cleanup tests. The manual Linux full Canvas
+pilot [39395651084](https://github.com/ElevenID/marty-ui/actions/runs/39395651084)
+passed at the same source `5be7d6754` as the switch-off baseline
+[39231230045](https://github.com/ElevenID/marty-ui/actions/runs/39231230045).
+Its `published-canvas` group took 1,203.1s versus 1,353.9s (150.8s, 11.1%
+less); the complete database step took 1,204s versus 1,354s. The exact 135
+composition, 133 worker, and 9 database cases completed in both runs with no
+failure. All five additional diagnostics passed, including fresh/migrated
+schema-data parity, concurrent isolation, and failed-restore owned cleanup.
+The full Canvas job improved by only 56s (2,395s versus 2,451s) because the
+pilot also spent 58s on diagnostics and 26s more compiling. These are two
+same-source hosted runs, not a guarantee under other cache or runner loads.
+Historical probes, native-process cases, cleanup and required gates remain.
