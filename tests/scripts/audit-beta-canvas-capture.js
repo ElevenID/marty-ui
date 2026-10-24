@@ -153,7 +153,10 @@ async function main() {
     await login(adminPage, stock.requireSecretFile('CANVAS_CAPTURE_ADMIN_EMAIL'),
       stock.requireSecretFile('CANVAS_CAPTURE_ADMIN_PASSWORD'));
     phase = 'admin-org-selection';
-    await selectOrg(adminPage);
+    const adminSelection = await selectOrg(adminPage);
+    assert.equal(adminSelection.ok, true, 'Canvas admin must be a console member of the capture organization');
+    assert.equal(adminSelection.activeOrgId, process.env.CANVAS_OSS_ORGANIZATION_ID,
+      'Canvas admin must select the capture organization');
     phase = 'wallet-session';
     const walletContext = await recordContext();
     session = await acquireWalletSession(walletContext, { origin: 'http://127.0.0.1:8787', runId: actual.runId });

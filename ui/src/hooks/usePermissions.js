@@ -19,11 +19,6 @@ import {
   getPermissionDeniedMessage,
 } from '../config/permissions';
 
-// System/sentinel org IDs that backend policy blocks member-level operations on.
-const SYSTEM_ORG_IDS = new Set([
-  '00000000-0000-0000-0000-000000000001',
-]);
-
 /**
  * @typedef {Object} UsePermissionsReturn
  * @property {function(string, string): boolean} can - Check a single permission
@@ -44,11 +39,12 @@ const SYSTEM_ORG_IDS = new Set([
 export function usePermissions() {
   const { isAuthenticated, user } = useAuth();
   const { activeOrgId, memberships, membershipsLoaded, mode } = useConsole();
-  // Never fall through to the system/sentinel org — it's policy-blocked for member operations.
+  // Require an actual selected membership, including for the default organization.
+  // The backend remains authoritative for that member's grants; an organization
+  // ID alone cannot establish either membership or a permission denial.
   const hasSelectedMembership = membershipsLoaded && Array.isArray(memberships)
     && memberships.some((membership) => membership.id === activeOrgId);
   const effectiveOrganizationId = mode === 'org' && hasSelectedMembership
-    && !SYSTEM_ORG_IDS.has(activeOrgId)
     ? activeOrgId
     : null;
   const principalId = user?.sub || user?.id || null;
