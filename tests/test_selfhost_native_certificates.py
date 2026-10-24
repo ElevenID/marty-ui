@@ -37,16 +37,17 @@ def key(kind="EC"):
 
 def certificate(subject, public_key, issuer=None, signer=None, *, ca=False, path_length=None,
                 before=-60, after=7200, ku=True, signing=True, eku=None, extensions=(), aki=None,
-                basic_constraints=True):
+                basic_constraints=True, basic_critical=True, ski=True, digest=None):
     name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, subject)])
     issuer_name = issuer.subject if issuer else name
     builder = (x509.CertificateBuilder().subject_name(name).issuer_name(issuer_name)
                .public_key(public_key).serial_number(x509.random_serial_number())
                .not_valid_before(NOW + timedelta(seconds=before))
-               .not_valid_after(NOW + timedelta(seconds=after))
-               .add_extension(x509.SubjectKeyIdentifier.from_public_key(public_key), False))
+               .not_valid_after(NOW + timedelta(seconds=after)))
+    if ski:
+        builder = builder.add_extension(x509.SubjectKeyIdentifier.from_public_key(public_key), False)
     if basic_constraints:
-        builder = builder.add_extension(x509.BasicConstraints(ca=ca, path_length=path_length), True)
+        builder = builder.add_extension(x509.BasicConstraints(ca=ca, path_length=path_length), basic_critical)
     if ku:
         builder = builder.add_extension(x509.KeyUsage(
             digital_signature=True, content_commitment=False, key_encipherment=False,
@@ -59,7 +60,7 @@ def certificate(subject, public_key, issuer=None, signer=None, *, ca=False, path
             issuer.public_key()), False)
     for extension, critical in extensions:
         builder = builder.add_extension(extension, critical)
-    return builder.sign(signer, None if isinstance(signer, ed25519.Ed25519PrivateKey) else hashes.SHA256())
+    return builder.sign(signer, None if isinstance(signer, ed25519.Ed25519PrivateKey) else digest or hashes.SHA256())
 
 
 def pem(cert):
@@ -269,8 +270,15 @@ def test_actual_openbao_transit_csr_producers(tmp_path):
         request("POST", "sys/mounts/transit", {"type": "transit"})
         request("POST", "sys/mounts/pki", {"type": "pki", "config": {"max_lease_ttl": "8760h"}})
         issuer = request("POST", "pki/root/generate/internal", {
-            "common_name": "synthetic OpenBao root", "key_type": "ec", "key_bits": 256,
+            "common_name": "Marty self-host workload CA v2", "key_type": "ec", "key_bits": 256,
             "ttl": "8760h"})["data"]["certificate"].encode()
+        operator_bytes(ROOT, "operator", "replacement-ca", "workload", "2", input=issuer)
+        assert json.loads(operator_bytes(ROOT, "operator", "certificate-expiry", str(300 * 86400), input=issuer))
+        request("POST", "sys/mounts/keycloak-pki", {"type": "pki", "config": {"max_lease_ttl": "8760h"}})
+        replacement = request("POST", "keycloak-pki/root/generate/internal", {
+            "common_name": "Marty self-host keycloak CA v8", "key_type": "ec", "key_bits": 256,
+            "ttl": "8760h"})["data"]["certificate"].encode()
+        operator_bytes(ROOT, "operator", "replacement-ca", "keycloak", "8", input=replacement)
         for role, kind, bits, server, client in [
             ("workload-server", "ec", 256, True, False),
             ("workload-client", "ec", 256, False, True),

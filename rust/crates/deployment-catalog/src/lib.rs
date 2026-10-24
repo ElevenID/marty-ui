@@ -663,7 +663,11 @@ mod tests {
 }
 
 pub mod approle;
+pub mod generation;
+pub mod keycloak;
+pub mod keycloak_provision;
 pub mod operator;
 pub mod operator_certificates;
 mod operator_files;
+mod operator_http;
 pub mod snapshot;

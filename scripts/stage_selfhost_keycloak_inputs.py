@@ -14,6 +14,19 @@ import tempfile
 
 from provision_selfhost_disposable_tls import preview_openbao_owner
 from provision_selfhost_keycloak_kms import OUTPUTS
+from selfhost_native_operator import OperatorCleanupError, operator_command
+
+
+def authenticated_operator_environment(source: Path) -> dict[str, str]:
+    """Keep only the installed operator's authenticated public release identity."""
+    names = ("MARTY_DEPLOY_BIN", "MARTY_DEPLOY_BIN_SHA256",
+             "MARTY_DEPLOY_SOURCE_SHA", "MARTY_DEPLOY_RELEASE_TAG")
+    if any(not os.environ.get(name, "").strip() for name in names):
+        raise ValueError("Install and source the matching signed marty-deploy operator before sudo staging")
+    # Preflight digest, build identity and (in source) exact checkout identity,
+    # before opening the root-token-backed provisioning flow. No cargo fallback.
+    operator_command(source, "operator", "keycloak-provision")
+    return {name: os.environ[name] for name in names}
 
 
 def owned_dir(path: Path, uid: int) -> Path:
@@ -43,6 +56,7 @@ def stage(private_root: Path, operator_uid: int) -> int:
     if (os.name != "posix" or os.geteuid() != 0 or operator_uid <= 0
             or operator_uid == os.geteuid()):
         raise ValueError("Keycloak input transfer requires sudo from a non-root operator")
+    native_env = authenticated_operator_environment(Path(__file__).resolve().parents[1])
     root = owned_dir(private_root, operator_uid)
     secrets = owned_dir(root / "secrets", operator_uid)
     state = openbao_state_dir(root / "openbao-state")
@@ -75,6 +89,9 @@ def stage(private_root: Path, operator_uid: int) -> int:
         output = Path(temporary)
         output.chmod(0o700)
         env = {
+            **native_env,
+            # Git recognizes the verified sudo caller when checking source HEAD.
+            "SUDO_UID": str(operator_uid),
             "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
             "PYTHONDONTWRITEBYTECODE": "1",
             "BAO_ADDR": f"https://127.0.0.1:{port}",
@@ -84,8 +101,10 @@ def stage(private_root: Path, operator_uid: int) -> int:
         }
         helper = Path(__file__).resolve().with_name("provision_selfhost_keycloak_kms.py")
         result = subprocess.run([sys.executable, str(helper)], env=env,
-                                capture_output=True, text=True, timeout=240,
+                                capture_output=True, text=True, timeout=None,
                                 check=False)
+        if result.returncode == 3 or result.returncode not in (0, 1, 2):
+            raise OperatorCleanupError("Keycloak provisioning requires operator recovery")
         if result.returncode:
             raise RuntimeError("disposable Keycloak provisioning failed")
         if {path.name for path in output.iterdir()} != OUTPUTS:
@@ -136,6 +155,9 @@ def main() -> int:
     try:
         uid = int(os.environ["SUDO_UID"])
         count = stage(args.private_root, uid)
+    except OperatorCleanupError:
+        print("Keycloak provisioning requires operator recovery", file=sys.stderr)
+        return 3
     except (KeyError, OSError, ValueError, RuntimeError, subprocess.SubprocessError,
             json.JSONDecodeError) as error:
         print(f"disposable Keycloak staging failed: {type(error).__name__}",

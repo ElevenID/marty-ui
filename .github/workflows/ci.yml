@@ -2175,7 +2175,13 @@ jobs:
           MARTY_DEPLOY_BIN_SHA256="$(sha256sum "$MARTY_DEPLOY_BIN" | cut -d ' ' -f 1)"
           export MARTY_DEPLOY_BIN_SHA256
           python -m pip install --disable-pip-version-check pytest cryptography
-          python -m pytest -q tests/test_export_selfhost_openbao.py tests/test_selfhost_native_approle.py tests/test_selfhost_native_rotation.py tests/test_selfhost_native_certificates.py tests/test_selfhost_approle_policy_parity.py tests/test_selfhost_operator_cleanup_cli.py tests/test_selfhost_native_operator.py::test_native_spki_matches_openssl_for_supported_operator_keys
+          python -m pytest -q tests/test_export_selfhost_openbao.py tests/test_selfhost_native_approle.py tests/test_selfhost_native_rotation.py tests/test_selfhost_native_certificates.py tests/test_selfhost_native_ca_profile.py tests/test_selfhost_native_keycloak.py tests/test_stage_selfhost_renewed_secrets.py tests/test_activate_selfhost_renewed_secrets.py tests/test_provision_selfhost_keycloak_kms.py tests/test_provision_selfhost_ca_rotation_identity.py tests/test_selfhost_approle_policy_parity.py tests/test_selfhost_operator_cleanup_cli.py tests/test_selfhost_native_operator.py::test_native_transactions_cannot_be_killed_during_cleanup tests/test_selfhost_native_operator.py::test_keycloak_abnormal_exit_is_sanitized_recovery tests/test_selfhost_native_operator.py::test_native_spki_matches_openssl_for_supported_operator_keys
+          python_bin="$(command -v python)"
+          sudo env PYTHONDONTWRITEBYTECODE=1 MARTY_DEPLOY_BIN="$MARTY_DEPLOY_BIN" \
+            MARTY_DEPLOY_BIN_SHA256="$MARTY_DEPLOY_BIN_SHA256" \
+            MARTY_DEPLOY_SOURCE_SHA="$MARTY_DEPLOY_SOURCE_SHA" \
+            MARTY_DEPLOY_RELEASE_TAG="$MARTY_DEPLOY_RELEASE_TAG" \
+            "$python_bin" -m pytest -q tests/test_stage_selfhost_keycloak_inputs.py
 
   rust-lint-policy:
     name: Rust Lint and Packaging
