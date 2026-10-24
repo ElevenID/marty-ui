@@ -125,9 +125,8 @@ def test_probe_manifest_has_one_fixed_binary_and_real_candidate_dependency() -> 
         "path": "../../../rust/services/issuance",
         "features": ["feature-regression-observer"],
     }
-    assert manifest["patch"]["crates-io"] == {
-        "ssi-jwt": {"path": "../../../rust/third_party/ssi-jwt"},
-    }
+    production = tomllib.loads((ROOT / "rust/Cargo.toml").read_text(encoding="utf-8"))
+    assert manifest["patch"]["crates-io"] == production["patch"]["crates-io"]
     assert manifest["profile"]["dev"] == {
         "opt-level": "z",
         "debug": 0,

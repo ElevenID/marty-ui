@@ -1,17 +1,19 @@
 """Reject production-workspace Core dependencies that restore local key custody."""
 
 import json
+import re
+import subprocess
 import sys
 import tomllib
 from pathlib import Path
 
-CORE_REVISION = "3f5dbb20999f773a765fd0b427a9050a6dc99fed"
+CORE_REVISION = "56f58d7a52f3468d25e0ad9936041d32d9bbf058"
 CORE_REF = CORE_REVISION
 CORE_SOURCE = (
     "git+https://github.com/ElevenID/marty-core"
     f"?rev={CORE_REF}#{CORE_REVISION}"
 )
-ISOMDL_REVISION = "784a52943469622873c7ae3200dbc11e89d6bd8e"
+ISOMDL_REVISION = "1e7ab823e26559dfce2f7e0f1fdf2aa61a936b4f"
 ISOMDL_SOURCE = (
     "git+https://github.com/ElevenID/isomdl-elevenid"
     f"?rev={ISOMDL_REVISION}#{ISOMDL_REVISION}"
@@ -71,6 +73,17 @@ def check(metadata: dict) -> None:
         raise ValueError("isomdl enables local issuer signing")
 
 
+def check_production_crypto_tree(tree: str) -> None:
+    forbidden = (
+        r'ecdsa feature "signing"',
+        r'(?:p256|p384|p521|k256) feature "ecdsa"',
+        r'jsonwebtoken feature "rust_crypto"',
+        r'ed448-goldilocks-plus feature "(?:signing|default|pkcs8)"',
+    )
+    if any(re.search(pattern, tree) for pattern in forbidden):
+        raise ValueError("Production service graph restores local credential signing")
+
+
 def check_standalone_probe_lock(path: Path) -> None:
     packages = tomllib.loads(path.read_text(encoding="utf-8"))["package"]
     core = [
@@ -87,6 +100,14 @@ def check_standalone_probe_lock(path: Path) -> None:
 if __name__ == "__main__":
     try:
         check(json.load(sys.stdin))
+        root = Path(__file__).resolve().parents[2]
+        command = ["cargo", "tree", "--locked", "--manifest-path", str(root / "rust/Cargo.toml"),
+                   "-e", "features,no-dev"]
+        for package in ("marty-issuance-service", "marty-verification-service", "marty-flow",
+                        "marty-signing-keys", "marty-device-registration", "marty-gateway"):
+            command.extend(["-p", package])
+        tree = subprocess.run(command, check=True, capture_output=True, text=True, encoding="utf-8").stdout
+        check_production_crypto_tree(tree)
         check_standalone_probe_lock(
             Path(__file__).resolve().parents[2]
             / ".github/feature-regression/rust-probe/Cargo.lock"

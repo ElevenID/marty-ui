@@ -93,3 +93,23 @@ def test_isomdl_local_signing_fails(feature: str) -> None:
     node["features"].append(feature)
     with pytest.raises(ValueError, match="local issuer signing"):
         guard.check(graph)
+
+
+@pytest.mark.parametrize("feature", [
+    'ecdsa feature "signing"',
+    'p256 feature "ecdsa"',
+    'p384 feature "ecdsa"',
+    'k256 feature "ecdsa"',
+    'jsonwebtoken feature "rust_crypto"',
+    'ed448-goldilocks-plus feature "signing"',
+])
+def test_production_transitive_signing_is_rejected(feature: str) -> None:
+    with pytest.raises(ValueError, match="local credential signing"):
+        guard.check_production_crypto_tree("??? " + feature)
+
+
+def test_production_public_verification_and_session_roles_are_allowed() -> None:
+    guard.check_production_crypto_tree(
+        'ecdsa feature "verifying"\np256 feature "ecdh"\n'
+        'marty-crypto feature "ecdsa-verification"\n'
+    )

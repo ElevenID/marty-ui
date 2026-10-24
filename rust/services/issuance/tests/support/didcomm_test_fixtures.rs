@@ -85,10 +85,8 @@ pub struct HolderDecryption {
 
 #[allow(dead_code)]
 pub fn holder_decrypt_anoncrypt(jwe: &str, recipient_secret: &[u8; 32]) -> String {
-    use affinidi_messaging_didcomm::{
-        crypto::key_agreement::{Curve, PrivateKeyAgreement},
-        jwe::decrypt,
-    };
+    use affinidi_crypto::jose::key_agreement::{Curve, PrivateKeyAgreement};
+    use affinidi_messaging_didcomm::jwe::decrypt;
     let recipient_private = PrivateKeyAgreement::from_raw_bytes(Curve::X25519, recipient_secret)
         .expect("holder X25519 secret");
     let value: serde_json::Value = serde_json::from_str(jwe).expect("DIDComm JWE");
@@ -100,7 +98,7 @@ pub fn holder_decrypt_anoncrypt(jwe: &str, recipient_secret: &[u8; 32]) -> Strin
                 .pointer("/header/kid")
                 .and_then(|kid| kid.as_str())
         })
-        .find_map(|kid| decrypt::decrypt(jwe, kid, &recipient_private, None).ok())
+        .find_map(|kid| decrypt::decrypt_bound(jwe, kid, &recipient_private, None).ok())
         .expect("holder can open anoncrypt JWE");
     assert!(!decrypted.authenticated);
     String::from_utf8(decrypted.plaintext).expect("UTF-8 DIDComm plaintext")
@@ -113,10 +111,8 @@ pub fn holder_decrypt_authcrypt(
     recipient_document: &DidDocument,
     sender_document: &DidDocument,
 ) -> HolderDecryption {
-    use affinidi_messaging_didcomm::{
-        crypto::key_agreement::{Curve, PrivateKeyAgreement, PublicKeyAgreement},
-        jwe::decrypt,
-    };
+    use affinidi_crypto::jose::key_agreement::{Curve, PrivateKeyAgreement, PublicKeyAgreement};
+    use affinidi_messaging_didcomm::jwe::decrypt;
     let recipient_private = PrivateKeyAgreement::from_raw_bytes(Curve::X25519, recipient_secret)
         .expect("holder X25519 secret");
     let PublicKeyAgreement::X25519(recipient_public) = recipient_private.public_key() else {
@@ -143,14 +139,18 @@ pub fn holder_decrypt_authcrypt(
         .expect("sender kid authorized by DID document");
     let sender_public = PublicKeyAgreement::from_raw_bytes(Curve::X25519, &sender_public)
         .expect("sender X25519 public key");
-    let decrypted = decrypt::decrypt(
+    let decrypted = decrypt::decrypt_bound(
         jwe,
         &recipient_kid,
         &recipient_private,
-        Some(&sender_public),
+        Some(decrypt::SenderKey::new(sender_kid, &sender_public)),
     )
     .expect("holder can open authcrypt JWE");
-    assert!(decrypted.authenticated && !decrypted.legacy_kek_used);
+    // Keep the historical interoperability assertion; current upstream rejects
+    // the legacy KDF outright and deprecates this always-false metadata field.
+    #[allow(deprecated)]
+    let authenticated_without_legacy = decrypted.authenticated && !decrypted.legacy_kek_used;
+    assert!(authenticated_without_legacy);
     assert_eq!(decrypted.sender_kid.as_deref(), Some(sender_kid));
     HolderDecryption {
         plaintext: String::from_utf8(decrypted.plaintext).expect("UTF-8 DIDComm plaintext"),
