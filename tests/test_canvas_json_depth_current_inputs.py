@@ -1,6 +1,5 @@
 """Guard current JSON-depth probe inputs; never authorize historical or CI skips."""
 
-import ast
 import json
 import re
 import runpy
@@ -9,7 +8,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from scripts.ci.canvas_oracle_current_inputs import json_references, normalized_sha256
+from scripts.ci.canvas_oracle_current_inputs import (
+    assert_current_input_pins,
+    flat_local_script_imports,
+    json_references,
+    normalized_sha256,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 EVIDENCE = ROOT / "contracts/canvas-json-depth-current-inputs.json"
@@ -50,20 +54,15 @@ POSTGRES_IMAGE = (
 
 
 def _assert_inputs(evidence: dict, root: Path) -> None:
-    assert set(evidence) == {"schema", "purpose", "normalization", "sha256"}
-    assert evidence["schema"] == "marty.canvas-json-depth-current-inputs/v1"
-    assert "do not attest historical capture provenance" in evidence["purpose"]
-    assert "authorize skipping a live oracle" in evidence["purpose"]
-    assert evidence["normalization"] == (
-        "UTF-8 text with CRLF and CR converted to LF before SHA-256"
+    assert_current_input_pins(
+        evidence,
+        root,
+        schema="marty.canvas-json-depth-current-inputs/v1",
+        label="JSON-depth",
+        disclaimer="do not attest historical capture provenance",
     )
+    assert "authorize skipping a live oracle" in evidence["purpose"]
     assert set(evidence["sha256"]) == INPUTS, "JSON-depth inputs need review"
-    for name, digest in evidence["sha256"].items():
-        assert Path(name).as_posix() == name and ".." not in Path(name).parts
-        assert len(digest) == 64 and all(c in "0123456789abcdef" for c in digest)
-        assert normalized_sha256(root / name) == digest, (
-            f"JSON-depth input drift: {name}"
-        )
     # Match the existing REST guard's literal JSON reference policy. Every
     # referenced contract must be explicitly pinned, even after a reviewed
     # update to the referring file's digest.
@@ -77,45 +76,6 @@ def _assert_inputs(evidence: dict, root: Path) -> None:
             assert f"contracts/{filename}" in evidence["sha256"], (
                 f"JSON-depth transitive JSON input needs review: {reference}"
             )
-
-
-def _local_imports(source: str, root: Path) -> set[str]:
-    tree = ast.parse((root / source).read_text(encoding="utf-8"))
-    imported = set()
-    dynamic_names = {"__import__"}
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and node.module in {"importlib", "runpy"}:
-            dynamic_names.update(
-                alias.asname or alias.name
-                for alias in node.names
-                if alias.name in {"import_module", "run_path"}
-            )
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            names = [alias.name for alias in node.names]
-        elif isinstance(node, ast.ImportFrom):
-            assert node.level == 0, f"Review relative local import in {source}"
-            names = [node.module] if node.module else []
-        elif isinstance(node, ast.Call):
-            function = node.func
-            assert not (
-                isinstance(function, ast.Name)
-                and function.id in dynamic_names
-                or isinstance(function, ast.Attribute)
-                and function.attr in {"import_module", "run_path"}
-            ), f"Review dynamic local import in {source}"
-            continue
-        else:
-            continue
-        for name in names:
-            base = name.split(".", 1)[0]
-            assert not (root / "scripts" / base).is_dir(), (
-                f"Review local package import in {source}: {name}"
-            )
-            path = f"scripts/{base}.py"
-            if (root / path).is_file():
-                imported.add(path)
-    return imported
 
 
 def test_current_json_depth_probe_inputs_and_selector() -> None:
@@ -189,7 +149,8 @@ def test_current_json_depth_probe_inputs_and_selector() -> None:
     # The preparer dispatches many unrelated modes behind their own flags; its
     # complete bytes are pinned above, while this import closure is depth-only.
     for script in SCRIPTS - {"scripts/prepare_canvas_published_schema.py"}:
-        assert _local_imports(script, ROOT) == DIRECT_IMPORTS.get(script, set()), (
+        imports = flat_local_script_imports(ROOT / script, ROOT / "scripts")
+        assert {f"scripts/{name}" for name in imports} == DIRECT_IMPORTS.get(script, set()), (
             f"Review static local imports of {script}"
         )
 
@@ -285,14 +246,16 @@ def test_new_transitive_json_reference_requires_review_after_hash_refresh(
         "__import__('helper')\n",
         "from importlib import import_module as load\nload('helper')\n",
         "from runpy import run_path as run\nrun('helper.py')\n",
+        "importlib.util.spec_from_file_location('helper', 'helper.py')\n",
+        "from importlib.util import spec_from_file_location as load\nload('helper', 'helper.py')\n",
     ],
 )
 def test_nonstatic_local_import_requires_review(tmp_path: Path, source: str) -> None:
     script = tmp_path / "scripts/probe.py"
     script.parent.mkdir(parents=True)
     script.write_text(source, encoding="utf-8")
-    with pytest.raises(AssertionError, match="Review .* local import"):
-        _local_imports("scripts/probe.py", tmp_path)
+    with pytest.raises(AssertionError, match="Review .*import"):
+        flat_local_script_imports(script, script.parent)
 
 
 def test_new_local_package_import_requires_review(tmp_path: Path) -> None:
@@ -304,4 +267,4 @@ def test_new_local_package_import_requires_review(tmp_path: Path) -> None:
         "from new_helper import nested\n", encoding="utf-8"
     )
     with pytest.raises(AssertionError, match="Review local package import"):
-        _local_imports("scripts/probe.py", tmp_path)
+        flat_local_script_imports(scripts / "probe.py", scripts)
