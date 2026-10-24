@@ -29,9 +29,11 @@ describe('PresentationPoliciesPage API recovery', () => {
   it('keeps an initial list outage in the page and retries the scoped request', async () => {
     listPolicies.mockRejectedValueOnce(new Error('Policy service temporarily unavailable'))
       .mockResolvedValueOnce([{
-        id: 'policy', name: 'Recovered member policy', trustProfile: 'Trusted issuer',
-        requiredClaims: ['memberId'], freshness: '1 day', holderBinding: true,
-        usageCount: 0, status: 'active',
+        id: 'policy', name: 'Recovered member policy', trust_profile_id: '60000000-0000-0000-0000-000000000001',
+        required_claims: [{ claim_name: 'memberId', display_name: 'Member ID' }],
+        credential_requirements: [], alternative_requirements: [],
+        freshness: { max_age_seconds: 86400, require_not_revoked: true },
+        holder_binding: { required: true }, status: 'active',
       }])
 
     renderWithRouter(<PresentationPoliciesPage />)
@@ -52,5 +54,27 @@ describe('PresentationPoliciesPage API recovery', () => {
     expect(await screen.findByText('No presentation policies')).toBeInTheDocument()
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument()
+  })
+
+  it('renders canonical nested requirements and optional binding without inventing usage', async () => {
+    listPolicies.mockResolvedValue([{
+      id: 'age-proof', name: 'Private Online Age Proof', status: 'active',
+      required_claims: [],
+      credential_requirements: [{
+        credential_template_id: '50000000-0000-0000-0000-000000000020',
+        display_name: 'Mobile Driving Licence',
+        trust_profile_id: '60000000-0000-0000-0000-000000000001',
+        requested_claims: [{ claim_name: 'age_over_21', required: true }],
+      }],
+      alternative_requirements: [{ name: 'Alternative identity', min_satisfied: 1, credential_requirements: [] }],
+      holder_binding: { required: false },
+    }])
+    renderWithRouter(<PresentationPoliciesPage />)
+    expect(await screen.findByText('Private Online Age Proof')).toBeInTheDocument()
+    expect(screen.getByText('60000000-0000-0000-0000-000000000001')).toBeInTheDocument()
+    expect(screen.getByText('1 credential requirement')).toBeInTheDocument()
+    expect(screen.getByText('1 alternative group')).toBeInTheDocument()
+    expect(screen.getByText('policies.holderBinding.optional')).toBeInTheDocument()
+    expect(screen.queryByText('policies.tableHeaders.usage')).not.toBeInTheDocument()
   })
 })
