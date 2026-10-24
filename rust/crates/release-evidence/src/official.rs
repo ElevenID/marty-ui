@@ -47,6 +47,8 @@ struct Summary {
     official_evidence: Vec<OfficialEvidence>,
     #[serde(default)]
     junit: Vec<Value>,
+    #[serde(default)]
+    local_runtime_binding: Option<Value>,
 }
 
 #[derive(Deserialize)]
@@ -218,6 +220,7 @@ pub fn validate_official_suite(
             || summary.result.exit_code != 0
             || !summary.result.passed
             || summary.result.skipped != 0
+            || summary.local_runtime_binding.is_some()
             || summary.stack.schema != "elevenid.official-stack-material/v1"
             || summary.stack.marty_commit != source
             || summary.stack.manifest_sha256 != manifest_sha256

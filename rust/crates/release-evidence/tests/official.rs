@@ -102,6 +102,18 @@ fn eudi_integer_zero_skips_and_absent_oidf_skip_count_are_valid() {
 }
 
 #[test]
+fn explicit_local_overlays_cannot_qualify_as_the_release_image_even_when_tests_pass() {
+    for release_qualified in [false, true] {
+        let mut values = LANES.map(summary);
+        values[0]["local_runtime_binding"] = json!({
+            "scope":"LOCAL_DEVELOPER_FEEDBACK", "nativeReadbackMatched":true,
+            "releaseQualified":release_qualified
+        });
+        assert!(validate(&values).is_err());
+    }
+}
+
+#[test]
 fn exit_zero_cannot_promote_review_missing_or_incomplete_oidf_modules() {
     for (pointer, replacement) in [
         ("", Value::Null),
