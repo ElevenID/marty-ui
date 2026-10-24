@@ -701,8 +701,9 @@ export async function listPresentationPolicies(params = {}) {
 /**
  * Get a specific presentation policy by ID
  */
-export async function getPresentationPolicy(id) {
-  const result = await get(`${PRESENTATION_POLICY_BASE}/${id}`);
+export async function getPresentationPolicy(id, scope = null) {
+  const query = scope ? `?${new URLSearchParams({ organization_id: requireOrganizationId(scope) })}` : '';
+  const result = await get(`${PRESENTATION_POLICY_BASE}/${encodeURIComponent(id)}${query}`);
   return normalizePresentationPolicy(result);
 }
 
@@ -710,7 +711,21 @@ export async function getPresentationPolicy(id) {
  * Update a presentation policy
  */
 export async function updatePresentationPolicy(id, data) {
-  const result = await patch(`${PRESENTATION_POLICY_BASE}/${id}`, buildPresentationPolicyPayload(data));
+  const organizationId = requireOrganizationId(data);
+  const { organization_id: _organizationId, freshness_requirements, ...payload } = data;
+  // PATCH is a sparse update, not a new policy. Never manufacture
+  // requirements or binding defaults for an unrelated metadata edit.
+  if (typeof payload.holder_binding === 'string') {
+    payload.holder_binding = normalizeHolderBindingPayload(payload.holder_binding);
+  }
+  if (freshness_requirements !== undefined && payload.freshness === undefined) {
+    payload.freshness = normalizeFreshnessPayload({ freshness_requirements });
+  }
+  // The public gateway authenticates body scope, then removes it before
+  // forwarding to the native update contract.
+  const result = await patch(`${PRESENTATION_POLICY_BASE}/${encodeURIComponent(id)}`, {
+    organization_id: organizationId, ...payload,
+  });
   return normalizePresentationPolicy(result);
 }
 
@@ -719,6 +734,10 @@ export async function updatePresentationPolicy(id, data) {
  */
 export async function deletePresentationPolicy(id) {
   return del(`${PRESENTATION_POLICY_BASE}/${id}`);
+}
+
+export async function suspendPresentationPolicy(id) {
+  return normalizePresentationPolicy(await post(`${PRESENTATION_POLICY_BASE}/${encodeURIComponent(id)}/suspend`, {}));
 }
 
 /**
