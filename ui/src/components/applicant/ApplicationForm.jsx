@@ -214,7 +214,7 @@ function formatEvidenceRequirement(requirement) {
   };
 }
 
-export default function ApplicationForm() {
+export default function ApplicationForm({ previewContext = null } = {}) {
   const { t } = useTranslation('applicant');
   const { credentialType: credentialConfigId } = useParams();
   const navigate = useNavigate();
@@ -224,11 +224,13 @@ export default function ApplicationForm() {
   const hasRegisteredWallet = preferredWallets.length > 0;
   const { isPreview } = usePreview?.() || { isPreview: false };
   const fileInputRefs = useRef({});
-  const [initialApplyState] = useState(() => location.state || readStoredApplyLocationState());
-  const canvasLtiState = useMemo(() => new URLSearchParams(location.search).get('canvas_lti_state') || '', [location.search]);
+  const [initialApplyState] = useState(() => (
+    isPreview && previewContext ? previewContext : location.state || readStoredApplyLocationState()
+  ));
+  const canvasLtiState = useMemo(() => isPreview ? '' : new URLSearchParams(location.search).get('canvas_lti_state') || '', [isPreview, location.search]);
   const canvasApplicationTemplateIdFromUrl = useMemo(
-    () => new URLSearchParams(location.search).get('application_template_id') || '',
-    [location.search]
+    () => isPreview ? '' : new URLSearchParams(location.search).get('application_template_id') || '',
+    [isPreview, location.search]
   );
 
   const [activeStep, setActiveStep] = useState(0);
@@ -311,7 +313,7 @@ export default function ApplicationForm() {
   );
   const applicationOrganizationId = isCanvasLtiApplication
     ? (canvasIssuerOrganizationId || organizationId)
-    : organizationId;
+    : (applicationTemplate?.organization_id || organizationId);
 
   const getCredentialTemplate = async (templateId) => get(`/v1/credential-templates/${templateId}`);
   const getApplicationTemplate = async (templateId) => get(`/v1/application-templates/${templateId}`);
@@ -623,6 +625,7 @@ export default function ApplicationForm() {
   const shouldShowStepper = !(isCanvasLtiApplication && steps.length === 1);
 
   const handleAutoApply = async () => {
+    if (isPreview) { setSubmitted(true); return; }
     setAutoApplying(true);
     setError(null);
     try {
@@ -686,6 +689,7 @@ export default function ApplicationForm() {
   };
 
   const submitApplicationForm = async (duplicateApplicationAction = null) => {
+    if (isPreview) { setSubmitted(true); return; }
     setSubmitting(true);
     setError(null);
 

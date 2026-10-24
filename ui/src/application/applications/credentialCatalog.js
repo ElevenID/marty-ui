@@ -211,11 +211,15 @@ export function scopeCredentialCatalogItemsForCanvasLaunch(credentials = [], { c
 
 export function resolveCredentialApplicationPath({
   credentialId,
+  applicationTemplateId,
   currentPathname = '',
   isPreview = false,
 }) {
   if (isPreview) {
-    return `/applicant/preview/applications/${credentialId}`;
+    if (typeof applicationTemplateId !== 'string' || !applicationTemplateId.trim()) {
+      throw new Error('An Application Template is required to preview this credential application.');
+    }
+    return `/applicant/preview/applications/${encodeURIComponent(applicationTemplateId)}`;
   }
 
   if (currentPathname.startsWith('/console/applicant')) {
@@ -252,24 +256,33 @@ export function buildCredentialApplicationNavigationState(credential, options = 
   delete serializableCredential.icon;
   const applicationTemplate = serializableCredential.application_template || null;
   delete serializableCredential.application_template;
+  if (options.isPreview && (!applicationTemplate?.organization_id
+    || applicationTemplate.credential_template_id !== credential.id
+    || (credential.application_template_id && credential.application_template_id !== applicationTemplate.id)
+    || (options.organizationId && applicationTemplate.organization_id !== options.organizationId))) {
+    throw new Error('This Application Template is not available for the selected credential and organization.');
+  }
   const basePath = resolveCredentialApplicationPath({
     credentialId: credential.id,
+    applicationTemplateId: applicationTemplate?.id,
     currentPathname: options.currentPathname,
     isPreview: options.isPreview,
   });
-  const canvasQuery = buildCanvasLtiQuery(options.canvasLtiContext);
+  const navigationQuery = options.isPreview
+    ? new URLSearchParams({ organization_id: applicationTemplate.organization_id }).toString()
+    : buildCanvasLtiQuery(options.canvasLtiContext);
   const state = {
     credential: serializableCredential,
   };
   if (applicationTemplate) {
     state.applicationTemplate = applicationTemplate;
   }
-  if (options.canvasLtiSession) {
+  if (!options.isPreview && options.canvasLtiSession) {
     state.canvasLtiSession = options.canvasLtiSession;
   }
 
   return {
-    path: canvasQuery ? `${basePath}?${canvasQuery}` : basePath,
+    path: navigationQuery ? `${basePath}?${navigationQuery}` : basePath,
     state,
   };
 }
