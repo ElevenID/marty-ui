@@ -5,6 +5,8 @@ COPY rust /build/rust
 COPY proto /build/proto
 COPY contracts/python-text-semantics.json /build/contracts/python-text-semantics.json
 COPY contracts/demo-seed-reference-v1.json /build/contracts/demo-seed-reference-v1.json
+COPY contracts/issuer-identity-capabilities-response.json /build/contracts/issuer-identity-capabilities-response.json
+COPY contracts/issuer-identity-inspection-response.json /build/contracts/issuer-identity-inspection-response.json
 RUN cargo build --locked --release -p marty-notification --bin marty-notification \
     && cargo build --locked --release -p marty-signing-keys --bin marty-migration-bootstrap \
     && cargo build --locked --release -p marty-demo-vendor-seed --bin marty-demo-vendor-seed \

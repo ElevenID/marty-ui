@@ -16,6 +16,48 @@ from pathlib import Path
 import tomllib
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def _assert_migration_issuer_contract_inputs(recipe: str, ignore_lines: list[str]) -> None:
+    # marty-migration-bootstrap compiles the signing-keys library, including its
+    # production OpenAPI schemas. Both COPY and the restrictive context matter.
+    for name in ("issuer-identity-capabilities-response.json",
+                 "issuer-identity-inspection-response.json"):
+        source = "contracts/" + name
+        copy = f"COPY {source} /build/{source}"
+        assert copy in recipe
+        assert recipe.index(copy) < recipe.index("RUN cargo build")
+        assert not _is_ignored(source, ignore_lines)
+
+
+def test_migration_image_includes_production_issuer_schemas() -> None:
+    recipe = (ROOT / "services/Dockerfile.migrations").read_text(encoding="utf-8")
+    ignore = (ROOT / "services/Dockerfile.migrations.dockerignore").read_text(
+        encoding="utf-8").splitlines()
+    _assert_migration_issuer_contract_inputs(recipe, ignore)
+    source = (ROOT / "rust/services/signing-keys/src/http.rs").read_text(encoding="utf-8")
+    for name in ("issuer-identity-capabilities-response.json",
+                 "issuer-identity-inspection-response.json"):
+        assert f'include_str!("../../../../contracts/{name}")' in source
+        assert (ROOT / "contracts" / name).is_file()
+
+
+def test_migration_schema_guard_rejects_missing_copy_or_context_input() -> None:
+    import pytest
+
+    recipe = (ROOT / "services/Dockerfile.migrations").read_text(encoding="utf-8")
+    ignore = (ROOT / "services/Dockerfile.migrations.dockerignore").read_text(
+        encoding="utf-8").splitlines()
+    for name in ("issuer-identity-capabilities-response.json",
+                 "issuer-identity-inspection-response.json"):
+        source = "contracts/" + name
+        with pytest.raises(AssertionError):
+            _assert_migration_issuer_contract_inputs(
+                recipe.replace(f"COPY {source} /build/{source}", ""), ignore)
+        with pytest.raises(AssertionError):
+            _assert_migration_issuer_contract_inputs(recipe, ignore + [source])
+
+
 sys.path.insert(0, str(ROOT))
 _without_rust_comments = import_module(
     "scripts.check_gateway_public_protocol_contract"
