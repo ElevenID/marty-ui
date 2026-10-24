@@ -7,7 +7,6 @@ import sys
 import tomllib
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
 PROBE = ROOT / ".github" / "feature-regression" / "rust-probe"
 MANIFEST = PROBE / "Cargo.toml"
@@ -92,7 +91,7 @@ def assert_expected_probe_output(raw: bytes) -> None:
 
 
 def test_probe_uses_only_the_reserved_regular_files() -> None:
-    assert {path.name for path in PROBE.iterdir() if not path.name == "target"} == {
+    assert {path.name for path in PROBE.iterdir() if path.name != "target"} == {
         "Cargo.lock",
         "Cargo.toml",
         "behavior_subject.rs",

@@ -4894,7 +4894,7 @@ dependencies = [
  "axum",
  "base64 0.22.1",
  "chrono",
- "ed25519-dalek",
+ "ed25519-dalek 2.2.0",
  "hex",
  "marty-api-key-policy",
  "marty-crypto",

@@ -99,12 +99,17 @@ def check_standalone_probe_lock(path: Path) -> None:
 
 if __name__ == "__main__":
     try:
-        check(json.load(sys.stdin))
+        metadata = json.load(sys.stdin)
+        check(metadata)
         root = Path(__file__).resolve().parents[2]
         command = ["cargo", "tree", "--locked", "--manifest-path", str(root / "rust/Cargo.toml"),
                    "-e", "features,no-dev"]
-        for package in ("marty-issuance-service", "marty-verification-service", "marty-flow",
-                        "marty-signing-keys", "marty-device-registration", "marty-gateway"):
+        services = root / "rust/services"
+        packages = sorted(package["name"] for package in metadata["packages"]
+                          if Path(package["manifest_path"]).resolve().is_relative_to(services))
+        if not packages:
+            raise ValueError("Production service graph is empty")
+        for package in packages:
             command.extend(["-p", package])
         tree = subprocess.run(command, check=True, capture_output=True, text=True, encoding="utf-8").stdout
         check_production_crypto_tree(tree)
