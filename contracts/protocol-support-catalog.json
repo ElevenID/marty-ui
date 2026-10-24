@@ -22,10 +22,19 @@
       "support_level": "implemented",
       "qualification": "focused_source",
       "owner_service": "trust-profiles",
-      "api_paths": ["/v1/trust-profiles", "/v1/trust-profiles/{profile_id}"],
-      "ui_paths": ["/console/org/trust/profiles"],
-      "schema_refs": ["#/components/schemas/schemas__trust_profile"],
-      "limitations": ["Organization-scoped registry resolution and pinned assertion methods are exposed. Independent public-network DID resolution still depends on the issuer hostname and HTTPS publication."]
+      "api_paths": [
+        "/v1/trust-profiles",
+        "/v1/trust-profiles/{profile_id}"
+      ],
+      "ui_paths": [
+        "/console/org/trust/profiles"
+      ],
+      "schema_refs": [
+        "#/components/schemas/schemas__trust_profile"
+      ],
+      "limitations": [
+        "Organization-scoped registry resolution and pinned assertion methods are exposed. Independent public-network DID resolution still depends on the issuer hostname and HTTPS publication."
+      ]
     },
     {
       "id": "organization-trust-profile",
@@ -68,12 +77,21 @@
       "kind": "profile",
       "display_name": "Revocation Profile",
       "support_level": "partial",
-      "qualification": "implementation_present",
+      "qualification": "focused_source",
       "owner_service": "revocation-profiles",
-      "api_paths": ["/v1/revocation-profiles", "/v1/revocation-profiles/{profile_id}/activate"],
-      "ui_paths": ["/console/org/trust/revocation"],
-      "schema_refs": ["#/components/schemas/schemas__revocation_profile"],
-      "limitations": ["Create, read, activate and delete exist; this catalog does not claim a complete editable lifecycle or live status-list qualification."]
+      "api_paths": [
+        "/v1/revocation-profiles",
+        "/v1/revocation-profiles/{profile_id}/activate"
+      ],
+      "ui_paths": [
+        "/console/org/trust/revocation"
+      ],
+      "schema_refs": [
+        "#/components/schemas/schemas__revocation_profile"
+      ],
+      "limitations": [
+        "Create, read, activate and native status checks are qualified; this is not a complete editable lifecycle or independent status-list interoperability claim."
+      ]
     },
     {
       "id": "credential-template",
@@ -94,10 +112,20 @@
       "support_level": "implemented",
       "qualification": "focused_source",
       "owner_service": "issuance",
-      "api_paths": ["/v1/application-templates", "/v1/application-templates/{template_id}", "/v1/application-templates/{template_id}/validate"],
-      "ui_paths": ["/console/org/templates/applications"],
-      "schema_refs": ["#/components/schemas/schemas__application_template"],
-      "limitations": ["Approval-triggered issuance requires an explicitly configured custom OID4VCI flow. Template lifecycle and synthetic application issuance have been exercised in an isolated runtime; independent-wallet interoperability is not asserted."]
+      "api_paths": [
+        "/v1/application-templates",
+        "/v1/application-templates/{template_id}",
+        "/v1/application-templates/{template_id}/validate"
+      ],
+      "ui_paths": [
+        "/console/org/templates/applications"
+      ],
+      "schema_refs": [
+        "#/components/schemas/schemas__application_template"
+      ],
+      "limitations": [
+        "Scoped creation, sparse metadata editing, validation, activation, manual application approval and native wallet claim are qualified. Independent-wallet interoperability is separate."
+      ]
     },
     {
       "id": "presentation-policy",
@@ -106,10 +134,20 @@
       "support_level": "implemented",
       "qualification": "focused_source",
       "owner_service": "presentation-policies",
-      "api_paths": ["/v1/presentation-policies", "/v1/presentation-policies/{policy_id}", "/v1/presentation-policies/{policy_id}/evaluate"],
-      "ui_paths": ["/console/org/policies/presentation"],
-      "schema_refs": ["#/components/schemas/schemas__presentation_policy"],
-      "limitations": ["Policy-bound signature, trust, required-claim and revocation checks have been exercised in an isolated runtime. This does not establish holder authentication or independent public-DID reachability."]
+      "api_paths": [
+        "/v1/presentation-policies",
+        "/v1/presentation-policies/{policy_id}",
+        "/v1/presentation-policies/{policy_id}/evaluate"
+      ],
+      "ui_paths": [
+        "/console/org/policies/presentation"
+      ],
+      "schema_refs": [
+        "#/components/schemas/schemas__presentation_policy"
+      ],
+      "limitations": [
+        "Policy-bound issuer signature, required disclosure, trust, freshness and revocation checks are qualified. Holder authentication requires its separately configured policy; it is not implied by issuer verification."
+      ]
     },
     {
       "id": "deployment-profile",
@@ -118,10 +156,19 @@
       "support_level": "implemented",
       "qualification": "focused_source",
       "owner_service": "deployment-profiles",
-      "api_paths": ["/v1/deployment-profiles", "/v1/deployment-profiles/{profile_id}"],
-      "ui_paths": ["/console/org/deploy/profiles"],
-      "schema_refs": ["#/components/schemas/schemas__deployment_profile"],
-      "limitations": ["Profiles bind trust, credential templates, presentation policies and flows. Consistent configuration does not by itself establish that an external deployment is operational."]
+      "api_paths": [
+        "/v1/deployment-profiles",
+        "/v1/deployment-profiles/{profile_id}"
+      ],
+      "ui_paths": [
+        "/console/org/deploy/profiles"
+      ],
+      "schema_refs": [
+        "#/components/schemas/schemas__deployment_profile"
+      ],
+      "limitations": [
+        "Scoped policy, template and flow bindings are qualified. Configuration consistency does not establish external transport readiness or wallet interoperability."
+      ]
     },
     {
       "id": "wallet-profile",
@@ -166,10 +213,20 @@
       "support_level": "implemented",
       "qualification": "focused_source",
       "owner_service": "signing-keys",
-      "api_paths": ["/v1/signing-keys/issuer-identities", "/v1/signing-keys/issuer-identities/inspection"],
-      "ui_paths": ["/console/org/deploy/issuer-identity", "/console/org/deploy/issuer-identity/inspect"],
-      "schema_refs": ["#/components/schemas/schemas__issuer_identity"],
-      "limitations": ["Provisioned and publicly resolvable states are distinct. Managed-signer public material has been checked in an isolated runtime; independent public HTTPS resolution remains a deployment prerequisite."]
+      "api_paths": [
+        "/v1/signing-keys/issuer-identities",
+        "/v1/signing-keys/issuer-identities/inspection"
+      ],
+      "ui_paths": [
+        "/console/org/deploy/issuer-identity",
+        "/console/org/deploy/issuer-identity/inspect"
+      ],
+      "schema_refs": [
+        "#/components/schemas/schemas__issuer_identity"
+      ],
+      "limitations": [
+        "Canonical locally served DID public material is matched to the non-exportable managed signer and an actual credential signature. Public-internet resolution remains distinct and unproven in the isolated fixture."
+      ]
     },
     {
       "id": "key-attestation-policy",
@@ -226,10 +283,19 @@
       "support_level": "implemented",
       "qualification": "focused_source",
       "owner_service": "flows",
-      "api_paths": ["/v1/flows/definitions", "/v1/flows/definitions/{flow_id}"],
-      "ui_paths": ["/console/org/flows/definitions"],
-      "schema_refs": ["#/components/schemas/schemas__flow"],
-      "limitations": ["Standard flows and custom extensions have distinct execution rules. Approved-application issuance uses a custom OID4VCI extension with a trusted APPLICATION_APPROVED webhook."]
+      "api_paths": [
+        "/v1/flows/definitions",
+        "/v1/flows/definitions/{flow_id}"
+      ],
+      "ui_paths": [
+        "/console/org/flows/definitions"
+      ],
+      "schema_refs": [
+        "#/components/schemas/schemas__flow"
+      ],
+      "limitations": [
+        "Scoped issuance, verification and application-approved flow composition are qualified. Execution outcomes and credential acceptance retain separate native lifecycles."
+      ]
     },
     {
       "id": "flow-execution",
@@ -238,22 +304,38 @@
       "support_level": "implemented",
       "qualification": "focused_source",
       "owner_service": "flows",
-      "api_paths": ["/v1/flows/instances", "/v1/flows/instances/{instance_id}"],
-      "ui_paths": ["/console/org/operate/flow-instances"],
-      "schema_refs": ["#/components/schemas/schemas__flow_execution"],
-      "limitations": ["Authorized actors explicitly record step outcomes or cancel executions. Wallet acceptance alone does not advance a flow; credential offers, verification and revocation retain separate lifecycles. Runtime instance APIs require an execution scope, beyond metadata-only flows:read."]
+      "api_paths": [
+        "/v1/flows/instances",
+        "/v1/flows/instances/{instance_id}"
+      ],
+      "ui_paths": [
+        "/console/org/operate/flow-instances"
+      ],
+      "schema_refs": [
+        "#/components/schemas/schemas__flow_execution"
+      ],
+      "limitations": [
+        "Authorized actors explicitly record step outcomes or cancel executions. Wallet acceptance alone does not advance a flow; credential offers, verification and revocation retain separate lifecycles. Runtime instance APIs require an execution scope, beyond metadata-only flows:read."
+      ]
     },
     {
       "id": "issued-credential",
       "kind": "record",
       "display_name": "Issued Credential",
       "support_level": "implemented",
-      "qualification": "implementation_present",
+      "qualification": "focused_source",
       "owner_service": "issuance",
-      "api_paths": ["/v1/issued-credentials", "/v1/issued-credentials/{credential_id}"],
-      "ui_paths": ["/console/org/operate/issuance"],
+      "api_paths": [
+        "/v1/issued-credentials",
+        "/v1/issued-credentials/{credential_id}"
+      ],
+      "ui_paths": [
+        "/console/org/operate/issuance"
+      ],
       "schema_refs": [],
-      "limitations": ["Non-exportable KMS SD-JWT issuance and policy verification have been exercised in an isolated runtime. Issued-record browser recovery and independent public-network or wallet qualification remain separate."]
+      "limitations": [
+        "This goal qualifies native SD-JWT issuance and policy-bound verification with non-exportable issuer custody, including tamper and missing-disclosure rejection. Other formats require their own interoperability qualification."
+      ]
     },
     {
       "id": "verification-decision-result",

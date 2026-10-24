@@ -24,6 +24,8 @@ describe('ProtocolSupportCatalog', () => {
     expect(screen.getByText('Derived: 1')).toBeInTheDocument();
     expect(screen.getByText('Partial: 14')).toBeInTheDocument();
     expect(screen.getByText('Unsupported: 3')).toBeInTheDocument();
+    expect(screen.queryByText(/separate integration branch/)).not.toBeInTheDocument();
+    expect(screen.getByText(/Public-internet resolution remains distinct/)).toBeInTheDocument();
     expect(screen.getByText('Machine Identity')).toBeInTheDocument();
     expect(screen.getByText('Machine Authentication Policy')).toBeInTheDocument();
     expect(screen.getByText('Authorization Decision Receipt')).toBeInTheDocument();
