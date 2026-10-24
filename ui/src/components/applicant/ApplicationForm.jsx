@@ -1243,7 +1243,7 @@ export default function ApplicationForm({ previewContext = null } = {}) {
     const heroTitle = credentialConfig?.display_name || credentialConfig?.name || fallbackTitle;
     const heroDescription = credentialConfig?.description || 'Add this credential to a compatible wallet.';
     const ctaLabel = isMdocCredential ? 'Get Membership ID' : 'Add to Wallet';
-    const ctaSubtext = [credentialConfig?.processingTime || 'Instant', credentialConfig?.format || credentialConfig?.standard]
+    const ctaSubtext = [credentialConfig?.format, credentialConfig?.issuanceProtocol]
       .filter(Boolean)
       .join(' - ');
 

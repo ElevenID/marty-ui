@@ -270,6 +270,7 @@ describe('ApplicationForm', () => {
     expect(screen.queryByText('ElevenID Login Credential')).not.toBeInTheDocument();
     expect(mockGet).not.toHaveBeenCalled();
     if (oneClick) {
+      expect(screen.queryByText(/^Instant/)).not.toBeInTheDocument();
       await user.click(screen.getByRole('button', { name: 'Add to Wallet' }));
     } else {
       if (screen.queryByTestId('next-step-btn')) await user.click(screen.getByTestId('next-step-btn'));
