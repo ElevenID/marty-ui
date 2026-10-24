@@ -16,7 +16,7 @@ pub(crate) const LIST_CURRENT_FACTS: &str = "SELECT jsonb_build_object(
         'requirement_id', fact.requirement_id, 'logical_key', fact.logical_key,
         'source_revision', fact.source_revision, 'payload_hash', fact.payload_hash,
         'effective_at', fact.effective_at, 'observed_at', fact.observed_at,
-        'created_at', fact.created_at
+        'superseded_fact_id', fact.superseded_fact_id, 'created_at', fact.created_at
     ) FROM issuance_service.evidence_fact_heads AS head
     JOIN issuance_service.evidence_facts AS fact
       ON fact.organization_id = head.organization_id
@@ -31,6 +31,41 @@ pub(crate) const LOAD_CANVAS_POLICY_SET: &str = "SELECT jsonb_build_object(
         'cedar_policies', cedar_policies
     ) FROM organization_service.policy_sets
     WHERE organization_id = $1::uuid AND id = $2::uuid";
+
+pub(crate) fn evidence_fact_snapshots_match(current: &[Value], expected: &[Value]) -> bool {
+    fn canonical_facts(facts: &[Value]) -> Option<Vec<Value>> {
+        let mut facts = facts.to_vec();
+        for fact in &mut facts {
+            let object = fact.as_object_mut()?;
+            if object.get("id")?.as_str()?.is_empty() {
+                return None;
+            }
+            // PostgreSQL JSON and the API serialize timestamptz differently.
+            // Normalize only these instants; preserve every other field,
+            // including assertion, verification and supersession lineage.
+            for field in ["observed_at", "effective_at", "created_at"] {
+                let value = object.get(field)?;
+                if field == "effective_at" && value.is_null() {
+                    continue;
+                }
+                let instant = DateTime::parse_from_rfc3339(value.as_str()?).ok()?;
+                object.insert(
+                    field.to_owned(),
+                    Value::String(instant.with_timezone(&Utc).to_rfc3339()),
+                );
+            }
+        }
+        facts.sort_by(|left, right| left["id"].as_str().cmp(&right["id"].as_str()));
+        if facts.windows(2).any(|pair| pair[0]["id"] == pair[1]["id"]) {
+            return None;
+        }
+        Some(facts)
+    }
+
+    canonical_facts(current)
+        .zip(canonical_facts(expected))
+        .is_some_and(|(current, expected)| current == expected)
+}
 
 pub(crate) fn canvas_approval_policy_set_id(
     binding: &Map<String, Value>,
@@ -1071,10 +1106,72 @@ pub(crate) fn policy_fact_payload(fact: &Value) -> Value {
 
 #[cfg(test)]
 mod tests {
+    use std::slice::from_ref;
+
     use chrono::TimeZone;
 
     use super::*;
     use crate::credential::{CredentialTransactionStatus, IssuerContext};
+
+    #[test]
+    fn evidence_fact_snapshots_compare_complete_content_and_timestamp_instants() {
+        let fact = json!({
+            "id": "fact-1", "payload_hash": "stable", "source_revision": "stable",
+            "assertion": {"eligible": true}, "verification": {"verified": true},
+            "source": {"job_id": "job-1"}, "superseded_fact_id": null,
+            "observed_at": "2026-10-24T12:00:00.123456+00:00",
+            "effective_at": null, "created_at": "2026-10-24T12:00:00+00:00"
+        });
+        let mut database = fact.clone();
+        database["observed_at"] = json!("2026-10-24T06:00:00.123456-06:00");
+        database["created_at"] = json!("2026-10-24T12:00:00.000000Z");
+        assert!(evidence_fact_snapshots_match(
+            from_ref(&database),
+            from_ref(&fact)
+        ));
+        for (field, changed) in [
+            ("assertion", json!({"eligible": false})),
+            ("verification", json!({"verified": false})),
+            ("source", json!({"job_id": "job-2"})),
+            ("superseded_fact_id", json!("prior-fact")),
+            ("observed_at", json!("2026-10-24T12:00:00.123457Z")),
+            ("effective_at", json!("2026-10-24T12:00:00Z")),
+            ("created_at", json!("2026-10-24T12:00:01Z")),
+        ] {
+            let mut changed_fact = database.clone();
+            changed_fact[field] = changed;
+            assert!(
+                !evidence_fact_snapshots_match(&[changed_fact], from_ref(&fact)),
+                "{field}"
+            );
+        }
+        let mut missing_lineage = database.clone();
+        missing_lineage
+            .as_object_mut()
+            .unwrap()
+            .remove("superseded_fact_id");
+        assert!(!evidence_fact_snapshots_match(
+            &[missing_lineage],
+            from_ref(&fact)
+        ));
+        let mut invalid = fact.clone();
+        invalid["observed_at"] = json!("invalid");
+        assert!(!evidence_fact_snapshots_match(
+            from_ref(&invalid),
+            from_ref(&invalid)
+        ));
+        assert!(!evidence_fact_snapshots_match(
+            &[fact.clone(), fact.clone()],
+            &[fact.clone(), fact.clone()]
+        ));
+        let mut second = fact.clone();
+        second["id"] = json!("fact-2");
+        assert!(evidence_fact_snapshots_match(
+            &[fact.clone(), second.clone()],
+            &[second, fact]
+        ));
+        assert!(evidence_fact_snapshots_match(&[], &[]));
+    }
 
     fn now() -> DateTime<Utc> {
         Utc.with_ymd_and_hms(2026, 7, 15, 12, 0, 0)

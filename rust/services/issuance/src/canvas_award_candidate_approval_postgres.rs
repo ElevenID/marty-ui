@@ -15,7 +15,8 @@ use crate::{
     },
     canvas_award_candidate_service::CanvasAwardCandidateApprovalError,
     canvas_issuance_guard::{
-        canvas_approval_policy_set_id, LIST_CURRENT_FACTS, LOAD_CANVAS_POLICY_SET,
+        canvas_approval_policy_set_id, evidence_fact_snapshots_match, LIST_CURRENT_FACTS,
+        LOAD_CANVAS_POLICY_SET,
     },
     canvas_lti_bootstrap::CanvasLtiBootstrapApplication,
     canvas_lti_experience::CanvasLtiExperienceSessionContext,
@@ -549,22 +550,10 @@ async fn lock_manual_approval_dependencies(
         .fetch_all(&mut **database)
         .await
         .map_err(manual_approval_repository_error)?;
-    if ordered_facts(&current) != ordered_facts(&snapshot.evidence_facts) {
+    if !evidence_fact_snapshots_match(&current, &snapshot.evidence_facts) {
         return Err(CanvasApplicationApprovalError::NotReady);
     }
     Ok(())
-}
-
-fn ordered_facts(facts: &[Value]) -> Vec<&Value> {
-    // Policy consumes the complete fact, including verification and assertion
-    // contents. Stable identifiers do not prove that a row stayed unchanged.
-    let mut ordered = facts.iter().collect::<Vec<_>>();
-    ordered.sort_by(|left, right| {
-        left.get("id")
-            .and_then(Value::as_str)
-            .cmp(&right.get("id").and_then(Value::as_str))
-    });
-    ordered
 }
 
 fn application_approval_snapshot_is_current(

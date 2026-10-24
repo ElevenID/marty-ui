@@ -2864,7 +2864,7 @@ async fn create_contract_schema(pool: &sqlx::PgPool) {
             subject_id TEXT, provider TEXT, fact_type TEXT, scope JSONB, assertion JSONB,
             verification JSONB, source JSONB, requirement_id TEXT, logical_key TEXT,
             source_revision TEXT, payload_hash TEXT, effective_at TIMESTAMPTZ,
-            observed_at TIMESTAMPTZ, created_at TIMESTAMPTZ)",
+            observed_at TIMESTAMPTZ, created_at TIMESTAMPTZ, superseded_fact_id TEXT)",
         "CREATE TABLE issuance_service.evidence_fact_heads (
             organization_id TEXT NOT NULL, application_id TEXT NOT NULL,
             logical_key TEXT NOT NULL, fact_id TEXT NOT NULL)",
