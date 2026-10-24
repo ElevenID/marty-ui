@@ -306,13 +306,16 @@ def safe_model(root: Path) -> dict:
             {"source": "signing_keys_internal_api_key"})
     services["presentation-policy"]["environment"].update({
         "PP_GRPC_PORT": "9009", "ISSUANCE_API_KEY_FILE": "/run/secrets/issuance_api_key",
+        "SIGNING_KEYS_SERVICE_URL": "http://signing-keys:8017",
+        "SIGNING_KEYS_INTERNAL_API_KEY_FILE": "/run/secrets/signing_keys_internal_api_key",
         "DID_RESOLUTION_BASE_URL": "http://gateway:8000",
         "TRUST_PROFILE_SERVICE_URL": "http://trust-profile:8004",
         "ISSUANCE_NATIVE_SERVICE_URL": "http://issuance-native:8005",
         "PUBLIC_DOMAIN": "localhost:29876", "PUBLIC_BASE_URL": "https://localhost:29876",
         "ISSUER_BASE_URL": "https://localhost:29876", "MARTY_ORG_SLUG": "marty",
     })
-    services["presentation-policy"]["secrets"].append({"source": "issuance_api_key"})
+    services["presentation-policy"]["secrets"].extend(
+        {"source": name} for name in ("issuance_api_key", "signing_keys_internal_api_key"))
     for service, port, dependencies in (
         ("compliance-profile", 8008, ("db-migrate", "organization")),
         ("trust-profile", 8004, ("db-migrate", "organization")),
@@ -700,6 +703,8 @@ def test_native_batch_operator_token_is_file_backed_and_native_only(tmp_path: Pa
     ("credential-template", "PUBLIC_API_URL", "http://gateway:8000"),
     ("trust-profile", "MARTY_ISSUER_BASE_URL", "http://localhost:8000"),
     ("presentation-policy", "ISSUANCE_NATIVE_SERVICE_URL", "http://issuance:8005"),
+    ("presentation-policy", "SIGNING_KEYS_SERVICE_URL", "http://gateway:8017"),
+    ("presentation-policy", "SIGNING_KEYS_INTERNAL_API_KEY_FILE", "/run/secrets/grpc_service_token"),
     ("deployment-profile", "ORG_GRPC_TARGET", "gateway:9002"),
 ])
 def test_rust_support_runtime_binding_is_required(
@@ -1119,3 +1124,11 @@ def test_cli_remains_red_even_if_static_model_is_safe(
     assert exc.value.code == 1
     report = json.loads(report_file.read_text(encoding="utf-8"))
     assert report["status"] == "blocked"
+
+
+def test_disposable_registry_verifier_requires_its_dedicated_secret(tmp_path: Path) -> None:
+    model = safe_model(tmp_path)
+    service = model["services"]["presentation-policy"]
+    service["secrets"] = [secret for secret in service["secrets"] if secret["source"] != "signing_keys_internal_api_key"]
+    with pytest.raises(ModelPreflightError, match="presentation-policy runtime"):
+        validate_model(model, PROJECT, IMAGE, tmp_path)

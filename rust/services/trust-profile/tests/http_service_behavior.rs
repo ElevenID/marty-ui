@@ -206,6 +206,58 @@ async fn sparse_profile_edits_preserve_security_settings_and_reject_invalid_chan
 }
 
 #[tokio::test]
+async fn did_source_controls_survive_storage_and_reject_cross_did_method_pins() {
+    let service = service();
+    let source = json!({
+        "source_type": "PINNED_ISSUER", "issuer_did": "did:web:issuer.example",
+        "organization_id": "org-1", "verification_method_ids": ["did:web:issuer.example#signing"],
+        "did_resolution": {"resolver_type": "ORGANIZATION_REGISTRY", "allow_public_fallback": false, "cache_ttl_seconds": 0}
+    });
+    let payload =
+        json!({"organization_id":"org-1", "name":"Scoped issuer", "trust_sources":[source]});
+    let created = request(
+        service.clone(),
+        "POST",
+        "/v1/trust-profiles",
+        Some(payload.clone()),
+    )
+    .await;
+    assert_eq!(created.status(), 200);
+    let created = body(created).await;
+    let uri = format!("/v1/trust-profiles/{}", created["id"].as_str().unwrap());
+    let stored = body(request(service.clone(), "GET", &uri, None).await).await;
+    for field in [
+        "organization_id",
+        "verification_method_ids",
+        "did_resolution",
+    ] {
+        assert_eq!(stored["trust_sources"][0][field], source[field]);
+    }
+    let mut invalid = payload;
+    invalid["trust_sources"][0]["verification_method_ids"] =
+        json!(["did:web:other.example#signing"]);
+    assert_eq!(
+        request(service.clone(), "POST", "/v1/trust-profiles", Some(invalid))
+            .await
+            .status(),
+        422
+    );
+    let mut invalid = source;
+    invalid["did_resolution"]["resolver_url"] = json!("https://untrusted.example");
+    assert_eq!(
+        request(
+            service,
+            "PATCH",
+            &uri,
+            Some(json!({"trust_sources":[invalid]}))
+        )
+        .await
+        .status(),
+        422
+    );
+}
+
+#[tokio::test]
 async fn machine_identity_profile_round_trips_without_credential_defaults() {
     let response = request(
         service(),

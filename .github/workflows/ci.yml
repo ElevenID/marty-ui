@@ -2988,8 +2988,13 @@ jobs:
           tests/test_passport_supported_k8s_deployment.py
           tests/test_passport_supported_consumer_routing.py
           tests/test_ci_workflow_performance.py -v --tb=short
+      - name: Prepare source-only deployment registry renderer
+        if: needs.changes.outputs.planner_only != 'true' && needs.changes.outputs.rollback_test_only != 'true' && needs.changes.outputs.k8s_policy_test_only != 'true' && needs.changes.outputs.didcomm_release_test_only != 'true'
+        run: bash scripts/ci/install-compose-renderer.sh
       - name: Run repository release checks
         if: needs.changes.outputs.planner_only != 'true' && needs.changes.outputs.rollback_test_only != 'true' && needs.changes.outputs.k8s_policy_test_only != 'true' && needs.changes.outputs.didcomm_release_test_only != 'true'
+        env:
+          MARTY_COMPOSE_RENDERER: ${{ runner.temp }}/compose-render-v5.4.0
         run: python -m pytest tests -n 2 -v --tb=short --durations=20
       - name: Exercise root-owned disposable TLS staging contracts
         if: needs.changes.outputs.planner_only != 'true' && needs.changes.outputs.rollback_test_only != 'true' && needs.changes.outputs.k8s_policy_test_only != 'true' && needs.changes.outputs.didcomm_release_test_only != 'true'
