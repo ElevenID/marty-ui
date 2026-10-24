@@ -52,24 +52,39 @@ describe('scoped presentation policy detail and metadata editing', () => {
     )
   })
 
-  it('inspects native requirements and activates, suspends and explicitly confirms deletion', async () => {
+  it('inspects native requirements and activates and suspends without offering immutable edits', async () => {
     const { user } = renderPage()
     expect(await screen.findByRole('heading', { name: profile.name })).toBeInTheDocument()
     expect(screen.getByText(/credential_requirements/)).toHaveTextContent('CREDENTIAL_KEY')
+    expect(screen.getByRole('link', { name: 'Edit metadata' })).toHaveAttribute('href', `${BASE}/${ID}/edit`)
     await user.click(screen.getByRole('button', { name: 'Activate policy' }))
     expect(await screen.findByText('active', { exact: true })).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'Edit metadata' })).toHaveAttribute('href', `${BASE}/${ID}/edit`)
+    expect(screen.queryByRole('link', { name: 'Edit metadata' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Delete policy' })).not.toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Suspend policy' }))
     expect(await screen.findByText('suspended', { exact: true })).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'Delete policy' }))
     expect(requests).toHaveLength(2)
-    await user.click(screen.getByRole('button', { name: 'Confirm deletion' }))
-    expect(await screen.findByText('Policy list')).toBeInTheDocument()
     expect(requests).toEqual([
       { method: 'POST', path: `/v1/presentation-policies/${ID}/activate`, body: {} },
       { method: 'POST', path: `/v1/presentation-policies/${ID}/suspend`, body: {} },
-      { method: 'DELETE', path: `/v1/presentation-policies/${ID}` },
     ])
+  })
+
+  it('requires explicit confirmation before deleting a draft', async () => {
+    const { user } = renderPage(); await screen.findByRole('heading', { name: profile.name })
+    await user.click(screen.getByRole('button', { name: 'Delete policy' }))
+    expect(requests).toHaveLength(0)
+    await user.click(screen.getByRole('button', { name: 'Confirm deletion' }))
+    expect(await screen.findByText('Policy list')).toBeInTheDocument()
+    expect(requests).toEqual([{ method: 'DELETE', path: `/v1/presentation-policies/${ID}` }])
+  })
+
+  it('rejects direct editing of active policies without offering a save', async () => {
+    profile.status = 'active'; renderPage(`/${ID}/edit`)
+    expect(await screen.findByRole('alert')).toHaveTextContent('Only draft policies can be edited')
+    expect(screen.queryByLabelText('Description')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Save changes' })).not.toBeInTheDocument()
+    expect(requests).toEqual([])
   })
 
   it('sends a sparse metadata edit without losing any native requirement or binding', async () => {

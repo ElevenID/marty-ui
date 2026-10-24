@@ -37,7 +37,7 @@ function PolicyContent({ organizationId, policyId, editing, can }) {
 
   const save = async (event) => {
     event.preventDefault();
-    if (busy || !policy || !can('presentation-policy', 'edit')) return;
+    if (busy || policy?.status !== 'draft' || !can('presentation-policy', 'edit')) return;
     setError('');
     if (!values.name.trim()) { setError('Name is required.'); return; }
     const changes = Object.fromEntries(Object.keys(METADATA).filter((key) => values[key] !== initial[key]).map((key) => [key, values[key]]));
@@ -53,6 +53,7 @@ function PolicyContent({ organizationId, policyId, editing, can }) {
   };
   const lifecycle = async (action) => {
     if (busy || !policy || !can('presentation-policy', action)) return;
+    if (action === 'delete' && policy.status !== 'draft') return;
     setBusy(true); setError('');
     try {
       if (action === 'delete') {
@@ -74,7 +75,7 @@ function PolicyContent({ organizationId, policyId, editing, can }) {
     {error && <Alert severity="error" sx={{ mb: 2 }}>{error}<Button disabled={busy} onClick={() => setAttempt((value) => value + 1)}>Reload</Button></Alert>}
     {loading ? <LinearProgress /> : !policy ? null : <Stack spacing={2}>
       <Chip sx={{ alignSelf: 'start' }} label={policy.status} />
-      {editing ? <Paper component="form" onSubmit={save} sx={{ p: 3 }}><Stack spacing={2}>
+      {editing && policy.status !== 'draft' ? <Alert severity="info">Only draft policies can be edited. This policy remains available for inspection.</Alert> : editing ? <Paper component="form" onSubmit={save} sx={{ p: 3 }}><Stack spacing={2}>
         {Object.entries(METADATA).map(([key, label]) => <TextField key={key} label={label} required={key === 'name'} value={values[key]} disabled={busy}
           multiline={key !== 'name'} minRows={key === 'name' ? undefined : 2}
           onChange={(event) => setValues((previous) => ({ ...previous, [key]: event.target.value }))} />)}
@@ -82,10 +83,10 @@ function PolicyContent({ organizationId, policyId, editing, can }) {
       </Stack></Paper> : <>
         <Typography>{policy.description}</Typography><Typography>{policy.purpose}</Typography>
         <Stack direction="row" spacing={1}>
-          {can('presentation-policy', 'edit') && <Button component={Link} to={`${BASE}/${encodeURIComponent(policyId)}/edit`}>Edit metadata</Button>}
-          {policy.status !== 'active' && can('presentation-policy', 'activate') && <Button disabled={busy} onClick={() => lifecycle('activate')}>Activate policy</Button>}
+          {policy.status === 'draft' && can('presentation-policy', 'edit') && <Button component={Link} to={`${BASE}/${encodeURIComponent(policyId)}/edit`}>Edit metadata</Button>}
+          {['draft', 'suspended'].includes(policy.status) && can('presentation-policy', 'activate') && <Button disabled={busy} onClick={() => lifecycle('activate')}>Activate policy</Button>}
           {policy.status === 'active' && can('presentation-policy', 'suspend') && <Button disabled={busy} onClick={() => lifecycle('suspend')}>Suspend policy</Button>}
-          {can('presentation-policy', 'delete') && <Button color="error" disabled={busy} onClick={() => setDeleteOpen(true)}>Delete policy</Button>}
+          {policy.status === 'draft' && can('presentation-policy', 'delete') && <Button color="error" disabled={busy} onClick={() => setDeleteOpen(true)}>Delete policy</Button>}
         </Stack>
       </>}
       <Paper sx={{ p: 2 }}><Typography variant="h6">Verification requirements</Typography>
