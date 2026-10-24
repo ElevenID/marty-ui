@@ -1,0 +1,311 @@
+{
+  "runtime__notification_send_request": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "recipient_id": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "recipient_email": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "template_id": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "subject": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "body": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "title": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "message": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "link": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "collapse_key": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "correlation_id": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "organization_id": {
+        "type": "string"
+      },
+      "notification_type": {
+        "type": "string"
+      },
+      "severity": {
+        "type": "string"
+      },
+      "priority": {
+        "type": "string"
+      },
+      "event_type": {
+        "type": "string"
+      },
+      "data": {
+        "type": "object"
+      },
+      "ttl_seconds": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "target": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "organization_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "user_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "device_tokens": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "webhook_endpoints": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "email_addresses": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "channels": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [],
+            "description": "Embedded delivery target. Omitted organization/user fall back to request selectors; explicit organization must equal the request organization. Channels accept case-insensitive FCM, SSE, WEBHOOK, EMAIL or SMS; omitted/empty channels use event defaults. Service validation checks destination and TTL constraints."
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "required": [
+      "organization_id"
+    ],
+    "description": "Actual native send DTO. Defaults: email notification type, info severity, normal priority, custom event and 86400-second TTL. Title/message override subject/body; a configured template can supply text. Protected credential material is rejected. Unknown root/target fields are rejected. Acceptance does not establish delivery.",
+    "$schema": "https://json-schema.org/draft/2020-12/schema"
+  },
+  "runtime__notification_response": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "id": {
+        "type": "string"
+      },
+      "organization_id": {
+        "type": "string"
+      },
+      "title": {
+        "type": "string"
+      },
+      "body": {
+        "type": "string"
+      },
+      "severity": {
+        "type": "string"
+      },
+      "event_type": {
+        "type": "string"
+      },
+      "link": {
+        "type": "string"
+      },
+      "collapse_key": {
+        "type": "string"
+      },
+      "correlation_id": {
+        "type": "string"
+      },
+      "read": {
+        "type": "boolean"
+      },
+      "status": {
+        "enum": [
+          "pending",
+          "sent",
+          "delivered",
+          "failed"
+        ]
+      },
+      "priority": {
+        "enum": [
+          "LOW",
+          "NORMAL",
+          "HIGH",
+          "CRITICAL"
+        ]
+      },
+      "data": {
+        "type": "object"
+      },
+      "target": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "organization_id": {
+            "type": "string"
+          },
+          "user_id": {
+            "type": "string"
+          },
+          "device_tokens": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "webhook_endpoints": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "email_addresses": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "channels": {
+            "type": "array",
+            "items": {
+              "enum": [
+                "FCM",
+                "SSE",
+                "WEBHOOK",
+                "EMAIL",
+                "SMS"
+              ]
+            }
+          }
+        },
+        "required": [
+          "device_tokens",
+          "webhook_endpoints",
+          "email_addresses",
+          "channels"
+        ]
+      },
+      "ttl_seconds": {
+        "type": "integer"
+      },
+      "created_at": {
+        "type": "string",
+        "format": "date-time"
+      }
+    },
+    "required": [
+      "id",
+      "organization_id",
+      "title",
+      "body",
+      "severity",
+      "event_type",
+      "read",
+      "status",
+      "priority",
+      "data",
+      "target",
+      "ttl_seconds",
+      "created_at"
+    ],
+    "$schema": "https://json-schema.org/draft/2020-12/schema"
+  },
+  "runtime__notification_delivery_result": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "notification_id": {
+        "type": "string"
+      },
+      "channel": {
+        "type": "string"
+      },
+      "error_code": {
+        "type": "string"
+      },
+      "success": {
+        "type": "boolean"
+      },
+      "attempted_at": {
+        "type": "string",
+        "format": "date-time"
+      },
+      "delivered_at": {
+        "type": "string",
+        "format": "date-time"
+      },
+      "should_retry": {
+        "type": "boolean"
+      },
+      "retry_after": {
+        "type": "integer"
+      }
+    },
+    "required": [
+      "notification_id",
+      "channel",
+      "success",
+      "attempted_at"
+    ],
+    "$schema": "https://json-schema.org/draft/2020-12/schema"
+  }
+}

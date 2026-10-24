@@ -79,6 +79,9 @@ def generate(protocol_root: Path) -> dict:
             "deployment-profile",
             "revocation-profile",
             "wallet-profile",
+            "notification-target",
+            "notification-payload",
+            "notification-delivery-result",
             "delivery-destination-profile",
         ]
     )

@@ -6811,6 +6811,7 @@ mod tests {
             ("issuance".into(), "http://issuance:8000".into()),
             ("issuance-native".into(), "http://issuance:8000".into()),
             ("organizations".into(), "http://organizations:8000".into()),
+            ("notifications".into(), "http://notifications:8000".into()),
             (
                 "presentation-policies".into(),
                 "http://presentation-policies:8080".into(),
@@ -6883,6 +6884,27 @@ mod tests {
             request: GatewayRequest,
         ) -> Result<GatewayResponse, PlatformError> {
             let issued_credential = request.path.starts_with("/v1/issued-credentials/");
+            let notification = (instance.service_name == "notifications").then(|| {
+                if request.path.ends_with("/delivery-results") {
+                    return json!([]);
+                }
+                let mut example: Value = serde_json::from_str(include_str!(
+                    "../../../../contracts/notification-http-examples.json"
+                ))
+                .unwrap();
+                let value = &mut example["response"];
+                value["organization_id"] = json!("org-1");
+                value["target"]["organization_id"] = json!("org-1");
+                value["id"] = json!("notification-one");
+                if request.path.ends_with("/read") {
+                    value["read"] = json!(true);
+                }
+                if request.path == "/v1/notifications" {
+                    json!([value])
+                } else {
+                    value.clone()
+                }
+            });
             self.0
                 .lock()
                 .expect("owned request recorder")
@@ -6891,7 +6913,9 @@ mod tests {
                 status_code: 200,
                 set_cookies: Vec::new(),
                 headers: BTreeMap::from([("content-type".into(), "application/json".into())]),
-                body: Some(if issued_credential {
+                body: Some(if let Some(notification) = notification {
+                    serde_json::to_vec(&notification).unwrap()
+                } else if issued_credential {
                     serde_json::to_vec(&json!({
                         "id":"credential-1","organization_id":"org-1",
                         "credential_id":"credential-1","credential_type":"EmployeeCredential",
@@ -8588,6 +8612,103 @@ mod tests {
             assert_eq!(calls.len(), usize::from(expected == StatusCode::OK));
             if expected == StatusCode::OK {
                 assert_eq!(calls[0].0, "credential-templates");
+                assert_eq!(calls[0].1.header("x-user-id"), Some("user-1"));
+                assert_eq!(calls[0].1.header("x-organization-id"), Some("org-1"));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn explicit_notification_routes_keep_tenant_read_send_boundaries_before_proxy() {
+        for (method, path, permission, authenticated, expected) in [
+            (
+                "GET",
+                "/v1/notifications?organization_id=org-1",
+                "notification:view",
+                false,
+                StatusCode::UNAUTHORIZED,
+            ),
+            (
+                "GET",
+                "/v1/notifications?organization_id=org-other",
+                "notification:view",
+                true,
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                "GET",
+                "/v1/notifications?organization_id=org-1",
+                "notification:send",
+                true,
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                "GET",
+                "/v1/notifications?organization_id=org-1",
+                "notification:view",
+                true,
+                StatusCode::OK,
+            ),
+            (
+                "POST",
+                "/v1/notifications/send",
+                "notification:view",
+                true,
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                "POST",
+                "/v1/notifications/send",
+                "notification:send",
+                true,
+                StatusCode::OK,
+            ),
+            (
+                "GET",
+                "/v1/notifications/notification-one/delivery-results?organization_id=org-1",
+                "notification:view",
+                true,
+                StatusCode::OK,
+            ),
+            (
+                "PATCH",
+                "/v1/notifications/notification-one/read?organization_id=org-other",
+                "notification:view",
+                true,
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                "PATCH",
+                "/v1/notifications/notification-one/read?organization_id=org-1",
+                "notification:view",
+                true,
+                StatusCode::OK,
+            ),
+        ] {
+            let recorder = Arc::new(ActorRecordingUpstream::default());
+            let mut state = runtime_state_with_upstream(Arc::new(NoOwner), recorder.clone());
+            Arc::get_mut(&mut state).unwrap().memberships =
+                Arc::new(SingleGrantMembership(permission));
+            let mut request = Request::builder()
+                .method(method)
+                .uri(path)
+                .header("content-type", "application/json");
+            if authenticated {
+                request = request.header("cookie", "sessionId=valid");
+            }
+            let response = gateway_router(state).oneshot(request.body(Body::from(r#"{"organization_id":"org-1","title":"Local fixture","target":{"channels":["SSE"]}}"#)).unwrap()).await.unwrap();
+            let actual = response.status();
+            let body = to_bytes(response.into_body(), 65536).await.unwrap();
+            assert_eq!(
+                actual,
+                expected,
+                "{method} {path} {permission}: {}",
+                String::from_utf8_lossy(&body)
+            );
+            let calls = recorder.0.lock().unwrap();
+            assert_eq!(calls.len(), usize::from(expected == StatusCode::OK));
+            if expected == StatusCode::OK {
+                assert_eq!(calls[0].0, "notifications");
                 assert_eq!(calls[0].1.header("x-user-id"), Some("user-1"));
                 assert_eq!(calls[0].1.header("x-organization-id"), Some("org-1"));
             }

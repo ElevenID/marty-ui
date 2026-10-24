@@ -64,7 +64,9 @@ def test_operation_schema_paths_exist_in_the_real_route_contract():
             "routes"
         ]
     }
-    source = (ROOT / "rust/services/gateway/src/openapi.rs").read_text()
+    # Production operation bindings only; Rust tests also contain deliberately
+    # absent legacy paths that must not become advertised operations.
+    source = (ROOT / "rust/services/gateway/src/openapi.rs").read_text().split("#[cfg(test)]", 1)[0]
     for path in re.findall(r'"(/v1/[^" ]+)"', source):
         assert path in routes, path
 
@@ -226,3 +228,32 @@ def test_derived_wallet_schema_matches_owner_example_and_rejects_nested_drift():
         target[field] = invalid
         with pytest.raises(jsonschema.ValidationError):
             validator.validate(mutated)
+
+
+def test_notification_http_schemas_match_native_examples_and_embedded_target_boundaries():
+    schemas = json.loads((ROOT / "contracts/notification-http-schemas.json").read_text())
+    examples = json.loads((ROOT / "contracts/notification-http-examples.json").read_text())
+    for key, schema in [("send", "runtime__notification_send_request"), ("response", "runtime__notification_response")]:
+        validator = jsonschema.Draft202012Validator(schemas[schema], format_checker=jsonschema.FormatChecker())
+        validator.validate(examples[key])
+        for path, field, invalid in [
+            ([], "kms_key_id", "private"), (["target"], "unknown", True),
+            (["target"], "device_tokens", [17]),
+        ]:
+            value = deepcopy(examples[key])
+            cursor = value
+            for segment in path:
+                cursor = cursor[segment]
+            cursor[field] = invalid
+            with pytest.raises(jsonschema.ValidationError):
+                validator.validate(value)
+    response = jsonschema.Draft202012Validator(schemas["runtime__notification_response"])
+    for field, invalid in [("read", "false"), ("status", "VERIFIED"), ("target", {"channels": ["UNKNOWN"]})]:
+        with pytest.raises(jsonschema.ValidationError):
+            response.validate({**examples["response"], field: invalid})
+    request = jsonschema.Draft202012Validator(schemas["runtime__notification_send_request"])
+    request.validate({"organization_id": "org-a", "target": {"channels": ["sse"]}})
+    delivery = jsonschema.Draft202012Validator(schemas["runtime__notification_delivery_result"])
+    delivery.validate({"notification_id": "notification-1", "channel": "SSE", "success": False, "attempted_at": examples["response"]["created_at"], "should_retry": True})
+    with pytest.raises(jsonschema.ValidationError):
+        delivery.validate({"notification_id": "notification-1", "channel": "SSE", "success": "true"})

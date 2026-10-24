@@ -13,7 +13,7 @@ use serde_json::{json, Map, Value};
 
 use crate::issuance_native;
 
-pub const EXPECTED_ROUTE_COUNT: usize = 459;
+pub const EXPECTED_ROUTE_COUNT: usize = 460;
 
 #[derive(Debug, Deserialize)]
 pub struct GatewayContract {
@@ -1022,6 +1022,46 @@ mod tests {
             .upstream_service,
             "organizations"
         );
+    }
+
+    #[test]
+    fn notification_routes_describe_native_operations_instead_of_a_management_catch_all() {
+        let contract = GatewayContract::load().unwrap();
+        let routes = contract.route_table().unwrap();
+        for (method, path) in [
+            (HttpMethod::Post, "/v1/notifications/send"),
+            (HttpMethod::Get, "/v1/notifications/unread/count"),
+            (
+                HttpMethod::Get,
+                "/v1/notifications/notification-one/delivery-results",
+            ),
+            (HttpMethod::Patch, "/v1/notifications/notification-one/read"),
+            (
+                HttpMethod::Delete,
+                "/v1/notifications/notification-one/read",
+            ),
+            (HttpMethod::Post, "/v1/notifications/read-all"),
+        ] {
+            assert_eq!(
+                route_for(&routes, method, path)
+                    .unwrap()
+                    .route
+                    .upstream_service,
+                "notifications"
+            );
+        }
+        for (method, path) in [
+            (HttpMethod::Post, "/v1/notifications"),
+            (HttpMethod::Put, "/v1/notifications/notification-one"),
+            (HttpMethod::Post, "/v1/notifications/rules"),
+            (HttpMethod::Patch, "/v1/notifications/rules/rule-one"),
+            (HttpMethod::Patch, "/v1/notifications/preferences"),
+        ] {
+            assert!(
+                route_for(&routes, method, path).is_err(),
+                "{method:?} {path}"
+            );
+        }
     }
 
     #[test]

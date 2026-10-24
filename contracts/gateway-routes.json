@@ -21,7 +21,7 @@
       "MIPVersionMiddleware"
     ]
   },
-  "route_count": 459,
+  "route_count": 460,
   "routes": [
     {
       "include_in_schema": true,
@@ -1555,31 +1555,7 @@
     },
     {
       "include_in_schema": true,
-      "method": "DELETE",
-      "path": "/v1/notifications",
-      "status_code": 200
-    },
-    {
-      "include_in_schema": true,
       "method": "GET",
-      "path": "/v1/notifications",
-      "status_code": 200
-    },
-    {
-      "include_in_schema": true,
-      "method": "PATCH",
-      "path": "/v1/notifications",
-      "status_code": 200
-    },
-    {
-      "include_in_schema": true,
-      "method": "POST",
-      "path": "/v1/notifications",
-      "status_code": 200
-    },
-    {
-      "include_in_schema": true,
-      "method": "PUT",
       "path": "/v1/notifications",
       "status_code": 200
     },
@@ -1591,32 +1567,62 @@
     },
     {
       "include_in_schema": true,
-      "method": "DELETE",
-      "path": "/v1/notifications/{subpath:path}",
-      "status_code": 200
-    },
-    {
-      "include_in_schema": true,
-      "method": "GET",
-      "path": "/v1/notifications/{subpath:path}",
-      "status_code": 200
-    },
-    {
-      "include_in_schema": true,
-      "method": "PATCH",
-      "path": "/v1/notifications/{subpath:path}",
+      "method": "POST",
+      "path": "/v1/notifications/read-all",
       "status_code": 200
     },
     {
       "include_in_schema": true,
       "method": "POST",
-      "path": "/v1/notifications/{subpath:path}",
+      "path": "/v1/notifications/send",
       "status_code": 200
     },
     {
       "include_in_schema": true,
-      "method": "PUT",
-      "path": "/v1/notifications/{subpath:path}",
+      "method": "GET",
+      "path": "/v1/notifications/templates",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/notifications/unread-count",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/notifications/unread/count",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "DELETE",
+      "path": "/v1/notifications/{notification_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/notifications/{notification_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/notifications/{notification_id}/delivery-results",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "DELETE",
+      "path": "/v1/notifications/{notification_id}/read",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "PATCH",
+      "path": "/v1/notifications/{notification_id}/read",
       "status_code": 200
     },
     {

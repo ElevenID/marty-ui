@@ -41,6 +41,16 @@ pub fn schemas() -> Value {
         .as_object_mut()
         .expect("schemas")
         .extend(compliance.as_object().expect("compliance schemas").clone());
+    let notification: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/notification-http-schemas.json"
+    ))
+    .expect("native notification HTTP schemas");
+    schemas.as_object_mut().expect("schemas").extend(
+        notification
+            .as_object()
+            .expect("notification schemas")
+            .clone(),
+    );
     schemas
 }
 pub fn protocol_revision() -> &'static str {
@@ -58,6 +68,10 @@ fn schema(name: &str) -> Value {
 
 pub fn describe_operation(operation: &mut Value, method: HttpMethod, path: &str, status: u16) {
     use HttpMethod::{Get, Patch, Post};
+    if path.starts_with("/v1/notifications") && path != "/v1/notifications/events/push" {
+        describe_notification(operation, method, path, status);
+        return;
+    }
     if method == Get
         && matches!(
             path,
@@ -346,6 +360,90 @@ fn describe_compliance(operation: &mut Value, method: HttpMethod, path: &str, st
     }
 }
 
+fn describe_notification(operation: &mut Value, method: HttpMethod, path: &str, status: u16) {
+    use HttpMethod::{Delete, Post};
+    let send = method == Post && path == "/v1/notifications/send";
+    let collection = path == "/v1/notifications";
+    let count = matches!(
+        path,
+        "/v1/notifications/unread/count" | "/v1/notifications/unread-count"
+    );
+    let read_all = path == "/v1/notifications/read-all";
+    let templates = path == "/v1/notifications/templates";
+    let deliveries = path.ends_with("/delivery-results");
+    operation["summary"] = json!(if send {
+        "Send a notification with an embedded target"
+    } else {
+        "Read or update organization-scoped notifications"
+    });
+    operation["description"] = json!(if send {
+        "Requires notification:send in the request organization. NotificationTarget is embedded, not a standalone saved profile. An explicit target organization must match the request organization. Channel and destination configuration determine delivery; acceptance does not prove delivery. Protected credential material and unknown root/target fields are rejected."
+    } else {
+        "Requires notification:view. An organization query selector is required even for stored IDs. Lists are arrays without total counts. List recipient filtering is explicit; unread count and mark-all-read default to the trusted authenticated user when recipient_id is omitted. Alert-rule and preference operations do not exist."
+    });
+    if send {
+        operation["requestBody"] = json!({"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/runtime__notification_send_request"}}}});
+    } else {
+        let mut parameters = operation["parameters"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        parameters.push(query_parameter(
+            "organization_id",
+            "Selected organization authorized by the gateway and native owner.",
+        ));
+        if collection || count || read_all {
+            let mut recipient = query_parameter("recipient_id", "Recipient filter. Count and mark-all-read use the trusted authenticated user if omitted.");
+            recipient["required"] = json!(false);
+            parameters.push(recipient);
+        }
+        if collection || templates || deliveries {
+            for (name, default) in [("limit", 100), ("offset", 0)] {
+                parameters.push(json!({"name":name,"in":"query","required":false,"description":"Array pagination; limits above 500 are clamped. No total count is returned.","schema":{"type":"integer","minimum":0,"default":default}}));
+            }
+        }
+        if collection {
+            parameters.push(json!({"name":"unread_only","in":"query","required":false,"schema":{"type":"boolean","default":false}}));
+            parameters.push(json!({"name":"status","in":"query","required":false,"description":"Case-insensitive pending, sent, delivered or failed state filter.","schema":{"type":"string"}}));
+        }
+        operation["parameters"] = json!(parameters);
+    }
+    let response_ref = json!({"$ref":"#/components/schemas/runtime__notification_response"});
+    let response = if collection {
+        json!({"type":"array","items":response_ref})
+    } else if deliveries {
+        json!({"type":"array","items":{"$ref":"#/components/schemas/runtime__notification_delivery_result"}})
+    } else if count || read_all {
+        let field = if count { "count" } else { "marked_read" };
+        json!({"type":"object","additionalProperties":false,"required":[field],"properties":{field:{"type":"integer","minimum":0}}})
+    } else if templates {
+        json!({"type":"array","items":{"type":"object","additionalProperties":false,"required":["id","name","notification_type","subject_template","active"],"properties":{"id":{"type":"string"},"name":{"type":"string"},"notification_type":{"type":"string"},"subject_template":{"type":"string"},"active":{"type":"boolean"}}}})
+    } else if method == Delete && !path.ends_with("/read") {
+        json!({"type":"object","additionalProperties":false,"required":["success"],"properties":{"success":{"type":"boolean"}}})
+    } else {
+        response_ref
+    };
+    operation["responses"][status.to_string()]["content"] =
+        json!({"application/json":{"schema":response}});
+    for (code, description) in [
+        (400, "Required organization query or recipient selector is missing or malformed."),
+        (401, "Authentication required."), (403, "Organization membership or route permission is not authorized."),
+        (404, "Notification does not exist in the selected organization."),
+        (422, "Invalid request fields, target organization, channel, destination, TTL or protected credential payload."),
+        (502, "Upstream returned an invalid response."), (503, "Notification or authorization dependency is unavailable."),
+    ] {
+        operation["responses"][code.to_string()] = json!({"description":description});
+    }
+    operation["x-marty-protocol-support"] = json!("partial");
+    operation["x-marty-protocol-schemas"] = json!([
+        schema("notification-payload"),
+        schema("notification-target"),
+        schema("notification-delivery-result")
+    ]);
+    operation["x-marty-request-schema-documented"] = json!(true);
+    operation["x-marty-response-schema-documented"] = json!(true);
+}
+
 fn query_parameter(name: &str, description: &str) -> Value {
     json!({"name":name,"in":"query","required":true,"description":description,"schema":{"type":"string","minLength":1}})
 }
@@ -514,6 +612,71 @@ mod tests {
             }
         }
     }
+    #[test]
+    fn notification_operations_document_real_scope_arrays_embedded_targets_and_delivery_evidence() {
+        let document = crate::contract::GatewayContract::load()
+            .unwrap()
+            .openapi_document("test");
+        for (path, method) in [
+            ("/v1/notifications", "get"),
+            ("/v1/notifications/send", "post"),
+            ("/v1/notifications/unread/count", "get"),
+            ("/v1/notifications/read-all", "post"),
+            ("/v1/notifications/{notification_id}/read", "patch"),
+            ("/v1/notifications/{notification_id}/read", "delete"),
+            (
+                "/v1/notifications/{notification_id}/delivery-results",
+                "get",
+            ),
+        ] {
+            let operation = &document["paths"][path][method];
+            assert_eq!(operation["x-marty-protocol-support"], "partial");
+            assert_eq!(operation["x-marty-request-schema-documented"], true);
+            assert_eq!(operation["x-marty-response-schema-documented"], true);
+            assert!(operation["responses"]["403"].is_object());
+            if path != "/v1/notifications/send" {
+                assert!(operation["parameters"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|parameter| parameter["name"] == "organization_id"
+                        && parameter["required"] == true));
+            }
+        }
+        let send = &document["paths"]["/v1/notifications/send"]["post"];
+        assert_eq!(
+            send["requestBody"]["content"]["application/json"]["schema"]["$ref"],
+            "#/components/schemas/runtime__notification_send_request"
+        );
+        assert_eq!(
+            document["paths"]["/v1/notifications"]["get"]["responses"]["200"]["content"]
+                ["application/json"]["schema"]["type"],
+            "array"
+        );
+        assert_eq!(
+            document["paths"]["/v1/notifications/unread/count"]["get"]["responses"]["200"]
+                ["content"]["application/json"]["schema"]["properties"]["count"]["type"],
+            "integer"
+        );
+        assert_eq!(
+            document["paths"]["/v1/notifications/read-all"]["post"]["responses"]["200"]["content"]
+                ["application/json"]["schema"]["properties"]["marked_read"]["type"],
+            "integer"
+        );
+        assert!(document["components"]["schemas"]["schemas__notification_target"].is_object());
+        assert_eq!(
+            document["components"]["schemas"]["runtime__notification_response"]["properties"]
+                ["read"]["type"],
+            "boolean"
+        );
+        assert!(document["paths"]
+            .get("/v1/notifications/{subpath:path}")
+            .is_none());
+        assert!(document["paths"]
+            .get("/v1/notifications/preferences")
+            .is_none());
+    }
+
     #[test]
     fn wallet_requirements_document_native_projection_and_derived_scope() {
         let document = crate::contract::GatewayContract::load()
