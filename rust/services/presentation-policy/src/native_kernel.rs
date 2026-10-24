@@ -18,6 +18,11 @@ type JsonObject = Map<String, Value>;
 type VerifiedJwtMaterial = (CredentialVerificationEvidence, Option<JsonObject>);
 type OpenBadgeDocument = (JsonObject, JsonObject);
 
+struct DataIntegrityDocument<'a> {
+    is_presentation: bool,
+    credentials: Vec<&'a JsonObject>,
+}
+
 /// Resolves public signature keys through deployment-bounded transport. This does
 /// not alter the policy's trust profile or mark any issuer as trusted.
 pub struct ResolvingCredentialKernel {
@@ -35,18 +40,22 @@ impl ResolvingCredentialKernel {
         let Some(profile) = context.trust_profile.as_ref() else {
             return Ok(());
         };
-        let token = context
-            .token
-            .as_object()
-            .ok_or("Invalid credential document")?;
-        let document = token
-            .get("credential")
-            .and_then(Value::as_object)
-            .unwrap_or(token);
-        let credentials: Vec<_> = match document.get("verifiableCredential") {
-            Some(Value::Array(values)) => values.iter().filter_map(Value::as_object).collect(),
-            Some(value) => value.as_object().into_iter().collect(),
-            None => vec![document],
+        let credentials: Vec<_> = match context.format {
+            DetectedCredentialFormat::OpenbadgeV3 => {
+                // Resolve the exact credential the Open Badge verifier will consume,
+                // including its supported VP and assertion aliases. Never inspect
+                // an outer envelope or reinterpret a field inside the selected VC.
+                vec![open_badge_credential(&context.token, "credential")
+                    .map_err(|_| "Invalid Open Badge credential selection")?]
+            }
+            DetectedCredentialFormat::W3cVcdmDi => {
+                let document = context
+                    .token
+                    .as_object()
+                    .ok_or("Invalid Data Integrity document")?;
+                data_integrity_document(document)?.credentials
+            }
+            _ => return Ok(()),
         };
         let mut resolved_methods = Vec::new();
         let mut governed_issuers = Vec::new();
@@ -663,6 +672,47 @@ async fn verify_vc_jwt_material(
     Ok((evidence, Some(credential.clone())))
 }
 
+fn data_integrity_document(
+    document: &JsonObject,
+) -> Result<DataIntegrityDocument<'_>, &'static str> {
+    let has_type = |expected: &str| match document.get("type") {
+        Some(Value::String(value)) => value == expected,
+        Some(Value::Array(values)) => values.iter().any(|value| value.as_str() == Some(expected)),
+        _ => false,
+    };
+    let is_presentation = has_type("VerifiablePresentation");
+    let is_credential = has_type("VerifiableCredential");
+    if is_presentation == is_credential {
+        return Err(
+            "Document must identify exactly one Data Integrity credential or presentation type",
+        );
+    }
+    if is_credential {
+        return Ok(DataIntegrityDocument {
+            is_presentation: false,
+            credentials: vec![document],
+        });
+    }
+    let credentials = document
+        .get("verifiableCredential")
+        .and_then(Value::as_array)
+        .ok_or("Data Integrity presentation must contain a credential array")?
+        .iter()
+        .map(|value| {
+            value
+                .as_object()
+                .ok_or("Data Integrity presentation credentials must be objects")
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if credentials.is_empty() {
+        return Err("Data Integrity presentation must contain a credential");
+    }
+    Ok(DataIntegrityDocument {
+        is_presentation: true,
+        credentials,
+    })
+}
+
 async fn verify_data_integrity(
     context: &CredentialVerificationContext,
 ) -> Result<CredentialVerificationEvidence, PresentationVerificationError> {
@@ -670,6 +720,7 @@ async fn verify_data_integrity(
         .token
         .as_object()
         .ok_or_else(|| invalid_input("Data Integrity presentation must be a JSON object"))?;
+    let selected = data_integrity_document(document).map_err(invalid_input)?;
     let request = json!({
         "document": document,
         "expected_challenge": context.nonce,
@@ -688,26 +739,25 @@ async fn verify_data_integrity(
         ));
     }
     let is_presentation = result.get("kind").and_then(Value::as_str) == Some("presentation");
+    if is_presentation != selected.is_presentation {
+        return Err(invalid_native(
+            "Data Integrity verifier kind did not match the selected document type",
+        ));
+    }
     let credential_count = result
         .get("verified_credentials")
         .and_then(Value::as_u64)
         .and_then(|value| usize::try_from(value).ok())
         .unwrap_or(1);
     let credential = if is_presentation {
-        let credentials = document
-            .get("verifiableCredential")
-            .and_then(Value::as_array)
-            .ok_or_else(|| invalid_native("Verified presentation omitted credentials"))?;
-        if credentials.len() != 1 {
+        if selected.credentials.len() != 1 {
             return Ok(rejected(
                 "Presentation must contain exactly one independently verified credential",
             ));
         }
-        credentials[0]
-            .as_object()
-            .ok_or_else(|| invalid_native("Verified credential was not an object"))?
+        selected.credentials[0]
     } else {
-        document
+        selected.credentials[0]
     };
     let mut evidence = credential_evidence(
         credential,
@@ -1124,18 +1174,26 @@ fn open_badge_document(
     token: &Value,
     default_key: &str,
 ) -> Result<OpenBadgeDocument, PresentationVerificationError> {
-    let object = token
-        .as_object()
-        .ok_or_else(|| invalid_input("Open Badge presentation must be a JSON object"))?;
-    let store = object
+    let credential = open_badge_credential(token, default_key)?.clone();
+    let store = token
         .get("document_store")
-        .or_else(|| object.get("documentStore"))
+        .or_else(|| token.get("documentStore"))
         .and_then(Value::as_object)
         .cloned()
         .unwrap_or_default();
+    Ok((credential, store))
+}
+
+fn open_badge_credential<'a>(
+    token: &'a Value,
+    default_key: &str,
+) -> Result<&'a JsonObject, PresentationVerificationError> {
+    let object = token
+        .as_object()
+        .ok_or_else(|| invalid_input("Open Badge presentation must be a JSON object"))?;
     for key in [default_key, "credential", "assertion"] {
         if let Some(value) = object.get(key).and_then(Value::as_object) {
-            return Ok((value.clone(), store));
+            return Ok(value);
         }
     }
     if let Some(vp) = object.get("vp").and_then(Value::as_object).or(Some(object)) {
@@ -1147,14 +1205,14 @@ fn open_badge_document(
                     ));
                 }
                 if let Some(credential) = credentials[0].as_object() {
-                    return Ok((credential.clone(), store));
+                    return Ok(credential);
                 }
             } else if let Some(credential) = value.as_object() {
-                return Ok((credential.clone(), store));
+                return Ok(credential);
             }
         }
     }
-    Ok((object.clone(), store))
+    Ok(object)
 }
 
 fn apply_open_badge_status(evidence: &mut CredentialVerificationEvidence, result: &Value) {
