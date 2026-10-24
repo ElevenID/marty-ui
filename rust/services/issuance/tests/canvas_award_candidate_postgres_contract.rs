@@ -2070,32 +2070,28 @@ async fn revoked_canvas_review_recovery_is_scoped_durable_and_retries_publicatio
         events.clone(),
     );
     let resolver = CanvasReviewResolver::new(pool.clone(), Some(Arc::new(lifecycle)));
-    assert!(
-        resolver
-            .resolve(
-                "foreign-org",
-                "review-recovery",
-                ReviewAction::Revoke,
-                Some("cleanup"),
-                Some("actor")
-            )
-            .await
-            .is_err()
-    );
+    assert!(resolver
+        .resolve(
+            "foreign-org",
+            "review-recovery",
+            ReviewAction::Revoke,
+            Some("cleanup"),
+            Some("actor")
+        )
+        .await
+        .is_err());
     assert_eq!(publication.calls.load(Ordering::SeqCst), 0);
     publication.fail.store(true, Ordering::SeqCst);
-    assert!(
-        resolver
-            .resolve(
-                "review-recovery-org",
-                "review-recovery",
-                ReviewAction::Revoke,
-                Some("cleanup"),
-                Some("actor")
-            )
-            .await
-            .is_err()
-    );
+    assert!(resolver
+        .resolve(
+            "review-recovery-org",
+            "review-recovery",
+            ReviewAction::Revoke,
+            Some("cleanup"),
+            Some("actor")
+        )
+        .await
+        .is_err());
     let current: Value = sqlx::query_scalar("SELECT to_jsonb(r) FROM issuance_service.evidence_policy_reviews r WHERE id='review-recovery'")
         .fetch_one(&pool).await.unwrap();
     assert_eq!(current["status"], "open");
@@ -2130,18 +2126,16 @@ async fn revoked_canvas_review_recovery_is_scoped_durable_and_retries_publicatio
         0,
         "no duplicate credential event"
     );
-    assert!(
-        resolver
-            .resolve(
-                "review-recovery-org",
-                "review-recovery",
-                ReviewAction::Revoke,
-                Some("cleanup"),
-                Some("actor")
-            )
-            .await
-            .is_err()
-    );
+    assert!(resolver
+        .resolve(
+            "review-recovery-org",
+            "review-recovery",
+            ReviewAction::Revoke,
+            Some("cleanup"),
+            Some("actor")
+        )
+        .await
+        .is_err());
     assert_eq!(publication.calls.load(Ordering::SeqCst), 2);
     let unrelated: String = sqlx::query_scalar(
         "SELECT status FROM issuance_service.evidence_policy_reviews WHERE id='unrelated-review'",
