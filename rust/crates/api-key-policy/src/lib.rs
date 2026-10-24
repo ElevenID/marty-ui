@@ -1,6 +1,124 @@
 //! Shared API-key scope policy for gateway and native service principals.
 use std::collections::BTreeSet;
 
+/// Claims supplied by a gateway whose service credential has already been
+/// authenticated. Parsing this type does not authenticate HTTP headers.
+#[derive(Clone, Debug)]
+pub struct GatewayApiKeyActor {
+    key_id: uuid::Uuid,
+    organization_id: uuid::Uuid,
+    scopes: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct InvalidGatewayApiKeyActor;
+
+impl GatewayApiKeyActor {
+    pub fn parse(
+        key_id: &str,
+        organization_id: &str,
+        scopes: &str,
+    ) -> Result<Self, InvalidGatewayApiKeyActor> {
+        let key_id = uuid::Uuid::parse_str(key_id).map_err(|_| InvalidGatewayApiKeyActor)?;
+        let organization_id =
+            uuid::Uuid::parse_str(organization_id).map_err(|_| InvalidGatewayApiKeyActor)?;
+        if key_id.is_nil() || organization_id.is_nil() {
+            return Err(InvalidGatewayApiKeyActor);
+        }
+        Ok(Self {
+            key_id,
+            organization_id,
+            scopes: scopes
+                .split(',')
+                .map(str::trim)
+                .filter(|scope| !scope.is_empty())
+                .map(str::to_owned)
+                .collect(),
+        })
+    }
+
+    #[must_use]
+    pub fn principal_id(&self) -> String {
+        self.key_id.to_string()
+    }
+
+    #[must_use]
+    pub fn authorizes(&self, principal: &str, organization: &str, permission: &str) -> bool {
+        uuid::Uuid::parse_str(principal).ok() == Some(self.key_id)
+            && uuid::Uuid::parse_str(organization).ok() == Some(self.organization_id)
+            && api_key_allowed(permission, &self.scopes)
+    }
+}
+
+#[cfg(test)]
+mod gateway_actor_tests {
+    use super::{api_key_allowed, GatewayApiKeyActor};
+    const KEY: &str = "10000000-0000-4000-8000-000000000001";
+    const ORG: &str = "20000000-0000-4000-8000-000000000001";
+    const OTHER: &str = "20000000-0000-4000-8000-000000000002";
+
+    #[test]
+    fn gateway_reader_remains_bound_to_actor_tenant_and_read_scope() {
+        let actor =
+            GatewayApiKeyActor::parse(KEY, ORG, "deployment:read, compliance:read,trust:read")
+                .unwrap();
+        for permission in [
+            "deployment-profile:view",
+            "compliance-profile:view",
+            "revocation-profile:view",
+        ] {
+            assert!(actor.authorizes(KEY, ORG, permission));
+            assert!(!actor.authorizes(OTHER, ORG, permission));
+            assert!(!actor.authorizes(KEY, OTHER, permission));
+        }
+        for permission in [
+            "deployment-profile:edit",
+            "compliance-profile:create",
+            "revocation-profile:activate",
+            "signing-key:view",
+        ] {
+            assert!(!actor.authorizes(KEY, ORG, permission));
+        }
+    }
+
+    #[test]
+    fn malformed_or_nil_gateway_actor_is_not_a_principal() {
+        for id in ["", "not-a-uuid", "00000000-0000-0000-0000-000000000000"] {
+            assert!(GatewayApiKeyActor::parse(id, ORG, "admin:full").is_err());
+            assert!(GatewayApiKeyActor::parse(KEY, id, "admin:full").is_err());
+        }
+        let actor = GatewayApiKeyActor::parse(KEY, ORG, "admin:full").unwrap();
+        assert!(!actor.authorizes(KEY, OTHER, "deployment-profile:view"));
+        assert!(
+            !GatewayApiKeyActor::parse(KEY, ORG, "").unwrap().authorizes(
+                KEY,
+                ORG,
+                "deployment-profile:view"
+            )
+        );
+    }
+
+    #[test]
+    fn revocation_profile_uses_trust_read_and_write_boundaries() {
+        assert!(api_key_allowed(
+            "revocation-profile:view",
+            &["trust:read".into()]
+        ));
+        assert!(!api_key_allowed(
+            "revocation-profile:activate",
+            &["trust:read".into()]
+        ));
+        assert!(api_key_allowed(
+            "revocation-profile:activate",
+            &["trust:write".into()]
+        ));
+        assert!(!api_key_allowed(
+            "revocation-profile:view",
+            &["credentials:issue".into()]
+        ));
+    }
+}
+
 pub fn api_key_allowed(required_permission: &str, scopes: &[String]) -> bool {
     let scopes = scopes.iter().map(String::as_str).collect::<BTreeSet<_>>();
     // Offline event ingestion is an explicitly granted reporting capability;
@@ -79,7 +197,9 @@ fn mapped_api_key_scope(resource: &str, action: &str, scopes: &BTreeSet<&str>) -
     let (read_scope, write_scope) = match resource {
         "credential-template" => ("templates:read", "templates:write"),
         "application-template" | "application" => ("applications:read", "applications:write"),
-        "trust-profile" | "issuer-entity" | "presentation-policy" => ("trust:read", "trust:write"),
+        "trust-profile" | "issuer-entity" | "presentation-policy" | "revocation-profile" => {
+            ("trust:read", "trust:write")
+        }
         "compliance-profile" => ("compliance:read", "compliance:write"),
         "deployment-profile" => ("deployment:read", "deployment:write"),
         "webhook" => ("webhooks:read", "webhooks:write"),
