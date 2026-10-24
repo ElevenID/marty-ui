@@ -288,14 +288,16 @@ describe('ApplicationForm', () => {
     mockLocationState.location.state = {
       credential: { id: 'issuer-credential', credential_type: 'EmployeeCredential', required_fields: [], optional_fields: [], custom_fields: [] },
       applicationTemplate: { id: 'issuer-application', organization_id: 'issuer-org', credential_template_id: 'issuer-credential',
-        name: 'Issuer application', status: 'ACTIVE', form_fields: [], evidence_requirements: [] },
+        name: 'Issuer application', status: 'ACTIVE', form_fields: [{ field_id: 'member_id', label: 'Member ID', field_type: 'TEXT', required: true }], evidence_requirements: [] },
     };
     const { user } = render(<ApplicationForm />);
+    await user.type(screen.getByRole('textbox', { name: /member id/i }), 'SYNTHETIC-ISSUER-MEMBER');
     if (screen.queryByTestId('next-step-btn')) await user.click(screen.getByTestId('next-step-btn'));
     await user.click(screen.getByTestId('accept-terms-checkbox'));
     await user.click(screen.getByTestId('submit-application-btn'));
     await waitFor(() => expect(mockCreateApplication).toHaveBeenCalledWith(expect.objectContaining({
       organization_id: 'issuer-org', application_template_id: 'issuer-application',
+      form_data: { member_id: 'SYNTHETIC-ISSUER-MEMBER' },
     })));
   });
 

@@ -16,6 +16,17 @@ import {
 describe('applicationFlow helpers', () => {
   const t = vi.fn((key: string) => key)
 
+  it('preserves canonical field IDs through rendering normalization and public payload filtering', () => {
+    const fields = [{ field_id: 'member_id', field_type: 'TEXT', required: true },
+      { field_id: 'count', field_type: 'INTEGER' }, { field_id: 'consent', field_type: 'BOOLEAN' }]
+    const config = normalizeApplicationTemplateToFormConfig({ id: 'application-1', credential_template_id: 'credential-1', form_fields: fields })
+    expect(buildStandardApplicationPayload({ organizationId: 'issuer-org', credentialConfig: config,
+      formData: { member_id: 'SYNTHETIC', count: 0, consent: false, acceptTerms: true, unconfigured_extra: 'blocked' },
+    })).toMatchObject({ organization_id: 'issuer-org', application_template_id: 'application-1',
+      form_data: { member_id: 'SYNTHETIC', count: 0, consent: false } })
+    expect(config.application_template.form_fields).toEqual(fields)
+  })
+
   it('normalizes credential configs from mixed field shapes', () => {
     expect(normalizeCredentialConfigInput({
       id: 'cfg-1',
