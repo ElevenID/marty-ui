@@ -104,14 +104,8 @@ pub struct KeyRecord {
 }
 
 pub fn tenant_standard_key_reference(org: &str, id: &str) -> String {
-    let prefix = crate::domain::MANAGED_KEY_PREFIXES
-        .iter()
-        .find(|prefix| id.starts_with(**prefix))
-        .expect("standard bootstrap key has a managed prefix");
-    let tenant = uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_URL, org.as_bytes())
-        .simple()
-        .to_string();
-    format!("{prefix}{tenant}-{}", &id[prefix.len()..])
+    marty_managed_key_reference::tenant_standard_key_reference(org, id)
+        .expect("standard bootstrap key has a managed prefix")
 }
 
 pub fn public_jwk_from_pem(spec: KeySpec, public_pem: &str) -> Result<Value, BootstrapError> {

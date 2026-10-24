@@ -26,6 +26,21 @@ version one. Native conversion accepts only canonical 32-byte Ed25519 public
 values. Root/operator file ownership, pending-token preservation and revocation
 recovery remain with their existing owners.
 
+Managed profile references now use the same small Rust naming contract as
+signing-keys bootstrap. It preserves the raw organization namespace and the
+closed issuer/verifier profile choices; registered holder-key naming is separate.
+Audit/custody leaf checks share native scope, lifetime and capability checks with
+AppRole minting while retaining each caller's policy and canary requirements.
+
+Owner-aware handoff stays with the privileged Python owner and shares its
+exclusive writes, install UID/GID and role-specific modes. A replacement is
+written and synced as `.new` before old-token revocation. Uncertain revocation
+or failed replacement leaves the old and pending files for reconciliation.
+Successful replacement is followed by a directory sync; if that final sync
+fails, exit 3 reports recovery and the new credential is at the primary path.
+No failure cleanup revokes that installed replacement merely because its final
+sync could not be confirmed.
+
 Generation assembly reuses the Rust workload identity inventory. It preserves
 exact static bytes, active file modes, exclusive creation, distinct scoped tokens
 and the separate overlap/retirement ceremonies. Failure removes only files

@@ -8,6 +8,7 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+marty-managed-key-reference = { path = "../managed-key-reference" }
 marty-selfhost-identity = { path = "../selfhost-identity" }
 serde_json.workspace = true
 regex.workspace = true
