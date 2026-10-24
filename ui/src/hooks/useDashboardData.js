@@ -19,6 +19,7 @@ import { listApiKeys } from '../services/apiKeysApi';
 import { listApplicationTemplates } from '../services/applicationTemplatesApi';
 import { listDeliveryDestinations } from '../services/deliveryDestinationsApi';
 import { listPolicySets } from '../services/policySetsApi';
+import { listComplianceProfiles } from '../services/complianceProfilesApi';
 import { getPhysicalDocumentCapabilities } from '../services/physicalDocumentsApi';
 import { listPublicIssuerIdentities } from '../services/issuerIdentitiesApi';
 import { 
@@ -39,8 +40,24 @@ function logDashboardHookError(message, error) {
   }
 }
 
+async function loadComplianceProfiles(organizationId) {
+  const profiles = [];
+  const seen = new Set();
+  for (let offset = 0; ; offset += 100) {
+    const page = await listComplianceProfiles({ organization_id: organizationId, limit: 100, offset });
+    if (!Array.isArray(page)) throw new Error('Compliance profile catalog returned invalid data.');
+    for (const profile of page) {
+      if (!profile?.id || seen.has(profile.id)) throw new Error('Compliance profile catalog returned an invalid or repeated profile.');
+      seen.add(profile.id);
+      profiles.push(profile);
+    }
+    if (page.length < 100) return profiles;
+  }
+}
+
 function createEmptyDashboardData() {
   return {
+    complianceProfiles: [],
     trustProfiles: [],
     issuerIdentities: [],
     templates: [],
@@ -98,6 +115,7 @@ export function useDashboardData() {
 
         // Fetch all resources in parallel
         const [
+          complianceProfilesRes,
           trustProfilesRes,
           templatesRes,
           applicationTemplatesRes,
@@ -117,6 +135,7 @@ export function useDashboardData() {
           environmentRes,
           lifecycleRes,
         ] = await Promise.allSettled([
+          loadComplianceProfiles(organizationId),
           listTrustProfiles({ organization_id: organizationId }),
           listCredentialTemplates({ organization_id: organizationId }),
           listApplicationTemplates(organizationId),
@@ -151,6 +170,7 @@ export function useDashboardData() {
           lifecycle: rejectedReason(lifecycleRes),
         };
         const resourceErrors = {
+          complianceProfiles: rejectedReason(complianceProfilesRes),
           trustProfiles: rejectedReason(trustProfilesRes),
           templates: rejectedReason(templatesRes),
           applicationTemplates: rejectedReason(applicationTemplatesRes),
@@ -166,6 +186,7 @@ export function useDashboardData() {
         };
 
         setData({
+          complianceProfiles: complianceProfilesRes.status === 'fulfilled' ? complianceProfilesRes.value : [],
           trustProfiles: trustProfilesRes.status === 'fulfilled' ? trustProfilesRes.value : [],
           issuerIdentities: Array.isArray(rawIssuerIdentities?.identities)
             ? rawIssuerIdentities.identities
