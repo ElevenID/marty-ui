@@ -7,6 +7,8 @@
 !contracts/
 !contracts/python-text-semantics.json
 !contracts/demo-seed-reference-v1.json
+!contracts/issuer-identity-capabilities-response.json
+!contracts/issuer-identity-inspection-response.json
 !scripts/
 !scripts/load-secrets-env.sh
 !scripts/run-migrations-with-secrets.sh

@@ -30,6 +30,8 @@
     "scripts/selfhost_native_operator.py",
     "scripts/install-marty-deploy.sh",
     "scripts/operator-release-assets.sh",
+    "scripts/nightly-release-assets.sh",
+    "release/nightly-assets.json",
     "scripts/passport_remote_tls.py",
     "scripts/provision_selfhost_disposable_tls.py",
     "scripts/stage_selfhost_renewed_secrets.py",

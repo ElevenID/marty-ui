@@ -36,12 +36,16 @@ def produce(archive: Path, image_lock: Path, transaction: Path, receipt_path: Pa
     # rendered Compose image closure, and every recorded byte digest.
     if receipt != record(archive, image_lock, transaction, source_sha, run_id):
         raise ValueError("preparation receipt differs from exact inputs")
-    claim = release_transaction.validate_claim(_json(transaction))
+    document = _json(transaction)
+    from nightly_release import SCHEMA as NIGHTLY_SCHEMA, validate_candidate
+
+    nightly = document.get("schema") == NIGHTLY_SCHEMA
+    claim = validate_candidate(document) if nightly else release_transaction.validate_claim(document)
     if claim["source_sha"] != source_sha:
         raise ValueError("transaction source differs from preparation receipt")
-    if claim["state"] not in {"qualified", "promoting", "promoted", "published"}:
+    if not nightly and claim["state"] not in {"qualified", "promoting", "promoted", "published"}:
         raise ValueError("transaction lacks stack qualification gate evidence")
-    if (claim["repository"] != "ElevenID/marty-ui"
+    if not nightly and (claim["repository"] != "ElevenID/marty-ui"
             or set(claim["gates"]) != set(release_transaction.REQUIRED_GATE_ROLES)):
         raise ValueError("transaction repository or stack gates changed")
     lock = _json(image_lock)

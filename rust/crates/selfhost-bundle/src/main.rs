@@ -7,6 +7,7 @@ fn run() -> Result<()> {
     let mut output = None;
     let mut archive = None;
     let mut image_lock = None;
+    let mut nightly_candidate = None;
     let mut compose = None;
     let mut replace = false;
     let mut args = std::env::args_os().skip(1);
@@ -31,6 +32,10 @@ fn run() -> Result<()> {
             image_lock = Some(user_path::expand(PathBuf::from(
                 args.next().ok_or("--image-lock needs a JSON path")?,
             ))?);
+        } else if arg == "--nightly-candidate" {
+            nightly_candidate = Some(user_path::expand(PathBuf::from(
+                args.next().ok_or("--nightly-candidate needs a JSON path")?,
+            ))?);
         } else if arg == "--compose-executable" {
             compose = Some(args.next().ok_or("--compose-executable needs a path")?);
         } else {
@@ -47,7 +52,16 @@ fn run() -> Result<()> {
         archive: archive.map(user_path::archive).transpose()?,
         replace,
     };
-    let published = if let Some(lock) = image_lock.as_deref() {
+    let published = if let Some(candidate) = nightly_candidate.as_deref() {
+        marty_selfhost_bundle::package_nightly_with_image_lock(
+            &options,
+            |dir, args| marty_selfhost_bundle::process::compose(dir, args, compose.as_ref()),
+            image_lock
+                .as_deref()
+                .ok_or("--nightly-candidate requires --image-lock")?,
+            candidate,
+        )?
+    } else if let Some(lock) = image_lock.as_deref() {
         marty_selfhost_bundle::package_with_image_lock(
             &options,
             |dir, args| marty_selfhost_bundle::process::compose(dir, args, compose.as_ref()),

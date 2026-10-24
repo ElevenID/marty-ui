@@ -675,6 +675,44 @@ mod tests {
     }
 
     #[test]
+    fn every_provider_template_validates_against_the_runtime_schema() {
+        let validator = mmf_security::CedarPolicyValidator::from_human_schema(
+            crate::policy_sets::ORGANIZATION_CEDAR_SCHEMA,
+            mmf_security::CedarConfig::default(),
+        )
+        .expect("runtime Policy Set schema");
+        for template in policy_templates().as_array().unwrap() {
+            let policies: Vec<CedarPolicyDocument> =
+                serde_json::from_value(template["cedar_policies"].clone()).unwrap();
+            let errors = crate::validate_policy_documents(&policies, &validator);
+            assert!(errors.is_empty(), "{}: {errors:?}", template["template_id"]);
+        }
+    }
+
+    #[test]
+    fn provider_schema_still_rejects_unknown_actions_and_invalid_context_types() {
+        let validator = mmf_security::CedarPolicyValidator::from_human_schema(
+            crate::policy_sets::ORGANIZATION_CEDAR_SCHEMA,
+            mmf_security::CedarConfig::default(),
+        )
+        .unwrap();
+        for text in [
+            r#"permit(principal, action == MIP::Action::"credentials:export", resource);"#,
+            r#"permit(principal, action == MIP::Action::"applications:approve", resource) when { context.all_required_evidence_satisfied == "yes" };"#,
+            r#"permit(principal, action == MIP::Action::"credentials:verify", resource) when { context.issuer_trust_level >= "high" };"#,
+        ] {
+            let policy = CedarPolicyDocument {
+                policy_id: "invalid".into(),
+                effect: "permit".into(),
+                cedar_text: text.into(),
+                description: None,
+                enabled: true,
+            };
+            assert!(!crate::validate_policy_documents(&[policy], &validator).is_empty());
+        }
+    }
+
+    #[test]
     fn patch_parser_preserves_omit_clear_and_replace() {
         let patch = parse_policy_patch(json!({"description":null,"name":"Updated"})).unwrap();
         assert_eq!(patch.name.as_deref(), Some("Updated"));

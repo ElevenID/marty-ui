@@ -20,13 +20,17 @@ describe('ProtocolSupportCatalog', () => {
     render(<ProtocolSupportCatalog />);
     expect(screen.getByLabelText('Loading protocol support')).toBeInTheDocument();
     expect(await screen.findByTestId('protocol-support-catalog')).toBeInTheDocument();
-    expect(screen.getByText('Implemented: 14')).toBeInTheDocument();
+    expect(screen.getByText('Implemented: 15')).toBeInTheDocument();
     expect(screen.getByText('Derived: 1')).toBeInTheDocument();
-    expect(screen.getByText('Partial: 15')).toBeInTheDocument();
+    expect(screen.getByText('Partial: 14')).toBeInTheDocument();
     expect(screen.getByText('Unsupported: 3')).toBeInTheDocument();
+    expect(screen.queryByText(/separate integration branch/)).not.toBeInTheDocument();
+    expect(screen.getByText(/Public-internet resolution remains distinct/)).toBeInTheDocument();
     expect(screen.getByText('Machine Identity')).toBeInTheDocument();
     expect(screen.getByText('Machine Authentication Policy')).toBeInTheDocument();
     expect(screen.getByText('Authorization Decision Receipt')).toBeInTheDocument();
+    expect(screen.getByText(/Organization-scoped registry resolution and pinned assertion methods are exposed/)).toBeInTheDocument();
+    expect(screen.queryByText(/separate integration branch/)).not.toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'machine-readable catalog' })).toHaveAttribute('href', '/v1/protocol-support');
   });
 
