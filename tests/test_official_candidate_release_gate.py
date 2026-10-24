@@ -67,6 +67,7 @@ def test_publication_depends_on_complete_official_gate_and_reuses_tested_manifes
     assert "record-digests" in producer["needs"]
     assert suite["with"]["lane"] == "all"
     assert suite["with"]["collect_only"] is True
+    assert suite["with"]["review_recipient"] == "${{ vars.OFFICIAL_REVIEW_RECIPIENT }}"
     assert suite["uses"].endswith("@" + suite["with"]["harness_revision"])
     assert "official-interoperability" in receipt["needs"]
     freezes = [step for step in receipt["steps"] if step.get("name") == "Preserve immutable review inputs before requiring approval"]

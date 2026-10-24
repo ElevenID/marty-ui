@@ -78,8 +78,16 @@ incomplete plans. Complete `REVIEW` cases can instead produce an immutable
 closed awaiting disposition. It contains only the exact candidate manifest,
 sanitized summaries, origin attempt and canonical `review-request.json`.
 Raw exports, API readbacks and screenshot pixels must remain private.
-Private CI review delivery remains required; a hash is not a substitute for
-viewing the actual bound images.
+The shared harness encrypts the actual images and unchanged exports to the
+public `OFFICIAL_REVIEW_RECIPIENT` repository variable before upload. Only the
+ciphertext and public-safe delivery receipt are stored as
+`official-review-private-<lane>-<run-id>-<origin-attempt>`. The decryption identity
+stays with the operator's secure local credentials; product signing keys remain
+in remote KMS custody. Follow the integration harness's `conformance/README.md`
+to open the exact packet against its frozen public summary. The viewer verifies
+all bytes and image bindings before writing images/HTML; it does not write raw
+plaintext exports or approve cases. Every actual image still needs review; a
+hash alone is not an accepted disposition.
 
 After reviewing every pending case, submit a normal reviewed change at
 `release/official-reviews/<run-id>-<origin-attempt>.json`. That record uses
