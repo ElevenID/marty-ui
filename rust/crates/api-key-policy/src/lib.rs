@@ -43,6 +43,11 @@ impl GatewayApiKeyActor {
     }
 
     #[must_use]
+    pub fn organization_id(&self) -> String {
+        self.organization_id.to_string()
+    }
+
+    #[must_use]
     pub fn scopes_csv(&self) -> String {
         self.scopes.join(",")
     }
