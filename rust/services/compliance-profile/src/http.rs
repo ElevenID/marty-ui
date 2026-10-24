@@ -15,6 +15,64 @@ use std::sync::Arc;
 #[derive(Clone)]
 pub struct ComplianceHttpState {
     pub service: Arc<ComplianceService>,
+    service_authenticator: Option<Arc<mmf_security::ServiceTokenAuthenticator>>,
+}
+
+impl ComplianceHttpState {
+    pub fn new(service: Arc<ComplianceService>) -> Self {
+        Self {
+            service,
+            service_authenticator: None,
+        }
+    }
+
+    pub fn with_service_token(
+        mut self,
+        token: Option<String>,
+    ) -> Result<Self, mmf_security::SecurityError> {
+        self.service_authenticator = token
+            .map(|token| {
+                mmf_security::ServiceTokenAuthenticator::new(Some(token), true).map(Arc::new)
+            })
+            .transpose()?;
+        Ok(self)
+    }
+
+    fn authenticate_service(&self, headers: &HeaderMap) -> Result<(), ApiError> {
+        match &self.service_authenticator {
+            Some(authenticator) => authenticator
+                .authenticate(header(headers, "x-service-token"))
+                .map_err(|_| {
+                    ComplianceError::Unauthorized("Service authentication required".into()).into()
+                }),
+            None => {
+                Err(ComplianceError::Unauthorized("Service authentication required".into()).into())
+            }
+        }
+    }
+
+    fn for_request(&self, headers: &HeaderMap) -> Result<ComplianceService, ApiError> {
+        let is_key =
+            headers.contains_key("x-api-key-id") || headers.contains_key("x-api-key-scopes");
+        if !is_key {
+            return Ok(self.service.as_ref().clone());
+        }
+        self.authenticate_service(headers)?;
+        let actor = marty_api_key_policy::GatewayApiKeyActor::parse(
+            header(headers, "x-api-key-id").unwrap_or_default(),
+            header(headers, "x-organization-id").unwrap_or_default(),
+            header(headers, "x-api-key-scopes").unwrap_or_default(),
+        )
+        .map_err(|_| ComplianceError::Unauthorized("Invalid gateway principal".into()))?;
+        Ok(self.service.for_gateway_api_key(actor))
+    }
+}
+
+fn header<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
+    headers
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
 }
 enum ApiError {
     Domain(ComplianceError),
@@ -67,6 +125,10 @@ const fn limit() -> usize {
 }
 pub fn compliance_router(s: ComplianceHttpState) -> Router {
     Router::new()
+        .route(
+            "/internal/v1/resource-owners/compliance-profiles/{profile_id}",
+            get(resource_owner),
+        )
         .route("/v1/compliance-profiles", post(create).get(list))
         .route(
             "/v1/compliance-profiles/system/discoverable",
@@ -86,13 +148,25 @@ pub fn compliance_router(s: ComplianceHttpState) -> Router {
         )
         .with_state(s)
 }
+
+async fn resource_owner(
+    State(state): State<ComplianceHttpState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    state.authenticate_service(&headers)?;
+    let (id, organization_id, is_system) = state.service.internal_owner(&id).await?;
+    Ok(Json(
+        json!({"id": id, "organization_id": organization_id, "is_system": is_system}),
+    ))
+}
 async fn create(
     State(s): State<ComplianceHttpState>,
     h: HeaderMap,
     b: Result<Json<CreateComplianceProfileRequest>, JsonRejection>,
 ) -> Result<Json<Value>, ApiError> {
     let Json(b) = b.map_err(|_| ApiError::Validation)?;
-    value(s.service.create(b, &user(&h)).await?)
+    value(s.for_request(&h)?.create(b, &user(&h)).await?)
 }
 async fn list(
     State(s): State<ComplianceHttpState>,
@@ -103,7 +177,7 @@ async fn list(
         return Err(ApiError::Validation);
     }
     value(
-        s.service
+        s.for_request(&h)?
             .list(&q.organization_id, q.limit, q.offset, &user(&h))
             .await?,
     )
@@ -116,7 +190,7 @@ async fn get_one(
     h: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    value(s.service.get(&id, &user(&h)).await?)
+    value(s.for_request(&h)?.get(&id, &user(&h)).await?)
 }
 async fn update(
     State(s): State<ComplianceHttpState>,
@@ -125,32 +199,33 @@ async fn update(
     b: Result<Json<UpdateComplianceProfileRequest>, JsonRejection>,
 ) -> Result<Json<Value>, ApiError> {
     let Json(b) = b.map_err(|_| ApiError::Validation)?;
-    value(s.service.update(&id, b, &user(&h)).await?)
+    value(s.for_request(&h)?.update(&id, b, &user(&h)).await?)
 }
 async fn activate(
     State(s): State<ComplianceHttpState>,
     h: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    value(s.service.activate(&id, &user(&h)).await?)
+    value(s.for_request(&h)?.activate(&id, &user(&h)).await?)
 }
 async fn suspend(
     State(s): State<ComplianceHttpState>,
     h: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    value(s.service.suspend(&id, &user(&h)).await?)
+    value(s.for_request(&h)?.suspend(&id, &user(&h)).await?)
 }
 async fn delete_one(
     State(s): State<ComplianceHttpState>,
     h: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    s.service.delete(&id, &user(&h)).await?;
+    s.for_request(&h)?.delete(&id, &user(&h)).await?;
     Ok(Json(json!({"success":true})))
 }
 fn user(h: &HeaderMap) -> String {
-    h.get("x-user-id")
+    h.get("x-api-key-id")
+        .or_else(|| h.get("x-user-id"))
         .and_then(|v| v.to_str().ok())
         .map(str::trim)
         .unwrap_or_default()

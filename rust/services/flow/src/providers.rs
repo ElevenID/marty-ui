@@ -440,6 +440,23 @@ pub trait PhysicalDocumentProvider: Send + Sync {
 
 #[async_trait]
 pub trait FlowReferenceProvider: Send + Sync {
+    async fn resolve_for_actor(
+        &self,
+        kind: FlowReferenceKind,
+        reference_id: &str,
+        principal_id: &str,
+        organization_id: &str,
+        actor: Option<&marty_api_key_policy::GatewayApiKeyActor>,
+    ) -> Result<FlowReference, FlowProviderError> {
+        if actor.is_some() {
+            return Err(FlowProviderError::Unavailable {
+                provider: "gateway_reference_delegation",
+            });
+        }
+        self.resolve(kind, reference_id, principal_id, organization_id)
+            .await
+    }
+
     async fn resolve(
         &self,
         kind: FlowReferenceKind,
@@ -451,6 +468,8 @@ pub trait FlowReferenceProvider: Send + Sync {
 
 #[derive(Clone, Default)]
 pub struct FlowProviderRegistry {
+    /// Set only on a request-local clone after gateway service authentication.
+    pub gateway_api_key_actor: Option<marty_api_key_policy::GatewayApiKeyActor>,
     pub tenant_membership: Option<Arc<dyn TenantMembershipProvider>>,
     pub credential_template: Option<Arc<dyn CredentialTemplateProvider>>,
     pub presentation_policy: Option<Arc<dyn PresentationPolicyProvider>>,
@@ -495,6 +514,15 @@ impl FlowProviderRegistry {
         permission: &str,
         owner_only: bool,
     ) -> Result<(), FlowProviderError> {
+        if let Some(actor) = &self.gateway_api_key_actor {
+            return if !owner_only && actor.authorizes(principal_id, organization_id, permission) {
+                Ok(())
+            } else {
+                Err(authorization_error(
+                    TenantAuthorizationFailure::ActionNotAuthorized,
+                ))
+            };
+        }
         let provider = self
             .tenant_membership
             .as_ref()
