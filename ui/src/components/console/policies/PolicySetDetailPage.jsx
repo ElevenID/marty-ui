@@ -7,7 +7,7 @@ import { usePermissions } from '../../../hooks/usePermissions';
 import { activatePolicySet, archivePolicySet, getPolicySet, updatePolicySetMetadata } from '../../../services/policySetsApi';
 import { requirePolicySet } from './policySetGuards';
 
-function ScopedPolicySet({ organizationId, policySetId, canView, canCreate, canEdit, grantsLoading }) {
+function ScopedPolicySet({ organizationId, policySetId, canView, canActivate, canArchive, canEdit, grantsLoading }) {
   const navigate = useNavigate();
   const [policySet, setPolicySet] = useState(null);
   const [error, setError] = useState('');
@@ -20,7 +20,7 @@ function ScopedPolicySet({ organizationId, policySetId, canView, canCreate, canE
   const [description, setDescription] = useState('');
   const mounted = useRef(false);
   const grants = useRef(null);
-  grants.current = { canView, canCreate, canEdit, grantsLoading };
+  grants.current = { canView, canActivate, canArchive, canEdit, grantsLoading };
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   useEffect(() => {
     let current = true;
@@ -39,7 +39,7 @@ function ScopedPolicySet({ organizationId, policySetId, canView, canCreate, canE
   if (policySet && (description.trim() || null) !== (policySet.description || null)) patch.description = description.trim() || null;
   const disabled = loading || busy || requiresRefresh || grantsLoading;
   const authorized = (operation) => grants.current.canView && !grants.current.grantsLoading
-    && (operation === 'edit' ? grants.current.canEdit : grants.current.canCreate);
+    && (operation === 'edit' ? grants.current.canEdit : operation === 'activate' ? grants.current.canActivate : grants.current.canArchive);
   const confirm = async () => {
     if (disabled || !action || !authorized(action) || (action === 'edit' && (!name.trim() || !Object.keys(patch).length))) return;
     const operation = action;
@@ -75,8 +75,8 @@ function ScopedPolicySet({ organizationId, policySetId, canView, canCreate, canE
           </Box>
           <Stack direction="row" spacing={1} alignItems="center">
             {policySet.status === 'DRAFT' && canEdit && <Button disabled={disabled} onClick={() => { setName(policySet.name); setDescription(policySet.description || ''); setAction('edit'); }}>Edit metadata</Button>}
-            {policySet.status === 'DRAFT' && canCreate && <Button variant="contained" disabled={disabled} onClick={() => setAction('activate')}>Activate</Button>}
-            {policySet.status === 'ACTIVE' && canCreate && <Button variant="outlined" disabled={disabled} onClick={() => setAction('archive')}>Archive</Button>}
+            {policySet.status === 'DRAFT' && canActivate && <Button variant="contained" disabled={disabled} onClick={() => setAction('activate')}>Activate</Button>}
+            {policySet.status === 'ACTIVE' && canArchive && <Button variant="outlined" disabled={disabled} onClick={() => setAction('archive')}>Archive</Button>}
           </Stack>
         </Stack>
         <Stack spacing={2}>{policySet.cedar_policies.map((policy) => <Paper key={policy.policy_id} variant="outlined" sx={{ p: 2.5 }}>
@@ -101,5 +101,6 @@ export default function PolicySetDetailPage() {
   const { can, isLoading } = usePermissions();
   if (!organizationId) return <Alert severity="info">Select an organization to inspect its Policy Sets.</Alert>;
   return <ScopedPolicySet key={`${organizationId}:${policySetId}`} organizationId={organizationId} policySetId={policySetId}
-    canView={can('policy-set', 'view')} canCreate={can('policy-set', 'create')} canEdit={can('policy-set', 'edit')} grantsLoading={isLoading} />;
+    canView={can('policy-set', 'view')} canActivate={can('policy-set', 'activate')} canArchive={can('policy-set', 'archive')}
+    canEdit={can('policy-set', 'edit')} grantsLoading={isLoading} />;
 }

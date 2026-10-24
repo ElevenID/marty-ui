@@ -29,7 +29,7 @@ import { usePermissions } from '../../../hooks/usePermissions';
 import { createPolicySet, listPolicySetTemplates, validatePolicySet } from '../../../services/policySetsApi';
 import { requirePolicySet, requirePolicySetTemplates, requirePolicySetValidation } from './policySetGuards';
 
-const ScopedPolicySetWizard = ({ organizationId, canCreate, grantsLoading }) => {
+const ScopedPolicySetWizard = ({ organizationId, canCreate, canValidate, grantsLoading }) => {
   const navigate = useNavigate();
   const [templates, setTemplates] = useState([]);
   const [selectedTemplate, setSelectedTemplate] = useState('');
@@ -47,7 +47,7 @@ const ScopedPolicySetWizard = ({ organizationId, canCreate, grantsLoading }) => 
   const [revision, setRevision] = useState(0);
   const mounted = useRef(false);
   const permitted = useRef(false);
-  permitted.current = canCreate && !grantsLoading;
+  permitted.current = canCreate && canValidate && !grantsLoading;
   const applies = () => mounted.current && permitted.current;
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
 
@@ -77,12 +77,12 @@ const ScopedPolicySetWizard = ({ organizationId, canCreate, grantsLoading }) => 
   };
 
   const runValidation = async () => {
-    if (!applies() || saving || validating || !policies.length) return;
+    if (!mounted.current || !canValidate || grantsLoading || saving || validating || !policies.length) return;
     setValidating(true);
     setError('');
     try {
       const result = requirePolicySetValidation(await validatePolicySet(organizationId, policies));
-      if (applies()) setValidation(result);
+      if (mounted.current && permitted.current) setValidation(result);
     } catch (cause) {
       if (applies()) setError(cause.message);
     } finally { if (mounted.current) setValidating(false); }
@@ -113,12 +113,13 @@ const ScopedPolicySetWizard = ({ organizationId, canCreate, grantsLoading }) => 
   };
 
   if (grantsLoading) return <CircularProgress />;
-  if (!canCreate) return <Alert severity="warning">You do not have permission to create or validate Policy Sets in this organization.</Alert>;
+  if (!canCreate) return <Alert severity="warning">You do not have permission to create Policy Sets in this organization.</Alert>;
   const busy = saving || validating;
   return (
     <Container maxWidth="md" sx={{ py: 4 }}>
       <Button startIcon={<ArrowBackIcon />} onClick={() => navigate('/console/org/policies/sets')} sx={{ mb: 2 }}>Policy Sets</Button>
       <Typography variant="h4" gutterBottom>Create Policy Set</Typography>
+      {!canValidate && <Alert severity="warning" sx={{ mb: 2 }}>You do not have permission to validate Policy Sets. Validation permission is required before this wizard can create a draft.</Alert>}
       {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
       {templatesError && <Alert severity="error" sx={{ mb: 2 }}>{templatesError}<Button disabled={busy} onClick={() => setRevision((value) => value + 1)}>Reload templates</Button></Alert>}
       {templatesLoading && <CircularProgress />}
@@ -127,7 +128,7 @@ const ScopedPolicySetWizard = ({ organizationId, canCreate, grantsLoading }) => 
         {templates.map((template) => (
           <Grid item xs={12} sm={4} key={template.template_id}>
             <Card variant="outlined" sx={{ height: '100%', borderColor: selectedTemplate === template.template_id ? 'primary.main' : 'divider' }}>
-              <CardActionArea disabled={busy} onClick={() => chooseTemplate(template)} sx={{ height: '100%' }}>
+              <CardActionArea disabled={busy || !canValidate} onClick={() => chooseTemplate(template)} sx={{ height: '100%' }}>
                 <CardContent>
                   <Typography variant="subtitle2">{template.name}</Typography>
                   <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>{template.description}</Typography>
@@ -191,8 +192,8 @@ const ScopedPolicySetWizard = ({ organizationId, canCreate, grantsLoading }) => 
           {validation && <Alert severity={validation.valid ? 'success' : 'error'}>{validation.valid ? 'Policy Set is valid.' : validation.errors.join(' ')}</Alert>}
 
           <Stack direction="row" justifyContent="flex-end" spacing={1.5}>
-            <Button variant="outlined" onClick={runValidation} disabled={!policies.length || busy}>Validate</Button>
-            <Button variant="contained" startIcon={<SaveIcon />} onClick={save} disabled={!name.trim() || !policies.length || busy}>Create draft</Button>
+            <Button variant="outlined" onClick={runValidation} disabled={!policies.length || busy || !canValidate}>Validate</Button>
+            <Button variant="contained" startIcon={<SaveIcon />} onClick={save} disabled={!name.trim() || !policies.length || busy || !canValidate}>Create draft</Button>
           </Stack>
         </Stack>
       </Paper>
@@ -204,5 +205,6 @@ export default function PolicySetWizard() {
   const { activeOrgId: organizationId } = useConsole();
   const { can, isLoading } = usePermissions();
   if (!organizationId) return <Alert severity="info">Select an organization before creating a Policy Set.</Alert>;
-  return <ScopedPolicySetWizard key={organizationId} organizationId={organizationId} canCreate={can('policy-set', 'create')} grantsLoading={isLoading} />;
+  return <ScopedPolicySetWizard key={organizationId} organizationId={organizationId} canCreate={can('policy-set', 'create')}
+    canValidate={can('policy-set', 'validate')} grantsLoading={isLoading} />;
 }

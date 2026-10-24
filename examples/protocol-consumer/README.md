@@ -87,7 +87,10 @@ The public gateway accepts `GET /v1/policy-sets`, `GET .../templates`,
 `PATCH .../POLICY_SET_ID`, and `POST .../POLICY_SET_ID/activate` or
 `POST .../POLICY_SET_ID/archive`, each with `organization_id=ORG_ID`.
 Reads require `policy-set:view`, metadata PATCH requires `policy-set:edit`,
-and the existing gateway POST operations require `policy-set:create`.
+and draft creation requires `policy-set:create`. The existing gateway uses
+separate `policy-set:validate`, `policy-set:activate` and `policy-set:archive`
+grants for those operations. The wizard validates before creating and therefore
+requires both create and validate permission.
 Activation and archive require explicit confirmation in the console. Their
 fresh scoped read prevents acting on an already changed snapshot; it is not
 an atomic version precondition. The server remains the authorization and

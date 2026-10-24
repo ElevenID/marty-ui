@@ -83,8 +83,8 @@ describe('Policy Set scoped consumer journeys', () => {
     expect(writes).toEqual([])
   })
 
-  it('requires confirmation and uses the existing create grant for lifecycle POSTs', async () => {
-    can.mockImplementation((_resource: string, action: string) => ['view', 'create'].includes(action))
+  it('requires confirmation and uses the independent native lifecycle grants without requiring create', async () => {
+    can.mockImplementation((_resource: string, action: string) => ['view', 'activate', 'archive'].includes(action))
     const { user } = renderPage(); await screen.findByRole('heading', { name: record.name })
     expect(screen.queryByRole('button', { name: 'Edit metadata' })).not.toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Activate', exact: true })); expect(writes).toEqual([])
@@ -96,6 +96,27 @@ describe('Policy Set scoped consumer journeys', () => {
       { method: 'POST', path: '/v1/policy-sets/set-1/activate', org: 'org-1', body: null },
       { method: 'POST', path: '/v1/policy-sets/set-1/archive', org: 'org-1', body: null },
     ])
+  })
+
+  it('does not offer activation with only view and create grants', async () => {
+    can.mockImplementation((_resource: string, action: string) => ['view', 'create'].includes(action))
+    renderPage(); await screen.findByRole('heading', { name: record.name })
+    expect(screen.queryByRole('button', { name: 'Activate', exact: true })).not.toBeInTheDocument()
+  })
+
+  it('does not offer archive without its independent grant', async () => {
+    record.status = 'ACTIVE'
+    can.mockImplementation((_resource: string, action: string) => ['view', 'create', 'activate'].includes(action))
+    renderPage(); await screen.findByRole('heading', { name: record.name })
+    expect(screen.queryByRole('button', { name: 'Archive', exact: true })).not.toBeInTheDocument()
+  })
+
+  it('requires validation permission independently of draft creation permission', async () => {
+    can.mockImplementation((_resource: string, action: string) => ['view', 'create'].includes(action))
+    renderPage('/new')
+    expect(await screen.findByText(/permission to validate Policy Sets/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Validate', exact: true })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Create draft' })).toBeDisabled()
   })
 
   it('edits only changed draft metadata and explicitly clears a description without replacing Cedar', async () => {
