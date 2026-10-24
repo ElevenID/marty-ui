@@ -10,11 +10,12 @@ import { screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { render } from '@test/utils'
 import { server } from '@test/mocks/server'
-import { mockPolicies } from '@test/mocks/fixtures'
+import { mockPolicies as fixturePolicies } from '@test/mocks/fixtures'
 import { http, HttpResponse } from 'msw'
 import DeploymentProfileWizard from '../DeploymentProfileWizard'
 
 const PRESENTATION_POLICIES_URL = 'http://localhost:8000/v1/presentation-policies'
+const mockPolicies = { valid: { ...fixturePolicies.valid, organization_id: 'org-1' } }
 
 const goToRuntimeSettings = async (user: ReturnType<typeof userEvent.setup>) => {
   await user.type(screen.getByLabelText(/profile name/i), 'Test Profile')
@@ -23,6 +24,7 @@ const goToRuntimeSettings = async (user: ReturnType<typeof userEvent.setup>) => 
 
 // Mock navigation
 const mockNavigate = vi.fn()
+const organization = vi.hoisted(() => ({ id: 'org-1' }))
 vi.mock('react-router', async () => {
   const actual = await vi.importActual('react-router')
   return {
@@ -32,13 +34,16 @@ vi.mock('react-router', async () => {
 })
 
 vi.mock('../../../../contexts/ConsoleContext', () => ({
-  useConsole: () => ({ activeOrgId: 'org-1' }),
+  useConsole: () => ({ activeOrgId: organization.id }),
 }))
 
 describe('DeploymentProfileWizard', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    organization.id = 'org-1'
     server.use(
+      http.get('http://localhost:8000/v1/credential-templates', () => HttpResponse.json([])),
+      http.get('http://localhost:8000/v1/flows/definitions', () => HttpResponse.json([])),
       http.get(PRESENTATION_POLICIES_URL, () => {
         return HttpResponse.json([mockPolicies.valid])
       })
@@ -290,6 +295,15 @@ describe('DeploymentProfileWizard', () => {
 
     let submittedData: any
     server.use(
+      http.get('http://localhost:8000/v1/credential-templates', () => HttpResponse.json([
+        { id: 'template-1', organization_id: 'org-1', name: 'Membership template', status: 'ACTIVE' },
+        { id: 'inactive-template', organization_id: 'org-1', name: 'Inactive template', status: 'DRAFT' },
+      ])),
+      http.get('http://localhost:8000/v1/flows/definitions', () => HttpResponse.json([
+        { id: 'flow-issue', organization_id: 'org-1', name: 'Issue membership', status: 'ACTIVE', flow_type: 'oid4vci_pre_authorized', credential_template_id: 'template-1', trust_profile_id: 'trust-1' },
+        { id: 'flow-verify', organization_id: 'org-1', name: 'Verify membership', status: 'ACTIVE', flow_type: 'oid4vp_presentation', presentation_policy_id: 1, trust_profile_id: 'trust-1' },
+        { id: 'flow-other', organization_id: 'org-1', name: 'Other policy flow', status: 'ACTIVE', presentation_policy_id: 'other-policy', trust_profile_id: 'trust-1' },
+      ])),
       http.post('http://localhost:8000/v1/deployment-profiles', async ({ request }) => {
         submittedData = await request.json()
         return HttpResponse.json(
@@ -310,6 +324,12 @@ describe('DeploymentProfileWizard', () => {
     // Step 2: Runtime Settings (policy auto-selected - only one active policy)
     await waitFor(() => screen.getByRole('heading', { name: /Runtime Settings/i }))
     await waitFor(() => expect(screen.getByTestId('wizard.deployment.next')).not.toBeDisabled())
+    expect(screen.queryByLabelText('Inactive template')).not.toBeInTheDocument()
+    expect(screen.getByRole('checkbox', { name: /Issue membership/ })).toBeDisabled()
+    expect(screen.getByRole('checkbox', { name: /Other policy flow/ })).toBeDisabled()
+    await user.click(screen.getByRole('checkbox', { name: 'Membership template' }))
+    await user.click(screen.getByRole('checkbox', { name: /Issue membership/ }))
+    await user.click(screen.getByRole('checkbox', { name: /Verify membership/ }))
     await user.click(screen.getByTestId('wizard.deployment.next'))
 
     // Step 3: Integration (skip)
@@ -333,7 +353,9 @@ describe('DeploymentProfileWizard', () => {
     expect(submittedData.default_policy_id).toBe(1)
     expect(submittedData.presentation_policy_ids).toEqual([1])
     expect(submittedData.trust_profile_id).toBe('trust-1')
-    expect(submittedData.enabled_flow_ids).toEqual([])
+    expect(submittedData.credential_template_ids).toEqual(['template-1'])
+    expect(submittedData.enabled_flow_ids).toEqual(['flow-issue', 'flow-verify'])
+    expect(submittedData).not.toHaveProperty('runtime_catalog')
     expect(submittedData.environment_config).toEqual({ theme: 'light', language: 'en-US' })
     expect(submittedData.feature_flags).toMatchObject({
       enable_qr_code_generation: true,
@@ -342,6 +364,34 @@ describe('DeploymentProfileWizard', () => {
     expect(submittedData).not.toHaveProperty('ux_config')
     expect(submittedData.status).toBe('active')
     expect(submittedData.activate_immediately).toBe(true)
+  })
+
+  it.each(['credential-templates', 'flows/definitions'])('fails closed for a foreign %s catalog', async (path) => {
+    const user = userEvent.setup()
+    server.use(http.get(`http://localhost:8000/v1/${path}`, () => HttpResponse.json([
+      { id: 'foreign-resource', name: 'Foreign resource', organization_id: 'other-org', status: 'ACTIVE' },
+    ])))
+    render(<DeploymentProfileWizard />)
+    await goToRuntimeSettings(user)
+    expect(await screen.findByRole('alert')).toHaveTextContent('outside the selected organization')
+    expect(screen.queryByText('Foreign resource')).not.toBeInTheDocument()
+    expect(screen.getByTestId('wizard.deployment.next')).toBeDisabled()
+  })
+
+  it('discards the wizard draft and late catalog responses after an organization switch', async () => {
+    const user = userEvent.setup()
+    let finish: (response: Response) => void = () => {}
+    let pending = false
+    server.use(http.get('http://localhost:8000/v1/credential-templates', () => new Promise<Response>((resolve) => { finish = resolve; pending = true })))
+    const { rerender } = render(<DeploymentProfileWizard />)
+    await goToRuntimeSettings(user)
+    await waitFor(() => expect(pending).toBe(true))
+    organization.id = 'org-2'
+    rerender(<DeploymentProfileWizard />)
+    expect(screen.getByLabelText(/profile name/i)).toHaveValue('')
+    finish(HttpResponse.json([{ id: 'old-template', organization_id: 'org-1', name: 'Old organization template', status: 'ACTIVE' }]))
+    expect(screen.queryByText('Old organization template')).not.toBeInTheDocument()
+    expect(screen.getByTestId('wizard.deployment.next')).toBeDisabled()
   })
 
   it('should handle API errors', async () => {

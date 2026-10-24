@@ -26,26 +26,9 @@ import AddCircleOutlineIcon from '@mui/icons-material/AddCircleOutlined';
 import PolicyIcon from '@mui/icons-material/Policy';
 import { useTranslation } from 'react-i18next';
 
-import { listPresentationPolicies } from '../../../../services/presentationPolicyApi';
+import { listPresentationPolicies, listCredentialTemplates } from '../../../../services/presentationPolicyApi';
+import { listFlows } from '../../../../services/flowsApi';
 import { useConsole } from '../../../../contexts/ConsoleContext';
-
-const getFlowTypes = (t) => [
-  {
-    value: 'verification',
-    label: t('wizards.deploymentProfile.runtimeSettingsStep.flowTypes.verification.label'),
-    description: t('wizards.deploymentProfile.runtimeSettingsStep.flowTypes.verification.description'),
-  },
-  {
-    value: 'issuance',
-    label: t('wizards.deploymentProfile.runtimeSettingsStep.flowTypes.issuance.label'),
-    description: t('wizards.deploymentProfile.runtimeSettingsStep.flowTypes.issuance.description'),
-  },
-  {
-    value: 'combined',
-    label: t('wizards.deploymentProfile.runtimeSettingsStep.flowTypes.combined.label'),
-    description: t('wizards.deploymentProfile.runtimeSettingsStep.flowTypes.combined.description'),
-  },
-];
 
 const isActivePolicy = (policy) => (
   String(policy?.status || '').trim().toLowerCase() === 'active'
@@ -56,27 +39,50 @@ const RuntimeSettingsStep = ({ data, onChange }) => {
   const { t } = useTranslation('console');
   const navigate = useNavigate();
   const { activeOrgId } = useConsole();
-  const { data: rawPolicies, loading, error, reload } = useAsyncData(
+  const { data: catalog, loading, error, reload } = useAsyncData(
     async () => {
       if (!activeOrgId) {
         throw new Error('Select an organization before loading presentation policies.');
       }
-      const response = await listPresentationPolicies({ organization_id: activeOrgId });
-      return response.filter(isActivePolicy);
+      const scope = { organization_id: activeOrgId };
+      const [policies, templates, flows] = await Promise.all([
+        listPresentationPolicies(scope), listCredentialTemplates(scope), listFlows(scope),
+      ]);
+      const ownedActive = (items, label) => {
+        if (!Array.isArray(items) || items.some((item) => !item || !item.id || item.organization_id !== activeOrgId)) {
+          throw new Error(`${label} catalog is malformed or outside the selected organization.`);
+        }
+        return items.filter(isActivePolicy);
+      };
+      return { policies: ownedActive(policies, 'Policy'), templates: ownedActive(templates, 'Credential template'), flows: ownedActive(flows, 'Flow') };
     },
     [activeOrgId]
   );
-  const policies = rawPolicies || [];
+  const policies = catalog?.policies || [];
+  const templates = catalog?.templates || [];
+  const flows = catalog?.flows || [];
+  const selectedPolicy = policies.find((policy) => policy.id === data.default_policy_id);
+  const compatibleFlow = (flow) => (!flow.trust_profile_id || flow.trust_profile_id === selectedPolicy?.trust_profile_id)
+    && (!flow.presentation_policy_id || flow.presentation_policy_id === selectedPolicy?.id)
+    && (!flow.credential_template_id || (data.credential_template_ids || []).includes(flow.credential_template_id));
 
-  // Auto-select if only one policy and none already selected (mirrors original mount-only behavior)
+  // Reconcile selections against the current scoped catalogs before allowing review.
   useEffect(() => {
-    if (policies.length === 1 && !data.default_policy_id) {
-      onChange({
-        default_policy_id: policies[0].id,
-        trust_profile_id: policies[0].trust_profile_id || null,
-      });
+    const updates = {};
+    const ready = Boolean(!loading && !error && catalog);
+    if (data.runtime_catalog_ready !== ready) updates.runtime_catalog_ready = ready;
+    if (ready) {
+      if (data.runtime_catalog !== catalog) updates.runtime_catalog = catalog;
+      const policy = selectedPolicy || (policies.length === 1 ? policies[0] : null);
+      if (data.default_policy_id !== (policy?.id || null)) updates.default_policy_id = policy?.id || null;
+      if (data.trust_profile_id !== (policy?.trust_profile_id || null)) updates.trust_profile_id = policy?.trust_profile_id || null;
+      const selectedTemplates = (data.credential_template_ids || []).filter((id) => templates.some((template) => template.id === id));
+      if (JSON.stringify(selectedTemplates) !== JSON.stringify(data.credential_template_ids)) updates.credential_template_ids = selectedTemplates;
+      const selectedFlows = (data.enabled_flows || []).filter((id) => flows.some((flow) => flow.id === id && compatibleFlow(flow)));
+      if (JSON.stringify(selectedFlows) !== JSON.stringify(data.enabled_flows)) updates.enabled_flows = selectedFlows;
     }
-  }, [policies]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (Object.keys(updates).length) onChange(updates);
+  });
 
   const handleFlowToggle = (flowValue) => {
     const flows = data.enabled_flows || [];
@@ -164,8 +170,9 @@ const RuntimeSettingsStep = ({ data, onChange }) => {
 
       {/* Default Presentation Policy */}
       <FormControl fullWidth required sx={{ mb: 4 }}>
-        <InputLabel>{t('wizards.deploymentProfile.runtimeSettingsStep.fields.defaultPolicy')}</InputLabel>
+        <InputLabel id="deployment-default-policy-label">{t('wizards.deploymentProfile.runtimeSettingsStep.fields.defaultPolicy')}</InputLabel>
         <Select
+          labelId="deployment-default-policy-label"
           value={data.default_policy_id || ''}
           onChange={(e) => {
             const selectedPolicy = policies.find((policy) => policy.id === e.target.value);
@@ -190,29 +197,40 @@ const RuntimeSettingsStep = ({ data, onChange }) => {
         </FormHelperText>
       </FormControl>
 
+      <Typography variant="subtitle2" gutterBottom>Credential templates</Typography>
+      <Typography variant="body2" color="text.secondary">Select active credential templates to bind to this deployment.</Typography>
+      <FormGroup>
+        {templates.map((template) => <FormControlLabel key={template.id} label={template.name}
+          control={<Checkbox checked={(data.credential_template_ids || []).includes(template.id)}
+            onChange={() => onChange({ credential_template_ids: (data.credential_template_ids || []).includes(template.id)
+              ? data.credential_template_ids.filter((id) => id !== template.id) : [...(data.credential_template_ids || []), template.id] })} />} />)}
+      </FormGroup>
+      {!templates.length && <Alert severity="info">No active credential templates are available. A verification-only deployment can continue without one.</Alert>}
+
       {/* Enabled Flows */}
       <Typography variant="subtitle2" gutterBottom>
         {t('wizards.deploymentProfile.runtimeSettingsStep.fields.enabledFlows')}
       </Typography>
       <Typography variant="body2" color="text.secondary" paragraph>
-        {t('wizards.deploymentProfile.runtimeSettingsStep.helpers.enabledFlows')}
+        Select active flow definitions. Issuance flows require their credential template to be selected; verification flows must use the selected policy and trust profile.
       </Typography>
       
       <FormGroup>
-        {getFlowTypes(t).map((flow) => (
+        {flows.map((flow) => (
           <FormControlLabel
-            key={flow.value}
+            key={flow.id}
             control={
               <Checkbox
-                checked={(data.enabled_flows || []).includes(flow.value)}
-                onChange={() => handleFlowToggle(flow.value)}
+                disabled={!compatibleFlow(flow)}
+                checked={(data.enabled_flows || []).includes(flow.id)}
+                onChange={() => handleFlowToggle(flow.id)}
               />
             }
             label={
               <Box>
-                <Typography variant="body1">{flow.label}</Typography>
+                <Typography variant="body1">{flow.name}</Typography>
                 <Typography variant="body2" color="text.secondary">
-                  {flow.description}
+                  {flow.flow_type}
                 </Typography>
               </Box>
             }
