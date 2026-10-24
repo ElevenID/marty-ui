@@ -233,7 +233,7 @@ def main() -> int:
     )
     wallet.add_argument("--template-id", required=True)
     issue = commands.add_parser(
-        "issue", help="Issue through an authorized template and public DID"
+        "issue", help="Issue a VCDM v2 Data Integrity credential through a JSON_LD template and public DID"
     )
     issue.add_argument("--template-id", required=True)
     issue.add_argument("--issuer-did", required=True)

@@ -220,7 +220,7 @@ function PresentationPoliciesPage() {
                           <VisibilityIcon fontSize="small" />
                         </IconButton>
                       </Tooltip>
-                      <Tooltip title={t('policies.actions.edit')}>
+                      {String(policy.status).toLowerCase() === 'draft' && <Tooltip title={t('policies.actions.edit')}>
                         <IconButton
                           component={Link}
                           to={`/console/org/policies/presentation/${policy.id}/edit`}
@@ -228,7 +228,7 @@ function PresentationPoliciesPage() {
                         >
                           <EditIcon fontSize="small" />
                         </IconButton>
-                      </Tooltip>
+                      </Tooltip>}
                     </TableCell>
                   </TableRow>
                 );

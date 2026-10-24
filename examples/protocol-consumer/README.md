@@ -46,11 +46,13 @@ This command first reads the public `/v1/protocol-support` catalog without crede
 
 For API-key composition checks, grant `trust:read` (trust, presentation policy and revocation profile), `templates:read`, `compliance:read`, `deployment:read`, `flows:read`, and `users:read` (organization runtime status) in the selected organization. Corresponding writer scopes can also authorize reads. Revocation-profile discovery does not grant credential-revocation authority. Bearer sessions need the corresponding organization read permissions.
 
-Save a VCDM v2 credential object matching your template's claims to `credential.json`, then issue it:
+The `issue` command uses the VC-API Data Integrity adapter. Select an active `JSON_LD` (VCDM v2 Data Integrity) template and compatible public issuer DID. Save an unsigned VCDM v2 credential object matching that template's claims to `credential.json`, then issue it:
 
 ```powershell
 python examples/protocol-consumer/client.py --base-url https://your-api.example --organization-id ORG_ID --output issued-response.json issue --template-id TEMPLATE_ID --issuer-did did:web:your-issuer.example --credential credential.json
 ```
+
+SD-JWT, JWT VC and mdoc templates use the native issuance workflow: initiate `POST /v1/issuance` with the organization, credential template, public issuer DID and format-appropriate claims; redeem the resulting credential offer through the advertised OID4VCI token, nonce and credential endpoints using the wallet's holder proof. Sending a complete `credential_document` through the VC-API adapter for these formats is rejected. Capability discovery describes supported signing tuples; it does not make every format compatible with this Data Integrity command.
 
 Verify the returned credential using a presentation policy. The example extracts `verifiableCredential` from the issuance response automatically:
 
