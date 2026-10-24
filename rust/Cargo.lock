@@ -3995,7 +3995,7 @@ dependencies = [
 [[package]]
 name = "marty-canonical-digest"
 version = "0.2.2"
-source = "git+https://github.com/ElevenID/marty-core?rev=56f58d7a52f3468d25e0ad9936041d32d9bbf058#56f58d7a52f3468d25e0ad9936041d32d9bbf058"
+source = "git+https://github.com/ElevenID/marty-core?rev=1ef74dcf0532e6a809b7a1c64b6bf4f44429a295#1ef74dcf0532e6a809b7a1c64b6bf4f44429a295"
 dependencies = [
  "serde_json",
  "sha2 0.10.9",
@@ -4208,7 +4208,7 @@ dependencies = [
 [[package]]
 name = "marty-crypto"
 version = "0.2.2"
-source = "git+https://github.com/ElevenID/marty-core?rev=56f58d7a52f3468d25e0ad9936041d32d9bbf058#56f58d7a52f3468d25e0ad9936041d32d9bbf058"
+source = "git+https://github.com/ElevenID/marty-core?rev=1ef74dcf0532e6a809b7a1c64b6bf4f44429a295#1ef74dcf0532e6a809b7a1c64b6bf4f44429a295"
 dependencies = [
  "aes 0.8.4",
  "aes-gcm 0.10.3",
@@ -4354,16 +4354,16 @@ dependencies = [
 [[package]]
 name = "marty-didcomm"
 version = "0.2.2"
-source = "git+https://github.com/ElevenID/marty-core?rev=56f58d7a52f3468d25e0ad9936041d32d9bbf058#56f58d7a52f3468d25e0ad9936041d32d9bbf058"
+source = "git+https://github.com/ElevenID/marty-core?rev=1ef74dcf0532e6a809b7a1c64b6bf4f44429a295#1ef74dcf0532e6a809b7a1c64b6bf4f44429a295"
 dependencies = [
  "aes-kw",
  "base64 0.22.1",
  "bs58 0.5.1",
  "chrono",
  "ed25519-dalek 2.2.0",
+ "getrandom 0.4.3",
  "marty-crypto",
  "p256",
- "rand 0.8.7",
  "reqwest",
  "serde",
  "serde_json",
@@ -4380,7 +4380,7 @@ dependencies = [
 [[package]]
 name = "marty-emrtd-issuance"
 version = "0.2.2"
-source = "git+https://github.com/ElevenID/marty-core?rev=56f58d7a52f3468d25e0ad9936041d32d9bbf058#56f58d7a52f3468d25e0ad9936041d32d9bbf058"
+source = "git+https://github.com/ElevenID/marty-core?rev=1ef74dcf0532e6a809b7a1c64b6bf4f44429a295#1ef74dcf0532e6a809b7a1c64b6bf4f44429a295"
 dependencies = [
  "cms",
  "const-oid 0.9.6",
@@ -4581,7 +4581,7 @@ dependencies = [
 [[package]]
 name = "marty-iso18013"
 version = "0.2.2"
-source = "git+https://github.com/ElevenID/marty-core?rev=56f58d7a52f3468d25e0ad9936041d32d9bbf058#56f58d7a52f3468d25e0ad9936041d32d9bbf058"
+source = "git+https://github.com/ElevenID/marty-core?rev=1ef74dcf0532e6a809b7a1c64b6bf4f44429a295#1ef74dcf0532e6a809b7a1c64b6bf4f44429a295"
 dependencies = [
  "anyhow",
  "ciborium",
@@ -4758,7 +4758,7 @@ dependencies = [
 [[package]]
 name = "marty-oid4vci"
 version = "0.2.2"
-source = "git+https://github.com/ElevenID/marty-core?rev=56f58d7a52f3468d25e0ad9936041d32d9bbf058#56f58d7a52f3468d25e0ad9936041d32d9bbf058"
+source = "git+https://github.com/ElevenID/marty-core?rev=1ef74dcf0532e6a809b7a1c64b6bf4f44429a295#1ef74dcf0532e6a809b7a1c64b6bf4f44429a295"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -5163,7 +5163,7 @@ dependencies = [
 [[package]]
 name = "marty-status"
 version = "0.2.2"
-source = "git+https://github.com/ElevenID/marty-core?rev=56f58d7a52f3468d25e0ad9936041d32d9bbf058#56f58d7a52f3468d25e0ad9936041d32d9bbf058"
+source = "git+https://github.com/ElevenID/marty-core?rev=1ef74dcf0532e6a809b7a1c64b6bf4f44429a295#1ef74dcf0532e6a809b7a1c64b6bf4f44429a295"
 dependencies = [
  "base64 0.22.1",
  "flate2",
@@ -5209,7 +5209,7 @@ dependencies = [
 [[package]]
 name = "marty-verification"
 version = "0.2.2"
-source = "git+https://github.com/ElevenID/marty-core?rev=56f58d7a52f3468d25e0ad9936041d32d9bbf058#56f58d7a52f3468d25e0ad9936041d32d9bbf058"
+source = "git+https://github.com/ElevenID/marty-core?rev=1ef74dcf0532e6a809b7a1c64b6bf4f44429a295#1ef74dcf0532e6a809b7a1c64b6bf4f44429a295"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -5311,7 +5311,7 @@ dependencies = [
 [[package]]
 name = "marty-x509-verification"
 version = "0.2.2"
-source = "git+https://github.com/ElevenID/marty-core?rev=56f58d7a52f3468d25e0ad9936041d32d9bbf058#56f58d7a52f3468d25e0ad9936041d32d9bbf058"
+source = "git+https://github.com/ElevenID/marty-core?rev=1ef74dcf0532e6a809b7a1c64b6bf4f44429a295#1ef74dcf0532e6a809b7a1c64b6bf4f44429a295"
 dependencies = [
  "chrono",
  "const-oid 0.9.6",
@@ -9816,12 +9816,12 @@ checksum = "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"
 [[patch.unused]]
 name = "bls12_381_plus"
 version = "0.8.18"
-source = "git+https://github.com/ElevenID/marty-core?rev=56f58d7a52f3468d25e0ad9936041d32d9bbf058#56f58d7a52f3468d25e0ad9936041d32d9bbf058"
+source = "git+https://github.com/ElevenID/marty-core?rev=1ef74dcf0532e6a809b7a1c64b6bf4f44429a295#1ef74dcf0532e6a809b7a1c64b6bf4f44429a295"
 
 [[patch.unused]]
 name = "elliptic-curve"
 version = "0.13.8"
-source = "git+https://github.com/ElevenID/marty-core?rev=56f58d7a52f3468d25e0ad9936041d32d9bbf058#56f58d7a52f3468d25e0ad9936041d32d9bbf058"
+source = "git+https://github.com/ElevenID/marty-core?rev=1ef74dcf0532e6a809b7a1c64b6bf4f44429a295#1ef74dcf0532e6a809b7a1c64b6bf4f44429a295"
 
 [[patch.unused]]
 name = "ssi"
