@@ -102,7 +102,6 @@ uuid.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
-marty-organization = { path = "../organization" }
 tokio = { workspace = true, features = ["test-util"] }
 axum-server.workspace = true
 affinidi-messaging-didcomm.workspace = true

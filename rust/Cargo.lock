@@ -4634,7 +4634,6 @@ dependencies = [
  "marty-key-material-policy",
  "marty-oid4vci",
  "marty-openbao-http",
- "marty-organization",
  "marty-passport-auth",
  "marty-platform-clock",
  "marty-response-compat",

@@ -1915,9 +1915,17 @@ async fn head_id(pool: &sqlx::PgPool) -> String {
 }
 
 async fn setup_schema(pool: &sqlx::PgPool) {
-    marty_organization::migration::migrate_organization_schema(pool)
-        .await
-        .expect("Canvas approval contract must use the production Organization schema");
+    // Reuse the owner's actual DDL without adding a cross-service Rust edge.
+    // The Organization migration contract runs afterward on this database.
+    for migration in [
+        include_str!("../../organization/migrations/0001_organization_schema.sql"),
+        include_str!("../../organization/migrations/0002_offline_audit_receipts.sql"),
+    ] {
+        sqlx::raw_sql(migration)
+            .execute(pool)
+            .await
+            .expect("Canvas approval contract must use the production Organization schema");
+    }
     sqlx::query(
         "INSERT INTO organization_service.organizations
             (id,name,status,created_at,updated_at)
