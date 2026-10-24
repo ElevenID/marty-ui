@@ -5,11 +5,14 @@ import type { ReactNode } from 'react';
 
 import ConsoleRoutes from './ConsoleRoutes';
 
-const { mockLogin, mockUseAuth, mockUseConsole } = vi.hoisted(() => ({
+const { mockLogin, mockUseAuth, mockUseConsole, mockUsePermissions } = vi.hoisted(() => ({
+  mockUsePermissions: vi.fn(),
   mockLogin: vi.fn(),
   mockUseAuth: vi.fn(),
   mockUseConsole: vi.fn(),
 }));
+
+vi.mock('../../hooks/usePermissions', () => ({ usePermissions: () => mockUsePermissions() }));
 
 vi.mock('../../hooks/useAuth', () => ({
   useAuth: () => mockUseAuth(),
@@ -89,12 +92,14 @@ vi.mock('../../components/console', () => ({
   CredentialTemplateWizard: () => <div data-testid="credential-template-wizard" />,
   PoliciesPage: () => <div data-testid="policies-page" />,
   PresentationPoliciesPage: () => <div data-testid="presentation-policies-page" />,
+  ComplianceProfilePage: ({ mode = "view" }: { mode?: string }) => <div data-testid={`compliance-profile-${mode}`} />,
   ComplianceProfilesPage: () => <div data-testid="compliance-profiles-page" />,
   PresentationPolicyWizard: () => <div data-testid="presentation-policy-wizard" />,
   DeployPage: () => <div data-testid="deploy-page" />,
   DeploymentProfilesPage: () => <div data-testid="deployment-profiles-page" />,
   ApiKeysPage: () => <div data-testid="api-keys-page" />,
   DidIdentitiesPage: () => <div data-testid="did-identities-page" />,
+  DidIdentityDetailPage: () => <div data-testid="did-identity-detail-page" />,
   CanvasIntegrationsPage: () => <div data-testid="canvas-integrations-page" />,
   DeliveryDestinationsPage: () => <div data-testid="delivery-destinations-page" />,
   LanesDevicesPage: () => <div data-testid="lanes-devices-page" />,
@@ -143,6 +148,7 @@ function renderConsoleRoutes(path: string) {
 describe('ConsoleRoutes login routing', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockUsePermissions.mockReturnValue({ can: () => true, isLoading: false });
     mockUseAuth.mockReturnValue({
       isAuthenticated: false,
       isLoading: false,
@@ -267,4 +273,56 @@ describe('ConsoleRoutes login routing', () => {
     expect(screen.queryByTestId('audit-page')).not.toBeInTheDocument();
   });
 
+});
+
+// ProtectedRoute is mocked only for authentication; the operator guard is real.
+describe('operator key management authorization', () => {
+  const canonical = '/console/org/operator/key-management';
+  const readPaths = [canonical, canonical + '/services', '/console/org/operator', '/console/org/deploy/key-management', '/console/org/deploy/key-management/services', '/console/org/deploy/signing-keys', '/console/org/deploy/signing-keys/settings'];
+  const writePaths = [canonical + '/services/new', '/console/org/deploy/key-management/services/new', '/console/org/deploy/signing-keys/services/new'];
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockUseAuth.mockReturnValue({ isAuthenticated: true });
+    mockUseConsole.mockReturnValue({ mode: 'org', activeOrgId: 'org-1', memberships: [{ id: 'org-1' }] });
+    mockUsePermissions.mockReturnValue({ can: (_resource: string, action: string) => action === 'view', isLoading: false });
+  });
+  it.each(readPaths)('allows metadata readers at %s', async (path) => {
+    renderConsoleRoutes(path);
+    expect(await screen.findByTestId('signing-keys-page')).toBeInTheDocument();
+  });
+  it.each(writePaths)('denies configuration to read-only users at %s', async (path) => {
+    renderConsoleRoutes(path);
+    expect(await screen.findByRole('alert')).toHaveTextContent('permission to configure');
+    expect(screen.queryByTestId('key-management-service-wizard')).not.toBeInTheDocument();
+  });
+  it.each(readPaths)('denies unauthorized readers at %s', async (path) => {
+    mockUsePermissions.mockReturnValue({ can: () => false, isLoading: false });
+    renderConsoleRoutes(path);
+    expect(await screen.findByRole('alert')).toHaveTextContent('permission to view');
+    expect(screen.queryByTestId('signing-keys-page')).not.toBeInTheDocument();
+  });
+  it.each(writePaths)('preserves administrator configuration access at %s', async (path) => {
+    mockUsePermissions.mockReturnValue({ can: () => true, isLoading: false });
+    renderConsoleRoutes(path);
+    expect(await screen.findByTestId('key-management-service-wizard')).toBeInTheDocument();
+  });
+  it('does not mount an operator page while permissions load even if stale can() grants access', () => {
+    mockUsePermissions.mockReturnValue({ can: () => true, isLoading: true });
+    renderConsoleRoutes(canonical);
+    expect(screen.getByText('Checking operator permissions...')).toBeInTheDocument();
+    expect(screen.queryByTestId('signing-keys-page')).not.toBeInTheDocument();
+  });
+  it('keeps the public issuer inventory in Deploy', () => {
+    mockUsePermissions.mockReturnValue({ can: () => false, isLoading: false });
+    renderConsoleRoutes('/console/org/deploy/issuer-identity');
+    expect(screen.getByTestId('did-identities-page')).toBeInTheDocument();
+  });
+});
+
+
+describe('canonical compliance profile routes', () => {
+  it.each([['/new', 'create'], ['/profile-one', 'view'], ['/profile-one/edit', 'edit']])('routes %s to the owned consumer page', (suffix, mode) => {
+    renderConsoleRoutes('/console/org/policies/compliance' + suffix);
+    expect(screen.getByTestId('compliance-profile-' + mode)).toBeInTheDocument();
+  });
 });

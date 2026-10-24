@@ -367,12 +367,9 @@ fn parse_mechanism(value: &str) -> Result<RevocationMechanism, String> {
 }
 
 fn parse_credential_format(value: &str) -> Result<CredentialFormat, String> {
-    match value {
-        "SD_JWT_VC" => Ok(CredentialFormat::SdJwtVc),
-        "MDOC" => Ok(CredentialFormat::Mdoc),
-        "VC_JWT" => Ok(CredentialFormat::VcJwt),
-        _ => Err(format!("unsupported credential format: {value}")),
-    }
+    // HTTP, gRPC and persistence share one canonical format vocabulary.
+    serde_json::from_value(serde_json::Value::String(value.into()))
+        .map_err(|_| format!("unsupported credential format: {value}"))
 }
 
 fn positive_i32_or<T>(value: i32, default: T) -> Result<T, String>
@@ -466,5 +463,31 @@ mod tests {
         assert_eq!(created.status, "draft");
         assert_eq!(created.supported_formats, ["SD_JWT_VC", "MDOC", "VC_JWT"]);
         assert_eq!(created.issuer_config.unwrap().status_list_size, 131_072);
+    }
+
+    #[tokio::test]
+    async fn grpc_json_ld_profile_uses_the_shared_format_model() {
+        let grpc = grpc();
+        let created = grpc
+            .create_revocation_profile(Request::new(CreateRevocationProfileRequest {
+                organization_id: "org-json-ld".into(),
+                name: "JSON-LD status profile".into(),
+                supported_formats: vec!["JSON_LD".into()],
+                ..Default::default()
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(created.supported_formats, ["JSON_LD"]);
+        let error = grpc
+            .create_revocation_profile(Request::new(CreateRevocationProfileRequest {
+                organization_id: "org-json-ld".into(),
+                name: "Unsupported format".into(),
+                supported_formats: vec!["UNKNOWN".into()],
+                ..Default::default()
+            }))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), tonic::Code::InvalidArgument);
     }
 }

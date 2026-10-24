@@ -180,6 +180,7 @@ describe('readiness gateway smoke', () => {
         identities: [{
           issuer_did: 'did:web:issuer.example.com',
           key_purpose: 'vc_jwt_issuer',
+          credential_format: 'SD_JWT_VC',
           algorithm: 'ES256',
           status: 'active',
         }],
@@ -242,6 +243,7 @@ describe('readiness gateway smoke', () => {
       identities: [{
         issuer_did: 'did:web:issuer.example.com',
         key_purpose: 'vc_jwt_issuer',
+          credential_format: 'SD_JWT_VC',
         algorithm: 'ES256',
         status: 'active',
       }],
@@ -330,6 +332,7 @@ describe('readiness gateway smoke', () => {
       organization_id: 'org_live',
       issuer_did: 'did:web:issuer.example.com:orgs:live',
       key_purpose: 'vc_jwt_issuer',
+          credential_format: 'SD_JWT_VC',
       credential_format: 'SD_JWT_VC',
       algorithm: 'ES256',
       issuer_profile_id: 'must-not-cross',
@@ -356,6 +359,7 @@ describe('readiness gateway smoke', () => {
         organization_id: 'org_live',
         issuer_did: 'did:web:issuer.example.com:orgs:live',
         key_purpose: 'vc_jwt_issuer',
+          credential_format: 'SD_JWT_VC',
         credential_format: 'SD_JWT_VC',
         algorithm: 'ES256',
       })

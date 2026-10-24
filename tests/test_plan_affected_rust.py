@@ -1971,11 +1971,13 @@ class AffectedRustPlannerTests(unittest.TestCase):
                 direct_dependencies = {
                     dep["name"] for dep in packages["marty-gateway"]["dependencies"]
                 }
-                # These Gateway upstreams are HTTP runtime edges, not Cargo
-                # dependencies. The Signing Keys dev-only edge was removed
-                # when its cross-service proof moved to service-acceptance;
-                # the non-Cargo route observation above must still fail closed.
-                self.assertNotIn(producer, direct_dependencies)
+                # Native template compatibility reuses the credential-template
+                # format parser through Cargo. That typed edge does not retire
+                # the independently observed HTTP upstream or narrow the plan.
+                if producer == "marty-credential-template":
+                    self.assertIn(producer, direct_dependencies)
+                else:
+                    self.assertNotIn(producer, direct_dependencies)
 
     def test_base_compose_wires_every_configured_gateway_upstream(self) -> None:
         # An in-container localhost default cannot reach a sibling service.

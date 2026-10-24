@@ -18,6 +18,64 @@ use tower::ServiceExt;
 static ENVIRONMENT: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 const FIXTURE: &str = include_str!("../../../../contracts/notification_behavior.json");
 
+fn assert_schema_fields(value: &Value, schema: &Value) {
+    if value.is_null() {
+        return;
+    }
+    let schema = schema
+        .get("oneOf")
+        .and_then(Value::as_array)
+        .and_then(|variants| variants.iter().find(|variant| variant["type"] != "null"))
+        .unwrap_or(schema);
+    if let (Some(object), Some(properties)) = (value.as_object(), schema["properties"].as_object())
+    {
+        assert_eq!(
+            object.keys().collect::<std::collections::BTreeSet<_>>(),
+            properties.keys().collect::<std::collections::BTreeSet<_>>(),
+            "native notification/schema field drift"
+        );
+        for (key, value) in object {
+            assert_schema_fields(value, &properties[key]);
+        }
+    }
+    if let Some(items) = value.as_array() {
+        for item in items {
+            assert_schema_fields(item, &schema["items"]);
+        }
+    }
+}
+
+#[test]
+fn nested_http_schemas_track_all_native_request_and_projection_fields() {
+    let examples: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/notification-http-examples.json"
+    ))
+    .unwrap();
+    let schemas: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/notification-http-schemas.json"
+    ))
+    .unwrap();
+    let request: marty_notification::service::SendNotificationRequest =
+        serde_json::from_value(examples["send"].clone()).unwrap();
+    assert_schema_fields(
+        &serde_json::to_value(request).unwrap(),
+        &schemas["runtime__notification_send_request"],
+    );
+    let stored = marty_notification::domain::Notification {
+        organization_id: Some("org-a".into()),
+        target: Some(serde_json::from_value(examples["response"]["target"].clone()).unwrap()),
+        link: Some("/console/org/notifications".into()),
+        collapse_key: Some("collapse".into()),
+        correlation_id: Some("correlation".into()),
+        ..Default::default()
+    };
+    let response = marty_notification::service::NotificationResponse::from(&stored);
+    assert_schema_fields(
+        &serde_json::to_value(response).unwrap(),
+        &schemas["runtime__notification_response"],
+    );
+}
+
 fn app(repository: Arc<dyn NotificationRepository>) -> axum::Router {
     router(repository)
 }
@@ -78,6 +136,17 @@ async fn send_contract_preserves_shape_priority_and_explicit_delivery_truth() {
     assert_eq!(body["title"], "Credential ready");
     assert_eq!(body["priority"], "CRITICAL");
     assert_eq!(body["target"]["channels"], json!(["FCM", "SSE"]));
+    let examples: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/notification-http-examples.json"
+    ))
+    .unwrap();
+    assert_eq!(fixture["valid_send"], examples["send"]);
+    let mut expected = examples["response"].clone();
+    for field in ["id", "created_at"] {
+        expected[field] = body[field].clone();
+    }
+    chrono::DateTime::parse_from_rfc3339(body["created_at"].as_str().unwrap()).unwrap();
+    assert_eq!(body, expected);
     let stored = repository
         .get_notification(body["id"].as_str().unwrap())
         .await
@@ -143,6 +212,10 @@ async fn tenant_bound_read_and_unread_routes_preserve_behavior() {
         .await
         .unwrap();
     assert_eq!(read.status(), StatusCode::OK);
+    let read = json_body(read).await;
+    assert_eq!(read["read"], true);
+    assert_eq!(read["organization_id"], "org-a");
+    assert_eq!(read["body"], fixture["valid_send"]["message"]);
     let count = app
         .clone()
         .oneshot(request(
@@ -162,6 +235,49 @@ async fn tenant_bound_read_and_unread_routes_preserve_behavior() {
         .await
         .unwrap();
     assert_eq!(unread.status(), StatusCode::OK);
+    assert_eq!(json_body(unread).await["read"], false);
+}
+
+#[tokio::test]
+async fn invalid_nested_targets_and_unknown_fields_fail_before_notification_storage() {
+    let examples: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/notification-http-examples.json"
+    ))
+    .unwrap();
+    for case in [
+        "unknown-root",
+        "unknown-target",
+        "foreign-target",
+        "invalid-channel",
+    ] {
+        let repository = Arc::new(InMemoryNotificationRepository::default());
+        let mut body = examples["send"].clone();
+        match case {
+            "unknown-root" => body["kms_key_id"] = json!("private-selector"),
+            "unknown-target" => body["target"]["unrecognized"] = json!(true),
+            "foreign-target" => body["target"]["organization_id"] = json!("org-b"),
+            _ => body["target"]["channels"] = json!(["UNKNOWN"]),
+        }
+        let response = app(repository.clone())
+            .oneshot(request("POST", "/v1/notifications/send", body))
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{case}"
+        );
+        assert!(repository
+            .list_notifications(Some("org-a"), None, None)
+            .await
+            .unwrap()
+            .is_empty());
+        assert!(repository
+            .list_notifications(Some("org-b"), None, None)
+            .await
+            .unwrap()
+            .is_empty());
+    }
 }
 
 #[tokio::test]

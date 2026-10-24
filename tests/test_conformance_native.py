@@ -249,6 +249,18 @@ def test_native_conformance_requires_remote_envelope_custody(fault):
         )
 
 
+@pytest.mark.parametrize("owner", ["issuance", "issuance-native"])
+@pytest.mark.parametrize("key", [*native.CONTROL_PLANE_TARGETS, "GRPC_TLS_CA_CERT"])
+def test_issuance_rejects_downgraded_control_plane(owner, key):
+    value = model()
+    value["services"][owner]["environment"][key] = (
+        native.CONTROL_PLANE_TARGETS[key].removeprefix("https://")
+        if key in native.CONTROL_PLANE_TARGETS else ""
+    )
+    with pytest.raises(ValueError):
+        native.validate_model(value, project=PROJECT, authcrypt=False, local_build=False)
+
+
 def model(*, local=False, authcrypt=False):
     env = {
         key: "synthetic"
@@ -278,6 +290,8 @@ def model(*, local=False, authcrypt=False):
         DIDCOMM_ALLOW_PRIVATE_IPS="true",
         DIDCOMM_TLS_CA_FILE=native.CA_TARGET,
     )
+    env.update(native.CONTROL_PLANE_TARGETS)
+    env["GRPC_TLS_CA_CERT"] = "/run/secrets/workload_identity_ca_cert"
     ca = {
         "type": "bind",
         "source": "/synthetic/tls/root-ca.pem",
@@ -803,14 +817,15 @@ def test_shared_compose_file_is_in_checkout_packaging_boundary():
     import yaml
 
     common = "docker-compose.service.issuance-native.yml"
-    for path in (
-        "docker-compose.beta.yml",
-        "docker-compose.profile.conformance-native.yml",
+    for path, expected in (
+        ("docker-compose.beta.yml", common),
+        ("docker-compose.profile.conformance-native.yml",
+         "docker-compose.service.issuance-native-runtime.yml"),
     ):
         document = yaml.safe_load((native.ROOT / path).read_text(encoding="utf-8"))
         reference = document["services"]["issuance-native"]["extends"]["file"]
         assert (
-            reference == common
+            reference == expected
             and (native.ROOT / path).parent.joinpath(reference).is_file()
         )
     # Beta uses full, source-verified checkouts. The durable runtime-config

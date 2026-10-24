@@ -20,11 +20,7 @@ import { listApplicationTemplates } from '../services/applicationTemplatesApi';
 import { listDeliveryDestinations } from '../services/deliveryDestinationsApi';
 import { listPolicySets } from '../services/policySetsApi';
 import { getPhysicalDocumentCapabilities } from '../services/physicalDocumentsApi';
-import {
-  getKeyManagementConfig,
-  listPublicIssuerIdentities,
-  listSigningKeys,
-} from '../services/signingKeysApi';
+import { listPublicIssuerIdentities } from '../services/issuerIdentitiesApi';
 import { 
   getTeamSnapshot, 
   getRuntimeStatus, 
@@ -32,10 +28,6 @@ import {
   getOrganizationEnvironment,
   getOrganizationLifecycle,
 } from '../services/dashboardApi';
-import {
-  DEFAULT_KEY_MANAGEMENT_CONFIG,
-  normalizeKeyManagementConfig,
-} from '../components/console/deploy/keyManagementServiceCatalog';
 import { useAuth } from './useAuth';
 import { useConsole } from '../contexts/ConsoleContext';
 
@@ -50,9 +42,7 @@ function logDashboardHookError(message, error) {
 function createEmptyDashboardData() {
   return {
     trustProfiles: [],
-    signingKeys: [],
     issuerIdentities: [],
-    keyManagementConfig: DEFAULT_KEY_MANAGEMENT_CONFIG,
     templates: [],
     applicationTemplates: [],
     deliveryDestinations: [],
@@ -118,9 +108,7 @@ export function useDashboardData() {
           revocationProfilesRes,
           deploymentsRes,
           flowsRes,
-          signingKeysRes,
           issuerIdentitiesRes,
-          keyManagementConfigRes,
           apiKeysRes,
           healthRes,
           teamRes,
@@ -139,9 +127,7 @@ export function useDashboardData() {
           listRevocationProfiles({ organization_id: organizationId }),
           listDeploymentProfiles({ organization_id: organizationId }),
           listFlows({ organization_id: organizationId }),
-          listSigningKeys({ organization_id: organizationId, limit: 1 }),
           listPublicIssuerIdentities({ organization_id: organizationId }),
-          getKeyManagementConfig({ organization_id: organizationId }),
           listApiKeys(organizationId),
           fetch('/health').then((r) => (r.ok ? r.json() : { status: 'error' })),
           getTeamSnapshot(organizationId),
@@ -153,13 +139,9 @@ export function useDashboardData() {
 
         if (!mounted) return;
 
-        const rawSigningKeys = signingKeysRes.status === 'fulfilled' ? signingKeysRes.value : [];
         const rawIssuerIdentities = issuerIdentitiesRes.status === 'fulfilled'
           ? issuerIdentitiesRes.value
           : { identities: [] };
-        const rawKeyManagementConfig = keyManagementConfigRes.status === 'fulfilled'
-          ? keyManagementConfigRes.value
-          : DEFAULT_KEY_MANAGEMENT_CONFIG;
         const rejectedReason = (result) => (result.status === 'rejected' ? result.reason : null);
         const dashboardErrors = {
           teamData: rejectedReason(teamRes),
@@ -180,20 +162,14 @@ export function useDashboardData() {
           deployments: rejectedReason(deploymentsRes),
           flows: rejectedReason(flowsRes),
           apiKeys: rejectedReason(apiKeysRes),
-          signingKeys: rejectedReason(signingKeysRes),
           issuerIdentities: rejectedReason(issuerIdentitiesRes),
-          keyManagementConfig: rejectedReason(keyManagementConfigRes),
         };
 
         setData({
           trustProfiles: trustProfilesRes.status === 'fulfilled' ? trustProfilesRes.value : [],
-          signingKeys: Array.isArray(rawSigningKeys)
-            ? rawSigningKeys
-            : (Array.isArray(rawSigningKeys?.keys) ? rawSigningKeys.keys : []),
           issuerIdentities: Array.isArray(rawIssuerIdentities?.identities)
             ? rawIssuerIdentities.identities
             : [],
-          keyManagementConfig: normalizeKeyManagementConfig(rawKeyManagementConfig || DEFAULT_KEY_MANAGEMENT_CONFIG),
           templates: templatesRes.status === 'fulfilled' ? templatesRes.value : [],
           applicationTemplates: applicationTemplatesRes.status === 'fulfilled' ? applicationTemplatesRes.value : [],
           deliveryDestinations: deliveryDestinationsRes.status === 'fulfilled' ? deliveryDestinationsRes.value : [],

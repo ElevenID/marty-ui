@@ -4,7 +4,7 @@
  * Loads the current user's permissions from the backend for the active organization,
  * and provides check methods (can, canAny, canAll).
  * 
- * Permissions are fetched once per org and cached in React state.
+ * Permissions are scoped to the authenticated user and selected organization in React state.
  * Other components invalidate by calling `refresh()`.
  */
 
@@ -18,9 +18,6 @@ import {
   hasAllPermissions,
   getPermissionDeniedMessage,
 } from '../config/permissions';
-
-const permissionsCache = new Map();
-const inflightPermissionsRequests = new Map();
 
 // System/sentinel org IDs that backend policy blocks member-level operations on.
 const SYSTEM_ORG_IDS = new Set([
@@ -45,7 +42,7 @@ const SYSTEM_ORG_IDS = new Set([
  * @returns {UsePermissionsReturn}
  */
 export function usePermissions() {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, user } = useAuth();
   const { activeOrgId, memberships, membershipsLoaded, mode } = useConsole();
   // Never fall through to the system/sentinel org — it's policy-blocked for member operations.
   const hasSelectedMembership = membershipsLoaded && Array.isArray(memberships)
@@ -54,122 +51,53 @@ export function usePermissions() {
     && !SYSTEM_ORG_IDS.has(activeOrgId)
     ? activeOrgId
     : null;
-  const [permissions, setPermissions] = useState(/** @type {Set<string>} */ new Set());
-  const [roles, setRoles] = useState([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const lastOrgRef = useRef(null);
+  const principalId = user?.sub || user?.id || null;
+  const scope = useMemo(() => ({ organizationId: effectiveOrganizationId, principalId, isAuthenticated }),
+    [effectiveOrganizationId, principalId, isAuthenticated]);
+  const currentScope = useRef(scope);
+  currentScope.current = scope;
+  const generation = useRef(0);
+  const [state, setState] = useState({ scope: null, permissions: new Set(), roles: [], loading: true });
 
   const loadPermissions = useCallback(async () => {
-    if (!effectiveOrganizationId || !isAuthenticated) {
-      setPermissions(new Set());
-      setRoles([]);
-      setIsLoading(false);
+    const requestGeneration = ++generation.current;
+    const applies = () => currentScope.current === scope && generation.current === requestGeneration;
+    if (!scope.organizationId || !scope.isAuthenticated) {
+      setState({ scope, permissions: new Set(), roles: [], loading: false });
       return;
     }
-
-    const cached = permissionsCache.get(effectiveOrganizationId);
-    if (cached) {
-      setPermissions(new Set(cached.permissions || []));
-      setRoles(cached.roles || []);
-      setIsLoading(false);
-      lastOrgRef.current = effectiveOrganizationId;
-      return;
-    }
-
-    setIsLoading(true);
-
-    const existingRequest = inflightPermissionsRequests.get(effectiveOrganizationId);
-    if (existingRequest) {
-      try {
-        const data = await existingRequest;
-        setPermissions(new Set(data.permissions || []));
-        setRoles(data.roles || []);
-      } catch {
-        setPermissions(new Set());
-        setRoles([]);
-      } finally {
-        setIsLoading(false);
-        lastOrgRef.current = effectiveOrganizationId;
-      }
-      return;
-    }
-
-    const request = getMyPermissions(effectiveOrganizationId);
-    inflightPermissionsRequests.set(effectiveOrganizationId, request);
-
+    setState({ scope, permissions: new Set(), roles: [], loading: true });
+    // A hook-local request cannot reuse grants from an earlier login session.
+    const request = getMyPermissions(scope.organizationId);
     try {
       const data = await request;
-      permissionsCache.set(effectiveOrganizationId, {
-        permissions: data.permissions || [],
-        roles: data.roles || [],
-      });
-      setPermissions(new Set(data.permissions || []));
-      setRoles(data.roles || []);
-      lastOrgRef.current = effectiveOrganizationId;
+      if (applies()) setState({ scope, permissions: new Set(data.permissions || []), roles: data.roles || [], loading: false });
     } catch (err) {
-      // 403 is expected for routes where this endpoint is policy-protected.
-      if (err?.status === 403) {
-        permissionsCache.set(effectiveOrganizationId, {
-          permissions: [],
-          roles: [],
-        });
-      } else {
-        console.error('Failed to load permissions:', err);
+      if (applies()) {
+        if (err?.status !== 403) console.error('Failed to load permissions:', err);
+        setState({ scope, permissions: new Set(), roles: [], loading: false });
       }
-      // On error, grant no permissions (fail-closed)
-      setPermissions(new Set());
-      setRoles([]);
-      lastOrgRef.current = effectiveOrganizationId;
-    } finally {
-      inflightPermissionsRequests.delete(effectiveOrganizationId);
-      setIsLoading(false);
     }
-  }, [effectiveOrganizationId, isAuthenticated]);
+  }, [scope]);
 
-  // Load when org changes
   useEffect(() => {
-    if (effectiveOrganizationId !== lastOrgRef.current) {
-      loadPermissions();
-    }
-  }, [effectiveOrganizationId, loadPermissions]);
+    loadPermissions();
+    return () => { generation.current += 1; };
+  }, [loadPermissions]);
 
-  const can = useCallback(
-    (resource, action) => {
-      if (isLoading) return false; // Deny while loading (fail-closed)
-      return hasPermission(permissions, resource, action);
-    },
-    [permissions, isLoading],
-  );
-
-  const canAny = useCallback(
-    (checks) => {
-      if (isLoading) return false;
-      return hasAnyPermission(permissions, checks);
-    },
-    [permissions, isLoading],
-  );
-
-  const canAll = useCallback(
-    (checks) => {
-      if (isLoading) return false;
-      return hasAllPermissions(permissions, checks);
-    },
-    [permissions, isLoading],
-  );
+  const isLoading = Boolean(scope.isAuthenticated && scope.organizationId && (state.scope !== scope || state.loading));
+  const grantsCurrent = scope.isAuthenticated && scope.organizationId && state.scope === scope && !state.loading;
+  const roles = useMemo(() => grantsCurrent ? state.roles : [], [grantsCurrent, state.roles]);
+  const can = useCallback((resource, action) => Boolean(grantsCurrent && hasPermission(state.permissions, resource, action)), [grantsCurrent, state.permissions]);
+  const canAny = useCallback((checks) => Boolean(grantsCurrent && hasAnyPermission(state.permissions, checks)), [grantsCurrent, state.permissions]);
+  const canAll = useCallback((checks) => Boolean(grantsCurrent && hasAllPermissions(state.permissions, checks)), [grantsCurrent, state.permissions]);
 
   const getPermissionMessage = useCallback(
     (action) => getPermissionDeniedMessage(action),
     [],
   );
 
-  const refresh = useCallback(async () => {
-    if (effectiveOrganizationId) {
-      permissionsCache.delete(effectiveOrganizationId);
-      inflightPermissionsRequests.delete(effectiveOrganizationId);
-    }
-    lastOrgRef.current = null; // Force reload
-    await loadPermissions();
-  }, [effectiveOrganizationId, loadPermissions]);
+  const refresh = useCallback(() => loadPermissions(), [loadPermissions]);
 
   return useMemo(
     () => ({

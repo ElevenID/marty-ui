@@ -46,6 +46,8 @@ pub struct PresentationPolicyServiceConfig {
     pub credential_status_url_template: String,
     pub service_token: Option<String>,
     pub issuance_api_key: Option<String>,
+    pub signing_registry_url: String,
+    pub signing_registry_api_key: Option<String>,
     pub dependency_timeout: Duration,
     pub workload_server_tls: Option<WorkloadServerTlsFiles>,
     pub release_version: String,
@@ -66,17 +68,20 @@ pub enum PresentationPolicyConfigError {
 
 impl PresentationPolicyServiceConfig {
     pub fn from_env() -> Result<Self, PresentationPolicyConfigError> {
-        let mut values = std::env::vars().collect::<BTreeMap<_, _>>();
-        for name in ["GRPC_SERVICE_TOKEN", "ISSUANCE_API_KEY"] {
-            load_secret(&mut values, name)?;
-        }
-        Self::from_values(values)
+        Self::from_values(std::env::vars())
     }
 
     pub fn from_values(
         values: impl IntoIterator<Item = (String, String)>,
     ) -> Result<Self, PresentationPolicyConfigError> {
-        let values = values.into_iter().collect::<BTreeMap<_, _>>();
+        let mut values = values.into_iter().collect::<BTreeMap<_, _>>();
+        for name in [
+            "GRPC_SERVICE_TOKEN",
+            "ISSUANCE_API_KEY",
+            "SIGNING_KEYS_INTERNAL_API_KEY",
+        ] {
+            load_secret(&mut values, name)?;
+        }
         let environment = environment(value(&values, "ENVIRONMENT").unwrap_or("development"))?;
         let http_addr = listener(
             &values,
@@ -142,6 +147,34 @@ impl PresentationPolicyServiceConfig {
             secret(&values, "ISSUANCE_API_KEY", environment)?
         };
         let workload_server_tls = workload_server_tls(&values, environment)?;
+        let signing_registry_url = service_url(
+            value(&values, "SIGNING_KEYS_SERVICE_URL").unwrap_or("http://signing-keys:8017"),
+            "SIGNING_KEYS_SERVICE_URL",
+        )?;
+        let registry_endpoint =
+            Url::parse(&signing_registry_url).map_err(|_| invalid("SIGNING_KEYS_SERVICE_URL"))?;
+        if !registry_endpoint.username().is_empty()
+            || registry_endpoint.password().is_some()
+            || registry_endpoint.query().is_some()
+            || registry_endpoint.fragment().is_some()
+            || registry_endpoint.path() != "/"
+        {
+            return Err(invalid("SIGNING_KEYS_SERVICE_URL"));
+        }
+        // Match the registry owner's 16-byte minimum, including development.
+        // Other service secrets retain their independent 32-byte policy.
+        let signing_registry_api_key = value(&values, "SIGNING_KEYS_INTERNAL_API_KEY")
+            .map(|key| {
+                if key.len() < 16 {
+                    Err(PresentationPolicyConfigError::SecretTooShort {
+                        name: "SIGNING_KEYS_INTERNAL_API_KEY",
+                        minimum: 16,
+                    })
+                } else {
+                    Ok(key.to_owned())
+                }
+            })
+            .transpose()?;
         let did_resolution_base_urls = value(&values, "DID_RESOLUTION_BASE_URL")
             .unwrap_or("")
             .split(',')
@@ -182,6 +215,8 @@ impl PresentationPolicyServiceConfig {
             credential_status_url_template,
             service_token,
             issuance_api_key,
+            signing_registry_url,
+            signing_registry_api_key,
             dependency_timeout: Duration::from_secs(number(
                 &values,
                 "PRESENTATION_POLICY_DEPENDENCY_TIMEOUT_SECONDS",
@@ -371,6 +406,9 @@ fn load_secret(
     };
     let secret =
         fs::read_to_string(path).map_err(|_| PresentationPolicyConfigError::SecretFile { name })?;
+    if secret.trim().is_empty() {
+        return Err(PresentationPolicyConfigError::SecretFile { name });
+    }
     values.insert(name.into(), secret.trim().into());
     Ok(())
 }

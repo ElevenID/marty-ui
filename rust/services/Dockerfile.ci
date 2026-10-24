@@ -52,7 +52,6 @@ RUN --mount=type=secret,id=sccache_token,required=true \
 FROM compiler_cache AS builder
 
 COPY --from=planner /build/rust/recipe.json recipe.json
-COPY --from=planner /build/rust/third_party /build/rust/third_party
 COPY proto /build/proto
 RUN --mount=type=cache,id=marty-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,id=marty-cargo-git,target=/usr/local/cargo/git,sharing=locked \

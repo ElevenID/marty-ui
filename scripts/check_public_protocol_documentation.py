@@ -22,11 +22,19 @@ FORBIDDEN_PUBLIC_SIGNING_GUIDANCE = {
 
 
 def assert_documented_public_boundary(root: Path = REPO_ROOT) -> None:
+    # The gateway owns the generated document. Shipping another static contract
+    # lets public download links drift independently of the served API.
+    if (root / "ui/public/openapi.yaml").exists():
+        raise AssertionError("Static OpenAPI YAML conflicts with the canonical /openapi.json endpoint")
+    for path in (root / "ui/src").rglob("*.jsx"):
+        if "/openapi.yaml" in path.read_text(encoding="utf-8"):
+            raise AssertionError(f"Public OpenAPI links must use /openapi.json: {path.relative_to(root)}")
     violations: dict[str, list[str]] = {}
     markdown_paths = sorted(root.glob("*.md"))
-    docs_root = root / "docs"
-    if docs_root.is_dir():
-        markdown_paths.extend(sorted(docs_root.rglob("*.md")))
+    for directory in ["docs", "examples"]:
+        docs_root = root / directory
+        if docs_root.is_dir():
+            markdown_paths.extend(sorted(docs_root.rglob("*.md")))
 
     for path in markdown_paths:
         source = (

@@ -358,14 +358,10 @@ fn project_instance(value: Value) -> Result<Value, FlowContractError> {
             "CANCELLED",
         ],
     )?;
-    for field in ["flow_id", "flow_type"] {
-        let Some(entry) = value.get(field) else {
-            return Err(FlowContractError);
-        };
-        if !entry.is_null() && !entry.is_string() {
-            return Err(FlowContractError);
-        }
-    }
+    // The Flow service omits optional identities for standalone or seeded
+    // instances. Keep the same omission semantics at the public boundary;
+    // flow_type, when present, is already checked against the canonical enum.
+    optional_string(&value, "flow_id", usize::MAX)?;
     for field in ["context_data", "step_results", "metadata"] {
         let entry = value
             .get(field)
@@ -860,6 +856,32 @@ mod tests {
         expected_instance: Value,
         internal_verification_result: Value,
         expected_verification_result: Value,
+    }
+
+    #[test]
+    fn flow_instance_optional_identity_matches_service_projection() {
+        let contract: Contract = serde_json::from_str(include_str!(
+            "../../../../contracts/gateway-flow-behavior.json"
+        ))
+        .expect("flow contract");
+        let mut standalone = contract.internal_instance;
+        standalone.as_object_mut().unwrap().remove("flow_id");
+        standalone.as_object_mut().unwrap().remove("flow_type");
+        let projected = project_response(json!([standalone.clone()]), FlowResponseKind::Instance)
+            .expect("omitted optional identities must not break the entire history list");
+        assert!(projected[0].get("flow_id").is_none());
+        assert!(projected[0].get("flow_type").is_none());
+        for (field, invalid) in [
+            ("flow_id", json!(42)),
+            ("flow_type", json!(42)),
+            ("flow_type", json!("unknown_protocol")),
+        ] {
+            let mut malformed = standalone.clone();
+            malformed[field] = invalid;
+            assert!(project_response(malformed, FlowResponseKind::Instance).is_err());
+        }
+        standalone["context_data"]["private_key"] = json!("must-not-leak");
+        assert!(project_response(standalone, FlowResponseKind::Instance).is_err());
     }
 
     #[test]

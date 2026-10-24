@@ -258,6 +258,260 @@ fn run() -> Result<(), String> {
         println!("{}", env!("MARTY_DEPLOY_BUILD_IDENTITY"));
         return Ok(());
     }
+    // KMS operator commands do not read the catalog or require a source checkout.
+    if args.first().is_some_and(|a| a == "operator") {
+        use marty_deployment_catalog::operator::{self, REFUSAL};
+        use std::io::{Read, Write};
+        let result = match args.get(1).map(String::as_str) {
+            Some("generation") if args.len() == 2 => {
+                use marty_deployment_catalog::generation;
+                use std::io::IsTerminal;
+                if std::io::stdout().is_terminal() {
+                    return Err(REFUSAL.into());
+                }
+                let mut input = Vec::new();
+                std::io::stdin()
+                    .take(512 * 1024 + 1)
+                    .read_to_end(&mut input)
+                    .map_err(|_| REFUSAL)?;
+                if input.len() > 512 * 1024 {
+                    return Err(REFUSAL.into());
+                }
+                let context: Value = serde_json::from_slice(&input).map_err(|_| REFUSAL)?;
+                let value = match generation::operation(&context) {
+                    Ok(value) => serde_json::json!({"value":value}),
+                    Err(error) => serde_json::json!({"error":error}),
+                };
+                let mut output = std::io::stdout().lock();
+                serde_json::to_writer(&mut output, &value).map_err(|_| REFUSAL)?;
+                output.flush().map_err(|_| REFUSAL)
+            }
+            Some("keycloak-policy" | "keycloak-token" | "keycloak-provision") => {
+                use marty_deployment_catalog::keycloak;
+                use std::{io::IsTerminal, path::Path, time::Duration};
+                let mint = args[1] != "keycloak-policy";
+                if args.len() != if mint { 4 } else { 2 }
+                    || (mint && std::io::stdout().is_terminal())
+                {
+                    return Err(REFUSAL.into());
+                }
+                let mut input = Vec::new();
+                std::io::stdin()
+                    .take(64 * 1024 + 1)
+                    .read_to_end(&mut input)
+                    .map_err(|_| REFUSAL)?;
+                if input.len() > 64 * 1024 {
+                    return Err(REFUSAL.into());
+                }
+                let context: Value = serde_json::from_slice(&input).map_err(|_| REFUSAL)?;
+                let value = if mint {
+                    let bao = marty_openbao_http::OpenBaoHttp::connect(
+                        &args[2],
+                        Some(Path::new(&args[3])),
+                        Duration::from_secs(10),
+                    )
+                    .map_err(|_| REFUSAL)?;
+                    tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                        .map_err(|_| REFUSAL)?
+                        .block_on(async {
+                            if args[1] == "keycloak-provision" {
+                                marty_deployment_catalog::keycloak_provision::provision(
+                                    &bao, &context,
+                                )
+                                .await
+                            } else {
+                                keycloak::mint(&bao, &context).await.map(Value::String)
+                            }
+                        })
+                        .map_err(str::to_owned)?
+                } else {
+                    Value::String(keycloak::policy(&context)?)
+                };
+                let refusal = if mint { keycloak::RECOVERY } else { REFUSAL };
+                let mut output = std::io::stdout().lock();
+                serde_json::to_writer(&mut output, &value).map_err(|_| refusal)?;
+                output.flush().map_err(|_| refusal)
+            }
+            Some("certificate-lifetime" | "certificate-expiry") if args.len() == 3 => {
+                let ttl: u64 = args[2].parse().map_err(|_| REFUSAL)?;
+                let mut input = Vec::new();
+                std::io::stdin()
+                    .take(64 * 1024 + 1)
+                    .read_to_end(&mut input)
+                    .map_err(|_| REFUSAL)?;
+                let check = if args[1] == "certificate-expiry" {
+                    marty_deployment_catalog::operator_certificates::check_expiry
+                } else {
+                    marty_deployment_catalog::operator_certificates::check_lifetime
+                };
+                let valid = check(&input, ttl)?;
+                serde_json::to_writer(std::io::stdout().lock(), &valid).map_err(|_| REFUSAL)
+            }
+            Some("replacement-ca") if args.len() == 4 => {
+                let version = args[3].parse().map_err(|_| REFUSAL)?;
+                let mut input = Vec::new();
+                std::io::stdin()
+                    .take(64 * 1024 + 1)
+                    .read_to_end(&mut input)
+                    .map_err(|_| REFUSAL)?;
+                marty_deployment_catalog::operator_certificates::check_replacement_ca(
+                    &input, &args[2], version,
+                )
+            }
+            Some("certificate-chain") if args.len() == 2 => {
+                let mut input = Vec::new();
+                std::io::stdin()
+                    .take(256 * 1024 + 1)
+                    .read_to_end(&mut input)
+                    .map_err(|_| REFUSAL)?;
+                if input.len() > 256 * 1024 {
+                    return Err(REFUSAL.into());
+                }
+                let context: Value = serde_json::from_slice(&input).map_err(|_| REFUSAL)?;
+                let certificate = context["certificate"].as_str().ok_or(REFUSAL)?;
+                let issuer = context["issuer"].as_str().ok_or(REFUSAL)?;
+                marty_deployment_catalog::operator_certificates::check_chain(
+                    certificate.as_bytes(),
+                    issuer.as_bytes(),
+                )
+            }
+            Some("public-spki" | "certificate-spki" | "ed25519-spki") if args.len() == 2 => {
+                let mut input = Vec::new();
+                std::io::stdin()
+                    .take(64 * 1024 + 1)
+                    .read_to_end(&mut input)
+                    .map_err(|_| REFUSAL.to_owned())?;
+                let der = if args[1] == "ed25519-spki" {
+                    operator::ed25519_spki(std::str::from_utf8(&input).map_err(|_| REFUSAL)?)
+                } else {
+                    operator::public_spki(&input, args[1] == "certificate-spki")
+                }
+                .map_err(str::to_owned)?;
+                std::io::stdout().write_all(&der).map_err(|_| REFUSAL)
+            }
+            Some("leaf-refresh") if args.len() == 4 => {
+                let mut input = Vec::new();
+                std::io::stdin()
+                    .take(64 * 1024 + 1)
+                    .read_to_end(&mut input)
+                    .map_err(|_| REFUSAL.to_owned())?;
+                if input.len() > 64 * 1024 {
+                    return Err(REFUSAL.into());
+                }
+                let context: Value = serde_json::from_slice(&input).map_err(|_| REFUSAL)?;
+                let bao = marty_openbao_http::OpenBaoHttp::connect(
+                    &args[2],
+                    Some(std::path::Path::new(&args[3])),
+                    std::time::Duration::from_secs(10),
+                )
+                .map_err(|_| REFUSAL)?;
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .map_err(|_| REFUSAL)?
+                    .block_on(marty_deployment_catalog::approle::refresh_leaf(
+                        &bao, &context,
+                    ))
+            }
+            Some(
+                "approle-policy" | "approle-login" | "approle-bootstrap" | "approle-mint"
+                | "approle-rotate" | "approle-retire",
+            ) => {
+                use marty_deployment_catalog::approle::{self, Role};
+                use std::{io::IsTerminal, path::Path, time::Duration};
+                let operation = &args[1];
+                if args.len() != if operation == "approle-policy" { 3 } else { 6 } {
+                    return Err(REFUSAL.into());
+                }
+                let role = Role::parse(&args[2]).map_err(str::to_owned)?;
+                let mut input = Vec::new();
+                std::io::stdin()
+                    .take(64 * 1024 + 1)
+                    .read_to_end(&mut input)
+                    .map_err(|_| REFUSAL.to_owned())?;
+                if input.len() > 64 * 1024 {
+                    return Err(REFUSAL.into());
+                }
+                let context: Value =
+                    serde_json::from_slice(&input).map_err(|_| REFUSAL.to_owned())?;
+                if !context.is_object() {
+                    return Err(REFUSAL.into());
+                }
+                let output = if operation == "approle-policy" {
+                    Value::String(approle::policy(role, &context).map_err(str::to_owned)?)
+                } else {
+                    if ["approle-login", "approle-mint"].contains(&operation.as_str())
+                        && std::io::stdout().is_terminal()
+                    {
+                        return Err(REFUSAL.into());
+                    }
+                    let bao = marty_openbao_http::OpenBaoHttp::connect(
+                        &args[3],
+                        Some(Path::new(&args[4])),
+                        Duration::from_secs(10),
+                    )
+                    .map_err(|_| REFUSAL.to_owned())?;
+                    let runtime = tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                        .map_err(|_| REFUSAL.to_owned())?;
+                    runtime
+                        .block_on(async {
+                            match operation.as_str() {
+                                "approle-login" => {
+                                    approle::login(&bao, role, Path::new(&args[5]), &context).await
+                                }
+                                "approle-mint" => {
+                                    approle::mint(&bao, role, Path::new(&args[5]), &context)
+                                        .await
+                                        .map(Value::String)
+                                }
+                                "approle-rotate" | "approle-retire" => approle::rotate(
+                                    &bao,
+                                    role,
+                                    Path::new(&args[5]),
+                                    &context,
+                                    operation == "approle-retire",
+                                )
+                                .await
+                                .map(|_| serde_json::json!({"ready":true})),
+                                _ => approle::bootstrap(&bao, role, Path::new(&args[5]), &context)
+                                    .await
+                                    .map(|_| serde_json::json!({"ready":true})),
+                            }
+                        })
+                        .map_err(str::to_owned)?
+                };
+                serde_json::to_writer(std::io::stdout().lock(), &output).map_err(|_| REFUSAL)
+            }
+            Some("export-snapshot") if args.len() == 7 => {
+                use std::path::Path;
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .map_err(|_| REFUSAL.to_owned())?;
+                let archive = runtime
+                    .block_on(marty_deployment_catalog::snapshot::export(
+                        Path::new(&args[2]),
+                        Path::new(&args[3]),
+                        Path::new(&args[4]),
+                        &args[5],
+                        Path::new(&args[6]),
+                    ))
+                    .map_err(str::to_owned)?;
+                println!("{}", archive.display());
+                Ok(())
+            }
+            Some("check-snapshot") if args.len() == 3 => {
+                let source = std::fs::File::open(&args[2]).map_err(|_| REFUSAL.to_owned())?;
+                operator::check_snapshot(source)
+            }
+            _ => Err(REFUSAL),
+        };
+        return result.map_err(str::to_owned);
+    }
     let root = if let Some(index) = args.iter().position(|arg| arg == "--repo-root") {
         if index + 1 >= args.len() {
             return Err("--repo-root requires a path".to_owned());
@@ -404,6 +658,17 @@ fn main() {
             std::process::exit(2);
         }
         eprintln!("{error}");
+        if [
+            marty_deployment_catalog::approle::CLEANUP_BOOTSTRAP,
+            marty_deployment_catalog::approle::CLEANUP_LEAF,
+            marty_deployment_catalog::approle::CLEANUP_ROTATION,
+            marty_deployment_catalog::approle::CLEANUP_REFRESH,
+            marty_deployment_catalog::keycloak::RECOVERY,
+        ]
+        .contains(&error.as_str())
+        {
+            std::process::exit(3);
+        }
         std::process::exit(1);
     }
 }

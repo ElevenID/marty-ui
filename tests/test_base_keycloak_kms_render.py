@@ -21,11 +21,16 @@ FILES = (
 
 
 def test_conformance_compose_keeps_keycloak_in_remote_custody(tmp_path: Path) -> None:
-    docker = shutil.which("docker")
-    if docker is None or subprocess.run(
-        [docker, "compose", "version"], capture_output=True, check=False, timeout=10
-    ).returncode:
-        pytest.skip("Docker Compose is unavailable")
+    renderer = os.environ.get("MARTY_COMPOSE_RENDERER")
+    if renderer:
+        command = [renderer]
+    else:
+        docker = shutil.which("docker")
+        if docker is None or subprocess.run(
+            [docker, "compose", "version"], capture_output=True, check=False, timeout=10
+        ).returncode:
+            pytest.skip("Docker Compose is unavailable")
+        command = [docker, "compose"]
 
     required = set()
     for name in (*FILES, "docker-compose.profile.issuance-native.yml"):
@@ -54,7 +59,6 @@ def test_conformance_compose_keeps_keycloak_in_remote_custody(tmp_path: Path) ->
     environment["MARTY_OPENBAO_DIDCOMM_IMAGE"] = (
         "example.invalid/openbao@sha256:" + "b" * 64
     )
-    command = [docker, "compose"]
     for name in FILES:
         command.extend(("--file", str(ROOT / name)))
     command.extend(("config", "--format", "json"))

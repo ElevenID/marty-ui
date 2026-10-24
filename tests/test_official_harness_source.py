@@ -66,9 +66,15 @@ def test_claim_runs_the_guard_and_evidence_verifier_uses_the_same_pin() -> None:
     cd = (ROOT / ".github/workflows/cd.yml").read_text()
     pin = GATE["harness_pin"](cd)
     verifier = yaml.safe_load(cd)["jobs"]["official-gate-evidence"]
-    verify_step = next(step for step in verifier["steps"]
-                       if step.get("name") == "Require seven passing candidate-bound official lanes")
-    assert f'{pin} "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"' in verify_step["run"]
+    assert verifier["env"]["HARNESS_SHA"] == pin
+    verify_steps = [step for step in verifier["steps"]
+                    if "official_review_gate.py" in step.get("run", "")]
+    assert len(verify_steps) == 2
+    for step in verify_steps:
+        assert '--harness "$HARNESS_SHA"' in step["run"]
+        assert '--run-id "$GITHUB_RUN_ID" --current-attempt "$GITHUB_RUN_ATTEMPT"' in step["run"]
+        assert step["env"]["GH_TOKEN"] == "${{ github.token }}"
+        assert "if" not in step and "continue-on-error" not in step
     claim = yaml.safe_load((ROOT / ".github/workflows/prepare-stack-tag.yml").read_text())
     steps = claim["jobs"]["claim-stack-release"]["steps"]
     guard = next(step for step in steps

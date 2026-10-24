@@ -14,6 +14,7 @@ from urllib.error import HTTPError
 
 from provision_selfhost_disposable_tls import read_protected_root_token, verified_openbao_owner
 from provision_selfhost_custody_signer import refresh_scoped_token
+from selfhost_native_operator import OperatorCleanupError
 from selfhost_openbao_client import Bao
 from selfhost_managed_reference import managed_reference
 
@@ -178,6 +179,9 @@ def main() -> int:
         provision(args.endpoint, args.state_root, args.output_root,
                   args.org_id, args.org_slug, args.did, args.project_name,
                   refresh_token=args.refresh_token, identity_root=args.identity_root)
+    except OperatorCleanupError as error:
+        print(str(error), file=sys.stderr)
+        return 3
     except (OSError, ValueError, RuntimeError, HTTPError) as error:
         print(f"OpenBao audit provisioning failed: {type(error).__name__}", file=sys.stderr)
         return 2

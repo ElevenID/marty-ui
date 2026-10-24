@@ -195,7 +195,7 @@ export function RuntimeReadinessPanel({ runtimeStatus, error = null, onRetry }) 
     : null;
 
   const issuanceAction = !issuerKeysValid 
-    ? { label: t('dashboard.runtimeReadiness.issuance.fixSigningKeys'), link: '/console/org/deploy/signing-keys' }
+    ? { label: t('dashboard.runtimeReadiness.issuance.fixSigningKeys'), link: '/console/org/deploy/issuer-identity' }
     : !issuerActive
     ? { label: t('dashboard.runtimeReadiness.issuance.activateIssuer'), link: '/console/org/settings' }
     : null;
@@ -228,7 +228,7 @@ export function RuntimeReadinessPanel({ runtimeStatus, error = null, onRetry }) 
     : null;
 
   const signingKeysAction = !issuerKeysValid
-    ? { label: t('dashboard.runtimeReadiness.keys.manageKeys'), link: '/console/org/deploy/signing-keys' }
+    ? { label: t('dashboard.runtimeReadiness.keys.manageKeys'), link: '/console/org/deploy/issuer-identity' }
     : null;
 
   return (

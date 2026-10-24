@@ -308,7 +308,7 @@ def obligation(name: str) -> tuple[str, str, list[dict[str, str]]]:
         "issuer_profile": (
             "marty-signing-keys",
             "issuer_profile_storage_contract",
-            ("MARTY_TEST_REDIS_URL",),
+            ("MARTY_TEST_REDIS_URL", "MARTY_TEST_REDIS_DISPOSABLE_NONCE"),
         ),
         "credential_template": (
             "marty-credential-template",

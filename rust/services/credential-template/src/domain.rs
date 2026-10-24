@@ -47,6 +47,16 @@ impl CredentialFormat {
     }
 
     #[must_use]
+    pub const fn issuer_key_purpose(self) -> &'static str {
+        match self {
+            Self::Mdoc | Self::ZkMdoc => "mdoc_dsc",
+            Self::VdsNc => "vdsnc_signing",
+            Self::IcaoEmrtd => "x509_doc_signer",
+            Self::SdJwtVc | Self::VcJwt | Self::JsonLd => "vc_jwt_issuer",
+        }
+    }
+
+    #[must_use]
     pub const fn public_wire(self) -> &'static str {
         match self {
             Self::Mdoc => "mdoc",

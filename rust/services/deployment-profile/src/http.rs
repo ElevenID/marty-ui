@@ -18,6 +18,64 @@ use crate::{
 #[derive(Clone)]
 pub struct DeploymentHttpState {
     pub service: Arc<DeploymentService>,
+    service_authenticator: Option<Arc<mmf_security::ServiceTokenAuthenticator>>,
+}
+
+impl DeploymentHttpState {
+    pub fn new(service: Arc<DeploymentService>) -> Self {
+        Self {
+            service,
+            service_authenticator: None,
+        }
+    }
+
+    pub fn with_service_token(
+        mut self,
+        token: Option<String>,
+    ) -> Result<Self, mmf_security::SecurityError> {
+        self.service_authenticator = token
+            .map(|token| {
+                mmf_security::ServiceTokenAuthenticator::new(Some(token), true).map(Arc::new)
+            })
+            .transpose()?;
+        Ok(self)
+    }
+
+    fn authenticate_service(&self, headers: &HeaderMap) -> Result<(), ApiError> {
+        match &self.service_authenticator {
+            Some(authenticator) => authenticator
+                .authenticate(header(headers, "x-service-token"))
+                .map_err(|_| {
+                    DeploymentError::Unauthorized("Service authentication required".into()).into()
+                }),
+            None => {
+                Err(DeploymentError::Unauthorized("Service authentication required".into()).into())
+            }
+        }
+    }
+
+    fn for_request(&self, headers: &HeaderMap) -> Result<DeploymentService, ApiError> {
+        let is_key =
+            headers.contains_key("x-api-key-id") || headers.contains_key("x-api-key-scopes");
+        if !is_key {
+            return Ok(self.service.as_ref().clone());
+        }
+        self.authenticate_service(headers)?;
+        let actor = marty_api_key_policy::GatewayApiKeyActor::parse(
+            header(headers, "x-api-key-id").unwrap_or_default(),
+            header(headers, "x-organization-id").unwrap_or_default(),
+            header(headers, "x-api-key-scopes").unwrap_or_default(),
+        )
+        .map_err(|_| DeploymentError::Unauthorized("Invalid gateway principal".into()))?;
+        Ok(self.service.for_gateway_api_key(actor))
+    }
+}
+
+fn header<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
+    headers
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
 }
 
 #[derive(Debug)]
@@ -80,6 +138,10 @@ struct DeleteResponse {
 
 pub fn deployment_router(state: DeploymentHttpState) -> Router {
     Router::new()
+        .route(
+            "/internal/v1/resource-owners/deployment-profiles/{profile_id}",
+            get(resource_owner),
+        )
         .route("/v1/deployment-profiles", post(create).get(list))
         .route(
             "/v1/deployment-profiles/{profile_id}",
@@ -112,6 +174,16 @@ pub fn deployment_router(state: DeploymentHttpState) -> Router {
         .with_state(state)
 }
 
+async fn resource_owner(
+    State(state): State<DeploymentHttpState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    state.authenticate_service(&headers)?;
+    let (id, organization_id) = state.service.internal_owner(&id).await?;
+    Ok(Json(json!({"id": id, "organization_id": organization_id})))
+}
+
 async fn create(
     State(s): State<DeploymentHttpState>,
     h: HeaderMap,
@@ -119,7 +191,7 @@ async fn create(
 ) -> Result<Json<Value>, ApiError> {
     let Json(body) = body.map_err(|_| ApiError::Validation)?;
     Ok(Json(
-        serde_json::to_value(s.service.create(body, &user(&h)).await?)
+        serde_json::to_value(s.for_request(&h)?.create(body, &user(&h)).await?)
             .map_err(|_| ApiError::Validation)?,
     ))
 }
@@ -131,7 +203,7 @@ async fn list(
     validate_page(q.limit, q.offset)?;
     Ok(Json(
         serde_json::to_value(
-            s.service
+            s.for_request(&h)?
                 .list(&q.organization_id, q.limit, q.offset, &user(&h))
                 .await?,
         )
@@ -144,7 +216,7 @@ async fn get_profile(
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
     Ok(Json(
-        serde_json::to_value(s.service.get(&id, &user(&h)).await?)
+        serde_json::to_value(s.for_request(&h)?.get(&id, &user(&h)).await?)
             .map_err(|_| ApiError::Validation)?,
     ))
 }
@@ -156,7 +228,7 @@ async fn update(
 ) -> Result<Json<Value>, ApiError> {
     let Json(body) = body.map_err(|_| ApiError::Validation)?;
     Ok(Json(
-        serde_json::to_value(s.service.update(&id, body, &user(&h)).await?)
+        serde_json::to_value(s.for_request(&h)?.update(&id, body, &user(&h)).await?)
             .map_err(|_| ApiError::Validation)?,
     ))
 }
@@ -166,7 +238,7 @@ async fn activate(
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
     Ok(Json(
-        serde_json::to_value(s.service.activate(&id, &user(&h)).await?)
+        serde_json::to_value(s.for_request(&h)?.activate(&id, &user(&h)).await?)
             .map_err(|_| ApiError::Validation)?,
     ))
 }
@@ -176,7 +248,7 @@ async fn suspend(
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
     Ok(Json(
-        serde_json::to_value(s.service.suspend(&id, &user(&h)).await?)
+        serde_json::to_value(s.for_request(&h)?.suspend(&id, &user(&h)).await?)
             .map_err(|_| ApiError::Validation)?,
     ))
 }
@@ -186,7 +258,7 @@ async fn generate_api_key(
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
     Ok(Json(
-        serde_json::to_value(s.service.generate_api_key(&id, &user(&h)).await?)
+        serde_json::to_value(s.for_request(&h)?.generate_api_key(&id, &user(&h)).await?)
             .map_err(|_| ApiError::Validation)?,
     ))
 }
@@ -195,7 +267,7 @@ async fn delete_profile(
     h: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<Json<DeleteResponse>, ApiError> {
-    s.service.delete(&id, &user(&h)).await?;
+    s.for_request(&h)?.delete(&id, &user(&h)).await?;
     Ok(Json(DeleteResponse { deleted: true }))
 }
 async fn create_lane(
@@ -206,8 +278,12 @@ async fn create_lane(
 ) -> Result<Json<Value>, ApiError> {
     let Json(body) = body.map_err(|_| ApiError::Validation)?;
     Ok(Json(
-        serde_json::to_value(s.service.create_lane(&profile, body, &user(&h)).await?)
-            .map_err(|_| ApiError::Validation)?,
+        serde_json::to_value(
+            s.for_request(&h)?
+                .create_lane(&profile, body, &user(&h))
+                .await?,
+        )
+        .map_err(|_| ApiError::Validation)?,
     ))
 }
 async fn list_lanes(
@@ -219,7 +295,7 @@ async fn list_lanes(
     validate_page(q.limit, q.offset)?;
     Ok(Json(
         serde_json::to_value(
-            s.service
+            s.for_request(&h)?
                 .list_lanes(&profile, q.limit, q.offset, &user(&h))
                 .await?,
         )
@@ -232,8 +308,12 @@ async fn get_lane(
     Path((profile, lane)): Path<(String, String)>,
 ) -> Result<Json<Value>, ApiError> {
     Ok(Json(
-        serde_json::to_value(s.service.get_lane(&profile, &lane, &user(&h)).await?)
-            .map_err(|_| ApiError::Validation)?,
+        serde_json::to_value(
+            s.for_request(&h)?
+                .get_lane(&profile, &lane, &user(&h))
+                .await?,
+        )
+        .map_err(|_| ApiError::Validation)?,
     ))
 }
 async fn update_lane(
@@ -245,7 +325,7 @@ async fn update_lane(
     let Json(body) = body.map_err(|_| ApiError::Validation)?;
     Ok(Json(
         serde_json::to_value(
-            s.service
+            s.for_request(&h)?
                 .update_lane(&profile, &lane, body, &user(&h))
                 .await?,
         )
@@ -257,7 +337,9 @@ async fn delete_lane(
     h: HeaderMap,
     Path((profile, lane)): Path<(String, String)>,
 ) -> Result<Json<DeleteResponse>, ApiError> {
-    s.service.delete_lane(&profile, &lane, &user(&h)).await?;
+    s.for_request(&h)?
+        .delete_lane(&profile, &lane, &user(&h))
+        .await?;
     Ok(Json(DeleteResponse { deleted: true }))
 }
 async fn assign_device(
@@ -269,7 +351,7 @@ async fn assign_device(
     let Json(body) = body.map_err(|_| ApiError::Validation)?;
     Ok(Json(
         serde_json::to_value(
-            s.service
+            s.for_request(&h)?
                 .assign_device(&profile, &lane, body, &user(&h))
                 .await?,
         )
@@ -286,7 +368,8 @@ fn validate_page(limit: usize, offset: usize) -> Result<(), ApiError> {
 }
 fn user(headers: &HeaderMap) -> String {
     headers
-        .get("x-user-id")
+        .get("x-api-key-id")
+        .or_else(|| headers.get("x-user-id"))
         .and_then(|v| v.to_str().ok())
         .map(str::trim)
         .unwrap_or_default()

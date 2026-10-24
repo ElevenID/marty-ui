@@ -23,6 +23,8 @@ def observation(delay):
         {
             "available_at": (updated + timedelta(seconds=delay)).isoformat(),
             "updated_at": updated.isoformat(),
+            "decision_window_start": updated.isoformat(),
+            "decision_window_end": updated.isoformat(),
         }
     )
 
@@ -86,6 +88,38 @@ def test_missing_or_duplicate_timing_evidence_is_rejected(native, output):
 def test_naive_timestamps_are_rejected(native):
     with pytest.raises(AssertionError):
         native.assert_retry_timing(observation(15).replace("+00:00", ""), {}, [], {})
+
+
+def test_delayed_write_does_not_shorten_actual_clamped_deadline(native):
+    prefix = "CANVAS_WORKER_RETRY_TIMING="
+    timing = json.loads(observation(86400)[len(prefix):])
+    decision = datetime.fromisoformat(timing["updated_at"])
+    timing["updated_at"] = (decision + timedelta(seconds=2)).isoformat()
+    timing["decision_window_end"] = (decision + timedelta(seconds=3)).isoformat()
+    native.assert_retry_timing(
+        prefix + json.dumps(timing),
+        {"name": "clamped", "timing": "bounds", "delay_bounds": [86400, 86400]},
+        [], {"kind": "bounds", "matches": True},
+    )
+
+
+@pytest.mark.parametrize("change", ["reversed", "write_before", "write_after", "naive", "missing"])
+def test_invalid_decision_window_is_rejected(native, change):
+    prefix = "CANVAS_WORKER_RETRY_TIMING="
+    timing = json.loads(observation(86400)[len(prefix):])
+    point = datetime.fromisoformat(timing["updated_at"])
+    if change == "reversed":
+        timing["decision_window_end"] = (point - timedelta(seconds=1)).isoformat()
+    elif change == "write_before":
+        timing["updated_at"] = (point - timedelta(seconds=1)).isoformat()
+    elif change == "write_after":
+        timing["updated_at"] = (point + timedelta(seconds=1)).isoformat()
+    elif change == "naive":
+        timing["decision_window_start"] = timing["decision_window_start"].replace("+00:00", "")
+    else:
+        del timing["decision_window_start"]
+    with pytest.raises(AssertionError):
+        native.assert_retry_timing(prefix + json.dumps(timing), {}, [], {})
 
 
 def test_each_retry_case_uses_a_separate_native_child(native, monkeypatch):

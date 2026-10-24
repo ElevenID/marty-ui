@@ -329,7 +329,7 @@ const KeyManagementServiceWizard = () => {
     validateStep,
     onSubmit: handleSubmit,
     onCancel: () => {
-      navigate('/console/org/deploy/key-management/services');
+      navigate('/console/org/operator/key-management/services');
     },
   });
   const updateWizardData = wizard.updateData;
@@ -972,7 +972,7 @@ const KeyManagementServiceWizard = () => {
             >
               Create issuer identity
             </Button>
-            <Button variant="outlined" onClick={() => navigate('/console/org/deploy/key-management/services')}>
+            <Button variant="outlined" onClick={() => navigate('/console/org/operator/key-management/services')}>
               View key management
             </Button>
           </Stack>

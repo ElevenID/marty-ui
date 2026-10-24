@@ -106,7 +106,7 @@ const DEPLOY_TABS = [
   { label: 'Deployment Profiles', path: '/console/org/deploy/profiles' },
   { label: 'Canvas', path: '/console/org/deploy/canvas' },
   { label: 'Issuer Identity', path: '/console/org/deploy/issuer-identity' },
-  { label: 'Key Management', path: '/console/org/deploy/key-management' },
+  { label: 'Key Management', path: '/console/org/operator/key-management' },
 ];
 
 const CANVAS_FEATURE_KEYS = [

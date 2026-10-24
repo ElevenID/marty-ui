@@ -83,7 +83,8 @@ python3 scripts/stage_selfhost_disposable_preview.py \
 python3 scripts/start_selfhost_disposable_openbao.py \
   --private-root /absolute/path/to/operator-private/new-run \
   --host-port 18200
-sudo python3 scripts/stage_selfhost_keycloak_inputs.py \
+# First install and source the signed marty-deploy.lock matching this source/release.
+sudo --preserve-env=MARTY_DEPLOY_BIN,MARTY_DEPLOY_BIN_SHA256,MARTY_DEPLOY_SOURCE_SHA,MARTY_DEPLOY_RELEASE_TAG python3 scripts/stage_selfhost_keycloak_inputs.py \
   --private-root /absolute/path/to/operator-private/new-run
 ```
 
@@ -419,7 +420,8 @@ python3 "$source_root/scripts/start_selfhost_disposable_openbao.py" \
   --private-root "$private" --host-port "$openbao_port"
 openbao_project=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["project"])' \
   "$private/openbao.json")
-sudo python3 "$source_root/scripts/stage_selfhost_keycloak_inputs.py" \
+# First install and source the signed marty-deploy.lock matching this source/release.
+sudo --preserve-env=MARTY_DEPLOY_BIN,MARTY_DEPLOY_BIN_SHA256,MARTY_DEPLOY_SOURCE_SHA,MARTY_DEPLOY_RELEASE_TAG python3 "$source_root/scripts/stage_selfhost_keycloak_inputs.py" \
   --private-root "$private"
 sudo env PYTHONDONTWRITEBYTECODE=1 python3 "$install_root/scripts/provision_selfhost_disposable_tls.py" \
   --secret-root "$secret_root" --openbao-state-root "$openbao_state_root" \

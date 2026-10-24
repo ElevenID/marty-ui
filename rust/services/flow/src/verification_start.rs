@@ -350,6 +350,7 @@ pub async fn prepare_profiled_verification_start(
                     instance,
                     &artifacts,
                     base,
+                    &options.request_object,
                     options.url_query_maximum_length,
                     now,
                 )?;

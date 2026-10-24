@@ -13,7 +13,7 @@ use serde_json::{json, Map, Value};
 
 use crate::issuance_native;
 
-pub const EXPECTED_ROUTE_COUNT: usize = 454;
+pub const EXPECTED_ROUTE_COUNT: usize = 461;
 
 #[derive(Debug, Deserialize)]
 pub struct GatewayContract {
@@ -228,7 +228,7 @@ impl GatewayContract {
         })?;
         table.add(RouteConfig {
             name: "internal:issuance-native:oid4vci-client-management".into(),
-            pattern: "/__gateway/issuance-native/v1/issuance/oid4vci-clients".into(),
+            pattern: OID4VCI_CLIENT_MANAGEMENT_PROXY_PATH.into(),
             match_type: RouteMatchType::Exact,
             upstream_service: issuance_native::NATIVE_SERVICE.into(),
             methods: BTreeSet::from([HttpMethod::Put]),
@@ -405,6 +405,12 @@ impl GatewayContract {
             } else {
                 json!([])
             };
+            crate::openapi::describe_operation(
+                &mut operation,
+                route.method,
+                &route.path,
+                route.status_code,
+            );
             path_item.insert(method_name(route.method).to_ascii_lowercase(), operation);
         }
         json!({
@@ -415,7 +421,9 @@ impl GatewayContract {
                 "description": "Canonical public HTTP surface for the Marty Rust service platform."
             },
             "paths": paths,
+            "x-marty-protocol-revision": crate::openapi::protocol_revision(),
             "components": {
+                "schemas": crate::openapi::schemas(),
                 "securitySchemes": {
                     "bearerAuth": {"type": "http", "scheme": "bearer", "bearerFormat": "JWT"},
                     "apiKeyAuth": {"type": "apiKey", "in": "header", "name": "X-API-Key"},
@@ -542,12 +550,15 @@ pub fn route_for(
     table.find(&GatewayRequest::new(method, path, 0))
 }
 
+const OID4VCI_CLIENT_MANAGEMENT_PROXY_PATH: &str =
+    "/__gateway/issuance-native/v1/issuance/oid4vci-clients";
+
 /// Preserve the legacy gateway's service credential boundary for direct
 /// issuance management and wallet routes while leaving browser/webhook Canvas
 /// protocol entry points credential-free.
 #[must_use]
 pub fn requires_issuance_service_auth(path: &str) -> bool {
-    route_ownership(path).service == "issuance"
+    (route_ownership(path).service == "issuance" || path == OID4VCI_CLIENT_MANAGEMENT_PROXY_PATH)
         && path != "/v1/issuance/authorize"
         && path != "/v1/passport/webhooks/personalization"
         && !CANVAS_PUBLIC.iter().any(|pattern| pattern.is_match(path))
@@ -683,8 +694,25 @@ static APPENDED_DISCOVERY_PUBLIC: LazyLock<Regex> = LazyLock::new(|| {
 static DID_WEB_PUBLIC: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^/orgs/[^/]+/did\.json$").expect("static DID Web route regex"));
 
+pub(crate) fn oid4vci_protocol_route(path: &str) -> bool {
+    matches!(
+        path,
+        "/v1/issuance/offers"
+            | "/v1/issuance/token"
+            | "/v1/issuance/credential"
+            | "/v1/issuance/nonce"
+            | "/v1/issuance/notification"
+            | "/v1/issuance/deferred-credential"
+            | "/v1/issuance/authorize"
+            | "/v1/issuance/par"
+    ) || path
+        .strip_prefix("/v1/issuance/offers/")
+        .is_some_and(|id| !id.is_empty() && !id.contains('/'))
+}
+
 fn public_route(path: &str) -> bool {
     path == "/openapi.json"
+        || path == "/v1/protocol-support"
         || path == "/docs"
         || path == "/redoc"
         || path == "/ready"
@@ -706,19 +734,8 @@ fn public_route(path: &str) -> bool {
         || path.starts_with("/v1/trust-registry")
         || APPENDED_DISCOVERY_PUBLIC.is_match(path)
         || DID_WEB_PUBLIC.is_match(path)
-        || [
-            "/v1/issuance/offers",
-            "/v1/issuance/token",
-            "/v1/issuance/credential",
-            "/v1/issuance/nonce",
-            "/v1/issuance/notification",
-            "/v1/issuance/deferred-credential",
-            "/v1/issuance/authorize",
-            "/v1/issuance/par",
-            "/v1/flows/siop/submit",
-        ]
-        .iter()
-        .any(|prefix| path.starts_with(prefix))
+        || oid4vci_protocol_route(path)
+        || path.starts_with("/v1/flows/siop/submit")
         || CANVAS_PUBLIC.iter().any(|pattern| pattern.is_match(path))
         || WALLET_PUBLIC.is_match(path)
         || STATUS_PUBLIC.is_match(path)
@@ -726,6 +743,8 @@ fn public_route(path: &str) -> bool {
 
 fn gateway_owned(path: &str) -> bool {
     path == "/openapi.json"
+        || path == "/v1/protocol-support"
+        || path == "/v1/credential-templates/issuer-options"
         || path == "/docs"
         || path == "/redoc"
         || path.starts_with("/.well-known/")
@@ -1016,10 +1035,60 @@ mod tests {
     }
 
     #[test]
+    fn notification_routes_describe_native_operations_instead_of_a_management_catch_all() {
+        let contract = GatewayContract::load().unwrap();
+        let routes = contract.route_table().unwrap();
+        for (method, path) in [
+            (HttpMethod::Post, "/v1/notifications/send"),
+            (HttpMethod::Get, "/v1/notifications/unread/count"),
+            (
+                HttpMethod::Get,
+                "/v1/notifications/notification-one/delivery-results",
+            ),
+            (HttpMethod::Patch, "/v1/notifications/notification-one/read"),
+            (
+                HttpMethod::Delete,
+                "/v1/notifications/notification-one/read",
+            ),
+            (HttpMethod::Post, "/v1/notifications/read-all"),
+        ] {
+            assert_eq!(
+                route_for(&routes, method, path)
+                    .unwrap()
+                    .route
+                    .upstream_service,
+                "notifications"
+            );
+        }
+        for (method, path) in [
+            (HttpMethod::Post, "/v1/notifications"),
+            (HttpMethod::Put, "/v1/notifications/notification-one"),
+            (HttpMethod::Post, "/v1/notifications/rules"),
+            (HttpMethod::Patch, "/v1/notifications/rules/rule-one"),
+            (HttpMethod::Patch, "/v1/notifications/preferences"),
+        ] {
+            assert!(
+                route_for(&routes, method, path).is_err(),
+                "{method:?} {path}"
+            );
+        }
+    }
+
+    #[test]
     fn openapi_is_derived_from_every_schema_visible_route() {
         let contract = GatewayContract::load().expect("gateway contract");
         let document = contract.openapi_document("1.2.3");
         assert_eq!(document["openapi"], "3.1.0");
+        assert_eq!(
+            document["paths"]["/v1/organizations/{org_id}"]["patch"]["requestBody"]["content"]
+                ["application/json"]["schema"]["$ref"],
+            "#/components/schemas/schemas__organization_update_request"
+        );
+        assert_eq!(
+            document["paths"]["/v1/trust-profiles/{profile_id}"]["get"]
+                ["x-marty-response-schema-documented"],
+            true
+        );
         assert_eq!(document["info"]["title"], "Marty API Gateway");
         assert_eq!(document["info"]["version"], "1.2.3");
         let paths = document["paths"].as_object().expect("OpenAPI paths");
@@ -1063,6 +1132,25 @@ mod tests {
             "organization_id"
         );
         assert!(document.to_string().find("commerce").is_none());
+    }
+
+    #[test]
+    fn protocol_support_catalog_is_public_gateway_owned_discovery() {
+        let ownership = route_ownership("/v1/protocol-support");
+        assert_eq!(ownership.service, "gateway");
+        assert!(ownership.gateway_owned);
+        assert!(!ownership.requires_authentication);
+        let contract = GatewayContract::load().expect("gateway contract");
+        let route = route_for(
+            &contract.runtime_route_table().expect("runtime routes"),
+            HttpMethod::Get,
+            "/v1/protocol-support",
+        )
+        .expect("support route");
+        assert_eq!(route.route.upstream_service, "gateway");
+        let operation = &contract.openapi_document("test")["paths"]["/v1/protocol-support"]["get"];
+        assert_eq!(operation["security"], json!([]));
+        assert_eq!(operation["x-marty-protocol-support"], "implemented");
     }
 
     #[test]

@@ -99,6 +99,13 @@ before retiring the old SecretID. Use the new directory for subsequent
 "$evidence_identity_root"` completes the operation; keep both private until it
 confirms the old login is rejected.
 
+AppRole rotation/retirement and leaf-token revocation proofs use the matching
+Rust `marty-deploy` operator behind the existing Python entrypoints. Exit status
+3 reports uncertain remote creation, revocation, or cleanup. Preserve private
+recovery files and investigate rather than automatically repeating the command.
+Snapshot-reader rotation continues to require its separate rotator identity;
+the reader itself gains no SecretID-management authority.
+
 If refresh fails and `selfhost_custody_signer_token.new` remains in the private
 output directory, stop rather than minting another token. The old-token revoke
 response may have been lost; either token may still be valid. Using the scoped
