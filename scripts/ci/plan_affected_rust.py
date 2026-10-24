@@ -812,7 +812,15 @@ OBSERVED_NON_CARGO_CONSUMERS = {
             "http_request_marker": '"v1/delivery-destinations/{encoded}"',
             "http_response_marker": "if response.id != reference_id {",
             "http_callsite_evidence": "rust/services/flow/src/reference_validation.rs",
-            "http_callsite_marker": ".resolve(kind, reference_id, principal_id, organization_id)",
+            "http_callsite_marker": (
+                ".resolve_for_actor(\n"
+                "                kind,\n"
+                "                reference_id,\n"
+                "                principal_id,\n"
+                "                organization_id,\n"
+                "                providers.gateway_api_key_actor.as_ref(),\n"
+                "            )"
+            ),
             "http_provider_evidence": "rust/services/credential-template/src/http_service.rs",
             "http_provider_marker": '"/v1/delivery-destinations/{destination_id}"',
         },
@@ -1000,7 +1008,15 @@ OBSERVED_NON_CARGO_CONSUMERS = {
             "http_request_marker": '"v1/application-templates/{encoded}"',
             "http_response_marker": "if response.id != reference_id {",
             "http_callsite_evidence": "rust/services/flow/src/reference_validation.rs",
-            "http_callsite_marker": ".resolve(kind, reference_id, principal_id, organization_id)",
+            "http_callsite_marker": (
+                ".resolve_for_actor(\n"
+                "                kind,\n"
+                "                reference_id,\n"
+                "                principal_id,\n"
+                "                organization_id,\n"
+                "                providers.gateway_api_key_actor.as_ref(),\n"
+                "            )"
+            ),
             "http_provider_evidence": "rust/services/issuance/src/application_template_http.rs",
             "http_provider_marker": '"/v1/application-templates/{template_id}"',
         },
@@ -1136,7 +1152,15 @@ OBSERVED_NON_CARGO_CONSUMERS = {
             "request_marker": '"v1/trust-profiles/{encoded}"',
             "response_marker": "if response.id != reference_id {",
             "callsite_evidence": "rust/services/flow/src/reference_validation.rs",
-            "callsite_marker": ".resolve(kind, reference_id, principal_id, organization_id)",
+            "callsite_marker": (
+                ".resolve_for_actor(\n"
+                "                kind,\n"
+                "                reference_id,\n"
+                "                principal_id,\n"
+                "                organization_id,\n"
+                "                providers.gateway_api_key_actor.as_ref(),\n"
+                "            )"
+            ),
             "provider_evidence": "rust/services/trust-profile/src/http_service.rs",
             "provider_marker": '"/v1/trust-profiles/{profile_id}"',
         },
@@ -1174,7 +1198,15 @@ OBSERVED_NON_CARGO_CONSUMERS = {
             "request_marker": '"v1/deployment-profiles/{encoded}"',
             "response_marker": "if response.id != reference_id {",
             "callsite_evidence": "rust/services/flow/src/reference_validation.rs",
-            "callsite_marker": ".resolve(kind, reference_id, principal_id, organization_id)",
+            "callsite_marker": (
+                ".resolve_for_actor(\n"
+                "                kind,\n"
+                "                reference_id,\n"
+                "                principal_id,\n"
+                "                organization_id,\n"
+                "                providers.gateway_api_key_actor.as_ref(),\n"
+                "            )"
+            ),
             "provider_evidence": "rust/services/deployment-profile/src/http.rs",
             "provider_marker": '"/v1/deployment-profiles/{profile_id}"',
         },

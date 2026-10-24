@@ -333,6 +333,129 @@ fn router() -> axum::Router {
     })
 }
 
+#[tokio::test]
+async fn delegated_destination_read_enforces_service_actor_scope_and_tenant() {
+    const ORG: &str = "20000000-0000-4000-8000-000000000001";
+    const OTHER: &str = "20000000-0000-4000-8000-000000000002";
+    const KEY: &str = "10000000-0000-4000-8000-000000000001";
+    let repository = Arc::new(Repository::default());
+    let registry = Arc::new(Registry::default());
+    let system = system_delivery_destination_catalog(Utc::now()).remove(0);
+    let mut tenant = system.clone();
+    tenant.id = "delegated-tenant".into();
+    tenant.organization_id = Some(ORG.into());
+    tenant.is_system = false;
+    let mut ownerless = tenant.clone();
+    ownerless.id = "delegated-ownerless".into();
+    ownerless.organization_id = None;
+    for entry in [&system, &tenant, &ownerless] {
+        registry.save_destination(entry).await.unwrap();
+    }
+    for configured in [true, false] {
+        let control_plane = Arc::new(ControlPlane);
+        let app = credential_template_router(CredentialTemplateHttpState {
+            application: Arc::new(CredentialTemplateApplication::new(
+                repository.clone(),
+                control_plane.clone(),
+            )),
+            registry_application: Arc::new(CredentialTemplateRegistryApplication::new(
+                repository.clone(),
+                registry.clone(),
+                control_plane,
+            )),
+            service_authenticator: Arc::new(
+                ServiceTokenAuthenticator::new(configured.then(|| TOKEN.to_owned()), configured)
+                    .unwrap(),
+            ),
+            environment: RuntimeEnvironment::Test,
+        });
+        for (id, token, key, organization, scopes, expected) in [
+            (
+                tenant.id.as_str(),
+                Some(TOKEN),
+                KEY,
+                ORG,
+                "wallet:read",
+                200,
+            ),
+            (
+                system.id.as_str(),
+                Some(TOKEN),
+                KEY,
+                ORG,
+                "wallet:write",
+                200,
+            ),
+            (
+                ownerless.id.as_str(),
+                Some(TOKEN),
+                KEY,
+                ORG,
+                "wallet:read",
+                403,
+            ),
+            (
+                tenant.id.as_str(),
+                Some(TOKEN),
+                KEY,
+                OTHER,
+                "admin:full",
+                403,
+            ),
+            (tenant.id.as_str(), None, KEY, ORG, "wallet:read", 401),
+            (
+                tenant.id.as_str(),
+                Some("incorrect"),
+                KEY,
+                ORG,
+                "wallet:read",
+                401,
+            ),
+            (
+                tenant.id.as_str(),
+                Some(TOKEN),
+                "malformed",
+                ORG,
+                "wallet:read",
+                401,
+            ),
+            (
+                tenant.id.as_str(),
+                Some(TOKEN),
+                KEY,
+                "invalid",
+                "wallet:read",
+                401,
+            ),
+            (system.id.as_str(), Some(TOKEN), KEY, ORG, "trust:read", 403),
+            (system.id.as_str(), Some(TOKEN), KEY, ORG, "", 403),
+        ] {
+            let mut request = Request::builder()
+                .uri(format!("/v1/delivery-destinations/{id}"))
+                .header("x-api-key-id", key)
+                .header("x-organization-id", organization)
+                .header("x-api-key-scopes", scopes)
+                .header("x-user-id", "user-1");
+            if let Some(token) = token {
+                request = request.header("x-service-token", token);
+            }
+            let response = app
+                .clone()
+                .oneshot(request.body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status().as_u16(),
+                if configured { expected } else { 401 },
+                "destination {id}"
+            );
+            if response.status().is_success() {
+                assert_eq!(json_body(response).await["id"], id);
+            }
+        }
+    }
+}
+
 fn create_body() -> Value {
     json!({
         "organization_id":"org-1",

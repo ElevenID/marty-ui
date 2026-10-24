@@ -17,6 +17,7 @@ test = false
 async-trait.workspace = true
 axum.workspace = true
 chrono.workspace = true
+marty-api-key-policy = { path = "../../crates/api-key-policy" }
 marty-credential-template = { path = "../credential-template" }
 marty-flow = { path = "../flow" }
 marty-key-material-policy = { path = "../../crates/key-material-policy" }

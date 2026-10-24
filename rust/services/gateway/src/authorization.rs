@@ -789,7 +789,10 @@ pub fn resolve_resource_lookup(path: &str) -> Option<ResourceLookup> {
     if let Some(captures) = FLOW_RESOURCE.captures(path) {
         return Some(ResourceLookup {
             service: "flows",
-            path: format!("/v1/flows/{}/{}", &captures[1], &captures[2]),
+            path: format!(
+                "/internal/v1/resource-owners/flows/{}/{}",
+                &captures[1], &captures[2]
+            ),
         });
     }
 
@@ -814,7 +817,7 @@ pub fn resolve_resource_lookup(path: &str) -> Option<ResourceLookup> {
         ),
         "compliance-profiles" => (
             "compliance-profiles",
-            "/v1/compliance-profiles/{id}",
+            "/internal/v1/resource-owners/compliance-profiles/{id}",
             &["system"],
         ),
         "presentation-policies" => (
@@ -822,8 +825,16 @@ pub fn resolve_resource_lookup(path: &str) -> Option<ResourceLookup> {
             "/internal/v1/resource-owners/presentation-policies/{id}",
             &["evaluate"],
         ),
-        "deployment-profiles" => ("deployment-profiles", "/v1/deployment-profiles/{id}", &[]),
-        "revocation-profiles" => ("revocation-profiles", "/v1/revocation-profiles/{id}", &[]),
+        "deployment-profiles" => (
+            "deployment-profiles",
+            "/internal/v1/resource-owners/deployment-profiles/{id}",
+            &[],
+        ),
+        "revocation-profiles" => (
+            "revocation-profiles",
+            "/internal/v1/resource-owners/revocation-profiles/{id}",
+            &[],
+        ),
         "flows" => (
             "flows",
             "/v1/flows/{id}",
@@ -1139,6 +1150,30 @@ mod tests {
     }
 
     #[test]
+    fn consumer_profile_ownership_uses_service_only_projections_instead_of_human_reads() {
+        for resource in [
+            "compliance-profiles",
+            "deployment-profiles",
+            "revocation-profiles",
+            "flows/definitions",
+            "flows/instances",
+        ] {
+            let lookup = resolve_resource_lookup(&format!(
+                "/v1/{resource}/11111111-1111-4111-8111-111111111111"
+            ))
+            .unwrap();
+            assert_eq!(
+                lookup.path,
+                format!(
+                    "/internal/v1/resource-owners/{resource}/11111111-1111-4111-8111-111111111111"
+                )
+            );
+        }
+        assert!(resolve_resource_lookup("/v1/flows/capabilities").is_none());
+        assert!(resolve_resource_lookup("/v1/compliance-profiles/system/discoverable").is_none());
+    }
+
+    #[test]
     fn organization_id_matches_published_lowercase_shape() {
         let id = "11111111-1111-1111-1111-111111111111";
         assert_eq!(
@@ -1240,7 +1275,7 @@ mod tests {
             );
             assert_eq!(
                 resolve_resource_lookup(&path).unwrap().path,
-                "/v1/compliance-profiles/profile-one"
+                "/internal/v1/resource-owners/compliance-profiles/profile-one"
             );
             assert!(!api_key_allowed(
                 requirement.permission,
