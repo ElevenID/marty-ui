@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use axum::{
-    body::Body,
+    body::{to_bytes, Body},
     http::{Request, StatusCode},
 };
 use chrono::Utc;
@@ -14,6 +14,30 @@ use serde_json::{json, Value};
 use sqlx::postgres::PgPoolOptions;
 use std::{collections::BTreeSet, sync::Arc};
 use tower::ServiceExt;
+
+#[tokio::test]
+async fn existing_human_membership_authorization_remains_independent_of_gateway_key_assertions() {
+    let (service, repository) = harness();
+    let profile = ComplianceProfile::new(request(), Utc::now()).unwrap();
+    let id = profile.id.clone();
+    repository.save(profile).await.unwrap();
+    let app = compliance_router(
+        ComplianceHttpState::new(service)
+            .with_service_token(Some("s".repeat(32)))
+            .unwrap(),
+    );
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/v1/compliance-profiles/{id}"))
+                .header("x-user-id", "user-1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+}
 #[derive(Clone)]
 struct Memberships {
     permissions: BTreeSet<String>,
@@ -62,6 +86,181 @@ fn harness() -> (Arc<ComplianceService>, Arc<dyn ComplianceRepository>) {
 }
 fn request() -> CreateComplianceProfileRequest {
     serde_json::from_value(json!({"organization_id":"org-1","name":"Enterprise SD-JWT VC","description":"Enterprise issuance baseline","compliance_code":"ENTERPRISE_VC","credential_format":"sd_jwt_vc","issuance_protocol":"OID4VCI_PRE_AUTH","issuer_artifact_requirements":{"requires_did":true,"requires_jwk":true,"recommended_algorithms":["ES256"]},"verification_policy_set_id":"policy-set-1","trust_profile_constraints":{"compatible_profile_types":["CUSTOM"],"required_source_types":["TRUST_LIST"],"required_formats":["SD_JWT_VC"]},"api_surface":[{"rel":"issuer","path_template":"/.well-known/openid-credential-issuer","auth_required":false}],"frameworks":["GDPR"],"data_retention":{"retention_period":"1_year","retain_metadata_only":true,"anonymize_after_days":30},"consent_requirement":{"consent_type":"explicit","consent_text":"Consent","consent_version":"2.0"},"audit_configuration":{"audit_level":"detailed","retention_days":730},"data_minimization_rules":[{"description":"Protect email","applies_to_claims":["email"],"action":"hash","parameters":{"algorithm":"sha256"}}],"jurisdictional_constraints":[{"name":"EU","allowed_countries":["DE","FR"],"data_residency_required":true,"allowed_data_regions":["eu"]}],"age_verification":{"enabled":true,"minimum_age":21,"verification_method":"derived"}})).unwrap()
+}
+
+#[tokio::test]
+async fn gateway_api_key_metadata_edits_preserve_hidden_rules_and_require_scoped_service_auth() {
+    const ORG: &str = "20000000-0000-4000-8000-000000000001";
+    const OTHER: &str = "20000000-0000-4000-8000-000000000002";
+    const KEY: &str = "10000000-0000-4000-8000-000000000001";
+    let repository: Arc<dyn ComplianceRepository> = Arc::new(MemoryComplianceRepository::new());
+    let service = Arc::new(ComplianceService::new(
+        repository.clone(),
+        Arc::new(Memberships {
+            permissions: BTreeSet::new(),
+        }),
+    ));
+    let mut input = request();
+    input.organization_id = Some(ORG.into());
+    let profile = ComplianceProfile::new(input, Utc::now()).unwrap();
+    let id = profile.id.clone();
+    let mut before = serde_json::to_value(&profile).unwrap();
+    repository.save(profile).await.unwrap();
+    let token = "s".repeat(32);
+    let app = compliance_router(
+        ComplianceHttpState::new(service)
+            .with_service_token(Some(token.clone()))
+            .unwrap(),
+    );
+    for (method, scopes, organization, supplied_token, expected) in [
+        (
+            "GET",
+            "compliance:read",
+            ORG,
+            token.as_str(),
+            StatusCode::OK,
+        ),
+        ("GET", "compliance:read", ORG, "", StatusCode::UNAUTHORIZED),
+        (
+            "GET",
+            "compliance:read",
+            ORG,
+            "wrong-token",
+            StatusCode::UNAUTHORIZED,
+        ),
+        (
+            "GET",
+            "compliance:read",
+            OTHER,
+            token.as_str(),
+            StatusCode::FORBIDDEN,
+        ),
+        (
+            "GET",
+            "flows:read",
+            ORG,
+            token.as_str(),
+            StatusCode::FORBIDDEN,
+        ),
+        (
+            "PATCH",
+            "compliance:read",
+            ORG,
+            token.as_str(),
+            StatusCode::FORBIDDEN,
+        ),
+        (
+            "PATCH",
+            "compliance:write",
+            OTHER,
+            token.as_str(),
+            StatusCode::FORBIDDEN,
+        ),
+        (
+            "PATCH",
+            "compliance:write",
+            ORG,
+            token.as_str(),
+            StatusCode::OK,
+        ),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(format!("/v1/compliance-profiles/{id}"))
+                    .header("content-type", "application/json")
+                    .header("x-service-token", supplied_token)
+                    .header("x-api-key-id", KEY)
+                    .header("x-api-key-scopes", scopes)
+                    .header("x-organization-id", organization)
+                    .body(Body::from(if method == "PATCH" {
+                        r#"{"description":"Scoped key metadata edit"}"#
+                    } else {
+                        ""
+                    }))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            expected,
+            "{method} {scopes} {organization}"
+        );
+    }
+    let stored = repository.get(&id).await.unwrap().unwrap();
+    assert_eq!(
+        stored.description.as_deref(),
+        Some("Scoped key metadata edit")
+    );
+    let mut after = serde_json::to_value(stored).unwrap();
+    for value in [&mut before, &mut after] {
+        value.as_object_mut().unwrap().remove("description");
+        value.as_object_mut().unwrap().remove("updated_at");
+    }
+    assert_eq!(after, before);
+}
+
+#[tokio::test]
+async fn compliance_owner_projection_preserves_explicit_system_shape_without_exposing_profile_rules(
+) {
+    let (service, repository) = harness();
+    let preset = system_profiles().remove(0);
+    let id = preset.id.clone();
+    repository.save(preset).await.unwrap();
+    let token = "s".repeat(32);
+    let app = compliance_router(
+        ComplianceHttpState::new(service)
+            .with_service_token(Some(token.clone()))
+            .unwrap(),
+    );
+    for (supplied, expected) in [
+        ("", StatusCode::UNAUTHORIZED),
+        ("wrong", StatusCode::UNAUTHORIZED),
+        (token.as_str(), StatusCode::OK),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/internal/v1/resource-owners/compliance-profiles/{id}"
+                    ))
+                    .header("x-service-token", supplied)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected);
+        if expected == StatusCode::OK {
+            let value: Value =
+                serde_json::from_slice(&to_bytes(response.into_body(), 1024).await.unwrap())
+                    .unwrap();
+            assert_eq!(
+                value,
+                json!({"id":id,"organization_id":null,"is_system":true})
+            );
+        }
+    }
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!("/v1/compliance-profiles/{id}"))
+                .header("content-type", "application/json")
+                .header("x-service-token", token)
+                .header("x-api-key-id", "10000000-0000-4000-8000-000000000001")
+                .header("x-organization-id", "20000000-0000-4000-8000-000000000001")
+                .header("x-api-key-scopes", "admin:full")
+                .body(Body::from(r#"{"description":"Forbidden system edit"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
 }
 
 #[tokio::test]
@@ -228,7 +427,7 @@ async fn exact_tenant_permissions_and_identity_are_required() {
 #[tokio::test]
 async fn http_surface_rejects_removed_fields_and_put_alias() {
     let (s, _) = harness();
-    let app = compliance_router(ComplianceHttpState { service: s });
+    let app = compliance_router(ComplianceHttpState::new(s));
     let response=app.clone().oneshot(Request::builder().method("POST").uri("/v1/compliance-profiles").header("content-type","application/json").header("x-user-id","user-1").body(Body::from(json!({"organization_id":"org-1","name":"Legacy","default_verification_rules":{}}).to_string())).unwrap()).await.unwrap();
     assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
     let response = app
@@ -277,7 +476,7 @@ async fn actual_http_public_examples_and_sparse_edits_preserve_all_stored_policy
     ))
     .unwrap();
     let (service, repository) = harness();
-    let app = compliance_router(ComplianceHttpState { service });
+    let app = compliance_router(ComplianceHttpState::new(service));
     let (status, created) = http_json(
         app.clone(),
         "POST",
@@ -348,7 +547,7 @@ async fn native_readers_cannot_edit_or_transition_the_public_profile() {
             permissions: BTreeSet::from(["compliance-profile:view".into()]),
         }),
     ));
-    let app = compliance_router(ComplianceHttpState { service });
+    let app = compliance_router(ComplianceHttpState::new(service));
     let path = format!("/v1/compliance-profiles/{}", created.id);
     for (method, suffix, body) in [
         ("POST", "/activate", json!({})),

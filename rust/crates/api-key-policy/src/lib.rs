@@ -43,79 +43,15 @@ impl GatewayApiKeyActor {
     }
 
     #[must_use]
+    pub fn scopes_csv(&self) -> String {
+        self.scopes.join(",")
+    }
+
+    #[must_use]
     pub fn authorizes(&self, principal: &str, organization: &str, permission: &str) -> bool {
         uuid::Uuid::parse_str(principal).ok() == Some(self.key_id)
             && uuid::Uuid::parse_str(organization).ok() == Some(self.organization_id)
             && api_key_allowed(permission, &self.scopes)
-    }
-}
-
-#[cfg(test)]
-mod gateway_actor_tests {
-    use super::{api_key_allowed, GatewayApiKeyActor};
-    const KEY: &str = "10000000-0000-4000-8000-000000000001";
-    const ORG: &str = "20000000-0000-4000-8000-000000000001";
-    const OTHER: &str = "20000000-0000-4000-8000-000000000002";
-
-    #[test]
-    fn gateway_reader_remains_bound_to_actor_tenant_and_read_scope() {
-        let actor =
-            GatewayApiKeyActor::parse(KEY, ORG, "deployment:read, compliance:read,trust:read")
-                .unwrap();
-        for permission in [
-            "deployment-profile:view",
-            "compliance-profile:view",
-            "revocation-profile:view",
-        ] {
-            assert!(actor.authorizes(KEY, ORG, permission));
-            assert!(!actor.authorizes(OTHER, ORG, permission));
-            assert!(!actor.authorizes(KEY, OTHER, permission));
-        }
-        for permission in [
-            "deployment-profile:edit",
-            "compliance-profile:create",
-            "revocation-profile:activate",
-            "signing-key:view",
-        ] {
-            assert!(!actor.authorizes(KEY, ORG, permission));
-        }
-    }
-
-    #[test]
-    fn malformed_or_nil_gateway_actor_is_not_a_principal() {
-        for id in ["", "not-a-uuid", "00000000-0000-0000-0000-000000000000"] {
-            assert!(GatewayApiKeyActor::parse(id, ORG, "admin:full").is_err());
-            assert!(GatewayApiKeyActor::parse(KEY, id, "admin:full").is_err());
-        }
-        let actor = GatewayApiKeyActor::parse(KEY, ORG, "admin:full").unwrap();
-        assert!(!actor.authorizes(KEY, OTHER, "deployment-profile:view"));
-        assert!(
-            !GatewayApiKeyActor::parse(KEY, ORG, "").unwrap().authorizes(
-                KEY,
-                ORG,
-                "deployment-profile:view"
-            )
-        );
-    }
-
-    #[test]
-    fn revocation_profile_uses_trust_read_and_write_boundaries() {
-        assert!(api_key_allowed(
-            "revocation-profile:view",
-            &["trust:read".into()]
-        ));
-        assert!(!api_key_allowed(
-            "revocation-profile:activate",
-            &["trust:read".into()]
-        ));
-        assert!(api_key_allowed(
-            "revocation-profile:activate",
-            &["trust:write".into()]
-        ));
-        assert!(!api_key_allowed(
-            "revocation-profile:view",
-            &["credentials:issue".into()]
-        ));
     }
 }
 
@@ -156,6 +92,11 @@ pub fn api_key_allowed(required_permission: &str, scopes: &[String]) -> bool {
         return false;
     };
     match resource {
+        // Discovery follows trust-read scope. Existing privileged revocation
+        // writes remain behind their original scope rules.
+        "revocation-profile" if matches!(action, "view" | "read" | "list") => {
+            scopes.contains("trust:read") || scopes.contains("trust:write")
+        }
         "compliance-profile" if action == "suspend" => scopes.contains("compliance:write"),
         "wallet" => match action {
             "view" => scopes.contains("wallet:read") || scopes.contains("wallet:write"),
@@ -197,9 +138,7 @@ fn mapped_api_key_scope(resource: &str, action: &str, scopes: &BTreeSet<&str>) -
     let (read_scope, write_scope) = match resource {
         "credential-template" => ("templates:read", "templates:write"),
         "application-template" | "application" => ("applications:read", "applications:write"),
-        "trust-profile" | "issuer-entity" | "presentation-policy" | "revocation-profile" => {
-            ("trust:read", "trust:write")
-        }
+        "trust-profile" | "issuer-entity" | "presentation-policy" => ("trust:read", "trust:write"),
         "compliance-profile" => ("compliance:read", "compliance:write"),
         "deployment-profile" => ("deployment:read", "deployment:write"),
         "webhook" => ("webhooks:read", "webhooks:write"),
@@ -253,5 +192,74 @@ mod application_review_tests {
         assert!(!api_key_allowed("signing-key:write", &scopes));
         assert!(!api_key_allowed("api-key:edit", &scopes));
         assert!(!api_key_allowed("credential-template:edit", &scopes));
+    }
+}
+
+#[cfg(test)]
+mod gateway_actor_tests {
+    use super::{api_key_allowed, GatewayApiKeyActor};
+    const KEY: &str = "10000000-0000-4000-8000-000000000001";
+    const ORG: &str = "20000000-0000-4000-8000-000000000001";
+    const OTHER: &str = "20000000-0000-4000-8000-000000000002";
+
+    #[test]
+    fn gateway_reader_remains_bound_to_actor_tenant_and_read_scope() {
+        let actor =
+            GatewayApiKeyActor::parse(KEY, ORG, "deployment:read, compliance:read,trust:read")
+                .unwrap();
+        for permission in [
+            "deployment-profile:view",
+            "compliance-profile:view",
+            "revocation-profile:view",
+        ] {
+            assert!(actor.authorizes(KEY, ORG, permission));
+            assert!(!actor.authorizes(OTHER, ORG, permission));
+            assert!(!actor.authorizes(KEY, OTHER, permission));
+        }
+        for permission in [
+            "deployment-profile:edit",
+            "compliance-profile:create",
+            "revocation-profile:activate",
+            "signing-key:view",
+        ] {
+            assert!(!actor.authorizes(KEY, ORG, permission));
+        }
+    }
+
+    #[test]
+    fn malformed_or_nil_gateway_actor_is_not_a_principal() {
+        for id in ["", "not-a-uuid", "00000000-0000-0000-0000-000000000000"] {
+            assert!(GatewayApiKeyActor::parse(id, ORG, "admin:full").is_err());
+            assert!(GatewayApiKeyActor::parse(KEY, id, "admin:full").is_err());
+        }
+        let actor = GatewayApiKeyActor::parse(KEY, ORG, "admin:full").unwrap();
+        assert!(!actor.authorizes(KEY, OTHER, "deployment-profile:view"));
+        assert!(
+            !GatewayApiKeyActor::parse(KEY, ORG, "").unwrap().authorizes(
+                KEY,
+                ORG,
+                "deployment-profile:view"
+            )
+        );
+    }
+
+    #[test]
+    fn revocation_profile_discovery_does_not_expand_privileged_write_scopes() {
+        assert!(api_key_allowed(
+            "revocation-profile:view",
+            &["trust:read".into()]
+        ));
+        assert!(!api_key_allowed(
+            "revocation-profile:activate",
+            &["trust:read".into()]
+        ));
+        assert!(!api_key_allowed(
+            "revocation-profile:activate",
+            &["trust:write".into()]
+        ));
+        assert!(!api_key_allowed(
+            "revocation-profile:view",
+            &["credentials:issue".into()]
+        ));
     }
 }

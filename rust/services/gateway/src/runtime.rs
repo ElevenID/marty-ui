@@ -3741,7 +3741,14 @@ fn compatibility_upstream_path(
 fn requires_gateway_service_token(service: &str) -> bool {
     matches!(
         service,
-        "organizations" | "credential-templates" | "trust-profiles" | "presentation-policies"
+        "organizations"
+            | "credential-templates"
+            | "trust-profiles"
+            | "presentation-policies"
+            | "compliance-profiles"
+            | "deployment-profiles"
+            | "revocation-profiles"
+            | "flows"
     )
 }
 
