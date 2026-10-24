@@ -24,9 +24,10 @@ import httpx
 
 from generate_selfhost_disposable_credentials import validate_operator_password
 from selfhost_openbao_client import (
-    CUSTODY_SIGNER, CUSTODY_SIGNER_POLICY, custody_signer_public,
+    CUSTODY_SIGNER, custody_signer_public,
 )
 from selfhost_managed_reference import managed_reference
+from selfhost_native_operator import operator_bytes
 
 
 def required_environment(values: dict[str, str]) -> dict[str, str]:
@@ -189,12 +190,11 @@ def validate_audit_token(metadata: dict) -> None:
 
 
 def validate_custody_signer_token(metadata: dict) -> None:
-    policies = metadata.get("policies")
-    ttl = metadata.get("ttl")
-    if (not isinstance(policies, list) or set(policies) != {CUSTODY_SIGNER_POLICY}
-            or metadata.get("orphan") is not True
-            or type(ttl) is not int or not 0 < ttl <= 3600):
-        raise ValueError("OpenBao custody signer token is not scoped or short-lived")
+    try:
+        operator_bytes(Path(__file__).resolve().parents[1], "operator", "leaf-metadata",
+                       input=json.dumps({"metadata": metadata}).encode())
+    except (RuntimeError, ValueError, TypeError) as error:
+        raise ValueError("OpenBao custody signer token is not scoped or short-lived") from error
 
 
 def validate_profile_projection(profile: dict, *, did: str, purpose: str) -> dict:

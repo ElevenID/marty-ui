@@ -5,19 +5,18 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import json
 import os
 import re
-import stat
 import sys
-from collections.abc import Callable
 from pathlib import Path
 from urllib.error import HTTPError
 
 from provision_selfhost_disposable_tls import read_protected_root_token, verified_openbao_owner
 from provision_selfhost_evidence_identity import checked_login as evidence_login
 from provision_selfhost_evidence_identity import mint as mint_evidence_token
-from selfhost_native_operator import OperatorCleanupError, operator_bytes
+from selfhost_native_operator import OperatorCleanupError, network_operation
+from selfhost_operator_inputs import private_operator_directory, write_owned
+from selfhost_operator_inputs import refresh_scoped_token as refresh_scoped_token
 from selfhost_openbao_client import (
     CUSTODY_SIGNER,
     CUSTODY_SIGNER_LEAF_ACL,
@@ -29,29 +28,8 @@ from selfhost_openbao_client import (
 SOURCE_ROOT = Path(__file__).resolve().parents[1]
 
 
-def refresh_scoped_token(bao: Bao, token_file: Path, token: str,
-                         write: Callable[[Path, str, int], None]) -> None:
-    """Keep the previous credential recoverable until its revocation succeeds."""
-    old_token = token_file.read_text(encoding="ascii").strip()
-    temporary = token_file.with_name(token_file.name + ".new")
-    if temporary.exists() or temporary.is_symlink():
-        raise ValueError("pending custody token refresh requires operator recovery")
-    write(temporary, token, 0o400)
-    operator_bytes(SOURCE_ROOT, "operator", "leaf-refresh", bao.endpoint, str(bao.ca),
-                   input=json.dumps({"old_token": old_token, "new_token": token,
-                                     "operator_token": bao.token}).encode("utf-8"))
-    # If replacement fails, the new token remains in .new for operator recovery.
-    os.replace(temporary, token_file)
-
-
 def private_directory(path: Path) -> Path:
-    if (not path.is_absolute() or path.is_symlink() or not path.is_dir()
-            or stat.S_IMODE(path.stat().st_mode) != 0o700):
-        raise ValueError("operator directory must be an existing private directory")
-    resolved = path.resolve()
-    if resolved.is_relative_to(SOURCE_ROOT):
-        raise ValueError("operator directory must be outside the source checkout")
-    return resolved
+    return private_operator_directory(path, SOURCE_ROOT)
 
 
 def provision(endpoint: str, state_root: Path, output_root: Path, project: str,
@@ -132,16 +110,7 @@ def provision(endpoint: str, state_root: Path, output_root: Path, project: str,
     owner = output_root.stat()
 
     def write(path: Path, value: str, mode: int) -> None:
-        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-                             0o600)
-        try:
-            with os.fdopen(descriptor, "w", encoding="ascii") as stream:
-                stream.write(value)
-                os.fchown(stream.fileno(), owner.st_uid, owner.st_gid)
-                os.fchmod(stream.fileno(), mode)
-        except Exception:
-            path.unlink(missing_ok=True)
-            raise
+        write_owned(path, value, mode, owner)
 
     if identity_root is None:
         created = bao.request("POST", "auth/token/create", {
@@ -155,20 +124,7 @@ def provision(endpoint: str, state_root: Path, output_root: Path, project: str,
         raise ValueError("OpenBao scoped custody token is absent")
     try:
         scoped = Bao(endpoint, ca_file, token)
-        lookup = scoped.request("GET", "auth/token/lookup-self").get("data", {})
-        if (lookup.get("policies") != [CUSTODY_SIGNER_POLICY]
-                or lookup.get("orphan") is not True
-                or type(lookup.get("ttl")) is not int
-                or not 0 < lookup["ttl"] <= 3600):
-            raise ValueError("OpenBao custody signer token is not orphaned, scoped or short-lived")
-        scoped.request("GET", f"transit/keys/{CUSTODY_SIGNER}")
-        try:
-            scoped.request("GET", f"transit/export/signing-key/{CUSTODY_SIGNER}")
-        except HTTPError as error:
-            if error.code != 403:
-                raise ValueError("OpenBao custody key export denial is invalid") from None
-        else:
-            raise ValueError("OpenBao custody key was exportable")
+        network_operation(scoped, "leaf-check", kind="custody")
         if refresh_token:
             refresh_scoped_token(bao, token_file, token, write)
         else:

@@ -268,7 +268,8 @@ fn run() -> Result<(), String> {
                 | "activation-certificates"
                 | "activation-tokens"
                 | "authority-check"
-                | "renewal-inventory",
+                | "renewal-inventory"
+                | "leaf-check",
             ) if args.len() == 4 => {
                 use marty_deployment_catalog::{activation_preflight as preflight, ca_issuer};
                 use std::{io::IsTerminal, path::Path, time::Duration};
@@ -297,6 +298,11 @@ fn run() -> Result<(), String> {
                     .block_on(async {
                         match args[1].as_str() {
                             "ca-issuer" => ca_issuer::stage(&bao, &context).await,
+                            "leaf-check" => {
+                                marty_deployment_catalog::leaf_tokens::check(&bao, &context)
+                                    .await
+                                    .map(|_| Value::Null)
+                            }
                             "activation-certificates" => preflight::certificates(&bao, &context)
                                 .await
                                 .map(|_| Value::Null),
@@ -442,6 +448,40 @@ fn run() -> Result<(), String> {
                     certificate.as_bytes(),
                     issuer.as_bytes(),
                 )
+            }
+            Some("leaf-metadata") if args.len() == 2 => {
+                let mut input = Vec::new();
+                std::io::stdin()
+                    .take(64 * 1024 + 1)
+                    .read_to_end(&mut input)
+                    .map_err(|_| REFUSAL)?;
+                if input.len() > 64 * 1024 {
+                    return Err(REFUSAL.into());
+                }
+                let context: Value = serde_json::from_slice(&input).map_err(|_| REFUSAL)?;
+                marty_deployment_catalog::leaf_tokens::metadata(
+                    &context["metadata"],
+                    "selfhost-qualification-custody-signer",
+                    true,
+                    None,
+                )
+            }
+            Some("managed-reference") if args.len() == 2 => {
+                let mut input = Vec::new();
+                std::io::stdin()
+                    .take(64 * 1024 + 1)
+                    .read_to_end(&mut input)
+                    .map_err(|_| REFUSAL)?;
+                if input.len() > 64 * 1024 {
+                    return Err(REFUSAL.into());
+                }
+                let context: Value = serde_json::from_slice(&input).map_err(|_| REFUSAL)?;
+                let reference = marty_managed_key_reference::selfhost_reference(
+                    context["org"].as_str().ok_or(REFUSAL)?,
+                    context["purpose"].as_str().ok_or(REFUSAL)?,
+                )
+                .ok_or(REFUSAL)?;
+                serde_json::to_writer(std::io::stdout(), &reference).map_err(|_| REFUSAL)
             }
             Some("custody-signer") if args.len() == 2 => {
                 let mut input = Vec::new();

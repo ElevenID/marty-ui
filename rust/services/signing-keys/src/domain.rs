@@ -200,14 +200,7 @@ pub fn key_purposes() -> Vec<KeyPurpose> {
     ]
 }
 
-pub const MANAGED_KEY_PREFIXES: &[&str] = &[
-    "cred-issuer-",
-    "cred-dsc-",
-    "lti-tool-",
-    "oid4vp-verifier-",
-    "cred-holder-",
-    "cred-presenter-",
-];
+pub use marty_managed_key_reference::MANAGED_KEY_PREFIXES;
 
 pub fn managed_key_prefix_for_purpose(purpose: &str) -> Option<&'static str> {
     match purpose {

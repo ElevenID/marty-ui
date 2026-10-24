@@ -12,7 +12,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import provision_selfhost_audit_token as audit  # noqa: E402
 import provision_selfhost_audit_identity as audit_identity  # noqa: E402
-import provision_selfhost_custody_signer as signer  # noqa: E402
+import selfhost_operator_inputs as handoff  # noqa: E402
 
 
 ORG = "00000000-0000-0000-0000-000000000001"
@@ -106,6 +106,17 @@ def test_provision_validates_and_recovers_token(
             return {}
 
     monkeypatch.setattr(audit, "Bao", FakeBao)
+
+    def validate(bao, operation, **context):
+        assert operation == "leaf-check" and context == {"kind": "audit", "paths": allowed}
+        assert bao.token == "scoped"
+        bao.request("GET", "auth/token/lookup-self")
+        if not orphan:
+            raise ValueError("not orphaned")
+        bao.request("POST", "sys/capabilities-self", {"paths": [*allowed, f"transit/sign/{audit.SIGNER}"]})
+        if excess:
+            raise ValueError("capabilities")
+    monkeypatch.setattr(audit, "network_operation", validate)
     monkeypatch.setattr(audit, "verified_openbao_owner", lambda *_args: "locked-image")
     monkeypatch.setattr(audit, "read_protected_root_token", lambda _path: "r" * 16)
     if orphan and not excess:
@@ -178,8 +189,9 @@ def test_refresh_refuses_root_authority_before_reading_saved_token(
     assert (output / "selfhost_audit_token").read_text() == "old"
 
 
+@pytest.mark.parametrize("commit_sync_failure", [False, True])
 def test_rootless_refresh_replaces_old_orphan_without_saved_root(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, commit_sync_failure: bool,
 ) -> None:
     if os.name != "posix":
         pytest.skip("POSIX private-file behavior")
@@ -227,6 +239,11 @@ def test_rootless_refresh_replaces_old_orphan_without_saved_root(
 
     monkeypatch.setattr(audit, "Bao", FakeBao)
 
+    def validate(bao, operation, **context):
+        assert operation == "leaf-check" and context == {"kind": "audit", "paths": allowed}
+        assert bao.token == "new"
+    monkeypatch.setattr(audit, "network_operation", validate)
+
     def refresh(_root, *args, input):
         assert args[:2] == ("operator", "leaf-refresh")
         credentials = json.loads(input)
@@ -239,10 +256,25 @@ def test_rootless_refresh_replaces_old_orphan_without_saved_root(
 
     # HTTP revocation and failure semantics are covered through actual native
     # HTTPS in test_selfhost_native_rotation; this test owns provisioning order.
-    monkeypatch.setattr(signer, "operator_bytes", refresh)
-    audit.provision("https://127.0.0.1:18200", state, output, ORG, SLUG, DID,
-                    "marty-selfhost-openbao-qualification", refresh_token=True,
-                    identity_root=identity)
+    monkeypatch.setattr(handoff, "operator_bytes", refresh)
+    if commit_sync_failure:
+        real_sync = os.fsync
+        syncs = []
+        def sync(fd):
+            if stat.S_ISDIR(os.fstat(fd).st_mode):
+                syncs.append(fd)
+                if len(syncs) == 2:
+                    raise OSError("synthetic commit sync failure")
+            real_sync(fd)
+        monkeypatch.setattr(handoff.os, "fsync", sync)
+        with pytest.raises(RuntimeError, match="operator recovery"):
+            audit.provision("https://127.0.0.1:18200", state, output, ORG, SLUG, DID,
+                            "marty-selfhost-openbao-qualification", refresh_token=True,
+                            identity_root=identity)
+    else:
+        audit.provision("https://127.0.0.1:18200", state, output, ORG, SLUG, DID,
+                        "marty-selfhost-openbao-qualification", refresh_token=True,
+                        identity_root=identity)
     assert token_file.read_text() == "new"
     assert stat.S_IMODE(token_file.stat().st_mode) == 0o400
     assert revoked == ["old"]

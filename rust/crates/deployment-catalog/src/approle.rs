@@ -18,9 +18,9 @@ pub const CLEANUP_BOOTSTRAP: &str = "AppRole bootstrap cleanup is incomplete";
 pub const CLEANUP_LEAF: &str = "AppRole leaf cleanup is unconfirmed";
 pub const CLEANUP_ROTATION: &str = "AppRole rotation requires operator recovery";
 pub const CLEANUP_REFRESH: &str = "Scoped token refresh requires operator recovery";
-const SIGNER: &str = "selfhost-qualification-custody-v1";
-const SIGNER_POLICY: &str = "selfhost-qualification-custody-signer";
-const AUDIT_POLICY: &str = "selfhost-qualification-audit";
+pub(crate) const SIGNER: &str = "selfhost-qualification-custody-v1";
+pub(crate) const SIGNER_POLICY: &str = "selfhost-qualification-custody-signer";
+pub(crate) const AUDIT_POLICY: &str = "selfhost-qualification-audit";
 const SNAPSHOT_POLICY: &str = "selfhost-raft-snapshot-read";
 const RENEWAL_POLICY: &str = "selfhost-kms-renewal";
 const CA_POLICY: &str = "selfhost-kms-ca-rotation";
@@ -1129,24 +1129,28 @@ pub async fn mint(
         .as_str()
         .filter(|v| v.len() >= 20)
         .ok_or(REFUSAL)?;
-    let verified:Result<()>=async {
-        let data=request(bao,Method::POST,"auth/token/lookup",Some(&json!({"token":leaf})),Some(operator)).await?; let data=&data["data"];
-        let ttl=data["ttl"].as_u64().ok_or(REFUSAL)?;
-        if data["policies"]!=json!([leaf_policy]) || data["orphan"]!=true || data["path"]!=format!("auth/token/create/{leaf_role}") || !(1..=3600).contains(&ttl) {return Err(REFUSAL);}
-        if role==Role::Audit {
-            let paths=context["paths"].as_array().ok_or(REFUSAL)?.iter().map(|v|v.as_str().ok_or(REFUSAL)).collect::<Result<Vec<_>>>()?;
-            let forbidden=[format!("transit/sign/{SIGNER}"),format!("transit/export/signing-key/{SIGNER}"),"auth/token/create".into(),format!("sys/policies/acl/{AUDIT_POLICY}")];
-            let all=paths.iter().copied().chain(forbidden.iter().map(String::as_str)).collect::<Vec<_>>();
-            let access=request(bao,Method::POST,"sys/capabilities-self",Some(&json!({"paths":all})),Some(leaf)).await?;
-            if paths.iter().any(|path|access[*path]!=json!(["read"])) || forbidden.iter().any(|path|access[path]!=json!(["deny"]) && access[path]!=json!([])) {return Err(REFUSAL);}
-        }else{
-            use base64::Engine;
-            let signed=request(bao,Method::POST,&format!("transit/sign/{SIGNER}"),Some(&json!({"input":base64::engine::general_purpose::STANDARD.encode(b"evidence-custody-canary"),"key_version":1})),Some(leaf)).await?;
-            if !signed["data"]["signature"].as_str().is_some_and(|v|v.starts_with("vault:v1:")) {return Err(REFUSAL);}
-            denial(bao,leaf,Method::GET,&format!("transit/export/signing-key/{SIGNER}"),None).await?;
+    let verified: Result<()> = async {
+        let data = request(
+            bao,
+            Method::POST,
+            "auth/token/lookup",
+            Some(&json!({"token":leaf})),
+            Some(operator),
+        )
+        .await?;
+        crate::leaf_tokens::metadata(
+            &data["data"],
+            leaf_policy,
+            false,
+            Some(&format!("auth/token/create/{leaf_role}")),
+        )?;
+        if role == Role::Audit {
+            crate::leaf_tokens::audit_access(bao, leaf, context).await
+        } else {
+            crate::leaf_tokens::evidence_access(bao, leaf, true).await
         }
-        Ok(())
-    }.await;
+    }
+    .await;
     if verified.is_err()
         && request(
             bao,
