@@ -30,7 +30,7 @@ pub(crate) const LOAD_CANVAS_POLICY_SET: &str = "SELECT jsonb_build_object(
         'id', id, 'status', status, 'policy_type', policy_type,
         'cedar_policies', cedar_policies
     ) FROM organization_service.policy_sets
-    WHERE organization_id = $1 AND id = $2";
+    WHERE organization_id = $1::uuid AND id = $2::uuid";
 
 pub(crate) fn canvas_approval_policy_set_id(
     binding: &Map<String, Value>,

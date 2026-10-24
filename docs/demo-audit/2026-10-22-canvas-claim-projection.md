@@ -121,3 +121,14 @@ failing, stale, unverified or policy-denied evidence and successful recovery. A 
 disposable PostgreSQL contract exercises changed heads and PolicySet edits between
 snapshot and reservation, template-policy fallback, successful recovery, and the
 existing automatic/legacy paths. These checks do not qualify a demo recording.
+
+Current-main reconciliation replaces the shortened policy table in the approval
+contract with the production Organization migration, valid UUID identifiers,
+foreign keys and required timestamps. That stronger fixture exposed a production
+query binding defect: the shared policy lookup bound text parameters directly to
+UUID columns. Its parameter casts now preserve indexed UUID comparisons for both
+approval/reservation locking and the signing-time guard. The original failed
+control remains recorded. Fresh native verification passes the approval PostgreSQL
+contract, both Organization migration controls on the same database afterward, and
+five manual-approval HTTP cases. Stock D07/D08 execution remains required; these
+source controls do not qualify a demo recording or official conformance.
