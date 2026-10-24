@@ -159,3 +159,46 @@ def test_pull_script_retries_bounded_exact_digest(
     assert pauses.read_text(encoding="utf-8").splitlines() == [
         "1", "2"
     ][:min(succeed_on - 1, 2)]
+
+
+@pytest.mark.parametrize("image", ["quay.io/openbao/openbao:latest", "other.example/image@sha256:" + "a" * 64,
+                                  "quay.io/openbao/openbao@sha256:" + "a" * 63,
+                                  "quay.io/openbao/openbao@sha256:" + "A" * 64])
+def test_shared_acquisition_rejects_unreviewed_references_before_docker(image):
+    from scripts.pinned_openbao_image import require_pinned_openbao
+    with mock.patch("scripts.pinned_openbao_image.docker") as docker:
+        with pytest.raises(ValueError, match="digest-pinned"):
+            require_pinned_openbao(image)
+        docker.assert_not_called()
+
+
+@pytest.mark.parametrize("registry", ["quay.io/openbao/openbao", "ghcr.io/elevenid/marty-ui-oss/openbao-didcomm"])
+def test_shared_acquisition_retries_only_immutable_pull_with_safe_failure_facts(registry):
+    from scripts.pinned_openbao_image import require_pinned_openbao
+    image = registry + "@sha256:" + "a" * 64
+    failure = subprocess.CompletedProcess([], 1, stderr="unauthorized synthetic-secret-do-not-print")
+    with mock.patch("scripts.pinned_openbao_image.docker", return_value=failure) as docker, mock.patch(
+        "scripts.pinned_openbao_image.time.sleep"
+    ) as pause:
+        with pytest.raises(RuntimeError, match="authorization; exit 1") as error:
+            require_pinned_openbao(image)
+    assert "synthetic-secret" not in str(error.value)
+    assert docker.call_args_list == [mock.call("image", "inspect", image)] + [mock.call("pull", image)] * 3
+    assert [call.args for call in pause.call_args_list] == [(1,), (2,)]
+
+
+def test_shared_default_runner_bounds_public_docker_invocations():
+    from scripts.pinned_openbao_image import docker
+    with mock.patch("scripts.pinned_openbao_image.subprocess.run") as run:
+        docker("pull", policy.IMAGE)
+    assert run.call_args.kwargs["timeout"] == 120
+    assert run.call_args.kwargs["capture_output"] is True
+
+
+
+def test_shared_acquisition_missing_docker_fails_without_provider_output():
+    from scripts.pinned_openbao_image import require_pinned_openbao
+    with mock.patch("scripts.pinned_openbao_image.docker", side_effect=OSError("synthetic-secret-path")) as docker:
+        with pytest.raises(RuntimeError, match="^Docker is unavailable for pinned OpenBao acquisition$"):
+            require_pinned_openbao(policy.IMAGE)
+    assert docker.call_count == 1

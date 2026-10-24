@@ -174,3 +174,34 @@ def test_rejects_readable_root_token_before_openbao_request(
     with pytest.raises(ValueError, match="unsafe ownership or mode"):
         signer.provision("https://127.0.0.1:18200", state, output,
                          "marty-selfhost-openbao-qualification")
+
+
+def test_provisioning_rejects_rotated_signer_before_policy_or_token_creation(tmp_path, monkeypatch):
+    private = tmp_path / "private"
+    state, output = private / "openbao-state", private / "secrets"
+    (state / "tls").mkdir(parents=True)
+    output.mkdir()
+    (state / "root.token").write_text("synthetic-root")
+    (state / "tls" / "ca.crt").write_text("public-ca")
+    monkeypatch.setattr(signer, "os", SimpleNamespace(name="posix", geteuid=lambda: 0))
+    monkeypatch.setattr(signer, "private_directory", lambda path: path)
+    monkeypatch.setattr(signer, "verified_openbao_owner", lambda *_: None)
+    monkeypatch.setattr(signer, "read_protected_root_token", lambda _: "synthetic-root")
+    calls = []
+
+    class Bao:
+        def __init__(self, *_):
+            pass
+
+        def request(self, method, path):
+            calls.append((method, path))
+            assert method == "GET" and path == "transit/keys/" + signer.CUSTODY_SIGNER
+            return {"data": {"type": "ed25519", "exportable": False, "allow_plaintext_backup": False,
+                             "latest_version": 2, "keys": {"2": {"public_key":
+                             "V4R5DrcNEOahL046jfk/QYO+hD44DCZ/LMzSHqcMIrM="}}}}
+
+    monkeypatch.setattr(signer, "Bao", Bao)
+    with pytest.raises(ValueError):
+        signer.provision("https://127.0.0.1:18200", state, output, "synthetic-stack")
+    assert len(calls) == 2
+    assert not list(output.iterdir())

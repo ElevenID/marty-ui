@@ -240,10 +240,12 @@ def test_supported_profile_refuses_legacy_ca_forms(tmp_path, case):
 def test_actual_openbao_transit_csr_producers(tmp_path):
     image = json.loads((ROOT / "deploy-config/passport-supported-disposable-infra-images.json")
                        .read_text())["images"]["openbao"]["reference"]
+    from scripts.pinned_openbao_image import require_pinned_openbao
+    require_pinned_openbao(image)
     name = "codex-certificate-test-" + uuid.uuid4().hex
     try:
         started = subprocess.run(
-            ["docker", "run", "--detach", "--name", name, "--platform", "linux/amd64",
+            ["docker", "run", "--detach", "--pull=never", "--name", name, "--platform", "linux/amd64",
              "-p", "127.0.0.1::8200", "-e", "BAO_DEV_ROOT_TOKEN_ID=synthetic-test-root",
              image, "server", "-dev", "-dev-listen-address", "0.0.0.0:8200"],
             capture_output=True, timeout=180)

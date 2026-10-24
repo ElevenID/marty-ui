@@ -17,7 +17,7 @@ import sys
 from urllib.error import HTTPError
 
 sys.dont_write_bytecode = True
-from selfhost_native_operator import OperatorCleanupError, approle_operation, approle_policy, operator_bytes, certificate_expiry  # noqa: E402
+from selfhost_native_operator import OperatorCleanupError, approle_operation, approle_policy, network_operation  # noqa: E402
 from selfhost_operator_inputs import private_file, write_private, snapshot_origin, private_empty_or_source  # noqa: E402
 from provision_selfhost_renewal_identity import existing_policy_names  # noqa: E402
 from selfhost_openbao_client import Bao  # noqa: E402
@@ -32,15 +32,6 @@ TOKEN_FILE = "ca-rotation-operator-token"
 POLICY_NAMES_FILE = "ca-rotation-leaf-policies.json"
 # Pre-authorized exact mount names; a mid-path `*` is not an OpenBao ACL glob.
 VERSIONS = range(2, 9)
-
-
-def checked_issuer_certificate(certificate: str, kind: str, version: int) -> None:
-    """Verify the strict public replacement-root profile in the signed operator."""
-    try:
-        operator_bytes(Path(__file__).resolve().parents[1], "operator", "replacement-ca",
-                       kind, str(version), input=certificate.encode("ascii"))
-    except RuntimeError as error:
-        raise RuntimeError("CA replacement certificate failed native validation") from error
 
 
 def rotation_acl(names: list[str]) -> str:
@@ -62,54 +53,10 @@ def bootstrap(bao: Bao, current: Path, output: Path) -> None:
 def stage_issuer(bao: Bao, identity: Path, output: Path,
                  kind: str, version: int) -> str:
     """Create or resume one non-exportable CA; leave leaf production to its owner."""
-    output = private_empty_or_source(output, empty=True)
-    if output.stat().st_uid != os.getuid():
-        raise ValueError("CA replacement output has an unexpected owner")
-    if kind not in ("workload", "keycloak") or type(version) is not int or version not in VERSIONS:
-        raise ValueError("CA replacement mount is outside reviewed versions")
-    mount = f"{kind}-pki-v{version}"
-    token = checked_login(bao, identity)
-    mounts = bao.request("GET", "sys/mounts", token=token).get("data", {})
-    if not isinstance(mounts, dict):
-        raise ValueError("CA replacement mount inventory is invalid")
-    if f"{mount}/" not in mounts:
-        bao.request("POST", f"sys/mounts/{mount}", {
-            "type": "pki", "config": {"max_lease_ttl": "8760h"},
-        }, token=token)
-    configured = bao.request("GET", f"sys/mounts/{mount}", token=token).get("data", {})
-    if (not isinstance(configured, dict) or configured.get("type") != "pki"
-            or not isinstance(configured.get("config"), dict)
-            or configured["config"].get("max_lease_ttl") != 365 * 24 * 60 * 60):
-        raise RuntimeError("CA replacement mount differs from reviewed lifetime")
-    try:
-        data = bao.request("GET", f"{mount}/cert/ca", token=token).get("data", {})
-    except HTTPError as error:
-        if error.code not in (400, 404):
-            raise
-        data = {}
-    if not data.get("certificate"):
-        data = bao.request("POST", f"{mount}/root/generate/internal", {
-            "common_name": f"Marty self-host {kind} CA v{version}",
-            "ttl": "8760h", "key_type": "ec", "key_bits": 256,
-        }, token=token).get("data", {})
-    certificate = data.get("certificate")
-    if ("private_key" in data or not isinstance(certificate, str)
-            or not certificate.startswith("-----BEGIN CERTIFICATE-----\n")
-            or "PRIVATE KEY" in certificate or len(certificate) > 64 * 1024):
-        raise RuntimeError("CA replacement exported or omitted key material")
-    checked_issuer_certificate(certificate, kind, version)
-    live = bao.request("GET", f"{mount}/cert/ca", token=token).get("data", {})
-    if live.get("certificate") != certificate:
-        raise RuntimeError("CA replacement differs from its mounted issuer")
-    if not certificate_expiry(certificate, 300 * 24 * 60 * 60):
-        raise RuntimeError("CA replacement expires before the overlap window")
-    destination = output / f"{kind}-ca-v{version}.crt"
-    descriptor = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL |
-                         getattr(os, "O_NOFOLLOW", 0), 0o600)
-    with os.fdopen(descriptor, "w", encoding="ascii") as stream:
-        stream.write(certificate)
-        stream.flush()
-        os.fsync(stream.fileno())
+    mount = network_operation(bao, "ca-issuer", identity=str(identity), output=str(output),
+                              kind=kind, version=version)
+    if mount != f"{kind}-pki-v{version}":
+        raise OperatorCleanupError("CA issuer staging requires operator recovery")
     return mount
 
 

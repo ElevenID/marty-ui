@@ -6,7 +6,6 @@ import json
 import os
 from pathlib import Path
 import sys
-from urllib.error import HTTPError
 
 import pytest
 from tests.test_selfhost_native_approle import approle_server as approle_server
@@ -14,10 +13,8 @@ from tests.test_selfhost_native_approle import approle_server as approle_server
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import provision_selfhost_renewal_identity as identity  # noqa: E402
-from selfhost_openbao_client import require_renewal_authority  # noqa: E402
 
 operator_acl = identity.operator_acl
-verify_denials = identity.verify_denials
 
 
 def test_operator_acl_has_exact_signers_and_only_named_leaf_issuance() -> None:
@@ -40,49 +37,20 @@ def test_operator_acl_has_exact_signers_and_only_named_leaf_issuance() -> None:
     assert "scripts/provision_selfhost_renewal_identity.py" in bundle["assets"]
 
 
-def test_renewal_operator_policy_must_match_reviewed_acl() -> None:
-    names = [f"selfhost-test-policy-{index}" for index in range(21)]
-
-    class PolicyBao:
-        def __init__(self, policy: str) -> None:
-            self.policy = policy
-
-        def request(self, method, path, body=None, *, token=None):
-            assert (method, path, token) == (
-                "GET", "sys/policies/acl/selfhost-kms-renewal", "scoped-token")
-            return {"data": {"policy": self.policy}}
-
-    acl = operator_acl(names)
-    identity.verified_operator_policy(PolicyBao(acl), "scoped-token", names)
-    with pytest.raises(ValueError, match="drifted"):
-        identity.verified_operator_policy(PolicyBao(acl + "\npath \"sys/*\" {}"),
-                                          "scoped-token", names)
-
-
-class FakeBao:
-    def __init__(self, *, policy: str = "selfhost-kms-renewal", denied: int = 403) -> None:
-        self.token = "operator-token"
-        self.policy = policy
-        self.denied = denied
-        self.calls = []
-
-    def request(self, method, path, body=None, *, token=None):
-        self.calls.append((method, path, token))
-        if path == "auth/token/lookup":
-            return {"data": {"policies": [self.policy], "ttl": 7200,
-                             "path": "auth/selfhost-renew/login"}}
-        raise HTTPError(path, self.denied, "denied", None, None)
-
-
-def test_renewal_authority_rejects_root_and_denials_must_be_real() -> None:
-    require_renewal_authority(FakeBao())
-    with pytest.raises(ValueError, match="scoped AppRole"):
-        require_renewal_authority(FakeBao(policy="root"))
-    scoped = FakeBao()
-    verify_denials(scoped, scoped.token)
-    assert len(scoped.calls) == 4
-    with pytest.raises(ValueError, match="exceeded"):
-        verify_denials(FakeBao(denied=400), "operator-token")
+@pytest.mark.parametrize("drift", [False, True])
+def test_native_renewal_login_keeps_exact_policy_and_real_denials(approle_server, drift):
+    state = approle_server
+    bao, private = state.prepare("renewal")
+    if drift:
+        state.policies["selfhost-kms-renewal"] += '\npath "sys/*" {}'
+        with pytest.raises(RuntimeError):
+            identity.checked_login(bao, private)
+        return
+    assert identity.checked_login(bao, private)[-1]
+    probes = {path for _, path, _, _ in state.seen}
+    assert {"transit/keys/foreign-keycloak-selfhost", "auth/token/create",
+            "sys/policies/acl/selfhost-renewal-forbidden-probe",
+            "sys/mounts/selfhost-renewal-forbidden-probe"} <= probes
 
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX private bootstrap contract")

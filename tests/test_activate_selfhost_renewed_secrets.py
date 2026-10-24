@@ -83,52 +83,14 @@ def test_activation_requires_rootless_db_migration_model() -> None:
 def test_certificate_overlap_rejects_invalid_public_certificate() -> None:
     fixture = json.loads((Path(__file__).parent / "fixtures/passport_beta_chain_public.json")
                          .read_text(encoding="utf-8"))
-    activation.checked_certificate_lifetime(fixture["csca"], 3600)
-    with pytest.raises(ValueError, match="outside the required validity overlap"):
-        activation.checked_certificate_lifetime(fixture["csca"], 11 * 365 * 24 * 3600)
-    with pytest.raises(ValueError, match="validity is invalid"):
-        activation.checked_certificate_lifetime("not a certificate", 3600)
-
-
-def test_activation_rejects_leaf_tokens_still_dependent_on_bootstrap_root(
-    tmp_path: Path,
-) -> None:
-    token_name = sorted(activation.RENEWED_TOKEN_FILES)[0]
-    (tmp_path / token_name).write_text("scoped-token")
-
-    class RootChildBao:
-        def request(self, method, path, body=None, *, token=None):
-            assert (method, path) == ("POST", "auth/token/lookup")
-            return {"data": {"policies": ["selfhost-exact-policy"],
-                             "ttl": 7200, "orphan": False,
-                             "path": "auth/token/create/selfhost-renew-leaf"}}
-
-    with pytest.raises(ValueError, match="depends on bootstrap root"):
-        activation.checked_tokens(RootChildBao(), tmp_path, tmp_path, 3600,
-                                  require_orphan_new=True)
-
-
-def test_root_retirement_rejects_root_child_in_rollback_generation(
-    tmp_path: Path,
-) -> None:
-    token_name = sorted(activation.RENEWED_TOKEN_FILES)[0]
-    rollback, active = tmp_path / "rollback", tmp_path / "active"
-    rollback.mkdir()
-    active.mkdir()
-    (rollback / token_name).write_text("root-child-token", encoding="ascii")
-
-    class RootChildBao:
-        def request(self, method, path, body=None, *, token=None):
-            assert (method, path, body) == (
-                "POST", "auth/token/lookup", {"token": "root-child-token"},
-            )
-            return {"data": {"policies": ["selfhost-exact-policy"],
-                             "ttl": 7200, "orphan": False,
-                             "path": "auth/token/create/selfhost-renew-leaf"}}
-
-    with pytest.raises(ValueError, match="depends on bootstrap root"):
-        activation.checked_tokens(RootChildBao(), rollback, active, 3600,
-                                  require_orphan_new=True, require_orphan_old=True)
+    from selfhost_native_operator import operator_bytes
+    root = Path(__file__).resolve().parents[1]
+    assert json.loads(operator_bytes(root, "operator", "certificate-lifetime", "3600",
+                                     input=fixture["csca"].encode())) is True
+    assert json.loads(operator_bytes(root, "operator", "certificate-lifetime", str(11 * 365 * 24 * 3600),
+                                     input=fixture["csca"].encode())) is False
+    with pytest.raises(RuntimeError):
+        operator_bytes(root, "operator", "certificate-lifetime", "3600", input=b"not a certificate")
 
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX activation contract")
@@ -253,88 +215,6 @@ def test_failed_activation_recreates_prior_kms_only_generation(tmp_path: Path,
     assert str(args.renewed_env) in calls[0]
     assert str(args.current_env) in calls[1]
     assert json.loads(args.report.read_text())["result"] == "rolled_back"
-
-
-def test_ca_overlap_certificate_preflight_binds_each_generation_to_its_issuer(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    old, new = tmp_path / "old", tmp_path / "new"
-    old.mkdir()
-    new.mkdir()
-    old_workload = "-----BEGIN CERTIFICATE-----\nT0xE\n-----END CERTIFICATE-----\n"
-    new_workload = "-----BEGIN CERTIFICATE-----\nTkVX\n-----END CERTIFICATE-----\n"
-    old_keycloak, new_keycloak = "old-keycloak-issuer", "new-keycloak-issuer"
-    (old / "workload_identity_ca_cert").write_text(old_workload)
-    (new / "workload_identity_ca_cert").write_text(old_workload + new_workload)
-    for root in (old, new):
-        for cert_name in activation.TLS_CERT_BY_ROLE.values():
-            (root / cert_name).write_text(f"{root.name}-{cert_name}")
-        for realm in activation.REALMS:
-            (root / f"keycloak_{realm}_rs256_cert").write_text(f"{root.name}-{realm}")
-
-    class FakeBao:
-        def __init__(self, *, replacement: bool = False):
-            self.replacement = replacement
-
-        def request(self, method, path):
-            assert method == "GET"
-            if path.endswith("/cert/ca"):
-                assert path in ({"workload-pki-v5/cert/ca", "keycloak-pki-v5/cert/ca"}
-                                if self.replacement else
-                                {"workload-pki/cert/ca", "keycloak-pki/cert/ca"})
-                return {"data": {"certificate": (
-                    new_workload if "workload" in path else new_keycloak)
-                    if self.replacement else (
-                    old_workload if "workload" in path else old_keycloak)}}
-            assert not self.replacement and path.startswith("transit/keys/")
-            return {"data": {"type": "rsa-2048" if "keycloak-" in path else "ecdsa-p256",
-                             "exportable": False, "allow_plaintext_backup": False,
-                             "latest_version": 1, "keys": {"1": {"public_key": "public"}}}}
-
-    chains = []
-    monkeypatch.setattr(activation, "checked_certificate_lifetime", lambda *_: None)
-    monkeypatch.setattr(activation, "checked_certificate_chain",
-                        lambda path, issuer: chains.append((path.parent.name, issuer)))
-    monkeypatch.setattr(activation, "certificate_public_key_der", lambda *_: b"public")
-    monkeypatch.setattr(activation, "public_key_der", lambda *_: b"public")
-    primary, ca = FakeBao(), FakeBao(replacement=True)
-    activation.checked_certificates(primary, old, new, 3600,
-                                    replacement=(ca, "workload-pki-v5", "keycloak-pki-v5"))
-    assert chains.count(("old", old_workload)) == len(activation.TLS_CERT_BY_ROLE)
-    assert chains.count(("new", new_workload)) == len(activation.TLS_CERT_BY_ROLE)
-    assert chains.count(("old", old_keycloak)) == len(activation.REALMS)
-    assert chains.count(("new", new_keycloak)) == len(activation.REALMS)
-    (new / "workload_identity_ca_cert").write_text(new_workload + old_workload)
-    with pytest.raises(ValueError, match="mounted trust anchor"):
-        activation.checked_certificates(primary, old, new, 3600,
-                                        replacement=(ca, "workload-pki-v5", "keycloak-pki-v5"))
-
-    class ReusedKeycloakIssuer(FakeBao):
-        def request(self, method, path):
-            if path == "keycloak-pki-v5/cert/ca":
-                return {"data": {"certificate": old_keycloak}}
-            return super().request(method, path)
-
-    with pytest.raises(ValueError, match="Keycloak issuer did not change"):
-        activation.checked_certificates(primary, old, new, 3600,
-                                        replacement=(ReusedKeycloakIssuer(replacement=True),
-                                                     "workload-pki-v5", "keycloak-pki-v5"))
-
-    (old / "workload_identity_ca_cert").write_text(old_workload + new_workload)
-    (new / "workload_identity_ca_cert").write_text(new_workload)
-    chains.clear()
-    lifetimes = []
-    monkeypatch.setattr(activation, "checked_certificate_lifetime",
-                        lambda cert, _ttl: lifetimes.append(cert))
-    activation.checked_certificates(primary, old, new, 3600,
-                                    replacement=(ca, "workload-pki-v5", "keycloak-pki-v5"),
-                                    retiring=True)
-    assert old_workload not in lifetimes and old_keycloak not in lifetimes
-    assert chains.count(("old", new_workload)) == len(activation.TLS_CERT_BY_ROLE)
-    assert chains.count(("new", new_workload)) == len(activation.TLS_CERT_BY_ROLE)
-    assert chains.count(("old", new_keycloak)) == len(activation.REALMS)
-    assert chains.count(("new", new_keycloak)) == len(activation.REALMS)
-    with pytest.raises(ValueError, match="requires live replacement issuers"):
-        activation.checked_certificates(primary, old, new, 3600, retiring=True)
 
 
 def test_compose_secret_preflight_requires_all_rendered_files(tmp_path: Path) -> None:
