@@ -153,3 +153,19 @@ def test_writer_failure_preserves_a_competing_replacement(tmp_path, monkeypatch)
         handoff.write_owned(output, "new", 0o400, tmp_path.stat())
     assert output.is_symlink() and victim.read_text() == "preserve"
     assert displaced.read_text() == "new"
+
+
+
+def test_writer_metadata_failure_closes_fd_and_preserves_uncertain_path(tmp_path, monkeypatch):
+    output = tmp_path / "output"
+    real_stat = os.fstat
+    seen = []
+    def fail(fd):
+        seen.append(fd)
+        raise OSError("synthetic metadata failure")
+    monkeypatch.setattr(handoff.os, "fstat", fail)
+    with pytest.raises(OperatorCleanupError):
+        handoff.write_owned(output, "new", 0o400, tmp_path.stat())
+    assert len(seen) == 1 and output.exists()
+    with pytest.raises(OSError):
+        real_stat(seen[0])

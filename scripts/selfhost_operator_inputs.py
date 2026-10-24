@@ -71,16 +71,21 @@ def private_operator_directory(path: Path, source_root: Path) -> Path:
 def write_owned(path: Path, value: str, mode: int, owner: os.stat_result) -> None:
     """Create only our file, preserving its install owner and role-specific mode."""
     descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-    created = os.fstat(descriptor)
+    created = None
     try:
         with os.fdopen(descriptor, "w", encoding="ascii") as stream:
+            created = os.fstat(stream.fileno())
             stream.write(value)
             os.fchown(stream.fileno(), owner.st_uid, owner.st_gid)
             os.fchmod(stream.fileno(), mode)
             stream.flush()
             os.fsync(stream.fileno())
-    except Exception:
+    except Exception as error:
+        if created is None:
+            raise OperatorCleanupError("Scoped token refresh requires operator recovery") from error
         try:
+            # Private directories remain single-writer. Preserve replacements observed
+            # here; this is best-effort cleanup, not an atomic conditional unlink.
             if os.path.samestat(created, path.lstat()):
                 path.unlink()
         except FileNotFoundError:
