@@ -258,9 +258,23 @@ export const getFlowExecution = async (flowId, executionId) => {
 };
 
 /** Get one runtime instance by its stable instance identifier. */
-export const getFlowInstance = async (instanceId) => {
+export const getFlowInstance = async (instanceId, { organizationId } = {}) => {
   try {
-    const response = await apiClient.get(`${FLOW_INSTANCES_PATH}/${instanceId}`);
+    const query = organizationId === undefined ? '' : buildDefinedQueryString({ organization_id: requireOrganizationId(organizationId) });
+    const response = await apiClient.get(withQuery(`${FLOW_INSTANCES_PATH}/${encodeURIComponent(instanceId)}`, query));
+    return response.data;
+  } catch (error) {
+    throw handleApiError(error);
+  }
+};
+
+/** Record an authorized outcome for the execution's current step. */
+export const advanceFlowInstance = async (instanceId, stepResult) => {
+  try {
+    if (!['success', 'failure'].includes(stepResult)) throw new Error('Choose a successful or failed step outcome.');
+    const response = await apiClient.post(`${FLOW_INSTANCES_PATH}/${encodeURIComponent(instanceId)}/advance`, {
+      step_result: stepResult, data: {},
+    });
     return response.data;
   } catch (error) {
     throw handleApiError(error);
@@ -399,6 +413,7 @@ export default {
   listFlowInstances,
   getFlowExecution,
   getFlowInstance,
+  advanceFlowInstance,
   approveFlowExecution,
   rejectFlowExecution,
   cancelFlowExecution,

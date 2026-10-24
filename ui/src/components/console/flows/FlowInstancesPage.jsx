@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useMatch, useParams } from 'react-router';
 import {
   Alert,
@@ -6,6 +6,7 @@ import {
   Button,
   Chip,
   Divider,
+  Dialog, DialogTitle, DialogContent, DialogContentText, DialogActions,
   FormControl,
   IconButton,
   InputAdornment,
@@ -43,7 +44,65 @@ import WarningIcon from '@mui/icons-material/Warning';
 import { ResourcePage, EmptyState, EmptyStates, StatusChip } from '../../common';
 import { useConsole } from '../../../contexts/ConsoleContext';
 import { useAsyncData } from '../../../hooks/useAsyncData';
-import { getFlowInstance, listFlowInstances, listFlows } from '../../../services/flowsApi';
+import { usePermissions } from '../../../hooks/usePermissions';
+import { advanceFlowInstance, cancelFlowExecution, getFlowInstance, listFlowInstances, listFlows } from '../../../services/flowsApi';
+
+function requireInstanceScope(instance, organizationId, instanceId) {
+  if (!instance?.id || instance.organization_id !== organizationId || (instanceId && instance.id !== instanceId)) {
+    throw new Error('This flow instance is not available in the selected organization.');
+  }
+  return instance;
+}
+
+function ExecutionActions({ instance, organizationId, loading, reload }) {
+  const { can, isLoading: grantsLoading } = usePermissions();
+  const mounted = useRef(true);
+  const [action, setAction] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [requiresRefresh, setRequiresRefresh] = useState(false);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  useEffect(() => { setAction(null); setError(''); setRequiresRefresh(false); }, [instance]);
+  const advance = !grantsLoading && can('flow-instance', 'advance');
+  const cancel = !grantsLoading && can('flow-instance', 'cancel');
+  if (!['in_progress', 'awaiting_wallet'].includes(instance.status) || (!advance && !cancel)) return null;
+  const disabled = loading || busy || requiresRefresh;
+  const confirm = async () => {
+    if (disabled || !action || (action === 'cancel' ? !cancel : !advance)) return;
+    setBusy(true); setError('');
+    try {
+      const fresh = requireInstanceScope(await getFlowInstance(instance.id, { organizationId }), organizationId, instance.id);
+      if (!mounted.current) return;
+      if (String(fresh.status).toLowerCase() !== instance.status || fresh.current_step !== instance.currentStep
+        || fresh.updated_at !== instance.updated_at) throw new Error('Execution changed. Refresh and review its current step.');
+      const result = action === 'cancel'
+        ? await cancelFlowExecution(instance.flowId, instance.id)
+        : await advanceFlowInstance(instance.id, action);
+      requireInstanceScope(result, organizationId, instance.id);
+      if (mounted.current) { setAction(null); await reload(); }
+    } catch (cause) {
+      if (mounted.current) { setAction(null); setRequiresRefresh(true); setError(`${cause?.message || 'Outcome request failed.'} Refresh the execution before recording another outcome.`); }
+    } finally { if (mounted.current) setBusy(false); }
+  };
+  const title = action === 'cancel' ? 'Cancel flow execution' : `Record ${action === 'failure' ? 'failed' : 'successful'} step`;
+  return <Box>
+    <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
+      {advance && <><Button variant="outlined" disabled={disabled} onClick={() => setAction('success')}>Record successful step</Button>
+        <Button variant="outlined" disabled={disabled} onClick={() => setAction('failure')}>Record failed step</Button></>}
+      {cancel && <Button color="error" disabled={disabled} onClick={() => setAction('cancel')}>Cancel execution</Button>}
+    </Stack>
+    {error && <Alert severity="error" sx={{ mt: 2 }}>{error}</Alert>}
+    <Dialog open={Boolean(action)} onClose={() => { if (!busy) setAction(null); }}>
+      <DialogTitle>{title}</DialogTitle>
+      <DialogContent><DialogContentText>
+        {action === 'cancel' ? 'Cancel this flow execution. Credential offers and issued credentials are managed separately.'
+          : `Record a ${action === 'failure' ? 'failed' : 'successful'} outcome for ${instance.currentStep || 'the current step'}. The flow follows its configured transition. This records a step outcome; it does not verify a credential.`}
+      </DialogContentText></DialogContent>
+      <DialogActions><Button disabled={busy} onClick={() => setAction(null)}>Back</Button>
+        <Button disabled={busy || loading} onClick={confirm}>{action === 'cancel' ? 'Confirm cancellation' : 'Confirm outcome'}</Button></DialogActions>
+    </Dialog>
+  </Box>;
+}
 
 const OPERATE_TABS = [
   { label: 'Flow Instances', path: '/console/org/operate/flow-instances' },
@@ -158,7 +217,7 @@ function InstanceTimeline({ instance }) {
   );
 }
 
-function InstanceDetail({ instance, loading, error, reload }) {
+function InstanceDetail({ instance, organizationId, loading, error, reload }) {
   const jobId = instance?.physicalJob?.id || instance?.physicalJob?.job_id || null;
   const jobStatus = instance?.physicalJob?.status || null;
   return (
@@ -178,6 +237,7 @@ function InstanceDetail({ instance, loading, error, reload }) {
       {error && <Alert severity="error">{error?.message || String(error)}</Alert>}
       {instance && (
         <Stack spacing={3}>
+          <ExecutionActions instance={instance} organizationId={organizationId} loading={loading} reload={reload} />
           <Paper variant="outlined" sx={{ p: 3 }}>
             <Stack direction={{ xs: 'column', md: 'row' }} justifyContent="space-between" gap={2}>
               <Box>
@@ -218,11 +278,7 @@ function InstanceDetail({ instance, loading, error, reload }) {
   );
 }
 
-function FlowInstancesPage() {
-  const { instanceId: routeInstanceId } = useParams();
-  const instanceMatch = useMatch('/console/org/operate/flow-instances/:instanceId');
-  const instanceId = routeInstanceId || instanceMatch?.params?.instanceId;
-  const { activeOrgId: organizationId } = useConsole();
+function ScopedFlowInstancesPage({ instanceId, organizationId }) {
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
 
@@ -231,16 +287,18 @@ function FlowInstancesPage() {
     const [flowsResponse, instancesResponse] = await Promise.all([
       listFlows({ organization_id: organizationId }),
       instanceId
-        ? getFlowInstance(instanceId).then((instance) => [instance])
+        ? getFlowInstance(instanceId, { organizationId }).then((instance) => [requireInstanceScope(instance, organizationId, instanceId)])
         : listFlowInstances({ organization_id: organizationId, limit: 500 }),
     ]);
-    const flows = Array.isArray(flowsResponse) ? flowsResponse : [];
+    if (!Array.isArray(flowsResponse) || !Array.isArray(instancesResponse)) throw new Error('Flow catalog response is malformed.');
+    const flows = flowsResponse;
+    if (flows.some((flow) => flow.organization_id !== organizationId)) throw new Error('Flow definitions are not available in the selected organization.');
     const flowById = new Map(flows.map((flow) => [String(flow.id), flow]));
-    const instances = Array.isArray(instancesResponse) ? instancesResponse : [];
+    const instances = instancesResponse.map((instance) => requireInstanceScope(instance, organizationId));
     return instances.map((instance) => normalizeInstance(instance, flowById.get(String(instance.flow_id || instance.flowId || ''))));
   }, [instanceId, organizationId]);
 
-  const instances = Array.isArray(data) ? data : [];
+  const instances = useMemo(() => !error && Array.isArray(data) ? data : [], [data, error]);
   const selectedInstance = instanceId ? instances[0] || null : null;
   const filteredInstances = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
@@ -254,7 +312,7 @@ function FlowInstancesPage() {
     });
   }, [instances, searchQuery, statusFilter]);
 
-  if (instanceId) return <InstanceDetail instance={selectedInstance} loading={loading} error={error} reload={reload} />;
+  if (instanceId) return <InstanceDetail instance={selectedInstance} organizationId={organizationId} loading={loading} error={error} reload={reload} />;
 
   return (
     <ResourcePage
@@ -319,4 +377,10 @@ function FlowInstancesPage() {
   );
 }
 
-export default FlowInstancesPage;
+export default function FlowInstancesPage() {
+  const { instanceId: routeInstanceId } = useParams();
+  const instanceMatch = useMatch('/console/org/operate/flow-instances/:instanceId');
+  const instanceId = routeInstanceId || instanceMatch?.params?.instanceId;
+  const { activeOrgId: organizationId } = useConsole();
+  return <ScopedFlowInstancesPage key={`${organizationId || 'none'}:${instanceId || 'list'}`} instanceId={instanceId} organizationId={organizationId} />;
+}
