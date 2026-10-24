@@ -79,6 +79,17 @@ describe('scoped presentation policy detail and metadata editing', () => {
     expect(requests).toEqual([{ method: 'DELETE', path: `/v1/presentation-policies/${ID}` }])
   })
 
+  it('uses the public edit grant for activation and suspension without inventing lifecycle grants', async () => {
+    can.mockImplementation((_resource: string, action: string) => ['view', 'edit'].includes(action))
+    const { user } = renderPage(); await screen.findByRole('heading', { name: profile.name })
+    expect(screen.queryByRole('button', { name: 'Delete policy' })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Activate policy' }))
+    expect(await screen.findByText('active', { exact: true })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Suspend policy' }))
+    expect(await screen.findByText('suspended', { exact: true })).toBeInTheDocument()
+    expect(requests).toHaveLength(2)
+  })
+
   it('rejects direct editing of active policies without offering a save', async () => {
     profile.status = 'active'; renderPage(`/${ID}/edit`)
     expect(await screen.findByRole('alert')).toHaveTextContent('Only draft policies can be edited')

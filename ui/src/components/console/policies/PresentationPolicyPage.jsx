@@ -52,7 +52,7 @@ function PolicyContent({ organizationId, policyId, editing, can }) {
     finally { if (alive.current) setBusy(false); }
   };
   const lifecycle = async (action) => {
-    if (busy || !policy || !can('presentation-policy', action)) return;
+    if (busy || !policy || !can('presentation-policy', action === 'delete' ? 'delete' : 'edit')) return;
     if (action === 'delete' && policy.status !== 'draft') return;
     setBusy(true); setError('');
     try {
@@ -84,8 +84,8 @@ function PolicyContent({ organizationId, policyId, editing, can }) {
         <Typography>{policy.description}</Typography><Typography>{policy.purpose}</Typography>
         <Stack direction="row" spacing={1}>
           {policy.status === 'draft' && can('presentation-policy', 'edit') && <Button component={Link} to={`${BASE}/${encodeURIComponent(policyId)}/edit`}>Edit metadata</Button>}
-          {['draft', 'suspended'].includes(policy.status) && can('presentation-policy', 'activate') && <Button disabled={busy} onClick={() => lifecycle('activate')}>Activate policy</Button>}
-          {policy.status === 'active' && can('presentation-policy', 'suspend') && <Button disabled={busy} onClick={() => lifecycle('suspend')}>Suspend policy</Button>}
+          {['draft', 'suspended'].includes(policy.status) && can('presentation-policy', 'edit') && <Button disabled={busy} onClick={() => lifecycle('activate')}>Activate policy</Button>}
+          {policy.status === 'active' && can('presentation-policy', 'edit') && <Button disabled={busy} onClick={() => lifecycle('suspend')}>Suspend policy</Button>}
           {policy.status === 'draft' && can('presentation-policy', 'delete') && <Button color="error" disabled={busy} onClick={() => setDeleteOpen(true)}>Delete policy</Button>}
         </Stack>
       </>}
