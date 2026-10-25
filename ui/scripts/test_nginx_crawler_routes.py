@@ -161,6 +161,7 @@ class NginxCrawlerRouteContract(unittest.TestCase):
             config_path or UI_ROOT / config_name,
             {
                 "index.html": "<h1>marketing fixture</h1>",
+                "docs/index.html": "<h1>docs fixture</h1>",
                 "console/index.html": "<h1>console fixture</h1>",
                 "locales/de/marketing.json": '{"navigation":{"home":"Startseite"}}',
                 **{name: content for name, (_, content) in CRAWLER_FILES.items()},
@@ -270,6 +271,12 @@ class NginxCrawlerRouteContract(unittest.TestCase):
         self.assertEqual(status, 308)
         self.assertEqual(headers["location"], "/openapi.json")
         self.assertNotIn("marketing fixture", body)
+        status, headers, _ = self.request(port, "/docs")
+        self.assertEqual(status, 301)
+        self.assertEqual(headers["location"], "/docs/")
+        status, _, body = self.request(port, "/docs/")
+        self.assertEqual(status, 200)
+        self.assertIn("docs fixture", body)
         for path in ("/console", "/console/credentials"):
             status, _, body = self.request(port, path)
             self.assertEqual(status, 200)
@@ -302,6 +309,15 @@ class NginxCrawlerRouteContract(unittest.TestCase):
         for config_name in ("nginx.prod.conf", "nginx.spa.conf"):
             with self.subTest(config=config_name):
                 self.verify_config(config_name)
+
+    def test_development_docs_redirect_preserves_origin(self) -> None:
+        _, port = self.start_ui("nginx.dev.conf")
+        status, headers, _ = self.request(port, "/docs")
+        self.assertEqual(status, 301)
+        self.assertEqual(headers["location"], "/docs/")
+        status, _, body = self.request(port, "/docs/")
+        self.assertEqual(status, 200)
+        self.assertIn("docs fixture", body)
 
     def test_oke_mounted_config_serves_gateway_schema_instead_of_spa(self) -> None:
         manifest = (UI_ROOT.parent / "k8s/oracle/08-ui.yaml").read_text(encoding="utf-8")
