@@ -12,6 +12,12 @@ use crate::{
 };
 use std::{
     collections::BTreeMap,
+    fs::{File, OpenOptions},
+    io::Write,
+    os::{
+        fd::{AsRawFd, FromRawFd},
+        unix::fs::{MetadataExt, OpenOptionsExt},
+    },
     path::{Component, Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -170,6 +176,148 @@ fn persist_signed(
             &installer_verify::read_private_bytes(Path::new(&file), 1048576)?,
         )?;
     }
+    Ok(())
+}
+
+fn held_private_directory(path: &Path) -> Result<File> {
+    crate::installer_runtime::private_parent(path)?;
+    let directory = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(path)
+        .map_err(|_| REFUSED)?;
+    directory_unchanged(&directory, path)?;
+    Ok(directory)
+}
+
+fn directory_unchanged(directory: &File, path: &Path) -> Result<()> {
+    crate::installer_runtime::private_parent(path)?;
+    let held = directory.metadata().map_err(|_| REFUSED)?;
+    let named = std::fs::symlink_metadata(path).map_err(|_| REFUSED)?;
+    require(held.dev() == named.dev() && held.ino() == named.ino())
+}
+
+fn durable_new(directory: &File, parent: &Path, name: &str, bytes: &[u8]) -> Result<()> {
+    directory_unchanged(directory, parent)?;
+    require(matches!(
+        name,
+        "public-acquisition-intent.json" | "public-acquisition-result.json"
+    ))?;
+    let name = std::ffi::CString::new(name).map_err(|_| REFUSED)?;
+    let fd = unsafe {
+        libc::openat(
+            directory.as_raw_fd(),
+            name.as_ptr(),
+            libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            0o600,
+        )
+    };
+    require(fd >= 0)?;
+    let mut file = unsafe { File::from_raw_fd(fd) };
+    file.write_all(bytes).map_err(|_| REFUSED)?;
+    file.sync_all().map_err(|_| REFUSED)?;
+    directory.sync_all().map_err(|_| REFUSED)?;
+    directory_unchanged(directory, parent)?;
+    Ok(())
+}
+
+/// Acceptance-only public acquisition on the already authenticated guest.
+/// The controller must first bootstrap this executable from the public release
+/// and verify its signature and pinned digest before calling this entry.
+pub fn fetch_published(args: &[String], build_identity: &str) -> Result<()> {
+    fetch_published_inner(args, build_identity).map_err(|_| REFUSED.into())
+}
+
+fn fetch_published_inner(args: &[String], build_identity: &str) -> Result<()> {
+    let o = options(args)?;
+    require(o.phase == CandidatePhase::Published && unsafe { libc::geteuid() } != 0)?;
+    require(cfg!(target_arch = "x86_64"))?;
+    let (source, version) = build_identity.split_once(':').ok_or(REFUSED)?;
+    require(hex(source, 40))?;
+    release::release_tier(version)?;
+    account_home()?;
+    let base = o.inputs.parent().ok_or(REFUSED)?;
+    crate::installer_runtime::private_parent(&o.inputs)?;
+    let held_base = held_private_directory(base)?;
+    require(o.authorization.starts_with(base) && o.controller.starts_with(base))?;
+    let tools = VerificationTools::new(&o.tools, &o.gh)?;
+    let expected = CandidateContext {
+        operator_sha: installer_verify::current_operator_digest()?,
+        source_sha: source.into(),
+        release_tag: version.into(),
+        phase: o.phase,
+        nonce: o.nonce,
+        harness_source_sha: o.harness,
+        run_id: o.run,
+        run_attempt: o.attempt,
+    };
+    let auth = installer_verify::read_private_record(&o.authorization)?;
+    let controller = installer_verify::read_private_record(&o.controller)?;
+    for (file, bytes) in [(&o.authorization, &auth), (&o.controller, &controller)] {
+        require(
+            tools.verify(
+                file,
+                release::ACCEPTANCE_WORKFLOW,
+                &expected.harness_source_sha,
+                expected.run_id,
+                expected.run_attempt,
+            )? == release::sha256(bytes),
+        )?;
+    }
+    let context_hash = release::candidate_context_sha256(&expected)?;
+    durable_new(
+        &held_base,
+        base,
+        "public-acquisition-intent.json",
+        &serde_json::to_vec(&serde_json::json!({
+            "schema": "elevenid.installer-public-acquisition-intent/v1",
+            "context_sha256": context_hash,
+            "authorization_sha256": release::sha256(&auth),
+            "controller_consumption_sha256": release::sha256(&controller),
+            "started_at": now()?,
+            "installation_ready": false
+        }))
+        .map_err(|_| REFUSED)?,
+    )?;
+    let runtime = tokio::runtime::Runtime::new().map_err(|_| REFUSED)?;
+    let receipts = runtime.block_on(crate::installer_candidate_prepare::fetch_published_inputs(
+        &o.authorization,
+        &o.inputs,
+        &tools,
+        &expected,
+        source,
+        version,
+    ))?;
+    directory_unchanged(&held_base, base)?;
+    let inventory =
+        installer_verify::read_private_record(&o.inputs.join("installer-inventory.json"))?;
+    release::bind_controller_consumption(
+        &controller,
+        &auth,
+        &inventory,
+        &expected,
+        &o.engine,
+        now()?,
+    )?;
+    require(
+        installer_verify::read_private_record(&o.authorization)? == auth
+            && installer_verify::read_private_record(&o.controller)? == controller,
+    )?;
+    durable_new(
+        &held_base,
+        base,
+        "public-acquisition-result.json",
+        &serde_json::to_vec(&serde_json::json!({
+            "schema": "elevenid.installer-public-acquisition-result/v1",
+            "context_sha256": context_hash,
+            "authorization_sha256": release::sha256(&auth),
+            "controller_consumption_sha256": release::sha256(&controller),
+            "inventory_sha256": release::sha256(&inventory),
+            "receipts": receipts,
+            "installation_ready": false
+        }))
+        .map_err(|_| REFUSED)?,
+    )?;
     Ok(())
 }
 /// The controller chooses expected run/phase/nonce independently of the signed
@@ -349,6 +497,7 @@ fn install_inner(args: &[String], build_identity: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::PermissionsExt;
     fn valid_options() -> Vec<String> {
         [
             ("--authorization", "/private/proofs/authorization".into()),
@@ -410,5 +559,72 @@ mod tests {
             assert_eq!(error, REFUSED);
             assert!(!error.contains("sensitive-input"));
         }
+    }
+
+    #[test]
+    fn public_acquisition_refuses_staged_phase_before_creating_evidence() {
+        let args = valid_options();
+        assert_eq!(fetch_published(&args, "not-a-build").unwrap_err(), REFUSED);
+    }
+
+    #[test]
+    fn acquisition_intent_is_private_durable_and_cannot_be_replaced() {
+        let parent = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(parent.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let path = parent.path().join("public-acquisition-intent.json");
+        let directory = held_private_directory(parent.path()).unwrap();
+        durable_new(
+            &directory,
+            parent.path(),
+            "public-acquisition-intent.json",
+            b"first",
+        )
+        .unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"first");
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o7777,
+            0o600
+        );
+        assert!(durable_new(
+            &directory,
+            parent.path(),
+            "public-acquisition-intent.json",
+            b"second"
+        )
+        .is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), b"first");
+    }
+
+    #[test]
+    fn acquisition_rejects_replaced_staging_directory() {
+        let root = tempfile::tempdir().unwrap();
+        let base = root.path().join("base");
+        std::fs::create_dir(&base).unwrap();
+        std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let directory = held_private_directory(&base).unwrap();
+        durable_new(
+            &directory,
+            &base,
+            "public-acquisition-intent.json",
+            b"intent",
+        )
+        .unwrap();
+        let moved = root.path().join("old-base");
+        std::fs::rename(&base, &moved).unwrap();
+        std::fs::create_dir(&base).unwrap();
+        std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(durable_new(
+            &directory,
+            &base,
+            "public-acquisition-result.json",
+            b"result"
+        )
+        .is_err());
+        assert!(!base.join("public-acquisition-result.json").exists());
+        assert!(!moved.join("public-acquisition-result.json").exists());
+        assert_eq!(
+            std::fs::read(moved.join("public-acquisition-intent.json")).unwrap(),
+            b"intent"
+        );
     }
 }

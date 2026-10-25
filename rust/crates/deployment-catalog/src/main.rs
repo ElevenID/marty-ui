@@ -372,6 +372,18 @@ fn run() -> Result<(), String> {
         #[cfg(not(target_os = "linux"))]
         return Err("internal Keycloak bridge requires Linux".into());
     }
+    if args
+        .first()
+        .is_some_and(|arg| arg == "fetch-published-candidate")
+    {
+        #[cfg(target_os = "linux")]
+        return marty_deployment_catalog::installer_candidate_command::fetch_published(
+            &args[1..],
+            env!("MARTY_DEPLOY_BUILD_IDENTITY"),
+        );
+        #[cfg(not(target_os = "linux"))]
+        return Err("acceptance-only public acquisition requires Linux amd64".into());
+    }
     if args.first().is_some_and(|arg| arg == "install-candidate") {
         #[cfg(target_os = "linux")]
         return marty_deployment_catalog::installer_candidate_command::install(
