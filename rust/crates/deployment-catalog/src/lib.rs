@@ -26,6 +26,7 @@ pub mod installer_logs;
 pub mod installer_openbao;
 pub mod installer_prepare;
 pub mod installer_release;
+pub mod installer_renewal;
 pub mod installer_renewal_bootstrap;
 pub mod installer_runtime;
 pub mod installer_state;

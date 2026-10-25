@@ -354,6 +354,15 @@ pub fn install(args: &[String], build_identity: &str) -> Result<()> {
         "ingress-observation.json",
         &serde_json::to_vec(&ingress).map_err(|_| "cannot encode ingress observation")?,
     )?;
+    crate::installer_renewal::provision(
+        docker,
+        &directory,
+        &prepared.bundle,
+        &mut state,
+        &infrastructure,
+        services_image,
+        &operator_sha,
+    )?;
     let application = crate::installer_application::prepare(
         docker,
         &directory,

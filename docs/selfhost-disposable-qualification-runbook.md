@@ -106,8 +106,16 @@ workload/Keycloak renewal identity from fixed, read-only container inputs. It
 validates the current 21-policy inventory, verifies a scoped login and retires
 that temporary verification token. Identity files remain private; pending and
 completed receipts distinguish an interrupted attempt from completed bootstrap.
-The helper is not yet connected to native installation orchestration. It must
-run only in a recorded, owned helper container with the reviewed input mounts.
+Native installation runs it after ingress provisioning and before application
+startup, through the internal `installer-renewal-bootstrap-transfer` wrapper in
+a recorded, owned helper container. Forty reviewed inputs are staged read-only.
+Root-owned originals remain private under `renewal-transfer/output`; exclusive
+copies of the three identity files and two receipts are delivered as `0600`
+files under the installation owner's `0700` `renewal-transfer/delivered` directory.
+The container is removed only after output validation and a durable result.
+Uninstall refuses a partial renewal stage or a still-present helper. Recovery
+retains these directories and receipts; it does not automatically repeat minting.
+Offline contract tests do not establish successful live bootstrap or renewal.
 
 This step retains the bootstrap root. Initial workload and Keycloak credentials
 are root descendants, so revoking root before replacing them would break the

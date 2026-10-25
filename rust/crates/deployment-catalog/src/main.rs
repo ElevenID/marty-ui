@@ -254,10 +254,12 @@ fn print_plan(plan: &Value) {
 
 fn run() -> Result<(), String> {
     let mut args: Vec<String> = env::args().skip(1).collect();
-    if args
-        .first()
-        .is_some_and(|arg| arg == "installer-renewal-bootstrap")
-    {
+    if args.first().is_some_and(|arg| {
+        matches!(
+            arg.as_str(),
+            "installer-renewal-bootstrap" | "installer-renewal-bootstrap-transfer"
+        )
+    }) {
         if args.len() != 3 || args[1] != "--installation-id" {
             return Err("internal renewal bootstrap requires an owned container invocation".into());
         }
@@ -265,9 +267,17 @@ fn run() -> Result<(), String> {
         {
             let runtime = tokio::runtime::Runtime::new()
                 .map_err(|_| "cannot start renewal bootstrap runtime")?;
-            let count = runtime.block_on(
-                marty_deployment_catalog::installer_renewal_bootstrap::bootstrap(&args[2]),
-            )?;
+            let count = if args[0] == "installer-renewal-bootstrap-transfer" {
+                runtime.block_on(
+                    marty_deployment_catalog::installer_renewal_bootstrap::bootstrap_transfer(
+                        &args[2],
+                    ),
+                )?
+            } else {
+                runtime.block_on(
+                    marty_deployment_catalog::installer_renewal_bootstrap::bootstrap(&args[2]),
+                )?
+            };
             println!("{}", serde_json::json!({"outputs_written":count}));
             return Ok(());
         }

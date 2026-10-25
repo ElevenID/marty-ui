@@ -132,6 +132,28 @@ struct Loaded {
     sources: BTreeMap<String, Vec<u8>>,
     helper_ids: BTreeSet<String>,
 }
+// Legacy installations may lack renewal only when no stage data exists.
+// read_record deliberately refuses directories, links and unreadable entries:
+// in the absence branch any such marker means an uncertain partial stage.
+fn renewal_present(state: &LockedMaintenance) -> Result<bool> {
+    if state
+        .read_evidence("renewal-container-removed.json")?
+        .is_some()
+    {
+        return Ok(true);
+    }
+    for marker in [
+        "renewal-pending.json",
+        "renewal-container.json",
+        "renewal-result.json",
+    ] {
+        require(state.read_evidence(marker)?.is_none())?;
+    }
+    for marker in ["renewal-inputs", "renewal-transfer"] {
+        require(state.read_record(marker)?.is_none())?;
+    }
+    Ok(false)
+}
 fn source(
     state: &LockedMaintenance,
     root: bool,
@@ -239,11 +261,15 @@ fn load(state: &LockedMaintenance) -> Result<Loaded> {
         installation_ready: false,
     };
     let mut helper_ids = BTreeSet::new();
-    for (stage, schema) in [
+    let mut helpers = vec![
         ("keycloak", "elevenid.installer-keycloak/v1"),
         ("tls", "elevenid.installer-tls/v1"),
         ("ingress", "elevenid.installer-ingress-host/v1"),
-    ] {
+    ];
+    if renewal_present(state)? {
+        helpers.push(("renewal", "elevenid.installer-renewal-host/v1"));
+    }
+    for (stage, schema) in helpers {
         let record: Value = parse(&source(
             state,
             false,
@@ -309,6 +335,12 @@ fn load(state: &LockedMaintenance) -> Result<Loaded> {
 }
 fn unchanged(state: &LockedMaintenance, loaded: &Loaded) -> Result<()> {
     state.require_unchanged()?;
+    require(
+        renewal_present(state)?
+            == loaded
+                .sources
+                .contains_key("evidence/renewal-container-removed.json"),
+    )?;
     for (key, bytes) in &loaded.sources {
         let (location, name) = key.split_once('/').ok_or(REFUSED)?;
         let current = if location == "root" {
@@ -879,6 +911,93 @@ else: sys.exit(98)
     }
     fn ledger(root: &tempfile::TempDir) -> Value {
         parse(&fs::read(root.path().join("ledger.json")).unwrap()).unwrap()
+    }
+    #[test]
+    fn renewal_cleanup_requires_complete_removal_and_rechecks_legacy_absence() {
+        use std::os::unix::fs::PermissionsExt;
+        let (root, args) = mock("success");
+        let installation = root.path().join("install");
+        let state = LockedMaintenance::open(&installation).unwrap();
+        let legacy = load(&state).unwrap();
+        assert_eq!(legacy.helper_ids.len(), 3);
+        for marker in [
+            "renewal-pending.json",
+            "renewal-container.json",
+            "renewal-result.json",
+        ] {
+            let path = installation.join("evidence").join(marker);
+            std::fs::write(&path, b"{}").unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+            assert!(load(&state).is_err());
+            assert!(unchanged(&state, &legacy).is_err());
+            std::fs::remove_file(path).unwrap();
+        }
+        for marker in ["renewal-inputs", "renewal-transfer"] {
+            let path = installation.join(marker);
+            std::fs::create_dir(&path).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+            assert!(load(&state).is_err());
+            std::fs::remove_dir(path).unwrap();
+        }
+        let ingress: Value = serde_json::from_slice(
+            &std::fs::read(installation.join("evidence/ingress-container-removed.json")).unwrap(),
+        )
+        .unwrap();
+        let mut receipt = serde_json::to_value(crate::installer_renewal::RenewalReceipt {
+            schema: "elevenid.installer-renewal-host/v1",
+            installation_id: legacy.plan.installation_id.clone(),
+            engine_id: legacy.plan.engine_id.clone(),
+            container_id: "e".repeat(64),
+            container_name: format!("{}-renewal-inputs", legacy.plan.project),
+            network_id: legacy.plan.network_id.clone(),
+            image: ingress["image"].as_str().unwrap_or("fixture-image").into(),
+            root_retired: false,
+            ingress_renewal: false,
+            private_identity_validated: true,
+            outputs: [
+                "renewal-role-id",
+                "renewal-secret-id",
+                "renewal-leaf-policies.json",
+            ]
+            .map(String::from)
+            .to_vec(),
+            container_removed: true,
+            installation_ready: false,
+        })
+        .unwrap();
+        let path = installation.join("evidence/renewal-container-removed.json");
+        std::fs::write(&path, serde_json::to_vec(&receipt).unwrap()).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let renewed = load(&state).unwrap();
+        assert_eq!(renewed.helper_ids.len(), 4);
+        assert_eq!(renewed.plan.resources.len(), 34);
+        assert_eq!(renewed.plan.source_hashes.len(), 9);
+        assert!(unchanged(&state, &legacy).is_err());
+        receipt["container_removed"] = json!(false);
+        std::fs::write(&path, serde_json::to_vec(&receipt).unwrap()).unwrap();
+        assert!(load(&state).is_err());
+        assert!(unchanged(&state, &renewed).is_err());
+        receipt["container_removed"] = json!(true);
+        std::fs::write(&path, serde_json::to_vec(&receipt).unwrap()).unwrap();
+        drop(state);
+        let mut saved = ledger(&root);
+        let mut live = saved["containers"]
+            .as_object()
+            .unwrap()
+            .values()
+            .next()
+            .unwrap()
+            .clone();
+        live["Id"] = receipt["container_id"].clone();
+        live["Name"] = json!(format!("/{}", receipt["container_name"].as_str().unwrap()));
+        saved["containers"]["e".repeat(64)] = live;
+        fs::write(
+            root.path().join("ledger.json"),
+            serde_json::to_vec(&saved).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(uninstall(&args).unwrap_err(), REFUSED);
+        assert!(ledger(&root)["mutations"].as_array().unwrap().is_empty());
     }
     #[test]
     fn full_mocked_cleanup_retains_data_and_recovers_interrupted_removal() {

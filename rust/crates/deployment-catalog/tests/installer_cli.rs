@@ -84,6 +84,17 @@ fn internal_ingress_provisioner_refuses_invalid_invocation_without_output() {
 fn internal_renewal_bootstrap_refuses_unowned_invocation_without_output() {
     for args in [
         vec!["installer-renewal-bootstrap"],
+        vec!["installer-renewal-bootstrap-transfer"],
+        vec![
+            "installer-renewal-bootstrap-transfer",
+            "--installation-id",
+            "invalid",
+        ],
+        vec![
+            "installer-renewal-bootstrap-transfer",
+            "--owner",
+            "secret-sentinel",
+        ],
         vec![
             "installer-renewal-bootstrap",
             "--installation-id",

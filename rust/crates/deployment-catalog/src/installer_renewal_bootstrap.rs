@@ -154,7 +154,7 @@ fn entry(
     )
 }
 
-fn validate_current(values: &BTreeMap<String, Vec<u8>>) -> Result<()> {
+pub(crate) fn validate_current(values: &BTreeMap<String, Vec<u8>>) -> Result<()> {
     require(values.keys().cloned().collect::<BTreeSet<_>>() == current_inputs())?;
     let mut tokens = BTreeSet::new();
     for (name, value) in values {
@@ -225,6 +225,10 @@ fn validate_id(id: &str) -> Result<()> {
 /// active; ingress renewal, application activation and root retirement are NOT
 /// performed. Failed login may have minted an unknown token: never auto-retry.
 pub async fn bootstrap(installation_id: &str) -> Result<usize> {
+    bootstrap_at(installation_id, Path::new("/output")).await
+}
+
+async fn bootstrap_at(installation_id: &str, output_path: &Path) -> Result<usize> {
     require(unsafe { libc::geteuid() } == 0)?;
     validate_id(installation_id)?;
     let root_bytes = input(Path::new("/input/root.token"), 4096, &[0o400])?;
@@ -240,7 +244,7 @@ pub async fn bootstrap(installation_id: &str) -> Result<usize> {
             .values()
             .all(|v| !v.windows(root.len()).any(|w| w == root.as_bytes())),
     )?;
-    let output = directory(Path::new("/output"), true, false)?;
+    let output = directory(output_path, true, false)?;
     require(names(&output)?.is_empty())?;
     let bao = OpenBaoHttp::connect(
         "https://openbao:8200",
@@ -281,12 +285,12 @@ pub async fn bootstrap(installation_id: &str) -> Result<usize> {
         return Err(RECOVERY.into());
     }
     output.sync_all().map_err(|_| RECOVERY)?;
-    let identity_path = Path::new("/output/identity");
-    let identity = directory(identity_path, true, false)?;
+        let identity_path = output_path.join("identity");
+        let identity = directory(&identity_path, true, false)?;
     approle::bootstrap(
         &bao,
         approle::Role::Renewal,
-        identity_path,
+            &identity_path,
         &json!({"root_token":root,"names":policies}),
     )
     .await
@@ -294,9 +298,10 @@ pub async fn bootstrap(installation_id: &str) -> Result<usize> {
     identity.sync_all().map_err(|_| RECOVERY)?;
     require(names(&identity)? == IDENTITY_FILES.map(String::from).into())?;
     for name in IDENTITY_FILES {
-        entry(&identity, name, &[0], &[0o600], false)?;
+            let value = entry(&identity, name, &[0], &[0o600], false)?;
+            require(!value.windows(root.len()).any(|v| v == root.as_bytes()))?;
     }
-    let login = approle::login(&bao, approle::Role::Renewal, identity_path, &json!({}))
+        let login = approle::login(&bao, approle::Role::Renewal, &identity_path, &json!({}))
         .await
         .map_err(|_| RECOVERY)?;
     let transient = login["token"].as_str().ok_or(RECOVERY)?;
@@ -345,10 +350,144 @@ pub async fn bootstrap(installation_id: &str) -> Result<usize> {
     outcome.map_err(|_| RECOVERY.into())
 }
 
+fn child(parent: &File, name: &str) -> Result<File> {
+    let name = CString::new(name).map_err(|_| RECOVERY)?;
+    if unsafe { libc::mkdirat(parent.as_raw_fd(), name.as_ptr(), 0o700) } != 0 {
+        return Err(RECOVERY.into());
+    }
+    parent.sync_all().map_err(|_| RECOVERY)?;
+    let fd = unsafe {
+        libc::openat(
+            parent.as_raw_fd(),
+            name.as_ptr(),
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        )
+    };
+    if fd < 0 {
+        return Err(RECOVERY.into());
+    }
+    Ok(unsafe { File::from_raw_fd(fd) })
+}
+
+fn deliver_file(directory: &File, name: &str, bytes: &[u8], uid: u32, gid: u32) -> Result<()> {
+    let name = CString::new(name).map_err(|_| RECOVERY)?;
+    let fd = unsafe {
+        libc::openat(
+            directory.as_raw_fd(),
+            name.as_ptr(),
+            libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            0o600,
+        )
+    };
+    if fd < 0 {
+        return Err(RECOVERY.into());
+    }
+    let mut file = unsafe { File::from_raw_fd(fd) };
+    directory.sync_all().map_err(|_| RECOVERY)?;
+    file.write_all(bytes)
+        .and_then(|_| file.sync_all())
+        .map_err(|_| RECOVERY)?;
+    if unsafe { libc::fchown(file.as_raw_fd(), uid, gid) } != 0 {
+        return Err(RECOVERY.into());
+    }
+    let metadata = file.metadata().map_err(|_| RECOVERY)?;
+    require(
+        metadata.uid() == uid
+            && metadata.gid() == gid
+            && metadata.nlink() == 1
+            && metadata.mode() & 0o7777 == 0o600,
+    )?;
+    file.sync_all()
+        .and_then(|_| directory.sync_all())
+        .map_err(|_| RECOVERY.into())
+}
+
+/// Fixed private transfer wrapper. CHOWN is needed only for freshly created
+/// delivery file descriptors and their new directory. Original root-owned
+/// identity and receipts remain private and untouched for recovery.
+pub async fn bootstrap_transfer(installation_id: &str) -> Result<usize> {
+    require(unsafe { libc::geteuid() } == 0)?;
+    validate_id(installation_id)?;
+    let parent = directory(Path::new("/transfer"), false, false)?;
+    let owner = parent.metadata().map_err(|_| REFUSED)?;
+    require(names(&parent)?.is_empty())?;
+    receipt(
+        &parent,
+        "transfer-pending.json",
+        &json!({"schema":"elevenid.installer-renewal-transfer-intent/v1",
+        "installation_id":installation_id,"root_retired":false}),
+    )?;
+    let result: Result<usize> = async {
+        let output = child(&parent, "output")?;
+        require(output.metadata().map_err(|_| RECOVERY)?.uid() == 0)?;
+        bootstrap_at(installation_id, Path::new("/transfer/output")).await?;
+        require(names(&output)? == BTreeSet::from(["pending.json".into(), "completed.json".into(), "identity".into()]))?;
+        let identity = directory(Path::new("/transfer/output/identity"), true, false)?;
+        require(names(&identity)? == IDENTITY_FILES.map(String::from).into())?;
+        let mut values = BTreeMap::new();
+        for name in IDENTITY_FILES {
+            values.insert(name.to_owned(), entry(&identity, name, &[0], &[0o600], false)?);
+        }
+        for name in ["pending.json", "completed.json"] {
+            values.insert(name.into(), entry(&output, name, &[0], &[0o600], false)?);
+        }
+        let completed: Value = serde_json::from_slice(&values["completed.json"]).map_err(|_| RECOVERY)?;
+        require(completed == json!({"schema":"elevenid.installer-renewal-bootstrap-result/v1",
+            "installation_id":installation_id,"identity_files":IDENTITY_FILES,"policy_count":21,
+            "scoped_login_verified":true,"verification_token_revoked":true,"root_retired":false,"ingress_renewal":false}))?;
+        let delivered = child(&parent, "delivered")?;
+        for (name, bytes) in values { deliver_file(&delivered, &name, &bytes, owner.uid(), owner.gid())?; }
+        let after = directory(Path::new("/transfer"), false, false)?.metadata().map_err(|_| RECOVERY)?;
+        require((after.dev(),after.ino(),after.uid(),after.gid(),after.mode()) == (owner.dev(),owner.ino(),owner.uid(),owner.gid(),owner.mode()))?;
+        if unsafe { libc::fchown(delivered.as_raw_fd(), owner.uid(), owner.gid()) } != 0 { return Err(RECOVERY.into()); }
+        let m = delivered.metadata().map_err(|_| RECOVERY)?;
+        require(m.uid() == owner.uid() && m.gid() == owner.gid() && m.mode() & 0o7777 == 0o700)?;
+        delivered.sync_all().and_then(|_| parent.sync_all()).map_err(|_| RECOVERY)?;
+        Ok(IDENTITY_FILES.len())
+    }.await;
+    result.map_err(|_| RECOVERY.into())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::os::unix::fs::{symlink, PermissionsExt};
+
+    #[test]
+    fn transfer_copies_are_private_exclusive_and_leave_originals() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let parent = directory(temp.path(), false, false).unwrap();
+        let original = child(&parent, "output").unwrap();
+        receipt(&original, "pending.json", &json!({"root_retired":false})).unwrap();
+        let delivered = child(&parent, "delivered").unwrap();
+        let uid = unsafe { libc::geteuid() };
+        let gid = unsafe { libc::getegid() };
+        deliver_file(
+            &delivered,
+            "renewal-secret-id",
+            b"private-credential",
+            uid,
+            gid,
+        )
+        .unwrap();
+        assert_eq!(
+            entry(&delivered, "renewal-secret-id", &[uid], &[0o600], false).unwrap(),
+            b"private-credential"
+        );
+        assert!(deliver_file(&delivered, "renewal-secret-id", b"overwrite", uid, gid).is_err());
+        assert!(child(&parent, "delivered").is_err());
+        assert_eq!(
+            names(&original).unwrap(),
+            BTreeSet::from(["pending.json".into()])
+        );
+        symlink(
+            temp.path().join("output/pending.json"),
+            temp.path().join("delivered/linked"),
+        )
+        .unwrap();
+        assert!(deliver_file(&delivered, "linked", b"overwrite", uid, gid).is_err());
+    }
 
     #[test]
     fn exact_input_inventory_refuses_scalar_ingress_duplicate_and_root_material() {

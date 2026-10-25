@@ -403,7 +403,7 @@ fn cleanup_summary(
         .filter(|r| r.bao)
         .map(|r| r.role.as_str())
         .collect();
-    let expected_sources = BTreeSet::from([
+    let mut expected_sources = BTreeSet::from([
         "evidence/application-plan.json",
         "evidence/application-compose.json",
         "evidence/application-created-resources.json",
@@ -413,6 +413,12 @@ fn cleanup_summary(
         "evidence/tls-container-removed.json",
         "evidence/ingress-container-removed.json",
     ]);
+    if plan
+        .source_hashes
+        .contains_key("evidence/renewal-container-removed.json")
+    {
+        expected_sources.insert("evidence/renewal-container-removed.json");
+    }
     if plan.schema != "elevenid.installer-uninstall-plan/v1"
         || plan.installation_id != journal.installation_id().to_string()
         || plan.engine_id != binding.engine_id
@@ -832,6 +838,8 @@ impl InstallerState {
                 "keycloak-output",
                 "tls-output",
                 "ingress-output",
+                "renewal-inputs",
+                "renewal-transfer",
             ]
             .contains(&entry)
         {
@@ -1274,6 +1282,29 @@ mod tests {
             },
         )
         .unwrap()
+    }
+    #[test]
+    fn cleanup_summary_accepts_exact_renewal_receipt_hash_but_no_unknown_sources() {
+        let root = tempfile::tempdir().unwrap();
+        let state = cleanup_test_state(&root.path().join("install"));
+        let (mut plan, result) = cleanup_test_records(state.journal());
+        plan["source_hashes"]["evidence/renewal-container-removed.json"] =
+            serde_json::json!("b".repeat(64));
+        let summary = cleanup_summary(
+            state.journal(),
+            Some(&serde_json::to_vec(&plan).unwrap()),
+            Some(&serde_json::to_vec(&result).unwrap()),
+        )
+        .unwrap();
+        assert_eq!(summary.state, CleanupState::Completed);
+        plan["source_hashes"]["evidence/unknown-container-removed.json"] =
+            serde_json::json!("c".repeat(64));
+        assert!(cleanup_summary(
+            state.journal(),
+            Some(&serde_json::to_vec(&plan).unwrap()),
+            None
+        )
+        .is_err());
     }
     #[test]
     fn cleanup_summary_tracks_records_without_changing_historical_ready_journal() {
@@ -1748,6 +1779,21 @@ mod tests {
             assert!(InstallerState::create_with_runtime(&path, identity(), runtime).is_err());
             assert!(!path.exists());
         }
+    }
+    #[test]
+    fn renewal_directories_are_private_and_never_adopted() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("install");
+        let mut state = InstallerState::create(&path, identity()).unwrap();
+        for entry in ["renewal-inputs", "renewal-transfer"] {
+            state.create_private_directory(entry).unwrap();
+            assert_eq!(
+                std::fs::metadata(path.join(entry)).unwrap().mode() & 0o777,
+                0o700
+            );
+        }
+        assert!(state.create_private_directory("renewal-transfer").is_err());
+        assert!(state.require_live_phase(Phase::Initialized).is_err());
     }
     #[test]
     fn evidence_is_private_durable_and_never_overwritten() {
