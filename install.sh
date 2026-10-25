@@ -53,8 +53,11 @@ main() (
     export DOCKER_HOST="$docker_endpoint"
     docker info >/dev/null 2>&1 || fail 'Docker Engine must be running and accessible'
     security_options=$(docker info --format '{{range .SecurityOptions}}{{println .}}{{end}}')
-    if printf '%s\n' "$security_options" | grep -Fxq 'name=rootless'; then
+    if printf '%s\n' "$security_options" | grep -Eq '^name=rootless(,|$)'; then
         fail 'Rootless Docker is not supported by this installer'
+    fi
+    if printf '%s\n' "$security_options" | grep -Eq '^name=userns(,|$)'; then
+        fail 'Docker user namespace remapping is not supported by this installer'
     fi
     docker_engine_id=$(docker info --format '{{.ID}}')
     [ -n "$docker_engine_id" ] || fail 'Docker Engine identity is unavailable'

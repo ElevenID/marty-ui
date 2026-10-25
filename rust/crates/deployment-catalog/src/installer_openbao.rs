@@ -528,6 +528,50 @@ fn observations(
     Ok((network_id, result))
 }
 
+/// Reconcile a recorded observation against the live, exact bound resources.
+/// This performs reads only; it neither adopts replacements nor repairs them.
+pub(crate) fn verify_observation(
+    docker: &DockerRunner,
+    installation: &Path,
+    bundle: &Path,
+    state: &InstallerState,
+    expected: &OpenBaoInventory,
+) -> Result<()> {
+    state.require_live_phase(Phase::Provisioning)?;
+    let journal = state.journal();
+    require(
+        InstallerState::inspect(installation)? == *journal,
+        "installation journal differs",
+    )?;
+    let binding = journal.runtime().ok_or("OpenBao runtime binding absent")?;
+    let project = format!("{}-bao", journal.compose_project());
+    require(
+        expected.installation_id == journal.installation_id().to_string()
+            && expected.engine_id == binding.engine_id
+            && expected.project == project
+            && expected.host_port == binding.openbao_port
+            && expected.network_name == format!("{project}_default")
+            && expected.pending_receipt == installation.join("openbao-pending.json"),
+        "OpenBao receipt differs from installation intent",
+    )?;
+    private(installation)?;
+    canonical_bundle(bundle)?;
+    docker.preflight()?;
+    let (network_id, container_ids) = observations(
+        docker,
+        &project,
+        &expected.image,
+        &installation.join("openbao-state"),
+        &installation.join("secrets"),
+        bundle,
+        binding.openbao_port,
+    )?;
+    require(
+        network_id == expected.network_id && container_ids == expected.container_ids,
+        "recorded OpenBao resources were replaced",
+    )
+}
+
 /// Starts only the fresh OpenBao portion. The journal must already be durably
 /// Provisioning. Never advances the journal or reports whole-stack readiness.
 /// `plugin_image` must have passed the caller's authenticated bundle/image gate.

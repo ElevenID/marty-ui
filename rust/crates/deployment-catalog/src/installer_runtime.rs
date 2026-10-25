@@ -296,10 +296,11 @@ fn validate_info(output: &str, expected: &str) -> Result<DockerInfo> {
         || !engine_id(&info.id)
         || info.os != "linux"
         || !matches!(info.architecture.as_str(), "amd64" | "x86_64")
-        || info
-            .security_options
-            .iter()
-            .any(|v| v == "name=rootless" || v.starts_with("name=rootless,"))
+        || info.security_options.iter().any(|v| {
+            ["name=rootless", "name=userns"]
+                .iter()
+                .any(|name| v == name || v.starts_with(&format!("{name},")))
+        })
         || info.server_version.is_empty()
         || info.server_version.len() > 128
     {
@@ -386,6 +387,9 @@ impl DockerRunner {
                     | &"image"
                     | &"pull"
                     | &"run"
+                    | &"create"
+                    | &"start"
+                    | &"wait"
                     | &"rm"
             )
         ) || args.iter().any(|arg| {
@@ -565,6 +569,8 @@ mod tests {
             info().replace("x86_64", "aarch64"),
             info().replace("linux", "windows"),
             info().replace("name=seccomp,profile=builtin", "name=rootless"),
+            info().replace("name=seccomp,profile=builtin", "name=userns"),
+            info().replace("name=seccomp,profile=builtin", "name=userns,remapped=true"),
             info().replace("test-engine", "other"),
             info().replacen('{', "{\"surprise\":true,", 1),
         ] {

@@ -69,6 +69,9 @@ def test_no_ambient_verifier_or_unsigned_download_execution():
     ("ssh://example.invalid", "name=seccomp", "remote contexts are refused"),
     ("tcp://127.0.0.1:2375", "name=seccomp", "remote contexts are refused"),
     ("unix:///run/user/1000/docker.sock", "name=rootless", "Rootless Docker"),
+    ("unix:///var/run/docker.sock", "name=rootless,detail=true", "Rootless Docker"),
+    ("unix:///var/run/docker.sock", "name=userns", "user namespace remapping"),
+    ("unix:///var/run/docker.sock", "name=userns,remapped=true", "user namespace remapping"),
 ])
 def test_wrong_docker_target_refused_before_download(endpoint, security, reason):
     source = SCRIPT.read_text()

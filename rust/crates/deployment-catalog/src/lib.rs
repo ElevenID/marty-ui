@@ -17,6 +17,7 @@ pub mod installer_bundle;
 pub mod installer_command;
 pub mod installer_openbao;
 pub mod installer_keycloak_bridge;
+pub mod installer_keycloak;
 
 use serde_json::{Map, Value};
 use std::collections::HashSet;

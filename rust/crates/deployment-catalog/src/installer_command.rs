@@ -306,7 +306,19 @@ pub fn install(args: &[String], build_identity: &str) -> Result<()> {
         "openbao-observation.json",
         &serde_json::to_vec(&infrastructure).map_err(|_| "cannot encode OpenBao observation")?,
     )?;
-    Err("OpenBao provisioning recorded; application and local HTTPS stages are not yet implemented. Installation is incomplete; preserve the reported state for recovery.".into())
+    let keycloak = crate::installer_keycloak::provision(
+        docker,
+        &directory,
+        &prepared.bundle,
+        &mut state,
+        &infrastructure,
+        &operator_sha,
+    )?;
+    state.write_evidence(
+        "keycloak-observation.json",
+        &serde_json::to_vec(&keycloak).map_err(|_| "cannot encode Keycloak observation")?,
+    )?;
+    Err("OpenBao and Keycloak provisioning recorded; workload TLS, application and local HTTPS stages are not yet implemented. Installation is incomplete; preserve the reported state for recovery.".into())
 }
 
 #[cfg(test)]

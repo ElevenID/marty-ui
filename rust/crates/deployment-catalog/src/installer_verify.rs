@@ -102,7 +102,11 @@ pub(crate) fn read_private_bytes(path: &Path, maximum: u64) -> Result<Vec<u8>> {
 
 pub(crate) fn current_operator_digest() -> Result<String> {
     let path = std::env::current_exe().map_err(|_| "cannot locate running installer")?;
-    Ok(file_digest(&path, 536870912, true)?.0)
+    operator_digest(&path)
+}
+pub(crate) fn operator_digest(path: &Path) -> Result<String> {
+    crate::installer_runtime::private_parent(path.parent().ok_or("operator parent missing")?)?;
+    Ok(file_digest(path, 536870912, true)?.0)
 }
 
 pub struct VerificationTools {
