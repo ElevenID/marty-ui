@@ -129,13 +129,168 @@ fn bounded_fixture_lock(path: &Path) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
+fn git_metadata_line(path: &Path) -> Result<String> {
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
+        .open(path)
+        .map_err(|_| "Git metadata unavailable")?;
+    let metadata = file.metadata().map_err(|_| "Git metadata unavailable")?;
+    require(
+        metadata.is_file() && metadata.nlink() == 1 && metadata.len() > 0 && metadata.len() <= 4096,
+        "Git metadata is not bounded ordinary data",
+    )?;
+    let mut text = String::new();
+    file.take(4097)
+        .read_to_string(&mut text)
+        .map_err(|_| "Git metadata is not text")?;
+    require(text.len() as u64 == metadata.len(), "Git metadata changed")?;
+    let line = text.trim_end_matches(['\r', '\n']);
+    require(
+        !line.is_empty() && !line.chars().any(char::is_control),
+        "Git metadata is not a single line",
+    )?;
+    Ok(line.into())
+}
+fn git_metadata_path(value: &str, relative_to: &Path) -> Result<PathBuf> {
+    require(
+        !value.is_empty()
+            && value.len() <= 4096
+            && !value.chars().any(char::is_control)
+            && !value.contains('\\'),
+        "Git metadata path unsupported",
+    )?;
+    let bytes = value.as_bytes();
+    if bytes.get(1) == Some(&b':') {
+        require(
+            bytes[0].is_ascii_alphabetic()
+                && bytes.get(2) == Some(&b'/')
+                && !value[2..].contains(':'),
+            "Git drive path unsupported",
+        )?;
+        let tail = &value[3..];
+        require(
+            !tail.is_empty()
+                && tail
+                    .split('/')
+                    .all(|p| !p.is_empty() && p != "." && p != ".."),
+            "Git drive path contains traversal",
+        )?;
+        return Ok(PathBuf::from(format!(
+            "/mnt/{}/{}",
+            (bytes[0] as char).to_ascii_lowercase(),
+            tail
+        )));
+    }
+    require(
+        !value.contains(':') && !value.starts_with("//"),
+        "Git metadata path unsupported",
+    )?;
+    let path = Path::new(value);
+    Ok(if path.is_absolute() {
+        path.into()
+    } else {
+        relative_to.join(path)
+    })
+}
+fn source_git_directory(source: &Path) -> Result<PathBuf> {
+    let source = source
+        .canonicalize()
+        .map_err(|_| "source directory unavailable")?;
+    let marker = source.join(".git");
+    let metadata = fs::symlink_metadata(&marker).map_err(|_| "source Git marker unavailable")?;
+    require(
+        !metadata.file_type().is_symlink(),
+        "source Git marker is linked",
+    )?;
+    if metadata.is_dir() {
+        return marker
+            .canonicalize()
+            .map_err(|_| "source Git directory unavailable".into());
+    }
+    let line = git_metadata_line(&marker)?;
+    let registry = git_metadata_path(
+        line.strip_prefix("gitdir: ")
+            .ok_or("source Git marker malformed")?,
+        &source,
+    )?
+    .canonicalize()
+    .map_err(|_| "worktree registry unavailable")?;
+    require(registry.is_dir(), "worktree registry is not directory")?;
+    let backpointer = git_metadata_path(&git_metadata_line(&registry.join("gitdir"))?, &registry)?
+        .canonicalize()
+        .map_err(|_| "worktree backpointer unavailable")?;
+    require(
+        backpointer == marker,
+        "worktree backpointer differs from source",
+    )?;
+    Ok(registry)
+}
+#[test]
+fn fixture_git_registry_translation_is_bounded_and_backpointer_bound() {
+    assert_eq!(
+        git_metadata_path(
+            "C:/Users/example/repo/.git/worktrees/task",
+            Path::new("/unused")
+        )
+        .unwrap(),
+        Path::new("/mnt/c/Users/example/repo/.git/worktrees/task")
+    );
+    for invalid in [
+        "C:/../repo",
+        "C:/repo/./git",
+        "C:\\repo",
+        "//host/share",
+        "C:/repo//git",
+        "C:relative",
+        "C:/repo\nother",
+    ] {
+        assert!(git_metadata_path(invalid, Path::new("/unused")).is_err());
+    }
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("source");
+    let registry = temp.path().join("registry");
+    fs::create_dir(&source).unwrap();
+    fs::create_dir(&registry).unwrap();
+    fs::write(source.join(".git"), "gitdir: ../registry\n").unwrap();
+    fs::write(
+        registry.join("gitdir"),
+        source.join(".git").to_str().unwrap(),
+    )
+    .unwrap();
+    assert_eq!(source_git_directory(&source).unwrap(), registry);
+    fs::write(
+        registry.join("gitdir"),
+        registry.join("gitdir").to_str().unwrap(),
+    )
+    .unwrap();
+    assert!(source_git_directory(&source).is_err());
+    fs::write(registry.join("gitdir"), "x".repeat(4097)).unwrap();
+    assert!(source_git_directory(&source).is_err());
+    fs::remove_file(registry.join("gitdir")).unwrap();
+    std::os::unix::fs::symlink(source.join(".git"), registry.join("gitdir")).unwrap();
+    assert!(source_git_directory(&source).is_err());
+    let ordinary = temp.path().join("ordinary");
+    fs::create_dir(&ordinary).unwrap();
+    fs::create_dir(ordinary.join(".git")).unwrap();
+    assert_eq!(
+        source_git_directory(&ordinary).unwrap(),
+        ordinary.join(".git")
+    );
+}
+
 fn source_head(source: &Path) -> Result<String> {
     use std::{
         process::{Command, Stdio},
         time::{Duration, Instant},
     };
+    let registry = source_git_directory(source)?;
     let mut output = tempfile::tempfile().map_err(|_| "cannot capture source identity")?;
     let mut child = Command::new("/usr/bin/git")
+        .arg("--git-dir")
+        .arg(&registry)
+        .arg("--work-tree")
+        .arg(source)
         .args(["rev-parse", "--verify", "HEAD"])
         .current_dir(source)
         .env_clear()
@@ -188,6 +343,10 @@ fn source_head(source: &Path) -> Result<String> {
                 .bytes()
                 .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)),
         "source identity is invalid",
+    )?;
+    require(
+        source_git_directory(source)? == registry,
+        "worktree registry changed during identity observation",
     )?;
     Ok(value.to_owned())
 }
