@@ -668,10 +668,10 @@ export function buildCredentialTemplatePayload(data = {}) {
 /**
  * Create a new presentation policy
  */
-export async function createPresentationPolicy(data) {
+export async function createPresentationPolicy(data, options = {}) {
   const payload = buildPresentationPolicyPayload(data);
   const shouldActivate = data?.activate_immediately === true || String(data?.status || '').toLowerCase() === 'active';
-  let result = await postWithIdempotency(PRESENTATION_POLICY_BASE, payload);
+  let result = await postWithIdempotency(PRESENTATION_POLICY_BASE, payload, options);
 
   if (shouldActivate && result?.id) {
     result = await activatePresentationPolicy(result.id);
