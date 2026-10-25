@@ -78,11 +78,10 @@ describe('credential template normalization', () => {
     })
 
     expect(payload.validity_rules).toEqual({
-      default_validity_days: 14,
-      max_validity_days: undefined,
+      ttl_seconds: 14 * 86400,
       renewable: false,
-      renewal_window_days: 3,
-      not_before_offset_seconds: 900,
+      reissue_within_seconds: 3 * 86400,
+      not_before_offset: 900,
     })
     expect(payload.vct).toBe(`${window.location.origin}/vct/com.example.employee`)
     expect(payload.issuer_did).toBe('did:web:issuer.example.com')

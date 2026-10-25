@@ -349,11 +349,11 @@ export function normalizeCredentialTemplateValidityRules(rules = {}) {
 
   return {
     ...rules,
-    ...(ttlSeconds != null ? { ttl_seconds: ttlSeconds, default_validity_days: daysFromSeconds(ttlSeconds) } : {}),
+    ...(ttlSeconds != null ? { ttl_seconds: ttlSeconds, default_validity_days: rules.ttl_seconds != null ? daysFromSeconds(ttlSeconds) : rules.default_validity_days } : {}),
     ...(reissueWithinSeconds != null
       ? {
           reissue_within_seconds: reissueWithinSeconds,
-          renewal_window_days: daysFromSeconds(reissueWithinSeconds),
+          renewal_window_days: rules.reissue_within_seconds != null ? daysFromSeconds(reissueWithinSeconds) : rules.renewal_window_days,
         }
       : {}),
     not_before_offset_seconds: notBeforeOffsetSeconds,
@@ -361,7 +361,7 @@ export function normalizeCredentialTemplateValidityRules(rules = {}) {
     ...(maxValiditySeconds != null
       ? {
           max_validity_seconds: maxValiditySeconds,
-          max_validity_days: daysFromSeconds(maxValiditySeconds),
+          max_validity_days: rules.max_validity_seconds != null ? daysFromSeconds(maxValiditySeconds) : rules.max_validity_days,
         }
       : {}),
   };
