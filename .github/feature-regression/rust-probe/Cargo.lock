@@ -3330,6 +3330,7 @@ dependencies = [
  "marty-platform-clock",
  "marty-response-compat",
  "marty-schema-startup",
+ "marty-service-runtime",
  "marty-signing-grant",
  "marty-verification",
  "mmf-config",
@@ -3448,6 +3449,16 @@ dependencies = [
 [[package]]
 name = "marty-schema-startup"
 version = "0.1.0"
+
+[[package]]
+name = "marty-service-runtime"
+version = "0.1.0"
+dependencies = [
+ "mmf-platform",
+ "tokio",
+ "tokio-rustls",
+ "tokio-stream",
+]
 
 [[package]]
 name = "marty-signing-grant"

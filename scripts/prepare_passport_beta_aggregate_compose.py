@@ -3,6 +3,14 @@
 
 from __future__ import annotations
 
+if __package__:
+    from .passport_model_policy import evaluate as evaluate_passport_policy
+else:
+    try:
+        from passport_model_policy import evaluate as evaluate_passport_policy
+    except ModuleNotFoundError:
+        from scripts.passport_model_policy import evaluate as evaluate_passport_policy
+
 import argparse
 import hashlib
 import json
@@ -132,61 +140,11 @@ def environment(service: dict[str, Any]) -> dict[str, str]:
 
 
 def assert_beta_origin(services: dict[str, Any]) -> None:
-    """Reject a rendered beta release that advertises another public origin."""
-    for name, service in services.items():
-        require(isinstance(service, dict),
-                f"Rendered beta service is invalid: {name}")
-        env = environment(service)
-        for key in PUBLIC_URL_KEYS:
-            if key in env:
-                require(env[key] == BETA_ORIGIN,
-                        f"Rendered beta public origin differs: {name}.{key}")
-        if "PUBLIC_DOMAIN" in env:
-            require(env["PUBLIC_DOMAIN"] == BETA_DOMAIN,
-                    f"Rendered beta public domain differs: {name}")
-    required = {
-        "auth": {"UI_BASE_URL": BETA_ORIGIN,
-                 "UI_ADDITIONAL_BASE_URLS": "",
-                 "OIDC_REDIRECT_URI": BETA_ORIGIN + "/v1/auth/callback",
-                 "OIDC_POST_LOGOUT_REDIRECT_URI": BETA_ORIGIN + "/"},
-        "gateway": {"ISSUER_BASE_URL": BETA_ORIGIN},
-        "flow": {"PUBLIC_BASE_URL": BETA_ORIGIN},
-        "keycloak": {"KC_HOSTNAME": BETA_ORIGIN,
-                     "PUBLIC_DOMAIN": BETA_DOMAIN,
-                     "UI_BASE_URL": BETA_ORIGIN},
-        "nginx-proxy": {"PUBLIC_DOMAIN": BETA_DOMAIN,
-                        "GATEWAY_UPSTREAM": "gateway:8000"},
-        "signing-keys": {"PUBLIC_DOMAIN": BETA_DOMAIN},
-        "issuance": {"ISSUER_BASE_URL": BETA_ORIGIN},
-    }
-    for name, expected in required.items():
-        require(name in services, f"Rendered beta origin service is absent: {name}")
-        env = environment(services[name])
-        for key, value in expected.items():
-            require(env.get(key) == value,
-                    f"Rendered beta public origin differs: {name}.{key}")
-    issuer = environment(services["auth"]).get("OIDC_EXTERNAL_ISSUER_URL", "")
-    require(re.fullmatch(re.escape(BETA_ORIGIN) + r"/realms/[A-Za-z0-9_-]+", issuer)
-            is not None,
-            "Rendered beta OIDC issuer origin differs")
-    cors = environment(services["gateway"]).get("CORS_ORIGINS", "")
-    origins = cors.split(",")
-    allowed = {BETA_ORIGIN, "http://localhost:9080", "http://localhost:3000",
-               "http://localhost:5173"}
-    require(BETA_ORIGIN in origins and len(origins) == len(set(origins))
-            and set(origins).issubset(allowed),
-            "Rendered beta Gateway CORS origins differ")
+    evaluate_passport_policy("beta-origin", error_type=ComposePlanError, services=services)
 
 
 def assert_private_gateway_port(services: dict[str, Any]) -> None:
-    gateway = services.get("gateway")
-    gateway_ports = gateway.get("ports") if isinstance(gateway, dict) else None
-    require(isinstance(gateway_ports, list) and len(gateway_ports) == 1
-            and isinstance(gateway_ports[0], dict)
-            and gateway_ports[0].get("host_ip") == "127.0.0.1"
-            and str(gateway_ports[0].get("target")) == "8000"
-            and gateway_ports[0].get("protocol", "tcp") == "tcp",
-            "Private beta Gateway must bind only the host loopback")
+    evaluate_passport_policy("private-gateway", error_type=ComposePlanError, services=services)
 
 
 def sha256(path: Path) -> str:

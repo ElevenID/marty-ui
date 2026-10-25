@@ -180,38 +180,26 @@ function hasActiveIssuerIdentity(template, issuerIdentities) {
 }
 
 function isActiveComplianceProfile(profile) {
-  if (typeof profile === 'string') {
-    return profile.trim().length > 0;
-  }
-
   if (!profile || typeof profile !== 'object') {
     return false;
   }
 
-  const status = String(profile.status || profile.lifecycle_status || '').trim().toLowerCase();
-  return !status || status === 'active';
+  return String(profile.status || '').trim().toUpperCase() === 'ACTIVE';
 }
 
 /**
  * Compute Compliance Profile readiness
  */
-function evaluateComplianceReadiness(lifecycle, dashboardErrors = {}) {
-  if (dashboardErrors?.lifecycle) {
-    return buildLoadErrorReadiness('Compliance profiles', dashboardErrors.lifecycle);
+function evaluateComplianceReadiness(complianceProfiles, resourceErrors = {}) {
+  if (resourceErrors?.complianceProfiles) {
+    return buildLoadErrorReadiness('Compliance profiles', resourceErrors.complianceProfiles);
   }
 
-  if (!lifecycle || !Object.prototype.hasOwnProperty.call(lifecycle, 'complianceProfiles')) {
-    return {
-      state: ReadinessState.READY,
-      message: 'Compliance profile status not reported',
-      action: null,
-      path: null,
-      blockReason: null,
-    };
+  if (!Array.isArray(complianceProfiles)) {
+    return buildLoadErrorReadiness('Compliance profiles', null);
   }
 
-  const safeProfiles = Array.isArray(lifecycle.complianceProfiles) ? lifecycle.complianceProfiles : [];
-  const activeProfiles = safeProfiles.filter(isActiveComplianceProfile);
+  const activeProfiles = complianceProfiles.filter(isActiveComplianceProfile);
 
   if (activeProfiles.length === 0) {
     return {
@@ -944,6 +932,7 @@ function evaluateRevocationReadiness(revocationProfiles, templates, trustDepende
  */
 export function computeSetupReadiness(data) {
   const {
+    complianceProfiles,
     trustProfiles,
     issuerIdentities,
     templates,
@@ -956,9 +945,7 @@ export function computeSetupReadiness(data) {
     policySets,
     physicalDocumentCapabilities,
     revocationProfiles,
-    lifecycle,
     resourceErrors,
-    dashboardErrors,
   } = data;
 
   const trustDependencies = {
@@ -966,7 +953,7 @@ export function computeSetupReadiness(data) {
     resourceErrors,
   };
 
-  const compliance = evaluateComplianceReadiness(lifecycle, dashboardErrors);
+  const compliance = evaluateComplianceReadiness(complianceProfiles, resourceErrors);
   const activeIntent = inferSetupIntent(data);
   const issuer = evaluateIssuerReadiness(trustDependencies);
   const trust = evaluateTrustReadiness(trustProfiles, trustDependencies);

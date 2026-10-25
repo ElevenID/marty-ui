@@ -1,3 +1,9 @@
+> October 24 disposition: the experimental UI affected-Rust shadow planner was
+> retired under the cleanup decision. References to its observations in this
+> inventory are historical. They do not describe a current selector or an open
+> commitment to complete that experiment. Existing conservative CI and run-bound
+> execution checks remain required; Core selection is unchanged.
+
 # Architecture test obligations and migration inventory
 
 Initial baseline: UI `92e16b2f15045e91a92a737b0a42b431895a8b66`.

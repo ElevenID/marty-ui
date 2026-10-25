@@ -9,6 +9,7 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
+marty-service-runtime = { path = "../../crates/service-runtime" }
 marty-api-key-policy = { path = "../../crates/api-key-policy" }
 async-trait.workspace = true
 axum.workspace = true

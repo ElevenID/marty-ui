@@ -11,6 +11,7 @@ publish = false
 marty-managed-key-reference = { path = "../managed-key-reference" }
 marty-selfhost-identity = { path = "../selfhost-identity" }
 serde_json.workspace = true
+regex.workspace = true
 serde.workspace = true
 sha2.workspace = true
 zip.workspace = true

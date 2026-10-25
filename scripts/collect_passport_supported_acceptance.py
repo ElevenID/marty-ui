@@ -7,6 +7,14 @@ Signed simulator callback and nine-route acceptance require a later protected ha
 
 from __future__ import annotations
 
+if __package__:
+    from .passport_model_policy import evaluate as evaluate_passport_policy
+else:
+    try:
+        from passport_model_policy import evaluate as evaluate_passport_policy
+    except ModuleNotFoundError:
+        from scripts.passport_model_policy import evaluate as evaluate_passport_policy
+
 import argparse
 import ipaddress
 import json
@@ -141,15 +149,7 @@ def disposable_context(value: str) -> str:
 
 def environment_flags(values: object, service: str,
                       flags: dict[str, tuple[str, ...]]) -> dict[str, bool]:
-    require(isinstance(values, list), f"Missing {service} runtime environment")
-    result: dict[str, bool] = {}
-    for name in flags[service]:
-        matches = [entry.partition("=")[2] for entry in values
-                   if isinstance(entry, str) and entry.partition("=")[0] == name]
-        require(len(matches) == 1 and matches[0] in ("true", "false"),
-                f"Missing or ambiguous {service} passport selector")
-        result[name] = matches[0] == "true"
-    return result
+    return evaluate_passport_policy("runtime-flags", error_type=SupportedEvidenceError, values=values, service=service, flags=flags[service])
 
 
 def kubernetes_config_value(container: dict, data: dict, name: str) -> object:

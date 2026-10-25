@@ -7,6 +7,14 @@ but never sufficient, for protected Rust acceptance.
 
 from __future__ import annotations
 
+if __package__:
+    from .passport_model_policy import evaluate as evaluate_passport_policy
+else:
+    try:
+        from passport_model_policy import evaluate as evaluate_passport_policy
+    except ModuleNotFoundError:
+        from scripts.passport_model_policy import evaluate as evaluate_passport_policy
+
 import argparse
 from copy import deepcopy
 from datetime import datetime, timezone
@@ -102,54 +110,7 @@ class ModelPreflightError(ValueError):
 
 
 def require_keyless_tls_custody(model: dict) -> None:
-    """Fail the protected producer if key custody or its Auth peer is incomplete."""
-    services = model.get("services")
-    require(isinstance(services, dict) and services, "Keyless TLS service model is missing")
-    openbao = services.get("openbao")
-    require(isinstance(openbao, dict)
-            and openbao.get("environment", {}).get("PASSPORT_BAO_TLS_MODE") == "required"
-            and openbao.get("healthcheck", {}).get("test") == [
-                "CMD", "bao", "status", "-address=https://127.0.0.1:8200",
-                "-ca-cert=/tmp/bao-tls/vault-ca.pem",
-            ]
-            and any(mount.get("type") == "volume"
-                    and mount.get("source") == "openbao_public_ca"
-                    and mount.get("target") == "/bao/public-ca"
-                    for mount in openbao.get("volumes", []))
-            and openbao.get("tmpfs") == ["/tmp/bao-tls:rw,mode=1777"],
-            "Keyless TLS custody requires HTTPS OpenBao and a public CA volume")
-    local_key_setting = re.compile(
-        r".*(?:TLS|MTLS)_(?:(?:CLIENT|SERVER|IDENTITY)_)?"
-        r"(?:PRIVATE_)?KEY(?:_FILE|_PATH)?\Z"
-    )
-    local_key_secret = re.compile(
-        r".*(?:_workload_(?:client|server)_key|_(?:m?tls)_(?:private_)?key)\Z"
-    )
-    for name, service in services.items():
-        environment = service.get("environment", {})
-        require(isinstance(environment, dict), "Keyless TLS environment is invalid")
-        require(not any(local_key_setting.fullmatch(key) for key in environment),
-                f"Keyless TLS custody requires retiring {name} private-key files")
-        require(environment.get("GRPC_INSECURE_ALLOWED") != "true",
-                f"Keyless TLS custody requires authenticated {name} gRPC")
-        require(all(not key.endswith("_GRPC_TARGET") or not value
-                    or str(value).startswith("https://")
-                    for key, value in environment.items()),
-                f"Keyless TLS custody requires HTTPS {name} gRPC targets")
-        require(not any(local_key_secret.fullmatch(
-                    entry if isinstance(entry, str) else entry.get("source", ""))
-                    for entry in service.get("secrets", [])),
-                f"Keyless TLS custody requires retiring {name} private-key mounts")
-    require(not any(local_key_secret.fullmatch(name)
-                    for name in model.get("secrets", {})),
-            "Keyless TLS custody requires retiring private-key secrets")
-    gateway = services.get("gateway")
-    if gateway is not None:
-        require("auth" in services and isinstance(services["auth"], dict),
-                "Keyless TLS custody requires the real Auth service for Gateway")
-        require(gateway.get("environment", {}).get("AUTH_GRPC_TARGET") ==
-                "https://auth:9001",
-                "Keyless TLS custody requires Gateway to use the isolated Auth service")
+    evaluate_passport_policy("keyless-custody", error_type=ModelPreflightError, model=model)
 
 
 def require(condition: bool, message: str) -> None:

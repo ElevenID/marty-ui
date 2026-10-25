@@ -263,6 +263,21 @@ fn run() -> Result<(), String> {
         use marty_deployment_catalog::operator::{self, REFUSAL};
         use std::io::{Read, Write};
         let result = match args.get(1).map(String::as_str) {
+            Some("passport-model") if args.len() == 3 => {
+                let mut input = Vec::new();
+                std::io::stdin()
+                    .take(16 * 1024 * 1024 + 1)
+                    .read_to_end(&mut input)
+                    .map_err(|_| REFUSAL)?;
+                if input.len() > 16 * 1024 * 1024 {
+                    return Err(REFUSAL.into());
+                }
+                let value: Value = serde_json::from_slice(&input).map_err(|_| REFUSAL)?;
+                let result = marty_deployment_catalog::passport_model::evaluate(&args[2], &value);
+                serde_json::to_writer(std::io::stdout(), &result).map_err(|_| REFUSAL)?;
+                Ok(())
+            }
+
             Some(
                 "ca-issuer"
                 | "activation-certificates"
