@@ -455,6 +455,21 @@ mod tests {
         assert!(!error.contains("credential-secret"));
     }
     #[test]
+    fn successful_leader_does_not_leave_pipe_holding_child_running() {
+        let parent = private_temp();
+        // The sleeping child inherits both pipes after its parent exits. A
+        // reader that waits for EOF without cancelling the owned group hangs.
+        let binary = script(parent.path(), "sleep 60 & printf 'done'; exit 0");
+        let runner =
+            BoundedRunner::new(&binary, "unix:///var/run/docker.sock", parent.path()).unwrap();
+        let started = Instant::now();
+        assert_eq!(
+            runner.run(&[], Duration::from_secs(2), 1024).unwrap(),
+            "done"
+        );
+        assert!(started.elapsed() < Duration::from_secs(1));
+    }
+    #[test]
     fn checks_real_stub_info_compose_and_identity_before_commands() {
         let parent = private_temp();
         let body = format!("case \"$1\" in info) printf '%s\\n' '{}' ;; compose) printf '2.39.0\\n' ;; *) exit 9 ;; esac", info());
