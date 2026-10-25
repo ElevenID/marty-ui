@@ -208,6 +208,16 @@ def input_plan() -> dict:
     }
 
 
+def test_native_staging_preserves_twenty_digit_integer_run_ids(tmp_path, monkeypatch):
+    plan = input_plan()
+    plan["run_id"] = 99999999999999999999
+    plan["owner_labels"] = {**LABELS,
+                            "com.marty.passport.acceptance.run-id": str(plan["run_id"])}
+    monkeypatch.setattr(producer.tempfile, "gettempdir", lambda: str(tmp_path))
+    _, env_file = stage_disposable_inputs(plan, 29876, now=NOW)
+    assert "PASSPORT_ACCEPTANCE_PLAN_RUN_ID=99999999999999999999" in env_file.read_text()
+
+
 def test_disposable_inputs_are_fresh_private_and_plan_bound() -> None:
     plan = input_plan()
     project = plan["project"]

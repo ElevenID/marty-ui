@@ -51,7 +51,30 @@ pub struct PreparedCsr {
     algorithm: &'static str,
 }
 
+#[derive(Debug, PartialEq)]
+pub(crate) enum ManagedSignatureError {
+    Encoding,
+    Base64,
+    Verification,
+}
+
 impl PreparedCsr {
+    /// Finish only a DER signature returned by the already authorized remote
+    /// signer. Authorization and the one-use grant stay with the caller.
+    pub(crate) fn finish_managed(
+        self,
+        encoding: Option<&str>,
+        encoded: Option<&str>,
+    ) -> Result<String, ManagedSignatureError> {
+        if encoding != Some("der") {
+            return Err(ManagedSignatureError::Encoding);
+        }
+        let signature = encoded
+            .and_then(|s| URL_SAFE_NO_PAD.decode(s).ok())
+            .ok_or(ManagedSignatureError::Base64)?;
+        self.finish(&signature)
+            .map_err(|_| ManagedSignatureError::Verification)
+    }
     pub fn signing_bytes(&self) -> &[u8] {
         &self.info_der
     }
@@ -232,5 +255,27 @@ mod tests {
         let csr = prepare(&jwk, "ES256", &subject()).unwrap();
         assert!(!csr.signing_bytes().is_empty());
         assert!(csr.finish(&[0u8; 64]).is_err());
+    }
+
+    #[test]
+    fn remote_csr_response_rejects_encoding_base64_and_unbound_signatures() {
+        let jwk = json!({"kty":"EC", "crv":"P-256", "x":URL_SAFE_NO_PAD.encode([0u8;32]), "y":URL_SAFE_NO_PAD.encode([0u8;32])});
+        let csr = || prepare(&jwk, "ES256", &subject()).unwrap();
+        assert_eq!(
+            csr().finish_managed(Some("raw"), Some("AA")),
+            Err(ManagedSignatureError::Encoding)
+        );
+        assert_eq!(
+            csr().finish_managed(Some("der"), None),
+            Err(ManagedSignatureError::Base64)
+        );
+        assert_eq!(
+            csr().finish_managed(Some("der"), Some("not base64")),
+            Err(ManagedSignatureError::Base64)
+        );
+        assert_eq!(
+            csr().finish_managed(Some("der"), Some("AA")),
+            Err(ManagedSignatureError::Verification)
+        );
     }
 }

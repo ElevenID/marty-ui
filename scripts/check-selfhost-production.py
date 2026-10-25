@@ -50,26 +50,22 @@ def validate_openbao_plugin_image(env_values: dict[str, str]) -> str:
 
 def validate_kms_transport(env_values: dict[str, str]) -> str:
     image = env_values.get("MARTY_KEYCLOAK_KMS_IMAGE", "").strip()
-    if re.fullmatch(
-        r"ghcr\.io/elevenid/marty-ui-oss/keycloak@sha256:[0-9a-f]{64}", image
-    ) is None:
-        raise CheckError("MARTY_KEYCLOAK_KMS_IMAGE must pin the released Keycloak digest.")
     origins = {key: value for key, value in env_values.items()
                if key in {"BAO_ADDR", "KEYCLOAK_KMS_ADDR"} or key.endswith("_TLS_KMS_ADDR")}
-    if "BAO_ADDR" not in origins or "KEYCLOAK_KMS_ADDR" not in origins:
-        raise CheckError("Self-host KMS HTTPS origins are incomplete.")
+    observations = {}
     for name, origin in origins.items():
         try:
             parsed = urllib.parse.urlsplit(origin.strip())
             port = parsed.port
         except ValueError as error:
             raise CheckError(f"{name} must be a trusted HTTPS OpenBao origin.") from error
-        if (parsed.scheme != "https" or not parsed.hostname
-                or port == 0
-                or parsed.username is not None or parsed.password is not None
-                or parsed.path not in {"", "/"} or parsed.query or parsed.fragment):
-            raise CheckError(f"{name} must be a trusted HTTPS OpenBao origin.")
-    return f"keycloak_image=immutable https_origins={len(origins)}"
+        observations[name] = {
+            "scheme": parsed.scheme, "hostname": parsed.hostname, "port": port,
+            "userinfo": parsed.username is not None or parsed.password is not None,
+            "path": parsed.path, "query": parsed.query, "fragment": parsed.fragment,
+        }
+    return native_admission("environment-kms-transport", error_type=CheckError,
+                            image=image, origins=observations)
 
 
 class NoRedirectHandler(urllib.request.HTTPRedirectHandler):

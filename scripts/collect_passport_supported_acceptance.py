@@ -254,21 +254,9 @@ def observe_compose(
                 f"{surface} {service} container inspection is ambiguous")
         record = payload[0]
         config, state = record.get("Config"), record.get("State")
-        require(isinstance(config, dict) and isinstance(state, dict),
-                f"{surface} {service} has no runtime state")
-        labels = config.get("Labels")
-        require(isinstance(labels, dict)
-                and labels.get("com.docker.compose.project") == project
-                and labels.get("com.docker.compose.service") == service,
-                f"{surface} {service} is outside the disposable project")
-        require(state.get("Running") is True and state.get("Status") == "running"
-                and (not isinstance(state.get("Health"), dict)
-                     or state["Health"].get("Status") == "healthy"),
-                f"{surface} {service} is not ready")
-        require(config.get("Image") == services_reference
-                and isinstance(record.get("Image"), str)
-                and DIGEST.fullmatch(record["Image"]) is not None,
-                f"{surface} {service} is not running the released services image")
+        evaluate_passport_policy("ownership-runtime-observation", error_type=SupportedEvidenceError,
+                                 record=record, surface=surface, service=service, project=project,
+                                 services_reference=services_reference)
         flags = environment_flags(config.get("Env"), service, COMPOSE_FLAGS)
         require(all(flags.values()), f"{surface} {service} did not select Rust passport")
         if service == "signing-keys":

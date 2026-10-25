@@ -2,6 +2,8 @@
 
 mod compose_model;
 mod deployment_admission;
+mod deployment_environment;
+mod deployment_lifecycle;
 pub mod passport_model;
 
 use serde_json::{Map, Value};

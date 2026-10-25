@@ -827,3 +827,31 @@ The sync reader still drives each chunk through the owned operation/inactivity
 timeout and cancellation path; the other clients retain their total deadlines.
 Pagination parsers are colocated without changing strict sync versus permissive
 catalog handling. The production Python Canvas cutover hold above still applies.
+
+### October 25: shared deployment observations and certificate operations
+
+Rendered support-service admission and live Compose ownership now share native
+service expectations. Model validation retains Organization-bound database and
+tenant values; live inspection retains fixed protected-run identity, duplicate
+environment-key refusal and raw-credential exclusion. Python still reads Docker
+and filesystem observations. Native results contain decisions and public
+readiness metadata, never observed credential-bearing environment maps.
+Supported-consumer runtime image/readiness checks and selfhost KMS transport
+admission also use the matching Rust operator. URL parsing stays with the
+existing adapter to preserve its hostname, port and userinfo semantics.
+
+The same operator validates disposable staging inputs, preserved scoped Raft
+OpenBao custody and partial resume generations. It preserves stopped-old versus
+replacement identity, config hashes, selectors, process bindings, subset network
+admission and exact-network readiness. Existing release attestations, lease and
+filesystem checks, maintenance receipt lineage, SQL fences, production isolation,
+Docker mutations and rollback remain with their protected owners. Static native
+policy does not establish release acceptance or authorize a production cutover.
+
+Signing Keys certificate issuance, enrollment and publication operations are
+separate from the transport router. Shared CSR completion classifies remote DER
+encoding, base64 and signature-verification failures while preserving each
+provider's existing HTTP diagnostics. Issuer and service grants, resolved-key
+checks, CSCA/DSC idempotency and KMS-only custody remain independent. No process
+supervisor, active Canvas compatibility path or physical Passport feature is
+retired by this consolidation.

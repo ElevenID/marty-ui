@@ -22,8 +22,10 @@ from typing import Callable
 import uuid
 
 if __package__:
+    from .passport_model_policy import evaluate as evaluate_policy
     from .passport_disposable_identity import ORGANIZATION_ID
 else:
+    from passport_model_policy import evaluate as evaluate_policy
     from passport_disposable_identity import ORGANIZATION_ID
 
 if __package__:
@@ -40,7 +42,6 @@ if __package__:
     from .passport_supported_provisioning_plan import (
         COMMIT, PLAN_WORKFLOW, RUN_ID, PlanError, _attest, release_inputs,
     )
-    from .passport_supported_infra_images import ROLES
     from .passport_remote_tls import PUBLIC_TLS_FILES
 else:
     from check_passport_supported_compose_ownership import (
@@ -56,7 +57,6 @@ else:
     from passport_supported_provisioning_plan import (
         COMMIT, PLAN_WORKFLOW, RUN_ID, PlanError, _attest, release_inputs,
     )
-    from passport_supported_infra_images import ROLES
     from passport_remote_tls import PUBLIC_TLS_FILES
 
 
@@ -223,27 +223,10 @@ def stage_disposable_inputs(
     until the project-scoped bootstrap mints them.
     """
     project = plan.get("project")
-    match = PROJECT.fullmatch(project) if isinstance(project, str) else None
-    require(match is not None and match.group(1) == plan.get("surface"),
-            "Disposable input project is invalid")
-    require(type(gateway_port) is int and 1024 <= gateway_port <= 65535,
-            "Disposable Gateway port is invalid")
-    require(plan.get("schema") == "marty.passport-supported-provisioning-plan/v1"
-            and plan.get("status") == "blocked"
-            and plan.get("surface") in {"base", "selfhost"}
-            and plan.get("run_id") is not None
-            and RUN_ID.fullmatch(str(plan["run_id"])) is not None
-            and isinstance(plan.get("source_commit"), str)
-            and COMMIT.fullmatch(plan["source_commit"]) is not None,
-            "Disposable input plan is invalid")
-    labels = plan.get("owner_labels")
-    require(isinstance(labels, dict)
-            and labels == {
-                "com.marty.passport.acceptance.owner": "supported-consumer",
-                "com.marty.passport.acceptance.run-id": str(plan["run_id"]),
-                "com.marty.passport.acceptance.source-commit": plan["source_commit"],
-                "com.marty.passport.acceptance.services-image": plan.get("services_reference"),
-            }, "Disposable input owner labels are invalid")
+    # Preserve Python's decimal run-ID representation beyond JSON's u64 range.
+    policy_plan = {**plan, "run_id": str(plan.get("run_id"))}
+    references = evaluate_policy("lifecycle-stage-input", error_type=ProducerError,
+                                 plan=policy_plan, gateway_port=gateway_port)
     try:
         created = datetime.fromisoformat(plan["created_at"])
         expires = datetime.fromisoformat(plan["expires_at"])
@@ -254,19 +237,6 @@ def stage_disposable_inputs(
             and expires.tzinfo is not None
             and created <= current < expires <= created + timedelta(hours=2),
             "Disposable input lease is invalid")
-    images = plan.get("infra_images")
-    require(isinstance(images, dict) and set(images) == set(ROLES),
-            "Disposable infrastructure image set is invalid")
-    references = {
-        "MARTY_SERVICES_IMAGE": plan.get("services_reference"),
-        "PASSPORT_ACCEPTANCE_MIGRATIONS_IMAGE": plan.get("migrations_reference"),
-        **{f"PASSPORT_ACCEPTANCE_{name.upper()}_IMAGE": image
-           for name, image in images.items()},
-    }
-    require(all(isinstance(value, str)
-                and re.fullmatch(r"[^\s]+@sha256:[0-9a-f]{64}", value) is not None
-                for value in references.values()),
-            "Disposable image reference is invalid")
     expires_at = plan.get("expires_at")
     require(isinstance(expires_at, str) and "\r" not in expires_at
             and "\n" not in expires_at,

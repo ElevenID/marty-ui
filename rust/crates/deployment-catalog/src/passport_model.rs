@@ -315,6 +315,10 @@ pub(super) fn service_reuses_credential(input: &Value) -> PolicyResult {
 /// Return a fixed validation error as structured data, never arbitrary input values.
 pub fn evaluate(operation: &str, input: &Value) -> Value {
     let result = match operation {
+        op if op.starts_with("lifecycle-") => super::deployment_lifecycle::evaluate(op, input),
+        op if op.starts_with("ownership-") || op.starts_with("environment-") => {
+            super::deployment_environment::evaluate(op, input)
+        }
         op if op.starts_with("compose-") => super::compose_model::evaluate(op, input),
         op if op.starts_with("kubernetes-") || op.starts_with("selfhost-credential") => {
             super::deployment_admission::evaluate(op, input)
