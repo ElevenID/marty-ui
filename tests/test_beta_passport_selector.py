@@ -1115,3 +1115,15 @@ def test_callback_signer_requires_token_file_preservation(tmp_path, value):
         env["PRESERVE_BAO_TOKEN_FILE"] = value
     with pytest.raises(VALIDATOR["PassportConfigurationError"]):
         validate(candidate)
+
+
+@pytest.mark.parametrize("path", ["/untrusted/../marty", "/%2e/marty", "/marty/."])
+def test_rejects_normalized_database_paths(tmp_path, path):
+    candidate = model(tmp_path)
+    for name in ("issuance-native", "passport-beta-bureau"):
+        candidate["services"][name]["environment"]["DATABASE_URL"] = (
+            "postgresql://marty:synthetic@postgres:5432" + path
+        )
+    with pytest.raises(VALIDATOR["PassportConfigurationError"],
+                       match="database target is invalid"):
+        validate(candidate)

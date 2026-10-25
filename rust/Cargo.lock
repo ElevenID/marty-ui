@@ -4283,6 +4283,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "flate2",
+ "icu_normalizer",
  "libc",
  "marty-crypto",
  "marty-managed-key-reference",

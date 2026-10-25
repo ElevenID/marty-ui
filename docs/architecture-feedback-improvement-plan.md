@@ -800,3 +800,30 @@ subsequent allowance removal. No production process, image or configuration was
 changed by this code cleanup. Historical published-image qualification remains
 independent. Retiring the allowance before that cutover would remove a live
 feature and is deferred rather than silently changing its supported scope.
+
+
+### October 24: Compose policy, signing ceremonies and Canvas response handling
+
+The source-matched Rust deployment operator now owns deterministic supported
+Compose topology/runtime checks and beta simulator/physical-provider admission.
+Python keeps canonical filesystem and mounted-file inspection, rendering, live
+identity/expiry observations, registry loading, provisioning and attestation.
+Both provider modes remain supported; passing static policy does not qualify a
+live release. Installed callers need the matching verified operator containing
+these Compose operations. Credential-bearing inputs remain on bounded stdin.
+Unicode authority validation uses the already locked ICU normalizer; no package
+version is changed.
+
+Gateway and Signing Keys share CSR intent validation and grant field construction
+through `marty-signing-grant`. Gateway keeps authorization and tenant scoping;
+Signing Keys independently checks the resolved KMS key, algorithm and actual
+bytes before consuming the one-use grant. No local signing fallback is added.
+Gateway ceremony orchestration lives in its own module and shares mint-error
+handling without merging the distinct public routes or purposes.
+
+Canvas catalog, OAuth and sync responses share bounded JSON body collection.
+Their status mapping, byte ceilings and pagination policies remain distinct.
+The sync reader still drives each chunk through the owned operation/inactivity
+timeout and cancellation path; the other clients retain their total deadlines.
+Pagination parsers are colocated without changing strict sync versus permissive
+catalog handling. The production Python Canvas cutover hold above still applies.

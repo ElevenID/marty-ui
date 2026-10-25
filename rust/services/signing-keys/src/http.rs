@@ -2543,10 +2543,7 @@ async fn generate_public_issuer_csr(
     if !authorize_issuer_sign(&state, &headers) {
         return public_error(StatusCode::UNAUTHORIZED, "Issuer CSR authority required.");
     }
-    if !(matches!(input.key_purpose.as_str(), "csca" | "x509_doc_signer")
-        || (input.key_purpose == "mdoc_dsc"
-            && input.credential_format.eq_ignore_ascii_case("MDOC")))
-    {
+    if !input.supports_certificate_purpose() {
         return public_error(
             StatusCode::UNPROCESSABLE_ENTITY,
             "Issuer CSR purpose or format is unsupported.",
@@ -2644,18 +2641,12 @@ async fn generate_public_issuer_csr(
     };
     let route = "/v1/signing-keys/issuer-identities/certificate-csr";
     let payload = input.bound_payload();
-    let intent = GrantBinding {
-        origin: SigningOrigin::GatewayIssuerDid,
-        operation_id: &envelope.claims.operation_id,
-        organization_id: &scope.organization_id,
+    let intent = input.grant_binding(
+        &envelope.claims.operation_id,
+        &scope.organization_id,
         route,
-        service_id: None,
-        issuer_did: Some(&input.issuer_did),
-        key_reference: None,
-        key_purpose: &input.key_purpose,
-        algorithm: &input.algorithm,
-        payload: &payload,
-    };
+        &payload,
+    );
     let consumed = match consume_bound_signing_grant(&state, header, &intent).await {
         Ok(consumed) => consumed,
         Err(GrantAuthorizationError::Denied) => {
@@ -6406,18 +6397,13 @@ async fn generate_public_service_csr(
     };
     let route = format!("/v1/signing-keys/services/{service_id}/certificate-csr");
     let intent_payload = input.bound_payload();
-    let intent = GrantBinding {
-        origin: SigningOrigin::GatewayService,
-        operation_id: &envelope.claims.operation_id,
-        organization_id: &scope.organization_id,
-        route: &route,
-        service_id: Some(&service_id),
-        issuer_did: None,
-        key_reference: Some(&input.key_reference),
-        key_purpose: "x509_csr",
-        algorithm,
-        payload: &intent_payload,
-    };
+    let intent = input.grant_binding(
+        &envelope.claims.operation_id,
+        &scope.organization_id,
+        &route,
+        &service_id,
+        &intent_payload,
+    );
     let consumed = match consume_bound_signing_grant(&state, header, &intent).await {
         Ok(consumed) => consumed,
         Err(GrantAuthorizationError::Denied) => {

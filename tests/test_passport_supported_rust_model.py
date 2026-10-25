@@ -1132,3 +1132,27 @@ def test_disposable_registry_verifier_requires_its_dedicated_secret(tmp_path: Pa
     service["secrets"] = [secret for secret in service["secrets"] if secret["source"] != "signing_keys_internal_api_key"]
     with pytest.raises(ModelPreflightError, match="presentation-policy runtime"):
         validate_model(model, PROJECT, IMAGE, tmp_path)
+
+
+@pytest.mark.parametrize("external", [1, 1.0])
+@pytest.mark.parametrize("section", ["networks", "volumes"])
+def test_numeric_external_resources_are_not_disposable(tmp_path, external, section):
+    candidate = safe_model(tmp_path)
+    next(iter(candidate[section].values()))["external"] = external
+    with pytest.raises(ModelPreflightError, match="external or shared"):
+        validate_model(candidate, PROJECT, IMAGE, tmp_path)
+
+
+@pytest.mark.parametrize("endpoint", ["http://%67ateway:8000", "https://[gateway]", "https://user[bad@gateway", "https://user\uff0fname@gateway"])
+def test_endpoint_authority_cannot_be_repaired_into_a_private_peer(tmp_path, endpoint):
+    candidate = safe_model(tmp_path)
+    candidate["services"]["gateway"]["environment"]["EXTRA_ENDPOINT"] = endpoint
+    with pytest.raises(ModelPreflightError, match="endpoint leaves"):
+        validate_model(candidate, PROJECT, IMAGE, tmp_path)
+
+
+def test_network_list_does_not_drop_untyped_members(tmp_path):
+    candidate = safe_model(tmp_path)
+    candidate["services"]["gateway"]["networks"] = ["private", 123]
+    with pytest.raises(ModelPreflightError, match="callback signing boundary"):
+        validate_model(candidate, PROJECT, IMAGE, tmp_path)

@@ -224,7 +224,7 @@ impl CanvasCatalogProvider for HttpCanvasCatalogProvider {
                     status.as_u16()
                 )));
             }
-            let next = next_link(response.headers());
+            let next = crate::canvas_http_response::catalog_next_link(response.headers());
             let payload = limited_json(response).await?;
             let page = match payload {
                 Value::Array(values) => values,
@@ -413,50 +413,11 @@ fn float_value(value: &Value) -> Option<f64> {
     }
 }
 
-async fn limited_json(mut response: Response) -> Result<Value, CanvasCatalogProviderError> {
-    if response
-        .content_length()
-        .is_some_and(|length| length > COLLECTION_PAGE_MAX_BYTES as u64)
-    {
-        return Err(CanvasCatalogProviderError::TemporarilyUnavailable {
+async fn limited_json(response: Response) -> Result<Value, CanvasCatalogProviderError> {
+    crate::canvas_http_response::bounded_json(response, COLLECTION_PAGE_MAX_BYTES)
+        .await
+        .map_err(|_| CanvasCatalogProviderError::TemporarilyUnavailable {
             retry_after_seconds: None,
-        });
-    }
-    let mut body = Vec::new();
-    while let Some(chunk) =
-        response
-            .chunk()
-            .await
-            .map_err(|_| CanvasCatalogProviderError::TemporarilyUnavailable {
-                retry_after_seconds: None,
-            })?
-    {
-        if body.len().saturating_add(chunk.len()) > COLLECTION_PAGE_MAX_BYTES {
-            return Err(CanvasCatalogProviderError::TemporarilyUnavailable {
-                retry_after_seconds: None,
-            });
-        }
-        body.extend_from_slice(&chunk);
-    }
-    serde_json::from_slice(&body).map_err(|_| CanvasCatalogProviderError::TemporarilyUnavailable {
-        retry_after_seconds: None,
-    })
-}
-
-fn next_link(headers: &header::HeaderMap) -> Option<String> {
-    headers
-        .get_all(header::LINK)
-        .iter()
-        .filter_map(|value| value.to_str().ok())
-        .flat_map(|value| value.split(','))
-        .find_map(|entry| {
-            let (target, parameters) = entry.trim().split_once('>')?;
-            let target = target.trim().strip_prefix('<')?;
-            parameters
-                .split(';')
-                .map(str::trim)
-                .any(|parameter| parameter == "rel=\"next\"" || parameter == "rel=next")
-                .then(|| target.to_owned())
         })
 }
 

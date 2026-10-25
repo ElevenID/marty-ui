@@ -18,6 +18,7 @@ pub mod canvas_award_candidate_postgres;
 pub mod canvas_award_candidate_service;
 pub mod canvas_binding_domain;
 pub mod canvas_catalog;
+mod canvas_http_response;
 mod canvas_claim_projection;
 mod canvas_content_decoder;
 pub mod canvas_credentials_delivery_config;

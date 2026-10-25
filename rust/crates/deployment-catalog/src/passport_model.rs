@@ -262,23 +262,26 @@ fn contains_credential(input: &Value) -> PolicyResult {
     let credential = input["credential"]
         .as_str()
         .ok_or("Passport credential marker is invalid")?;
-    let mut pending = vec![&input["value"]];
+    Ok(json!(contains_marker(&input["value"], credential)))
+}
+pub(super) fn contains_marker(value: &Value, credential: &str) -> bool {
+    let mut pending = vec![value];
     while let Some(value) = pending.pop() {
         match value {
-            Value::String(s) if s.contains(credential) => return Ok(json!(true)),
+            Value::String(s) if s.contains(credential) => return true,
             Value::Array(a) => pending.extend(a),
             Value::Object(m) => {
                 if m.keys().any(|k| k.contains(credential)) {
-                    return Ok(json!(true));
+                    return true;
                 }
                 pending.extend(m.values());
             }
             _ => {}
         }
     }
-    Ok(json!(false))
+    false
 }
-fn service_reuses_credential(input: &Value) -> PolicyResult {
+pub(super) fn service_reuses_credential(input: &Value) -> PolicyResult {
     let name = input["name"]
         .as_str()
         .ok_or("Passport service name is invalid")?;
@@ -312,6 +315,7 @@ fn service_reuses_credential(input: &Value) -> PolicyResult {
 /// Return a fixed validation error as structured data, never arbitrary input values.
 pub fn evaluate(operation: &str, input: &Value) -> Value {
     let result = match operation {
+        op if op.starts_with("compose-") => super::compose_model::evaluate(op, input),
         op if op.starts_with("kubernetes-") || op.starts_with("selfhost-credential") => {
             super::deployment_admission::evaluate(op, input)
         }

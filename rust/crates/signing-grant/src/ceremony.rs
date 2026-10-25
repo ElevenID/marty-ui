@@ -1,5 +1,6 @@
 //! Canonical, public inputs for a Gateway-authorized service CSR ceremony.
 
+use crate::{GrantBinding, SigningOrigin};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize)]
@@ -24,6 +25,35 @@ struct BoundServiceCsrIntent<'a> {
 }
 
 impl ServiceCsrIntent {
+    pub fn has_valid_key_request(&self) -> bool {
+        !self.key_reference.is_empty()
+            && self.key_reference == self.key_reference.trim()
+            && matches!(self.algorithm.as_str(), "ES256" | "ES384" | "ES512")
+    }
+    /// Bind only public intent. Authorization, key resolution and one-use
+    /// consumption remain independent at producer and consumer boundaries.
+    pub fn grant_binding<'a>(
+        &'a self,
+        operation_id: &'a str,
+        organization_id: &'a str,
+        route: &'a str,
+        service_id: &'a str,
+        payload: &'a [u8],
+    ) -> GrantBinding<'a> {
+        GrantBinding {
+            origin: SigningOrigin::GatewayService,
+            operation_id,
+            organization_id,
+            route,
+            service_id: Some(service_id),
+            issuer_did: None,
+            key_reference: Some(&self.key_reference),
+            key_purpose: "x509_csr",
+            algorithm: &self.algorithm,
+            payload,
+        }
+    }
+
     /// The tenant and service ID are separate grant fields. Serialize the
     /// remaining signed intent once in shared Rust code for both producer and
     /// consumer; the eventual CSR DER is bound again at the KMS call.
@@ -67,6 +97,37 @@ struct BoundIssuerCsrIntent<'a> {
 }
 
 impl IssuerCsrIntent {
+    pub fn supports_certificate_purpose(&self) -> bool {
+        matches!(self.key_purpose.as_str(), "csca" | "x509_doc_signer")
+            || (self.key_purpose == "mdoc_dsc"
+                && self.credential_format.eq_ignore_ascii_case("MDOC"))
+    }
+    pub fn has_valid_certificate_identity(&self) -> bool {
+        self.issuer_did.starts_with("did:")
+            && self.supports_certificate_purpose()
+            && matches!(self.algorithm.as_str(), "ES256" | "ES384" | "ES512")
+    }
+    pub fn grant_binding<'a>(
+        &'a self,
+        operation_id: &'a str,
+        organization_id: &'a str,
+        route: &'a str,
+        payload: &'a [u8],
+    ) -> GrantBinding<'a> {
+        GrantBinding {
+            origin: SigningOrigin::GatewayIssuerDid,
+            operation_id,
+            organization_id,
+            route,
+            service_id: None,
+            issuer_did: Some(&self.issuer_did),
+            key_reference: None,
+            key_purpose: &self.key_purpose,
+            algorithm: &self.algorithm,
+            payload,
+        }
+    }
+
     /// The authenticated tenant and route are separate grant fields; the
     /// resolved KMS key and generated CSR bytes are bound at final signing.
     pub fn bound_payload(&self) -> Vec<u8> {
