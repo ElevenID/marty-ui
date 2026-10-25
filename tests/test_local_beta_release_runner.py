@@ -1,4 +1,5 @@
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -156,8 +157,9 @@ def test_beta_runtime_bind_mounts_survive_release_worktree_removal() -> None:
             line.lstrip().startswith("- ./") for line in compose.splitlines()
         )
 
+    native = text("rust/crates/deployment-catalog/src/beta_runtime_config.rs")
     staged = set(re.findall(r'"([A-Za-z0-9_./-]+)"',
-                           deploy.split("$runtimeSources = @(", 1)[1].split("\n    )", 1)[0]))
+                           native.split("const SOURCES:", 1)[1].split("];", 1)[0]))
     for compose_path in beta_compose_paths:
         for required in re.findall(r'\$\{MARTY_RUNTIME_CONFIG_ROOT:-\.\}/([A-Za-z0-9_./-]+)', text(compose_path)):
             assert (ROOT / required).exists(), f"Missing source runtime input: {required}"
@@ -166,10 +168,11 @@ def test_beta_runtime_bind_mounts_survive_release_worktree_removal() -> None:
                        for source in staged), f"Runtime input omitted from durable staging: {required}"
 
     assert "function Initialize-DurableRuntimeConfig" in deploy
-    assert "rev-parse --path-format=absolute --git-common-dir" in deploy
-    assert '"tests\\artifacts\\runtime-config"' in deploy
-    assert "marty_ui_revision = $SourceRevision" in deploy
-    assert '"runtime-config-manifest.json"' in deploy
+    assert '"--path-format=absolute", "--git-common-dir"' in native
+    assert '"tests/artifacts/runtime-config"' in native
+    assert '"marty_ui_revision"' in native
+    assert "stage_beta_runtime_config.py" in deploy
+    assert '"runtime-config-manifest.json"' in native
     assert "$env:MARTY_RUNTIME_CONFIG_ROOT = $script:RuntimeConfigRoot" in deploy
     assert "runtime_config_manifest_sha256 = Get-FileSha256" in deploy
     assert deploy.index('"--verify-manifest", $sourceManifestPath') < deploy.index(
@@ -187,7 +190,7 @@ def test_beta_runtime_bind_mounts_survive_release_worktree_removal() -> None:
         "docker/waltid/wallet-api/config",
         "nginx-tunnel.conf.template",
     ):
-        assert f'"{required_source}"' in deploy
+        assert f'"{required_source}"' in native
 
 
 def test_keycloak_custom_theme_is_source_pinned_and_mounted_read_only() -> None:
@@ -1053,3 +1056,40 @@ try {
     else:
         assert result.returncode != 0
         assert "commit must match source manifest repository" in result.stderr
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows PowerShell 5 native-output codepage contract")
+def test_native_runtime_staging_preserves_unicode_paths_through_windows_powershell(tmp_path):
+    import base64
+    import sys
+    shell = shutil.which("powershell.exe")
+    assert shell
+    directory = tmp_path / "caf\u00e9-\u6771\u4eac"
+    directory.mkdir()
+    manifest = directory / "runtime-config-manifest.json"
+    manifest.write_text("{}")
+    driver = tmp_path / "native_adapter_driver.py"
+    driver.write_text(
+        "import json, runpy, sys\n"
+        f"sys.path.insert(0, {str(ROOT / 'scripts')!r})\n"
+        f"scope=runpy.run_path({str(ROOT / 'scripts/stage_beta_runtime_config.py')!r})\n"
+        f"value={{'root':{str(directory)!r},'manifest':{str(manifest)!r}}}\n"
+        "scope['main'].__globals__['operator_bytes']=lambda *a,**k: json.dumps(value,ensure_ascii=False).encode('utf-8')\n"
+        "sys.argv=['stage_beta_runtime_config.py','--source-revision','a'*40]\n"
+        "scope['main']()\n", encoding="utf-8")
+    source = text("scripts/deploy-local-beta-release.ps1")
+    function = re.search(r"^function Initialize-DurableRuntimeConfig\(.*?^\}", source, re.M | re.S).group()
+    def quote(value):
+        return "'" + str(value).replace("'", "''") + "'"
+    script = tmp_path / "unicode-contract.ps1"
+    script.write_text(
+        "$ErrorActionPreference='Stop'\n[Console]::OutputEncoding=[Text.Encoding]::GetEncoding(437)\n"
+        f"$script:RepoRoot={quote(ROOT)}\n"
+        f"function python {{ & {quote(sys.executable)} {quote(driver)} }}\n"
+        + function + "\nInitialize-DurableRuntimeConfig -SourceRevision ('a'*40)\n"
+        + "[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($script:RuntimeConfigRoot))\n",
+        encoding="utf-8-sig")
+    result = subprocess.run([shell, "-NoProfile", "-NonInteractive", "-File", str(script)],
+                            text=True, capture_output=True, timeout=30)
+    assert result.returncode == 0, result.stderr
+    assert Path(base64.b64decode(result.stdout.strip()).decode("utf-8")) == directory

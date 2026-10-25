@@ -85,6 +85,9 @@ mod bounded_fixture_command;
 #[path = "../../../services/issuance/tests/support/canvas_published_database.rs"]
 mod canvas_published_database;
 
+#[path = "../../../services/issuance/tests/support/canvas_replay_control.rs"]
+mod canvas_replay_control;
+
 #[path = "../../../services/issuance/tests/support/canvas_worker_deadline_replay.rs"]
 mod canvas_worker_deadline_replay;
 

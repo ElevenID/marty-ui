@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import sys
+import json
 
 import yaml
 
@@ -80,5 +81,6 @@ def test_production_catalog_and_deploy_script_require_the_dedicated_key() -> Non
     assert secret["placeholder_disallowed"] is True
 
     deploy = (ROOT / "scripts/deploy-kubernetes.sh").read_text(encoding="utf-8")
-    assert "resolve_secret_input FLOW_APPLICATION_EVENT_HMAC_KEY" in deploy
-    assert '--from-literal=FLOW_APPLICATION_EVENT_HMAC_KEY=' in deploy
+    spec = json.loads((ROOT / "deploy-config/catalog/kubernetes-secrets.json").read_text())
+    assert spec["secrets"][0]["fields"][ENV_NAME] == {"env": ENV_NAME}
+    assert 'kubernetes-secrets "$K8S_STACK_NAME" "$NAMESPACE"' in deploy

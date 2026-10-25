@@ -264,15 +264,14 @@ async fn await_marker(
     seconds: u64,
 ) -> Checked<()> {
     let path = marker(control, name)?;
-    tokio::time::timeout(Duration::from_secs(seconds), async {
-        while !path.is_file() {
-            alive(worker)?;
-            tokio::time::sleep(Duration::from_millis(10)).await;
+    // Keep the expiry scenario's stricter owned-file check before final liveness.
+    super::canvas_replay_control::wait_for_marker(&path, seconds, || {
+        if path.is_file() {
+            require(
+                !path.is_symlink(),
+                "native expiry marker is not an owned regular file",
+            )?;
         }
-        require(
-            !path.is_symlink(),
-            "native expiry marker is not an owned regular file",
-        )?;
         alive(worker)
     })
     .await

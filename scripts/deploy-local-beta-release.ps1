@@ -592,98 +592,11 @@ function Get-PreparedLocalBetaImage([string]$Reference, [string]$Role) {
 }
 
 function Initialize-DurableRuntimeConfig([string]$SourceRevision) {
-    $commonGitDirOutput = & git -C $script:RepoRoot rev-parse --path-format=absolute --git-common-dir
-    if ($LASTEXITCODE -ne 0) {
-        throw "Could not resolve the primary marty-ui checkout for durable beta runtime configuration"
-    }
-    $commonGitDir = [IO.Path]::GetFullPath([string]($commonGitDirOutput | Select-Object -Last 1))
-    $primaryCheckoutRoot = Split-Path -Parent $commonGitDir
-    $durableArtifactRoot = Join-Path $primaryCheckoutRoot "tests\artifacts\runtime-config"
-    New-Item -ItemType Directory -Path $durableArtifactRoot -Force | Out-Null
-    $durableArtifactRoot = (Resolve-Path -LiteralPath $durableArtifactRoot).Path
-
-    $runtimeConfigRoot = Join-Path $durableArtifactRoot $SourceRevision
-    $stagingRoot = Join-Path $durableArtifactRoot ("{0}.staging.{1}" -f $SourceRevision, [Guid]::NewGuid().ToString("N"))
-    $allowedPrefix = $durableArtifactRoot.TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
-    foreach ($candidate in @($runtimeConfigRoot, $stagingRoot)) {
-        $absoluteCandidate = [IO.Path]::GetFullPath($candidate)
-        if (-not $absoluteCandidate.StartsWith($allowedPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
-            throw "Durable runtime configuration must stay under $durableArtifactRoot"
-        }
-    }
-
-    $runtimeSources = @(
-        "docker/init-databases.sh",
-        "config/keycloak",
-        "scripts/setup-keycloak.sh",
-        "docker/openbao-selfhost.hcl",
-        "docker/openbao-init.sh",
-        "docker/openbao-selfhost-init.sh",
-        "docker/openbao-haip-workload-policy.hcl",
-        "config/envoy/envoy.yaml",
-        "config/envoy/proto_descriptor.pb",
-        "docker/canvas-localhost-bridge/Cargo.toml",
-        "docker/canvas-localhost-bridge/Cargo.lock",
-        "docker/canvas-localhost-bridge/Dockerfile",
-        "docker/canvas-localhost-bridge/src/main.rs",
-        "config/canvas/production-local.rb",
-        "config/canvas/dynamic_settings.local.yml",
-        "config/canvas/session_store.local.yml",
-        "docker/waltid/wallet-api/config",
-        "docker/waltid/nginx.conf",
-        "nginx-tunnel.conf.template",
-        "scripts/nginx-entrypoint.sh"
-    )
-
-    New-Item -ItemType Directory -Path $stagingRoot | Out-Null
-    try {
-        foreach ($relativePath in $runtimeSources) {
-            $sourcePath = Join-Path $script:RepoRoot $relativePath
-            if (-not (Test-Path -LiteralPath $sourcePath)) {
-                throw "Required beta runtime configuration is missing: $relativePath"
-            }
-            $destinationPath = Join-Path $stagingRoot $relativePath
-            New-Item -ItemType Directory -Path (Split-Path -Parent $destinationPath) -Force | Out-Null
-            Copy-Item -LiteralPath $sourcePath -Destination $destinationPath -Recurse -Force
-        }
-
-        $stagingPrefix = $stagingRoot.TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
-        $runtimeFiles = @(Get-ChildItem -LiteralPath $stagingRoot -File -Recurse | Sort-Object FullName | ForEach-Object {
-            [ordered]@{
-                path = $_.FullName.Substring($stagingPrefix.Length).Replace("\", "/")
-                size = $_.Length
-                sha256 = Get-FileSha256 $_.FullName
-            }
-        })
-        $runtimeConfigManifest = [ordered]@{
-            schema_version = 1
-            marty_ui_revision = $SourceRevision
-            files = $runtimeFiles
-        }
-        $stagedManifestPath = Join-Path $stagingRoot "runtime-config-manifest.json"
-        Write-Utf8Text -Path $stagedManifestPath -Content (($runtimeConfigManifest | ConvertTo-Json -Depth 5) + "`n")
-
-        if (Test-Path -LiteralPath $runtimeConfigRoot -PathType Container) {
-            $existingManifestPath = Join-Path $runtimeConfigRoot "runtime-config-manifest.json"
-            if (-not (Test-Path -LiteralPath $existingManifestPath -PathType Leaf) -or
-                (Get-FileSha256 $existingManifestPath) -ne (Get-FileSha256 $stagedManifestPath)) {
-                throw "Durable runtime configuration conflicts with content-addressed revision $SourceRevision"
-            }
-            Remove-Item -LiteralPath $stagingRoot -Recurse -Force
-        }
-        else {
-            Move-Item -LiteralPath $stagingRoot -Destination $runtimeConfigRoot
-        }
-    }
-    catch {
-        if (Test-Path -LiteralPath $stagingRoot) {
-            Remove-Item -LiteralPath $stagingRoot -Recurse -Force
-        }
-        throw
-    }
-
-    $script:RuntimeConfigRoot = (Resolve-Path -LiteralPath $runtimeConfigRoot).Path
-    $script:RuntimeConfigManifestPath = Join-Path $script:RuntimeConfigRoot "runtime-config-manifest.json"
+    $result = & python (Join-Path $script:RepoRoot "scripts/stage_beta_runtime_config.py") --source-revision $SourceRevision
+    if ($LASTEXITCODE -ne 0) { throw "Rust beta runtime configuration staging failed" }
+    $staged = ($result -join "`n") | ConvertFrom-Json
+    $script:RuntimeConfigRoot = (Resolve-Path -LiteralPath $staged.root).Path
+    $script:RuntimeConfigManifestPath = (Resolve-Path -LiteralPath $staged.manifest).Path
     $env:MARTY_RUNTIME_CONFIG_ROOT = $script:RuntimeConfigRoot
 }
 
