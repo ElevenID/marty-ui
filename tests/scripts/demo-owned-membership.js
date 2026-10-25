@@ -35,6 +35,7 @@ function createOwnedMembership(operator, inputs) {
         display_icon: claim.display_icon || null,
       }));
       payload.application_template_id = null;
+      payload.supported_formats = [credential.credential_payload_format];
       const ownCredential = await createOwnedActiveConfiguration(operator, owned, {
         collectionPath: '/v1/credential-templates', name: 'First-party membership credential', payload,
       });

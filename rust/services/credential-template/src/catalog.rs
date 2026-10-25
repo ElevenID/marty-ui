@@ -12,6 +12,9 @@ use crate::{
 
 const MARTY_LOGIN_BADGE_ID: &str = "50000000-0000-0000-0000-000000000040";
 const OPEN_BADGES_PROFILE_ID: &str = "10000000-0000-0000-0000-000000000003";
+// The seeded membership badge and its compliance profile share this contract.
+// Open Badges' JWT proof wraps the credential as VC-JWT, not SD-JWT VC.
+pub const OPEN_BADGES_CREDENTIAL_FORMAT: CredentialFormat = CredentialFormat::VcJwt;
 const MARTY_LOGIN_TRUST_PROFILE_ID: &str = "60000000-0000-0000-0000-000000000001";
 const MARTY_REVOCATION_PROFILE_ID: &str = "70000000-0000-0000-0000-000000000001";
 
@@ -490,7 +493,7 @@ pub fn marty_login_badge(
         },
         validity_rules: ValidityRules::default(),
         issuer_requirements: IssuerRequirements::default(),
-        supported_formats: vec![CredentialFormat::VcJwt],
+        supported_formats: vec![OPEN_BADGES_CREDENTIAL_FORMAT],
         credential_payload_format: "jwt_vc".to_owned(),
         wallet_configs: Vec::new(),
         compliance_profile: Some(json!({
