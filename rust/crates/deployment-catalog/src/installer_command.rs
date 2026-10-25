@@ -282,7 +282,34 @@ pub fn install(args: &[String], build_identity: &str) -> Result<()> {
         &serde_json::to_vec(&bundle).map_err(|_| "cannot encode bundle validation")?,
     )?;
     state.advance(Phase::Verified)?;
-    let realm_path = prepared.bundle.join("config/keycloak/11id-realm.json");
+    provision_runtime(
+        docker,
+        &directory,
+        &prepared.bundle,
+        &prepared.inventory,
+        &mut state,
+        &operator_sha,
+        port_reservation,
+    )
+}
+
+/// Shared runtime stage for independently authenticated release entry points.
+/// The caller must authenticate the inventory and operator, validate the bundle,
+/// persist that evidence, and retain exclusive private-path ownership. This
+/// function grants no admission and does not advance the installation to Ready.
+/// Ownership of the port reservation preserves its lifetime through credential
+/// generation; the exact existing release point precedes OpenBao creation.
+pub(crate) fn provision_runtime(
+    docker: &Path,
+    installation: &Path,
+    bundle: &Path,
+    inventory: &release::Inventory,
+    state: &mut InstallerState,
+    operator_sha: &str,
+    port_reservation: std::net::TcpListener,
+) -> Result<()> {
+    state.require_live_phase(Phase::Verified)?;
+    let realm_path = bundle.join("config/keycloak/11id-realm.json");
     let realm: serde_json::Value = serde_json::from_slice(
         &std::fs::read(realm_path).map_err(|_| "packaged Keycloak realm unavailable")?,
     )
@@ -290,52 +317,45 @@ pub fn install(args: &[String], build_identity: &str) -> Result<()> {
     state.advance(Phase::Provisioning)?;
     state.generate_local_credentials(&realm)?;
     drop(port_reservation);
-    let plugin = prepared
-        .inventory
+    let plugin = inventory
         .images
         .get("openbao_didcomm_image")
         .ok_or("admitted OpenBao image missing")?;
-    let infrastructure = crate::installer_openbao::start_openbao(
-        docker,
-        &directory,
-        &prepared.bundle,
-        &state,
-        plugin,
-    )?;
+    let infrastructure =
+        crate::installer_openbao::start_openbao(docker, installation, bundle, state, plugin)?;
     state.write_evidence(
         "openbao-observation.json",
         &serde_json::to_vec(&infrastructure).map_err(|_| "cannot encode OpenBao observation")?,
     )?;
     let keycloak = crate::installer_keycloak::provision(
         docker,
-        &directory,
-        &prepared.bundle,
-        &mut state,
+        installation,
+        bundle,
+        state,
         &infrastructure,
-        &operator_sha,
+        operator_sha,
     )?;
     state.write_evidence(
         "keycloak-observation.json",
         &serde_json::to_vec(&keycloak).map_err(|_| "cannot encode Keycloak observation")?,
     )?;
-    let services_image = prepared
-        .inventory
+    let services_image = inventory
         .images
         .get("gateway")
         .ok_or("admitted gateway image missing")?;
-    if prepared.inventory.images.get("signing-keys") != Some(services_image) {
+    if inventory.images.get("signing-keys") != Some(services_image) {
         return Err(
             "TLS bootstrap requires identical admitted gateway and signing-keys images".into(),
         );
     }
     let tls = crate::installer_tls::provision(
         docker,
-        &directory,
-        &prepared.bundle,
-        &mut state,
+        installation,
+        bundle,
+        state,
         &infrastructure,
         services_image,
-        &operator_sha,
+        operator_sha,
     )?;
     state.write_evidence(
         "tls-observation.json",
@@ -343,12 +363,12 @@ pub fn install(args: &[String], build_identity: &str) -> Result<()> {
     )?;
     let ingress = crate::installer_ingress::provision(
         docker,
-        &directory,
-        &prepared.bundle,
-        &mut state,
+        installation,
+        bundle,
+        state,
         &infrastructure,
         services_image,
-        &operator_sha,
+        operator_sha,
     )?;
     state.write_evidence(
         "ingress-observation.json",
@@ -356,12 +376,12 @@ pub fn install(args: &[String], build_identity: &str) -> Result<()> {
     )?;
     let renewal = crate::installer_renewal::provision(
         docker,
-        &directory,
-        &prepared.bundle,
-        &mut state,
+        installation,
+        bundle,
+        state,
         &infrastructure,
         services_image,
-        &operator_sha,
+        operator_sha,
     )?;
     state.write_evidence(
         "renewal-observation.json",
@@ -369,12 +389,12 @@ pub fn install(args: &[String], build_identity: &str) -> Result<()> {
     )?;
     let generation = crate::installer_generation_host::provision(
         docker,
-        &directory,
-        &prepared.bundle,
-        &mut state,
+        installation,
+        bundle,
+        state,
         &infrastructure,
         services_image,
-        &operator_sha,
+        operator_sha,
     )?;
     state.write_evidence(
         "generation-observation.json",
@@ -382,17 +402,17 @@ pub fn install(args: &[String], build_identity: &str) -> Result<()> {
     )?;
     let application = crate::installer_application::prepare_with_generation(
         docker,
-        &directory,
-        &prepared.bundle,
-        &mut state,
+        installation,
+        bundle,
+        state,
         &infrastructure,
-        &prepared.inventory.images,
+        &inventory.images,
     )?;
     crate::installer_application_start::start(
         docker,
-        &directory,
-        &prepared.bundle,
-        &mut state,
+        installation,
+        bundle,
+        state,
         &infrastructure,
         application,
     )?;
@@ -402,6 +422,45 @@ pub fn install(args: &[String], build_identity: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn shared_runtime_refuses_unverified_state_before_reading_bundle_or_running_docker() {
+        use std::os::unix::fs::PermissionsExt;
+        let parent = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(parent.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let directory = parent.path().join("installation");
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/installer-candidate-records.json"
+        ))
+        .unwrap();
+        let inventory_bytes = fixture["inventory"].as_str().unwrap().as_bytes();
+        let inventory = release::parse_inventory(inventory_bytes).unwrap();
+        let mut state = InstallerState::create(
+            &directory,
+            Identity {
+                source_sha: inventory.source_sha.clone(),
+                release_tag: inventory.release_tag.clone(),
+                inventory_sha256: format!("sha256:{}", release::sha256(inventory_bytes)),
+            },
+        )
+        .unwrap();
+        let before = std::fs::read(directory.join("installation.json")).unwrap();
+        let result = provision_runtime(
+            Path::new("/nonexistent-docker"),
+            &directory,
+            &directory.join("nonexistent-bundle"),
+            &inventory,
+            &mut state,
+            &"a".repeat(64),
+            std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap(),
+        );
+        assert!(result.is_err());
+        assert_eq!(
+            std::fs::read(directory.join("installation.json")).unwrap(),
+            before
+        );
+        assert!(!directory.join("secrets").exists());
+    }
+
     #[test]
     fn refuses_unknown_duplicate_partial_and_unsafe_inputs() {
         for args in [
