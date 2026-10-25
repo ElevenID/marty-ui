@@ -18,6 +18,8 @@ pub mod installer_command;
 pub mod installer_openbao;
 pub mod installer_keycloak_bridge;
 pub mod installer_keycloak;
+pub mod installer_tls;
+pub mod installer_tls_outputs;
 
 use serde_json::{Map, Value};
 use std::collections::HashSet;

@@ -318,7 +318,30 @@ pub fn install(args: &[String], build_identity: &str) -> Result<()> {
         "keycloak-observation.json",
         &serde_json::to_vec(&keycloak).map_err(|_| "cannot encode Keycloak observation")?,
     )?;
-    Err("OpenBao and Keycloak provisioning recorded; workload TLS, application and local HTTPS stages are not yet implemented. Installation is incomplete; preserve the reported state for recovery.".into())
+    let services_image = prepared
+        .inventory
+        .images
+        .get("gateway")
+        .ok_or("admitted gateway image missing")?;
+    if prepared.inventory.images.get("signing-keys") != Some(services_image) {
+        return Err(
+            "TLS bootstrap requires identical admitted gateway and signing-keys images".into(),
+        );
+    }
+    let tls = crate::installer_tls::provision(
+        docker,
+        &directory,
+        &prepared.bundle,
+        &mut state,
+        &infrastructure,
+        services_image,
+        &operator_sha,
+    )?;
+    state.write_evidence(
+        "tls-observation.json",
+        &serde_json::to_vec(&tls).map_err(|_| "cannot encode TLS observation")?,
+    )?;
+    Err("OpenBao, Keycloak and workload TLS provisioning recorded; application and local HTTPS stages are not yet implemented. Installation is incomplete; preserve the reported state for recovery.".into())
 }
 
 #[cfg(test)]

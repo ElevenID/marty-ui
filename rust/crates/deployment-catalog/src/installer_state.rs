@@ -372,7 +372,14 @@ impl InstallerState {
     /// Create one owned runtime/staging directory without adopting existing data.
     pub fn create_private_directory(&mut self, entry: &str) -> Result<()> {
         if self.poisoned
-            || !["downloads", "evidence", "openbao-state", "keycloak-output"].contains(&entry)
+            || ![
+                "downloads",
+                "evidence",
+                "openbao-state",
+                "keycloak-output",
+                "tls-output",
+            ]
+            .contains(&entry)
         {
             return Err("invalid or uncertain installer directory operation".into());
         }
