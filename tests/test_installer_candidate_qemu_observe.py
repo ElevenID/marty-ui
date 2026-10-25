@@ -184,3 +184,39 @@ def test_observation_output_is_exclusive_and_bound_to_held_directory(tmp_path):
         assert not (output / "second.post-install-observation.json").exists()
     finally:
         os.close(parent)
+
+
+def test_vm_control_reads_stay_in_held_private_directory(tmp_path):
+    vm = tmp_path / "vm"
+    vm.mkdir(mode=0o700)
+    (vm / "vm.json").write_bytes(b"original\n")
+    (vm / "vm.json").chmod(0o600)
+    parent = observer.open_vm_dir(vm, os.getuid())
+    try:
+        moved = tmp_path / "moved"
+        vm.rename(moved)
+        vm.mkdir(mode=0o700)
+        (vm / "vm.json").write_bytes(b"replacement\n")
+        (vm / "vm.json").chmod(0o600)
+        assert observer.private_file_at(parent, "vm.json", os.getuid(), 65536) == b"original\n"
+        (tmp_path / "symlink").symlink_to(tmp_path, target_is_directory=True)
+        with pytest.raises(OSError):
+            observer.open_vm_dir(tmp_path / "symlink" / "vm", os.getuid())
+    finally:
+        os.close(parent)
+
+
+def test_root_controller_accepts_only_selected_nonroot_vm_owner(tmp_path):
+    if os.geteuid() != 0:
+        pytest.skip("root controller identity requires root")
+    owner = 65534
+    ancestor = tmp_path / "vm-owner"
+    vm = ancestor / "vm"
+    ancestor.mkdir(mode=0o700)
+    vm.mkdir(mode=0o700)
+    os.chown(ancestor, owner, owner)
+    os.chown(vm, owner, owner)
+    parent = observer.open_vm_dir(vm, owner)
+    os.close(parent)
+    with pytest.raises(ValueError, match="untrusted"):
+        observer.open_vm_dir(vm, owner + 1)

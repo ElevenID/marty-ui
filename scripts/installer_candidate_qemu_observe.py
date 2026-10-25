@@ -27,27 +27,6 @@ from installer_candidate_controller import _directory
 from installer_host_probe import command
 
 
-def private_file(path: Path, owner: int, maximum: int) -> bytes:
-    info = path.lstat()
-    release.require(stat.S_ISREG(info.st_mode) and info.st_uid == owner
-                    and stat.S_IMODE(info.st_mode) == 0o600 and info.st_nlink == 1
-                    and 0 < info.st_size <= maximum, "VM control file differs")
-    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
-    try:
-        held = os.fstat(fd)
-        release.require((held.st_dev, held.st_ino, held.st_size, held.st_mtime_ns) ==
-                        (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns),
-                        "VM control file changed")
-        raw = os.read(fd, maximum + 1)
-        again = path.lstat()
-        release.require((again.st_dev, again.st_ino, again.st_size, again.st_mtime_ns) ==
-                        (held.st_dev, held.st_ino, held.st_size, held.st_mtime_ns)
-                        and len(raw) == info.st_size, "VM control file changed")
-    finally:
-        os.close(fd)
-    return raw
-
-
 def private_file_at(parent: int, name: str, owner: int, maximum: int) -> bytes:
     release.require("/" not in name and name not in ("", ".", ".."),
                     "VM observation filename invalid")
@@ -70,6 +49,36 @@ def private_file_at(parent: int, name: str, owner: int, maximum: int) -> bytes:
         return raw
     finally:
         os.close(fd)
+
+
+def open_vm_dir(path: Path, expected_owner: int) -> int:
+    release.require(path.is_absolute() and ".." not in path.parts
+                    and type(expected_owner) is int and expected_owner >= 0,
+                    "VM control directory path invalid")
+    fd = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    try:
+        for component in path.parts[1:-1]:
+            child = os.open(component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                            dir_fd=fd)
+            os.close(fd)
+            fd = child
+            info = os.fstat(fd)
+            release.require(info.st_uid in (0, expected_owner)
+                            and (not info.st_mode & 0o022
+                                 or info.st_uid == 0 and info.st_mode & stat.S_ISVTX),
+                            "VM control ancestor is untrusted")
+        child = os.open(path.name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                        dir_fd=fd)
+        os.close(fd)
+        fd = child
+        info = os.fstat(fd)
+        release.require(stat.S_ISDIR(info.st_mode) and info.st_uid == expected_owner
+                        and stat.S_IMODE(info.st_mode) == 0o700,
+                        "VM control directory is not private")
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
 
 
 def qmp(socket_path: Path, disk: Path, *, pid: int, uid: int) -> None:
@@ -220,8 +229,8 @@ def write_observation(parent: int, name: str, raw: bytes) -> None:
         os.close(fd)
 
 
-def _observe(vm_dir: Path, output_dir: Path, output_parent: int, *, guest_user: str,
-             ssh_host: str, installation_id: str, phase: str,
+def _observe(vm_dir: Path, vm_parent: int, output_dir: Path, output_parent: int, *, guest_user: str,
+             ssh_host: str, installation_id: str, phase: str, expected_vm_uid: int,
              ssh_bin: Path) -> dict:
     release.require(os.geteuid() == 0 and vm_dir.is_absolute() and output_dir.is_absolute()
                     and vm_dir.resolve() == vm_dir and output_dir.resolve() == output_dir,
@@ -240,7 +249,7 @@ def _observe(vm_dir: Path, output_dir: Path, output_parent: int, *, guest_user: 
         initial_bytes = private_file_at(output_parent, initial_name, 0, 65536)
         initial = release.decode(initial_bytes)
         validate_initial(initial, installation_id)
-    directory = vm_dir.lstat()
+    directory = os.fstat(vm_parent)
     release.require(stat.S_ISDIR(directory.st_mode) and stat.S_IMODE(directory.st_mode) == 0o700,
                     "VM control directory is not private")
     owner = directory.st_uid
@@ -248,7 +257,7 @@ def _observe(vm_dir: Path, output_dir: Path, output_parent: int, *, guest_user: 
     release.require(stat.S_ISDIR(output.st_mode) and output.st_uid == 0
                     and stat.S_IMODE(output.st_mode) == 0o700,
                     "controller registry is not private")
-    vm_bytes = private_file(vm_dir / "vm.json", owner, 65536)
+    vm_bytes = private_file_at(vm_parent, "vm.json", owner, 65536)
     vm = release.decode(vm_bytes)
     release.require(isinstance(vm, dict) and type(vm.get("id")) is str
                     and str(uuid.UUID(vm["id"])) == vm["id"]
@@ -267,7 +276,7 @@ def _observe(vm_dir: Path, output_dir: Path, output_parent: int, *, guest_user: 
                     and "user,id=net0,hostfwd=tcp:127.0.0.1:"
                     + str(port) + "-:22" in args,
                     "VM launch arguments differ")
-    pid = int(private_file(vm_dir / "vm.pid", 0, 16))
+    pid = int(private_file_at(vm_parent, "vm.pid", 0, 16))
     release.require(pid > 4, "VM PID invalid")
     process = Path("/proc") / str(pid)
     live_args = (process / "cmdline").read_bytes().rstrip(b"\0").decode().split("\0")
@@ -282,8 +291,8 @@ def _observe(vm_dir: Path, output_dir: Path, output_parent: int, *, guest_user: 
     disk_fd = held_writable_disk(process, disk, disk_info)
     key = vm_dir / "controller_ed25519"
     known_hosts = vm_dir / "known_hosts"
-    key_bytes = private_file(key, owner, 65536)
-    known_hosts_bytes = private_file(known_hosts, owner, 65536)
+    key_bytes = private_file_at(vm_parent, key.name, owner, 65536)
+    known_hosts_bytes = private_file_at(vm_parent, known_hosts.name, owner, 65536)
     boot_id = Path("/proc/sys/kernel/random/boot_id").read_text(encoding="ascii").strip()
     release.require(str(uuid.UUID(boot_id)) == boot_id, "controller boot identity invalid")
     # SSH consumes root-owned snapshots, never mutable VM-owner paths.
@@ -335,11 +344,15 @@ def _observe(vm_dir: Path, output_dir: Path, output_parent: int, *, guest_user: 
                         and os.readlink(process / "exe") == args[0]
                         and (process / "stat").read_text().rsplit(")", 1)[1].split()[19] == start_ticks,
                         "VM changed during observation")
-        final_directory = vm_dir.lstat()
-        release.require((final_directory.st_dev, final_directory.st_ino) ==
-                        (directory.st_dev, directory.st_ino)
-                        and private_file(vm_dir / "vm.json", owner, 65536) == vm_bytes,
-                        "VM control root changed")
+        rebound_vm = open_vm_dir(vm_dir, expected_vm_uid)
+        try:
+            final_directory = os.fstat(rebound_vm)
+            release.require((final_directory.st_dev, final_directory.st_ino) ==
+                            (directory.st_dev, directory.st_ino)
+                            and private_file_at(vm_parent, "vm.json", owner, 65536) == vm_bytes,
+                            "VM control root changed")
+        finally:
+            os.close(rebound_vm)
         qmp(vm_dir / "qmp.sock", disk, pid=pid, uid=owner)
         release.require(held_writable_disk(process, disk, disk_info) == disk_fd,
                         "VM disk descriptor changed during observation")
@@ -368,10 +381,16 @@ def _observe(vm_dir: Path, output_dir: Path, output_parent: int, *, guest_user: 
             release.require(initial is not None and initial_bytes is not None,
                             "initial VM observation unavailable")
             require_same_vm(initial, evidence)
-            release.require(private_file_at(output_parent, initial_name, 0, 65536) == initial_bytes
-                            and (vm_dir.lstat().st_dev, vm_dir.lstat().st_ino)
-                            == (directory.st_dev, directory.st_ino),
-                            "initial observation or VM control root changed")
+            rebound_vm = open_vm_dir(vm_dir, expected_vm_uid)
+            try:
+                current_dir = os.fstat(rebound_vm)
+                release.require(private_file_at(output_parent, initial_name, 0, 65536)
+                                == initial_bytes
+                                and (current_dir.st_dev, current_dir.st_ino)
+                                == (directory.st_dev, directory.st_ino),
+                                "initial observation or VM control root changed")
+            finally:
+                os.close(rebound_vm)
             evidence["initial_observation_sha256"] = release.digest(initial_bytes)
             if phase == "pre-dispatch":
                 evidence["docker_clean_at_observation"] = True
@@ -393,15 +412,21 @@ def _observe(vm_dir: Path, output_dir: Path, output_parent: int, *, guest_user: 
 
 
 def observe(vm_dir: Path, output_dir: Path, *, guest_user: str, ssh_host: str,
-            installation_id: str, phase: str,
+            installation_id: str, phase: str, expected_vm_uid: int,
             ssh_bin: Path = Path("/usr/bin/ssh")) -> dict:
-    parent = _directory(output_dir)
+    vm_parent = open_vm_dir(vm_dir, expected_vm_uid)
     try:
-        return _observe(vm_dir, output_dir, parent, guest_user=guest_user,
-                        ssh_host=ssh_host, installation_id=installation_id,
-                        phase=phase, ssh_bin=ssh_bin)
+        parent = _directory(output_dir)
+        try:
+            return _observe(vm_dir, vm_parent, output_dir, parent,
+                            guest_user=guest_user, ssh_host=ssh_host,
+                            installation_id=installation_id, phase=phase,
+                            expected_vm_uid=expected_vm_uid,
+                            ssh_bin=ssh_bin)
+        finally:
+            os.close(parent)
     finally:
-        os.close(parent)
+        os.close(vm_parent)
 
 
 def main() -> int:
@@ -412,11 +437,13 @@ def main() -> int:
     parser.add_argument("--ssh-host", default="127.0.0.1")
     parser.add_argument("--installation-id", required=True)
     parser.add_argument("--phase", choices=("initial-empty", "pre-dispatch", "post-install"), required=True)
+    parser.add_argument("--expected-vm-uid", type=int, required=True,
+                        help="Diagnostic selection only; future dispatch needs independent approval")
     args = parser.parse_args()
     try:
         observe(args.vm_dir, args.output_dir, guest_user=args.guest_user,
                 ssh_host=args.ssh_host, installation_id=args.installation_id,
-                phase=args.phase)
+                phase=args.phase, expected_vm_uid=args.expected_vm_uid)
     except (OSError, ValueError, KeyError, TypeError, UnicodeError, IndexError):
         parser.exit(1, "Owned VM observation refused; preserve all control records.\n")
     return 0
