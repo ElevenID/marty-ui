@@ -53,6 +53,7 @@ vi.mock('react-router', async () => {
 
 // Dashboard data fixtures
 const emptyDashboardData = {
+  complianceProfiles: [],
   trustProfiles: [],
   signingKeys: [{ id: 'key_1', name: 'Issuer Key' }],
   issuerIdentities: [],
@@ -74,6 +75,7 @@ const emptyDashboardData = {
 }
 
 const partialDashboardData = {
+  complianceProfiles: [{ id: 'compliance-1', status: 'ACTIVE' }],
   trustProfiles: [{ id: 1, name: 'Active Profile', status: 'active' }],
   signingKeys: [{ id: 'key_1', name: 'Issuer Key' }],
   issuerIdentities: [{
@@ -107,6 +109,7 @@ const partialDashboardData = {
 }
 
 const fullDashboardData = {
+  complianceProfiles: [{ id: 'compliance-1', status: 'ACTIVE' }],
   trustProfiles: [{ id: 1, name: 'Active Profile', status: 'active' }],
   signingKeys: [{ id: 'key_1', name: 'Issuer Key' }],
   issuerIdentities: [{
