@@ -4,6 +4,9 @@ Run on the trusted Linux controller as root. This reads only the owned VM and
 guest Docker state. This experimental output must not authorize controller
 nonce consumption, dispatch, or installed-journey acceptance. It does not prove
 fresh image origin, trusted control-directory custody, or physical capacity.
+Use one caller-allocated installation UUID for initial-empty, pre-dispatch,
+and post-install identity observations. A VM restart requires separate policy;
+this observer requires the original process lifetime throughout.
 """
 from __future__ import annotations
 
@@ -123,13 +126,68 @@ def held_writable_disk(process: Path, disk: Path, expected: os.stat_result) -> i
     return matches[0]
 
 
+def validate_initial(initial: dict, installation_id: str) -> None:
+    required = {"schema", "target", "observation_phase", "vm_boot_id",
+                "vm_config_sha256", "controller_key_sha256", "known_hosts_sha256",
+                "guest_user", "guest_uid", "observed_at", "vm_pid",
+                "vm_start_ticks", "vm_disk_device", "vm_disk_inode", "vm_disk_fd",
+                "vm_memory_mib", "vm_cpus", "initial_docker_clean",
+                "capacity_qualified", "clean_host_qualified", "dispatch_authorized"}
+    release.require(type(initial) is dict and set(initial) == required
+                    and initial["schema"] == "elevenid.installer-qemu-trial-observation/v2"
+                    and initial["observation_phase"] == "initial-empty"
+                    and type(initial["target"]) is dict
+                    and set(initial["target"]) == {"guest_id", "disk_id", "engine_id",
+                                                    "installation_id"}
+                    and initial["target"]["installation_id"] == installation_id
+                    and initial["initial_docker_clean"] is True
+                    and initial["dispatch_authorized"] is False
+                    and initial["clean_host_qualified"] is False
+                    and initial["capacity_qualified"] is False,
+                    "initial VM observation invalid")
+    release.require(all(type(initial["target"][field]) is str
+                        and initial["target"][field]
+                        for field in ("guest_id", "disk_id", "engine_id", "installation_id"))
+                    and type(initial["guest_user"]) is str
+                    and initial["guest_user"].isidentifier()
+                    and type(initial["guest_uid"]) is int and initial["guest_uid"] > 0
+                    and all(type(initial[field]) is int and initial[field] >= 0
+                            for field in ("vm_pid", "vm_disk_device", "vm_disk_inode",
+                                          "vm_disk_fd"))
+                    and type(initial["vm_start_ticks"]) is str
+                    and initial["vm_start_ticks"].isdecimal(),
+                    "initial VM observation invalid")
+
+
+def require_same_vm(initial: dict, current: dict) -> None:
+    for field in ("target", "guest_user", "guest_uid", "vm_boot_id",
+                  "vm_pid", "vm_start_ticks",
+                  "vm_disk_device", "vm_disk_inode", "vm_disk_fd",
+                  "vm_config_sha256", "controller_key_sha256", "known_hosts_sha256"):
+        release.require(initial.get(field) == current[field],
+                        "VM changed after initial observation")
+
+
 def observe(vm_dir: Path, output_dir: Path, *, guest_user: str, ssh_host: str,
+            installation_id: str, phase: str,
             ssh_bin: Path = Path("/usr/bin/ssh")) -> dict:
     release.require(os.geteuid() == 0 and vm_dir.is_absolute() and output_dir.is_absolute()
                     and vm_dir.resolve() == vm_dir and output_dir.resolve() == output_dir,
                     "trusted absolute controller paths required")
     release.require(guest_user.isidentifier() and guest_user != "root"
                     and ssh_host == "127.0.0.1", "trial guest selection differs")
+    release.require(phase in ("initial-empty", "pre-dispatch", "post-install")
+                    and type(installation_id) is str
+                    and str(uuid.UUID(installation_id)) == installation_id
+                    and uuid.UUID(installation_id).version == 4,
+                    "observation phase or installation identity differs")
+    initial_path = output_dir / (installation_id + ".initial-observation.json")
+    initial_bytes = None
+    initial = None
+    if phase != "initial-empty":
+        initial_bytes = private_file(initial_path, 0, 65536)
+        initial = release.decode(initial_bytes)
+        validate_initial(initial, installation_id)
     directory = vm_dir.lstat()
     release.require(stat.S_ISDIR(directory.st_mode) and stat.S_IMODE(directory.st_mode) == 0o700,
                     "VM control directory is not private")
@@ -174,6 +232,8 @@ def observe(vm_dir: Path, output_dir: Path, *, guest_user: str, ssh_host: str,
     known_hosts = vm_dir / "known_hosts"
     key_bytes = private_file(key, owner, 65536)
     known_hosts_bytes = private_file(known_hosts, owner, 65536)
+    boot_id = Path("/proc/sys/kernel/random/boot_id").read_text(encoding="ascii").strip()
+    release.require(str(uuid.UUID(boot_id)) == boot_id, "controller boot identity invalid")
     # SSH consumes root-owned snapshots, never mutable VM-owner paths.
     with tempfile.TemporaryDirectory(prefix="observe-ssh-", dir=output_dir) as credentials:
         key = Path(credentials) / "controller_ed25519"
@@ -214,10 +274,11 @@ def observe(vm_dir: Path, output_dir: Path, *, guest_user: str, ssh_host: str,
                         json.loads(guest(docker + " info --format '{{json .OSType}}'")) == "linux" and
                         json.loads(guest(docker + " info --format '{{json .Architecture}}'")) in ("x86_64", "amd64"),
                         "guest Docker platform differs")
-        for docker_query in ("ps -aq", "images -q", "volume ls -q"):
-            release.require(guest(docker + " " + docker_query) == "", "guest Docker is not initially clean")
-        release.require(set(guest(docker + " network ls --format '{{.Name}}'").splitlines())
-                        == {"bridge", "host", "none"}, "guest Docker network inventory differs")
+        if phase != "post-install":
+            for docker_query in ("ps -aq", "images -q", "volume ls -q"):
+                release.require(guest(docker + " " + docker_query) == "", "guest Docker is not initially clean")
+            release.require(set(guest(docker + " network ls --format '{{.Name}}'").splitlines())
+                            == {"bridge", "host", "none"}, "guest Docker network inventory differs")
         release.require(json.loads(guest(engine_query)) == engine, "guest Docker Engine changed")
         again = disk.lstat()
         release.require((again.st_dev, again.st_ino) == (disk_info.st_dev, disk_info.st_ino)
@@ -239,17 +300,40 @@ def observe(vm_dir: Path, output_dir: Path, *, guest_user: str, ssh_host: str,
                         "VM process changed after disk observation")
         disk_identity = release.digest(release.encode(dict(vm_id=vm["id"], path=str(disk),
                             device=disk_info.st_dev, inode=disk_info.st_ino)))
-        installation_id = str(uuid.uuid4())
         target = dict(guest_id=vm["id"], disk_id=disk_identity, engine_id=engine,
                       installation_id=installation_id)
-        evidence = dict(schema="elevenid.installer-qemu-trial-observation/v1", target=target,
+        evidence = dict(schema="elevenid.installer-qemu-trial-observation/v2", target=target,
+                        observation_phase=phase, vm_boot_id=boot_id,
+                        guest_user=guest_user, guest_uid=int(account[0]),
+                        vm_config_sha256=release.digest(vm_bytes),
+                        controller_key_sha256=release.digest(key_bytes),
+                        known_hosts_sha256=release.digest(known_hosts_bytes),
                         observed_at=int(time.time()), vm_pid=pid, vm_start_ticks=start_ticks,
                         vm_disk_device=disk_info.st_dev, vm_disk_inode=disk_info.st_ino,
                         vm_disk_fd=disk_fd,
                         vm_memory_mib=vm.get("memory_mib"), vm_cpus=vm.get("cpus"),
-                        initial_docker_clean=True, capacity_qualified=False,
+                        capacity_qualified=False,
                         clean_host_qualified=False, dispatch_authorized=False)
-        write_exclusive(output_dir / (installation_id + ".observation.json"), release.encode(evidence))
+        if phase == "initial-empty":
+            evidence["initial_docker_clean"] = True
+        else:
+            release.require(initial is not None and initial_bytes is not None,
+                            "initial VM observation unavailable")
+            require_same_vm(initial, evidence)
+            release.require(private_file(initial_path, 0, 65536) == initial_bytes
+                            and (vm_dir.lstat().st_dev, vm_dir.lstat().st_ino)
+                            == (directory.st_dev, directory.st_ino),
+                            "initial observation or VM control root changed")
+            evidence["initial_observation_sha256"] = release.digest(initial_bytes)
+            if phase == "pre-dispatch":
+                evidence["docker_clean_at_observation"] = True
+        final_output = output_dir.lstat()
+        release.require((final_output.st_dev, final_output.st_ino)
+                        == (output.st_dev, output.st_ino),
+                        "controller output root changed")
+        suffix = (".initial-observation.json" if phase == "initial-empty"
+                  else "." + phase + "-observation.json")
+        write_exclusive(output_dir / (installation_id + suffix), release.encode(evidence))
     return evidence
 
 
@@ -259,10 +343,13 @@ def main() -> int:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--guest-user", required=True)
     parser.add_argument("--ssh-host", default="127.0.0.1")
+    parser.add_argument("--installation-id", required=True)
+    parser.add_argument("--phase", choices=("initial-empty", "pre-dispatch", "post-install"), required=True)
     args = parser.parse_args()
     try:
         observe(args.vm_dir, args.output_dir, guest_user=args.guest_user,
-                ssh_host=args.ssh_host)
+                ssh_host=args.ssh_host, installation_id=args.installation_id,
+                phase=args.phase)
     except (OSError, ValueError, KeyError, TypeError, UnicodeError, IndexError):
         parser.exit(1, "Owned VM observation refused; preserve all control records.\n")
     return 0

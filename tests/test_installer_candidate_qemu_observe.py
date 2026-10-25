@@ -5,6 +5,7 @@ from pathlib import Path
 import socket
 import sys
 import threading
+import uuid
 
 import pytest
 
@@ -98,3 +99,49 @@ def test_held_disk_refuses_read_only_descriptor(tmp_path):
             observer.held_writable_disk(Path("/proc") / str(os.getpid()), disk, disk.stat())
     finally:
         os.close(descriptor)
+
+
+def initial_observation(installation_id):
+    return dict(schema="elevenid.installer-qemu-trial-observation/v2",
+                target=dict(guest_id=str(uuid.uuid4()), disk_id="disk", engine_id="engine",
+                            installation_id=installation_id),
+                observation_phase="initial-empty", vm_boot_id=str(uuid.uuid4()),
+                vm_config_sha256="config", controller_key_sha256="client-key",
+                known_hosts_sha256="host-key", guest_user="installer", guest_uid=1000,
+                observed_at=1, vm_pid=42, vm_start_ticks="100", vm_disk_device=1,
+                vm_disk_inode=2, vm_disk_fd=3, vm_memory_mib=4096, vm_cpus=2,
+                initial_docker_clean=True, capacity_qualified=False,
+                clean_host_qualified=False, dispatch_authorized=False)
+
+
+def test_reobservation_refuses_target_or_process_substitution():
+    installation_id = str(uuid.uuid4())
+    initial = initial_observation(installation_id)
+    observer.validate_initial(initial, installation_id)
+    observer.require_same_vm(initial, dict(initial))
+    for field, replacement in (("vm_boot_id", str(uuid.uuid4())),
+                               ("guest_user", "different"), ("guest_uid", 1001),
+                               ("vm_pid", 43), ("vm_start_ticks", "101"),
+                               ("vm_disk_inode", 4), ("vm_config_sha256", "different"),
+                               ("controller_key_sha256", "different"),
+                               ("known_hosts_sha256", "different")):
+        changed = dict(initial, **{field: replacement})
+        with pytest.raises(ValueError, match="VM changed"):
+            observer.require_same_vm(initial, changed)
+    for target_field in ("guest_id", "disk_id", "engine_id", "installation_id"):
+        changed = dict(initial, target=dict(initial["target"], **{target_field: "different"}))
+        with pytest.raises(ValueError, match="VM changed"):
+            observer.require_same_vm(initial, changed)
+
+
+def test_reobservation_refuses_untrusted_initial_record():
+    installation_id = str(uuid.uuid4())
+    initial = initial_observation(installation_id)
+    for changed in (dict(initial, dispatch_authorized=True),
+                    dict(initial, initial_docker_clean=False),
+                    dict(initial, observation_phase="post-install"),
+                    dict(initial, extra="forged"),
+                    dict(initial, vm_pid=True),
+                    dict(initial, target=dict(initial["target"], installation_id=str(uuid.uuid4())))):
+        with pytest.raises(ValueError, match="initial VM observation invalid"):
+            observer.validate_initial(changed, installation_id)
