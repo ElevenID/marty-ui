@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import installer_candidate_vm_launch as launch
 import installer_candidate_vm_live_observe as live
+from installer_candidate_controller import ControllerLease
 from test_installer_candidate_vm_launch import _seeded
 from test_installer_candidate_vm_create import root_trial as root_trial
 from test_installer_candidate_vm_runtime import runtime_parent as runtime_parent
@@ -57,6 +58,50 @@ def test_exact_live_observation_is_diagnostic_only(
     with pytest.raises(FileExistsError):
         live.observe(registry, runtime_parent, vm_id=VM_ID)
     assert output.read_bytes() == before
+
+
+def test_observation_can_borrow_live_controller_lease(
+    root_trial, runtime_parent, monkeypatch
+):
+    registry = _launched(root_trial, runtime_parent, monkeypatch)
+    with ControllerLease(registry) as lease:
+        record = live.observe(registry, runtime_parent, vm_id=VM_ID,
+                              lease=lease)
+        assert record["process_pid"] == 12345
+        assert lease.parent is not None
+        with pytest.raises(BlockingIOError):
+            with ControllerLease(registry):
+                pass
+    assert (registry / f"{VM_ID}.live-process-observation.json").is_file()
+    with pytest.raises(ValueError, match="not held"):
+        live.observe(registry, runtime_parent, vm_id=VM_ID, lease=lease)
+
+
+def test_observation_rejects_lease_for_other_registry(
+    root_trial, runtime_parent, monkeypatch
+):
+    registry = _launched(root_trial, runtime_parent, monkeypatch)
+    other = registry.parent / "other-registry"
+    other.mkdir(mode=0o700)
+    with ControllerLease(other) as lease:
+        with pytest.raises(ValueError, match="not held"):
+            live.observe(registry, runtime_parent, vm_id=VM_ID, lease=lease)
+        with pytest.raises(BlockingIOError):
+            with ControllerLease(other):
+                pass
+    assert not (registry / f"{VM_ID}.live-process-observation.json").exists()
+    displaced = registry.parent / "displaced-registry"
+    with ControllerLease(registry) as lease:
+        registry.rename(displaced)
+        registry.mkdir(mode=0o700)
+        monkeypatch.setattr(launch, "_live", lambda *_a, **_k: pytest.fail(
+            "VM process must not be probed after registry replacement"))
+        with pytest.raises(ValueError, match="VM custody path changed"):
+            live.observe(registry, runtime_parent, vm_id=VM_ID, lease=lease)
+        with pytest.raises(BlockingIOError):
+            with ControllerLease(displaced):
+                pass
+    assert not (registry / f"{VM_ID}.live-process-observation.json").exists()
 
 
 def test_legacy_launch_cannot_gain_live_candidate_evidence(

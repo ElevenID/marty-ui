@@ -8,6 +8,7 @@ its original content digest is evidence of creation, not a live byte predicate.
 from __future__ import annotations
 
 import argparse
+from contextlib import nullcontext
 import json
 import os
 from pathlib import Path
@@ -79,7 +80,8 @@ def bind_pre_dispatch(initial_raw: bytes, current: dict, *,
 
 def observe(registry: Path, runtime_parent: Path, *, vm_id: str,
             guest_readiness: bool = False,
-            pre_dispatch_id: str | None = None) -> dict:
+            pre_dispatch_id: str | None = None,
+            lease: ControllerLease | None = None) -> dict:
     """Observe only the existing process named in root-held launch records."""
     release.require(os.geteuid() == 0 and type(vm_id) is str
                     and str(uuid.UUID(vm_id)) == vm_id
@@ -93,7 +95,12 @@ def observe(registry: Path, runtime_parent: Path, *, vm_id: str,
                         and uuid.UUID(pre_dispatch_id).version == 4,
                         "pre-dispatch observation ID invalid")
     with_guest = guest_readiness or pre_dispatch_id is not None
-    with ControllerLease(registry) as lease:
+    if lease is not None:
+        release.require(lease.registry == registry and lease.parent is not None
+                        and lease.owner_pid == os.getpid(),
+                        "selected controller lease is not held")
+    with (ControllerLease(registry) if lease is None else nullcontext(lease)) as lease:
+        _same_path(registry, lease.parent, _directory)
         initial_raw = None
         if pre_dispatch_id is not None:
             initial_raw, _ = _read_record(
