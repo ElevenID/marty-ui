@@ -71,8 +71,9 @@ def test_fresh_vm_creation_has_required_root_release_owner() -> None:
     assert command.count("tests/test_installer_candidate_vm_create.py") == 1
     assert command.count("tests/test_installer_candidate_vm_runtime.py") == 1
     assert command.count("tests/test_installer_candidate_vm_seed.py") == 1
+    assert command.count("tests/test_installer_candidate_vm_launch.py") == 1
     assert "-p no:cacheprovider --junitxml=" in command
-    for required in ('len(cases) != 30', '("tests", 30)', '("skipped", 0)',
+    for required in ('len(cases) != 38', '("tests", 38)', '("skipped", 0)',
                      '("failures", 0)', '("errors", 0)'):
         assert required in command
 CANVAS_COMPOSITION_COMMAND = (
