@@ -11,6 +11,7 @@ use std::{
 type Result<T> = std::result::Result<T, String>;
 const REFUSED: &str = "application environment differs from the reviewed installation contract";
 const EXAMPLE: &str = include_str!("../../../../.env.selfhost.production.example");
+pub const OPERATOR_EMAIL: &str = "operator@localhost";
 
 pub struct ApplicationParameters {
     pub installation: PathBuf,
@@ -164,6 +165,7 @@ pub fn render(
         ("KEYCLOAK_KMS_ADDR", "https://openbao:8200"),
         ("GRPC_INSECURE_ALLOWED", "false"),
         ("MARTY_ORG_DOMAIN", "localhost"),
+        ("MARTY_ORG_ADMIN_EMAIL", OPERATOR_EMAIL),
         ("KEYCLOAK_SMTP_FROM", "noreply@localhost"),
         ("MARTY_MIGRATION_PROFILE", "selfhost-production"),
     ] {
@@ -226,7 +228,6 @@ pub fn render(
     }
     for key in [
         "UI_ADDITIONAL_BASE_URLS",
-        "MARTY_ORG_ADMIN_EMAIL",
         "KEYCLOAK_SMTP_HOST",
         "KEYCLOAK_SMTP_USERNAME",
         "SMTP_HOST",
@@ -352,6 +353,7 @@ mod tests {
             "SELFHOST_SECRET_DIR='/private/marty $literal #path/secrets'\n",
             "BAO_ADDR='https://openbao:8200'\n",
             "KEYCLOAK_SOCIAL_LOGIN_ENABLED='false'\n",
+            "MARTY_ORG_ADMIN_EMAIL='operator@localhost'\n",
         ] {
             assert!(text.contains(expected), "missing {expected}");
         }

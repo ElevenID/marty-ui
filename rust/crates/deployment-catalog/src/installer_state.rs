@@ -519,6 +519,70 @@ impl InstallerState {
         Ok(())
     }
 
+    /// Stage the operator password for one narrowly mounted configurator input.
+    /// The user-facing original remains 0600; the 0444 copy stays inside the
+    /// private secrets directory so a different container UID can read its bind.
+    /// Call after OpenBao's initial scalar-inventory admission. Never replay an
+    /// uncertain account bootstrap or replace an existing staged credential.
+    pub fn stage_operator_password(&mut self) -> Result<()> {
+        self.require_live_phase(Phase::Provisioning)?;
+        private(&self.directory, true)?;
+        let mut source = open_at(
+            &self.directory,
+            &name("operator-password"),
+            libc::O_RDONLY | libc::O_NONBLOCK,
+            0,
+        )?;
+        private(&source, false)?;
+        let metadata = source
+            .metadata()
+            .map_err(|_| "operator credential unavailable")?;
+        if metadata.len() != 69 {
+            return Err("operator credential differs from generated contract".into());
+        }
+        let mut password = [0u8; 69];
+        source
+            .read_exact(&mut password)
+            .map_err(|_| "operator credential unavailable")?;
+        if !password.starts_with(b"Aa1!")
+            || password[68] != b'\n'
+            || !password[4..68]
+                .iter()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte))
+        {
+            return Err("operator credential differs from generated contract".into());
+        }
+        let secrets = open_at(
+            &self.directory,
+            &name("secrets"),
+            libc::O_RDONLY | libc::O_DIRECTORY,
+            0,
+        )?;
+        private(&secrets, true)?;
+        self.poisoned = true;
+        let mut destination = open_at(
+            &secrets,
+            &name("operator_bootstrap_password"),
+            libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL,
+            0o600,
+        )?;
+        private(&destination, false)?;
+        destination
+            .write_all(&password)
+            .map_err(|_| "stage operator credential")?;
+        if unsafe { libc::fchmod(destination.as_raw_fd(), 0o444) } != 0 {
+            return Err(error("set configurator credential mode"));
+        }
+        destination
+            .sync_all()
+            .map_err(|_| "sync configurator credential")?;
+        secrets
+            .sync_all()
+            .map_err(|_| "sync configurator secret directory")?;
+        self.poisoned = false;
+        Ok(())
+    }
+
     /// Creates a NEW directory only. Existing empty directories are not adopted.
     /// Failure may leave a private directory requiring explicit inspection.
     pub fn create(path: &Path, identity: Identity) -> Result<Self> {
@@ -950,6 +1014,78 @@ mod tests {
         assert!(state.generate_local_credentials(&realm).is_err());
         assert_eq!(std::fs::read(operator).unwrap(), password);
         assert!(state.advance(Phase::Provisioned).is_err());
+    }
+    #[test]
+    fn staged_operator_credential_preserves_private_original_and_refuses_replay() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("install");
+        let mut state = InstallerState::create(&path, identity()).unwrap();
+        assert!(state.stage_operator_password().is_err());
+        state.advance(Phase::Verified).unwrap();
+        state.advance(Phase::Provisioning).unwrap();
+        state
+            .generate_local_credentials(&serde_json::json!({"passwordPolicy": PASSWORD_POLICY}))
+            .unwrap();
+        state.stage_operator_password().unwrap();
+        let original = path.join("operator-password");
+        let staged = path.join("secrets/operator_bootstrap_password");
+        assert_eq!(
+            std::fs::read(&original).unwrap(),
+            std::fs::read(&staged).unwrap()
+        );
+        assert_eq!(std::fs::metadata(&original).unwrap().mode() & 0o777, 0o600);
+        assert_eq!(std::fs::metadata(&staged).unwrap().mode() & 0o777, 0o444);
+        assert_eq!(
+            std::fs::metadata(path.join("secrets")).unwrap().mode() & 0o777,
+            0o700
+        );
+        assert!(state.stage_operator_password().is_err());
+        assert!(state.advance(Phase::Provisioned).is_err());
+    }
+    #[test]
+    fn staged_operator_credential_rejects_links_and_changed_values_before_writing() {
+        for mutation in ["symlink", "hardlink", "public", "fifo", "value"] {
+            let root = tempfile::tempdir().unwrap();
+            let path = root.path().join("install");
+            let mut state = InstallerState::create(&path, identity()).unwrap();
+            state.advance(Phase::Verified).unwrap();
+            state.advance(Phase::Provisioning).unwrap();
+            state
+                .generate_local_credentials(&serde_json::json!({"passwordPolicy": PASSWORD_POLICY}))
+                .unwrap();
+            let original = path.join("operator-password");
+            match mutation {
+                "symlink" => {
+                    std::fs::rename(&original, path.join("saved")).unwrap();
+                    std::os::unix::fs::symlink(path.join("saved"), &original).unwrap();
+                }
+                "hardlink" => std::fs::hard_link(&original, path.join("saved")).unwrap(),
+                "fifo" => {
+                    std::fs::remove_file(&original).unwrap();
+                    assert_eq!(
+                        unsafe {
+                            libc::mkfifo(
+                                CString::new(original.as_os_str().as_bytes())
+                                    .unwrap()
+                                    .as_ptr(),
+                                0o600,
+                            )
+                        },
+                        0
+                    );
+                }
+                "public" => {
+                    std::fs::set_permissions(&original, std::fs::Permissions::from_mode(0o644))
+                        .unwrap()
+                }
+                _ => std::fs::write(&original, [b'x'; 69]).unwrap(),
+            }
+            assert!(
+                state.stage_operator_password().is_err(),
+                "accepted {mutation}"
+            );
+            assert!(!path.join("secrets/operator_bootstrap_password").exists());
+        }
     }
     #[test]
     fn completed_installation_preserves_identity_and_ready_state() {

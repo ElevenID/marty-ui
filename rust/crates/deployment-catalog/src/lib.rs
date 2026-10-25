@@ -21,6 +21,7 @@ pub mod installer_keycloak;
 pub mod installer_tls;
 pub mod installer_tls_outputs;
 pub mod installer_application_env;
+pub mod installer_ingress_config;
 
 use serde_json::{Map, Value};
 use std::collections::HashSet;
