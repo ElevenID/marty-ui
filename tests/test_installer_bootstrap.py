@@ -1,7 +1,10 @@
 """Execute early bootstrap refusals; these are not installation/crypto proof."""
 import os
+import json
+import re
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -13,7 +16,10 @@ SHELL = (r"C:\Program Files\Git\usr\bin\sh.exe" if os.name == "nt" else shutil.w
 
 def run(args=(), source=None):
     command = [SHELL, str(SCRIPT), *args] if source is None else [SHELL, "-s", "--", *args]
-    return subprocess.run(command, input=source, capture_output=True, text=True, timeout=15)
+    environment = dict(os.environ)
+    if os.name == "nt":
+        environment["PATH"] = str(Path(SHELL).parent) + os.pathsep + environment.get("PATH", "")
+    return subprocess.run(command, input=source, capture_output=True, text=True, timeout=15, env=environment)
 
 
 def test_help_does_not_require_docker_or_downloads():
@@ -57,3 +63,100 @@ def test_no_ambient_verifier_or_unsigned_download_execution():
     assert source.index('"$(digest "$2")" = "$3"') < source.index('chmod 700 "$stage/jq"')
     assert source.index('verify "$stage/marty-deploy"') < source.index('"$stage/marty-deploy" --build-identity')
     assert "--skip-verification" not in source
+
+
+@pytest.mark.parametrize("endpoint,security,reason", [
+    ("ssh://example.invalid", "name=seccomp", "remote contexts are refused"),
+    ("tcp://127.0.0.1:2375", "name=seccomp", "remote contexts are refused"),
+    ("unix:///run/user/1000/docker.sock", "name=rootless", "Rootless Docker"),
+])
+def test_wrong_docker_target_refused_before_download(endpoint, security, reason):
+    source = SCRIPT.read_text()
+    # Override host observations only; execute the actual argument/preflight code.
+    setup = f'''
+unset DOCKER_CONTEXT DOCKER_HOST
+uname() {{ case "$1" in -s) echo Linux;; -m) echo x86_64;; esac; }}
+id() {{ echo 1000; }}
+docker() {{
+    case "$1:${{2:-}}" in
+        context:inspect) echo '{endpoint}';;
+        info:--format) echo '{security}';;
+        *) return 0;;
+    esac
+}}
+curl() {{ echo UNEXPECTED_DOWNLOAD >&2; return 1; }}
+'''
+    source = source.replace('\nmain "$@" --bootstrap-complete', setup + '\nmain "$@" --bootstrap-complete')
+    result = run(source=source)
+    assert result.returncode != 0 and reason in result.stderr
+    assert "UNEXPECTED_DOWNLOAD" not in result.stderr
+
+
+@pytest.mark.skipif(shutil.which("jq") is None, reason="requires jq for actual bootstrap JSON policy")
+@pytest.mark.parametrize("field,value", [
+    ("runInvocationURI", "https://github.com/ElevenID/marty-ui/actions/runs/43/attempts/1"),
+    ("runInvocationURI", "https://github.com/ElevenID/marty-ui/actions/runs/42/attempts/2"),
+    ("sourceRepositoryIdentifier", "999"), ("runnerEnvironment", "self-hosted"),
+    ("sourceRepositoryRef", "refs/heads/feature"), ("sourceRepositoryDigest", "b" * 40),
+    ("buildSignerURI", "https://github.com/attacker/repo/workflow"),
+])
+def test_actual_bootstrap_certificate_policy_rejects_mismatch(field, value):
+    source = SCRIPT.read_text()
+    match = re.search(r'--arg invocation "[^"\n]+" \'(.*?)\' "\$1.verified.json"', source, re.S)
+    assert match, "bootstrap verification policy must remain exercised"
+    signer = "https://github.com/ElevenID/marty-ui/.github/workflows/nightly-release.yml@refs/heads/main"
+    invocation = "https://github.com/ElevenID/marty-ui/actions/runs/42/attempts/1"
+    certificate = dict(issuer="https://token.actions.githubusercontent.com",
+                       runnerEnvironment="github-hosted", sourceRepositoryIdentifier="1140864197",
+                       sourceRepositoryURI="https://github.com/ElevenID/marty-ui",
+                       sourceRepositoryDigest="a" * 40, sourceRepositoryRef="refs/heads/main",
+                       buildSignerURI=signer, runInvocationURI=invocation)
+    command = ["jq", "-e", "--arg", "source", "a" * 40, "--arg", "signer", signer,
+               "--arg", "invocation", invocation, match[1]]
+    def check():
+        evidence = [{"verificationResult": {"signature": {"certificate": certificate}}}]
+        return subprocess.run(command, input=json.dumps(evidence), text=True,
+                              capture_output=True, timeout=10).returncode
+    assert check() == 0
+    certificate[field] = value
+    assert check() != 0
+
+
+@pytest.mark.skipif(shutil.which("jq") is None, reason="requires jq for actual bootstrap JSON policy")
+@pytest.mark.parametrize("field,value", [
+    ("channel", "stable"), ("generation", 0), ("generation", True),
+    ("repository", "attacker/marty-ui"), ("admission_sha256", "bad"),
+    ("expires_at", 1), ("issued_at", 9999999999), ("expires_at", 9999999999),
+])
+def test_actual_bootstrap_channel_policy_rejects_stale_or_wrong_metadata(field, value):
+    source = SCRIPT.read_text()
+    match = re.search(r'--arg channel "\$channel" \'(.*?)\' "\$stage/channel.json"', source, re.S)
+    assert match
+    record = dict(schema="elevenid.installer-channel/v1", repository="ElevenID/marty-ui",
+                  channel="nightly", generation=1, admission_sha256="a" * 64,
+                  issued_at=int(time.time()) - 60, expires_at=int(time.time()) + 300)
+    command = ["jq", "-e", "--arg", "channel", "nightly", match[1]]
+    def check():
+        return subprocess.run(command, input=json.dumps(record), text=True,
+                              capture_output=True, timeout=10).returncode
+    assert check() == 0
+    record[field] = value
+    assert check() != 0
+
+
+@pytest.mark.parametrize("channel,version,accepted", [
+    ("nightly", "v1.2.3-nightly.20261025.1", True),
+    ("stable", "v1.2.3", True),
+    ("nightly", "v1.2.3", False),
+    ("stable", "v1.2.3-nightly.20261025.1", False),
+])
+def test_actual_bootstrap_tier_refusal(channel, version, accepted):
+    checks = "\n".join(line for line in SCRIPT.read_text().splitlines()
+                       if 'case "$channel:$version"' in line)
+    assert checks.count("case ") == 2
+    result = run(source=f'''fail() {{ exit 1; }}
+channel='{channel}'
+version='{version}'
+{checks}
+''')
+    assert (result.returncode == 0) == accepted

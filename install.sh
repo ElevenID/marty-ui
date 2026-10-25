@@ -41,7 +41,23 @@ main() (
     for tool in curl sha256sum mktemp tar chmod rm wc cut grep docker mkdir env; do
         command -v "$tool" >/dev/null 2>&1 || fail "Required tool is missing: $tool"
     done
+    if [ -n "${DOCKER_CONTEXT:-}" ]; then
+        docker_endpoint=$(docker context inspect "$DOCKER_CONTEXT" --format '{{.Endpoints.docker.Host}}')
+    elif [ -n "${DOCKER_HOST:-}" ]; then
+        docker_endpoint=$DOCKER_HOST
+    else
+        docker_endpoint=$(docker context inspect --format '{{.Endpoints.docker.Host}}')
+    fi
+    case "$docker_endpoint" in unix:///*) ;; *) fail 'A local Unix-socket Docker Engine is required; remote contexts are refused' ;; esac
+    unset DOCKER_CONTEXT DOCKER_TLS_VERIFY DOCKER_CERT_PATH
+    export DOCKER_HOST="$docker_endpoint"
     docker info >/dev/null 2>&1 || fail 'Docker Engine must be running and accessible'
+    security_options=$(docker info --format '{{range .SecurityOptions}}{{println .}}{{end}}')
+    if printf '%s\n' "$security_options" | grep -Fxq 'name=rootless'; then
+        fail 'Rootless Docker is not supported by this installer'
+    fi
+    docker_engine_id=$(docker info --format '{{.ID}}')
+    [ -n "$docker_engine_id" ] || fail 'Docker Engine identity is unavailable'
     docker compose version >/dev/null 2>&1 || fail 'Docker Compose plugin is required'
     stage=$(mktemp -d /tmp/marty-installer.XXXXXXXX) || fail 'Cannot create private download directory'
     trap 'rm -rf -- "$stage"' EXIT
@@ -78,6 +94,9 @@ main() (
     jq="$stage/jq"
     repo=ElevenID/marty-ui
     base="https://github.com/$repo/releases/download"
+    run_field() {
+        "$jq" -er --arg key "$2" '.[$key] | select(type == "number" and . > 0 and . < 9007199254740992 and floor == .)' "$1"
+    }
     verify() {
         env -i PATH=/usr/bin:/bin HOME="$stage/home" XDG_CACHE_HOME="$stage/cache" \
             "$stage/cosign" verify-blob "$1" --bundle "$1.sigstore.json" \
@@ -87,7 +106,21 @@ main() (
             GH_CONFIG_DIR="$stage/config" GH_HOST=github.com GH_PROMPT_DISABLED=1 \
             "$gh" attestation verify "$1" --bundle "$1.provenance.jsonl" --repo "$repo" \
             --signer-workflow "$repo/.github/workflows/$2" --source-ref refs/heads/main \
-            --source-digest "$3" --deny-self-hosted-runners --format json > "$1.verified.json"
+            --source-digest "$3" --deny-self-hosted-runners \
+            --predicate-type https://slsa.dev/provenance/v1 --format json > "$1.verified.json"
+        "$jq" -e --arg source "$3" \
+            --arg signer "https://github.com/$repo/.github/workflows/$2@refs/heads/main" \
+            --arg invocation "https://github.com/$repo/actions/runs/$4/attempts/$5" '
+            type == "array" and length == 1 and
+            (.[0].verificationResult.signature.certificate |
+                .issuer == "https://token.actions.githubusercontent.com"
+                and .runnerEnvironment == "github-hosted"
+                and .sourceRepositoryURI == "https://github.com/ElevenID/marty-ui"
+                and .sourceRepositoryIdentifier == "1140864197"
+                and .sourceRepositoryDigest == $source
+                and .sourceRepositoryRef == "refs/heads/main"
+                and .buildSignerURI == $signer
+                and .runInvocationURI == $invocation)' "$1.verified.json" >/dev/null
     }
     signed_download() {
         fetch "$1" "$2" "$3"
@@ -97,17 +130,25 @@ main() (
     if [ -z "$version" ]; then
         signed_download "$base/installer-channel-$channel/installer-channel.json" "$stage/channel.json" 65536
         source=$("$jq" -er '.source_sha | select(test("^[0-9a-f]{40}$"))' "$stage/channel.json")
-        verify "$stage/channel.json" installer-promote.yml "$source"
+        verify "$stage/channel.json" installer-promote.yml "$source" \
+            "$(run_field "$stage/channel.json" promotion_run_id)" "$(run_field "$stage/channel.json" promotion_run_attempt)"
         "$jq" -e --arg channel "$channel" '
             .schema == "elevenid.installer-channel/v1" and .repository == "ElevenID/marty-ui"
             and .channel == $channel and (.generation | type == "number" and . > 0 and floor == .)
-            and (.admission_sha256 | test("^[0-9a-f]{64}$"))' "$stage/channel.json" >/dev/null
+            and (.admission_sha256 | test("^[0-9a-f]{64}$"))
+            and (.issued_at | type == "number" and floor == .)
+            and (.expires_at | type == "number" and floor == .)
+            and .issued_at <= now and .expires_at > now
+            and .expires_at > .issued_at and .expires_at - .issued_at <= 604800' "$stage/channel.json" >/dev/null
         version=$("$jq" -er '.release_tag' "$stage/channel.json")
         printf '%s\n' "$version" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-nightly\.20[0-9]{6}\.[1-9][0-9]*)?$' || fail 'Invalid channel version'
+        case "$channel:$version" in nightly:*-nightly.*|stable:v*) ;; *) fail 'Channel tier differs' ;; esac
+        case "$channel:$version" in stable:*-nightly.*) fail 'Channel tier differs' ;; esac
     fi
     signed_download "$base/$version/installer-admission.json" "$stage/admission.json" 65536
     source=$("$jq" -er '.source_sha | select(test("^[0-9a-f]{40}$"))' "$stage/admission.json")
-    verify "$stage/admission.json" installer-promote.yml "$source"
+    verify "$stage/admission.json" installer-promote.yml "$source" \
+        "$(run_field "$stage/admission.json" promotion_run_id)" "$(run_field "$stage/admission.json" promotion_run_attempt)"
     "$jq" -e --arg tag "$version" '
         .schema == "elevenid.installer-admission/v1" and .repository == "ElevenID/marty-ui"
         and .release_tag == $tag and .platform == "linux/amd64" and .status == "accepted"
@@ -120,11 +161,13 @@ main() (
     case "$version" in *-nightly.*) workflow=nightly-release.yml ;; *) workflow=cd.yml ;; esac
     signed_download "$base/$version/marty-deploy-linux-amd64" "$stage/marty-deploy" 536870912
     [ "$(digest "$stage/marty-deploy")" = "$("$jq" -er '.operator_sha256' "$stage/admission.json")" ] || fail 'Operator digest differs from admitted version'
-    verify "$stage/marty-deploy" "$workflow" "$source"
+    verify "$stage/marty-deploy" "$workflow" "$source" \
+        "$(run_field "$stage/admission.json" build_run_id)" "$(run_field "$stage/admission.json" build_run_attempt)"
     chmod 700 "$stage/marty-deploy"
     [ "$("$stage/marty-deploy" --build-identity)" = "$source:$version" ] || fail 'Operator build identity differs'
     set -- install --version "$version" --verified-admission "$stage/admission.json" \
-        --verification-tools "$stage" --gh-bin "$gh"
+        --verification-tools "$stage" --gh-bin "$gh" \
+        --docker-host "$docker_endpoint" --docker-engine-id "$docker_engine_id"
     [ -z "$destination" ] || set -- "$@" --install-dir "$destination"
     [ "$yes" = false ] || set -- "$@" --yes
     # Operator re-verifies admission/inventory and owns persistent state. Keep
