@@ -48,10 +48,11 @@ rebuild refuses the retry and preserves the original release; reproducibility
 is not assumed, and signatures or inventory are not overwritten. Never put a
 cross-repository access token into an Actions secret for this handoff.
 
-Use a host with at least 32 GiB RAM and 20 GiB free disk for all locked images and
-fresh database state, Docker Compose, Python 3.12 with the pinned integration
-test dependencies, Rust 1.95.0 with locked Cargo dependencies, OpenSSL, and
-anonymous registry access. The host must have
+The current qualification target is 32 GiB RAM and 20 GiB free disk for all
+locked images and fresh database state. The component rehearsal also requires
+Docker Compose, Python 3.12 with the pinned integration test dependencies,
+Rust 1.95.0 with locked Cargo dependencies, OpenSSL, and anonymous registry
+access. The host must have
 no existing qualification project. Canvas qualification may use the same host
 sequentially, after its Docker project and state have been removed. The local
 Windows Docker/WSL configuration is not a suitable 32 GiB qualifier.
@@ -69,6 +70,12 @@ health or business step. Keep the result **unqualified** until the complete
 journey and custody checks pass, the lower-memory operating envelope is
 reviewed, and this qualification target is updated. A Compose render or image
 pull alone does not establish a smaller supported minimum.
+
+The active capacity experiment starts with a disposable 4 GiB, two-CPU VM and
+a 32 GiB disk. Run the same installation and business/custody journey, with
+memory, swap, OOM and disk observations retained alongside failures. Increase
+resources only when the measured failure calls for it. The 32 GiB target is not
+an established product minimum and must not prevent this smaller-host trial.
 
 ### One-line installer host observation
 
@@ -100,6 +107,12 @@ than substituting a different filesystem or claiming a clean host. This record
 cannot replace the signed installed-journey acceptance report.
 
 ### Candidate execution boundary
+
+`scripts/installer_candidate_authorize.py` verifies the five staged subjects and
+their original build proofs before writing an unsigned, acceptance-only grant.
+Its caller must supply an authenticated acceptance-run API snapshot, independent
+invocation context, and pinned verifier binaries. It does not sign or dispatch
+the grant, and cannot produce an installed-acceptance report.
 
 Candidate testing must use acceptance-only authorization rather than a fabricated
 consumer admission. The native candidate preparation library authenticates the
