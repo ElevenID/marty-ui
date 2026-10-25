@@ -130,7 +130,7 @@ const FlowDefinitionWizard = () => {
       getCredentialTemplate(requestedTemplateId).then((template) => {
         if (!current) return;
         const flowType = { OID4VCI_PRE_AUTH: 'oid4vci_pre_authorized', OID4VCI_AUTH_CODE: 'oid4vci_authorization_code' }[template.issuance_protocol];
-        if (template.organization_id !== organizationId || String(template.status).toUpperCase() !== 'ACTIVE' || !flowType || !template.trust_profile_id) {
+        if (template.id !== requestedTemplateId || template.organization_id !== organizationId || String(template.status).toUpperCase() !== 'ACTIVE' || !flowType || !template.trust_profile_id) {
           throw new Error('The linked template is unavailable or incompatible in this organization. Choose an eligible template in Dependencies.');
         }
         updateData({ credentialTemplateId: template.id, trustProfileId: template.trust_profile_id, flowType });

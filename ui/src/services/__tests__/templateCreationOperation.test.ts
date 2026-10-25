@@ -46,9 +46,9 @@ describe('template creation recovery', () => {
     expect(getCredentialTemplate).not.toHaveBeenCalled();
     expect(activateCredentialTemplate).not.toHaveBeenCalled();
   });
-  it('retains the acknowledged draft and retries activation without another create', async () => {
+  it.each([403, 422, 503])('retains the acknowledged draft after activation %s and retries without another create', async (status) => {
     const operation = createTemplateCreationOperation('org-a');
-    vi.mocked(activateCredentialTemplate).mockRejectedValueOnce(new Error('503 unavailable'));
+    vi.mocked(activateCredentialTemplate).mockRejectedValueOnce(Object.assign(new Error('Activation failed'), { status }));
     await expect(operation.submit(data)).rejects.toMatchObject({ createdResource: draft });
     expect(operation.resource).toEqual(draft);
     await expect(operation.submit(data)).resolves.toMatchObject({ status: 'active' });
