@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const {
   cleanupApplicationCredential, createOwnedApplication, ensureApplicantProfile,
   issueOwnedApplication, requireJson, requireOwnedApplication, submitOwnedApplication,
+  approvedApplicationFlowPayload,
 } = require('./beta-demo-resource-helpers');
 const { createOwnedActiveConfiguration, retireOwnedConfiguration } = require('./demo-owned-configuration');
 
@@ -58,6 +59,13 @@ function createOwnedMembership(operator, inputs) {
           notification_config: {}, ui_config: {} },
       });
       owned.applicationTemplateId = application.id;
+      const flow = await createOwnedActiveConfiguration(operator, owned, {
+        collectionPath: '/v1/flows/definitions', name: 'First-party membership issuance',
+        payload: approvedApplicationFlowPayload({ organizationId: owned.organizationId,
+          name: 'First-party membership issuance', description: 'Issue this owned approved membership application.',
+          credentialTemplateId: owned.credentialTemplateId }),
+      });
+      assert.equal(flow.credential_template_id, owned.credentialTemplateId);
       await createOwnedApplication(applicantPage, owned, { formData: {
         email: inputs.email, given_name: inputs.givenName, family_name: inputs.familyName,
         member_id: `demo-${owned.runId}`, organization_id: owned.organizationId,

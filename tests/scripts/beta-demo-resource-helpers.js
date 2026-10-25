@@ -2,6 +2,15 @@
 
 const DEFAULT_CREDENTIAL_RANKING_STRATEGY = 'FRESHEST_FIRST';
 
+function approvedApplicationFlowPayload({ organizationId, name, description, credentialTemplateId }) {
+  return {
+    organization_id: organizationId, name, description,
+    flow_type: 'oid4vci_pre_authorized', approval_strategy: 'AUTO',
+    credential_template_id: credentialTemplateId,
+    trigger: { trigger_type: 'WEBHOOK', config: { event_type: 'APPLICATION_APPROVED' } },
+  };
+}
+
 function requestedClaim(claimName, {
   displayName = '',
   description = null,
@@ -856,6 +865,7 @@ async function requireNoConflictingApplications(applicantPage, {
 }
 
 module.exports = {
+  approvedApplicationFlowPayload,
   DEFAULT_CREDENTIAL_RANKING_STRATEGY,
   browserJson,
   cancelOwnedIssuanceTransaction,

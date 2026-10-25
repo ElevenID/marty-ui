@@ -29,6 +29,7 @@ const {
 } = require('./beta-credential-contract');
 const {
   DEFAULT_CREDENTIAL_RANKING_STRATEGY,
+  approvedApplicationFlowPayload,
   browserJson,
   cleanupApplicationCredential,
   compactObject,
@@ -225,18 +226,12 @@ function employeePolicyPayload(credentialTemplate) {
 }
 
 function employeeFlowPayload(credentialTemplateId) {
-  return {
-    organization_id: ORG_ID,
+  return approvedApplicationFlowPayload({
+    organizationId: ORG_ID,
     name: RESOURCE_NAMES.flow,
     description: 'Issue the approved D-04 employee access credential.',
-    flow_type: 'oid4vci_pre_authorized',
-    approval_strategy: 'AUTO',
-    credential_template_id: credentialTemplateId,
-    trigger: {
-      trigger_type: 'WEBHOOK',
-      config: { event_type: 'APPLICATION_APPROVED' },
-    },
-  };
+    credentialTemplateId,
+  });
 }
 
 function requireConfigurationBinding(configuration) {
