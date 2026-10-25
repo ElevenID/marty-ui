@@ -1,19 +1,22 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use axum::{
+    Json, Router,
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
-    Json, Router,
 };
 use chrono::Utc;
 use mmf_security::ServiceTokenAuthenticator;
 use serde::Deserialize;
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
 use crate::{
+    ClaimDefinition, ClaimType, CredentialFormat, CredentialTemplate, CredentialTemplateError,
+    DeliveryDestinationEntry, DerivedAttribute, DisplayStyle, PrivacyPosture, RuntimeEnvironment,
+    TemplateStatus, ValidityRulesInput, WalletRegistryEntry,
     application::{
         ControlPlaneError, CreateTemplateCommand, CredentialTemplateApplication,
         CredentialTemplateApplicationError, UpdateTemplateCommand, UpdateTemplatePatch,
@@ -25,12 +28,9 @@ use crate::{
     },
     resolve_validity_rules,
     wallet::{
-        derive_ios_same_device_mode, normalize_issuance_protocol, wallet_capabilities,
-        wallet_routing_templates, IosSameDeviceMode, WalletCompatibility,
+        IosSameDeviceMode, WalletCompatibility, derive_ios_same_device_mode,
+        normalize_issuance_protocol, wallet_capabilities, wallet_routing_templates,
     },
-    ClaimDefinition, ClaimType, CredentialFormat, CredentialTemplate, CredentialTemplateError,
-    DeliveryDestinationEntry, DerivedAttribute, DisplayStyle, PrivacyPosture, RuntimeEnvironment,
-    TemplateStatus, ValidityRulesInput, WalletRegistryEntry,
 };
 
 #[derive(Clone)]
@@ -451,6 +451,11 @@ async fn create_template(
     Json(input): Json<CreateTemplateRequest>,
 ) -> Result<Json<Value>, CredentialTemplateHttpError> {
     let user_id = trusted_user_id(&state, &headers)?;
+    if input._schema_uri.is_some() {
+        return Err(bad_request(
+            "schema_uri is not supported by template storage",
+        ));
+    }
     let claims = input
         .claims
         .into_iter()
@@ -1062,19 +1067,23 @@ fn internal_issuance_context(
         .expect("template response is an object");
     object.insert(
         "issuer_algorithm".to_owned(),
-        json!(template
-            .issuer_algorithm
-            .as_deref()
-            .map(str::trim)
-            .unwrap_or_default()),
+        json!(
+            template
+                .issuer_algorithm
+                .as_deref()
+                .map(str::trim)
+                .unwrap_or_default()
+        ),
     );
     object.insert(
         "supported_formats".to_owned(),
-        json!(template
-            .supported_formats
-            .iter()
-            .map(|format| format.canonical())
-            .collect::<Vec<_>>()),
+        json!(
+            template
+                .supported_formats
+                .iter()
+                .map(|format| format.canonical())
+                .collect::<Vec<_>>()
+        ),
     );
     object.insert(
         "issuance_protocol".to_owned(),
@@ -1300,6 +1309,11 @@ fn template_response(template: &CredentialTemplate) -> Result<Value, CredentialT
         "revocation_profile_id":template.revocation_profile_id,
         "issuer_did":issuer_did,
         "claims":claims,
+        "supported_formats":template.supported_formats.iter().map(|format| format.canonical()).collect::<Vec<_>>(),
+        "selective_disclosure_fields":template.selective_disclosure_fields,
+        "zk_predicate_claims":template.zk_predicate_claims,
+        "derived_attributes":template.derived_attributes,
+        "display_style":template.display_style,
         "validity_rules":validity,
         "privacy_posture":{
             "mode":template.privacy_posture.as_str(),

@@ -126,6 +126,15 @@ Registry entries and derived application/platform names are configuration, not i
 Delivery destinations are a separate abstraction. Reads require the existing `wallet:view` grant (API key `wallet:read` or `wallet:write`), preserving applicant claim-dialog reads. Creates, sparse updates and deletes require `integration-connector:create`, `integration-connector:edit` and `integration-connector:delete` respectively (API key `integrations:write`). The gateway checks the selected organization and resolves stored destination ownership before forwarding. The console uses these same catalog grants instead of an unseeded delivery-destination permission. A configured/enabled destination does not establish approval, successful delivery or wallet compatibility. Template detail and destination loaders discard results after organization changes; Canvas observations require their separate integration read grant.
 
 
+### Template configuration readback
+
+Template detail and list responses include persisted `supported_formats`,
+`selective_disclosure_fields`, `zk_predicate_claims`, `derived_attributes` and
+`display_style`. These fields describe configuration and do not establish
+interoperability or successful predicate execution. Their native readback shapes
+extend the pinned response schema with a runtime-extension annotation.
+`schema_uri` has no template storage implementation; non-null writes are rejected.
+
 ### Notifications and embedded targets
 
 The console notification inbox reads the selected organization and authenticated recipient through the native array API. It displays the service-owned read state and message body, acknowledges notifications, confirms deletion and pages recorded delivery attempts. A returned notification is not proof of delivery; inspect each attempt's success/error/retry metadata. The bell and dropdown use the same scoped selectors and discard late responses after an organization or principal change. Notification links in the dropdown are limited to safe console paths.

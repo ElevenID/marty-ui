@@ -24,6 +24,11 @@ const PUBLIC_FIELDS: &[&str] = &[
     "validity_rules",
     "issuer_did",
     "privacy_posture",
+    "supported_formats",
+    "selective_disclosure_fields",
+    "zk_predicate_claims",
+    "derived_attributes",
+    "display_style",
     "created_at",
     "updated_at",
 ];
@@ -57,6 +62,13 @@ pub fn canonicalize_create(body: &[u8]) -> Result<Value, CredentialTemplateContr
         .ok()
         .and_then(|value| value.as_object().cloned())
         .ok_or(CredentialTemplateContractError)?;
+    // No domain/storage representation exists for schema_uri yet.
+    if value
+        .get("schema_uri")
+        .is_some_and(|value| !value.is_null())
+    {
+        return Err(CredentialTemplateContractError);
+    }
     if value
         .keys()
         .any(|key| !CREATE_FIELDS.contains(&key.as_str()))
@@ -239,7 +251,85 @@ fn public_template(value: Value) -> Result<Value, CredentialTemplateContractErro
             .collect::<Result<Vec<_>, _>>()?;
         public.insert("claims".into(), Value::Array(claims));
     }
+    if let Some(style) = public.get_mut("display_style") {
+        let object = style
+            .as_object_mut()
+            .ok_or(CredentialTemplateContractError)?;
+        object.retain(|key, _| {
+            [
+                "background_color",
+                "text_color",
+                "logo_url",
+                "background_image_url",
+                "icon",
+            ]
+            .contains(&key.as_str())
+        });
+    }
+    if let Some(attributes) = public.get_mut("derived_attributes") {
+        for attribute in attributes
+            .as_array_mut()
+            .ok_or(CredentialTemplateContractError)?
+        {
+            let object = attribute
+                .as_object_mut()
+                .ok_or(CredentialTemplateContractError)?;
+            object.retain(|key, _| {
+                [
+                    "id",
+                    "name",
+                    "description",
+                    "source_claim",
+                    "derivation_type",
+                    "parameters",
+                ]
+                .contains(&key.as_str())
+            });
+            if let Some(parameters) = object.get("parameters") {
+                reject_private_parameters(parameters, 0)?;
+            }
+        }
+    }
     Ok(Value::Object(public))
+}
+
+fn reject_private_parameters(
+    value: &Value,
+    depth: usize,
+) -> Result<(), CredentialTemplateContractError> {
+    if depth > 48 {
+        return Err(CredentialTemplateContractError);
+    }
+    match value {
+        Value::Object(object) => {
+            for (key, value) in object {
+                if [
+                    "key_reference",
+                    "signing_service_id",
+                    "signing_key_reference",
+                    "issuer_profile_id",
+                    "private_key",
+                    "privatekeyjwk",
+                    "access_token",
+                    "auth_token",
+                    "api_key",
+                    "client_secret",
+                ]
+                .contains(&key.to_ascii_lowercase().as_str())
+                {
+                    return Err(CredentialTemplateContractError);
+                }
+                reject_private_parameters(value, depth + 1)?;
+            }
+        }
+        Value::Array(values) => {
+            for value in values {
+                reject_private_parameters(value, depth + 1)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 fn public_claim(value: &Value) -> Result<Value, CredentialTemplateContractError> {
@@ -297,6 +387,41 @@ pub fn response_route(method: &str, path: &str) -> bool {
 mod tests {
     use super::*;
     use serde::Deserialize;
+    #[test]
+    fn nested_readback_omits_unknown_fields_and_rejects_custody_parameters() {
+        let public = public_response(serde_json::json!({
+            "display_style":{"background_color":"#123456", "key_reference":"private"},
+            "derived_attributes":[{"id":"derived", "parameters":{"threshold":21},"issuer_profile_id":"private"}]
+        })).unwrap();
+        assert!(public["display_style"].get("key_reference").is_none());
+        assert!(public["derived_attributes"][0].get("issuer_profile_id").is_none());
+        assert_eq!(public["derived_attributes"][0]["parameters"]["threshold"], 21);
+        assert!(public_response(serde_json::json!({"derived_attributes":[{
+            "parameters":{"nested":[{"key_reference":"private"}]}
+        }]})).is_err());
+    }
+    #[test]
+    fn public_configuration_is_retained_without_custody_selectors() {
+        let value = serde_json::json!({
+            "supported_formats":["SD_JWT_VC"], "selective_disclosure_fields":["name"],
+            "zk_predicate_claims":["age"], "derived_attributes":[],
+            "display_style":{"background_color":"#010203"},
+            "issuer_profile_id":"private", "remote_signing_config":{"secret":"private"}
+        });
+        let public = public_response(value.clone()).unwrap();
+        for field in [
+            "supported_formats",
+            "selective_disclosure_fields",
+            "zk_predicate_claims",
+            "derived_attributes",
+            "display_style",
+        ] {
+            assert_eq!(public[field], value[field]);
+        }
+        assert!(public.get("issuer_profile_id").is_none());
+        assert!(public.get("remote_signing_config").is_none());
+        assert!(canonicalize_create(br#"{"schema_uri":"https://example.org/schema"}"#).is_err());
+    }
     #[derive(Deserialize)]
     struct Contract {
         schema_version: u32,

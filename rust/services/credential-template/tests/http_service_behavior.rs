@@ -7,25 +7,25 @@ use std::{
 
 use async_trait::async_trait;
 use axum::{
-    body::{to_bytes, Body},
+    body::{Body, to_bytes},
     http::{Request, StatusCode},
 };
 use chrono::Utc;
 use marty_credential_template::{
+    CredentialTemplate, CredentialTemplateRepositoryError, DeliveryDestinationEntry,
+    RuntimeEnvironment, TemplateStatus, WalletRegistryEntry,
     application::{
         ControlPlaneError, CredentialTemplateApplication, CredentialTemplateControlPlane,
         CredentialTemplateRepository, IssuerIdentity,
     },
     catalog::{system_delivery_destination_catalog, system_wallet_catalog},
-    http_service::{credential_template_router, CredentialTemplateHttpState},
+    http_service::{CredentialTemplateHttpState, credential_template_router},
     registry_application::{
         CredentialTemplateRegistryApplication, CredentialTemplateRegistryRepository,
     },
-    CredentialTemplate, CredentialTemplateRepositoryError, DeliveryDestinationEntry,
-    RuntimeEnvironment, TemplateStatus, WalletRegistryEntry,
 };
 use mmf_security::ServiceTokenAuthenticator;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tower::ServiceExt;
 
 const TOKEN: &str = "0123456789abcdef0123456789abcdef";
@@ -524,6 +524,23 @@ async fn template_http_routes_require_trusted_forwarded_identity() {
 }
 
 #[tokio::test]
+async fn unsupported_schema_uri_is_rejected_instead_of_silently_discarded() {
+    let mut body = create_body();
+    body["schema_uri"] = json!("https://issuer.example/schema");
+    let response = router()
+        .oneshot(request("POST", "/v1/credential-templates", body, true))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert!(
+        json_body(response).await["detail"]
+            .as_str()
+            .unwrap()
+            .contains("schema_uri")
+    );
+}
+
+#[tokio::test]
 async fn create_get_update_activate_and_delete_expose_only_public_behavior() {
     let app = router();
     let response = app
@@ -562,7 +579,7 @@ async fn create_get_update_activate_and_delete_expose_only_public_behavior() {
         })
     );
     assert!(created.get("issuer_algorithm").is_none());
-    assert!(created.get("supported_formats").is_none());
+    assert_eq!(created["supported_formats"], json!(["SD_JWT_VC"]));
     assert!(created.get("wallet_configs").is_none());
     assert!(created.get("doctype").is_none());
 
@@ -588,6 +605,41 @@ async fn create_get_update_activate_and_delete_expose_only_public_behavior() {
     assert_eq!(updated["claims"].as_array().unwrap().len(), 2);
     assert_eq!(updated["validity_rules"]["ttl_seconds"], 172800);
     assert_eq!(updated["validity_rules"]["not_before_offset_seconds"], 900);
+    assert_eq!(updated["display_style"]["background_color"], "#000000");
+    let before_metadata = updated.clone();
+    let response = app
+        .clone()
+        .oneshot(request(
+            "PATCH",
+            &format!("/v1/credential-templates/{template_id}"),
+            json!({"name":"Renamed template"}),
+            true,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let response = app
+        .clone()
+        .oneshot(request(
+            "GET",
+            &format!("/v1/credential-templates/{template_id}"),
+            json!({}),
+            true,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let after_metadata = json_body(response).await;
+    for field in [
+        "supported_formats",
+        "selective_disclosure_fields",
+        "zk_predicate_claims",
+        "derived_attributes",
+        "display_style",
+    ] {
+        assert_eq!(after_metadata[field], before_metadata[field], "{field}");
+        assert!(!after_metadata[field].is_null(), "missing {field}");
+    }
 
     let response = app
         .clone()
@@ -689,11 +741,13 @@ async fn wallet_registry_routes_preserve_catalog_tenancy_routing_and_crud_behavi
             .as_u64()
             .unwrap() as usize
     );
-    assert!(global_wallets
-        .as_array()
-        .unwrap()
-        .iter()
-        .all(|entry| entry.get("organization_id").is_none()));
+    assert!(
+        global_wallets
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|entry| entry.get("organization_id").is_none())
+    );
 
     let response = app
         .clone()
