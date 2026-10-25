@@ -1,4 +1,5 @@
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -1055,3 +1056,40 @@ try {
     else:
         assert result.returncode != 0
         assert "commit must match source manifest repository" in result.stderr
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows PowerShell 5 native-output codepage contract")
+def test_native_runtime_staging_preserves_unicode_paths_through_windows_powershell(tmp_path):
+    import base64
+    import sys
+    shell = shutil.which("powershell.exe")
+    assert shell
+    directory = tmp_path / "caf\u00e9-\u6771\u4eac"
+    directory.mkdir()
+    manifest = directory / "runtime-config-manifest.json"
+    manifest.write_text("{}")
+    driver = tmp_path / "native_adapter_driver.py"
+    driver.write_text(
+        "import json, runpy, sys\n"
+        f"sys.path.insert(0, {str(ROOT / 'scripts')!r})\n"
+        f"scope=runpy.run_path({str(ROOT / 'scripts/stage_beta_runtime_config.py')!r})\n"
+        f"value={{'root':{str(directory)!r},'manifest':{str(manifest)!r}}}\n"
+        "scope['main'].__globals__['operator_bytes']=lambda *a,**k: json.dumps(value,ensure_ascii=False).encode('utf-8')\n"
+        "sys.argv=['stage_beta_runtime_config.py','--source-revision','a'*40]\n"
+        "scope['main']()\n", encoding="utf-8")
+    source = text("scripts/deploy-local-beta-release.ps1")
+    function = re.search(r"^function Initialize-DurableRuntimeConfig\(.*?^\}", source, re.M | re.S).group()
+    def quote(value):
+        return "'" + str(value).replace("'", "''") + "'"
+    script = tmp_path / "unicode-contract.ps1"
+    script.write_text(
+        "$ErrorActionPreference='Stop'\n[Console]::OutputEncoding=[Text.Encoding]::GetEncoding(437)\n"
+        f"$script:RepoRoot={quote(ROOT)}\n"
+        f"function python {{ & {quote(sys.executable)} {quote(driver)} }}\n"
+        + function + "\nInitialize-DurableRuntimeConfig -SourceRevision ('a'*40)\n"
+        + "[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($script:RuntimeConfigRoot))\n",
+        encoding="utf-8-sig")
+    result = subprocess.run([shell, "-NoProfile", "-NonInteractive", "-File", str(script)],
+                            text=True, capture_output=True, timeout=30)
+    assert result.returncode == 0, result.stderr
+    assert Path(base64.b64decode(result.stdout.strip()).decode("utf-8")) == directory
