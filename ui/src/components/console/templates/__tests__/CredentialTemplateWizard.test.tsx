@@ -228,6 +228,9 @@ describe('CredentialTemplateWizard', () => {
             status: 'draft',
           })
         }),
+        http.get('*/v1/credential-templates/template-1', () => HttpResponse.json({
+          id: 'template-1', ...createdPayload, status: 'draft',
+        })),
         http.post('*/v1/credential-templates/template-1/activate', () => {
           activationRequested = true
           return HttpResponse.json({

@@ -13,7 +13,7 @@
  * });
  */
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useLayoutEffect, useRef } from 'react';
 import { operationStatusUnknownMessage } from '../services/idempotency';
 
 const SHOULD_LOG_WIZARD_DIAGNOSTICS = import.meta.env.DEV && import.meta.env.MODE !== 'test';
@@ -48,6 +48,7 @@ function wizardErrorMessage(error) {
  * @property {Function} validateStep - Step validation function (stepIndex, data) => boolean
  * @property {Function} onComplete - Optional callback on successful submission
  * @property {Function} onCancel - Optional callback on cancel
+ * @property {string} [scopeKey] - Organization or other submission ownership scope
  */
 
 /**
@@ -60,12 +61,32 @@ export function useWizard({
   validateStep,
   onComplete,
   onCancel,
+  scopeKey,
 }) {
   const [activeStep, setActiveStep] = useState(0);
   const [data, setData] = useState(initialData);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(false);
+  const [result, setResult] = useState(null);
+  const generation = useRef(0);
+  const submitting = useRef(false);
+  const completionTimer = useRef(null);
+  const invalidateSubmission = useCallback(() => {
+    generation.current += 1;
+    submitting.current = false;
+    clearTimeout(completionTimer.current);
+    completionTimer.current = null;
+  }, []);
+
+  useLayoutEffect(() => {
+    invalidateSubmission();
+    setResult(null);
+    setSuccess(false);
+    setLoading(false);
+    setError(null);
+    return invalidateSubmission;
+  }, [scopeKey, invalidateSubmission]);
 
   /**
    * Update wizard data
@@ -125,27 +146,40 @@ export function useWizard({
       return;
     }
 
+    if (submitting.current) return null;
+    submitting.current = true;
+    const submittedGeneration = generation.current;
+    clearTimeout(completionTimer.current);
+
     setLoading(true);
     setError(null);
+    setResult(null);
+    setSuccess(false);
 
     try {
-      const result = await onSubmit(data);
+      const submittedResult = await onSubmit(data);
+      if (generation.current !== submittedGeneration) return null;
+      setResult(submittedResult);
       setSuccess(true);
 
       if (onComplete) {
         // Delay to show success message
-        setTimeout(() => {
-          onComplete(result);
+        completionTimer.current = setTimeout(() => {
+          if (generation.current === submittedGeneration) onComplete(submittedResult);
         }, 1500);
       }
 
-      return result;
+      return submittedResult;
     } catch (err) {
+      if (generation.current !== submittedGeneration) return null;
       logWizardError('Wizard submission failed:', err);
       setError(wizardErrorMessage(err));
       return null;
     } finally {
-      setLoading(false);
+      if (generation.current === submittedGeneration) {
+        submitting.current = false;
+        setLoading(false);
+      }
     }
   }, [data, onSubmit, onComplete]);
 
@@ -153,21 +187,25 @@ export function useWizard({
    * Cancel the wizard
    */
   const cancel = useCallback(() => {
+    invalidateSubmission();
+    setLoading(false);
     if (onCancel) {
       onCancel();
     }
-  }, [onCancel]);
+  }, [onCancel, invalidateSubmission]);
 
   /**
    * Reset wizard to initial state
    */
   const reset = useCallback(() => {
+    invalidateSubmission();
     setActiveStep(0);
     setData(initialData);
     setLoading(false);
     setError(null);
     setSuccess(false);
-  }, [initialData]);
+    setResult(null);
+  }, [initialData, invalidateSubmission]);
 
   return {
     // State
@@ -176,6 +214,7 @@ export function useWizard({
     loading,
     error,
     success,
+    result,
     steps,
     
     // Computed
