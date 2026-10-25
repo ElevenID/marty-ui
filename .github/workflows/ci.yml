@@ -3013,7 +3013,8 @@ jobs:
             tests/test_installer_candidate_vm_runtime.py \
             tests/test_installer_candidate_vm_seed.py \
             tests/test_installer_candidate_vm_launch.py \
-            tests/test_installer_candidate_vm_live_observe.py -p no:cacheprovider --junitxml="$report"
+            tests/test_installer_candidate_vm_live_observe.py \
+            tests/test_installer_candidate_vm_target.py -p no:cacheprovider --junitxml="$report"
           python - "$report" <<'PY'
           import sys
           import xml.etree.ElementTree as ET
@@ -3024,9 +3025,9 @@ jobs:
           if suite is None or suite.tag != "testsuite":
               raise SystemExit("root-owned VM creation test report is missing")
           cases = list(suite.iter("testcase"))
-          if len(cases) != 52 or any(
+          if len(cases) != 62 or any(
               int(suite.attrib.get(name, "-1")) != expected
-              for name, expected in (("tests", 52), ("skipped", 0),
+              for name, expected in (("tests", 62), ("skipped", 0),
                                      ("failures", 0), ("errors", 0))
           ):
               raise SystemExit("root-owned VM creation cases did not all execute and pass")
