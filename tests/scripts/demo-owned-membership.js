@@ -13,9 +13,9 @@ function createOwnedMembership(operator, inputs) {
   const owned = { organizationId: inputs.organizationId, credentialTemplateId: null,
     runId: inputs.runId, applicationId: null, transactionId: null, credentialId: null,
     applicationTemplateId: null, applicantId: null, uncertainMutations: [] };
-  return {
+  const controller = {
     owned,
-    async prepare(applicantPage) {
+    async configure() {
       const credential = await requireJson(operator, `/v1/credential-templates/${encodeURIComponent(inputs.credentialTemplateId)}`);
       assert.equal(credential.organization_id, owned.organizationId);
       assert.equal(credential.status, 'ACTIVE');
@@ -45,9 +45,6 @@ function createOwnedMembership(operator, inputs) {
       });
       owned.credentialTemplateId = ownCredential.id;
       assert.equal(ownCredential.credential_type, inputs.receiptConfigurationId);
-      const profile = await ensureApplicantProfile(applicantPage, { email: inputs.email });
-      assert.equal(profile.email, inputs.email);
-      owned.applicantId = profile.id;
       const application = await createOwnedActiveConfiguration(operator, owned, {
         collectionPath: '/v1/application-templates', name: 'First-party membership control',
         payload: { organization_id: owned.organizationId, credential_template_id: owned.credentialTemplateId,
@@ -66,6 +63,13 @@ function createOwnedMembership(operator, inputs) {
           credentialTemplateId: owned.credentialTemplateId }),
       });
       assert.equal(flow.credential_template_id, owned.credentialTemplateId);
+      return { credential, ownCredential, application, flow };
+    },
+    async prepare(applicantPage) {
+      await controller.configure();
+      const profile = await ensureApplicantProfile(applicantPage, { email: inputs.email });
+      assert.equal(profile.email, inputs.email);
+      owned.applicantId = profile.id;
       await createOwnedApplication(applicantPage, owned, { formData: {
         email: inputs.email, given_name: inputs.givenName, family_name: inputs.familyName,
         member_id: `demo-${owned.runId}`, organization_id: owned.organizationId,
@@ -90,6 +94,7 @@ function createOwnedMembership(operator, inputs) {
         application, configuration, sharedCredentialTemplateModified: false };
     },
   };
+  return controller;
 }
 
 module.exports = { createOwnedMembership };
