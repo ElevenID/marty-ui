@@ -108,7 +108,9 @@ async function maskProtocolField(page, label) {
   return maskRecordingProtocolField(page, label, RECORD_VIDEO);
 }
 
-async function receiveBadge(walletPage, offerUri, { retainSummary = false } = {}) {
+async function receiveBadge(walletPage, offerUri, {
+  retainSummary = false, configurationId = MEMBERSHIP_BADGE_CONFIGURATION_ID,
+} = {}) {
   await openIsolatedWallet(walletPage, TEST_WALLET_ORIGIN);
   await maskProtocolField(walletPage, 'Credential offer URI');
   await walletPage.getByLabel('Credential offer URI').fill(offerUri);
@@ -122,7 +124,7 @@ async function receiveBadge(walletPage, offerUri, { retainSummary = false } = {}
   const inventory = await walletPage.locator('#credentials').innerText();
   const inventoryEvidence = credentialInventoryEvidence(inventory, {
     vct: MEMBERSHIP_BADGE_VCT,
-    configurationId: MEMBERSHIP_BADGE_CONFIGURATION_ID,
+    configurationId,
   });
   return {
     status: response.status(),
@@ -133,7 +135,7 @@ async function receiveBadge(walletPage, offerUri, { retainSummary = false } = {}
       credentialFormat: body?.format || null,
       credentialConfigurationId: body?.credential_configuration_id || null,
       credentialVct: body?.vct || null,
-      nativeExpectedCredential: body?.credential_configuration_id === MEMBERSHIP_BADGE_CONFIGURATION_ID
+      nativeExpectedCredential: body?.credential_configuration_id === configurationId
         || body?.vct === MEMBERSHIP_BADGE_VCT,
     } : {}),
     error: response.ok() ? null : redact(body?.error || 'Credential receipt failed'),
@@ -172,6 +174,7 @@ async function runCredentialLogin({ retainedFirstParty = false, evidence = null 
     organizationId: process.env.BETA_AUDIT_ORG_ID || DEFAULT_BETA_ORGANIZATION_ID,
     credentialTemplateId: process.env.LOGIN_BADGE_TEMPLATE_ID || DEFAULT_LOGIN_BADGE_TEMPLATE_ID,
     configurationId: MEMBERSHIP_BADGE_CONFIGURATION_ID, vct: MEMBERSHIP_BADGE_VCT,
+    receiptConfigurationId: 'OpenBadgeCredential',
     email: process.env.TEST_APPLICANT_EMAIL, givenName: 'Jamie', familyName: 'Lee',
     identityBoundary: 'AUTHORIZED_EXISTING_BETA_TEST_ACCOUNT_WITH_SYNTHETIC_FORM_VALUES',
   }, evidence) : null;
@@ -278,7 +281,8 @@ async function runCredentialLogin({ retainedFirstParty = false, evidence = null 
       offerSource: offer.offerSource,
       ...(control ? { governedApplicationId: control.owned.applicationId } : {}),
       loggedOut: offer.loggedOut === true,
-      ...await receiveBadge(walletPage, offer.offerUri, { retainSummary: retainedFirstParty }),
+      ...await receiveBadge(walletPage, offer.offerUri, { retainSummary: retainedFirstParty,
+        ...(inputs ? { configurationId: inputs.receiptConfigurationId } : {}) }),
     };
     if (retainedFirstParty && !controlCredentialReceived(report.badge)) {
       throw new Error('The control wallet did not receive and store the exact expected credential');

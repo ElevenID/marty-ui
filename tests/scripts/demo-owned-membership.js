@@ -36,10 +36,14 @@ function createOwnedMembership(operator, inputs) {
       }));
       payload.application_template_id = null;
       payload.supported_formats = [credential.credential_payload_format];
+      // This is a new program, not a copy of the legacy seed's configuration
+      // identifier into the public credential-type field.
+      payload.credential_type = inputs.receiptConfigurationId;
       const ownCredential = await createOwnedActiveConfiguration(operator, owned, {
         collectionPath: '/v1/credential-templates', name: 'First-party membership credential', payload,
       });
       owned.credentialTemplateId = ownCredential.id;
+      assert.equal(ownCredential.credential_type, inputs.receiptConfigurationId);
       const profile = await ensureApplicantProfile(applicantPage, { email: inputs.email });
       assert.equal(profile.email, inputs.email);
       owned.applicantId = profile.id;
