@@ -24,9 +24,10 @@ def host():
 def trust(installation_id='22345678-1234-4234-8234-123456789abc'):
     pem=(Path(__file__).resolve().parents[1]/'rust/crates/deployment-catalog/tests/fixtures/installer-log-public-ca.txt').read_text()
     der=base64.b64decode(''.join(pem.splitlines()[1:-1]),validate=True)
-    return dict(schema='elevenid.installer-trust-info/v1',installation_id=installation_id,
+    return dict(schema='elevenid.installer-trust-info/v2',installation_id=installation_id,
         origin='https://localhost:18443',ca_certificate_pem=pem,
-        ca_der_sha256=hashlib.sha256(der).hexdigest(),ca_expires_at=200000,certificate_expires_at=200000,
+        ca_der_sha256=hashlib.sha256(der).hexdigest(),certificate_der_sha256='c'*64,
+        ca_expires_at=200000,certificate_expires_at=200000,
         recorded_token_expires_at=200000,evidence_sha256=dict.fromkeys(a.TRUST_EVIDENCE,'b'*64),
         recorded_startup_containers=30,runtime_observed=False,host_trust_observed=False,
         host_trust_modified=False,installation_ready=False,pending=['browser trust','business journey','recovery'])
@@ -48,6 +49,15 @@ def status(context,target,auth,inv):
         cleanup=dict(state='not_started',runtime_observed=False))
 
 
+def tls(target,trust_value):
+    return dict(schema='elevenid.installer-live-tls-observation/v1',
+        installation_id=target['installation_id'],engine_id=target['engine_id'],
+        origin=trust_value['origin'],ca_der_sha256=trust_value['ca_der_sha256'],
+        peer_der_sha256='c'*64,tls_version='TLSv1.3',root_status=200,discovery_status=200,
+        discovery_sha256='d'*64,issuer=trust_value['origin']+'/realms/11id',observed_at=100000,
+        browser_login_observed=False,host_trust_modified=False)
+
+
 @pytest.fixture
 def candidate(tmp_path,monkeypatch):
     tmp_path.chmod(0o700)
@@ -61,12 +71,16 @@ def candidate(tmp_path,monkeypatch):
     output=tmp_path/'output';output.mkdir(mode=0o700)
     monkeypatch.setattr(a.dispatch,'executable',lambda _:None)
     monkeypatch.setattr(a.dispatch,'verify',lambda **_: (auth,receipt,inv,{}))
+    monkeypatch.setattr(a.dispatch,'verified_harness_script',
+        lambda source,name:(Path(__file__).resolve().parents[1]/'scripts'/name).read_text())
     calls=[]
     def execute(argv,**kwargs):
         if ' status --install-dir ' in argv[-1]:
             calls.append(('status',argv,kwargs));return r.encode(status(context,target,auth,inv))
         if 'trust-info' in argv[-1]:
             calls.append(('trust',argv,kwargs));return r.encode(trust())
+        if 'installer-live-tls-probe' in argv[-1]:
+            calls.append(('tls',argv,kwargs));return r.encode(tls(target,trust()))
         calls.append(('probe',argv,kwargs));return r.encode(host())
     def dispatch(**kwargs):calls.append(('dispatch',kwargs))
     args=dict(output=output,assets=tmp_path/'assets',grants=tmp_path/'grants',context_file=tmp_path/'context',
@@ -81,19 +95,74 @@ def test_real_probe_before_dispatch_and_never_claims_acceptance(candidate):
     a.status_observation(r.encode(status(context,target,auth,inv)),context,target,auth,inv)
     a.trust_observation(r.encode(trust()),target,100000)
     result=a.run(**args)
-    assert [v[0] for v in calls]==['probe','dispatch','status','trust','status']
+    assert [v[0] for v in calls]==['probe','dispatch','status','trust','status','tls','status','trust']
     assert calls[0][1][:2]==['/usr/bin/ssh','-F']
     assert 'env -i HOME=/home/installer PATH=/usr/bin:/bin /usr/bin/python3 -c' in calls[0][1][-1]
     assert set(calls[0][2]['env'])=={'HOME','PATH','LANG','LC_ALL'}
     assert calls[0][2]['timeout']==120
     assert result['dispatch']=='returned_zero_unqualified' and result['acceptance'] is False
     assert result['trust_inspection']=='verified_public_record'
+    assert result['tls_inspection']=='verified_local_https'
+    assert result['tls_observation_sha256']==r.digest((args['output']/a.TLS_NAME).read_bytes())
     assert result['trust_info_sha256']==r.digest((args['output']/a.TRUST_NAME).read_bytes())
     assert result['status_observation_sha256']==r.digest((args['output']/a.STATUS_NAME).read_bytes())
     assert all(v=='blocked' for k,v in result['cases'].items() if k!='artifact-verification')
     assert (args['output']/a.NAME).exists() and not (args['output']/'installer-acceptance.json').exists()
     with pytest.raises(FileExistsError):a.run(**args)
-    assert len(calls)==5
+    assert len(calls)==8
+
+
+def test_host_probe_must_match_signed_harness(candidate,monkeypatch):
+    args,calls,*_=candidate
+    monkeypatch.setattr(a.dispatch,'verified_harness_script',lambda source,name:'print("drift")')
+    with pytest.raises(ValueError):a.run(**args)
+    assert calls==[]
+    assert not (args['output']/a.NAME).exists()
+
+
+def test_tls_probe_must_match_signed_harness(candidate,monkeypatch):
+    args,calls,*_=candidate
+    actual=a.dispatch.verified_harness_script
+    monkeypatch.setattr(a.dispatch,'verified_harness_script',
+        lambda source,name:(_ for _ in ()).throw(ValueError('signed source unavailable'))
+        if name=='installer_live_tls_probe.py' else actual(source,name))
+    with pytest.raises(ValueError):a.run(**args)
+    assert calls==[] and not (args['output']/a.NAME).exists()
+
+
+@pytest.mark.parametrize('mutation',['peer','engine','browser','ca','origin','stale'])
+def test_live_tls_record_refuses_substitution(candidate,mutation):
+    args,calls,context,target,auth,receipt,inv=candidate
+    original=args['execute']
+    def execute(argv,**kwargs):
+        if 'installer-live-tls-probe' not in argv[-1]:return original(argv,**kwargs)
+        value=tls(target,trust())
+        if mutation=='peer':value['peer_der_sha256']='f'*64
+        if mutation=='engine':value['engine_id']='other-engine'
+        if mutation=='browser':value['browser_login_observed']=True
+        if mutation=='ca':value['ca_der_sha256']='f'*64
+        if mutation=='origin':value['origin']='https://evil.example:18443'
+        if mutation=='stale':value['observed_at']=99800
+        return r.encode(value)
+    args['execute']=execute
+    result=a.run(**args)
+    assert result['tls_inspection']=='unavailable' and result['tls_observation_sha256'] is None
+    assert not (args['output']/a.TLS_NAME).exists()
+    assert result['cases']['browser-tls-login']=='blocked'
+
+
+def test_unavailable_tls_preserves_trust_record_and_incomplete_scope(candidate):
+    args,calls,*_=candidate
+    original=args['execute']
+    def execute(argv,**kwargs):
+        if 'installer-live-tls-probe' in argv[-1]:raise ValueError('private diagnostic')
+        return original(argv,**kwargs)
+    args['execute']=execute
+    result=a.run(**args)
+    assert result['trust_inspection']=='verified_public_record'
+    assert result['tls_inspection']=='unavailable'
+    assert b'private diagnostic' not in (args['output']/a.NAME).read_bytes()
+    assert result['acceptance'] is False
 
 
 def test_published_checkpoint_uses_public_guest_operator_without_claiming_acceptance(candidate,monkeypatch):
@@ -111,10 +180,12 @@ def test_published_checkpoint_uses_public_guest_operator_without_claiming_accept
             calls.append(('status',argv,kwargs));return r.encode(status(context,target,auth,inv))
         if 'trust-info' in argv[-1]:
             calls.append(('trust',argv,kwargs));return r.encode(trust())
+        if 'installer-live-tls-probe' in argv[-1]:
+            calls.append(('tls',argv,kwargs));return r.encode(tls(target,trust()))
         calls.append(('probe',argv,kwargs));return r.encode(host())
     args['execute']=execute
     result=a.run(**args)
-    assert [v[0] for v in calls]==['probe','dispatch','status','trust','status']
+    assert [v[0] for v in calls]==['probe','dispatch','status','trust','status','tls','status','trust']
     assert all('/bootstrap/marty-deploy-linux-amd64' in v[1][-1]
         for v in calls if v[0] in ('status','trust'))
     assert result['phase']=='published' and result['acceptance'] is False

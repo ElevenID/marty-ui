@@ -136,6 +136,7 @@ pub struct TrustInfo {
     pub origin: String,
     pub ca_certificate_pem: String,
     pub ca_der_sha256: String,
+    pub certificate_der_sha256: String,
     pub ca_expires_at: u64,
     pub certificate_expires_at: u64,
     pub recorded_token_expires_at: u64,
@@ -336,11 +337,12 @@ pub fn inspect(path: &Path) -> Result<TrustInfo> {
     )?;
     state.require_path_binding(path)?;
     Ok(TrustInfo {
-        schema: "elevenid.installer-trust-info/v1",
+        schema: "elevenid.installer-trust-info/v2",
         installation_id: id,
         origin,
         ca_certificate_pem: pem,
         ca_der_sha256: m.ca_der_sha256,
+        certificate_der_sha256: m.certificate_der_sha256,
         ca_expires_at: m.ca_expires_at,
         certificate_expires_at: m.certificate_expires_at,
         recorded_token_expires_at: expires,

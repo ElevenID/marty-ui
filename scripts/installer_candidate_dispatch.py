@@ -121,14 +121,17 @@ def verify(*, assets, grants, context, target, ledger, gh, cosign, now, runner=p
     return authorization, receipt, inventory, paths
 
 
-def verified_bootstrap(harness_source_sha):
+def verified_harness_script(harness_source_sha, name):
     release.sha(harness_source_sha)
+    release.require(name in ('installer_candidate_public_bootstrap.py',
+                             'installer_host_probe.py', 'installer_live_tls_probe.py'),
+                    'unapproved harness script')
     root = Path(__file__).resolve().parent.parent
-    script = root / 'scripts/installer_candidate_public_bootstrap.py'
-    release.require(script.is_file() and not script.is_symlink(), 'public guest bootstrap unavailable')
+    script = root / 'scripts' / name
+    release.require(script.is_file() and not script.is_symlink(), 'guest harness script unavailable')
     with tempfile.TemporaryDirectory(prefix='marty-candidate-bootstrap-source-') as home:
         raw = command(['/usr/bin/git', '--no-replace-objects', '-C', str(root), 'show',
-                       harness_source_sha + ':scripts/installer_candidate_public_bootstrap.py'],
+                       harness_source_sha + ':scripts/' + name],
                       env={'HOME': home, 'PATH': '/usr/bin:/bin', 'LANG': 'C', 'LC_ALL': 'C',
                            'GIT_NO_REPLACE_OBJECTS': '1', 'GIT_CONFIG_NOSYSTEM': '1',
                            'GIT_CONFIG_GLOBAL': '/dev/null'},
@@ -136,8 +139,12 @@ def verified_bootstrap(harness_source_sha):
     with script.open('rb') as stream:
         current = stream.read(65537)
     release.require(raw == current and 0 < len(raw) <= 65536 and len(current) <= 65536,
-                    'public guest bootstrap differs from signed harness source')
+                    'guest harness script differs from signed harness source')
     return raw.decode('utf-8')
+
+
+def verified_bootstrap(harness_source_sha):
+    return verified_harness_script(harness_source_sha, 'installer_candidate_public_bootstrap.py')
 
 
 def remote_plan(home, user, context, target, *, authorization=None, bootstrap_source=None):
