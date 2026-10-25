@@ -1,5 +1,6 @@
 """Signed input, held-lease VM and raw host admission orchestration."""
 import os
+import json
 from pathlib import Path
 import sys
 
@@ -15,6 +16,8 @@ from installer_candidate_vm_create import _write
 import installer_candidate_vm_host_preflight as preflight
 import installer_release as release
 from test_installer_acceptance_runner import host
+
+REAL_BIND_CANDIDATE = release.bind_candidate_authorization
 
 VM_ID = "11111111-1111-4111-8111-111111111111"
 INSTALLATION_ID = "22222222-2222-4222-8222-222222222222"
@@ -48,7 +51,7 @@ def arranged(tmp_path, monkeypatch):
         return {"id": kwargs["pre_dispatch_id"]}
     monkeypatch.setattr(preflight, "observe", observe)
     engine = "test-engine-12345678"
-    def bind(_records, _initial, current, **_kwargs):
+    def bind(_records, initial, current, **_kwargs):
         return dict(target=dict(guest_id=VM_ID, disk_id="e" * 64,
                                 engine_id=engine, installation_id=INSTALLATION_ID),
                     ssh=dict(host="127.0.0.1", port=2222, user="installer",
@@ -56,7 +59,7 @@ def arranged(tmp_path, monkeypatch):
                              controller_key_sha256="f" * 64,
                              known_hosts_sha256="0" * 64),
                     provisioning_sha256={"creation_intent_sha256": "1" * 64},
-                    initial_guest_readiness_sha256="2" * 64,
+                    initial_guest_readiness_sha256=release.digest(initial),
                     pre_dispatch_sha256=release.digest(release.encode(current)))
     monkeypatch.setattr(preflight, "bind_target", bind)
     observed = release.encode(host())
@@ -87,6 +90,127 @@ def test_preflight_preserves_raw_host_bytes_without_consuming_nonce(arranged):
     assert calls == ["signed", "observe:" + FIRST_ID, "probe", "signed",
                      "observe:" + FINAL_ID, "signed"]
     assert not (args["registry"] / (args["expected"]["nonce"] + ".json")).exists()
+
+
+def test_consume_reobserves_same_vm_under_held_lease(arranged):
+    args, calls, _, monkeypatch = arranged
+    consumed = []
+    def consume(_self, a, i, **kwargs):
+        consumed.append((a, i, kwargs))
+        return b"durable receipt"
+    monkeypatch.setattr(ControllerLease, "consume", consume)
+    with ControllerLease(args["registry"]) as lease:
+        record = preflight.preflight(lease, **args)
+        result = preflight.consume_preflight(
+            lease, args["registry"], args["runtime_parent"], vm_id=VM_ID,
+            installation_id=INSTALLATION_ID, observation_id=FIRST_ID,
+            consumption_observation_id="55555555-5555-4555-8555-555555555555",
+            preflight_record=record, authorization=args["authorization"],
+            assets=args["assets"], expected=args["expected"], gh=args["gh"],
+            cosign=args["cosign"], clock=args["clock"])
+        assert lease.parent is not None
+    assert result == b"durable receipt"
+    assert len(consumed) == 1
+    assert consumed[0][2]["guest_id"] == VM_ID
+    assert consumed[0][2]["installation_id"] == INSTALLATION_ID
+    assert calls[-2:] == ["signed", "observe:55555555-5555-4555-8555-555555555555"]
+
+
+def test_consume_rejects_changed_host_bytes_before_nonce(arranged):
+    args, _, _, monkeypatch = arranged
+    monkeypatch.setattr(ControllerLease, "consume", lambda *_a, **_k:
+                        pytest.fail("nonce consumed after host evidence changed"))
+    with ControllerLease(args["registry"]) as lease:
+        record = preflight.preflight(lease, **args)
+        raw_path = args["registry"] / f"{VM_ID}.{FIRST_ID}.host-observation.json"
+        raw_path.write_bytes(release.encode({}))
+        with pytest.raises(ValueError, match="host evidence differs"):
+            preflight.consume_preflight(
+                lease, args["registry"], args["runtime_parent"], vm_id=VM_ID,
+                installation_id=INSTALLATION_ID, observation_id=FIRST_ID,
+                consumption_observation_id="55555555-5555-4555-8555-555555555555",
+                preflight_record=record, authorization=args["authorization"],
+                assets=args["assets"], expected=args["expected"], gh=args["gh"],
+                cosign=args["cosign"], clock=args["clock"])
+
+
+def test_consume_preserves_noncanonical_raw_host_json(arranged):
+    args, _, raw, monkeypatch = arranged
+    args["guest_probe"] = lambda *_a: b" " + raw
+    monkeypatch.setattr(ControllerLease, "consume", lambda *_a, **_k: b"receipt")
+    with ControllerLease(args["registry"]) as lease:
+        record = preflight.preflight(lease, **args)
+        result = preflight.consume_preflight(
+            lease, args["registry"], args["runtime_parent"], vm_id=VM_ID,
+            installation_id=INSTALLATION_ID, observation_id=FIRST_ID,
+            consumption_observation_id="55555555-5555-4555-8555-555555555555",
+            preflight_record=record, authorization=args["authorization"],
+            assets=args["assets"], expected=args["expected"], gh=args["gh"],
+            cosign=args["cosign"], clock=args["clock"])
+    assert result == b"receipt"
+
+
+def test_consume_rejects_replaced_vm_target_before_nonce(arranged):
+    args, _, _, monkeypatch = arranged
+    monkeypatch.setattr(ControllerLease, "consume", lambda *_a, **_k:
+                        pytest.fail("nonce consumed after VM changed"))
+    with ControllerLease(args["registry"]) as lease:
+        record = preflight.preflight(lease, **args)
+        original = preflight.bind_target
+        def changed(*a, **k):
+            bound = original(*a, **k)
+            bound["target"]["engine_id"] = "replacement-engine-12345678"
+            return bound
+        monkeypatch.setattr(preflight, "bind_target", changed)
+        with pytest.raises(ValueError, match="VM target changed"):
+            preflight.consume_preflight(
+                lease, args["registry"], args["runtime_parent"], vm_id=VM_ID,
+                installation_id=INSTALLATION_ID, observation_id=FIRST_ID,
+                consumption_observation_id="55555555-5555-4555-8555-555555555555",
+                preflight_record=record, authorization=args["authorization"],
+                assets=args["assets"], expected=args["expected"], gh=args["gh"],
+                cosign=args["cosign"], clock=args["clock"])
+
+
+def test_real_held_lease_consumes_exact_nonce_once(arranged):
+    args, _, _, monkeypatch = arranged
+    fixture = json.loads((Path(__file__).resolve().parents[1]
+                          / "rust/crates/deployment-catalog/tests/fixtures/installer-candidate-records.json")
+                         .read_text())
+    authorization = fixture["authorization"].encode()
+    inventory = fixture["inventory"].encode()
+    grant = release.decode(authorization)
+    args["expected"] = {key: grant[key] for key in release.CONTEXT_FIELDS}
+    monkeypatch.setattr(preflight.uploader, "authenticate",
+                        lambda *_a, **_k: (authorization, inventory))
+    with ControllerLease(args["registry"]) as lease:
+        record = preflight.preflight(lease, **args)
+        monkeypatch.setattr(release, "bind_candidate_authorization", REAL_BIND_CANDIDATE)
+        common = dict(vm_id=VM_ID, installation_id=INSTALLATION_ID,
+                      observation_id=FIRST_ID, preflight_record=record,
+                      authorization=args["authorization"], assets=args["assets"],
+                      expected=args["expected"], gh=args["gh"], cosign=args["cosign"],
+                      clock=args["clock"])
+        receipt = preflight.consume_preflight(
+            lease, args["registry"], args["runtime_parent"],
+            consumption_observation_id="55555555-5555-4555-8555-555555555555",
+            **common)
+        ledger = args["registry"] / (grant["nonce"] + ".json")
+        assert ledger.read_bytes() == receipt
+        bound = release.bind_controller_consumption(
+            receipt, authorization, inventory, expected=args["expected"],
+            expected_engine=record["target"]["engine_id"], now=100000)
+        assert all(bound[key] == value for key, value in record["target"].items())
+        with pytest.raises(FileExistsError):
+            preflight.consume_preflight(
+                lease, args["registry"], args["runtime_parent"],
+                consumption_observation_id="66666666-6666-4666-8666-666666666666",
+                **common)
+        assert ledger.read_bytes() == receipt
+        assert lease.parent is not None
+        with pytest.raises(BlockingIOError):
+            with ControllerLease(args["registry"]):
+                pass
 
 
 def test_preflight_rejects_dirty_host_but_retains_raw_evidence(arranged):

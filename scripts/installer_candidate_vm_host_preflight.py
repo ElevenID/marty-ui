@@ -69,6 +69,38 @@ def _unchanged_raw(parent: int, name: str, raw: bytes) -> None:
         os.close(fd)
 
 
+def _raw_bytes_at(parent: int, name: str) -> bytes:
+    release.require(name.endswith(".host-observation.json") and "/" not in name,
+                    "VM raw host evidence name invalid")
+    before = os.stat(name, dir_fd=parent, follow_symlinks=False)
+    release.require(stat.S_ISREG(before.st_mode) and before.st_uid == 0
+                    and before.st_nlink == 1
+                    and stat.S_IMODE(before.st_mode) == 0o600
+                    and 0 < before.st_size <= 65536,
+                    "VM raw host evidence custody invalid")
+    fd = os.open(name, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW
+                 | os.O_CLOEXEC, dir_fd=parent)
+    try:
+        held = os.fstat(fd)
+        def identity(info):
+            return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns)
+        release.require(stat.S_ISREG(held.st_mode)
+                        and identity(held) == identity(before),
+                        "VM raw host evidence changed")
+        raw = bytearray()
+        while len(raw) < before.st_size:
+            chunk = os.read(fd, before.st_size - len(raw))
+            release.require(bool(chunk), "VM raw host evidence truncated")
+            raw.extend(chunk)
+        release.require(identity(os.fstat(fd)) == identity(before)
+                        and identity(os.stat(name, dir_fd=parent,
+                                             follow_symlinks=False)) == identity(before),
+                        "VM raw host evidence changed")
+        return bytes(raw)
+    finally:
+        os.close(fd)
+
+
 def preflight(lease: ControllerLease, registry: Path, runtime_parent: Path, *,
               vm_id: str, installation_id: str, observation_id: str,
               final_observation_id: str, authorization: Path, assets: Path,
@@ -164,3 +196,82 @@ def preflight(lease: ControllerLease, registry: Path, runtime_parent: Path, *,
            record)
     _same_path(registry, lease.parent, dispatch._directory)
     return record
+
+
+def consume_preflight(lease: ControllerLease, registry: Path, runtime_parent: Path, *,
+                      vm_id: str, installation_id: str, observation_id: str,
+                      consumption_observation_id: str, preflight_record: dict,
+                      authorization: Path, assets: Path, expected: dict,
+                      gh: Path, cosign: Path, clock=time.time,
+                      verifier=provenance.command) -> bytes:
+    """Rebind a fresh live VM and durably consume its one candidate nonce."""
+    release.require(os.geteuid() == 0 and lease.registry == registry
+                    and lease.parent is not None and lease.owner_pid == os.getpid(),
+                    "root controller lease required for consumption")
+    _same_path(registry, lease.parent, dispatch._directory)
+    name = vm_id + "." + observation_id + ".host-preflight.json"
+    _, persisted = _read_record(lease.parent, name)
+    release.require(persisted == preflight_record and persisted["schema"] == SCHEMA
+                    and persisted["vm_id"] == vm_id
+                    and persisted["installation_id"] == installation_id
+                    and persisted["host_admission_passed"] is True
+                    and persisted["nonce_consumed"] is False
+                    and persisted["qualified"] is False
+                    and persisted["dispatch_authorized"] is False,
+                    "VM preflight record differs")
+    now = int(clock())
+    release.require(type(persisted["probe_finished_at"]) is int
+                    and 0 <= now - persisted["probe_finished_at"] <= 60,
+                    "VM host measurement is stale")
+    raw_name = vm_id + "." + observation_id + ".host-observation.json"
+    raw = _raw_bytes_at(lease.parent, raw_name)
+    release.require(release.digest(raw) == persisted["host_observation_sha256"],
+                    "VM host evidence differs")
+    _unchanged_raw(lease.parent, raw_name, raw)
+    host_admission(raw, persisted["target"]["engine_id"])
+    a, i = uploader.authenticate(authorization, assets / "installer-inventory.json",
+                                 assets, gh, cosign, runner=verifier)
+    release.bind_candidate_authorization(a, i, expected=expected, now=int(clock()))
+    release.require(release.digest(a) == persisted["authorization_sha256"]
+                    and release.digest(i) == persisted["inventory_sha256"]
+                    and release.candidate_context_sha256(expected)
+                    == persisted["context_sha256"],
+                    "VM candidate differs from preflight")
+    source = dispatch.verified_harness_script(
+        expected["harness_source_sha"], "installer_host_probe.py")
+    release.require(release.digest(source.encode("utf-8"))
+                    == persisted["host_probe_source_sha256"],
+                    "signed host probe source changed")
+    initial_raw, _ = _read_record(lease.parent, vm_id + ".guest-readiness.json")
+    records = {part.replace("-", "_"): _read_record(
+        lease.parent, vm_id + "." + part + ".json")[0] for part in RECORDS}
+    current = observe(registry, runtime_parent, vm_id=vm_id,
+                      pre_dispatch_id=consumption_observation_id, lease=lease)
+    bound = bind_target(records, initial_raw, current,
+                        observation_id=consumption_observation_id,
+                        installation_id=installation_id, now=int(clock()))
+    release.require(bound["target"] == persisted["target"]
+                    and bound["ssh"] == persisted["ssh"]
+                    and bound["provisioning_sha256"]
+                    == persisted["provisioning_sha256"]
+                    and bound["initial_guest_readiness_sha256"]
+                    == persisted["initial_guest_readiness_sha256"],
+                    "VM target changed before nonce consumption")
+    release.require(0 <= int(clock()) - persisted["probe_finished_at"] <= 60,
+                    "VM host measurement is stale")
+    _same_path(registry, lease.parent, dispatch._directory)
+    _unchanged_raw(lease.parent, raw_name, raw)
+    release.require(all(_read_record(
+        lease.parent, vm_id + "." + part + ".json")[0]
+        == records[part.replace("-", "_")] for part in RECORDS)
+        and _read_record(lease.parent, vm_id + ".guest-readiness.json")[0]
+        == initial_raw and _read_record(lease.parent, name)[1] == persisted,
+        "VM preflight inputs changed")
+    target = bound["target"]
+    consumed_at = int(clock())
+    release.require(0 <= consumed_at - persisted["probe_finished_at"] <= 60,
+                    "VM host measurement is stale")
+    return lease.consume(a, i, expected=expected, guest_id=target["guest_id"],
+                         disk_id=target["disk_id"], engine_id=target["engine_id"],
+                         installation_id=target["installation_id"],
+                         consumed_at=consumed_at, now=consumed_at)
