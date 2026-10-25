@@ -24,7 +24,7 @@ fn contract() -> Contract {
 fn rust_surface_freezes_every_intended_http_and_grpc_operation() {
     let contract = contract();
     assert_eq!(contract.schema_version, 1);
-    assert_eq!(contract.http_routes.len(), 24);
+    assert_eq!(contract.http_routes.len(), 25);
     assert_eq!(contract.grpc_methods.len(), 12);
     assert_eq!(
         contract

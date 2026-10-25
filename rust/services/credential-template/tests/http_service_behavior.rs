@@ -297,6 +297,10 @@ impl CredentialTemplateControlPlane for ControlPlane {
 }
 
 fn router() -> axum::Router {
+    router_with_service_auth(true)
+}
+
+fn router_with_service_auth(configured: bool) -> axum::Router {
     let repository = Arc::new(Repository::default());
     let now = Utc::now();
     let registry = Arc::new(Registry {
@@ -327,7 +331,8 @@ fn router() -> axum::Router {
         application,
         registry_application,
         service_authenticator: Arc::new(
-            ServiceTokenAuthenticator::new(Some(TOKEN.to_owned()), true).unwrap(),
+            ServiceTokenAuthenticator::new(configured.then(|| TOKEN.to_owned()), configured)
+                .unwrap(),
         ),
         environment: RuntimeEnvironment::Test,
     })
@@ -520,6 +525,90 @@ async fn template_http_routes_require_trusted_forwarded_identity() {
     assert_eq!(
         json_body(response).await["detail"],
         "CREDENTIAL_TEMPLATE.SERVICE_AUTHENTICATION_REQUIRED"
+    );
+}
+
+#[tokio::test]
+async fn template_owner_projection_requires_service_authority_and_only_exposes_stored_identity() {
+    let mut req = request(
+        "GET",
+        "/internal/v1/resource-owners/credential-templates/missing",
+        json!({}),
+        false,
+    );
+    req.headers_mut()
+        .insert("x-service-token", TOKEN.parse().unwrap());
+    assert_eq!(
+        router_with_service_auth(false)
+            .oneshot(req)
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    let app = router();
+    let response = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/v1/credential-templates",
+            create_body(),
+            true,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let created = json_body(response).await;
+    let id = created["id"].as_str().unwrap();
+    let path = format!("/internal/v1/resource-owners/credential-templates/{id}");
+    for token in [None, Some("invalid"), Some(TOKEN)] {
+        let mut req = request("GET", &path, json!({}), false);
+        // These actor claims are not authority to discover resource ownership.
+        req.headers_mut()
+            .insert("x-user-id", "foreign-user".parse().unwrap());
+        req.headers_mut()
+            .insert("x-organization-id", "foreign-org".parse().unwrap());
+        req.headers_mut()
+            .insert("x-api-key-id", "foreign-key".parse().unwrap());
+        if let Some(token) = token {
+            req.headers_mut()
+                .insert("x-service-token", token.parse().unwrap());
+        }
+        let response = app.clone().oneshot(req).await.unwrap();
+        if token == Some(TOKEN) {
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(
+                json_body(response).await,
+                json!({"id":id,"organization_id":"org-1"})
+            );
+        } else {
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        }
+    }
+    // Ordinary reads still enforce actor membership even with service authority.
+    let mut req = request(
+        "GET",
+        &format!("/v1/credential-templates/{id}"),
+        json!({}),
+        true,
+    );
+    req.headers_mut()
+        .insert("x-user-id", "foreign-user".parse().unwrap());
+    assert_eq!(
+        app.clone().oneshot(req).await.unwrap().status(),
+        StatusCode::FORBIDDEN
+    );
+    let mut req = request(
+        "GET",
+        "/internal/v1/resource-owners/credential-templates/missing",
+        json!({}),
+        false,
+    );
+    req.headers_mut()
+        .insert("x-service-token", TOKEN.parse().unwrap());
+    assert_eq!(
+        app.oneshot(req).await.unwrap().status(),
+        StatusCode::NOT_FOUND
     );
 }
 
