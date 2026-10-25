@@ -70,6 +70,35 @@ journey and custody checks pass, the lower-memory operating envelope is
 reviewed, and this qualification target is updated. A Compose render or image
 pull alone does not establish a smaller supported minimum.
 
+### One-line installer host observation
+
+The component rehearsal above uses source and development tools. It is not the
+clean guest required for one-line installer acceptance. The acceptance controller
+must establish a fresh guest image and disk, keep its GitHub credentials outside
+the guest, and collect observations before any image pulls or neighbor fixtures.
+
+Transfer the reviewed standalone `scripts/installer_host_probe.py` into that guest
+without transferring the repository, then run it with the guest's Python runtime:
+
+```bash
+python3 installer_host_probe.py --docker-bin /usr/bin/docker > host-observation.json
+```
+
+The probe queries the fixed local Docker socket and measures guest RAM, Docker
+RAM, and free space on Docker's data filesystem. It records initial Docker
+resources and limited credential-file, environment-name and development-tool
+presence observations. It does not read credential contents or mutate Docker
+resources. Its only local write is a private temporary directory for isolated
+Docker client configuration, removed on normal completion.
+
+Exit zero means observation succeeded; it does not mean the host qualifies.
+Inspect the separate capacity and Docker-clean predicates. The observation is
+not an atomic snapshot and cannot establish source absence, credential absence,
+VM origin, physical backing capacity or pre-pull timing. Those remain controller
+responsibilities. Permission failures or incomplete reads fail the probe rather
+than substituting a different filesystem or claiming a clean host. This record
+cannot replace the signed installed-journey acceptance report.
+
 ## Experimental preview installer path
 
 An [experimental tester preview](https://github.com/ElevenID/marty-ui/releases)
