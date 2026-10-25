@@ -238,6 +238,14 @@ pub fn install(args: &[String], build_identity: &str) -> Result<()> {
         "installer-admission.json",
         &admission_bytes,
     )?;
+    state.persist_operator(
+        &std::env::current_exe().map_err(|_| "cannot locate running installer")?,
+        &operator_sha,
+    )?;
+    eprintln!(
+        "Marty management executable: {}",
+        directory.join("marty-deploy").display()
+    );
     state.write_evidence(
         "docker-preflight.json",
         &serde_json::to_vec(&observed).map_err(|_| "cannot encode Docker observation")?,

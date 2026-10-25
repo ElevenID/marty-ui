@@ -4,6 +4,7 @@
 #![cfg(target_os = "linux")]
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::{
     ffi::CString,
     fs::File,
@@ -267,6 +268,101 @@ pub struct InstallerState {
     poisoned: bool,
 }
 impl InstallerState {
+    /// Preserve the caller's authenticated release operator for recovery after
+    /// bootstrap cleanup. The caller supplies current_exe and the signed digest.
+    /// Partial copies remain non-executable and are never silently overwritten.
+    /// A failure after publication may leave an authenticated executable; the
+    /// poisoned transaction requires reconciliation rather than another copy.
+    pub fn persist_operator(&mut self, source: &Path, expected_sha256: &str) -> Result<()> {
+        self.require_live_phase(Phase::Initialized)?;
+        if !regex::Regex::new(r"\A[0-9a-f]{64}\z")
+            .unwrap()
+            .is_match(expected_sha256)
+        {
+            return Err("invalid operator digest".into());
+        }
+        self.poisoned = true;
+        let (source_parent, leaf) = parent(source)?;
+        private(&source_parent, true)?;
+        let mut input = open_at(&source_parent, &leaf, libc::O_RDONLY | libc::O_NONBLOCK, 0)?;
+        let metadata = input
+            .metadata()
+            .map_err(|_| "operator metadata unavailable")?;
+        const MAX: u64 = 512 * 1024 * 1024;
+        if !metadata.is_file()
+            || metadata.nlink() != 1
+            || metadata.uid() != unsafe { libc::geteuid() }
+            || metadata.mode() & 0o7777 != 0o700
+            || metadata.len() == 0
+            || metadata.len() > MAX
+        {
+            return Err("operator source must be owned ordinary executable data".into());
+        }
+        let partial = name("marty-deploy.partial");
+        let target = name("marty-deploy");
+        let mut output = open_at(
+            &self.directory,
+            &partial,
+            libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL,
+            0o600,
+        )?;
+        private(&output, false)?;
+        self.directory
+            .sync_all()
+            .map_err(|_| "persist operator partial name")?;
+        let mut digest = Sha256::new();
+        let mut copied = 0u64;
+        let mut buffer = [0u8; 65536];
+        loop {
+            let count = input
+                .read(&mut buffer)
+                .map_err(|_| "read operator source")?;
+            if count == 0 {
+                break;
+            }
+            copied += count as u64;
+            if copied > MAX {
+                return Err("operator exceeds size limit".into());
+            }
+            output
+                .write_all(&buffer[..count])
+                .map_err(|_| "write operator partial")?;
+            digest.update(&buffer[..count]);
+        }
+        output.sync_all().map_err(|_| "persist operator bytes")?;
+        if copied != metadata.len() || format!("{:x}", digest.finalize()) != expected_sha256 {
+            return Err("operator digest or size differs".into());
+        }
+        // Publish authenticated bytes while still non-executable. A crash before
+        // chmod leaves a safe, non-executable final file requiring reconciliation.
+        // NOREPLACE also rejects existing links and leaves partial mode 0600.
+        if unsafe {
+            libc::renameat2(
+                self.directory.as_raw_fd(),
+                partial.as_ptr(),
+                self.directory.as_raw_fd(),
+                target.as_ptr(),
+                libc::RENAME_NOREPLACE,
+            )
+        } != 0
+        {
+            return Err(error("publish operator without replacement"));
+        }
+        self.directory
+            .sync_all()
+            .map_err(|_| "persist published operator name")?;
+        if unsafe { libc::fchmod(output.as_raw_fd(), 0o700) } != 0 {
+            return Err(error("make authenticated operator executable"));
+        }
+        output
+            .sync_all()
+            .map_err(|_| "persist operator permissions")?;
+        self.directory
+            .sync_all()
+            .map_err(|_| "persist published operator name")?;
+        self.poisoned = false;
+        Ok(())
+    }
     pub fn require_live_phase(&self, phase: Phase) -> Result<()> {
         if self.poisoned || self.journal.phase != phase || read(&self.directory)? != self.journal {
             return Err("installer transaction is not live at the required phase".into());
@@ -546,6 +642,144 @@ mod tests {
             source_sha: "a".repeat(40),
             release_tag: "v1.2.3".into(),
             inventory_sha256: format!("sha256:{}", "b".repeat(64)),
+        }
+    }
+    fn operator_fixture(root: &Path) -> std::path::PathBuf {
+        std::fs::set_permissions(root, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let source = root.join("source-operator");
+        std::fs::write(&source, b"authenticated release operator").unwrap();
+        std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o700)).unwrap();
+        source
+    }
+    fn operator_digest() -> String {
+        format!("{:x}", Sha256::digest(b"authenticated release operator"))
+    }
+    #[test]
+    fn operator_copy_persists_authenticated_bytes_and_private_executable_mode() {
+        let root = tempfile::tempdir().unwrap();
+        let source = operator_fixture(root.path());
+        let path = root.path().join("install");
+        let mut state = InstallerState::create(&path, identity()).unwrap();
+        state.persist_operator(&source, &operator_digest()).unwrap();
+        state.require_live_phase(Phase::Initialized).unwrap();
+        drop(state);
+        let file = path.join("marty-deploy");
+        assert_eq!(
+            std::fs::read(&file).unwrap(),
+            b"authenticated release operator"
+        );
+        let metadata = std::fs::metadata(&file).unwrap();
+        assert_eq!(metadata.mode() & 0o7777, 0o700);
+        assert_eq!(metadata.nlink(), 1);
+        assert!(!path.join("marty-deploy.partial").exists());
+        assert_eq!(
+            InstallerState::inspect(&path).unwrap().phase(),
+            Phase::Initialized
+        );
+    }
+    #[test]
+    fn wrong_operator_hash_keeps_nonexecutable_partial_and_poisons_transaction() {
+        let root = tempfile::tempdir().unwrap();
+        let source = operator_fixture(root.path());
+        let path = root.path().join("install");
+        let mut state = InstallerState::create(&path, identity()).unwrap();
+        assert!(state.persist_operator(&source, &"0".repeat(64)).is_err());
+        assert!(!path.join("marty-deploy").exists());
+        assert_eq!(
+            std::fs::metadata(path.join("marty-deploy.partial"))
+                .unwrap()
+                .mode()
+                & 0o7777,
+            0o600
+        );
+        assert!(state.require_live_phase(Phase::Initialized).is_err());
+        assert!(state.persist_operator(&source, &operator_digest()).is_err());
+    }
+    #[test]
+    fn operator_publication_never_replaces_files_or_links() {
+        for linked in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let source = operator_fixture(root.path());
+            let path = root.path().join("install");
+            let mut state = InstallerState::create(&path, identity()).unwrap();
+            let destination = path.join("marty-deploy");
+            if linked {
+                symlink(&source, &destination).unwrap();
+            } else {
+                std::fs::write(&destination, b"existing").unwrap();
+            }
+            assert!(state.persist_operator(&source, &operator_digest()).is_err());
+            assert_eq!(
+                std::fs::metadata(path.join("marty-deploy.partial"))
+                    .unwrap()
+                    .mode()
+                    & 0o7777,
+                0o600
+            );
+            assert_eq!(
+                std::fs::read(&destination).unwrap(),
+                if linked {
+                    b"authenticated release operator".as_slice()
+                } else {
+                    b"existing".as_slice()
+                }
+            );
+            assert!(state.require_live_phase(Phase::Initialized).is_err());
+        }
+    }
+    #[test]
+    fn operator_copy_refuses_linked_sources_and_existing_partial() {
+        for variant in [
+            "symlink",
+            "hardlink",
+            "partial",
+            "mode",
+            "oversized",
+            "phase",
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            let source = operator_fixture(root.path());
+            let path = root.path().join("install");
+            let mut state = InstallerState::create(&path, identity()).unwrap();
+            let mut input = source.clone();
+            match variant {
+                "symlink" => {
+                    input = root.path().join("linked");
+                    symlink(&source, &input).unwrap();
+                }
+                "hardlink" => {
+                    std::fs::hard_link(&source, root.path().join("linked")).unwrap();
+                }
+                "partial" => {
+                    std::fs::write(path.join("marty-deploy.partial"), b"preserve").unwrap();
+                }
+                "mode" => {
+                    std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o755))
+                        .unwrap();
+                }
+                "oversized" => {
+                    std::fs::OpenOptions::new()
+                        .write(true)
+                        .open(&source)
+                        .unwrap()
+                        .set_len(512 * 1024 * 1024 + 1)
+                        .unwrap();
+                }
+                _ => {
+                    state.advance(Phase::Verified).unwrap();
+                }
+            }
+            assert!(
+                state.persist_operator(&input, &operator_digest()).is_err(),
+                "accepted {variant}"
+            );
+            assert!(!path.join("marty-deploy").exists());
+            if variant == "partial" {
+                assert_eq!(
+                    std::fs::read(path.join("marty-deploy.partial")).unwrap(),
+                    b"preserve"
+                );
+            }
         }
     }
     #[test]

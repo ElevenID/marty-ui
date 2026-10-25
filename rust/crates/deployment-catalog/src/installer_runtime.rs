@@ -363,6 +363,18 @@ impl DockerRunner {
     /// created resource before recording success, rather than treating this as a
     /// transaction with Docker. No user-controlled global CLI options are allowed.
     pub fn run_checked(&self, args: &[&str]) -> Result<String> {
+        self.run_checked_with_timeout(args, COMMAND_TIMEOUT)
+    }
+    /// Internal stage-specific budgets remain finite; never inherit a user's
+    /// timeout or let image downloads remove the subprocess cancellation bound.
+    pub(crate) fn run_checked_with_timeout(
+        &self,
+        args: &[&str],
+        timeout: Duration,
+    ) -> Result<String> {
+        if timeout.is_zero() || timeout > Duration::from_secs(900) {
+            return Err("invalid Docker operation timeout".into());
+        }
         if !matches!(
             args.first(),
             Some(
@@ -386,7 +398,7 @@ impl DockerRunner {
             return Err("unapproved Docker command or endpoint override".into());
         }
         self.info()?;
-        self.runner.run(args, COMMAND_TIMEOUT, MAX_OUTPUT)
+        self.runner.run(args, timeout, MAX_OUTPUT)
     }
 }
 
@@ -447,6 +459,37 @@ mod tests {
         }
         assert!(output.contains(&format!("HOME={}", runner.staging.path().display())));
         assert!(output.contains("DOCKER_HOST=unix:///var/run/docker.sock"));
+    }
+    #[test]
+    fn stage_timeouts_are_bounded_and_keep_endpoint_checks() {
+        let parent = private_temp();
+        let binary = script(parent.path(), "exit 19");
+        let docker = DockerRunner::new(
+            &binary,
+            "unix:///var/run/docker.sock",
+            "test-engine",
+            parent.path(),
+        )
+        .unwrap();
+        for timeout in [Duration::ZERO, Duration::from_secs(901)] {
+            assert_eq!(
+                docker
+                    .run_checked_with_timeout(&["pull", "image"], timeout)
+                    .unwrap_err(),
+                "invalid Docker operation timeout"
+            );
+        }
+        assert!(docker
+            .run_checked_with_timeout(
+                &["pull", "-Htcp://remote", "image"],
+                Duration::from_secs(600)
+            )
+            .unwrap_err()
+            .contains("override"));
+        // Even a long pull budget must inspect the expected engine first.
+        assert!(docker
+            .run_checked_with_timeout(&["pull", "image"], Duration::from_secs(600))
+            .is_err());
     }
     #[test]
     fn bounds_real_process_output_timeout_and_redacts_failure() {

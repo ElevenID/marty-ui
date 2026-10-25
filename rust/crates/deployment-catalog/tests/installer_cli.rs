@@ -5,6 +5,43 @@ use serde_json::Value;
 use std::process::Command;
 
 #[test]
+fn persisted_operator_runs_after_bootstrap_storage_is_removed() {
+    use sha2::{Digest, Sha256};
+    use std::os::unix::fs::PermissionsExt;
+    let root = tempfile::tempdir().unwrap();
+    let stage = root.path().join("bootstrap");
+    std::fs::create_dir(&stage).unwrap();
+    std::fs::set_permissions(&stage, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let source = stage.join("operator");
+    std::fs::copy(env!("CARGO_BIN_EXE_marty-deploy"), &source).unwrap();
+    std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let digest = format!("{:x}", Sha256::digest(std::fs::read(&source).unwrap()));
+    let path = root.path().join("installation");
+    let mut state = InstallerState::create(
+        &path,
+        Identity {
+            source_sha: "a".repeat(40),
+            release_tag: "v1.2.3".into(),
+            inventory_sha256: format!("sha256:{}", "b".repeat(64)),
+        },
+    )
+    .unwrap();
+    state.persist_operator(&source, &digest).unwrap();
+    drop(state);
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_dir(stage).unwrap();
+    let output = Command::new(path.join("marty-deploy"))
+        .current_dir(root.path())
+        .args(["status", "--install-dir"])
+        .arg(&path)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{:?}", output.stderr);
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["runtime_observed"], false);
+}
+
+#[test]
 fn doctor_observes_bound_engine_without_source_or_inherited_context() {
     use std::os::unix::fs::PermissionsExt;
     let root = tempfile::tempdir().unwrap();

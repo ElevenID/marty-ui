@@ -156,6 +156,16 @@ fn compose(docker: &DockerRunner, base: &[String], args: &[&str]) -> Result<Stri
     command.extend_from_slice(args);
     docker.run_checked(&command)
 }
+fn compose_with_timeout(
+    docker: &DockerRunner,
+    base: &[String],
+    args: &[&str],
+    timeout: Duration,
+) -> Result<String> {
+    let mut command: Vec<&str> = base.iter().map(String::as_str).collect();
+    command.extend_from_slice(args);
+    docker.run_checked_with_timeout(&command, timeout)
+}
 fn expected_mounts(
     role: &str,
     state: &Path,
@@ -629,7 +639,12 @@ pub fn start_openbao(
         &serde_json::to_vec(&intent).map_err(|_| "cannot encode OpenBao intent")?,
     )?;
     state.require_live_phase(Phase::Provisioning)?;
-    compose(&docker, &base, &["pull", "openbao"])?;
+    compose_with_timeout(
+        &docker,
+        &base,
+        &["pull", "openbao"],
+        Duration::from_secs(600),
+    )?;
     // Recheck project emptiness immediately before first resource creation.
     fresh(&docker, &project)?;
     drop(listener);
@@ -638,7 +653,7 @@ pub fn start_openbao(
         &base,
         &["up", "-d", "--pull", "never", "--no-build", "openbao"],
     )?;
-    compose(
+    compose_with_timeout(
         &docker,
         &base,
         &[
@@ -649,6 +664,7 @@ pub fn start_openbao(
             "never",
             "openbao-bootstrap",
         ],
+        Duration::from_secs(300),
     )?;
     compose(
         &docker,
