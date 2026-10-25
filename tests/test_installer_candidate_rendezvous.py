@@ -1,0 +1,156 @@
+"""Mock transport contracts, never remote mutation or acceptance evidence."""
+import copy
+import io
+import json
+import os
+from pathlib import Path
+import sys
+import urllib.error
+import pytest
+sys.path.insert(0,str(Path(__file__).resolve().parents[1]/"scripts"))
+import installer_candidate_rendezvous as t
+import installer_release as r
+pytestmark=pytest.mark.skipif(os.name!="posix",reason="private Linux output contract")
+
+class Fake:
+    def __init__(self): self.remote=None; self.items=[]; self.raw=b""; self.calls=[]; self.on_download=None
+    def request(self,method,path,body=None):
+        self.calls.append((method,path,body))
+        if method=="POST": self.remote=dict(body,id=123,author=dict(id=41898282)); return copy.deepcopy(self.remote)
+        return copy.deepcopy(self.items if "/assets?" in path else self.remote)
+    def download(self,asset_id,size):
+        assert asset_id==456 and size==len(self.raw)
+        if self.on_download: self.on_download()
+        return self.raw
+
+@pytest.fixture
+def scenario(tmp_path):
+    tmp_path.chmod(0o700)
+    fixture=json.loads((Path(__file__).resolve().parents[1]/"rust/crates/deployment-catalog/tests/fixtures/installer-candidate-records.json").read_text())
+    a,i=fixture["authorization"].encode(),fixture["inventory"].encode()
+    auth,inv=tmp_path/"authorization",tmp_path/"inventory"
+    auth.write_bytes(a); inv.write_bytes(i)
+    client=Fake()
+    args=dict(client=client,authorization=auth,inventory=inv,harness_source_sha="c"*40,
+              run_id=99,run_attempt=3,controller_user_id=12345,clock=lambda:100000)
+    descriptor=tmp_path/"descriptor"
+    t.prepare(**args,descriptor_output=descriptor)
+    context={key:r.decode(a)[key] for key in r.CONTEXT_FIELDS}
+    receipt=r.controller_consumption(a,i,expected=context,guest_id="12345678-1234-4234-8234-123456789abc",
+        disk_id="d"*64,engine_id="test-engine-12345678",installation_id="22345678-1234-4234-8234-123456789abc",
+        consumed_at=100000,now=100000)
+    client.raw=r.encode(receipt)
+    client.items=[dict(id=456,name=t.RECEIPT,state="uploaded",size=len(client.raw),digest="sha256:"+r.digest(client.raw),
+        uploader=dict(id=12345,type="User",login="controller"),created_at="fixed",updated_at="fixed")]
+    return args,descriptor,tmp_path/"receipt",client
+
+def receive(scenario):
+    args,descriptor,out,client=scenario
+    return t.receive(**args,descriptor=descriptor,receipt_output=out)
+
+def test_create_bound_draft_and_receive_exact_bytes(scenario):
+    args,descriptor,out,client=scenario
+    result=receive(scenario)
+    assert result==r.decode(client.raw) and out.read_bytes()==client.raw
+    d=r.decode(descriptor.read_bytes()); assert d["release"]["id"]==123
+    assert client.remote["draft"] is True and client.remote["prerelease"] is True
+    assert Path(str(descriptor)+".intent.json").is_file()
+    assert out.stat().st_mode & 0o777==0o600
+    evidence=r.decode(Path(str(out)+".transport.json").read_bytes())
+    assert evidence["asset"]["id"]==456 and evidence["asset"]["uploader_id"]==12345
+    assert evidence["receipt_sha256"]==r.digest(client.raw)
+    assert "uploader" not in evidence["asset"] and "login" not in json.dumps(evidence)
+    with pytest.raises(FileExistsError): t.prepare(**args,descriptor_output=descriptor)
+    assert sum(method=="POST" for method,_,_ in client.calls)==1
+
+@pytest.mark.parametrize("field,value",[("id",True),("size",65537),("name","other"),("state","starter"),("digest","sha256:"+"0"*64)])
+def test_wrong_asset_refused(scenario,field,value):
+    scenario[3].items[0][field]=value
+    with pytest.raises(ValueError): receive(scenario)
+    assert not scenario[2].exists()
+
+@pytest.mark.parametrize("field,value",[("id",7),("type","Bot"),("login","github-actions[bot]")])
+def test_wrong_uploader_refused(scenario,field,value):
+    scenario[3].items[0]["uploader"][field]=value
+    with pytest.raises(ValueError): receive(scenario)
+
+def test_asset_replacement_and_draft_publication_refused(scenario):
+    client=scenario[3]
+    client.on_download=lambda:client.items[0].update(id=457)
+    with pytest.raises(ValueError): receive(scenario)
+    client.items[0]["id"]=456
+    client.on_download=lambda:client.remote.update(draft=False)
+    with pytest.raises(ValueError): receive(scenario)
+    assert not scenario[2].exists()
+
+def test_receipt_context_substitution_refused(scenario):
+    client=scenario[3]; receipt=r.decode(client.raw); receipt["nonce"]="b"*64
+    client.raw=r.encode(receipt); client.items[0].update(size=len(client.raw),digest="sha256:"+r.digest(client.raw))
+    with pytest.raises(ValueError): receive(scenario)
+
+def test_poll_timeout_is_bounded(scenario):
+    args,descriptor,out,client=scenario; client.items=[]; now=[100000]
+    args["clock"]=lambda:now[0]
+    def sleep(seconds): now[0]+=seconds
+    with pytest.raises(ValueError,match="deadline"):
+        t.receive(**args,descriptor=descriptor,receipt_output=out,sleep=sleep)
+    assert now[0]==100900 and not out.exists()
+
+def test_shared_bot_and_wrong_run_refused_before_remote(scenario):
+    args,_,out,client=scenario
+    for replacement in (dict(controller_user_id=t.SHARED_ACTIONS_BOT),dict(run_attempt=4)):
+        changed=dict(args,**replacement)
+        count=len(client.calls)
+        with pytest.raises(ValueError): t.prepare(**changed,descriptor_output=out)
+        assert len(client.calls)==count
+
+def test_failed_create_keeps_intent_and_never_retries(scenario):
+    args,_,out,client=scenario
+    def failure(*_): raise ValueError("uncertain")
+    client.request=failure
+    with pytest.raises(ValueError): t.prepare(**args,descriptor_output=out)
+    assert Path(str(out)+".intent.json").is_file() and not out.exists()
+    with pytest.raises(FileExistsError): t.prepare(**args,descriptor_output=out)
+
+class Response(io.BytesIO):
+    def read1(self,n): return self.read(n)
+
+class Opener:
+    def __init__(self,target,payload): self.target=target; self.payload=payload; self.requests=[]
+    def open(self,request,timeout):
+        self.requests.append(request)
+        if len(self.requests)==1:
+            raise urllib.error.HTTPError(request.full_url,302,"redirect",{"Location":self.target},None)
+        return Response(self.payload)
+
+def test_download_drops_bearer_on_fixed_release_host():
+    client=t.Client("synthetic-token")
+    client.opener=Opener("https://release-assets.githubusercontent.com/fixed?signature=opaque",b"abc")
+    assert client.download(456,3)==b"abc"
+    first,second=client.opener.requests
+    assert first.get_header("Authorization")=="Bearer synthetic-token"
+    assert second.get_header("Authorization") is None
+
+@pytest.mark.parametrize("target",["https://evil.example/file","http://release-assets.githubusercontent.com/file",
+    "https://user@release-assets.githubusercontent.com/file","https://release-assets.githubusercontent.com:444/file"])
+def test_untrusted_redirect_refused(target):
+    client=t.Client("synthetic-token"); client.opener=Opener(target,b"abc")
+    with pytest.raises(ValueError): client.download(456,3)
+    assert len(client.opener.requests)==1
+
+def test_oversized_download_refused():
+    client=t.Client("synthetic-token")
+    client.opener=Opener("https://release-assets.githubusercontent.com/fixed",b"abcd")
+    with pytest.raises(ValueError): client.download(456,3)
+
+def test_failed_receipt_write_preserves_transport_evidence(scenario,monkeypatch):
+    out=scenario[2]; original=t.write_exclusive
+    def fail_receipt(path,raw):
+        if path==out: raise OSError("synthetic output failure")
+        return original(path,raw)
+    monkeypatch.setattr(t,"write_exclusive",fail_receipt)
+    with pytest.raises(OSError): receive(scenario)
+    assert Path(str(out)+".transport.json").is_file() and not out.exists()
+    monkeypatch.setattr(t,"write_exclusive",original)
+    with pytest.raises(FileExistsError): receive(scenario)
+    assert not out.exists()

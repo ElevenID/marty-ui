@@ -114,6 +114,35 @@ Its caller must supply an authenticated acceptance-run API snapshot, independent
 invocation context, and pinned verifier binaries. It does not sign or dispatch
 the grant, and cannot produce an installed-acceptance report.
 
+The main-only `installer-acceptance.yml` workflow now prepares staged execution
+grants from an exact successful nightly build. Configure repository variable
+`INSTALLER_CONTROLLER_USER_ID` to the approved controller operator's numeric
+GitHub user ID before dispatch. Shared Actions bot credentials are not accepted.
+The workflow signs the authorization, creates a unique draft release for receipt
+transport, and uploads `installer-staged-grant-<run-id>-<attempt>` containing the
+authorization, its two proofs and the exact transport descriptor.
+
+The controller must authenticate that package and its independently selected
+invocation, observe the intended guest/disk/Engine, and durably consume the nonce
+outside the guest. Upload only the returned receipt bytes as
+`installer-controller-consumption.json` to the descriptor's numeric draft release
+ID using the approved account. Do not overwrite an asset or retry an uncertain
+consumption. Keep GitHub credentials outside the guest. The workflow polls for
+at most 15 minutes, leaving at least two minutes before authorization expiry.
+It binds the uploader, asset ID, digest and exact candidate context, checks for
+replacement during download, then signs the receipt in the same hosted invocation.
+The final `installer-candidate-execution-grant-<run-id>-<attempt>` artifact contains
+both grant triplets and transport evidence. Guest execution and installed-journey
+report collection are still separate work; this workflow cannot promote a release.
+
+Draft transport is authenticated coordination, not anonymous public acquisition.
+GitHub permits release-asset updates, so names alone cannot identify the receipt
+([asset API](https://docs.github.com/en/rest/releases/assets)). Preserve the exact
+draft and any partial evidence until the controller archives their identities and
+hashes. Cleanup must remove only that owned draft, never publish it, and retain
+the external nonce ledger permanently. The workflow does not delete transports
+automatically; failed creation retains a local intent for reconciliation.
+
 Candidate testing must use acceptance-only authorization rather than a fabricated
 consumer admission. The native candidate preparation library authenticates the
 acceptance workflow invocation, the exact inventory and all four payloads before
