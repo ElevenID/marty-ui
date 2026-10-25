@@ -2833,7 +2833,7 @@ jobs:
       needs.changes.outputs.verification == 'true' ||
       needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 45
     env:
       CARGO_PROFILE_DEV_DEBUG: 0
       PYTHONPATH: packages
@@ -2968,8 +2968,7 @@ jobs:
           cat /sys/fs/cgroup/memory.events 2>/dev/null || true
           grep '^oom_kill ' /proc/vmstat 2>/dev/null || true
           trap 'status=$?; printf "release-contract memory counters after:\n"; cat /sys/fs/cgroup/memory.events 2>/dev/null || true; grep "^oom_kill " /proc/vmstat 2>/dev/null || true; exit "$status"' EXIT
-          python -X faulthandler -m pytest tests/test_issuance_consumer_bindings.py -v --tb=short
-          python -X faulthandler -m pytest tests --ignore=tests/test_issuance_consumer_bindings.py -n 2 -v --tb=short --durations=20
+          python -X faulthandler -m pytest tests -v --tb=short --durations=20
       - name: Exercise root-owned disposable TLS staging contracts
         if: needs.changes.outputs.rollback_test_only != 'true' && needs.changes.outputs.k8s_policy_test_only != 'true' && needs.changes.outputs.didcomm_release_test_only != 'true'
         shell: bash
