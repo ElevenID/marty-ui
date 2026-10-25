@@ -2652,6 +2652,7 @@ def main() -> int:
         # Trace arguments and network bodies retain credentials even without
         # screenshots. Start only after login and KMS credential submission.
         trace_started = False
+        trace_stopped = False
         page = context.new_page()
         if capture:
             capture.bind_page(page)
@@ -2678,7 +2679,9 @@ def main() -> int:
             create_key_service_if_possible(audit, run_id, signing_inputs)
             if record_trace:
                 context.tracing.start(
-                    screenshots=record_video, snapshots=record_video, sources=record_video,
+                    # DOM snapshots also enable HAR capture, including session
+                    # cookies. Keep those out of both functional and video traces.
+                    screenshots=record_video, snapshots=False, sources=False,
                 )
                 trace_started = True
             create_issuer_identity(audit, run_id)
@@ -2690,6 +2693,13 @@ def main() -> int:
             create_policy_and_deployment(audit, run_id)
             create_flow(audit, run_id, "issuance")
             create_flow(audit, run_id, "verification")
+            # API-key response/read actions contain the one-time bearer even
+            # without DOM snapshots. Preserve the earlier trace, then stop before
+            # creation; recorder-owned request-ID observations continue throughout.
+            if trace_started:
+                trace_path = artifact_dir / "mip-primitives-management-trace.zip"
+                context.tracing.stop(path=str(trace_path))
+                trace_stopped = True
             create_api_key(audit, run_id)
             verify_resource_inventory(audit, run_id)
             verify_unauthorized_administration_denied(audit)
@@ -2702,7 +2712,7 @@ def main() -> int:
             audit.cleanup_created_api_keys()
             report = audit.report()
             recording: dict[str, Any] | None = None
-            if trace_started:
+            if trace_started and not trace_stopped:
                 trace_path = artifact_dir / "mip-primitives-management-trace.zip"
                 context.tracing.stop(path=str(trace_path))
             if record_video:
@@ -2733,8 +2743,9 @@ def main() -> int:
                 report["trace_coverage"] = {
                     "status": "CAPTURED_AFTER_SENSITIVE_SETUP" if trace_started else "NOT_STARTED_SETUP_FAILED",
                     "starts_after": "kms-service-configured",
-                    "omitted": ["authentication", "organization-creation", "kms-service-registration"],
-                    "reason": "Credential entry and service submission are excluded from trace arguments and network payloads.",
+                    "stops_before": "api-key-creation",
+                    "omitted": ["authentication", "organization-creation", "kms-service-registration", "api-key-creation"],
+                    "reason": "No DOM/HAR snapshots; secret entry and one-time API-key actions are excluded. Live request-ID evidence continues throughout.",
                 }
                 if not trace_started:
                     report["releaseReady"] = False

@@ -97,6 +97,7 @@ def test_main_honors_recorder_video_mode_and_keeps_required_trace(
             trace_options.append(options)
 
         def stop(self, *, path):
+            events.append("trace-stopped")
             with ZipFile(path, "w") as archive:
                 archive.writestr("test.trace", '{"type":"synthetic-trace"}\n')
 
@@ -205,7 +206,9 @@ def test_main_honors_recorder_video_mode_and_keeps_required_trace(
     assert all(report["behaviorAssertions"].values())
     assert events.index("create_key_service_if_possible") < events.index("trace-started") < events.index("create_issuer_identity")
     assert events.index("verify_issuer_signing_capabilities") < events.index("verify_resource_inventory")
-    assert report["trace_coverage"]["omitted"] == ["authentication", "organization-creation", "kms-service-registration"]
+    assert report["trace_coverage"]["omitted"] == ["authentication", "organization-creation", "kms-service-registration", "api-key-creation"]
+    assert events.index("trace-stopped") < events.index("create_api_key")
+    assert all(options["snapshots"] is False and options["sources"] is False for options in trace_options)
     assert events.index("verify_resource_inventory") < events.index("cleanup")
     assert events.index("verify_unauthorized_administration_denied") < events.index("cleanup")
     assert events.index("context-closed") < events.index("browser-closed")
