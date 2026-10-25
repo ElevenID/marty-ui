@@ -655,6 +655,75 @@ async fn profiled_requests_preserve_lissi_and_x509_identity_modes() {
 }
 
 #[tokio::test]
+async fn derived_verifier_did_changes_public_kid_without_changing_kms_signing_binding() {
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../signing-keys/tests/fixtures/document_vectors.json"
+    ))
+    .unwrap();
+    let signing = Signing {
+        public_jwk: Some(
+            serde_json::from_value(fixture["certificate"]["expected_jwk"].clone()).unwrap(),
+        ),
+        ..Default::default()
+    };
+    let providers = FlowProviderRegistry {
+        signing_identity: Some(Arc::new(signing.clone())),
+        ..Default::default()
+    };
+    let artifacts = PresentationRequestArtifacts {
+        presentation_definition: json!({"id": "pd-1"}),
+        dcql_query: json!({"credentials": [{"id": "age", "format": "mso_mdoc"}]}),
+    };
+    for (method, suffix) in [
+        (VerifierDidMethod::Key, None),
+        (VerifierDidMethod::Jwk, Some("0")),
+    ] {
+        let built = build_profiled_request_object(
+            &providers,
+            instance("verification"),
+            Some(&artifacts),
+            "https://verifier.example",
+            &RequestObjectOptions {
+                client_id_scheme: Oid4vpClientIdScheme::RedirectUri,
+                verifier_did_method: method,
+                ..Default::default()
+            },
+            now(),
+        )
+        .await
+        .unwrap();
+        let protected: Value = serde_json::from_slice(
+            &URL_SAFE_NO_PAD
+                .decode(built.compact_jwt.split('.').next().unwrap())
+                .unwrap(),
+        )
+        .unwrap();
+        let kid = protected["kid"].as_str().unwrap();
+        let (did, fragment) = kid.split_once('#').unwrap();
+        match suffix {
+            None => {
+                assert!(did.starts_with("did:key:z"));
+                assert_eq!(fragment, did.strip_prefix("did:key:").unwrap());
+            }
+            Some(expected) => {
+                assert!(did.starts_with("did:jwk:"));
+                assert_eq!(fragment, expected);
+            }
+        }
+        assert!(built
+            .client_id
+            .starts_with("redirect_uri:https://verifier.example/"));
+    }
+    let signed = signing.requests.lock().unwrap();
+    assert_eq!(signed.len(), 2);
+    assert!(signed
+        .iter()
+        .all(|request| request.issuer_did == "did:web:verifier.example"
+            && request.verification_method_id == "did:web:verifier.example#key-1"
+            && request.signing_key_reference == "managed-key-1"));
+}
+
+#[tokio::test]
 async fn digital_credentials_api_request_is_origin_bound_and_encrypted() {
     let envelopes = Envelopes::default();
     let providers = FlowProviderRegistry {
