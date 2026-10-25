@@ -23,6 +23,7 @@ if __package__:
         PASSPORT_REMOTE_GRPC_SERVERS, RUST_DEPENDENCIES, SELECTED,
         remote_grpc_client_environment, remote_grpc_server_environment,
     )
+    from .passport_model_policy import evaluate as evaluate_policy
     from .passport_supported_infra_images import ROLES
 else:
     from check_passport_supported_rust_model import (
@@ -31,6 +32,7 @@ else:
         PASSPORT_REMOTE_GRPC_SERVERS, RUST_DEPENDENCIES, SELECTED,
         remote_grpc_client_environment, remote_grpc_server_environment,
     )
+    from passport_model_policy import evaluate as evaluate_policy
     from passport_supported_infra_images import ROLES
 
 
@@ -161,6 +163,8 @@ def _ids(value: object, name: str) -> dict[str, str]:
 
 
 def _runtime_environment(actual: object, service: str) -> dict[str, str]:
+    # Keep the adapter's credential-bearing map in-process. Native admission
+    # returns decisions, never an observed environment containing credentials.
     require(isinstance(actual, list)
             and all(isinstance(entry, str) and "=" in entry
                     and bool(entry.partition("=")[0]) for entry in actual),
@@ -173,182 +177,29 @@ def _runtime_environment(actual: object, service: str) -> dict[str, str]:
 
 
 def _organization_environment(actual: object, record: dict) -> None:
-    environment = _runtime_environment(actual, "Organization")
-    expected = {
-        "SERVICE_NAME": "organization",
-        "ORGANIZATION_SERVICE_PORT": "8002",
-        "ORG_GRPC_PORT": "9002",
-        "DATABASE_URL_TEMPLATE": (
-            "postgresql+asyncpg://marty:${MARTY_DB_PASSWORD}@postgres:5432/marty"),
-        "MARTY_DB_PASSWORD_FILE": "/run/secrets/marty_db_password",
-        "GRPC_SERVICE_TOKEN_FILE": "/run/secrets/grpc_service_token",
-        "ES_GRPC_TARGET": "https://event-stream:9015",
-        "ES_GRPC_CA_CERT": "/run/secrets/workload_identity_ca_cert",
-        "MARTY_ORG_ID": "00000000-0000-0000-0000-000000000001",
-        "PASSPORT_ACCEPTANCE_PROJECT": record["project"],
-        "PASSPORT_ACCEPTANCE_RUN_ID": record["run_id"],
-        "PASSPORT_ACCEPTANCE_SOURCE_COMMIT": record["source_commit"],
-        "PASSPORT_ACCEPTANCE_EXPIRES_AT": record["expires_at"],
-    }
-    require(all(environment.get(key) == value for key, value in expected.items())
-            and "MARTY_DB_PASSWORD" not in environment
-            and "GRPC_SERVICE_TOKEN" not in environment,
-            "Organization runtime identity differs from protected run")
+    evaluate_policy("ownership-runtime-identity", error_type=OwnershipError,
+                    actual=actual, service="organization", project=record["project"], record=record)
 
 
 def _revocation_environment(actual: object, status_origin: str) -> None:
-    environment = _runtime_environment(actual, "Revocation Profile")
-    expected = {
-        "SERVICE_NAME": "revocation_profile",
-        "ENVIRONMENT": "development",
-        "REVOCATION_PROFILE_SERVICE_PORT": "8013",
-        "RP_GRPC_ENABLED": "true",
-        "RP_GRPC_PORT": "9013",
-        "DATABASE_URL_TEMPLATE": (
-            "postgresql://marty:${MARTY_DB_PASSWORD}@postgres:5432/marty"),
-        "MARTY_DB_PASSWORD_FILE": "/run/secrets/marty_db_password",
-        "GRPC_SERVICE_TOKEN_FILE": "/run/secrets/grpc_service_token",
-        "REDIS_URL": "redis://redis:6379/4",
-        "ORG_GRPC_TARGET": "https://organization:9002",
-        "ORG_GRPC_CA_CERT": "/run/secrets/workload_identity_ca_cert",
-        "PUBLIC_API_URL": "http://gateway:8000",
-        "STATUS_LIST_BASE_URL": status_origin,
-        "MARTY_ORG_ID": "00000000-0000-0000-0000-000000000001",
-    }
-    require(all(environment.get(key) == value for key, value in expected.items())
-            and "RP_MIGRATE_ONLY" not in environment
-            and "MARTY_DB_PASSWORD" not in environment
-            and "GRPC_SERVICE_TOKEN" not in environment,
-            "Revocation Profile runtime identity differs from disposable model")
+    evaluate_policy("ownership-runtime-identity", error_type=OwnershipError,
+                    actual=actual, service="revocation-profile", status_origin=status_origin)
 
 
 def _support_environment(actual: object, service: str, status_origin: str,
                          surface: str, project: str) -> None:
-    environment = _runtime_environment(actual, service)
-    database = "postgresql+asyncpg://marty:${MARTY_DB_PASSWORD}@postgres:5432/marty"
-    common = {
-        "ENVIRONMENT": "development",
-        "DATABASE_URL_TEMPLATE": database,
-        "MARTY_DB_PASSWORD_FILE": "/run/secrets/marty_db_password",
-        "GRPC_SERVICE_TOKEN_FILE": "/run/secrets/grpc_service_token",
-        "ORG_GRPC_TARGET": "https://organization:9002",
-    }
-    public_origin = status_origin
-    expected = {
-        "compliance-profile": {
-            **common, "SERVICE_NAME": "compliance_profile",
-            "COMPLIANCE_PROFILE_SERVICE_PORT": "8008",
-            **remote_grpc_client_environment("compliance-profile", project),
-        },
-        "trust-profile": {
-            **common, "SERVICE_NAME": "trust_profile", "TRUST_PROFILE_SERVICE_PORT": "8004",
-            "SIGNING_KEYS_INTERNAL_API_KEY_FILE":
-                "/run/secrets/signing_keys_internal_api_key",
-            "MARTY_ISSUER_DID":
-                f"did:web:localhost%3A{status_origin.rsplit(':', 1)[1]}:orgs:marty",
-            "MARTY_ISSUER_BASE_URL": public_origin,
-            "MARTY_ORG_ID": "00000000-0000-0000-0000-000000000001",
-            "MARTY_ORG_SLUG": "marty",
-            "PUBLIC_DOMAIN": f"localhost:{status_origin.rsplit(':', 1)[1]}",
-            "DID_RESOLUTION_BASE_URL": "http://gateway:8000",
-            "ORG_GRPC_CA_CERT": "/run/secrets/workload_identity_ca_cert",
-        },
-        "credential-template": {
-            **common, "SERVICE_NAME": "credential_template",
-            "CREDENTIAL_TEMPLATE_SERVICE_PORT": "8003", "CT_GRPC_PORT": "9003",
-            "ORG_GRPC_TARGET": "https://organization:9002",
-            "ORG_GRPC_CA_CERT": "/run/secrets/workload_identity_ca_cert",
-            "RP_GRPC_TARGET": "https://revocation-profile:9013",
-            "RP_GRPC_CA_CERT": "/run/secrets/workload_identity_ca_cert",
-            "SIGNING_KEYS_INTERNAL_URL": "http://gateway:8000/internal/signing-keys",
-            "SIGNING_KEYS_INTERNAL_API_KEY_FILE":
-                "/run/secrets/signing_keys_internal_api_key",
-            "TRUST_PROFILE_SERVICE_URL": "http://trust-profile:8004",
-            "PUBLIC_API_URL": public_origin,
-            "MARTY_ORG_ID": "00000000-0000-0000-0000-000000000001",
-            "MARTY_MIGRATION_PROFILE": "dev",
-        },
-        "presentation-policy": {
-            **common, "SERVICE_NAME": "presentation_policy",
-            "PRESENTATION_POLICY_SERVICE_PORT": "8009", "PP_GRPC_PORT": "9009",
-            "ISSUANCE_API_KEY_FILE": "/run/secrets/issuance_api_key",
-            "TRUST_PROFILE_SERVICE_URL": "http://trust-profile:8004",
-            "ISSUANCE_NATIVE_SERVICE_URL": "http://issuance-native:8005",
-            "PUBLIC_BASE_URL": public_origin,
-            "ISSUER_BASE_URL": public_origin,
-            "DID_RESOLUTION_BASE_URL": "http://gateway:8000",
-            "PUBLIC_DOMAIN": f"localhost:{status_origin.rsplit(':', 1)[1]}",
-            "MARTY_ORG_SLUG": "marty",
-            "ORG_GRPC_CA_CERT": "/run/secrets/workload_identity_ca_cert",
-        },
-        "deployment-profile": {
-            **common, "SERVICE_NAME": "deployment_profile",
-            "DEPLOYMENT_PROFILE_SERVICE_PORT": "8010",
-            **remote_grpc_client_environment("deployment-profile", project),
-        },
-    }[service]
-    if service == "presentation-policy":
-        expected.update({
-            **({"ENVIRONMENT": "production"} if surface == "selfhost" else {}),
-            "GRPC_WORKLOAD_TLS_SERVER_CERT": "/run/secrets/pp_workload_server_cert",
-            "GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR": "https://openbao:8200",
-            "GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT": "/bao/public-ca/ca.crt",
-            "GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE": "/run/secrets/pp_workload_server_kms_token",
-            "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME": f"{project}-pp-server",
-            "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION": "1",
-            "GRPC_WORKLOAD_TLS_CA_CERT": "/run/secrets/workload_identity_ca_cert",
-        })
-    require(all(environment.get(key) == value for key, value in expected.items())
-            and all(key not in environment for key in (
-                "MARTY_DB_PASSWORD", "GRPC_SERVICE_TOKEN", "ISSUANCE_API_KEY",
-                "SIGNING_KEYS_INTERNAL_API_KEY")),
-            f"{service} runtime identity differs from disposable model")
+    evaluate_policy("ownership-runtime-identity", error_type=OwnershipError, actual=actual,
+                    service=service, status_origin=status_origin, surface=surface, project=project)
 
 
-def _issuer_origin_environment(actual: object, service: str,
-                               status_origin: str) -> None:
-    environment = _runtime_environment(actual, service)
-    origin = status_origin
-    key = "MARTY_ISSUER_BASE_URL" if service == "db-migrate" else "ISSUER_BASE_URL"
-    require(environment.get(key) == origin,
-            f"{service} issuer origin differs from disposable Gateway")
+def _issuer_origin_environment(actual: object, service: str, status_origin: str) -> None:
+    evaluate_policy("ownership-issuer-origin", error_type=OwnershipError,
+                    actual=actual, service=service, status_origin=status_origin)
 
 
 def _flow_surface_environment(actual: object, surface: str, project: str) -> None:
-    environment = _runtime_environment(actual, "Flow")
-    require(environment.get("FLOW_APPLICATION_EVENT_HMAC_KEY_FILE")
-            == "/run/secrets/flow_application_event_hmac_key",
-            "Disposable Flow application event authentication differs from model")
-    expected = {
-        "FLOW_CALLBACK_DESTINATIONS": (
-            "00000000-0000-0000-0000-000000000001|"
-            "https://edge:8443/__disposable/flow-callback?nonce=__MARTY_TOKEN__"),
-        "FLOW_WEBHOOK_SECRET_FILE": "/run/secrets/flow_webhook_secret",
-        "FLOW_CALLBACK_CA_CERT_FILE": "/run/secrets/workload_identity_ca_cert",
-        "GRPC_WORKLOAD_TLS_CLIENT_CERT": "/run/secrets/flow_workload_client_cert",
-        "GRPC_WORKLOAD_TLS_CLIENT_KMS_ADDR": "https://openbao:8200",
-        "GRPC_WORKLOAD_TLS_CLIENT_KMS_CA_CERT": "/bao/public-ca/ca.crt",
-        "GRPC_WORKLOAD_TLS_CLIENT_KMS_TOKEN_FILE": "/run/secrets/flow_workload_client_kms_token",
-        "GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_NAME": f"{project}-flow-client",
-        "GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_VERSION": "1",
-        "GRPC_WORKLOAD_TLS_SERVER_CERT": "/run/secrets/flow_workload_server_cert",
-        "GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR": "https://openbao:8200",
-        "GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT": "/bao/public-ca/ca.crt",
-        "GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE": "/run/secrets/flow_workload_server_kms_token",
-        "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME": f"{project}-flow-server",
-        "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION": "1",
-        "GRPC_WORKLOAD_TLS_CA_CERT": "/run/secrets/workload_identity_ca_cert",
-    }
-    require(environment.get("ENVIRONMENT") == (
-                "production" if surface == "selfhost" else "development")
-            and all(environment.get(key) == value for key, value in expected.items()
-                    if key not in {"FLOW_CALLBACK_DESTINATIONS", "FLOW_WEBHOOK_SECRET_FILE",
-                                   "FLOW_CALLBACK_CA_CERT_FILE"})
-            and (surface != "selfhost" or all(
-                environment.get(key) == expected[key] for key in
-                ("FLOW_CALLBACK_DESTINATIONS", "FLOW_WEBHOOK_SECRET_FILE",
-                 "FLOW_CALLBACK_CA_CERT_FILE"))),
-            "Disposable Flow callback or workload TLS runtime differs from surface")
+    evaluate_policy("ownership-runtime-identity", error_type=OwnershipError,
+                    actual=actual, service="flow", surface=surface, project=project)
 
 
 def _ceremony_environment(actual: object, service: str, surface: str,

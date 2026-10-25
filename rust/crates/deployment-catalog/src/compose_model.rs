@@ -214,7 +214,7 @@ fn resources(input: &Value) -> PolicyResult {
     }
     Ok(Value::Null)
 }
-fn grpc_environment(project: &str, prefix: &str, role: &str, server: bool) -> Value {
+pub(crate) fn grpc_environment(project: &str, prefix: &str, role: &str, server: bool) -> Value {
     if server {
         json!({
 "GRPC_WORKLOAD_TLS_SERVER_CERT": format!("/run/secrets/{prefix}_cert"),
@@ -704,30 +704,12 @@ fn runtime(input: &Value) -> PolicyResult {
     let origin = format!("https://localhost:{port}");
     let domain = format!("localhost:{port}");
     let did = format!("did:web:localhost%3A{port}:orgs:marty");
-    let common = json!({
-"ENVIRONMENT": "development",
-"DATABASE_URL_TEMPLATE": org[
-"DATABASE_URL_TEMPLATE"],
-"MARTY_DB_PASSWORD_FILE": "/run/secrets/marty_db_password",
-"GRPC_SERVICE_TOKEN_FILE": "/run/secrets/grpc_service_token",
-"ORG_GRPC_TARGET": "https://organization:9002"});
+    let support =
+        |name| crate::deployment_environment::model_support(name, p, &origin, selfhost, org);
     runtime_rule(
         s,
         "compliance-profile",
-        merged(
-            merged(
-                common.clone(),
-                json!({
-"SERVICE_NAME": "compliance_profile",
-"COMPLIANCE_PROFILE_SERVICE_PORT": "8008"}),
-            ),
-            grpc_environment(
-                p,
-                "compliance_profile_workload_client",
-                "compliance-profile-client",
-                false,
-            ),
-        ),
+        support("compliance-profile")?,
         &[
             "marty_db_password",
             "grpc_service_token",
@@ -743,21 +725,7 @@ fn runtime(input: &Value) -> PolicyResult {
     runtime_rule(
         s,
         "trust-profile",
-        merged(
-            common.clone(),
-            json!({
-"SERVICE_NAME": "trust_profile",
-"TRUST_PROFILE_SERVICE_PORT": "8004",
-"SIGNING_KEYS_INTERNAL_API_KEY_FILE": "/run/secrets/signing_keys_internal_api_key",
-"MARTY_ORG_ID": org[
-"MARTY_ORG_ID"],
-"MARTY_ORG_SLUG": "marty",
-"MARTY_ISSUER_DID": did,
-"MARTY_ISSUER_BASE_URL": origin,
-"PUBLIC_DOMAIN": domain,
-"DID_RESOLUTION_BASE_URL": "http://gateway:8000",
-"ORG_GRPC_CA_CERT": "/run/secrets/workload_identity_ca_cert"}),
-        ),
+        support("trust-profile")?,
         &[
             "marty_db_password",
             "grpc_service_token",
@@ -772,26 +740,7 @@ fn runtime(input: &Value) -> PolicyResult {
     runtime_rule(
         s,
         "credential-template",
-        merged(
-            merged(
-                common.clone(),
-                json!({
-"SERVICE_NAME": "credential_template",
-"CREDENTIAL_TEMPLATE_SERVICE_PORT": "8003",
-"CT_GRPC_PORT": "9003",
-"ORG_GRPC_CA_CERT": "/run/secrets/workload_identity_ca_cert",
-"RP_GRPC_TARGET": "https://revocation-profile:9013",
-"RP_GRPC_CA_CERT": "/run/secrets/workload_identity_ca_cert",
-"SIGNING_KEYS_INTERNAL_URL": "http://gateway:8000/internal/signing-keys",
-"SIGNING_KEYS_INTERNAL_API_KEY_FILE": "/run/secrets/signing_keys_internal_api_key",
-"TRUST_PROFILE_SERVICE_URL": "http://trust-profile:8004",
-"PUBLIC_API_URL": origin,
-"MARTY_ORG_ID": org[
-"MARTY_ORG_ID"],
-"MARTY_MIGRATION_PROFILE": "dev"}),
-            ),
-            grpc_environment(p, "ct_workload_server", "credential-template-server", true),
-        ),
+        support("credential-template")?,
         &[
             "marty_db_password",
             "grpc_service_token",
@@ -808,35 +757,10 @@ fn runtime(input: &Value) -> PolicyResult {
 "signing-keys": "service_healthy"}),
         8003,
     )?;
-    let pp = merged(
-        common.clone(),
-        json!({
-"ENVIRONMENT": if selfhost {
-"production"}else{
-"development"},
-"SERVICE_NAME": "presentation_policy",
-"GRPC_WORKLOAD_TLS_CA_CERT": "/run/secrets/workload_identity_ca_cert",
-"ORG_GRPC_CA_CERT": "/run/secrets/workload_identity_ca_cert",
-"PRESENTATION_POLICY_SERVICE_PORT": "8009",
-"PP_GRPC_PORT": "9009",
-"ISSUANCE_API_KEY_FILE": "/run/secrets/issuance_api_key",
-"SIGNING_KEYS_SERVICE_URL": "http://signing-keys:8017",
-"SIGNING_KEYS_INTERNAL_API_KEY_FILE": "/run/secrets/signing_keys_internal_api_key",
-"DID_RESOLUTION_BASE_URL": "http://gateway:8000",
-"TRUST_PROFILE_SERVICE_URL": "http://trust-profile:8004",
-"ISSUANCE_NATIVE_SERVICE_URL": "http://issuance-native:8005",
-"PUBLIC_DOMAIN": domain,
-"PUBLIC_BASE_URL": origin,
-"ISSUER_BASE_URL": origin,
-"MARTY_ORG_SLUG": "marty"}),
-    );
     runtime_rule(
         s,
         "presentation-policy",
-        merged(
-            pp,
-            grpc_environment(p, "pp_workload_server", "pp-server", true),
-        ),
+        support("presentation-policy")?,
         &[
             "marty_db_password",
             "grpc_service_token",
@@ -856,20 +780,7 @@ fn runtime(input: &Value) -> PolicyResult {
     runtime_rule(
         s,
         "deployment-profile",
-        merged(
-            merged(
-                common,
-                json!({
-"SERVICE_NAME": "deployment_profile",
-"DEPLOYMENT_PROFILE_SERVICE_PORT": "8010"}),
-            ),
-            grpc_environment(
-                p,
-                "deployment_profile_workload_client",
-                "deployment-profile-client",
-                false,
-            ),
-        ),
+        support("deployment-profile")?,
         &[
             "marty_db_password",
             "grpc_service_token",

@@ -344,152 +344,15 @@ def prepare(handoff: dict[str, Any], maintenance_intent: dict[str, Any],
             and type(handoff.get("cutover_report_run_id")) is int
             and handoff["cutover_report_run_id"] > 0,
             "Beta maintenance intent differs from signed handoff")
-    generation = maintenance_intent.get("beta_generation")
-    require(isinstance(generation, list) and generation,
-            "Beta maintenance generation is invalid")
-    previous = {}
-    for item in generation:
-        require(isinstance(item, dict)
-                and isinstance(item.get("service"), str)
-                and CONTAINER.fullmatch(str(item.get("container_id"))) is not None
-                and item["service"] not in previous,
-                "Beta maintenance generation has ambiguous services")
-        previous[item["service"]] = item["container_id"]
-    require(OPTIONAL_LOCALHOST_BRIDGE not in previous,
-            "Optional Canvas localhost bridge cannot enter signed aggregate beta generation")
-    require("postgres" in previous
-            and (SIGNED_APPLICATIONS - NEW_SERVICES | {"issuance"}).issubset(previous)
-            and not (NEW_SERVICES & previous.keys()),
-            "Beta generation or simulator service state is unexpected")
-    services = rendered.get("services")
-    require(isinstance(services, dict)
-            and set(previous).issubset(services)
-            and SIGNED_APPLICATIONS.issubset(services),
-            "Rendered beta Compose omits required services")
-    assert_beta_origin(services)
-    assert_private_gateway_port(services)
-    for name in SIGNED_APPLICATIONS:
-        service = services[name]
-        require(isinstance(service, dict), f"Rendered beta service is invalid: {name}")
-        require(service.get("image") == handoff["services_image"],
-                f"Rendered beta service image differs from signed release: {name}")
-        env = environment(service)
-        require(env.get("SERVICE_NAME") == name.replace("-", "_"),
-                f"Rendered beta service dispatch differs: {name}")
-        if name == "issuance-native":
-            for key in ("PHYSICAL_DOCUMENT_ARTIFACT_KEY",
-                        "PHYSICAL_DOCUMENT_ARTIFACT_KEY_FILE",
-                        "PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED",
-                        "PERSONALIZATION_BUREAU_WEBHOOK_SECRET",
-                        "PERSONALIZATION_BUREAU_WEBHOOK_SECRET_FILE"):
-                require(key not in env,
-                        f"Rendered beta Rust selector differs: {name}.{key}")
-        for key, expected in RUNTIME_ENV.get(name, {}).items():
-            require(env.get(key) == expected,
-                    f"Rendered beta Rust selector differs: {name}.{key}")
-        if name in NEW_SERVICES:
-            require(not service.get("ports"),
-                    f"Synthetic passport service publishes a port: {name}")
-    callback = services["passport-callback-signer"]
-    require(set(callback.get("networks", {})) == {"passport-callback-signing"}
-            and not callback.get("volumes") and not callback.get("secrets"),
-            "Passport callback signer isolation differs")
-    bureau = services["passport-beta-bureau"]
-    require(set(bureau.get("networks", {}))
-            == {"marty-network", "passport-callback-signing"},
-            "Passport synthetic bureau networks differ")
-    signing_network = rendered.get("networks", {}).get("passport-callback-signing")
-    require(isinstance(signing_network, dict)
-            and signing_network.get("name") == "elevenid-beta-passport-callback-signing"
-            and signing_network.get("internal") is True,
-            "Passport callback signing network is not isolated")
-    for name in SIGNED_APPLICATIONS - {"issuance-native", "canvas-sync-worker", "canvas-sandbox"}:
-        require(not services[name].get("entrypoint") and not services[name].get("command"),
-                f"Rendered beta service overrides signed dispatch: {name}")
-    require(services["issuance-native"].get("entrypoint")
-            == ["/app/services/entrypoint.sh"]
-            and services["issuance-native"].get("command") == [],
-            "Native issuance entrypoint differs")
-    require(services["canvas-sync-worker"].get("command")
-            == ["/usr/local/bin/marty-canvas-sync-worker"]
-            and not services["canvas-sync-worker"].get("entrypoint"),
-            "Canvas worker command differs")
-    sandbox = services["canvas-sandbox"]
-    require(sandbox.get("entrypoint") == ["/usr/local/bin/marty-canvas-sandbox"]
-            and sandbox.get("command") == []
-            and not sandbox.get("build")
-            and sandbox.get("healthcheck", {}).get("test")
-                == ["CMD", "curl", "-fsS", "http://localhost:8017/health"],
-            "Rendered beta Canvas sandbox is not the signed Rust runtime")
-    issuance = services.get("issuance")
-    require(isinstance(issuance, dict)
-            and issuance.get("image") == handoff["services_image"]
-            and issuance.get("entrypoint")
-                == ["/usr/local/bin/marty-issuance-service"]
-            and issuance.get("command") == []
-            and environment(issuance).get("SERVICE_NAME") == "issuance_native"
-            and environment(issuance).get("MARTY_SCHEMA_STARTUP_MODE") == "validate"
-            and environment(issuance).get("CANVAS_MIRROR_WORKER_ENABLED") == "false",
-            "Rendered beta issuance image differs from signed Rust release")
-    migrations = services.get("issuance-migrations")
-    require(isinstance(migrations, dict)
-            and migrations.get("image") == handoff["services_image"]
-            and migrations.get("entrypoint")
-                == ["/usr/local/bin/marty-issuance-service"]
-            and migrations.get("command") == ["verify-owned-schema"]
-            and environment(migrations).get("SERVICE_NAME") == "issuance_native"
-            and str(environment(migrations).get("DATABASE_URL", "")).startswith(
-                "postgresql://")
-            and migrations.get("depends_on", {}).get("organization", {}).get("condition")
-                == "service_healthy"
-            and migrations.get("depends_on", {}).get("credential-template", {}).get("condition")
-                == "service_healthy",
-            "Rendered beta issuance migrator differs from signed Rust release")
-    for name in ("passport-provider-ingress", "passport-callback-signer-supported"):
-        require(name not in services,
-                "External physical provider profile entered synthetic beta Compose")
-    require(rendered.get("name") == "elevenid-beta",
-            "Rendered Compose project is not the beta project")
-    ui_services = ui_rendered.get("services")
-    require(ui_rendered.get("name") == "elevenid-beta-ui"
-            and isinstance(ui_services, dict)
-            and set(ui_services) == {"ui-prod"}
-            and isinstance(ui_services["ui-prod"], dict)
-            and ui_services["ui-prod"].get("image") == handoff["ui_image"],
-            "Rendered beta UI differs from signed release")
-    ui_networks = ui_rendered.get("networks")
-    require(isinstance(ui_networks, dict)
-            and isinstance(ui_networks.get("default"), dict)
-            and ui_networks["default"].get("external") is True
-            and ui_networks["default"].get("name") == "elevenid-beta-network",
-            "Rendered beta UI network differs")
-    old_services = set(previous) - {"postgres"}
-    require("openbao" in old_services
-            and previous["openbao"] not in maintenance_intent["stop_container_ids"],
-            "Beta OpenBao was not preserved through maintenance")
-    replacement = (old_services & (SIGNED_APPLICATIONS | {"issuance"})) | NEW_SERVICES
-    restart = old_services - replacement - {"openbao"}
-    network_definitions = rendered.get("networks")
-    require(isinstance(network_definitions, dict),
-            "Rendered beta networks are invalid")
-    expected_networks = {}
-    for name in sorted(set(previous) | NEW_SERVICES):
-        service = services[name]
-        configured = service.get("networks", {"marty-network": None})
-        keys = list(configured) if isinstance(configured, dict) else configured
-        require(isinstance(keys, list)
-                and all(isinstance(key, str) for key in keys),
-                "Rendered beta service network configuration is invalid")
-        names = []
-        for key in keys:
-            definition = network_definitions.get(key)
-            require(isinstance(definition, dict)
-                    and isinstance(definition.get("name"), str),
-                    "Rendered beta network name is invalid")
-            names.append(definition["name"])
-        require(bool(names) and len(names) == len(set(names)),
-                "Rendered beta service networks are ambiguous")
-        expected_networks[name] = sorted(names)
+    native = evaluate_passport_policy(
+        "lifecycle-aggregate-plan", error_type=ComposePlanError,
+        rendered=rendered, ui_rendered=ui_rendered,
+        generation=maintenance_intent.get("beta_generation"),
+        stop_container_ids=maintenance_intent["stop_container_ids"],
+        services_image=handoff["services_image"], ui_image=handoff["ui_image"],
+        signed_applications=sorted(SIGNED_APPLICATIONS), new_services=sorted(NEW_SERVICES),
+        ingress=sorted(INGRESS), selectors=RUNTIME_ENV,
+    )
     return {
         "schema": "marty.passport-beta-aggregate-compose-plan/v1",
         "beta_origin": BETA_ORIGIN,
@@ -506,7 +369,7 @@ def prepare(handoff: dict[str, Any], maintenance_intent: dict[str, Any],
         "legacy_writer_generation": handoff["legacy_writer_generation"],
         "maintenance_receipt_sha256": handoff["maintenance_receipt_sha256"],
         "native_receipt_sha256": handoff["native_receipt_sha256"],
-        "postgres_container_id": previous["postgres"],
+        "postgres_container_id": native["postgres_container_id"],
         "postgres_system_identifier": maintenance_intent["postgres_system_identifier"],
         "database_oid": maintenance_intent["database_oid"],
         "fence_epoch": handoff["fence_epoch"],
@@ -522,14 +385,14 @@ def prepare(handoff: dict[str, Any], maintenance_intent: dict[str, Any],
         "build_only_artifacts": handoff["build_only_artifacts"],
         "docs_image": handoff["docs_image"],
         "issuance_image": handoff["issuance_image"],
-        "restart_infrastructure": sorted(restart - INGRESS),
-        "preserved_infrastructure": ["openbao"],
-        "recreate_applications": sorted(replacement - INGRESS),
-        "restart_ingress_last": sorted(restart & INGRESS),
-        "recreate_ingress_last": sorted(replacement & INGRESS),
-        "target_services": sorted(old_services | NEW_SERVICES),
-        "old_container_ids_by_service": previous,
-        "expected_networks_by_service": expected_networks,
+        "restart_infrastructure": native["restart_infrastructure"],
+        "preserved_infrastructure": native["preserved_infrastructure"],
+        "recreate_applications": native["recreate_applications"],
+        "restart_ingress_last": native["restart_ingress_last"],
+        "recreate_ingress_last": native["recreate_ingress_last"],
+        "target_services": native["target_services"],
+        "old_container_ids_by_service": native["old_container_ids_by_service"],
+        "expected_networks_by_service": native["expected_networks_by_service"],
         "schema_startup_mode": "validate",
         "ui_project": "elevenid-beta-ui",
         "ui_image": handoff["ui_image"],
@@ -572,12 +435,6 @@ def verify_preserved_openbao_custody(recorded: dict[str, Any]) -> dict[str, Any]
             and CONTAINER.fullmatch(str(old.get("openbao"))) is not None,
             "Preserved OpenBao identity is invalid")
     bao = inspect(old["openbao"], run)
-    config = bao.get("Config")
-    raw_env = config.get("Env") if isinstance(config, dict) else None
-    require(bao.get("Id") == old["openbao"]
-            and isinstance(raw_env, list)
-            and all(isinstance(value, str) and "=" in value for value in raw_env),
-            "Preserved OpenBao environment is invalid")
     services = rendered.get("services")
     require(isinstance(services, dict), "Rendered beta service graph is invalid")
     signer = services.get("passport-callback-signer") if isinstance(services, dict) else None
@@ -586,21 +443,9 @@ def verify_preserved_openbao_custody(recorded: dict[str, Any]) -> dict[str, Any]
             "Rendered beta KMS roles are incomplete")
     signer_env = environment(signer)
     bootstrap_env = environment(bootstrap)
-    require(not any(row.startswith(("BAO_DEV_ROOT_TOKEN_ID=", "BAO_TOKEN=", "VAULT_TOKEN="))
-                    for row in raw_env)
-            and config.get("Cmd") == ["server", "-config=/bao/config/openbao.hcl"]
-            and any(isinstance(mount, dict)
-                    and mount.get("Type") == "volume"
-                    and mount.get("Destination") == "/bao/data"
-                    and mount.get("Name") == "elevenid-beta_openbao_data"
-                    for mount in bao.get("Mounts", []))
-            and signer_env.get("BAO_ADDR") == "https://openbao:8200"
-            and signer_env.get("BAO_CACERT") == "/bao/public-ca/ca.crt"
-            and signer_env.get("BAO_TOKEN_FILE") == "/bao/passport-callback/token"
-            and not signer_env.get("BAO_TOKEN")
-            and bootstrap_env.get("BAO_PASSPORT_CALLBACK_TOKEN_FILE")
-                == "/bao/passport-callback/token",
-            "Preserved OpenBao is not the scoped Raft callback KMS")
+    evaluate_passport_policy("lifecycle-preserved-kms", error_type=ComposePlanError,
+                             observed=bao, container_id=old["openbao"], rendered=rendered,
+                             signer_environment=signer_env, bootstrap_environment=bootstrap_env)
     return {"schema": "marty.passport-beta-openbao-custody-check/v1", "verified": True,
             "source_commit": recorded["source_commit"]}
 
@@ -734,92 +579,10 @@ def verify_resume_plan(
                 and service in set(old) | NEW_SERVICES,
                 "Aggregate resume beta service inventory changed")
         observed.setdefault(service, []).append(container)
-    require(all(len(items) <= 2 for items in observed.values()),
-            "Aggregate resume beta service is duplicated")
-    recreated = set(recorded.get("recreate_applications", [])) | set(
-        recorded.get("recreate_ingress_last", []))
-    rendered_services = beta_rendered.get("services")
-    require(isinstance(rendered_services, dict),
-            "Aggregate resume rendered services are invalid")
-    for service, containers in observed.items():
-        replacements = [item for item in containers
-                        if item.get("Id") != old.get(service)]
-        require(len(replacements) <= 1,
-                "Aggregate resume beta service has duplicate replacements")
-        for container in containers:
-            state = container.get("State")
-            require(isinstance(state, dict), "Aggregate resume beta state is invalid")
-            networks = container.get("NetworkSettings", {}).get("Networks")
-            expected_networks = recorded.get("expected_networks_by_service")
-            require(isinstance(networks, dict)
-                    and isinstance(expected_networks, dict)
-                    and isinstance(expected_networks.get(service), list)
-                    and set(networks).issubset(set(expected_networks[service])),
-                    "Aggregate resume beta service joined an unexpected network")
-            if service in recreated:
-                if container.get("Id") == old.get(service):
-                    require(state.get("Running") is False,
-                            "Stopped old beta application restarted during resume")
-                else:
-                    expected = recorded["services_image"]
-                    config = container.get("Config")
-                    require(isinstance(config, dict)
-                            and config.get("Image") == expected,
-                            "Aggregate resume application image differs")
-                    labels = config.get("Labels")
-                    expected_hashes = recorded.get("service_config_hashes")
-                    require(isinstance(labels, dict)
-                            and isinstance(expected_hashes, dict)
-                            and re.fullmatch(r"[0-9a-f]{64}",
-                                             str(expected_hashes.get(service))) is not None
-                            and labels.get("com.docker.compose.config-hash")
-                                == expected_hashes.get(service),
-                            "Aggregate resume Compose service config differs")
-                    if service in SIGNED_APPLICATIONS:
-                        raw_env = config.get("Env")
-                        require(isinstance(raw_env, list)
-                                and all(isinstance(value, str) and "=" in value
-                                        for value in raw_env),
-                                "Aggregate resume application environment is invalid")
-                        selected = dict(value.split("=", 1) for value in raw_env)
-                        require(len(selected) == len(raw_env)
-                                and selected.get("SERVICE_NAME")
-                                    == service.replace("-", "_")
-                                and all(selected.get(key) == value
-                                        for key, value in RUNTIME_ENV.get(service, {}).items()),
-                                "Aggregate resume Rust runtime selector differs")
-                    expected_service = rendered_services.get(service)
-                    require(isinstance(expected_service, dict),
-                            "Aggregate resume rendered application is absent")
-                    for field, docker_field in (("entrypoint", "Entrypoint"),
-                                                ("command", "Cmd")):
-                        if field in expected_service:
-                            require(config.get(docker_field) == expected_service[field],
-                                    "Aggregate resume application process differs")
-                    if service == "passport-callback-signer":
-                        networks = container.get("NetworkSettings", {}).get("Networks")
-                        require(isinstance(networks, dict)
-                                and set(networks)
-                                    == {"elevenid-beta-passport-callback-signing"},
-                                "Aggregate resume callback signer network differs")
-            else:
-                require(container.get("Id") == old.get(service),
-                        "Aggregate resume infrastructure identity changed")
-    ready_services = []
-    for service in sorted(recreated):
-        containers = observed.get(service, [])
-        if len(containers) != 1 or containers[0].get("Id") == old.get(service):
-            continue
-        state = containers[0]["State"]
-        health = state.get("Health")
-        networks = containers[0].get("NetworkSettings", {}).get("Networks")
-        if (state.get("Running") is True and state.get("Status") == "running"
-                and isinstance(networks, dict)
-                and set(networks)
-                    == set(recorded["expected_networks_by_service"][service])
-                and (health is None or (isinstance(health, dict)
-                                         and health.get("Status") == "healthy"))):
-            ready_services.append(service)
+    ready_services = evaluate_passport_policy(
+        "lifecycle-resume-runtime", error_type=ComposePlanError, record=recorded,
+        observed=observed, rendered_services=beta_rendered.get("services"),
+        signed_applications=sorted(SIGNED_APPLICATIONS), selectors=RUNTIME_ENV)
     ui_ids = ids("elevenid-beta-ui", run)
     require(len(ui_ids) <= 1, "Aggregate resume UI generation is ambiguous")
     ready_ui = False

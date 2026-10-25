@@ -1310,6 +1310,11 @@ def test_openbao_plugin_changes_select_required_image_lane(tmp_path: Path) -> No
         "rust/services/flow/tests/haip_live_signing.rs",
         "rust/services/signing-keys/src/flow_envelope.rs",
         "rust/services/signing-keys/src/http.rs",
+        "rust/services/signing-keys/src/http/certificate_operations.rs",
+        "rust/services/signing-keys/src/kms.rs",
+        "rust/services/signing-keys/src/kms_azure.rs",
+        "rust/services/signing-keys/src/kms_gcp.rs",
+        "rust/services/signing-keys/src/kms_aws.rs",
         "rust/crates/oid4vp-contract/src/haip_key.rs",
     ):
         selected = _classify_changed_path(path, tmp_path)
