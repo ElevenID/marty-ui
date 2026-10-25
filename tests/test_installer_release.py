@@ -98,8 +98,8 @@ def evidence(prepared, tmp_path):
                       phase=phase, platform="linux/amd64", inventory_sha256="sha256:" + release.digest(inventory_bytes),
                       workflow=acceptance.WORKFLOW, run_id=index, run_attempt=1,
                       cases=dict.fromkeys(acceptance.CASES, "passed"),
-                      host=dict(docker_version="28.0.0", compose_version="2.39.0", memory_bytes=1,
-                                disk_free_bytes=1, image_cache_empty=True, source_available=False,
+                      host=dict(docker_version="28.0.0", compose_version="2.39.0", memory_bytes=32 * 1024**3,
+                                disk_free_bytes=20 * 1024**3, image_cache_empty=True, source_available=False,
                                 development_tools_available=False, credentials_available=False, tls_errors_ignored=False),
                       cleanup=dict(owned_containers_remaining=0, owned_networks_remaining=0,
                                    owned_volumes_remaining=0, recovery_retention_verified=True))

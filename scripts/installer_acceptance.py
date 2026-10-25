@@ -17,6 +17,11 @@ REPOSITORY = "ElevenID/marty-ui"
 SCHEMA = "elevenid.installer-acceptance/v1"
 WORKFLOW = ".github/workflows/installer-acceptance.yml"
 MAX_REPORT_BYTES = 65536
+# Qualification capacity, not a consumer installer minimum. These measurements
+# describe guest-visible RAM and free space on Docker's data filesystem before
+# pulls. The controller must provision extra RAM for kernel reservations.
+MIN_MEMORY_BYTES = 32 * 1024**3
+MIN_DISK_FREE_BYTES = 20 * 1024**3
 CASES = (
     "anonymous-download", "artifact-verification", "isolated-install",
     "browser-tls-login", "issue", "present", "verify", "revoke", "deny",
@@ -117,6 +122,10 @@ def validate(report: dict, *, inventory_bytes: bytes, source_sha: str,
                 "invalid " + name)
     for name in ("memory_bytes", "disk_free_bytes"):
         require(type(host[name]) is int and host[name] > 0, "missing host measurement")
+    require(host["memory_bytes"] >= MIN_MEMORY_BYTES,
+            "host RAM is below the reviewed qualification target")
+    require(host["disk_free_bytes"] >= MIN_DISK_FREE_BYTES,
+            "Docker data filesystem free space is below the qualification target")
     require(host["image_cache_empty"] is True, "host image cache was not empty")
     require(all(host[name] is False for name in (
         "source_available", "development_tools_available", "credentials_available",

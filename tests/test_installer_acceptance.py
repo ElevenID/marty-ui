@@ -134,6 +134,20 @@ def test_no_runtime_smoke_or_extra_case_substitution(evidence):
         gate.validate(report, **args)
 
 
+@pytest.mark.parametrize("field,minimum", [
+    ("memory_bytes", 32 * 1024**3), ("disk_free_bytes", 20 * 1024**3),
+])
+def test_qualification_capacity_boundary(evidence, field, minimum):
+    report, args = evidence
+    for insufficient in (1, minimum - 1):
+        report["host"][field] = insufficient
+        with pytest.raises(ValueError, match="qualification target"):
+            gate.validate(report, **args)
+    for sufficient in (minimum, minimum + 1):
+        report["host"][field] = sufficient
+        gate.validate(report, **args)
+
+
 @pytest.mark.parametrize("raw", [b'{"a":1,"a":2}', b'{"nested":{"a":1,"a":2}}', b'[]', b' ' * 65537],
                          ids=["duplicate", "nested-duplicate", "array", "oversized"])
 def test_ambiguous_or_oversized_json_rejected(tmp_path, raw):
