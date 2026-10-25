@@ -95,10 +95,10 @@ def private_file(path, maximum, mode=0o600):
         require(stat.S_ISREG(info.st_mode) and info.st_uid == os.geteuid()
                 and info.st_nlink == 1 and stat.S_IMODE(info.st_mode) == mode
                 and 0 < info.st_size <= maximum)
-        fd = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=parent)
+        fd = os.open(path.name, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=parent)
         try:
             current = os.fstat(fd)
-            require((info.st_dev, info.st_ino, info.st_size) ==
+            require(stat.S_ISREG(current.st_mode) and (info.st_dev, info.st_ino, info.st_size) ==
                     (current.st_dev, current.st_ino, current.st_size))
             with os.fdopen(fd, "rb", closefd=False) as stream:
                 raw = stream.read(maximum + 1)
@@ -118,10 +118,10 @@ def private_digest(path, maximum, mode=0o600):
         require(stat.S_ISREG(info.st_mode) and info.st_uid == os.geteuid()
                 and info.st_nlink == 1 and stat.S_IMODE(info.st_mode) == mode
                 and 0 < info.st_size <= maximum)
-        fd = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=parent)
+        fd = os.open(path.name, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=parent)
         try:
             current = os.fstat(fd)
-            require((info.st_dev, info.st_ino, info.st_size) ==
+            require(stat.S_ISREG(current.st_mode) and (info.st_dev, info.st_ino, info.st_size) ==
                     (current.st_dev, current.st_ino, current.st_size))
             hashed, total = hashlib.sha256(), 0
             with os.fdopen(fd, "rb", closefd=False) as stream:

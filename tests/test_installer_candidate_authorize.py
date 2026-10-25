@@ -53,6 +53,15 @@ def test_verifies_all_five_before_exclusive_unsigned_write(inputs):
     assert options["output"].stat().st_mode & 0o777 == 0o600
     with pytest.raises(FileExistsError): a.authorize(**options)
 
+
+@pytest.mark.skipif(os.name != "posix", reason="Linux exclusive output contract")
+def test_published_authorization_uses_same_exact_proof_checks(inputs):
+    options,calls,_=inputs
+    options['phase']='published'
+    record=a.authorize(**options)
+    assert record['phase']=='published' and r.decode(options['output'].read_bytes())==record
+    assert len(calls)==10
+
 @pytest.mark.parametrize("field,value", [("run_id",100),("run_attempt",4),("harness_source_sha","d"*40),
     ("build_run_attempt",3),("source_sha","b"*40)])
 def test_wrong_independent_identity_writes_nothing(inputs,field,value):

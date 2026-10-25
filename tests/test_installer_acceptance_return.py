@@ -85,11 +85,34 @@ def test_workflow_checkpoint_never_uses_acceptance_artifact_name():
     # PyYAML 1.1 treats the unchanged unquoted on key as True.
     trigger=workflow.get('on',workflow.get(True))
     assert trigger['workflow_dispatch']['inputs']['execute']['default'] is False
-    steps=workflow['jobs']['prepare-staged-grant']['steps']
+    assert trigger['workflow_dispatch']['inputs']['phase']['options']==['staged','published']
+    steps=workflow['jobs']['prepare-candidate-grant']['steps']
     step=next(s for s in steps if s.get('name')=='Refuse incomplete execution as installed acceptance')
     assert 'exit 1' in step['run'] and step['if']=='inputs.execute'
     assert any(s.get('with',{}).get('name','').startswith('installer-incomplete-checkpoint-') for s in steps)
     assert not any(s.get('with',{}).get('name','').startswith('installer-acceptance-staged-') for s in steps)
+
+
+def test_published_grant_uses_public_assets_without_relabeling_build_artifact():
+    import yaml
+    root=Path(__file__).resolve().parents[1]
+    workflow=yaml.safe_load((root/'.github/workflows/installer-acceptance.yml').read_text())
+    steps=workflow['jobs']['prepare-candidate-grant']['steps']
+    staged=next(s for s in steps if s.get('uses','').startswith('actions/download-artifact@'))
+    public=next(s for s in steps if s.get('name')=='Download the public version assets anonymously for authorizer verification')
+    authorize=next(s for s in steps if s.get('name')=='Verify exact candidate payloads and issue an unsigned short-lived authorization')
+    assert staged['if']=="inputs.phase == 'staged'"
+    assert public['if']=="inputs.phase == 'published'"
+    assert 'GH_TOKEN' not in public.get('env',{}) and 'public.download(' in public['run']
+    assert "releases/download/{os.environ['RELEASE_TAG']}" in public['run']
+    assert '--phase "$PHASE"' in authorize['run']
+    assert authorize['env']['PHASE']=='${{ inputs.phase }}'
+    observation=next(s for s in steps if s.get('name')=='Preserve bounded published release observation')
+    recheck=next(s for s in steps if s.get('name')=='Recheck published release identity and anonymous asset bytes')
+    assert observation['if']=="always() && inputs.phase == 'published'"
+    assert 'context/published-release-identity.json' in observation['with']['path']
+    assert 'public_release.observe(' in recheck['run'] and 'public_release.verify_downloads(' in recheck['run']
+    assert steps.index(recheck)<steps.index(authorize)
 
 
 def test_production_transport_allows_only_exact_read_only_run_endpoint(monkeypatch):

@@ -1,10 +1,17 @@
-name: Installer staged grant preparation
+name: Installer candidate grant preparation
 
-run-name: Prepare staged installer grant for build ${{ inputs.build_run_id }} attempt ${{ inputs.build_run_attempt }}
+run-name: Prepare ${{ inputs.phase }} installer grant for build ${{ inputs.build_run_id }} attempt ${{ inputs.build_run_attempt }}
 
 on:
   workflow_dispatch:
     inputs:
+      phase:
+        description: Staged build artifact or independently downloaded public release
+        required: true
+        type: choice
+        options:
+          - staged
+          - published
       execute:
         description: Wait for a real controller execution checkpoint (currently always incomplete; cannot produce acceptance)
         required: true
@@ -30,11 +37,11 @@ on:
 permissions: {}
 
 concurrency:
-  group: installer-staged-grant-${{ inputs.build_run_id }}-${{ inputs.build_run_attempt }}
+  group: installer-${{ inputs.phase }}-grant-${{ inputs.build_run_id }}-${{ inputs.build_run_attempt }}
   cancel-in-progress: false
 
 jobs:
-  prepare-staged-grant:
+  prepare-candidate-grant:
     if: github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && github.repository == 'ElevenID/marty-ui'
     # This job signs grants and an authenticated controller consumption record.
     # It performs no guest execution and issues no acceptance, admission or channel.
@@ -62,16 +69,18 @@ jobs:
           BUILD_RUN_ATTEMPT: ${{ inputs.build_run_attempt }}
           BUILD_SOURCE_SHA: ${{ inputs.source_sha }}
           RELEASE_TAG: ${{ inputs.release_tag }}
+          PHASE: ${{ inputs.phase }}
           CONTROLLER_USER_ID: ${{ vars.INSTALLER_CONTROLLER_USER_ID }}
         shell: bash
         run: |
           set -euo pipefail
           umask 077
           python - <<'PY'
-          import json, os, re, sys, urllib.request
+          import json, os, re, sys, urllib.parse, urllib.request
           from pathlib import Path
           sys.path.insert(0, 'scripts')
           import installer_release as release
+          import installer_candidate_public_release as public_release
           def require(value):
               if not value:
                   raise SystemExit('Installer grant context refused')
@@ -84,6 +93,7 @@ jobs:
           require(re.fullmatch(r'[1-9][0-9]{0,15}', attempt) is not None)
           release.identity(os.environ['BUILD_SOURCE_SHA'], os.environ['RELEASE_TAG'], int(build), int(attempt))
           require(release.classify_release_tag(os.environ['RELEASE_TAG'])[0] == 'nightly')
+          require(os.environ['PHASE'] in ('staged', 'published'))
           class NoRedirect(urllib.request.HTTPRedirectHandler):
               def redirect_request(self, *args, **kwargs):
                   raise ValueError('API redirect refused')
@@ -104,15 +114,21 @@ jobs:
                   and run['head_sha'] == os.environ['BUILD_SOURCE_SHA'] and run['head_branch'] == 'main'
                   and run['event'] == 'workflow_dispatch' and run['status'] == 'completed'
                   and run['conclusion'] == 'success')
-              artifacts = api('actions/runs/' + build + '/artifacts?per_page=100')
-              require(artifacts['total_count'] <= 100)
-              matches = [a for a in artifacts['artifacts']
-                         if a['name'] == 'nightly-publication-assets-' + build]
-              require(len(matches) == 1)
-              artifact = matches[0]
-              require(not artifact['expired'] and type(artifact['id']) is int and artifact['id'] > 0)
-              require(artifact['workflow_run']['id'] == int(build)
-                  and artifact['workflow_run']['head_sha'] == os.environ['BUILD_SOURCE_SHA'])
+              artifact = None
+              published_observation = None
+              if os.environ['PHASE'] == 'staged':
+                  artifacts = api('actions/runs/' + build + '/artifacts?per_page=100')
+                  require(artifacts['total_count'] <= 100)
+                  matches = [a for a in artifacts['artifacts']
+                             if a['name'] == 'nightly-publication-assets-' + build]
+                  require(len(matches) == 1)
+                  artifact = matches[0]
+                  require(not artifact['expired'] and type(artifact['id']) is int and artifact['id'] > 0)
+                  require(artifact['workflow_run']['id'] == int(build)
+                      and artifact['workflow_run']['head_sha'] == os.environ['BUILD_SOURCE_SHA'])
+              else:
+                  published_observation = public_release.observe(
+                      api, os.environ['RELEASE_TAG'], os.environ['BUILD_SOURCE_SHA'])
               current = api('actions/runs/' + os.environ['GITHUB_RUN_ID'])
               require(current['id'] == int(os.environ['GITHUB_RUN_ID'])
                   and current['run_attempt'] == int(os.environ['GITHUB_RUN_ATTEMPT'])
@@ -138,19 +154,94 @@ jobs:
                   (base / name).mkdir(mode=0o700)
               with (base / 'context' / 'acceptance-run.json').open('xb') as stream:
                   stream.write(release.encode(current))
+              if published_observation is not None:
+                  with (base / 'context' / 'published-release-identity.json').open('xb') as stream:
+                      stream.write(release.encode(published_observation))
               with open(os.environ['GITHUB_OUTPUT'], 'a') as stream:
-                  stream.write('artifact_id=' + str(artifact['id']) + '\n')
+                  if artifact is not None:
+                      stream.write('artifact_id=' + str(artifact['id']) + '\n')
                   stream.write('controller_user_id=' + controller + '\n')
           except (KeyError, ValueError, OSError):
               raise SystemExit('Installer grant API context refused') from None
           PY
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        if: inputs.phase == 'staged'
         with:
           artifact-ids: ${{ steps.context.outputs.artifact_id }}
           run-id: ${{ inputs.build_run_id }}
           github-token: ${{ github.token }}
           merge-multiple: true
           path: ${{ runner.temp }}/installer-staged-grant/inputs
+      - name: Download the public version assets anonymously for authorizer verification
+        if: inputs.phase == 'published'
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          python - <<'PY'
+          import os,sys
+          from pathlib import Path
+          sys.path.insert(0,'scripts')
+          import installer_candidate_public_bootstrap as public
+          import installer_release as release
+          directory=Path(os.environ['RUNNER_TEMP'])/'installer-staged-grant/inputs'
+          held=public.private_directory(directory)
+          try:
+              for name in ['installer-inventory.json',*sorted(release.ARTIFACTS)]:
+                  for suffix in public.SUFFIXES:
+                      asset=name+suffix
+                      limit=(1048576 if suffix else 65536 if name=='installer-inventory.json'
+                             else release.ARTIFACT_MAX_BYTES[name])
+                      url=f"https://github.com/ElevenID/marty-ui/releases/download/{os.environ['RELEASE_TAG']}/{asset}"
+                      public.download(url,directory/asset,held,limit)
+          finally:
+              os.close(held)
+          PY
+      - name: Preserve bounded published release observation
+        if: always() && inputs.phase == 'published'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: installer-published-release-observation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/installer-staged-grant/context/published-release-identity.json
+          if-no-files-found: warn
+          retention-days: 1
+      - name: Recheck published release identity and anonymous asset bytes
+        if: inputs.phase == 'published'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUILD_SOURCE_SHA: ${{ inputs.source_sha }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          python - <<'PY'
+          import json, os, sys, urllib.request
+          from pathlib import Path
+          sys.path.insert(0, 'scripts')
+          import installer_candidate_public_release as public_release
+          import installer_release as release
+          class NoRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, *args, **kwargs):
+                  raise ValueError('API redirect refused')
+          opener = urllib.request.build_opener(NoRedirect)
+          def api(path):
+              request = urllib.request.Request('https://api.github.com/repos/ElevenID/marty-ui/' + path,
+                  headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],
+                           'Accept': 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28'})
+              with opener.open(request, timeout=30) as response:
+                  raw = response.read(1048577)
+              if len(raw) > 1048576:
+                  raise ValueError('API response exceeds bound')
+              return json.loads(raw)
+          base = Path(os.environ['RUNNER_TEMP']) / 'installer-staged-grant'
+          snapshot = release.decode((base / 'context/published-release-identity.json').read_bytes())
+          if public_release.observe(api, os.environ['RELEASE_TAG'], os.environ['BUILD_SOURCE_SHA']) != snapshot:
+              raise SystemExit('Published release identity changed during acquisition')
+          public_release.verify_downloads(snapshot, base / 'inputs')
+          PY
       - name: Prepare exact installer verifier binaries
         shell: bash
         run: |
@@ -169,12 +260,13 @@ jobs:
           printf '%s  %s\n' 62ccf747115ddc61237efffdde66a3c8f70ba249433dc64f70801089b59c59c8 "$tools/gh.tar.gz" | sha256sum --check --strict
           tar -xzf "$tools/gh.tar.gz" --no-same-owner --no-same-permissions -C "$tools" gh_2.103.2_linux_amd64/bin/gh
           chmod 700 "$tools/cosign" "$tools/gh_2.103.2_linux_amd64/bin/gh"
-      - name: Verify staged payloads and issue an unsigned short-lived authorization
+      - name: Verify exact candidate payloads and issue an unsigned short-lived authorization
         env:
           BUILD_RUN_ID: ${{ inputs.build_run_id }}
           BUILD_RUN_ATTEMPT: ${{ inputs.build_run_attempt }}
           BUILD_SOURCE_SHA: ${{ inputs.source_sha }}
           RELEASE_TAG: ${{ inputs.release_tag }}
+          PHASE: ${{ inputs.phase }}
         shell: bash
         run: |
           set -euo pipefail
@@ -186,6 +278,7 @@ jobs:
             --gh "$base/tools/gh_2.103.2_linux_amd64/bin/gh" --cosign "$base/tools/cosign" \
             --source-sha "$BUILD_SOURCE_SHA" --release-tag "$RELEASE_TAG" \
             --build-run-id "$BUILD_RUN_ID" --build-run-attempt "$BUILD_RUN_ATTEMPT" \
+            --phase "$PHASE" \
             --harness-source-sha "$GITHUB_SHA" --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" \
             --output "$base/grant/candidate-authorization.json"
       - name: Sign the acceptance-only authorization
@@ -247,12 +340,13 @@ jobs:
       - name: Archive the signed authorization and controller transport descriptor
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: installer-staged-grant-${{ github.run_id }}-${{ github.run_attempt }}
+          name: installer-${{ inputs.phase }}-grant-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             ${{ runner.temp }}/installer-staged-grant/grant/candidate-authorization.json
             ${{ runner.temp }}/installer-staged-grant/grant/candidate-authorization.json.sigstore.json
             ${{ runner.temp }}/installer-staged-grant/grant/candidate-authorization.json.provenance.jsonl
             ${{ runner.temp }}/installer-staged-grant/grant/controller-transport.json
+            ${{ runner.temp }}/installer-staged-grant/context/published-release-identity.json
           if-no-files-found: error
           retention-days: 1
       - name: Receive the approved controller's durable consumption receipt
@@ -328,6 +422,7 @@ jobs:
             ${{ runner.temp }}/installer-staged-grant/grant/controller-consumption.json.provenance.jsonl
             ${{ runner.temp }}/installer-staged-grant/grant/controller-consumption.json.transport.json
             ${{ runner.temp }}/installer-staged-grant/grant/controller-transport.json
+            ${{ runner.temp }}/installer-staged-grant/context/published-release-identity.json
           if-no-files-found: error
           retention-days: 1
       - name: Receive same-invocation installed probe checkpoint

@@ -119,7 +119,7 @@ def inputs(authorization, inventory, *, harness_source_sha, run_id, run_attempt,
     expected = {key: record.get(key) for key in release.CONTEXT_FIELDS}
     expected.update(harness_source_sha=harness_source_sha, run_id=run_id, run_attempt=run_attempt)
     release.bind_candidate_authorization(a, i, expected=expected, now=now)
-    release.require(record["phase"] == "staged", "only staged candidate transport is supported")
+    release.require(record["phase"] in ("staged", "published"), "candidate transport phase invalid")
     return a, i, expected, record
 
 

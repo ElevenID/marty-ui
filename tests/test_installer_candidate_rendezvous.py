@@ -63,6 +63,25 @@ def test_create_bound_draft_and_receive_exact_bytes(scenario):
     with pytest.raises(FileExistsError): t.prepare(**args,descriptor_output=descriptor)
     assert sum(method=="POST" for method,_,_ in client.calls)==1
 
+
+def test_published_grant_receipt_transport_keeps_phase_binding(scenario):
+    args,_,_,client=scenario
+    auth=r.decode(args['authorization'].read_bytes());auth['phase']='published'
+    published=r.encode(auth)
+    args['authorization'].write_bytes(published)
+    descriptor=args['authorization'].parent/'published-descriptor'
+    output=args['authorization'].parent/'published-receipt'
+    t.prepare(**args,descriptor_output=descriptor)
+    context={key:auth[key] for key in r.CONTEXT_FIELDS}
+    receipt=r.encode(r.controller_consumption(published,args['inventory'].read_bytes(),expected=context,
+        guest_id='12345678-1234-4234-8234-123456789abc',disk_id='d'*64,
+        engine_id='test-engine-12345678',installation_id='22345678-1234-4234-8234-123456789abc',
+        consumed_at=100000,now=100000))
+    client.raw=receipt
+    client.items[0].update(size=len(receipt),digest='sha256:'+r.digest(receipt))
+    result=t.receive(**args,descriptor=descriptor,receipt_output=output)
+    assert result['phase']=='published' and output.read_bytes()==receipt
+
 @pytest.mark.parametrize("field,value",[("id",True),("size",65537),("name","other"),("state","starter"),("digest","sha256:"+"0"*64)])
 def test_wrong_asset_refused(scenario,field,value):
     scenario[3].items[0][field]=value

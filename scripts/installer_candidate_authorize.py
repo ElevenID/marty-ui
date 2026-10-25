@@ -1,4 +1,4 @@
-"""Verify staged inputs and exclusively write an UNSIGNED acceptance authorization.
+"""Verify exact candidate inputs and exclusively write an UNSIGNED acceptance authorization.
 
 Workflow caller authenticates the API run snapshot and verifier binary pins.
 This does not sign, consume a dispatch, observe a guest, or report acceptance.
@@ -56,7 +56,7 @@ def write_exclusive(path: Path, raw: bytes) -> None:
 def authorize(*, assets: Path, acceptance_run: Path, gh: Path, cosign: Path,
               source_sha: str, release_tag: str, build_run_id: int, build_run_attempt: int,
               harness_source_sha: str, run_id: int, run_attempt: int, output: Path,
-              clock=time.time, runner=provenance.command) -> dict:
+              phase="staged", clock=time.time, runner=provenance.command) -> dict:
     """Caller-supplied API snapshot is authoritative, never taken from an artifact.
 
     Verifier binaries must be pinned by the workflow before invocation. Private
@@ -64,6 +64,7 @@ def authorize(*, assets: Path, acceptance_run: Path, gh: Path, cosign: Path,
     """
     expected = dict(source_sha=source_sha, release_tag=release_tag,
                     build_run_id=build_run_id, build_run_attempt=build_run_attempt)
+    release.require(phase in ("staged", "published"), "invalid candidate phase")
     run_bytes = read_record(acceptance_run)
     run = release.decode(run_bytes)
     release.require(run.get("head_sha") == harness_source_sha and run.get("id") == run_id
@@ -75,7 +76,7 @@ def authorize(*, assets: Path, acceptance_run: Path, gh: Path, cosign: Path,
     inventory = read_record(inventory_path)
     # Prevalidate run and inventory before spending time in verifier subprocesses.
     release.candidate_authorization(inventory, **expected, acceptance_run=run,
-                                    phase="staged", now=int(clock()))
+                                    phase=phase, now=int(clock()))
     tier, _ = release.classify_release_tag(release_tag)
     workflow = ".github/workflows/nightly-release.yml" if tier == "nightly" else ".github/workflows/cd.yml"
     record = release.verify_inventory_assets(assets, **expected)
@@ -88,9 +89,9 @@ def authorize(*, assets: Path, acceptance_run: Path, gh: Path, cosign: Path,
             cosign=cosign, signature_bundle=assets / (name + ".sigstore.json"), runner=runner)
     release.require(read_record(inventory_path) == inventory and read_record(acceptance_run) == run_bytes,
                     "verified inputs changed")
-    release.require(release.verify_inventory_assets(assets, **expected) == record, "staged assets changed")
+    release.require(release.verify_inventory_assets(assets, **expected) == record, "candidate assets changed")
     result = release.candidate_authorization(inventory, **expected, acceptance_run=run,
-                                           phase="staged", now=int(clock()))
+                                           phase=phase, now=int(clock()))
     write_exclusive(output, release.encode(result))
     return result
 
@@ -103,6 +104,7 @@ def main(argv=None) -> int:
         parser.add_argument("--" + flag, required=True)
     for flag in ("build-run-id", "build-run-attempt", "run-id", "run-attempt"):
         parser.add_argument("--" + flag, required=True, type=int)
+    parser.add_argument("--phase", choices=("staged", "published"), default="staged")
     args = vars(parser.parse_args(argv))
     try:
         authorize(**args)
