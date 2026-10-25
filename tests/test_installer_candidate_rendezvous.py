@@ -503,9 +503,58 @@ def test_initial_published_grant_keeps_four_file_closure(scenario,monkeypatch):
     kwargs,api=initial_scenario((args,descriptor,receipt,client),monkeypatch)
     kwargs['phase']='published'
     api.item['name']='installer-published-grant-99-3'
+    observations=[]
+    downloads=[]
+    monkeypatch.setattr(initial_grant.public_release,'observe',
+                        lambda api,tag,source:observations.append((tag,source)) or {'id':123})
+    monkeypatch.setattr(initial_grant.public_release,'verify_downloads',
+                        lambda identity,assets:downloads.append((identity,assets)))
     result=initial_grant.acquire(**kwargs)
     assert result['phase']=='published' and result['nonce_consumed'] is False
     assert {p.name for p in kwargs['output'].iterdir()}==initial_grant.NAMES
+    assert len(observations)==2 and len(downloads)==2
+    assert result['published_release_observation_sha256']==r.digest(r.encode({'id':123}))
+
+
+def test_initial_published_grant_refuses_changed_release_identity(scenario,monkeypatch):
+    args,_,receipt,client=scenario
+    auth=r.decode(args['authorization'].read_bytes());auth['phase']='published'
+    args['authorization'].write_bytes(r.encode(auth))
+    descriptor=args['authorization'].parent/'published-changing-descriptor'
+    t.prepare(**args,descriptor_output=descriptor)
+    kwargs,api=initial_scenario((args,descriptor,receipt,client),monkeypatch)
+    kwargs['phase']='published'
+    api.item['name']='installer-published-grant-99-3'
+    observations=iter(({'id':123},{'id':124}))
+    monkeypatch.setattr(initial_grant.public_release,'observe',lambda *a:next(observations))
+    monkeypatch.setattr(initial_grant.public_release,'verify_downloads',lambda *a:None)
+    with pytest.raises(ValueError,match='published release identity changed'):
+        initial_grant.acquire(**kwargs)
+    assert not Path(str(kwargs['output'])+'.verified.json').exists()
+
+
+def test_initial_published_grant_refuses_expiry_during_final_release_check(scenario,monkeypatch):
+    args,_,receipt,client=scenario
+    auth=r.decode(args['authorization'].read_bytes());auth['phase']='published'
+    args['authorization'].write_bytes(r.encode(auth))
+    descriptor=args['authorization'].parent/'published-expiry-descriptor'
+    t.prepare(**args,descriptor_output=descriptor)
+    kwargs,api=initial_scenario((args,descriptor,receipt,client),monkeypatch)
+    kwargs['phase']='published'
+    api.item['name']='installer-published-grant-99-3'
+    moment=[100000]
+    kwargs['clock']=lambda:moment[0]
+    expiry=r.decode((kwargs['assets']/'authorization').read_bytes())['expires_at']
+    monkeypatch.setattr(initial_grant.public_release,'observe',lambda *a:{'id':123})
+    calls=[0]
+    def verify(*args):
+        calls[0]+=1
+        if calls[0]==2:moment[0]=expiry-t.RESERVE
+    monkeypatch.setattr(initial_grant.public_release,'verify_downloads',verify)
+    with pytest.raises(ValueError,match='expires too soon'):
+        initial_grant.acquire(**kwargs)
+    assert calls[0]==2 and kwargs['output'].is_dir()
+    assert not Path(str(kwargs['output'])+'.verified.json').exists()
 
 
 def test_initial_grant_expiry_during_authentication_retains_archive(scenario,monkeypatch):

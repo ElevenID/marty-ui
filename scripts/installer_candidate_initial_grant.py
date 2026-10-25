@@ -14,6 +14,7 @@ import zipfile
 
 import installer_candidate_dispatch as dispatch
 import installer_candidate_grant_receive as archive_transport
+import installer_candidate_public_release as public_release
 import installer_candidate_receipt_upload as uploader
 import installer_candidate_rendezvous as transport
 import installer_promote as promotion
@@ -38,6 +39,14 @@ def acquire(*, client, assets: Path, gh: Path, cosign: Path, output: Path,
     release.identity(source_sha, release_tag, build_run_id, build_run_attempt)
     release.sha(harness_source_sha)
     transport.controller_id(controller_user_id)
+    def published_identity():
+        def api(path):
+            return client.request("GET", transport.REPO + "/" + path)
+        return public_release.observe(api, release_tag, source_sha)
+    observed = None
+    if phase == "published":
+        observed = published_identity()
+        public_release.verify_downloads(observed, assets)
     name = f"installer-{phase}-grant-{run_id}-{run_attempt}"
     deadline = int(clock()) + 900
     chosen = None
@@ -110,13 +119,21 @@ def acquire(*, client, assets: Path, gh: Path, cosign: Path, output: Path,
                         and read_record(authorization) == a
                         and read_record(inventory) == i,
                         "initial grant expired or inputs changed")
+        if observed is not None:
+            release.require(published_identity() == observed,
+                            "published release identity changed during grant retrieval")
+            public_release.verify_downloads(observed, assets)
         dispatch.registry_unchanged(held, output.parent)
         release.require({entry: dispatch.private_file(output / entry, 1048576) for entry in NAMES} == snapshot,
                         "initial grant files changed")
+        release.require(grant["expires_at"] - int(clock()) > transport.RESERVE,
+                        "initial grant expires too soon")
         result = dict(schema="elevenid.installer-initial-grant-acquisition/v1",
                       artifact=chosen, archive_sha256=digest, phase=phase,
                       release_id=owned["id"], authorization_sha256=release.digest(a),
                       inventory_sha256=release.digest(i),
+                      published_release_observation_sha256=(release.digest(release.encode(observed))
+                                                            if observed is not None else None),
                       context_sha256=release.candidate_context_sha256(context),
                       acquired_at=int(clock()), nonce_consumed=False,
                       guest_dispatched=False, acceptance=False)
