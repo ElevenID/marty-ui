@@ -99,6 +99,8 @@ def test_signed_inventory_fails_closed(prepared, tmp_path, monkeypatch, fault):
     names = files + [name + ".sigstore.json" for name in files]
     for name in names:
         (assets / name).write_bytes(b"fixture")
+    for name in publishing.provenance_files():
+        (assets / name).write_bytes(b"fixture offline evidence")
     (assets / "RELEASE-SHA256SUMS").write_text("".join(
         nightly.file_digest(assets / name).removeprefix("sha256:") + "  " + name + "\n"
         for name in sorted(names)), encoding="ascii")
@@ -106,6 +108,7 @@ def test_signed_inventory_fails_closed(prepared, tmp_path, monkeypatch, fault):
     value = candidate(prepared)
     monkeypatch.setattr(publishing, "validate", lambda *args: (value, files))
     monkeypatch.setattr(publishing, "command", lambda *args: commands.append(args))
+    monkeypatch.setattr(publishing, "verify_installer_provenance", lambda *args: None)
     if fault == "digest":
         (assets / files[0]).write_bytes(b"changed")
     elif fault == "extra":
@@ -116,10 +119,10 @@ def test_signed_inventory_fails_closed(prepared, tmp_path, monkeypatch, fault):
         (assets / names[-1]).write_bytes(b"")
     if fault:
         with pytest.raises(ValueError):
-            publishing.verify_signed(assets, ROOT, value["tag"], RUN_ID)
+            publishing.verify_signed(assets, ROOT, value["tag"], RUN_ID, gh=tmp_path / "gh")
         assert not commands
     else:
-        assert publishing.verify_signed(assets, ROOT, value["tag"], RUN_ID) == value
+        assert publishing.verify_signed(assets, ROOT, value["tag"], RUN_ID, gh=tmp_path / "gh") == value
         assert len(commands) == 19
         assert all(args[:2] == ("cosign", "verify-blob") for args in commands)
 
@@ -129,6 +132,70 @@ def test_runtime_uses_pinned_rust_override_for_entire_lifecycle():
     assert '"--file", "docker-compose.yml", "--file", "docker-compose.rust-revocation.yml"' in runner
     for operation in ('"config"', '"up"', '"down"'):
         assert '[*compose, ' + operation in runner
+
+
+@pytest.mark.parametrize("fault", [None, "unverified", "oversized", "empty", "existing"])
+def test_offline_provenance_export_verifies_every_subject_before_output(tmp_path, monkeypatch, fault):
+    import publish_nightly_release as publishing
+    assets = tmp_path / "assets"
+    assets.mkdir(mode=0o700)
+    bundle = tmp_path / "action-bundle.jsonl"
+    raw = b"mock attestation, not cryptographic evidence\n"
+    if fault == "oversized":
+        raw = b"x" * (publishing.PROVENANCE_LIMIT + 1)
+    if fault == "empty":
+        raw = b""
+    bundle.write_bytes(raw)
+    for name in publishing.INSTALLER_SUBJECTS:
+        (assets / name).write_bytes(b"subject fixture")
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "2")
+    candidate = {"source_sha": SOURCE}
+    monkeypatch.setattr(publishing, "verify_signed", lambda *a, **kw: candidate)
+    observed = []
+    def verify(subject, staged, **options):
+        assert staged.read_bytes() == raw
+        assert staged != bundle
+        assert options == dict(gh=tmp_path / "gh", workflow=nightly.WORKFLOW,
+                               source_sha=SOURCE, run_id=int(RUN_ID), run_attempt=2)
+        observed.append(subject.name)
+        if fault == "unverified" and len(observed) == 5:
+            raise ValueError("wrong invocation")
+    monkeypatch.setattr(publishing, "verify_subject", verify)
+    if fault == "existing":
+        # Export's normal verify_signed rejects this before any outputs. The
+        # exclusive writer independently refuses replacement if state changes.
+        (assets / sorted(publishing.provenance_files())[0]).write_bytes(b"preserve")
+    if fault:
+        with pytest.raises((ValueError, FileExistsError)):
+            publishing.export_provenance(assets, ROOT, "v1.2.3", RUN_ID, bundle, tmp_path / "gh")
+        sidecars = list(assets.glob("*.provenance.jsonl"))
+        if fault == "existing":
+            assert len(sidecars) == 1 and sidecars[0].read_bytes() == b"preserve"
+        else:
+            assert not sidecars
+    else:
+        publishing.export_provenance(assets, ROOT, "v1.2.3", RUN_ID, bundle, tmp_path / "gh")
+        assert set(observed) == set(publishing.INSTALLER_SUBJECTS)
+        assert {p.name for p in assets.glob("*.provenance.jsonl")} == publishing.provenance_files()
+        assert all((assets / name).read_bytes() == raw for name in publishing.provenance_files())
+
+
+@pytest.mark.parametrize("fault", ["missing", "oversized", "wrong-invocation"])
+def test_publication_rejects_unusable_offline_provenance(tmp_path, monkeypatch, fault):
+    import publish_nightly_release as publishing
+    for name in publishing.provenance_files():
+        (tmp_path / name).write_bytes(b"fixture")
+    chosen = tmp_path / (publishing.INSTALLER_SUBJECTS[0] + ".provenance.jsonl")
+    if fault == "missing":
+        chosen.unlink()
+    if fault == "oversized":
+        chosen.write_bytes(b"x" * (publishing.PROVENANCE_LIMIT + 1))
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
+    def reject(*args, **kwargs):
+        raise ValueError("wrong producer invocation")
+    monkeypatch.setattr(publishing, "verify_subject", reject)
+    with pytest.raises(ValueError):
+        publishing.verify_installer_provenance(tmp_path, {"source_sha": SOURCE}, RUN_ID, tmp_path / "gh")
 
 
 def test_nightly_admission_keeps_claim_immutable_and_isolates_stable_transactions(prepared):
