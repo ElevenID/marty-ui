@@ -145,7 +145,7 @@ async fn absent(bao: &OpenBaoHttp, path: &str, root: &str) -> Result<()> {
         .map_err(|_| REFUSED)?;
     require(response.status() == StatusCode::NOT_FOUND)
 }
-fn certificate(pem: &str) -> Result<Certificate> {
+pub(crate) fn certificate(pem: &str) -> Result<Certificate> {
     require(
         pem.len() <= 65536 && pem.is_ascii() && !pem.contains("PRIVATE KEY") && !pem.contains('\0'),
     )?;
@@ -233,7 +233,7 @@ fn check_leaf_profile(cert: &Certificate) -> Result<()> {
     }
     require(dns && ip)
 }
-fn check_certificates(
+pub(crate) fn check_certificates(
     ca: &str,
     leaf: &str,
     public: &str,

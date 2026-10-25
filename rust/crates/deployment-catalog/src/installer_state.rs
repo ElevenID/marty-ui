@@ -382,6 +382,7 @@ impl InstallerState {
                 "openbao-state",
                 "keycloak-output",
                 "tls-output",
+                "ingress-output",
             ]
             .contains(&entry)
         {

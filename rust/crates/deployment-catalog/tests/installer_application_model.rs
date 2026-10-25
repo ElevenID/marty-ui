@@ -116,7 +116,8 @@ fn actual_source_compose_matches_installer_application_contract() {
     let environment =
         installer_application_env::render(&example, &packaged, &tls, &parameters, &images).unwrap();
     fs::write(bundle.join("application.env"), environment.env_bytes).unwrap();
-    let project = format!("marty-install-{}", "c".repeat(32));
+    let installation_id = "12345678-1234-4234-8234-123456789abc";
+    let project = "marty-install-12345678123442348234123456789abc".to_owned();
     let rendered = compose(
         &bundle,
         &executable,
@@ -135,20 +136,29 @@ fn actual_source_compose_matches_installer_application_contract() {
         ],
     );
     let model: Value = serde_json::from_str(&rendered).unwrap();
-    let plan = installer_application_model::prepare(
+    let mut plan = installer_application_model::prepare(
         &model,
         &images,
         &ApplicationModelParameters {
-            installation,
+            installation: installation.clone(),
             bundle: bundle.clone(),
             compose_project: project.clone(),
             openbao_network_name: format!("{project}-bao_default"),
             openbao_network_id: "d".repeat(64),
-            origin: parameters.origin,
+            origin: parameters.origin.clone(),
         },
     )
     .expect("actual normalized canonical Compose must satisfy installer admission");
     assert_eq!(plan.selected_services.len(), 28);
+    marty_deployment_catalog::installer_ingress_model::add(
+        &mut plan,
+        &installation,
+        installation_id,
+        &parameters.origin,
+        &images["gateway"],
+    )
+    .unwrap();
+    assert_eq!(plan.selected_services.len(), 29);
     assert!(!plan.installation_ready);
     assert!(
         plan.model["services"]["issuance"]["environment"]["DATABASE_URL_TEMPLATE"]
@@ -203,8 +213,21 @@ fn actual_source_compose_matches_installer_application_contract() {
             mount["bind"] = serde_json::json!({});
         }
     }
+    for mount in roundtrip_expected["services"]["installer-ingress"]["volumes"]
+        .as_array_mut()
+        .unwrap()
+    {
+        assert_eq!(mount["bind"], serde_json::json!({"create_host_path":false}));
+        mount["bind"] = serde_json::json!({});
+    }
     for (role, service) in normalized["services"].as_object().unwrap() {
-        assert!(service.get("ports").is_none(), "published {role}");
+        if role == "installer-ingress" {
+            assert_eq!(service["ports"], plan.model["services"][role]["ports"]);
+            assert_eq!(service["ports"][0]["host_ip"], "127.0.0.1");
+            assert_eq!(service["ports"][0]["published"], "18443");
+        } else {
+            assert!(service.get("ports").is_none(), "published {role}");
+        }
         assert_eq!(service["image"], plan.model["services"][role]["image"]);
         for field in [
             "command",
@@ -218,6 +241,10 @@ fn actual_source_compose_matches_installer_application_contract() {
             "user",
             "restart",
             "pull_policy",
+            "cap_drop",
+            "read_only",
+            "security_opt",
+            "labels",
         ] {
             assert_eq!(
                 service[field], roundtrip_expected["services"][role][field],

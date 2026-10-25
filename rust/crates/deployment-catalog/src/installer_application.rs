@@ -117,7 +117,7 @@ pub fn prepare(
         "json",
     ])?;
     let model = serde_json::from_str(&output).map_err(|_| "invalid application Compose model")?;
-    let plan = installer_application_model::prepare(
+    let mut plan = installer_application_model::prepare(
         &model,
         images,
         &ApplicationModelParameters {
@@ -128,6 +128,15 @@ pub fn prepare(
             openbao_network_id: bao.network_id.clone(),
             origin: origin.clone(),
         },
+    )?;
+    crate::installer_ingress_model::add(
+        &mut plan,
+        installation,
+        &state.journal().installation_id().to_string(),
+        &origin,
+        images
+            .get("gateway")
+            .ok_or("admitted ingress image absent")?,
     )?;
     state.write_evidence("application-compose.json", &compose_document(&plan.model)?)?;
     state.write_evidence(

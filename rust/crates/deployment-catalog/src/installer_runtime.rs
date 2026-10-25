@@ -216,7 +216,15 @@ impl BoundedRunner {
                 .env("GH_HOST", "github.com")
                 .env("GH_PROMPT_DISABLED", "1");
         }
-        let child = command.spawn().map_err(|_| "cannot start Docker command")?;
+        let child = command.spawn().map_err(|error| {
+            // Only OS classification is safe: never include executable paths,
+            // arguments or inherited diagnostic contents in installer errors.
+            format!(
+                "cannot start Docker command (kind={:?}, errno={:?})",
+                error.kind(),
+                error.raw_os_error()
+            )
+        })?;
         let mut owned = OwnedChild {
             child,
             reaped: false,
@@ -539,8 +547,19 @@ mod tests {
     #[test]
     fn checks_real_stub_info_compose_and_identity_before_commands() {
         let parent = private_temp();
-        let body = format!("case \"$1\" in info) printf '%s\\n' '{}' ;; compose) printf '2.39.0\\n' ;; *) exit 9 ;; esac", info());
-        let binary = script(parent.path(), &body);
+        // Model a daemon identity change without rewriting the Docker client.
+        // Replacing executable text is unrelated to the identity policy and can
+        // encounter Linux ETXTBSY when another process retains a writer fd.
+        let info_path = parent.path().join("engine-info.json");
+        fs::write(&info_path, info()).unwrap();
+        let binary = script(
+            parent.path(),
+            r#"case "$1" in
+info) cat "${0%/*}/engine-info.json" ;;
+compose) printf x >> "${0%/*}/compose-calls"; printf '2.39.0\n' ;;
+*) exit 9 ;;
+esac"#,
+        );
         let docker = DockerRunner::new(
             &binary,
             "unix:///var/run/docker.sock",
@@ -552,12 +571,40 @@ mod tests {
         assert!(docker.run_checked(&["--host=tcp://remote", "ps"]).is_err());
         assert!(docker.run_checked(&["ps", "-c", "unrelated"]).is_err());
         assert!(docker.run_checked(&["ps", "-cunrelated"]).is_err());
-        script(parent.path(), &body.replace("test-engine", "replacement"));
+        let calls = fs::read(parent.path().join("compose-calls")).unwrap();
+        fs::write(&info_path, info().replace("test-engine", "replacement")).unwrap();
         let refusal = docker.run_checked(&["compose", "version"]).unwrap_err();
         assert!(
             refusal.contains("identity"),
             "unexpected refusal: {refusal}"
         );
+        assert_eq!(
+            fs::read(parent.path().join("compose-calls")).unwrap(),
+            calls,
+            "identity mismatch must refuse before executing the requested command"
+        );
+    }
+    #[test]
+    fn executable_writer_failure_reports_only_os_classification() {
+        let parent = private_temp();
+        let binary = script(parent.path(), "printf 'credential-secret' >&2; exit 0");
+        let runner =
+            BoundedRunner::new(&binary, "unix:///var/run/docker.sock", parent.path()).unwrap();
+        // Linux deterministically refuses exec while this inode has a writer.
+        // This characterizes ETXTBSY; it does not establish the errno of a past
+        // intermittent failure whose original OS classification was unavailable.
+        let writer = fs::OpenOptions::new().write(true).open(&binary).unwrap();
+        let error = runner
+            .run(&["credential-secret"], Duration::from_secs(2), 1024)
+            .unwrap_err();
+        drop(writer);
+        assert!(error.contains("kind=ExecutableFileBusy"), "{error}");
+        assert!(
+            error.contains(&format!("errno=Some({})", libc::ETXTBSY)),
+            "{error}"
+        );
+        assert!(!error.contains(binary.to_str().unwrap()));
+        assert!(!error.contains("credential-secret"));
     }
     #[test]
     fn refuses_remote_endpoint_rootless_wrong_platform_and_unknown_fields() {

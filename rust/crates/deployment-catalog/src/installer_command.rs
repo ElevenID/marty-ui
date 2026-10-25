@@ -341,6 +341,19 @@ pub fn install(args: &[String], build_identity: &str) -> Result<()> {
         "tls-observation.json",
         &serde_json::to_vec(&tls).map_err(|_| "cannot encode TLS observation")?,
     )?;
+    let ingress = crate::installer_ingress::provision(
+        docker,
+        &directory,
+        &prepared.bundle,
+        &mut state,
+        &infrastructure,
+        services_image,
+        &operator_sha,
+    )?;
+    state.write_evidence(
+        "ingress-observation.json",
+        &serde_json::to_vec(&ingress).map_err(|_| "cannot encode ingress observation")?,
+    )?;
     let _application = crate::installer_application::prepare(
         docker,
         &directory,
@@ -349,7 +362,7 @@ pub fn install(args: &[String], build_identity: &str) -> Result<()> {
         &infrastructure,
         &prepared.inventory.images,
     )?;
-    Err("OpenBao, Keycloak and workload TLS provisioning recorded; application inputs prepared. Application startup and localhost TLS identity are not yet implemented. Installation is incomplete; preserve the reported state for recovery.".into())
+    Err("OpenBao, Keycloak, workload TLS and localhost TLS identity provisioning recorded; application and loopback HTTPS inputs prepared. Application startup and explicit local CA trust onboarding are not yet implemented. Installation is incomplete; preserve the reported state for recovery.".into())
 }
 
 #[cfg(test)]
