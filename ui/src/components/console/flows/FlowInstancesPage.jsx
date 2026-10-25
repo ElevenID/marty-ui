@@ -1,3 +1,4 @@
+import { loadScopedCatalog } from '../../../services/loadScopedCatalog';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useMatch, useParams } from 'react-router';
 import {
@@ -288,7 +289,7 @@ function ScopedFlowInstancesPage({ instanceId, organizationId }) {
   const { data = [], loading, error, reload } = useAsyncData(async () => {
     if (!organizationId) throw new Error('Select an organization before loading flow instances.');
     const [flowsResponse, instancesResponse] = await Promise.all([
-      listFlows({ organization_id: organizationId }),
+      loadScopedCatalog(listFlows, organizationId),
       instanceId
         ? getFlowInstance(instanceId, { organizationId }).then((instance) => [requireInstanceScope(instance, organizationId, instanceId)])
         : listFlowInstances({ organization_id: organizationId, limit: 500 }),

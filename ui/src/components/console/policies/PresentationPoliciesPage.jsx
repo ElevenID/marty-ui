@@ -1,3 +1,4 @@
+import { loadScopedCatalog } from '../../../services/loadScopedCatalog';
 /**
  * Presentation Policies Page
  * 
@@ -56,7 +57,7 @@ function PresentationPoliciesPage() {
   const { t } = useTranslation('console');
   const { activeOrgId: organizationId } = useConsole();
   const { data: policies = [], loading, error, reload } = useAsyncData(
-    () => listPresentationPolicies({ organization_id: organizationId }),
+    () => loadScopedCatalog(listPresentationPolicies, organizationId),
     [organizationId]
   );
 

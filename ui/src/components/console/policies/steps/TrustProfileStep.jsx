@@ -1,3 +1,4 @@
+import { loadScopedCatalog } from '../../../../services/loadScopedCatalog';
 /**
  * Trust Profile Prerequisite Step
  * 
@@ -58,7 +59,7 @@ const TrustProfileStep = ({ selectedTrustProfile, onSelectTrustProfile }) => {
         throw new Error('Select an organization before loading trust profiles.');
       }
 
-      const response = await listTrustProfiles({ organization_id: activeOrgId });
+      const response = await loadScopedCatalog(listTrustProfiles, activeOrgId);
       const profiles = response.data || response || [];
       setTrustProfiles(profiles);
 

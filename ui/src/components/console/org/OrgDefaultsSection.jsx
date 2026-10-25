@@ -1,3 +1,4 @@
+import { loadScopedCatalog } from '../../../services/loadScopedCatalog';
 /**
  * Organization Defaults Section
  * 
@@ -83,9 +84,9 @@ export function OrgDefaultsSection() {
         // Load defaults and available resources in parallel
         const [defaultsData, profilesData, policiesData, templatesData] = await Promise.all([
           getOrganizationDefaults(organizationId),
-          listTrustProfiles({ organization_id: organizationId }),
-          listPresentationPolicies({ organization_id: organizationId }),
-          listCredentialTemplates({ organization_id: organizationId }),
+          loadScopedCatalog(listTrustProfiles, organizationId),
+          loadScopedCatalog(listPresentationPolicies, organizationId),
+          loadScopedCatalog(listCredentialTemplates, organizationId),
         ]);
 
         setDefaults({

@@ -1,3 +1,4 @@
+import { loadScopedCatalog } from '../../../services/loadScopedCatalog';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router';
 import {
@@ -108,7 +109,7 @@ function ApplicationTemplateEditorContent({ organizationId, templateId, advanced
       return () => { active = false; };
     }
     Promise.all([
-      listCredentialTemplates({ organization_id: organizationId }),
+      loadScopedCatalog(listCredentialTemplates, organizationId),
       templateId ? getApplicationTemplate(templateId, organizationId) : Promise.resolve(null),
     ]).then(([templates, existing]) => {
       if (!active) return;

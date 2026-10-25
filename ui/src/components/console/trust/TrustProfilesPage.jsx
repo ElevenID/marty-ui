@@ -1,3 +1,4 @@
+import { loadScopedCatalog } from '../../../services/loadScopedCatalog';
 /**
  * Trust Profiles Page
  * 
@@ -50,7 +51,7 @@ function TrustProfilesPage() {
       if (!effectiveOrganizationId) {
         throw new Error('Select an organization before loading trust profiles.');
       }
-      return listTrustProfiles({ organization_id: effectiveOrganizationId });
+      return loadScopedCatalog(listTrustProfiles, effectiveOrganizationId);
     },
     [effectiveOrganizationId]
   );

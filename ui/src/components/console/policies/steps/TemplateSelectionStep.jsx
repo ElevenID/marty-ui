@@ -1,3 +1,4 @@
+import { loadScopedCatalog } from '../../../../services/loadScopedCatalog';
 /**
  * Template Selection Step
  * 
@@ -98,7 +99,7 @@ const TemplateSelectionStep = ({ trustProfile, selectedTemplate, onSelectTemplat
     if (!activeOrgId) {
       return [];
     }
-    const response = await listCredentialTemplates({ organization_id: activeOrgId });
+    const response = await loadScopedCatalog(listCredentialTemplates, activeOrgId);
     return Array.isArray(response?.data) ? response.data : (Array.isArray(response) ? response : []);
   }, [activeOrgId]);
 

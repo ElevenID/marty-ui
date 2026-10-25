@@ -9,7 +9,7 @@ export async function loadScopedCatalog(listPage, organizationId, { signal, page
     checkCancelled();
     const page = await listPage({ organization_id: organizationId, limit: pageSize, offset });
     checkCancelled();
-    if (!Array.isArray(page) || page.length > pageSize) throw new Error('Catalog returned an invalid page.');
+    if (!Array.isArray(page) || page.length > pageSize) throw new Error('Catalog returned a malformed page.');
     for (const item of page) {
       const validId = (typeof item?.id === 'string' && item.id.trim()) || (Number.isSafeInteger(item?.id) && item.id > 0);
       const id = String(item?.id);

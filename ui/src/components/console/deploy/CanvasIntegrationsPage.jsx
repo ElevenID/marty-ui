@@ -1,3 +1,4 @@
+import { loadScopedCatalog } from '../../../services/loadScopedCatalog';
 import { useEffect, useMemo, useState } from 'react';
 import {
   Alert,
@@ -497,12 +498,12 @@ function CanvasIntegrationsPage() {
 
   const { data: credentialTemplatesData } = useAsyncData(async () => {
     if (!canViewCanvas) return [];
-    return normalizeCredentialTemplates(await listCredentialTemplates({ organization_id: organizationId }));
+    return normalizeCredentialTemplates(await loadScopedCatalog(listCredentialTemplates, organizationId));
   }, [organizationId, canViewCanvas]);
 
   const { data: deploymentProfilesData } = useAsyncData(async () => {
     if (!canViewCanvas) return [];
-    const profiles = await listDeploymentProfiles({ organization_id: organizationId });
+    const profiles = await loadScopedCatalog(listDeploymentProfiles, organizationId);
     return Array.isArray(profiles) ? profiles : [];
   }, [organizationId, canViewCanvas]);
 
