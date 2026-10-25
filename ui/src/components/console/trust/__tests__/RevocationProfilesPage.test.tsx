@@ -78,7 +78,7 @@ describe('RevocationProfilesPage', () => {
 
     await waitFor(() => {
       expect(listRevocationProfiles).toHaveBeenCalledWith(
-        { organization_id: 'org-1' },
+        { organization_id: 'org-1', limit: 100, offset: 0 },
         { retryConfig: { maxRetries: 0 } },
       )
     })
