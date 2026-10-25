@@ -1,5 +1,6 @@
 //! Deployment metadata and native KMS operator commands.
 
+mod deployment_admission;
 pub mod passport_model;
 
 use serde_json::{Map, Value};

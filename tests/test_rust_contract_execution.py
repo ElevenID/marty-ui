@@ -616,7 +616,7 @@ def test_flow_inventory_binds_exact_crate_and_shared_roster(monkeypatch) -> None
             command, 0, "happy: test\n1 test, 0 benchmarks\n", ""
         )
 
-    monkeypatch.setattr(INVENTORY.subprocess, "run", fake_roster)
+    monkeypatch.setattr(INVENTORY, "discover_harness", fake_roster)
     INVENTORY.verify_flow_roster("owned-harness", {"happy"}, set())
     with pytest.raises(ValueError, match="flow_roster_drift"):
         INVENTORY.verify_flow_roster("owned-harness", {"other"}, set())
@@ -1258,7 +1258,7 @@ def test_obligation_signal_during_spawn_still_settles_assigned_child(
         def poll(self):
             return None
 
-    monkeypatch.setattr(INVENTORY.subprocess, "Popen", Child)
+    monkeypatch.setattr(INVENTORY, "spawn_harness", Child)
     monkeypatch.setattr(
         INVENTORY,
         "settle_owned_child",
@@ -1308,7 +1308,7 @@ def test_db_inventory_preserves_child_failure_and_saves_observed_outcomes(
         result_paths.append(result_log)
         return Child()
 
-    monkeypatch.setattr(INVENTORY.subprocess, "Popen", fake_child)
+    monkeypatch.setattr(INVENTORY, "spawn_harness", fake_child)
     assert INVENTORY.run_contract("issuer_profile", ["harness"]) == (child_status or 1)
     evidence = json.loads(
         (tmp_path / "rust-build-evidence" / INVENTORY.EVIDENCE_NAME).read_text()
@@ -1752,7 +1752,7 @@ def test_db_inventory_missing_result_log_fails_closed_and_cleans_temp_directory(
     monkeypatch.setattr(
         INVENTORY, "expected_cases", lambda *args, **kwargs: ({"happy"}, set())
     )
-    monkeypatch.setattr(INVENTORY.subprocess, "Popen", fake_child)
+    monkeypatch.setattr(INVENTORY, "spawn_harness", fake_child)
     assert INVENTORY.run_contract("issuer_profile", ["harness"]) == 1
     evidence = json.loads(
         (tmp_path / "rust-build-evidence" / INVENTORY.EVIDENCE_NAME).read_text()
@@ -2256,8 +2256,8 @@ def test_direct_rust_test_requires_positive_summary_and_command_success(
         [
             BASH,
             "-c",
-            # Git Bash on Windows has no python3; only the guard is under test.
-            "python3() { date +%s%N; }; "
+            # Exercise the real policy adapter as well as shell status propagation.
+            f'python3() {{ "{Path(sys.executable).as_posix()}" "$@"; }}; '
             "source scripts/ci/rust_contract_execution.sh; "
             f'{invocation} bash tests/fixtures/fake_rust_contract.sh "$1" "$2"',
             "synthetic",
@@ -2281,3 +2281,30 @@ def test_direct_rust_test_requires_positive_summary_and_command_success(
     assert timing["name"] == "synthetic"
     assert timing["duration_ms"] >= 0
     assert timing["status"] == ("ok" if expected_status == 0 else "failed")
+
+
+def test_native_summary_policy_preserves_verbose_output_and_duplicate_refusal():
+    # A legitimate child may print more than 16 MiB before its actual summary.
+    summary = "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+    assert INVENTORY.native_execution_policy("positive-summary", lines=["x" * (17 * 1024 * 1024), summary]) is True
+    with pytest.raises(ValueError, match="missing_or_ambiguous_libtest_summary"):
+        INVENTORY.verify_execution([summary, summary], ["ok happy"], {"happy"}, set())
+
+
+def test_native_execution_identity_failure_emits_sanitized_refusal(monkeypatch):
+    monkeypatch.setenv("MARTY_CI_EXECUTION_BIN", "private-path-sentinel")
+    monkeypatch.setenv("MARTY_CI_EXECUTION_BIN_SHA256", "invalid")
+    with pytest.raises(ValueError, match="^native_execution_policy_unavailable$"):
+        INVENTORY.selection(["happy"])
+
+
+def test_execution_policy_is_prepared_before_workflow_consumers():
+    for workflow, job in [("ci.yml", "test-rust-services"), ("ci.yml", "test-release-contracts"), ("cd.yml", "build-operator-catalog")]:
+        steps = yaml.safe_load((ROOT / ".github/workflows" / workflow).read_text())["jobs"][job]["steps"]
+        prepared = next(i for i, step in enumerate(steps) if step.get("run") == "bash scripts/ci/prepare-native-ci-execution.sh")
+        consumed = next(i for i, step in enumerate(steps) if "rust_contract_execution.sh" in step.get("run", "") or "python -m pytest tests -n" in step.get("run", ""))
+        assert prepared < consumed
+
+
+def test_native_case_results_preserve_completion_order():
+    assert list(INVENTORY.case_results(["ok zeta", "ok alpha"])) == ["zeta", "alpha"]

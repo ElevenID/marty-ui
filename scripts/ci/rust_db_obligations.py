@@ -23,6 +23,14 @@ import time
 import tomllib
 from pathlib import Path
 
+# This module is also loaded by file path in regression tests.
+if str(Path(__file__).resolve().parent) not in sys.path:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+from native_execution_policy import evaluate as native_execution_policy
+
+spawn_harness = subprocess.Popen
+discover_harness = subprocess.run
+
 ROOT = Path(__file__).resolve().parents[2]
 EVIDENCE_NAME = "db-contract-obligations.jsonl"
 UNIT_EVIDENCE_NAME = "rust-unit-obligations.jsonl"
@@ -114,17 +122,6 @@ LIBRARY_UNIT_IGNORED_OWNERS = {
         "internal_application_diagnostics::tests::actual_tracing_event_fields_are_stable_in_isolated_process"
     ),
 }
-CASE = r"[A-Za-z_][A-Za-z0-9_:]*"
-# Stable libtest's separate result log is unaffected by stdout inherited by a
-# tested process. --logfile is deprecated but supported by pinned Rust 1.95;
-# the real-harness regression check must fail visibly if that interface changes.
-CASE_RESULT = re.compile(rf"^(ok|failed|ignored) ({CASE})$")
-IGNORED_RESULT = re.compile(rf"^ignored: .* ({CASE})$")
-SUMMARY = re.compile(
-    r"^test result: (ok|FAILED)\. (\d+) passed; (\d+) failed; "
-    r"(\d+) ignored; (\d+) measured; (\d+) filtered out; finished in .+$"
-)
-
 
 def digest(path: Path) -> str:
     checksum = hashlib.sha256()
@@ -630,64 +627,27 @@ def libtest_harness(package: str, target: str) -> dict:
 def selection(
     arguments: list[str], *, allow_nocapture: bool = False, allow_skip: bool = False
 ) -> tuple[list[str], str]:
-    mode = "default"
-    selectors = []
-    skip_value = False
-    for argument in arguments:
-        if skip_value:
-            if not re.fullmatch(CASE, argument):
-                raise ValueError("invalid_skip_selector")
-            selectors.append(argument)
-            skip_value = False
-            continue
-        if argument == "--skip":
-            if not allow_skip:
-                raise ValueError("unsupported_selection_argument")
-            selectors.append(argument)
-            skip_value = True
-            continue
-        if argument in {"--ignored", "--include-ignored"}:
-            if mode != "default":
-                raise ValueError("ambiguous_ignored_selection")
-            mode = argument.removeprefix("--")
-        elif (
-            argument == "--exact"
-            or (argument == "--nocapture" and allow_nocapture)
-            or re.fullmatch(r"--test-threads=[1-9][0-9]*", argument)
-        ):
-            selectors.append(argument)
-        elif re.fullmatch(CASE, argument):
-            selectors.append(argument)
-        else:
-            raise ValueError("unsupported_selection_argument")
-    if skip_value:
-        raise ValueError("missing_skip_selector")
+    selectors, mode = native_execution_policy(
+        "selection", arguments=arguments, allow_nocapture=allow_nocapture, allow_skip=allow_skip
+    )
     return selectors, mode
 
 
 def list_cases(command: list[str]) -> set[str]:
-    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    result = discover_harness(command, capture_output=True, text=True, check=False)
     if result.returncode:
         raise ValueError("libtest_discovery_failed")
     return parse_case_listing(result.stdout)
 
 
 def parse_case_listing(output: str) -> set[str]:
-    cases = []
-    for line in output.splitlines():
-        if match := re.fullmatch(rf"({CASE}): test", line):
-            cases.append(match[1])
-        elif line and not re.fullmatch(r"\d+ tests?, \d+ benchmarks?", line):
-            raise ValueError("unrecognized_libtest_discovery")
-    if len(cases) != len(set(cases)):
-        raise ValueError("duplicate_discovered_case")
-    return set(cases)
+    return set(native_execution_policy("listing", lines=output.splitlines()))
 
 
 def verify_flow_roster(executable: str, expected: set[str], ignored: set[str]) -> None:
     # One shared exact roster is owned by the existing Flow script. Do not
     # replicate its names in this evidence collector.
-    roster = subprocess.run(
+    roster = discover_harness(
         ["bash", str(ROOT / "scripts/ci/list-flow-acceptance-cases.sh"), executable],
         capture_output=True,
         text=True,
@@ -1298,46 +1258,14 @@ def expected_cases(
 
 
 def case_results(lines: list[str]) -> dict[str, str]:
-    cases = {}
-    for line in lines:
-        if match := CASE_RESULT.fullmatch(line):
-            name, outcome = match[2], "FAILED" if match[1] == "failed" else match[1]
-        elif match := IGNORED_RESULT.fullmatch(line):
-            name, outcome = match[1], "ignored"
-        else:
-            raise ValueError("unrecognized_libtest_result")
-        if name in cases:
-            raise ValueError("duplicate_executed_case")
-        cases[name] = outcome
-    return cases
+    return native_execution_policy("case-results", lines=lines)
 
 
 def verify_execution(
     lines: list[str], result_lines: list[str], expected: set[str], ignored: set[str]
 ) -> dict:
-    cases = case_results(result_lines)
-    summaries = [match.groups() for line in lines if (match := SUMMARY.fullmatch(line))]
-    executed = {name for name, status in cases.items() if status in {"ok", "FAILED"}}
-    actually_ignored = {name for name, status in cases.items() if status == "ignored"}
-    if len(summaries) != 1:
-        raise ValueError("missing_or_ambiguous_libtest_summary")
-    status, passed, failed, skipped, measured, _filtered = summaries[0]
-    if (
-        executed != expected
-        or actually_ignored != ignored
-        or int(passed) != sum(value == "ok" for value in cases.values())
-        or int(failed) != sum(value == "FAILED" for value in cases.values())
-        or int(skipped) != len(ignored)
-        or int(measured) != 0
-    ):
-        raise ValueError("selected_executed_mismatch")
-    return {
-        "executed": sorted(executed),
-        "ignored": sorted(actually_ignored),
-        "passed": int(passed),
-        "failed": int(failed),
-        "summary_status": status,
-    }
+    return native_execution_policy("verify", lines=lines, result_lines=result_lines,
+                                   expected=sorted(expected), ignored=sorted(ignored))
 
 
 def emit(evidence: dict) -> None:
@@ -1431,7 +1359,7 @@ def run_owned_harness(
     try:
         for signum in (signal.SIGTERM, signal.SIGINT):
             previous[signum] = signal.signal(signum, interrupt)
-        child = subprocess.Popen(
+        child = spawn_harness(
             [
                 *command,
                 "--format",

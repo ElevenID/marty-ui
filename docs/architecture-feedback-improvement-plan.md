@@ -764,3 +764,39 @@ supply the signed source-matched `MARTY_DEPLOY_BIN` and its existing digest/sour
 release identity variables. A missing or outdated operator fails closed. The
 supported-consumer workflow installs that toolchain and builds the operator before
 collection. No previous-release binary without `passport-model` is accepted.
+
+### October 24: remaining deployment and execution consolidation
+
+Move deterministic Kubernetes admission and self-host credential policy into the
+existing Rust deployment operator. Keep kubectl/cluster UID and CA observations,
+Docker/HTTP inspection, secret-file reads and provisioning at their current owners.
+Python public preflight functions retain their error types and checks; source and
+installed workflows require the matching verified native operator.
+
+CI libtest selection, discovery, result-log parsing, exact roster/summary consistency
+and positive-summary policy now share the CI-only `marty-ci-execution` Rust helper.
+It is separate from the shipped deployment operator. Both use the same digest,
+source, release-tag and checkout identity verifier and shared CI build bootstrap.
+CI prepares the helper before consuming checks; source checkouts can build it
+with pinned Cargo 1.95.0 and the locked workspace. Candidate summary filtering
+keeps arbitrary child output outside the policy request; the CI-only stdin
+interface retains the old local parsers' input capacity.
+
+Keep the existing process-group cancellation/reaping, streaming, per-database
+scheduling, exact Cargo executable identity, runtime input checks, Python AST
+source inventory and evidence schemas. These enforce behavior and are not dead
+proof artifacts. The process supervisor is retained until a native replacement
+has equivalent signal-during-spawn and descendant cleanup qualification. A full
+orchestrator rewrite is not required to share deterministic policy.
+
+Python Canvas production launch compatibility is not yet a dead path. Read-only
+Docker inspection on October 24 found the elevenid-beta worker running the native
+binary, while `marty-selfhost-prod-canvas-sync-worker-1` still ran the Python
+loader and configured processor. The live self-host deployment must keep its
+preflight/rollback coverage until the deployment owner qualifies and deploys an
+accepted Rust-only release, verifies KMS/readiness/database/process behavior and
+records a rollback plan. Root/deployment owner owns that cutover; cleanup owns
+subsequent allowance removal. No production process, image or configuration was
+changed by this code cleanup. Historical published-image qualification remains
+independent. Retiring the allowance before that cutover would remove a live
+feature and is deferred rather than silently changing its supported scope.

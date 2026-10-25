@@ -45,9 +45,11 @@ def test_consumer_workflow_prepares_native_policy_before_collecting():
     command = "bash scripts/ci/prepare-native-model-operator.sh"
     assert steps[prepare]["run"] == command
     helper = (ROOT / "scripts/ci/prepare-native-model-operator.sh").read_text(encoding="utf-8")
+    assert 'prepare-native-tool.sh" model' in helper
+    helper = (ROOT / "scripts/ci/prepare-native-tool.sh").read_text(encoding="utf-8")
     for requirement in ("+1.95.0 build --locked", "marty-deployment-catalog", "--build-identity",
-                        "sha256sum", "MARTY_DEPLOY_BIN_SHA256", "MARTY_DEPLOY_SOURCE_SHA",
-                        "MARTY_DEPLOY_RELEASE_TAG", "rev-parse HEAD", '== "$source_sha:v0.0.0"', "GITHUB_ENV"):
+                        "sha256sum", "${prefix}_SOURCE_SHA", "${prefix}_RELEASE_TAG",
+                        "rev-parse HEAD", '== "$source_sha:v0.0.0"', "GITHUB_ENV"):
         assert requirement in helper
     ci = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8"))
     assert next(step for step in ci["jobs"]["test-release-contracts"]["steps"]

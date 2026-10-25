@@ -7,11 +7,15 @@ protected attestation, rollout authorization, or runtime acceptance.
 
 from __future__ import annotations
 
+if __package__:
+    from .passport_model_policy import evaluate as native_admission
+else:
+    from passport_model_policy import evaluate as native_admission
+
 import argparse
 import base64
 import hashlib
 import json
-import posixpath
 import re
 import subprocess
 from collections.abc import Callable
@@ -66,165 +70,31 @@ def selector_for(name: str, plan_run_id: str) -> dict[str, str]:
 
 
 def forbidden_routing_env(name: str) -> bool:
-    normalized = name.casefold()
-    return (normalized == "proxy" or normalized.endswith("_proxy")
-            or normalized in {"hostaliases", "res_options", "localdomain"})
+    return native_admission("kubernetes-routing-env", error_type=KubernetesPreflightError, name=name)
 
 
 def approved_health_probe(probe: object, port: int) -> bool:
-    if probe is None:
-        return True
-    if not isinstance(probe, dict) or not set(probe) <= {
-            "httpGet", "initialDelaySeconds", "periodSeconds", "timeoutSeconds",
-            "successThreshold", "failureThreshold", "terminationGracePeriodSeconds"}:
-        return False
-    request = probe.get("httpGet")
-    return (isinstance(request, dict)
-            and request.get("path") == "/health"
-            and request.get("port") == port
-            and request.get("scheme") in (None, "HTTP")
-            and request.get("host") in (None, "")
-            and request.get("httpHeaders") in (None, [])
-            and set(request) <= {"path", "port", "scheme", "host", "httpHeaders"}
-            and all(isinstance(value, int) and not isinstance(value, bool) and value >= 0
-                    for key, value in probe.items() if key != "httpGet"))
+    return native_admission("kubernetes-health-probe", error_type=KubernetesPreflightError, probe=probe, port=port)
 
 
 def approved_entrypoint(container: dict) -> bool:
-    """Require the released image entrypoint and protect its Rust binaries."""
-    if (container.get("command") not in (None, ["/app/services/entrypoint.sh"])
-            or container.get("args") not in (None, [])
-            or container.get("lifecycle") not in (None, {})
-            or container.get("name") not in HEALTH_PORTS
-            or any(not approved_health_probe(container.get(name),
-                                             HEALTH_PORTS[container["name"]])
-                   for name in ("startupProbe", "readinessProbe", "livenessProbe"))):
-        return False
-    mounts = container.get("volumeMounts", [])
-    if not isinstance(mounts, list):
-        return False
-    entries = container.get("env", [])
-    sources = container.get("envFrom", [])
-    if (not isinstance(entries, list) or not isinstance(sources, list)
-            or any(not isinstance(entry, dict)
-                   or not isinstance(entry.get("name"), str)
-                   or entry["name"] == "PATH" or entry["name"].startswith("LD_")
-                   or forbidden_routing_env(entry["name"])
-                   for entry in entries)
-            or any(not isinstance(source, dict)
-                   or source.get("configMapRef") != {"name": "marty-config"}
-                   for source in sources)):
-        return False
-    return all(isinstance(mount, dict)
-               and isinstance(mount.get("mountPath"), str)
-               and mount["mountPath"].startswith("/run/secrets/")
-               and mount["mountPath"] == "/" + posixpath.normpath(
-                   mount["mountPath"]).lstrip("/")
-               and mount.get("readOnly") is True
-               for mount in mounts)
+    return native_admission("kubernetes-entrypoint", error_type=KubernetesPreflightError, container=container)
 
 
 def approved_runtime_spec(spec: dict) -> bool:
-    """Keep the exec proof tied to the immutable, unprivileged image files."""
-    if not isinstance(spec, dict):
-        return False
-    pod = spec.get("securityContext")
-    containers = spec.get("containers")
-    volumes = spec.get("volumes", [])
-    if (not isinstance(pod, dict)
-            or pod.get("runAsNonRoot") is not True
-            or pod.get("runAsUser") != 10001
-            or pod.get("runAsGroup") != 10001
-            or spec.get("automountServiceAccountToken") is not False
-            or spec.get("hostNetwork") not in (None, False)
-            or spec.get("hostAliases") not in (None, [])
-            or spec.get("dnsPolicy") not in (None, "ClusterFirst")
-            or spec.get("dnsConfig") not in (None, {})
-            or spec.get("hostPID") not in (None, False)
-            or spec.get("hostIPC") not in (None, False)
-            or spec.get("shareProcessNamespace") not in (None, False)
-            or spec.get("initContainers") not in (None, [])
-            or spec.get("ephemeralContainers") not in (None, [])
-            or not isinstance(containers, list) or len(containers) != 1
-            or not isinstance(containers[0], dict)
-            or not isinstance(volumes, list)):
-        return False
-    mounts = containers[0].get("volumeMounts", [])
-    ports = containers[0].get("ports", [])
-    if not isinstance(mounts, list):
-        return False
-    if (not isinstance(ports, list)
-            or any(not isinstance(port, dict)
-                   or port.get("hostPort") not in (None, 0)
-                   or port.get("hostIP") not in (None, "")
-                   for port in ports)):
-        return False
-    mounted_names = [mount.get("name") for mount in mounts
-                     if isinstance(mount, dict)]
-    volume_names = [volume.get("name") for volume in volumes
-                    if isinstance(volume, dict)]
-    if (len(mounted_names) != len(mounts)
-            or len(volume_names) != len(volumes)
-            or any(not isinstance(name, str) for name in mounted_names + volume_names)
-            or len(set(mounted_names)) != len(mounted_names)
-            or len(set(volume_names)) != len(volume_names)
-            or set(mounted_names) != set(volume_names)
-            or any(not isinstance(volume.get("name"), str)
-                   or not re.fullmatch(r"[a-z0-9]([-a-z0-9]*[a-z0-9])?",
-                                       volume["name"])
-                   or set(volume) != {"name", "secret"}
-                   or not isinstance(volume.get("secret"), dict)
-                   or not set(volume["secret"]) <= {
-                       "secretName", "items", "defaultMode", "optional"}
-                   or not isinstance(volume["secret"].get("secretName"), str)
-                   or not re.fullmatch(r"passport-acceptance-[a-z0-9-]+",
-                                       volume["secret"]["secretName"])
-                   or volume["secret"].get("optional") not in (None, False)
-                   for volume in volumes)):
-        return False
-    runtime = containers[0].get("securityContext")
-    return (isinstance(runtime, dict)
-            and runtime.get("readOnlyRootFilesystem") is True
-            and runtime.get("allowPrivilegeEscalation") is False
-            and runtime.get("privileged") in (None, False)
-            and runtime.get("runAsNonRoot") in (None, True)
-            and runtime.get("runAsUser") in (None, 10001)
-            and runtime.get("runAsGroup") in (None, 10001)
-            and runtime.get("procMount") in (None, "Default")
-            and isinstance(runtime.get("capabilities"), dict)
-            and runtime["capabilities"].get("drop") == ["ALL"]
-            and runtime["capabilities"].get("add") in (None, []))
+    return native_admission("kubernetes-runtime", error_type=KubernetesPreflightError, spec=spec)
 
 
 def kubernetes_config_value(
     container: dict, data: dict, name: str, *,
     require: Callable[[bool, str], None] = require,
 ) -> object:
-    """Resolve a required setting without accepting an envFrom override."""
-    entries = container.get("env", [])
-    require(isinstance(entries, list), "Kubernetes passport environment is invalid")
-    matches = [entry for entry in entries
-               if isinstance(entry, dict) and entry.get("name") == name]
-    require(len(matches) <= 1, "Kubernetes passport environment is ambiguous")
-    if matches:
-        entry = matches[0]
-        if "value" in entry:
-            require("valueFrom" not in entry,
-                    "Kubernetes passport configuration source is ambiguous")
-            return entry["value"]
-        value_from = entry.get("valueFrom")
-        source = value_from.get("configMapKeyRef") if isinstance(value_from, dict) else None
-        require(isinstance(source, dict) and source.get("name") == "marty-config"
-                and source.get("key") == name,
-                "Kubernetes passport configuration source is invalid")
-        return data.get(name)
-    env_from = container.get("envFrom", [])
-    require(isinstance(env_from, list), "Kubernetes passport environment source is invalid")
-    require(len(env_from) == 1 and isinstance(env_from[0], dict)
-            and isinstance(env_from[0].get("configMapRef"), dict)
-            and env_from[0]["configMapRef"].get("name") == "marty-config",
-            "Kubernetes passport ConfigMap source is ambiguous")
-    return data.get(name)
+    try:
+        return native_admission("kubernetes-config", error_type=KubernetesPreflightError,
+                                container=container, data=data, name=name)
+    except KubernetesPreflightError as exc:
+        require(False, str(exc))
+        raise
 
 
 def command(args: list[str]) -> str:
@@ -260,77 +130,7 @@ def object_command(args: list[str], runner: Callable[[list[str]], str]) -> dict:
 
 
 def validate_plan(plan: dict, source_commit: str, services_reference: str) -> None:
-    """Freeze the operator's exact read-only target without trusting it as proof."""
-    require(
-        isinstance(plan, dict)
-        and set(plan)
-        == {
-            "schema",
-            "status",
-            "source_commit",
-            "plan_run_id",
-            "services_reference",
-            "cluster",
-            "namespace",
-            "resources",
-        }
-        and plan["schema"] == "marty.passport-supported-kubernetes-model/v1"
-        and plan["status"] == "blocked"
-        and COMMIT.fullmatch(source_commit) is not None
-        and plan["source_commit"] == source_commit
-        and isinstance(plan["plan_run_id"], str)
-        and RUN_ID.fullmatch(plan["plan_run_id"]) is not None
-        and plan["services_reference"] == services_reference
-        and re.fullmatch(
-            r"ghcr\.io/elevenid/marty-ui-oss/services@sha256:[0-9a-f]{64}",
-            services_reference,
-        )
-        is not None,
-        "Disposable Kubernetes plan source or images are invalid",
-    )
-    cluster = plan["cluster"]
-    namespace = plan["namespace"]
-    require(
-        isinstance(cluster, dict)
-        and set(cluster)
-        == {
-            "context",
-            "name",
-            "server",
-            "ca_sha256",
-        }
-        and all(isinstance(cluster[key], str) for key in cluster)
-        and NAME.fullmatch(cluster["context"]) is not None
-        and NAME.fullmatch(cluster["name"]) is not None
-        and urlsplit(cluster["server"]).scheme == "https"
-        and urlsplit(cluster["server"]).hostname is not None
-        and not urlsplit(cluster["server"]).username
-        and not urlsplit(cluster["server"]).password
-        and not urlsplit(cluster["server"]).path.strip("/")
-        and not urlsplit(cluster["server"]).query
-        and DIGEST.fullmatch(cluster["ca_sha256"]) is not None,
-        "Disposable Kubernetes cluster identity is invalid",
-    )
-    require(
-        isinstance(namespace, dict)
-        and set(namespace) == {"name", "uid"}
-        and isinstance(namespace["name"], str)
-        and NAME.fullmatch(namespace["name"]) is not None
-        and isinstance(namespace["uid"], str)
-        and UID.fullmatch(namespace["uid"]) is not None,
-        "Disposable Kubernetes namespace identity is invalid",
-    )
-    resources = plan["resources"]
-    require(
-        isinstance(resources, dict)
-        and set(resources) == {f"{kind}/{name}" for kind, name in RESOURCES}
-        and all(
-            isinstance(uid, str) and UID.fullmatch(uid) is not None
-            for uid in resources.values()
-        )
-        and len(set(resources.values())) == len(resources),
-        "Disposable Kubernetes resource identities are invalid",
-    )
+    native_admission("kubernetes-plan", error_type=KubernetesPreflightError, plan=plan, source_commit=source_commit, services_reference=services_reference)
 
 
 def inspect(

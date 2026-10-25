@@ -3,8 +3,8 @@
 use serde_json::{json, Map, Value};
 use std::collections::HashSet;
 
-type PolicyResult = Result<Value, String>;
-fn require(ok: bool, message: impl Into<String>) -> Result<(), String> {
+pub(super) type PolicyResult = Result<Value, String>;
+pub(super) fn require(ok: bool, message: impl Into<String>) -> Result<(), String> {
     if ok {
         Ok(())
     } else {
@@ -312,6 +312,9 @@ fn service_reuses_credential(input: &Value) -> PolicyResult {
 /// Return a fixed validation error as structured data, never arbitrary input values.
 pub fn evaluate(operation: &str, input: &Value) -> Value {
     let result = match operation {
+        op if op.starts_with("kubernetes-") || op.starts_with("selfhost-credential") => {
+            super::deployment_admission::evaluate(op, input)
+        }
         "keyless-custody" => keyless_custody(&input["model"]),
         "beta-origin" => beta_origin(&input["services"]),
         "private-gateway" => private_gateway(&input["services"]),

@@ -17,7 +17,7 @@ run_timed_rust_test() (
   if (( pipeline_status[1] != 0 && status == 0 )); then
     status="${pipeline_status[1]}"
   fi
-  if (( status == 0 )) && ! grep -Eq '^test result: ok\. [1-9][0-9]* passed; 0 failed; ' "$log"; then
+  if (( status == 0 )) && ! python3 "$(dirname "${BASH_SOURCE[0]}")/native_execution_policy.py" positive-summary "$log"; then
     printf 'Rust %s test %s exited successfully without a passing test summary.\n' "$phase" "$name" >&2
     status=1
   fi
