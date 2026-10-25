@@ -416,6 +416,21 @@ def test_setup_publishes_same_existing_token_once_without_echo(harness, source):
 
 
 @pytest.mark.parametrize("source", ["environment", "file"])
+@pytest.mark.parametrize("suffix", ["\n\n", "\r\n\n"])
+def test_published_secret_matches_legacy_trailing_newline_normalization(harness, source, suffix):
+    value = TOKEN + suffix
+    expected = TOKEN + ("\r" if source == "environment" and "\r" in suffix else "")
+    if source == "file":
+        result, calls = harness(file_bytes=value.encode())
+    else:
+        result, calls = harness({"TOKEN_HMAC_KEY": value})
+    assert result.returncode == 0, result.stderr
+    secret = next(call for call in calls if call[:4] == ["create", "secret", "generic", "marty-secrets"])
+    assert f"--from-literal=TOKEN_HMAC_KEY={expected}" in secret
+    assert TOKEN not in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("source", ["environment", "file"])
 def test_actual_resolver_preserves_literal_key_and_file_line_endings(harness, source):
     arguments = {"operation": "resolve"}
     if source == "file":

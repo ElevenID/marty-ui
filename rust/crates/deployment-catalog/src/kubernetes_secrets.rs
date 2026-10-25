@@ -24,7 +24,9 @@ fn resolve(name: &str) -> Result<String> {
         return Err(format!("Both {name} and {name}_FILE are set; choose one."));
     }
     if path.is_empty() {
-        return Ok(value);
+        // Every legacy resolver result crossed Bash command substitution,
+        // including inline credentials. Only file inputs remove CR bytes.
+        return Ok(value.trim_end_matches('\n').to_owned());
     }
     if !std::fs::metadata(&path)
         .map_err(|_| format!("{name}_FILE is not readable"))?
