@@ -24,7 +24,7 @@ import installer_release as release
 
 
 IMAGE = "noble-server-cloudimg-amd64.img"
-SCHEMA = "elevenid.installer-vm-overlay-creation/v1"
+SCHEMA = "elevenid.installer-vm-overlay-creation/v2"
 TOOLS = (Path("/usr/bin/gpgv"), Path("/usr/bin/qemu-img"))
 KEYRING = Path("/usr/share/keyrings/ubuntu-cloudimage-keyring.gpg")
 MAX_IMAGE = 2 * 1024 * 1024 * 1024
@@ -190,6 +190,38 @@ def _write(parent: int, name: str, record: dict) -> bytes:
     return raw
 
 
+def _read_record(parent: int, name: str) -> tuple[bytes, dict]:
+    release.require("/" not in name and name.endswith(".json"),
+                    "VM creation record name invalid")
+    before = os.stat(name, dir_fd=parent, follow_symlinks=False)
+    release.require(stat.S_ISREG(before.st_mode) and before.st_uid == 0
+                    and before.st_nlink == 1 and stat.S_IMODE(before.st_mode) == 0o600
+                    and 0 < before.st_size <= 65536,
+                    "VM creation record custody invalid")
+    fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC,
+                 dir_fd=parent)
+    try:
+        held = os.fstat(fd)
+        release.require((held.st_dev, held.st_ino, held.st_size, held.st_mtime_ns)
+                        == (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns),
+                        "VM creation record changed")
+        raw = bytearray()
+        while len(raw) < before.st_size:
+            chunk = os.read(fd, before.st_size - len(raw))
+            release.require(bool(chunk), "VM creation record truncated")
+            raw.extend(chunk)
+        after = os.stat(name, dir_fd=parent, follow_symlinks=False)
+        release.require((after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
+                        == (held.st_dev, held.st_ino, held.st_size, held.st_mtime_ns),
+                        "VM creation record changed")
+        record = release.decode(bytes(raw))
+        release.require(release.encode(record) == raw,
+                        "VM creation record is not canonical")
+        return bytes(raw), record
+    finally:
+        os.close(fd)
+
+
 def _same_disk(vm_fd: int, disk_fd: int) -> os.stat_result:
     held = os.fstat(disk_fd)
     named = os.stat("disk.qcow2", dir_fd=vm_fd, follow_symlinks=False)
@@ -199,6 +231,134 @@ def _same_disk(vm_fd: int, disk_fd: int) -> os.stat_result:
                     and (held.st_dev, held.st_ino) == (named.st_dev, named.st_ino),
                     "VM overlay identity changed")
     return held
+
+
+def _disk_digest(disk_fd: int) -> tuple[int, str]:
+    """Hash the bounded, held overlay, rejecting mutation during the read."""
+    before = os.fstat(disk_fd)
+    release.require(stat.S_ISREG(before.st_mode) and 0 < before.st_size <= 64 * 1024 * 1024,
+                    "VM overlay physical size invalid")
+    digest = hashlib.sha256()
+    os.lseek(disk_fd, 0, os.SEEK_SET)
+    remaining = before.st_size
+    while remaining:
+        block = os.read(disk_fd, min(1024 * 1024, remaining))
+        release.require(bool(block), "VM overlay truncated during digest")
+        digest.update(block)
+        remaining -= len(block)
+    after = os.fstat(disk_fd)
+    release.require((before.st_dev, before.st_ino, before.st_size,
+                     before.st_mtime_ns, before.st_ctime_ns)
+                    == (after.st_dev, after.st_ino, after.st_size,
+                        after.st_mtime_ns, after.st_ctime_ns),
+                    "VM overlay changed during digest")
+    return before.st_size, digest.hexdigest()
+
+
+def _data_reference(value: object) -> bool:
+    if type(value) is dict:
+        return any(key in ("data-file", "data-file-raw") or _data_reference(item)
+                   for key, item in value.items())
+    if type(value) is list:
+        return any(_data_reference(item) for item in value)
+    return False
+
+
+def verify_creation(source: Path, registry: Path, vm_parent: Path, *,
+                    vm_id: str, now: int | None = None) -> dict:
+    """Revalidate a root-held creation receipt before later seed/launch work."""
+    release.require(os.geteuid() == 0 and type(vm_id) is str
+                    and str(uuid.UUID(vm_id)) == vm_id and uuid.UUID(vm_id).version == 4,
+                    "VM creation identity invalid")
+    checked_at = int(time.time()) if now is None else now
+    release.require(type(checked_at) is int and checked_at > 0,
+                    "VM creation verification time invalid")
+    registry_fd = _directory(registry)
+    try:
+        parent_fd = _directory(vm_parent)
+        try:
+            vm_dir = vm_parent / vm_id
+            vm_fd = _directory(vm_dir)
+            try:
+                intent_raw, intent = _read_record(registry_fd, vm_id + ".creation-intent.json")
+                receipt_raw, receipt = _read_record(registry_fd, vm_id + ".creation-receipt.json")
+                release.exact(intent, {"schema", "phase", "vm_id", "image", "vm_dir",
+                                       "disk_path", "virtual_gib", "started_at",
+                                       "qualified", "launch_authorized"}, "VM creation intent")
+                release.exact(receipt, {"schema", "phase", "vm_id", "intent_sha256",
+                                        "image", "vm_dir", "disk_path", "disk_device",
+                                        "disk_inode", "disk_bytes", "disk_sha256",
+                                        "virtual_gib", "created_at",
+                                        "qualified", "launch_authorized"}, "VM creation receipt")
+                disk = vm_dir / "disk.qcow2"
+                release.require(intent["schema"] == receipt["schema"] == SCHEMA
+                                and intent["phase"] == "intent"
+                                and receipt["phase"] == "created"
+                                and intent["vm_id"] == receipt["vm_id"] == vm_id
+                                and receipt["intent_sha256"] == release.digest(intent_raw)
+                                and intent["image"] == receipt["image"]
+                                and intent["vm_dir"] == receipt["vm_dir"] == str(vm_dir)
+                                and intent["disk_path"] == receipt["disk_path"] == str(disk)
+                                and type(intent["virtual_gib"]) is int
+                                and 20 <= intent["virtual_gib"] <= 512
+                                and receipt["virtual_gib"] == intent["virtual_gib"]
+                                and type(intent["started_at"]) is int
+                                and type(receipt["created_at"]) is int
+                                and 0 < intent["started_at"] <= receipt["created_at"]
+                                <= min(checked_at + 5, intent["started_at"] + 600)
+                                and intent["qualified"] is False
+                                and receipt["qualified"] is False
+                                and intent["launch_authorized"] is False
+                                and receipt["launch_authorized"] is False,
+                                "VM creation records disagree")
+                provenance = verify_source(source)
+                release.require(receipt["image"] == provenance,
+                                "VM creation source changed")
+                disk_fd = os.open("disk.qcow2", os.O_RDONLY | os.O_NONBLOCK
+                                  | os.O_NOFOLLOW | os.O_CLOEXEC,
+                                  dir_fd=vm_fd)
+                try:
+                    info = _same_disk(vm_fd, disk_fd)
+                    release.require(type(receipt["disk_device"]) is int
+                                    and type(receipt["disk_inode"]) is int
+                                    and (info.st_dev, info.st_ino)
+                                    == (receipt["disk_device"], receipt["disk_inode"])
+                                    and stat.S_IMODE(info.st_mode) == 0o600,
+                                    "VM creation disk differs")
+                    release.require(type(receipt["disk_bytes"]) is int
+                                    and type(receipt["disk_sha256"]) is str
+                                    and len(receipt["disk_sha256"]) == 64,
+                                    "VM creation disk digest invalid")
+                    release.require(_disk_digest(disk_fd)
+                                    == (receipt["disk_bytes"], receipt["disk_sha256"]),
+                                    "VM creation disk bytes differ")
+                    qemu = _image_info(disk)
+                    release.require(qemu.get("virtual-size") == receipt["virtual_gib"] * 1024 ** 3
+                                    and qemu.get("backing-filename") == provenance["image_path"]
+                                    and qemu.get("backing-filename-format") in (None, "qcow2")
+                                    and not _data_reference(qemu),
+                                    "VM creation backing differs")
+                    _same_disk(vm_fd, disk_fd)
+                    release.require(_disk_digest(disk_fd)
+                                    == (receipt["disk_bytes"], receipt["disk_sha256"]),
+                                    "VM creation disk bytes changed during verification")
+                finally:
+                    os.close(disk_fd)
+                _rebind_directory(registry, registry_fd)
+                _rebind_directory(vm_parent, parent_fd)
+                _rebind_directory(vm_dir, vm_fd)
+                release.require(_read_record(registry_fd, vm_id + ".creation-intent.json")[0]
+                                == intent_raw
+                                and _read_record(registry_fd, vm_id + ".creation-receipt.json")[0]
+                                == receipt_raw,
+                                "VM creation records changed during verification")
+                return receipt
+            finally:
+                os.close(vm_fd)
+        finally:
+            os.close(parent_fd)
+    finally:
+        os.close(registry_fd)
 
 
 def _create_held(source: Path, registry: Path, vm_parent: Path, *, vm_id: str,
@@ -253,6 +413,7 @@ def _create_held(source: Path, registry: Path, vm_parent: Path, *, vm_id: str,
                             "VM overlay custody invalid")
             os.fsync(disk_fd)
             os.fsync(vm_fd)
+            disk_bytes, disk_sha256 = _disk_digest(disk_fd)
             _rebind_directory(registry, registry_fd)
             _rebind_directory(vm_parent, vm_parent_fd)
             _rebind_directory(vm_dir, vm_fd)
@@ -269,6 +430,7 @@ def _create_held(source: Path, registry: Path, vm_parent: Path, *, vm_id: str,
                            intent_sha256=release.digest(release.encode(intent)),
                            image=provenance, vm_dir=str(vm_dir), disk_path=str(disk),
                            disk_device=disk_info.st_dev, disk_inode=disk_info.st_ino,
+                           disk_bytes=disk_bytes, disk_sha256=disk_sha256,
                            virtual_gib=virtual_gib, created_at=int(time.time()),
                            qualified=False, launch_authorized=False)
             _write(registry_fd, vm_id + ".creation-receipt.json", receipt)
@@ -313,10 +475,17 @@ def main() -> int:
         parser.add_argument("--" + name, required=True, type=Path)
     parser.add_argument("--vm-id", required=True)
     parser.add_argument("--virtual-gib", required=True, type=int)
+    parser.add_argument("--verify-only", action="store_true")
     args = parser.parse_args()
     try:
-        create_overlay(args.source, args.registry, args.vm_parent,
-                       vm_id=args.vm_id, virtual_gib=args.virtual_gib)
+        if args.verify_only:
+            record = verify_creation(args.source, args.registry, args.vm_parent,
+                                     vm_id=args.vm_id)
+            release.require(record["virtual_gib"] == args.virtual_gib,
+                            "VM creation requested size differs")
+        else:
+            create_overlay(args.source, args.registry, args.vm_parent,
+                           vm_id=args.vm_id, virtual_gib=args.virtual_gib)
     except (ValueError, OSError, KeyError, TypeError, UnicodeError, json.JSONDecodeError):
         parser.exit(1, "VM creation refused or uncertain; retain the intent and disk for review.\n")
     return 0

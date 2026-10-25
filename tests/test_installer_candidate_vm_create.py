@@ -1,6 +1,8 @@
 """Fresh overlay creation keeps uncertain disks and never publishes false completion."""
 import os
+import signal
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 
@@ -108,6 +110,67 @@ def test_duplicate_id_preserves_existing_receipt_and_disk(root_trial):
     with pytest.raises(FileExistsError):
         creation.create_overlay(source, registry, parent, vm_id=vm_id, virtual_gib=20)
     assert (receipt.read_bytes(), disk.read_bytes()) == before
+
+
+def test_creation_receipt_revalidation_refuses_changed_intent(root_trial):
+    source, registry, parent = root_trial
+    vm_id = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"
+    created = creation.create_overlay(source, registry, parent,
+                                      vm_id=vm_id, virtual_gib=20)
+    assert creation.verify_creation(source, registry, parent, vm_id=vm_id) == created
+    intent = registry / f"{vm_id}.creation-intent.json"
+    intent.write_bytes(b"tampered intent")
+    with pytest.raises(ValueError):
+        creation.verify_creation(source, registry, parent, vm_id=vm_id)
+
+
+def test_creation_receipt_revalidation_refuses_replaced_disk(root_trial):
+    source, registry, parent = root_trial
+    vm_id = "ffffffff-ffff-4fff-8fff-ffffffffffff"
+    creation.create_overlay(source, registry, parent, vm_id=vm_id, virtual_gib=20)
+    disk = parent / vm_id / "disk.qcow2"
+    old = parent / vm_id / "prior-disk.qcow2"
+    disk.rename(old)
+    shutil.copyfile(old, disk)
+    disk.chmod(0o600)
+    with pytest.raises(ValueError, match="disk differs"):
+        creation.verify_creation(source, registry, parent, vm_id=vm_id)
+
+
+def test_creation_receipt_revalidation_refuses_mutated_bytes(root_trial):
+    source, registry, parent = root_trial
+    vm_id = "11111111-1111-4111-8111-111111111111"
+    creation.create_overlay(source, registry, parent, vm_id=vm_id, virtual_gib=20)
+    disk = parent / vm_id / "disk.qcow2"
+    with disk.open("r+b") as stream:
+        stream.seek(4096)
+        original = stream.read(1)
+        stream.seek(4096)
+        stream.write(bytes([original[0] ^ 1]))
+    with pytest.raises(ValueError, match="disk bytes differ"):
+        creation.verify_creation(source, registry, parent, vm_id=vm_id)
+
+
+def test_creation_receipt_revalidation_refuses_fifo_without_blocking(root_trial):
+    source, registry, parent = root_trial
+    vm_id = "22222222-2222-4222-8222-222222222222"
+    creation.create_overlay(source, registry, parent, vm_id=vm_id, virtual_gib=20)
+    disk = parent / vm_id / "disk.qcow2"
+    disk.rename(parent / vm_id / "prior-disk.qcow2")
+    os.mkfifo(disk, 0o600)
+    previous = signal.getsignal(signal.SIGALRM)
+
+    def timed_out(_signal, _frame):
+        raise TimeoutError("FIFO verification blocked")
+
+    signal.signal(signal.SIGALRM, timed_out)
+    signal.alarm(5)
+    try:
+        with pytest.raises(ValueError, match="overlay identity changed"):
+            creation.verify_creation(source, registry, parent, vm_id=vm_id)
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, previous)
 
 
 def test_base_with_backing_file_is_not_closed(tmp_path):
