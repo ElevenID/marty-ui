@@ -11,6 +11,7 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[1]/"scripts"))
 import installer_candidate_rendezvous as t
 import installer_candidate_receipt_upload as uploader
 import installer_candidate_grant_receive as grant_receiver
+import installer_candidate_initial_grant as initial_grant
 import installer_release as r
 pytestmark=pytest.mark.skipif(os.name!="posix",reason="private Linux output contract")
 
@@ -447,3 +448,101 @@ def test_grant_receiver_refuses_replaced_staging_parent(scenario,monkeypatch):
     finally:
         if moved.exists():os.rename(moved,parent)
     assert not Path(str(kwargs['output'])+'.verified.json').exists()
+
+
+def initial_scenario(scenario,monkeypatch):
+    import hashlib,zipfile
+    prior,api,raw=grant_scenario(scenario,monkeypatch)
+    with zipfile.ZipFile(io.BytesIO(raw)) as bundle:
+        members={name:bundle.read(name) for name in initial_grant.NAMES}
+    initial_zip=io.BytesIO()
+    with zipfile.ZipFile(initial_zip,'w') as bundle:
+        for name,data in members.items():bundle.writestr(name,data)
+    archive=initial_zip.getvalue()
+    api.item['name']='installer-staged-grant-99-3'
+    api.item['size_in_bytes']=len(archive)
+    api.item['digest']='sha256:'+hashlib.sha256(archive).hexdigest()
+    auth=r.decode(prior['authorization'].read_bytes())
+    (prior['assets']/'installer-inventory.json').write_bytes(prior['inventory'].read_bytes())
+    def download(_gh,_token,_id,path,held):
+        fd=os.open(path.name,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600,dir_fd=held)
+        with os.fdopen(fd,'wb') as stream:stream.write(archive)
+    kwargs=dict(client=api,assets=prior['assets'],gh=prior['gh'],cosign=prior['cosign'],
+        output=prior['output'].parent/'initial-grant',phase='staged',
+        source_sha=auth['source_sha'],release_tag=auth['release_tag'],
+        build_run_id=auth['build_run_id'],build_run_attempt=auth['build_run_attempt'],
+        harness_source_sha='c'*40,run_id=99,run_attempt=3,
+        controller_user_id=12345,clock=lambda:100000,downloader=download)
+    return kwargs,api
+
+
+def test_initial_grant_acquired_without_nonce_consumption(scenario,monkeypatch):
+    kwargs,api=initial_scenario(scenario,monkeypatch)
+    result=initial_grant.acquire(**kwargs)
+    assert result['nonce_consumed'] is False and result['guest_dispatched'] is False
+    assert {p.name for p in kwargs['output'].iterdir()}==initial_grant.NAMES
+    assert Path(str(kwargs['output'])+'.verified.json').is_file()
+    assert any('/actions/artifacts/789' in path for _,path in api.calls)
+
+
+def test_initial_grant_refuses_independent_build_mismatch(scenario,monkeypatch):
+    kwargs,_=initial_scenario(scenario,monkeypatch)
+    kwargs['source_sha']='b'*40
+    with pytest.raises(ValueError,match='independent candidate'):
+        initial_grant.acquire(**kwargs)
+    assert kwargs['output'].is_dir()
+    assert not Path(str(kwargs['output'])+'.verified.json').exists()
+
+
+def test_initial_published_grant_keeps_four_file_closure(scenario,monkeypatch):
+    args,_,receipt,client=scenario
+    auth=r.decode(args['authorization'].read_bytes());auth['phase']='published'
+    args['authorization'].write_bytes(r.encode(auth))
+    descriptor=args['authorization'].parent/'published-initial-descriptor'
+    t.prepare(**args,descriptor_output=descriptor)
+    kwargs,api=initial_scenario((args,descriptor,receipt,client),monkeypatch)
+    kwargs['phase']='published'
+    api.item['name']='installer-published-grant-99-3'
+    result=initial_grant.acquire(**kwargs)
+    assert result['phase']=='published' and result['nonce_consumed'] is False
+    assert {p.name for p in kwargs['output'].iterdir()}==initial_grant.NAMES
+
+
+def test_initial_grant_expiry_during_authentication_retains_archive(scenario,monkeypatch):
+    kwargs,_=initial_scenario(scenario,monkeypatch)
+    moment=[100000]
+    kwargs['clock']=lambda:moment[0]
+    expiry=r.decode((kwargs['assets']/'authorization').read_bytes())['expires_at']
+    def slow_auth(authorization,inventory,assets,gh,cosign,runner):
+        moment[0]=expiry-t.RESERVE
+        return authorization.read_bytes(),inventory.read_bytes()
+    monkeypatch.setattr(uploader,'authenticate',slow_auth)
+    with pytest.raises(ValueError,match='expires too soon'):
+        initial_grant.acquire(**kwargs)
+    assert Path(str(kwargs['output'])+'.archive.zip').is_file()
+    assert kwargs['output'].is_dir()
+    assert not Path(str(kwargs['output'])+'.verified.json').exists()
+
+
+def test_initial_grant_refuses_run_attempt_change_after_download(scenario,monkeypatch):
+    kwargs,api=initial_scenario(scenario,monkeypatch)
+    original=api.request
+    seen=[0]
+    def changed(method,path):
+        result=original(method,path)
+        if path.endswith('/actions/runs/99'):
+            seen[0]+=1
+            if seen[0]==2:result['run_attempt']=4
+        return result
+    api.request=changed
+    with pytest.raises(ValueError,match='run identity'):
+        initial_grant.acquire(**kwargs)
+    assert kwargs['output'].is_dir()
+    assert not Path(str(kwargs['output'])+'.verified.json').exists()
+
+
+def test_initial_grant_repeat_refuses_existing_staging(scenario,monkeypatch):
+    kwargs,_=initial_scenario(scenario,monkeypatch)
+    initial_grant.acquire(**kwargs)
+    with pytest.raises(ValueError,match='already exists'):
+        initial_grant.acquire(**kwargs)

@@ -346,7 +346,6 @@ jobs:
             ${{ runner.temp }}/installer-staged-grant/grant/candidate-authorization.json.sigstore.json
             ${{ runner.temp }}/installer-staged-grant/grant/candidate-authorization.json.provenance.jsonl
             ${{ runner.temp }}/installer-staged-grant/grant/controller-transport.json
-            ${{ runner.temp }}/installer-staged-grant/context/published-release-identity.json
           if-no-files-found: error
           retention-days: 1
       - name: Receive the approved controller's durable consumption receipt

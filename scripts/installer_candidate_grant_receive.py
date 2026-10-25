@@ -46,8 +46,9 @@ def hash_fd(fd, maximum):
     return hashed.hexdigest(), total
 
 
-def selected_artifact(value, *, run_id, run_attempt, harness_source_sha):
-    name = f"installer-candidate-execution-grant-{run_id}-{run_attempt}"
+def selected_artifact(value, *, run_id, run_attempt, harness_source_sha, name=None):
+    if name is None:
+        name = f"installer-candidate-execution-grant-{run_id}-{run_attempt}"
     release.require(isinstance(value, dict) and value.get("total_count") is not None
                     and type(value["total_count"]) is int and 0 <= value["total_count"] <= 100
                     and isinstance(value.get("artifacts"), list)
@@ -127,7 +128,7 @@ def download_archive(gh, token, artifact_id, destination, parent_fd, maximum=ARC
         os.close(tool_fd)
 
 
-def extract_exact(archive_stream, directory, parent_fd):
+def extract_exact(archive_stream, directory, parent_fd, names=NAMES):
     release.require(not directory.exists(), "grant extraction directory already exists")
     os.mkdir(directory.name, mode=0o700, dir_fd=parent_fd)
     os.fsync(parent_fd)
@@ -136,7 +137,7 @@ def extract_exact(archive_stream, directory, parent_fd):
     try:
       with zipfile.ZipFile(archive_stream) as bundle:
         entries = bundle.infolist()
-        release.require(len(entries) == len(NAMES) and {entry.filename for entry in entries} == NAMES,
+        release.require(len(entries) == len(names) and {entry.filename for entry in entries} == names,
                         "execution grant archive closure differs")
         total = 0
         for entry in entries:
@@ -163,7 +164,7 @@ def extract_exact(archive_stream, directory, parent_fd):
                 os.close(fd)
       os.fsync(held)
       dispatch.registry_unchanged(held, directory)
-      release.require({path.name for path in directory.iterdir()} == NAMES,
+      release.require({path.name for path in directory.iterdir()} == names,
                       "extracted execution grant closure differs")
     finally:
       os.close(held)
