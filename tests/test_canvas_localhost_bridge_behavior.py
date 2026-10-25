@@ -281,8 +281,12 @@ def test_contract_covers_native_source_and_runtime_wiring():
     assert "redirect::Policy::none()" in source
     assert "FROM rust:1.95-bookworm@sha256:" in dockerfile
     assert "FROM debian:bookworm-slim@sha256:" in dockerfile
-    assert "docker/canvas-localhost-bridge/src/main.rs" in deploy
-    assert "docker/canvas-localhost-bridge/Cargo.lock" in deploy
+    staging = (ROOT / "rust/crates/deployment-catalog/src/beta_runtime_config.rs").read_text()
+    adapter = (ROOT / "scripts/stage_beta_runtime_config.py").read_text()
+    assert "docker/canvas-localhost-bridge/src/main.rs" in staging
+    assert "docker/canvas-localhost-bridge/Cargo.lock" in staging
+    assert '"scripts/stage_beta_runtime_config.py"' in deploy
+    assert '"operator", "beta-runtime-config"' in adapter
     assert deploy.index("$runningCanvasBridge = @(& docker ps") < deploy.index(
         'Write-Step "Enter maintenance window and apply live migration"'
     )
