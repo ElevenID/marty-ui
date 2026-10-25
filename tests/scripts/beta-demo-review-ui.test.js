@@ -2,8 +2,24 @@
 
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { approveThroughConsole, issueThroughConsole, matchesMutation, requireVerificationDecision } = require('./beta-demo-review-ui');
+const { approveThroughConsole, issueThroughConsole, matchesMutation, requireVerificationDecision, responseForAction } = require('./beta-demo-review-ui');
 const { createActionRecording } = require('./demo-recording');
+
+test('response timeout stays handled until the click settles and preserves its actual failure', async () => {
+  let clickSettled = false;
+  const page = { waitForResponse: () => Promise.reject(new Error('response timeout')) };
+  await assert.rejects(responseForAction(page, () => true, async () => {
+    await new Promise(resolve => setImmediate(resolve));
+    clickSettled = true;
+    throw new Error('real control blocked');
+  }), /real control blocked/);
+  assert.equal(clickSettled, true);
+});
+
+test('successful click still requires its observed response', async () => {
+  await assert.rejects(responseForAction({ waitForResponse: () => Promise.reject(new Error('no product response')) },
+    () => true, () => {}), /no product response/);
+});
 
 test('UI mutation evidence must match the exact origin, organization, application and method', () => {
   const endpoint = '/v1/organizations/org-1/applicants/app-1/approve';

@@ -952,7 +952,9 @@ test('each lifecycle stage requires its action, current state and completed veri
       ok: true,
       status: 200,
       current: { ok: true, status: 200, lifecycleStatus: state },
-      verification: { session: { ok: true }, wallet: { ok: true }, result: { httpStatus: 200, decision, decisionReason: reason } },
+      verification: { session: { ok: true }, wallet: { ok: true }, result: { httpStatus: 200, decision, decisionReason: reason,
+        status: decision === 'allow' ? 'COMPLETED' : 'FAILED',
+        evaluation: decision === 'allow' ? 'passed' : 'failed' } },
     };
     assert.equal(requireLifecycleActionEvidence(action, evidence), evidence.verification.result);
     const invalid = [
@@ -964,13 +966,15 @@ test('each lifecycle stage requires its action, current state and completed veri
       { ...evidence, current: { ...evidence.current, lifecycleStatus: 'DRAFT' } },
       { ...evidence, verification: { ...evidence.verification, session: { ok: false } } },
       { ...evidence, verification: { ...evidence.verification, wallet: { ok: false } } },
-      { ...evidence, verification: { ...evidence.verification, result: { httpStatus: 500, decision, decisionReason: reason } } },
-      { ...evidence, verification: { ...evidence.verification, result: { httpStatus: 200, decision: decision === 'allow' ? 'deny' : 'allow' } } },
+      { ...evidence, verification: { ...evidence.verification, result: { ...evidence.verification.result, httpStatus: 500 } } },
+      { ...evidence, verification: { ...evidence.verification, result: { ...evidence.verification.result, decision: decision === 'allow' ? 'deny' : 'allow' } } },
+      { ...evidence, verification: { ...evidence.verification, result: { ...evidence.verification.result, status: 'IN_PROGRESS' } } },
+      { ...evidence, verification: { ...evidence.verification, result: { ...evidence.verification.result, evaluation: undefined } } },
     ];
     if (decision === 'deny') {
       invalid.push(
-        { ...evidence, verification: { ...evidence.verification, result: { httpStatus: 200, decision, decisionReason: 'Issuer is untrusted' } } },
-        { ...evidence, verification: { ...evidence.verification, result: { httpStatus: 200, decision } } },
+        { ...evidence, verification: { ...evidence.verification, result: { ...evidence.verification.result, decisionReason: 'Issuer is untrusted' } } },
+        { ...evidence, verification: { ...evidence.verification, result: { ...evidence.verification.result, decisionReason: undefined } } },
       );
     }
     for (const failure of invalid) {

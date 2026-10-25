@@ -6,12 +6,12 @@ const { acquireWalletSession, openIsolatedWallet, resetIsolatedWallet } = requir
 const path = require('path');
 const assert = require('node:assert/strict');
 const { randomUUID, createHash } = require('node:crypto');
-const { createDemoLiveEvidence, acknowledgeDemoInputs } = require('./demo-live-evidence');
+const { createDemoLiveEvidence, acknowledgeDemoInputs, applyLocalNativeReadiness } = require('./demo-live-evidence');
 const { spawnSync } = require('child_process');
 const { chromium } = require('@playwright/test');
 const { loadEnvFile, redact } = require('./verify-beta-waltid-acceptance');
 const { browserJson, cancelOwnedIssuanceTransaction, selectOrganization } = require('./beta-demo-resource-helpers');
-const { requireVerificationDecision } = require('./beta-demo-review-ui');
+const { requireVerificationDecision, responseForAction } = require('./beta-demo-review-ui');
 const {
   VIDEO_SIZE,
   createActionRecording,
@@ -461,12 +461,10 @@ async function receiveCredential(walletPage, offerUri, expectedVct) {
   await walletPage.reload({ waitUntil: 'domcontentloaded' });
   await maskProtocolField(walletPage, 'Credential offer URI', RECORD_VIDEO);
   await walletPage.getByLabel('Credential offer URI').fill(offerUri);
-  const responsePromise = walletPage.waitForResponse((response) => (
+  const response = await responseForAction(walletPage, (response) => (
     response.url() === `${TEST_WALLET_ORIGIN}/api/receive`
     && response.request().method() === 'POST'
-  ), { timeout: 60_000 });
-  await walletPage.getByRole('button', { name: /^receive$/i }).click();
-  const response = await responsePromise;
+  ), () => walletPage.getByRole('button', { name: /^receive$/i }).click(), 60_000);
   const body = await response.json().catch(() => null);
   await walletPage.getByRole('status').filter({ hasText: 'Credential received' }).waitFor({
     timeout: 60_000,
@@ -719,11 +717,6 @@ async function performLifecycleAction(page, row, action, reason, recording = nul
   await recording?.explain(action, reason);
   const actionButton = row.getByRole('button', { name: new RegExp(`^${action} credential`, 'i') });
   await recording?.hold(action, 'button', actionButton);
-  const responsePromise = page.waitForResponse((response) => (
-    response.url().includes(`/v1/issued-credentials/`)
-    && response.url().endsWith(`/${action}`)
-    && response.request().method() === 'POST'
-  ), { timeout: 30_000 });
   recording?.mark(action, 'button-click');
   await actionButton.click();
   const dialog = page.getByRole('dialog', { name: new RegExp(`${action} credential`, 'i') });
@@ -731,8 +724,11 @@ async function performLifecycleAction(page, row, action, reason, recording = nul
   await dialog.getByRole('textbox', { name: /reason/i }).fill(reason);
   await recording?.hold(action, 'reason', dialog, 3200);
   recording?.mark(action, 'confirm-click', { reason });
-  await dialog.getByRole('button', { name: new RegExp(`^${action}$`, 'i') }).click();
-  const response = await responsePromise;
+  const response = await responseForAction(page, (candidate) => (
+    candidate.url().includes('/v1/issued-credentials/')
+    && candidate.url().endsWith(`/${action}`)
+    && candidate.request().method() === 'POST'
+  ), () => dialog.getByRole('button', { name: new RegExp(`^${action}$`, 'i') }).click());
   const body = await response.json().catch(() => null);
   if (response.ok()) {
     await dialog.waitFor({ state: 'hidden', timeout: 30_000 });
@@ -802,17 +798,15 @@ async function renewCredential(page, row, ownedResources, recording = null) {
   await recording?.explain('renew');
   const button = row.getByRole('button', { name: /^renew credential/i });
   await recording?.hold('renew', 'button', button, 3200);
-  const responsePromise = page.waitForResponse((response) => (
-    response.url().includes('/v1/issued-credentials/')
-    && response.url().endsWith('/renew')
-    && response.request().method() === 'POST'
-  ), { timeout: 30_000 });
   const recordRenewal = trackOwnedMutation(ownedResources, 'renewal', (id) => {
     (ownedResources.transactionIds ||= []).push(id);
   });
   recording?.mark('renew', 'button-click', { confirmationDialog: false, reasonField: false });
-  await button.click();
-  const response = await responsePromise;
+  const response = await responseForAction(page, (candidate) => (
+    candidate.url().includes('/v1/issued-credentials/')
+    && candidate.url().endsWith('/renew')
+    && candidate.request().method() === 'POST'
+  ), () => button.click());
   const body = await response.json().catch(() => null);
   recordRenewal(body?.transaction_id);
   return {
@@ -837,12 +831,10 @@ async function getCredentialStatus(page, credentialId) {
 async function present(walletPage, requestUri) {
   await maskProtocolField(walletPage, 'Presentation request URI', RECORD_VIDEO);
   await walletPage.getByLabel('Presentation request URI').fill(requestUri);
-  const responsePromise = walletPage.waitForResponse((response) => (
+  const response = await responseForAction(walletPage, (response) => (
     response.url() === `${TEST_WALLET_ORIGIN}/api/present`
     && response.request().method() === 'POST'
-  ), { timeout: 60_000 });
-  await walletPage.getByRole('button', { name: /^present$/i }).click();
-  const response = await responsePromise;
+  ), () => walletPage.getByRole('button', { name: /^present$/i }).click(), 60_000);
   const body = await response.json().catch(() => null);
   return {
     ok: response.ok() && body?.ok === true,
@@ -1285,12 +1277,14 @@ async function main() {
         }
       },
       writeReport: () => {
+        const ready = applyLocalNativeReadiness(report, evidence,
+          {ready:report.engineeringReady, cleanupComplete:report.cleanup?.ok === true});
         report.finishedAt = new Date().toISOString();
         fs.writeFileSync(path.join(artifactDir, 'report.json'), JSON.stringify(report, null, 2));
         console.log(JSON.stringify(report, null, 2));
-        if (uiCandidate ? !report.engineeringReady : !report.releaseReady) process.exitCode = 1;
+        if (uiCandidate ? !report.engineeringReady : !ready) process.exitCode = 1;
       },
-      successful: () => report.releaseReady === true,
+      successful: () => report.releaseReady === true || report.functionalReady === true,
       complete: () => evidence.complete(),
       closeEvidence: () => evidence.close(),
     });
