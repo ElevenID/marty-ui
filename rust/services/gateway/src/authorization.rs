@@ -802,7 +802,7 @@ pub fn resolve_resource_lookup(path: &str) -> Option<ResourceLookup> {
     let (service, template, reserved): (&str, &str, &[&str]) = match segment {
         "credential-templates" => (
             "credential-templates",
-            "/v1/credential-templates/{id}",
+            "/internal/v1/resource-owners/credential-templates/{id}",
             &["issuer-options"],
         ),
         "trust-profiles" => (

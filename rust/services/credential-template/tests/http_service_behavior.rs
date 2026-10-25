@@ -297,6 +297,10 @@ impl CredentialTemplateControlPlane for ControlPlane {
 }
 
 fn router() -> axum::Router {
+    router_with_service_auth(true)
+}
+
+fn router_with_service_auth(configured: bool) -> axum::Router {
     let repository = Arc::new(Repository::default());
     let now = Utc::now();
     let registry = Arc::new(Registry {
@@ -327,7 +331,8 @@ fn router() -> axum::Router {
         application,
         registry_application,
         service_authenticator: Arc::new(
-            ServiceTokenAuthenticator::new(Some(TOKEN.to_owned()), true).unwrap(),
+            ServiceTokenAuthenticator::new(configured.then(|| TOKEN.to_owned()), configured)
+                .unwrap(),
         ),
         environment: RuntimeEnvironment::Test,
     })
@@ -524,6 +529,90 @@ async fn template_http_routes_require_trusted_forwarded_identity() {
 }
 
 #[tokio::test]
+async fn template_owner_projection_requires_service_authority_and_only_exposes_stored_identity() {
+    let mut req = request(
+        "GET",
+        "/internal/v1/resource-owners/credential-templates/missing",
+        json!({}),
+        false,
+    );
+    req.headers_mut()
+        .insert("x-service-token", TOKEN.parse().unwrap());
+    assert_eq!(
+        router_with_service_auth(false)
+            .oneshot(req)
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    let app = router();
+    let response = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/v1/credential-templates",
+            create_body(),
+            true,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let created = json_body(response).await;
+    let id = created["id"].as_str().unwrap();
+    let path = format!("/internal/v1/resource-owners/credential-templates/{id}");
+    for token in [None, Some("invalid"), Some(TOKEN)] {
+        let mut req = request("GET", &path, json!({}), false);
+        // These actor claims are not authority to discover resource ownership.
+        req.headers_mut()
+            .insert("x-user-id", "foreign-user".parse().unwrap());
+        req.headers_mut()
+            .insert("x-organization-id", "foreign-org".parse().unwrap());
+        req.headers_mut()
+            .insert("x-api-key-id", "foreign-key".parse().unwrap());
+        if let Some(token) = token {
+            req.headers_mut()
+                .insert("x-service-token", token.parse().unwrap());
+        }
+        let response = app.clone().oneshot(req).await.unwrap();
+        if token == Some(TOKEN) {
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(
+                json_body(response).await,
+                json!({"id":id,"organization_id":"org-1"})
+            );
+        } else {
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        }
+    }
+    // Ordinary reads still enforce actor membership even with service authority.
+    let mut req = request(
+        "GET",
+        &format!("/v1/credential-templates/{id}"),
+        json!({}),
+        true,
+    );
+    req.headers_mut()
+        .insert("x-user-id", "foreign-user".parse().unwrap());
+    assert_eq!(
+        app.clone().oneshot(req).await.unwrap().status(),
+        StatusCode::FORBIDDEN
+    );
+    let mut req = request(
+        "GET",
+        "/internal/v1/resource-owners/credential-templates/missing",
+        json!({}),
+        false,
+    );
+    req.headers_mut()
+        .insert("x-service-token", TOKEN.parse().unwrap());
+    assert_eq!(
+        app.oneshot(req).await.unwrap().status(),
+        StatusCode::NOT_FOUND
+    );
+}
+
+#[tokio::test]
 async fn unsupported_schema_uri_is_rejected_instead_of_silently_discarded() {
     let mut body = create_body();
     body["schema_uri"] = json!("https://issuer.example/schema");
@@ -658,6 +747,88 @@ async fn private_derivation_parameters_are_rejected_before_create_or_update_pers
         .await
         .unwrap();
     assert_eq!(json_body(response).await, created);
+}
+
+#[tokio::test]
+async fn public_validity_readback_retains_canonical_rules_and_legacy_seconds_aliases() {
+    let mut cases = Vec::new();
+    for (seconds, days) in [(1, 1), (3600, 1), (86399, 1), (86400, 1), (86401, 2)] {
+        cases.push((
+            json!({"ttl_seconds":seconds,"default_validity_days":9,
+                "max_validity_seconds":seconds,"max_validity_days":9,
+                "reissue_within_seconds":seconds,"renewal_window_days":9,
+                "renewable":false,"not_before_offset":-1,"not_before_offset_seconds":900,
+                "require_revalidation":true,"revalidation_interval_days":7}),
+            json!({"default_validity_days":days,"max_validity_days":days,
+                "renewal_window_days":days,"renewable":false,"not_before_offset_seconds":900,
+                "require_revalidation":true,"revalidation_interval_days":7}),
+        ));
+    }
+    cases.push((
+        json!({"default_validity_days":0,"max_validity_days":-1,"renewal_window_days":0,
+            "renewable":false,"require_revalidation":false}),
+        json!({"default_validity_days":0,"max_validity_days":-1,"renewal_window_days":0,
+            "renewable":false,"not_before_offset_seconds":0,"require_revalidation":false,
+            "revalidation_interval_days":null}),
+    ));
+    for (input, canonical) in cases {
+        let app = router();
+        let mut body = create_body();
+        body["validity_rules"] = input;
+        let response = app
+            .clone()
+            .oneshot(request("POST", "/v1/credential-templates", body, true))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let created = json_body(response).await;
+        let rules = &created["validity_rules"];
+        for (key, value) in canonical.as_object().unwrap() {
+            assert_eq!(&rules[key], value, "{key}");
+        }
+        assert_eq!(
+            rules["ttl_seconds"],
+            canonical["default_validity_days"].as_i64().unwrap() * 86_400
+        );
+        let renewal = canonical["renewal_window_days"].as_i64().unwrap();
+        if renewal == 0 {
+            assert!(rules.get("reissue_within_seconds").is_none());
+        } else {
+            assert_eq!(rules["reissue_within_seconds"], renewal * 86_400);
+        }
+        let path = format!(
+            "/v1/credential-templates/{}",
+            created["id"].as_str().unwrap()
+        );
+        let response = app
+            .clone()
+            .oneshot(request("GET", &path, json!({}), true))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(json_body(response).await["validity_rules"], *rules);
+        let response = app
+            .clone()
+            .oneshot(request(
+                "GET",
+                "/v1/credential-templates?organization_id=org-1",
+                json!({}),
+                true,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(json_body(response).await[0]["validity_rules"], *rules);
+        let response = app.clone().oneshot(request("PATCH", &path, json!({"name":"Renamed", "validity_rules":{"default_validity_days":null,"max_validity_days":null,"renewal_window_days":null,"require_revalidation":null,"revalidation_interval_days":null}}), true)).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(json_body(response).await["validity_rules"], *rules);
+        let response = app
+            .oneshot(request("GET", &path, json!({}), true))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(json_body(response).await["validity_rules"], *rules);
+    }
 }
 
 #[tokio::test]

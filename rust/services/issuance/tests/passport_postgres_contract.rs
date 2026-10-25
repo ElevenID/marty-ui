@@ -45,6 +45,9 @@ use tower::ServiceExt;
 #[path = "support/passport_mock_artifact_kms.rs"]
 mod passport_mock_artifact_kms;
 
+#[path = "support/passport_delivery_destinations.rs"]
+mod passport_delivery_destinations;
+
 #[path = "support/contract_grant.rs"]
 mod contract_grant;
 
@@ -406,6 +409,87 @@ async fn exercise_native_passport_http(
     assert_eq!(status, StatusCode::OK);
     assert_eq!(signed["status"], "SOD_SIGNED");
     assert_eq!(signed["sod_signature_verified"], true);
+    let principal = keyring.authenticate(Some("org-a"), Some(key_a)).unwrap();
+    let before_denial = repository
+        .get(&principal, application_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let prior_sign_calls = sign_calls.load(Ordering::SeqCst);
+    for patch in [
+        json!({"is_enabled":false}),
+        json!({"organization_id":"org-b"}),
+        json!({"organization_id":null}),
+        json!({"organization_id":"org-b", "is_system":true}),
+        json!({"provider":"oid4vci_wallet"}),
+        json!({"mode":"holder_wallet"}),
+        json!({"delivery_target":"wallet"}),
+        json!({"credential_format":"VC_JWT"}),
+        json!({"issuance_protocol":"DIRECT"}),
+        json!({"connector_id":"another-bureau"}),
+        json!({"id":"temporarily-missing-destination"}),
+    ] {
+        let mut destination = json!({
+            "id":"destination-http", "organization_id":"org-a", "is_system":false,
+            "is_enabled":true, "provider":"physical_document_bureau", "mode":"physical_document",
+            "delivery_target":"physical_document", "credential_format":"ICAO_EMRTD",
+            "issuance_protocol":"PHYSICAL_DOCUMENT", "connector_id":null
+        });
+        destination
+            .as_object_mut()
+            .unwrap()
+            .extend(patch.as_object().unwrap().clone());
+        sqlx::query(
+            "UPDATE credential_template_service.delivery_destinations
+             SET id=$1, organization_id=$2, is_system=$3, is_enabled=$4, provider=$5,
+                 mode=$6, delivery_target=$7, credential_format=$8, issuance_protocol=$9,
+                 connector_id=$10 WHERE id='destination-http'",
+        )
+        .bind(destination["id"].as_str().unwrap())
+        .bind(destination["organization_id"].as_str())
+        .bind(destination["is_system"].as_bool().unwrap())
+        .bind(destination["is_enabled"].as_bool().unwrap())
+        .bind(destination["provider"].as_str().unwrap())
+        .bind(destination["mode"].as_str().unwrap())
+        .bind(destination["delivery_target"].as_str().unwrap())
+        .bind(destination["credential_format"].as_str())
+        .bind(destination["issuance_protocol"].as_str())
+        .bind(destination["connector_id"].as_str())
+        .execute(pool)
+        .await
+        .unwrap();
+        let (status, body) = passport_http_request(
+            &app,
+            "POST",
+            &format!("{path}/submit-personalization"),
+            Some("org-a"),
+            Some(key_a),
+            json!({}),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT, "destination patch: {patch}");
+        assert_eq!(
+            body["detail"],
+            "Physical document delivery destination is unavailable or incompatible"
+        );
+        assert!(observed.lock().unwrap().is_empty());
+        assert_eq!(sign_calls.load(Ordering::SeqCst), prior_sign_calls);
+        let denied = repository
+            .get(&principal, application_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(denied.status, "SOD_SIGNED");
+        assert_eq!(denied.sod_sha256, before_denial.sod_sha256);
+        assert_eq!(
+            denied.secure_artifact_ciphertext,
+            before_denial.secure_artifact_ciphertext
+        );
+        assert!(denied.submission_intent_id.is_none());
+        assert!(denied.bureau_job_id.is_none());
+    }
+    passport_delivery_destinations::seed(pool).await;
     assert_eq!(
         signed["sod_sha256"],
         hex::encode(sha2::Sha256::digest(
@@ -1340,6 +1424,7 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
         .await
         .unwrap();
     migration::migrate_passport(&pool).await.unwrap();
+    passport_delivery_destinations::seed(&pool).await;
     sqlx::query(
         "ALTER TABLE issuance_service.physical_document_jobs
          DROP CONSTRAINT physical_document_jobs_pkey",
@@ -2328,7 +2413,16 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
         &[expected_internal.to_vec()]
     );
     mock_server.abort();
-    exercise_native_passport_http(&pool, restarted, keyring, cipher, &kms, &key_a, &key_b).await;
+    exercise_native_passport_http(
+        &restarted_pool,
+        restarted,
+        keyring,
+        cipher,
+        &kms,
+        &key_a,
+        &key_b,
+    )
+    .await;
     let profile_repository = PostgresPassportRepository::new(restarted_pool.clone());
     let profile_job = profile_repository
         .insert(

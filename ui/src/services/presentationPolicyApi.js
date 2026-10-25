@@ -337,23 +337,25 @@ function daysFromSeconds(seconds) {
 }
 
 export function normalizeCredentialTemplateValidityRules(rules = {}) {
-  const ttlSeconds = rules.ttl_seconds
-    ?? (rules.default_validity_days != null ? Number(rules.default_validity_days) * SECONDS_PER_DAY : undefined);
-  const reissueWithinSeconds = rules.reissue_within_seconds
-    ?? (rules.renewal_window_days != null ? Number(rules.renewal_window_days) * SECONDS_PER_DAY : undefined);
+  // This normalizes readback only. Canonical stored days are authoritative;
+  // create/PATCH input aliases still pass unchanged to the native resolver.
+  const ttlSeconds = rules.default_validity_days != null
+    ? Number(rules.default_validity_days) * SECONDS_PER_DAY : rules.ttl_seconds;
+  const reissueWithinSeconds = rules.renewal_window_days != null
+    ? Number(rules.renewal_window_days) * SECONDS_PER_DAY : rules.reissue_within_seconds;
   const notBeforeOffsetSeconds = rules.not_before_offset_seconds
     ?? rules.not_before_offset
     ?? 0;
-  const maxValiditySeconds = rules.max_validity_seconds
-    ?? (rules.max_validity_days != null ? Number(rules.max_validity_days) * SECONDS_PER_DAY : undefined);
+  const maxValiditySeconds = rules.max_validity_days != null
+    ? Number(rules.max_validity_days) * SECONDS_PER_DAY : rules.max_validity_seconds;
 
   return {
     ...rules,
-    ...(ttlSeconds != null ? { ttl_seconds: ttlSeconds, default_validity_days: rules.ttl_seconds != null ? daysFromSeconds(ttlSeconds) : rules.default_validity_days } : {}),
+    ...(ttlSeconds != null ? { ttl_seconds: ttlSeconds, default_validity_days: rules.default_validity_days ?? daysFromSeconds(ttlSeconds) } : {}),
     ...(reissueWithinSeconds != null
       ? {
           reissue_within_seconds: reissueWithinSeconds,
-          renewal_window_days: rules.reissue_within_seconds != null ? daysFromSeconds(reissueWithinSeconds) : rules.renewal_window_days,
+          renewal_window_days: rules.renewal_window_days ?? daysFromSeconds(reissueWithinSeconds),
         }
       : {}),
     not_before_offset_seconds: notBeforeOffsetSeconds,
@@ -361,7 +363,7 @@ export function normalizeCredentialTemplateValidityRules(rules = {}) {
     ...(maxValiditySeconds != null
       ? {
           max_validity_seconds: maxValiditySeconds,
-          max_validity_days: rules.max_validity_seconds != null ? daysFromSeconds(maxValiditySeconds) : rules.max_validity_days,
+          max_validity_days: rules.max_validity_days ?? daysFromSeconds(maxValiditySeconds),
         }
       : {}),
   };
@@ -813,7 +815,10 @@ export async function getCredentialTemplate(id) {
  * Update a credential template
  */
 export async function updateCredentialTemplate(id, data) {
-  const result = await patch(`${CREDENTIAL_TEMPLATE_BASE}/${id}`, buildCredentialTemplatePatch(data));
+  const organizationId = requireOrganizationId(data);
+  const result = await patch(`${CREDENTIAL_TEMPLATE_BASE}/${id}`, buildCredentialTemplatePatch(data), {
+    params: { organization_id: organizationId },
+  });
   return normalizeCredentialTemplate(result);
 }
 
@@ -839,7 +844,8 @@ export function buildCredentialTemplatePatch(data = {}) {
       }
     }
   };
-  const payload = { organization_id: requireOrganizationId(data) };
+  requireOrganizationId(data);
+  const payload = {};
   for (const [field, value] of Object.entries(data)) {
     if (value === undefined) continue;
     if (!fields.has(field)) throw new Error(`Unsupported template update field: ${field}`);

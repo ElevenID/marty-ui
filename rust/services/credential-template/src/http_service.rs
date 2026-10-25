@@ -101,6 +101,10 @@ pub fn credential_template_router(state: CredentialTemplateHttpState) -> Router 
             get(get_internal_issuance_context),
         )
         .route(
+            "/internal/v1/resource-owners/credential-templates/{template_id}",
+            get(template_owner),
+        )
+        .route(
             "/internal/credential-configurations",
             get(get_internal_credential_configurations),
         )
@@ -532,6 +536,32 @@ async fn list_templates(
             .map(template_response)
             .collect::<Result<Vec<_>, _>>()?,
     )))
+}
+
+async fn template_owner(
+    State(state): State<CredentialTemplateHttpState>,
+    headers: HeaderMap,
+    Path(template_id): Path<String>,
+) -> Result<Json<Value>, CredentialTemplateHttpError> {
+    if !state.service_authenticator.is_configured() {
+        return Err(unauthorized(
+            "CREDENTIAL_TEMPLATE.SERVICE_AUTHENTICATION_REQUIRED",
+        ));
+    }
+    state
+        .service_authenticator
+        .authenticate(header(&headers, "x-service-token"))
+        .map_err(|_| unauthorized("CREDENTIAL_TEMPLATE.SERVICE_AUTHENTICATION_REQUIRED"))?;
+    // Owner discovery precedes gateway actor authorization. Return only the
+    // stored identity tuple, independent of the caller's tenant or grants.
+    let template = state
+        .application
+        .template_internal(&template_id)
+        .await
+        .map_err(application_error)?;
+    Ok(Json(
+        json!({"id":template.id,"organization_id":template.organization_id}),
+    ))
 }
 
 async fn get_template(
@@ -1262,7 +1292,34 @@ fn template_response(template: &CredentialTemplate) -> Result<Value, CredentialT
         .filter(|value| !value.trim().is_empty())
         .ok_or_else(|| service_unavailable("CREDENTIAL_TEMPLATE.INVALID_STORED_COMPLIANCE"))?;
     let claims = template.claims.iter().map(public_claim).collect::<Vec<_>>();
-    let mut validity = Map::new();
+    // Expose every persisted public rule, including explicit zero/false/null.
+    // Keep the released seconds aliases below for existing consumers.
+    let mut validity = Map::from_iter([
+        (
+            "default_validity_days".to_owned(),
+            json!(template.validity_rules.default_validity_days),
+        ),
+        (
+            "max_validity_days".to_owned(),
+            json!(template.validity_rules.max_validity_days),
+        ),
+        (
+            "renewal_window_days".to_owned(),
+            json!(template.validity_rules.renewal_window_days),
+        ),
+        (
+            "not_before_offset_seconds".to_owned(),
+            json!(template.validity_rules.not_before_offset_seconds),
+        ),
+        (
+            "require_revalidation".to_owned(),
+            json!(template.validity_rules.require_revalidation),
+        ),
+        (
+            "revalidation_interval_days".to_owned(),
+            json!(template.validity_rules.revalidation_interval_days),
+        ),
+    ]);
     validity.insert(
         "ttl_seconds".to_owned(),
         json!(i64::from(template.validity_rules.default_validity_days) * 86_400),

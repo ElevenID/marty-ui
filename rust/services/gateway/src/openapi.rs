@@ -24,6 +24,10 @@ pub fn schemas() -> Value {
     schemas["schemas__credential_template"]["x-marty-runtime-extension"] = json!(
         "Native persisted configuration readback; extends the pinned protocol response. schema_uri writes are unsupported."
     );
+    schemas["runtime__credential_template_validity_input"] = serde_json::from_str(include_str!(
+        "../../../../contracts/credential-template-validity-input.json"
+    ))
+    .expect("native template validity input schema");
     schemas["runtime__issuer_identity_capabilities"] = serde_json::from_str(include_str!(
         "../../../../contracts/issuer-identity-capabilities-response.json"
     ))
@@ -313,6 +317,19 @@ pub fn describe_operation(operation: &mut Value, method: HttpMethod, path: &str,
     // Coverage is explicit while remaining service-owned shapes are reconciled.
     operation["x-marty-request-schema-documented"] = json!(request.is_some());
     operation["x-marty-response-schema-documented"] = json!(response.is_some());
+    if (method == Post && path == "/v1/credential-templates")
+        || (method == Patch && path == "/v1/credential-templates/{template_id}")
+    {
+        // Document this reconciled field without claiming the rest of the
+        // service-owned request DTO has been fully described.
+        operation["requestBody"] = json!({"required":true,"content":{"application/json":{"schema":{
+            "type":"object","properties":{"validity_rules":{"anyOf":[
+                {"$ref":"#/components/schemas/runtime__credential_template_validity_input"},
+                {"type":"null"}
+            ]}}
+        }}}});
+        operation["x-marty-validity-rules-schema-documented"] = json!(true);
+    }
     let template_response = (matches!(method, Get | Post) && path == "/v1/credential-templates")
         || (matches!(method, Get | Patch) && path == "/v1/credential-templates/{template_id}")
         || (method == Post && matches!(path, "/v1/credential-templates/{template_id}/activate"));
@@ -613,6 +630,17 @@ mod tests {
             let mut operation = json!({});
             describe_operation(&mut operation, method, path, 200);
             assert_eq!(operation["x-marty-response-schema-documented"], true);
+            if (method == HttpMethod::Post && path == "/v1/credential-templates")
+                || method == HttpMethod::Patch
+            {
+                assert_eq!(operation["x-marty-request-schema-documented"], false);
+                assert_eq!(operation["x-marty-validity-rules-schema-documented"], true);
+                assert_eq!(
+                    operation["requestBody"]["content"]["application/json"]["schema"]["properties"]
+                        ["validity_rules"]["anyOf"][0]["$ref"],
+                    "#/components/schemas/runtime__credential_template_validity_input"
+                );
+            }
         }
     }
     #[test]
