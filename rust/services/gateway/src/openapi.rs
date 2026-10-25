@@ -313,8 +313,7 @@ pub fn describe_operation(operation: &mut Value, method: HttpMethod, path: &str,
     // Coverage is explicit while remaining service-owned shapes are reconciled.
     operation["x-marty-request-schema-documented"] = json!(request.is_some());
     operation["x-marty-response-schema-documented"] = json!(response.is_some());
-    let template_response = (method == Get && path == "/v1/credential-templates")
-        || (method == Post && path == "/v1/credential-templates")
+    let template_response = (matches!(method, Get | Post) && path == "/v1/credential-templates")
         || (matches!(method, Get | Patch) && path == "/v1/credential-templates/{template_id}")
         || (method == Post && matches!(path, "/v1/credential-templates/{template_id}/activate"));
     if template_response && (200..300).contains(&status) {
