@@ -5,6 +5,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { webcrypto } from 'node:crypto'
 import { render, screen, waitFor, within } from '@test/utils'
 import { server } from '@test/mocks/server'
 import { http, HttpResponse } from 'msw'
@@ -35,6 +36,8 @@ vi.mock('../../../../contexts/ConsoleContext', () => ({
 
 describe('CredentialTemplateWizard', () => {
   beforeEach(() => {
+    vi.stubGlobal('crypto', webcrypto)
+    sessionStorage.clear()
     vi.clearAllMocks()
     mockOrgContext.activeOrgId = 'console-org'
     mockOrgContext.authOrganizationId = 'auth-org'
