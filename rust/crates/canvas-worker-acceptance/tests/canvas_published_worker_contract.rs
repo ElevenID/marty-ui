@@ -100,6 +100,14 @@ mod canvas_worker_lease_expiry_replay;
 #[path = "../../../services/issuance/tests/support/canvas_published_borrowed_database.rs"]
 mod canvas_published_borrowed_database;
 
+const TIMEOUT_CASES: &[&str] = &[
+    "application_prompt",
+    "application_delayed_headers",
+    "roster_prompt",
+    "roster_delayed_headers",
+];
+const LEASE_EXPIRY_CASES: &[&str] = &["renewal_lock_early_release", "renewal_lock_crosses_expiry"];
+
 #[test]
 fn worker_repository_root_is_independent_of_cargo_package_depth() {
     let root = canvas_published_database::repository_root();
@@ -129,12 +137,7 @@ async fn worker_deadline_matches_frozen_published_process() {
 async fn worker_timeout_matches_frozen_published_process() {
     assert_borrowed_worker_cases(
         "test_canvas_worker_timeout_https.py",
-        &[
-            "application_prompt",
-            "application_delayed_headers",
-            "roster_prompt",
-            "roster_delayed_headers",
-        ],
+        TIMEOUT_CASES,
         "MARTY_CANVAS_WORKER_TIMEOUT_DATABASE",
     )
     .await;
@@ -154,7 +157,7 @@ async fn worker_body_timeout_matches_frozen_published_process() {
 async fn worker_lease_expiry_matches_frozen_published_process() {
     assert_borrowed_worker_cases(
         "test_canvas_worker_lease_expiry_https.py",
-        &["renewal_lock_early_release", "renewal_lock_crosses_expiry"],
+        LEASE_EXPIRY_CASES,
         "MARTY_CANVAS_WORKER_LEASE_EXPIRY_DATABASE",
     )
     .await;
@@ -185,6 +188,10 @@ async fn assert_borrowed_worker_cases(script: &str, cases: &[&str], descriptor_e
         return;
     }
     for case in cases {
+        // Declare before the owner so panic timing ends after its Drop cleanup.
+        let timer =
+            canvas_published_database::BorrowedPreflightCase::from_script_case(script, case)
+                .map(|case| case.timer());
         // Keep Docker ownership outside the killable inner coordinator. Each
         // case receives a fresh database and only a checked ownership descriptor.
         let owned = canvas_published_database::PublishedDatabase::start()
@@ -197,7 +204,53 @@ async fn assert_borrowed_worker_cases(script: &str, cases: &[&str], descriptor_e
             &[(descriptor_environment, descriptor.as_str())],
         );
         owned.close_verified().unwrap();
+        if let Some(timer) = timer {
+            timer.success();
+        }
     }
+}
+
+#[test]
+fn borrowed_preflight_timing_names_cover_only_fixed_native_cases() {
+    use canvas_published_database::BorrowedPreflightCase;
+    let actual = TIMEOUT_CASES
+        .iter()
+        .map(|case| {
+            BorrowedPreflightCase::from_script_case("test_canvas_worker_timeout_https.py", case)
+                .unwrap()
+                .timing_name()
+        })
+        .chain(LEASE_EXPIRY_CASES.iter().map(|case| {
+            BorrowedPreflightCase::from_script_case(
+                "test_canvas_worker_lease_expiry_https.py",
+                case,
+            )
+            .unwrap()
+            .timing_name()
+        }))
+        .collect::<BTreeSet<_>>();
+    assert_eq!(actual.len(), TIMEOUT_CASES.len() + LEASE_EXPIRY_CASES.len());
+    assert!(actual.contains("timeout.application_prompt"));
+    assert!(actual.contains("lease-expiry.renewal_lock_crosses_expiry"));
+    assert!(BorrowedPreflightCase::from_script_case(
+        "test_canvas_worker_body_timeout_https.py",
+        "application_body_prompt"
+    )
+    .is_none());
+    assert!(
+        std::panic::catch_unwind(|| BorrowedPreflightCase::from_script_case(
+            "test_canvas_worker_timeout_https.py",
+            "unknown"
+        ))
+        .is_err()
+    );
+    assert!(
+        std::panic::catch_unwind(|| BorrowedPreflightCase::from_script_case(
+            "test_canvas_worker_lease_expiry_https.py",
+            "unknown"
+        ))
+        .is_err()
+    );
 }
 
 #[tokio::test]

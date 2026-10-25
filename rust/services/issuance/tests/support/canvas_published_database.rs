@@ -193,6 +193,59 @@ impl PhaseTimer {
     }
 }
 
+// Only these six source-owned routine cases may create borrowed preflight labels.
+pub(super) enum BorrowedPreflightCase {
+    ApplicationPrompt,
+    ApplicationDelayedHeaders,
+    RosterPrompt,
+    RosterDelayedHeaders,
+    RenewalLockEarlyRelease,
+    RenewalLockCrossesExpiry,
+}
+
+impl BorrowedPreflightCase {
+    pub(super) fn from_script_case(script: &str, case: &str) -> Option<Self> {
+        match (script, case) {
+            ("test_canvas_worker_timeout_https.py", "application_prompt") => {
+                Some(Self::ApplicationPrompt)
+            }
+            ("test_canvas_worker_timeout_https.py", "application_delayed_headers") => {
+                Some(Self::ApplicationDelayedHeaders)
+            }
+            ("test_canvas_worker_timeout_https.py", "roster_prompt") => Some(Self::RosterPrompt),
+            ("test_canvas_worker_timeout_https.py", "roster_delayed_headers") => {
+                Some(Self::RosterDelayedHeaders)
+            }
+            ("test_canvas_worker_lease_expiry_https.py", "renewal_lock_early_release") => {
+                Some(Self::RenewalLockEarlyRelease)
+            }
+            ("test_canvas_worker_lease_expiry_https.py", "renewal_lock_crosses_expiry") => {
+                Some(Self::RenewalLockCrossesExpiry)
+            }
+            (
+                "test_canvas_worker_timeout_https.py" | "test_canvas_worker_lease_expiry_https.py",
+                _,
+            ) => panic!("Unknown fixed borrowed preflight case"),
+            _ => None,
+        }
+    }
+
+    pub(super) fn timing_name(&self) -> &'static str {
+        match self {
+            Self::ApplicationPrompt => "timeout.application_prompt",
+            Self::ApplicationDelayedHeaders => "timeout.application_delayed_headers",
+            Self::RosterPrompt => "timeout.roster_prompt",
+            Self::RosterDelayedHeaders => "timeout.roster_delayed_headers",
+            Self::RenewalLockEarlyRelease => "lease-expiry.renewal_lock_early_release",
+            Self::RenewalLockCrossesExpiry => "lease-expiry.renewal_lock_crosses_expiry",
+        }
+    }
+
+    pub(super) fn timer(self) -> PhaseTimer {
+        PhaseTimer::start("scenario", self.timing_name())
+    }
+}
+
 // These are exact test-owned identities, never an oracle value or payload.
 // Time the whole repository matrix, including its template and owned cleanup,
 // so the CI artifact can distinguish it from the surrounding worker target.

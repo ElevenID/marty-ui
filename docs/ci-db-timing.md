@@ -47,6 +47,15 @@ The native REST worker harness separately times each corpus-owned `scenario`,
 plus its own HTTPS `fixture_seed` and `cleanup`; that `fixture_seed` is the TLS
 fixture, not PostgreSQL seeding. A case's scenario duration includes its nested
 setup, worker run, assertions, and cleanup, so these durations must not be added.
+The four timeout and two lease-expiry borrowed native preflight cases also
+emit fixed, individually allowlisted `scenario` IDs through a closed enum.
+Each timer starts before its fresh owned PostgreSQL fixture and ends only
+after verified close; a panic reports `failed` after fixture Drop. The duration
+includes the child HTTPS process and its existing real deadline. Deadline,
+body-timeout and historical process replay cases retain aggregate test/group
+durations and generic fixture phases, not these case-labelled timings. This
+changes no preflight or qualification selection. Nested durations overlap and
+must not be added.
 The PostgreSQL cleanup duration measures resource removal, not the subsequent
 exact-absence verification; a successful removal can still fail that verification
 and fail the test. Explicit close and the following Rust destructor produce one
