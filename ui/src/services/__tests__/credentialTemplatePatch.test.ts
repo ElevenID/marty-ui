@@ -5,19 +5,23 @@ import { buildCredentialTemplatePatch as build, updateCredentialTemplate, buildC
 describe('sparse credential template update', () => {
   it('sends a sparse body through the exported update adapter', async () => {
     let received;
+    let scope;
     server.use(http.patch('*/v1/credential-templates/template-a', async ({ request }) => {
       received = await request.json();
+      scope = new URL(request.url).searchParams.get('organization_id');
+      if (Object.hasOwn(received, 'organization_id')) return HttpResponse.json({ detail: 'Unknown native update field' }, { status: 422 });
       return HttpResponse.json({ id: 'template-a', organization_id: 'org', name: 'Renamed', status: 'ACTIVE', claims: [{ name: 'subject' }] });
     }));
     const result = await updateCredentialTemplate('template-a', { organization_id: ' org ', name: 'Renamed' });
-    expect(received).toEqual({ organization_id: 'org', name: 'Renamed' });
+    expect(received).toEqual({ name: 'Renamed' });
+    expect(scope).toBe('org');
     expect(result.claims[0].name).toBe('subject');
   });
   it('keeps metadata edits sparse without creation identity/defaults', () => {
-    expect(build({ organization_id: 'org', name: 'Renamed' })).toEqual({ organization_id: 'org', name: 'Renamed' });
+    expect(build({ organization_id: 'org', name: 'Renamed' })).toEqual({ name: 'Renamed' });
   });
   it('distinguishes explicit empty values from omission', () => {
-    expect(build({ organization_id: 'org', claims: [], description: null, supported_formats: undefined })).toEqual({ organization_id: 'org', claims: [], description: null });
+    expect(build({ organization_id: 'org', claims: [], description: null, supported_formats: undefined })).toEqual({ claims: [], description: null });
   });
   it('does not expand sparse validity rules into defaults', () => {
     expect(build({ organization_id: 'org', validity_rules: { renewable: false, not_before_offset_seconds: 0 } }).validity_rules).toEqual({ renewable: false, not_before_offset_seconds: 0 });

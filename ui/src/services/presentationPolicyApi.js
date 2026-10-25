@@ -815,7 +815,10 @@ export async function getCredentialTemplate(id) {
  * Update a credential template
  */
 export async function updateCredentialTemplate(id, data) {
-  const result = await patch(`${CREDENTIAL_TEMPLATE_BASE}/${id}`, buildCredentialTemplatePatch(data));
+  const organizationId = requireOrganizationId(data);
+  const result = await patch(`${CREDENTIAL_TEMPLATE_BASE}/${id}`, buildCredentialTemplatePatch(data), {
+    params: { organization_id: organizationId },
+  });
   return normalizeCredentialTemplate(result);
 }
 
@@ -841,7 +844,8 @@ export function buildCredentialTemplatePatch(data = {}) {
       }
     }
   };
-  const payload = { organization_id: requireOrganizationId(data) };
+  requireOrganizationId(data);
+  const payload = {};
   for (const [field, value] of Object.entries(data)) {
     if (value === undefined) continue;
     if (!fields.has(field)) throw new Error(`Unsupported template update field: ${field}`);
