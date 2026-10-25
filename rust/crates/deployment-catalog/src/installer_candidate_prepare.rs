@@ -1,12 +1,16 @@
 //! Authenticate an acceptance-only candidate from an exclusively owned local
 //! staging directory. No normal admission, channel promotion or runtime action.
-//! Published-phase inputs still require independently authenticated public
-//! acquisition by the controller; local verification does not prove public replay.
+//! Local candidate preparation alone does not prove public replay. The optional
+//! published fetch helper observes anonymous bytes only when run on the guest;
+//! the controller still must authenticate guest identity and the public release.
 #![cfg(target_os = "linux")]
 
 use crate::{
     installer_artifacts,
-    installer_release::{self as release, CandidateAuthorization, CandidateContext, Inventory},
+    installer_fetch::{DownloadReceipt, GitHubReleaseFetcher},
+    installer_release::{
+        self as release, CandidateAuthorization, CandidateContext, CandidatePhase, Inventory,
+    },
     installer_runtime,
     installer_verify::{self, read_private_record, VerificationTools},
 };
@@ -83,6 +87,190 @@ fn bind_inputs(
         return Err("candidate differs from running operator identity".into());
     }
     release::bind_candidate_authorization(authorization, inventory, expected, timestamp)
+}
+
+fn bind_public_authorization(
+    bytes: &[u8],
+    expected: &CandidateContext,
+    embedded_source: &str,
+    embedded_version: &str,
+    running_operator: &str,
+    timestamp: u64,
+) -> Result<CandidateAuthorization, String> {
+    if expected.phase != CandidatePhase::Published
+        || expected.source_sha != embedded_source
+        || expected.release_tag != embedded_version
+        || expected.operator_sha != running_operator
+    {
+        return Err("published candidate differs from running operator".into());
+    }
+    let authorization = release::parse_candidate_authorization(bytes, timestamp)?;
+    if authorization.phase != CandidatePhase::Published
+        || authorization.source_sha != expected.source_sha
+        || authorization.release_tag != expected.release_tag
+        || authorization.operator_sha256 != expected.operator_sha
+        || authorization.nonce != expected.nonce
+        || authorization.harness_source_sha != expected.harness_source_sha
+        || authorization.run_id != expected.run_id
+        || authorization.run_attempt != expected.run_attempt
+    {
+        return Err("published candidate authorization context differs".into());
+    }
+    Ok(authorization)
+}
+
+fn bind_download_receipts(directory: &Path, receipts: &[DownloadReceipt]) -> Result<(), String> {
+    for receipt in receipts {
+        if receipt.asset.contains('/')
+            || receipt.asset.contains('\\')
+            || receipt.asset == "."
+            || receipt.asset == ".."
+        {
+            return Err("public candidate receipt asset name invalid".into());
+        }
+        installer_verify::check_private_asset(
+            &directory.join(&receipt.asset),
+            &receipt.sha256,
+            receipt.bytes,
+        )?;
+    }
+    Ok(())
+}
+
+/// Download the exact acceptance-only published candidate over anonymous HTTPS.
+/// This does not prove how the *running* operator was bootstrapped. A separate
+/// guest bootstrap must fetch and authenticate that executable before invoking
+/// this stage. The caller retains this private directory on every failure and
+/// later runs prepare_candidate against these same files before any runtime use.
+pub async fn fetch_published_inputs(
+    authorization_path: &Path,
+    inputs_dir: &Path,
+    tools: &VerificationTools,
+    expected: &CandidateContext,
+    embedded_source: &str,
+    embedded_version: &str,
+) -> Result<Vec<DownloadReceipt>, String> {
+    if expected.phase != CandidatePhase::Published {
+        return Err("published phase required for public candidate acquisition".into());
+    }
+    installer_runtime::private_parent(inputs_dir)?;
+    if std::fs::read_dir(inputs_dir)
+        .map_err(|_| "public candidate input directory unavailable")?
+        .next()
+        .is_some()
+    {
+        return Err("public candidate input directory must be fresh".into());
+    }
+    let authorization_bytes = read_private_record(authorization_path)?;
+    let signature = tools.verify(
+        authorization_path,
+        release::ACCEPTANCE_WORKFLOW,
+        &expected.harness_source_sha,
+        expected.run_id,
+        expected.run_attempt,
+    )?;
+    if signature != release::sha256(&authorization_bytes) {
+        return Err("published candidate authorization changed".into());
+    }
+    let authorization = bind_public_authorization(
+        &authorization_bytes,
+        expected,
+        embedded_source,
+        embedded_version,
+        &installer_verify::current_operator_digest()?,
+        now()?,
+    )?;
+    let fetcher = GitHubReleaseFetcher::new()?;
+    let mut receipts = Vec::new();
+    let inventory_path = inputs_dir.join("installer-inventory.json");
+    receipts.push(
+        fetcher
+            .fetch_record(
+                &expected.release_tag,
+                "installer-inventory.json",
+                &inventory_path,
+            )
+            .await?,
+    );
+    for suffix in [".sigstore.json", ".provenance.jsonl"] {
+        let name = format!("installer-inventory.json{suffix}");
+        receipts.push(
+            fetcher
+                .fetch_sidecar(&expected.release_tag, &name, &inputs_dir.join(&name))
+                .await?,
+        );
+    }
+    bind_download_receipts(inputs_dir, &receipts)?;
+    let inventory_bytes = read_private_record(&inventory_path)?;
+    if release::sha256(&inventory_bytes) != authorization.inventory_sha256 {
+        return Err("public inventory differs from signed candidate authorization".into());
+    }
+    let (_, inventory) = bind_inputs(
+        &authorization_bytes,
+        &inventory_bytes,
+        expected,
+        embedded_source,
+        embedded_version,
+        &expected.operator_sha,
+        now()?,
+    )?;
+    let workflow = release::build_workflow(&inventory.release_tag)?;
+    let verified = tools.verify(
+        &inventory_path,
+        workflow,
+        &inventory.source_sha,
+        inventory.build_run_id,
+        inventory.build_run_attempt,
+    )?;
+    if verified != release::sha256(&inventory_bytes) {
+        return Err("public inventory provenance differs".into());
+    }
+    bind_download_receipts(inputs_dir, &receipts)?;
+    for name in ARTIFACTS {
+        let artifact = inventory.artifact(name)?;
+        let path = inputs_dir.join(name);
+        receipts.push(
+            fetcher
+                .fetch_verified(
+                    &inventory.release_tag,
+                    name,
+                    &path,
+                    artifact.size,
+                    &artifact.sha256,
+                )
+                .await?,
+        );
+        for suffix in [".sigstore.json", ".provenance.jsonl"] {
+            let sidecar = format!("{name}{suffix}");
+            receipts.push(
+                fetcher
+                    .fetch_sidecar(&inventory.release_tag, &sidecar, &inputs_dir.join(&sidecar))
+                    .await?,
+            );
+        }
+        bind_download_receipts(inputs_dir, &receipts[receipts.len() - 3..])?;
+        let verified = tools.verify(
+            &path,
+            workflow,
+            &inventory.source_sha,
+            inventory.build_run_id,
+            inventory.build_run_attempt,
+        )?;
+        if verified != artifact.sha256 {
+            return Err("public artifact provenance differs from signed inventory".into());
+        }
+        bind_download_receipts(inputs_dir, &receipts[receipts.len() - 3..])?;
+    }
+    if read_private_record(&inventory_path)? != inventory_bytes
+        || read_private_record(authorization_path)? != authorization_bytes
+        || installer_verify::current_operator_digest()? != expected.operator_sha
+    {
+        return Err("published candidate custody changed during acquisition".into());
+    }
+    release::parse_candidate_authorization(&authorization_bytes, now()?)?;
+    bind_download_receipts(inputs_dir, &receipts)?;
+    input_names(inputs_dir)?;
+    Ok(receipts)
 }
 
 /// Verify the exact controller-selected phase, nonce, harness source and run.
@@ -233,6 +421,125 @@ mod tests {
             run_attempt: parsed.run_attempt,
         };
         (auth, inventory, expected)
+    }
+
+    #[test]
+    fn public_authorization_requires_exact_published_identity_and_live_lease() {
+        let (staged, _, mut expected) = fixture();
+        let mut value: serde_json::Value = serde_json::from_slice(&staged).unwrap();
+        value["phase"] = serde_json::Value::from("published");
+        let published = serde_json::to_vec(&value).unwrap();
+        expected.phase = CandidatePhase::Published;
+        let bind = |bytes: &[u8],
+                    context: &CandidateContext,
+                    source: &str,
+                    version: &str,
+                    operator: &str,
+                    time| {
+            bind_public_authorization(bytes, context, source, version, operator, time)
+        };
+        assert!(bind(
+            &published,
+            &expected,
+            &expected.source_sha,
+            &expected.release_tag,
+            &expected.operator_sha,
+            100000
+        )
+        .is_ok());
+        assert!(bind(
+            &staged,
+            &expected,
+            &expected.source_sha,
+            &expected.release_tag,
+            &expected.operator_sha,
+            100000
+        )
+        .is_err());
+        let mut other = expected.clone();
+        other.phase = CandidatePhase::Staged;
+        assert!(bind(
+            &published,
+            &other,
+            &expected.source_sha,
+            &expected.release_tag,
+            &expected.operator_sha,
+            100000
+        )
+        .is_err());
+        other = expected.clone();
+        other.nonce = "f".repeat(64);
+        assert!(bind(
+            &published,
+            &other,
+            &expected.source_sha,
+            &expected.release_tag,
+            &expected.operator_sha,
+            100000
+        )
+        .is_err());
+        assert!(bind(
+            &published,
+            &expected,
+            &"f".repeat(40),
+            &expected.release_tag,
+            &expected.operator_sha,
+            100000
+        )
+        .is_err());
+        assert!(bind(
+            &published,
+            &expected,
+            &expected.source_sha,
+            &expected.release_tag,
+            &"f".repeat(64),
+            100000
+        )
+        .is_err());
+        assert!(bind(
+            &published,
+            &expected,
+            &expected.source_sha,
+            &expected.release_tag,
+            &expected.operator_sha,
+            104000
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn public_receipts_refuse_payload_and_sidecar_substitution() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let names = [
+            "installer-inventory.json",
+            "installer-inventory.json.sigstore.json",
+            "installer-inventory.json.provenance.jsonl",
+        ];
+        let receipts: Vec<DownloadReceipt> = names
+            .iter()
+            .map(|name| {
+                let path = directory.path().join(name);
+                std::fs::write(&path, b"original public bytes").unwrap();
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+                DownloadReceipt {
+                    asset: (*name).into(),
+                    bytes: 21,
+                    sha256: release::sha256(b"original public bytes"),
+                    hash_verified: false,
+                }
+            })
+            .collect();
+        bind_download_receipts(directory.path(), &receipts).unwrap();
+        for name in names {
+            let path = directory.path().join(name);
+            std::fs::write(&path, b"different public bytes").unwrap();
+            assert!(bind_download_receipts(directory.path(), &receipts).is_err());
+            std::fs::write(&path, b"original public bytes").unwrap();
+        }
+        let mut wrong = receipts;
+        wrong[1].asset = "../other".into();
+        assert!(bind_download_receipts(directory.path(), &wrong).is_err());
     }
 
     #[test]
