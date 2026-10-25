@@ -4,7 +4,7 @@
 const assert = require('node:assert/strict');
 const {
   cleanupApplicationCredential, createOwnedApplication, ensureApplicantProfile,
-  issueOwnedApplication, listResources, requireJson, requireOwnedApplication, submitOwnedApplication,
+  issueOwnedApplication, requireJson, requireOwnedApplication, submitOwnedApplication,
   approvedApplicationFlowPayload,
 } = require('./beta-demo-resource-helpers');
 const { createOwnedActiveConfiguration, retireOwnedConfiguration } = require('./demo-owned-configuration');
@@ -21,13 +21,18 @@ function createOwnedMembership(operator, inputs) {
       assert.equal(credential.status, 'ACTIVE');
       assert.equal(credential.credential_type, inputs.configurationId);
       assert.equal(credential.vct, inputs.vct);
-      const applicationSources = (await listResources(operator, '/v1/application-templates', owned.organizationId))
-        .filter(item => item.organization_id === owned.organizationId && item.status === 'ACTIVE'
-          && item.credential_template_id === credential.id);
-      assert.equal(applicationSources.length, 1, 'Require one active source membership application contract');
-      const applicationSource = applicationSources[0];
+      assert.match(inputs.sourceApplicationTemplateId || '', /^[a-f0-9-]{36}$/i);
+      const applicationSource = await requireJson(operator,
+        `/v1/application-templates/${encodeURIComponent(inputs.sourceApplicationTemplateId)}`);
+      assert.equal(applicationSource.id, inputs.sourceApplicationTemplateId);
+      assert.equal(applicationSource.organization_id, owned.organizationId);
+      assert.equal(applicationSource.credential_template_id, credential.id);
+      assert.equal(applicationSource.status, 'ACTIVE');
       assert.ok(applicationSource.description?.trim(), 'Membership badge requires its governed description');
       assert.ok(Array.isArray(applicationSource.form_fields) && Array.isArray(applicationSource.claim_collection_rules));
+      for (const name of ['name', 'description']) assert(applicationSource.claim_collection_rules.some(rule =>
+        rule.claim_name === `achievement_${name}` && rule.source === 'SYSTEM'
+          && rule.source_config?.system_field === `template.${name}`), 'Preserve governed badge metadata rules');
       const payload = Object.fromEntries(['organization_id', 'description', 'credential_type', 'vct', 'doctype',
         'privacy_posture', 'selective_disclosure_fields', 'zk_predicate_claims', 'derived_attributes',
         'display_style', 'validity_rules', 'supported_formats', 'trust_profile_id', 'revocation_profile_id',
