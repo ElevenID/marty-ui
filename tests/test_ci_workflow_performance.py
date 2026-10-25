@@ -68,8 +68,9 @@ def test_fresh_vm_creation_has_required_root_release_owner() -> None:
     assert "qemu-utils ubuntu-keyring" in command
     assert "sudo env PYTHONPATH=packages PYTHONDONTWRITEBYTECODE=1" in command
     assert command.count("tests/test_installer_candidate_vm_create.py") == 1
+    assert command.count("tests/test_installer_candidate_vm_runtime.py") == 1
     assert "-p no:cacheprovider --junitxml=" in command
-    for required in ('len(cases) != 9', '("tests", 9)', '("skipped", 0)',
+    for required in ('len(cases) != 15', '("tests", 15)', '("skipped", 0)',
                      '("failures", 0)', '("errors", 0)'):
         assert required in command
 CANVAS_COMPOSITION_COMMAND = (

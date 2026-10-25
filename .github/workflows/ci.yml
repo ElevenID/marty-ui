@@ -3009,7 +3009,8 @@ jobs:
           python_bin="$(command -v python)"
           report="$RUNNER_TEMP/installer-root-vm-creation.xml"
           sudo env PYTHONPATH=packages PYTHONDONTWRITEBYTECODE=1 "$python_bin" -m pytest -q \
-            tests/test_installer_candidate_vm_create.py -p no:cacheprovider --junitxml="$report"
+            tests/test_installer_candidate_vm_create.py \
+            tests/test_installer_candidate_vm_runtime.py -p no:cacheprovider --junitxml="$report"
           python - "$report" <<'PY'
           import sys
           import xml.etree.ElementTree as ET
@@ -3020,9 +3021,9 @@ jobs:
           if suite is None or suite.tag != "testsuite":
               raise SystemExit("root-owned VM creation test report is missing")
           cases = list(suite.iter("testcase"))
-          if len(cases) != 9 or any(
+          if len(cases) != 15 or any(
               int(suite.attrib.get(name, "-1")) != expected
-              for name, expected in (("tests", 9), ("skipped", 0),
+              for name, expected in (("tests", 15), ("skipped", 0),
                                      ("failures", 0), ("errors", 0))
           ):
               raise SystemExit("root-owned VM creation cases did not all execute and pass")
