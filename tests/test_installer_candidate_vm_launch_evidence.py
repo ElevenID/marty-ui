@@ -79,3 +79,124 @@ def test_changed_seed_and_noncanonical_records_refused():
     with pytest.raises(ValueError, match="not canonical"):
         evidence.bind_exact_launch(raw, release.encode(spawned),
                                    release.encode(receipt), seed, boot_id=boot)
+
+
+def chain():
+    li, lp, lr, _, boot = records()
+    vm_id = li["vm_id"]
+    ci = dict(schema="elevenid.installer-vm-overlay-creation/v2",
+              phase="intent", vm_id=vm_id, qualified=False,
+              launch_authorized=False, image={"image_sha256": "a" * 64},
+              vm_dir="/source/vm", disk_path="/source/vm/disk.qcow2",
+              virtual_gib=32, started_at=1000)
+    cr = dict((key, value) for key, value in ci.items() if key != "started_at")
+    cr.update(phase="created", intent_sha256=release.digest(release.encode(ci)),
+              disk_device=1, disk_inode=5, disk_bytes=1024,
+              disk_sha256="b" * 64, created_at=1001)
+    ri = dict(schema="elevenid.installer-vm-runtime-transfer/v1", phase="intent",
+              vm_id=vm_id, creation_receipt_sha256=release.digest(release.encode(cr)),
+              source_path=cr["disk_path"], target_path="/runtime/vm/disk.qcow2",
+              disk_device=1, disk_inode=5, disk_bytes=1024,
+              disk_sha256="b" * 64, runtime_uid=997, runtime_gid=989,
+              runtime_account="mvq_test", started_at=1002,
+              qualified=False, launch_authorized=False)
+    rr = dict(ri, phase="transferred", intent_sha256=release.digest(release.encode(ri)),
+              runtime_dir_device=1, runtime_dir_inode=2,
+              transferred_at=1003)
+    si = dict(schema="elevenid.installer-vm-seed/v1", phase="intent", vm_id=vm_id,
+              runtime_receipt_sha256=release.digest(release.encode(rr)),
+              control_dir="/registry/vm.control", runtime_dir="/runtime/vm",
+              ssh_port=22022, guest_user="installer", packages={"docker.io": "1"},
+              started_at=1004, qualified=False, launch_authorized=False)
+    sr = dict(si, phase="seeded", intent_sha256=release.digest(release.encode(si)),
+              control_dir_device=3, control_dir_inode=4, seed_device=3,
+              seed_inode=6, seed_bytes=4096, seed_sha256="c" * 64,
+              user_data_sha256="d" * 64, metadata_sha256="e" * 64,
+              known_hosts_sha256="f" * 64,
+              controller_public_sha256="1" * 64,
+              guest_host_public_sha256="2" * 64,
+              controller_private_sha256="3" * 64,
+              guest_host_private_sha256="4" * 64, seeded_at=1005)
+    li["started_at"] = 1006
+    li["seed_receipt_sha256"] = release.digest(release.encode(sr))
+    lp["intent_sha256"] = release.digest(release.encode(li))
+    lp["spawned_at"] = 1007
+    lr.update(seed_receipt_sha256=li["seed_receipt_sha256"],
+              intent_sha256=lp["intent_sha256"], started_at=1006,
+              observed_at=1008)
+    return dict(creation_intent=ci, creation_receipt=cr, runtime_intent=ri,
+                runtime_receipt=rr, seed_intent=si, seed_receipt=sr,
+                launch_intent=li, launch_pid=lp, launch_receipt=lr), boot
+
+
+def bind_chain(entries, boot):
+    return evidence.bind_provisioned_launch(
+        **{name: release.encode(record) for name, record in entries.items()},
+        boot_id=boot)
+
+
+def refresh_links(entries):
+    """Rehash every downstream record after a contradictory source mutation."""
+    e = entries
+    e["runtime_intent"]["creation_receipt_sha256"] = release.digest(
+        release.encode(e["creation_receipt"]))
+    e["runtime_receipt"]["creation_receipt_sha256"] = e["runtime_intent"][
+        "creation_receipt_sha256"]
+    e["runtime_receipt"]["intent_sha256"] = release.digest(
+        release.encode(e["runtime_intent"]))
+    e["seed_intent"]["runtime_receipt_sha256"] = release.digest(
+        release.encode(e["runtime_receipt"]))
+    e["seed_receipt"]["runtime_receipt_sha256"] = e["seed_intent"][
+        "runtime_receipt_sha256"]
+    e["seed_receipt"]["intent_sha256"] = release.digest(
+        release.encode(e["seed_intent"]))
+    e["launch_intent"]["seed_receipt_sha256"] = release.digest(
+        release.encode(e["seed_receipt"]))
+    e["launch_pid"]["intent_sha256"] = release.digest(
+        release.encode(e["launch_intent"]))
+    e["launch_receipt"]["seed_receipt_sha256"] = e["launch_intent"][
+        "seed_receipt_sha256"]
+    e["launch_receipt"]["intent_sha256"] = e["launch_pid"]["intent_sha256"]
+
+
+def test_provisioning_chain_binds_pristine_receipts_without_rehashing_booted_disk():
+    entries, boot = chain()
+    bound = bind_chain(entries, boot)
+    assert bound["creation_receipt_sha256"] == release.digest(
+        release.encode(entries["creation_receipt"]))
+    assert len(bound) == 9
+
+
+@pytest.mark.parametrize("name,field,value", [
+    ("runtime_intent", "creation_receipt_sha256", "0" * 64),
+    ("seed_intent", "runtime_receipt_sha256", "0" * 64),
+    ("launch_intent", "disk_inode", 99),
+    ("seed_receipt", "control_dir_inode", 99),
+    ("runtime_receipt", "runtime_uid", 0),
+])
+def test_provisioning_chain_substitution_refused(name, field, value):
+    entries, boot = chain()
+    entries[name][field] = value
+    with pytest.raises(ValueError):
+        bind_chain(entries, boot)
+
+
+@pytest.mark.parametrize("name,field,value", [
+    ("creation_receipt", "image", {"image_sha256": "0" * 64}),
+    ("creation_receipt", "launch_authorized", True),
+    ("runtime_receipt", "runtime_account", "other-account"),
+    ("seed_receipt", "packages", {"wrong": "1"}),
+    ("creation_receipt", "disk_inode", True),
+    ("creation_intent", "unexpected", "field"),
+    ("seed_receipt", "launch_authorized", True),
+    ("runtime_intent", "launch_authorized", True),
+    ("seed_receipt", "seed_sha256", "G" * 64),
+    ("creation_receipt", "disk_bytes", 0),
+    ("seed_receipt", "seed_bytes", 0),
+])
+def test_rehashed_contradictory_provisioning_records_refused(name, field, value):
+    entries, boot = chain()
+    entries[name][field] = value
+    refresh_links(entries)
+    with pytest.raises(ValueError):
+        bind_chain(entries, boot)
