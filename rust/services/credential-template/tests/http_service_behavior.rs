@@ -541,6 +541,70 @@ async fn unsupported_schema_uri_is_rejected_instead_of_silently_discarded() {
 }
 
 #[tokio::test]
+async fn nondefault_public_configuration_survives_create_list_and_metadata_edit() {
+    let app = router();
+    let mut body = create_body();
+    body["selective_disclosure_fields"] = json!(["age"]);
+    body["zk_predicate_claims"] = json!(["age"]);
+    body["derived_attributes"] = json!([{
+        "name":"Age threshold", "source_claim":"age", "derivation_type":"age_over",
+        "parameters":{"threshold":21}
+    }]);
+    body["display_style"] = json!({"background_color":"#123456", "text_color":"#abcdef", "logo_url":"https://issuer.example/logo.png"});
+    let response = app
+        .clone()
+        .oneshot(request("POST", "/v1/credential-templates", body, true))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let created = json_body(response).await;
+    assert_eq!(
+        created["derived_attributes"][0]["parameters"]["threshold"],
+        21
+    );
+    assert_eq!(created["selective_disclosure_fields"], json!(["age"]));
+    assert_eq!(created["zk_predicate_claims"], json!(["age"]));
+    let id = created["id"].as_str().unwrap();
+    let response = app
+        .clone()
+        .oneshot(request(
+            "PATCH",
+            &format!("/v1/credential-templates/{id}"),
+            json!({"description":"metadata only"}),
+            true,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let response = app
+        .oneshot(request(
+            "GET",
+            "/v1/credential-templates?organization_id=org-1",
+            json!({}),
+            true,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let listed = json_body(response).await;
+    let after = listed
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["id"] == id)
+        .unwrap();
+    for field in [
+        "supported_formats",
+        "selective_disclosure_fields",
+        "zk_predicate_claims",
+        "derived_attributes",
+        "display_style",
+    ] {
+        assert_eq!(after[field], created[field], "{field}");
+    }
+}
+
+#[tokio::test]
 async fn create_get_update_activate_and_delete_expose_only_public_behavior() {
     let app = router();
     let response = app

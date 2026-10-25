@@ -316,12 +316,7 @@ pub fn describe_operation(operation: &mut Value, method: HttpMethod, path: &str,
     let template_response = (method == Get && path == "/v1/credential-templates")
         || (method == Post && path == "/v1/credential-templates")
         || (matches!(method, Get | Patch) && path == "/v1/credential-templates/{template_id}")
-        || (method == Post
-            && matches!(
-                path,
-                "/v1/credential-templates/{template_id}/activate"
-                    | "/v1/credential-templates/{template_id}/suspend"
-            ));
+        || (method == Post && matches!(path, "/v1/credential-templates/{template_id}/activate"));
     if template_response && (200..300).contains(&status) {
         let response_schema = if method == Get && path == "/v1/credential-templates" {
             json!({"type":"array","items":schema("credential-template")})
