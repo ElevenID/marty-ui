@@ -315,6 +315,163 @@ pub fn bind_candidate_authorization(
     )?;
     Ok((a, inv))
 }
+
+/// Stable cross-language context digest: sorted compact JSON, no trailing LF,
+/// and the wire field `operator_sha256` (not the Rust member name).
+pub fn candidate_context_sha256(expected: &CandidateContext) -> Result<String> {
+    require(
+        sha(&expected.source_sha, 40)
+            && sha(&expected.operator_sha, 64)
+            && sha(&expected.harness_source_sha, 40)
+            && sha(&expected.nonce, 64)
+            && positive(expected.run_id)
+            && positive(expected.run_attempt),
+        "invalid controller context",
+    )?;
+    release_tier(&expected.release_tag)?;
+    let phase = match expected.phase {
+        CandidatePhase::Staged => "staged",
+        CandidatePhase::Published => "published",
+    };
+    let values: BTreeMap<&str, Value> = [
+        ("source_sha", Value::from(expected.source_sha.clone())),
+        ("release_tag", Value::from(expected.release_tag.clone())),
+        (
+            "operator_sha256",
+            Value::from(expected.operator_sha.clone()),
+        ),
+        (
+            "harness_source_sha",
+            Value::from(expected.harness_source_sha.clone()),
+        ),
+        ("nonce", Value::from(expected.nonce.clone())),
+        ("phase", Value::from(phase)),
+        ("run_id", Value::from(expected.run_id)),
+        ("run_attempt", Value::from(expected.run_attempt)),
+    ]
+    .into_iter()
+    .collect();
+    Ok(sha256(
+        &serde_json::to_vec(&values).map_err(|_| "cannot encode controller context")?,
+    ))
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ControllerConsumption {
+    pub schema: String,
+    pub repository: String,
+    pub scope: String,
+    pub source_ref: String,
+    pub workflow: String,
+    pub authorization_sha256: String,
+    pub context_sha256: String,
+    pub nonce: String,
+    pub source_sha: String,
+    pub release_tag: String,
+    pub operator_sha256: String,
+    pub inventory_sha256: String,
+    pub build_run_id: u64,
+    pub build_run_attempt: u64,
+    pub harness_source_sha: String,
+    pub run_id: u64,
+    pub run_attempt: u64,
+    pub phase: CandidatePhase,
+    pub guest_id: String,
+    pub disk_id: String,
+    pub engine_id: String,
+    pub installation_id: String,
+    pub consumed_at: u64,
+}
+
+fn canonical_v4(value: &str) -> bool {
+    uuid::Uuid::parse_str(value).is_ok_and(|id| {
+        id.to_string() == value
+            && id.get_version_num() == 4
+            && id.get_variant() == uuid::Variant::RFC4122
+    })
+}
+
+/// Structural validation only. The exact bytes require the acceptance workflow's
+/// signature/provenance. A receipt claims a controller dispatch was durably
+/// consumed outside the guest; this module cannot prove persistence or global
+/// one-use semantics. Guest/disk identity must be established by the controller.
+pub fn parse_controller_consumption(bytes: &[u8], now: u64) -> Result<ControllerConsumption> {
+    let c: ControllerConsumption = typed(decode(bytes, MAX_RECORD)?)?;
+    require(
+        c.schema == "elevenid.installer-controller-consumption/v1"
+            && c.repository == REPOSITORY
+            && c.scope == "controller-dispatch-consumed"
+            && c.source_ref == REF
+            && c.workflow == ACCEPTANCE_WORKFLOW,
+        "controller consumption identity differs",
+    )?;
+    candidate(
+        &c.source_sha,
+        &c.release_tag,
+        c.build_run_id,
+        c.build_run_attempt,
+    )?;
+    require(
+        [
+            &c.authorization_sha256,
+            &c.context_sha256,
+            &c.nonce,
+            &c.operator_sha256,
+            &c.inventory_sha256,
+            &c.disk_id,
+        ]
+        .into_iter()
+        .all(|s| sha(s, 64))
+            && sha(&c.harness_source_sha, 40)
+            && positive(c.run_id)
+            && positive(c.run_attempt)
+            && positive(now)
+            && positive(c.consumed_at)
+            && c.consumed_at <= now
+            && canonical_v4(&c.guest_id)
+            && canonical_v4(&c.installation_id)
+            && pattern(&c.engine_id, r"\A[A-Za-z0-9][A-Za-z0-9:-]{7,127}\z"),
+        "invalid controller consumption binding",
+    )?;
+    Ok(c)
+}
+
+/// Bind only, never authenticate or consume. The caller verifies this exact
+/// receipt against expected harness workflow/source/run/attempt and independently
+/// authenticates controller/guest identity before applying runtime mutations.
+pub fn bind_controller_consumption(
+    bytes: &[u8],
+    authorization_bytes: &[u8],
+    inventory_bytes: &[u8],
+    expected: &CandidateContext,
+    expected_engine: &str,
+    now: u64,
+) -> Result<ControllerConsumption> {
+    let (a, _) = bind_candidate_authorization(authorization_bytes, inventory_bytes, expected, now)?;
+    let c = parse_controller_consumption(bytes, now)?;
+    require(
+        c.authorization_sha256 == sha256(authorization_bytes)
+            && c.context_sha256 == candidate_context_sha256(expected)?
+            && c.inventory_sha256 == sha256(inventory_bytes)
+            && c.source_sha == a.source_sha
+            && c.release_tag == a.release_tag
+            && c.operator_sha256 == a.operator_sha256
+            && c.nonce == a.nonce
+            && c.build_run_id == a.build_run_id
+            && c.build_run_attempt == a.build_run_attempt
+            && c.workflow == a.workflow
+            && c.harness_source_sha == a.harness_source_sha
+            && c.run_id == a.run_id
+            && c.run_attempt == a.run_attempt
+            && c.phase == a.phase
+            && c.engine_id == expected_engine
+            && c.consumed_at >= a.issued_at
+            && c.consumed_at < a.expires_at,
+        "controller consumption differs from candidate or target",
+    )?;
+    Ok(c)
+}
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct Channel {
@@ -643,6 +800,90 @@ mod tests {
             run_id: 99,
             run_attempt: 3,
         };
+        assert_eq!(
+            candidate_context_sha256(&expected).unwrap(),
+            "fea75ea294741f68adcde307b631428cc7884016123abd4324462426fabbba6e"
+        );
+        let a: Value = serde_json::from_slice(authorization).unwrap();
+        let mut receipt = json!({
+            "schema":"elevenid.installer-controller-consumption/v1", "repository":REPOSITORY,
+            "scope":"controller-dispatch-consumed", "source_ref":REF, "workflow":ACCEPTANCE_WORKFLOW,
+            "authorization_sha256":sha256(authorization), "context_sha256":candidate_context_sha256(&expected).unwrap(),
+            "inventory_sha256":sha256(inventory), "guest_id":"12345678-1234-4234-8234-123456789abc",
+            "disk_id":"d".repeat(64), "engine_id":"test-engine-12345678",
+            "installation_id":"22345678-1234-4234-8234-123456789abc", "consumed_at":100000
+        });
+        for field in [
+            "nonce",
+            "source_sha",
+            "release_tag",
+            "operator_sha256",
+            "build_run_id",
+            "build_run_attempt",
+            "harness_source_sha",
+            "run_id",
+            "run_attempt",
+            "phase",
+        ] {
+            receipt[field] = a[field].clone();
+        }
+        let bind = |r: &Value| {
+            bind_controller_consumption(
+                &bytes(r),
+                authorization,
+                inventory,
+                &expected,
+                "test-engine-12345678",
+                100000,
+            )
+        };
+        bind(&receipt).unwrap();
+        for (field, value) in [
+            ("schema", json!("bad")),
+            ("scope", json!("acceptance-only")),
+            ("authorization_sha256", json!("b".repeat(64))),
+            ("context_sha256", json!("b".repeat(64))),
+            ("inventory_sha256", json!("b".repeat(64))),
+            ("source_sha", json!("b".repeat(40))),
+            ("nonce", json!("b".repeat(64))),
+            ("operator_sha256", json!("b".repeat(64))),
+            ("build_run_id", json!(43)),
+            ("build_run_attempt", json!(3)),
+            ("harness_source_sha", json!("b".repeat(40))),
+            ("run_id", json!(100)),
+            ("run_attempt", json!(4)),
+            ("phase", json!("published")),
+            ("engine_id", json!("different-engine")),
+            ("guest_id", json!("12345678-1234-1234-8234-123456789abc")),
+            (
+                "installation_id",
+                json!("22345678-1234-4234-0234-123456789abc"),
+            ),
+            ("disk_id", json!("bad")),
+            ("consumed_at", json!(99999)),
+            ("consumed_at", json!(100001)),
+            ("consumed_at", json!(true)),
+            ("run_id", json!(SAFE_INTEGER)),
+            ("extra", json!(1)),
+        ] {
+            let mut changed = receipt.clone();
+            changed[field] = value;
+            assert!(bind(&changed).is_err(), "{field}");
+        }
+        let raw = String::from_utf8(bytes(&receipt)).unwrap();
+        let duplicate = raw.replacen('{', "{\"scope\":\"bad\",", 1);
+        assert!(parse_controller_consumption(duplicate.as_bytes(), 100000).is_err());
+        assert!(parse_admission(&bytes(&receipt)).is_err());
+        assert!(parse_channel(&bytes(&receipt), 100000).is_err());
+        assert!(bind_controller_consumption(
+            &bytes(&receipt),
+            authorization,
+            inventory,
+            &expected,
+            "test-engine-12345678",
+            103600
+        )
+        .is_err());
         assert_eq!(fixture["now"], json!(100000));
         let (a, inv) =
             bind_candidate_authorization(authorization, inventory, &expected, 100000).unwrap();

@@ -110,11 +110,25 @@ and nonce, retain a durable consumption record outside the guest, and use the
 guest's shared private nonce registry before provisioning. Neither a copied
 authorization nor the guest registry provides global replay prevention.
 
-Acceptance-only journals retain that scope and cannot use ordinary provisioning
-resume or claim the consumer `Ready` phase. External acceptance evidence must
-assess the actual runtime and journey. Candidate preparation, nonce consumption
-and journal scope are library components; their presence does not establish a
-working candidate CLI, controller, or completed release acceptance workflow.
+The internal `marty-deploy install-candidate` command requires both the signed
+candidate authorization and a signed controller-consumption receipt, verified
+against the independently selected acceptance workflow invocation. The receipt
+binds the authorization, inventory, guest, disk, Docker engine and installation
+UUID. The controller library persists its exact unsigned receipt outside the
+guest before returning it for signing and dispatch. A failed or uncertain write
+consumes that dispatch; it must not be silently retried.
+
+The command fixes the guest nonce registry at
+`~/.marty-installer-candidate-nonces` using the account's recorded home directory.
+The controller must create this private directory before dispatch and retain it
+across failures and uninstall. After consuming the nonce, the command creates an
+acceptance-only journal, verifies every payload, rechecks authorization expiry,
+and invokes the same provisioning path as normal installation. These journals
+cannot use ordinary provisioning resume or claim the consumer `Ready` phase.
+External acceptance evidence must assess the actual runtime and journey. This
+entry does not itself prove guest origin, anonymous public acquisition, or a
+completed acceptance workflow; controller provisioning and release qualification
+remain required.
 
 ### Native renewal bootstrap and root retirement
 

@@ -12,6 +12,7 @@ import argparse
 import json
 import re
 import secrets
+import uuid
 from datetime import datetime
 from pathlib import Path
 
@@ -227,6 +228,89 @@ def bind_candidate_authorization(authorization_bytes: bytes, inventory_bytes: by
                                              if entry["name"] == "marty-deploy-linux-amd64"),
             "candidate operator differs")
     return record, inv
+
+
+CONTROLLER_SCHEMA = "elevenid.installer-controller-consumption/v1"
+CONTEXT_FIELDS = {"source_sha", "release_tag", "operator_sha256", "phase", "nonce",
+                  "harness_source_sha", "run_id", "run_attempt"}
+CONTROLLER_FIELDS = {"schema", "repository", "scope", "source_ref", "workflow",
+    "authorization_sha256", "context_sha256", "nonce", "source_sha", "release_tag",
+    "operator_sha256", "inventory_sha256", "build_run_id", "build_run_attempt",
+    "harness_source_sha", "run_id", "run_attempt", "phase", "guest_id", "disk_id",
+    "engine_id", "installation_id", "consumed_at"}
+
+
+def candidate_context_sha256(expected: dict) -> str:
+    """Sorted compact ASCII JSON without newline, identical to native contract."""
+    exact(expected, CONTEXT_FIELDS, "candidate context")
+    identity(expected["source_sha"], expected["release_tag"], expected["run_id"], expected["run_attempt"])
+    sha(expected["operator_sha256"], 64)
+    sha(expected["nonce"], 64)
+    sha(expected["harness_source_sha"])
+    require(type(expected["phase"]) is str and expected["phase"] in {"staged", "published"}, "invalid phase")
+    return digest(json.dumps(expected, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("ascii"))
+
+
+def validate_controller_consumption(record: dict, *, now: int) -> None:
+    """Validate structure; exact signature/provenance and persistence are separate."""
+    exact(record, CONTROLLER_FIELDS, "controller consumption")
+    require(record["schema"] == CONTROLLER_SCHEMA and record["repository"] == REPOSITORY
+            and record["scope"] == "controller-dispatch-consumed"
+            and record["source_ref"] == "refs/heads/main" and record["workflow"] == acceptance.WORKFLOW,
+            "controller consumption identity differs")
+    identity(record["source_sha"], record["release_tag"], record["build_run_id"], record["build_run_attempt"])
+    candidate_context_sha256({key: record[key] for key in CONTEXT_FIELDS})
+    for field in ("authorization_sha256", "context_sha256", "inventory_sha256", "disk_id"):
+        sha(record[field], 64)
+    for field in ("guest_id", "installation_id"):
+        value = record[field]
+        require(type(value) is str and acceptance.matches(value, r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}"),
+                "invalid controller target UUID")
+        parsed = uuid.UUID(value)
+        require(str(parsed) == value and parsed.version == 4 and parsed.variant == uuid.RFC_4122,
+                "invalid controller target UUID")
+    require(acceptance.matches(record["engine_id"], r"[A-Za-z0-9][A-Za-z0-9:-]{7,127}"), "invalid engine identity")
+    positive(now)
+    positive(record["consumed_at"])
+    require(record["consumed_at"] <= now, "controller consumption is in the future")
+
+
+def bind_controller_consumption(receipt_bytes: bytes, authorization_bytes: bytes, inventory_bytes: bytes, *,
+                                expected: dict, expected_engine: str, now: int) -> dict:
+    """Bind unauthenticated records; never grants execution or consumes a nonce."""
+    authorization, _ = bind_candidate_authorization(authorization_bytes, inventory_bytes, expected=expected, now=now)
+    record = decode(receipt_bytes)
+    validate_controller_consumption(record, now=now)
+    require(record["authorization_sha256"] == digest(authorization_bytes)
+            and record["context_sha256"] == candidate_context_sha256(expected)
+            and record["inventory_sha256"] == digest(inventory_bytes), "controller record hashes differ")
+    require(all(record[field] == authorization[field] for field in
+                CONTEXT_FIELDS | {"build_run_id", "build_run_attempt", "workflow"}), "controller candidate differs")
+    require(record["engine_id"] == expected_engine and authorization["issued_at"] <= record["consumed_at"] < authorization["expires_at"],
+            "controller target or consumption time differs")
+    return record
+
+
+def controller_consumption(authorization_bytes: bytes, inventory_bytes: bytes, *, expected: dict,
+                           guest_id: str, disk_id: str, engine_id: str, installation_id: str,
+                           consumed_at: int, now: int) -> dict:
+    """Construct UNSIGNED bytes-to-be-consumed, not evidence of durable consumption.
+
+    Caller authenticates inputs/context and persists this exact dispatch claim
+    outside the guest before signing, emitting, or dispatching the receipt. It
+    must not reuse a claim after an uncertain result or guest rollback. Neither
+    this function nor its public nonce provides global one-use guarantees.
+    """
+    authorization, _ = bind_candidate_authorization(authorization_bytes, inventory_bytes, expected=expected, now=now)
+    record = {field: authorization[field] for field in
+              CONTEXT_FIELDS | {"build_run_id", "build_run_attempt", "workflow", "source_ref", "repository"}}
+    record.update(schema=CONTROLLER_SCHEMA, scope="controller-dispatch-consumed",
+                  authorization_sha256=digest(authorization_bytes), context_sha256=candidate_context_sha256(expected),
+                  inventory_sha256=digest(inventory_bytes), guest_id=guest_id, disk_id=disk_id,
+                  engine_id=engine_id, installation_id=installation_id, consumed_at=consumed_at)
+    bind_controller_consumption(encode(record), authorization_bytes, inventory_bytes,
+                                expected=expected, expected_engine=engine_id, now=now)
+    return record
 
 
 def admission(inventory_bytes: bytes, *, reports: dict, gh: Path,

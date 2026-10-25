@@ -306,7 +306,8 @@ fn actual_source_compose_matches_installer_application_contract() {
         }
     }
     assert_eq!(
-        normalized["services"]["keycloak-configurator"]["environment"]["MARTY_ORG_ADMIN_PASSWORD_FILE"],
+        normalized["services"]["keycloak-configurator"]["environment"]
+            ["MARTY_ORG_ADMIN_PASSWORD_FILE"],
         "/run/secrets/operator_bootstrap_password"
     );
     // Model-only generation selection: hashes below are synthetic. No candidate

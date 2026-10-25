@@ -53,7 +53,11 @@ pub struct GenerationBinding {
     pub installation_ready: bool,
 }
 fn require(ok: bool) -> Result<()> {
-    if ok { Ok(()) } else { Err(REFUSED.into()) }
+    if ok {
+        Ok(())
+    } else {
+        Err(REFUSED.into())
+    }
 }
 fn hex(value: &str) -> bool {
     value.len() == 64
@@ -682,7 +686,7 @@ pub fn verify_model(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::os::unix::fs::{PermissionsExt, symlink};
+    use std::os::unix::fs::{symlink, PermissionsExt};
     const ID: &str = "2e052c77-efe8-44c6-9421-9ef15fe8ee7c";
     fn fixture() -> (GenerationBinding, ApplicationModelPlan) {
         let mut services = serde_json::Map::new();
@@ -786,13 +790,11 @@ mod tests {
         apply_model(root, &binding, &mut plan).unwrap();
         verify_model(root, &binding, &plan).unwrap();
         assert_eq!(plan.model["services"].as_object().unwrap().len(), 30);
-        assert!(
-            plan.model["services"]
-                .as_object()
-                .unwrap()
-                .values()
-                .all(|service| service.get("volumes").is_none())
-        );
+        assert!(plan.model["services"]
+            .as_object()
+            .unwrap()
+            .values()
+            .all(|service| service.get("volumes").is_none()));
         plan.model["services"]["cloudflared"] = json!({"restart":"no"});
         assert!(verify_model(root, &binding, &plan).is_err());
         plan.model["services"]
@@ -807,11 +809,9 @@ mod tests {
             .unwrap()
             .remove("unexpected");
         assert!(plan.model["services"].get("kms-initialize").is_some());
-        assert!(
-            plan.model["secrets"]
-                .get("cloudflare_tunnel_token")
-                .is_none()
-        );
+        assert!(plan.model["secrets"]
+            .get("cloudflare_tunnel_token")
+            .is_none());
         for name in binding.files.keys() {
             assert_eq!(
                 plan.model["secrets"][name]["file"],

@@ -3,6 +3,26 @@
 use marty_deployment_catalog::installer_state::{Identity, InstallerState, Phase, RuntimeBinding};
 use serde_json::Value;
 #[test]
+fn candidate_cli_requires_explicit_authenticated_context_without_output_or_argument_echo() {
+    let sensitive = "never-echo-candidate-input";
+    for args in [
+        vec!["install-candidate"],
+        vec!["install-candidate", "--skip-verification", sensitive],
+        vec!["install-candidate", "--authorization", sensitive],
+        vec!["install-candidate", "--phase", "channel"],
+    ] {
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_marty-deploy"))
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+        let error = String::from_utf8_lossy(&output.stderr);
+        assert!(error.contains("Acceptance-only candidate"));
+        assert!(!error.contains(sensitive));
+    }
+}
+#[test]
 fn internal_generation_refuses_unowned_invocation_without_output_or_argument_echo() {
     let secret = "never-echo-generation-input";
     for args in [
