@@ -74,7 +74,7 @@ def ssh_options(key, known_hosts, port):
 def verify(*, assets, grants, context, target, ledger, gh, cosign, now, runner=provenance.command):
     release.exact(context, release.CONTEXT_FIELDS, 'independent candidate context')
     release.exact(target, TARGET_FIELDS, 'controller-observed target')
-    release.require(context['phase'] == 'staged', 'only staged dispatch supported')
+    release.require(context['phase'] in ('staged', 'published'), 'unsupported candidate phase')
     expected_names = {name + suffix for name in SUBJECTS for suffix in SUFFIXES}
     release.require({p.name for p in assets.iterdir()} == expected_names, 'candidate input closure differs')
     paths = {}
@@ -121,7 +121,26 @@ def verify(*, assets, grants, context, target, ledger, gh, cosign, now, runner=p
     return authorization, receipt, inventory, paths
 
 
-def remote_plan(home, user, context, target):
+def verified_bootstrap(harness_source_sha):
+    release.sha(harness_source_sha)
+    root = Path(__file__).resolve().parent.parent
+    script = root / 'scripts/installer_candidate_public_bootstrap.py'
+    release.require(script.is_file() and not script.is_symlink(), 'public guest bootstrap unavailable')
+    with tempfile.TemporaryDirectory(prefix='marty-candidate-bootstrap-source-') as home:
+        raw = command(['/usr/bin/git', '--no-replace-objects', '-C', str(root), 'show',
+                       harness_source_sha + ':scripts/installer_candidate_public_bootstrap.py'],
+                      env={'HOME': home, 'PATH': '/usr/bin:/bin', 'LANG': 'C', 'LC_ALL': 'C',
+                           'GIT_NO_REPLACE_OBJECTS': '1', 'GIT_CONFIG_NOSYSTEM': '1',
+                           'GIT_CONFIG_GLOBAL': '/dev/null'},
+                      timeout=15, limit=65536)
+    with script.open('rb') as stream:
+        current = stream.read(65537)
+    release.require(raw == current and 0 < len(raw) <= 65536 and len(current) <= 65536,
+                    'public guest bootstrap differs from signed harness source')
+    return raw.decode('utf-8')
+
+
+def remote_plan(home, user, context, target, *, authorization=None, bootstrap_source=None):
     release.require(re.fullmatch(r'[a-z_][a-z0-9_-]{0,31}', user) is not None and user != 'root', 'invalid guest user')
     release.require(home == '/home/' + user, 'guest home must match dedicated account')
     base = home + '/.marty-installer-dispatch-' + target['installation_id']
@@ -146,17 +165,39 @@ def remote_plan(home, user, context, target):
              '--harness-source-sha', context['harness_source_sha'], '--phase', context['phase'],
              '--run-id', str(context['run_id']), '--run-attempt', str(context['run_attempt']),
              '--nonce', context['nonce']]
-    checks = [(context['operator_sha256'], base + '/marty-deploy'),
-              (TOOLS['gh'][0], base + '/tools/gh'), (TOOLS['cosign'][0], base + '/tools/cosign')]
+    checks = ([(context['operator_sha256'], base + '/marty-deploy')]
+              if context['phase'] == 'staged' else []) + [
+                  (TOOLS['gh'][0], base + '/tools/gh'),
+                  (TOOLS['cosign'][0], base + '/tools/cosign')]
     hash_commands = ''.join("printf '%s  %s\\n' " + q(digest) + ' ' + q(path) +
                             ' | /usr/bin/sha256sum --check --status --strict; ' for digest, path in checks)
-    invoke = ('set -eu; PATH=/usr/bin:/bin; export PATH; umask 077; '
-              f'chmod 600 -- {q(base)}/inputs/* {q(base)}/grants/*; '
-              f'chmod 700 -- {q(base)}/tools/gh {q(base)}/tools/cosign; '
-              f'(set -C; cat -- {q(base)}/inputs/marty-deploy-linux-amd64 > {q(base)}/marty-deploy); '
-              f'chmod 700 -- {q(base)}/marty-deploy; '
-              + hash_commands + 'exec env -i HOME=' + q(home) + ' PATH=/usr/bin:/bin ' +
-              shlex.join([base + '/marty-deploy', 'install-candidate', *flags]))
+    if context['phase'] == 'staged':
+        invoke = ('set -eu; PATH=/usr/bin:/bin; export PATH; umask 077; '
+                  f'chmod 600 -- {q(base)}/inputs/* {q(base)}/grants/*; '
+                  f'chmod 700 -- {q(base)}/tools/gh {q(base)}/tools/cosign; '
+                  f'(set -C; cat -- {q(base)}/inputs/marty-deploy-linux-amd64 > {q(base)}/marty-deploy); '
+                  f'chmod 700 -- {q(base)}/marty-deploy; '
+                  + hash_commands + 'exec env -i HOME=' + q(home) + ' PATH=/usr/bin:/bin ' +
+                  shlex.join([base + '/marty-deploy', 'install-candidate', *flags]))
+    else:
+        release.require(authorization is not None and bootstrap_source is not None,
+                        'published dispatch needs authenticated bootstrap')
+        authorization_record = release.decode(authorization)
+        public_flags = ['--base', base, '--grants', base + '/grants', '--tools', base + '/tools',
+                        '--inputs', base + '/inputs', '--install-dir', installation,
+                        '--source-sha', context['source_sha'], '--release-tag', context['release_tag'],
+                        '--operator-sha256', context['operator_sha256'], '--nonce', context['nonce'],
+                        '--harness-source-sha', context['harness_source_sha'],
+                        '--engine-id', target['engine_id'], '--guest-id', target['guest_id'],
+                        '--disk-id', target['disk_id'], '--installation-id', target['installation_id'],
+                        '--run-id', str(context['run_id']), '--run-attempt', str(context['run_attempt']),
+                        '--build-run-id', str(authorization_record['build_run_id']),
+                        '--build-run-attempt', str(authorization_record['build_run_attempt'])]
+        invoke = ('set -eu; PATH=/usr/bin:/bin; export PATH; umask 077; '
+                  f'chmod 600 -- {q(base)}/grants/*; '
+                  f'chmod 700 -- {q(base)}/tools/gh {q(base)}/tools/cosign; '
+                  + hash_commands + 'exec env -i HOME=' + q(home) + ' PATH=/usr/bin:/bin ' +
+                  shlex.join(['/usr/bin/python3', '-I', '-c', bootstrap_source, *public_flags]))
     return base, setup, invoke
 
 
@@ -193,7 +234,9 @@ def dispatch(*, assets, grants, context_file, target_file, ledger, gh, cosign,
             target=target, ledger=ledger, gh=gh, cosign=cosign, now=int(clock()), runner=verifier)
         release.bind_controller_consumption(receipt, authorization, inventory, expected=context,
             expected_engine=target['engine_id'], now=int(clock()))
-        base, setup, invoke = remote_plan(home, user, context, target)
+        source = verified_bootstrap(context['harness_source_sha']) if context['phase'] == 'published' else None
+        base, setup, invoke = remote_plan(home, user, context, target,
+            authorization=authorization, bootstrap_source=source)
         intent = Path(str(ledger) + '.dispatch.json')
         registry_unchanged(parent, ledger.parent)
         write_exclusive(intent, release.encode(dict(schema='elevenid.installer-candidate-dispatch/v1',
@@ -215,8 +258,11 @@ def dispatch(*, assets, grants, context_file, target_file, ledger, gh, cosign,
             def remote(script, timeout=60):
                 return guarded_run([str(ssh), *options, '-T', user + '@' + host, script], timeout)
             remote(setup)
-            for names, destination in [([assets / (n + s) for n in SUBJECTS for s in SUFFIXES], '/inputs'),
-                                       ([grants / (n + s) for n in ('candidate-authorization.json', 'controller-consumption.json') for s in SUFFIXES], '/grants')]:
+            transfers = []
+            if context['phase'] == 'staged':
+                transfers.append(([assets / (n + s) for n in SUBJECTS for s in SUFFIXES], '/inputs'))
+            transfers.append(([grants / (n + s) for n in ('candidate-authorization.json', 'controller-consumption.json') for s in SUFFIXES], '/grants'))
+            for names, destination in transfers:
                 guarded_run([str(scp), *options, *map(str, names), user + '@' + host + ':' + base + destination + '/'], 300)
             for name, source in [('gh', gh), ('cosign', cosign)]:
                 guarded_run([str(scp), *options, str(source), user + '@' + host + ':' + base + '/tools/' + name], 180)

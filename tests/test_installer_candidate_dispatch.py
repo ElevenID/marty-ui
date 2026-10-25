@@ -1,6 +1,7 @@
 """Controller orchestration with mocked crypto/SSH, never guest execution proof."""
 import os
 from pathlib import Path
+import subprocess
 import sys
 
 import pytest
@@ -105,6 +106,83 @@ def test_full_dispatch_verifies_seven_and_transfers_only_exact_inputs(staged):
     with pytest.raises(FileExistsError):
         d.dispatch(**options)
     assert len(calls) == 6
+
+
+def published(staged):
+    options, calls, proofs = staged
+    inventory = (options['assets'] / 'installer-inventory.json').read_bytes()
+    run = dict(repository=dict(full_name=r.REPOSITORY), path=r.acceptance.WORKFLOW,
+               head_sha='c' * 40, head_branch='main', event='workflow_dispatch',
+               status='in_progress', conclusion=None, id=99, run_attempt=3)
+    auth = r.encode(r.candidate_authorization(inventory, source_sha='a' * 40,
+        release_tag='v1.2.3', build_run_id=42, build_run_attempt=2,
+        acceptance_run=run, phase='published', now=100000))
+    context = {key: r.decode(auth)[key] for key in r.CONTEXT_FIELDS}
+    target = r.decode(options['target_file'].read_bytes())
+    receipt = r.encode(r.controller_consumption(auth, inventory, expected=context,
+        **target, consumed_at=100001, now=100001))
+    (options['grants'] / 'candidate-authorization.json').write_bytes(auth)
+    (options['grants'] / 'controller-consumption.json').write_bytes(receipt)
+    options['context_file'].write_bytes(r.encode(context))
+    options['ledger'] = options['ledger'].with_name(context['nonce'] + '.json')
+    options['ledger'].write_bytes(receipt)
+    options['ledger'].chmod(0o600)
+    return options, calls, proofs
+
+
+def test_published_dispatch_transfers_no_release_payload_and_invokes_fixed_bootstrap(staged, monkeypatch):
+    options, calls, proofs = published(staged)
+    monkeypatch.setattr(d, 'verified_bootstrap', lambda source: "raise SystemExit('synthetic bootstrap')")
+    result = d.dispatch(**options)
+    assert len(calls) == 5  # setup, grant6, two pinned tools, guest bootstrap
+    assert len(proofs) == 7
+    assert all(str(options['assets']) not in str(argv) for argv, _ in calls)
+    assert all('/inputs/' not in str(argv) for argv, _ in calls[1:4])
+    invoke = calls[-1][0][-1]
+    assert '/usr/bin/python3 -I -c' in invoke
+    assert '--phase published' not in invoke  # phase is fixed inside the bootstrap code
+    assert '--build-run-id 42' in invoke and '--build-run-attempt 2' in invoke
+    assert '/marty-deploy install-candidate' not in invoke  # bootstrap authenticates first
+    assert result['installation_ready'] is False and result['acceptance_report'] is False
+
+
+def test_published_dispatch_refuses_unverified_bootstrap_before_remote_mutation(staged, monkeypatch):
+    options, calls, _ = published(staged)
+    monkeypatch.setattr(d, 'verified_bootstrap', lambda source: (_ for _ in ()).throw(ValueError('different source')))
+    with pytest.raises(ValueError):
+        d.dispatch(**options)
+    assert calls == []
+    assert not Path(str(options['ledger']) + '.dispatch.json').exists()
+
+
+def test_authenticated_bootstrap_ignores_local_git_replace_refs(tmp_path, monkeypatch):
+    tmp_path.chmod(0o700)
+    scripts = tmp_path / 'scripts'
+    scripts.mkdir(mode=0o700)
+    source = scripts / 'installer_candidate_public_bootstrap.py'
+    source.write_bytes(b'print("authenticated")\n')
+    def git(*args):
+        result = subprocess.run(['/usr/bin/git', '-C', str(tmp_path), *args],
+                                capture_output=True, text=True, check=True)
+        return result.stdout.strip()
+    git('init', '-q')
+    git('config', 'user.name', 'Installer Test')
+    git('config', 'user.email', 'installer-test@example.invalid')
+    git('add', 'scripts/installer_candidate_public_bootstrap.py')
+    git('commit', '-qm', 'authenticated source')
+    authenticated = git('rev-parse', 'HEAD')
+    monkeypatch.setattr(d, '__file__', str(scripts / 'installer_candidate_dispatch.py'))
+    assert d.verified_bootstrap(authenticated) == 'print("authenticated")\n'
+    source.write_bytes(b'x' * 65537)
+    with pytest.raises(ValueError):
+        d.verified_bootstrap(authenticated)
+    source.write_bytes(b'print("substituted")\n')
+    git('add', 'scripts/installer_candidate_public_bootstrap.py')
+    git('commit', '-qm', 'substituted source')
+    replacement = git('rev-parse', 'HEAD')
+    git('replace', authenticated, replacement)
+    with pytest.raises(ValueError):
+        d.verified_bootstrap(authenticated)
 
 
 @pytest.mark.parametrize('change', ['ledger', 'guest', 'engine', 'asset', 'proof', 'extra', 'tool'])

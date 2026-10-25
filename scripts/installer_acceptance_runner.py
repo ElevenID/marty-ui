@@ -210,8 +210,10 @@ def run(*, output, assets, grants, context_file, target_file, ledger, gh, cosign
             r.require(dispatch.private_file(path,expected[1],executable=path in (gh,cosign))==expected,
                 'authenticated candidate custody changed')
     unchanged()
-    dispatch.remote_plan(home,user,context,target) # Validate fixed guest account/path contract.
-    r.require(context['phase']=='staged','published public acquisition is not implemented')
+    bootstrap_source=(dispatch.verified_bootstrap(context['harness_source_sha'])
+        if context['phase']=='published' else None)
+    dispatch.remote_plan(home,user,context,target,authorization=authorization,
+        bootstrap_source=bootstrap_source) # Validate fixed guest account/path contract.
     identity={key:context[key] for key in ('source_sha','release_tag','harness_source_sha','run_id','run_attempt','phase','nonce')}
     checkpoint=dict(schema=SCHEMA,repository=r.REPOSITORY,workflow=r.acceptance.WORKFLOW,**identity,
         target=target,authorization_sha256=r.digest(authorization),receipt_sha256=r.digest(receipt),
@@ -257,8 +259,10 @@ def run(*, output, assets, grants, context_file, target_file, ledger, gh, cosign
     # Native startup deliberately exits incomplete. Query its locked public
     # trust record through the same pinned SSH route; absence remains explicit.
     # This does not modify a trust store, contact the app, or qualify login.
-    base, _, _ = dispatch.remote_plan(home,user,context,target)
-    operator=base+'/marty-deploy'
+    base, _, _ = dispatch.remote_plan(home,user,context,target,authorization=authorization,
+        bootstrap_source=bootstrap_source)
+    operator=(base+'/bootstrap/marty-deploy-linux-amd64' if context['phase']=='published'
+        else base+'/marty-deploy')
     installation=home+'/marty-install-'+target['installation_id']
     quoted_operator=shlex.quote(operator)
     remote_prefix=('set -eu; PATH=/usr/bin:/bin; export PATH; '

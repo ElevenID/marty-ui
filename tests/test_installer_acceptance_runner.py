@@ -96,6 +96,32 @@ def test_real_probe_before_dispatch_and_never_claims_acceptance(candidate):
     assert len(calls)==5
 
 
+def test_published_checkpoint_uses_public_guest_operator_without_claiming_acceptance(candidate,monkeypatch):
+    args,calls,context,target,auth,receipt,inv=candidate
+    changed=r.decode(auth);changed['phase']='published';auth=r.encode(changed)
+    context={key:changed[key] for key in r.CONTEXT_FIELDS}
+    receipt=r.encode(r.controller_consumption(auth,inv,expected=context,**target,
+        consumed_at=100000,now=100000))
+    args['context_file'].write_bytes(r.encode(context))
+    args['ledger'].write_bytes(receipt)
+    monkeypatch.setattr(a.dispatch,'verify',lambda **_: (auth,receipt,inv,{}))
+    monkeypatch.setattr(a.dispatch,'verified_bootstrap',lambda source:'synthetic authenticated source')
+    def execute(argv,**kwargs):
+        if ' status --install-dir ' in argv[-1]:
+            calls.append(('status',argv,kwargs));return r.encode(status(context,target,auth,inv))
+        if 'trust-info' in argv[-1]:
+            calls.append(('trust',argv,kwargs));return r.encode(trust())
+        calls.append(('probe',argv,kwargs));return r.encode(host())
+    args['execute']=execute
+    result=a.run(**args)
+    assert [v[0] for v in calls]==['probe','dispatch','status','trust','status']
+    assert all('/bootstrap/marty-deploy-linux-amd64' in v[1][-1]
+        for v in calls if v[0] in ('status','trust'))
+    assert result['phase']=='published' and result['acceptance'] is False
+    assert result['installation_ready'] is False
+    assert all(v=='blocked' for k,v in result['cases'].items() if k!='artifact-verification')
+
+
 @pytest.mark.parametrize('mutation',['ram','images','credentials','engine','missing_keys'])
 def test_host_refusal_prevents_any_installation(candidate,mutation):
     args,calls,*_=candidate;value=host()
