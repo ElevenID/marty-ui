@@ -4,7 +4,7 @@ use crate::{
     TrustProfileConstraints,
 };
 use chrono::{TimeZone, Utc};
-use marty_credential_template::CredentialFormat;
+use marty_credential_template::{catalog::OPEN_BADGES_CREDENTIAL_FORMAT, CredentialFormat};
 use sqlx::PgPool;
 use thiserror::Error;
 
@@ -74,7 +74,7 @@ pub fn system_profiles() -> Vec<ComplianceProfile> {
             "Open Badges 3.0",
             "System baseline for Open Badges 3.0 credentials.",
             "OPEN_BADGES_3",
-            CredentialFormat::SdJwtVc,
+            OPEN_BADGES_CREDENTIAL_FORMAT,
             IssuanceProtocol::Oid4vciPreAuth,
             false,
             true,
@@ -143,6 +143,26 @@ pub fn system_profiles() -> Vec<ComplianceProfile> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn open_badges_profile_matches_the_actual_membership_template() {
+        let badge = marty_credential_template::catalog::marty_login_badge(
+            Utc::now(),
+            "00000000-0000-0000-0000-000000000001",
+            "https://beta.example.test",
+        );
+        let profile = system_profiles()
+            .into_iter()
+            .find(|profile| Some(&profile.id) == badge.compliance_profile_id.as_ref())
+            .expect("membership compliance profile");
+        assert_eq!(badge.supported_formats, vec![profile.credential_format]);
+        assert_eq!(profile.credential_format, CredentialFormat::VcJwt);
+        assert_eq!(
+            profile.issuance_protocol,
+            Some(IssuanceProtocol::Oid4vciPreAuth)
+        );
+        assert!(profile.is_system && profile.discoverable);
+    }
 
     #[test]
     fn schema_owns_durable_policy_payload_and_system_scope() {
