@@ -46,6 +46,8 @@ def test_transfer_moves_only_disk_and_denies_qemu_controller_access(root_trial, 
     creation.create_overlay(source, registry, parent, vm_id=VM_ID, virtual_gib=20)
     receipt = runtime.transfer(source, registry, parent, runtime_parent,
                                vm_id=VM_ID, uid=UID, gid=GID)
+    assert runtime.verify_transfer(source, registry, parent, runtime_parent,
+                                   vm_id=VM_ID) == receipt
     disk = runtime_parent / VM_ID / "disk.qcow2"
     assert receipt["qualified"] is False and receipt["launch_authorized"] is False
     assert receipt["runtime_uid"] == UID and receipt["runtime_gid"] == GID
@@ -166,3 +168,93 @@ def test_registry_replacement_after_intent_never_completes(root_trial, runtime_p
     assert (moved / f"{VM_ID}.runtime-intent.json").is_file()
     assert not (moved / f"{VM_ID}.runtime-receipt.json").exists()
     assert (parent / VM_ID / "disk.qcow2").is_file()
+
+
+def test_prelaunch_revalidation_refuses_modified_overlay(root_trial, runtime_parent,
+                                                         monkeypatch):
+    source, registry, parent = root_trial
+    monkeypatch.setattr(runtime, "_backing_readable", lambda _path: None)
+    creation.create_overlay(source, registry, parent, vm_id=VM_ID, virtual_gib=20)
+    runtime.transfer(source, registry, parent, runtime_parent, vm_id=VM_ID,
+                     uid=UID, gid=GID)
+    disk = runtime_parent / VM_ID / "disk.qcow2"
+    with disk.open("r+b") as stream:
+        stream.seek(4096)
+        original = stream.read(1)
+        stream.seek(4096)
+        stream.write(bytes([original[0] ^ 1]))
+    with pytest.raises(ValueError, match="pristine bytes differ"):
+        runtime.verify_transfer(source, registry, parent, runtime_parent,
+                                vm_id=VM_ID)
+
+
+def test_prelaunch_revalidation_refuses_replaced_overlay(root_trial, runtime_parent,
+                                                         monkeypatch):
+    source, registry, parent = root_trial
+    monkeypatch.setattr(runtime, "_backing_readable", lambda _path: None)
+    creation.create_overlay(source, registry, parent, vm_id=VM_ID, virtual_gib=20)
+    runtime.transfer(source, registry, parent, runtime_parent, vm_id=VM_ID,
+                     uid=UID, gid=GID)
+    disk = runtime_parent / VM_ID / "disk.qcow2"
+    prior = disk.with_name("prior-disk.qcow2")
+    disk.rename(prior)
+    shutil.copyfile(prior, disk)
+    os.chown(disk, UID, GID)
+    disk.chmod(0o600)
+    with pytest.raises(ValueError, match="pristine bytes differ"):
+        runtime.verify_transfer(source, registry, parent, runtime_parent,
+                                vm_id=VM_ID)
+
+
+def test_prelaunch_revalidation_refuses_changed_receipt(root_trial, runtime_parent,
+                                                        monkeypatch):
+    source, registry, parent = root_trial
+    monkeypatch.setattr(runtime, "_backing_readable", lambda _path: None)
+    creation.create_overlay(source, registry, parent, vm_id=VM_ID, virtual_gib=20)
+    runtime.transfer(source, registry, parent, runtime_parent, vm_id=VM_ID,
+                     uid=UID, gid=GID)
+    receipt = registry / f"{VM_ID}.runtime-receipt.json"
+    receipt.write_bytes(b"tampered")
+    with pytest.raises(ValueError):
+        runtime.verify_transfer(source, registry, parent, runtime_parent,
+                                vm_id=VM_ID)
+
+
+def test_prelaunch_never_parses_mutable_runtime_path_as_root(root_trial, runtime_parent,
+                                                              monkeypatch):
+    source, registry, parent = root_trial
+    monkeypatch.setattr(runtime, "_backing_readable", lambda _path: None)
+    creation.create_overlay(source, registry, parent, vm_id=VM_ID, virtual_gib=20)
+    runtime.transfer(source, registry, parent, runtime_parent, vm_id=VM_ID,
+                     uid=UID, gid=GID)
+
+    def forbidden(_path):
+        raise AssertionError("root QEMU parsed UID-writable runtime disk")
+
+    monkeypatch.setattr(creation, "_image_info", forbidden)
+    runtime.verify_transfer(source, registry, parent, runtime_parent, vm_id=VM_ID)
+
+
+def test_prelaunch_rechecks_creation_intent_at_end(root_trial, runtime_parent,
+                                                    monkeypatch):
+    source, registry, parent = root_trial
+    monkeypatch.setattr(runtime, "_backing_readable", lambda _path: None)
+    creation.create_overlay(source, registry, parent, vm_id=VM_ID, virtual_gib=20)
+    runtime.transfer(source, registry, parent, runtime_parent, vm_id=VM_ID,
+                     uid=UID, gid=GID)
+    original = runtime._disk_digest
+    changed = False
+
+    def mutate_during_digest(fd):
+        nonlocal changed
+        result = original(fd)
+        if not changed:
+            (registry / f"{VM_ID}.creation-intent.json").write_bytes(b"changed")
+            changed = True
+        return result
+
+    monkeypatch.setattr(runtime, "_disk_digest", mutate_during_digest)
+    with pytest.raises(ValueError):
+        runtime.verify_transfer(source, registry, parent, runtime_parent,
+                                vm_id=VM_ID)
+    assert changed

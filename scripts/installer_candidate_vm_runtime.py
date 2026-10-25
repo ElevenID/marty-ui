@@ -17,6 +17,8 @@ import time
 import uuid
 
 from installer_candidate_controller import ControllerLease, _directory
+import installer_candidate_qemu_observe as observer
+import installer_candidate_vm_create as creation_module
 from installer_candidate_vm_create import (_disk_digest, _read_record, _same_disk,
                                            _write, verify_creation)
 import installer_release as release
@@ -199,6 +201,114 @@ def transfer(source: Path, registry: Path, vm_parent: Path, runtime_parent: Path
             os.close(vm_fd)
 
 
+def verify_transfer(source: Path, registry: Path, vm_parent: Path,
+                    runtime_parent: Path, *, vm_id: str) -> dict:
+    """Require unchanged transfer records and pristine named disk before seeding/launch."""
+    release.require(os.geteuid() == 0, "root controller required")
+    with ControllerLease(registry) as lease:
+        creation_raw, made = _read_record(lease.parent, vm_id + ".creation-receipt.json")
+        initial_raw, initial = _read_record(lease.parent, vm_id + ".creation-intent.json")
+        intent_raw, intent = _read_record(lease.parent, vm_id + ".runtime-intent.json")
+        receipt_raw, receipt = _read_record(lease.parent, vm_id + ".runtime-receipt.json")
+        fields = {"schema", "phase", "vm_id", "creation_receipt_sha256",
+                  "source_path", "target_path", "disk_device", "disk_inode",
+                  "disk_bytes", "disk_sha256", "runtime_uid", "runtime_gid",
+                  "runtime_account", "started_at", "qualified", "launch_authorized"}
+        release.exact(intent, fields, "VM runtime intent")
+        release.exact(receipt, fields | {"intent_sha256", "runtime_dir_device",
+                                         "runtime_dir_inode", "transferred_at"},
+                      "VM runtime receipt")
+        source_dir = vm_parent / vm_id
+        creation_module.validate_creation_records(initial_raw, initial, made,
+                                                  source_dir, vm_id, int(time.time()))
+        provenance = creation_module.verify_source(source)
+        release.require(made["image"] == provenance,
+                        "VM creation source changed after transfer")
+        target_dir = runtime_parent / vm_id
+        release.require(intent["schema"] == receipt["schema"] == SCHEMA
+                        and intent["phase"] == "intent" and receipt["phase"] == "transferred"
+                        and intent["vm_id"] == receipt["vm_id"] == vm_id
+                        and intent["creation_receipt_sha256"] == release.digest(creation_raw)
+                        and receipt["intent_sha256"] == release.digest(intent_raw)
+                        and intent["source_path"] == made["disk_path"]
+                        == str(source_dir / "disk.qcow2")
+                        and intent["target_path"] == str(target_dir / "disk.qcow2")
+                        and type(intent["disk_device"]) is int
+                        and type(intent["disk_inode"]) is int
+                        and type(intent["disk_bytes"]) is int
+                        and type(intent["disk_sha256"]) is str
+                        and (intent["disk_device"], intent["disk_inode"],
+                             intent["disk_bytes"], intent["disk_sha256"])
+                        == (made["disk_device"], made["disk_inode"],
+                            made["disk_bytes"], made["disk_sha256"])
+                        and type(intent["runtime_uid"]) is int
+                        and type(intent["runtime_gid"]) is int
+                        and intent["runtime_account"] == _identity(
+                            vm_id, intent["runtime_uid"], intent["runtime_gid"])
+                        and type(intent["started_at"]) is int
+                        and type(receipt["transferred_at"]) is int
+                        and 0 < intent["started_at"] <= receipt["transferred_at"]
+                        and receipt["transferred_at"] <= int(time.time()) + 5
+                        and intent["qualified"] is receipt["qualified"] is False
+                        and intent["launch_authorized"] is receipt["launch_authorized"] is False
+                        and all(receipt[field] == value for field, value in intent.items()
+                                if field != "phase"),
+                        "VM runtime records disagree")
+        _backing_readable(Path(provenance["image_path"]))
+        source_fd = _directory(source_dir)
+        try:
+            parent_fd = _runtime_parent(runtime_parent)
+            try:
+                target_fd = observer.open_vm_dir(target_dir, intent["runtime_uid"])
+                try:
+                    directory = os.fstat(target_fd)
+                    release.require((directory.st_dev, directory.st_ino)
+                                    == (receipt["runtime_dir_device"],
+                                        receipt["runtime_dir_inode"]),
+                                    "VM runtime directory differs")
+                    disk_fd = os.open("disk.qcow2", os.O_RDONLY | os.O_NONBLOCK
+                                      | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=target_fd)
+                    try:
+                        _named_disk(target_fd, disk_fd, intent["runtime_uid"],
+                                    intent["runtime_gid"])
+                        info = os.fstat(disk_fd)
+                        release.require((info.st_dev, info.st_ino)
+                                        == (intent["disk_device"], intent["disk_inode"])
+                                        and _disk_digest(disk_fd)
+                                        == (intent["disk_bytes"], intent["disk_sha256"]),
+                                        "VM runtime pristine bytes differ")
+                        # The exact held bytes were authenticated and parsed before
+                        # custody transfer. Root must not parse this UID-writable path.
+                        _named_disk(target_fd, disk_fd, intent["runtime_uid"],
+                                    intent["runtime_gid"])
+                        release.require(_disk_digest(disk_fd)
+                                        == (intent["disk_bytes"], intent["disk_sha256"]),
+                                        "VM runtime bytes changed during verification")
+                    finally:
+                        os.close(disk_fd)
+                    _same_path(target_dir, target_fd,
+                               lambda path: observer.open_vm_dir(path, intent["runtime_uid"]))
+                finally:
+                    os.close(target_fd)
+                _same_path(source_dir, source_fd, _directory)
+                _same_path(runtime_parent, parent_fd, _runtime_parent)
+                _same_path(registry, lease.parent, _directory)
+                release.require(_read_record(lease.parent, vm_id + ".creation-receipt.json")[0]
+                                == creation_raw
+                                and _read_record(lease.parent, vm_id + ".creation-intent.json")[0]
+                                == initial_raw
+                                and _read_record(lease.parent, vm_id + ".runtime-intent.json")[0]
+                                == intent_raw
+                                and _read_record(lease.parent, vm_id + ".runtime-receipt.json")[0]
+                                == receipt_raw,
+                                "VM runtime records changed during verification")
+                return receipt
+            finally:
+                os.close(parent_fd)
+        finally:
+            os.close(source_fd)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("source", "registry", "vm-parent", "runtime-parent"):
@@ -206,10 +316,17 @@ def main() -> int:
     parser.add_argument("--vm-id", required=True)
     parser.add_argument("--uid", type=int, required=True)
     parser.add_argument("--gid", type=int, required=True)
+    parser.add_argument("--verify-only", action="store_true")
     args = parser.parse_args()
     try:
-        transfer(args.source, args.registry, args.vm_parent, args.runtime_parent,
-                 vm_id=args.vm_id, uid=args.uid, gid=args.gid)
+        if args.verify_only:
+            record = verify_transfer(args.source, args.registry, args.vm_parent,
+                                     args.runtime_parent, vm_id=args.vm_id)
+            release.require((record["runtime_uid"], record["runtime_gid"])
+                            == (args.uid, args.gid), "VM runtime identity differs")
+        else:
+            transfer(args.source, args.registry, args.vm_parent, args.runtime_parent,
+                     vm_id=args.vm_id, uid=args.uid, gid=args.gid)
     except (ValueError, OSError, KeyError, TypeError, UnicodeError, json.JSONDecodeError):
         parser.exit(1, "VM runtime transfer refused or uncertain; retain all records and disks.\n")
     return 0

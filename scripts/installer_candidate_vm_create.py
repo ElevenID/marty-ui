@@ -264,6 +264,42 @@ def _data_reference(value: object) -> bool:
     return False
 
 
+def validate_creation_records(intent_raw: bytes, intent: dict, receipt: dict,
+                              vm_dir: Path, vm_id: str, checked_at: int) -> None:
+    """Validate the complete immutable v2 record chain, independent of disk location."""
+    release.exact(intent, {"schema", "phase", "vm_id", "image", "vm_dir",
+                           "disk_path", "virtual_gib", "started_at",
+                           "qualified", "launch_authorized"}, "VM creation intent")
+    release.exact(receipt, {"schema", "phase", "vm_id", "intent_sha256",
+                            "image", "vm_dir", "disk_path", "disk_device",
+                            "disk_inode", "disk_bytes", "disk_sha256",
+                            "virtual_gib", "created_at", "qualified",
+                            "launch_authorized"}, "VM creation receipt")
+    release.sha(receipt["disk_sha256"], 64)
+    disk = vm_dir / "disk.qcow2"
+    release.require(intent["schema"] == receipt["schema"] == SCHEMA
+                    and intent["phase"] == "intent" and receipt["phase"] == "created"
+                    and intent["vm_id"] == receipt["vm_id"] == vm_id
+                    and receipt["intent_sha256"] == release.digest(intent_raw)
+                    and intent["image"] == receipt["image"]
+                    and intent["vm_dir"] == receipt["vm_dir"] == str(vm_dir)
+                    and intent["disk_path"] == receipt["disk_path"] == str(disk)
+                    and type(intent["virtual_gib"]) is int
+                    and 20 <= intent["virtual_gib"] <= 512
+                    and receipt["virtual_gib"] == intent["virtual_gib"]
+                    and type(receipt["disk_device"]) is int
+                    and type(receipt["disk_inode"]) is int
+                    and type(receipt["disk_bytes"]) is int
+                    and 0 < receipt["disk_bytes"] <= 64 * 1024 * 1024
+                    and type(intent["started_at"]) is int
+                    and type(receipt["created_at"]) is int
+                    and 0 < intent["started_at"] <= receipt["created_at"]
+                    <= min(checked_at + 5, intent["started_at"] + 600)
+                    and intent["qualified"] is receipt["qualified"] is False
+                    and intent["launch_authorized"] is receipt["launch_authorized"] is False,
+                    "VM creation records disagree")
+
+
 def verify_creation(source: Path, registry: Path, vm_parent: Path, *,
                     vm_id: str, now: int | None = None) -> dict:
     """Revalidate a root-held creation receipt before later seed/launch work."""
@@ -282,35 +318,9 @@ def verify_creation(source: Path, registry: Path, vm_parent: Path, *,
             try:
                 intent_raw, intent = _read_record(registry_fd, vm_id + ".creation-intent.json")
                 receipt_raw, receipt = _read_record(registry_fd, vm_id + ".creation-receipt.json")
-                release.exact(intent, {"schema", "phase", "vm_id", "image", "vm_dir",
-                                       "disk_path", "virtual_gib", "started_at",
-                                       "qualified", "launch_authorized"}, "VM creation intent")
-                release.exact(receipt, {"schema", "phase", "vm_id", "intent_sha256",
-                                        "image", "vm_dir", "disk_path", "disk_device",
-                                        "disk_inode", "disk_bytes", "disk_sha256",
-                                        "virtual_gib", "created_at",
-                                        "qualified", "launch_authorized"}, "VM creation receipt")
                 disk = vm_dir / "disk.qcow2"
-                release.require(intent["schema"] == receipt["schema"] == SCHEMA
-                                and intent["phase"] == "intent"
-                                and receipt["phase"] == "created"
-                                and intent["vm_id"] == receipt["vm_id"] == vm_id
-                                and receipt["intent_sha256"] == release.digest(intent_raw)
-                                and intent["image"] == receipt["image"]
-                                and intent["vm_dir"] == receipt["vm_dir"] == str(vm_dir)
-                                and intent["disk_path"] == receipt["disk_path"] == str(disk)
-                                and type(intent["virtual_gib"]) is int
-                                and 20 <= intent["virtual_gib"] <= 512
-                                and receipt["virtual_gib"] == intent["virtual_gib"]
-                                and type(intent["started_at"]) is int
-                                and type(receipt["created_at"]) is int
-                                and 0 < intent["started_at"] <= receipt["created_at"]
-                                <= min(checked_at + 5, intent["started_at"] + 600)
-                                and intent["qualified"] is False
-                                and receipt["qualified"] is False
-                                and intent["launch_authorized"] is False
-                                and receipt["launch_authorized"] is False,
-                                "VM creation records disagree")
+                validate_creation_records(intent_raw, intent, receipt,
+                                          vm_dir, vm_id, checked_at)
                 provenance = verify_source(source)
                 release.require(receipt["image"] == provenance,
                                 "VM creation source changed")
