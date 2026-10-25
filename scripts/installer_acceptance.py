@@ -22,6 +22,11 @@ CASES = (
     "browser-tls-login", "issue", "present", "verify", "revoke", "deny",
     "kms-custody", "restart-recovery", "existing-stack-isolation",
     "uninstall-retains-recovery", "owned-cleanup",
+    "tampered-artifact-rejected", "wrong-provenance-rejected",
+    "interrupted-download-recovery", "uncertain-provisioning-refused",
+    "concurrent-install-refused", "partial-cleanup-preserves-recovery",
+    "failed-public-replay-blocks-channel", "stale-promotion-refused",
+    "existing-stack-survives-cleanup",
 )
 
 
@@ -64,6 +69,13 @@ def validate(report: dict, *, inventory_bytes: bytes, source_sha: str,
     The run is an independently fetched terminal GitHub Actions run, never a
     nested report assertion. Staged/public phases both exercise the real installer;
     runtime-happy-path evidence is intentionally not accepted here.
+    The caller must verify the report attestation invocation binds this SAME run
+    and attempt, not merely authenticate the report and run independently.
+
+    Host observations precede any pulls or neighboring-stack fixture setup.
+    Retained-state recovery is tested after default uninstall; final owned counts
+    are measured after explicit purge of the test installation. Neighboring-stack
+    resources are excluded from those counts and independently checked unchanged.
     """
     require(phase in {"staged", "published", "channel"}, "unknown acceptance phase")
     require(matches(source_sha, r"[0-9a-f]{40}"), "invalid expected source")
@@ -83,6 +95,8 @@ def validate(report: dict, *, inventory_bytes: bytes, source_sha: str,
     require(report["workflow"] == WORKFLOW, "wrong acceptance workflow")
     for name in ("run_id", "run_attempt"):
         require(type(report[name]) is int and report[name] > 0, "invalid " + name)
+    require(isinstance(run, dict) and isinstance(run.get("repository"), dict),
+            "invalid authoritative run shape")
     require(run.get("id") == report["run_id"] and run.get("run_attempt") == report["run_attempt"]
             and run.get("path") == WORKFLOW and run.get("head_sha") == source_sha
             and run.get("head_branch") == "main" and run.get("event") == "workflow_dispatch"
@@ -105,9 +119,9 @@ def validate(report: dict, *, inventory_bytes: bytes, source_sha: str,
     require(all(host[name] is False for name in (
         "source_available", "development_tools_available", "credentials_available",
         "tls_errors_ignored")), "host is not a clean anonymous TLS-verified installation")
-    cleanup = exact(report["cleanup"], {"containers_remaining", "networks_remaining",
-                    "volumes_remaining", "recovery_retention_verified"}, "cleanup")
+    cleanup = exact(report["cleanup"], {"owned_containers_remaining", "owned_networks_remaining",
+                    "owned_volumes_remaining", "recovery_retention_verified"}, "cleanup")
     require(all(type(cleanup[name]) is int and cleanup[name] == 0 for name in (
-        "containers_remaining", "networks_remaining", "volumes_remaining"))
+        "owned_containers_remaining", "owned_networks_remaining", "owned_volumes_remaining"))
         and cleanup["recovery_retention_verified"] is True,
         "owned cleanup or retained-state recovery incomplete")

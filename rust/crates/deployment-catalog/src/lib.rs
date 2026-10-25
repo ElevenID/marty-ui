@@ -6,6 +6,7 @@ mod deployment_admission;
 mod deployment_environment;
 mod deployment_lifecycle;
 pub mod passport_model;
+pub mod installer_state;
 
 use serde_json::{Map, Value};
 use std::collections::HashSet;

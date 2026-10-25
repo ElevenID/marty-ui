@@ -24,8 +24,8 @@ def evidence():
                  "image_cache_empty": True, "source_available": False,
                  "development_tools_available": False, "credentials_available": False,
                  "tls_errors_ignored": False},
-        "cleanup": {"containers_remaining": 0, "networks_remaining": 0,
-                    "volumes_remaining": 0, "recovery_retention_verified": True},
+        "cleanup": {"owned_containers_remaining": 0, "owned_networks_remaining": 0,
+                    "owned_volumes_remaining": 0, "recovery_retention_verified": True},
     }
     run = {"id": 42, "run_attempt": 1, "path": gate.WORKFLOW,
            "head_sha": "a" * 40, "head_branch": "main", "event": "workflow_dispatch",
@@ -71,11 +71,27 @@ def test_same_inventory_semantics_different_bytes_rejected(evidence):
         gate.validate(report, **args)
 
 
+@pytest.mark.parametrize("run", [None, [], {"repository": None}, {"repository": "ElevenID/marty-ui"}])
+def test_malformed_authoritative_run_rejected(evidence, run):
+    report, args = evidence
+    args["run"] = run
+    with pytest.raises(ValueError, match="run shape"):
+        gate.validate(report, **args)
+
+
+@pytest.mark.parametrize("case", gate.CASES)
+def test_no_required_case_can_be_omitted(evidence, case):
+    report, args = evidence
+    del report["cases"][case]
+    with pytest.raises(ValueError, match="fields differ"):
+        gate.validate(report, **args)
+
+
 @pytest.mark.parametrize("section,name,value", [
     ("host", "tls_errors_ignored", True), ("host", "credentials_available", True),
     ("host", "source_available", True), ("host", "development_tools_available", True),
     ("host", "image_cache_empty", False), ("host", "memory_bytes", True),
-    ("cleanup", "volumes_remaining", 1), ("cleanup", "containers_remaining", False),
+    ("cleanup", "owned_volumes_remaining", 1), ("cleanup", "owned_containers_remaining", False),
     ("cleanup", "recovery_retention_verified", False),
 ])
 def test_unclean_host_or_incomplete_cleanup_rejected(evidence, section, name, value):
