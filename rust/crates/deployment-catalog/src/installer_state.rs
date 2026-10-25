@@ -281,6 +281,73 @@ impl LockedInspection {
     pub fn journal(&self) -> &Journal {
         &self.journal
     }
+    /// Read credentials for diagnostic filtering without following user paths.
+    /// Root-created scoped outputs may be readable immutable files; private
+    /// unreadable outputs are refused, never skipped or read via escalation.
+    pub(crate) fn read_secret(&self, entry: &str) -> Result<Vec<u8>> {
+        self.require_unchanged()?;
+        if !regex::Regex::new(r"\A[a-z0-9][a-z0-9._-]{0,127}\z")
+            .unwrap()
+            .is_match(entry)
+        {
+            return Err("invalid diagnostic credential name".into());
+        }
+        let secrets = open_at(
+            &self.directory,
+            &name("secrets"),
+            libc::O_RDONLY | libc::O_DIRECTORY,
+            0,
+        )?;
+        private(&secrets, true)?;
+        let file = open_at(&secrets, &name(entry), libc::O_RDONLY | libc::O_NONBLOCK, 0)?;
+        let metadata = file
+            .metadata()
+            .map_err(|_| "diagnostic credential metadata unavailable")?;
+        if !metadata.is_file()
+            || metadata.nlink() != 1
+            || ![unsafe { libc::geteuid() }, 0].contains(&metadata.uid())
+            || !([0o400, 0o444, 0o600].contains(&(metadata.mode() & 0o7777))
+                || (entry == "openbao_tls_ca_cert" && metadata.mode() & 0o7777 == 0o644))
+        {
+            return Err("diagnostic credential must be ordinary protected data".into());
+        }
+        let bytes = self.read_credential_bytes(
+            file,
+            crate::installer_application_env::OPTIONAL_EMPTY_SECRETS.contains(&entry),
+        )?;
+        if entry == "openbao_tls_ca_cert" {
+            use x509_cert::der::DecodePem;
+            let pem = std::str::from_utf8(&bytes).map_err(|_| "invalid public CA certificate")?;
+            if !regex::Regex::new(r"\A-----BEGIN CERTIFICATE-----\r?\n[A-Za-z0-9+/=\r\n]+-----END CERTIFICATE-----\s*\z")
+                .unwrap().is_match(pem)
+                || x509_cert::Certificate::from_pem(&bytes).is_err() {
+                return Err("invalid public CA certificate".into());
+            }
+        }
+        Ok(bytes)
+    }
+    pub(crate) fn read_operator_password(&self) -> Result<Vec<u8>> {
+        self.require_unchanged()?;
+        let file = open_at(
+            &self.directory,
+            &name("operator-password"),
+            libc::O_RDONLY | libc::O_NONBLOCK,
+            0,
+        )?;
+        private(&file, false)?;
+        self.read_credential_bytes(file, false)
+    }
+    fn read_credential_bytes(&self, file: File, allow_empty: bool) -> Result<Vec<u8>> {
+        let mut bytes = Vec::new();
+        file.take(LIMIT + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|_| "cannot read diagnostic credential")?;
+        if (!allow_empty && bytes.is_empty()) || bytes.len() as u64 > LIMIT {
+            return Err("diagnostic credential exceeds bounds".into());
+        }
+        self.require_unchanged()?;
+        Ok(bytes)
+    }
     pub fn require_unchanged(&self) -> Result<()> {
         private(&self.directory, true)?;
         if read(&self.directory)? != self.journal {
@@ -837,6 +904,56 @@ mod tests {
             release_tag: "v1.2.3".into(),
             inventory_sha256: format!("sha256:{}", "b".repeat(64)),
         }
+    }
+    #[test]
+    fn diagnostic_credentials_are_bounded_nofollow_and_protected() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("install");
+        let state = InstallerState::create(&path, identity()).unwrap();
+        std::fs::create_dir(path.join("secrets")).unwrap();
+        std::fs::set_permissions(path.join("secrets"), std::fs::Permissions::from_mode(0o700))
+            .unwrap();
+        drop(state);
+        let secret = path.join("secrets/token");
+        std::fs::write(&secret, b"credential").unwrap();
+        std::fs::set_permissions(&secret, std::fs::Permissions::from_mode(0o444)).unwrap();
+        let inspection = LockedInspection::open(&path).unwrap();
+        assert_eq!(inspection.read_secret("token").unwrap(), b"credential");
+        for entry in crate::installer_application_env::OPTIONAL_EMPTY_SECRETS {
+            let optional = path.join("secrets").join(entry);
+            std::fs::write(&optional, b"").unwrap();
+            std::fs::set_permissions(&optional, std::fs::Permissions::from_mode(0o444)).unwrap();
+            assert!(inspection.read_secret(entry).unwrap().is_empty());
+        }
+        std::fs::set_permissions(&secret, std::fs::Permissions::from_mode(0o600)).unwrap();
+        std::fs::write(&secret, b"").unwrap();
+        assert!(inspection.read_secret("token").is_err());
+        std::fs::write(&secret, b"credential").unwrap();
+        std::fs::set_permissions(&secret, std::fs::Permissions::from_mode(0o444)).unwrap();
+        let ca = path.join("secrets/openbao_tls_ca_cert");
+        let public = include_bytes!("../tests/fixtures/installer-log-public-ca.txt");
+        std::fs::write(&ca, public).unwrap();
+        std::fs::set_permissions(&ca, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert_eq!(
+            inspection.read_secret("openbao_tls_ca_cert").unwrap(),
+            public
+        );
+        std::fs::write(&ca, b"not-a-certificate-secret").unwrap();
+        assert!(inspection.read_secret("openbao_tls_ca_cert").is_err());
+        std::fs::set_permissions(&secret, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(inspection.read_secret("token").is_err());
+        std::fs::set_permissions(&secret, std::fs::Permissions::from_mode(0o444)).unwrap();
+        assert!(inspection.read_secret("../installation.json").is_err());
+        symlink(&secret, path.join("secrets/linked")).unwrap();
+        assert!(inspection.read_secret("linked").is_err());
+        std::fs::set_permissions(&secret, std::fs::Permissions::from_mode(0o666)).unwrap();
+        assert!(inspection.read_secret("token").is_err());
+        std::fs::write(&secret, vec![b'x'; 65537]).unwrap();
+        std::fs::set_permissions(&secret, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(inspection.read_secret("token").is_err());
+        std::fs::write(&secret, b"credential").unwrap();
+        std::fs::hard_link(&secret, path.join("secrets/hard")).unwrap();
+        assert!(inspection.read_secret("token").is_err());
     }
     #[test]
     fn recovery_inspection_locks_uncertain_state_without_enabling_resume() {

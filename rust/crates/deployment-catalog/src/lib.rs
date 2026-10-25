@@ -22,6 +22,7 @@ pub mod installer_ingress_outputs;
 pub mod installer_ingress_provision;
 pub mod installer_keycloak;
 pub mod installer_keycloak_bridge;
+pub mod installer_logs;
 pub mod installer_openbao;
 pub mod installer_prepare;
 pub mod installer_release;

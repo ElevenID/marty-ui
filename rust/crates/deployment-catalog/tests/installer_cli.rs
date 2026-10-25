@@ -3,6 +3,45 @@
 use marty_deployment_catalog::installer_state::{Identity, InstallerState, Phase, RuntimeBinding};
 use serde_json::Value;
 #[test]
+fn log_cli_refuses_unbounded_or_unbound_requests_without_output() {
+    for args in [
+        vec!["logs"],
+        vec![
+            "logs",
+            "--install-dir",
+            "/missing",
+            "--service",
+            "gateway",
+            "--tail",
+            "1001",
+        ],
+        vec![
+            "logs",
+            "--install-dir",
+            "/missing",
+            "--service",
+            "keycloak-configurator",
+        ],
+        vec![
+            "logs",
+            "--install-dir",
+            "/missing",
+            "--service",
+            "gateway",
+            "--follow",
+            "true",
+        ],
+    ] {
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_marty-deploy"))
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+        assert!(!output.stderr.is_empty());
+    }
+}
+#[test]
 fn internal_ingress_provisioner_refuses_invalid_invocation_without_output() {
     for args in [
         vec!["installer-ingress-provision"],

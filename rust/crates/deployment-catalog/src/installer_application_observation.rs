@@ -310,7 +310,41 @@ pub fn validate_container(
     image: &Value,
     phase: ContainerPhase,
 ) -> Result<()> {
-    validate_container_inner(c, container_id, role, plan, image, phase, false)
+    validate_container_inner(
+        c,
+        container_id,
+        role,
+        plan,
+        image,
+        phase,
+        ObservationKind::Application,
+    )
+}
+
+/// Diagnostics validate ownership/configuration even for failed workloads.
+/// This deliberately makes no running, successful exit, or readiness assertion.
+pub(crate) fn validate_container_for_logs(
+    c: &Value,
+    container_id: &str,
+    role: &str,
+    plan: &ApplicationModelPlan,
+    image: &Value,
+) -> Result<()> {
+    validate_container_inner(
+        c,
+        container_id,
+        role,
+        plan,
+        image,
+        ContainerPhase::Created,
+        ObservationKind::Diagnostic,
+    )
+}
+
+enum ObservationKind {
+    Application,
+    OpenBao,
+    Diagnostic,
 }
 
 /// Same identity and execution admission for the separately owned Bao project.
@@ -333,7 +367,15 @@ pub(crate) fn validate_openbao_container(
         .contains(&role)
             && project(plan)?.ends_with("-bao"),
     )?;
-    validate_container_inner(c, container_id, role, plan, image, phase, true)
+    validate_container_inner(
+        c,
+        container_id,
+        role,
+        plan,
+        image,
+        phase,
+        ObservationKind::OpenBao,
+    )
 }
 
 fn validate_container_inner(
@@ -343,8 +385,10 @@ fn validate_container_inner(
     plan: &ApplicationModelPlan,
     image: &Value,
     phase: ContainerPhase,
-    bao: bool,
+    kind: ObservationKind,
 ) -> Result<()> {
+    let bao = matches!(kind, ObservationKind::OpenBao);
+    let diagnostic = matches!(kind, ObservationKind::Diagnostic);
     let s = service(plan, role)?;
     let p = project(plan)?;
     let config = &c["Config"];
@@ -464,10 +508,15 @@ fn validate_container_inner(
         require(empty(&host[field]))?;
     }
     let netid = &networks[network_name(plan)?]["NetworkID"];
-    require(
-        netid == &json!(plan.expected_network_id)
-            || (matches!(phase, ContainerPhase::Created) && netid == ""),
-    )?;
+    let detached = if diagnostic {
+        matches!(
+            c["State"]["Status"].as_str(),
+            Some("created" | "exited" | "dead")
+        )
+    } else {
+        matches!(phase, ContainerPhase::Created)
+    };
+    require(netid == &json!(plan.expected_network_id) || (detached && netid == ""))?;
     let mut actual = BTreeMap::new();
     for m in c["Mounts"].as_array().ok_or(REFUSED)? {
         let kind = text(&m["Type"])?;
@@ -531,6 +580,12 @@ fn validate_container_inner(
         for (port, bindings) in &ports {
             require(c["NetworkSettings"]["Ports"].get(port) == Some(bindings))?;
         }
+    }
+    if diagnostic {
+        return require(matches!(
+            c["State"]["Status"].as_str(),
+            Some("created" | "running" | "exited" | "paused" | "restarting" | "dead")
+        ));
     }
     require(
         c["State"]["OOMKilled"] == false
@@ -638,6 +693,35 @@ mod tests {
         running["NetworkSettings"]["Networks"]["owned-bao_default"]["NetworkID"] =
             json!(plan.expected_network_id);
         validate_container(&running, &id, "app", &plan, &image, ContainerPhase::Running).unwrap();
+    }
+    #[test]
+    fn diagnostics_admit_failed_states_without_weakening_resource_identity() {
+        let (plan, image, mut c) = fixture();
+        let id = "d".repeat(64);
+        c["State"]["Status"] = json!("exited");
+        c["State"]["ExitCode"] = json!(137);
+        c["State"]["OOMKilled"] = json!(true);
+        validate_container_for_logs(&c, &id, "app", &plan, &image).unwrap();
+        c["State"]["Status"] = json!("running");
+        assert!(validate_container_for_logs(&c, &id, "app", &plan, &image).is_err());
+        c["NetworkSettings"]["Networks"]["owned-bao_default"]["NetworkID"] =
+            json!(plan.expected_network_id);
+        validate_container_for_logs(&c, &id, "app", &plan, &image).unwrap();
+        c["State"]["Status"] = json!("exited");
+        assert!(validate_container(
+            &c,
+            &id,
+            "app",
+            &plan,
+            &image,
+            ContainerPhase::ExitedSuccessfully
+        )
+        .is_err());
+        c["HostConfig"]["Privileged"] = json!(true);
+        assert!(validate_container_for_logs(&c, &id, "app", &plan, &image).is_err());
+        c["HostConfig"]["Privileged"] = json!(false);
+        c["State"]["Status"] = json!("removing");
+        assert!(validate_container_for_logs(&c, &id, "app", &plan, &image).is_err());
     }
     #[test]
     fn bao_port_exception_is_scoped_to_the_server_and_owned_project() {

@@ -384,6 +384,16 @@ fn run() -> Result<(), String> {
         #[cfg(not(target_os = "linux"))]
         return Err("installer doctor currently requires Linux".into());
     }
+    if args.first().is_some_and(|arg| arg == "logs") {
+        #[cfg(target_os = "linux")]
+        {
+            let report = marty_deployment_catalog::installer_logs::logs(&args[1..])?;
+            println!("{report}");
+            return Ok(());
+        }
+        #[cfg(not(target_os = "linux"))]
+        return Err("installer logs currently requires Linux".into());
+    }
     // KMS operator commands do not read the catalog or require a source checkout.
     if args.first().is_some_and(|a| a == "operator") {
         use marty_deployment_catalog::operator::{self, REFUSAL};
