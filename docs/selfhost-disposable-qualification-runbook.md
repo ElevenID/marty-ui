@@ -930,3 +930,39 @@ After the native application startup has written a complete locked local receipt
 The controller's incomplete acceptance checkpoint v3 may retain `installer-status-observation.json`, `installer-trust-info-observation.json` and a separate `installer-live-tls-observation.json` after candidate dispatch. It invokes the pinned operator over the already authenticated SSH route, binds the acceptance-only journal and guest nonce-consumption digest to the exact candidate, and requires identical status bytes before and after the public trust export. The checkpoint hashes the status and trust records only when native inspection succeeds; otherwise it records `trust_inspection: unavailable`. A separate pinned probe can observe live local HTTPS and OIDC discovery. The status and trust exports remain historical read-only startup/certificate observations; the HTTPS probe does not prove browser trust, login or a completed installed journey. None of these records can satisfy the blocked installed-journey cases.
 
 For acceptance-only published replay, dispatch invokes the authenticated guest bootstrap, which acquires the operator from GitHub before executing it. Native `fetch_published_inputs` then requires a signed published-phase authorization, anonymously downloads the exact version's inventory, four installer payloads and their ten signature/provenance sidecars over the fixed GitHub release transport, and binds original download receipts to the private bytes used for verification. The bootstrap persists an acquisition intent and receipts; failed attempts retain partial files. This implemented path remains unqualified until a clean host completes the actual published installed journey. It grants no admission, installed acceptance or Ready state.
+
+### Fresh VM authority and controller ordering (pending implementation)
+
+An independently trusted Linux controller must create each acceptance guest from an
+authenticated, digest-pinned base image. Before launch it records an exclusive
+fresh overlay, exact backing image, seed/configuration hashes, and a durable
+creation receipt outside the guest. The reviewed QEMU and image tools, fixed
+loopback-only SSH/QMP arguments, dedicated VM identity, and a host key established
+by the controlled seed belong to that receipt. Neither a VM-owned `vm.json` nor
+an earlier diagnostic observation is proof of creation or approval. The guest
+must have no source checkout, personal credentials, or cached application images.
+
+Provisioning may precede the acceptance invocation. After the invocation issues
+its initial signed authorization, the controller binds that exact authorization,
+candidate context, creation receipt, and preallocated installation UUID into a
+short-lived approval. Under `ControllerLease` it observes initial-empty Docker,
+binds the approval to the exact observation bytes, and consumes the nonce once.
+The controller durably links approval, initial observation, and ledger receipt
+hashes. It releases the lease before uploading the exact consumption receipt,
+because the uploader takes the registry lock itself.
+
+Only after the same invocation returns its complete signed execution grant does
+the controller reacquire the lease and make the exclusive pre-dispatch observation.
+It authenticates the earlier observation and approval, rechecks the live process,
+QMP peer, writable disk inode/backing chain, SSH host key, Docker Engine and
+expiry, and binds the new observation immediately before dispatch. Dispatch takes
+the registry lock separately. Waiting for signatures before this observation
+avoids spending its short freshness window on an external grant wait.
+
+A consumed nonce is never regenerated after an uncertain upload, grant, launch,
+or dispatch. Changed VM/process/disk/Engine/SSH identity stops the transaction;
+replacement requires a new reconciled authorization and guest. Preserve the
+guest, ledger, creation receipt and incomplete checkpoint for recovery. A 4 GiB
+guest may test this machinery only as an engineering trial; release acceptance
+still enforces the existing 32 GiB RAM and 20 GiB free-space predicate until a
+complete measured installed journey and policy change justify another profile.
