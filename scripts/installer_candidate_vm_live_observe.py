@@ -25,6 +25,14 @@ import installer_release as release
 
 SCHEMA = "elevenid.installer-vm-live-process-observation/v1"
 GUEST_SCHEMA = "elevenid.installer-vm-guest-readiness/v1"
+PRE_DISPATCH_SCHEMA = "elevenid.installer-vm-pre-dispatch-observation/v1"
+GUEST_FIELDS = {
+    "schema", "phase", "vm_id", "controller_boot_id", "process_pid",
+    "process_start_ticks", "process_disk_fd", "disk_device", "disk_inode",
+    "runtime_dir_device", "runtime_dir_inode", "control_dir_device",
+    "control_dir_inode", "record_sha256", "observed_at", "qualified",
+    "dispatch_authorized", "guest",
+}
 RECORDS = (
     "creation-intent", "creation-receipt", "runtime-intent", "runtime-receipt",
     "seed-intent", "seed-receipt", "launch-intent", "launch-pid",
@@ -32,14 +40,64 @@ RECORDS = (
 )
 
 
+def bind_pre_dispatch(initial_raw: bytes, current: dict, *,
+                      observation_id: str, now: int) -> None:
+    """Compare a fresh reobservation with the exact initial guest evidence."""
+    initial = release.decode(initial_raw)
+    release.require(release.encode(initial) == initial_raw,
+                    "initial VM readiness is not canonical")
+    release.exact(initial, GUEST_FIELDS, "initial VM readiness")
+    release.exact(current, GUEST_FIELDS | {
+        "observation_id", "initial_guest_readiness_sha256"},
+        "pre-dispatch VM observation")
+    release.require(
+        initial["schema"] == GUEST_SCHEMA
+        and initial["phase"] == "guest-ready"
+        and current["schema"] == PRE_DISPATCH_SCHEMA
+        and current["phase"] == "pre-dispatch"
+        and current["observation_id"] == observation_id
+        and current["initial_guest_readiness_sha256"]
+        == release.digest(initial_raw)
+        and type(now) is int
+        and type(initial["observed_at"]) is int
+        and type(current["observed_at"]) is int
+        and 0 < initial["observed_at"] <= current["observed_at"] <= now
+        and now - current["observed_at"] <= 60
+        and initial["qualified"] is current["qualified"] is False
+        and initial["dispatch_authorized"]
+        is current["dispatch_authorized"] is False
+        and type(initial["guest"]) is dict
+        and initial["guest"].get("docker_initially_empty") is True
+        and type(current["guest"]) is dict
+        and current["guest"].get("docker_initially_empty") is True
+        and all(type(current[key]) is type(value) and current[key] == value
+                for key, value in initial.items()
+                if key not in {"schema", "phase", "observed_at"}),
+        "pre-dispatch VM differs from initial readiness",
+    )
+
+
 def observe(registry: Path, runtime_parent: Path, *, vm_id: str,
-            guest_readiness: bool = False) -> dict:
+            guest_readiness: bool = False,
+            pre_dispatch_id: str | None = None) -> dict:
     """Observe only the existing process named in root-held launch records."""
     release.require(os.geteuid() == 0 and type(vm_id) is str
                     and str(uuid.UUID(vm_id)) == vm_id
                     and uuid.UUID(vm_id).version == 4,
                     "root exact VM observer and canonical ID required")
+    release.require(not (guest_readiness and pre_dispatch_id is not None),
+                    "VM observation phase is ambiguous")
+    if pre_dispatch_id is not None:
+        release.require(type(pre_dispatch_id) is str
+                        and str(uuid.UUID(pre_dispatch_id)) == pre_dispatch_id
+                        and uuid.UUID(pre_dispatch_id).version == 4,
+                        "pre-dispatch observation ID invalid")
+    with_guest = guest_readiness or pre_dispatch_id is not None
     with ControllerLease(registry) as lease:
+        initial_raw = None
+        if pre_dispatch_id is not None:
+            initial_raw, _ = _read_record(
+                lease.parent, vm_id + ".guest-readiness.json")
         raw = {name.replace("-", "_"): _read_record(
             lease.parent, vm_id + "." + name + ".json")[0]
             for name in RECORDS}
@@ -109,7 +167,7 @@ def observe(registry: Path, runtime_parent: Path, *, vm_id: str,
                         "VM process differs from exact launch receipt",
                     )
                     guest = None
-                    if guest_readiness:
+                    if with_guest:
                         guest = pinned_guest(
                             control_dir, port=seed["ssh_port"],
                             user=seed["guest_user"], packages=seed["packages"],
@@ -143,9 +201,11 @@ def observe(registry: Path, runtime_parent: Path, *, vm_id: str,
                         for name in RECORDS),
                         "VM registry records changed before observation write")
                     observed = dict(
-                        schema=GUEST_SCHEMA if guest_readiness else SCHEMA,
-                        phase="guest-ready" if guest_readiness
-                        else "process-observed", vm_id=vm_id,
+                        schema=(PRE_DISPATCH_SCHEMA if pre_dispatch_id is not None
+                                else GUEST_SCHEMA if guest_readiness else SCHEMA),
+                        phase=("pre-dispatch" if pre_dispatch_id is not None
+                               else "guest-ready" if guest_readiness
+                               else "process-observed"), vm_id=vm_id,
                         controller_boot_id=boot_id, process_pid=first["pid"],
                         process_start_ticks=first["start_ticks"],
                         process_disk_fd=first["disk_fd"],
@@ -158,8 +218,15 @@ def observe(registry: Path, runtime_parent: Path, *, vm_id: str,
                         record_sha256=bound, observed_at=int(time.time()),
                         qualified=False, dispatch_authorized=False,
                     )
-                    if guest_readiness:
+                    if with_guest:
                         observed["guest"] = guest
+                    if pre_dispatch_id is not None:
+                        observed["observation_id"] = pre_dispatch_id
+                        observed["initial_guest_readiness_sha256"] = (
+                            release.digest(initial_raw))
+                        bind_pre_dispatch(initial_raw, observed,
+                                          observation_id=pre_dispatch_id,
+                                          now=int(time.time()))
                     _same_path(runtime_dir, runtime_fd,
                                lambda path: observer.open_vm_dir(
                                    path, runtime["runtime_uid"]))
@@ -175,7 +242,17 @@ def observe(registry: Path, runtime_parent: Path, *, vm_id: str,
                             release.digest(_bytes(control_dir / name, maximum)) == expected,
                             "VM control material changed before observation write",
                         )
-                    name = ("guest-readiness" if guest_readiness else
+                    if initial_raw is not None:
+                        release.require(_read_record(
+                            lease.parent, vm_id + ".guest-readiness.json")[0]
+                            == initial_raw,
+                            "initial VM readiness changed before observation write")
+                        bind_pre_dispatch(initial_raw, observed,
+                                          observation_id=pre_dispatch_id,
+                                          now=int(time.time()))
+                    name = ("pre-dispatch-" + pre_dispatch_id
+                            if pre_dispatch_id is not None else
+                            "guest-readiness" if guest_readiness else
                             "live-process-observation")
                     _write(lease.parent, vm_id + "." + name + ".json", observed)
                     _same_path(registry, lease.parent, _directory)
@@ -194,10 +271,12 @@ def main() -> int:
     parser.add_argument("--runtime-parent", type=Path, required=True)
     parser.add_argument("--vm-id", required=True)
     parser.add_argument("--guest-readiness", action="store_true")
+    parser.add_argument("--pre-dispatch-id")
     args = parser.parse_args()
     try:
         result = observe(args.registry, args.runtime_parent, vm_id=args.vm_id,
-                         guest_readiness=args.guest_readiness)
+                         guest_readiness=args.guest_readiness,
+                         pre_dispatch_id=args.pre_dispatch_id)
     except (ValueError, OSError, KeyError, TypeError, UnicodeError,
             json.JSONDecodeError):
         parser.exit(1, "VM live observation refused or uncertain; retain evidence.\n")

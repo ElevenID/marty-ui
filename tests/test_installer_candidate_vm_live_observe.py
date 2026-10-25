@@ -146,3 +146,106 @@ def test_failed_guest_probe_retains_process_without_readiness_record(
                      guest_readiness=True)
     assert not (registry / f"{VM_ID}.guest-readiness.json").exists()
     assert (registry / f"{VM_ID}.launch-receipt.json").is_file()
+
+
+def test_fresh_pre_dispatch_binds_initial_and_can_be_reobserved(
+    root_trial, runtime_parent, monkeypatch
+):
+    registry = _launched(root_trial, runtime_parent, monkeypatch)
+    monkeypatch.setattr(live, "pinned_guest", lambda *_a, **_k: {
+        "guest_uid": 1000, "docker_engine_id": "engine-1",
+        "docker_initially_empty": True})
+    initial = live.observe(registry, runtime_parent, vm_id=VM_ID,
+                           guest_readiness=True)
+    first_id = "44444444-4444-4444-8444-444444444444"
+    record = live.observe(registry, runtime_parent, vm_id=VM_ID,
+                          pre_dispatch_id=first_id)
+    assert record["schema"] == live.PRE_DISPATCH_SCHEMA
+    assert record["phase"] == "pre-dispatch"
+    assert record["initial_guest_readiness_sha256"] == launch.release.digest(
+        launch.release.encode(initial))
+    assert record["dispatch_authorized"] is False
+    before = (registry / f"{VM_ID}.pre-dispatch-{first_id}.json").read_bytes()
+    with pytest.raises(FileExistsError):
+        live.observe(registry, runtime_parent, vm_id=VM_ID,
+                     pre_dispatch_id=first_id)
+    assert (registry / f"{VM_ID}.pre-dispatch-{first_id}.json").read_bytes() == before
+    second_id = "55555555-5555-4555-8555-555555555555"
+    later = live.observe(registry, runtime_parent, vm_id=VM_ID,
+                         pre_dispatch_id=second_id)
+    assert later["observation_id"] == second_id
+    assert later["initial_guest_readiness_sha256"] == record[
+        "initial_guest_readiness_sha256"]
+
+
+def test_pre_dispatch_refuses_engine_change(
+    root_trial, runtime_parent, monkeypatch
+):
+    registry = _launched(root_trial, runtime_parent, monkeypatch)
+    state = {"engine": "engine-1"}
+    monkeypatch.setattr(live, "pinned_guest", lambda *_a, **_k: {
+        "guest_uid": 1000, "docker_engine_id": state["engine"],
+        "docker_initially_empty": True})
+    live.observe(registry, runtime_parent, vm_id=VM_ID, guest_readiness=True)
+    state["engine"] = "engine-2"
+    observation_id = "66666666-6666-4666-8666-666666666666"
+    with pytest.raises(ValueError, match="differs from initial"):
+        live.observe(registry, runtime_parent, vm_id=VM_ID,
+                     pre_dispatch_id=observation_id)
+    assert not (registry / f"{VM_ID}.pre-dispatch-{observation_id}.json").exists()
+
+
+def test_pre_dispatch_requires_root_held_initial_readiness(
+    root_trial, runtime_parent, monkeypatch
+):
+    registry = _launched(root_trial, runtime_parent, monkeypatch)
+    observation_id = "77777777-7777-4777-8777-777777777777"
+    with pytest.raises(FileNotFoundError):
+        live.observe(registry, runtime_parent, vm_id=VM_ID,
+                     pre_dispatch_id=observation_id)
+    assert not (registry / f"{VM_ID}.pre-dispatch-{observation_id}.json").exists()
+
+
+def test_pre_dispatch_rejects_stale_or_future_observation_time(
+    root_trial, runtime_parent, monkeypatch
+):
+    registry = _launched(root_trial, runtime_parent, monkeypatch)
+    monkeypatch.setattr(live, "pinned_guest", lambda *_a, **_k: {
+        "guest_uid": 1000, "docker_initially_empty": True})
+    initial = live.observe(registry, runtime_parent, vm_id=VM_ID,
+                           guest_readiness=True)
+    raw = launch.release.encode(initial)
+    observation_id = "88888888-8888-4888-8888-888888888888"
+    current = dict(initial, schema=live.PRE_DISPATCH_SCHEMA,
+                   phase="pre-dispatch", observation_id=observation_id,
+                   initial_guest_readiness_sha256=launch.release.digest(raw))
+    with pytest.raises(ValueError, match="differs from initial"):
+        live.bind_pre_dispatch(raw, current, observation_id=observation_id,
+                               now=initial["observed_at"] + 61)
+    current["observed_at"] = initial["observed_at"] + 1
+    with pytest.raises(ValueError, match="differs from initial"):
+        live.bind_pre_dispatch(raw, current, observation_id=observation_id,
+                               now=initial["observed_at"])
+
+
+def test_initial_readiness_mutation_during_probe_refuses_write(
+    root_trial, runtime_parent, monkeypatch
+):
+    registry = _launched(root_trial, runtime_parent, monkeypatch)
+    initial_guest = {"guest_uid": 1000, "docker_initially_empty": True}
+    monkeypatch.setattr(live, "pinned_guest", lambda *_a, **_k: initial_guest)
+    live.observe(registry, runtime_parent, vm_id=VM_ID, guest_readiness=True)
+    original = registry / f"{VM_ID}.guest-readiness.json"
+
+    def changed(*_args, **_kwargs):
+        initial = json.loads(original.read_bytes())
+        initial["guest"]["guest_uid"] = 1001
+        original.write_bytes(launch.release.encode(initial))
+        return initial_guest
+
+    monkeypatch.setattr(live, "pinned_guest", changed)
+    observation_id = "99999999-9999-4999-8999-999999999999"
+    with pytest.raises(ValueError, match="initial VM readiness changed"):
+        live.observe(registry, runtime_parent, vm_id=VM_ID,
+                     pre_dispatch_id=observation_id)
+    assert not (registry / f"{VM_ID}.pre-dispatch-{observation_id}.json").exists()
