@@ -893,6 +893,12 @@ fn runtime(input: &Value) -> PolicyResult {
   && ["credential-template","trust-profile","presentation-policy","deployment-profile","issuance-native","signing-keys"].iter().all(|n|dep(&s["flow"],n,"service_healthy"))
   && s["issuance-native"]["healthcheck"]["test"]==json!(["CMD","curl","--fail","http://localhost:8005/health"])
   && s["signing-keys"]["healthcheck"]["test"]==json!(["CMD-SHELL","curl --fail http://localhost:8017/health && curl --fail --cacert /run/secrets/workload_identity_ca_cert https://signing-keys:8018/health"]),"Disposable Flow startup dependencies are incomplete")?;
+    require(
+        flow["FLOW_APPLICATION_EVENT_HMAC_KEY_FILE"]
+            == "/run/secrets/flow_application_event_hmac_key"
+            && refs(&s["flow"]).contains("flow_application_event_hmac_key"),
+        "Disposable Flow application event authentication is missing",
+    )?;
     let flow_tls = json!({
 "GRPC_WORKLOAD_TLS_CLIENT_CERT": "/run/secrets/flow_workload_client_cert",
 "GRPC_WORKLOAD_TLS_CLIENT_KMS_ADDR": "https://openbao:8200",
