@@ -5,6 +5,11 @@ run-name: Prepare staged installer grant for build ${{ inputs.build_run_id }} at
 on:
   workflow_dispatch:
     inputs:
+      execute:
+        description: Wait for a real controller execution checkpoint (currently always incomplete; cannot produce acceptance)
+        required: true
+        type: boolean
+        default: false
       build_run_id:
         description: Successful Nightly installation release run ID
         required: true
@@ -36,7 +41,7 @@ jobs:
     # A new dispatch is a new authorization; it does not resume a consumed dispatch.
     runs-on: ubuntu-24.04
     environment: stack-release
-    timeout-minutes: 55
+    timeout-minutes: 90
     permissions:
       contents: write
       actions: read
@@ -325,6 +330,76 @@ jobs:
             ${{ runner.temp }}/installer-staged-grant/grant/controller-transport.json
           if-no-files-found: error
           retention-days: 1
+      - name: Receive same-invocation installed probe checkpoint
+        if: inputs.execute
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CONTROLLER_USER_ID: ${{ steps.context.outputs.controller_user_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          base="$RUNNER_TEMP/installer-staged-grant"
+          mkdir -m 700 "$base/checkpoint"
+          python scripts/installer_acceptance_return.py \
+            --authorization "$base/grant/candidate-authorization.json" --inventory "$base/inputs/installer-inventory.json" \
+            --receipt "$base/grant/controller-consumption.json" --descriptor "$base/grant/controller-transport.json" \
+            --harness-source-sha "$GITHUB_SHA" --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --controller-user-id "$CONTROLLER_USER_ID" --output "$base/checkpoint/installer-acceptance-checkpoint.json"
+      - name: Sign distinct incomplete checkpoint only
+        if: inputs.execute
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="$RUNNER_TEMP/installer-staged-grant"
+          "$base/tools/cosign" sign-blob --yes \
+            --bundle "$base/checkpoint/installer-acceptance-checkpoint.json.sigstore.json" \
+            "$base/checkpoint/installer-acceptance-checkpoint.json" >/dev/null
+      - id: checkpoint_provenance
+        if: inputs.execute
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+        with:
+          subject-path: ${{ runner.temp }}/installer-staged-grant/checkpoint/installer-acceptance-checkpoint.json
+      - name: Verify checkpoint signature and exact invocation proof
+        if: inputs.execute
+        env:
+          PROVENANCE_BUNDLE: ${{ steps.checkpoint_provenance.outputs.bundle-path }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          python - <<'PY'
+          import os,sys
+          from pathlib import Path
+          sys.path.insert(0,'scripts')
+          import installer_release as r
+          import verify_installer_provenance as p
+          from installer_candidate_authorize import write_exclusive
+          base=Path(os.environ['RUNNER_TEMP'])/'installer-staged-grant'
+          subject=base/'checkpoint/installer-acceptance-checkpoint.json'
+          source=Path(os.environ['PROVENANCE_BUNDLE'])
+          p.local_file(source,maximum=1048576)
+          with source.open('rb') as stream: raw=stream.read(1048577)
+          r.require(0<len(raw)<=1048576,'checkpoint proof exceeds bound')
+          proof=Path(str(subject)+'.provenance.jsonl');write_exclusive(proof,raw)
+          p.verify_subject(subject,proof,gh=base/'tools/gh_2.103.2_linux_amd64/bin/gh',cosign=base/'tools/cosign',
+              signature_bundle=Path(str(subject)+'.sigstore.json'),workflow=r.acceptance.WORKFLOW,
+              source_sha=os.environ['GITHUB_SHA'],run_id=int(os.environ['GITHUB_RUN_ID']),run_attempt=int(os.environ['GITHUB_RUN_ATTEMPT']))
+          PY
+      - name: Archive incomplete checkpoint and authenticated transport evidence
+        if: always() && inputs.execute
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: installer-incomplete-checkpoint-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/installer-staged-grant/checkpoint/
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Refuse incomplete execution as installed acceptance
+        if: inputs.execute
+        shell: bash
+        run: |
+          printf '%s\n' 'Real controller probe checkpoint is retained. Installed browser/business/recovery cases remain incomplete; no staged/published acceptance report, admission or channel promotion is issued.' >> "$GITHUB_STEP_SUMMARY"
+          exit 1
       - name: Preserve partial grant and transport evidence
         if: failure() || cancelled()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a

@@ -95,8 +95,13 @@ class Client:
             raise ValueError("GitHub transport request failed") from None
 
     def request(self, method, path, body=None):
-        release.require(path.startswith(REPO + "/releases") and not any(c in path for c in "#\r\n"),
-                        "invalid transport API path")
+        run = re.fullmatch(re.escape(REPO) + r"/actions/runs/([1-9][0-9]{0,15})", path)
+        if run:
+            positive_id(int(run.group(1)))
+            release.require(method == "GET" and body is None, "run observation is read-only")
+        else:
+            release.require(path.startswith(REPO + "/releases") and not any(c in path for c in "#\r\n"),
+                            "invalid transport API path")
         data = None if body is None else release.encode(body)
         return json_bytes(self._read("https://api.github.com" + path, method=method, body=data))
 
