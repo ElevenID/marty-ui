@@ -355,8 +355,9 @@ fn run() -> Result<(), String> {
         #[cfg(target_os = "linux")]
         {
             let directory = std::path::Path::new(&args[2]);
-            let journal =
-                marty_deployment_catalog::installer_state::InstallerState::inspect(directory)?;
+            let inspection =
+                marty_deployment_catalog::installer_state::LockedInspection::open(directory)?;
+            let journal = inspection.journal();
             let runtime = journal.runtime().ok_or(
                 "installation has no recorded Docker binding; automatic adoption is refused",
             )?;
@@ -369,6 +370,7 @@ fn run() -> Result<(), String> {
                 directory,
             )?;
             let observation = runner.preflight()?;
+            inspection.require_unchanged()?;
             println!(
                 "{}",
                 serde_json::json!({

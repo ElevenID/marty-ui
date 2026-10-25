@@ -310,6 +310,41 @@ pub fn validate_container(
     image: &Value,
     phase: ContainerPhase,
 ) -> Result<()> {
+    validate_container_inner(c, container_id, role, plan, image, phase, false)
+}
+
+/// Same identity and execution admission for the separately owned Bao project.
+/// Its sole permitted publication is the server's fixed 8200 loopback mapping.
+pub(crate) fn validate_openbao_container(
+    c: &Value,
+    container_id: &str,
+    role: &str,
+    plan: &ApplicationModelPlan,
+    image: &Value,
+    phase: ContainerPhase,
+) -> Result<()> {
+    require(
+        [
+            "openbao",
+            "openbao-tls-init",
+            "openbao-bootstrap",
+            "openbao-unseal",
+        ]
+        .contains(&role)
+            && project(plan)?.ends_with("-bao"),
+    )?;
+    validate_container_inner(c, container_id, role, plan, image, phase, true)
+}
+
+fn validate_container_inner(
+    c: &Value,
+    container_id: &str,
+    role: &str,
+    plan: &ApplicationModelPlan,
+    image: &Value,
+    phase: ContainerPhase,
+    bao: bool,
+) -> Result<()> {
     let s = service(plan, role)?;
     let p = project(plan)?;
     let config = &c["Config"];
@@ -449,11 +484,16 @@ pub fn validate_container(
     }
     require(actual == expected_mounts(plan, role)?)?;
     let mut ports = serde_json::Map::new();
+    let (published_role, published_target) = if bao {
+        ("openbao", 8200)
+    } else {
+        ("installer-ingress", 8443)
+    };
     for port in s["ports"].as_array().map(Vec::as_slice).unwrap_or(&[]) {
         require(
-            role == "installer-ingress"
+            role == published_role
                 && port["host_ip"] == "127.0.0.1"
-                && port["target"] == 8443
+                && port["target"] == published_target
                 && port["protocol"] == "tcp",
         )?;
         let published = text(&port["published"])?;
@@ -462,7 +502,7 @@ pub fn validate_container(
         require(
             ports
                 .insert(
-                    "8443/tcp".into(),
+                    format!("{published_target}/tcp"),
                     json!([{"HostIp":"127.0.0.1","HostPort":published}]),
                 )
                 .is_none(),
@@ -588,6 +628,62 @@ mod tests {
         running["NetworkSettings"]["Networks"]["owned-bao_default"]["NetworkID"] =
             json!(plan.expected_network_id);
         validate_container(&running, &id, "app", &plan, &image, ContainerPhase::Running).unwrap();
+    }
+    #[test]
+    fn bao_port_exception_is_scoped_to_the_server_and_owned_project() {
+        let (mut plan, image, mut c) = fixture();
+        plan.model["name"] = json!("owned-bao");
+        let service = plan.model["services"]
+            .as_object_mut()
+            .unwrap()
+            .remove("app")
+            .unwrap();
+        plan.model["services"]["openbao"] = service;
+        plan.model["services"]["openbao"]["ports"] =
+            json!([{"host_ip":"127.0.0.1","target":8200,"published":"18200","protocol":"tcp"}]);
+        plan.selected_services = vec!["openbao".into()];
+        c["Name"] = json!("/owned-bao-openbao-1");
+        c["Config"]["Labels"]["com.docker.compose.project"] = json!("owned-bao");
+        c["Config"]["Labels"]["com.docker.compose.service"] = json!("openbao");
+        c["NetworkSettings"]["Networks"]["owned-bao_default"]["Aliases"] =
+            json!(["owned-bao-openbao-1", "openbao"]);
+        c["HostConfig"]["PortBindings"] =
+            json!({"8200/tcp":[{"HostIp":"127.0.0.1","HostPort":"18200"}]});
+        let cid = "d".repeat(64);
+        validate_openbao_container(&c, &cid, "openbao", &plan, &image, ContainerPhase::Created)
+            .unwrap();
+        assert!(
+            validate_container(&c, &cid, "openbao", &plan, &image, ContainerPhase::Created)
+                .is_err()
+        );
+        for (field, value) in [
+            ("host_ip", json!("0.0.0.0")),
+            ("target", json!(8443)),
+            ("protocol", json!("udp")),
+        ] {
+            let original = plan.model["services"]["openbao"]["ports"][0][field].clone();
+            plan.model["services"]["openbao"]["ports"][0][field] = value;
+            assert!(validate_openbao_container(
+                &c,
+                &cid,
+                "openbao",
+                &plan,
+                &image,
+                ContainerPhase::Created
+            )
+            .is_err());
+            plan.model["services"]["openbao"]["ports"][0][field] = original;
+        }
+        plan.model["name"] = json!("other");
+        assert!(validate_openbao_container(
+            &c,
+            &cid,
+            "openbao",
+            &plan,
+            &image,
+            ContainerPhase::Created
+        )
+        .is_err());
     }
     #[test]
     fn rejects_extra_mounts_ports_capabilities_and_unselected_roles() {

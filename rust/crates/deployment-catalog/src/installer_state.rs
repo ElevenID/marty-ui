@@ -262,6 +262,68 @@ fn read(directory: &File) -> Result<Journal> {
     Ok(journal)
 }
 
+/// Read-only recovery view. Holding this guard excludes an active installer or
+/// another lifecycle operation, including while the journal is Provisioning.
+/// It intentionally exposes no phase transition or provisioning replay API.
+pub struct LockedInspection {
+    directory: File,
+    journal: Journal,
+}
+impl LockedInspection {
+    pub fn open(path: &Path) -> Result<Self> {
+        let (ancestor, leaf) = parent(path)?;
+        let directory = open_at(&ancestor, &leaf, libc::O_RDONLY | libc::O_DIRECTORY, 0)?;
+        private(&directory, true)?;
+        lock(&directory)?;
+        let journal = read(&directory)?;
+        Ok(Self { directory, journal })
+    }
+    pub fn journal(&self) -> &Journal {
+        &self.journal
+    }
+    pub fn require_unchanged(&self) -> Result<()> {
+        private(&self.directory, true)?;
+        if read(&self.directory)? != self.journal {
+            return Err("installation changed during recovery inspection".into());
+        }
+        Ok(())
+    }
+    /// Evidence is read relative to the held installation descriptor, with
+    /// no-follow, ordinary-file, ownership, link-count and byte-limit checks.
+    pub fn read_evidence(&self, entry: &str) -> Result<Vec<u8>> {
+        self.require_unchanged()?;
+        if !regex::Regex::new(r"\A[a-z0-9][a-z0-9._-]{0,127}\z")
+            .unwrap()
+            .is_match(entry)
+        {
+            return Err("invalid recovery evidence name".into());
+        }
+        let evidence = open_at(
+            &self.directory,
+            &name("evidence"),
+            libc::O_RDONLY | libc::O_DIRECTORY,
+            0,
+        )?;
+        private(&evidence, true)?;
+        let file = open_at(
+            &evidence,
+            &name(entry),
+            libc::O_RDONLY | libc::O_NONBLOCK,
+            0,
+        )?;
+        private(&file, false)?;
+        let mut bytes = Vec::new();
+        file.take(4 * 1024 * 1024 + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|_| "cannot read recovery evidence")?;
+        if bytes.is_empty() || bytes.len() > 4 * 1024 * 1024 {
+            return Err("recovery evidence exceeds bounds".into());
+        }
+        self.require_unchanged()?;
+        Ok(bytes)
+    }
+}
+
 pub struct InstallerState {
     directory: File,
     journal: Journal,
@@ -775,6 +837,56 @@ mod tests {
             release_tag: "v1.2.3".into(),
             inventory_sha256: format!("sha256:{}", "b".repeat(64)),
         }
+    }
+    #[test]
+    fn recovery_inspection_locks_uncertain_state_without_enabling_resume() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("install");
+        let mut state = InstallerState::create(&path, identity()).unwrap();
+        state.create_private_directory("evidence").unwrap();
+        state
+            .write_evidence("owned.json", b"owned evidence")
+            .unwrap();
+        state.advance(Phase::Verified).unwrap();
+        state.advance(Phase::Provisioning).unwrap();
+        assert!(LockedInspection::open(&path).is_err());
+        drop(state);
+        let before = std::fs::read(path.join(JOURNAL)).unwrap();
+        let inspection = LockedInspection::open(&path).unwrap();
+        assert_eq!(inspection.journal().phase(), Phase::Provisioning);
+        assert_eq!(
+            inspection.read_evidence("owned.json").unwrap(),
+            b"owned evidence"
+        );
+        assert!(LockedInspection::open(&path).is_err());
+        assert!(InstallerState::resume(&path, &identity()).is_err());
+        drop(inspection);
+        assert_eq!(std::fs::read(path.join(JOURNAL)).unwrap(), before);
+        assert!(InstallerState::resume(&path, &identity()).is_err());
+    }
+    #[test]
+    fn recovery_evidence_rejects_links_traversal_and_oversize() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("install");
+        let mut state = InstallerState::create(&path, identity()).unwrap();
+        state.create_private_directory("evidence").unwrap();
+        state
+            .write_evidence("owned.json", b"owned evidence")
+            .unwrap();
+        drop(state);
+        let inspection = LockedInspection::open(&path).unwrap();
+        let evidence = path.join("evidence");
+        symlink(evidence.join("owned.json"), evidence.join("linked.json")).unwrap();
+        assert!(inspection.read_evidence("linked.json").is_err());
+        assert!(inspection.read_evidence("../installation.json").is_err());
+        std::fs::hard_link(evidence.join("owned.json"), evidence.join("hard.json")).unwrap();
+        assert!(inspection.read_evidence("owned.json").is_err());
+        let large = evidence.join("large.json");
+        std::fs::write(&large, vec![b'x'; 4 * 1024 * 1024 + 1]).unwrap();
+        std::fs::set_permissions(&large, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(inspection.read_evidence("large.json").is_err());
+        std::fs::write(path.join(JOURNAL), b"{}").unwrap();
+        assert!(inspection.require_unchanged().is_err());
     }
     fn operator_fixture(root: &Path) -> std::path::PathBuf {
         std::fs::set_permissions(root, std::fs::Permissions::from_mode(0o700)).unwrap();

@@ -5,10 +5,12 @@
 #![cfg(target_os = "linux")]
 
 use crate::{
+    installer_application_model::ApplicationModelPlan,
+    installer_application_observation::{validate_openbao_container, ContainerPhase},
     installer_runtime::DockerRunner,
     installer_state::{InstallerState, Phase, SCALAR_SECRETS},
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -399,6 +401,139 @@ fn fresh(docker: &DockerRunner, project: &str) -> Result<()> {
     }
     Ok(())
 }
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CreatedResources {
+    schema: String,
+    installation_id: String,
+    engine_id: String,
+    project: String,
+    image: String,
+    image_id: String,
+    network_id: String,
+    container_ids: BTreeMap<String, String>,
+}
+fn one(value: Value) -> Result<Value> {
+    let values = value
+        .as_array()
+        .ok_or("Docker observation is not an array")?;
+    require(
+        values.len() == 1 && values[0].is_object(),
+        "ambiguous Docker observation",
+    )?;
+    Ok(values[0].clone())
+}
+fn inspect_container(docker: &DockerRunner, container: &str) -> Result<Value> {
+    require(id(container), "invalid recorded OpenBao container ID")?;
+    one(json_output(
+        docker,
+        &["inspect", "--type", "container", container],
+    )?)
+}
+fn discover(docker: &DockerRunner, project: &str) -> Result<BTreeMap<String, String>> {
+    let label = format!("label=com.docker.compose.project={project}");
+    let listed = docker.run_checked(&["ps", "-aq", "--no-trunc", "--filter", &label])?;
+    let ids: Vec<_> = listed.lines().collect();
+    require(
+        ids.len() == 4
+            && ids.iter().all(|s| id(s))
+            && ids.iter().collect::<BTreeSet<_>>().len() == 4,
+        "unexpected OpenBao container inventory",
+    )?;
+    let mut result = BTreeMap::new();
+    for container in ids {
+        let observed = inspect_container(docker, container)?;
+        let labels = &observed["Config"]["Labels"];
+        let role = labels["com.docker.compose.service"]
+            .as_str()
+            .ok_or("OpenBao role absent")?;
+        require(
+            ROLES.contains(&role)
+                && observed["Id"] == container
+                && labels["com.docker.compose.project"] == project
+                && result
+                    .insert(role.to_owned(), container.to_owned())
+                    .is_none(),
+            "OpenBao discovery identity differs",
+        )?;
+    }
+    require(
+        result.keys().map(String::as_str).collect::<BTreeSet<_>>() == BTreeSet::from(ROLES),
+        "OpenBao role inventory incomplete",
+    )?;
+    Ok(result)
+}
+fn network_observation(docker: &DockerRunner, project: &str, network: &str) -> Result<Value> {
+    let observed = one(json_output(docker, &["network", "inspect", network])?)?;
+    require(
+        observed["Name"] == format!("{project}_default")
+            && observed["Id"].as_str().is_some_and(id)
+            && observed["Driver"] == "bridge"
+            && observed["Labels"]["com.docker.compose.project"] == project
+            && observed["Labels"]["com.docker.compose.network"] == "default",
+        "OpenBao network owner differs",
+    )?;
+    Ok(observed)
+}
+fn validate_created_identity(created: &CreatedResources, project: &str, image: &str) -> Result<()> {
+    require(
+        created.schema == "elevenid.installer-openbao-created/v1"
+            && created.project == project
+            && created.image == image
+            && id(&created.network_id)
+            && created.image_id.strip_prefix("sha256:").is_some_and(id)
+            && created
+                .container_ids
+                .keys()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>()
+                == BTreeSet::from(ROLES)
+            && created.container_ids.values().all(|s| id(s))
+            && created
+                .container_ids
+                .values()
+                .collect::<BTreeSet<_>>()
+                .len()
+                == 4,
+        "recorded OpenBao creation identity differs",
+    )
+}
+fn created_resources(installation: &Path) -> Result<CreatedResources> {
+    serde_json::from_slice(&crate::installer_verify::read_private_record(
+        &installation.join("openbao-created.json"),
+    )?)
+    .map_err(|_| "invalid durable OpenBao resource inventory".into())
+}
+fn observe_role(
+    docker: &DockerRunner,
+    plan: &ApplicationModelPlan,
+    image: &Value,
+    resources: &CreatedResources,
+    role: &str,
+    phase: ContainerPhase,
+) -> Result<Value> {
+    let container = resources
+        .container_ids
+        .get(role)
+        .ok_or("recorded OpenBao role absent")?;
+    let observed = inspect_container(docker, container)?;
+    validate_openbao_container(&observed, container, role, plan, image, phase)?;
+    if role == "openbao" && matches!(phase, ContainerPhase::Running) {
+        // Preserve the original runtime publication check in addition to the
+        // shared HostConfig admission: a running server must expose its exact
+        // loopback binding, not merely have that binding in creation intent.
+        require(
+            observed["NetworkSettings"]["Ports"]["8200/tcp"]
+                == observed["HostConfig"]["PortBindings"]["8200/tcp"],
+            "OpenBao observed port publication differs",
+        )?;
+    }
+    require(
+        observed["RestartCount"] == 0,
+        "OpenBao container restarted unexpectedly",
+    )?;
+    Ok(observed)
+}
 fn observations(
     docker: &DockerRunner,
     project: &str,
@@ -408,125 +543,50 @@ fn observations(
     bundle: &Path,
     port: u16,
 ) -> Result<(String, BTreeMap<String, String>)> {
-    let label = format!("label=com.docker.compose.project={project}");
-    let listed = docker.run_checked(&["ps", "-aq", "--no-trunc", "--filter", &label])?;
-    let ids: Vec<_> = listed.split_whitespace().collect();
+    let installation = state.parent().ok_or("OpenBao installation parent absent")?;
+    let created = created_resources(installation)?;
+    validate_created_identity(&created, project, image)?;
+    let model: Value = serde_json::from_slice(&crate::installer_verify::read_private_bytes(
+        &installation.join("openbao-compose-model.json"),
+        262144,
+    )?)
+    .map_err(|_| "invalid recorded OpenBao Compose model")?;
+    verify_model(&model, image, state, secrets, bundle, port, project)?;
     require(
-        ids.len() == 3 && ids.iter().all(|v| id(v)),
-        "unexpected OpenBao container inventory",
+        discover(docker, project)? == created.container_ids,
+        "OpenBao containers were replaced",
     )?;
-    let mut args = vec!["inspect"];
-    args.extend_from_slice(&ids);
-    let inspected = json_output(docker, &args)?;
-    let containers = inspected
-        .as_array()
-        .ok_or("invalid container observations")?;
-    require(containers.len() == 3, "OpenBao container count changed")?;
-    let mut result = BTreeMap::new();
-    let network_name = format!("{project}_default");
-    let mut network_id = String::new();
-    for c in containers {
-        let labels = &c["Config"]["Labels"];
-        let role = labels["com.docker.compose.service"]
-            .as_str()
-            .ok_or("OpenBao role label absent")?;
-        let container_id = c["Id"].as_str().ok_or("OpenBao container ID absent")?;
-        require(
-            matches!(role, "openbao-tls-init" | "openbao" | "openbao-unseal")
-                && labels["com.docker.compose.project"] == project
-                && c["Config"]["Image"] == image
-                && id(container_id)
-                && ids.contains(&container_id)
-                && result
-                    .insert(role.to_owned(), container_id.to_owned())
-                    .is_none(),
-            "OpenBao container identity differs",
-        )?;
-        if role == "openbao-tls-init" {
-            require(
-                c["State"]["Status"] == "exited" && c["State"]["ExitCode"] == 0,
-                "OpenBao TLS initializer did not finish",
-            )?;
+    let local_image = one(json_output(docker, &["image", "inspect", image])?)?;
+    require(
+        local_image["Id"] == created.image_id,
+        "OpenBao image identity changed",
+    )?;
+    let plan = ApplicationModelPlan {
+        model,
+        selected_services: ROLES.iter().map(|s| s.to_string()).collect(),
+        expected_network_id: created.network_id.clone(),
+        installation_ready: false,
+    };
+    for role in ROLES {
+        let phase = if matches!(role, "openbao-tls-init" | "openbao-bootstrap") {
+            ContainerPhase::ExitedSuccessfully
         } else {
-            require(c["State"]["Running"] == true, "OpenBao service stopped")?;
-        }
-        let mut mounts = BTreeMap::new();
-        for mount in c["Mounts"]
-            .as_array()
-            .ok_or("OpenBao runtime mounts absent")?
-        {
-            require(
-                mount["Type"] == "bind",
-                "unexpected OpenBao runtime mount type",
-            )?;
-            let source = mount["Source"]
-                .as_str()
-                .ok_or("runtime mount source absent")?;
-            let target = mount["Destination"]
-                .as_str()
-                .ok_or("runtime mount target absent")?;
-            let writable = mount["RW"].as_bool().ok_or("runtime mount access absent")?;
-            require(
-                mounts
-                    .insert(target.to_owned(), (PathBuf::from(source), !writable))
-                    .is_none(),
-                "duplicate runtime mount",
-            )?;
-        }
-        require(
-            mounts == expected_mounts(role, state, secrets, bundle),
-            "OpenBao runtime mounts differ",
-        )?;
+            ContainerPhase::Running
+        };
+        let c = observe_role(docker, &plan, &local_image, &created, role, phase)?;
         if role == "openbao" {
             require(
                 c["State"]["Health"]["Status"] == "healthy",
                 "OpenBao not healthy",
             )?;
-            let ports = json!({"8200/tcp":[{"HostIp":"127.0.0.1","HostPort":port.to_string()}]});
-            require(
-                c["HostConfig"]["PortBindings"] == ports
-                    && c["NetworkSettings"]["Ports"]
-                        .as_object()
-                        .is_some_and(|observed| {
-                            observed.get("8200/tcp") == ports.get("8200/tcp")
-                                && observed
-                                    .iter()
-                                    .all(|(name, value)| name == "8200/tcp" || value.is_null())
-                        }),
-                "OpenBao runtime port binding differs",
-            )?;
-            require(
-                keys(&c["NetworkSettings"]["Networks"])? == BTreeSet::from([network_name.as_str()]),
-                "OpenBao runtime network differs",
-            )?;
-            let n = &c["NetworkSettings"]["Networks"][&network_name];
-            require(
-                n["Aliases"]
-                    .as_array()
-                    .is_some_and(|a| a.contains(&json!("openbao"))),
-                "OpenBao network alias absent",
-            )?;
-            network_id = n["NetworkID"]
-                .as_str()
-                .ok_or("OpenBao network ID absent")?
-                .to_owned();
-            require(id(&network_id), "OpenBao network ID invalid")?;
         }
     }
-    let networks = json_output(docker, &["network", "inspect", &network_id])?;
-    let network = networks
-        .as_array()
-        .filter(|v| v.len() == 1)
-        .and_then(|v| v.first())
-        .ok_or("OpenBao network observation absent")?;
+    let network = network_observation(docker, project, &created.network_id)?;
     require(
-        network["Id"] == network_id
-            && network["Name"] == network_name
-            && network["Labels"]["com.docker.compose.project"] == project
-            && network["Labels"]["com.docker.compose.network"] == "default",
-        "OpenBao network owner differs",
+        network["Id"] == created.network_id,
+        "OpenBao network replaced",
     )?;
-    Ok((network_id, result))
+    Ok((created.network_id, created.container_ids))
 }
 
 /// Reconcile a recorded observation against the live, exact bound resources.
@@ -546,6 +606,13 @@ pub(crate) fn verify_observation(
     )?;
     let binding = journal.runtime().ok_or("OpenBao runtime binding absent")?;
     let project = format!("{}-bao", journal.compose_project());
+    let created = created_resources(installation)?;
+    require(
+        created.installation_id == journal.installation_id().to_string()
+            && created.engine_id == binding.engine_id
+            && created.project == project,
+        "OpenBao creation receipt differs from runtime binding",
+    )?;
     require(
         expected.installation_id == journal.installation_id().to_string()
             && expected.engine_id == binding.engine_id
@@ -640,8 +707,10 @@ pub fn start_openbao(
     )?;
     docker.preflight()?;
     fresh(&docker, &project)?;
-    let listener = TcpListener::bind(("127.0.0.1", binding.openbao_port))
-        .map_err(|_| "OpenBao loopback port unavailable")?;
+    let mut listener = Some(
+        TcpListener::bind(("127.0.0.1", binding.openbao_port))
+            .map_err(|_| "OpenBao loopback port unavailable")?,
+    );
     let state_root = installation.join("openbao-state");
     let env_file = installation.join("openbao.env");
     let pending = installation.join("openbao-pending.json");
@@ -683,6 +752,10 @@ pub fn start_openbao(
         &pending,
         &serde_json::to_vec(&intent).map_err(|_| "cannot encode OpenBao intent")?,
     )?;
+    exclusive(
+        &installation.join("openbao-compose-model.json"),
+        &serde_json::to_vec(&model).map_err(|_| "cannot encode OpenBao model")?,
+    )?;
     state.require_live_phase(Phase::Provisioning)?;
     compose_with_timeout(
         &docker,
@@ -690,59 +763,166 @@ pub fn start_openbao(
         &["pull", "openbao"],
         Duration::from_secs(600),
     )?;
-    // Recheck project emptiness immediately before first resource creation.
-    fresh(&docker, &project)?;
-    drop(listener);
-    compose(
-        &docker,
-        &base,
-        &["up", "-d", "--pull", "never", "--no-build", "openbao"],
+    let local_image = one(json_output(&docker, &["image", "inspect", plugin_image])?)?;
+    let image_id = local_image["Id"]
+        .as_str()
+        .ok_or("OpenBao image ID absent")?
+        .to_owned();
+    require(
+        image_id.strip_prefix("sha256:").is_some_and(id)
+            && local_image["RepoDigests"]
+                .as_array()
+                .is_some_and(|v| v.contains(&json!(plugin_image))),
+        "OpenBao local image differs from admitted digest",
     )?;
+    fresh(&docker, &project)?;
+    state.require_live_phase(Phase::Provisioning)?;
+    // Explicitly create all four roles, including the normally profiled bootstrap.
+    // Compose create never starts dependencies. Retain every initializer for
+    // ownership reconciliation; do not use compose run --rm or compose up.
     compose_with_timeout(
         &docker,
         &base,
         &[
-            "run",
-            "--no-deps",
-            "--rm",
+            "--profile",
+            "kms-init",
+            "create",
             "--pull",
             "never",
-            "openbao-bootstrap",
-        ],
-        Duration::from_secs(300),
-    )?;
-    compose(
-        &docker,
-        &base,
-        &[
-            "up",
-            "-d",
-            "--no-deps",
             "--no-build",
-            "--pull",
-            "never",
+            "openbao-tls-init",
+            "openbao",
+            "openbao-bootstrap",
             "openbao-unseal",
         ],
+        Duration::from_secs(120),
     )?;
+    let container_ids = discover(&docker, &project)?;
+    let network = network_observation(&docker, &project, &format!("{project}_default"))?;
+    let network_id = network["Id"]
+        .as_str()
+        .ok_or("OpenBao network ID absent")?
+        .to_owned();
+    let created = CreatedResources {
+        schema: "elevenid.installer-openbao-created/v1".into(),
+        installation_id: journal.installation_id().to_string(),
+        engine_id: binding.engine_id.clone(),
+        project: project.clone(),
+        image: plugin_image.into(),
+        image_id,
+        network_id: network_id.clone(),
+        container_ids,
+    };
+    validate_created_identity(&created, &project, plugin_image)?;
+    exclusive(
+        &installation.join("openbao-created.json"),
+        &serde_json::to_vec(&created).map_err(|_| "cannot encode created OpenBao inventory")?,
+    )?;
+    let plan = ApplicationModelPlan {
+        model,
+        selected_services: ROLES.iter().map(|s| s.to_string()).collect(),
+        expected_network_id: network_id,
+        installation_ready: false,
+    };
+    // Every identity/configuration is admitted before the first start. Later
+    // transitions address only these durable exact IDs, never discovered names.
+    for role in ROLES {
+        observe_role(
+            &docker,
+            &plan,
+            &local_image,
+            &created,
+            role,
+            ContainerPhase::Created,
+        )?;
+    }
+    for role in [
+        "openbao-tls-init",
+        "openbao",
+        "openbao-bootstrap",
+        "openbao-unseal",
+    ] {
+        state.require_live_phase(Phase::Provisioning)?;
+        require(
+            discover(&docker, &project)? == created.container_ids,
+            "OpenBao creation inventory changed",
+        )?;
+        require(
+            network_observation(&docker, &project, &created.network_id)?["Id"]
+                == created.network_id,
+            "OpenBao network changed before start",
+        )?;
+        observe_role(
+            &docker,
+            &plan,
+            &local_image,
+            &created,
+            role,
+            ContainerPhase::Created,
+        )?;
+        let container = created
+            .container_ids
+            .get(role)
+            .ok_or("OpenBao role absent")?;
+        exclusive(
+            &installation.join(format!("openbao-start-{role}.json")),
+            &serde_json::to_vec(&json!({"role":role,"container_id":container}))
+                .map_err(|_| "cannot encode OpenBao start intent")?,
+        )?;
+        if role == "openbao" {
+            drop(listener.take());
+        }
+        docker.run_checked(&["start", container])?;
+        if matches!(role, "openbao-tls-init" | "openbao-bootstrap") {
+            require(
+                docker
+                    .run_checked_with_timeout(&["wait", container], Duration::from_secs(300))?
+                    .trim()
+                    == "0",
+                "OpenBao initializer did not complete successfully",
+            )?;
+            observe_role(
+                &docker,
+                &plan,
+                &local_image,
+                &created,
+                role,
+                ContainerPhase::ExitedSuccessfully,
+            )?;
+            exclusive(
+                &installation.join(format!("openbao-completed-{role}.json")),
+                &serde_json::to_vec(&json!({"role":role,"container_id":container,"exit_code":0}))
+                    .map_err(|_| "cannot encode OpenBao completion")?,
+            )?;
+        } else {
+            observe_role(
+                &docker,
+                &plan,
+                &local_image,
+                &created,
+                role,
+                ContainerPhase::Running,
+            )?;
+        }
+    }
     let deadline = Instant::now() + Duration::from_secs(120);
-    let container = compose(&docker, &base, &["ps", "-q", "openbao"])?;
-    let container = container.trim();
-    require(
-        container.len() >= 12
-            && container.len() <= 64
-            && container
-                .bytes()
-                .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()),
-        "OpenBao container ID invalid",
-    )?;
     loop {
-        let health =
-            docker.run_checked(&["inspect", "--format", "{{.State.Health.Status}}", container])?;
-        if health.trim() == "healthy" {
+        let c = observe_role(
+            &docker,
+            &plan,
+            &local_image,
+            &created,
+            "openbao",
+            ContainerPhase::Running,
+        )?;
+        let health = c["State"]["Health"]["Status"]
+            .as_str()
+            .ok_or("OpenBao health absent")?;
+        if health == "healthy" {
             break;
         }
         require(
-            matches!(health.trim(), "starting" | "unhealthy") && Instant::now() < deadline,
+            matches!(health, "starting" | "unhealthy") && Instant::now() < deadline,
             "OpenBao failed bounded readiness check",
         )?;
         std::thread::sleep(Duration::from_secs(2));
@@ -784,6 +964,66 @@ pub fn start_openbao(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn durable_created_inventory_requires_all_four_unique_exact_ids() {
+        let image = format!("ghcr.io/elevenid/openbao@sha256:{}", "a".repeat(64));
+        let good = CreatedResources {
+            schema: "elevenid.installer-openbao-created/v1".into(),
+            installation_id: uuid::Uuid::new_v4().to_string(),
+            engine_id: "owned-engine".into(),
+            project: "owned-bao".into(),
+            image: image.clone(),
+            image_id: format!("sha256:{}", "b".repeat(64)),
+            network_id: "c".repeat(64),
+            container_ids: ROLES
+                .iter()
+                .enumerate()
+                .map(|(i, role)| (role.to_string(), format!("{i:064x}")))
+                .collect(),
+        };
+        validate_created_identity(&good, "owned-bao", &image).unwrap();
+        let bytes = serde_json::to_vec(&good).unwrap();
+        for fault in [
+            "missing-bootstrap",
+            "duplicate-id",
+            "wrong-network",
+            "wrong-image-id",
+            "wrong-project",
+        ] {
+            let mut changed: CreatedResources = serde_json::from_slice(&bytes).unwrap();
+            match fault {
+                "missing-bootstrap" => {
+                    changed.container_ids.remove("openbao-bootstrap");
+                }
+                "duplicate-id" => {
+                    changed.container_ids.insert(
+                        "openbao-bootstrap".into(),
+                        changed.container_ids["openbao"].clone(),
+                    );
+                }
+                "wrong-network" => changed.network_id = "name-not-id".into(),
+                "wrong-image-id" => changed.image_id = "latest".into(),
+                _ => changed.project = "foreign-bao".into(),
+            }
+            assert!(
+                validate_created_identity(&changed, "owned-bao", &image).is_err(),
+                "{fault}"
+            );
+        }
+        let mut unknown: Value = serde_json::from_slice(&bytes).unwrap();
+        unknown["adopt_by_name"] = json!(true);
+        assert!(serde_json::from_value::<CreatedResources>(unknown).is_err());
+    }
+
+    #[test]
+    fn creation_receipt_is_exclusive_and_preserved_for_recovery() {
+        let root = tempfile::tempdir().unwrap();
+        let receipt = root.path().join("openbao-created.json");
+        exclusive(&receipt, b"original exact IDs").unwrap();
+        assert!(exclusive(&receipt, b"replacement IDs").is_err());
+        assert_eq!(fs::read(&receipt).unwrap(), b"original exact IDs");
+        assert_eq!(fs::metadata(receipt).unwrap().mode() & 0o7777, 0o600);
+    }
     use std::os::unix::fs::{symlink, PermissionsExt};
 
     #[test]

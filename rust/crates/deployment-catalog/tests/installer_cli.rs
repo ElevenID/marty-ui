@@ -119,10 +119,18 @@ esac
             .unwrap()
     };
     let output = invoke();
+    assert!(
+        !output.status.success(),
+        "doctor must refuse an active lifecycle writer"
+    );
+    assert!(output.stdout.is_empty());
+    let project = state.journal().compose_project();
+    drop(state);
+    let output = invoke();
     assert!(output.status.success(), "{:?}", output.stderr);
     let report: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(report["docker"]["engine_id"], "test-engine");
-    assert_eq!(report["compose_project"], state.journal().compose_project());
+    assert_eq!(report["compose_project"], project);
     assert_eq!(report["services_observed"], false);
     assert_eq!(report["installation_ready"], false);
     std::fs::write(&binary, script.replace("test-engine", "replacement-engine")).unwrap();
@@ -170,6 +178,7 @@ fn status_reports_uncertain_journal_without_checkout_or_secret_values() {
     assert!(output.stderr.is_empty());
 
     // A legacy/preparation-only journal must not adopt the caller's daemon.
+    drop(state);
     let doctor = Command::new(env!("CARGO_BIN_EXE_marty-deploy"))
         .current_dir(root.path())
         .args(["doctor", "--install-dir"])
