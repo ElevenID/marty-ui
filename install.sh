@@ -130,8 +130,29 @@ main() (
         fetch "$1.sigstore.json" "$2.sigstore.json" 1048576
         fetch "$1.provenance.jsonl" "$2.provenance.jsonl" 1048576
     }
+    # The unsigned pointer locates immutable metadata; it grants no authority.
+    # Publishers compare-and-swap one branch commit, never replace release assets.
+    select_channel() {
+        pointer_url="https://raw.githubusercontent.com/$repo/installer-channel/$channel.json"
+        fetch "$pointer_url" "$stage/channel-pointer.json" 65536
+        "$jq" -e --arg channel "$channel" '
+            type == "object" and keys == ["channel","generation","record_sha256","repository","schema"]
+            and .schema == "elevenid.installer-channel-pointer/v1"
+            and .repository == "ElevenID/marty-ui" and .channel == $channel
+            and (.generation | type == "number" and . > 0 and . < 9007199254740992 and floor == .)
+            and (.record_sha256 | type == "string" and test("^[0-9a-f]{64}$"))
+        ' "$stage/channel-pointer.json" >/dev/null || fail 'Invalid channel pointer'
+        generation=$("$jq" -er '.generation | tostring' "$stage/channel-pointer.json")
+        signed_download "$base/installer-channel-$channel-$generation/installer-channel.json" "$stage/channel.json" 65536
+        [ "$(digest "$stage/channel.json")" = "$("$jq" -er '.record_sha256' "$stage/channel-pointer.json")" ] || fail 'Channel record differs from pointer'
+        [ "$("$jq" -er '.generation | tostring' "$stage/channel.json")" = "$generation" ] || fail 'Channel generation differs from pointer'
+    }
+    recheck_channel_pointer() {
+        fetch "$pointer_url" "$stage/channel-pointer-recheck.json" 65536
+        [ "$(digest "$stage/channel-pointer.json")" = "$(digest "$stage/channel-pointer-recheck.json")" ] || fail 'Channel changed during download; retry the original command'
+    }
     if [ -z "$version" ]; then
-        signed_download "$base/installer-channel-$channel/installer-channel.json" "$stage/channel.json" 65536
+        select_channel
         promotion_source=$("$jq" -er '.promotion_source_sha | select(test("^[0-9a-f]{40}$"))' "$stage/channel.json")
         verify "$stage/channel.json" installer-promote.yml "$promotion_source" \
             "$(run_field "$stage/channel.json" promotion_run_id)" "$(run_field "$stage/channel.json" promotion_run_attempt)"
@@ -148,7 +169,7 @@ main() (
         case "$channel:$version" in nightly:*-nightly.*|stable:v*) ;; *) fail 'Channel tier differs' ;; esac
         case "$channel:$version" in stable:*-nightly.*) fail 'Channel tier differs' ;; esac
     fi
-    signed_download "$base/$version/installer-admission.json" "$stage/admission.json" 65536
+    signed_download "$base/installer-admission-$version/installer-admission.json" "$stage/admission.json" 65536
     source=$("$jq" -er '.source_sha | select(test("^[0-9a-f]{40}$"))' "$stage/admission.json")
     promotion_source=$("$jq" -er '.promotion_source_sha | select(test("^[0-9a-f]{40}$"))' "$stage/admission.json")
     verify "$stage/admission.json" installer-promote.yml "$promotion_source" \
@@ -167,6 +188,9 @@ main() (
     [ "$(digest "$stage/marty-deploy")" = "$("$jq" -er '.operator_sha256' "$stage/admission.json")" ] || fail 'Operator digest differs from admitted version'
     verify "$stage/marty-deploy" "$workflow" "$source" \
         "$(run_field "$stage/admission.json" build_run_id)" "$(run_field "$stage/admission.json" build_run_attempt)"
+    if [ -f "$stage/channel.json" ]; then
+        recheck_channel_pointer
+    fi
     chmod 700 "$stage/marty-deploy"
     [ "$("$stage/marty-deploy" --build-identity)" = "$source:$version" ] || fail 'Operator build identity differs'
     set -- install --version "$version" --verified-admission "$stage/admission.json" \

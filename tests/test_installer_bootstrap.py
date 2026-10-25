@@ -5,6 +5,8 @@ import re
 import shutil
 import subprocess
 import time
+import hashlib
+import shlex
 from pathlib import Path
 
 import pytest
@@ -133,7 +135,7 @@ def test_actual_bootstrap_certificate_policy_rejects_mismatch(field, value):
 ])
 def test_actual_bootstrap_channel_policy_rejects_stale_or_wrong_metadata(field, value):
     source = SCRIPT.read_text()
-    match = re.search(r'--arg channel "\$channel" \'(.*?)\' "\$stage/channel.json"', source, re.S)
+    match = re.search(r'--arg channel "\$channel" \'([^\']*)\' "\$stage/channel.json"', source, re.S)
     assert match
     record = dict(schema="elevenid.installer-channel/v1", repository="ElevenID/marty-ui",
                   channel="nightly", generation=1, admission_sha256="a" * 64,
@@ -163,3 +165,71 @@ version='{version}'
 {checks}
 ''')
     assert (result.returncode == 0) == accepted
+
+@pytest.mark.skipif(os.name != "posix" or shutil.which("jq") is None, reason="actual Linux shell and jq routing")
+@pytest.mark.parametrize("change,accepted", [
+    ("none", True), ("pointer-race", False), ("digest", False), ("generation", False),
+    ("channel", False), ("extra", False), ("boolean-generation", False),
+    ("unsafe-integer", False), ("url", False),
+])
+def test_channel_pointer_resolves_immutable_metadata_and_refuses_races(tmp_path, change, accepted):
+    source=SCRIPT.read_text()
+    helpers=source[source.index('    select_channel() {'):source.index('    if [ -z "$version" ]; then')]
+    channel=json.dumps(dict(generation=7)).encode()
+    pointer=dict(schema="elevenid.installer-channel-pointer/v1", repository="ElevenID/marty-ui",
+                 channel="nightly", generation=7, record_sha256=hashlib.sha256(channel).hexdigest())
+    if change=="digest": pointer["record_sha256"]="0"*64
+    if change=="generation": pointer["generation"]=8
+    if change=="channel": pointer["channel"]="stable"
+    if change=="extra": pointer["extra"]=True
+    if change=="boolean-generation": pointer["generation"]=True
+    if change=="unsafe-integer": pointer["generation"]=9007199254740992
+    if change=="url": pointer["generation"]="https://attacker.invalid"
+    raw=json.dumps(pointer).encode()
+    (tmp_path/"pointer").write_bytes(raw)
+    (tmp_path/"pointer-again").write_bytes(raw+b" " if change=="pointer-race" else raw)
+    (tmp_path/"record").write_bytes(channel)
+    stage=tmp_path/"stage"; stage.mkdir()
+    q=shlex.quote
+    script=f'''set -eu
+stage={q(str(stage))}
+fixtures={q(str(tmp_path))}
+jq={q(shutil.which("jq"))}
+channel=nightly
+repo=ElevenID/marty-ui
+base=https://github.com/ElevenID/marty-ui/releases/download
+count=0
+fail() {{ echo "$*" >&2; exit 1; }}
+digest() {{ sha256sum < "$1" | cut -d ' ' -f 1; }}
+fetch() {{
+  [ "$1" = "https://raw.githubusercontent.com/ElevenID/marty-ui/installer-channel/nightly.json" ] || exit 90
+  count=$((count+1))
+  if [ "$count" = 1 ]; then cp "$fixtures/pointer" "$2"; else cp "$fixtures/pointer-again" "$2"; fi
+}}
+signed_download() {{
+  echo "$1"
+  cp "$fixtures/record" "$2"
+}}
+{helpers}
+select_channel
+recheck_channel_pointer
+'''
+    result=run(source=script)
+    assert (result.returncode==0)==accepted, result.stderr
+    if accepted:
+        assert result.stdout.strip()=="https://github.com/ElevenID/marty-ui/releases/download/installer-channel-nightly-7/installer-channel.json"
+    if change=="pointer-race": assert "Channel changed during download" in result.stderr
+
+
+def test_version_admission_uses_separate_metadata_release_without_changing_payload_location():
+    source=SCRIPT.read_text()
+    line=next(line for line in source.splitlines() if 'signed_download "$base/installer-admission-' in line)
+    result=run(source='''base=https://github.com/ElevenID/marty-ui/releases/download
+version=v1.2.3
+stage=/private/stage
+signed_download() { printf '%s\\n' "$1"; }
+'''+line)
+    assert result.returncode==0
+    assert result.stdout.strip()=="https://github.com/ElevenID/marty-ui/releases/download/installer-admission-v1.2.3/installer-admission.json"
+    assert 'signed_download "$base/$version/marty-deploy-linux-amd64"' in source
+    assert source.index('        recheck_channel_pointer\n') < source.index('    chmod 700 "$stage/marty-deploy"')

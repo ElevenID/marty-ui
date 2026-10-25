@@ -840,3 +840,38 @@ the default fresh build. Anonymous bundle verification needs network access;
 the admission is limited to Ubuntu 24.04 amd64 and does not claim portable or
 offline compatibility. Public preview publication must separately bind the
 companion to the prepared source/run; never use an ambient binary.
+
+
+### Immutable installer metadata endpoints
+
+The consumer bootstrap leaves the original version release's exact asset set
+unchanged. For version `vX.Y.Z` (including a nightly suffix), it downloads the
+admission subject `installer-admission.json` and its `.sigstore.json` and
+`.provenance.jsonl` sidecars from the separate GitHub Release tag
+`installer-admission-vX.Y.Z`. The signed record still binds the original version,
+inventory, operator, and successful staged/published acceptance. Payloads continue
+to come from the original version release. Publishing these metadata releases is
+not implemented by the consumer endpoint change.
+
+Channel selection reads one unsigned routing pointer from
+`https://raw.githubusercontent.com/ElevenID/marty-ui/installer-channel/nightly.json`
+(or `stable.json`). The branch is `refs/heads/installer-channel`. Its closed JSON
+fields are `schema` (`elevenid.installer-channel-pointer/v1`), `repository`
+(`ElevenID/marty-ui`), `channel`, positive integer `generation` below 2^53, and
+`record_sha256` (lowercase SHA-256 of the exact signed channel record bytes).
+The consumer derives the metadata release tag
+`installer-channel-<channel>-<generation>` and downloads `installer-channel.json`
+and its two signature/provenance sidecars from that immutable release. No URL
+from pointer content is followed.
+
+The pointer grants no authority. Channel signatures, exact promotion invocation,
+expiry, channel/version tier, generation, record hash, admission hash, and source
+binding remain required. The bootstrap reads the pointer again before executing
+the authenticated operator and refuses if its exact bytes changed. Publishers
+must upload and verify immutable channel metadata first, then compare-and-swap
+the branch commit containing the pointer; they must never replace release assets.
+A failed compare-and-swap requires reconciliation rather than overwriting a newer
+pointer. No pointer branch or metadata release is created by this implementation.
+A fresh consumer cannot infer the globally newest generation from an unsigned
+pointer alone: replay of an older correctly signed, still-valid channel remains
+bounded by its expiry. This change does not claim global rollback prevention.
