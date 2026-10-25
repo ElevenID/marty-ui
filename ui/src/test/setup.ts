@@ -9,7 +9,7 @@
 
 import '@testing-library/jest-dom'
 import { cleanup } from '@testing-library/react'
-import { afterEach, beforeAll, afterAll, vi } from 'vitest'
+import { afterEach, beforeEach, beforeAll, afterAll, vi } from 'vitest'
 import { server } from './mocks/server'
 
 // Mock environment variables
@@ -30,10 +30,22 @@ beforeAll(() => {
   })
 })
 
+// jsdom can report Document as the previous focus target after a focused
+// portal is removed. Start each case with an actual focusable DOM target so
+// MUI's restore-focus behavior is exercised against browser-like focus state.
+let originalBodyTabIndex: string | null = null
+beforeEach(() => {
+  originalBodyTabIndex = document.body.getAttribute('tabindex')
+  document.body.tabIndex = -1
+  document.body.focus()
+})
+
 // Reset handlers and cleanup after each test
 afterEach(() => {
   server.resetHandlers()
   cleanup()
+  if (originalBodyTabIndex == null) document.body.removeAttribute('tabindex')
+  else document.body.setAttribute('tabindex', originalBodyTabIndex)
 })
 
 // Stop MSW server after all tests
