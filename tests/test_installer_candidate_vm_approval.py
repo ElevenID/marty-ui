@@ -9,6 +9,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import installer_candidate_vm_approval as approval
 import installer_release as release
 
+OTHER_ID = "ffffffff-ffff-4fff-8fff-ffffffffffff"
+
 
 def sample():
     installation_id = str(uuid.uuid4())
@@ -111,7 +113,7 @@ def test_approval_scope_and_expiry_are_not_inferred_from_vm():
 
 
 @pytest.mark.parametrize("field,replacement", [
-    ("vm_boot_id", str(uuid.uuid4())), ("vm_dir_path", "/trusted/other"),
+    ("vm_boot_id", OTHER_ID), ("vm_dir_path", "/trusted/other"),
     ("vm_dir_inode", 14), ("vm_uid", 1002), ("vm_pid", 1235),
     ("vm_start_ticks", "12346"), ("vm_executable_sha256", "9" * 64),
     ("vm_config_sha256", "9" * 64), ("vm_disk_inode", 14),
@@ -127,8 +129,8 @@ def test_observed_identity_substitution_rejected(field, replacement):
 
 
 @pytest.mark.parametrize("field,replacement", [
-    ("guest_id", str(uuid.uuid4())), ("disk_id", "9" * 64),
-    ("engine_id", "engine-2"), ("installation_id", str(uuid.uuid4())),
+    ("guest_id", OTHER_ID), ("disk_id", "9" * 64),
+    ("engine_id", "engine-2"), ("installation_id", OTHER_ID),
 ])
 def test_target_substitution_rejected(field, replacement):
     record, observed, context, authorization, receipt = sample()
@@ -171,7 +173,7 @@ def test_fresh_pre_dispatch_is_bound_to_approved_initial_bytes():
 
 
 @pytest.mark.parametrize("field,replacement", [
-    ("vm_boot_id", str(uuid.uuid4())), ("vm_uid", 1002), ("vm_dir_inode", 14),
+    ("vm_boot_id", OTHER_ID), ("vm_uid", 1002), ("vm_dir_inode", 14),
     ("vm_pid", 1235), ("vm_start_ticks", "12346"),
     ("vm_disk_inode", 14), ("vm_executable_sha256", "9" * 64),
     ("controller_key_sha256", "9" * 64), ("known_hosts_sha256", "9" * 64),
