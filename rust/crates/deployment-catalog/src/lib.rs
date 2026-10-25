@@ -13,6 +13,9 @@ pub mod installer_release;
 pub mod installer_verify;
 pub mod installer_fetch;
 pub mod installer_prepare;
+pub mod installer_bundle;
+pub mod installer_command;
+pub mod installer_openbao;
 
 use serde_json::{Map, Value};
 use std::collections::HashSet;

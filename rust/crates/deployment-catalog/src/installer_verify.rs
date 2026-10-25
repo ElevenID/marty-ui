@@ -78,20 +78,31 @@ fn text(path: &Path) -> Result<&str> {
 }
 
 pub(crate) fn read_private_record(path: &Path) -> Result<Vec<u8>> {
-    let before = file_digest(path, 65536, false)?;
+    read_private_bytes(path, 65536)
+}
+pub(crate) fn read_private_bytes(path: &Path, maximum: u64) -> Result<Vec<u8>> {
+    if maximum > 4 * 1024 * 1024 {
+        return Err("invalid evidence bound".into());
+    }
+    let before = file_digest(path, maximum, false)?;
     let mut bytes = Vec::new();
     OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
         .open(path)
         .map_err(|_| "cannot read installer record")?
-        .take(65537)
+        .take(maximum + 1)
         .read_to_end(&mut bytes)
         .map_err(|_| "cannot read installer record")?;
     if bytes.len() as u64 != before.1 || format!("{:x}", Sha256::digest(&bytes)) != before.0 {
         return Err("installer record changed".into());
     }
     Ok(bytes)
+}
+
+pub(crate) fn current_operator_digest() -> Result<String> {
+    let path = std::env::current_exe().map_err(|_| "cannot locate running installer")?;
+    Ok(file_digest(&path, 536870912, true)?.0)
 }
 
 pub struct VerificationTools {

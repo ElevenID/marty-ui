@@ -254,6 +254,12 @@ fn print_plan(plan: &Value) {
 
 fn run() -> Result<(), String> {
     let mut args: Vec<String> = env::args().skip(1).collect();
+    if args.first().is_some_and(|arg| arg == "install") {
+        #[cfg(target_os = "linux")]
+        return marty_deployment_catalog::installer_command::install(&args[1..], env!("MARTY_DEPLOY_BUILD_IDENTITY"));
+        #[cfg(not(target_os = "linux"))]
+        return Err("installer currently requires Linux amd64".into());
+    }
     if args == ["--build-identity"] {
         println!("{}", env!("MARTY_DEPLOY_BUILD_IDENTITY"));
         return Ok(());

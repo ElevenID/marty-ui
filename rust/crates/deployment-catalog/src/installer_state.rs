@@ -267,6 +267,69 @@ pub struct InstallerState {
     poisoned: bool,
 }
 impl InstallerState {
+    pub fn require_live_phase(&self, phase: Phase) -> Result<()> {
+        if self.poisoned || self.journal.phase != phase || read(&self.directory)? != self.journal {
+            return Err("installer transaction is not live at the required phase".into());
+        }
+        Ok(())
+    }
+    /// Create one owned runtime/staging directory without adopting existing data.
+    pub fn create_private_directory(&mut self, entry: &str) -> Result<()> {
+        if self.poisoned || !["downloads", "evidence", "openbao-state"].contains(&entry) {
+            return Err("invalid or uncertain installer directory operation".into());
+        }
+        self.poisoned = true;
+        if unsafe { libc::mkdirat(self.directory.as_raw_fd(), name(entry).as_ptr(), 0o700) } != 0 {
+            return Err(error("create installer subdirectory"));
+        }
+        let child = open_at(
+            &self.directory,
+            &name(entry),
+            libc::O_RDONLY | libc::O_DIRECTORY,
+            0,
+        )?;
+        private(&child, true)?;
+        child
+            .sync_all()
+            .and_then(|_| self.directory.sync_all())
+            .map_err(|_| "persist installer subdirectory")?;
+        self.poisoned = false;
+        Ok(())
+    }
+    /// Preserve exact authenticated records/receipts before remote side effects.
+    /// Partial writes stay private and poison this transaction; never overwrite.
+    pub fn write_evidence(&mut self, entry: &str, bytes: &[u8]) -> Result<()> {
+        if self.poisoned
+            || bytes.is_empty()
+            || bytes.len() > 4 * 1024 * 1024
+            || !regex::Regex::new(r"\A[a-z0-9][a-z0-9._-]{0,127}\z")
+                .unwrap()
+                .is_match(entry)
+        {
+            return Err("invalid or uncertain installer evidence operation".into());
+        }
+        let directory = open_at(
+            &self.directory,
+            &name("evidence"),
+            libc::O_RDONLY | libc::O_DIRECTORY,
+            0,
+        )?;
+        private(&directory, true)?;
+        self.poisoned = true;
+        let mut file = open_at(
+            &directory,
+            &name(entry),
+            libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL,
+            0o600,
+        )?;
+        private(&file, false)?;
+        file.write_all(bytes)
+            .and_then(|_| file.sync_all())
+            .and_then(|_| directory.sync_all())
+            .map_err(|_| "persist installer evidence")?;
+        self.poisoned = false;
+        Ok(())
+    }
     /// Atomic journal snapshot for status/doctor, including uncertain phases.
     /// This proves stored state only, not running containers or live readiness.
     pub fn inspect(path: &Path) -> Result<Journal> {
@@ -534,6 +597,24 @@ mod tests {
             assert!(InstallerState::create_with_runtime(&path, identity(), runtime).is_err());
             assert!(!path.exists());
         }
+    }
+    #[test]
+    fn evidence_is_private_durable_and_never_overwritten() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("install");
+        let mut state = InstallerState::create(&path, identity()).unwrap();
+        assert!(state.create_private_directory("../outside").is_err());
+        state.create_private_directory("evidence").unwrap();
+        assert!(state.write_evidence("../outside", b"bad").is_err());
+        state.write_evidence("record.json", b"original").unwrap();
+        let file = path.join("evidence/record.json");
+        assert_eq!(std::fs::metadata(&file).unwrap().mode() & 0o777, 0o600);
+        assert!(state.write_evidence("record.json", b"replacement").is_err());
+        assert_eq!(std::fs::read(file).unwrap(), b"original");
+        assert!(state.require_live_phase(Phase::Initialized).is_err());
+        assert!(state.advance(Phase::Verified).is_err());
+        drop(state);
+        assert_eq!(InstallerState::inspect(&path).unwrap().revision(), 0);
     }
     #[test]
     fn corrupt_persisted_runtime_is_rejected_on_inspection_and_resume() {

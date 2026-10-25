@@ -168,7 +168,7 @@ main() (
     [ "$("$stage/marty-deploy" --build-identity)" = "$source:$version" ] || fail 'Operator build identity differs'
     set -- install --version "$version" --verified-admission "$stage/admission.json" \
         --verification-tools "$stage" --gh-bin "$gh" \
-        --docker-host "$docker_endpoint" --docker-engine-id "$docker_engine_id"
+        --docker-host "$docker_endpoint" --docker-engine-id "$docker_engine_id" --docker-bin "$(command -v docker)"
     [ -z "$destination" ] || set -- "$@" --install-dir "$destination"
     if [ -f "$stage/channel.json" ]; then
         set -- "$@" --channel "$channel" --verified-channel "$stage/channel.json"
