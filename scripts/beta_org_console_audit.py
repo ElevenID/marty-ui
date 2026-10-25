@@ -1969,7 +1969,6 @@ def create_credential_template(audit: Audit, run_id: str) -> None:
 
     name = f"Audit Employee Credential {run_id}"
     audit.fill_label(re.compile(r"template name", re.I), name)
-    audit.fill_label(re.compile(r"vct|verifiable credential type", re.I), f"com.elevenid.audit.employee.{run_id}")
     audit.fill_label(re.compile(r"description", re.I), "Employee credential template created during beta UI audit.")
     audit.snapshot("template-basics-filled", "Filled template basics.")
     if not audit.click_role("button", re.compile(r"next", re.I), timeout=3000):
@@ -1999,6 +1998,18 @@ def create_credential_template(audit: Audit, run_id: str) -> None:
         audit.snapshot("template-compliance-blocked", "The active system Compliance Profile was unavailable.")
         return
     audit.snapshot("compliance-profile-available", "Selected the active OID4VC system Compliance Profile.")
+    identities = [step.get("issuer_identity") for step in audit.steps
+                  if step.get("label") == "issuer-identity-active"]
+    if len(identities) != 1 or not is_active(identities[0]) or not identities[0].get("issuer_did"):
+        raise ValueError("Credential authoring requires this run's active issuer identity")
+    issuer_did = identities[0]["issuer_did"]
+    if not audit.select_mui_option("template-issuer-profile-select",
+            re.compile(rf"^{re.escape(issuer_did)}$"), timeout=10000):
+        raise ValueError("The run-owned issuer DID is not offered by the compatibility selector")
+    if not audit.fill_label(re.compile(r"^Credential type URI \(VCT\)", re.I),
+            f"https://beta.elevenidllc.com/credentials/audit-employee/{run_id}"):
+        raise ValueError("The selected credential format requires its real VCT field")
+    audit.snapshot("template-issuer-and-type-selected", "Bound the run-owned issuer DID and credential type through the real compatibility form.")
     if not audit.click_role("button", re.compile(r"next", re.I), timeout=3000):
         audit.snapshot("template-trust-next-blocked", "Next unavailable after trust selection.")
         return
@@ -2130,10 +2141,10 @@ def create_policy_and_deployment(audit: Audit, run_id: str) -> None:
         audit.snapshot("policy-trust-next-blocked", "Next unavailable after selecting a trust profile.")
         return
 
-    if not audit.click_role("button", re.compile(rf"Select Audit Employee Credential {run_id}", re.I), timeout=5000):
-        if not audit.click_role("button", re.compile(r"Audit Employee Credential|Employee Access Verification|Custom Policy|Identity Verification", re.I), timeout=3000):
-            audit.click_text(re.compile(r"Audit Employee Credential|Employee Access Verification|Custom Policy|Identity Verification", re.I), timeout=1500)
-    audit.snapshot("policy-template-selected", "Selected the audit credential template or a fallback presentation policy template.")
+    if not audit.click_role("button", re.compile(
+            rf"^Select Audit Employee Credential {re.escape(run_id)} presentation policy template$", re.I), timeout=10000):
+        raise ValueError("Presentation policy requires this run's active employee credential template; no unrelated policy fallback is allowed")
+    audit.snapshot("policy-template-selected", "Selected the exact run-owned employee credential template.")
     if not audit.click_role("button", re.compile(r"next", re.I), timeout=2500):
         audit.snapshot("policy-template-next-blocked", "Next unavailable after selecting a policy template.")
         return
