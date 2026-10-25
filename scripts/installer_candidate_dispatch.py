@@ -20,6 +20,7 @@ import tempfile
 import time
 
 import installer_release as release
+from installer_candidate_controller import ControllerLease
 import verify_installer_provenance as provenance
 from installer_candidate_authorize import read_record, write_exclusive
 from installer_candidate_controller import _directory
@@ -219,8 +220,14 @@ def registry_unchanged(held, path):
 
 def dispatch(*, assets, grants, context_file, target_file, ledger, gh, cosign,
              ssh, scp, key, known_hosts, host, port, user, home,
-             clock=time.time, verifier=provenance.command, run=command):
+             clock=time.time, verifier=provenance.command, run=command,
+             lease: ControllerLease | None = None):
     release.require(os.name == 'posix', 'Linux controller required')
+    if lease is not None:
+        release.require(lease.registry == ledger.parent and lease.parent is not None
+                        and lease.owner_pid == os.getpid(),
+                        'selected controller lease is not held')
+        registry_unchanged(lease.parent, ledger.parent)
     release.require(re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9.-]{0,252}', host) is not None,
                     'invalid pinned guest host')
     release.require(type(port) is int and 1 <= port <= 65535, 'invalid guest SSH port')
@@ -230,12 +237,17 @@ def dispatch(*, assets, grants, context_file, target_file, ledger, gh, cosign,
         private_file(path, 65536)
     ssh_inputs = {path: private_file(path, 65536) for path in (key, known_hosts)}
     context, target = release.decode(read_record(context_file)), release.decode(read_record(target_file))
-    parent = _directory(ledger.parent)
+    if lease is not None:
+        parent = lease.parent
+        registry_unchanged(parent, ledger.parent)
+    else:
+        parent = _directory(ledger.parent)
     locked = False
     owner = os.getpid()
     try:
-        locked = True
-        fcntl.flock(parent, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        if lease is None:
+            locked = True
+            fcntl.flock(parent, fcntl.LOCK_EX | fcntl.LOCK_NB)
         registry_unchanged(parent, ledger.parent)
         authorization, receipt, inventory, files = verify(assets=assets, grants=grants, context=context,
             target=target, ledger=ledger, gh=gh, cosign=cosign, now=int(clock()), runner=verifier)
@@ -300,7 +312,8 @@ def dispatch(*, assets, grants, context_file, target_file, ledger, gh, cosign,
                     except InterruptedError:
                         continue
         finally:
-            os.close(parent)
+            if lease is None:
+                os.close(parent)
 
 
 def main(argv=None):

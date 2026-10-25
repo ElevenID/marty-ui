@@ -11,6 +11,7 @@ pytest.importorskip('fcntl', reason='Linux controller locking')
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 import installer_candidate_dispatch as d
 import installer_release as r
+from installer_candidate_controller import ControllerLease
 
 pytestmark = pytest.mark.skipif(os.name != 'posix', reason='Linux controller filesystem contract')
 
@@ -106,6 +107,60 @@ def test_full_dispatch_verifies_seven_and_transfers_only_exact_inputs(staged):
     with pytest.raises(FileExistsError):
         d.dispatch(**options)
     assert len(calls) == 6
+
+
+def test_dispatch_can_borrow_held_controller_lease(staged):
+    options, calls, _ = staged
+    with ControllerLease(options['ledger'].parent) as lease:
+        result = d.dispatch(**options, lease=lease)
+        assert result['command_returned_zero'] is True
+        with pytest.raises(BlockingIOError):
+            with ControllerLease(options['ledger'].parent):
+                pass
+    assert len(calls) == 6
+
+
+def test_dispatch_rejects_closed_or_other_registry_lease(staged):
+    options, calls, _ = staged
+    with ControllerLease(options['ledger'].parent) as lease:
+        pass
+    with pytest.raises(ValueError, match='not held'):
+        d.dispatch(**options, lease=lease)
+    other = options['ledger'].parent.parent / 'other-registry'
+    other.mkdir(mode=0o700)
+    with ControllerLease(other) as lease:
+        with pytest.raises(ValueError, match='not held'):
+            d.dispatch(**options, lease=lease)
+    assert calls == []
+
+
+def test_failed_borrowed_dispatch_retains_intent_and_caller_lock(staged):
+    options, calls, _ = staged
+    def refuse(argv, **kwargs):
+        calls.append((argv, kwargs))
+        raise ValueError('synthetic SSH failure')
+    options['run'] = refuse
+    with ControllerLease(options['ledger'].parent) as lease:
+        with pytest.raises(ValueError, match='synthetic SSH failure'):
+            d.dispatch(**options, lease=lease)
+        assert Path(str(options['ledger']) + '.dispatch.json').is_file()
+        with pytest.raises(BlockingIOError):
+            with ControllerLease(options['ledger'].parent):
+                pass
+    assert len(calls) == 1
+
+
+def test_borrowed_dispatch_refuses_replaced_registry_before_remote(staged):
+    options, calls, _ = staged
+    registry = options['ledger'].parent
+    displaced = registry.parent / 'displaced-registry'
+    with ControllerLease(registry) as lease:
+        registry.rename(displaced)
+        registry.mkdir(mode=0o700)
+        with pytest.raises(ValueError, match='registry replaced'):
+            d.dispatch(**options, lease=lease)
+    assert calls == []
+    assert not Path(str(options['ledger']) + '.dispatch.json').exists()
 
 
 def published(staged):
