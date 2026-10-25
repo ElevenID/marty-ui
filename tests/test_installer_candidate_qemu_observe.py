@@ -160,3 +160,27 @@ def test_populated_docker_refuses_clean_phases_but_not_identity_reobservation():
     assert len(queries) == 2
     observer.require_clean_docker("post-install", populated, "docker")
     assert len(queries) == 2
+
+
+def test_observation_output_is_exclusive_and_bound_to_held_directory(tmp_path):
+    output = tmp_path / "output"
+    output.mkdir(mode=0o700)
+    parent = observer._directory(output)
+    try:
+        observer.write_observation(parent, "first.initial-observation.json", b"first\n")
+        assert observer.private_file_at(parent, "first.initial-observation.json",
+                                        os.getuid(), 65536) == b"first\n"
+        (output / "alias.initial-observation.json").symlink_to("first.initial-observation.json")
+        with pytest.raises(ValueError, match="observation file differs"):
+            observer.private_file_at(parent, "alias.initial-observation.json",
+                                     os.getuid(), 65536)
+        with pytest.raises(FileExistsError):
+            observer.write_observation(parent, "first.initial-observation.json", b"replacement\n")
+        moved = tmp_path / "moved"
+        output.rename(moved)
+        output.mkdir(mode=0o700)
+        observer.write_observation(parent, "second.post-install-observation.json", b"second\n")
+        assert (moved / "second.post-install-observation.json").read_bytes() == b"second\n"
+        assert not (output / "second.post-install-observation.json").exists()
+    finally:
+        os.close(parent)

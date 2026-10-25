@@ -23,7 +23,7 @@ import uuid
 from typing import Callable
 
 import installer_release as release
-from installer_candidate_authorize import write_exclusive
+from installer_candidate_controller import _directory
 from installer_host_probe import command
 
 
@@ -46,6 +46,30 @@ def private_file(path: Path, owner: int, maximum: int) -> bytes:
     finally:
         os.close(fd)
     return raw
+
+
+def private_file_at(parent: int, name: str, owner: int, maximum: int) -> bytes:
+    release.require("/" not in name and name not in ("", ".", ".."),
+                    "VM observation filename invalid")
+    info = os.stat(name, dir_fd=parent, follow_symlinks=False)
+    release.require(stat.S_ISREG(info.st_mode) and info.st_uid == owner
+                    and stat.S_IMODE(info.st_mode) == 0o600 and info.st_nlink == 1
+                    and 0 < info.st_size <= maximum, "VM observation file differs")
+    fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC,
+                 dir_fd=parent)
+    try:
+        held = os.fstat(fd)
+        release.require((held.st_dev, held.st_ino, held.st_size, held.st_mtime_ns)
+                        == (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns),
+                        "VM observation file changed")
+        raw = os.read(fd, maximum + 1)
+        again = os.stat(name, dir_fd=parent, follow_symlinks=False)
+        release.require((again.st_dev, again.st_ino, again.st_size, again.st_mtime_ns)
+                        == (held.st_dev, held.st_ino, held.st_size, held.st_mtime_ns)
+                        and len(raw) == info.st_size, "VM observation file changed")
+        return raw
+    finally:
+        os.close(fd)
 
 
 def qmp(socket_path: Path, disk: Path, *, pid: int, uid: int) -> None:
@@ -180,9 +204,25 @@ def require_clean_docker(phase: str, guest: Callable[[str], str], docker: str) -
                     "guest Docker network inventory differs")
 
 
-def observe(vm_dir: Path, output_dir: Path, *, guest_user: str, ssh_host: str,
-            installation_id: str, phase: str,
-            ssh_bin: Path = Path("/usr/bin/ssh")) -> dict:
+def write_observation(parent: int, name: str, raw: bytes) -> None:
+    release.require(name.endswith("-observation.json") and "/" not in name
+                    and len(raw) <= 65536, "observation output invalid")
+    fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+                 0o600, dir_fd=parent)
+    try:
+        os.fsync(parent)
+        with os.fdopen(fd, "wb", closefd=False) as stream:
+            stream.write(raw)
+            stream.flush()
+            os.fsync(fd)
+        os.fsync(parent)
+    finally:
+        os.close(fd)
+
+
+def _observe(vm_dir: Path, output_dir: Path, output_parent: int, *, guest_user: str,
+             ssh_host: str, installation_id: str, phase: str,
+             ssh_bin: Path) -> dict:
     release.require(os.geteuid() == 0 and vm_dir.is_absolute() and output_dir.is_absolute()
                     and vm_dir.resolve() == vm_dir and output_dir.resolve() == output_dir,
                     "trusted absolute controller paths required")
@@ -193,18 +233,18 @@ def observe(vm_dir: Path, output_dir: Path, *, guest_user: str, ssh_host: str,
                     and str(uuid.UUID(installation_id)) == installation_id
                     and uuid.UUID(installation_id).version == 4,
                     "observation phase or installation identity differs")
-    initial_path = output_dir / (installation_id + ".initial-observation.json")
+    initial_name = installation_id + ".initial-observation.json"
     initial_bytes = None
     initial = None
     if phase != "initial-empty":
-        initial_bytes = private_file(initial_path, 0, 65536)
+        initial_bytes = private_file_at(output_parent, initial_name, 0, 65536)
         initial = release.decode(initial_bytes)
         validate_initial(initial, installation_id)
     directory = vm_dir.lstat()
     release.require(stat.S_ISDIR(directory.st_mode) and stat.S_IMODE(directory.st_mode) == 0o700,
                     "VM control directory is not private")
     owner = directory.st_uid
-    output = output_dir.lstat()
+    output = os.fstat(output_parent)
     release.require(stat.S_ISDIR(output.st_mode) and output.st_uid == 0
                     and stat.S_IMODE(output.st_mode) == 0o700,
                     "controller registry is not private")
@@ -328,7 +368,7 @@ def observe(vm_dir: Path, output_dir: Path, *, guest_user: str, ssh_host: str,
             release.require(initial is not None and initial_bytes is not None,
                             "initial VM observation unavailable")
             require_same_vm(initial, evidence)
-            release.require(private_file(initial_path, 0, 65536) == initial_bytes
+            release.require(private_file_at(output_parent, initial_name, 0, 65536) == initial_bytes
                             and (vm_dir.lstat().st_dev, vm_dir.lstat().st_ino)
                             == (directory.st_dev, directory.st_ino),
                             "initial observation or VM control root changed")
@@ -341,8 +381,27 @@ def observe(vm_dir: Path, output_dir: Path, *, guest_user: str, ssh_host: str,
                         "controller output root changed")
         suffix = (".initial-observation.json" if phase == "initial-empty"
                   else "." + phase + "-observation.json")
-        write_exclusive(output_dir / (installation_id + suffix), release.encode(evidence))
+        write_observation(output_parent, installation_id + suffix, release.encode(evidence))
+        rebound = _directory(output_dir)
+        try:
+            release.require((os.fstat(rebound).st_dev, os.fstat(rebound).st_ino)
+                            == (output.st_dev, output.st_ino),
+                            "controller output root changed after publication")
+        finally:
+            os.close(rebound)
     return evidence
+
+
+def observe(vm_dir: Path, output_dir: Path, *, guest_user: str, ssh_host: str,
+            installation_id: str, phase: str,
+            ssh_bin: Path = Path("/usr/bin/ssh")) -> dict:
+    parent = _directory(output_dir)
+    try:
+        return _observe(vm_dir, output_dir, parent, guest_user=guest_user,
+                        ssh_host=ssh_host, installation_id=installation_id,
+                        phase=phase, ssh_bin=ssh_bin)
+    finally:
+        os.close(parent)
 
 
 def main() -> int:
