@@ -80,7 +80,7 @@ def validate(report: dict, *, inventory_bytes: bytes, source_sha: str,
     require(phase in {"staged", "published", "channel"}, "unknown acceptance phase")
     require(matches(source_sha, r"[0-9a-f]{40}"), "invalid expected source")
     tier, _ = classify_release_tag(release_tag)
-    exact(report, {"schema", "repository", "source_sha", "source_ref", "release_tag",
+    exact(report, {"schema", "repository", "source_sha", "harness_source_sha", "source_ref", "release_tag",
                    "phase", "platform", "inventory_sha256", "workflow", "run_id",
                    "run_attempt", "cases", "host", "cleanup"}, "report")
     require(report["schema"] == SCHEMA and report["repository"] == REPOSITORY,
@@ -93,12 +93,13 @@ def validate(report: dict, *, inventory_bytes: bytes, source_sha: str,
     require(report["inventory_sha256"] == "sha256:" + hashlib.sha256(inventory_bytes).hexdigest(),
             "tested inventory differs")
     require(report["workflow"] == WORKFLOW, "wrong acceptance workflow")
+    require(matches(report["harness_source_sha"], r"[0-9a-f]{40}"), "invalid acceptance harness source")
     for name in ("run_id", "run_attempt"):
         require(type(report[name]) is int and report[name] > 0, "invalid " + name)
     require(isinstance(run, dict) and isinstance(run.get("repository"), dict),
             "invalid authoritative run shape")
     require(run.get("id") == report["run_id"] and run.get("run_attempt") == report["run_attempt"]
-            and run.get("path") == WORKFLOW and run.get("head_sha") == source_sha
+            and run.get("path") == WORKFLOW and run.get("head_sha") == report["harness_source_sha"]
             and run.get("head_branch") == "main" and run.get("event") == "workflow_dispatch"
             and run.get("status") == "completed" and run.get("conclusion") == "success"
             and run.get("repository", {}).get("full_name") == REPOSITORY,

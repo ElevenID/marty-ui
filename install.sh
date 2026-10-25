@@ -129,8 +129,8 @@ main() (
     }
     if [ -z "$version" ]; then
         signed_download "$base/installer-channel-$channel/installer-channel.json" "$stage/channel.json" 65536
-        source=$("$jq" -er '.source_sha | select(test("^[0-9a-f]{40}$"))' "$stage/channel.json")
-        verify "$stage/channel.json" installer-promote.yml "$source" \
+        promotion_source=$("$jq" -er '.promotion_source_sha | select(test("^[0-9a-f]{40}$"))' "$stage/channel.json")
+        verify "$stage/channel.json" installer-promote.yml "$promotion_source" \
             "$(run_field "$stage/channel.json" promotion_run_id)" "$(run_field "$stage/channel.json" promotion_run_attempt)"
         "$jq" -e --arg channel "$channel" '
             .schema == "elevenid.installer-channel/v1" and .repository == "ElevenID/marty-ui"
@@ -147,7 +147,8 @@ main() (
     fi
     signed_download "$base/$version/installer-admission.json" "$stage/admission.json" 65536
     source=$("$jq" -er '.source_sha | select(test("^[0-9a-f]{40}$"))' "$stage/admission.json")
-    verify "$stage/admission.json" installer-promote.yml "$source" \
+    promotion_source=$("$jq" -er '.promotion_source_sha | select(test("^[0-9a-f]{40}$"))' "$stage/admission.json")
+    verify "$stage/admission.json" installer-promote.yml "$promotion_source" \
         "$(run_field "$stage/admission.json" promotion_run_id)" "$(run_field "$stage/admission.json" promotion_run_attempt)"
     "$jq" -e --arg tag "$version" '
         .schema == "elevenid.installer-admission/v1" and .repository == "ElevenID/marty-ui"
@@ -169,6 +170,9 @@ main() (
         --verification-tools "$stage" --gh-bin "$gh" \
         --docker-host "$docker_endpoint" --docker-engine-id "$docker_engine_id"
     [ -z "$destination" ] || set -- "$@" --install-dir "$destination"
+    if [ -f "$stage/channel.json" ]; then
+        set -- "$@" --channel "$channel" --verified-channel "$stage/channel.json"
+    fi
     [ "$yes" = false ] || set -- "$@" --yes
     # Operator re-verifies admission/inventory and owns persistent state. Keep
     # staging alive until it exits; no exec, so the cleanup trap also runs.

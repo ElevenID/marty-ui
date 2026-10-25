@@ -19,6 +19,27 @@ pub type Result<T> = std::result::Result<T, String>;
 const LIMIT: u64 = 65536;
 const JOURNAL: &str = "installation.json";
 const SCHEMA: &str = "elevenid.installer-state/v1";
+pub const PASSWORD_POLICY: &str =
+    "length(8) and upperCase(1) and lowerCase(1) and digits(1) and specialChars(1)";
+pub const SCALAR_SECRETS: [&str; 17] = [
+    "device_registration_gateway_key",
+    "device_registration_signing_keys_key",
+    "flow_application_event_hmac_key",
+    "flow_webhook_secret",
+    "grpc_service_token",
+    "issuance_api_key",
+    "keycloak_admin_password",
+    "keycloak_db_password",
+    "marty_api_client_secret",
+    "marty_db_password",
+    "notification_applicant_event_token",
+    "notification_webhook_secret",
+    "postgres_password",
+    "signing_keys_integration_secret_key",
+    "signing_keys_issuer_sign_key",
+    "signing_keys_service_sign_gateway_key",
+    "token_hmac_key",
+];
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -198,6 +219,90 @@ pub struct InstallerState {
     poisoned: bool,
 }
 impl InstallerState {
+    /// Atomic journal snapshot for status/doctor, including uncertain phases.
+    /// This proves stored state only, not running containers or live readiness.
+    pub fn inspect(path: &Path) -> Result<Journal> {
+        let (parent, leaf) = parent(path)?;
+        let directory = open_at(&parent, &leaf, libc::O_RDONLY | libc::O_DIRECTORY, 0)?;
+        private(&directory, true)?;
+        read(&directory)
+    }
+
+    /// Generate local disposable scalars using the existing self-host contract.
+    /// Remote keys/tokens and workload certificates are provisioned separately.
+    /// Call only after the durable Provisioning transition. Partial output is
+    /// preserved and poisons the transaction; it is never silently regenerated.
+    pub fn generate_local_credentials(&mut self, realm: &serde_json::Value) -> Result<()> {
+        if self.poisoned || self.journal.phase != Phase::Provisioning {
+            return Err("credential generation requires a live provisioning transaction".into());
+        }
+        if realm
+            .get("passwordPolicy")
+            .and_then(serde_json::Value::as_str)
+            != Some(PASSWORD_POLICY)
+        {
+            return Err("shipped operator password policy needs review".into());
+        }
+        self.poisoned = true;
+        private(&self.directory, true)?;
+        if unsafe { libc::mkdirat(self.directory.as_raw_fd(), name("secrets").as_ptr(), 0o700) }
+            != 0
+        {
+            return Err(error("create new secret directory"));
+        }
+        let secrets = open_at(
+            &self.directory,
+            &name("secrets"),
+            libc::O_RDONLY | libc::O_DIRECTORY,
+            0,
+        )?;
+        private(&secrets, true)?;
+        self.directory
+            .sync_all()
+            .map_err(|_| "sync secret directory")?;
+        let mut random = File::open("/dev/urandom").map_err(|_| "OS randomness unavailable")?;
+        let mut seen = std::collections::BTreeSet::new();
+        for entry in SCALAR_SECRETS.into_iter().chain(["operator-password"]) {
+            let mut entropy = [0u8; 32];
+            random
+                .read_exact(&mut entropy)
+                .map_err(|_| "OS randomness unavailable")?;
+            let hex: String = entropy.iter().map(|byte| format!("{byte:02x}")).collect();
+            if !seen.insert(hex.clone()) {
+                return Err("OS randomness repeated a credential".into());
+            }
+            let operator = entry == "operator-password";
+            let value = if operator {
+                format!("Aa1!{hex}\n")
+            } else {
+                hex
+            };
+            let directory = if operator { &self.directory } else { &secrets };
+            let mut output = open_at(
+                directory,
+                &name(entry),
+                libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL,
+                0o600,
+            )?;
+            private(&output, false)?;
+            output
+                .write_all(value.as_bytes())
+                .map_err(|_| "write credential")?;
+            // Private parent is 0700; different container UIDs need read access
+            // to the explicitly bind-mounted scalar files, matching old helper.
+            if !operator && unsafe { libc::fchmod(output.as_raw_fd(), 0o444) } != 0 {
+                return Err(error("set container-readable credential mode"));
+            }
+            output.sync_all().map_err(|_| "sync credential")?;
+        }
+        secrets.sync_all().map_err(|_| "sync credentials")?;
+        self.directory
+            .sync_all()
+            .map_err(|_| "sync operator credential")?;
+        self.poisoned = false;
+        Ok(())
+    }
+
     /// Creates a NEW directory only. Existing empty directories are not adopted.
     /// Failure may leave a private directory requiring explicit inspection.
     pub fn create(path: &Path, identity: Identity) -> Result<Self> {
@@ -339,9 +444,51 @@ mod tests {
         state.advance(Phase::Verified).unwrap();
         state.advance(Phase::Provisioning).unwrap();
         drop(state);
+        assert_eq!(
+            InstallerState::inspect(&path).unwrap().phase(),
+            Phase::Provisioning
+        );
         assert!(InstallerState::resume(&path, &identity())
             .unwrap_err_string()
             .contains("indeterminate"));
+    }
+    #[test]
+    fn generates_distinct_private_credentials_without_overwrite() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("install");
+        let mut state = InstallerState::create(&path, identity()).unwrap();
+        let realm = serde_json::json!({"passwordPolicy": PASSWORD_POLICY});
+        assert!(state.generate_local_credentials(&realm).is_err());
+        state.advance(Phase::Verified).unwrap();
+        state.advance(Phase::Provisioning).unwrap();
+        assert!(state
+            .generate_local_credentials(&serde_json::json!({}))
+            .is_err());
+        assert!(!path.join("secrets").exists());
+        state.generate_local_credentials(&realm).unwrap();
+        let mut values = std::collections::BTreeSet::new();
+        for entry in SCALAR_SECRETS {
+            let file = path.join("secrets").join(entry);
+            let value = std::fs::read_to_string(&file).unwrap();
+            assert!(regex::Regex::new(r"\A[0-9a-f]{64}\z")
+                .unwrap()
+                .is_match(&value));
+            assert!(values.insert(value));
+            assert_eq!(std::fs::metadata(file).unwrap().mode() & 0o777, 0o444);
+        }
+        assert_eq!(std::fs::read_dir(path.join("secrets")).unwrap().count(), 17);
+        assert_eq!(
+            std::fs::metadata(path.join("secrets")).unwrap().mode() & 0o777,
+            0o700
+        );
+        let operator = path.join("operator-password");
+        let password = std::fs::read(&operator).unwrap();
+        assert!(password.starts_with(b"Aa1!"));
+        assert_eq!(password.len(), 69);
+        assert_eq!(std::fs::metadata(&operator).unwrap().mode() & 0o777, 0o600);
+        assert!(state.generate_local_credentials(&realm).is_err());
+        assert_eq!(std::fs::read(operator).unwrap(), password);
+        assert!(state.advance(Phase::Provisioned).is_err());
     }
     #[test]
     fn completed_installation_preserves_identity_and_ready_state() {

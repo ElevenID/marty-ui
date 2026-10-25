@@ -4288,6 +4288,7 @@ dependencies = [
  "marty-crypto",
  "marty-managed-key-reference",
  "marty-openbao-http",
+ "marty-selfhost-bundle",
  "marty-selfhost-identity",
  "regex",
  "reqwest",

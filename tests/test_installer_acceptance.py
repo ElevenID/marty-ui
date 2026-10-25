@@ -14,7 +14,7 @@ def evidence():
     inventory = b'{"exact":"signed inventory bytes"}\n'
     report = {
         "schema": gate.SCHEMA, "repository": gate.REPOSITORY,
-        "source_sha": "a" * 40, "source_ref": "refs/heads/main",
+        "source_sha": "a" * 40, "harness_source_sha": "a" * 40, "source_ref": "refs/heads/main",
         "release_tag": "v1.1.260-nightly.20261025.42", "phase": "published",
         "platform": "linux/amd64", "inventory_sha256": "sha256:" + hashlib.sha256(inventory).hexdigest(),
         "workflow": gate.WORKFLOW, "run_id": 42, "run_attempt": 1,
@@ -68,6 +68,16 @@ def test_same_inventory_semantics_different_bytes_rejected(evidence):
     report, args = evidence
     args["inventory_bytes"] = args["inventory_bytes"].rstrip()
     with pytest.raises(ValueError, match="inventory"):
+        gate.validate(report, **args)
+
+
+def test_newer_main_harness_can_qualify_exact_older_candidate(evidence):
+    report, args = evidence
+    report["harness_source_sha"] = "b" * 40
+    args["run"]["head_sha"] = "b" * 40
+    gate.validate(report, **args)
+    args["run"]["head_sha"] = "c" * 40
+    with pytest.raises(ValueError):
         gate.validate(report, **args)
 
 

@@ -258,6 +258,23 @@ fn run() -> Result<(), String> {
         println!("{}", env!("MARTY_DEPLOY_BUILD_IDENTITY"));
         return Ok(());
     }
+    if args.first().is_some_and(|arg| arg == "status") {
+        if args.len() != 3 || args[1] != "--install-dir" {
+            return Err("usage: marty-deploy status --install-dir ABSOLUTE_PATH".into());
+        }
+        #[cfg(target_os = "linux")]
+        {
+            let journal = marty_deployment_catalog::installer_state::InstallerState::inspect(
+                std::path::Path::new(&args[2]),
+            )?;
+            println!("{}", serde_json::json!({
+                "scope": "installation-journal", "runtime_observed": false, "journal": journal,
+            }));
+            return Ok(());
+        }
+        #[cfg(not(target_os = "linux"))]
+        return Err("installer status currently requires Linux".into());
+    }
     // KMS operator commands do not read the catalog or require a source checkout.
     if args.first().is_some_and(|a| a == "operator") {
         use marty_deployment_catalog::operator::{self, REFUSAL};
