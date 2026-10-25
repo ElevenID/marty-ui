@@ -347,7 +347,8 @@ Verification migration still runs twice. Success is required before maintenance.
 
 Each detached service and one-shot helper has a unique owner label and exact
 run name. Cleanup discovers that owner, verifies the role/name and full container
-ID, removes only verified objects, and confirms the owner inventory is empty.
+ID, removes only verified objects and their disposable anonymous volumes, and
+confirms the owner inventory is empty. Named volumes are retained.
 It never pre-deletes a previous run by name prefix. Interrupted or uncertain
 cleanup requires inspection of `marty.beta-rehearsal.owner` labels; do not enter
 live maintenance or delete a foreign object to make cleanup pass.

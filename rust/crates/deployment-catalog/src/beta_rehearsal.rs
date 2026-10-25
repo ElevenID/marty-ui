@@ -287,7 +287,7 @@ fn cleanup(docker: &mut impl Docker, owner: &str, names: &BTreeMap<String, Strin
             {
                 return Err(RECOVERY);
             }
-            checked(docker, Request::new(&["rm", "--force", id])).map(|_| ())
+            checked(docker, Request::new(&["rm", "--force", "--volumes", id])).map(|_| ())
         })();
         if result.is_err() {
             failed = true;
@@ -1009,6 +1009,8 @@ mod docker_contract {
             "--detach",
             "--network",
             "none",
+            "--volume",
+            "/rehearsal-disposable-copy",
             "--name",
             &names["postgres"],
             "--label",
@@ -1023,6 +1025,27 @@ mod docker_contract {
         parent.redactions = Vec::new();
         // Model loss of a successful creation response with a real created object.
         assert!(checked(&mut Uncertain, parent).is_err());
+        let mounts = checked(
+            &mut docker,
+            Request::new(&[
+                "inspect",
+                "--format",
+                "{{json .Mounts}}",
+                &names["postgres"],
+            ]),
+        )
+        .unwrap();
+        let mounts: Value = serde_json::from_str(&mounts).unwrap();
+        let anonymous = mounts
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["Destination"] == "/rehearsal-disposable-copy")
+            .unwrap()["Name"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert!(!anonymous.is_empty());
         let scope = tempfile::tempdir().unwrap();
         let file = scope.path().join("compose.json");
         fs::write(&file,serde_json::to_vec(&json!({"services":{"helper":{"image":IMAGE,"network_mode":"none","entrypoint":["/bin/sh","-ec"],"command":["while :; do sleep 1; done"]}}})).unwrap()).unwrap();
@@ -1064,6 +1087,13 @@ mod docker_contract {
         // Both the detached uncertain object and the Compose helper must be
         // discovered by exact owner/name/role and removed by immutable ID.
         cleanup(&mut docker, &owner, &names).unwrap();
+        assert!(
+            !docker
+                .execute(Request::new(&["volume", "inspect", &anonymous]))
+                .unwrap()
+                .success,
+            "owned anonymous copy volume must not leak"
+        );
         drop(guard);
     }
 }
