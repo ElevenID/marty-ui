@@ -35,10 +35,18 @@ local attestation bundles. After a failed build or publication attempt, use a
 checkpoint described above. Rerunning failed jobs cannot relabel older artifacts
 with the new attempt; existing run-ID artifact names must not be overwritten to
 bypass that check. `installer-inputs-unqualified-<run-id>-<attempt>` is a mandatory
-build prerequisite, not installer acceptance, admission, signing, or public
-installer distribution. Existing stack qualifications and publishing contents
-remain unchanged. Never put a cross-repository access token into an Actions
-secret for this handoff.
+build prerequisite, not installer acceptance or admission. Stack publication
+now signs the installer payloads and inventory and includes five verified offline
+provenance files in its exact 32-asset release set. Normal one-line installation
+still requires separate acceptance and admission evidence; publishing these
+inputs does not grant it. Existing stack qualification gates remain mandatory.
+The operator-only download helper also accepts the exact historical 19-asset
+release set through an explicit legacy policy; the publisher does not downgrade.
+An immutable-release retry verifies the original producer's proofs and compares
+the four actual installer payloads with the new candidate. A differing same-source
+rebuild refuses the retry and preserves the original release; reproducibility
+is not assumed, and signatures or inventory are not overwritten. Never put a
+cross-repository access token into an Actions secret for this handoff.
 
 Use a host with at least 32 GiB RAM and 20 GiB free disk for all locked images and
 fresh database state, Docker Compose, Python 3.12 with the pinned integration

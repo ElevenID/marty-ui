@@ -202,7 +202,8 @@ def test_installer_inputs_are_a_mandatory_unqualified_build_dependency() -> None
     uploaded = steps[-1]["with"]
     assert uploaded["name"] == "installer-inputs-unqualified-${{ github.run_id }}-${{ github.run_attempt }}"
     assert uploaded["if-no-files-found"] == "error"
-    assert "installer-inputs-unqualified" not in str(jobs["publish-manifest"]["steps"])
+    assert "installer-inputs-unqualified" in str(jobs["publish-manifest"]["steps"])
+    assert "verify-inputs" in str(jobs["publish-manifest"]["steps"])
     assert all(token not in source for token in (
         "gh release create", "gh release upload", "gh workflow run",
         "installer-admission.json", "installer-channel.json",

@@ -57,6 +57,12 @@ release_doc="$(gh api "repos/$repo/releases/tags/$tag")"
 test "$(jq -er '.tag_name' <<<"$release_doc")" = "$tag"
 test "$(jq -er '.draft' <<<"$release_doc")" = false
 test "$(jq -r '.prerelease' <<<"$release_doc")" = "$nightly"
+if [[ "$nightly" = false ]] && ! operator_release_require_remote_allowlist /dev/stdin <<<"$release_doc" 2>/dev/null; then
+  # Compatibility for historical operator-only releases, never an installer
+  # admission fallback. The selector requires the complete exact legacy set;
+  # binary signature, source provenance and embedded identity still apply.
+  operator_release_select_legacy_consumer_policy /dev/stdin <<<"$release_doc"
+fi
 "$remote_check" /dev/stdin <<<"$release_doc"
 
 stage="$(mktemp -d)"

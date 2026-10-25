@@ -2270,6 +2270,40 @@ jobs:
         with:
           name: operator-catalog-arm64-${{ github.run_id }}
           path: .
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: installer-inputs-unqualified-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/stable-installer-inputs
+      - name: Revalidate exact installer inputs before any publication signing
+        shell: bash
+        run: |
+          set -euo pipefail
+          inputs="$RUNNER_TEMP/stable-installer-inputs"
+          chmod 700 "$inputs"
+          python scripts/stable_installer_assets.py --phase verify-inputs --assets "$inputs" \
+            --source-sha "$SOURCE_SHA" --tag "$TAG" \
+            --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT"
+          cmp install.sh "$inputs/install.sh"
+          cmp marty-deploy-linux-amd64 "$inputs/marty-deploy-linux-amd64"
+          for asset in installer-inventory.json prepared-selfhost-bundle.zip prepared-selfhost-images.json; do
+            test ! -e "$asset"
+            cp "$inputs/$asset" "$asset"
+          done
+      - name: Prepare the installer-pinned publication verifier
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          verifier="$RUNNER_TEMP/installer-gh"
+          mkdir "$verifier"
+          curl --fail --location --silent --show-error --proto '=https' --proto-redir '=https' \
+            --connect-timeout 20 --max-time 120 --max-filesize 15031001 \
+            https://github.com/cli/cli/releases/download/v2.103.2/gh_2.103.2_linux_amd64.tar.gz \
+            --output "$verifier/gh.tar.gz"
+          test "$(stat -c %s "$verifier/gh.tar.gz")" = 15031001
+          printf '%s  %s\n' 62ccf747115ddc61237efffdde66a3c8f70ba249433dc64f70801089b59c59c8 "$verifier/gh.tar.gz" | sha256sum --check --strict
+          tar -xzf "$verifier/gh.tar.gz" --no-same-owner --no-same-permissions -C "$verifier" gh_2.103.2_linux_amd64/bin/gh
+          chmod 700 "$verifier/gh_2.103.2_linux_amd64/bin/gh"
       - name: Verify exact operator binary provenance before signing
         env:
           GH_TOKEN: ${{ github.token }}
@@ -2500,8 +2534,9 @@ jobs:
             fi
           done
           sha256sum "${OPERATOR_CHECKSUM_INPUTS[@]}" > SHA256SUMS
-          operator_release_require_local_assets
-      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+          operator_release_require_pre_provenance_assets
+      - id: stable_installer_publication_provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
         with:
           subject-path: |
             stack-manifest.json
@@ -2513,6 +2548,51 @@ jobs:
             marty-deploy-linux-arm64
             marty-ui-openbao-didcomm-sbom.cdx.json
             marty-ui-keycloak-sbom.cdx.json
+            install.sh
+            installer-inventory.json
+            prepared-selfhost-bundle.zip
+            prepared-selfhost-images.json
+            stack-manifest.json.sigstore.json
+            release-transaction.json.sigstore.json
+            marty-ui-sbom.cdx.json.sigstore.json
+            marty-ui-services-sbom.cdx.json.sigstore.json
+            marty-ui-migrations-sbom.cdx.json.sigstore.json
+            marty-deploy-linux-amd64.sigstore.json
+            marty-deploy-linux-arm64.sigstore.json
+            marty-ui-openbao-didcomm-sbom.cdx.json.sigstore.json
+            marty-ui-keycloak-sbom.cdx.json.sigstore.json
+            install.sh.sigstore.json
+            installer-inventory.json.sigstore.json
+            prepared-selfhost-bundle.zip.sigstore.json
+            prepared-selfhost-images.json.sigstore.json
+            SHA256SUMS
+      - name: Export and verify offline stable installer proofs
+        env:
+          PROVENANCE_BUNDLE: ${{ steps.stable_installer_publication_provenance.outputs.bundle-path }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          source scripts/operator-release-assets.sh
+          operator_release_require_pre_provenance_assets
+          assets="$RUNNER_TEMP/stable-installer-publication"
+          mkdir "$assets"
+          for asset in "${OPERATOR_CHECKSUM_INPUTS[@]}" SHA256SUMS; do
+            cp "$asset" "$assets/$asset"
+          done
+          python scripts/stable_installer_assets.py --phase export-provenance --assets "$assets" \
+            --source-sha "$SOURCE_SHA" --tag "$TAG" \
+            --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --gh "$RUNNER_TEMP/installer-gh/gh_2.103.2_linux_amd64/bin/gh" \
+            --provenance-bundle "$PROVENANCE_BUNDLE"
+          python scripts/stable_installer_assets.py --phase verify-published --assets "$assets" \
+            --source-sha "$SOURCE_SHA" --tag "$TAG" \
+            --gh "$RUNNER_TEMP/installer-gh/gh_2.103.2_linux_amd64/bin/gh"
+          for asset in "${OPERATOR_PROVENANCE_INPUTS[@]}"; do
+            test ! -e "$asset"
+            cp "$assets/$asset" "$asset"
+          done
+          operator_release_require_local_assets
       - name: Create or verify the late annotated source tag
         env:
           CLAIM_RUN_ID: ${{ needs.resolve-transaction.outputs.claim_run_id }}
@@ -2562,9 +2642,16 @@ jobs:
               source scripts/operator-release-assets.sh
               operator_release_require_local_assets
               operator_release_require_remote_allowlist release-response.json
-              mkdir existing-release
+              mkdir -m 700 existing-release
               gh release download "$TAG" --dir existing-release
-              operator_release_verify_published_assets existing-release "$SOURCE_SHA" "$GITHUB_REPOSITORY"
+              operator_release_verify_published_assets existing-release "$SOURCE_SHA" "$GITHUB_REPOSITORY" \
+                "$GITHUB_WORKSPACE/scripts/stable_installer_assets.py" "$TAG" \
+                "$RUNNER_TEMP/installer-gh/gh_2.103.2_linux_amd64/bin/gh"
+              # Preserve the existing release's original signed inventory and
+              # producer invocation; compare the four actual candidate payloads.
+              for payload in install.sh marty-deploy-linux-amd64 prepared-selfhost-bundle.zip prepared-selfhost-images.json; do
+                cmp --silent "$payload" "existing-release/$payload"
+              done
               if ! cmp --silent stack-manifest.json existing-release/stack-manifest.json; then
                 echo '::error::Existing release manifest differs from this exact-source resume'
                 exit 1
@@ -2604,6 +2691,14 @@ jobs:
           gh api -H 'X-GitHub-Api-Version: 2026-03-10' \
             "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" > published-release.json
           operator_release_require_remote_allowlist published-release.json
+          mkdir -m 700 published-release-assets
+          gh release download "$TAG" --dir published-release-assets
+          operator_release_verify_published_assets published-release-assets "$SOURCE_SHA" "$GITHUB_REPOSITORY" \
+            "$GITHUB_WORKSPACE/scripts/stable_installer_assets.py" "$TAG" \
+            "$RUNNER_TEMP/installer-gh/gh_2.103.2_linux_amd64/bin/gh"
+          for asset in "${OPERATOR_RELEASE_ASSETS[@]}"; do
+            cmp --silent "$asset" "published-release-assets/$asset"
+          done
           echo "id=$release_id" >> "$GITHUB_OUTPUT"
       - name: Seal the published terminal transaction
         env:
