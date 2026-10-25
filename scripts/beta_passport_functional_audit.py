@@ -17,6 +17,7 @@ import subprocess
 import sys
 import traceback
 import uuid
+from collections.abc import Mapping
 from functools import partial
 from http.cookies import SimpleCookie
 from pathlib import Path
@@ -29,21 +30,31 @@ ROLES = ("gateway", "flow", "signing-keys", "issuance-native",
          "passport-beta-bureau", "passport-callback-signer")
 CALLBACK_NETWORK = "elevenid-beta-passport-callback-signing"
 
-def local_native_overlay_binding() -> dict[str, Any] | None:
-    """Verify the shared developer overlay independently of release markers."""
+def local_native_overlay_binding(capture, image_source_id: str) -> dict[str, Any] | None:
+    """Bind the recorder's canonical live observation, not an imported verifier."""
     receipt = os.environ.get("DEMO_LOCAL_NATIVE_OVERLAY_RECEIPT")
+    context = getattr(capture, "native_runtime_binding", None)
     if not receipt:
+        require(context is None, "Unexpected native runtime binding without an overlay")
         return None
-    binder = Path(os.environ.get("DEMO_LOCAL_NATIVE_OVERLAY_BINDER", ""))
-    require(binder.is_absolute() and binder.is_file() and not binder.is_symlink()
-            and binder.name == "run-real-canvas-engineering-contract.py"
-            and hashlib.sha256(binder.read_bytes()).hexdigest()
-                == os.environ.get("DEMO_LOCAL_NATIVE_OVERLAY_BINDER_SHA256"),
-            "Local native overlay verifier is unavailable or changed")
-    specification = importlib.util.spec_from_file_location("local_native_overlay_verifier", binder)
-    module = importlib.util.module_from_spec(specification)
-    specification.loader.exec_module(module)
-    return module.verify_local_overlay(Path(receipt).resolve(strict=True), docker_context="desktop-linux")
+    path = Path(receipt)
+    require(os.environ.get("RECORD_VIDEO") == "0"
+            and os.environ.get("DEMO_LOCAL_NATIVE_LIVE_BINDING") == "1"
+            and isinstance(context, Mapping)
+            and set(context) == {"nativeSourceRevision", "receiptSha256", "imageSourceId",
+                                 "betaImageMarkersRemainBaseline", "releaseQualified"},
+            "Local native operations require the recorder-owned functional binding")
+    require(path.is_absolute() and path.is_file() and not path.is_symlink()
+            and context["receiptSha256"] == os.environ.get("DEMO_LOCAL_NATIVE_OVERLAY_SHA256")
+            == hashlib.sha256(path.read_bytes()).hexdigest()
+            and re.fullmatch(r"[a-f0-9]{40}", context["nativeSourceRevision"])
+            and context["imageSourceId"] == image_source_id
+            and context["betaImageMarkersRemainBaseline"] is True
+            and context["releaseQualified"] is False,
+            "Local native receipt or source differs from recorder observation")
+    # The recorder checks every actual native role before and after its owned
+    # child. Keep image markers separate and recheck receipt custody in Python.
+    return dict(context)
 FEATURES = {
     "gateway": {"PASSPORT_NATIVE_GATEWAY_ENABLED": "true",
                 "PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED": "false",
@@ -590,7 +601,7 @@ def _run_bound_capture(capture) -> dict[str, Any]:
     # receipt-bound, never inferred from a services image containing its binary.
     capture._passport_failure_stage = "PROTECTED_RUNTIME"
     initial_runtime = verify_runtime(receipt, deployment)
-    overlay_binding = local_native_overlay_binding()
+    overlay_binding = local_native_overlay_binding(capture, receipt["sourceId"])
     capture._passport_failure_stage = "PUBLIC_MARKERS"
     public = assert_beta()
     require(public.get("source_id") == receipt["sourceId"]
@@ -627,7 +638,7 @@ def _run_bound_capture(capture) -> dict[str, Any]:
             bound_json(scenario[name], private=name == "privateFixture")
         require(verify_runtime(receipt, deployment) == initial_runtime,
                 "Protected passport runtime changed during fresh operations")
-        require(local_native_overlay_binding() == overlay_binding,
+        require(local_native_overlay_binding(capture, receipt["sourceId"]) == overlay_binding,
                 "Local native overlay changed during fresh operations")
         require(assert_beta() == public, "Public beta source changed during fresh operations")
 
