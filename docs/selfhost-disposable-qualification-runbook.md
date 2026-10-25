@@ -161,6 +161,14 @@ revocation, private identity delivery and owned-resource cleanup with unchanged
 neighbor identities. It did not replace application credentials, retire root,
 renew ingress credentials, or qualify a complete installed journey.
 
+The same fresh-stack fixture also passed against source
+`574a8eade92d8a7d43e81ab57b8de9dd4355b66c`, using static operator SHA-256
+`896b45b040d9eac06b9e6d9f80807444e23656671005bccf5d98d7da4fae2d70`.
+That run exercised the new renewal-only self-revocation permission and denied
+lookup afterward. The fixture removed its owned resources and retained private
+recovery data, with unchanged neighboring resource identities. This does not
+qualify the candidate-generation helper described below.
+
 This step retains the bootstrap root. Initial workload and Keycloak credentials
 are root descendants, so revoking root before replacing them would break the
 installation. Replacement credentials need orphan-token verification, durable
