@@ -45,15 +45,7 @@ pub struct OrganizationServiceConfig {
     pub build_revision: String,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct OrganizationGrpcServerTls {
-    pub certificate: PathBuf,
-    pub kms_endpoint: String,
-    pub kms_ca_certificate: PathBuf,
-    pub kms_token_file: PathBuf,
-    pub kms_key_name: String,
-    pub kms_key_version: u32,
-}
+pub use marty_service_runtime::GrpcServerTls as OrganizationGrpcServerTls;
 
 #[derive(Clone, Debug, Eq, Error, PartialEq)]
 pub enum OrganizationConfigError {

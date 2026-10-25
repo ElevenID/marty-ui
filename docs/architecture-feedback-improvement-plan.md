@@ -406,7 +406,7 @@ This document coordinates the new architecture work. [The original build audit](
 | A0 | Inventory test obligations and their inputs; identify effective execution, owning package, runtime dependencies, and current gate | None | investigating | DB-contract executables resolve from this run's Cargo artifacts. The normal DB runner now records selected/executed libtest cases, ignored/filter semantics and declared runtime input names/owners in run-bound JSONL. The separate acceptance runners, assertion reachability and complete transitive dependency/obligation graph remain incomplete; no selective skip is authorized. |
 | A1 | Move cross-service/system tests into a dedicated workspace acceptance package; separate deployment/packaging, DIDComm/renewal, and Canvas groups | A0 | implementing | Dedicated acceptance owners and the zero service-to-service dev-edge guard have landed. Preserve all moved obligations; installed system acceptance remains distinct from component tests. |
 | A2 | Extract one small domain/compatibility boundary from issuance, preserving public behavior and reusing existing Rust implementations | A0; coordinate moves with A1 | merged | The narrow shared Rust extraction is landed. Keep one implementation and public/error/resource-limit compatibility across consumers. |
-| A3 | Harden Core selection and implement conservative UI affected-check planning in shadow mode | A0; map A1/A2 changes | implementing | UI planning remains shadow-only until the complete non-Cargo graph and conservative fallback are qualified; preserve Core feature/security owners. |
+| A3 | Preserve Core selection; retire the experimental UI affected-package planner | A0; map A1/A2 changes | UI experiment retired | The complete non-Cargo graph, runtime provisioning and assertion reachability remain unqualified. The shadow report does not select checks and is not close to an authoritative selector. Under the October 24 cleanup decision, remove its script, dedicated tests and PR feedback lane; retain conservative UI validation and Core feature/security owners. |
 | A4 | Assign overlapping case matrices to the lowest adequate test level, retaining real adapter and process guarantees | A0; use A2 where appropriate | implementing | Retain old/new case-ID, fixture, assertion and required-lane parity; keep real database, adapter, process and cancellation obligations at their actual boundary. |
 | A5 | Separate historical oracle qualification from native regression testing; define complete reference inputs and evidence validity | A0, A1 | implementing | Historical reference closure remains incomplete. No additional qualification skips or weakened current-input/source/producer checks are authorized. |
 | A6 | Enable proven selective validation and earlier failure reporting; validate the assembled result on protected main/release paths | A1-A5 review and evidence | implementing | Unknown and mixed inputs remain broad. Preserve fail-closed planned-skip policy, required protected-main/full release gates and same-run evidence validity. |
@@ -724,3 +724,43 @@ main commit `4f2b6d83922f0c8e5d6b26dddd903ef928566c59`; its active constraints a
 
 The installed-setup requirements also incorporate protected-main checkpoint
 `dd0d8d17a556696d6d287b785f40c3fc61f72b66`; source/package checks do not qualify the preview.
+
+### October 24: UI impact-analysis experiment retired
+
+The affected-Rust planner required more than a final enablement step: complete
+non-Cargo runtime/image/provisioning ownership and assertion reachability were
+still open. Its package report only went to logs; no CI selector consumed it.
+The user authorized retirement when completion was not close. Remove the shadow
+report and its dedicated feedback mode rather than keep expanding witness tables.
+Existing conservative Rust, release, security and protected merge-group checks
+remain authoritative. Earlier A3 observations below/above are historical research,
+not a remaining implementation commitment. A0 run-bound execution checks remain.
+
+### October 24: shared Rust startup and Passport model policy
+
+Nine services share signal installation and the unchanged watch-channel shutdown
+loop through `marty-service-runtime`. Strict and best-effort installation policies
+remain distinct. Organization and Credential Template additionally share their
+server-only OpenBao TLS configuration and sequential incoming stream adapter;
+MMF still owns TLS and KMS signing. Workload mTLS, service authorization, health
+rosters, outbox draining and public diagnostics retain their service owners.
+
+Passport tooling delegates the common read-only custody, beta origin/loopback,
+runtime selector and credential-isolation scans to `marty-deploy operator
+passport-model`. The four Python entrypoints retain their public functions and
+error types. They use the existing source-matched native operator launcher; no
+Python policy fallback or production resource mutation is added. Model input is
+bounded and credential values stay on stdin, absent from policy results.
+
+Surface-specific filesystem safety, Docker/Kubernetes identity observations,
+attestation verification, provisioning, recovery and receipt collection remain
+necessary features, not obsolete proof artifacts. Their migration is deliberately
+separate from sharing these deterministic validation rules. This change does not
+claim installed-release or live supported-Passport acceptance.
+
+Local beta configuration checks now need the matching Rust operator: source
+checkouts use Cargo/toolchain 1.95.0 with the locked workspace; installed use must
+supply the signed source-matched `MARTY_DEPLOY_BIN` and its existing digest/source/
+release identity variables. A missing or outdated operator fails closed. The
+supported-consumer workflow installs that toolchain and builds the operator before
+collection. No previous-release binary without `passport-model` is accepted.

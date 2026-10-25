@@ -57,12 +57,18 @@ jobs:
       PASSPORT_SUPPORTED_ACCEPTANCE_API_KEY: ${{ secrets.PASSPORT_SUPPORTED_ACCEPTANCE_API_KEY }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Inspect dedicated Passport runner before preparing tools
+        run: python3 scripts/check_passport_beta_runner.py --output "$RUNNER_TEMP/passport-beta-runner-preflight.json"
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+        with:
+          toolchain: 1.95.0
+      - name: Prepare read-only Rust Passport model policy
+        run: bash scripts/ci/prepare-native-model-operator.sh
       - name: Inspect disposable supported consumers against official release
         id: collect
         shell: bash
         run: |
           set -euo pipefail
-          python3 scripts/check_passport_beta_runner.py --output "$RUNNER_TEMP/passport-beta-runner-preflight.json"
           release_dir="$RUNNER_TEMP/passport-supported-release-$GITHUB_RUN_ID"
           mkdir -p "$release_dir"
           report="passport-supported-consumer-acceptance-$GITHUB_RUN_ID.json"

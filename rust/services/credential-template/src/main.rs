@@ -1,3 +1,4 @@
+use marty_service_runtime::{shutdown_signal, wait_for_shutdown};
 use std::{error::Error, future::Future, pin::Pin, sync::Arc, time::Duration};
 
 use marty_credential_template::{
@@ -22,13 +23,11 @@ use marty_credential_template::{
 };
 use mmf_platform::{
     GrpcChannelConfig, GrpcChannelFactory, GrpcTlsMaterial, GrpcTransportSecurity, GrpcTrustMode,
-    OpenBaoTlsIdentityFiles,
 };
 use mmf_security::ServiceTokenAuthenticator;
 use sqlx::postgres::PgPoolOptions;
 use tokio::{net::TcpListener, sync::watch};
 use tokio_stream::wrappers::TcpListenerStream;
-use tokio_stream::StreamExt;
 use tonic::transport::Channel;
 use tonic::transport::Server;
 use tower_http::trace::TraceLayer;
@@ -202,20 +201,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let (health_reporter, health_service) = tonic_health::server::health_reporter();
     let grpc_server = CredentialTemplateServiceServer::new(grpc_service);
     let tls_acceptor = if let Some(files) = &config.grpc_server_tls {
-        Some(
-            OpenBaoTlsIdentityFiles {
-                certificate_chain_file: files.certificate.clone(),
-                kms_ca_cert_file: files.kms_ca_certificate.clone(),
-                kms_endpoint: files.kms_endpoint.clone(),
-                kms_token_file: files.kms_token_file.clone(),
-                kms_key_name: files.kms_key_name.clone(),
-                kms_key_version: files.kms_key_version,
-                request_timeout: Duration::from_secs(10),
-                max_concurrent_signs: 64,
-            }
-            .grpc_acceptor_without_client_auth(64, Duration::from_secs(15))
-            .await?,
-        )
+        Some(files.acceptor().await?)
     } else {
         None
     };
@@ -230,15 +216,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .add_service(grpc_server);
     let grpc: Pin<Box<dyn Future<Output = Result<(), tonic::transport::Error>> + Send>> =
         if let Some(acceptor) = tls_acceptor {
-            let incoming = TcpListenerStream::new(grpc_listener).then(move |connection| {
-                let acceptor = acceptor.clone();
-                async move {
-                    match connection {
-                        Ok(stream) => acceptor.accept(stream).await,
-                        Err(error) => Err(error),
-                    }
-                }
-            });
+            let incoming = marty_service_runtime::keyless_incoming(grpc_listener, acceptor);
             Box::pin(
                 grpc_router.serve_with_incoming_shutdown(incoming, async move {
                     wait_for_shutdown(&mut grpc_shutdown).await;
@@ -318,29 +296,4 @@ async fn ca_channel(
     )?
     .connect()
     .await?)
-}
-
-async fn wait_for_shutdown(shutdown: &mut watch::Receiver<bool>) {
-    while !*shutdown.borrow() && shutdown.changed().await.is_ok() {}
-}
-
-async fn shutdown_signal() {
-    let ctrl_c = async {
-        tokio::signal::ctrl_c()
-            .await
-            .expect("failed to install Ctrl+C handler");
-    };
-    #[cfg(unix)]
-    let terminate = async {
-        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-            .expect("failed to install SIGTERM handler")
-            .recv()
-            .await;
-    };
-    #[cfg(not(unix))]
-    let terminate = std::future::pending::<()>();
-    tokio::select! {
-        () = ctrl_c => {}
-        () = terminate => {}
-    }
 }

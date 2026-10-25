@@ -1,5 +1,7 @@
 //! Deployment metadata and native KMS operator commands.
 
+pub mod passport_model;
+
 use serde_json::{Map, Value};
 use std::collections::HashSet;
 use std::fs;

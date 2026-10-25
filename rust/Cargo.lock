@@ -3966,6 +3966,7 @@ dependencies = [
  "chrono",
  "hmac 0.12.1",
  "marty-oid4vci",
+ "marty-service-runtime",
  "mmf-core",
  "mmf-data",
  "mmf-messaging",
@@ -4184,6 +4185,7 @@ dependencies = [
  "chrono",
  "marty-api-key-policy",
  "marty-key-material-policy",
+ "marty-service-runtime",
  "mmf-core",
  "mmf-platform",
  "mmf-runtime",
@@ -4278,6 +4280,7 @@ dependencies = [
  "marty-managed-key-reference",
  "marty-openbao-http",
  "marty-selfhost-identity",
+ "regex",
  "reqwest",
  "rustls",
  "rustls-webpki",
@@ -4305,6 +4308,7 @@ dependencies = [
  "marty-api-key-policy",
  "marty-flow",
  "marty-key-material-policy",
+ "marty-service-runtime",
  "mmf-core",
  "mmf-platform",
  "mmf-runtime",
@@ -4446,6 +4450,7 @@ dependencies = [
  "marty-oid4vp-contract",
  "marty-passport-auth",
  "marty-schema-startup",
+ "marty-service-runtime",
  "marty-signing-grant",
  "marty-verification",
  "mmf-core",
@@ -4639,6 +4644,7 @@ dependencies = [
  "marty-platform-clock",
  "marty-response-compat",
  "marty-schema-startup",
+ "marty-service-runtime",
  "marty-signing-grant",
  "marty-verification",
  "mmf-config",
@@ -4833,6 +4839,7 @@ dependencies = [
  "chrono",
  "marty-api-key-policy",
  "marty-key-material-policy",
+ "marty-service-runtime",
  "mmf-core",
  "mmf-data",
  "mmf-messaging",
@@ -4917,6 +4924,7 @@ dependencies = [
  "marty-key-material-policy",
  "marty-oid4vci",
  "marty-oid4vp-contract",
+ "marty-service-runtime",
  "marty-verification",
  "mmf-core",
  "mmf-platform",
@@ -5097,6 +5105,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "marty-service-runtime"
+version = "0.1.0"
+dependencies = [
+ "mmf-platform",
+ "tokio",
+ "tokio-rustls",
+ "tokio-stream",
+]
+
+[[package]]
 name = "marty-signing-grant"
 version = "0.1.0"
 dependencies = [
@@ -5201,6 +5219,7 @@ dependencies = [
  "marty-didcomm",
  "marty-issuer-key-resolution",
  "marty-key-material-policy",
+ "marty-service-runtime",
  "marty-verification",
  "mmf-core",
  "mmf-platform",
@@ -5296,6 +5315,7 @@ dependencies = [
  "marty-didcomm",
  "marty-flow",
  "marty-oid4vci",
+ "marty-service-runtime",
  "marty-verification",
  "mmf-core",
  "mmf-platform",
