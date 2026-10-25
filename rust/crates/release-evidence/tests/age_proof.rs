@@ -414,3 +414,43 @@ fn cleanup_refuses_ambiguous_foreign_and_previous_run_resources() {
         assert!(validate_age_proof("cleanup", &input).is_err(), "{pointer}");
     }
 }
+
+#[test]
+fn actual_urn_uuid_credential_binds_issuance_and_native_lifecycle_cleanup() {
+    let id = "urn:uuid:26992c11-b13d-5ad3-82cc-9caf654296dd";
+    let mut issued = issuance_input();
+    issued.observed["issued_credentials"][0]["id"] = json!(id);
+    assert_eq!(
+        validate_age_proof("issued", &issued).unwrap()["evidence"]["credential_id"],
+        id
+    );
+    let mut cleanup = cleanup_input();
+    cleanup.observed["issued_credentials"][0]["id"] = json!(id);
+    let receipt = validate_age_proof("cleanup", &cleanup).unwrap();
+    let action = &receipt["evidence"]["actions"][0];
+    assert_eq!(action["id"], id);
+    assert_eq!(
+        action["path"],
+        "/v1/issued-credentials/urn%3Auuid%3A26992c11-b13d-5ad3-82cc-9caf654296dd/revoke"
+    );
+    assert_eq!(action["body"], json!({"reason": "D03 current-run cleanup"}));
+}
+
+#[test]
+fn credential_uri_support_does_not_allow_arbitrary_or_path_injecting_ids() {
+    for id in [
+        "urn:uuid:not-a-uuid",
+        "urn:uuid:26992c11-b13d-5ad3-82cc-9caf654296dd/other",
+        "urn:uuid:26992c11-b13d-5ad3-82cc-9caf654296dd?organization_id=other",
+        "urn:uuid:26992c11-b13d-5ad3-82cc-9caf654296dd%2fother",
+        "https://other.example/credential",
+        "did:key:unrelated",
+    ] {
+        let mut issued = issuance_input();
+        issued.observed["issued_credentials"][0]["id"] = json!(id);
+        assert!(validate_age_proof("issued", &issued).is_err(), "{id}");
+        let mut cleanup = cleanup_input();
+        cleanup.observed["issued_credentials"][0]["id"] = json!(id);
+        assert!(validate_age_proof("cleanup", &cleanup).is_err(), "{id}");
+    }
+}
