@@ -7,12 +7,12 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::{
-    ClaimDefinition, CredentialFormat, CredentialTemplate, CredentialTemplateError,
-    CredentialTemplateRepositoryError, DerivedAttribute, DisplayStyle, IssuanceProtocol,
-    IssuerRequirements, PostgresCredentialTemplateStore, PrivacyPosture, TemplateStatus,
-    ValidityRules, ValidityRulesInput, WalletConfig, normalize_payload_format,
-    resolve_validity_rules, validate_claim_definitions, validate_credential_type,
-    validate_protocol_requirements,
+    normalize_payload_format, resolve_validity_rules, validate_claim_definitions,
+    validate_credential_type, validate_protocol_requirements, ClaimDefinition, CredentialFormat,
+    CredentialTemplate, CredentialTemplateError, CredentialTemplateRepositoryError,
+    DerivedAttribute, DisplayStyle, IssuanceProtocol, IssuerRequirements,
+    PostgresCredentialTemplateStore, PrivacyPosture, TemplateStatus, ValidityRules,
+    ValidityRulesInput, WalletConfig,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]

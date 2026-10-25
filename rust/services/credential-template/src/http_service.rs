@@ -1,22 +1,19 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use axum::{
-    Json, Router,
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
+    Json, Router,
 };
 use chrono::Utc;
 use mmf_security::ServiceTokenAuthenticator;
 use serde::Deserialize;
-use serde_json::{Map, Value, json};
+use serde_json::{json, Map, Value};
 use uuid::Uuid;
 
 use crate::{
-    ClaimDefinition, ClaimType, CredentialFormat, CredentialTemplate, CredentialTemplateError,
-    DeliveryDestinationEntry, DerivedAttribute, DisplayStyle, PrivacyPosture, RuntimeEnvironment,
-    TemplateStatus, ValidityRulesInput, WalletRegistryEntry,
     application::{
         ControlPlaneError, CreateTemplateCommand, CredentialTemplateApplication,
         CredentialTemplateApplicationError, UpdateTemplateCommand, UpdateTemplatePatch,
@@ -28,9 +25,12 @@ use crate::{
     },
     resolve_validity_rules,
     wallet::{
-        IosSameDeviceMode, WalletCompatibility, derive_ios_same_device_mode,
-        normalize_issuance_protocol, wallet_capabilities, wallet_routing_templates,
+        derive_ios_same_device_mode, normalize_issuance_protocol, wallet_capabilities,
+        wallet_routing_templates, IosSameDeviceMode, WalletCompatibility,
     },
+    ClaimDefinition, ClaimType, CredentialFormat, CredentialTemplate, CredentialTemplateError,
+    DeliveryDestinationEntry, DerivedAttribute, DisplayStyle, PrivacyPosture, RuntimeEnvironment,
+    TemplateStatus, ValidityRulesInput, WalletRegistryEntry,
 };
 
 #[derive(Clone)]
@@ -1067,23 +1067,19 @@ fn internal_issuance_context(
         .expect("template response is an object");
     object.insert(
         "issuer_algorithm".to_owned(),
-        json!(
-            template
-                .issuer_algorithm
-                .as_deref()
-                .map(str::trim)
-                .unwrap_or_default()
-        ),
+        json!(template
+            .issuer_algorithm
+            .as_deref()
+            .map(str::trim)
+            .unwrap_or_default()),
     );
     object.insert(
         "supported_formats".to_owned(),
-        json!(
-            template
-                .supported_formats
-                .iter()
-                .map(|format| format.canonical())
-                .collect::<Vec<_>>()
-        ),
+        json!(template
+            .supported_formats
+            .iter()
+            .map(|format| format.canonical())
+            .collect::<Vec<_>>()),
     );
     object.insert(
         "issuance_protocol".to_owned(),

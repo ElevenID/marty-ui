@@ -393,21 +393,17 @@ mod tests {
             "derived_attributes":[{"id":"derived", "parameters":{"threshold":21},"issuer_profile_id":"private"}]
         })).unwrap();
         assert!(public["display_style"].get("key_reference").is_none());
-        assert!(
-            public["derived_attributes"][0]
-                .get("issuer_profile_id")
-                .is_none()
-        );
+        assert!(public["derived_attributes"][0]
+            .get("issuer_profile_id")
+            .is_none());
         assert_eq!(
             public["derived_attributes"][0]["parameters"]["threshold"],
             21
         );
-        assert!(
-            public_response(serde_json::json!({"derived_attributes":[{
-                "parameters":{"nested":[{"key_reference":"private"}]}
-            }]}))
-            .is_err()
-        );
+        assert!(public_response(serde_json::json!({"derived_attributes":[{
+            "parameters":{"nested":[{"key_reference":"private"}]}
+        }]}))
+        .is_err());
     }
     #[test]
     fn public_configuration_is_retained_without_custody_selectors() {

@@ -1,7 +1,7 @@
 //! Public protocol components from the reviewed pin, with operation metadata
 //! reconciled against the gateway's public handlers. No private custody fields.
 use mmf_platform::HttpMethod;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::sync::LazyLock;
 
 static BUNDLE: LazyLock<Value> = LazyLock::new(|| {
@@ -694,19 +694,19 @@ mod tests {
                     .expect("public issuer DID");
                 assert_eq!(did["schema"]["pattern"], "^did:");
                 assert_eq!(
-                    operation["responses"]["200"]["content"]["application/json"]["schema"]["properties"]
-                        ["verifiableCredential"]["type"],
+                    operation["responses"]["200"]["content"]["application/json"]["schema"]
+                        ["properties"]["verifiableCredential"]["type"],
                     "object"
                 );
             } else {
                 assert_eq!(
-                    operation["responses"]["200"]["content"]["application/json"]["schema"]["properties"]
-                        ["verified"]["const"],
+                    operation["responses"]["200"]["content"]["application/json"]["schema"]
+                        ["properties"]["verified"]["const"],
                     true
                 );
                 assert_eq!(
-                    operation["responses"]["422"]["content"]["application/json"]["examples"]["verificationRejected"]
-                        ["value"]["verified"],
+                    operation["responses"]["422"]["content"]["application/json"]["examples"]
+                        ["verificationRejected"]["value"]["verified"],
                     false
                 );
             }
@@ -735,14 +735,12 @@ mod tests {
             assert_eq!(operation["x-marty-response-schema-documented"], true);
             assert!(operation["responses"]["403"].is_object());
             if path != "/v1/notifications/send" {
-                assert!(
-                    operation["parameters"]
-                        .as_array()
-                        .unwrap()
-                        .iter()
-                        .any(|parameter| parameter["name"] == "organization_id"
-                            && parameter["required"] == true)
-                );
+                assert!(operation["parameters"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|parameter| parameter["name"] == "organization_id"
+                        && parameter["required"] == true));
             }
         }
         let send = &document["paths"]["/v1/notifications/send"]["post"];
@@ -751,13 +749,13 @@ mod tests {
             "#/components/schemas/runtime__notification_send_request"
         );
         assert_eq!(
-            document["paths"]["/v1/notifications"]["get"]["responses"]["200"]["content"]["application/json"]
-                ["schema"]["type"],
+            document["paths"]["/v1/notifications"]["get"]["responses"]["200"]["content"]
+                ["application/json"]["schema"]["type"],
             "array"
         );
         assert_eq!(
-            document["paths"]["/v1/notifications/unread/count"]["get"]["responses"]["200"]["content"]
-                ["application/json"]["schema"]["properties"]["count"]["type"],
+            document["paths"]["/v1/notifications/unread/count"]["get"]["responses"]["200"]
+                ["content"]["application/json"]["schema"]["properties"]["count"]["type"],
             "integer"
         );
         assert_eq!(
@@ -767,20 +765,16 @@ mod tests {
         );
         assert!(document["components"]["schemas"]["schemas__notification_target"].is_object());
         assert_eq!(
-            document["components"]["schemas"]["runtime__notification_response"]["properties"]["read"]
-                ["type"],
+            document["components"]["schemas"]["runtime__notification_response"]["properties"]
+                ["read"]["type"],
             "boolean"
         );
-        assert!(
-            document["paths"]
-                .get("/v1/notifications/{subpath:path}")
-                .is_none()
-        );
-        assert!(
-            document["paths"]
-                .get("/v1/notifications/preferences")
-                .is_none()
-        );
+        assert!(document["paths"]
+            .get("/v1/notifications/{subpath:path}")
+            .is_none());
+        assert!(document["paths"]
+            .get("/v1/notifications/preferences")
+            .is_none());
     }
 
     #[test]
@@ -802,23 +796,19 @@ mod tests {
             assert!(operation["responses"]["403"].is_object());
             assert!(operation["responses"]["422"].is_object());
         }
-        let parameters =
-            document["paths"]["/v1/wallet-registry/resolve/profile"]["get"]["parameters"]
-                .as_array()
-                .unwrap();
+        let parameters = document["paths"]["/v1/wallet-registry/resolve/profile"]["get"]
+            ["parameters"]
+            .as_array()
+            .unwrap();
         for name in ["organization_id", "credential_format", "issuance_protocol"] {
-            assert!(
-                parameters
-                    .iter()
-                    .any(|parameter| parameter["name"] == name && parameter["required"] == true)
-            );
-        }
-        assert!(
-            parameters
+            assert!(parameters
                 .iter()
-                .any(|parameter| parameter["name"] == "compliance_profile_code"
-                    && parameter["required"] == false)
-        );
+                .any(|parameter| parameter["name"] == name && parameter["required"] == true));
+        }
+        assert!(parameters
+            .iter()
+            .any(|parameter| parameter["name"] == "compliance_profile_code"
+                && parameter["required"] == false));
         let response = &document["components"]["schemas"]["runtime__wallet_compatibility"];
         assert_eq!(response["additionalProperties"], false);
         assert_eq!(
@@ -860,13 +850,13 @@ mod tests {
             }
         }
         assert_eq!(
-            document["paths"]["/v1/compliance-profiles"]["post"]["requestBody"]["content"]["application/json"]
-                ["schema"]["$ref"],
+            document["paths"]["/v1/compliance-profiles"]["post"]["requestBody"]["content"]
+                ["application/json"]["schema"]["$ref"],
             "#/components/schemas/runtime__compliance_profile_create_request"
         );
         assert_eq!(
-            document["paths"]["/v1/compliance-profiles/{profile_id}"]["patch"]["requestBody"]["content"]
-                ["application/json"]["schema"]["$ref"],
+            document["paths"]["/v1/compliance-profiles/{profile_id}"]["patch"]["requestBody"]
+                ["content"]["application/json"]["schema"]["$ref"],
             "#/components/schemas/runtime__compliance_profile_update_request"
         );
         let response = &document["components"]["schemas"]["runtime__compliance_profile_response"];
