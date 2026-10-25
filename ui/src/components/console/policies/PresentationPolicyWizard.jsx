@@ -27,6 +27,7 @@ import {
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
+import { validatePolicyCreationDependencies } from '../../../services/policyCreationDependencies';
 import { createPolicyCreationOperation } from '../../../services/policyCreationOperation';
 import { useConsole } from '../../../contexts/ConsoleContext';
 
@@ -104,6 +105,9 @@ const PresentationPolicyWizard = () => {
   }, []);
 
   const handleSubmit = useCallback(async (data) => {
+    const epoch = scopeEpoch.current;
+    const isCurrent = () => epoch === scopeEpoch.current;
+    await validatePolicyCreationDependencies(data, activeOrgId, isCurrent);
     const credentialRequirements = Array.isArray(data.policyConfig.credential_requirements)
       ? data.policyConfig.credential_requirements.map((requirement) => ({
           ...requirement,
@@ -119,9 +123,8 @@ const PresentationPolicyWizard = () => {
       status: 'draft',
       activate_immediately: data.activateImmediately,
     };
-    const epoch = scopeEpoch.current;
     try {
-      return await creation.submit(payload, { isCurrent: () => epoch === scopeEpoch.current });
+      return await creation.submit(payload, { isCurrent });
     } catch (error) {
       if (epoch === scopeEpoch.current && error.createdResource) setCreatedDraft(error.createdResource);
       throw error;
