@@ -48,7 +48,11 @@ def arranged(tmp_path, monkeypatch):
                         lambda *_a, **_k: "print('{}')")
     def observe(*_a, **kwargs):
         calls.append("observe:" + kwargs["pre_dispatch_id"])
-        return {"id": kwargs["pre_dispatch_id"]}
+        observed = {"id": kwargs["pre_dispatch_id"], "observed_at": 100000}
+        _write(kwargs["lease"].parent,
+               VM_ID + ".pre-dispatch-" + kwargs["pre_dispatch_id"] + ".json",
+               observed)
+        return observed
     monkeypatch.setattr(preflight, "observe", observe)
     engine = "test-engine-12345678"
     def bind(_records, initial, current, **_kwargs):
@@ -94,6 +98,15 @@ def test_preflight_preserves_raw_host_bytes_without_consuming_nonce(arranged):
 
 def test_consume_reobserves_same_vm_under_held_lease(arranged):
     args, calls, _, monkeypatch = arranged
+    now = [100000]
+    args["clock"] = lambda: now[0]
+    original_write = preflight._write
+    def advance_after_intent(parent, name, record):
+        result = original_write(parent, name, record)
+        if name.endswith(".vm-consumption-intent.json"):
+            now[0] += 1
+        return result
+    monkeypatch.setattr(preflight, "_write", advance_after_intent)
     consumed = []
     def consume(_self, a, i, **kwargs):
         consumed.append((a, i, kwargs))
@@ -113,6 +126,8 @@ def test_consume_reobserves_same_vm_under_held_lease(arranged):
     assert len(consumed) == 1
     assert consumed[0][2]["guest_id"] == VM_ID
     assert consumed[0][2]["installation_id"] == INSTALLATION_ID
+    assert consumed[0][2]["consumed_at"] == 100000
+    assert consumed[0][2]["now"] == 100001
     assert calls[-2:] == ["signed", "observe:55555555-5555-4555-8555-555555555555"]
 
 
@@ -197,6 +212,19 @@ def test_real_held_lease_consumes_exact_nonce_once(arranged):
             **common)
         ledger = args["registry"] / (grant["nonce"] + ".json")
         assert ledger.read_bytes() == receipt
+        intent_path = args["registry"] / (grant["nonce"] + ".vm-consumption-intent.json")
+        intent_bytes = intent_path.read_bytes()
+        intent = release.decode(intent_bytes)
+        preflight_raw = (args["registry"] /
+                         f"{VM_ID}.{FIRST_ID}.host-preflight.json").read_bytes()
+        observation_raw = (args["registry"] /
+            f"{VM_ID}.pre-dispatch-55555555-5555-4555-8555-555555555555.json").read_bytes()
+        assert intent["preflight_sha256"] == release.digest(preflight_raw)
+        assert intent["consumption_observation_sha256"] == release.digest(observation_raw)
+        assert intent["target"] == record["target"]
+        assert intent["nonce"] == grant["nonce"]
+        assert intent["nonce_consumed"] is False
+        assert intent["dispatch_authorized"] is False
         bound = release.bind_controller_consumption(
             receipt, authorization, inventory, expected=args["expected"],
             expected_engine=record["target"]["engine_id"], now=100000)
@@ -207,10 +235,40 @@ def test_real_held_lease_consumes_exact_nonce_once(arranged):
                 consumption_observation_id="66666666-6666-4666-8666-666666666666",
                 **common)
         assert ledger.read_bytes() == receipt
+        assert intent_path.read_bytes() == intent_bytes
         assert lease.parent is not None
         with pytest.raises(BlockingIOError):
             with ControllerLease(args["registry"]):
                 pass
+
+
+def test_slow_intent_persistence_cannot_consume_stale_evidence(arranged):
+    args, _, _, monkeypatch = arranged
+    now = [100000]
+    args["clock"] = lambda: now[0]
+    original_write = preflight._write
+    def slow_write(parent, name, record):
+        result = original_write(parent, name, record)
+        if name.endswith(".vm-consumption-intent.json"):
+            now[0] = 100061
+        return result
+    monkeypatch.setattr(preflight, "_write", slow_write)
+    monkeypatch.setattr(ControllerLease, "consume", lambda *_a, **_k:
+                        pytest.fail("stale evidence consumed nonce"))
+    with ControllerLease(args["registry"]) as lease:
+        record = preflight.preflight(lease, **args)
+        with pytest.raises(ValueError, match="consumption evidence is stale"):
+            preflight.consume_preflight(
+                lease, args["registry"], args["runtime_parent"], vm_id=VM_ID,
+                installation_id=INSTALLATION_ID, observation_id=FIRST_ID,
+                consumption_observation_id="55555555-5555-4555-8555-555555555555",
+                preflight_record=record, authorization=args["authorization"],
+                assets=args["assets"], expected=args["expected"], gh=args["gh"],
+                cosign=args["cosign"], clock=args["clock"])
+        assert (args["registry"] /
+                (args["expected"]["nonce"] + ".vm-consumption-intent.json")).exists()
+        assert not (args["registry"] /
+                    (args["expected"]["nonce"] + ".json")).exists()
 
 
 def test_preflight_rejects_dirty_host_but_retains_raw_evidence(arranged):

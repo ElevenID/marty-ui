@@ -24,6 +24,7 @@ import installer_release as release
 import verify_installer_provenance as provenance
 
 SCHEMA = "elevenid.installer-vm-host-preflight/v1"
+CONSUMPTION_INTENT_SCHEMA = "elevenid.installer-vm-consumption-intent/v1"
 
 
 def _raw_at(parent: int, name: str, raw: bytes) -> None:
@@ -210,7 +211,7 @@ def consume_preflight(lease: ControllerLease, registry: Path, runtime_parent: Pa
                     "root controller lease required for consumption")
     _same_path(registry, lease.parent, dispatch._directory)
     name = vm_id + "." + observation_id + ".host-preflight.json"
-    _, persisted = _read_record(lease.parent, name)
+    preflight_raw, persisted = _read_record(lease.parent, name)
     release.require(persisted == preflight_record and persisted["schema"] == SCHEMA
                     and persisted["vm_id"] == vm_id
                     and persisted["installation_id"] == installation_id
@@ -247,6 +248,11 @@ def consume_preflight(lease: ControllerLease, registry: Path, runtime_parent: Pa
         lease.parent, vm_id + "." + part + ".json")[0] for part in RECORDS}
     current = observe(registry, runtime_parent, vm_id=vm_id,
                       pre_dispatch_id=consumption_observation_id, lease=lease)
+    observation_name = vm_id + ".pre-dispatch-" + consumption_observation_id + ".json"
+    observation_raw, observation_record = _read_record(lease.parent, observation_name)
+    release.require(observation_record == current
+                    and observation_raw == release.encode(current),
+                    "VM consumption observation differs")
     bound = bind_target(records, initial_raw, current,
                         observation_id=consumption_observation_id,
                         installation_id=installation_id, now=int(clock()))
@@ -271,7 +277,31 @@ def consume_preflight(lease: ControllerLease, registry: Path, runtime_parent: Pa
     consumed_at = int(clock())
     release.require(0 <= consumed_at - persisted["probe_finished_at"] <= 60,
                     "VM host measurement is stale")
+    intent_name = expected["nonce"] + ".vm-consumption-intent.json"
+    intent = dict(schema=CONSUMPTION_INTENT_SCHEMA, nonce=expected["nonce"],
+                  vm_id=vm_id, installation_id=installation_id,
+                  preflight_sha256=release.digest(preflight_raw),
+                  consumption_observation_sha256=release.digest(observation_raw),
+                  host_observation_sha256=release.digest(raw),
+                  authorization_sha256=release.digest(a),
+                  inventory_sha256=release.digest(i),
+                  context_sha256=release.candidate_context_sha256(expected),
+                  target=target, consumed_at=consumed_at,
+                  nonce_consumed=False, dispatch_authorized=False)
+    _write(lease.parent, intent_name, intent)
+    _same_path(registry, lease.parent, dispatch._directory)
+    release.require(_read_record(lease.parent, intent_name)[1] == intent
+                    and _read_record(lease.parent, observation_name)[0]
+                    == observation_raw and _read_record(lease.parent, name)[0]
+                    == preflight_raw,
+                    "VM consumption intent inputs changed")
+    _unchanged_raw(lease.parent, raw_name, raw)
+    fresh_now = int(clock())
+    release.require(type(current["observed_at"]) is int
+                    and 0 <= fresh_now - current["observed_at"] <= 60
+                    and 0 <= fresh_now - persisted["probe_finished_at"] <= 60,
+                    "VM consumption evidence is stale")
     return lease.consume(a, i, expected=expected, guest_id=target["guest_id"],
                          disk_id=target["disk_id"], engine_id=target["engine_id"],
                          installation_id=target["installation_id"],
-                         consumed_at=consumed_at, now=consumed_at)
+                         consumed_at=consumed_at, now=fresh_now)

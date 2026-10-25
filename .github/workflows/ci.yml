@@ -3027,9 +3027,9 @@ jobs:
           if suite is None or suite.tag != "testsuite":
               raise SystemExit("root-owned VM creation test report is missing")
           cases = list(suite.iter("testcase"))
-          if len(cases) != 82 or any(
+          if len(cases) != 83 or any(
               int(suite.attrib.get(name, "-1")) != expected
-              for name, expected in (("tests", 82), ("skipped", 0),
+              for name, expected in (("tests", 83), ("skipped", 0),
                                      ("failures", 0), ("errors", 0))
           ):
               raise SystemExit("root-owned VM creation cases did not all execute and pass")
