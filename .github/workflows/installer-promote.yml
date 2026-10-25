@@ -4,6 +4,12 @@ run-name: Verify installer admission for ${{ inputs.release_tag }}
 'on':
   workflow_dispatch:
     inputs:
+      operation:
+        description: Admission gate or sign channel from published verified admission
+        required: true
+        type: choice
+        default: admission
+        options: [admission, channel]
       source_sha:
         description: Exact original installer source SHA
         required: true
@@ -14,27 +20,27 @@ run-name: Verify installer admission for ${{ inputs.release_tag }}
         type: string
       build_run_id:
         description: Original successful installer build run
-        required: true
+        required: false
         type: string
       build_run_attempt:
         description: Exact original build attempt
-        required: true
+        required: false
         type: string
       staged_run_id:
         description: Successful real staged installer acceptance run
-        required: true
+        required: false
         type: string
       staged_run_attempt:
         description: Exact staged acceptance attempt
-        required: true
+        required: false
         type: string
       published_run_id:
         description: Successful anonymous public replay acceptance run
-        required: true
+        required: false
         type: string
       published_run_attempt:
         description: Exact published acceptance attempt
-        required: true
+        required: false
         type: string
 permissions: {}
 concurrency:
@@ -42,7 +48,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   admit-installer:
-    if: github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && github.repository == 'ElevenID/marty-ui'
+    if: github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && github.repository == 'ElevenID/marty-ui' && inputs.operation != 'channel'
     runs-on: ubuntu-24.04
     environment: stack-release
     timeout-minutes: 30
@@ -253,3 +259,103 @@ jobs:
       shell: bash
       run: |
         printf '%s\n' 'Verified admission archived only. No version release was modified, no channel was published, and installer release lifecycle integration is not complete.' >> "$GITHUB_STEP_SUMMARY"
+
+  sign-channel:
+    if: github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && github.repository == 'ElevenID/marty-ui' && inputs.operation == 'channel'
+    runs-on: ubuntu-24.04
+    environment: stack-release
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+      attestations: write
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+    - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      with:
+        python-version: '3.12'
+    - name: Create private channel workspace
+      shell: bash
+      run: |
+        set -euo pipefail
+        umask 077
+        base="$RUNNER_TEMP/installer-channel-signing"
+        mkdir -m 700 "$base" "$base/work" "$base/output" "$base/tools"
+    - name: Prepare exact installer verifier binaries
+      shell: bash
+      run: |
+        set -euo pipefail
+        umask 077
+        tools="$RUNNER_TEMP/installer-channel-signing/tools"
+        curl --fail --location --silent --show-error --proto '=https' --proto-redir '=https' \
+          --connect-timeout 20 --max-time 180 --max-filesize 145688404 \
+          https://github.com/sigstore/cosign/releases/download/v3.1.4/cosign-linux-amd64 --output "$tools/cosign"
+        test "$(stat -c %s "$tools/cosign")" = 145688404
+        printf '%s  %s\n' 424e2c97d0b45fd7a6b608a87f090f35633f4c23ece5f092d48bba11aaf4bbfa "$tools/cosign" | sha256sum --check --strict
+        curl --fail --location --silent --show-error --proto '=https' --proto-redir '=https' \
+          --connect-timeout 20 --max-time 120 --max-filesize 15031001 \
+          https://github.com/cli/cli/releases/download/v2.103.2/gh_2.103.2_linux_amd64.tar.gz --output "$tools/gh.tar.gz"
+        test "$(stat -c %s "$tools/gh.tar.gz")" = 15031001
+        printf '%s  %s\n' 62ccf747115ddc61237efffdde66a3c8f70ba249433dc64f70801089b59c59c8 "$tools/gh.tar.gz" | sha256sum --check --strict
+        tar -xzf "$tools/gh.tar.gz" --no-same-owner --no-same-permissions -C "$tools" gh_2.103.2_linux_amd64/bin/gh
+        chmod 700 "$tools/cosign" "$tools/gh_2.103.2_linux_amd64/bin/gh"
+    - name: Require published signed admission and sign exact channel plus CAS context
+      env:
+        GH_TOKEN: ${{ github.token }}
+        SOURCE_SHA: ${{ inputs.source_sha }}
+        RELEASE_TAG: ${{ inputs.release_tag }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        umask 077
+        base="$RUNNER_TEMP/installer-channel-signing"
+        python scripts/installer_channel.py produce --work "$base/work" --output "$base/output" \
+          --gh "$base/tools/gh_2.103.2_linux_amd64/bin/gh" --cosign "$base/tools/cosign" \
+          --source-sha "$SOURCE_SHA" --release-tag "$RELEASE_TAG" --promotion-source-sha "$GITHUB_SHA" \
+          --promotion-run-id "$GITHUB_RUN_ID" --promotion-run-attempt "$GITHUB_RUN_ATTEMPT"
+        for subject in installer-channel.json installer-channel-context.json; do
+          "$base/tools/cosign" sign-blob --yes --bundle "$base/output/$subject.sigstore.json" "$base/output/$subject" >/dev/null
+        done
+    - id: channel_provenance
+      uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+      with:
+        subject-path: |-
+          ${{ runner.temp }}/installer-channel-signing/output/installer-channel.json
+          ${{ runner.temp }}/installer-channel-signing/output/installer-channel-context.json
+    - name: Verify and export exact promotion invocation proof
+      env:
+        PROVENANCE_BUNDLE: ${{ steps.channel_provenance.outputs.bundle-path }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        umask 077
+        python - <<'PY'
+        import os,sys
+        from pathlib import Path
+        sys.path.insert(0,'scripts')
+        import installer_release as r
+        import verify_installer_provenance as p
+        from installer_candidate_authorize import write_exclusive
+        base=Path(os.environ['RUNNER_TEMP'])/'installer-channel-signing'
+        source=Path(os.environ['PROVENANCE_BUNDLE'])
+        p.local_file(source,maximum=1048576)
+        with source.open('rb') as stream: raw=stream.read(1048577)
+        r.require(0<len(raw)<=1048576,'promotion provenance exceeds bound')
+        for name in ('installer-channel.json','installer-channel-context.json'):
+            subject=base/'output'/name
+            proof=base/'output'/(name+'.provenance.jsonl')
+            write_exclusive(proof,raw)
+            p.verify_subject(subject,proof,gh=base/'tools/gh_2.103.2_linux_amd64/bin/gh',cosign=base/'tools/cosign',
+                signature_bundle=base/'output'/(name+'.sigstore.json'),workflow=r.PROMOTION_WORKFLOW,
+                source_sha=os.environ['GITHUB_SHA'],run_id=int(os.environ['GITHUB_RUN_ID']),run_attempt=int(os.environ['GITHUB_RUN_ATTEMPT']))
+        PY
+    - name: Archive signed channel and signed expected-head context
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: installer-channel-${{ github.run_id }}-${{ github.run_attempt }}
+        path: ${{ runner.temp }}/installer-channel-signing/output/
+        if-no-files-found: error
+        retention-days: 90
