@@ -203,10 +203,13 @@ fn stage_at(repo: &Path, durable: &Path, revision: &str, sources: &[&str]) -> Re
         let mut file = fs::OpenOptions::new()
             .write(true)
             .create_new(true)
-            .open(path)
+            .open(&path)
             .map_err(|_| REFUSAL)?;
         file.write_all(bytes)
             .and_then(|_| file.sync_all())
+            .map_err(|_| REFUSAL)?;
+        #[cfg(unix)]
+        fs::set_permissions(&path, ordinary(&repo.join(name))?.permissions())
             .map_err(|_| REFUSAL)?;
     }
     let mut file = fs::OpenOptions::new()
@@ -236,10 +239,13 @@ fn stage_at(repo: &Path, durable: &Path, revision: &str, sources: &[&str]) -> Re
         let path = destination.join(name);
         fs::create_dir_all(path.parent().ok_or(REFUSAL)?).map_err(|_| REFUSAL)?;
         let bytes = fs::read(staging.path().join(name)).map_err(|_| REFUSAL)?;
-        let mut output = fs::OpenOptions::new().write(true).create_new(true).open(path)
+        let mut output = fs::OpenOptions::new().write(true).create_new(true).open(&path)
             .map_err(|_| "Beta runtime configuration publication is incomplete; preserve generation for inspection")?;
         output.write_all(&bytes).and_then(|_|output.sync_all())
             .map_err(|_| "Beta runtime configuration publication is incomplete; preserve generation for inspection")?;
+        #[cfg(unix)]
+        fs::set_permissions(&path, ordinary(&staging.path().join(name))?.permissions())
+            .map_err(|_| REFUSAL)?;
     }
 
     Ok(destination)
@@ -274,6 +280,32 @@ pub fn stage(repo: &Path, revision: &str) -> Result<Value> {
 mod tests {
     use super::*;
     const REVISION: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    #[cfg(unix)]
+    #[test]
+    fn executable_runtime_scripts_keep_their_mode() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let repo = temp.path().join("repo");
+        fs::create_dir(&repo).unwrap();
+        let source = repo.join("script.sh");
+        fs::write(&source, b"#!/bin/sh\nexit 0\n").unwrap();
+        fs::set_permissions(&source, fs::Permissions::from_mode(0o755)).unwrap();
+        let output = stage_at(
+            &repo,
+            &temp.path().join("durable"),
+            REVISION,
+            &["script.sh"],
+        )
+        .unwrap();
+        assert_eq!(
+            fs::metadata(output.join("script.sh"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o755
+        );
+    }
     #[test]
     fn historical_manifest_format_and_order_are_accepted() {
         let temp = tempfile::tempdir().unwrap();
