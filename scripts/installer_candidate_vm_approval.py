@@ -81,15 +81,7 @@ def validate(record: dict) -> None:
                     "VM approval identity invalid")
 
 
-def bind_observation(approval: bytes, observation: dict, *, context: dict,
-                     authorization: bytes, creation_receipt: bytes,
-                     now: int) -> str:
-    """Compare independently produced approval and fresh diagnostic evidence.
-
-    This returns the approval hash for a later durable controller companion.
-    The caller must already have authenticated the approval producer, creation
-    receipt and candidate inputs; this comparison alone grants no dispatch.
-    """
+def _record(approval: bytes, *, now: int) -> dict:
     record = release.decode(approval)
     release.require(release.encode(record) == approval,
                     "VM approval encoding is not canonical")
@@ -97,12 +89,19 @@ def bind_observation(approval: bytes, observation: dict, *, context: dict,
     release.require(record["purpose"] == "candidate-acceptance"
                     and type(now) is int and record["approved_at"] <= now
                     and now < record["expires_at"], "VM approval unavailable")
-    observer.validate_initial(observation, record["installation_id"])
+    return record
+
+
+def _fresh(record: dict, observation: dict, now: int) -> None:
     observed_at = observation["observed_at"]
     release.require(type(observed_at) is int and observed_at > 0
                     and record["approved_at"] - 60 <= observed_at <= now
                     and now - observed_at <= 60,
                     "VM observation is not fresh")
+
+
+def _candidate(record: dict, context: dict, authorization: bytes,
+               creation_receipt: bytes) -> None:
     release.require(record["candidate_context_sha256"]
                     == release.candidate_context_sha256(context)
                     and record["authorization_sha256"] == release.digest(authorization)
@@ -110,6 +109,9 @@ def bind_observation(approval: bytes, observation: dict, *, context: dict,
                     and record["overlay_creation_receipt_sha256"]
                     == release.digest(creation_receipt),
                     "VM approval candidate or creation differs")
+
+
+def _identity(record: dict, observation: dict) -> None:
     target = observation["target"]
     fields = {
         "controller_boot_id": "vm_boot_id", "vm_id": ("target", "guest_id"),
@@ -131,4 +133,64 @@ def bind_observation(approval: bytes, observation: dict, *, context: dict,
         release.require(type(record[approved]) is type(actual)
                         and record[approved] == actual,
                         "approved VM differs from observation")
+
+
+def bind_observation(approval: bytes, observation: dict, *, context: dict,
+                     authorization: bytes, creation_receipt: bytes,
+                     now: int) -> str:
+    """Compare independently produced approval and fresh initial evidence.
+
+    This returns the exact approval-byte hash for a durable controller companion.
+    The caller must authenticate the approval producer, creation receipt and
+    candidate inputs; this comparison alone grants no dispatch.
+    """
+    record = _record(approval, now=now)
+    observer.validate_initial(observation, record["installation_id"])
+    _fresh(record, observation, now)
+    _candidate(record, context, authorization, creation_receipt)
+    _identity(record, observation)
+    return release.digest(approval)
+
+
+def bind_pre_dispatch(approval: bytes, initial: bytes, current: dict, *,
+                      approved_initial_sha256: str, context: dict,
+                      authorization: bytes, creation_receipt: bytes,
+                      now: int) -> str:
+    """Bind fresh pre-dispatch evidence to the exact earlier initial observation.
+
+    The caller must supply the authenticated initial hash from its durable
+    companion, hold the controller lease, and reobserve the live VM immediately
+    before nonce consumption. This pure comparison does none of those actions.
+    """
+    record = _record(approval, now=now)
+    release.sha(approved_initial_sha256, 64)
+    release.require(release.digest(initial) == approved_initial_sha256,
+                    "approved initial observation differs")
+    first = release.decode(initial)
+    release.require(release.encode(first) == initial,
+                    "initial observation encoding is not canonical")
+    observer.validate_initial(first, record["installation_id"])
+    initial_at = first["observed_at"]
+    release.require(type(initial_at) is int and initial_at > 0
+                    and record["approved_at"] - 60 <= initial_at
+                    and initial_at < record["expires_at"],
+                    "initial observation time invalid")
+    expected = (set(first) - {"initial_docker_clean"}
+                | {"initial_observation_sha256", "docker_clean_at_observation"})
+    release.require(type(current) is dict and set(current) == expected
+                    and current["schema"] == first["schema"]
+                    and current["observation_phase"] == "pre-dispatch"
+                    and current["initial_observation_sha256"] == approved_initial_sha256
+                    and current["docker_clean_at_observation"] is True
+                    and current["dispatch_authorized"] is False
+                    and current["clean_host_qualified"] is False
+                    and current["capacity_qualified"] is False,
+                    "pre-dispatch observation invalid")
+    release.require(type(current["observed_at"]) is int
+                    and initial_at <= current["observed_at"],
+                    "pre-dispatch observation order invalid")
+    _fresh(record, current, now)
+    observer.require_same_vm(first, current)
+    _candidate(record, context, authorization, creation_receipt)
+    _identity(record, current)
     return release.digest(approval)

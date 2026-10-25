@@ -59,6 +59,25 @@ def bind(record, observed, context, authorization, receipt, *, now=2000):
                                      creation_receipt=receipt, now=now)
 
 
+def pre_dispatch(record, initial, current, context, authorization, receipt,
+                 *, initial_hash=None, now=2010):
+    raw = release.encode(initial)
+    return approval.bind_pre_dispatch(
+        release.encode(record), raw, current,
+        approved_initial_sha256=initial_hash or release.digest(raw),
+        context=context, authorization=authorization,
+        creation_receipt=receipt, now=now)
+
+
+def pre_sample():
+    record, initial, context, authorization, receipt = sample()
+    current = dict(initial, observation_phase="pre-dispatch", observed_at=2005)
+    del current["initial_docker_clean"]
+    current["docker_clean_at_observation"] = True
+    current["initial_observation_sha256"] = release.digest(release.encode(initial))
+    return record, initial, current, context, authorization, receipt
+
+
 def test_matching_approval_binds_exact_bytes_without_dispatch():
     record, observed, context, authorization, receipt = sample()
     assert bind(record, observed, context, authorization, receipt) == release.digest(
@@ -142,3 +161,75 @@ def test_malformed_approval_rejected(mutation):
     mutation(record)
     with pytest.raises(ValueError):
         bind(record, observed, context, authorization, receipt)
+
+
+def test_fresh_pre_dispatch_is_bound_to_approved_initial_bytes():
+    record, initial, current, context, authorization, receipt = pre_sample()
+    assert pre_dispatch(record, initial, current, context, authorization, receipt) == (
+        release.digest(release.encode(record)))
+    assert current["dispatch_authorized"] is False
+
+
+@pytest.mark.parametrize("field,replacement", [
+    ("vm_boot_id", str(uuid.uuid4())), ("vm_uid", 1002), ("vm_dir_inode", 14),
+    ("vm_pid", 1235), ("vm_start_ticks", "12346"),
+    ("vm_disk_inode", 14), ("vm_executable_sha256", "9" * 64),
+    ("controller_key_sha256", "9" * 64), ("known_hosts_sha256", "9" * 64),
+    ("guest_uid", 1001), ("ssh_port", 49001),
+])
+def test_pre_dispatch_refuses_vm_changes(field, replacement):
+    record, initial, current, context, authorization, receipt = pre_sample()
+    current[field] = replacement
+    with pytest.raises(ValueError):
+        pre_dispatch(record, initial, current, context, authorization, receipt)
+
+
+def test_pre_dispatch_refuses_boolean_descriptor_equal_to_integer_one():
+    record, initial, current, context, authorization, receipt = pre_sample()
+    initial["vm_disk_fd"] = 1
+    current["vm_disk_fd"] = True
+    current["initial_observation_sha256"] = release.digest(release.encode(initial))
+    with pytest.raises(ValueError, match="VM changed"):
+        pre_dispatch(record, initial, current, context, authorization, receipt)
+
+
+@pytest.mark.parametrize("field,replacement", [
+    ("observation_phase", "post-install"),
+    ("docker_clean_at_observation", False),
+    ("initial_observation_sha256", "9" * 64),
+    ("dispatch_authorized", True),
+    ("capacity_qualified", True),
+    ("observed_at", 2011), ("observed_at", 1949),
+    ("observed_at", True), ("observed_at", "2005"),
+])
+def test_pre_dispatch_refuses_wrong_phase_or_freshness(field, replacement):
+    record, initial, current, context, authorization, receipt = pre_sample()
+    current[field] = replacement
+    with pytest.raises(ValueError):
+        pre_dispatch(record, initial, current, context, authorization, receipt)
+
+
+def test_pre_dispatch_refuses_unbound_initial_or_candidate():
+    record, initial, current, context, authorization, receipt = pre_sample()
+    with pytest.raises(ValueError, match="approved initial observation differs"):
+        pre_dispatch(record, initial, current, context, authorization, receipt,
+                     initial_hash="9" * 64)
+    for changed_context, changed_auth, changed_receipt in (
+        (dict(context, nonce="9" * 64), authorization, receipt),
+        (context, b"different authorization", receipt),
+        (context, authorization, b"different creation receipt"),
+    ):
+        with pytest.raises(ValueError, match="candidate or creation differs"):
+            pre_dispatch(record, initial, current, changed_context,
+                         changed_auth, changed_receipt)
+
+
+def test_pre_dispatch_refuses_initial_after_current_and_expired_approval():
+    record, initial, current, context, authorization, receipt = pre_sample()
+    current["observed_at"] = 1984
+    with pytest.raises(ValueError, match="order invalid"):
+        pre_dispatch(record, initial, current, context, authorization, receipt)
+    current["observed_at"] = 2005
+    with pytest.raises(ValueError, match="unavailable"):
+        pre_dispatch(record, initial, current, context, authorization,
+                     receipt, now=2590)

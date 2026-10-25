@@ -232,7 +232,8 @@ def require_same_vm(initial: dict, current: dict) -> None:
                   "vm_disk_device", "vm_disk_inode", "vm_disk_fd",
                   "vm_config_sha256", "vm_executable_sha256",
                   "controller_key_sha256", "known_hosts_sha256"):
-        release.require(initial.get(field) == current[field],
+        release.require(type(initial.get(field)) is type(current[field])
+                        and initial.get(field) == current[field],
                         "VM changed after initial observation")
 
 
