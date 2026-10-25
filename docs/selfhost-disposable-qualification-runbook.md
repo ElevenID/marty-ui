@@ -942,6 +942,42 @@ by the controlled seed belong to that receipt. Neither a VM-owned `vm.json` nor
 an earlier diagnostic observation is proof of creation or approval. The guest
 must have no source checkout, personal credentials, or cached application images.
 
+The authoritative provisioner must keep two distinct custody roots. A root-owned
+`0700` controller directory holds launch intent/receipt, `vm.json`, the PID record,
+the controller SSH private key, and the approved `known_hosts`; QEMU must have no
+traverse access to it. A separate runtime directory grants a dedicated unprivileged
+QEMU identity only the writable overlay, private QMP socket, and read-only seed
+media it needs. The controller binds both directory device/inode identities,
+their paths, the exact disk and QMP paths, and the QEMU UID/GID in a new closed
+record schema. The existing diagnostic observer's VM-directory-owned controller
+key layout cannot authorize a release; changing only the key file's owner inside
+a QEMU-writable directory would still let that process replace its pathname.
+Existing diagnostic observations and v1 approvals remain historical evidence,
+not silently upgraded authority.
+
+Seeding and launching are separate durable transitions. Under the controller
+lease, verify the v2 creation receipt and pristine overlay, persist an exclusive
+seed intent, generate dedicated controller and guest host keys, derive the pinned
+host entry from the generated public key before first contact, and build a fixed
+cloud-init seed. The seed is secret-bearing: hold private directories and files,
+use exclusive no-follow writes, hash its bytes and configuration into a completion
+receipt, and flush files and directories. The seed policy must fix guest account,
+package source and exact package versions; successful network installation alone
+does not prove reproducible guest provenance. Reject a repeated or uncertain seed
+attempt without overwriting its evidence.
+
+Before spawning QEMU, verify unchanged seed and overlay, reserve the selected
+loopback SSH port, bind the reviewed executable and exact closed arguments, and
+persist an exclusive launch intent. Run QEMU under the dedicated UID with a clean
+environment, no host shares or public listeners, and a read-only seed. A spawn
+failure or crash before a PID receipt remains uncertain; preserve it and never
+retry automatically. Authenticate the live process executable, PID/start time,
+arguments, held writable disk, QMP peer, and pinned SSH host key before writing
+a launch observation. Wait boundedly for cloud-init and Docker readiness, record
+the actual installed package versions and Engine identity, and keep
+`qualified=false` and `dispatch_authorized=false` until the later acceptance
+gates prove otherwise. A 4 GiB boot remains engineering evidence only.
+
 Provisioning may precede the acceptance invocation. After the invocation issues
 its initial signed authorization, the controller binds that exact authorization,
 candidate context, creation receipt, and preallocated installation UUID into a
