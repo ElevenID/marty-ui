@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from datetime import datetime
 from pathlib import Path
 
 import installer_acceptance as acceptance
@@ -243,4 +244,63 @@ def channel(admission_bytes: bytes, *, channel_name: str, previous_bytes: bytes 
                   promotion_run_id=promotion_run_id, promotion_run_attempt=promotion_run_attempt,
                   issued_at=now, expires_at=now + lifetime)
     validate_channel(record, now=now)
+    return record
+
+
+def renew_channel(admission_bytes: bytes, inventory_bytes: bytes, *, previous_bytes: bytes,
+                  published_report: tuple[Path, Path, dict], gh: Path,
+                  promotion_source_sha: str, promotion_run_id: int, promotion_run_attempt: int,
+                  now: int, lifetime: int = 604800, runner=provenance.command) -> dict:
+    """Renew only the same admitted release after fresh published-install replay.
+
+    Caller authenticates the exact prior/admission/inventory bytes and fetches
+    the authoritative run-attempt API record. Protect report staging from writers,
+    retain its verified evidence with the promotion run, and atomically CAS the
+    previous record hash at publication. This returns an unsigned channel record;
+    it does not renew admission, alter assets, or permit rollback/new versions.
+    """
+    require(type(now) is int and type(lifetime) is int, "invalid renewal timestamps")
+    previous = decode(previous_bytes)
+    validate_channel(previous, now=now, allow_expired=True)
+    accepted = decode(admission_bytes)
+    validate_admission(accepted)
+    inv = decode(inventory_bytes)
+    validate_inventory(inv)
+    require(previous["admission_sha256"] == digest(admission_bytes), "renewal admission bytes differ")
+    require(accepted["inventory_sha256"] == digest(inventory_bytes), "renewal inventory bytes differ")
+    for field in ("source_sha", "release_tag"):
+        require(previous[field] == accepted[field] == inv[field], "renewal release identity differs")
+    for field in ("build_run_id", "build_run_attempt"):
+        require(accepted[field] == inv[field], "renewal build identity differs")
+    require(accepted["operator_sha256"] == next(entry["sha256"] for entry in inv["artifacts"]
+                                               if entry["name"] == "marty-deploy-linux-amd64"),
+            "renewal operator identity differs")
+    path, bundle, run = published_report
+    report = acceptance.read_report(path)
+    acceptance.validate(report, inventory_bytes=inventory_bytes, source_sha=inv["source_sha"],
+                        release_tag=inv["release_tag"], phase="published", run=run)
+
+    def timestamp(field: str) -> float:
+        value = run.get(field)
+        require(isinstance(value, str), "renewal run timestamp missing")
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            require(parsed.utcoffset() is not None, "renewal run timestamp lacks timezone")
+            return parsed.timestamp()
+        except (ValueError, OverflowError):
+            raise ValueError("invalid renewal run timestamp") from None
+
+    started, updated = timestamp("run_started_at"), timestamp("updated_at")
+    require(now - 86400 <= started <= updated <= now and started > previous["issued_at"],
+            "renewal replay is stale, future, or predates the channel")
+    provenance.verify_subject(path, bundle, gh=gh, workflow=acceptance.WORKFLOW,
+                              source_sha=report["harness_source_sha"], run_id=report["run_id"],
+                              run_attempt=report["run_attempt"], runner=runner)
+    record = {**previous, "generation": previous["generation"] + 1,
+              "previous_sha256": digest(previous_bytes), "promotion_source_sha": promotion_source_sha,
+              "promotion_run_id": promotion_run_id, "promotion_run_attempt": promotion_run_attempt,
+              "issued_at": now, "expires_at": now + lifetime}
+    validate_channel(record, now=now)
+    require(record["issued_at"] > previous["issued_at"]
+            and record["expires_at"] > previous["expires_at"], "renewal must advance channel expiry")
     return record

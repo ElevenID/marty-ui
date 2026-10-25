@@ -2,6 +2,7 @@
 import copy
 import json
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -9,6 +10,10 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import installer_release as release
 import installer_acceptance as acceptance
+
+
+def iso_timestamp(value):
+    return datetime.fromtimestamp(value, timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 @pytest.fixture
@@ -254,3 +259,125 @@ def test_closed_inventory_validator(prepared, mutation):
         record["images"]["gateway"] = "image:latest"
     with pytest.raises(ValueError):
         release.validate_inventory(record)
+
+
+@pytest.fixture
+def renewal(evidence):
+    inv, options = evidence
+    admitted = release.encode(release.admission(inv, **options))
+    prior = release.channel(admitted, **channel_args())
+    now = prior["issued_at"] + 3600
+    path, bundle, run = options["reports"]["published"]
+    report = json.loads(path.read_bytes())
+    report["run_id"] = 103
+    report["harness_source_sha"] = "d" * 40
+    path.write_bytes(release.encode(report))
+    run.update(id=103, head_sha="d" * 40, run_started_at=iso_timestamp(now - 600),
+               updated_at=iso_timestamp(now - 60))
+    args = dict(previous_bytes=release.encode(prior), published_report=(path, bundle, run),
+                gh=options["gh"], promotion_source_sha="e" * 40, promotion_run_id=400,
+                promotion_run_attempt=1, now=now, runner=options["runner"])
+    return admitted, inv, args
+
+
+def test_renewal_preserves_exact_release_and_links_prior_record(renewal):
+    admitted, inv, args = renewal
+    prior = release.decode(args["previous_bytes"])
+    renewed = release.renew_channel(admitted, inv, **args)
+    for field in ("channel", "release_tag", "source_sha", "admission_sha256"):
+        assert renewed[field] == prior[field]
+    assert renewed["generation"] == prior["generation"] + 1
+    assert renewed["previous_sha256"] == release.digest(args["previous_bytes"])
+    assert renewed["expires_at"] > prior["expires_at"]
+    assert renewed["promotion_source_sha"] == "e" * 40
+
+
+def test_renewal_can_recover_expired_channel_with_fresh_replay(renewal):
+    admitted, inv, args = renewal
+    prior = release.decode(args["previous_bytes"])
+    prior["expires_at"] = prior["issued_at"] + 10
+    args["previous_bytes"] = release.encode(prior)
+    assert release.renew_channel(admitted, inv, **args)["expires_at"] > args["now"]
+
+
+@pytest.mark.parametrize("field,value", [
+    ("run_started_at", None), ("updated_at", None),
+    ("run_started_at", "not-time"), ("updated_at", "2026-10-25T10:00:00"),
+    ("run_started_at", "old"), ("updated_at", "old"),
+    ("run_started_at", "future"), ("updated_at", "future"),
+    ("run_started_at", "prior"), ("updated_at", "reversed"),
+])
+def test_renewal_refuses_missing_stale_future_or_reversed_run_times(renewal, field, value):
+    admitted, inv, args = renewal
+    run = args["published_report"][2]
+    if value == "old":
+        value = iso_timestamp(args["now"] - 86401)
+    elif value == "future":
+        value = iso_timestamp(args["now"] + 1)
+    elif value == "prior":
+        value = iso_timestamp(release.decode(args["previous_bytes"])["issued_at"])
+    elif value == "reversed":
+        value = iso_timestamp(args["now"] - 601)
+    run[field] = value
+    with pytest.raises(ValueError, match="renewal"):
+        release.renew_channel(admitted, inv, **args)
+
+
+@pytest.mark.parametrize("mode", ["admission-bytes", "inventory-bytes", "release", "source", "build", "operator",
+                                  "failed-case", "failed-run", "wrong-attempt", "crypto", "shorter-expiry"])
+def test_renewal_rejects_changed_identity_or_unqualified_replay(renewal, mode):
+    admitted, inv, args = renewal
+    if mode == "admission-bytes":
+        admitted += b" "
+    elif mode == "inventory-bytes":
+        inv += b" "
+    elif mode in ("release", "source", "build", "operator"):
+        changed = release.decode(admitted)
+        key, value = {"release": ("release_tag", "v1.2.3-nightly.20261026.43"),
+                      "source": ("source_sha", "f" * 40), "build": ("build_run_id", 43),
+                      "operator": ("operator_sha256", "f" * 64)}[mode]
+        changed[key] = value
+        admitted = release.encode(changed)
+        prior = release.decode(args["previous_bytes"])
+        prior["admission_sha256"] = release.digest(admitted)
+        args["previous_bytes"] = release.encode(prior)
+    elif mode == "crypto":
+        args["runner"] = lambda _: "[]"
+    elif mode == "shorter-expiry":
+        args["lifetime"] = 100
+    else:
+        path, _, run = args["published_report"]
+        if mode == "failed-run":
+            run["conclusion"] = "failure"
+        elif mode == "wrong-attempt":
+            run["run_attempt"] = 2
+        else:
+            report = json.loads(path.read_bytes())
+            report["cases"]["owned-cleanup"] = "failed"
+            path.write_bytes(release.encode(report))
+    with pytest.raises(ValueError):
+        release.renew_channel(admitted, inv, **args)
+
+
+def test_renewal_replay_cannot_renew_a_second_time(renewal):
+    admitted, inv, args = renewal
+    renewed = release.renew_channel(admitted, inv, **args)
+    args["previous_bytes"] = release.encode(renewed)
+    args["now"] += 600
+    with pytest.raises(ValueError, match="predates"):
+        release.renew_channel(admitted, inv, **args)
+
+
+@pytest.mark.parametrize("age,accepted", [(86400, True), (86401, False)])
+def test_renewal_24_hour_boundary_independent_of_prior_issue_time(renewal, age, accepted):
+    admitted, inv, args = renewal
+    prior = release.decode(args["previous_bytes"])
+    prior["issued_at"] = args["now"] - 100000
+    prior["expires_at"] = prior["issued_at"] + 604800
+    args["previous_bytes"] = release.encode(prior)
+    args["published_report"][2]["run_started_at"] = iso_timestamp(args["now"] - age)
+    if accepted:
+        assert release.renew_channel(admitted, inv, **args)["generation"] == 2
+    else:
+        with pytest.raises(ValueError, match="stale"):
+            release.renew_channel(admitted, inv, **args)
