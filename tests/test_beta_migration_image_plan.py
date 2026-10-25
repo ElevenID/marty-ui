@@ -9,42 +9,43 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_actual_rehearsal_job_receives_notification_trust_without_root_token(tmp_path):
+def test_actual_rehearsal_context_binds_pinned_inputs_without_credentials(tmp_path):
     shell = shutil.which('powershell') or shutil.which('pwsh')
     if not shell:
         pytest.skip('PowerShell is required')
     source = str(ROOT / 'scripts/deploy-local-beta-release.ps1').replace("'", "''")
     script = tmp_path / 'rehearsal.ps1'
-    script.write_text(f"""$ErrorActionPreference='Stop'
+    script.write_text(f'''$ErrorActionPreference='Stop'
 $tokens=$null; $errors=$null
 $ast=[Management.Automation.Language.Parser]::ParseFile('{source}',[ref]$tokens,[ref]$errors)
 if ($errors.Count) {{ throw 'Runner parse failed' }}
 $assignments=@($ast.FindAll({{param($node)
  $node -is [Management.Automation.Language.AssignmentStatementAst] -and
  $node.Left -is [Management.Automation.Language.VariableExpressionAst] -and
- $node.Left.VariablePath.UserPath -eq 'rehearsalArguments' -and [string]$node.Operator -eq 'Equals'
+ $node.Left.VariablePath.UserPath -eq 'rehearsalContext'
 }},$true))
-if ($assignments.Count -ne 1) {{ throw 'Rehearsal job is ambiguous' }}
-$copyOpenBaoContainer='controlled-bao'; $copyCaMount='controlled-ca-mount'
-$copyUrl='postgresql://controlled.invalid/demo'; $copyPassword='CONTROLLED_NOT_A_PASSWORD'
-$migrationAdminEmail='operator@example.test'; $BetaOrigin='https://beta.elevenidllc.com'
-$copyNotificationToken='CONTROLLED_NOT_A_TOKEN'; $encodedCopyRedisPassword='CONTROLLED'
-$copyRedisContainer='controlled-redis'; $PilotOrganizationId='00000000-0000-0000-0000-000000000001'
+if ($assignments.Count -ne 1) {{ throw 'Rehearsal context is ambiguous' }}
+$script:RepoRoot='controlled-repo'; $script:ArtifactDir='controlled-artifacts'
+$preflightBackupDir='controlled-backup'; $logsDir='controlled-logs'
+$sourceId='a'*40; $migrationImage='sha256:'+('b'*64); $verificationMigrationImage='sha256:'+('c'*64)
+$script:EnvFiles=@('first.env','second.env'); $script:ComposeFiles=@('base.yml','frozen-images.yml')
+$migrationAdminEmail='operator@example.invalid'; $BetaOrigin='https://beta.elevenidllc.com'
+$PilotOrganizationId='00000000-0000-0000-0000-000000000001'
 Invoke-Expression $assignments[0].Extent.Text
-$environment=@{{}}
-for ($i=0; $i -lt $rehearsalArguments.Count-1; $i++) {{
- if ($rehearsalArguments[$i] -eq '--env') {{
-  $pair=$rehearsalArguments[++$i] -split '=',2; $environment[$pair[0]]=$pair[1]
- }}
-}}
-$environment | ConvertTo-Json
-""", encoding='utf8')
+$rehearsalContext | ConvertTo-Json
+''', encoding='utf8')
     result = subprocess.run([shell, '-NoProfile', '-File', str(script)],
                             capture_output=True, text=True, check=True, timeout=20)
-    environment = json.loads(result.stdout)
-    assert environment['NOTIFICATION_OPENBAO_CA_CERT_FILE'] == environment['BAO_CACERT'] == '/bao-public-ca/ca.crt'
-    assert environment['MARTY_KMS_BOOTSTRAP_ENABLED'] == 'false'
-    assert 'BAO_TOKEN' not in environment
+    context = json.loads(result.stdout)
+    assert context == {
+        'repo_root': 'controlled-repo', 'artifact_dir': 'controlled-artifacts',
+        'backup_dir': 'controlled-backup', 'logs_dir': 'controlled-logs',
+        'source_id': 'a'*40, 'migration_image': 'sha256:'+'b'*64,
+        'verification_image': 'sha256:'+'c'*64,
+        'env_files': ['first.env', 'second.env'], 'compose_files': ['base.yml', 'frozen-images.yml'],
+        'migration_admin_email': 'operator@example.invalid', 'beta_origin': 'https://beta.elevenidllc.com',
+        'pilot_organization_id': '00000000-0000-0000-0000-000000000001',
+    }
 
 
 def test_migration_jobs_use_frozen_artifacts_without_initialization_privilege(tmp_path):

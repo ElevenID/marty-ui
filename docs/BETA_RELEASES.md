@@ -214,13 +214,13 @@ aggregate release completes the same gates.
 
 ## Official release deployment on the beta host
 
-For the post-deletion Rust passport aggregate, follow the
-[passport aggregate acceptance checklist](rust-migrations/next-aggregate-beta-acceptance.md)
-and use `scripts/run-passport-beta-aggregate-deploy.ps1` with the final signed
-manifest and protected fence, maintenance, and native migration receipts. Its
-public acceptance soak completes the cutover. The `deploy-canvas-oss-beta.ps1`
-path below calls `deploy-local-beta-release.ps1`, which still invokes Python
-migrations; reserve that path for earlier non-passport beta deployments.
+The historical passport aggregate and SQL cutover entrypoints now refuse
+execution. Their [acceptance checklist](rust-migrations/next-aggregate-beta-acceptance.md)
+retains historical evidence; it is not a current executable deployment sequence.
+`deploy-canvas-oss-beta.ps1` still calls the active local beta transaction in
+`deploy-local-beta-release.ps1`, which invokes Rust migration binaries. That
+transaction does not substitute for source-bound Passport acceptance or remove
+the physical-provider and post-mutation recovery holds.
 
 The procedure below uses the official-stack mode for an earlier non-passport
 release produced by `.github/workflows/cd.yml`.
@@ -333,3 +333,30 @@ migration rehearsal, KMS custody checks, exact-container recovery, and the hold 
 physical-provider deployment/restoration remain required. Failures after live
 mutation still require reviewed forward repair; staging does not authorize an
 automatic rollback or resumed passport writes.
+
+## Native isolated migration rehearsal
+
+The existing beta transaction delegates its disposable copy rehearsal to
+`marty-deploy operator beta-rehearsal` through a bounded private-stdin adapter.
+It passes the captured backup/log paths, source, immutable migration images,
+and exact Compose files; the Rust owner generates the disposable credentials.
+Revocation and both issuance passes retain their Compose configurations. The
+DB migration and verify-only pass use the isolated OpenBao CA and scoped
+Notification authority, without its root token or KMS initialization privilege.
+Verification migration still runs twice. Success is required before maintenance.
+
+Each detached service and one-shot helper has a unique owner label and exact
+run name. Cleanup discovers that owner, verifies the role/name and full container
+ID, removes only verified objects, and confirms the owner inventory is empty.
+It never pre-deletes a previous run by name prefix. Interrupted or uncertain
+cleanup requires inspection of `marty.beta-rehearsal.owner` labels; do not enter
+live maintenance or delete a foreign object to make cleanup pass.
+
+The seven existing log filenames remain diagnostic outputs. Known generated
+credentials are redacted before logs are written; stdout is followed by stderr,
+so these files do not establish cross-stream chronological ordering. Existing
+rehearsal logs/CA files are preserved and block artifact-directory reuse.
+Closed command/failure tests and a disposable Docker/Compose ownership test
+qualify the mechanics; a seeded beta-copy migration remains deployment acceptance
+before release use. Live writer stop, backups, source revalidation, production
+invariants, and pre-/post-mutation recovery remain in the existing transaction.

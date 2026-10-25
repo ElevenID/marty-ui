@@ -1,6 +1,7 @@
 //! Deployment metadata and native KMS operator commands.
 
 mod aggregate_plan;
+pub mod beta_rehearsal;
 pub mod beta_runtime_config;
 mod compose_model;
 mod deployment_admission;
