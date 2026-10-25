@@ -3,6 +3,10 @@
 
 const fs = require('fs');
 const path = require('path');
+const assert = require('node:assert/strict');
+const { createDemoLiveEvidence, acknowledgeDemoInputs, applyLocalNativeReadiness } = require('./demo-live-evidence');
+const { createOwnedMembership } = require('./demo-owned-membership');
+const { login, selectOrg } = require('./audit-beta-credential-lifecycle');
 const { acquireWalletSession, openIsolatedWallet } = require('./demo-wallet-session');
 const { chromium } = require('@playwright/test');
 const {
@@ -20,6 +24,8 @@ const {
 } = require('./demo-recording');
 const {
   DEFAULT_LOGIN_BADGE_CONFIGURATION_ID,
+  DEFAULT_LOGIN_BADGE_TEMPLATE_ID,
+  DEFAULT_BETA_ORGANIZATION_ID,
   credentialInventoryEvidence,
   membershipLoginBehaviorAssertions,
 } = require('./beta-credential-contract');
@@ -56,7 +62,9 @@ function firstPartyControlAssertions(report) {
   const session = report.walletSession;
   const closed = report.closedWalletSession;
   return {
-    governed_claim: scope && membership.governed_claim,
+    governed_claim: scope && membership.governed_claim
+      && WALLET_ID.test(report.ownedResources?.applicationId || '')
+      && report.badge?.governedApplicationId === report.ownedResources.applicationId,
     expected_credential_received_and_stored: scope && controlCredentialReceived(report.badge),
     presentation_authenticated: scope && membership.same_device_passwordless_login
       && report.presentation?.status === 200 && report.completion?.authStatus === 200,
@@ -149,15 +157,26 @@ async function presentBadge(walletPage, requestUri) {
   };
 }
 
-async function main({ retainedFirstParty = false } = {}) {
+async function runCredentialLogin({ retainedFirstParty = false, evidence = null } = {}) {
   loadEnvFile(path.join(ROOT, '.env.tunnel.beta.local'));
   loadEnvFile(path.join(ROOT, '.env'));
   const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\..+/, '');
   const artifactDir = createArtifactDir(ROOT, `beta-credential-login-${stamp}`);
   const uiCandidate = resolveUiCandidateDist(ROOT);
-  if (retainedFirstParty && (!RECORD_VIDEO || LOCAL_BETA_PROXY || uiCandidate
+  if (retainedFirstParty && (!['0', '1'].includes(process.env.RECORD_VIDEO) || LOCAL_BETA_PROXY || uiCandidate
     || process.env.NODE_TLS_REJECT_UNAUTHORIZED === '0' || new URL(BETA_ORIGIN).protocol !== 'https:')) {
-    throw new Error('Retained first-party control requires fresh recordings and authenticated deployed HTTPS');
+    throw new Error('Retained first-party control requires explicit recording mode and authenticated deployed HTTPS');
+  }
+  const inputs = retainedFirstParty ? await acknowledgeDemoInputs(artifactDir, 'first-party-run-input.json', {
+    runId: process.env.DEMO_EXECUTION_EVIDENCE_RUN_ID,
+    organizationId: process.env.BETA_AUDIT_ORG_ID || DEFAULT_BETA_ORGANIZATION_ID,
+    credentialTemplateId: process.env.LOGIN_BADGE_TEMPLATE_ID || DEFAULT_LOGIN_BADGE_TEMPLATE_ID,
+    configurationId: MEMBERSHIP_BADGE_CONFIGURATION_ID, vct: MEMBERSHIP_BADGE_VCT,
+    email: process.env.TEST_APPLICANT_EMAIL, givenName: 'Jamie', familyName: 'Lee',
+  }, evidence) : null;
+  if (inputs) {
+    assert.match(inputs.runId || '', /^[a-f0-9-]{36}$/i);
+    assert.ok(inputs.email?.endsWith('@example.test'), 'Reserved synthetic applicant required');
   }
   const explain = retainedFirstParty
     ? (page, title, detail) => showRecordingStep(page, title, detail, {
@@ -185,7 +204,7 @@ async function main({ retainedFirstParty = false } = {}) {
       limitations: [
         'This fresh run reuses the governed membership product path with the internal Rust wallet control.',
         'Closed-session rejection is observed through the Rust wallet API; it does not qualify TTL expiry, public-device isolation or a public wallet product.',
-        'An approved synthetic membership application is a preprovisioned dependency. Closing the control session is not server credential revocation.',
+        'A fresh owned application uses the existing membership issuer and login policy. Its credential and application-template authority are retired after this run.',
       ],
     } : {}),
     uiCandidate: uiCandidate ? {
@@ -199,9 +218,21 @@ async function main({ retainedFirstParty = false } = {}) {
     },
   };
 
-  let walletSession;
+  let walletSession, walletContext, loginContext, holderContext, adminContext, adminPage;
+  let control, loginVideo, walletVideo;
   try {
-    const walletContext = await browser.newContext({
+    if (retainedFirstParty) {
+      adminContext = await browser.newContext({ viewport: VIDEO_SIZE });
+      adminPage = await adminContext.newPage();
+      evidence.bindPage(adminPage);
+      await login(adminPage, process.env.TEST_ADMIN_EMAIL, process.env.TEST_ADMIN_PASSWORD);
+      assert.equal((await selectOrg(adminPage)).ok, true);
+      control = createOwnedMembership(adminPage, inputs);
+      report.ownedResources = control.owned;
+      report.demonstrationBoundary = { setup: 'AUTHENTICATED_PUBLIC_API', claim: 'REAL_APPLICANT_UI',
+        receiptAndPresentation: 'REAL_RUST_WALLET_UI', cryptography: 'PRODUCTION_KMS_AND_VERIFIER', recording: RECORD_VIDEO };
+    }
+    walletContext = await browser.newContext({
       viewport: VIDEO_SIZE,
       ignoreHTTPSErrors: LOCAL_BETA_PROXY,
       ...(RECORD_VIDEO ? { recordVideo: { dir: artifactDir, size: VIDEO_SIZE } } : {}),
@@ -212,22 +243,29 @@ async function main({ retainedFirstParty = false } = {}) {
     const offerResult = await collectBetaOffer(browser, {
       walletId: 'wr-default',
       logoutAfterOffer: true,
-      keepContext: RECORD_VIDEO,
+      keepContext: RECORD_VIDEO || retainedFirstParty,
+      prepareApplication: control ? (page) => control.prepare(page) : null,
+      onPage: evidence ? (page) => evidence.bindPage(page) : null,
       contextOptions: RECORD_VIDEO ? { viewport: VIDEO_SIZE, recordVideo: { dir: artifactDir, size: VIDEO_SIZE } } : {},
       onStep: explain,
-      setupContext: (context) => installUiCandidateRoute(context, uiCandidate, BETA_ORIGIN),
+      setupContext: async (context) => {
+        if (retainedFirstParty) holderContext = context;
+        await installUiCandidateRoute(context, uiCandidate, BETA_ORIGIN);
+      },
     });
-    const { context: holderContext = null, page: holderPage = null, ...offer } = offerResult;
+    const { context: offerContext = null, page: holderPage = null, ...offer } = offerResult;
+    holderContext = offerContext;
     report.badResponses.push(...(offer.badResponses || []));
     report.consoleErrors.push(...(offer.consoleErrors || []));
     const holderVideo = holderPage?.video() || null;
     await installUiCandidateRoute(walletContext, uiCandidate, BETA_ORIGIN);
     const walletPage = await walletContext.newPage();
+    if (evidence) evidence.bindPage(walletPage);
     walletPage.on('pageerror', (error) => report.pageErrors.push(redact(error.message)));
     walletPage.on('console', (message) => {
       if (message.type() === 'error') report.consoleErrors.push(redact(message.text()).slice(0, 400));
     });
-    const walletVideo = walletPage.video();
+    walletVideo = walletPage.video();
     await explain(
       walletPage,
       'Browser wallet opened',
@@ -235,6 +273,7 @@ async function main({ retainedFirstParty = false } = {}) {
     );
     report.badge = {
       offerSource: offer.offerSource,
+      ...(control ? { governedApplicationId: control.owned.applicationId } : {}),
       loggedOut: offer.loggedOut === true,
       ...await receiveBadge(walletPage, offer.offerUri, { retainSummary: retainedFirstParty }),
     };
@@ -248,7 +287,7 @@ async function main({ retainedFirstParty = false } = {}) {
     );
     await walletPage.screenshot({ path: path.join(artifactDir, '01-wallet-with-badge.png'), fullPage: true });
 
-    const loginContext = holderContext || await browser.newContext({
+    loginContext = holderContext || await browser.newContext({
       viewport: VIDEO_SIZE,
       ignoreHTTPSErrors: LOCAL_BETA_PROXY,
       ...(RECORD_VIDEO ? { recordVideo: { dir: artifactDir, size: VIDEO_SIZE } } : {}),
@@ -263,7 +302,8 @@ async function main({ retainedFirstParty = false } = {}) {
       });
     });
     const loginPage = holderPage || await loginContext.newPage();
-    const loginVideo = holderVideo || loginPage.video();
+    loginVideo = holderVideo || loginPage.video();
+    if (evidence && !holderPage) evidence.bindPage(loginPage);
     loginPage.on('pageerror', (error) => report.pageErrors.push(redact(error.message)));
     loginPage.on('console', (message) => {
       if (message.type() === 'error') report.consoleErrors.push(redact(message.text()).slice(0, 400));
@@ -343,6 +383,9 @@ async function main({ retainedFirstParty = false } = {}) {
       authStatus: auth.status,
       authenticatedEmail: auth.body?.authenticated ? auth.body?.user?.email : null,
     };
+    if (retainedFirstParty && report.completion.authenticatedEmail?.toLowerCase() !== inputs.email.toLowerCase()) {
+      throw new Error('Credential login resolved a different account');
+    }
     if (retainedFirstParty && !firstPartyControlAssertions(report).presentation_authenticated) {
       throw new Error('The control presentation did not establish an authenticated HTTP 200 session');
     }
@@ -370,22 +413,36 @@ async function main({ retainedFirstParty = false } = {}) {
         'The Rust control closed this run’s session. A fresh credential-list API request for that run is rejected with HTTP 410.');
       report.finishedAt = new Date().toISOString();
     } else await walletSession.close();
-    await loginContext.close();
-    await walletContext.close();
-    if (RECORD_VIDEO) {
-      report.recordings = {
-        holder: path.relative(ROOT, await finalizeVideo(loginVideo, artifactDir, 'open-badge-holder-and-login.webm')),
-        wallet: path.relative(ROOT, await finalizeVideo(walletVideo, artifactDir, 'open-badge-browser-wallet.webm')),
-      };
-    }
   } catch (error) {
     report.finishedAt = new Date().toISOString();
     report.releaseReady = false;
     report.engineeringReady = false;
     report.error = redact(error.stack || error.message || String(error));
   } finally {
+    if (control) {
+      try { report.cleanup = await control.cleanup(); }
+      catch (error) { report.cleanupError = redact(error.message); report.engineeringReady = false; }
+    }
+    if (retainedFirstParty) {
+      report.authoringSessionsRetired = true;
+      for (const context of new Set([loginContext || holderContext, adminContext].filter(Boolean))) {
+        try {
+          const response = await context.request.post(`${BETA_ORIGIN}/v1/auth/logout`, { maxRedirects: 0 });
+          assert.ok(response.ok() || [302, 303, 307].includes(response.status()));
+          const me = await context.request.get(`${BETA_ORIGIN}/v1/auth/me`);
+          assert.equal((await me.json()).authenticated, false);
+        } catch (error) {
+          report.authoringSessionsRetired = false; report.engineeringReady = false;
+          report.cleanupErrors ||= [];
+          report.cleanupErrors.push({ operation: 'beta_session_logout', error: redact(error.message) });
+        }
+      }
+    }
     for (const [operation, close] of [
-      ['wallet', () => walletSession?.close()], ['browser', () => browser.close()],
+      ['wallet', () => walletSession?.close()],
+      ['holder_context', () => (loginContext || holderContext)?.close()],
+      ['wallet_context', () => walletContext?.close()], ['admin_context', () => adminContext?.close()],
+      ['browser', () => browser.close()],
     ]) {
       try { await close(); }
       catch (error) {
@@ -395,10 +452,37 @@ async function main({ retainedFirstParty = false } = {}) {
         report.releaseReady = false;
       }
     }
+    if (retainedFirstParty) {
+      const cleanupComplete = report.cleanup?.complete === true && report.authoringSessionsRetired === true
+        && walletSession?.evidence.closed === true && !report.cleanupError && !report.cleanupErrors?.length;
+      report.engineeringReady = report.engineeringReady === true && cleanupComplete;
+      report.releaseReady = report.engineeringReady && !uiCandidate;
+      applyLocalNativeReadiness(report, evidence, { ready: report.engineeringReady, cleanupComplete });
+    }
+    if (RECORD_VIDEO && report.engineeringReady) {
+      try { report.recordings = {
+        holder: path.relative(ROOT, await finalizeVideo(loginVideo, artifactDir, 'open-badge-holder-and-login.webm')),
+        wallet: path.relative(ROOT, await finalizeVideo(walletVideo, artifactDir, 'open-badge-browser-wallet.webm')),
+      }; } catch (error) { report.engineeringReady = false; report.releaseReady = false; report.error = redact(error.message); }
+    }
+    if (evidence && report.engineeringReady) {
+      try { await evidence.complete(); } catch (error) {
+        report.engineeringReady = false; report.releaseReady = false; report.functionalReady = false;
+        report.operations_verified = false; report.error = redact(error.message);
+      }
+    }
+    report.finishedAt = new Date().toISOString();
     fs.writeFileSync(path.join(artifactDir, 'report.json'), JSON.stringify(report, null, 2));
     console.log(JSON.stringify(report, null, 2));
     if (!report.engineeringReady) process.exitCode = 1;
   }
+}
+
+async function main({ retainedFirstParty = false } = {}) {
+  if (!retainedFirstParty) return runCredentialLogin();
+  const evidence = await createDemoLiveEvidence();
+  try { return await runCredentialLogin({ retainedFirstParty, evidence }); }
+  finally { evidence.close(); }
 }
 
 if (require.main === module) {

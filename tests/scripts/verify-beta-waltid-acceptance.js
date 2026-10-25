@@ -149,8 +149,9 @@ async function registerAndLoginLocalWallet(browser) {
   return { context, page, walletId };
 }
 
-async function loginToBetaApplicant(page, email, password) {
-  const applyUrl = `${BETA_ORIGIN}/console/applicant/apply/${TEMPLATE_ID}`;
+async function loginToBetaApplicant(page, email, password, { prepareApplication = false } = {}) {
+  const applyUrl = prepareApplication ? `${BETA_ORIGIN}/console/applicant/identity`
+    : `${BETA_ORIGIN}/console/applicant/apply/${TEMPLATE_ID}`;
   await page.context().clearCookies();
   await page.goto(BETA_ORIGIN, { waitUntil: 'domcontentloaded', timeout: 60_000 }).catch(() => {});
   await page.evaluate(() => {
@@ -185,6 +186,8 @@ async function collectBetaOffer(browser, {
   keepContext = false,
   onStep = null,
   setupContext = null,
+  prepareApplication = null,
+  onPage = null,
 } = {}) {
   loadEnvFile(path.join(ROOT, '.env.tunnel.beta.local'));
   loadEnvFile(path.join(ROOT, '.env'));
@@ -201,6 +204,8 @@ async function collectBetaOffer(browser, {
   });
   if (setupContext) await setupContext(context);
   const page = await context.newPage();
+  if (onPage) await onPage(page);
+  let ownedApplication = null;
   const issueResponses = [];
   const badResponses = [];
   const consoleErrors = [];
@@ -212,7 +217,8 @@ async function collectBetaOffer(browser, {
     const url = response.url();
     if (url.includes('/cdn-cgi/rum')) return;
     const canonicalClaim = /\/v1\/me\/applications\/[^/]+\/claim(?:\?|$)/.test(url);
-    if (canonicalClaim && response.request().method() === 'POST') {
+    if (canonicalClaim && response.request().method() === 'POST'
+        && (!ownedApplication || new URL(url).pathname === `/v1/me/applications/${ownedApplication.applicationId}/claim`)) {
       try {
         issueResponses.push({ status: response.status(), json: await response.json() });
       } catch {
@@ -224,7 +230,12 @@ async function collectBetaOffer(browser, {
     }
   });
 
-  await loginToBetaApplicant(page, email, password);
+  await loginToBetaApplicant(page, email, password, { prepareApplication: Boolean(prepareApplication) });
+  ownedApplication = prepareApplication ? await prepareApplication(page) : null;
+  if (ownedApplication) {
+    if (!/^[a-f0-9-]{36}$/i.test(ownedApplication.applicationId || '')) throw new Error('Explicit owned application required');
+    await page.goto(`${BETA_ORIGIN}/console/applicant/identity?id=${encodeURIComponent(ownedApplication.applicationId)}`);
+  }
   if (onStep) {
     await onStep(
       page,
@@ -232,7 +243,12 @@ async function collectBetaOffer(browser, {
       'The applicant is authenticated and the approved membership badge is ready to claim.',
     );
   }
-  await page.getByRole('button', { name: /add to wallet/i }).click({ timeout: 60_000 });
+  if (ownedApplication) {
+    await page.getByRole('dialog', { name: 'Application Details', exact: true })
+      .getByRole('button', { name: /^claim$/i }).click({ timeout: 60_000 });
+    const actual = await page.getByTestId('credential-claim-dialog').getAttribute('data-application-id');
+    if (actual !== ownedApplication.applicationId) throw new Error('UI selected a different application; no claim authorized');
+  } else await page.getByRole('button', { name: /add to wallet/i }).click({ timeout: 60_000 });
   await page.getByTestId('wallet-selector').waitFor({ state: 'visible', timeout: 15_000 });
   if (onStep) {
     await onStep(
