@@ -16,6 +16,7 @@ import { listDeliveryDestinations } from '../../../../services/deliveryDestinati
 import { listDeploymentProfiles } from '../../../../services/deploymentProfilesApi';
 import { listCredentialTemplates, listPresentationPolicies } from '../../../../services/presentationPolicyApi';
 import { useConsole } from '../../../../contexts/ConsoleContext';
+import { loadScopedCatalog } from '../../../../services/loadScopedCatalog';
 
 const CREDENTIAL_TYPES = new Set([
   'oid4vci_authorization_code', 'oid4vci_pre_authorized', 'mdl_issuance',
@@ -54,17 +55,18 @@ const DeploymentBindingStep = ({
     presentation: PRESENTATION_TYPES.has(flowType),
   }), [flowType]);
 
-  const fetchData = useCallback(async () => {
+  const fetchData = useCallback(async (signal) => {
     if (!organizationId) return;
     setLoading(true);
     const requests = [
-      ['deployments', listDeploymentProfiles({ organization_id: organizationId })],
-      ['policies', listPresentationPolicies({ organization_id: organizationId })],
-      ['templates', listCredentialTemplates({ organization_id: organizationId })],
+      ['deployments', loadScopedCatalog(listDeploymentProfiles, organizationId, { signal })],
+      ['policies', loadScopedCatalog(listPresentationPolicies, organizationId, { signal })],
+      ['templates', loadScopedCatalog(listCredentialTemplates, organizationId, { signal })],
       ['applications', listApplicationTemplates(organizationId)],
       ['deliveries', listDeliveryDestinations({ organizationId, activeOnly: true })],
     ];
     const settled = await Promise.allSettled(requests.map(([, request]) => request));
+    if (signal.aborted) return;
     const nextResources = { applications: [], deliveries: [], deployments: [], policies: [], templates: [] };
     const errors = [];
     settled.forEach((result, index) => {
@@ -80,7 +82,11 @@ const DeploymentBindingStep = ({
     setLoading(false);
   }, [organizationId]);
 
-  useEffect(() => { fetchData(); }, [fetchData]);
+  useEffect(() => {
+    const controller = new AbortController();
+    fetchData(controller.signal);
+    return () => controller.abort();
+  }, [fetchData]);
 
   useEffect(() => {
     const updates = {};

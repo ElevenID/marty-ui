@@ -11,8 +11,10 @@ export async function loadScopedCatalog(listPage, organizationId, { signal, page
     checkCancelled();
     if (!Array.isArray(page) || page.length > pageSize) throw new Error('Catalog returned an invalid page.');
     for (const item of page) {
-      if (typeof item?.id !== 'string' || !item.id || seen.has(item.id)) throw new Error('Catalog pagination did not advance.');
-      seen.add(item.id);
+      const validId = (typeof item?.id === 'string' && item.id.trim()) || (Number.isSafeInteger(item?.id) && item.id > 0);
+      const id = String(item?.id);
+      if (!validId || seen.has(id)) throw new Error('Catalog pagination did not advance.');
+      seen.add(id);
       items.push(item);
     }
     if (page.length < pageSize) return items;

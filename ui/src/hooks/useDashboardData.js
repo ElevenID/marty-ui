@@ -20,6 +20,7 @@ import { listApplicationTemplates } from '../services/applicationTemplatesApi';
 import { listDeliveryDestinations } from '../services/deliveryDestinationsApi';
 import { listPolicySets } from '../services/policySetsApi';
 import { listComplianceProfiles } from '../services/complianceProfilesApi';
+import { loadScopedCatalog } from '../services/loadScopedCatalog';
 import { getPhysicalDocumentCapabilities } from '../services/physicalDocumentsApi';
 import { listPublicIssuerIdentities } from '../services/issuerIdentitiesApi';
 import { 
@@ -37,21 +38,6 @@ const SHOULD_LOG_DASHBOARD_HOOK_DIAGNOSTICS = import.meta.env.DEV && import.meta
 function logDashboardHookError(message, error) {
   if (SHOULD_LOG_DASHBOARD_HOOK_DIAGNOSTICS) {
     console.error(message, error);
-  }
-}
-
-async function loadComplianceProfiles(organizationId) {
-  const profiles = [];
-  const seen = new Set();
-  for (let offset = 0; ; offset += 100) {
-    const page = await listComplianceProfiles({ organization_id: organizationId, limit: 100, offset });
-    if (!Array.isArray(page)) throw new Error('Compliance profile catalog returned invalid data.');
-    for (const profile of page) {
-      if (!profile?.id || seen.has(profile.id)) throw new Error('Compliance profile catalog returned an invalid or repeated profile.');
-      seen.add(profile.id);
-      profiles.push(profile);
-    }
-    if (page.length < 100) return profiles;
   }
 }
 
@@ -107,6 +93,8 @@ export function useDashboardData() {
     }
 
     let mounted = true;
+    const controller = new AbortController();
+    const catalog = (list) => loadScopedCatalog(list, organizationId, { signal: controller.signal });
 
     const loadDashboardData = async () => {
       try {
@@ -135,17 +123,17 @@ export function useDashboardData() {
           environmentRes,
           lifecycleRes,
         ] = await Promise.allSettled([
-          loadComplianceProfiles(organizationId),
-          listTrustProfiles({ organization_id: organizationId }),
-          listCredentialTemplates({ organization_id: organizationId }),
+          catalog(listComplianceProfiles),
+          catalog(listTrustProfiles),
+          catalog(listCredentialTemplates),
           listApplicationTemplates(organizationId),
           listDeliveryDestinations({ organizationId, activeOnly: true }),
           listPolicySets(organizationId),
           getPhysicalDocumentCapabilities(),
-          listPresentationPolicies({ organization_id: organizationId }),
-          listRevocationProfiles({ organization_id: organizationId }),
-          listDeploymentProfiles({ organization_id: organizationId }),
-          listFlows({ organization_id: organizationId }),
+          catalog(listPresentationPolicies),
+          catalog(listRevocationProfiles),
+          catalog(listDeploymentProfiles),
+          catalog(listFlows),
           listPublicIssuerIdentities({ organization_id: organizationId }),
           listApiKeys(organizationId),
           fetch('/health').then((r) => (r.ok ? r.json() : { status: 'error' })),
@@ -238,6 +226,7 @@ export function useDashboardData() {
 
     return () => {
       mounted = false;
+      controller.abort();
       clearInterval(healthInterval);
     };
   }, [organizationId, refetchTrigger]);
