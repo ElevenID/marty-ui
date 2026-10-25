@@ -17,6 +17,7 @@ pub const REPOSITORY: &str = "ElevenID/marty-ui";
 pub const REF: &str = "refs/heads/main";
 pub const ISSUER: &str = "https://token.actions.githubusercontent.com";
 pub const PROMOTION_WORKFLOW: &str = ".github/workflows/installer-promote.yml";
+pub const ACCEPTANCE_WORKFLOW: &str = ".github/workflows/installer-acceptance.yml";
 pub const MAX_RECORD: usize = 65536;
 const SAFE_INTEGER: u64 = 1 << 53;
 
@@ -198,6 +199,121 @@ pub struct Admission {
     pub promotion_run_id: u64,
     pub promotion_run_attempt: u64,
     pub acceptance: Acceptance,
+}
+/// A bounded authorization to exercise a candidate, never consumer admission.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum CandidatePhase {
+    Staged,
+    Published,
+}
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct CandidateAuthorization {
+    pub schema: String,
+    pub repository: String,
+    pub scope: String,
+    pub source_ref: String,
+    pub source_sha: String,
+    pub release_tag: String,
+    pub platform: String,
+    pub inventory_sha256: String,
+    pub operator_sha256: String,
+    pub build_run_id: u64,
+    pub build_run_attempt: u64,
+    pub phase: CandidatePhase,
+    pub harness_source_sha: String,
+    pub workflow: String,
+    pub run_id: u64,
+    pub run_attempt: u64,
+    pub issued_at: u64,
+    pub expires_at: u64,
+    pub nonce: String,
+}
+/// Independently selected harness invocation and candidate, never populated by
+/// copying claims from the authorization under verification.
+#[derive(Clone, Debug)]
+pub struct CandidateContext {
+    pub operator_sha: String,
+    pub source_sha: String,
+    pub release_tag: String,
+    pub phase: CandidatePhase,
+    pub nonce: String,
+    pub harness_source_sha: String,
+    pub run_id: u64,
+    pub run_attempt: u64,
+}
+
+/// Parse only. The caller must authenticate these exact bytes against the
+/// harness workflow/source/run certificate and enforce nonce consumption.
+pub fn parse_candidate_authorization(bytes: &[u8], now: u64) -> Result<CandidateAuthorization> {
+    let a: CandidateAuthorization = typed(decode(bytes, MAX_RECORD)?)?;
+    require(
+        a.schema == "elevenid.installer-candidate-authorization/v1"
+            && a.repository == REPOSITORY
+            && a.scope == "acceptance-only"
+            && a.source_ref == REF
+            && a.platform == "linux/amd64"
+            && a.workflow == ACCEPTANCE_WORKFLOW,
+        "candidate authorization identity differs",
+    )?;
+    candidate(
+        &a.source_sha,
+        &a.release_tag,
+        a.build_run_id,
+        a.build_run_attempt,
+    )?;
+    require(
+        sha(&a.inventory_sha256, 64)
+            && sha(&a.operator_sha256, 64)
+            && sha(&a.harness_source_sha, 40)
+            && sha(&a.nonce, 64)
+            && positive(a.run_id)
+            && positive(a.run_attempt),
+        "invalid candidate authorization binding",
+    )?;
+    require(
+        positive(now)
+            && positive(a.issued_at)
+            && a.issued_at <= now
+            && a.expires_at < SAFE_INTEGER
+            && a.expires_at > now
+            && a.expires_at > a.issued_at
+            && a.expires_at - a.issued_at <= 3600,
+        "candidate authorization is expired or has invalid lifetime",
+    )?;
+    Ok(a)
+}
+
+/// Bind an authenticated acceptance-only authorization to exact candidate
+/// bytes and the independently observed running operator. This performs no
+/// cryptographic verification, execution, or durable replay prevention.
+pub fn bind_candidate_authorization(
+    authorization_bytes: &[u8],
+    inventory_bytes: &[u8],
+    expected: &CandidateContext,
+    now: u64,
+) -> Result<(CandidateAuthorization, Inventory)> {
+    let a = parse_candidate_authorization(authorization_bytes, now)?;
+    let inv = parse_inventory(inventory_bytes)?;
+    require(
+        a.source_sha == expected.source_sha
+            && a.release_tag == expected.release_tag
+            && a.phase == expected.phase
+            && a.nonce == expected.nonce
+            && a.harness_source_sha == expected.harness_source_sha
+            && a.run_id == expected.run_id
+            && a.run_attempt == expected.run_attempt
+            && inv.source_sha == a.source_sha
+            && inv.release_tag == a.release_tag
+            && inv.build_run_id == a.build_run_id
+            && inv.build_run_attempt == a.build_run_attempt
+            && sha256(inventory_bytes) == a.inventory_sha256
+            && inv.artifact("marty-deploy-linux-amd64")?.sha256 == a.operator_sha256
+            && a.operator_sha256 == expected.operator_sha,
+        "candidate authorization bytes, phase or producer differ",
+    )?;
+    Ok((a, inv))
 }
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -486,6 +602,192 @@ mod tests {
          "previous_sha256":null,"source_sha":"a".repeat(40),"release_tag":"v1.2.3-nightly.20261025.42",
          "admission_sha256":sha256(a),"promotion_source_sha":"f".repeat(40),"promotion_run_id":100,
          "promotion_run_attempt":1,"issued_at":1000,"expires_at":2000})
+    }
+    fn authorization(inv: &[u8]) -> Value {
+        json!({"schema":"elevenid.installer-candidate-authorization/v1",
+            "repository":REPOSITORY,"scope":"acceptance-only","source_ref":REF,"platform":"linux/amd64",
+            "source_sha":"a".repeat(40),"release_tag":"v1.2.3-nightly.20261025.42",
+            "inventory_sha256":sha256(inv),"operator_sha256":"c".repeat(64),
+            "build_run_id":42,"build_run_attempt":1,"phase":"staged",
+            "harness_source_sha":"b".repeat(40),"workflow":ACCEPTANCE_WORKFLOW,
+            "run_id":90,"run_attempt":2,"issued_at":1000,"expires_at":4600,
+            "nonce":"d".repeat(64)})
+    }
+    fn candidate_context() -> CandidateContext {
+        CandidateContext {
+            operator_sha: "c".repeat(64),
+            source_sha: "a".repeat(40),
+            release_tag: "v1.2.3-nightly.20261025.42".into(),
+            phase: CandidatePhase::Staged,
+            nonce: "d".repeat(64),
+            harness_source_sha: "b".repeat(40),
+            run_id: 90,
+            run_attempt: 2,
+        }
+    }
+    #[test]
+    fn python_candidate_fixture_binds_exact_serialized_bytes() {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/installer-candidate-records.json"
+        ))
+        .unwrap();
+        let inventory = fixture["inventory"].as_str().unwrap().as_bytes();
+        let authorization = fixture["authorization"].as_str().unwrap().as_bytes();
+        let expected = CandidateContext {
+            operator_sha: "a085d8a20cddaa36a743b4016b4e1f135cc0c25b7d5abf69285c68c054a5aed8".into(),
+            source_sha: "a".repeat(40),
+            release_tag: "v1.2.3".into(),
+            phase: CandidatePhase::Staged,
+            nonce: "e".repeat(64),
+            harness_source_sha: "c".repeat(40),
+            run_id: 99,
+            run_attempt: 3,
+        };
+        assert_eq!(fixture["now"], json!(100000));
+        let (a, inv) =
+            bind_candidate_authorization(authorization, inventory, &expected, 100000).unwrap();
+        assert_eq!(
+            a.inventory_sha256,
+            "57728fd27d81cf3523b3aef77d3e072cf50c64e7a6ea44fdf8060da6858d6b56"
+        );
+        assert_eq!((inv.build_run_id, inv.build_run_attempt), (42, 2));
+        assert!(parse_admission(authorization).is_err());
+        assert!(parse_channel(authorization, 100000).is_err());
+        let mut reformatted = inventory.to_vec();
+        reformatted.push(b' ');
+        assert!(
+            bind_candidate_authorization(authorization, &reformatted, &expected, 100000).is_err()
+        );
+    }
+    #[test]
+    fn candidate_authorization_is_separate_and_binds_exact_candidate() {
+        let inv = bytes(&inventory());
+        let original = authorization(&inv);
+        let bind = |a: &Value, inv: &[u8], phase| {
+            let context = CandidateContext {
+                phase,
+                ..candidate_context()
+            };
+            bind_candidate_authorization(&bytes(a), inv, &context, 1500)
+        };
+        let (a, _) = bind(&original, &inv, CandidatePhase::Staged).unwrap();
+        assert_eq!(a.harness_source_sha, "b".repeat(40));
+        let mut published = original.clone();
+        published["phase"] = json!("published");
+        bind(&published, &inv, CandidatePhase::Published).unwrap();
+        assert!(bind(&original, &inv, CandidatePhase::Published).is_err());
+        assert!(parse_admission(&bytes(&original)).is_err());
+        assert!(parse_channel(&bytes(&original), 1500).is_err());
+        assert!(parse_candidate_authorization(&bytes(&admission(&inv)), 1500).is_err());
+        let mut changed = inv.clone();
+        changed.push(b' ');
+        assert!(bind(&original, &changed, CandidatePhase::Staged).is_err());
+        for (field, value) in [
+            ("source_sha", json!("e".repeat(40))),
+            ("release_tag", json!("v1.2.4")),
+            ("build_run_id", json!(43)),
+            ("build_run_attempt", json!(2)),
+            ("inventory_sha256", json!("e".repeat(64))),
+            ("operator_sha256", json!("e".repeat(64))),
+            ("nonce", json!("e".repeat(64))),
+            ("harness_source_sha", json!("e".repeat(40))),
+            ("run_id", json!(91)),
+            ("run_attempt", json!(3)),
+        ] {
+            let mut changed = original.clone();
+            changed[field] = value;
+            assert!(
+                bind(&changed, &inv, CandidatePhase::Staged).is_err(),
+                "{field}"
+            );
+        }
+        for (operator, source, tag) in [
+            ("f".repeat(64), "a".repeat(40), "v1.2.3-nightly.20261025.42"),
+            ("c".repeat(64), "f".repeat(40), "v1.2.3-nightly.20261025.42"),
+            ("c".repeat(64), "a".repeat(40), "v1.2.4"),
+        ] {
+            let context = CandidateContext {
+                operator_sha: operator,
+                source_sha: source,
+                release_tag: tag.into(),
+                ..candidate_context()
+            };
+            assert!(bind_candidate_authorization(&bytes(&original), &inv, &context, 1500).is_err());
+        }
+        for field in ["nonce", "harness", "run", "attempt"] {
+            let mut context = candidate_context();
+            match field {
+                "nonce" => context.nonce = "e".repeat(64),
+                "harness" => context.harness_source_sha = "e".repeat(40),
+                "run" => context.run_id += 1,
+                _ => context.run_attempt += 1,
+            }
+            assert!(bind_candidate_authorization(&bytes(&original), &inv, &context, 1500).is_err());
+        }
+    }
+    #[test]
+    fn candidate_authorization_rejects_identity_time_and_ambiguous_records() {
+        let original = authorization(&bytes(&inventory()));
+        for (field, value) in [
+            ("schema", json!("elevenid.installer-admission/v1")),
+            ("repository", json!("other/repo")),
+            ("scope", json!("accepted")),
+            ("source_ref", json!("refs/heads/other")),
+            ("platform", json!("linux/arm64")),
+            ("workflow", json!(PROMOTION_WORKFLOW)),
+            ("source_sha", json!("A".repeat(40))),
+            ("release_tag", json!("latest")),
+            ("harness_source_sha", json!("bad")),
+            ("inventory_sha256", json!("bad")),
+            ("operator_sha256", json!("bad")),
+            ("nonce", json!("D".repeat(64))),
+            ("phase", json!("accepted")),
+            ("run_id", json!(0)),
+            ("run_attempt", json!(SAFE_INTEGER)),
+            ("build_run_id", json!(true)),
+            ("build_run_attempt", json!(1.0)),
+            ("issued_at", json!(1501)),
+            ("issued_at", json!(-1)),
+            ("issued_at", json!(0)),
+            ("expires_at", json!(1500)),
+            ("expires_at", json!(4601)),
+            ("expires_at", json!(SAFE_INTEGER)),
+            ("extra", json!(false)),
+        ] {
+            let mut changed = original.clone();
+            changed[field] = value;
+            assert!(
+                parse_candidate_authorization(&bytes(&changed), 1500).is_err(),
+                "{field}"
+            );
+        }
+        assert!(parse_candidate_authorization(&bytes(&original), 1000).is_ok());
+        assert!(parse_candidate_authorization(&bytes(&original), 4599).is_ok());
+        assert!(parse_candidate_authorization(&bytes(&original), 999).is_err());
+        assert!(parse_candidate_authorization(&bytes(&original), 4600).is_err());
+        assert!(parse_candidate_authorization(&bytes(&original), SAFE_INTEGER).is_err());
+        assert!(parse_candidate_authorization(&bytes(&original), 0).is_err());
+        let mut zero_epoch = original.clone();
+        zero_epoch["issued_at"] = json!(0);
+        zero_epoch["expires_at"] = json!(3600);
+        for now in [0, 1] {
+            assert!(parse_candidate_authorization(&bytes(&zero_epoch), now).is_err());
+        }
+        for key in original.as_object().unwrap().keys() {
+            let mut missing = original.clone();
+            missing.as_object_mut().unwrap().remove(key);
+            assert!(
+                parse_candidate_authorization(&bytes(&missing), 1500).is_err(),
+                "{key}"
+            );
+        }
+        let duplicate = String::from_utf8(bytes(&original)).unwrap().replacen(
+            '{',
+            "{\"nonce\":\"duplicate\",",
+            1,
+        );
+        assert!(parse_candidate_authorization(duplicate.as_bytes(), 1500).is_err());
+        assert!(parse_candidate_authorization(&vec![b' '; MAX_RECORD + 1], 1500).is_err());
     }
     #[test]
     fn exact_records_bind_without_conflating_promotion_source() {

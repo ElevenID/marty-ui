@@ -2,8 +2,8 @@
 
 No publication or signing occurs here. Callers authenticate inventory/prior-channel
 bytes and authoritative API run records before using them; serialize promotion
-and compare-and-swap the prior channel when publishing. This module cannot grant
-candidate replay authorization or bypass stable release qualification.
+and compare-and-swap the prior channel when publishing. Unsigned candidate-test
+records cannot grant execution permission or bypass release qualification.
 """
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ import hashlib
 import argparse
 import json
 import re
+import secrets
 from datetime import datetime
 from pathlib import Path
 
@@ -31,6 +32,7 @@ ARTIFACT_MAX_BYTES = {
 }
 ARTIFACTS = frozenset(ARTIFACT_MAX_BYTES)
 PROMOTION_WORKFLOW = ".github/workflows/installer-promote.yml"
+CANDIDATE_SCHEMA = "elevenid.installer-candidate-authorization/v1"
 require = acceptance.require
 exact = acceptance.exact
 
@@ -134,6 +136,97 @@ def validate_inventory(record: dict) -> None:
     for name, image in record["images"].items():
         require(acceptance.matches(name, r"[a-z0-9][a-z0-9_-]*")
                 and acceptance.matches(image, r"[a-z0-9][a-z0-9./:_-]*@sha256:[0-9a-f]{64}"), "unpinned image")
+
+
+def validate_candidate_authorization(record: dict, *, now: int) -> None:
+    """Validate structure/time only; this does not authenticate or admit a release."""
+    exact(record, {"schema", "repository", "scope", "source_ref", "source_sha", "release_tag",
+                   "platform", "inventory_sha256", "operator_sha256", "build_run_id",
+                   "build_run_attempt", "phase", "harness_source_sha", "workflow", "run_id",
+                   "run_attempt", "issued_at", "expires_at", "nonce"}, "candidate authorization")
+    require(record["schema"] == CANDIDATE_SCHEMA and record["repository"] == REPOSITORY
+            and record["scope"] == "acceptance-only" and record["source_ref"] == "refs/heads/main"
+            and record["platform"] == "linux/amd64" and record["workflow"] == acceptance.WORKFLOW,
+            "candidate authorization identity differs")
+    require(isinstance(record["phase"], str) and record["phase"] in {"staged", "published"}, "invalid candidate phase")
+    identity(record["source_sha"], record["release_tag"], record["build_run_id"], record["build_run_attempt"])
+    sha(record["harness_source_sha"])
+    for field in ("inventory_sha256", "operator_sha256", "nonce"):
+        sha(record[field], 64)
+    for field in ("run_id", "run_attempt", "issued_at", "expires_at"):
+        positive(record[field])
+    positive(now)
+    require(record["issued_at"] <= now < record["expires_at"]
+            and 0 < record["expires_at"] - record["issued_at"] <= 3600,
+            "candidate authorization expired, future, or overlong")
+
+
+def candidate_authorization(inventory_bytes: bytes, *, source_sha: str, release_tag: str,
+                            build_run_id: int, build_run_attempt: int,
+                            acceptance_run: dict, phase: str, now: int,
+                            lifetime: int = 3600) -> dict:
+    """Produce unsigned acceptance-only authorization from authenticated inputs.
+
+    The caller authenticates exact inventory bytes and independently obtains the
+    current acceptance workflow run from GitHub. Its run is still in progress;
+    only final acceptance reports can require terminal success. The signer must
+    separately authenticate this record and bind its invocation. Persist and
+    consume the nonce in the target/control-plane transaction before mutation.
+    No global one-use property is provided by this random public nonce alone.
+    """
+    inv = decode(inventory_bytes)
+    validate_inventory(inv)
+    expected = dict(source_sha=source_sha, release_tag=release_tag,
+                    build_run_id=build_run_id, build_run_attempt=build_run_attempt)
+    identity(source_sha, release_tag, build_run_id, build_run_attempt)
+    require(all(inv[key] == value for key, value in expected.items()), "candidate producer differs")
+    run = acceptance_run
+    require(isinstance(run, dict) and isinstance(run.get("repository"), dict)
+            and run["repository"].get("full_name") == REPOSITORY
+            and run.get("path") == acceptance.WORKFLOW and run.get("head_branch") == "main"
+            and run.get("event") == "workflow_dispatch" and run.get("status") == "in_progress"
+            and run.get("conclusion") is None, "candidate authorizer is not the active acceptance run")
+    sha(run.get("head_sha"))
+    positive(run.get("id"))
+    positive(run.get("run_attempt"))
+    positive(now)
+    require(type(lifetime) is int and 0 < lifetime <= 3600, "invalid candidate lifetime")
+    record = dict(schema=CANDIDATE_SCHEMA, repository=REPOSITORY, scope="acceptance-only",
+                  source_ref="refs/heads/main", platform="linux/amd64", **expected,
+                  inventory_sha256=digest(inventory_bytes),
+                  operator_sha256=next(entry["sha256"] for entry in inv["artifacts"]
+                                       if entry["name"] == "marty-deploy-linux-amd64"),
+                  phase=phase, harness_source_sha=run["head_sha"], workflow=acceptance.WORKFLOW,
+                  run_id=run["id"], run_attempt=run["run_attempt"], issued_at=now,
+                  expires_at=now + lifetime, nonce=secrets.token_hex(32))
+    validate_candidate_authorization(record, now=now)
+    return record
+
+
+def bind_candidate_authorization(authorization_bytes: bytes, inventory_bytes: bytes, *,
+                                 expected: dict, now: int) -> tuple[dict, dict]:
+    """Bind unauthenticated records to independently supplied harness context.
+
+    Callers must additionally authenticate both records' signatures/provenance,
+    all payloads, and the control-plane expected context before any execution.
+    Expected values must not simply be copied from the authorization being read.
+    """
+    exact(expected, {"source_sha", "release_tag", "operator_sha256", "phase", "nonce",
+                     "harness_source_sha", "run_id", "run_attempt"}, "candidate context")
+    for field in ("run_id", "run_attempt"):
+        positive(expected[field])
+    record = decode(authorization_bytes)
+    validate_candidate_authorization(record, now=now)
+    require(all(record[key] == value for key, value in expected.items()), "candidate context differs")
+    inv = decode(inventory_bytes)
+    validate_inventory(inv)
+    require(record["inventory_sha256"] == digest(inventory_bytes), "candidate inventory bytes differ")
+    require(all(inv[key] == record[key] for key in (
+        "source_sha", "release_tag", "build_run_id", "build_run_attempt")), "candidate inventory identity differs")
+    require(record["operator_sha256"] == next(entry["sha256"] for entry in inv["artifacts"]
+                                             if entry["name"] == "marty-deploy-linux-amd64"),
+            "candidate operator differs")
+    return record, inv
 
 
 def admission(inventory_bytes: bytes, *, reports: dict, gh: Path,
