@@ -892,6 +892,18 @@ credentials silently.
 
 ### Mandatory version promotion and channel publication
 
+Once a channel has a published signed admission and has passed post-promotion
+one-line qualification, the intended Linux amd64 command is:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/ElevenID/marty-ui/main/install.sh | sh -s -- --channel nightly
+```
+
+Use `--channel stable` for the stable channel. This command is a release target,
+not a claim that either channel is ready today; the bootstrap refuses missing or
+unqualified GitHub metadata. It checks a terminal marker so a truncated piped
+download cannot start an installation.
+
 An installer version is not promoted by a successful build or candidate-grant workflow. The required sequence is the exact version's real staged installed acceptance and anonymous published replay (all 23 cases and the 32 GiB host policy), signed admission through `installer-promote.yml` operation `admission`, publication of its separate immutable admission release, then `installer-promote.yml` operation `channel`, followed by `installer-publish-channel.yml`. The channel operation only consumes authenticated published admission and cannot create one. Existing version payload releases are never modified.
 
 The channel signing archive contains the channel triplet and a separately signed publication-context triplet. The context fixes the observed `installer-channel` branch commit and prior pointer hash. The publisher revalidates admission, predecessor signatures and invocation identities, publishes only the three channel files to immutable `installer-channel-<channel>-<generation>`, and creates a single-parent Git commit preserving the other channel pointer. Reference publication uses non-force update (or exclusive initial creation); a changed head, failed update or uncertain response retains immutable metadata and recovery evidence. Do not force, automatically retry, adopt a draft, or regenerate an older expected-head context. Same-version freshness renewal is deliberately not wired: it requires a separately reviewed fresh public replay.
