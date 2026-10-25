@@ -875,3 +875,16 @@ pointer. No pointer branch or metadata release is created by this implementation
 A fresh consumer cannot infer the globally newest generation from an unsigned
 pointer alone: replay of an older correctly signed, still-valid channel remains
 bounded by its expiry. This change does not claim global rollback prevention.
+
+The protected `installer-publish-admission.yml` workflow publishes only the
+separate admission metadata release after the gate archives its verified
+triplet. Before any release write, it requires immutable releases to be enabled.
+The `stack-release` environment must provide
+`INSTALLER_REPOSITORY_POLICY_TOKEN` with repository Administration:read solely
+for that fixed policy GET; the workflow token handles metadata release writes.
+An interrupted draft is retained for review and is never automatically adopted
+or overwritten. This publisher does not create channel metadata or update the
+pointer. Creating its tag at the original promotion commit may require GitHub
+Workflows permission if that commit's workflow files differ from current main;
+a refusal must be investigated rather than changing the tag target or widening
+credentials silently.
