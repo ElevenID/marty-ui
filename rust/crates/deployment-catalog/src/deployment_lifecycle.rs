@@ -299,11 +299,96 @@ fn resume(input: &Value) -> PolicyResult {
 }
 pub(crate) fn evaluate(operation: &str, input: &Value) -> PolicyResult {
     match operation {
+        "lifecycle-teardown-record" => teardown_record(input),
+        "lifecycle-teardown-inventory" => teardown_inventory(input),
+        "lifecycle-aggregate-plan" => crate::aggregate_plan::prepare(input),
         "lifecycle-stage-input" => stage(input),
         "lifecycle-preserved-kms" => preserved_kms(input),
         "lifecycle-resume-runtime" => resume(input),
         _ => Err("Deployment lifecycle operation is invalid".into()),
     }
+}
+
+fn teardown_record(input: &Value) -> PolicyResult {
+    let record = &input["record"];
+    let project = record["project"].as_str().unwrap_or("");
+    let containers = &record["containers"];
+    let networks = &record["networks"];
+    let volumes = &record["volumes"];
+    let complete = input["complete"]
+        .as_bool()
+        .ok_or("Disposable teardown record is invalid")?;
+    let allowed = strings(&input["services"]).ok_or("Disposable teardown record is invalid")?;
+    let partial =
+        strings(&input["partial_services"]).ok_or("Disposable teardown record is invalid")?;
+    let identifiers = |value: &Value| {
+        value.as_object().is_some_and(|map| {
+            map.values().all(|v| pattern(v, r"\A[0-9a-f]{64}\z"))
+                && map
+                    .values()
+                    .filter_map(Value::as_str)
+                    .collect::<BTreeSet<_>>()
+                    .len()
+                    == map.len()
+        })
+    };
+    let volume_names = strings(volumes);
+    require(
+        pattern(
+            &record["project"],
+            r"\Amarty-passport-acceptance-(base|selfhost)-[a-z0-9]{6,32}\z",
+        ) && record["schema"] == "marty.passport-supported-compose-ownership/v1"
+            && identifiers(containers)
+            && (if complete {
+                keys(containers) == allowed
+            } else {
+                keys(containers).is_subset(&allowed.union(&partial).copied().collect())
+            })
+            && identifiers(networks)
+            && (!complete || !keys(networks).is_empty())
+            && keys(networks)
+                .iter()
+                .all(|name| name.starts_with(&format!("{project}_")))
+            && volume_names.is_some_and(|names| {
+                names.len() == volumes.as_array().unwrap().len()
+                    && names
+                        .iter()
+                        .all(|name| name.starts_with(&format!("{project}_")))
+            }),
+        "Disposable teardown record is invalid",
+    )?;
+    Ok(Value::Null)
+}
+
+fn teardown_inventory(input: &Value) -> PolicyResult {
+    let record = &input["record"];
+    let listed = input["listed"]
+        .as_array()
+        .filter(|a| a.len() == 3)
+        .ok_or("Disposable project changed before teardown")?;
+    let expected = [
+        record["containers"]
+            .as_object()
+            .map(|o| o.values().cloned().collect::<Vec<_>>()),
+        record["networks"]
+            .as_object()
+            .map(|o| o.values().cloned().collect::<Vec<_>>()),
+        record["volumes"].as_array().cloned(),
+    ];
+    for (found, wanted) in listed.iter().zip(expected) {
+        let actual = strings(found).ok_or("Disposable project changed before teardown")?;
+        let wanted = wanted.ok_or("Disposable project changed before teardown")?;
+        let wanted = wanted
+            .iter()
+            .map(Value::as_str)
+            .collect::<Option<BTreeSet<_>>>()
+            .ok_or("Disposable project changed before teardown")?;
+        require(
+            actual.len() == found.as_array().unwrap().len() && actual == wanted,
+            "Disposable project changed before teardown",
+        )?;
+    }
+    Ok(Value::Null)
 }
 
 #[cfg(test)]

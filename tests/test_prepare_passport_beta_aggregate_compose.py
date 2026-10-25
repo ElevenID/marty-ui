@@ -207,6 +207,41 @@ def candidate():
     return handoff, intent, rendered, ui
 
 
+@pytest.mark.parametrize("generation", [None, [], {}, False, [None], [{"service": "postgres"}]])
+def test_aggregate_cannot_plan_a_malformed_generation(generation):
+    handoff, intent, rendered, ui = candidate()
+    intent["beta_generation"] = generation
+    with pytest.raises(ComposePlanError, match="Beta maintenance generation"):
+        prepare(handoff, intent, rendered, ui)
+
+
+def test_native_plan_preserves_large_receipt_id_and_supported_network_list_syntax():
+    handoff, intent, rendered, ui = candidate()
+    handoff["cutover_report_run_id"] = intent["cutover_report_run_id"] = 10**30 + 7
+    for name in ("passport-callback-signer", "passport-beta-bureau"):
+        rendered["services"][name]["networks"] = list(rendered["services"][name]["networks"])
+    plan = prepare(handoff, intent, rendered, ui)
+    assert plan["cutover_report_run_id"] == 10**30 + 7
+    assert plan["expected_networks_by_service"]["passport-callback-signer"] == [
+        "elevenid-beta-passport-callback-signing"]
+
+
+def test_duplicate_network_aliases_cannot_enter_a_start_plan():
+    handoff, intent, rendered, ui = candidate()
+    rendered["networks"]["alias"] = {"name": "elevenid-beta-network"}
+    rendered["services"]["organization"]["networks"] = ["marty-network", "alias"]
+    with pytest.raises(ComposePlanError, match="service networks are ambiguous"):
+        prepare(handoff, intent, rendered, ui)
+
+
+@pytest.mark.parametrize("service", [None, [], "postgres"])
+def test_malformed_infrastructure_cannot_acquire_default_networks(service):
+    handoff, intent, rendered, ui = candidate()
+    rendered["services"]["postgres"] = service
+    with pytest.raises(ComposePlanError, match="Rendered beta service"):
+        prepare(handoff, intent, rendered, ui)
+
+
 def test_rendered_compose_assigns_signed_rust_start_groups():
     plan = prepare(*candidate())
     assert plan["schema"] == "marty.passport-beta-aggregate-compose-plan/v1"

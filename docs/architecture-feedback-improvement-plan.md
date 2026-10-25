@@ -855,3 +855,33 @@ provider's existing HTTP diagnostics. Issuer and service grants, resolved-key
 checks, CSCA/DSC idempotency and KMS-only custody remain independent. No process
 supervisor, active Canvas compatibility path or physical Passport feature is
 retired by this consolidation.
+
+### October 25: Gateway domains, KMS adapters and aggregate planning
+
+Gateway profile/template, issuance/verification orchestration and internal signing
+compatibility handlers live in private domain modules. The router, middleware
+order, tenant authorization, trusted identities and proxy transport remain at
+their existing owner. Three identical body admission paths share the same bounded
+JSON-object reader; grant parsing and tenant binding still precede forwarding.
+
+Signing Keys cloud provider adapters are separate modules. OpenBao continues to
+use the existing trusted HTTPS transport. Provider request execution shares
+response-size bounds, status classification and redacted errors; only the existing
+lifecycle calls accept an empty success response. Provider authentication,
+requested key versions, algorithms and response-key binding remain distinct.
+Every production signature remains remote KMS backed.
+
+Rust deployment policy now calculates aggregate start groups and expected networks
+from the observed signed generation and rendered services. It reuses beta origin
+and private Gateway admission, preserves OpenBao, checks native dispatch/selectors,
+and separates application replacement from ingress startup. Python retains
+protected SQL hashes, receipt/fence lineage and metadata copying, including integer
+receipt IDs larger than JSON's native u64 range. Native output contains public
+resource identities and decisions, not observed credential-bearing environments.
+
+Disposable teardown also delegates record and final project inventory admission
+to Rust. Live resource reinspection, labels, mounts, canonical filesystem paths,
+network attachments, exact Docker mutations and post-deletion absence checks stay
+with the current protected owner. Private input staging and its filesystem rollback
+are retained. This completes these policy consolidations; it does not claim a
+native replacement for all deployment I/O or authorize production changes.

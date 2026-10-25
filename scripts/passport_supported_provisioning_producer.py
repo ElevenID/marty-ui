@@ -473,23 +473,9 @@ def _destroy_recorded_project(
     containers = record.get("containers")
     networks = record.get("networks")
     volumes = record.get("volumes")
-    require(isinstance(project, str) and PROJECT.fullmatch(project) is not None
-            and record.get("schema") == "marty.passport-supported-compose-ownership/v1"
-            and isinstance(containers, dict)
-            and (set(containers) == DISPOSABLE_SERVICES if complete
-                 else set(containers) <= DISPOSABLE_SERVICES | PARTIAL_ONLY_SERVICES)
-            and all(isinstance(value, str) and RESOURCE_ID.fullmatch(value)
-                    for value in containers.values())
-            and len(set(containers.values())) == len(containers)
-            and isinstance(networks, dict) and (bool(networks) if complete else True)
-            and all(isinstance(name, str) and name.startswith(project + "_")
-                    and isinstance(value, str) and RESOURCE_ID.fullmatch(value)
-                    for name, value in networks.items())
-            and len(set(networks.values())) == len(networks)
-            and isinstance(volumes, list) and all(isinstance(name, str)
-                    and name.startswith(project + "_") for name in volumes)
-            and len(set(volumes)) == len(volumes),
-            "Disposable teardown record is invalid")
+    evaluate_policy("lifecycle-teardown-record", error_type=ProducerError,
+                    record=record, complete=complete, services=sorted(DISPOSABLE_SERVICES),
+                    partial_services=sorted(PARTIAL_ONLY_SERVICES))
     surface = PROJECT.fullmatch(project).group(1)
     disposable_root = Path(tempfile.gettempdir()) / project
     try:
@@ -614,7 +600,6 @@ def _destroy_recorded_project(
             if not complete:
                 require(item.get("Driver") == "local" and not item.get("Options"),
                         "Partial disposable volume is outside the storage model")
-        expected = (set(containers.values()), set(networks.values()), set(volumes))
         listed = (
             inspector(["ps", "-aq", "--no-trunc", "--filter",
                        f"label=com.docker.compose.project={project}"]).split(),
@@ -623,9 +608,8 @@ def _destroy_recorded_project(
             inspector(["volume", "ls", "-q", "--filter",
                        f"label=com.docker.compose.project={project}"]).split(),
         )
-        require(all(len(found) == len(set(found)) and set(found) == wanted
-                    for found, wanted in zip(listed, expected)),
-                "Disposable project changed before teardown")
+        evaluate_policy("lifecycle-teardown-inventory", error_type=ProducerError,
+                        record=record, listed=listed)
     except (OSError, ValueError, KeyError, TypeError):
         return False
     if containers:

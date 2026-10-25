@@ -14,7 +14,7 @@ pub(super) fn require(ok: bool, message: impl Into<String>) -> Result<(), String
 fn object<'a>(value: &'a Value, message: &str) -> Result<&'a Map<String, Value>, String> {
     value.as_object().ok_or_else(|| message.into())
 }
-fn environment(service: &Value) -> Result<Map<String, Value>, String> {
+pub(super) fn environment(service: &Value) -> Result<Map<String, Value>, String> {
     let empty = Map::new();
     let value = service
         .get("environment")
@@ -134,7 +134,7 @@ fn keyless_custody(model: &Value) -> PolicyResult {
     }
     Ok(Value::Null)
 }
-fn beta_origin(services: &Value) -> PolicyResult {
+pub(super) fn beta_origin(services: &Value) -> PolicyResult {
     const ORIGIN: &str = "https://beta.elevenidllc.com";
     const DOMAIN: &str = "beta.elevenidllc.com";
     let services = object(services, "Rendered beta service graph is invalid")?;
@@ -217,7 +217,7 @@ fn beta_origin(services: &Value) -> PolicyResult {
     )?;
     Ok(Value::Null)
 }
-fn private_gateway(services: &Value) -> PolicyResult {
+pub(super) fn private_gateway(services: &Value) -> PolicyResult {
     let ports = services["gateway"]["ports"].as_array();
     require(
         ports.is_some_and(|p| {

@@ -28,11 +28,13 @@ def test_superseded_python_signing_and_gateway_adapters_are_deleted() -> None:
 def test_gateway_signing_compatibility_is_native_and_contract_driven() -> None:
     compatibility = read("rust/services/gateway/src/signing_compat.rs")
     runtime = read("rust/services/gateway/src/runtime.rs")
+    adapter = read("rust/services/gateway/src/runtime_signing_compatibility.rs")
 
     assert "gateway-internal-signing-behavior.json" in compatibility
     assert "internal_signing_compatibility_handler" in runtime
     assert "constant_time_header_matches" in runtime
-    assert '"Invalid internal API key"' in runtime
+    assert '#[path = "runtime_signing_compatibility.rs"]' in runtime
+    assert '"Invalid internal API key"' in adapter
     assert "signing_service_request" in runtime
 
 

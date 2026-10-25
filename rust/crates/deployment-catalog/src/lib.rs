@@ -1,5 +1,6 @@
 //! Deployment metadata and native KMS operator commands.
 
+mod aggregate_plan;
 mod compose_model;
 mod deployment_admission;
 mod deployment_environment;
