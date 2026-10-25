@@ -1,3 +1,4 @@
+import { loadScopedCatalog } from '../../../services/loadScopedCatalog';
 /**
  * Issued Credentials Page
  *
@@ -127,7 +128,7 @@ function IssuancePage() {
   const {
     data: credentialTemplatesData,
   } = useAsyncData(async () => {
-    const result = await listCredentialTemplates({ organization_id: organizationId });
+    const result = await loadScopedCatalog(listCredentialTemplates, organizationId);
     return Array.isArray(result) ? result : [];
   }, [organizationId]);
 

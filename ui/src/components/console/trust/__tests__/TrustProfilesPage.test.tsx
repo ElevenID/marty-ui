@@ -76,7 +76,7 @@ describe('TrustProfilesPage', () => {
 
     renderWithRouter(<TrustProfilesPage />);
     expect(await screen.findByText('Production Trust')).toBeInTheDocument();
-    expect(listTrustProfiles).toHaveBeenCalledWith({ organization_id: 'org-1' });
+    expect(listTrustProfiles).toHaveBeenCalledWith({ organization_id: 'org-1', limit: 100, offset: 0 });
     expect(listPublicIssuerIdentities).toHaveBeenCalledWith({ organization_id: 'org-1' });
     expect(listRevocationProfiles).toHaveBeenCalledWith({ organization_id: 'org-1', limit: 1 });
   });

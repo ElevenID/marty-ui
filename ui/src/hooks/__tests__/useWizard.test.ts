@@ -319,6 +319,58 @@ describe('useWizard', () => {
   })
 
   describe('submission', () => {
+    it('prevents overlapping creates and retains the acknowledged result', async () => {
+      let resolve!: (value: unknown) => void
+      const onSubmit = vi.fn(() => new Promise(done => { resolve = done }))
+      const { result } = renderHook(() => useWizard({ steps: mockSteps, onSubmit }))
+      let first!: Promise<unknown>
+      await act(async () => {
+        first = result.current.submit()
+        expect(await result.current.submit()).toBeNull()
+      })
+      expect(onSubmit).toHaveBeenCalledTimes(1)
+      await act(async () => { resolve({ id: 'created' }); await first })
+      expect(result.current.result).toEqual({ id: 'created' })
+      act(() => result.current.reset())
+      expect(result.current.result).toBeNull()
+    })
+
+    it.each(['reset', 'scope', 'unmount'])('ignores a late completion after %s', async (change) => {
+      let resolve!: (value: unknown) => void
+      const onSubmit = vi.fn(() => new Promise(done => { resolve = done }))
+      const onComplete = vi.fn()
+      const { result, rerender, unmount } = renderHook(({ scope }) => useWizard({
+        steps: mockSteps, scopeKey: scope, onSubmit, onComplete,
+      }), { initialProps: { scope: 'org-a' } })
+      let pending!: Promise<unknown>
+      act(() => { pending = result.current.submit() })
+      if (change === 'reset') act(() => result.current.reset())
+      if (change === 'scope') rerender({ scope: 'org-b' })
+      if (change === 'unmount') unmount()
+      await act(async () => { resolve({ id: 'old-org-template' }); expect(await pending).toBeNull() })
+      expect(onComplete).not.toHaveBeenCalled()
+      if (change !== 'unmount') {
+        expect(result.current.result).toBeNull()
+        expect(result.current.success).toBe(false)
+        expect(result.current.loading).toBe(false)
+      }
+    })
+
+    it('cancels a scheduled completion when reset', async () => {
+      vi.useFakeTimers()
+      try {
+        const onComplete = vi.fn()
+        const { result } = renderHook(() => useWizard({
+          steps: mockSteps, onSubmit: async () => ({ id: 'created' }), onComplete,
+        }))
+        await act(async () => { await result.current.submit() })
+        act(() => result.current.reset())
+        act(() => vi.advanceTimersByTime(2000))
+        expect(onComplete).not.toHaveBeenCalled()
+        expect(result.current.result).toBeNull()
+      } finally { vi.useRealTimers() }
+    })
+
     it('should submit successfully', async () => {
       const mockResult = { id: 1, name: 'Created' }
       mockOnSubmit.mockResolvedValue(mockResult)
@@ -346,6 +398,7 @@ describe('useWizard', () => {
         description: 'Description',
       })
       expect(submitResult).toEqual(mockResult)
+      expect(result.current.result).toEqual(mockResult)
       expect(result.current.success).toBe(true)
       expect(result.current.loading).toBe(false)
       expect(result.current.error).toBeNull()

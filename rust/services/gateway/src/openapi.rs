@@ -13,6 +13,17 @@ static BUNDLE: LazyLock<Value> = LazyLock::new(|| {
 
 pub fn schemas() -> Value {
     let mut schemas = BUNDLE["schemas"].clone();
+    let readback: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/credential-template-readback-properties.json"
+    ))
+    .expect("native template readback schema");
+    schemas["schemas__credential_template"]["properties"]
+        .as_object_mut()
+        .expect("template properties")
+        .extend(readback.as_object().expect("readback properties").clone());
+    schemas["schemas__credential_template"]["x-marty-runtime-extension"] = json!(
+        "Native persisted configuration readback; extends the pinned protocol response. schema_uri writes are unsupported."
+    );
     schemas["runtime__issuer_identity_capabilities"] = serde_json::from_str(include_str!(
         "../../../../contracts/issuer-identity-capabilities-response.json"
     ))
@@ -74,7 +85,9 @@ pub fn describe_operation(operation: &mut Value, method: HttpMethod, path: &str,
     use HttpMethod::{Get, Patch, Post};
     if method == Get && path == "/v1/protocol-support" {
         operation["summary"] = json!("Discover product support for protocol abstractions");
-        operation["description"] = json!("Public gateway-owned catalog of product consumer surfaces. Implemented, derived, partial and unsupported are distinct; qualification state and limitations prevent route presence or protocol vocabulary from being presented as end-to-end support.");
+        operation["description"] = json!(
+            "Public gateway-owned catalog of product consumer surfaces. Implemented, derived, partial and unsupported are distinct; qualification state and limitations prevent route presence or protocol vocabulary from being presented as end-to-end support."
+        );
         operation["responses"][status.to_string()]["content"] = json!({
             "application/json": {
                 "schema": {"$ref":"#/components/schemas/runtime__protocol_support_catalog"},
@@ -162,7 +175,9 @@ pub fn describe_operation(operation: &mut Value, method: HttpMethod, path: &str,
     }
     if method == Get && path == "/v1/signing-keys/issuer-identities/inspection" {
         operation["summary"] = json!("Inspect DID publication and managed signer matching");
-        operation["description"] = json!("Requires signing-key:view in the selected organization. Read-only current registry, managed signer and public HTTPS observations, including assertion authorization. Public resolution uses the deployment authority and no internal fallback. Assertion readiness does not qualify credential issuance, certificate trust or interoperability.");
+        operation["description"] = json!(
+            "Requires signing-key:view in the selected organization. Read-only current registry, managed signer and public HTTPS observations, including assertion authorization. Public resolution uses the deployment authority and no internal fallback. Assertion readiness does not qualify credential issuance, certificate trust or interoperability."
+        );
         operation["parameters"] = json!(["organization_id", "issuer_did", "key_purpose", "credential_format", "algorithm"].map(|name| query_parameter(name, "Exact public identity tuple in the authorized organization; no private custody selector.")));
         for (code, description) in [
             (400, "Missing, malformed or unsupported query fields."),
@@ -186,7 +201,9 @@ pub fn describe_operation(operation: &mut Value, method: HttpMethod, path: &str,
     }
     if method == Post && path == "/v1/credential-templates/issuer-options" {
         operation["summary"] = json!("Discover compatible, unambiguous template issuer DIDs");
-        operation["description"] = json!("Requires credential-template:create in the selected organization. Validates an active compliance profile and every declared credential format; no algorithm or private binding selector is accepted. Template creation repeats these checks.");
+        operation["description"] = json!(
+            "Requires credential-template:create in the selected organization. Validates an active compliance profile and every declared credential format; no algorithm or private binding selector is accepted. Template creation repeats these checks."
+        );
         operation["requestBody"] = json!({"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/runtime__template_issuer_options_request"}}}});
         for (status, description) in [
             (401, "Authentication required."),
@@ -296,6 +313,19 @@ pub fn describe_operation(operation: &mut Value, method: HttpMethod, path: &str,
     // Coverage is explicit while remaining service-owned shapes are reconciled.
     operation["x-marty-request-schema-documented"] = json!(request.is_some());
     operation["x-marty-response-schema-documented"] = json!(response.is_some());
+    let template_response = (matches!(method, Get | Post) && path == "/v1/credential-templates")
+        || (matches!(method, Get | Patch) && path == "/v1/credential-templates/{template_id}")
+        || (method == Post && matches!(path, "/v1/credential-templates/{template_id}/activate"));
+    if template_response && (200..300).contains(&status) {
+        let response_schema = if method == Get && path == "/v1/credential-templates" {
+            json!({"type":"array","items":schema("credential-template")})
+        } else {
+            schema("credential-template")
+        };
+        operation["responses"][status.to_string()]["content"] =
+            json!({"application/json":{"schema":response_schema}});
+        operation["x-marty-response-schema-documented"] = json!(true);
+    }
 }
 
 fn describe_compliance(operation: &mut Value, method: HttpMethod, path: &str, status: u16) {
@@ -311,13 +341,18 @@ fn describe_compliance(operation: &mut Value, method: HttpMethod, path: &str, st
         Delete => "delete",
         _ => return,
     };
-    operation["description"] = json!(format!("Requires compliance-profile:{action} in the resource's organization. System presets are migration-owned and immutable. Public metadata is a partial projection of the protocol entity; internal privacy enforcement sections are not returned."));
+    operation["description"] = json!(format!(
+        "Requires compliance-profile:{action} in the resource's organization. System presets are migration-owned and immutable. Public metadata is a partial projection of the protocol entity; internal privacy enforcement sections are not returned."
+    ));
     operation["x-marty-protocol-schema-ref"] = schema("compliance-profile");
     operation["x-marty-protocol-support"] = json!("partial");
     operation["x-marty-request-schema-documented"] = json!(true);
     operation["x-marty-response-schema-documented"] = json!(true);
     if method == Get && (collection || catalog) {
-        operation["parameters"] = json!([query_parameter("organization_id", "Selected authorized organization; even the shared catalog requires this view grant at the gateway.")]);
+        operation["parameters"] = json!([query_parameter(
+            "organization_id",
+            "Selected authorized organization; even the shared catalog requires this view grant at the gateway."
+        )]);
         if catalog {
             operation["parameters"][0]["required"] = json!(false);
         }
@@ -374,7 +409,10 @@ fn describe_compliance(operation: &mut Value, method: HttpMethod, path: &str, st
         operation["responses"][code.to_string()] = json!({"description":description});
     }
     if method == Post && !collection {
-        operation["description"] = json!(format!("{} The operation has no request body; the native owner changes only status and updated_at.",operation["description"].as_str().expect("description")));
+        operation["description"] = json!(format!(
+            "{} The operation has no request body; the native owner changes only status and updated_at.",
+            operation["description"].as_str().expect("description")
+        ));
     }
 }
 
@@ -411,7 +449,10 @@ fn describe_notification(operation: &mut Value, method: HttpMethod, path: &str, 
             "Selected organization authorized by the gateway and native owner.",
         ));
         if collection || count || read_all {
-            let mut recipient = query_parameter("recipient_id", "Recipient filter. Count and mark-all-read use the trusted authenticated user if omitted.");
+            let mut recipient = query_parameter(
+                "recipient_id",
+                "Recipient filter. Count and mark-all-read use the trusted authenticated user if omitted.",
+            );
             recipient["required"] = json!(false);
             parameters.push(recipient);
         }
@@ -444,11 +485,28 @@ fn describe_notification(operation: &mut Value, method: HttpMethod, path: &str, 
     operation["responses"][status.to_string()]["content"] =
         json!({"application/json":{"schema":response}});
     for (code, description) in [
-        (400, "Required organization query or recipient selector is missing or malformed."),
-        (401, "Authentication required."), (403, "Organization membership or route permission is not authorized."),
-        (404, "Notification does not exist in the selected organization."),
-        (422, "Invalid request fields, target organization, channel, destination, TTL or protected credential payload."),
-        (502, "Upstream returned an invalid response."), (503, "Notification or authorization dependency is unavailable."),
+        (
+            400,
+            "Required organization query or recipient selector is missing or malformed.",
+        ),
+        (401, "Authentication required."),
+        (
+            403,
+            "Organization membership or route permission is not authorized.",
+        ),
+        (
+            404,
+            "Notification does not exist in the selected organization.",
+        ),
+        (
+            422,
+            "Invalid request fields, target organization, channel, destination, TTL or protected credential payload.",
+        ),
+        (502, "Upstream returned an invalid response."),
+        (
+            503,
+            "Notification or authorization dependency is unavailable.",
+        ),
     ] {
         operation["responses"][code.to_string()] = json!({"description":description});
     }
@@ -484,7 +542,10 @@ fn describe_vc_api(operation: &mut Value, path: &str, status: u16) {
             "credential_template_id",
             "Authorized active template defining credential claims, compliance and lifecycle.",
         ));
-        let mut did = query_parameter("issuer_did", "Public DID selected for issuance. Marty resolves managed custody internally; the credential issuer must match this DID.");
+        let mut did = query_parameter(
+            "issuer_did",
+            "Public DID selected for issuance. Marty resolves managed custody internally; the credential issuer must match this DID.",
+        );
         did["schema"]["pattern"] = json!("^did:");
         parameters.push(did);
     } else {
@@ -534,6 +595,26 @@ fn describe_vc_api(operation: &mut Value, path: &str, status: u16) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn template_readback_schema_covers_native_response_operations() {
+        let schemas = schemas();
+        assert!(schemas["schemas__credential_template"]["properties"]["display_style"].is_object());
+        assert!(schemas["schemas__credential_template"]["x-marty-runtime-extension"].is_string());
+        for (method, path) in [
+            (HttpMethod::Get, "/v1/credential-templates"),
+            (HttpMethod::Post, "/v1/credential-templates"),
+            (HttpMethod::Get, "/v1/credential-templates/{template_id}"),
+            (HttpMethod::Patch, "/v1/credential-templates/{template_id}"),
+            (
+                HttpMethod::Post,
+                "/v1/credential-templates/{template_id}/activate",
+            ),
+        ] {
+            let mut operation = json!({});
+            describe_operation(&mut operation, method, path, 200);
+            assert_eq!(operation["x-marty-response-schema-documented"], true);
+        }
+    }
     #[test]
     fn schema_bundle_refs_are_self_contained_and_pin_is_exact() {
         let document = json!({"components":{"schemas":schemas()}});

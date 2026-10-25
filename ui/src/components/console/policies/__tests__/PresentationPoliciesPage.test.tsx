@@ -44,8 +44,8 @@ describe('PresentationPoliciesPage API recovery', () => {
     expect(await screen.findByText('Recovered member policy')).toBeInTheDocument()
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
     expect(listPolicies).toHaveBeenCalledTimes(2)
-    expect(listPolicies).toHaveBeenNthCalledWith(1, { organization_id: 'org-recovery' })
-    expect(listPolicies).toHaveBeenNthCalledWith(2, { organization_id: 'org-recovery' })
+    expect(listPolicies).toHaveBeenNthCalledWith(1, { organization_id: 'org-recovery', limit: 100, offset: 0 })
+    expect(listPolicies).toHaveBeenNthCalledWith(2, { organization_id: 'org-recovery', limit: 100, offset: 0 })
   })
 
   it('shows the empty state only after a successful empty response', async () => {

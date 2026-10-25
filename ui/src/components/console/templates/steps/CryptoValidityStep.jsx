@@ -25,6 +25,7 @@ import { useTranslation } from 'react-i18next';
 import { useAsyncData } from '../../../../hooks/useAsyncData';
 import { useConsole } from '../../../../contexts/ConsoleContext';
 import { listRevocationProfiles } from '../../../../services/presentationPolicyApi';
+import { loadScopedCatalog } from '../../../../services/loadScopedCatalog';
 
 const CryptoValidityStep = ({ data, onChange }) => {
   const { t } = useTranslation('console');
@@ -37,7 +38,7 @@ const CryptoValidityStep = ({ data, onChange }) => {
       if (!organizationId) {
         throw new Error('Select an organization before loading revocation profiles.');
       }
-      return listRevocationProfiles({ organization_id: organizationId });
+      return loadScopedCatalog(listRevocationProfiles, organizationId);
     },
     [organizationId],
   );

@@ -1,3 +1,4 @@
+import { loadScopedCatalog } from '../../../../services/loadScopedCatalog';
 /**
  * Claims Configuration Step
  * 
@@ -45,7 +46,7 @@ const ClaimsConfigurationStep = ({ policyConfig, onConfigChange }) => {
       if (!activeOrgId) {
         return { templates: [], claims: [] };
       }
-      const response = await listCredentialTemplates({ organization_id: activeOrgId });
+      const response = await loadScopedCatalog(listCredentialTemplates, activeOrgId);
       const templates = response.data || response || [];
       const claims = templates.flatMap(template =>
         (template.claims || []).map(claim => ({

@@ -524,6 +524,143 @@ async fn template_http_routes_require_trusted_forwarded_identity() {
 }
 
 #[tokio::test]
+async fn unsupported_schema_uri_is_rejected_instead_of_silently_discarded() {
+    let mut body = create_body();
+    body["schema_uri"] = json!("https://issuer.example/schema");
+    let response = router()
+        .oneshot(request("POST", "/v1/credential-templates", body, true))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert!(json_body(response).await["detail"]
+        .as_str()
+        .unwrap()
+        .contains("schema_uri"));
+}
+
+#[tokio::test]
+async fn nondefault_public_configuration_survives_create_list_and_metadata_edit() {
+    let app = router();
+    let mut body = create_body();
+    body["selective_disclosure_fields"] = json!(["age"]);
+    body["zk_predicate_claims"] = json!(["age"]);
+    body["derived_attributes"] = json!([{
+        "name":"Age threshold", "source_claim":"age", "derivation_type":"age_over",
+        "parameters":{"threshold":21}
+    }]);
+    body["display_style"] = json!({"background_color":"#123456", "text_color":"#abcdef", "logo_url":"https://issuer.example/logo.png"});
+    let response = app
+        .clone()
+        .oneshot(request("POST", "/v1/credential-templates", body, true))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let created = json_body(response).await;
+    assert_eq!(
+        created["derived_attributes"][0]["parameters"]["threshold"],
+        21
+    );
+    assert_eq!(created["selective_disclosure_fields"], json!(["age"]));
+    assert_eq!(created["zk_predicate_claims"], json!(["age"]));
+    let id = created["id"].as_str().unwrap();
+    let response = app
+        .clone()
+        .oneshot(request(
+            "PATCH",
+            &format!("/v1/credential-templates/{id}"),
+            json!({"description":"metadata only"}),
+            true,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let response = app
+        .oneshot(request(
+            "GET",
+            "/v1/credential-templates?organization_id=org-1",
+            json!({}),
+            true,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let listed = json_body(response).await;
+    let after = listed
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["id"] == id)
+        .unwrap();
+    for field in [
+        "supported_formats",
+        "selective_disclosure_fields",
+        "zk_predicate_claims",
+        "derived_attributes",
+        "display_style",
+    ] {
+        assert_eq!(after[field], created[field], "{field}");
+    }
+}
+
+#[tokio::test]
+async fn private_derivation_parameters_are_rejected_before_create_or_update_persistence() {
+    let app = router();
+    let bad = json!([{"name":"Derived", "source_claim":"age", "derivation_type":"age_over", "parameters":{"nested":[{"api_key":"forbidden"}]}}]);
+    let mut body = create_body();
+    body["derived_attributes"] = bad.clone();
+    let response = app
+        .clone()
+        .oneshot(request("POST", "/v1/credential-templates", body, true))
+        .await
+        .unwrap();
+    assert!(response.status().is_client_error());
+    let response = app
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/v1/credential-templates?organization_id=org-1",
+            json!({}),
+            true,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(json_body(response).await, json!([]));
+    let response = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/v1/credential-templates",
+            create_body(),
+            true,
+        ))
+        .await
+        .unwrap();
+    let created = json_body(response).await;
+    let id = created["id"].as_str().unwrap();
+    let response = app
+        .clone()
+        .oneshot(request(
+            "PATCH",
+            &format!("/v1/credential-templates/{id}"),
+            json!({"name":"must not save", "derived_attributes":bad}),
+            true,
+        ))
+        .await
+        .unwrap();
+    assert!(response.status().is_client_error());
+    let response = app
+        .oneshot(request(
+            "GET",
+            &format!("/v1/credential-templates/{id}"),
+            json!({}),
+            true,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(json_body(response).await, created);
+}
+
+#[tokio::test]
 async fn create_get_update_activate_and_delete_expose_only_public_behavior() {
     let app = router();
     let response = app
@@ -562,7 +699,7 @@ async fn create_get_update_activate_and_delete_expose_only_public_behavior() {
         })
     );
     assert!(created.get("issuer_algorithm").is_none());
-    assert!(created.get("supported_formats").is_none());
+    assert_eq!(created["supported_formats"], json!(["SD_JWT_VC"]));
     assert!(created.get("wallet_configs").is_none());
     assert!(created.get("doctype").is_none());
 
@@ -588,6 +725,41 @@ async fn create_get_update_activate_and_delete_expose_only_public_behavior() {
     assert_eq!(updated["claims"].as_array().unwrap().len(), 2);
     assert_eq!(updated["validity_rules"]["ttl_seconds"], 172800);
     assert_eq!(updated["validity_rules"]["not_before_offset_seconds"], 900);
+    assert_eq!(updated["display_style"]["background_color"], "#000000");
+    let before_metadata = updated.clone();
+    let response = app
+        .clone()
+        .oneshot(request(
+            "PATCH",
+            &format!("/v1/credential-templates/{template_id}"),
+            json!({"name":"Renamed template"}),
+            true,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let response = app
+        .clone()
+        .oneshot(request(
+            "GET",
+            &format!("/v1/credential-templates/{template_id}"),
+            json!({}),
+            true,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let after_metadata = json_body(response).await;
+    for field in [
+        "supported_formats",
+        "selective_disclosure_fields",
+        "zk_predicate_claims",
+        "derived_attributes",
+        "display_style",
+    ] {
+        assert_eq!(after_metadata[field], before_metadata[field], "{field}");
+        assert!(!after_metadata[field].is_null(), "missing {field}");
+    }
 
     let response = app
         .clone()

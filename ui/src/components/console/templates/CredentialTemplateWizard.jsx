@@ -6,7 +6,7 @@
  */
 
 import { useNavigate } from 'react-router';
-import { useCallback, useLayoutEffect, useRef } from 'react';
+import { useCallback, useLayoutEffect, useRef, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   Box,
@@ -26,7 +26,8 @@ import AccountTreeIcon from '@mui/icons-material/AccountTree';
 
 import { useWizard } from '../../../hooks/useWizard';
 import { useConsole } from '../../../contexts/ConsoleContext';
-import { createCredentialTemplate } from '../../../services/presentationPolicyApi';
+import { useAuth } from '../../../hooks/useAuth';
+import { createTemplateCreationOperation } from '../../../services/templateCreationOperation';
 import BasicsStep from './steps/BasicsStep';
 import ClaimsStep from './steps/ClaimsStep';
 import TrustComplianceStep from './steps/TrustComplianceStep';
@@ -47,8 +48,12 @@ const CredentialTemplateWizard = () => {
   const navigate = useNavigate();
   const { t } = useTranslation('console');
   const { activeOrgId } = useConsole();
+  const { user } = useAuth();
+  const principalId = user?.user_id;
   const effectiveOrganizationId = activeOrgId;
   const organizationEpoch = useRef(0);
+  const creation = useMemo(() => createTemplateCreationOperation(activeOrgId, principalId), [activeOrgId, principalId]);
+  const [createdDraft, setCreatedDraft] = useState(null);
 
   const validateStep = useCallback((stepIndex, data) => {
     switch (stepIndex) {
@@ -91,12 +96,19 @@ const CredentialTemplateWizard = () => {
       || !templateIssuerRequirementsSatisfied(data, options.requirements)) {
       throw new Error('Issuer compatibility changed. Return to Trust & Compliance and refresh the available options.');
     }
-    const result = await createCredentialTemplate(payload);
+    let result;
+    try {
+      result = await creation.submit(payload, { isCurrent: () => epoch === organizationEpoch.current });
+    } catch (error) {
+      if (epoch === organizationEpoch.current && error.createdResource) setCreatedDraft(error.createdResource);
+      throw error;
+    }
     if (epoch !== organizationEpoch.current) throw new Error('The request completed for the previous organization. Check its templates before retrying.');
     return result;
-  }, [effectiveOrganizationId, t]);
+  }, [effectiveOrganizationId, t, creation]);
 
   const wizard = useWizard({
+    scopeKey: `${activeOrgId}:${principalId}`,
     steps: getSteps(t),
     initialData: {
       name: '',
@@ -117,10 +129,6 @@ const CredentialTemplateWizard = () => {
     },
     validateStep,
     onSubmit: handleSubmit,
-    onComplete: (result) => {
-      // Don't auto-navigate - show success screen with CTAs
-      wizard.templateId = result?.id;
-    },
     onCancel: () => {
       navigate('/console/org/templates/credentials');
     },
@@ -129,11 +137,12 @@ const CredentialTemplateWizard = () => {
   const updateWizardData = wizard.updateData;
   useLayoutEffect(() => {
     organizationEpoch.current += 1;
+    setCreatedDraft(null);
     updateWizardData({ trust_profile_id: null, compliance_profile_id: null, issuer_did: null,
       revocation_profile_id: null, credential_payload_format: undefined, supported_formats: undefined,
       issuance_protocol: undefined, _issuer_selection: null });
     return () => { organizationEpoch.current += 1; };
-  }, [activeOrgId, updateWizardData]);
+  }, [activeOrgId, principalId, updateWizardData]);
 
   const renderStepContent = () => {
     switch (wizard.activeStep) {
@@ -180,7 +189,7 @@ const CredentialTemplateWizard = () => {
 
   // Success screen
   if (wizard.success) {
-    const templateId = wizard.result?.id || 'unknown';
+    const templateId = wizard.result?.id;
     
     return (
       <Container maxWidth="md" sx={{ py: 4 }}>
@@ -219,7 +228,8 @@ const CredentialTemplateWizard = () => {
               variant="contained"
               size="large"
               startIcon={<AccountTreeIcon />}
-              onClick={() => navigate(`/console/org/flows/definitions/new?templateId=${templateId}`)}
+              disabled={!templateId}
+              onClick={() => navigate(`/console/org/flows/definitions/new?templateId=${encodeURIComponent(templateId)}`)}
             >
               {t('wizards.credentialTemplate.success.createFlowButton')}
             </Button>
@@ -266,6 +276,7 @@ const CredentialTemplateWizard = () => {
             <Typography color="error.contrastText">
               {wizard.error}
             </Typography>
+            {createdDraft && <Button onClick={() => navigate(`/console/org/templates/credentials/${encodeURIComponent(createdDraft.id)}`)}>Open created draft</Button>}
           </Box>
         )}
 
@@ -305,7 +316,7 @@ const CredentialTemplateWizard = () => {
                 startIcon={wizard.loading ? <CircularProgress size={20} /> : <CheckCircleIcon />}
                 data-testid="wizard.template.submit"
               >
-                {wizard.loading ? t('wizards.credentialTemplate.buttons.submitting') : t('wizards.credentialTemplate.buttons.submit')}
+                {wizard.loading ? t('wizards.credentialTemplate.buttons.submitting') : createdDraft ? 'Retry activation' : t('wizards.credentialTemplate.buttons.submit')}
               </Button>
             ) : (
               <Button

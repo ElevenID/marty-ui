@@ -5,6 +5,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { webcrypto } from 'node:crypto'
 import { render, screen, waitFor, within } from '@test/utils'
 import { server } from '@test/mocks/server'
 import { http, HttpResponse } from 'msw'
@@ -26,7 +27,7 @@ vi.mock('react-router', async () => {
 })
 
 vi.mock('../../../../hooks/useAuth', () => ({
-  useAuth: () => ({ organizationId: mockOrgContext.authOrganizationId }),
+  useAuth: () => ({ organizationId: mockOrgContext.authOrganizationId, user: { user_id: 'test-user' } }),
 }))
 
 vi.mock('../../../../contexts/ConsoleContext', () => ({
@@ -35,6 +36,8 @@ vi.mock('../../../../contexts/ConsoleContext', () => ({
 
 describe('CredentialTemplateWizard', () => {
   beforeEach(() => {
+    vi.stubGlobal('crypto', webcrypto)
+    sessionStorage.clear()
     vi.clearAllMocks()
     mockOrgContext.activeOrgId = 'console-org'
     mockOrgContext.authOrganizationId = 'auth-org'
@@ -228,6 +231,9 @@ describe('CredentialTemplateWizard', () => {
             status: 'draft',
           })
         }),
+        http.get('*/v1/credential-templates/template-1', () => HttpResponse.json({
+          id: 'template-1', ...createdPayload, status: 'draft',
+        })),
         http.post('*/v1/credential-templates/template-1/activate', () => {
           activationRequested = true
           return HttpResponse.json({

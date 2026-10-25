@@ -28,6 +28,7 @@ import { useAsyncData } from '../../../hooks/useAsyncData';
 import { useAuth } from '../../../hooks/useAuth';
 import { useConsole } from '../../../contexts/ConsoleContext';
 import { listRevocationProfiles } from '../../../services/presentationPolicyApi';
+import { loadScopedCatalog } from '../../../services/loadScopedCatalog';
 
 const getBreadcrumbs = (t) => [
   { label: t('trust.breadcrumbs.console'), path: '/console' },
@@ -46,10 +47,8 @@ function RevocationProfilesPage() {
       if (!organizationId) {
         throw new Error('Select an organization before loading revocation profiles.');
       }
-      return listRevocationProfiles(
-        { organization_id: organizationId },
-        { retryConfig: { maxRetries: 0 } },
-      );
+      return loadScopedCatalog((params) => listRevocationProfiles(params,
+        { retryConfig: { maxRetries: 0 } }), organizationId);
     },
     [organizationId],
   );

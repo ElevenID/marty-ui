@@ -451,6 +451,11 @@ async fn create_template(
     Json(input): Json<CreateTemplateRequest>,
 ) -> Result<Json<Value>, CredentialTemplateHttpError> {
     let user_id = trusted_user_id(&state, &headers)?;
+    if input._schema_uri.is_some() {
+        return Err(bad_request(
+            "schema_uri is not supported by template storage",
+        ));
+    }
     let claims = input
         .claims
         .into_iter()
@@ -1300,6 +1305,11 @@ fn template_response(template: &CredentialTemplate) -> Result<Value, CredentialT
         "revocation_profile_id":template.revocation_profile_id,
         "issuer_did":issuer_did,
         "claims":claims,
+        "supported_formats":template.supported_formats.iter().map(|format| format.canonical()).collect::<Vec<_>>(),
+        "selective_disclosure_fields":template.selective_disclosure_fields,
+        "zk_predicate_claims":template.zk_predicate_claims,
+        "derived_attributes":template.derived_attributes,
+        "display_style":template.display_style,
         "validity_rules":validity,
         "privacy_posture":{
             "mode":template.privacy_posture.as_str(),

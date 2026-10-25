@@ -1,3 +1,4 @@
+import { loadScopedCatalog } from '../../../services/loadScopedCatalog';
 /**
  * Application Templates Page
  * 
@@ -43,7 +44,7 @@ function ApplicationTemplatesPage() {
   }, [organizationId]);
 
   const { data: credentialTemplates = [] } = useAsyncData(async () => {
-    const result = await listCredentialTemplates({ organization_id: organizationId });
+    const result = await loadScopedCatalog(listCredentialTemplates, organizationId);
     const items = result;
     return items;
   }, [organizationId]);

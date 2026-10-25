@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { useNavigate } from 'react-router';
+import { useNavigate, useSearchParams } from 'react-router';
 import {
   Alert,
   Box,
@@ -20,6 +20,7 @@ import RefreshIcon from '@mui/icons-material/Refresh';
 import { useWizard } from '../../../hooks/useWizard';
 import { useConsole } from '../../../contexts/ConsoleContext';
 import { createFlow, getFlowCapabilities } from '../../../services/flowsApi';
+import { getCredentialTemplate } from '../../../services/presentationPolicyApi';
 import { DeploymentBindingStep, FlowStepsConfigStep, FlowTypeStep, ReviewStep } from './steps';
 
 const STEPS = ['Flow type', 'Definition', 'Dependencies', 'Review'];
@@ -68,10 +69,13 @@ export function buildFlowPayload(data, organizationId) {
 
 const FlowDefinitionWizard = () => {
   const navigate = useNavigate();
+  const [search] = useSearchParams();
+  const requestedTemplateId = search.get('templateId');
   const { activeOrgId: organizationId } = useConsole();
   const [capabilities, setCapabilities] = useState(null);
   const [capabilityError, setCapabilityError] = useState('');
   const [capabilitiesLoading, setCapabilitiesLoading] = useState(true);
+  const [templateError, setTemplateError] = useState('');
 
   const loadCapabilities = useCallback(async () => {
     setCapabilitiesLoading(true);
@@ -105,6 +109,7 @@ const FlowDefinitionWizard = () => {
   }, [capabilities]);
 
   const wizard = useWizard({
+    scopeKey: organizationId,
     steps: STEPS,
     initialData: INITIAL_DATA,
     validateStep,
@@ -116,13 +121,31 @@ const FlowDefinitionWizard = () => {
     onCancel: () => navigate('/console/org/flows/definitions'),
   });
 
+  const updateData = wizard.updateData;
+  useEffect(() => {
+    let current = true;
+    setTemplateError('');
+    updateData(INITIAL_DATA);
+    if (requestedTemplateId && organizationId) {
+      getCredentialTemplate(requestedTemplateId).then((template) => {
+        if (!current) return;
+        const flowType = { OID4VCI_PRE_AUTH: 'oid4vci_pre_authorized', OID4VCI_AUTH_CODE: 'oid4vci_authorization_code' }[template.issuance_protocol];
+        if (template.id !== requestedTemplateId || template.organization_id !== organizationId || String(template.status).toUpperCase() !== 'ACTIVE' || !flowType || !template.trust_profile_id) {
+          throw new Error('The linked template is unavailable or incompatible in this organization. Choose an eligible template in Dependencies.');
+        }
+        updateData({ credentialTemplateId: template.id, trustProfileId: template.trust_profile_id, flowType });
+      }).catch(() => { if (current) setTemplateError('The linked template is unavailable or incompatible in this organization. Choose an eligible template in Dependencies.'); });
+    }
+    return () => { current = false; };
+  }, [requestedTemplateId, organizationId, updateData]);
+
   const content = [
     <FlowTypeStep
       key="type"
       capabilities={capabilities}
       selectedType={wizard.data.flowType}
-      onSelectType={(flowType) => wizard.updateData({ ...INITIAL_DATA, flowType })}
-      onOpenCustomBuilder={() => navigate('/console/org/flows/definitions/new/custom')}
+      onSelectType={(flowType) => wizard.updateData({ ...INITIAL_DATA, ...(flowType === wizard.data.flowType ? { credentialTemplateId: wizard.data.credentialTemplateId, trustProfileId: wizard.data.trustProfileId } : {}), flowType })}
+      onOpenCustomBuilder={() => navigate(`/console/org/flows/definitions/new/custom${requestedTemplateId ? `?templateId=${encodeURIComponent(requestedTemplateId)}` : ''}`)}
     />,
     <FlowStepsConfigStep
       key="definition"
@@ -149,6 +172,7 @@ const FlowDefinitionWizard = () => {
         <Typography color="text.secondary">MIP 0.4 standard flow</Typography>
       </Box>
 
+      {templateError && <Alert severity="warning" sx={{ mb: 3 }}>{templateError}</Alert>}
       {capabilityError && (
         <Alert
           severity="error"

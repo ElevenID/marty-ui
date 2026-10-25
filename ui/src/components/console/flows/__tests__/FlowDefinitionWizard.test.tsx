@@ -8,9 +8,10 @@ import { server } from '@test/mocks/server';
 import FlowDefinitionWizard, { buildFlowPayload } from '../FlowDefinitionWizard';
 
 const mockNavigate = vi.fn();
+const route = vi.hoisted(() => ({ search: '' }));
 vi.mock('react-router', async () => {
   const actual = await vi.importActual('react-router');
-  return { ...actual, useNavigate: () => mockNavigate };
+  return { ...actual, useNavigate: () => mockNavigate, useSearchParams: () => [new URLSearchParams(route.search)] };
 });
 
 vi.mock('../../../../contexts/ConsoleContext', () => ({
@@ -18,7 +19,33 @@ vi.mock('../../../../contexts/ConsoleContext', () => ({
 }));
 
 describe('FlowDefinitionWizard', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => { vi.clearAllMocks(); route.search = ''; });
+
+  it('carries a validated template link into standard-flow dependencies', async () => {
+    route.search = 'templateId=linked-template';
+    const linked = { id: 'linked-template', organization_id: 'org-1', name: 'Linked template', status: 'ACTIVE', issuance_protocol: 'OID4VCI_PRE_AUTH', trust_profile_id: 'trust-1', claims: [] };
+    server.use(
+      http.get('*/v1/credential-templates/linked-template', () => HttpResponse.json(linked)),
+      http.get('*/v1/credential-templates', () => HttpResponse.json([linked])),
+    );
+    const user = userEvent.setup();
+    render(<FlowDefinitionWizard />);
+    await waitFor(() => expect(screen.getByTestId('wizard.flow.next')).toBeEnabled());
+    await user.click(screen.getByTestId('wizard.flow.next'));
+    await user.type(await screen.findByLabelText(/Flow name/i), 'Linked flow');
+    await user.click(screen.getByTestId('wizard.flow.next'));
+    await waitFor(() => expect(screen.getByRole('combobox', { name: /credential template/i })).toHaveTextContent('Linked template'));
+  });
+
+  it('rejects a foreign template link before setting flow dependencies', async () => {
+    route.search = 'templateId=foreign-template';
+    server.use(http.get('*/v1/credential-templates/foreign-template', () => HttpResponse.json({
+      id: 'foreign-template', organization_id: 'org-other', status: 'ACTIVE', issuance_protocol: 'OID4VCI_PRE_AUTH', trust_profile_id: 'trust-other',
+    })));
+    render(<FlowDefinitionWizard />);
+    expect(await screen.findByText(/linked template is unavailable or incompatible/i)).toBeInTheDocument();
+    expect(screen.getByTestId('wizard.flow.next')).toBeDisabled();
+  });
 
   it('shows the draft-first standard workflow', async () => {
     render(<FlowDefinitionWizard />);

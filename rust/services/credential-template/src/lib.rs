@@ -12,6 +12,7 @@ pub mod http_service;
 pub mod migration;
 pub mod persistence;
 pub mod postgres;
+pub mod public_configuration;
 pub mod registry_application;
 pub mod runtime;
 pub mod surface;

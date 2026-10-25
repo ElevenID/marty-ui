@@ -45,7 +45,7 @@ describe('TemplateSelectionStep', () => {
     )
 
     await waitFor(() => {
-      expect(mockListCredentialTemplates).toHaveBeenCalledWith({ organization_id: 'org-123' })
+      expect(mockListCredentialTemplates).toHaveBeenCalledWith({ organization_id: 'org-123', limit: 100, offset: 0 })
       expect(screen.getByText('Audit Employee Credential')).toBeInTheDocument()
     })
 

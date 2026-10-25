@@ -232,7 +232,7 @@ describe('useDashboardData', () => {
     expect(result.current.loading).toBe(false)
     expect(mockListSigningKeys).not.toHaveBeenCalled()
     expect(mockListApplicationTemplates).toHaveBeenCalledWith('org_live')
-    expect(mockListRevocationProfiles).toHaveBeenCalledWith({ organization_id: 'org_live' })
+    expect(mockListRevocationProfiles).toHaveBeenCalledWith({ organization_id: 'org_live', limit: 100, offset: 0 })
     expect(mockListComplianceProfiles).toHaveBeenCalledWith({ organization_id: 'org_live', limit: 100, offset: 0 })
     expect(mockListPublicIssuerIdentities).toHaveBeenCalledWith({ organization_id: 'org_live' })
     expect(mockGetKeyManagementConfig).not.toHaveBeenCalled()
@@ -279,6 +279,18 @@ describe('useDashboardData', () => {
     expect(result.current.data.complianceProfiles).toEqual([...first, active])
     expect(result.current.data.lifecycle.complianceProfiles).toEqual([])
     expect(result.current.data.resourceErrors.complianceProfiles).toBeNull()
+  })
+
+  it('loads later template pages for readiness instead of treating the first page as complete', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => ({ status: 'healthy' }) }))
+    const first = Array.from({ length: 100 }, (_, index) => ({ id: `draft-${index}`, status: 'DRAFT' }))
+    const active = { id: 'active-template', organization_id: 'org_live', status: 'ACTIVE' }
+    mockListCredentialTemplates.mockResolvedValueOnce(first).mockResolvedValueOnce([active])
+    const { result } = renderHook(() => useDashboardData())
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve() })
+    expect(mockListCredentialTemplates).toHaveBeenLastCalledWith({ organization_id: 'org_live', limit: 100, offset: 100 })
+    expect(result.current.data.templates).toEqual([...first, active])
+    expect(result.current.data.resourceErrors.templates).toBeNull()
   })
 
   it('reports a failed profile page without exposing an incomplete catalog as ready', async () => {

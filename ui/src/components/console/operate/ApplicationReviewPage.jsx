@@ -1,3 +1,4 @@
+import { loadScopedCatalog } from '../../../services/loadScopedCatalog';
 /**
  * ApplicationReviewPage
  *
@@ -405,7 +406,7 @@ export default function ApplicationReviewPage() {
       // Fetch the credential template to drive the claims display dynamically
       if (app.organization_id && app.credential_template_id) {
         try {
-          const templates = await listCredentialTemplates({ organization_id: app.organization_id });
+          const templates = await loadScopedCatalog(listCredentialTemplates, app.organization_id);
           const matched = Array.isArray(templates)
             ? templates.find(t => t.id === app.credential_template_id)
             : null;

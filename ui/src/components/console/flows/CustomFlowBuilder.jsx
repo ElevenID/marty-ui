@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { useNavigate } from 'react-router';
+import { useNavigate, useSearchParams } from 'react-router';
 import {
   Alert,
   Box,
@@ -34,13 +34,14 @@ function buildTransitions(steps) {
   }));
 }
 
-const CustomFlowBuilderForm = ({ organizationId }) => {
+const CustomFlowBuilderForm = ({ organizationId, requestedTemplateId }) => {
   const navigate = useNavigate();
   const mounted = useRef(true);
   const [capabilities, setCapabilities] = useState(null);
   const [capabilityError, setCapabilityError] = useState('');
   const [capabilityAttempt, setCapabilityAttempt] = useState(0);
-  const [applicationApproved, setApplicationApproved] = useState(false);
+  const [applicationApproved, setApplicationApproved] = useState(Boolean(requestedTemplateId));
+  const [linkedTemplateError, setLinkedTemplateError] = useState('');
   const [templates, setTemplates] = useState({ items: [], loading: false, error: '' });
   const [templateAttempt, setTemplateAttempt] = useState(0);
   const [templateId, setTemplateId] = useState('');
@@ -88,15 +89,21 @@ const CustomFlowBuilderForm = ({ organizationId }) => {
           }
           if (page.length < 100) break;
         }
-        if (current) setTemplates({ items: items.filter((item) => item.organization_id === organizationId
+        if (current) {
+          const eligible = items.filter((item) => item.organization_id === organizationId
           && String(item.status).toUpperCase() === 'ACTIVE' && item.issuance_protocol === 'OID4VCI_PRE_AUTH'
-          && item.trust_profile_id), loading: false, error: '' });
+          && item.trust_profile_id);
+          setTemplates({ items: eligible, loading: false, error: '' });
+          setTemplateId(eligible.some((item) => item.id === requestedTemplateId) ? requestedTemplateId : '');
+          setLinkedTemplateError(requestedTemplateId && !eligible.some((item) => item.id === requestedTemplateId)
+            ? 'The linked template is unavailable or incompatible in this organization. Select an eligible template.' : '');
+        }
       })().catch((cause) => {
         if (current) setTemplates({ items: [], loading: false, error: cause.message || 'Credential templates could not be loaded.' });
       });
     }
     return () => { current = false; };
-  }, [applicationApproved, organizationId, templateAttempt]);
+  }, [applicationApproved, organizationId, templateAttempt, requestedTemplateId]);
 
   const applicationSupported = capabilities?.flow_types?.includes('custom')
     && capabilities?.standard_flow_types?.includes('oid4vci_pre_authorized') && capabilities?.triggers?.includes('WEBHOOK');
@@ -205,6 +212,7 @@ const CustomFlowBuilderForm = ({ organizationId }) => {
           </Stack>
 
           {applicationApproved ? <Box>
+            {linkedTemplateError && <Alert severity="warning">{linkedTemplateError}</Alert>}
             {templates.error && <Alert severity="error" action={<Button onClick={() => setTemplateAttempt((n) => n + 1)}>Retry templates</Button>}>{templates.error}</Alert>}
             <FormControl fullWidth required sx={{ mt: 2 }} disabled={templates.loading || saving || Boolean(templates.error)}>
               <InputLabel id="approved-flow-template-label">Credential template</InputLabel>
@@ -250,5 +258,7 @@ const CustomFlowBuilderForm = ({ organizationId }) => {
 
 export default function CustomFlowBuilder() {
   const { activeOrgId: organizationId } = useConsole();
-  return <CustomFlowBuilderForm key={organizationId || 'no-organization'} organizationId={organizationId} />;
+  const [search] = useSearchParams();
+  const requestedTemplateId = search.get('templateId');
+  return <CustomFlowBuilderForm key={`${organizationId || 'no-organization'}:${requestedTemplateId || ''}`} organizationId={organizationId} requestedTemplateId={requestedTemplateId} />;
 }
