@@ -414,71 +414,6 @@ fn matching_relationships<'a>(
         .collect()
 }
 
-pub(crate) fn mdoc_direct_pin_lifecycle_verified(
-    document: &Value,
-    issuer_id: &str,
-    now: DateTime<Utc>,
-) -> bool {
-    let Some(profile) = document.as_object() else {
-        return false;
-    };
-    if profile
-        .get("status")
-        .and_then(Value::as_str)
-        .is_none_or(|status| !status.eq_ignore_ascii_case("active"))
-    {
-        return false;
-    }
-    let Some(fingerprint) = issuer_id.strip_prefix("x509-sha256:") else {
-        return false;
-    };
-    if !is_mdoc_certificate_issuer(issuer_id) {
-        return false;
-    }
-    let matching_pins = profile
-        .get("trust_sources")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_object)
-        .filter(|source| source.get("enabled") != Some(&Value::Bool(false)))
-        .filter(|source| {
-            source
-                .get("source_type")
-                .and_then(Value::as_str)
-                .is_some_and(|kind| kind.eq_ignore_ascii_case("PINNED_ISSUER"))
-        })
-        .filter(|source| {
-            source
-                .get("certificate_pem")
-                .into_iter()
-                .chain(
-                    source
-                        .get("pinned_certificates")
-                        .and_then(Value::as_array)
-                        .into_iter()
-                        .flatten(),
-                )
-                .filter_map(Value::as_str)
-                .filter_map(|pem| marty_crypto::certificate::pem_to_der(pem).ok())
-                .map(|der| hex::encode(marty_crypto::hashing::hash_sha256(&der)))
-                .any(|candidate| candidate == fingerprint)
-        })
-        .count();
-    if matching_pins != 1 {
-        return false;
-    }
-    let Some(relationships) = profile
-        .get("issuer_relationships")
-        .and_then(Value::as_array)
-        .filter(|relationships| !relationships.is_empty())
-    else {
-        return false;
-    };
-    let matches = matching_relationships(relationships, issuer_id);
-    matches.len() == 1 && evaluate_relationship(matches[0], now).verified
-}
-
 fn is_mdoc_certificate_issuer(issuer_id: &str) -> bool {
     issuer_id
         .strip_prefix("x509-sha256:")
@@ -905,7 +840,7 @@ mod tests {
     }
 
     #[test]
-    fn normalized_relationship_and_exact_direct_pin_preserve_mdoc_lifecycle_semantics() {
+    fn normalized_relationship_governs_mdoc_issuer_trust_only() {
         let contract: Value = serde_json::from_str(include_str!(
             "../../../../contracts/presentation-mdoc-lifecycle-behavior.json"
         ))
@@ -949,43 +884,12 @@ mod tests {
             )
             .unwrap()
         );
-        assert_eq!(
-            mdoc_direct_pin_lifecycle_verified(&profile, &issuer_id, now),
-            contract["expected"]["direct_pin_lifecycle_verified"]
-                .as_bool()
-                .unwrap()
-        );
-
-        let mut root_only = profile.clone();
-        root_only["trust_sources"][0]["source_type"] = Value::String("ROOT_CA".into());
-        assert_eq!(
-            mdoc_direct_pin_lifecycle_verified(&root_only, &issuer_id, now),
-            contract["expected"]["root_only_lifecycle_verified"]
-                .as_bool()
-                .unwrap()
-        );
-
-        let mut ambiguous = profile.clone();
-        let duplicate = ambiguous["trust_sources"][0].clone();
-        ambiguous["trust_sources"]
-            .as_array_mut()
-            .unwrap()
-            .push(duplicate);
-        assert_eq!(
-            mdoc_direct_pin_lifecycle_verified(&ambiguous, &issuer_id, now),
-            contract["expected"]["ambiguous_pin_lifecycle_verified"]
-                .as_bool()
-                .unwrap()
-        );
-
+        assert!(trust.verified);
         let mut revoked = profile;
         revoked["issuer_relationships"][0]["revoked_at"] =
             Value::String("2026-08-20T00:00:00Z".into());
-        assert_eq!(
-            mdoc_direct_pin_lifecycle_verified(&revoked, &issuer_id, now),
-            contract["expected"]["revoked_relationship_lifecycle_verified"]
-                .as_bool()
-                .unwrap()
-        );
+        let revoked_issuer =
+            evaluate_issuer_document(&revoked, &issuer_id, DetectedCredentialFormat::Mdoc, now);
+        assert!(!revoked_issuer.verified);
     }
 }
