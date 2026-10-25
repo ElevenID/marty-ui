@@ -177,6 +177,7 @@ fn input_names(spec: &Value) -> Vec<String> {
 }
 
 fn assemble(spec: &Value, namespace: &str, values: &BTreeMap<String, String>) -> Value {
+    let template_variables = regex::Regex::new(r"\{([A-Z_0-9]+)\}").unwrap();
     let mut items = Vec::new();
     for secret in spec["secrets"].as_array().unwrap() {
         if secret["optional_env"]
@@ -195,8 +196,7 @@ fn assemble(spec: &Value, namespace: &str, values: &BTreeMap<String, String>) ->
                     value.clone()
                 }
             } else if let Some(template) = field["template"].as_str() {
-                regex::Regex::new(r"\{([A-Z_0-9]+)\}")
-                    .unwrap()
+                template_variables
                     .replace_all(template, |captures: &regex::Captures<'_>| {
                         values[&captures[1]].clone()
                     })
