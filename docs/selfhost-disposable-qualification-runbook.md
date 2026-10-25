@@ -145,6 +145,14 @@ private state. Successful helper removal precedes exact four-role OpenBao
 cleanup and comparison with the original neighboring resource sets. This
 fixture has synthetic release admission and cannot qualify a version release.
 
+This component fixture passed against installer source
+`8392d2ba461f945b2ffb5023b9eadf0fdfc7a71b` with a freshly built static operator
+(SHA-256 `a7184acd9a157ef5e996116b63669ecaa6870c262d1dd156d177f836240fd3c6`).
+It verified the live 21-policy inventory, scoped login, verification-token
+revocation, private identity delivery and owned-resource cleanup with unchanged
+neighbor identities. It did not replace application credentials, retire root,
+renew ingress credentials, or qualify a complete installed journey.
+
 This step retains the bootstrap root. Initial workload and Keycloak credentials
 are root descendants, so revoking root before replacing them would break the
 installation. Replacement credentials need orphan-token verification, durable
