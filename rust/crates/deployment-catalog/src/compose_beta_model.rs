@@ -102,7 +102,14 @@ pub(super) fn simulator_before(i: &Value) -> PolicyResult {
     ] {
         let e = beta_env(&s[n])?;
         require(
-            flag(&e, k) == (i["passport_enabled"] == true),
+            e.get(k)
+                .map(pystr)
+                .unwrap_or_else(|| "false".into())
+                .eq_ignore_ascii_case(if i["passport_enabled"] == true {
+                    "true"
+                } else {
+                    "false"
+                }),
             "Beta passport owner selection is inconsistent",
         )?;
     }
