@@ -1969,7 +1969,6 @@ def create_credential_template(audit: Audit, run_id: str) -> None:
 
     name = f"Audit Employee Credential {run_id}"
     audit.fill_label(re.compile(r"template name", re.I), name)
-    audit.fill_label(re.compile(r"vct|verifiable credential type", re.I), f"com.elevenid.audit.employee.{run_id}")
     audit.fill_label(re.compile(r"description", re.I), "Employee credential template created during beta UI audit.")
     audit.snapshot("template-basics-filled", "Filled template basics.")
     if not audit.click_role("button", re.compile(r"next", re.I), timeout=3000):
@@ -1999,6 +1998,18 @@ def create_credential_template(audit: Audit, run_id: str) -> None:
         audit.snapshot("template-compliance-blocked", "The active system Compliance Profile was unavailable.")
         return
     audit.snapshot("compliance-profile-available", "Selected the active OID4VC system Compliance Profile.")
+    identities = [step.get("issuer_identity") for step in audit.steps
+                  if step.get("label") == "issuer-identity-active"]
+    if len(identities) != 1 or not is_active(identities[0]) or not identities[0].get("issuer_did"):
+        raise ValueError("Credential authoring requires this run's active issuer identity")
+    issuer_did = identities[0]["issuer_did"]
+    if not audit.select_mui_option("template-issuer-profile-select",
+            re.compile(rf"^{re.escape(issuer_did)}$"), timeout=10000):
+        raise ValueError("The run-owned issuer DID is not offered by the compatibility selector")
+    if not audit.fill_label(re.compile(r"^Credential type URI \(VCT\)", re.I),
+            f"https://beta.elevenidllc.com/credentials/audit-employee/{run_id}"):
+        raise ValueError("The selected credential format requires its real VCT field")
+    audit.snapshot("template-issuer-and-type-selected", "Bound the run-owned issuer DID and credential type through the real compatibility form.")
     if not audit.click_role("button", re.compile(r"next", re.I), timeout=3000):
         audit.snapshot("template-trust-next-blocked", "Next unavailable after trust selection.")
         return
@@ -2130,10 +2141,10 @@ def create_policy_and_deployment(audit: Audit, run_id: str) -> None:
         audit.snapshot("policy-trust-next-blocked", "Next unavailable after selecting a trust profile.")
         return
 
-    if not audit.click_role("button", re.compile(rf"Select Audit Employee Credential {run_id}", re.I), timeout=5000):
-        if not audit.click_role("button", re.compile(r"Audit Employee Credential|Employee Access Verification|Custom Policy|Identity Verification", re.I), timeout=3000):
-            audit.click_text(re.compile(r"Audit Employee Credential|Employee Access Verification|Custom Policy|Identity Verification", re.I), timeout=1500)
-    audit.snapshot("policy-template-selected", "Selected the audit credential template or a fallback presentation policy template.")
+    if not audit.click_role("button", re.compile(
+            rf"^Select Audit Employee Credential {re.escape(run_id)} presentation policy template$", re.I), timeout=10000):
+        raise ValueError("Presentation policy requires this run's active employee credential template; no unrelated policy fallback is allowed")
+    audit.snapshot("policy-template-selected", "Selected the exact run-owned employee credential template.")
     if not audit.click_role("button", re.compile(r"next", re.I), timeout=2500):
         audit.snapshot("policy-template-next-blocked", "Next unavailable after selecting a policy template.")
         return
@@ -2652,6 +2663,7 @@ def main() -> int:
         # Trace arguments and network bodies retain credentials even without
         # screenshots. Start only after login and KMS credential submission.
         trace_started = False
+        trace_stopped = False
         page = context.new_page()
         if capture:
             capture.bind_page(page)
@@ -2678,7 +2690,9 @@ def main() -> int:
             create_key_service_if_possible(audit, run_id, signing_inputs)
             if record_trace:
                 context.tracing.start(
-                    screenshots=record_video, snapshots=record_video, sources=record_video,
+                    # DOM snapshots also enable HAR capture, including session
+                    # cookies. Keep those out of both functional and video traces.
+                    screenshots=record_video, snapshots=False, sources=False,
                 )
                 trace_started = True
             create_issuer_identity(audit, run_id)
@@ -2690,6 +2704,13 @@ def main() -> int:
             create_policy_and_deployment(audit, run_id)
             create_flow(audit, run_id, "issuance")
             create_flow(audit, run_id, "verification")
+            # API-key response/read actions contain the one-time bearer even
+            # without DOM snapshots. Preserve the earlier trace, then stop before
+            # creation; recorder-owned request-ID observations continue throughout.
+            if trace_started:
+                trace_path = artifact_dir / "mip-primitives-management-trace.zip"
+                context.tracing.stop(path=str(trace_path))
+                trace_stopped = True
             create_api_key(audit, run_id)
             verify_resource_inventory(audit, run_id)
             verify_unauthorized_administration_denied(audit)
@@ -2702,7 +2723,7 @@ def main() -> int:
             audit.cleanup_created_api_keys()
             report = audit.report()
             recording: dict[str, Any] | None = None
-            if trace_started:
+            if trace_started and not trace_stopped:
                 trace_path = artifact_dir / "mip-primitives-management-trace.zip"
                 context.tracing.stop(path=str(trace_path))
             if record_video:
@@ -2733,8 +2754,9 @@ def main() -> int:
                 report["trace_coverage"] = {
                     "status": "CAPTURED_AFTER_SENSITIVE_SETUP" if trace_started else "NOT_STARTED_SETUP_FAILED",
                     "starts_after": "kms-service-configured",
-                    "omitted": ["authentication", "organization-creation", "kms-service-registration"],
-                    "reason": "Credential entry and service submission are excluded from trace arguments and network payloads.",
+                    "stops_before": "api-key-creation",
+                    "omitted": ["authentication", "organization-creation", "kms-service-registration", "api-key-creation"],
+                    "reason": "No DOM/HAR snapshots; secret entry and one-time API-key actions are excluded. Live request-ID evidence continues throughout.",
                 }
                 if not trace_started:
                     report["releaseReady"] = False
