@@ -389,7 +389,7 @@ pub fn seed_did_and_jwks(
         if let Some(object) = jwk.as_object_mut() {
             object.insert("kid".into(), json!(record.reference));
         }
-        let method = json!({"id": vm_id, "type": "JsonWebKey", "controller": issuer_did,
+        let method = json!({"id": vm_id, "type": documents::JWK_VERIFICATION_METHOD_TYPE, "controller": issuer_did,
             "publicKeyJwk": jwk});
         if let Some(position) = methods
             .iter()
@@ -631,6 +631,20 @@ mod tests {
         }
     }
 
+    fn expected_interoperable_managed_methods(mut expected: Value, records: &[KeyRecord]) -> Value {
+        for method in expected["verificationMethod"].as_array_mut().unwrap() {
+            let managed = method["publicKeyJwk"]["kid"].as_str().is_some_and(|kid| {
+                records
+                    .iter()
+                    .any(|record| kid == record.reference || kid == record.spec.id)
+            });
+            if managed {
+                method["type"] = json!(documents::JWK_VERIFICATION_METHOD_TYPE);
+            }
+        }
+        expected
+    }
+
     #[test]
     fn clean_registry_did_jwks_and_profiles_match_python_except_derived_managed_service() {
         let clean = case("clean_apply");
@@ -659,7 +673,10 @@ mod tests {
         let (did_doc, jwks) = seed_did_and_jwks(None, org, did, &records);
         assert_eq!(
             did_doc,
-            scoped_historical_expected(&expected[did_key(org, Some(did))], org)
+            expected_interoperable_managed_methods(
+                scoped_historical_expected(&expected[did_key(org, Some(did))], org),
+                &records
+            )
         );
         assert_eq!(
             jwks,
@@ -730,7 +747,13 @@ mod tests {
         let (did_doc, jwks) = seed_did_and_jwks(current, org, did, &records);
         assert_eq!(
             did_doc,
-            scoped_historical_expected(&backfill["state"]["redis"][did_key(org, Some(did))], org)
+            expected_interoperable_managed_methods(
+                scoped_historical_expected(
+                    &backfill["state"]["redis"][did_key(org, Some(did))],
+                    org
+                ),
+                &records
+            )
         );
         assert_eq!(
             jwks,
