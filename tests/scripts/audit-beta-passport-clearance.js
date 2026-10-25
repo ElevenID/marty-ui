@@ -4,7 +4,9 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { randomUUID } = require('node:crypto');
+const { randomUUID, createHash } = require('node:crypto');
+const { createDemoLiveEvidence, acknowledgeDemoInputs, applyLocalNativeReadiness } = require('./demo-live-evidence');
+const { createOwnedActiveConfiguration, retireOwnedConfiguration } = require('./demo-owned-configuration');
 const { chromium } = require('@playwright/test');
 const { acquireWalletSession } = require('./demo-wallet-session');
 
@@ -32,9 +34,9 @@ const {
   findCurrentCredential,
   governedIssuerTrustProfilePayload,
   issueOwnedApplication,
-  listResources,
   requestedClaim,
   requireJson,
+  requireActiveComplianceProfile,
   requireNoConflictingApplications,
   requireOwnedApplication,
   resolveActiveIssuerDid,
@@ -314,22 +316,7 @@ function requireConfigurationBinding(configuration) {
   return configuration;
 }
 
-async function activeOwnedDependency(page, collectionPath, resourceId, label) {
-  if (!resourceId) throw new Error(`${label} binding is missing`);
-  const resource = await requireJson(
-    page,
-    `${collectionPath}/${encodeURIComponent(resourceId)}`,
-    {},
-    `Load ${label}`,
-  );
-  if (resource.organization_id !== ORG_ID
-      || String(resource.status || '').toUpperCase() !== 'ACTIVE') {
-    throw new Error(`${label} must be active and owned by the demo organization`);
-  }
-  return resource;
-}
-
-async function ensureConfiguration(page, stamp) {
+async function ensureConfiguration(page, stamp, ownedResources) {
   const source = await requireJson(
     page,
     `/v1/credential-templates/${encodeURIComponent(SOURCE_TEMPLATE_ID)}`,
@@ -339,38 +326,18 @@ async function ensureConfiguration(page, stamp) {
   if (!source.compliance_profile_id) {
     throw new Error('D-01 source Credential Template lacks a compliance binding');
   }
+  await requireActiveComplianceProfile(page, {
+    profileId: source.compliance_profile_id, organizationId: ORG_ID,
+  });
   const issuerDid = await resolveActiveIssuerDid(page, { organizationId: ORG_ID });
-  const existingCredentials = (await listResources(
-    page,
-    '/v1/credential-templates',
-    ORG_ID,
-  )).filter(({ name }) => name === RESOURCE_NAMES.credential);
-  if (existingCredentials.length > 1) {
-    throw new Error(`Multiple resources named '${RESOURCE_NAMES.credential}' exist`);
-  }
-  const existingCredential = existingCredentials[0] || null;
-  const trustProfile = existingCredential
-    ? await activeOwnedDependency(
-      page,
-      '/v1/trust-profiles',
-      existingCredential.trust_profile_id,
-      'D-01 Trust Profile',
-    )
-    : await ensureActiveResource(page, {
-      organizationId: ORG_ID,
-      collectionPath: '/v1/trust-profiles',
-      name: RESOURCE_NAMES.trust,
-      payload: clearanceTrustProfilePayload(issuerDid),
-      idempotencyKey: 'demo-d01-pre-boarding-trust-v1',
-    });
-  const revocationProfile = existingCredential
-    ? await activeOwnedDependency(
-      page,
-      '/v1/revocation-profiles',
-      existingCredential.revocation_profile_id,
-      'D-01 Revocation Profile',
-    )
-    : await ensureActiveRevocationProfile(page, stamp);
+  const trustProfile = await ensureActiveResource(page, {
+    organizationId: ORG_ID,
+    collectionPath: '/v1/trust-profiles',
+    name: RESOURCE_NAMES.trust,
+    payload: clearanceTrustProfilePayload(issuerDid),
+    idempotencyKey: 'demo-d01-pre-boarding-trust-v1',
+  });
+  const revocationProfile = await ensureActiveRevocationProfile(page, stamp);
   if (!revocationProfile?.id || revocationProfile.ok === false) {
     throw new Error(`D-01 target revocation profile unavailable: ${revocationProfile?.error || 'unknown error'}`);
   }
@@ -381,7 +348,7 @@ async function ensureConfiguration(page, stamp) {
     displayName: 'D-01 Pre-Boarding Credential Issuer',
     idempotencyKey: 'demo-d01-pre-boarding-governed-issuer-v1',
   });
-  const credential = await ensureActiveResource(page, {
+  const credential = await createOwnedActiveConfiguration(page, ownedResources, {
     organizationId: ORG_ID,
     collectionPath: '/v1/credential-templates',
     name: RESOURCE_NAMES.credential,
@@ -393,7 +360,7 @@ async function ensureConfiguration(page, stamp) {
     ),
     idempotencyKey: 'demo-d01-pre-boarding-credential-v2',
   });
-  const application = await ensureActiveResource(page, {
+  const application = await createOwnedActiveConfiguration(page, ownedResources, {
     organizationId: ORG_ID,
     collectionPath: '/v1/application-templates',
     name: RESOURCE_NAMES.application,
@@ -401,14 +368,14 @@ async function ensureConfiguration(page, stamp) {
     idempotencyKey: 'demo-d01-passport-clearance-application-v1',
     validate: true,
   });
-  const policy = await ensureActiveResource(page, {
+  const policy = await createOwnedActiveConfiguration(page, ownedResources, {
     organizationId: ORG_ID,
     collectionPath: '/v1/presentation-policies',
     name: RESOURCE_NAMES.policy,
     payload: clearancePolicyPayload(credential),
     idempotencyKey: 'demo-d01-rapid-gate-policy-v1',
   });
-  const flow = await ensureActiveResource(page, {
+  const flow = await createOwnedActiveConfiguration(page, ownedResources, {
     organizationId: ORG_ID,
     collectionPath: '/v1/flows/definitions',
     name: RESOURCE_NAMES.flow,
@@ -487,7 +454,12 @@ async function approveAndIssue(page, ownedResources, evidenceDigest, { recording
 }
 
 async function cleanup(page, ownedResources) {
-  return cleanupApplicationCredential(page, ownedResources, 'D-01 release qualification cleanup');
+  const result = await cleanupApplicationCredential(page, ownedResources, 'D-01 release qualification cleanup', { cancelPendingOffer: true });
+  if (!result.ok) return result;
+  try { result.configuration = await retireOwnedConfiguration(page, ownedResources); }
+  catch (error) { result.configuration = { ok: false, error: redact(error.message) }; }
+  result.ok = result.configuration.ok === true;
+  return result;
 }
 
 async function showClearanceStep(page, title, detail) {
@@ -511,7 +483,7 @@ function observePage(page, report) {
   });
 }
 
-async function main() {
+async function runPassportDemo(evidence) {
   const adminEmail = process.env.TEST_VENDOR_EMAIL || process.env.TEST_ADMIN_EMAIL;
   const adminPassword = process.env.TEST_VENDOR_PASSWORD || process.env.TEST_ADMIN_PASSWORD;
   const applicantEmail = process.env.TEST_APPLICANT_EMAIL || process.env.TEST_APPLICANT1_EMAIL;
@@ -530,6 +502,15 @@ async function main() {
 
   const stamp = `${new Date().toISOString().replace(/[-:]/g, '').replace(/\..+/, '').toLowerCase()}-${randomUUID()}`;
   const artifactDir = createArtifactDir(ROOT, `beta-passport-clearance-${stamp}`);
+  const nativeEvidence = await evidence.readFixture('passport-validation-evidence.json');
+  if (createHash('sha256').update(nativeEvidence).digest('hex') !== evidenceDigest) {
+    throw new Error('D-01 native evidence differs from the actual parent artifact');
+  }
+  const input = await acknowledgeDemoInputs(artifactDir, 'passport-clearance-run-input.json', {
+    schemaVersion: 1, runId: stamp, organizationId: ORG_ID, sourceTemplateId: SOURCE_TEMPLATE_ID,
+    verifierDid: VERIFIER_DID, passportEvidenceSha256: evidenceDigest,
+    nativeEvidenceFile: 'passport-validation-evidence.json',
+  }, evidence);
   const ownedResources = {
     organizationId: ORG_ID,
     runId: stamp,
@@ -593,6 +574,9 @@ async function main() {
     const applicantPage = await applicantContext.newPage();
     adminVideo = page.video();
     walletVideo = walletPage.video();
+    evidence.bindPage(page);
+    evidence.bindPage(walletPage);
+    evidence.bindPage(applicantPage);
     observePage(page, report);
     observePage(applicantPage, report);
     observePage(walletPage, report);
@@ -600,7 +584,7 @@ async function main() {
     await login(page, adminEmail, adminPassword);
     report.orgSelection = await selectOrg(page);
     if (!report.orgSelection.ok) throw new Error(`Cannot select organization ${ORG_ID}`);
-    const configuration = await ensureConfiguration(page, stamp);
+    const configuration = await ensureConfiguration(page, stamp, ownedResources);
     ownedResources.applicationTemplateId = configuration.application.id;
     ownedResources.credentialTemplateId = configuration.credential.id;
     report.configuration = {
@@ -627,8 +611,8 @@ async function main() {
     const application = await createAndSubmitApplication(
       applicantPage,
       ownedResources,
-      evidenceDigest,
-      stamp,
+      input.passportEvidenceSha256,
+      input.runId,
     );
     applicationId = application.created.id;
     report.application = {
@@ -671,6 +655,7 @@ async function main() {
 
     const walletReceipt = await receiveCredential(walletPage, offerUri, configuration.credential.vct);
     report.issuance.walletReceived = walletReceipt.ok;
+    report.issuance.walletReceiveStatus = walletReceipt.status;
     if (!walletReceipt.ok) throw new Error('Pre-boarding wallet did not accept the credential');
     const walletCredential = await walletPage.evaluate(async (expectedVct) => {
       const response = await fetch('/api/credentials');
@@ -774,11 +759,27 @@ async function main() {
     });
     report.releaseReady = Boolean(journeyReady && walletClosed
       && report.cleanup?.ok === true && !report.cleanupError && report.finalizationFailures.length === 0);
+    applyLocalNativeReadiness(report, evidence, { ready: report.releaseReady,
+      cleanupComplete: report.cleanup?.ok === true && walletClosed && !report.cleanupError });
+    if (report.releaseReady || report.functionalReady) {
+      try { await evidence.complete(); }
+      catch (error) {
+        report.releaseReady = false;
+        if (report.localOverlayBinding) { report.functionalReady = false; report.operations_verified = false; }
+        report.finalizationFailures.push({ operation: 'live_evidence_completion', error: redact(error.message) });
+      }
+    }
     report.finishedAt = new Date().toISOString();
     fs.writeFileSync(path.join(artifactDir, 'report.json'), JSON.stringify(report, null, 2));
     console.log(JSON.stringify(report, null, 2));
-    if (!report.releaseReady) process.exitCode = 1;
+    if (!report.releaseReady && !report.functionalReady) process.exitCode = 1;
   }
+}
+
+async function main() {
+  const evidence = await createDemoLiveEvidence();
+  try { return await runPassportDemo(evidence); }
+  finally { evidence.close(); }
 }
 
 if (require.main === module) {
