@@ -459,6 +459,17 @@ fn cleanup_summary(
         }
         expected_sources.insert("evidence/generation-container-removed.json");
     }
+    if plan
+        .source_hashes
+        .contains_key("evidence/application-generation.json")
+    {
+        if !expected_sources.contains("evidence/generation-container-removed.json") {
+            return Err("application generation cleanup lacks candidate evidence".into());
+        }
+        expected_sources.insert("evidence/application-generation.json");
+        expected_sources.insert("evidence/application-generation-pending.json");
+        expected_sources.insert("evidence/application-generation-selection.json");
+    }
     if plan.schema != "elevenid.installer-uninstall-plan/v1"
         || plan.installation_id != journal.installation_id().to_string()
         || plan.engine_id != binding.engine_id
@@ -883,6 +894,7 @@ impl InstallerState {
                 "generation-inputs",
                 "generation-identity",
                 "generation-transfer",
+                "application-generation",
             ]
             .contains(&entry)
         {
@@ -1392,6 +1404,41 @@ mod tests {
             None
         )
         .is_ok());
+        plan["source_hashes"]["evidence/application-generation.json"] =
+            serde_json::json!("e".repeat(64));
+        assert!(cleanup_summary(
+            state.journal(),
+            Some(&serde_json::to_vec(&plan).unwrap()),
+            None
+        )
+        .is_err());
+        plan["source_hashes"]["evidence/application-generation-pending.json"] =
+            serde_json::json!("f".repeat(64));
+        assert!(cleanup_summary(
+            state.journal(),
+            Some(&serde_json::to_vec(&plan).unwrap()),
+            None
+        )
+        .is_err());
+        plan["source_hashes"]["evidence/application-generation-selection.json"] =
+            serde_json::json!("a".repeat(64));
+        assert!(cleanup_summary(
+            state.journal(),
+            Some(&serde_json::to_vec(&plan).unwrap()),
+            None
+        )
+        .is_ok());
+        let mut missing_candidate = plan.clone();
+        missing_candidate["source_hashes"]
+            .as_object_mut()
+            .unwrap()
+            .remove("evidence/generation-container-removed.json");
+        assert!(cleanup_summary(
+            state.journal(),
+            Some(&serde_json::to_vec(&missing_candidate).unwrap()),
+            None
+        )
+        .is_err());
         let mut missing_renewal = plan.clone();
         missing_renewal["source_hashes"]
             .as_object_mut()
@@ -1897,6 +1944,7 @@ mod tests {
             "generation-inputs",
             "generation-identity",
             "generation-transfer",
+            "application-generation",
         ] {
             state.create_private_directory(entry).unwrap();
             assert_eq!(

@@ -219,6 +219,21 @@ pub fn validate_inputs(
     installation: &Path,
     bundle: &Path,
 ) -> Result<()> {
+    validate_inputs_with_generation(plan, installation, bundle, None)
+}
+
+pub fn validate_inputs_with_generation(
+    plan: &ApplicationModelPlan,
+    installation: &Path,
+    bundle: &Path,
+    generation: Option<&crate::installer_generation_binding::GenerationBinding>,
+) -> Result<()> {
+    let generation_dir = if let Some(binding) = generation {
+        crate::installer_generation_binding::verify_model(installation, binding, plan)?;
+        Some(binding.secret_dir(installation)?)
+    } else {
+        None
+    };
     crate::installer_runtime::private_parent(installation)?;
     require(bundle.starts_with(installation) && bundle != installation)?;
     let mut paths = BTreeMap::<String, bool>::new();
@@ -280,6 +295,16 @@ pub fn validate_inputs(
                 }
                 if path.starts_with(installation.join("secrets")) {
                     require(m.is_file() && matches!(m.mode() & 0o7777, 0o444 | 0o644))?;
+                } else if generation_dir
+                    .as_ref()
+                    .is_some_and(|dir| path.parent() == Some(dir.as_path()))
+                {
+                    require(
+                        m.is_file()
+                            && readonly
+                            && m.uid() == unsafe { libc::geteuid() }
+                            && m.mode() & 0o7777 == 0o444,
+                    )?;
                 } else if path.starts_with(bundle) {
                     require(readonly && m.uid() == unsafe { libc::geteuid() })?;
                 } else if path.starts_with(installation.join("state")) {

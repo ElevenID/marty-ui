@@ -71,11 +71,14 @@ pub fn startup_order(model: &Value, selected: &[String]) -> Result<Vec<String>> 
         .map(String::as_str)
         .filter(|s| !EXCLUDED.contains(s))
         .collect();
-    if services.len() != 33
+    let canonical = services.len() == 33 && EXCLUDED.iter().all(|s| services.contains_key(*s));
+    let generation_selected = services.len() == 30
+        && services.contains_key("kms-initialize")
+        && EXCLUDED[..3].iter().all(|s| !services.contains_key(*s));
+    if !(canonical || generation_selected)
         || chosen.len() != 29
         || chosen.len() != selected.len()
         || chosen != expected
-        || EXCLUDED.iter().any(|s| !services.contains_key(*s))
     {
         return Err(REFUSED.into());
     }

@@ -107,14 +107,17 @@ fn decoded_path(s: &str) -> Result<PathBuf> {
     require(!s.replace("$$", "").contains('$'))?;
     Ok(PathBuf::from(s.replace("$$", "$")))
 }
-fn secret_entry(source: &str, installation: &Path) -> Result<String> {
+fn secret_entry(source: &str, secret_dir: &Path) -> Result<String> {
     let path = decoded_path(source)?;
-    require(path.parent() == Some(installation.join("secrets").as_path()))?;
+    require(path.parent() == Some(secret_dir))?;
     let entry = path.file_name().and_then(|s| s.to_str()).ok_or(REFUSED)?;
     require(name(entry))?;
     Ok(entry.to_owned())
 }
 fn credential_names(plan: &ApplicationModelPlan, installation: &Path) -> Result<BTreeSet<String>> {
+    credential_names_at(plan, &installation.join("secrets"))
+}
+fn credential_names_at(plan: &ApplicationModelPlan, secret_dir: &Path) -> Result<BTreeSet<String>> {
     let mut entries: BTreeSet<String> = SCALAR_SECRETS.iter().map(|s| s.to_string()).collect();
     for role in &plan.selected_services {
         let service = &plan.model["services"][role];
@@ -123,7 +126,7 @@ fn credential_names(plan: &ApplicationModelPlan, installation: &Path) -> Result<
                 let source = text(&secret["source"])?;
                 entries.insert(secret_entry(
                     text(&plan.model["secrets"][source]["file"])?,
-                    installation,
+                    secret_dir,
                 )?);
             }
         }
@@ -131,8 +134,8 @@ fn credential_names(plan: &ApplicationModelPlan, installation: &Path) -> Result<
             for mount in volumes.as_array().ok_or(REFUSED)? {
                 if mount["type"] == "bind" {
                     let source = text(&mount["source"])?;
-                    if decoded_path(source)?.starts_with(installation.join("secrets")) {
-                        entries.insert(secret_entry(source, installation)?);
+                    if decoded_path(source)?.starts_with(secret_dir) {
+                        entries.insert(secret_entry(source, secret_dir)?);
                     }
                 }
             }
@@ -145,6 +148,22 @@ fn corpus(state: &LockedInspection, entries: &BTreeSet<String>) -> Result<Vec<Ve
     let mut result = vec![state.read_operator_password()?];
     for entry in entries {
         result.push(state.read_secret(entry)?);
+    }
+    Ok(result)
+}
+fn selected_corpus(
+    state: &LockedInspection,
+    entries: &BTreeSet<String>,
+    installation: &Path,
+    generation: Option<&crate::installer_generation_binding::GenerationBinding>,
+) -> Result<Vec<Vec<u8>>> {
+    // Preserve the original corpus too: historical logs can contain credentials
+    // from bootstrap, even when current mounts select a replacement generation.
+    let mut result = corpus(state, entries)?;
+    if let Some(generation) = generation {
+        for name in generation.files.keys() {
+            result.push(generation.read(installation, name)?);
+        }
     }
     Ok(result)
 }
@@ -270,8 +289,18 @@ fn logs_inner(args: &[String]) -> Result<String> {
     let id = created.containers.get(&args.service).ok_or(REFUSED)?;
     let compose_bytes = state.read_evidence("application-compose.json")?;
     require(compose_bytes == crate::installer_application::compose_document(&plan.model)?)?;
-    let names = credential_names(&plan, &args.installation)?;
-    let credentials = corpus(&state, &names)?;
+    let generation = crate::installer_generation_binding::load_verified(
+        &args.installation,
+        &state.journal().installation_id().to_string(),
+        &binding.engine_id,
+    )?;
+    let names = if let Some(generation) = &generation {
+        crate::installer_generation_binding::verify_model(&args.installation, generation, &plan)?;
+        credential_names_at(&plan, &generation.secret_dir(&args.installation)?)?
+    } else {
+        credential_names(&plan, &args.installation)?
+    };
+    let credentials = selected_corpus(&state, &names, &args.installation, generation.as_ref())?;
     let patterns = patterns(&credentials)?;
     let docker = DockerRunner::new(
         &args.docker,
@@ -284,10 +313,19 @@ fn logs_inner(args: &[String]) -> Result<String> {
     let (stdout, stderr) = docker.capture_logs(id, args.tail)?;
     observe(&docker, &plan, &args.service, id, &project)?;
     require(
-        credentials == corpus(&state, &names)?
+        credentials == selected_corpus(&state, &names, &args.installation, generation.as_ref())?
             && saved == state.read_evidence("application-plan.json")?
             && created_bytes == state.read_evidence("application-created-resources.json")?
             && compose_bytes == state.read_evidence("application-compose.json")?,
+    )?;
+    let current_generation = crate::installer_generation_binding::load_verified(
+        &args.installation,
+        &state.journal().installation_id().to_string(),
+        &binding.engine_id,
+    )?;
+    require(
+        serde_json::to_vec(&generation).map_err(|_| REFUSED)?
+            == serde_json::to_vec(&current_generation).map_err(|_| REFUSED)?,
     )?;
     state.require_unchanged()?;
     serde_json::to_string(&json!({"schema":"marty.installer.logs.v1","installation_id":state.journal().installation_id(),"service":args.service,"container_id":id,"tail":args.tail,"stdout":redact(&stdout,&patterns)?,"stderr":redact(&stderr,&patterns)?,"filtering":"Known credential literals and common encodings, private-key blocks, and conventional sensitive lines are suppressed. Unknown, fragmented, or differently encoded secrets may remain; keep these diagnostics private.","installation_ready":false})).map_err(|_| REFUSED.into())
@@ -463,14 +501,19 @@ mod tests {
         ] {
             fs::write(root.path().join(name), serde_json::to_vec(&value).unwrap()).unwrap();
         }
-        let mutation=match mode {
-            "engine"=>"cp \"$fixture/foreign-info.json\" \"$fixture/info.json\"",
-            "container"=>"cp \"$fixture/replacement.json\" \"$fixture/container.json\"",
-            "rotation"=>"chmod 600 \"$fixture/install/secrets/token_hmac_key\"; printf rotated-credential > \"$fixture/install/secrets/token_hmac_key\"; chmod 444 \"$fixture/install/secrets/token_hmac_key\"",
-            "success"|"misclassified-ca"=>":",
-            _=>panic!("invalid fixture mode"),
+        let mutation = match mode {
+            "engine" => "cp \"$fixture/foreign-info.json\" \"$fixture/info.json\"",
+            "container" => "cp \"$fixture/replacement.json\" \"$fixture/container.json\"",
+            "rotation" => {
+                "chmod 600 \"$fixture/install/secrets/token_hmac_key\"; printf rotated-credential > \"$fixture/install/secrets/token_hmac_key\"; chmod 444 \"$fixture/install/secrets/token_hmac_key\""
+            }
+            "success" | "misclassified-ca" => ":",
+            _ => panic!("invalid fixture mode"),
         };
-        let script=format!("#!/bin/sh\nfixture='{}'\ncase \"$1\" in\ninfo) cat \"$fixture/info.json\";;\ncompose) printf '2.40.3';;\nnetwork) cat \"$fixture/network.json\";;\nimage) cat \"$fixture/image.json\";;\ninspect) cat \"$fixture/container.json\";;\nlogs) printf 'out credential-sensitive-123\\n'; printf 'err operator-sensitive-456\\n' >&2; {mutation};;\n*) exit 97;;\nesac\n",root.path().display());
+        let script = format!(
+            "#!/bin/sh\nfixture='{}'\ncase \"$1\" in\ninfo) cat \"$fixture/info.json\";;\ncompose) printf '2.40.3';;\nnetwork) cat \"$fixture/network.json\";;\nimage) cat \"$fixture/image.json\";;\ninspect) cat \"$fixture/container.json\";;\nlogs) printf 'out credential-sensitive-123\\n'; printf 'err operator-sensitive-456\\n' >&2; {mutation};;\n*) exit 97;;\nesac\n",
+            root.path().display()
+        );
         let executable = root.path().join("docker-stub");
         fs::write(&executable, script).unwrap();
         fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
@@ -550,7 +593,7 @@ mod tests {
     }
     #[test]
     fn secret_paths_are_literal_and_confined() {
-        let root = Path::new("/private/dollar$install");
+        let root = Path::new("/private/dollar$install/secrets");
         assert_eq!(
             secret_entry("/private/dollar$$install/secrets/token_name", root).unwrap(),
             "token_name"

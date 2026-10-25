@@ -211,11 +211,21 @@ It exercises fresh Keycloak/TLS/renewal setup, candidate generation, output
 delivery and exact helper removal before infrastructure cleanup. Contract tests
 alone do not qualify that actual execution or clean-host installation.
 
-Normal installation does not invoke this stage yet. Integration must assemble
-the complete immutable generation including unchanged scalar credentials.
-Application model, mount admission, logs and cleanup must select that recorded
-generation consistently before activation. Do not replace individual files in
-the existing `secrets` directory or treat candidate production as readiness.
+Normal installation does not invoke this stage yet. The explicit
+`prepare_with_generation` path assembles the complete application credential
+snapshot under private `application-generation`, after optional storage and
+operator-password staging. It replaces exactly the40 renewable inputs and
+copies the referenced unchanged scalars, initializer token and ingress inputs.
+Snapshot files are read-only; original files and recovery evidence remain intact.
+The final selection receipt binds the snapshot inventory and exact application
+environment, plan and Compose bytes. Startup, mount admission, log filtering and
+uninstall verify that selection; partial selection is refused. Logs filter both
+the original credentials and selected snapshot. Only unused tunnel services are
+pruned; the selected29 services and KMS initializer keep their dependency order.
+Actual candidate production has passed the opt-in fixture; full application
+activation, rollback and clean-host release acceptance remain unqualified.
+Do not replace individual files in the existing `secrets` directory or treat
+candidate production or model preparation as readiness or root retirement.
 
 ## Experimental preview installer path
 

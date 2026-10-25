@@ -299,6 +299,42 @@ pub fn render(
     })
 }
 
+/// Select only the fixed immutable snapshot after canonical source rendering.
+/// All other environment bytes remain exactly as admitted.
+pub fn select_generation(source: &[u8], installation: &std::path::Path) -> Result<Vec<u8>> {
+    let text = std::str::from_utf8(source).map_err(|_| REFUSED)?;
+    let expected = format!(
+        "SELFHOST_SECRET_DIR='{}'",
+        safe_path(&installation.join("secrets"))?
+    );
+    let replacement = format!(
+        "SELFHOST_SECRET_DIR='{}'",
+        safe_path(&installation.join("application-generation"))?
+    );
+    require(
+        text.lines()
+            .filter(|line| line.starts_with("SELFHOST_SECRET_DIR="))
+            .count()
+            == 1
+            && text.lines().any(|line| line == expected),
+    )?;
+    Ok(text
+        .lines()
+        .map(|line| {
+            if line == expected {
+                replacement.as_str()
+            } else {
+                line
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        .into_bytes()
+        .into_iter()
+        .chain([b'\n'])
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -435,5 +471,17 @@ mod tests {
         image = images();
         image.insert("keycloak-configurator".into(), "other".into());
         assert!(render(EXAMPLE, COMPOSE, &tls(), &parameters(), &image).is_err());
+    }
+    #[test]
+    fn generation_environment_changes_only_exact_admitted_secret_directory() {
+        let root = std::path::Path::new("/private/install $literal #path");
+        let source=b"A='unchanged'\nSELFHOST_SECRET_DIR='/private/install $literal #path/secrets'\nB='unchanged'\n";
+        let selected = select_generation(source, root).unwrap();
+        assert_eq!(selected,b"A='unchanged'\nSELFHOST_SECRET_DIR='/private/install $literal #path/application-generation'\nB='unchanged'\n");
+        assert!(select_generation(&selected, root).is_err());
+        assert!(select_generation(b"SELFHOST_SECRET_DIR='/etc'\n", root).is_err());
+        let mut duplicate = source.to_vec();
+        duplicate.extend_from_slice(source);
+        assert!(select_generation(&duplicate, root).is_err());
     }
 }

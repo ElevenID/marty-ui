@@ -47,6 +47,20 @@ fn require(ok: bool) -> Result<()> {
         Err(REFUSED.into())
     }
 }
+fn validate_selected_inputs(
+    plan: &ApplicationModelPlan,
+    installation: &Path,
+    bundle: &Path,
+    state: &InstallerState,
+) -> Result<()> {
+    let journal = state.journal();
+    let generation = crate::installer_generation_binding::load_verified(
+        installation,
+        &journal.installation_id().to_string(),
+        &journal.runtime().ok_or(REFUSED)?.engine_id,
+    )?;
+    observation::validate_inputs_with_generation(plan, installation, bundle, generation.as_ref())
+}
 fn text(v: &Value) -> Result<&str> {
     v.as_str().ok_or_else(|| REFUSED.into())
 }
@@ -261,7 +275,7 @@ pub fn start(
     let volume = text(&plan.model["volumes"]["redis-socket"]["name"])?.to_owned();
     require(volume == format!("{project}_redis-socket"))?;
     bound_document(installation, &plan)?;
-    observation::validate_inputs(&plan, installation, bundle)?;
+    validate_selected_inputs(&plan, installation, bundle, state)?;
     let docker = DockerRunner::new(
         dockerpath,
         &binding.docker_host,
@@ -305,7 +319,7 @@ pub fn start(
         images.insert(reference.to_owned(), image);
     }
     bound_document(installation, &plan)?;
-    observation::validate_inputs(&plan, installation, bundle)?;
+    validate_selected_inputs(&plan, installation, bundle, state)?;
     installer_openbao::verify_observation(&docker, installation, bundle, state, bao)?;
     fresh(&docker, &project, &volume, &roles)?;
     state.require_live_phase(Phase::Provisioning)?;
@@ -362,7 +376,7 @@ pub fn start(
     }
     // Last complete filesystem admission precedes the first workload. Legitimate
     // postgres/redis initialization can change ownership of their state roots.
-    observation::validate_inputs(&plan, installation, bundle)?;
+    validate_selected_inputs(&plan, installation, bundle, state)?;
     installer_openbao::verify_observation(&docker, installation, bundle, state, bao)?;
     require(project_ids(&docker, &project)? == discovered)?;
     persist(

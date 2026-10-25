@@ -15,10 +15,10 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
 type Result<T> = std::result::Result<T, String>;
-const REFUSED:&str="Scoped uninstall refused or interrupted; preserve installation data and cleanup receipts. Incomplete provisioning helpers require explicit recovery";
+const REFUSED: &str = "Scoped uninstall refused or interrupted; preserve installation data and cleanup receipts. Incomplete provisioning helpers require explicit recovery";
 const BAO: [&str; 4] = [
     "openbao-unseal",
     "openbao",
@@ -125,6 +125,8 @@ struct CleanupPlan {
     source_hashes: BTreeMap<String, String>,
 }
 struct Loaded {
+    installation: PathBuf,
+    generation: Option<crate::installer_generation_binding::GenerationBinding>,
     plan: CleanupPlan,
     application: ApplicationModelPlan,
     bao: ApplicationModelPlan,
@@ -199,7 +201,32 @@ fn source(
     );
     Ok(bytes)
 }
-fn load(state: &LockedMaintenance) -> Result<Loaded> {
+fn require_no_selected_generation(installation: &Path, plan: &ApplicationModelPlan) -> Result<()> {
+    let root = installation.join("application-generation");
+    let check = |value: &Value| -> Result<()> {
+        let value = text(value)?;
+        require(!value.replace("$$", "").contains('$'))?;
+        require(!Path::new(&value.replace("$$", "$")).starts_with(&root))
+    };
+    if let Some(declarations) = plan.model.get("secrets") {
+        for declaration in declarations.as_object().ok_or(REFUSED)?.values() {
+            check(&declaration["file"])?;
+        }
+    }
+    for service in plan.model["services"].as_object().ok_or(REFUSED)?.values() {
+        for mount in service["volumes"]
+            .as_array()
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+        {
+            if mount["type"] == "bind" {
+                check(&mount["source"])?;
+            }
+        }
+    }
+    Ok(())
+}
+fn load(state: &LockedMaintenance, installation: &Path) -> Result<Loaded> {
     let journal = state.journal();
     let binding = journal.runtime().ok_or(REFUSED)?;
     let project = journal.compose_project();
@@ -222,6 +249,24 @@ fn load(state: &LockedMaintenance) -> Result<Loaded> {
         expected_network_id: saved.expected_network_id,
         installation_ready: false,
     };
+    let generation = crate::installer_generation_binding::load_verified(
+        installation,
+        &installation_id,
+        &binding.engine_id,
+    )?;
+    if let Some(generation) = &generation {
+        require(generation_present(state)?)?;
+        crate::installer_generation_binding::verify_model(installation, generation, &application)?;
+        for name in [
+            "application-generation-pending.json",
+            "application-generation.json",
+            "application-generation-selection.json",
+        ] {
+            source(state, false, name, &mut sources)?;
+        }
+    } else {
+        require_no_selected_generation(installation, &application)?;
+    }
     let mut order = crate::installer_application_graph::startup_order(
         &application.model,
         &application.selected_services,
@@ -345,6 +390,8 @@ fn load(state: &LockedMaintenance) -> Result<Loaded> {
         .map(|(name, bytes)| (name.clone(), format!("{:x}", Sha256::digest(bytes))))
         .collect();
     Ok(Loaded {
+        installation: installation.into(),
+        generation,
         plan: CleanupPlan {
             schema: "elevenid.installer-uninstall-plan/v1".into(),
             installation_id,
@@ -365,6 +412,22 @@ fn load(state: &LockedMaintenance) -> Result<Loaded> {
 }
 fn unchanged(state: &LockedMaintenance, loaded: &Loaded) -> Result<()> {
     state.require_unchanged()?;
+    let generation = crate::installer_generation_binding::load_verified(
+        &loaded.installation,
+        &loaded.plan.installation_id,
+        &loaded.plan.engine_id,
+    )?;
+    require(
+        serde_json::to_vec(&generation).map_err(|_| REFUSED)?
+            == serde_json::to_vec(&loaded.generation).map_err(|_| REFUSED)?,
+    )?;
+    if let Some(generation) = &generation {
+        crate::installer_generation_binding::verify_model(
+            &loaded.installation,
+            generation,
+            &loaded.application,
+        )?;
+    }
     require(
         generation_present(state)?
             == loaded
@@ -591,7 +654,7 @@ pub fn uninstall(args: &[String]) -> Result<String> {
 fn uninstall_inner(args: &[String]) -> Result<String> {
     let args = arguments(args)?;
     let mut state = LockedMaintenance::open(&args.installation)?;
-    let loaded = load(&state)?;
+    let loaded = load(&state, &args.installation)?;
     let binding = state.journal().runtime().ok_or(REFUSED)?;
     let docker = DockerRunner::new(
         &args.docker,
@@ -949,12 +1012,84 @@ else: sys.exit(98)
         parse(&fs::read(root.path().join("ledger.json")).unwrap()).unwrap()
     }
     #[test]
+    fn application_generation_partial_selection_refuses_without_mutation() {
+        use std::os::unix::fs::PermissionsExt;
+        let (root, _) = mock("success");
+        let installation = root.path().join("install");
+        let state = LockedMaintenance::open(&installation).unwrap();
+        let legacy = load(&state, &installation).unwrap();
+        let mut changed = ApplicationModelPlan {
+            model: legacy.application.model.clone(),
+            selected_services: legacy.application.selected_services.clone(),
+            expected_network_id: legacy.application.expected_network_id.clone(),
+            installation_ready: false,
+        };
+        changed.model["secrets"]["marty_db_password"]["file"] =
+            json!(installation.join("application-generation/marty_db_password"));
+        assert!(require_no_selected_generation(&installation, &changed).is_err());
+        for marker in [
+            "application-generation-pending.json",
+            "application-generation.json",
+            "application-generation-selection.json",
+        ] {
+            let path = installation.join("evidence").join(marker);
+            fs::write(&path, b"{}").unwrap();
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+            assert!(load(&state, &installation).is_err());
+            assert!(unchanged(&state, &legacy).is_err());
+            fs::remove_file(path).unwrap();
+        }
+        let path = installation.join("application-generation");
+        fs::create_dir(&path).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(load(&state, &installation).is_err());
+        assert!(unchanged(&state, &legacy).is_err());
+        assert_eq!(ledger(&root)["mutations"], json!([]));
+    }
+
+    #[test]
+    fn selected_generation_graph_preserves_initializer_barrier_and_exact_exclusions() {
+        let (root, _) = mock("success");
+        let installation = root.path().join("install");
+        let state = LockedMaintenance::open(&installation).unwrap();
+        let loaded = load(&state, &installation).unwrap();
+        let plan = loaded.application;
+        let order =
+            crate::installer_application_graph::startup_order(&plan.model, &plan.selected_services)
+                .unwrap();
+        let mut selected = plan.model.clone();
+        for name in ["cloudflared", "cloudflared-beta", "tunnel-nginx-proxy"] {
+            selected["services"].as_object_mut().unwrap().remove(name);
+        }
+        assert_eq!(
+            crate::installer_application_graph::startup_order(&selected, &plan.selected_services)
+                .unwrap(),
+            order
+        );
+        let mut partial = selected.clone();
+        partial["services"]["cloudflared"] = plan.model["services"]["cloudflared"].clone();
+        assert!(crate::installer_application_graph::startup_order(
+            &partial,
+            &plan.selected_services
+        )
+        .is_err());
+        selected["services"]
+            .as_object_mut()
+            .unwrap()
+            .remove("kms-initialize");
+        assert!(crate::installer_application_graph::startup_order(
+            &selected,
+            &plan.selected_services
+        )
+        .is_err());
+    }
+    #[test]
     fn renewal_cleanup_requires_complete_removal_and_rechecks_legacy_absence() {
         use std::os::unix::fs::PermissionsExt;
         let (root, args) = mock("success");
         let installation = root.path().join("install");
         let state = LockedMaintenance::open(&installation).unwrap();
-        let legacy = load(&state).unwrap();
+        let legacy = load(&state, &installation).unwrap();
         assert_eq!(legacy.helper_ids.len(), 3);
         for marker in [
             "renewal-pending.json",
@@ -964,7 +1099,7 @@ else: sys.exit(98)
             let path = installation.join("evidence").join(marker);
             std::fs::write(&path, b"{}").unwrap();
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
-            assert!(load(&state).is_err());
+            assert!(load(&state, &installation).is_err());
             assert!(unchanged(&state, &legacy).is_err());
             std::fs::remove_file(path).unwrap();
         }
@@ -972,7 +1107,7 @@ else: sys.exit(98)
             let path = installation.join(marker);
             std::fs::create_dir(&path).unwrap();
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
-            assert!(load(&state).is_err());
+            assert!(load(&state, &installation).is_err());
             std::fs::remove_dir(path).unwrap();
         }
         let ingress: Value = serde_json::from_slice(
@@ -1004,14 +1139,14 @@ else: sys.exit(98)
         let path = installation.join("evidence/renewal-container-removed.json");
         std::fs::write(&path, serde_json::to_vec(&receipt).unwrap()).unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
-        let renewed = load(&state).unwrap();
+        let renewed = load(&state, &installation).unwrap();
         assert_eq!(renewed.helper_ids.len(), 4);
         assert_eq!(renewed.plan.resources.len(), 34);
         assert_eq!(renewed.plan.source_hashes.len(), 9);
         assert!(unchanged(&state, &legacy).is_err());
         receipt["container_removed"] = json!(false);
         std::fs::write(&path, serde_json::to_vec(&receipt).unwrap()).unwrap();
-        assert!(load(&state).is_err());
+        assert!(load(&state, &installation).is_err());
         assert!(unchanged(&state, &renewed).is_err());
         receipt["container_removed"] = json!(true);
         std::fs::write(&path, serde_json::to_vec(&receipt).unwrap()).unwrap();
@@ -1041,7 +1176,7 @@ else: sys.exit(98)
         let (root, args) = mock("success");
         let installation = root.path().join("install");
         let state = LockedMaintenance::open(&installation).unwrap();
-        let legacy = load(&state).unwrap();
+        let legacy = load(&state, &installation).unwrap();
         let put = |name: &str, value: &Value| {
             let path = installation.join("evidence").join(name);
             fs::write(&path, serde_json::to_vec(value).unwrap()).unwrap();
@@ -1054,7 +1189,7 @@ else: sys.exit(98)
             "generation-observation.json",
         ] {
             put(name, &json!({}));
-            assert!(load(&state).is_err());
+            assert!(load(&state, &installation).is_err());
             assert!(unchanged(&state, &legacy).is_err());
             fs::remove_file(installation.join("evidence").join(name)).unwrap();
         }
@@ -1066,7 +1201,7 @@ else: sys.exit(98)
             let path = installation.join(name);
             fs::create_dir(&path).unwrap();
             fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
-            assert!(load(&state).is_err());
+            assert!(load(&state, &installation).is_err());
             assert!(unchanged(&state, &legacy).is_err());
             fs::remove_dir(path).unwrap();
         }
@@ -1095,7 +1230,7 @@ else: sys.exit(98)
         let candidate = serde_json::to_value(receipt).unwrap();
         put("generation-container-removed.json", &candidate);
         assert!(
-            load(&state).is_err(),
+            load(&state, &installation).is_err(),
             "generation cannot lack renewal evidence"
         );
         // The production generation receipt and historical renewal identity
@@ -1123,7 +1258,7 @@ else: sys.exit(98)
         })
         .unwrap();
         put("renewal-container-removed.json", &renewal);
-        let complete = load(&state).unwrap();
+        let complete = load(&state, &installation).unwrap();
         assert_eq!(complete.helper_ids.len(), 5);
         assert_eq!(complete.plan.source_hashes.len(), 10);
         assert_eq!(complete.plan.resources.len(), 34);

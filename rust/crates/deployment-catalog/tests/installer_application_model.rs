@@ -306,8 +306,187 @@ fn actual_source_compose_matches_installer_application_contract() {
         }
     }
     assert_eq!(
-        normalized["services"]["keycloak-configurator"]["environment"]
-            ["MARTY_ORG_ADMIN_PASSWORD_FILE"],
+        normalized["services"]["keycloak-configurator"]["environment"]["MARTY_ORG_ADMIN_PASSWORD_FILE"],
         "/run/secrets/operator_bootstrap_password"
     );
+    // Model-only generation selection: hashes below are synthetic. No candidate
+    // credentials are minted/read, and no filesystem binding proof is claimed.
+    use marty_deployment_catalog::installer_generation_binding::{
+        self, GenerationBinding, GenerationFile, GenerationSource,
+    };
+    let renewable = marty_deployment_catalog::installer_renewal_bootstrap::current_inputs();
+    let mut referenced = std::collections::BTreeSet::new();
+    for role in &order {
+        let service = &plan.model["services"][role];
+        for reference in service["secrets"]
+            .as_array()
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+        {
+            referenced.insert(reference["source"].as_str().unwrap().to_owned());
+        }
+        for mount in service["volumes"]
+            .as_array()
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+        {
+            if mount["type"] != "bind" {
+                continue;
+            }
+            let path = PathBuf::from(mount["source"].as_str().unwrap().replace("$$", "$"));
+            if path.parent() == Some(installation.join("secrets").as_path()) {
+                assert_eq!(mount["read_only"], true);
+                referenced.insert(path.file_name().unwrap().to_str().unwrap().to_owned());
+            }
+        }
+    }
+    assert!(renewable.is_subset(&referenced));
+    assert!(referenced.contains("operator_bootstrap_password"));
+    assert!(referenced.contains("installer_ingress_tls_kms_token"));
+    assert!(referenced.contains("openbao_bootstrap_token"));
+    assert!(!referenced.contains("cloudflare_tunnel_token"));
+    let binding = GenerationBinding {
+        schema: "elevenid.installer-application-generation/v1".into(),
+        installation_id: installation_id.into(),
+        engine_id: "synthetic-parser-only-engine".into(),
+        network_id: plan.expected_network_id.clone(),
+        generation_receipt_sha256: "e".repeat(64),
+        files: referenced
+            .into_iter()
+            .map(|name| {
+                let source = if renewable.contains(&name) {
+                    GenerationSource::Candidate
+                } else {
+                    GenerationSource::Original
+                };
+                (
+                    name,
+                    GenerationFile {
+                        source,
+                        sha256: "f".repeat(64),
+                        size: 32,
+                        source_mode: 0o444,
+                        mode: 0o444,
+                    },
+                )
+            })
+            .collect(),
+        activated: false,
+        root_retired: false,
+        installation_ready: false,
+    };
+    let selected_before = plan.selected_services.clone();
+    installer_generation_binding::apply_model(&installation, &binding, &mut plan).unwrap();
+    installer_generation_binding::verify_model(&installation, &binding, &plan).unwrap();
+    assert_eq!(plan.selected_services, selected_before);
+    assert_eq!(plan.model["services"].as_object().unwrap().len(), 30);
+    assert_eq!(
+        marty_deployment_catalog::installer_application_graph::startup_order(
+            &plan.model,
+            &plan.selected_services
+        )
+        .unwrap(),
+        order
+    );
+    let canonical_env = fs::read(bundle.join("application.env")).unwrap();
+    let selected_env =
+        installer_application_env::select_generation(&canonical_env, &installation).unwrap();
+    fs::write(bundle.join("application-generation.env"), selected_env).unwrap();
+    fs::write(
+        bundle.join("installer-generation-compose.json"),
+        marty_deployment_catalog::installer_application::compose_document(&plan.model).unwrap(),
+    )
+    .unwrap();
+    let selected_normalized: Value = serde_json::from_str(&compose(
+        &bundle,
+        &executable,
+        &[
+            "--project-name",
+            &project,
+            "--env-file",
+            "application-generation.env",
+            "-f",
+            "installer-generation-compose.json",
+            "--profile",
+            "*",
+            "config",
+            "--format",
+            "json",
+        ],
+    ))
+    .unwrap();
+    assert_eq!(
+        selected_normalized["secrets"], plan.model["secrets"],
+        "generation secret paths must survive Compose interpolation exactly"
+    );
+    let mut expected_networks = plan.model["networks"].clone();
+    // This plugin emits the same empty IPAM normalization as canonical config.
+    if selected_normalized["networks"]["default"]
+        .get("ipam")
+        .is_some()
+    {
+        assert_eq!(
+            selected_normalized["networks"]["default"]["ipam"],
+            serde_json::json!({})
+        );
+        expected_networks["default"]["ipam"] = serde_json::json!({});
+    }
+    assert_eq!(selected_normalized["networks"], expected_networks);
+    assert_eq!(selected_normalized["volumes"], plan.model["volumes"]);
+    assert_eq!(
+        selected_normalized["services"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .collect::<std::collections::BTreeSet<_>>(),
+        plan.model["services"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .collect::<std::collections::BTreeSet<_>>()
+    );
+    let mut selected_expected = plan.model.clone();
+    for role in ["edge", "installer-ingress"] {
+        for mount in selected_expected["services"][role]["volumes"]
+            .as_array_mut()
+            .unwrap()
+        {
+            if mount["bind"] == serde_json::json!({"create_host_path":false}) {
+                mount["bind"] = serde_json::json!({});
+            }
+        }
+    }
+    for (role, service) in selected_normalized["services"].as_object().unwrap() {
+        for field in [
+            "image",
+            "command",
+            "entrypoint",
+            "environment",
+            "healthcheck",
+            "volumes",
+            "secrets",
+            "depends_on",
+            "profiles",
+            "user",
+            "restart",
+            "pull_policy",
+            "cap_drop",
+            "read_only",
+            "security_opt",
+            "labels",
+            "ports",
+        ] {
+            assert_eq!(
+                service[field], selected_expected["services"][role][field],
+                "generation execution field changed: {role}.{field}"
+            );
+        }
+    }
+    let normalized_plan = installer_application_model::ApplicationModelPlan {
+        model: selected_normalized,
+        selected_services: plan.selected_services.clone(),
+        expected_network_id: plan.expected_network_id.clone(),
+        installation_ready: false,
+    };
+    installer_generation_binding::verify_model(&installation, &binding, &normalized_plan).unwrap();
 }

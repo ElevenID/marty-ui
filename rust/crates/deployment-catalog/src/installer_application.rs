@@ -34,6 +34,29 @@ pub fn prepare(
     bao: &OpenBaoInventory,
     images: &BTreeMap<String, String>,
 ) -> Result<PreparedApplication> {
+    prepare_inner(dockerpath, installation, bundle, state, bao, images, false)
+}
+
+/// Explicit generation selection, still without starting any application services.
+pub fn prepare_with_generation(
+    dockerpath: &Path,
+    installation: &Path,
+    bundle: &Path,
+    state: &mut InstallerState,
+    bao: &OpenBaoInventory,
+    images: &BTreeMap<String, String>,
+) -> Result<PreparedApplication> {
+    prepare_inner(dockerpath, installation, bundle, state, bao, images, true)
+}
+fn prepare_inner(
+    dockerpath: &Path,
+    installation: &Path,
+    bundle: &Path,
+    state: &mut InstallerState,
+    bao: &OpenBaoInventory,
+    images: &BTreeMap<String, String>,
+    select_generation: bool,
+) -> Result<PreparedApplication> {
     state.require_live_phase(Phase::Provisioning)?;
     let binding = state
         .journal()
@@ -98,9 +121,14 @@ pub fn prepare(
     })).map_err(|_| "cannot serialize application intent")?)?;
     state.prepare_application_storage()?;
     state.stage_operator_password()?;
-    state.write_evidence("application.env", &env.env_bytes)?;
+    let source_env = if select_generation {
+        "application-source.env"
+    } else {
+        "application.env"
+    };
+    state.write_evidence(source_env, &env.env_bytes)?;
     state.write_evidence("installer-nginx.conf", nginx.as_bytes())?;
-    let env_path = installation.join("evidence/application.env");
+    let env_path = installation.join("evidence").join(source_env);
     let compose_path = bundle.join("docker-compose.yml");
     let output = docker.run_checked(&[
         "compose",
@@ -138,11 +166,24 @@ pub fn prepare(
             .get("gateway")
             .ok_or("admitted ingress image absent")?,
     )?;
+    let mut selected_binding = None;
+    if select_generation {
+        let generation = crate::installer_generation_binding::stage(installation, state, &plan)?;
+        crate::installer_generation_binding::apply_model(installation, &generation, &mut plan)?;
+        let selected_env =
+            installer_application_env::select_generation(&env.env_bytes, installation)?;
+        state.write_evidence("application.env", &selected_env)?;
+        crate::installer_generation_binding::verify(installation, &generation)?;
+        selected_binding = Some(generation);
+    }
     state.write_evidence("application-compose.json", &compose_document(&plan.model)?)?;
     state.write_evidence(
         "application-plan.json",
         &serde_json::to_vec(&plan).map_err(|_| "cannot serialize application plan")?,
     )?;
+    if let Some(generation) = selected_binding {
+        crate::installer_generation_binding::publish_selection(installation, state, &generation)?;
+    }
     Ok(PreparedApplication {
         plan,
         origin,
