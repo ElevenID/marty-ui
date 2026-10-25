@@ -71,6 +71,22 @@ fn identifier(value: &str) -> bool {
         && !value.starts_with("REPLACE_")
 }
 
+// Issuance reserves urn:uuid IDs for credentials. Other resource identifiers
+// keep their narrower grammar; do not admit arbitrary URIs into route paths.
+fn credential_identifier(value: &str) -> bool {
+    if let Some(uuid) = value.strip_prefix("urn:uuid:") {
+        return uuid.len() == 36
+            && uuid.bytes().enumerate().all(|(index, byte)| {
+                if matches!(index, 8 | 13 | 18 | 23) {
+                    byte == b'-'
+                } else {
+                    byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase()
+                }
+            });
+    }
+    identifier(value)
+}
+
 fn equal(object: &Value, field: &str, expected: &str) -> Check<()> {
     (text(object, field)? == expected)
         .then_some(())
@@ -363,7 +379,7 @@ fn issued(input: &AgeProofInput) -> Check<Value> {
     }
     recent(text(record, "issued_at")?, expected)?;
     let id = text(record, "id")?;
-    if !identifier(id) {
+    if !credential_identifier(id) {
         return Err("invalid issued credential ID");
     }
     Ok(json!({"transaction_id": transaction_id, "credential_id": id, "template_id": template_id}))
@@ -578,7 +594,7 @@ fn denied(input: &AgeProofInput) -> Check<Value> {
         "template_id",
         &expected.rejected_template_id,
     )?;
-    if !identifier(text(&observed["issued_binding"], "credential_id")?)
+    if !credential_identifier(text(&observed["issued_binding"], "credential_id")?)
         || !identifier(text(&observed["issued_binding"], "transaction_id")?)
     {
         return Err("negative fixture must have its own exact issued credential");
@@ -722,13 +738,15 @@ fn cleanup_plan(input: &AgeProofInput) -> Check<Value> {
         };
         equal(record, "credential_template_id", template_id)?;
         let record_id = text(record, "id")?;
-        if !identifier(record_id) {
+        if !credential_identifier(record_id) {
             return Err("invalid cleanup credential ID");
         }
         match text(record, "status")? {
             "ACTIVE" | "SUSPENDED" => actions.push(json!({"resource": "credential", "id": record_id,
-                "method": "POST", "path": format!("/v1/issued-credentials/{record_id}/revoke"),
-                "body": {"organization_id": expected.organization_id, "reason": "D03 current-run cleanup"},
+                "method": "POST", "path": format!("/v1/issued-credentials/{}/revoke", record_id.replace(':', "%3A")),
+                // The lifecycle DTO rejects unknown body fields. Tenant scope
+                // is provided by the authenticated gateway organization header.
+                "body": {"reason": "D03 current-run cleanup"},
                 "expected_status": "REVOKED"})),
             "REVOKED" | "EXPIRED" => {},
             _ => return Err("unknown issued credential cleanup state"),
