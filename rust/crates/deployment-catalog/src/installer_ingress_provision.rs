@@ -69,7 +69,7 @@ fn valid_name(name: &str) -> bool {
 pub fn signer_policy(name: &str) -> Result<String> {
     require(valid_name(name))?;
     Ok(format!("path \"transit/keys/{name}\" {{ capabilities = [\"read\"] }}\n\
-path \"transit/sign/{name}\" {{\n  capabilities = [\"update\"]\n  required_parameters = [\"input\", \"prehashed\", \"hash_algorithm\", \"marshaling_algorithm\", \"key_version\"]\n  allowed_parameters = {{\n    \"input\" = []\n    \"prehashed\" = [true]\n    \"hash_algorithm\" = [\"sha2-256\"]\n    \"marshaling_algorithm\" = [\"asn1\"]\n    \"key_version\" = [1]\n  }}\n}}\n"))
+path \"transit/sign/{name}\" {{\n  capabilities = [\"update\"]\n  required_parameters = [\"input\", \"prehashed\", \"hash_algorithm\", \"marshaling_algorithm\", \"key_version\"]\n  allowed_parameters = {{\n    \"input\" = []\n    \"prehashed\" = [true]\n    \"hash_algorithm\" = [\"sha2-256\"]\n    \"marshaling_algorithm\" = [\"asn1\"]\n    \"key_version\" = [\"1\"]\n  }}\n}}\n"))
 }
 fn read_input(path: &Path, max: u64, secret: bool) -> Result<Vec<u8>> {
     require(path.is_absolute() && path.canonicalize().map_err(|_| REFUSED)? == path)?;
@@ -304,9 +304,11 @@ fn check_token(data: &Value, policy: &str) -> Result<u64> {
     require((3600..=TTL).contains(&ttl))?;
     Ok(ttl)
 }
+// OpenBao 2.5.x ACL compares JSON numbers and HCL integers as distinct types.
+// Keep the version mandatory and exact, using the same string on wire and in policy.
 fn sign_body() -> Value {
     json!({"input":STANDARD.encode(Sha256::digest(b"marty-installer-ingress-custody-proof")),
-        "prehashed":true,"hash_algorithm":"sha2-256","marshaling_algorithm":"asn1","key_version":1})
+        "prehashed":true,"hash_algorithm":"sha2-256","marshaling_algorithm":"asn1","key_version":"1"})
 }
 fn verify_signing_proof(public: &str, signature: &str) -> Result<()> {
     let key = spki::SubjectPublicKeyInfoOwned::from_pem(public).map_err(|_| REFUSED)?;
@@ -366,6 +368,7 @@ enum ProvisionStage {
     DenyCaMutation,
     DenyTokenMint,
     DenyWrongVersion,
+    DenyNumericVersion,
     DenyMissingVersion,
     Metadata,
     WriteCa,
@@ -411,6 +414,7 @@ impl ProvisionStage {
             Self::DenyCaMutation => "deny-ca-mutation",
             Self::DenyTokenMint => "deny-token-mint",
             Self::DenyWrongVersion => "deny-wrong-version",
+            Self::DenyNumericVersion => "deny-numeric-version",
             Self::DenyMissingVersion => "deny-missing-version",
             Self::Metadata => "metadata",
             Self::WriteCa => "write-ca",
@@ -622,7 +626,7 @@ pub async fn provision(installation_id: &str) -> Result<usize> {
             .await
             .map_err(|_| REFUSED)?;
     }
-    for (operation, wrong) in [(ProvisionStage::DenyWrongVersion, Some(json!(2))), (ProvisionStage::DenyMissingVersion, None)] {
+    for (operation, wrong) in [(ProvisionStage::DenyWrongVersion, Some(json!("2"))), (ProvisionStage::DenyNumericVersion, Some(json!(1))), (ProvisionStage::DenyMissingVersion, None)] {
         stage = operation;
         let mut body = sign_body();
         match wrong {
@@ -683,11 +687,11 @@ mod tests {
         }
         let policy = signer_policy(&name).unwrap();
         assert_eq!(policy.matches("path \"").count(), 2);
-        assert!(policy.contains("\"key_version\" = [1]"));
+        assert!(policy.contains("\"key_version\" = [\"1\"]"));
         assert!(policy.contains("required_parameters"));
         assert!(!policy.contains('*'));
         assert!(signer_policy("installer-ingress-\"anything").is_err());
-        assert_eq!(sign_body()["key_version"], 1);
+        assert_eq!(sign_body()["key_version"], "1");
         assert_eq!(sign_body()["prehashed"], true);
     }
     #[test]
@@ -816,6 +820,7 @@ mod tests {
             ProvisionStage::DenyCaMutation,
             ProvisionStage::DenyTokenMint,
             ProvisionStage::DenyWrongVersion,
+            ProvisionStage::DenyNumericVersion,
             ProvisionStage::DenyMissingVersion,
             ProvisionStage::Metadata,
             ProvisionStage::WriteCa,
