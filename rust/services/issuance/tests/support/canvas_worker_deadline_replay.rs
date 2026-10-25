@@ -32,16 +32,7 @@ async fn scalar(pool: &PgPool, query: &'static str) -> Value {
 }
 
 fn control_directory() -> PathBuf {
-    let supplied = PathBuf::from(std::env::var("MARTY_CANVAS_WORKER_DEADLINE_CONTROL").unwrap());
-    let directory = supplied.canonicalize().unwrap();
-    assert!(directory.is_dir());
-    assert_eq!(directory.file_name().unwrap(), "native-control");
-    // The Python owner must keep markers/logs alive after its HTTPS owner closes.
-    let certificate = PathBuf::from(std::env::var("SSL_CERT_FILE").unwrap())
-        .canonicalize()
-        .unwrap();
-    assert!(!directory.starts_with(certificate.parent().unwrap()));
-    directory
+    super::canvas_replay_control::control_directory("MARTY_CANVAS_WORKER_DEADLINE_CONTROL")
 }
 
 fn marker(control: &Path, name: &str) -> PathBuf {
@@ -74,15 +65,13 @@ fn alive(worker: &mut OwnedWorker) {
 }
 
 async fn await_marker(control: &Path, name: &str, worker: &mut OwnedWorker) {
-    tokio::time::timeout(Duration::from_secs(20), async {
-        while !marker(control, name).is_file() {
-            alive(worker);
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
+    super::canvas_replay_control::wait_for_marker(&marker(control, name), 20, || {
         alive(worker);
+        Ok::<(), ()>(())
     })
     .await
-    .expect("native deadline parent handshake exceeded its fixed bound");
+    .expect("native deadline parent handshake exceeded its fixed bound")
+    .unwrap();
 }
 
 struct Generation {

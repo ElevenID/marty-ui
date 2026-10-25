@@ -1,6 +1,7 @@
 //! Deployment metadata and native KMS operator commands.
 
 mod aggregate_plan;
+pub mod beta_runtime_config;
 mod compose_model;
 mod deployment_admission;
 mod deployment_environment;
@@ -41,6 +42,7 @@ pub mod installer_tls;
 pub mod installer_tls_outputs;
 pub mod installer_uninstall;
 pub mod installer_verify;
+pub mod kubernetes_secrets;
 pub mod passport_model;
 
 use serde_json::{Map, Value};

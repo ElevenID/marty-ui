@@ -76,11 +76,9 @@ def test_kubernetes_notification_reads_the_generated_webhook_secret() -> None:
         "key": "NOTIFICATION_WEBHOOK_SECRET",
     }
     deploy_script = (ROOT / "scripts/deploy-kubernetes.sh").read_text(encoding="utf-8")
-    assert "resolve_secret_input NOTIFICATION_WEBHOOK_SECRET" in deploy_script
-    assert (
-        '--from-literal=NOTIFICATION_WEBHOOK_SECRET="$notification_webhook_secret"'
-        in deploy_script
-    )
+    spec = json.loads((ROOT / "deploy-config/catalog/kubernetes-secrets.json").read_text())
+    assert spec["secrets"][0]["fields"]["NOTIFICATION_WEBHOOK_SECRET"] == {"env": "NOTIFICATION_WEBHOOK_SECRET"}
+    assert 'kubernetes-secrets "$K8S_STACK_NAME" "$NAMESPACE"' in deploy_script
 
 
 def test_notification_runtime_receives_openbao_token_as_a_secret_file() -> None:
@@ -195,5 +193,6 @@ def test_notification_openbao_identity_is_required_and_bootstrapped() -> None:
     assert "-policy=notification-webhook-service" in selfhost_init
     assert "notification_openbao_token" in external_init
     assert "-policy=notification-webhook-service" in external_init
-    assert "resolve_secret_input NOTIFICATION_OPENBAO_TOKEN" in deploy
-    assert '--from-literal=NOTIFICATION_OPENBAO_TOKEN="$notification_openbao_token"' in deploy
+    spec = json.loads((ROOT / "deploy-config/catalog/kubernetes-secrets.json").read_text())
+    assert spec["secrets"][0]["fields"]["NOTIFICATION_OPENBAO_TOKEN"] == {"env": "NOTIFICATION_OPENBAO_TOKEN"}
+    assert 'kubernetes-secrets "$K8S_STACK_NAME" "$NAMESPACE"' in deploy

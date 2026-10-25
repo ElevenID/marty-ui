@@ -272,15 +272,7 @@ async fn scalar(pool: &PgPool, query: &'static str) -> Value {
 }
 
 fn control_directory(kind: ReplayKind) -> PathBuf {
-    let supplied = PathBuf::from(std::env::var(kind.control_environment()).unwrap());
-    let directory = supplied.canonicalize().unwrap();
-    assert!(directory.is_dir());
-    assert_eq!(directory.file_name().unwrap(), "native-control");
-    let certificate = PathBuf::from(std::env::var("SSL_CERT_FILE").unwrap())
-        .canonicalize()
-        .unwrap();
-    assert!(!directory.starts_with(certificate.parent().unwrap()));
-    directory
+    super::canvas_replay_control::control_directory(kind.control_environment())
 }
 
 fn marker(control: &Path, name: &str) -> PathBuf {
@@ -421,15 +413,13 @@ fn alive(worker: &mut OwnedWorker) {
 }
 
 async fn await_marker(control: &Path, name: &str, worker: &mut OwnedWorker) {
-    tokio::time::timeout(Duration::from_secs(30), async {
-        while !marker(control, name).is_file() {
-            alive(worker);
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
+    super::canvas_replay_control::wait_for_marker(&marker(control, name), 30, || {
         alive(worker);
+        Ok::<(), ()>(())
     })
     .await
-    .expect("native timeout parent handshake exceeded its fixed bound");
+    .expect("native timeout parent handshake exceeded its fixed bound")
+    .unwrap();
 }
 
 async fn observe(pool: &PgPool, fixture: &WorkerFixture, kind: ReplayKind) -> Value {

@@ -406,6 +406,9 @@ def test_kubernetes_mounts_separate_workload_tls_secrets() -> None:
 
 def test_kubernetes_helper_creates_service_scoped_tls_secrets() -> None:
     deploy_script = (ROOT / "scripts/deploy-kubernetes.sh").read_text(encoding="utf-8")
+    spec = json.loads((ROOT / "deploy-config/catalog/kubernetes-secrets.json").read_text())
+    names = {entry["name"] for entry in spec["secrets"]}
+    assert 'kubernetes-secrets "$K8S_STACK_NAME" "$NAMESPACE"' in deploy_script
     for secret_name in (
         "presentation-policy-workload-tls",
         "flow-workload-tls",
@@ -415,4 +418,4 @@ def test_kubernetes_helper_creates_service_scoped_tls_secrets() -> None:
         "deployment-profile-workload-tls",
         "compliance-profile-workload-tls",
     ):
-        assert f"kubectl create secret generic {secret_name}" in deploy_script
+        assert secret_name in names

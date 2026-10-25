@@ -274,3 +274,26 @@ these model and command-boundary tests.
 Any later real Kubernetes gate must use an explicitly owned ephemeral cluster
 and namespace. Merely finding `kubectl` does not authorize using the current
 kubeconfig/context; no context or cluster API was inspected for this slice.
+
+## Native secret publication
+
+`setup-secrets` delegates application and workload Secret assembly to the signed,
+source-matched `marty-deploy kubernetes-secrets` command. The mappings live in
+`deploy-config/catalog/kubernetes-secrets.json` and are compiled into that tool.
+The shell retains namespace and image-pull provisioning. It passes the captured
+required-secret names; native assembly refuses catalog drift before publishing
+application secrets. Namespace/image-pull setup still precedes value validation.
+
+Each input is captured once, including `_FILE` values. File inputs must be regular,
+UTF-8, NUL-free files of at most 1 MiB; CR removal and trailing-newline stripping
+match the earlier shell resolver. These explicit limits also apply to certificate
+bundles. No local private key or fallback credential is generated. Keycloak's eight
+file-mounted KMS fields retain their bytes in a Kubernetes Secret without temporary
+credential files on the deployment host.
+
+The native command applies each Secret separately in the historical order and
+stops on the first failure. Credential-bearing manifests travel on stdin, never
+in command arguments. Kubectl output is suppressed on this private path; the
+command returns a fixed failure diagnostic. Earlier successfully applied Secrets
+remain applied on a later failure, as before. This is not a transactional cluster
+rollback or a release/cutover qualification.

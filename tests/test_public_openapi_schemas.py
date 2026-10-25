@@ -387,3 +387,26 @@ def test_ai_consumer_page_uses_gateway_discovery_instead_of_unverified_cli_claim
         'primary interface for AI agents',
     ):
         assert unverified_claim not in page
+
+
+def test_native_template_validity_extension_covers_days_and_input_aliases():
+    properties = json.loads((ROOT / "contracts/credential-template-readback-properties.json").read_text())
+    response_schema = properties["validity_rules"]
+    validator = jsonschema.Draft202012Validator(response_schema)
+    validator.validate({"default_validity_days": 2, "max_validity_days": 1095,
+                        "renewal_window_days": 0, "renewable": True,
+                        "not_before_offset_seconds": -900, "require_revalidation": False,
+                        "revalidation_interval_days": None, "ttl_seconds": 172800})
+    validator.validate({"default_validity_days": 0, "max_validity_days": -1,
+                        "renewal_window_days": 0, "renewable": False,
+                        "not_before_offset_seconds": 0, "require_revalidation": False,
+                        "revalidation_interval_days": None, "ttl_seconds": 0})
+    schema = json.loads((ROOT / "contracts/credential-template-validity-input.json").read_text())
+    validator = jsonschema.Draft202012Validator(schema)
+    validator.validate({"ttl_seconds": 86401, "default_validity_days": 9})
+    for invalid in [{"ttl_seconds": 0}, {"ttl_seconds": 1.5},
+                    {"not_before_offset_seconds": 2147483648}, {"private_key": "secret"}]:
+        with pytest.raises(jsonschema.ValidationError):
+            validator.validate(invalid)
+    assert "override" in schema["description"]
+    assert "whole-day" in schema["description"]

@@ -337,23 +337,25 @@ function daysFromSeconds(seconds) {
 }
 
 export function normalizeCredentialTemplateValidityRules(rules = {}) {
-  const ttlSeconds = rules.ttl_seconds
-    ?? (rules.default_validity_days != null ? Number(rules.default_validity_days) * SECONDS_PER_DAY : undefined);
-  const reissueWithinSeconds = rules.reissue_within_seconds
-    ?? (rules.renewal_window_days != null ? Number(rules.renewal_window_days) * SECONDS_PER_DAY : undefined);
+  // This normalizes readback only. Canonical stored days are authoritative;
+  // create/PATCH input aliases still pass unchanged to the native resolver.
+  const ttlSeconds = rules.default_validity_days != null
+    ? Number(rules.default_validity_days) * SECONDS_PER_DAY : rules.ttl_seconds;
+  const reissueWithinSeconds = rules.renewal_window_days != null
+    ? Number(rules.renewal_window_days) * SECONDS_PER_DAY : rules.reissue_within_seconds;
   const notBeforeOffsetSeconds = rules.not_before_offset_seconds
     ?? rules.not_before_offset
     ?? 0;
-  const maxValiditySeconds = rules.max_validity_seconds
-    ?? (rules.max_validity_days != null ? Number(rules.max_validity_days) * SECONDS_PER_DAY : undefined);
+  const maxValiditySeconds = rules.max_validity_days != null
+    ? Number(rules.max_validity_days) * SECONDS_PER_DAY : rules.max_validity_seconds;
 
   return {
     ...rules,
-    ...(ttlSeconds != null ? { ttl_seconds: ttlSeconds, default_validity_days: daysFromSeconds(ttlSeconds) } : {}),
+    ...(ttlSeconds != null ? { ttl_seconds: ttlSeconds, default_validity_days: rules.default_validity_days ?? daysFromSeconds(ttlSeconds) } : {}),
     ...(reissueWithinSeconds != null
       ? {
           reissue_within_seconds: reissueWithinSeconds,
-          renewal_window_days: daysFromSeconds(reissueWithinSeconds),
+          renewal_window_days: rules.renewal_window_days ?? daysFromSeconds(reissueWithinSeconds),
         }
       : {}),
     not_before_offset_seconds: notBeforeOffsetSeconds,
@@ -361,7 +363,7 @@ export function normalizeCredentialTemplateValidityRules(rules = {}) {
     ...(maxValiditySeconds != null
       ? {
           max_validity_seconds: maxValiditySeconds,
-          max_validity_days: daysFromSeconds(maxValiditySeconds),
+          max_validity_days: rules.max_validity_days ?? daysFromSeconds(maxValiditySeconds),
         }
       : {}),
   };
@@ -638,9 +640,6 @@ export function buildCredentialTemplatePayload(data = {}) {
     throw error;
   }
 
-  const validityRules = data.validity_rules
-    ? normalizeCredentialTemplateValidityRules(data.validity_rules)
-    : undefined;
   const claims = Array.isArray(data.claims)
     ? data.claims.map((claim) => normalizeCredentialTemplateClaim(claim))
     : [];
@@ -651,27 +650,17 @@ export function buildCredentialTemplatePayload(data = {}) {
     compliance_profile_id: complianceProfileId,
     vct: normalizeCredentialTemplateVct(data),
     claims,
-    ...(validityRules
-      ? {
-          validity_rules: {
-            default_validity_days: validityRules.default_validity_days,
-            max_validity_days: validityRules.max_validity_days,
-            renewable: validityRules.renewable ?? true,
-            renewal_window_days: validityRules.renewal_window_days,
-            not_before_offset_seconds: validityRules.not_before_offset_seconds,
-          },
-        }
-      : {}),
+    ...(data.validity_rules !== undefined ? { validity_rules: data.validity_rules } : {}),
   };
 }
 
 /**
  * Create a new presentation policy
  */
-export async function createPresentationPolicy(data) {
+export async function createPresentationPolicy(data, options = {}) {
   const payload = buildPresentationPolicyPayload(data);
   const shouldActivate = data?.activate_immediately === true || String(data?.status || '').toLowerCase() === 'active';
-  let result = await postWithIdempotency(PRESENTATION_POLICY_BASE, payload);
+  let result = await postWithIdempotency(PRESENTATION_POLICY_BASE, payload, options);
 
   if (shouldActivate && result?.id) {
     result = await activatePresentationPolicy(result.id);
@@ -826,8 +815,46 @@ export async function getCredentialTemplate(id) {
  * Update a credential template
  */
 export async function updateCredentialTemplate(id, data) {
-  const result = await patch(`${CREDENTIAL_TEMPLATE_BASE}/${id}`, buildCredentialTemplatePayload(data));
+  const organizationId = requireOrganizationId(data);
+  const result = await patch(`${CREDENTIAL_TEMPLATE_BASE}/${id}`, buildCredentialTemplatePatch(data), {
+    params: { organization_id: organizationId },
+  });
   return normalizeCredentialTemplate(result);
+}
+
+// Match the native sparse update contract, rather than the create contract.
+export function buildCredentialTemplatePatch(data = {}) {
+  const fields = new Set([
+    'organization_id', 'name', 'description', 'claims', 'privacy_posture',
+    'selective_disclosure_fields', 'zk_predicate_claims', 'derived_attributes',
+    'display_style', 'validity_rules', 'supported_formats', 'application_template_id',
+    'trust_profile_id', 'revocation_profile_id', 'issuer_did',
+    'credential_payload_format', 'issuance_protocol',
+  ]);
+  const privateFields = new Set([
+    'key_reference', 'signing_service_id', 'signing_key_reference', 'issuer_profile_id',
+    'private_key', 'privatekeyjwk', 'access_token', 'auth_token', 'api_key', 'client_secret',
+  ]);
+  const inspect = (value, depth = 0) => {
+    if (depth > 48) throw new Error('Template update exceeds the supported nesting depth.');
+    if (value && typeof value === 'object') {
+      for (const [key, child] of Object.entries(value)) {
+        if (privateFields.has(key.toLowerCase())) throw new Error('Private custody fields are not supported in template updates.');
+        inspect(child, depth + 1);
+      }
+    }
+  };
+  requireOrganizationId(data);
+  const payload = {};
+  for (const [field, value] of Object.entries(data)) {
+    if (value === undefined) continue;
+    if (!fields.has(field)) throw new Error(`Unsupported template update field: ${field}`);
+    inspect(value);
+    if (field !== 'organization_id') payload[field] = value;
+  }
+  // Preserve sparse nested validity and claim representations; the gateway
+  // canonicalizes public aliases without manufacturing creation defaults.
+  return payload;
 }
 
 /**

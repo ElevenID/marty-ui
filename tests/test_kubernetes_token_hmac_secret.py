@@ -63,8 +63,38 @@ def test_shared_token_catalog_and_template_are_required_not_generated():
     assert "TOKEN_HMAC_KEY" not in secret.get("data", {})
 
 
+@pytest.fixture(scope="module")
+def native_tools(tmp_path_factory):
+    directory = tmp_path_factory.mktemp("native-kubernetes")
+    subprocess.run(["cargo", "+1.95.0", "build", "--locked", "--manifest-path",
+                    str(ROOT / "rust/Cargo.toml"), "-p", "marty-deployment-catalog",
+                    "--bin", "marty-deploy"], cwd=ROOT, check=True, capture_output=True)
+    target = Path(os.environ.get("CARGO_TARGET_DIR", ROOT / "rust/target"))
+    binary = (target / "debug" / ("marty-deploy.exe" if os.name == "nt" else "marty-deploy")).resolve()
+    # A closed executable double: no Docker, cluster, shell interpretation or network.
+    source = directory / "kubectl.rs"
+    source.write_text(r'''use std::{env,fs::{self,OpenOptions},io::{self,Read,Write}};
+fn main() {
+    assert_eq!(env::args().skip(1).collect::<Vec<_>>(), ["apply","-f","-"]);
+    let mut bytes=Vec::new(); io::stdin().read_to_end(&mut bytes).unwrap();
+    let root=std::path::PathBuf::from(env::var("TEST_ROOT").unwrap());
+    let mut file=OpenOptions::new().create(true).append(true).open(root.join("native-manifest.json")).unwrap(); file.write_all(&bytes).unwrap(); file.write_all(b"\n").unwrap(); drop(file);
+    if let Ok(value)=env::var("TEST_FILE_NEXT") { fs::write(root.join("synthetic-token.txt"),value).unwrap(); }
+    if let Ok(binary)=env::var("TEST_REAL_KUBECTL") {
+        use std::process::{Command,Stdio};
+        let mut child=Command::new(binary).args(["apply","--validate=false","--request-timeout=3s","--server",&env::var("TEST_API_SERVER").unwrap(),"--kubeconfig",&env::var("TEST_KUBECONFIG").unwrap(),"--cache-dir",&root.join("kube-cache").to_string_lossy(),"-f","-"]).stdin(Stdio::piped()).spawn().unwrap();
+        child.stdin.take().unwrap().write_all(&bytes).unwrap();
+        std::process::exit(child.wait().unwrap().code().unwrap_or(1));
+    }
+    if env::var("TEST_APPLY_FAIL").is_ok() { eprintln!("synthetic-sensitive-diagnostic"); std::process::exit(1); }
+}''', encoding="utf-8")
+    kubectl = directory / ("kubectl.exe" if os.name == "nt" else "kubectl")
+    subprocess.run(["rustc", "+1.95.0", str(source), "-o", str(kubectl)], check=True, capture_output=True)
+    return binary, kubectl
+
+
 @pytest.fixture
-def harness(tmp_path):
+def harness(tmp_path, native_tools):
     if os.name == "nt":
         git = shutil.which("git")
         assert git, "Git Bash is required for the shell contract"
@@ -74,14 +104,14 @@ def harness(tmp_path):
     assert bash and Path(bash).is_file()
     empty_path = tmp_path / "empty-path"
     empty_path.mkdir()
-    keycloak_secret_dir = tmp_path / "keycloak-secret-dir"
-    keycloak_secret_dir.mkdir()
+    shutil.copy2(native_tools[1], empty_path / native_tools[1].name)
     operator_root = tmp_path / "operator"
     operator_scripts = operator_root / "scripts"
     operator_scripts.mkdir(parents=True)
     catalog_double = operator_scripts / "marty-deploy.sh"
     catalog_double.write_bytes(
         b'#!/bin/sh\n'
+        b'if [ "$1" = kubernetes-secrets ]; then exec "$TEST_NATIVE_BIN" --repo-root "$TEST_SOURCE_ROOT" "$@"; fi\n'
         b'[ "$1" = secrets ] && [ "$3" = --field ] && [ "$4" = env ] || exit 96\n'
         b'[ "${TEST_CATALOG_FAIL:-}" != 1 ] || exit 97\n'
         b'[ "${TEST_CATALOG_EMPTY:-}" != 1 ] || exit 0\n'
@@ -94,6 +124,8 @@ def harness(tmp_path):
         "TEST_PYTHON": sys.executable.replace("\\", "/"),
         "REPO_ROOT": operator_root.as_posix(),
         "TEST_ROOT": tmp_path.as_posix(),
+        "TEST_NATIVE_BIN": native_tools[0].as_posix(),
+        "TEST_SOURCE_ROOT": ROOT.as_posix(),
         "NAMESPACE": "synthetic-owned-namespace",
         "K8S_STACK_NAME": "kubernetes-production",
         "REGISTRY_AUTH_TOKEN": "synthetic-registry-token",
@@ -170,33 +202,11 @@ tr() {
 }
 # The test-owned script models the Rust CLI output and failure status.
 command_not_found_handle() { printf 'Unexpected external command\n' >&2; return 91; }
-mktemp() {
-  [[ "$#" == 1 && "$1" == -d ]] || return 97
-  printf '%s\n' "$TEST_ROOT/keycloak-secret-dir"
-}
-rm() {
-  [[ "$1" == -f && "$2" == -- ]] || return 97
-  shift 2
-  local path
-  for path in "$@"; do
-    [[ "$path" == "$TEST_ROOT/keycloak-secret-dir/"* ]] || return 97
-  done
-  /usr/bin/rm -f -- "$@"
-}
-rmdir() {
-  [[ "$1" == -- && "$2" == "$TEST_ROOT/keycloak-secret-dir" ]] || return 97
-  /usr/bin/rmdir -- "$2"
-}
 kubectl() {
   case "$1:$2:${3:-}" in
     create:namespace:synthetic-owned-namespace) ;;
     create:secret:docker-registry)
       [[ "$4" == synthetic-pull-secret ]] || return 92 ;;
-    create:secret:generic)
-      case "$4" in
-        marty-secrets|keycloak-kms|signing-keys-integration-secret-server-tls|signing-keys-tls-kms|signing-keys-integration-secret-ca|org-workload-tls|org-tls-kms|es-workload-tls|es-tls-kms|rp-workload-tls|rp-tls-kms|ct-workload-tls|ct-tls-kms|presentation-policy-workload-tls|pp-tls-kms|flow-workload-tls|flow-client-tls-kms|flow-server-workload-tls|flow-server-tls-kms|auth-workload-tls|auth-tls-kms|auth-server-tls|auth-server-kms|gateway-auth-tls|gateway-auth-kms|issuance-server-tls|issuance-server-kms|verification-workload-tls|verification-tls-kms|deployment-profile-workload-tls|deployment-profile-tls-kms|compliance-profile-workload-tls|compliance-profile-tls-kms) ;;
-        *) return 93 ;;
-      esac ;;
     apply:-f:-) [[ $# == 3 ]] || return 94 ;;
     *) return 95 ;;
   esac
@@ -238,6 +248,13 @@ readonly -f kubectl
             path.read_bytes().decode().rstrip("\0").split("\0")
             for path in tmp_path.glob("call-*")
         ]
+        manifest = tmp_path / "native-manifest.json"
+        if manifest.exists():
+            # Retain the pre-migration field assertions against actual native output.
+            for line in manifest.read_text().splitlines():
+                item = json.loads(line)
+                calls.append(["create", "secret", "generic", item["metadata"]["name"],
+                              *[f"--from-literal={key}={value}" for key, value in item["stringData"].items()]])
         return result, calls
 
     return run
@@ -399,6 +416,21 @@ def test_setup_publishes_same_existing_token_once_without_echo(harness, source):
 
 
 @pytest.mark.parametrize("source", ["environment", "file"])
+@pytest.mark.parametrize("suffix", ["\n\n", "\r\n\n"])
+def test_published_secret_matches_legacy_trailing_newline_normalization(harness, source, suffix):
+    value = TOKEN + suffix
+    expected = TOKEN + ("\r" if source == "environment" and "\r" in suffix else "")
+    if source == "file":
+        result, calls = harness(file_bytes=value.encode())
+    else:
+        result, calls = harness({"TOKEN_HMAC_KEY": value})
+    assert result.returncode == 0, result.stderr
+    secret = next(call for call in calls if call[:4] == ["create", "secret", "generic", "marty-secrets"])
+    assert f"--from-literal=TOKEN_HMAC_KEY={expected}" in secret
+    assert TOKEN not in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("source", ["environment", "file"])
 def test_actual_resolver_preserves_literal_key_and_file_line_endings(harness, source):
     arguments = {"operation": "resolve"}
     if source == "file":
@@ -477,8 +509,8 @@ def test_captured_placeholder_rejected_even_when_later_file_becomes_valid(
     assert result.returncode != 0
     assert "TOKEN_HMAC_KEY must be set to a non-placeholder value" in result.stderr
     assert not applications(calls)
-    assert (tmp_path / "token-file-reads").read_text().strip() == "1"
-    assert (tmp_path / "synthetic-token.txt").read_text().strip() == TOKEN
+    assert not (tmp_path / "token-file-reads").exists()
+    assert (tmp_path / "synthetic-token.txt").read_text().strip() == placeholder
     assert placeholder not in result.stdout + result.stderr
     assert TOKEN not in result.stdout + result.stderr
 
@@ -489,7 +521,7 @@ def test_second_valid_file_read_cannot_replace_validated_captured_key(
     later = "synthetic-different-key-after-first-read"
     result, calls = harness(file_bytes=(TOKEN + "\n").encode(), next_file_value=later)
     assert result.returncode == 0, result.stderr
-    assert (tmp_path / "token-file-reads").read_text().strip() == "2"
+    assert not (tmp_path / "token-file-reads").exists()
     assert (tmp_path / "synthetic-token.txt").read_text().strip() == later
     records = applications(calls)
     assert len(records) == 1
@@ -619,3 +651,89 @@ def test_full_deploy_rejects_catalog_failure_before_first_manifest(tmp_path, fai
     assert "Deployment catalog" in result.stderr
     assert "APPLY:" not in result.stdout
     assert "SECRET-WRITE" not in result.stdout
+
+
+def test_native_apply_failure_is_propagated_without_credential_diagnostics(harness):
+    result, _ = harness({"TOKEN_HMAC_KEY": TOKEN, "TEST_APPLY_FAIL": "1"})
+    assert result.returncode != 0
+    assert "secret apply failed" in result.stderr
+    assert TOKEN not in result.stdout + result.stderr
+    assert "synthetic-sensitive-diagnostic" not in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("payload", [b"x" * (1024 * 1024 + 1), b"synthetic\0token", b"\xff\xfe"], ids=["oversize", "nul", "non-utf8"])
+def test_native_file_content_boundary_fails_before_secret_write(harness, payload):
+    result, calls = harness(file_bytes=payload)
+    assert result.returncode != 0
+    assert not applications(calls)
+    assert "TOKEN_HMAC_KEY_FILE" in result.stderr
+
+
+def test_native_apply_stops_at_first_failure(harness):
+    result, calls = harness({"TOKEN_HMAC_KEY": TOKEN, "TEST_APPLY_FAIL": "1"})
+    assert result.returncode != 0
+    assert len([call for call in calls if call[:3] == ["create", "secret", "generic"]]) == 1
+
+
+def test_real_kubectl_applies_synthetic_secret_schema_against_owned_api(harness, tmp_path):
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from threading import Thread
+    from urllib.parse import urlsplit
+
+    binary = shutil.which("kubectl")
+    if not binary:
+        pytest.skip("Optional real kubectl client qualification requires kubectl on PATH")
+    received = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *_):
+            pass
+
+        def reply(self, status, value):
+            body = json.dumps(value).encode()
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self):
+            path = urlsplit(self.path).path
+            if path == "/api":
+                self.reply(200, {"kind": "APIVersions", "apiVersion": "v1", "versions": ["v1"]})
+            elif path == "/apis":
+                self.reply(200, {"kind": "APIGroupList", "apiVersion": "v1", "groups": []})
+            elif path == "/api/v1":
+                self.reply(200, {"kind": "APIResourceList", "apiVersion": "v1", "groupVersion": "v1", "resources": [{"name": "secrets", "singularName": "secret", "namespaced": True, "kind": "Secret", "verbs": ["get", "create", "patch"]}]})
+            else:
+                self.reply(404, {"apiVersion": "v1", "kind": "Status", "status": "Failure", "reason": "NotFound", "code": 404})
+
+        def do_POST(self):
+            assert urlsplit(self.path).path == "/api/v1/namespaces/synthetic-owned-namespace/secrets"
+            value = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            received.append(value)
+            self.reply(201, value)
+
+    config = tmp_path / "empty-kubeconfig"
+    config.write_text("apiVersion: v1\nkind: Config\nclusters: []\ncontexts: []\nusers: []\n")
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        result, _ = harness({"TOKEN_HMAC_KEY": TOKEN, "TEST_REAL_KUBECTL": binary,
+                             "TEST_API_SERVER": f"http://127.0.0.1:{server.server_port}",
+                             "TEST_KUBECONFIG": str(config)})
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
+    assert result.returncode == 0, result.stderr
+    assert len(received) == 33
+    expected = [json.loads(line) for line in (tmp_path / "native-manifest.json").read_text().splitlines()]
+    for actual, manifest in zip(received, expected, strict=True):
+        assert actual["metadata"]["name"] == manifest["metadata"]["name"]
+        assert actual["type"] == "Opaque"
+        assert actual["stringData"] == manifest["stringData"]
+    keycloak = next(item for item in received if item["metadata"]["name"] == "keycloak-kms")
+    assert keycloak["stringData"]["master-cookie.token"] == "synthetic-required-value-at-least-thirty-two-bytes"
+    assert TOKEN not in result.stdout + result.stderr
