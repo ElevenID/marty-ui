@@ -205,15 +205,30 @@ fn image(docker: &mut impl Docker, reference: &str) -> Result<String> {
         Err(REFUSAL)
     }
 }
-fn compose(context: &Context) -> Request {
+// Windows canonical paths use a verbatim prefix that Docker Desktop rejects.
+// Keep canonical paths for filesystem checks; translate only CLI host paths.
+fn docker_path(path: &std::path::Path) -> Result<String> {
+    let value = path.to_str().ok_or(REFUSAL)?;
+    #[cfg(windows)]
+    {
+        if let Some(rest) = value.strip_prefix(r"\\?\UNC\") {
+            return Ok(format!(r"\\{rest}"));
+        }
+        if let Some(rest) = value.strip_prefix(r"\\?\") {
+            return Ok(rest.to_owned());
+        }
+    }
+    Ok(value.to_owned())
+}
+fn compose(context: &Context) -> Result<Request> {
     let mut request = Request::new(&["compose", "--project-name", "elevenid-beta"]);
     for path in &context.env_files {
-        request.tail(&["--env-file", path.to_str().unwrap()]);
+        request.tail(&["--env-file", &docker_path(path)?]);
     }
     for path in &context.compose_files {
-        request.tail(&["-f", path.to_str().unwrap()]);
+        request.tail(&["-f", &docker_path(path)?]);
     }
-    request
+    Ok(request)
 }
 fn tag_helper(request: &mut Request, owner: &str, names: &BTreeMap<String, String>) {
     request.tail(&[
@@ -425,7 +440,7 @@ fn perform(
         .map_err(|_| REFUSAL)?;
     let ca_mount = format!(
         "type=bind,src={},dst=/bao-public-ca/ca.crt,readonly",
-        ca.display()
+        docker_path(&ca)?
     );
     let network = format!("container:{bao}");
     let bao_request = |operator: bool| {
@@ -444,7 +459,7 @@ fn perform(
         "--mount",
         &format!(
             "type=bind,src={},dst=/scripts/openbao-init.sh,readonly",
-            context.repo_root.join("docker/openbao-init.sh").display()
+            docker_path(&context.repo_root.join("docker/openbao-init.sh"))?
         ),
         "--entrypoint",
         "/bin/sh",
@@ -494,11 +509,7 @@ fn perform(
         docker,
         Request::new(&[
             "cp",
-            context
-                .backup_dir
-                .join("postgres-marty.dump")
-                .to_str()
-                .ok_or(REFUSAL)?,
+            &docker_path(&context.backup_dir.join("postgres-marty.dump"))?,
             &format!("{pg}:/tmp/marty.dump"),
         ]),
     )?;
@@ -518,7 +529,7 @@ fn perform(
         ]),
     )?;
     let url = format!("postgresql://marty:{password}@{pg}:5432/marty");
-    let mut request = compose(context);
+    let mut request = compose(context)?;
     request.tail(&["run", "--rm", "--no-deps"]);
     tag_helper(&mut request, owner, names);
     request.env("DATABASE_URL", &url);
@@ -581,7 +592,7 @@ fn perform(
         "issuance-migration-rehearsal.log",
         "issuance-migration-rehearsal-verify.log",
     ] {
-        let mut request = compose(context);
+        let mut request = compose(context)?;
         request.tail(&["run", "--rm", "--no-deps"]);
         tag_helper(&mut request, owner, names);
         request.env("DATABASE_URL", &url);
@@ -642,6 +653,24 @@ pub fn run(input: Value) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(windows)]
+    #[test]
+    fn docker_paths_remove_verbatim_prefix_without_losing_unicode_or_unc() {
+        use std::path::Path;
+        assert_eq!(
+            docker_path(Path::new(r"\\?\C:\private ?\copy.dump")).unwrap(),
+            r"C:\private ?\copy.dump"
+        );
+        assert_eq!(
+            docker_path(Path::new(r"\\?\UNC\server\share\copy.dump")).unwrap(),
+            r"\\server\share\copy.dump"
+        );
+        assert_eq!(
+            docker_path(Path::new(r"C:\ordinary\copy.dump")).unwrap(),
+            r"C:\ordinary\copy.dump"
+        );
+    }
+
     #[derive(Default)]
     struct MockDocker {
         calls: Vec<Request>,
