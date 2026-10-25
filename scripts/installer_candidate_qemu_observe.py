@@ -20,6 +20,7 @@ import struct
 import tempfile
 import time
 import uuid
+from typing import Callable
 
 import installer_release as release
 from installer_candidate_authorize import write_exclusive
@@ -168,6 +169,17 @@ def require_same_vm(initial: dict, current: dict) -> None:
                         "VM changed after initial observation")
 
 
+def require_clean_docker(phase: str, guest: Callable[[str], str], docker: str) -> None:
+    if phase == "post-install":
+        return
+    for docker_query in ("ps -aq", "images -q", "volume ls -q"):
+        release.require(guest(docker + " " + docker_query) == "",
+                        "guest Docker is not initially clean")
+    release.require(set(guest(docker + " network ls --format '{{.Name}}'").splitlines())
+                    == {"bridge", "host", "none"},
+                    "guest Docker network inventory differs")
+
+
 def observe(vm_dir: Path, output_dir: Path, *, guest_user: str, ssh_host: str,
             installation_id: str, phase: str,
             ssh_bin: Path = Path("/usr/bin/ssh")) -> dict:
@@ -274,11 +286,7 @@ def observe(vm_dir: Path, output_dir: Path, *, guest_user: str, ssh_host: str,
                         json.loads(guest(docker + " info --format '{{json .OSType}}'")) == "linux" and
                         json.loads(guest(docker + " info --format '{{json .Architecture}}'")) in ("x86_64", "amd64"),
                         "guest Docker platform differs")
-        if phase != "post-install":
-            for docker_query in ("ps -aq", "images -q", "volume ls -q"):
-                release.require(guest(docker + " " + docker_query) == "", "guest Docker is not initially clean")
-            release.require(set(guest(docker + " network ls --format '{{.Name}}'").splitlines())
-                            == {"bridge", "host", "none"}, "guest Docker network inventory differs")
+        require_clean_docker(phase, guest, docker)
         release.require(json.loads(guest(engine_query)) == engine, "guest Docker Engine changed")
         again = disk.lstat()
         release.require((again.st_dev, again.st_ino) == (disk_info.st_dev, disk_info.st_ino)

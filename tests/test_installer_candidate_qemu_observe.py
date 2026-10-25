@@ -145,3 +145,18 @@ def test_reobservation_refuses_untrusted_initial_record():
                     dict(initial, target=dict(initial["target"], installation_id=str(uuid.uuid4())))):
         with pytest.raises(ValueError, match="initial VM observation invalid"):
             observer.validate_initial(changed, installation_id)
+
+
+def test_populated_docker_refuses_clean_phases_but_not_identity_reobservation():
+    queries = []
+
+    def populated(script):
+        queries.append(script)
+        return "container-1"
+
+    for phase in ("initial-empty", "pre-dispatch"):
+        with pytest.raises(ValueError, match="not initially clean"):
+            observer.require_clean_docker(phase, populated, "docker")
+    assert len(queries) == 2
+    observer.require_clean_docker("post-install", populated, "docker")
+    assert len(queries) == 2
