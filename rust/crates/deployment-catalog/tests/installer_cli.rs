@@ -5,6 +5,17 @@ use serde_json::Value;
 use std::process::Command;
 
 #[test]
+fn internal_keycloak_bridge_refuses_invalid_nonce_without_output() {
+    let output = Command::new(env!("CARGO_BIN_EXE_marty-deploy"))
+        .args(["installer-keycloak-bridge", "--nonce", "invalid"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("Keycloak bridge input refused"));
+}
+
+#[test]
 fn persisted_operator_runs_after_bootstrap_storage_is_removed() {
     use sha2::{Digest, Sha256};
     use std::os::unix::fs::PermissionsExt;

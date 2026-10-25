@@ -254,6 +254,20 @@ fn print_plan(plan: &Value) {
 
 fn run() -> Result<(), String> {
     let mut args: Vec<String> = env::args().skip(1).collect();
+    if args.first().is_some_and(|arg| arg == "installer-keycloak-bridge") {
+        if args.len() != 3 || args[1] != "--nonce" {
+            return Err("internal Keycloak bridge requires an owned container invocation".into());
+        }
+        #[cfg(target_os = "linux")]
+        {
+            let runtime = tokio::runtime::Runtime::new().map_err(|_| "cannot start Keycloak bridge runtime")?;
+            let count = runtime.block_on(marty_deployment_catalog::installer_keycloak_bridge::provision(&args[2]))?;
+            println!("{}", serde_json::json!({"outputs_written":count}));
+            return Ok(());
+        }
+        #[cfg(not(target_os = "linux"))]
+        return Err("internal Keycloak bridge requires Linux".into());
+    }
     if args.first().is_some_and(|arg| arg == "install") {
         #[cfg(target_os = "linux")]
         return marty_deployment_catalog::installer_command::install(&args[1..], env!("MARTY_DEPLOY_BUILD_IDENTITY"));
