@@ -482,10 +482,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.12"
-      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e
         with:
           version: "0.11.3"
           enable-cache: false
@@ -507,7 +507,7 @@ jobs:
           fetch-depth: 2
           persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: "24"
       - name: Bootstrap released UI dependencies
@@ -580,10 +580,10 @@ jobs:
         with:
           persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: "24"
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.12"
       - name: Bootstrap released UI dependencies
@@ -637,7 +637,7 @@ jobs:
           persist-credentials: false
       - name: Prefer cached Docker Hub images without restarting the runner daemon
         run: bash scripts/ci/configure-dockerhub-mirror.sh
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.12"
       - name: Test both configs against the pinned production Nginx image
@@ -661,7 +661,7 @@ jobs:
         with:
           persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: "24"
       - name: Bootstrap released UI dependencies
@@ -680,7 +680,7 @@ jobs:
         id: ui_timing_upload
         if: always()
         continue-on-error: true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: ui-vitest-timing-${{ matrix.shard }}
           path: ${{ runner.temp }}/ui-vitest-timing-${{ matrix.shard }}.json
@@ -690,7 +690,7 @@ jobs:
         id: ui_timing_retry
         if: always() && steps.ui_timing_upload.outcome == 'failure'
         continue-on-error: true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: ui-vitest-timing-${{ matrix.shard }}
           path: ${{ runner.temp }}/ui-vitest-timing-${{ matrix.shard }}.json
@@ -721,10 +721,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.12"
-      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e
         with:
           version: "0.11.3"
           enable-cache: true
@@ -783,7 +783,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
         with:
           toolchain: 1.95.0
       - name: Verify frozen Rust feature-regression probe
@@ -865,14 +865,14 @@ jobs:
           push: false
           tags: marty-keycloak-openbao:ci
           provenance: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.12"
-      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
         with:
           toolchain: 1.95.0
       - name: Use mold linker for Rust recovery probe
-        uses: rui314/setup-mold@10ca16bf91dc22e05ebdc935cad9c75ea248f621
+        uses: rui314/setup-mold@da13e0b42e392e3a45d1215033a2270b849d7d36
         with:
           mold-version: 2.41.0
       - name: Enable compiler cache for Rust recovery probe
@@ -927,7 +927,7 @@ jobs:
       - name: Retain recovery preparation evidence
         if: always()
         continue-on-error: true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: rust-recovery-preparation-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -1025,7 +1025,7 @@ jobs:
         with:
           driver-opts: image=${{ env.MARTY_CI_BUILDKIT_IMAGE }}
           buildkitd-config: .github/buildkit-ci-mirror.toml
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.12"
       - name: Prepare isolated Canvas worker harness dependencies
@@ -1074,11 +1074,11 @@ jobs:
           "$RUNNER_TEMP/flow-renderer/bin/python" -c \
             'import yaml; assert yaml.__version__ == "6.0.3"'
           printf '%s\n' "$RUNNER_TEMP/flow-renderer/bin" >> "$GITHUB_PATH"
-      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
         with:
           toolchain: 1.95.0
       - name: Use mold linker
-        uses: rui314/setup-mold@10ca16bf91dc22e05ebdc935cad9c75ea248f621
+        uses: rui314/setup-mold@da13e0b42e392e3a45d1215033a2270b849d7d36
         with:
           mold-version: 2.41.0
       - name: Enable compiler cache
@@ -2008,7 +2008,7 @@ jobs:
             --lib passport_http::reconciliation_tests:: -- --ignored --test-threads=1
       - name: Preserve synthetic runtime failure diagnostics
         if: always() && matrix.lane == 'canvas'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: owned-runtime-failure-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/marty-owned-runtime-diagnostics/*.*
@@ -2046,7 +2046,7 @@ jobs:
           fi
       - name: Upload Rust build evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: rust-build-evidence-${{ matrix.lane }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/rust-build-evidence/
@@ -2063,7 +2063,7 @@ jobs:
           test -s "$RUNNER_TEMP/canvas-rest-fresh-run.json"
       - name: Preserve fresh full-main startup attestation
         if: success() && matrix.lane == 'canvas' && env.MARTY_CANVAS_FULL_QUALIFICATION == '1' && github.ref == 'refs/heads/main'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: canvas-startup-fresh-run-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/canvas-startup-fresh-run.json
@@ -2073,7 +2073,7 @@ jobs:
       # comparison and owned cleanup. It attests a new run, not the old capture.
       - name: Preserve fresh full-main REST requalification evidence
         if: success() && matrix.lane == 'canvas' && env.MARTY_CANVAS_FULL_QUALIFICATION == '1' && github.ref == 'refs/heads/main'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: canvas-rest-fresh-run-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/canvas-rest-fresh-run.json
@@ -2118,10 +2118,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.12"
-      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
         with:
           toolchain: 1.95.0
           targets: ${{ matrix.target }}
@@ -2169,12 +2169,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
         with:
           toolchain: 1.95.0
           components: clippy,rustfmt
       - name: Use mold linker
-        uses: rui314/setup-mold@10ca16bf91dc22e05ebdc935cad9c75ea248f621
+        uses: rui314/setup-mold@da13e0b42e392e3a45d1215033a2270b849d7d36
         with:
           mold-version: 2.41.0
       - name: Enable compiler cache
@@ -2804,10 +2804,10 @@ jobs:
           repository: Marty-Protocol/Marty-Protocol
           ref: ${{ env.MARTY_PROTOCOL_REF }}
           path: marty-protocol
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.12"
-      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e
         with:
           version: "0.11.3"
           enable-cache: true
@@ -2841,10 +2841,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.12.10"
-      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e
         with:
           version: "0.11.3"
           enable-cache: true
@@ -2918,7 +2918,7 @@ jobs:
           assert result.not_revoked is None
           assert result.error
           PY
-      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
         with:
           toolchain: 1.95.0
       - name: Prepare Rust KMS operator for release contracts
@@ -3001,7 +3001,7 @@ jobs:
           PY
       - name: Configure the pinned containerd image store
         if: needs.changes.outputs.rollback_test_only != 'true' && needs.changes.outputs.k8s_policy_test_only != 'true' && needs.changes.outputs.didcomm_release_test_only != 'true'
-        uses: docker/setup-docker-action@2bf61fb9464cc67f0cbdeabed6aa0380accd1c70 # v5.5.0
+        uses: docker/setup-docker-action@7ec28a010822b4626af4874f9448a4b05ac6f3e5 # v5.6.0
         with:
           version: v29.7.2
           daemon-config: |
@@ -3045,7 +3045,7 @@ jobs:
         with:
           persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: "24"
           cache: npm
@@ -3087,7 +3087,7 @@ jobs:
         run: npx playwright test --config playwright.applicant-wallet.config.js
       - name: Upload browser evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: mip-03-credential-lifecycle-browser
           path: |
@@ -3106,10 +3106,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.12"
-      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e
         with:
           version: "0.11.3"
           enable-cache: false
@@ -3171,7 +3171,7 @@ jobs:
           exit "$status"
       - name: Upload security reports
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: security-reports
           path: |
@@ -3191,7 +3191,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
         with:
           toolchain: 1.95.0
       - name: Audit Rust advisories, licenses, bans, and sources
@@ -3441,7 +3441,7 @@ jobs:
           output.write_text(json.dumps(record, sort_keys=True, separators=(',', ':')) + '\n')
           PY
       - name: Upload short-lived engineering image
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: installer-trial-image-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/installer-trial-image/

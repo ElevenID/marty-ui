@@ -131,7 +131,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.12"
 
@@ -173,7 +173,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Stage the authenticated transaction for this run
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: stack-release-resolved-${{ github.run_id }}
           path: release-transaction.json
@@ -222,7 +222,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.12"
       - name: Require the exact claimed protected-main source
@@ -349,7 +349,7 @@ jobs:
           gh attestation verify integration-source.tar.gz \
             --repo "$repository" --source-digest "$commit" \
             --source-ref "$source_ref" --deny-self-hosted-runners
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: stack-release-integration-source-${{ github.run_id }}
           path: integration-source.tar.gz
@@ -713,10 +713,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.12"
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: stack-release-resolved-${{ github.run_id }}
           path: transaction
@@ -738,7 +738,7 @@ jobs:
           --digest "keycloak=$KEYCLOAK_DIGEST"
           --build-run-id "$GITHUB_RUN_ID"
           --output release-transaction.json
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: stack-release-digests-${{ github.run_id }}
           path: release-transaction.json
@@ -758,10 +758,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.12"
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: stack-release-digests-${{ github.run_id }}
           path: transaction
@@ -780,7 +780,7 @@ jobs:
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
         with:
           subject-path: stack-manifest.json
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: stack-release-official-candidate-${{ github.run_id }}
           path: stack-manifest.json
@@ -794,7 +794,7 @@ jobs:
       contents: read
       packages: read
       attestations: read
-    uses: ElevenID/marty-integration-tests/.github/workflows/official-interoperability.yml@1e646774e43d41868e1e927c48b492d23678dda7
+    uses: ElevenID/marty-integration-tests/.github/workflows/official-interoperability.yml@c3bcbe2cf077f3614c3f39878c18dee2a4a8e51e
     with:
       lane: all
       collect_only: true
@@ -817,10 +817,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
         with:
           toolchain: 1.95.0
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: stack-release-official-candidate-${{ github.run_id }}
           path: candidate
@@ -842,7 +842,7 @@ jobs:
           --run-id "$GITHUB_RUN_ID" --current-attempt "$GITHUB_RUN_ATTEMPT"
       - name: Preserve immutable review inputs before requiring approval
         if: steps.freeze.outputs.frozen_new == 'true'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: official-review-input-${{ github.run_id }}
           path: official-review-input/
@@ -858,7 +858,7 @@ jobs:
           --manifest candidate/stack-manifest.json
           --source "$SOURCE_SHA" --harness "$HARNESS_SHA"
           --run-id "$GITHUB_RUN_ID" --current-attempt "$GITHUB_RUN_ATTEMPT"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: stack-release-official-gate-${{ github.run_id }}
           path: |
@@ -884,11 +884,11 @@ jobs:
         with:
           path: marty-ui
           persist-credentials: false
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: stack-release-integration-source-${{ github.run_id }}
           path: harness-input
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.12"
       - name: Extract the verified integration harness without trusting archive paths
@@ -902,7 +902,7 @@ jobs:
           --destination integration-tests
           --expected-root "marty-integration-tests-$INTEGRATION_VERSION"
           --expected-sha256 "$INTEGRATION_DIGEST"
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: "24"
           registry-url: https://registry.npmjs.org
@@ -1087,7 +1087,7 @@ jobs:
               images:{ui:$ui_digest,services:$services_digest,migrations:$migrations_digest,
                       openbao_didcomm:$openbao_didcomm_digest,keycloak:$keycloak_digest}}' \
             > work/release-evidence/public-stack.json
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: stack-release-public-gate-${{ github.run_id }}
           path: integration-tests/work/release-evidence/public-stack.json
@@ -1108,7 +1108,7 @@ jobs:
         with:
           path: marty-ui
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
         with:
           toolchain: 1.95.0
       - name: Build the Rust public-key fixture converter
@@ -1123,11 +1123,11 @@ jobs:
           test "$(git rev-parse 'HEAD^{commit}')" = "$SOURCE_SHA"
           test "$(uname -m)" = x86_64
           cargo build --locked --release -p marty-release-evidence --bin public-kms-jwk
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: stack-release-integration-source-${{ github.run_id }}
           path: harness-input
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.12"
       - name: Fetch the exact upstream harness history
@@ -1210,7 +1210,7 @@ jobs:
             --bin marty-test-signer-agent
       - name: Prepare bounded verifier evidence workspace
         run: mkdir -p integration-tests/work
-      - uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26
+      - uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c
         with:
           image: ${{ env.SERVICES_IMAGE }}@${{ needs.build-services.outputs.services_digest }}
           format: cyclonedx-json@1.6
@@ -1309,7 +1309,7 @@ jobs:
           python marty-ui/scripts/verify_selfhost_public_kms_helper.py \
             --producer-attestations --directory . \
             --source-sha "$SOURCE_SHA" --run-id "$GITHUB_RUN_ID"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: selfhost-public-kms-jwk-unqualified-${{ github.run_id }}
           path: |
@@ -1319,7 +1319,7 @@ jobs:
             selfhost-public-kms-jwk.slsa-bundle.json
           if-no-files-found: error
           retention-days: 7
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: stack-release-verifier-gate-${{ github.run_id }}
           path: |
@@ -1339,7 +1339,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.12"
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
@@ -1390,7 +1390,7 @@ jobs:
             .verify_only_database == "reachable-unreachable-malformed-read-only" and
             .profile == "selfhost-production" and .runs == "2"
           ' native-schema.json >/dev/null
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: stack-release-native-schema-gate-${{ github.run_id }}
           path: native-schema.json
@@ -1410,7 +1410,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.12"
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
@@ -1418,7 +1418,7 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ github.token }}
-      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
         with:
           toolchain: 1.95.0
       - name: Prepare source-matched Rust KMS operator for image qualification
@@ -1447,7 +1447,7 @@ jobs:
             '{schema:"marty.stack-didcomm-plugin-qualification/v1",image:$image,
               source_sha:$source,scoped_token:"passed",raft_failover:"passed",
               raft_snapshot_recovery:"passed"}' > didcomm-plugin.json
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: stack-release-didcomm-plugin-gate-${{ github.run_id }}
           path: didcomm-plugin.json
@@ -1465,7 +1465,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.12"
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
@@ -1501,7 +1501,7 @@ jobs:
               keycloak_image:$keycloak,openbao_image:$openbao,source_sha:$source,
               browser_pkce:"passed",ciba:"passed",rotation:"passed",
               kms_loss:"denied",private_key_database:"absent"}' > keycloak-kms.json
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: stack-release-keycloak-kms-gate-${{ github.run_id }}
           path: keycloak-kms.json
@@ -1517,34 +1517,34 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.12"
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: stack-release-digests-${{ github.run_id }}
           path: transaction
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: stack-release-public-gate-${{ github.run_id }}
           path: gates/public
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: stack-release-verifier-gate-${{ github.run_id }}
           path: gates/verifier
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: stack-release-native-schema-gate-${{ github.run_id }}
           path: gates/native
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: stack-release-didcomm-plugin-gate-${{ github.run_id }}
           path: gates/didcomm
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: stack-release-keycloak-kms-gate-${{ github.run_id }}
           path: gates/keycloak
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: stack-release-official-gate-${{ github.run_id }}
           path: gates/official
@@ -1571,7 +1571,7 @@ jobs:
               --gate "official_interoperability=$GITHUB_RUN_ID:$official_digest" \
               --output release-transaction.json
           fi
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: stack-release-qualified-${{ github.run_id }}
           path: release-transaction.json
@@ -1724,12 +1724,12 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.12"
       - name: Install the exact offline source parsers
         run: python -m pip install PyYAML==6.0.3 jsonschema==4.25.1
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: stack-release-qualified-${{ github.run_id }}
           path: transaction
@@ -1822,7 +1822,7 @@ jobs:
           while IFS= read -r image; do
             docker pull "$image" >/dev/null
           done
-      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
         with:
           toolchain: 1.95.0
       - name: Package and record the unqualified exact-lock ZIP
@@ -1877,13 +1877,13 @@ jobs:
           set -euo pipefail
           test -s "$BUNDLE"
           cp -- "$BUNDLE" installer-prepared.provenance.jsonl
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: installer-prepared-provenance-${{ github.run_id }}
           path: installer-prepared.provenance.jsonl
           if-no-files-found: error
           retention-days: 30
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: selfhost-lock-preparation-unqualified-${{ github.run_id }}
           path: |
@@ -1905,16 +1905,16 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.12"
       - name: Install the exact offline source parsers
         run: python -m pip install PyYAML==6.0.3 jsonschema==4.25.1
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: selfhost-lock-preparation-unqualified-${{ github.run_id }}
           path: prepared
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: stack-release-qualified-${{ github.run_id }}
           path: transaction
@@ -2014,7 +2014,7 @@ jobs:
           test "$(git rev-parse 'HEAD^{commit}')" = "$SOURCE_SHA"
           git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
           git merge-base --is-ancestor "$SOURCE_SHA" refs/remotes/origin/main
-      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
         with:
           toolchain: 1.95.0
           targets: ${{ matrix.target }}
@@ -2062,7 +2062,7 @@ jobs:
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
         with:
           subject-path: marty-deploy-linux-${{ matrix.arch }}
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: operator-catalog-${{ matrix.arch }}-${{ github.run_id }}
           path: marty-deploy-linux-${{ matrix.arch }}
@@ -2078,7 +2078,7 @@ jobs:
           set -euo pipefail
           test -s "$BUNDLE"
           cp -- "$BUNDLE" "marty-deploy-linux-$ARCH.provenance.jsonl"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: operator-installer-provenance-${{ matrix.arch }}-${{ github.run_id }}
           path: marty-deploy-linux-${{ matrix.arch }}.provenance.jsonl
@@ -2104,32 +2104,32 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.12"
       - name: Install exact input-contract parsers
         run: python -m pip install PyYAML==6.0.3 jsonschema==4.25.1
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: stack-release-qualified-${{ github.run_id }}
           path: ${{ runner.temp }}/installer-transaction
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: selfhost-lock-preparation-unqualified-${{ github.run_id }}
           path: ${{ runner.temp }}/installer-prepared
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: installer-prepared-provenance-${{ github.run_id }}
           path: ${{ runner.temp }}/installer-prepared-proof
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: operator-catalog-amd64-${{ github.run_id }}
           path: ${{ runner.temp }}/installer-operator
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: operator-installer-provenance-amd64-${{ github.run_id }}
           path: ${{ runner.temp }}/installer-operator-proof
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: selfhost-public-kms-jwk-unqualified-${{ github.run_id }}
           path: ${{ runner.temp }}/installer-public-kms
@@ -2229,7 +2229,7 @@ jobs:
             --build-run-id "$GITHUB_RUN_ID" --build-run-attempt "$GITHUB_RUN_ATTEMPT" \
             --output "$output/installer-inventory.json"
           cp "$inputs/"* "$output/"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: installer-inputs-unqualified-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/installer-unqualified/
@@ -2255,22 +2255,22 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.12"
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: stack-release-qualified-${{ github.run_id }}
           path: transaction
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: operator-catalog-amd64-${{ github.run_id }}
           path: .
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: operator-catalog-arm64-${{ github.run_id }}
           path: .
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: installer-inputs-unqualified-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/stable-installer-inputs
@@ -2357,7 +2357,7 @@ jobs:
           python scripts/release_transaction.py record-promotion \
             --input transaction/release-transaction.json --role ui --digest "$DIGEST" \
             --output transaction/release-transaction.json
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: stack-release-promotion-ui-${{ github.run_id }}
           path: transaction/release-transaction.json
@@ -2387,7 +2387,7 @@ jobs:
           python scripts/release_transaction.py record-promotion \
             --input transaction/release-transaction.json --role services --digest "$DIGEST" \
             --output transaction/release-transaction.json
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: stack-release-promotion-services-${{ github.run_id }}
           path: transaction/release-transaction.json
@@ -2465,38 +2465,38 @@ jobs:
           python scripts/release_transaction.py record-promotion \
             --input transaction/release-transaction.json --role keycloak --digest "$DIGEST" \
             --output transaction/release-transaction.json
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: stack-release-promotion-complete-${{ github.run_id }}
           path: transaction/release-transaction.json
           if-no-files-found: error
           retention-days: 90
-      - uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26
+      - uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c
         with:
           image: ${{ env.IMAGE }}@${{ needs.build-ui.outputs.digest }}
           format: cyclonedx-json
           output-file: marty-ui-sbom.cdx.json
-      - uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26
+      - uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c
         with:
           image: ${{ env.SERVICES_IMAGE }}@${{ needs.build-services.outputs.services_digest }}
           format: cyclonedx-json
           output-file: marty-ui-services-sbom.cdx.json
-      - uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26
+      - uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c
         with:
           image: ${{ env.MIGRATIONS_IMAGE }}@${{ needs.build-services.outputs.migrations_digest }}
           format: cyclonedx-json
           output-file: marty-ui-migrations-sbom.cdx.json
-      - uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26
+      - uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c
         with:
           image: ${{ env.OPENBAO_DIDCOMM_IMAGE }}@${{ needs.build-openbao-didcomm.outputs.digest }}
           format: cyclonedx-json
           output-file: marty-ui-openbao-didcomm-sbom.cdx.json
-      - uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26
+      - uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c
         with:
           image: ${{ env.KEYCLOAK_IMAGE }}@${{ needs.build-keycloak.outputs.digest }}
           format: cyclonedx-json
           output-file: marty-ui-keycloak-sbom.cdx.json
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: stack-release-official-candidate-${{ github.run_id }}
           path: official-candidate
@@ -2718,7 +2718,7 @@ jobs:
             --manifest-sha256 "$manifest_digest" \
             --publication-run-id "$GITHUB_RUN_ID" \
             --output published-release-transaction.json
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: stack-release-published-${{ github.run_id }}
           path: published-release-transaction.json
