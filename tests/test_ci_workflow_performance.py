@@ -66,11 +66,13 @@ def test_fresh_vm_creation_has_required_root_release_owner() -> None:
     assert vm["shell"] == "bash"
     command = vm["run"]
     assert "qemu-utils ubuntu-keyring" in command
+    assert "cloud-image-utils openssh-client cloud-init" in command
     assert "sudo env PYTHONPATH=packages PYTHONDONTWRITEBYTECODE=1" in command
     assert command.count("tests/test_installer_candidate_vm_create.py") == 1
     assert command.count("tests/test_installer_candidate_vm_runtime.py") == 1
+    assert command.count("tests/test_installer_candidate_vm_seed.py") == 1
     assert "-p no:cacheprovider --junitxml=" in command
-    for required in ('len(cases) != 20', '("tests", 20)', '("skipped", 0)',
+    for required in ('len(cases) != 26', '("tests", 26)', '("skipped", 0)',
                      '("failures", 0)', '("errors", 0)'):
         assert required in command
 CANVAS_COMPOSITION_COMMAND = (
