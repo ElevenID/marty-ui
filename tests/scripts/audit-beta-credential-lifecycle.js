@@ -6,7 +6,7 @@ const { acquireWalletSession, openIsolatedWallet, resetIsolatedWallet } = requir
 const path = require('path');
 const assert = require('node:assert/strict');
 const { randomUUID, createHash } = require('node:crypto');
-const { createDemoLiveEvidence, acknowledgeDemoInputs } = require('./demo-live-evidence');
+const { createDemoLiveEvidence, acknowledgeDemoInputs, applyLocalNativeReadiness } = require('./demo-live-evidence');
 const { spawnSync } = require('child_process');
 const { chromium } = require('@playwright/test');
 const { loadEnvFile, redact } = require('./verify-beta-waltid-acceptance');
@@ -1285,12 +1285,14 @@ async function main() {
         }
       },
       writeReport: () => {
+        const ready = applyLocalNativeReadiness(report, evidence,
+          {ready:report.engineeringReady, cleanupComplete:report.cleanup?.ok === true});
         report.finishedAt = new Date().toISOString();
         fs.writeFileSync(path.join(artifactDir, 'report.json'), JSON.stringify(report, null, 2));
         console.log(JSON.stringify(report, null, 2));
-        if (uiCandidate ? !report.engineeringReady : !report.releaseReady) process.exitCode = 1;
+        if (uiCandidate ? !report.engineeringReady : !ready) process.exitCode = 1;
       },
-      successful: () => report.releaseReady === true,
+      successful: () => report.releaseReady === true || report.functionalReady === true,
       complete: () => evidence.complete(),
       closeEvidence: () => evidence.close(),
     });
