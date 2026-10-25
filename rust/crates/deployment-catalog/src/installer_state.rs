@@ -75,6 +75,43 @@ pub enum Phase {
     Ready,
 }
 
+/// Immutable local daemon/port selection, committed before any Docker mutation.
+/// The runtime must re-observe this engine ID before every mutation. This is
+/// intent, not evidence that containers or networks exist or are owned.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeBinding {
+    pub docker_host: String,
+    pub engine_id: String,
+    pub openbao_port: u16,
+}
+impl RuntimeBinding {
+    pub fn validate(&self) -> Result<()> {
+        let socket = self
+            .docker_host
+            .strip_prefix("unix://")
+            .ok_or("installer requires a local Unix Docker socket")?;
+        if !socket.starts_with('/')
+            || socket == "/"
+            || socket.len() > 4096
+            || socket
+                .bytes()
+                .any(|b| b.is_ascii_control() || b.is_ascii_whitespace())
+            || socket
+                .split('/')
+                .skip(1)
+                .any(|part| part.is_empty() || part == "." || part == "..")
+            || !regex::Regex::new(r"\A[A-Za-z0-9][A-Za-z0-9:-]{7,127}\z")
+                .unwrap()
+                .is_match(&self.engine_id)
+            || self.openbao_port < 1024
+        {
+            return Err("invalid local installer runtime binding".into());
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Journal {
@@ -83,6 +120,8 @@ pub struct Journal {
     identity: Identity,
     phase: Phase,
     revision: u64,
+    #[serde(default)]
+    runtime: Option<RuntimeBinding>,
 }
 impl Journal {
     pub fn installation_id(&self) -> uuid::Uuid {
@@ -97,8 +136,17 @@ impl Journal {
     pub fn revision(&self) -> u64 {
         self.revision
     }
+    pub fn runtime(&self) -> Option<&RuntimeBinding> {
+        self.runtime.as_ref()
+    }
+    pub fn compose_project(&self) -> String {
+        format!("marty-install-{}", self.installation_id.simple())
+    }
     fn validate(&self) -> Result<()> {
         self.identity.validate()?;
+        if let Some(runtime) = &self.runtime {
+            runtime.validate()?;
+        }
         let revision = match self.phase {
             Phase::Initialized => 0,
             Phase::Verified => 1,
@@ -306,6 +354,21 @@ impl InstallerState {
     /// Creates a NEW directory only. Existing empty directories are not adopted.
     /// Failure may leave a private directory requiring explicit inspection.
     pub fn create(path: &Path, identity: Identity) -> Result<Self> {
+        Self::create_internal(path, identity, None)
+    }
+    pub fn create_with_runtime(
+        path: &Path,
+        identity: Identity,
+        runtime: RuntimeBinding,
+    ) -> Result<Self> {
+        runtime.validate()?;
+        Self::create_internal(path, identity, Some(runtime))
+    }
+    fn create_internal(
+        path: &Path,
+        identity: Identity,
+        runtime: Option<RuntimeBinding>,
+    ) -> Result<Self> {
         identity.validate()?;
         let (parent, leaf) = parent(path)?;
         if unsafe { libc::mkdirat(parent.as_raw_fd(), leaf.as_ptr(), 0o700) } != 0 {
@@ -321,6 +384,7 @@ impl InstallerState {
             identity,
             phase: Phase::Initialized,
             revision: 0,
+            runtime,
         };
         let mut state = Self {
             directory,
@@ -420,6 +484,79 @@ mod tests {
             release_tag: "v1.2.3".into(),
             inventory_sha256: format!("sha256:{}", "b".repeat(64)),
         }
+    }
+    #[test]
+    fn runtime_intent_survives_reopen_and_is_never_rebound() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("install");
+        let runtime = RuntimeBinding {
+            docker_host: "unix:///var/run/docker.sock".into(),
+            engine_id: "01234567-89ab-cdef".into(),
+            openbao_port: 18200,
+        };
+        let mut state =
+            InstallerState::create_with_runtime(&path, identity(), runtime.clone()).unwrap();
+        let project = state.journal().compose_project();
+        assert!(project.starts_with("marty-install-"));
+        assert_eq!(project.len(), 46);
+        state.advance(Phase::Verified).unwrap();
+        drop(state);
+        let state = InstallerState::resume(&path, &identity()).unwrap();
+        assert_eq!(state.journal().runtime(), Some(&runtime));
+        assert_eq!(state.journal().compose_project(), project);
+        assert!(InstallerState::create_with_runtime(&path, identity(), runtime).is_err());
+    }
+    #[test]
+    fn invalid_runtime_is_refused_before_directory_creation() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("install");
+        for host in [
+            "tcp://localhost:2375",
+            "unix:///",
+            "unix:///run/../docker.sock",
+            "unix:///run//docker.sock",
+            "unix:///run/docker.sock\n",
+        ] {
+            let runtime = RuntimeBinding {
+                docker_host: host.into(),
+                engine_id: "engine-id".into(),
+                openbao_port: 18200,
+            };
+            assert!(InstallerState::create_with_runtime(&path, identity(), runtime).is_err());
+            assert!(!path.exists());
+        }
+        for (engine, port) in [("", 18200), ("engine id", 18200), ("engine-id", 443)] {
+            let runtime = RuntimeBinding {
+                docker_host: "unix:///run/docker.sock".into(),
+                engine_id: engine.into(),
+                openbao_port: port,
+            };
+            assert!(InstallerState::create_with_runtime(&path, identity(), runtime).is_err());
+            assert!(!path.exists());
+        }
+    }
+    #[test]
+    fn corrupt_persisted_runtime_is_rejected_on_inspection_and_resume() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("install");
+        let state = InstallerState::create_with_runtime(
+            &path,
+            identity(),
+            RuntimeBinding {
+                docker_host: "unix:///var/run/docker.sock".into(),
+                engine_id: "engine-id".into(),
+                openbao_port: 18200,
+            },
+        )
+        .unwrap();
+        drop(state);
+        let journal_path = path.join(JOURNAL);
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&journal_path).unwrap()).unwrap();
+        value["runtime"]["docker_host"] = serde_json::json!("tcp://other-host:2375");
+        std::fs::write(&journal_path, serde_json::to_vec(&value).unwrap()).unwrap();
+        assert!(InstallerState::inspect(&path).is_err());
+        assert!(InstallerState::resume(&path, &identity()).is_err());
     }
     #[test]
     fn survives_reopen_and_refuses_existing_or_concurrent_owner() {

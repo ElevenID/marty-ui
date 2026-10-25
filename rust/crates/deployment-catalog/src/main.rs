@@ -275,6 +275,32 @@ fn run() -> Result<(), String> {
         #[cfg(not(target_os = "linux"))]
         return Err("installer status currently requires Linux".into());
     }
+    if args.first().is_some_and(|arg| arg == "doctor") {
+        if !matches!(args.len(), 3 | 5) || args[1] != "--install-dir"
+            || (args.len() == 5 && args[3] != "--docker-bin")
+        {
+            return Err("usage: marty-deploy doctor --install-dir ABSOLUTE_PATH [--docker-bin ABSOLUTE_PATH]".into());
+        }
+        #[cfg(target_os = "linux")]
+        {
+            let directory = std::path::Path::new(&args[2]);
+            let journal = marty_deployment_catalog::installer_state::InstallerState::inspect(directory)?;
+            let runtime = journal.runtime().ok_or("installation has no recorded Docker binding; automatic adoption is refused")?;
+            let docker = std::path::Path::new(args.get(4).map(String::as_str).unwrap_or("/usr/bin/docker"));
+            let runner = marty_deployment_catalog::installer_runtime::DockerRunner::new(
+                docker, &runtime.docker_host, &runtime.engine_id, directory,
+            )?;
+            let observation = runner.preflight()?;
+            println!("{}", serde_json::json!({
+                "scope": "installation-host", "installation_id": journal.installation_id(),
+                "compose_project": journal.compose_project(), "docker": observation,
+                "services_observed": false, "installation_ready": false,
+            }));
+            return Ok(());
+        }
+        #[cfg(not(target_os = "linux"))]
+        return Err("installer doctor currently requires Linux".into());
+    }
     // KMS operator commands do not read the catalog or require a source checkout.
     if args.first().is_some_and(|a| a == "operator") {
         use marty_deployment_catalog::operator::{self, REFUSAL};

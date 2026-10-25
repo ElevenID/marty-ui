@@ -8,6 +8,7 @@ mod deployment_lifecycle;
 pub mod passport_model;
 pub mod installer_state;
 pub mod installer_artifacts;
+pub mod installer_runtime;
 
 use serde_json::{Map, Value};
 use std::collections::HashSet;

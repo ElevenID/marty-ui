@@ -1,8 +1,69 @@
 #![cfg(target_os = "linux")]
 
-use marty_deployment_catalog::installer_state::{Identity, InstallerState, Phase};
+use marty_deployment_catalog::installer_state::{Identity, InstallerState, Phase, RuntimeBinding};
 use serde_json::Value;
 use std::process::Command;
+
+#[test]
+fn doctor_observes_bound_engine_without_source_or_inherited_context() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("installation");
+    let state = InstallerState::create_with_runtime(
+        &path,
+        Identity {
+            source_sha: "a".repeat(40),
+            release_tag: "v1.2.3".into(),
+            inventory_sha256: format!("sha256:{}", "b".repeat(64)),
+        },
+        RuntimeBinding {
+            docker_host: "unix:///var/run/docker.sock".into(),
+            engine_id: "test-engine".into(),
+            openbao_port: 18200,
+        },
+    )
+    .unwrap();
+    let binary = path.join("docker-stub");
+    let script = r#"#!/bin/sh
+[ "$DOCKER_HOST" = 'unix:///var/run/docker.sock' ] || exit 4
+[ -z "${DOCKER_CONTEXT:-}" ] || exit 5
+case "$1" in
+info) printf '%s\n' '{"id":"test-engine","os":"linux","architecture":"x86_64","server_version":"28.0.0","security_options":["name=seccomp,profile=builtin"]}' ;;
+compose) printf '2.39.0\n' ;;
+*) exit 9 ;;
+esac
+"#;
+    std::fs::write(&binary, script).unwrap();
+    std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let invoke = || {
+        Command::new(env!("CARGO_BIN_EXE_marty-deploy"))
+            .current_dir(root.path())
+            .args(["doctor", "--install-dir"])
+            .arg(&path)
+            .arg("--docker-bin")
+            .arg(&binary)
+            .env("DOCKER_CONTEXT", "unrelated")
+            .env("DOCKER_HOST", "tcp://unrelated:2375")
+            .output()
+            .unwrap()
+    };
+    let output = invoke();
+    assert!(output.status.success(), "{:?}", output.stderr);
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["docker"]["engine_id"], "test-engine");
+    assert_eq!(report["compose_project"], state.journal().compose_project());
+    assert_eq!(report["services_observed"], false);
+    assert_eq!(report["installation_ready"], false);
+    std::fs::write(&binary, script.replace("test-engine", "replacement-engine")).unwrap();
+    let output = invoke();
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(!std::fs::read_dir(&path).unwrap().any(|entry| entry
+        .unwrap()
+        .file_name()
+        .to_string_lossy()
+        .starts_with(".installer-command-")));
+}
 
 #[test]
 fn status_reports_uncertain_journal_without_checkout_or_secret_values() {
@@ -36,4 +97,18 @@ fn status_reports_uncertain_journal_without_checkout_or_secret_values() {
         .unwrap()
         .contains("secret-sentinel"));
     assert!(output.stderr.is_empty());
+
+    // A legacy/preparation-only journal must not adopt the caller's daemon.
+    let doctor = Command::new(env!("CARGO_BIN_EXE_marty-deploy"))
+        .current_dir(root.path())
+        .args(["doctor", "--install-dir"])
+        .arg(&path)
+        .env("DOCKER_HOST", "tcp://unrelated-host:2375")
+        .output()
+        .unwrap();
+    assert!(!doctor.status.success());
+    assert!(doctor.stdout.is_empty());
+    assert!(String::from_utf8(doctor.stderr)
+        .unwrap()
+        .contains("no recorded Docker binding"));
 }
