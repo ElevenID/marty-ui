@@ -497,3 +497,16 @@ jobs:
           python scripts/publish_nightly_release.py --phase publish --assets "$RUNNER_TEMP/publish" \
             --source "$GITHUB_WORKSPACE" --tag "$TAG" --run-id "$GITHUB_RUN_ID" \
             --gh "$RUNNER_TEMP/installer-gh/gh_2.103.2_linux_amd64/bin/gh"
+      - name: Record required installer release qualification
+        env:
+          TAG: ${{ needs.admit.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            printf '### Installer release qualification pending\n\n'
+            printf 'Published candidate `%s` from `%s`, build run `%s` attempt `%s`.\n\n' \
+              "$TAG" "$GITHUB_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"
+            printf 'Before this version can become the nightly one-line installer channel, run the main-only staged installed-journey acceptance, replay the published version anonymously on a clean host, run the installer admission gate with both signed reports, publish its separate immutable admission metadata, and promote a signed nightly channel generation with a compare-and-swap pointer update.\n'
+            printf 'This candidate release alone does not authorize installation or channel promotion.\n'
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -2724,3 +2724,17 @@ jobs:
           path: published-release-transaction.json
           if-no-files-found: error
           retention-days: 90
+      - name: Record required stable installer qualification
+        env:
+          TAG: ${{ needs.resolve-transaction.outputs.tag }}
+          SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            printf '### Installer release qualification pending\n\n'
+            printf 'Published version `%s` from `%s`, publication/verification run `%s` attempt `%s`.\n\n' \
+              "$TAG" "$SOURCE_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"
+            printf 'Before this version can become the stable one-line installer channel, run the main-only staged installed-journey acceptance, replay the published version anonymously on a clean host, run the installer admission gate with both signed reports, publish its separate immutable admission metadata, and promote a signed stable channel generation with a compare-and-swap pointer update.\n'
+            printf 'The version release itself does not authorize channel promotion.\n'
+          } >> "$GITHUB_STEP_SUMMARY"
