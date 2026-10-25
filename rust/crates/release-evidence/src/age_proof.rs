@@ -329,7 +329,7 @@ fn prepare(input: &AgeProofInput) -> Check<Value> {
         "rejected_issuance": {"method": "POST", "path": "/v1/issuance", "body": {
             "organization_id": expected.organization_id, "credential_template_id": expected.rejected_template_id, "claims": claims
         }},
-        "verification": {"method": "POST", "path": "/v1/flows/verification/start", "body": {
+        "verification": {"method": "POST", "path": "/v1/flows/verify", "body": {
             "organization_id": expected.organization_id, "presentation_policy_id": expected.policy_id,
             "trust_profile_id": expected.trust_profile_id, "issuer_did": expected.verifier_did,
             "response_type": "vp_token", "request_transport": "request_uri", "request_uri_method": "get", "expiry_minutes": 10

@@ -10,7 +10,7 @@ const okay = body => ({ status: 200, body });
 const plan = {
   trusted_issuance: { method: 'POST', path: '/v1/issuance', body: { credential_template_id: 'template-1' } },
   rejected_issuance: { method: 'POST', path: '/v1/issuance', body: { credential_template_id: 'template-2' } },
-  verification: { method: 'POST', path: '/v1/flows/verification/start', body: { organization_id: 'org-1' } },
+  verification: { method: 'POST', path: '/v1/flows/verify', body: { organization_id: 'org-1' } },
   setup_sha256: 'a'.repeat(64),
 };
 
@@ -53,7 +53,7 @@ test('D03 dependency reads fail before mutation and do not report an uncertain c
 test('D03 retains an issuance ID before a lost verification creation response', async () => {
   const { controller, states } = fixture({ onApi: call => {
     if (call.route === '/v1/issuance') return okay({ id: 'transaction-1', organization_id: 'org-1', credential_template_id: 'template-1' });
-    if (call.route === '/v1/flows/verification/start') throw Error('Lost creation response');
+    if (call.route === '/v1/flows/verify') throw Error('Lost creation response');
     if (call.route.startsWith('/v1/issued-credentials?')) return okay([]);
   } });
   await controller.preflight();
@@ -102,7 +102,7 @@ test('D03 pending cleanup uses exact shared cancellation and retains unconfirmed
     } };
     const { controller, states } = fixture({ page, onApi: call => {
       if (call.route === '/v1/issuance') return okay({ id: 'transaction-1', organization_id: 'org-1', credential_template_id: 'template-1' });
-      if (call.route === '/v1/flows/verification/start') return { status: 409, body: { error: 'conflict' } };
+      if (call.route === '/v1/flows/verify') return { status: 409, body: { error: 'conflict' } };
       if (call.route.startsWith('/v1/issued-credentials?')) return okay([]);
     } });
     await controller.preflight();
@@ -130,7 +130,7 @@ test('D03 retains both exact IDs before request inspection fails and cleans only
     readRequest: async () => { throw Error('Signed request missing'); },
     onApi: call => {
       if (call.route === '/v1/issuance') return okay({ id: 'transaction-1', organization_id: 'org-1', credential_template_id: 'template-1' });
-      if (call.route === '/v1/flows/verification/start') return okay({ instance_id: 'instance-1' });
+      if (call.route === '/v1/flows/verify') return okay({ instance_id: 'instance-1' });
       if (call.route.startsWith('/v1/issued-credentials?')) return okay([
         { id: 'owned-credential', flow_execution_id: 'transaction-1' },
         { id: 'unrelated-credential', flow_execution_id: 'old-transaction' },
@@ -155,10 +155,33 @@ test('D03 retains both exact IDs before request inspection fails and cleans only
   const cleanup = await controller.cleanup();
   assert.equal(cleanup.ok, true);
   assert.deepEqual(calls.filter(call => call.method === 'POST').map(call => call.route), [
-    '/v1/issuance', '/v1/flows/verification/start',
+    '/v1/issuance', '/v1/flows/verify',
     '/v1/issued-credentials/owned-credential/revoke', '/v1/flows/instances/instance-1/cancel',
   ]);
   await assert.rejects(controller.prepareLane(lane), /duplicated/);
+});
+
+test('D03 hands the native wallet the OpenID4VP request URI', async () => {
+  let issued = 0;
+  let started = 0;
+  const { controller, calls } = fixture({ onApi: call => {
+    if (call.route === '/v1/issuance') return okay({ id: `transaction-${++issued}`,
+      organization_id: 'org-1', credential_template_id: call.body.credential_template_id,
+      credential_offer_uri: 'openid-credential-offer://example' });
+    if (call.route === '/v1/flows/verify') {
+      const instance = `instance-${++started}`;
+      const walletUri = `openid4vp://authorize?request_uri=https%3A%2F%2Fdemo.example.test%2Fv1%2Fflows%2Finstances%2F${instance}%2Frequest`;
+      return okay({ instance_id: instance, request_uri: walletUri, qr_code_data: walletUri });
+    }
+  } });
+  await controller.preflight();
+  const binding = await controller.prepareLane(lane);
+  assert.equal(started, 2);
+  assert.match(binding.trusted.requestUri, /^openid4vp:\/\/authorize\?/);
+  assert.match(binding.rejected.requestUri, /^openid4vp:\/\/authorize\?/);
+  assert.deepEqual(calls.filter(call => call.method === 'POST').map(call => call.route), [
+    '/v1/issuance', '/v1/flows/verify', '/v1/issuance', '/v1/flows/verify',
+  ]);
 });
 
 test('D03 proven request rejection leaves no uncertain mutation', async () => {
