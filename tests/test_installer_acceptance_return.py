@@ -24,7 +24,9 @@ def ready(scenario):
         **{k:context[k] for k in ('source_sha','release_tag','harness_source_sha','run_id','run_attempt','phase','nonce')},
         target=target,authorization_sha256=r.digest(auth),receipt_sha256=r.digest(consumed),inventory_sha256=r.digest(inv),
         cases={k:('passed' if k=='artifact-verification' else 'blocked') for k in r.acceptance.CASES},
-        host_observation_sha256='a'*64,host_preflight='passed',dispatch='failed_or_incomplete',acceptance=False,installation_ready=False,observed_at=100000)
+        host_observation_sha256='a'*64,host_preflight='passed',dispatch='failed_or_incomplete',
+        trust_info_sha256=None,status_observation_sha256=None,trust_inspection='unavailable',
+        acceptance=False,installation_ready=False,observed_at=100000)
     raw=r.encode(value)
     client.items.append(dict(id=789,name=runner.NAME,state='uploaded',size=len(raw),digest='sha256:'+r.digest(raw),
         uploader=dict(id=12345,type='User',login='controller'),created_at='fixed',updated_at='fixed'))

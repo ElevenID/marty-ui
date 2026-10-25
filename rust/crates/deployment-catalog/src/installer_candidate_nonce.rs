@@ -135,6 +135,25 @@ mod tests {
             engine_id: "test-engine-12345678".into(),
         }
     }
+    #[test]
+    fn controller_observation_matches_native_consumption_bytes() {
+        let claim = Consumption {
+            nonce: "a".repeat(64),
+            authorization_sha256: "b".repeat(64),
+            context_sha256: "c".repeat(64),
+            installation_id: uuid::Uuid::parse_str("22345678-1234-4234-8234-123456789abc").unwrap(),
+            engine_id: "test-engine-12345678".into(),
+        };
+        let bytes = serde_json::to_vec(&serde_json::json!({
+            "schema":"elevenid.installer-candidate-consumption/v1", "scope":"guest-local",
+            "claim":claim,
+        }))
+        .unwrap();
+        assert_eq!(
+            crate::installer_release::sha256(&bytes),
+            "a668c9bbe5f77fe7ec8e182163de73fd0807f56f623758016146a97fbc979e5d"
+        );
+    }
     fn registry() -> tempfile::TempDir {
         let directory = tempfile::tempdir().unwrap();
         std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700)).unwrap();

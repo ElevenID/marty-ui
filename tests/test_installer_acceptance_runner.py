@@ -1,5 +1,7 @@
 """Fixed probe routing with synthetic subprocesses; not installed qualification."""
+import base64
 import copy
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -19,6 +21,33 @@ def host():
         development_tool_presence=dict.fromkeys(a.DEVTOOLS,False))
 
 
+def trust(installation_id='22345678-1234-4234-8234-123456789abc'):
+    pem=(Path(__file__).resolve().parents[1]/'rust/crates/deployment-catalog/tests/fixtures/installer-log-public-ca.txt').read_text()
+    der=base64.b64decode(''.join(pem.splitlines()[1:-1]),validate=True)
+    return dict(schema='elevenid.installer-trust-info/v1',installation_id=installation_id,
+        origin='https://localhost:18443',ca_certificate_pem=pem,
+        ca_der_sha256=hashlib.sha256(der).hexdigest(),ca_expires_at=200000,certificate_expires_at=200000,
+        recorded_token_expires_at=200000,evidence_sha256=dict.fromkeys(a.TRUST_EVIDENCE,'b'*64),
+        recorded_startup_containers=30,runtime_observed=False,host_trust_observed=False,
+        host_trust_modified=False,installation_ready=False,pending=['browser trust','business journey','recovery'])
+
+
+def status(context,target,auth,inv):
+    claim=dict(nonce=context['nonce'],authorization_sha256=r.digest(auth),
+        context_sha256=r.candidate_context_sha256(context),installation_id=target['installation_id'],
+        engine_id=target['engine_id'])
+    consumption=r.digest(json.dumps(dict(schema='elevenid.installer-candidate-consumption/v1',
+        scope='guest-local',claim=claim),separators=(',',':')).encode())
+    return dict(scope='installation-journal',runtime_observed=False,
+        journal=dict(schema='elevenid.installer-state/v1',installation_id=target['installation_id'],
+            identity=dict(source_sha=context['source_sha'],release_tag=context['release_tag'],
+                inventory_sha256='sha256:'+r.digest(inv)),phase='provisioning',revision=2,
+            runtime=dict(docker_host='unix:///var/run/docker.sock',engine_id=target['engine_id'],openbao_port=18442),
+            scope=dict(kind='acceptance-only',authorization_sha256=r.digest(auth),
+                context_sha256=r.candidate_context_sha256(context),consumption_id=consumption)),
+        cleanup=dict(state='not_started',runtime_observed=False))
+
+
 @pytest.fixture
 def candidate(tmp_path,monkeypatch):
     tmp_path.chmod(0o700)
@@ -34,6 +63,10 @@ def candidate(tmp_path,monkeypatch):
     monkeypatch.setattr(a.dispatch,'verify',lambda **_: (auth,receipt,inv,{}))
     calls=[]
     def execute(argv,**kwargs):
+        if ' status --install-dir ' in argv[-1]:
+            calls.append(('status',argv,kwargs));return r.encode(status(context,target,auth,inv))
+        if 'trust-info' in argv[-1]:
+            calls.append(('trust',argv,kwargs));return r.encode(trust())
         calls.append(('probe',argv,kwargs));return r.encode(host())
     def dispatch(**kwargs):calls.append(('dispatch',kwargs))
     args=dict(output=output,assets=tmp_path/'assets',grants=tmp_path/'grants',context_file=tmp_path/'context',
@@ -44,18 +77,23 @@ def candidate(tmp_path,monkeypatch):
 
 
 def test_real_probe_before_dispatch_and_never_claims_acceptance(candidate):
-    args,calls,*_=candidate
+    args,calls,context,target,auth,receipt,inv=candidate
+    a.status_observation(r.encode(status(context,target,auth,inv)),context,target,auth,inv)
+    a.trust_observation(r.encode(trust()),target,100000)
     result=a.run(**args)
-    assert [v[0] for v in calls]==['probe','dispatch']
+    assert [v[0] for v in calls]==['probe','dispatch','status','trust','status']
     assert calls[0][1][:2]==['/usr/bin/ssh','-F']
     assert 'env -i HOME=/home/installer PATH=/usr/bin:/bin /usr/bin/python3 -c' in calls[0][1][-1]
     assert set(calls[0][2]['env'])=={'HOME','PATH','LANG','LC_ALL'}
     assert calls[0][2]['timeout']==120
     assert result['dispatch']=='returned_zero_unqualified' and result['acceptance'] is False
+    assert result['trust_inspection']=='verified_public_record'
+    assert result['trust_info_sha256']==r.digest((args['output']/a.TRUST_NAME).read_bytes())
+    assert result['status_observation_sha256']==r.digest((args['output']/a.STATUS_NAME).read_bytes())
     assert all(v=='blocked' for k,v in result['cases'].items() if k!='artifact-verification')
     assert (args['output']/a.NAME).exists() and not (args['output']/'installer-acceptance.json').exists()
     with pytest.raises(FileExistsError):a.run(**args)
-    assert len(calls)==2
+    assert len(calls)==5
 
 
 @pytest.mark.parametrize('mutation',['ram','images','credentials','engine','missing_keys'])
@@ -78,8 +116,87 @@ def test_native_incomplete_error_is_retained_without_raw_diagnostics(candidate):
     args['candidate_dispatch']=fail
     result=a.run(**args)
     assert result['dispatch']=='failed_or_incomplete'
+    assert result['trust_inspection']=='verified_public_record'
     assert b'private-token' not in (args['output']/a.NAME).read_bytes()
     assert all(v=='blocked' for k,v in result['cases'].items() if k!='artifact-verification')
+
+
+@pytest.mark.parametrize('mutation',['identity','ready','origin','expiry','private_ca','ca_hash','malformed_ca'])
+def test_untrusted_or_incomplete_trust_observation_cannot_be_recorded(candidate,mutation):
+    args,calls,context,target,auth,receipt,inv=candidate
+    def execute(argv,**kwargs):
+        if ' status --install-dir ' in argv[-1]:
+            return r.encode(status(context,target,auth,inv))
+        if 'trust-info' not in argv[-1]:return r.encode(host())
+        value=trust()
+        if mutation=='identity':value['installation_id']='32345678-1234-4234-8234-123456789abc'
+        if mutation=='ready':value['installation_ready']=True
+        if mutation=='origin':value['origin']='https://foreign.example:18443'
+        if mutation=='expiry':value['ca_expires_at']=100000
+        if mutation=='private_ca':value['ca_certificate_pem']+='-----BEGIN PRIVATE KEY-----\nsecret\n'
+        if mutation=='ca_hash':value['ca_der_sha256']='f'*64
+        if mutation=='malformed_ca':value['ca_certificate_pem']=value['ca_certificate_pem'].replace('MIIB','bad!')
+        return r.encode(value)
+    args['execute']=execute
+    result=a.run(**args)
+    assert result['trust_inspection']=='unavailable' and result['trust_info_sha256'] is None
+    assert not (args['output']/a.TRUST_NAME).exists()
+    assert result['acceptance'] is False
+
+
+@pytest.mark.parametrize('mutation',['engine','scope','authorization','consumption','identity','inventory','cleanup','phase'])
+def test_wrong_candidate_status_cannot_bind_trust_record(candidate,mutation):
+    args,_,context,target,auth,receipt,inv=candidate
+    def execute(argv,**kwargs):
+        if ' status --install-dir ' not in argv[-1]:return r.encode(host())
+        value=status(context,target,auth,inv)
+        journal=value['journal']
+        if mutation=='engine':journal['runtime']['engine_id']='other-engine-12345'
+        if mutation=='scope':journal['scope']={'kind':'unclassified'}
+        if mutation=='authorization':journal['scope']['authorization_sha256']='f'*64
+        if mutation=='consumption':journal['scope']['consumption_id']='f'*64
+        if mutation=='identity':journal['identity']['source_sha']='f'*40
+        if mutation=='inventory':journal['identity']['inventory_sha256']='sha256:'+'f'*64
+        if mutation=='cleanup':value['cleanup']['state']='in_progress'
+        if mutation=='phase':journal['phase']='ready';journal['revision']=4
+        return r.encode(value)
+    args['execute']=execute
+    result=a.run(**args)
+    assert result['trust_inspection']=='unavailable'
+    assert result['trust_info_sha256'] is None and result['status_observation_sha256'] is None
+    assert not (args['output']/a.TRUST_NAME).exists()
+    assert result['acceptance'] is False
+
+
+def test_missing_poststart_status_retains_incomplete_checkpoint(candidate):
+    args,_,*_=candidate
+    def execute(argv,**kwargs):
+        if ' status --install-dir ' in argv[-1]:raise ValueError('private diagnostic')
+        return r.encode(host())
+    args['execute']=execute
+    result=a.run(**args)
+    assert result['dispatch']=='returned_zero_unqualified'
+    assert result['trust_inspection']=='unavailable'
+    assert result['acceptance'] is False
+    assert b'private diagnostic' not in (args['output']/a.NAME).read_bytes()
+
+
+def test_status_change_across_trust_export_refuses_paired_record(candidate):
+    args,_,context,target,auth,receipt,inv=candidate
+    reads=0
+    def execute(argv,**kwargs):
+        nonlocal reads
+        if ' status --install-dir ' in argv[-1]:
+            reads+=1
+            value=status(context,target,auth,inv)
+            if reads==2:value['journal']['phase']='provisioned';value['journal']['revision']=3
+            return r.encode(value)
+        if 'trust-info' in argv[-1]:return r.encode(trust())
+        return r.encode(host())
+    args['execute']=execute
+    result=a.run(**args)
+    assert reads==2 and result['trust_inspection']=='unavailable'
+    assert not (args['output']/a.TRUST_NAME).exists()
 
 
 def test_checkpoint_cannot_upgrade_unimplemented_cases(candidate):
