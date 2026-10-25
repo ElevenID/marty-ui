@@ -51,9 +51,9 @@ describe('CredentialTemplatesPage', () => {
     })
   })
 
-  it('renders listed templates from a wrapped response shape', async () => {
-    mockListCredentialTemplates.mockResolvedValue({
-      items: [
+  it('renders the native direct-array catalog including later pages', async () => {
+    const drafts = Array.from({ length: 100 }, (_, index) => ({ id: `draft-${index}`, name: `Draft ${index}`, claims: [], status: 'draft' }))
+    mockListCredentialTemplates.mockResolvedValueOnce(drafts).mockResolvedValueOnce([
         {
           id: 'ct-1',
           name: 'Employee Badge',
@@ -65,8 +65,7 @@ describe('CredentialTemplatesPage', () => {
           status: 'active',
           updated_at: '2026-04-15T18:00:00Z',
         },
-      ],
-    })
+      ])
 
     renderWithRouter(<CredentialTemplatesPage />, {
       initialEntries: ['/console/org/templates/credentials'],
@@ -77,6 +76,7 @@ describe('CredentialTemplatesPage', () => {
     })
 
     expect(screen.getByText('VC_JWT')).toBeInTheDocument()
+    expect(mockListCredentialTemplates).toHaveBeenLastCalledWith({ organization_id: 'org-1', limit: 100, offset: 100 })
     expect(screen.getByText('templates.issuerDidStatus.configured')).toBeInTheDocument()
   })
 })

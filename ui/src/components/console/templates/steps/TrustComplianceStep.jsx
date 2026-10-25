@@ -8,6 +8,7 @@ import { listComplianceProfiles } from '../../../../services/complianceProfilesA
 import issuerIdentitiesApi from '../../../../services/issuerIdentitiesApi';
 import { useConsole } from '../../../../contexts/ConsoleContext';
 import { templateIssuerRequest } from '../templateIssuerSelection';
+import { loadScopedCatalog } from '../../../../services/loadScopedCatalog';
 
 const active = (profile) => String(profile?.status || '').toLowerCase() === 'active';
 const EMPTY = [];
@@ -29,11 +30,12 @@ const TrustComplianceStep = ({ data, onChange }) => {
 
   useEffect(() => {
     let current = true;
+    const controller = new AbortController();
     setCatalog(null);
     if (activeOrgId) {
       Promise.all([
-        listTrustProfiles({ organization_id: activeOrgId }),
-        listComplianceProfiles({ organization_id: activeOrgId }),
+        loadScopedCatalog(listTrustProfiles, activeOrgId, { signal: controller.signal }),
+        loadScopedCatalog(listComplianceProfiles, activeOrgId, { signal: controller.signal }),
       ]).then(([trust, compliance]) => {
         if (!current) return;
         setCatalog({ organizationId: activeOrgId,
@@ -44,7 +46,7 @@ const TrustComplianceStep = ({ data, onChange }) => {
         });
       }).catch((error) => { if (current) setCatalog({ organizationId: activeOrgId, error }); });
     }
-    return () => { current = false; };
+    return () => { current = false; controller.abort(); };
   }, [activeOrgId, refreshCatalog]);
 
   const trustProfiles = catalog?.organizationId === activeOrgId ? catalog.trust || EMPTY : EMPTY;

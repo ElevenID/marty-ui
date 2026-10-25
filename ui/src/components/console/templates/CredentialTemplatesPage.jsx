@@ -32,6 +32,7 @@ import { Link } from 'react-router';
 import { ResourcePage, EmptyState, EmptyStates, StatusChip } from '../../common';
 import { useConsole } from '../../../contexts/ConsoleContext';
 import { listCredentialTemplates, listTrustProfiles } from '../../../services/presentationPolicyApi';
+import { loadScopedCatalog } from '../../../services/loadScopedCatalog';
 
 const getTemplatesTabs = (t) => [
   { label: t('templates.credentialTemplates'), path: '/console/org/templates/credentials' },
@@ -92,7 +93,7 @@ function CredentialTemplatesPage() {
       if (!organizationId) {
         throw new Error('Select an organization before loading credential templates.');
       }
-      return listCredentialTemplates({ organization_id: organizationId });
+      return loadScopedCatalog(listCredentialTemplates, organizationId);
     },
     [organizationId]
   );
