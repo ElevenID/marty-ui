@@ -297,6 +297,13 @@ pub struct DockerObservation {
     pub server_version: String,
     pub compose_version: String,
 }
+fn compose_version_valid(version: &str) -> bool {
+    // Distribution builds include suffixes such as +ds1-0ubuntu1~24.04.1.
+    version.len() <= 128
+        && regex::Regex::new(r"\Av?[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.~-]+)?\z")
+            .unwrap()
+            .is_match(version)
+}
 fn validate_info(output: &str, expected: &str) -> Result<DockerInfo> {
     let info: DockerInfo =
         serde_json::from_str(output).map_err(|_| "Docker info response is invalid")?;
@@ -352,10 +359,7 @@ impl DockerRunner {
             )?
             .trim()
             .to_owned();
-        if !regex::Regex::new(r"\Av?[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?\z")
-            .unwrap()
-            .is_match(&compose_version)
-        {
+        if !compose_version_valid(&compose_version) {
             return Err("Docker Compose plugin version unavailable".into());
         }
         Ok(DockerObservation {
@@ -416,6 +420,23 @@ impl DockerRunner {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn distribution_compose_versions_remain_bounded_metadata() {
+        assert!(super::compose_version_valid("2.40.3+ds1-0ubuntu1~24.04.1"));
+        for invalid in [
+            "2.40.3~ubuntu",
+            "2.40.3+bad suffix",
+            "2.40.3+bad\n",
+            "2.40.3+bad/path",
+            "2.40.3+$(id)",
+        ] {
+            assert!(!super::compose_version_valid(invalid));
+        }
+        assert!(!super::compose_version_valid(&format!(
+            "2.40.3+{}",
+            "a".repeat(122)
+        )));
+    }
     use super::*;
     fn private_temp() -> tempfile::TempDir {
         let d = tempfile::tempdir().unwrap();

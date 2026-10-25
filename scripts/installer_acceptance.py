@@ -112,7 +112,8 @@ def validate(report: dict, *, inventory_bytes: bytes, source_sha: str,
                  "development_tools_available", "credentials_available",
                  "tls_errors_ignored"}, "host")
     for name in ("docker_version", "compose_version"):
-        require(matches(host[name], r"[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?"),
+        require(matches(host[name], r"[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.~-]+)?")
+                and len(host[name]) <= 128,
                 "invalid " + name)
     for name in ("memory_bytes", "disk_free_bytes"):
         require(type(host[name]) is int and host[name] > 0, "missing host measurement")

@@ -43,6 +43,18 @@ def test_accepts_exact_candidate_in_both_release_tiers_and_all_phases(evidence):
             gate.validate(report, **{**args, "release_tag": tag, "phase": phase})
 
 
+@pytest.mark.parametrize("value", ["2.40.3+ds1-0ubuntu1~24.04.1", "2.40.3~ubuntu",
+    "2.40.3+bad suffix", "2.40.3+bad\n", "2.40.3+bad/path", "2.40.3+$(id)", "2.40.3+" + "a" * 122])
+def test_distribution_version_metadata_is_bounded(evidence, value):
+    report, args = evidence
+    report["host"]["compose_version"] = value
+    if value == "2.40.3+ds1-0ubuntu1~24.04.1":
+        gate.validate(report, **args)
+    else:
+        with pytest.raises(ValueError):
+            gate.validate(report, **args)
+
+
 @pytest.mark.parametrize("name,value", [
     ("head_sha", "b" * 40), ("head_branch", "feature"), ("path", ".github/workflows/nightly-release.yml"),
     ("event", "pull_request"), ("run_attempt", 2), ("conclusion", "failure"),
