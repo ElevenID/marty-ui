@@ -127,7 +127,7 @@ describe('template creation recovery', () => {
     const operation = createTemplateCreationOperation('org-a');
     vi.mocked(getCredentialTemplate).mockResolvedValue({ ...draft, organization_id: 'org-b' });
     await expect(operation.submit(data)).rejects.toThrow('ownership');
-    await expect(operation.submit({ ...data, name: 'changed' })).rejects.toThrow('already created');
+    await expect(operation.submit({ ...data, name: 'changed' })).rejects.toThrow('ownership');
     expect(createCredentialTemplate).toHaveBeenCalledTimes(1);
     expect(activateCredentialTemplate).not.toHaveBeenCalled();
   });

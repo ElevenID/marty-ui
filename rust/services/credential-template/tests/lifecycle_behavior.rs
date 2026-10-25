@@ -196,3 +196,64 @@ fn lifecycle_transitions_are_fail_closed_and_versioning_is_lossless() {
     assert_eq!(version.validity_rules, original.validity_rules);
     assert_eq!(version.created_at, now);
 }
+
+#[test]
+fn validity_duration_boundaries_and_offsets_are_explicit() {
+    for (seconds, days) in [(1, 1), (3600, 1), (86399, 1), (86400, 1), (86401, 2)] {
+        let input = ValidityRulesInput {
+            ttl_seconds: Some(seconds),
+            max_validity_seconds: Some(seconds),
+            reissue_within_seconds: Some(seconds),
+            default_validity_days: Some(9),
+            max_validity_days: Some(9),
+            renewal_window_days: Some(9),
+            not_before_offset: Some(1),
+            not_before_offset_seconds: Some(-900),
+            ..Default::default()
+        };
+        let result = resolve_validity_rules(&input, None).unwrap();
+        assert_eq!(result.default_validity_days, days);
+        assert_eq!(result.max_validity_days, days);
+        assert_eq!(result.renewal_window_days, days);
+        assert_eq!(result.not_before_offset_seconds, -900);
+    }
+    for seconds in [0, -1] {
+        assert!(resolve_validity_rules(
+            &ValidityRulesInput {
+                ttl_seconds: Some(seconds),
+                ..Default::default()
+            },
+            None
+        )
+        .is_err());
+        let result = resolve_validity_rules(
+            &ValidityRulesInput {
+                max_validity_seconds: Some(seconds),
+                reissue_within_seconds: Some(seconds),
+                ..Default::default()
+            },
+            None,
+        )
+        .unwrap();
+        assert_eq!(result.max_validity_days, 1);
+        assert_eq!(result.renewal_window_days, 1);
+    }
+    let result = resolve_validity_rules(
+        &ValidityRulesInput {
+            ttl_seconds: Some(i64::MAX),
+            ..Default::default()
+        },
+        None,
+    )
+    .unwrap();
+    assert_eq!(result.default_validity_days, i32::MAX);
+    let result = resolve_validity_rules(
+        &ValidityRulesInput {
+            renewal_window_days: Some(0),
+            ..Default::default()
+        },
+        None,
+    )
+    .unwrap();
+    assert_eq!(result.renewal_window_days, 0);
+}

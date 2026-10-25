@@ -239,6 +239,7 @@ describe('CredentialTemplateWizard', () => {
           return HttpResponse.json({
             id: 'template-1',
             name: 'Production mDL Template',
+            organization_id: 'console-org',
             status: 'active',
           })
         })
