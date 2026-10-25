@@ -112,6 +112,26 @@ class Client:
         release.require(len(raw) == size, "receipt size changed")
         return raw
 
+    def whoami(self):
+        return json_bytes(self._read("https://api.github.com/user"))
+
+    def upload_receipt(self, release_id, raw):
+        positive_id(release_id)
+        release.require(type(raw) is bytes and 0 < len(raw) <= MAX_BYTES, "invalid receipt bytes")
+        url = (f"https://uploads.github.com{REPO}/releases/{release_id}/assets?"
+               + urllib.parse.urlencode({"name": RECEIPT}))
+        request = urllib.request.Request(url, data=raw, method="POST", headers={
+            "Accept": "application/vnd.github+json", "Content-Type": "application/octet-stream",
+            "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "marty-installer-candidate",
+            "Authorization": "Bearer " + self.token})
+        try:
+            with self.opener.open(request, timeout=20) as response:
+                release.require(response.status == 201, "GitHub receipt upload status differs")
+                answer = response.read(MAX_BYTES + 1)
+        except (urllib.error.HTTPError, OSError, urllib.error.URLError):
+            raise ValueError("GitHub receipt upload failed or is uncertain") from None
+        return json_bytes(answer)
+
 
 def inputs(authorization, inventory, *, harness_source_sha, run_id, run_attempt, now):
     a, i = read_record(authorization), read_record(inventory)
@@ -136,6 +156,22 @@ def check_release(remote, expected):
     release.require(all(type(remote.get(k)) is type(v) and remote.get(k) == v
                         for k, v in expected.items() if k != "author_id")
                     and remote["author"].get("id") == expected["author_id"], "draft transport identity changed")
+
+
+def bound_descriptor(descriptor, a, i, context, record, approved):
+    d = release.decode(read_record(descriptor))
+    release.exact(d, {"schema", "authorization_sha256", "inventory_sha256", "context_sha256", "controller_user_id",
+                     "nonce", "run_id", "run_attempt", "harness_source_sha", "release"}, "transport descriptor")
+    release.require(d["schema"] == SCHEMA and d["authorization_sha256"] == release.digest(a)
+                    and d["inventory_sha256"] == release.digest(i)
+                    and d["context_sha256"] == release.candidate_context_sha256(context)
+                    and d["controller_user_id"] == approved
+                    and all(d[k] == record[k] for k in ("nonce", "run_id", "run_attempt", "harness_source_sha")),
+                    "transport descriptor binding differs")
+    release.require(isinstance(d["release"], dict), "invalid release binding")
+    owned = identity(record, d["release"].get("id"), d["release"].get("author_id"))
+    release.require(d["release"] == owned, "transport release binding differs")
+    return owned
 
 
 def prepare(*, client, authorization, inventory, harness_source_sha, run_id, run_attempt,
@@ -185,18 +221,7 @@ def receive(*, client, authorization, inventory, harness_source_sha, run_id, run
     a, i, context, record = inputs(authorization, inventory, harness_source_sha=harness_source_sha,
                                  run_id=run_id, run_attempt=run_attempt, now=int(clock()))
     approved = controller_id(controller_user_id)
-    d = release.decode(read_record(descriptor))
-    release.exact(d, {"schema", "authorization_sha256", "inventory_sha256", "context_sha256", "controller_user_id",
-                     "nonce", "run_id", "run_attempt", "harness_source_sha", "release"}, "transport descriptor")
-    release.require(d["schema"] == SCHEMA and d["authorization_sha256"] == release.digest(a)
-                    and d["inventory_sha256"] == release.digest(i)
-                    and d["context_sha256"] == release.candidate_context_sha256(context)
-                    and d["controller_user_id"] == approved
-                    and all(d[k] == record[k] for k in ("nonce", "run_id", "run_attempt", "harness_source_sha")),
-                    "transport descriptor binding differs")
-    release.require(isinstance(d["release"], dict), "invalid release binding")
-    owned = identity(record, d["release"].get("id"), d["release"].get("author_id"))
-    release.require(d["release"] == owned, "transport release binding differs")
+    owned = bound_descriptor(descriptor, a, i, context, record, approved)
     endpoint = f"{REPO}/releases/{owned['id']}"
     deadline = min(int(clock()) + 900, record["expires_at"] - RESERVE)
     while int(clock()) < deadline:

@@ -9,6 +9,7 @@ import urllib.error
 import pytest
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/"scripts"))
 import installer_candidate_rendezvous as t
+import installer_candidate_receipt_upload as uploader
 import installer_release as r
 pytestmark=pytest.mark.skipif(os.name!="posix",reason="private Linux output contract")
 
@@ -173,3 +174,112 @@ def test_failed_receipt_write_preserves_transport_evidence(scenario,monkeypatch)
     monkeypatch.setattr(t,"write_exclusive",original)
     with pytest.raises(FileExistsError): receive(scenario)
     assert not out.exists()
+
+
+def upload_scenario(scenario,monkeypatch):
+    args,descriptor,_,client=scenario
+    receipt=r.decode(client.raw)
+    ledger=descriptor.parent/(receipt['nonce']+'.json')
+    ledger.write_bytes(client.raw)
+    monkeypatch.setattr(uploader,'authenticate',lambda authorization,inventory,assets,gh,cosign,runner:
+        (authorization.read_bytes(),inventory.read_bytes()))
+    client.items=[]
+    client.whoami=lambda:dict(id=12345,type='User',login='controller')
+    original=client.request
+    def request(method,path,body=None):
+        if '/actions/runs/' in path:
+            return dict(repository=dict(full_name=r.REPOSITORY),id=99,run_attempt=3,
+                path=r.acceptance.WORKFLOW,head_sha='c'*40,head_branch='main',
+                event='workflow_dispatch',status='in_progress',conclusion=None)
+        return original(method,path,body)
+    client.request=request
+    def upload(release_id,raw):
+        assert release_id==123 and raw==ledger.read_bytes()
+        client.items=[dict(id=456,name=t.RECEIPT,state='uploaded',size=len(raw),
+            digest='sha256:'+r.digest(raw),uploader=dict(id=12345,type='User',login='controller'),
+            created_at='fixed',updated_at='fixed')]
+        client.raw=raw
+        client.calls.append(('UPLOAD',release_id,None))
+        return copy.deepcopy(client.items[0])
+    client.upload_receipt=upload
+    return dict(args,descriptor=descriptor,ledger=ledger,output=descriptor.parent/'upload',
+        assets=descriptor.parent,gh=descriptor.parent/'gh',cosign=descriptor.parent/'cosign'),client
+
+
+def test_controller_upload_exact_durable_ledger(scenario,monkeypatch):
+    kwargs,client=upload_scenario(scenario,monkeypatch)
+    result=uploader.upload(**kwargs)
+    assert result['receipt_sha256']==r.digest(client.raw)
+    assert r.decode(kwargs['output'].read_bytes())==result
+    assert (kwargs['ledger'].parent/(r.decode(kwargs['ledger'].read_bytes())['nonce']+'.upload-intent.json')).is_file()
+    assert sum(method=='UPLOAD' for method,_,_ in client.calls)==1
+    with pytest.raises(ValueError,match='already has assets'): uploader.upload(**kwargs)
+    assert sum(method=='UPLOAD' for method,_,_ in client.calls)==1
+
+
+def test_controller_upload_wrong_actor_and_existing_asset_refused(scenario,monkeypatch):
+    kwargs,client=upload_scenario(scenario,monkeypatch)
+    client.whoami=lambda:dict(id=12,type='User',login='other')
+    with pytest.raises(ValueError): uploader.upload(**kwargs)
+    intent=kwargs['ledger'].parent/(r.decode(client.raw)['nonce']+'.upload-intent.json')
+    assert not intent.exists()
+    client.whoami=lambda:dict(id=12345,type='User',login='controller')
+    client.items=[dict(name='unexpected')]
+    with pytest.raises(ValueError): uploader.upload(**kwargs)
+    assert not intent.exists()
+
+
+def test_controller_upload_uncertain_post_keeps_intent(scenario,monkeypatch):
+    kwargs,client=upload_scenario(scenario,monkeypatch)
+    def uncertain(*_): raise ValueError('uncertain')
+    client.upload_receipt=uncertain
+    with pytest.raises(ValueError): uploader.upload(**kwargs)
+    assert (kwargs['ledger'].parent/(r.decode(client.raw)['nonce']+'.upload-intent.json')).is_file()
+    assert not kwargs['output'].exists()
+    with pytest.raises(FileExistsError): uploader.upload(**dict(kwargs,output=kwargs['output'].parent/'alternate'))
+
+
+def test_controller_upload_changed_download_refused(scenario,monkeypatch):
+    kwargs,client=upload_scenario(scenario,monkeypatch)
+    client.on_download=lambda:setattr(client,'raw',b'wrong')
+    with pytest.raises(ValueError): uploader.upload(**kwargs)
+    assert (kwargs['ledger'].parent/(r.decode(kwargs['ledger'].read_bytes())['nonce']+'.upload-intent.json')).is_file()
+    assert not kwargs['output'].exists()
+
+
+def test_controller_upload_expired_during_preflight_retains_intent(scenario,monkeypatch):
+    kwargs,client=upload_scenario(scenario,monkeypatch)
+    grant=r.decode(kwargs['authorization'].read_bytes())
+    moment=[100000]
+    kwargs['clock']=lambda:moment[0]
+    original=client.request
+    asset_reads=[0]
+    def slow(method,path,body=None):
+        value=original(method,path,body)
+        if '/assets?' in path:
+            asset_reads[0]+=1
+            if asset_reads[0]==2:moment[0]=grant['expires_at']-t.RESERVE
+        return value
+    client.request=slow
+    with pytest.raises(ValueError,match='expired before controller upload'):
+        uploader.upload(**kwargs)
+    assert (kwargs['ledger'].parent/(r.decode(client.raw)['nonce']+'.upload-intent.json')).is_file()
+    assert sum(method=='UPLOAD' for method,_,_ in client.calls)==0
+
+
+def test_upload_http_boundary_is_fixed_and_never_redirects():
+    client=t.Client('synthetic-token')
+    class UploadResponse(io.BytesIO):
+        status=201
+    class UploadOpener:
+        def __init__(self): self.requests=[]
+        def open(self,request,timeout):
+            self.requests.append(request)
+            return UploadResponse(b'{}')
+    client.opener=UploadOpener()
+    assert client.upload_receipt(123,b'ledger')=={}
+    req=client.opener.requests[0]
+    assert req.full_url=='https://uploads.github.com/repos/ElevenID/marty-ui/releases/123/assets?name=installer-controller-consumption.json'
+    assert req.get_method()=='POST' and req.data==b'ledger'
+    assert req.get_header('Authorization')=='Bearer synthetic-token'
+    assert req.get_header('Content-type')=='application/octet-stream'
