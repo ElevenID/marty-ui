@@ -107,3 +107,42 @@ def test_changed_root_record_refuses_diagnostic_write(
     with pytest.raises(ValueError, match="provisioning chain invalid"):
         live.observe(registry, runtime_parent, vm_id=VM_ID)
     assert not (registry / f"{VM_ID}.live-process-observation.json").exists()
+
+
+def test_guest_readiness_remains_diagnostic_under_same_lease(
+    root_trial, runtime_parent, monkeypatch
+):
+    registry = _launched(root_trial, runtime_parent, monkeypatch)
+    calls = []
+
+    def pinned(_control, *, port, user, packages, key_sha256,
+               known_hosts_sha256):
+        calls.append((port, user, packages, key_sha256, known_hosts_sha256))
+        return {"guest_uid": 1000, "docker_initially_empty": True}
+
+    monkeypatch.setattr(live, "pinned_guest", pinned)
+    record = live.observe(registry, runtime_parent, vm_id=VM_ID,
+                          guest_readiness=True)
+    assert record["schema"] == live.GUEST_SCHEMA
+    assert record["phase"] == "guest-ready"
+    assert record["guest"]["docker_initially_empty"] is True
+    assert record["qualified"] is False
+    assert record["dispatch_authorized"] is False
+    assert len(calls) == 1
+    assert (registry / f"{VM_ID}.guest-readiness.json").is_file()
+
+
+def test_failed_guest_probe_retains_process_without_readiness_record(
+    root_trial, runtime_parent, monkeypatch
+):
+    registry = _launched(root_trial, runtime_parent, monkeypatch)
+
+    def refuse(*_args, **_kwargs):
+        raise ValueError("injected guest host key mismatch")
+
+    monkeypatch.setattr(live, "pinned_guest", refuse)
+    with pytest.raises(ValueError, match="host key mismatch"):
+        live.observe(registry, runtime_parent, vm_id=VM_ID,
+                     guest_readiness=True)
+    assert not (registry / f"{VM_ID}.guest-readiness.json").exists()
+    assert (registry / f"{VM_ID}.launch-receipt.json").is_file()

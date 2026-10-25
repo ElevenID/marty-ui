@@ -20,9 +20,11 @@ import installer_candidate_qemu_observe as observer
 import installer_candidate_vm_launch as launcher
 from installer_candidate_vm_runtime import _identity, _named_disk, _same_path
 from installer_candidate_vm_launch_evidence import bind_provisioned_launch
+from installer_candidate_vm_guest_readiness import pinned_guest
 import installer_release as release
 
 SCHEMA = "elevenid.installer-vm-live-process-observation/v1"
+GUEST_SCHEMA = "elevenid.installer-vm-guest-readiness/v1"
 RECORDS = (
     "creation-intent", "creation-receipt", "runtime-intent", "runtime-receipt",
     "seed-intent", "seed-receipt", "launch-intent", "launch-pid",
@@ -30,7 +32,8 @@ RECORDS = (
 )
 
 
-def observe(registry: Path, runtime_parent: Path, *, vm_id: str) -> dict:
+def observe(registry: Path, runtime_parent: Path, *, vm_id: str,
+            guest_readiness: bool = False) -> dict:
     """Observe only the existing process named in root-held launch records."""
     release.require(os.geteuid() == 0 and type(vm_id) is str
                     and str(uuid.UUID(vm_id)) == vm_id
@@ -105,6 +108,14 @@ def observe(registry: Path, runtime_parent: Path, *, vm_id: str) -> dict:
                                   "disk_fd": launch_receipt["disk_fd"]},
                         "VM process differs from exact launch receipt",
                     )
+                    guest = None
+                    if guest_readiness:
+                        guest = pinned_guest(
+                            control_dir, port=seed["ssh_port"],
+                            user=seed["guest_user"], packages=seed["packages"],
+                            key_sha256=seed["controller_private_sha256"],
+                            known_hosts_sha256=seed["known_hosts_sha256"],
+                        )
                     _same_path(runtime_dir, runtime_fd,
                                lambda path: observer.open_vm_dir(
                                    path, runtime["runtime_uid"]))
@@ -132,7 +143,9 @@ def observe(registry: Path, runtime_parent: Path, *, vm_id: str) -> dict:
                         for name in RECORDS),
                         "VM registry records changed before observation write")
                     observed = dict(
-                        schema=SCHEMA, phase="process-observed", vm_id=vm_id,
+                        schema=GUEST_SCHEMA if guest_readiness else SCHEMA,
+                        phase="guest-ready" if guest_readiness
+                        else "process-observed", vm_id=vm_id,
                         controller_boot_id=boot_id, process_pid=first["pid"],
                         process_start_ticks=first["start_ticks"],
                         process_disk_fd=first["disk_fd"],
@@ -145,6 +158,8 @@ def observe(registry: Path, runtime_parent: Path, *, vm_id: str) -> dict:
                         record_sha256=bound, observed_at=int(time.time()),
                         qualified=False, dispatch_authorized=False,
                     )
+                    if guest_readiness:
+                        observed["guest"] = guest
                     _same_path(runtime_dir, runtime_fd,
                                lambda path: observer.open_vm_dir(
                                    path, runtime["runtime_uid"]))
@@ -160,8 +175,9 @@ def observe(registry: Path, runtime_parent: Path, *, vm_id: str) -> dict:
                             release.digest(_bytes(control_dir / name, maximum)) == expected,
                             "VM control material changed before observation write",
                         )
-                    _write(lease.parent, vm_id + ".live-process-observation.json",
-                           observed)
+                    name = ("guest-readiness" if guest_readiness else
+                            "live-process-observation")
+                    _write(lease.parent, vm_id + "." + name + ".json", observed)
                     _same_path(registry, lease.parent, _directory)
                     return observed
                 finally:
@@ -177,9 +193,11 @@ def main() -> int:
     parser.add_argument("--registry", type=Path, required=True)
     parser.add_argument("--runtime-parent", type=Path, required=True)
     parser.add_argument("--vm-id", required=True)
+    parser.add_argument("--guest-readiness", action="store_true")
     args = parser.parse_args()
     try:
-        result = observe(args.registry, args.runtime_parent, vm_id=args.vm_id)
+        result = observe(args.registry, args.runtime_parent, vm_id=args.vm_id,
+                         guest_readiness=args.guest_readiness)
     except (ValueError, OSError, KeyError, TypeError, UnicodeError,
             json.JSONDecodeError):
         parser.exit(1, "VM live observation refused or uncertain; retain evidence.\n")

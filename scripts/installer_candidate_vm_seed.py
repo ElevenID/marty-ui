@@ -17,26 +17,17 @@ import time
 
 from installer_candidate_controller import ControllerLease, _directory
 import installer_candidate_qemu_observe as observer
+from installer_candidate_vm_policy import GUEST_USER, PACKAGES
 from installer_candidate_vm_create import _bytes, _read_record, _write
 from installer_candidate_vm_runtime import _runtime_parent, _same_path, verify_transfer
 from installer_host_probe import command
 import installer_release as release
 
 SCHEMA = "elevenid.installer-vm-seed/v1"
-GUEST_USER = "installer"
 KEYGEN = Path("/usr/bin/ssh-keygen")
 LOCALDS = Path("/usr/bin/cloud-localds")
 CLOUD_INIT = Path("/usr/bin/cloud-init")
 ENV = {"HOME": "/", "PATH": "/usr/bin:/bin", "LANG": "C"}
-# This is an engineering image policy. The later installed acceptance must
-# record actual package identities and source before it may qualify a release.
-PACKAGES = {
-    "openssh-server": "1:9.6p1-3ubuntu13.20",
-    "docker.io": "29.1.3-0ubuntu3~24.04.2",
-    "docker-compose-v2": "2.40.3+ds1-0ubuntu1~24.04.1",
-    "containerd": "2.2.1-0ubuntu1~24.04.4",
-    "runc": "1.3.4-0ubuntu1~24.04.1",
-}
 
 
 def _tool(path: Path) -> None:
