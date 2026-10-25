@@ -19,7 +19,7 @@ pub async fn seed(pool: &sqlx::PgPool) {
              delivery_target='physical_document', credential_format='ICAO_EMRTD',
              issuance_protocol='PHYSICAL_DOCUMENT', connector_id=NULL, is_enabled=true",
     )
-    .bind(&["destination-http", "destination-poll-race", "destination"])
+    .bind(["destination-http", "destination-poll-race", "destination"])
     .execute(pool)
     .await
     .unwrap();
