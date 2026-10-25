@@ -2,6 +2,7 @@
 import copy
 import json
 import sys
+import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -10,6 +11,55 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import installer_release as release
 import installer_acceptance as acceptance
+
+
+def test_inventory_cli_produces_bound_release_input_and_refuses_replacement(prepared, tmp_path):
+    directory, args = prepared
+    model = tmp_path / "compose.json"
+    model.write_text(json.dumps({"services": {"gateway": {}}}), encoding="utf-8")
+    output = tmp_path / "installer-inventory.json"
+    command = [sys.executable, str(Path(release.__file__)), "inventory",
+               "--artifacts", str(directory), "--compose-model", str(model),
+               "--source-sha", args["source_sha"], "--release-tag", args["release_tag"],
+               "--build-run-id", "42", "--build-run-attempt", "1", "--output", str(output)]
+    result = subprocess.run(command, capture_output=True, timeout=30)
+    assert result.returncode == 0, result.stderr
+    original = output.read_bytes()
+    assert release.decode(original) == release.inventory(directory, **args)
+    assert subprocess.run(command, capture_output=True, timeout=30).returncode != 0
+    assert output.read_bytes() == original
+    output.unlink()
+    model.write_text('{"services":{"foreign":{}}}', encoding="utf-8")
+    assert subprocess.run(command, capture_output=True, timeout=30).returncode != 0
+    assert not output.exists()
+    model.write_text('{"services":{"gateway":{},"gateway":{}}}', encoding="utf-8")
+    assert subprocess.run(command, capture_output=True, timeout=30).returncode != 0
+    assert not output.exists()
+
+
+@pytest.mark.parametrize("fault", [None, "bytes", "image", "run", "attempt", "extra"])
+def test_release_rechecks_installer_inventory_against_published_bytes(prepared, fault):
+    directory, args = prepared
+    record = release.inventory(directory, **args)
+    if fault == "image":
+        record["images"]["gateway"] = "ghcr.io/elevenid/foreign@sha256:" + "f" * 64
+    elif fault == "run":
+        record["build_run_id"] += 1
+    elif fault == "attempt":
+        record["build_run_attempt"] += 1
+    (directory / "installer-inventory.json").write_bytes(release.encode(record))
+    if fault == "bytes":
+        path = directory / "install.sh"
+        path.write_bytes(b"x" * path.stat().st_size)
+    if fault == "extra":
+        # Full release has other assets; their allowlist is the publisher's job.
+        (directory / "stack-manifest.json").write_bytes(b"other signed release asset")
+    options = {key: value for key, value in args.items() if key != "expected_services"}
+    if fault in (None, "extra"):
+        assert release.verify_inventory_assets(directory, **options) == record
+    else:
+        with pytest.raises(ValueError):
+            release.verify_inventory_assets(directory, **options)
 
 
 def iso_timestamp(value):

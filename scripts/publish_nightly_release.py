@@ -15,6 +15,7 @@ from check_prepared_selfhost_consumer import verify_descriptor, verify_receipt
 from nightly_release import WORKFLOW, file_digest, product_manifest, read, require, validate_preparation
 from run_nightly_runtime_smoke import CASES, SCHEMA as RUNTIME_SCHEMA
 from stage_selfhost_disposable_preview import verify_checksums
+from installer_release import verify_inventory_assets
 
 REPOSITORY = "ElevenID/marty-ui"
 
@@ -32,7 +33,8 @@ def policy(source: Path) -> list[str]:
             and value["platform"] == "linux/amd64" and value["signer_workflow"] == WORKFLOW,
             "nightly asset policy changed")
     files = value["signed_inputs"]
-    require(len(files) == 17 and len(set(files)) == len(files)
+    require(len(files) == 19 and len(set(files)) == len(files)
+            and {"install.sh", "installer-inventory.json"}.issubset(files)
             and all(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]+", name) for name in files),
             "invalid nightly release inventory")
     return files
@@ -78,6 +80,11 @@ def validate(assets: Path, source: Path, tag: str, run_id: str) -> tuple[dict, l
     binary.chmod(0o755)
     require(command(str(binary), "--build-identity") == f"{revision}:{tag}",
             "nightly operator identity differs")
+    verify_inventory_assets(assets, source_sha=revision, release_tag=tag,
+                            build_run_id=int(run_id),
+                            build_run_attempt=int(os.environ["GITHUB_RUN_ATTEMPT"]))
+    require((assets / "install.sh").read_bytes() == (source / "install.sh").read_bytes(),
+            "installer bootstrap differs from exact source")
     return candidate, files
 
 

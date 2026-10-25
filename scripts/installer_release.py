@@ -8,6 +8,7 @@ candidate replay authorization or bypass stable release qualification.
 from __future__ import annotations
 
 import hashlib
+import argparse
 import json
 import re
 from datetime import datetime
@@ -247,6 +248,45 @@ def channel(admission_bytes: bytes, *, channel_name: str, previous_bytes: bytes 
     return record
 
 
+def inventory_command(argv: list[str] | None = None) -> None:
+    """Produce inventory only; this command cannot grant installation admission."""
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("operation", choices=["inventory"])
+    parser.add_argument("--artifacts", required=True, type=Path)
+    parser.add_argument("--compose-model", required=True, type=Path)
+    parser.add_argument("--source-sha", required=True)
+    parser.add_argument("--release-tag", required=True)
+    parser.add_argument("--build-run-id", required=True, type=int)
+    parser.add_argument("--build-run-attempt", required=True, type=int)
+    parser.add_argument("--output", required=True, type=Path)
+    args = parser.parse_args(argv)
+    require(not args.compose_model.is_symlink() and args.compose_model.is_file(),
+            "Compose model must be an ordinary file")
+    # Compose models exceed the 64KiB signed-record bound. Reject oversized and
+    # duplicate-key input without silently accepting a different service set.
+    with args.compose_model.open("rb") as stream:
+        raw = stream.read(4 * 1024 * 1024 + 1)
+    require(len(raw) <= 4 * 1024 * 1024, "Compose model exceeds size limit")
+    def pairs(items):
+        result = {}
+        for key, value in items:
+            require(key not in result, "duplicate Compose field")
+            result[key] = value
+        return result
+    model = json.loads(raw, object_pairs_hook=pairs)
+    require(isinstance(model, dict) and isinstance(model.get("services"), dict)
+            and bool(model["services"]), "missing Compose service inventory")
+    require(not args.output.resolve().is_relative_to(args.artifacts.resolve()),
+            "inventory output must be outside the input artifact directory")
+    record = inventory(args.artifacts, source_sha=args.source_sha,
+                       release_tag=args.release_tag, build_run_id=args.build_run_id,
+                       build_run_attempt=args.build_run_attempt,
+                       expected_services=set(model["services"]))
+    validate_inventory(record)
+    with args.output.open("xb") as stream:
+        stream.write(encode(record))
+
+
 def renew_channel(admission_bytes: bytes, inventory_bytes: bytes, *, previous_bytes: bytes,
                   published_report: tuple[Path, Path, dict], gh: Path,
                   promotion_source_sha: str, promotion_run_id: int, promotion_run_attempt: int,
@@ -304,3 +344,33 @@ def renew_channel(admission_bytes: bytes, inventory_bytes: bytes, *, previous_by
     require(record["issued_at"] > previous["issued_at"]
             and record["expires_at"] > previous["expires_at"], "renewal must advance channel expiry")
     return record
+
+
+def verify_inventory_assets(directory: Path, *, source_sha: str, release_tag: str,
+                            build_run_id: int, build_run_attempt: int) -> dict:
+    """Recheck the four install inputs inside a larger release asset collection."""
+    path = directory / "installer-inventory.json"
+    require(not path.is_symlink() and path.is_file(), "missing ordinary installer inventory")
+    with path.open("rb") as stream:
+        record = decode(stream.read(65537))
+    validate_inventory(record)
+    require(all(record[key] == value for key, value in dict(
+        source_sha=source_sha, release_tag=release_tag, build_run_id=build_run_id,
+        build_run_attempt=build_run_attempt).items()),
+        "installer inventory candidate/producer attempt differs; rebuild the full workflow attempt")
+    for entry in record["artifacts"]:
+        asset = directory / entry["name"]
+        require(not asset.is_symlink() and asset.is_file()
+                and asset.stat().st_size == entry["size"], "installer artifact size/type differs")
+        with asset.open("rb") as stream:
+            actual = hashlib.file_digest(stream, "sha256").hexdigest()
+        require(actual == entry["sha256"], "installer artifact digest differs")
+    lock = decode((directory / "prepared-selfhost-images.json").read_bytes())
+    require(isinstance(lock.get("services"), dict), "invalid installer image lock")
+    require(record["images"] == images(lock, release_tag, set(lock["services"])),
+            "installer inventory images differ from hashed lock")
+    return record
+
+
+if __name__ == "__main__":
+    inventory_command()

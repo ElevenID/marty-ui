@@ -231,6 +231,17 @@ jobs:
           CC_x86_64_unknown_linux_musl=musl-gcc cargo build --locked --release \
             --target x86_64-unknown-linux-musl --manifest-path rust/Cargo.toml \
             --target-dir "$RUNNER_TEMP/tools" -p marty-deployment-catalog --bin marty-deploy
+      - name: Require real Compose installer model compatibility
+        shell: bash
+        run: |
+          set -euo pipefail
+          export MARTY_INSTALLER_COMPOSE_EXECUTABLE=
+          for plugin in /usr/libexec/docker/cli-plugins/docker-compose /usr/lib/docker/cli-plugins/docker-compose /usr/local/lib/docker/cli-plugins/docker-compose /usr/local/libexec/docker/cli-plugins/docker-compose; do
+            if [ -x "$plugin" ]; then export MARTY_INSTALLER_COMPOSE_EXECUTABLE="$plugin"; break; fi
+          done
+          test -n "$MARTY_INSTALLER_COMPOSE_EXECUTABLE"
+          cargo test --locked --manifest-path rust/Cargo.toml --target-dir "$RUNNER_TEMP/tools" \
+            -p marty-deployment-catalog --test installer_application_model -- --ignored
       - name: Package digest-locked installation assets
         env:
           TAG: ${{ needs.admit.outputs.tag }}
@@ -252,6 +263,34 @@ jobs:
           # The six-file staging inventory stays separate from release signatures.
           (cd "$RUNNER_TEMP/prepared" && sha256sum --check --strict SHA256SUMS)
           # The extracted copy is rebuildable; only the owned ZIP is uploaded.
+      - name: Record exact installer inputs from the source Compose service inventory
+        # Inventory binds this producer attempt. After a failed sign/publish job,
+        # rerun all jobs to rebuild/requalify inputs; never relabel old artifacts
+        # with the current attempt or rerun only the failed publication job.
+        env:
+          TAG: ${{ needs.admit.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          inputs="$RUNNER_TEMP/installer-inputs"
+          mkdir "$inputs"
+          cp install.sh "$RUNNER_TEMP/prepared/install.sh"
+          for asset in install.sh marty-deploy-linux-amd64 prepared-selfhost-bundle.zip prepared-selfhost-images.json; do
+            cp "$RUNNER_TEMP/prepared/$asset" "$inputs/$asset"
+          done
+          export SELFHOST_IMAGE_PREFIX=ghcr.io/elevenid/marty-ui
+          export SELFHOST_IMAGE_TAG="${TAG#v}"
+          export MARTY_KEYCLOAK_KMS_IMAGE
+          MARTY_KEYCLOAK_KMS_IMAGE="$(jq -er '.services.keycloak' "$inputs/prepared-selfhost-images.json")"
+          docker compose --profile '*' --env-file .env.selfhost.production.example \
+            -f docker-compose.selfhost.prod.yml -f docker-compose.selfhost.bundle.override.yml \
+            config --format json > "$RUNNER_TEMP/installer-source-compose.json"
+          python scripts/installer_release.py inventory --artifacts "$inputs" \
+            --compose-model "$RUNNER_TEMP/installer-source-compose.json" \
+            --source-sha "$GITHUB_SHA" --release-tag "$TAG" \
+            --build-run-id "$GITHUB_RUN_ID" --build-run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --output "$RUNNER_TEMP/prepared/installer-inventory.json"
       - name: Require anonymously pullable Linux amd64 installation images
         shell: bash
         run: |
@@ -268,6 +307,7 @@ jobs:
             ${{ runner.temp }}/prepared/*.json
             ${{ runner.temp }}/prepared/*.zip
             ${{ runner.temp }}/prepared/*.md
+            ${{ runner.temp }}/prepared/*.sh
             ${{ runner.temp }}/prepared/SHA256SUMS
             ${{ runner.temp }}/prepared/marty-deploy-linux-amd64
           if-no-files-found: error

@@ -2041,6 +2041,18 @@ jobs:
           fi
           test "$(./"$asset" --build-identity)" = "$MARTY_DEPLOY_SOURCE_SHA:$MARTY_DEPLOY_RELEASE_TAG"
           ./"$asset" --repo-root . validate
+      - name: Require real Compose installer model compatibility
+        shell: bash
+        run: |
+          set -euo pipefail
+          export MARTY_INSTALLER_COMPOSE_EXECUTABLE=
+          for plugin in /usr/libexec/docker/cli-plugins/docker-compose /usr/lib/docker/cli-plugins/docker-compose /usr/local/lib/docker/cli-plugins/docker-compose /usr/local/libexec/docker/cli-plugins/docker-compose; do
+            if [ -x "$plugin" ]; then export MARTY_INSTALLER_COMPOSE_EXECUTABLE="$plugin"; break; fi
+          done
+          test -n "$MARTY_INSTALLER_COMPOSE_EXECUTABLE"
+          source scripts/ci/rust_contract_execution.sh
+          run_timed installer_compose_model cargo test --locked --manifest-path rust/Cargo.toml \
+            -p marty-deployment-catalog --test installer_application_model -- --ignored
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
         with:
           subject-path: marty-deploy-linux-${{ matrix.arch }}
