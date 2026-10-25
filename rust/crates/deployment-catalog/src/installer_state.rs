@@ -114,6 +114,43 @@ impl RuntimeBinding {
     }
 }
 
+/// Local scope evidence, not cryptographic authorization or nonce consumption.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AcceptanceScope {
+    pub authorization_sha256: String,
+    pub context_sha256: String,
+    pub consumption_id: String,
+}
+impl AcceptanceScope {
+    fn validate(&self) -> Result<()> {
+        for value in [
+            &self.authorization_sha256,
+            &self.context_sha256,
+            &self.consumption_id,
+        ] {
+            if value.len() != 64
+                || !value
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            {
+                return Err("invalid acceptance execution scope".into());
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Historical journals carry no proven admission classification. Absence of
+/// this field cannot establish that candidate evidence was never present.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum ExecutionScope {
+    #[default]
+    Unclassified,
+    AcceptanceOnly(AcceptanceScope),
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Journal {
@@ -124,6 +161,8 @@ pub struct Journal {
     revision: u64,
     #[serde(default)]
     runtime: Option<RuntimeBinding>,
+    #[serde(default)]
+    scope: ExecutionScope,
 }
 impl Journal {
     pub fn installation_id(&self) -> uuid::Uuid {
@@ -141,11 +180,20 @@ impl Journal {
     pub fn runtime(&self) -> Option<&RuntimeBinding> {
         self.runtime.as_ref()
     }
+    pub fn execution_scope(&self) -> &ExecutionScope {
+        &self.scope
+    }
     pub fn compose_project(&self) -> String {
         format!("marty-install-{}", self.installation_id.simple())
     }
     fn validate(&self) -> Result<()> {
         self.identity.validate()?;
+        if let ExecutionScope::AcceptanceOnly(scope) = &self.scope {
+            scope.validate()?;
+            if self.phase == Phase::Ready {
+                return Err("acceptance-only journal cannot claim installation Ready".into());
+            }
+        }
         if let Some(runtime) = &self.runtime {
             runtime.validate()?;
         }
@@ -1157,7 +1205,13 @@ impl InstallerState {
     /// Creates a NEW directory only. Existing empty directories are not adopted.
     /// Failure may leave a private directory requiring explicit inspection.
     pub fn create(path: &Path, identity: Identity) -> Result<Self> {
-        Self::create_internal(path, identity, None)
+        Self::create_internal(
+            path,
+            identity,
+            None,
+            ExecutionScope::Unclassified,
+            uuid::Uuid::new_v4(),
+        )
     }
     pub fn create_with_runtime(
         path: &Path,
@@ -1165,12 +1219,44 @@ impl InstallerState {
         runtime: RuntimeBinding,
     ) -> Result<Self> {
         runtime.validate()?;
-        Self::create_internal(path, identity, Some(runtime))
+        Self::create_internal(
+            path,
+            identity,
+            Some(runtime),
+            ExecutionScope::Unclassified,
+            uuid::Uuid::new_v4(),
+        )
+    }
+    /// Caller must authenticate and durably consume the candidate authorization
+    /// separately. This constructor records scope; it grants no execution right.
+    pub fn create_candidate_with_runtime(
+        path: &Path,
+        identity: Identity,
+        runtime: RuntimeBinding,
+        scope: AcceptanceScope,
+        installation_id: uuid::Uuid,
+    ) -> Result<Self> {
+        runtime.validate()?;
+        scope.validate()?;
+        if installation_id.get_version_num() != 4
+            || installation_id.get_variant() != uuid::Variant::RFC4122
+        {
+            return Err("candidate installation identity must be UUIDv4".into());
+        }
+        Self::create_internal(
+            path,
+            identity,
+            Some(runtime),
+            ExecutionScope::AcceptanceOnly(scope),
+            installation_id,
+        )
     }
     fn create_internal(
         path: &Path,
         identity: Identity,
         runtime: Option<RuntimeBinding>,
+        scope: ExecutionScope,
+        installation_id: uuid::Uuid,
     ) -> Result<Self> {
         identity.validate()?;
         let (parent, leaf) = parent(path)?;
@@ -1183,11 +1269,12 @@ impl InstallerState {
         parent.sync_all().map_err(|e| e.to_string())?;
         let journal = Journal {
             schema: SCHEMA.into(),
-            installation_id: uuid::Uuid::new_v4(),
+            installation_id,
             identity,
             phase: Phase::Initialized,
             revision: 0,
             runtime,
+            scope,
         };
         let mut state = Self {
             directory,
@@ -1208,6 +1295,9 @@ impl InstallerState {
         let journal = read(&directory)?;
         if &journal.identity != identity {
             return Err("installation candidate differs".into());
+        }
+        if matches!(journal.scope, ExecutionScope::AcceptanceOnly(_)) {
+            return Err("acceptance-only execution cannot use ordinary provisioning resume".into());
         }
         // Cleanup and provisioning are separate lifecycles. Even a historical
         // Ready journal must never authorize recreation after cleanup begins.
@@ -1233,6 +1323,9 @@ impl InstallerState {
         }
         if read(&self.directory)? != self.journal {
             return Err("installation journal changed unexpectedly".into());
+        }
+        if next == Phase::Ready && matches!(self.journal.scope, ExecutionScope::AcceptanceOnly(_)) {
+            return Err("acceptance-only execution requires external runtime qualification; installation Ready is not granted".into());
         }
         if !matches!(
             (self.journal.phase, next),
@@ -1286,6 +1379,120 @@ impl InstallerState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn acceptance_scope() -> AcceptanceScope {
+        AcceptanceScope {
+            authorization_sha256: "a".repeat(64),
+            context_sha256: "b".repeat(64),
+            consumption_id: "c".repeat(64),
+        }
+    }
+    fn acceptance_runtime() -> RuntimeBinding {
+        RuntimeBinding {
+            docker_host: "unix:///var/run/docker.sock".into(),
+            engine_id: "01234567-89ab-cdef".into(),
+            openbao_port: 18200,
+        }
+    }
+    #[test]
+    fn acceptance_scope_persists_initially_and_cannot_resume_or_claim_ready() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let path = root.path().join("candidate");
+        let installation_id = uuid::Uuid::new_v4();
+        let mut state = InstallerState::create_candidate_with_runtime(
+            &path,
+            identity(),
+            acceptance_runtime(),
+            acceptance_scope(),
+            installation_id,
+        )
+        .unwrap();
+        let expected = ExecutionScope::AcceptanceOnly(acceptance_scope());
+        assert_eq!(state.journal().execution_scope(), &expected);
+        assert_eq!(state.journal().installation_id(), installation_id);
+        let disk = InstallerState::inspect(&path).unwrap();
+        assert_eq!(disk.execution_scope(), &expected);
+        for phase in [Phase::Verified, Phase::Provisioning, Phase::Provisioned] {
+            state.advance(phase).unwrap();
+            assert_eq!(state.journal().execution_scope(), &expected);
+        }
+        let before = std::fs::read(path.join("installation.json")).unwrap();
+        assert!(state.advance(Phase::Ready).is_err());
+        assert_eq!(
+            std::fs::read(path.join("installation.json")).unwrap(),
+            before
+        );
+        drop(state);
+        assert!(InstallerState::resume(&path, &identity()).is_err());
+        assert_eq!(
+            InstallerState::inspect(&path).unwrap().execution_scope(),
+            &expected
+        );
+    }
+    #[test]
+    fn acceptance_scope_rejects_invalid_hashes_before_directory_creation() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        for field in 0..3 {
+            for bad in ["", "a", &"A".repeat(64), &"g".repeat(64)] {
+                let mut scope = acceptance_scope();
+                match field {
+                    0 => scope.authorization_sha256 = bad.into(),
+                    1 => scope.context_sha256 = bad.into(),
+                    _ => scope.consumption_id = bad.into(),
+                }
+                let path = root.path().join("refused");
+                assert!(InstallerState::create_candidate_with_runtime(
+                    &path,
+                    identity(),
+                    acceptance_runtime(),
+                    scope,
+                    uuid::Uuid::new_v4(),
+                )
+                .is_err());
+                assert!(!path.exists());
+            }
+        }
+        for invalid_id in [
+            uuid::Uuid::nil(),
+            uuid::Uuid::parse_str("00000000-0000-1000-8000-000000000001").unwrap(),
+        ] {
+            let path = root.path().join("invalid-id");
+            assert!(InstallerState::create_candidate_with_runtime(
+                &path,
+                identity(),
+                acceptance_runtime(),
+                acceptance_scope(),
+                invalid_id,
+            )
+            .is_err());
+            assert!(!path.exists());
+        }
+    }
+    #[test]
+    fn historical_scope_is_unclassified_and_candidate_schema_is_closed() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let state = InstallerState::create(&root.path().join("legacy"), identity()).unwrap();
+        let mut encoded = serde_json::to_value(state.journal()).unwrap();
+        encoded.as_object_mut().unwrap().remove("scope");
+        let historical: Journal = serde_json::from_value(encoded.clone()).unwrap();
+        historical.validate().unwrap();
+        assert_eq!(historical.execution_scope(), &ExecutionScope::Unclassified);
+        encoded["scope"] =
+            serde_json::to_value(ExecutionScope::AcceptanceOnly(acceptance_scope())).unwrap();
+        let candidate: Journal = serde_json::from_value(encoded.clone()).unwrap();
+        candidate.validate().unwrap();
+        encoded["phase"] = serde_json::json!("ready");
+        encoded["revision"] = serde_json::json!(4);
+        assert!(serde_json::from_value::<Journal>(encoded.clone())
+            .unwrap()
+            .validate()
+            .is_err());
+        encoded["scope"]["unexpected"] = serde_json::json!(true);
+        assert!(serde_json::from_value::<Journal>(encoded).is_err());
+    }
+
     #[test]
     fn lock_owner_drop_unlocks_despite_inherited_open_file_description() {
         let root = tempfile::tempdir().unwrap();

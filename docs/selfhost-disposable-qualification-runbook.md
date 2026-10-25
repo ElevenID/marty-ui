@@ -99,6 +99,23 @@ responsibilities. Permission failures or incomplete reads fail the probe rather
 than substituting a different filesystem or claiming a clean host. This record
 cannot replace the signed installed-journey acceptance report.
 
+### Candidate execution boundary
+
+Candidate testing must use acceptance-only authorization rather than a fabricated
+consumer admission. The native candidate preparation library authenticates the
+acceptance workflow invocation, the exact inventory and all four payloads before
+extracting the bundle. Local verification alone does not prove an anonymous
+public download. The controller must independently supply the expected invocation
+and nonce, retain a durable consumption record outside the guest, and use the
+guest's shared private nonce registry before provisioning. Neither a copied
+authorization nor the guest registry provides global replay prevention.
+
+Acceptance-only journals retain that scope and cannot use ordinary provisioning
+resume or claim the consumer `Ready` phase. External acceptance evidence must
+assess the actual runtime and journey. Candidate preparation, nonce consumption
+and journal scope are library components; their presence does not establish a
+working candidate CLI, controller, or completed release acceptance workflow.
+
 ### Native renewal bootstrap and root retirement
 
 The internal `installer-renewal-bootstrap` helper creates the existing scoped

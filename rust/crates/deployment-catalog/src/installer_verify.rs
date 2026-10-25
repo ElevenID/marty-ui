@@ -109,6 +109,19 @@ pub(crate) fn operator_digest(path: &Path) -> Result<String> {
     Ok(file_digest(path, 536870912, true)?.0)
 }
 
+/// Check an inert private asset's exact size and digest before verifier invocation.
+/// Executable payload copies remain 0600; this never authenticates provenance.
+pub(crate) fn check_private_asset(path: &Path, expected_sha: &str, size: u64) -> Result<()> {
+    if size == 0 || size > 536870912 {
+        return Err("installer asset size outside verification bound".into());
+    }
+    let observed = file_digest(path, size, false)?;
+    if observed.0 != expected_sha || observed.1 != size {
+        return Err("installer asset differs from inventory".into());
+    }
+    Ok(())
+}
+
 pub struct VerificationTools {
     cosign: PathBuf,
     gh: PathBuf,
@@ -150,6 +163,7 @@ impl VerificationTools {
             ".github/workflows/nightly-release.yml",
             ".github/workflows/cd.yml",
             ".github/workflows/installer-promote.yml",
+            crate::installer_release::ACCEPTANCE_WORKFLOW,
         ]
         .contains(&workflow)
             || !regex::Regex::new(r"\A[0-9a-f]{40}\z")

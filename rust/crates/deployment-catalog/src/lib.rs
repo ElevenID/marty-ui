@@ -13,6 +13,9 @@ pub mod installer_application_observation;
 pub mod installer_application_start;
 pub mod installer_artifacts;
 pub mod installer_bundle;
+#[cfg(target_os = "linux")]
+pub mod installer_candidate_nonce;
+pub mod installer_candidate_prepare;
 pub mod installer_command;
 pub mod installer_fetch;
 pub mod installer_generation;
