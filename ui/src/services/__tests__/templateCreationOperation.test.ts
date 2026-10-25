@@ -15,6 +15,20 @@ beforeEach(() => {
   vi.mocked(activateCredentialTemplate).mockResolvedValue({ ...draft, status: 'active' });
 });
 describe('template creation recovery', () => {
+  it('rejects mismatched readback IDs even when their organization matches', async () => {
+    vi.mocked(getCredentialTemplate).mockResolvedValue({ ...draft, id: 'other-template' });
+    const operation = createTemplateCreationOperation('org-a');
+    await expect(operation.submit(data)).rejects.toThrow('ownership');
+    expect(activateCredentialTemplate).not.toHaveBeenCalled();
+    expect(createCredentialTemplate).toHaveBeenCalledTimes(1);
+  });
+  it('does not report a foreign create response as successful for a draft-only request', async () => {
+    vi.mocked(createCredentialTemplate).mockResolvedValue({ ...draft, organization_id: 'org-b' });
+    const operation = createTemplateCreationOperation('org-a');
+    await expect(operation.submit({ ...data, activate_immediately: false })).rejects.toThrow('ownership');
+    expect(getCredentialTemplate).not.toHaveBeenCalled();
+    expect(activateCredentialTemplate).not.toHaveBeenCalled();
+  });
   it('allows a corrected payload with a new key after a definitive validation rejection', async () => {
     const operation = createTemplateCreationOperation('org-a');
     vi.mocked(createCredentialTemplate).mockRejectedValueOnce(Object.assign(new Error('Invalid name'), { status: 422 }));

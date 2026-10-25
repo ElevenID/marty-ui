@@ -29,13 +29,14 @@ export function createTemplateCreationOperation(organizationId) {
       }
     }
     if (!operation.resource?.id) throw new Error('Template creation did not return a resource ID. Reconcile the request before continuing.');
+    if (operation.resource.organization_id !== organizationId) throw new Error('Created template ownership could not be confirmed. Reconcile the request before continuing.');
     assertCurrent();
     if (!data.activate_immediately) return operation.resource;
     try {
       // Read first on every activation attempt, including retries after a lost response.
       const current = await getCredentialTemplate(operation.resource.id);
       assertCurrent();
-      if (current.organization_id !== organizationId) throw new Error('Template ownership could not be confirmed.');
+      if (current.id !== operation.resource.id || current.organization_id !== organizationId) throw new Error('Template ownership could not be confirmed.');
       if (String(current.status).toUpperCase() === 'ACTIVE') return current;
       if (String(current.status).toUpperCase() !== 'DRAFT') throw new Error('The created template is no longer a draft. Open it to inspect its state.');
       return await activateCredentialTemplate(current.id);
