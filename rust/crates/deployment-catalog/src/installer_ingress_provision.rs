@@ -328,9 +328,112 @@ fn verify_signing_proof(public: &str, signature: &str) -> Result<()> {
     }))
 }
 
+// Closed diagnostic vocabulary: never attach backend bodies, paths, UUIDs or credentials.
+#[derive(Clone, Copy, Debug)]
+enum ProvisionStage {
+    Input,
+    CaInput,
+    OutputDirectory,
+    Connect,
+    MountInventory,
+    TransitAbsent,
+    PolicyAbsent,
+    MountCreate,
+    CaCreate,
+    CaResponse,
+    TransitCreate,
+    TransitReadback,
+    TransitValidation,
+    RoleCreate,
+    CsrCreate,
+    CertificateIssue,
+    CertificateValidation,
+    PolicyCreate,
+    PolicyReadback,
+    PolicyEquality,
+    TokenCreate,
+    TokenResponse,
+    TokenLookup,
+    TokenValidation,
+    SignerRead,
+    SignerValidation,
+    SignerSign,
+    SignatureProof,
+    DenyForeignSign,
+    DenyExport,
+    DenyBackup,
+    DenyRotation,
+    DenyCaMutation,
+    DenyTokenMint,
+    DenyWrongVersion,
+    DenyMissingVersion,
+    Metadata,
+    WriteCa,
+    WriteCertificate,
+    WriteToken,
+    WriteMetadata,
+}
+impl ProvisionStage {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Input => "input",
+            Self::CaInput => "ca-input",
+            Self::OutputDirectory => "output-directory",
+            Self::Connect => "connect",
+            Self::MountInventory => "mount-inventory",
+            Self::TransitAbsent => "transit-absent",
+            Self::PolicyAbsent => "policy-absent",
+            Self::MountCreate => "mount-create",
+            Self::CaCreate => "ca-create",
+            Self::CaResponse => "ca-response",
+            Self::TransitCreate => "transit-create",
+            Self::TransitReadback => "transit-readback",
+            Self::TransitValidation => "transit-validation",
+            Self::RoleCreate => "role-create",
+            Self::CsrCreate => "csr-create",
+            Self::CertificateIssue => "certificate-issue",
+            Self::CertificateValidation => "certificate-validation",
+            Self::PolicyCreate => "policy-create",
+            Self::PolicyReadback => "policy-readback",
+            Self::PolicyEquality => "policy-equality",
+            Self::TokenCreate => "token-create",
+            Self::TokenResponse => "token-response",
+            Self::TokenLookup => "token-lookup",
+            Self::TokenValidation => "token-validation",
+            Self::SignerRead => "signer-read",
+            Self::SignerValidation => "signer-validation",
+            Self::SignerSign => "signer-sign",
+            Self::SignatureProof => "signature-proof",
+            Self::DenyForeignSign => "deny-foreign-sign",
+            Self::DenyExport => "deny-export",
+            Self::DenyBackup => "deny-backup",
+            Self::DenyRotation => "deny-rotation",
+            Self::DenyCaMutation => "deny-ca-mutation",
+            Self::DenyTokenMint => "deny-token-mint",
+            Self::DenyWrongVersion => "deny-wrong-version",
+            Self::DenyMissingVersion => "deny-missing-version",
+            Self::Metadata => "metadata",
+            Self::WriteCa => "write-ca",
+            Self::WriteCertificate => "write-certificate",
+            Self::WriteToken => "write-token",
+            Self::WriteMetadata => "write-metadata",
+        }
+    }
+}
+fn stage_result<T, E>(stage: ProvisionStage, result: std::result::Result<T, E>) -> Result<T> {
+    result.map_err(|_| {
+        format!(
+            "Ingress provisioning refused at {}; preserve owned state for recovery",
+            stage.label()
+        )
+    })
+}
+
 /// Fixed-path root helper. This is creation only, never renewal or trust import.
 /// Returns only a public file count. Never returns or logs raw backend errors.
 pub async fn provision(installation_id: &str) -> Result<usize> {
+    let mut stage = ProvisionStage::Input;
+    let result: Result<usize> = async {
     require(unsafe { libc::geteuid() } == 0)?;
     let name = resource_name(installation_id)?;
     let root_bytes = read_input(Path::new("/input/root.token"), 4096, true)?;
@@ -344,14 +447,18 @@ pub async fn provision(installation_id: &str) -> Result<usize> {
                 .bytes()
                 .any(|b| b.is_ascii_whitespace() || b.is_ascii_control()),
     )?;
+    stage = ProvisionStage::CaInput;
     read_input(Path::new("/input/ca.crt"), 65536, false)?;
+    stage = ProvisionStage::OutputDirectory;
     let output = fresh_output(Path::new("/output"))?;
+    stage = ProvisionStage::Connect;
     let bao = OpenBaoHttp::connect(
         "https://openbao:8200",
         Some(Path::new("/input/ca.crt")),
         Duration::from_secs(10),
     )
     .map_err(|_| REFUSED)?;
+    stage = ProvisionStage::MountInventory;
     let mounts = request(&bao, Method::GET, "sys/mounts", None, Some(root))
         .await
         .map_err(|_| REFUSED)?;
@@ -362,8 +469,11 @@ pub async fn provision(installation_id: &str) -> Result<usize> {
             .is_some_and(|v| v["type"] == "transit")
             && !mounts.contains_key(&format!("{name}/")),
     )?;
+    stage = ProvisionStage::TransitAbsent;
     absent(&bao, &format!("transit/keys/{name}"), root).await?;
+    stage = ProvisionStage::PolicyAbsent;
     absent(&bao, &format!("sys/policies/acl/{name}"), root).await?;
+    stage = ProvisionStage::MountCreate;
     request(
         &bao,
         Method::POST,
@@ -373,9 +483,12 @@ pub async fn provision(installation_id: &str) -> Result<usize> {
     )
     .await
     .map_err(|_| REFUSED)?;
+    stage = ProvisionStage::CaCreate;
     let ca = request(&bao, Method::POST, &format!("{name}/root/generate/internal"), Some(&json!({"common_name":format!("Marty local CA {}", name.strip_prefix("installer-ingress-").ok_or(REFUSED)?),"ttl":"8760h","key_type":"ec","key_bits":256})), Some(root)).await.map_err(|_| REFUSED)?;
+    stage = ProvisionStage::CaResponse;
     require(ca["data"].get("private_key").is_none())?;
     let ca_pem = text(&ca["data"], "certificate")?;
+    stage = ProvisionStage::TransitCreate;
     request(
         &bao,
         Method::POST,
@@ -385,6 +498,7 @@ pub async fn provision(installation_id: &str) -> Result<usize> {
     )
     .await
     .map_err(|_| REFUSED)?;
+    stage = ProvisionStage::TransitReadback;
     let custody = request(
         &bao,
         Method::GET,
@@ -394,9 +508,12 @@ pub async fn provision(installation_id: &str) -> Result<usize> {
     )
     .await
     .map_err(|_| REFUSED)?;
+    stage = ProvisionStage::TransitValidation;
     version_one_custody(&custody["data"], "ecdsa-p256").map_err(|_| REFUSED)?;
     let public = text(&custody["data"]["keys"]["1"], "public_key")?;
+    stage = ProvisionStage::RoleCreate;
     request(&bao, Method::POST, &format!("{name}/roles/localhost"), Some(&json!({"allow_any_name":false,"allow_localhost":true,"allowed_domains":["localhost"],"allow_bare_domains":true,"allow_subdomains":false,"allow_glob_domains":false,"allow_ip_sans":true,"server_flag":true,"client_flag":false,"key_type":"ec","key_bits":256,"max_ttl":"8h","use_csr_common_name":false,"use_csr_sans":false})), Some(root)).await.map_err(|_| REFUSED)?;
+    stage = ProvisionStage::CsrCreate;
     let csr = request(
         &bao,
         Method::POST,
@@ -406,7 +523,9 @@ pub async fn provision(installation_id: &str) -> Result<usize> {
     )
     .await
     .map_err(|_| REFUSED)?;
+    stage = ProvisionStage::CertificateIssue;
     let leaf = request(&bao, Method::POST, &format!("{name}/sign/localhost"), Some(&json!({"csr":text(&csr["data"],"csr")?,"common_name":"localhost","alt_names":"localhost","ip_sans":"127.0.0.1","ttl":"8h"})), Some(root)).await.map_err(|_| REFUSED)?;
+    stage = ProvisionStage::CertificateValidation;
     require(leaf["data"].get("private_key").is_none())?;
     let leaf_pem = text(&leaf["data"], "certificate")?;
     let now = SystemTime::now()
@@ -414,6 +533,7 @@ pub async fn provision(installation_id: &str) -> Result<usize> {
         .map_err(|_| REFUSED)?
         .as_secs();
     let (ca_expiry, leaf_expiry) = check_certificates(ca_pem, leaf_pem, public, &name, now)?;
+    stage = ProvisionStage::PolicyCreate;
     let policy = signer_policy(&name)?;
     request(
         &bao,
@@ -424,6 +544,7 @@ pub async fn provision(installation_id: &str) -> Result<usize> {
     )
     .await
     .map_err(|_| REFUSED)?;
+    stage = ProvisionStage::PolicyReadback;
     let readback = request(
         &bao,
         Method::GET,
@@ -433,8 +554,11 @@ pub async fn provision(installation_id: &str) -> Result<usize> {
     )
     .await
     .map_err(|_| REFUSED)?;
+    stage = ProvisionStage::PolicyEquality;
     require(text(&readback["data"], "policy")? == policy)?;
+    stage = ProvisionStage::TokenCreate;
     let issued = request(&bao, Method::POST, "auth/token/create-orphan", Some(&json!({"policies":[name],"no_default_policy":true,"renewable":false,"ttl":"8h","explicit_max_ttl":"8h"})), Some(root)).await.map_err(|_| REFUSED)?;
+    stage = ProvisionStage::TokenResponse;
     let token = text(&issued["auth"], "client_token")?;
     require(
         (20..=2048).contains(&token.len())
@@ -444,6 +568,7 @@ pub async fn provision(installation_id: &str) -> Result<usize> {
                 .bytes()
                 .any(|b| b.is_ascii_whitespace() || b.is_ascii_control()),
     )?;
+    stage = ProvisionStage::TokenLookup;
     let lookup = request(
         &bao,
         Method::POST,
@@ -453,11 +578,13 @@ pub async fn provision(installation_id: &str) -> Result<usize> {
     )
     .await
     .map_err(|_| REFUSED)?;
+    stage = ProvisionStage::TokenValidation;
     let token_ttl = check_token(&lookup["data"], &name)?;
     let token_observed_at = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|_| REFUSED)?
         .as_secs();
+    stage = ProvisionStage::SignerRead;
     let leaf_custody = request(
         &bao,
         Method::GET,
@@ -467,8 +594,10 @@ pub async fn provision(installation_id: &str) -> Result<usize> {
     )
     .await
     .map_err(|_| REFUSED)?;
+    stage = ProvisionStage::SignerValidation;
     version_one_custody(&leaf_custody["data"], "ecdsa-p256").map_err(|_| REFUSED)?;
     require(text(&leaf_custody["data"]["keys"]["1"], "public_key")? == public)?;
+    stage = ProvisionStage::SignerSign;
     let signed = request(
         &bao,
         Method::POST,
@@ -478,20 +607,23 @@ pub async fn provision(installation_id: &str) -> Result<usize> {
     )
     .await
     .map_err(|_| REFUSED)?;
+    stage = ProvisionStage::SignatureProof;
     verify_signing_proof(public, text(&signed["data"], "signature")?)?;
-    for (method, path) in [
-        (Method::POST, "transit/sign/workload-tls-auth-server".into()),
-        (Method::GET, format!("transit/export/signing-key/{name}")),
-        (Method::GET, format!("transit/backup/{name}")),
-        (Method::POST, format!("transit/keys/{name}/rotate")),
-        (Method::POST, format!("{name}/root/generate/internal")),
-        (Method::POST, "auth/token/create".into()),
+    for (operation, method, path) in [
+        (ProvisionStage::DenyForeignSign, Method::POST, "transit/sign/workload-tls-auth-server".into()),
+        (ProvisionStage::DenyExport, Method::GET, format!("transit/export/signing-key/{name}")),
+        (ProvisionStage::DenyBackup, Method::GET, format!("transit/backup/{name}")),
+        (ProvisionStage::DenyRotation, Method::POST, format!("transit/keys/{name}/rotate")),
+        (ProvisionStage::DenyCaMutation, Method::POST, format!("{name}/root/generate/internal")),
+        (ProvisionStage::DenyTokenMint, Method::POST, "auth/token/create".into()),
     ] {
+        stage = operation;
         denial(&bao, token, method, &path, Some(sign_body()))
             .await
             .map_err(|_| REFUSED)?;
     }
-    for wrong in [Some(json!(2)), None] {
+    for (operation, wrong) in [(ProvisionStage::DenyWrongVersion, Some(json!(2))), (ProvisionStage::DenyMissingVersion, None)] {
+        stage = operation;
         let mut body = sign_body();
         match wrong {
             Some(value) => body["key_version"] = value,
@@ -509,6 +641,7 @@ pub async fn provision(installation_id: &str) -> Result<usize> {
         .await
         .map_err(|_| REFUSED)?;
     }
+    stage = ProvisionStage::Metadata;
     let ca_der = certificate(ca_pem)?.to_der().map_err(|_| REFUSED)?;
     let leaf_der = certificate(leaf_pem)?.to_der().map_err(|_| REFUSED)?;
     let metadata = serde_json::to_vec(&json!({"schema":"elevenid.installer-ingress/v1","installation_id":installation_id,
@@ -517,15 +650,18 @@ pub async fn provision(installation_id: &str) -> Result<usize> {
         "ca_pem_sha256":format!("{:x}",Sha256::digest(ca_pem.as_bytes())),"certificate_pem_sha256":format!("{:x}",Sha256::digest(leaf_pem.as_bytes())),
         "ca_expires_at":ca_expiry,"certificate_expires_at":leaf_expiry,"token_ttl_seconds":token_ttl,"token_observed_at":token_observed_at,
         "trust_installed":false,"installation_ready":false})).map_err(|_| REFUSED)?;
-    for (filename, bytes) in [
-        (OUTPUTS[0], ca_pem.as_bytes()),
-        (OUTPUTS[1], leaf_pem.as_bytes()),
-        (OUTPUTS[2], token.as_bytes()),
-        (OUTPUTS[3], metadata.as_slice()),
+    for (operation, filename, bytes) in [
+        (ProvisionStage::WriteCa, OUTPUTS[0], ca_pem.as_bytes()),
+        (ProvisionStage::WriteCertificate, OUTPUTS[1], leaf_pem.as_bytes()),
+        (ProvisionStage::WriteToken, OUTPUTS[2], token.as_bytes()),
+        (ProvisionStage::WriteMetadata, OUTPUTS[3], metadata.as_slice()),
     ] {
+        stage = operation;
         write_output(&output, filename, bytes, root)?;
     }
     Ok(OUTPUTS.len())
+    }.await;
+    stage_result(stage, result)
 }
 
 #[cfg(test)]
@@ -641,5 +777,92 @@ mod tests {
         let name = CString::new(fifo.as_os_str().as_bytes()).unwrap();
         assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
         assert!(read_input(&fifo, 64, false).is_err());
+    }
+    #[test]
+    fn operation_diagnostics_are_closed_and_discard_sensitive_errors() {
+        let stages = [
+            ProvisionStage::Input,
+            ProvisionStage::CaInput,
+            ProvisionStage::OutputDirectory,
+            ProvisionStage::Connect,
+            ProvisionStage::MountInventory,
+            ProvisionStage::TransitAbsent,
+            ProvisionStage::PolicyAbsent,
+            ProvisionStage::MountCreate,
+            ProvisionStage::CaCreate,
+            ProvisionStage::CaResponse,
+            ProvisionStage::TransitCreate,
+            ProvisionStage::TransitReadback,
+            ProvisionStage::TransitValidation,
+            ProvisionStage::RoleCreate,
+            ProvisionStage::CsrCreate,
+            ProvisionStage::CertificateIssue,
+            ProvisionStage::CertificateValidation,
+            ProvisionStage::PolicyCreate,
+            ProvisionStage::PolicyReadback,
+            ProvisionStage::PolicyEquality,
+            ProvisionStage::TokenCreate,
+            ProvisionStage::TokenResponse,
+            ProvisionStage::TokenLookup,
+            ProvisionStage::TokenValidation,
+            ProvisionStage::SignerRead,
+            ProvisionStage::SignerValidation,
+            ProvisionStage::SignerSign,
+            ProvisionStage::SignatureProof,
+            ProvisionStage::DenyForeignSign,
+            ProvisionStage::DenyExport,
+            ProvisionStage::DenyBackup,
+            ProvisionStage::DenyRotation,
+            ProvisionStage::DenyCaMutation,
+            ProvisionStage::DenyTokenMint,
+            ProvisionStage::DenyWrongVersion,
+            ProvisionStage::DenyMissingVersion,
+            ProvisionStage::Metadata,
+            ProvisionStage::WriteCa,
+            ProvisionStage::WriteCertificate,
+            ProvisionStage::WriteToken,
+            ProvisionStage::WriteMetadata,
+        ];
+        let mut labels = BTreeSet::new();
+        for stage in stages {
+            assert!(labels.insert(stage.label()));
+            assert!(stage
+                .label()
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b == b'-'));
+            let error = stage_result::<(), _>(
+                stage,
+                Err("backend token=never-emit UUID/dynamic-path secret backend-response-sensitive"),
+            )
+            .unwrap_err();
+            assert_eq!(
+                error,
+                format!(
+                    "Ingress provisioning refused at {}; preserve owned state for recovery",
+                    stage.label()
+                )
+            );
+            for forbidden in [
+                "never-emit",
+                "UUID",
+                "dynamic-path",
+                "backend-response-sensitive",
+            ] {
+                assert!(!error.contains(forbidden));
+            }
+            assert_eq!(stage_result::<_, String>(stage, Ok(4)).unwrap(), 4);
+        }
+    }
+    #[test]
+    fn invalid_invocation_reports_only_input_stage() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let error = runtime
+            .block_on(provision("secret-invalid-installation-id"))
+            .unwrap_err();
+        assert_eq!(
+            error,
+            "Ingress provisioning refused at input; preserve owned state for recovery"
+        );
+        assert!(!error.contains("secret-invalid"));
     }
 }
