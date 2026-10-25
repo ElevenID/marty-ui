@@ -173,10 +173,13 @@ async function runCredentialLogin({ retainedFirstParty = false, evidence = null 
     credentialTemplateId: process.env.LOGIN_BADGE_TEMPLATE_ID || DEFAULT_LOGIN_BADGE_TEMPLATE_ID,
     configurationId: MEMBERSHIP_BADGE_CONFIGURATION_ID, vct: MEMBERSHIP_BADGE_VCT,
     email: process.env.TEST_APPLICANT_EMAIL, givenName: 'Jamie', familyName: 'Lee',
+    identityBoundary: 'AUTHORIZED_EXISTING_BETA_TEST_ACCOUNT_WITH_SYNTHETIC_FORM_VALUES',
   }, evidence) : null;
   if (inputs) {
     assert.match(inputs.runId || '', /^[a-f0-9-]{36}$/i);
-    assert.ok(inputs.email?.endsWith('@example.test'), 'Reserved synthetic applicant required');
+    assert.match(inputs.email || '', /^[^\s@]+@[^\s@]+\.[^\s@]+$/);
+    assert.equal(inputs.email, process.env.DEMO_FIRST_PARTY_AUTHORIZED_APPLICANT,
+      'Explicit authorization for the reserved beta test account is required');
   }
   const explain = retainedFirstParty
     ? (page, title, detail) => showRecordingStep(page, title, detail, {
@@ -204,7 +207,7 @@ async function runCredentialLogin({ retainedFirstParty = false, evidence = null 
       limitations: [
         'This fresh run reuses the governed membership product path with the internal Rust wallet control.',
         'Closed-session rejection is observed through the Rust wallet API; it does not qualify TTL expiry, public-device isolation or a public wallet product.',
-        'A fresh owned application uses the existing membership issuer and login policy. Its credential and application-template authority are retired after this run.',
+        'A fresh owned application uses an authorized existing beta test account with synthetic form values. Its credential and application-template authority are retired after this run.',
       ],
     } : {}),
     uiCandidate: uiCandidate ? {
