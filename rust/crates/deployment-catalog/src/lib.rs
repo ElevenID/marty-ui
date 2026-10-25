@@ -20,6 +20,7 @@ pub mod installer_keycloak_bridge;
 pub mod installer_keycloak;
 pub mod installer_tls;
 pub mod installer_tls_outputs;
+pub mod installer_application_env;
 
 use serde_json::{Map, Value};
 use std::collections::HashSet;
