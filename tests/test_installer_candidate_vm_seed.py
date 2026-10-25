@@ -40,6 +40,7 @@ def test_seed_is_root_controlled_and_read_only_to_vm(root_trial, runtime_parent,
     assert receipt["phase"] == "seeded"
     assert receipt["qualified"] is False and receipt["launch_authorized"] is False
     assert receipt["packages"] == seed.PACKAGES
+    assert seed.verify_seed(source, registry, parent, runtime_parent, vm_id=VM_ID) == receipt
     assert stat.S_IMODE(control.stat().st_mode) == 0o700
     assert (media.stat().st_uid, media.stat().st_gid) == (0, GID)
     assert stat.S_IMODE(media.stat().st_mode) == 0o440
@@ -98,6 +99,79 @@ def test_schema_rejection_retains_intent_without_media(root_trial, runtime_paren
     assert (registry / f"{VM_ID}.seed-intent.json").is_file()
     assert not (registry / f"{VM_ID}.seed-receipt.json").exists()
     assert not (runtime_parent / VM_ID / "seed.iso").exists()
+
+
+def test_seed_verifier_refuses_runtime_media_replacement(root_trial, runtime_parent, monkeypatch):
+    source, registry, parent = _transferred(root_trial, runtime_parent, monkeypatch)
+    seed.prepare(source, registry, parent, runtime_parent, vm_id=VM_ID, ssh_port=22022)
+    media = runtime_parent / VM_ID / "seed.iso"
+    original = media.read_bytes()
+    media.rename(media.with_name("displaced-seed.iso"))
+    media.write_bytes(original)
+    os.chown(media, 0, GID)
+    media.chmod(0o440)
+    with pytest.raises(ValueError, match="seed identity differs"):
+        seed.verify_seed(source, registry, parent, runtime_parent, vm_id=VM_ID)
+
+
+def test_seed_verifier_refuses_control_key_replacement(root_trial, runtime_parent, monkeypatch):
+    source, registry, parent = _transferred(root_trial, runtime_parent, monkeypatch)
+    seed.prepare(source, registry, parent, runtime_parent, vm_id=VM_ID, ssh_port=22022)
+    key = registry / f"{VM_ID}.control" / "controller_ed25519"
+    replacement = key.with_name("replacement")
+    shutil.copyfile(key, replacement)
+    os.chmod(replacement, 0o640)
+    key.unlink()
+    replacement.rename(key)
+    with pytest.raises(ValueError, match="permissions differ"):
+        seed.verify_seed(source, registry, parent, runtime_parent, vm_id=VM_ID)
+
+
+def test_seed_verifier_refuses_runtime_directory_swap_after_transfer_check(
+        root_trial, runtime_parent, monkeypatch):
+    source, registry, parent = _transferred(root_trial, runtime_parent, monkeypatch)
+    seed.prepare(source, registry, parent, runtime_parent, vm_id=VM_ID, ssh_port=22022)
+    actual_verify = seed.verify_transfer
+
+    def swap_after_transfer(*args, **kwargs):
+        receipt = actual_verify(*args, **kwargs)
+        directory = runtime_parent / VM_ID
+        displaced = runtime_parent / (VM_ID + ".displaced")
+        directory.rename(displaced)
+        shutil.copytree(displaced, directory)
+        os.chown(directory, UID, GID)
+        directory.chmod(0o700)
+        return receipt
+
+    monkeypatch.setattr(seed, "verify_transfer", swap_after_transfer)
+    with pytest.raises(ValueError, match="runtime directory differs"):
+        seed.verify_seed(source, registry, parent, runtime_parent, vm_id=VM_ID)
+
+
+def test_seed_verifier_refuses_media_swap_during_read(root_trial, runtime_parent, monkeypatch):
+    source, registry, parent = _transferred(root_trial, runtime_parent, monkeypatch)
+    receipt = seed.prepare(source, registry, parent, runtime_parent,
+                           vm_id=VM_ID, ssh_port=22022)
+    media = runtime_parent / VM_ID / "seed.iso"
+    actual_read = os.read
+    swapped = False
+
+    def swap_on_media_read(fd, count):
+        nonlocal swapped
+        raw = actual_read(fd, count)
+        if not swapped and os.fstat(fd).st_ino == receipt["seed_inode"]:
+            swapped = True
+            displaced = media.with_name("displaced-seed.iso")
+            media.rename(displaced)
+            shutil.copyfile(displaced, media)
+            os.chown(media, 0, GID)
+            media.chmod(0o440)
+        return raw
+
+    monkeypatch.setattr(seed.os, "read", swap_on_media_read)
+    with pytest.raises(ValueError, match="seed changed during verification"):
+        seed.verify_seed(source, registry, parent, runtime_parent, vm_id=VM_ID)
+    assert swapped
 
 
 def test_seed_replacement_during_handoff_never_completes(root_trial, runtime_parent,

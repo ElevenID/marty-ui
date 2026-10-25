@@ -285,16 +285,170 @@ def prepare(source: Path, registry: Path, vm_parent: Path, runtime_parent: Path,
             os.close(runtime_fd)
 
 
+def verify_seed(source: Path, registry: Path, vm_parent: Path,
+                runtime_parent: Path, *, vm_id: str) -> dict:
+    """Revalidate root control, read-only seed media and the pristine disk chain."""
+    transfer = verify_transfer(source, registry, vm_parent, runtime_parent, vm_id=vm_id)
+    with ControllerLease(registry) as lease:
+        runtime_raw, current = _read_record(lease.parent, vm_id + ".runtime-receipt.json")
+        intent_raw, intent = _read_record(lease.parent, vm_id + ".seed-intent.json")
+        receipt_raw, receipt = _read_record(lease.parent, vm_id + ".seed-receipt.json")
+        release.require(current == transfer, "VM runtime receipt changed before seed check")
+        base = {"schema", "phase", "vm_id", "runtime_receipt_sha256", "control_dir",
+                "runtime_dir", "ssh_port", "guest_user", "packages", "started_at",
+                "qualified", "launch_authorized"}
+        release.exact(intent, base, "VM seed intent")
+        release.exact(receipt, base | {"intent_sha256", "control_dir_device",
+                                      "control_dir_inode", "seed_device", "seed_inode",
+                                      "seed_bytes", "seed_sha256", "user_data_sha256",
+                                      "metadata_sha256", "known_hosts_sha256",
+                                      "controller_public_sha256", "guest_host_public_sha256",
+                                      "controller_private_sha256", "guest_host_private_sha256",
+                                      "seeded_at"}, "VM seed receipt")
+        release.require(intent["schema"] == receipt["schema"] == SCHEMA
+                        and intent["phase"] == "intent" and receipt["phase"] == "seeded"
+                        and intent["vm_id"] == vm_id
+                        and intent["runtime_receipt_sha256"] == release.digest(runtime_raw)
+                        and intent["control_dir"] == str(registry / (vm_id + ".control"))
+                        and intent["runtime_dir"] == str(runtime_parent / vm_id)
+                        and type(intent["ssh_port"]) is int
+                        and 1024 <= intent["ssh_port"] <= 65535
+                        and intent["guest_user"] == GUEST_USER
+                        and intent["packages"] == PACKAGES
+                        and type(intent["started_at"]) is int
+                        and type(receipt["seeded_at"]) is int
+                        and 0 < intent["started_at"] <= receipt["seeded_at"]
+                        and receipt["seeded_at"] <= int(time.time()) + 5
+                        and intent["qualified"] is receipt["qualified"] is False
+                        and intent["launch_authorized"] is receipt["launch_authorized"] is False
+                        and receipt["intent_sha256"] == release.digest(intent_raw)
+                        and all(receipt[key] == value for key, value in intent.items()
+                                if key != "phase"), "VM seed records disagree")
+        control_dir = registry / (vm_id + ".control")
+        control_fd = _directory(control_dir)
+        try:
+            control_info = os.fstat(control_fd)
+            release.require((control_info.st_dev, control_info.st_ino)
+                            == (receipt["control_dir_device"], receipt["control_dir_inode"]),
+                            "VM control directory differs")
+            controller_private = _bytes(control_dir / "controller_ed25519", 8192)
+            controller_public = _public_key(_bytes(control_dir / "controller_ed25519.pub", 1024))
+            host_private = _private_key(_bytes(control_dir / "guest_host_ed25519", 8192))
+            host_public = _public_key(_bytes(control_dir / "guest_host_ed25519.pub", 1024))
+            user_data = _bytes(control_dir / "user-data", 65536)
+            metadata = _bytes(control_dir / "meta-data", 4096)
+            known_hosts = _bytes(control_dir / "known_hosts", 4096)
+            control_seed = _bytes(control_dir / "seed.iso", 16 * 1024 * 1024)
+            expected_hosts = ("[127.0.0.1]:" + str(intent["ssh_port"]) + " "
+                              + host_public + "\n").encode("ascii")
+            expected_meta = ("instance-id: " + vm_id + "\nlocal-hostname: marty-vm-"
+                             + vm_id[:8] + "\n").encode("ascii")
+            release.require(user_data == _cloud_config(controller_public, host_public,
+                                                        host_private)
+                            and metadata == expected_meta and known_hosts == expected_hosts
+                            and release.digest(controller_private)
+                            == receipt["controller_private_sha256"]
+                            and release.digest(host_private.encode("ascii"))
+                            == receipt["guest_host_private_sha256"]
+                            and release.digest(controller_public.encode("ascii"))
+                            == receipt["controller_public_sha256"]
+                            and release.digest(host_public.encode("ascii"))
+                            == receipt["guest_host_public_sha256"]
+                            and release.digest(user_data) == receipt["user_data_sha256"]
+                            and release.digest(metadata) == receipt["metadata_sha256"]
+                            and release.digest(known_hosts) == receipt["known_hosts_sha256"]
+                            and release.digest(control_seed) == receipt["seed_sha256"]
+                            and len(control_seed) == receipt["seed_bytes"],
+                            "VM control seed differs")
+            for name in ("controller_ed25519", "guest_host_ed25519", "user-data",
+                         "meta-data", "known_hosts", "seed.iso"):
+                info = os.stat(name, dir_fd=control_fd, follow_symlinks=False)
+                release.require(info.st_uid == 0 and info.st_nlink == 1
+                                and stat.S_IMODE(info.st_mode) == 0o600,
+                                "VM control file permissions differ")
+            runtime_dir = runtime_parent / vm_id
+            runtime_fd = observer.open_vm_dir(runtime_dir, current["runtime_uid"])
+            try:
+                directory = os.fstat(runtime_fd)
+                release.require((directory.st_dev, directory.st_ino)
+                                == (current["runtime_dir_device"],
+                                    current["runtime_dir_inode"]),
+                                "VM runtime directory differs")
+                media_fd = os.open("seed.iso", os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW
+                                   | os.O_CLOEXEC, dir_fd=runtime_fd)
+                try:
+                    held = os.fstat(media_fd)
+                    named = os.stat("seed.iso", dir_fd=runtime_fd, follow_symlinks=False)
+                    release.require(stat.S_ISREG(held.st_mode) and held.st_nlink == 1
+                                    and (held.st_dev, held.st_ino)
+                                    == (named.st_dev, named.st_ino)
+                                    == (receipt["seed_device"], receipt["seed_inode"])
+                                    and held.st_uid == named.st_uid == 0
+                                    and held.st_gid == named.st_gid == current["runtime_gid"]
+                                    and stat.S_IMODE(held.st_mode)
+                                    == stat.S_IMODE(named.st_mode) == 0o440
+                                    and held.st_size == named.st_size == len(control_seed),
+                                    "VM runtime seed identity differs")
+                    observed = bytearray()
+                    while len(observed) < held.st_size:
+                        block = os.read(media_fd, min(1024 * 1024, held.st_size - len(observed)))
+                        release.require(bool(block), "VM runtime seed truncated")
+                        observed.extend(block)
+                    release.require(bytes(observed) == control_seed
+                                    and os.fstat(media_fd).st_size == held.st_size,
+                                    "VM runtime seed bytes differ")
+                    final = os.stat("seed.iso", dir_fd=runtime_fd, follow_symlinks=False)
+                    again = os.fstat(media_fd)
+                    release.require(stat.S_ISREG(final.st_mode)
+                                    and (final.st_dev, final.st_ino)
+                                    == (again.st_dev, again.st_ino)
+                                    == (receipt["seed_device"], receipt["seed_inode"])
+                                    and final.st_uid == again.st_uid == 0
+                                    and final.st_gid == again.st_gid == current["runtime_gid"]
+                                    and final.st_nlink == again.st_nlink == 1
+                                    and stat.S_IMODE(final.st_mode)
+                                    == stat.S_IMODE(again.st_mode) == 0o440
+                                    and final.st_size == again.st_size == receipt["seed_bytes"],
+                                    "VM runtime seed changed during verification")
+                    _same_path(runtime_dir, runtime_fd,
+                               lambda path: observer.open_vm_dir(path, current["runtime_uid"]))
+                    _same_path(control_dir, control_fd, _directory)
+                    _same_path(registry, lease.parent, _directory)
+                    release.require(_read_record(lease.parent, vm_id + ".seed-intent.json")[0]
+                                    == intent_raw
+                                    and _read_record(lease.parent,
+                                                     vm_id + ".seed-receipt.json")[0] == receipt_raw
+                                    and _read_record(lease.parent,
+                                                     vm_id + ".runtime-receipt.json")[0]
+                                    == runtime_raw,
+                                    "VM seed records changed during verification")
+                    return receipt
+                finally:
+                    os.close(media_fd)
+            finally:
+                os.close(runtime_fd)
+        finally:
+            os.close(control_fd)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("source", "registry", "vm-parent", "runtime-parent"):
         parser.add_argument("--" + name, required=True, type=Path)
     parser.add_argument("--vm-id", required=True)
-    parser.add_argument("--ssh-port", required=True, type=int)
+    parser.add_argument("--ssh-port", type=int)
+    parser.add_argument("--verify-only", action="store_true")
     args = parser.parse_args()
     try:
-        prepare(args.source, args.registry, args.vm_parent, args.runtime_parent,
-                vm_id=args.vm_id, ssh_port=args.ssh_port)
+        if args.verify_only:
+            receipt = verify_seed(args.source, args.registry, args.vm_parent,
+                                  args.runtime_parent, vm_id=args.vm_id)
+            release.require(args.ssh_port is None or args.ssh_port == receipt["ssh_port"],
+                            "VM seed SSH port differs")
+        else:
+            release.require(args.ssh_port is not None, "VM seed SSH port required")
+            prepare(args.source, args.registry, args.vm_parent, args.runtime_parent,
+                    vm_id=args.vm_id, ssh_port=args.ssh_port)
     except (ValueError, OSError, KeyError, TypeError, UnicodeError, json.JSONDecodeError):
         parser.exit(1, "VM seed refused or uncertain; retain all intent, media and keys.\n")
     return 0
