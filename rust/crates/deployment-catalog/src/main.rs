@@ -695,7 +695,9 @@ fn run() -> Result<(), String> {
     let params = &args[1..];
     if params.iter().any(|arg| arg == "--help" || arg == "-h") {
         if command == "kubernetes-secrets" {
-            println!("usage: marty-deploy kubernetes-secrets STACK NAMESPACE [CAPTURED_REQUIRED_NAMES]");
+            println!(
+                "usage: marty-deploy kubernetes-secrets STACK NAMESPACE [CAPTURED_REQUIRED_NAMES]"
+            );
             return Ok(());
         }
         print!("{}", frozen_help(command));
