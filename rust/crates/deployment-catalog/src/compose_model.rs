@@ -87,7 +87,7 @@ fn set<'a>(s: impl IntoIterator<Item = &'a str>) -> BTreeSet<&'a str> {
 fn exact(v: &Value, expected: &[&str]) -> bool {
     v.is_object() && names(v) == set(expected.iter().copied())
 }
-fn text<'a>(v: &'a Value) -> &'a str {
+fn text(v: &Value) -> &str {
     v.as_str().unwrap_or("")
 }
 fn truthy(v: &Value) -> bool {
