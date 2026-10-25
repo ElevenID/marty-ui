@@ -473,6 +473,8 @@ def initial_scenario(scenario,monkeypatch):
         build_run_id=auth['build_run_id'],build_run_attempt=auth['build_run_attempt'],
         harness_source_sha='c'*40,run_id=99,run_attempt=3,
         controller_user_id=12345,clock=lambda:100000,downloader=download)
+    monkeypatch.setattr(initial_grant.staged_assets,'verify_acquisition',
+                        lambda **unused:{'artifact':'synthetic-staged-transport'})
     return kwargs,api
 
 
@@ -483,6 +485,7 @@ def test_initial_grant_acquired_without_nonce_consumption(scenario,monkeypatch):
     assert {p.name for p in kwargs['output'].iterdir()}==initial_grant.NAMES
     assert Path(str(kwargs['output'])+'.verified.json').is_file()
     assert any('/actions/artifacts/789' in path for _,path in api.calls)
+    assert result['staged_transport_sha256']==r.digest(r.encode({'artifact':'synthetic-staged-transport'}))
 
 
 def test_initial_grant_refuses_independent_build_mismatch(scenario,monkeypatch):

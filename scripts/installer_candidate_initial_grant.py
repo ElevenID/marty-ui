@@ -15,6 +15,7 @@ import zipfile
 import installer_candidate_dispatch as dispatch
 import installer_candidate_grant_receive as archive_transport
 import installer_candidate_public_release as public_release
+import installer_candidate_staged_assets as staged_assets
 import installer_candidate_receipt_upload as uploader
 import installer_candidate_rendezvous as transport
 import installer_promote as promotion
@@ -44,9 +45,14 @@ def acquire(*, client, assets: Path, gh: Path, cosign: Path, output: Path,
             return client.request("GET", transport.REPO + "/" + path)
         return public_release.observe(api, release_tag, source_sha)
     observed = None
+    staged_record = None
     if phase == "published":
         observed = published_identity()
         public_release.verify_downloads(observed, assets)
+    else:
+        staged_record = staged_assets.verify_acquisition(client=client, assets=assets,
+            source_sha=source_sha, release_tag=release_tag,
+            build_run_id=build_run_id, build_run_attempt=build_run_attempt)
     name = f"installer-{phase}-grant-{run_id}-{run_attempt}"
     deadline = int(clock()) + 900
     chosen = None
@@ -123,6 +129,11 @@ def acquire(*, client, assets: Path, gh: Path, cosign: Path, output: Path,
             release.require(published_identity() == observed,
                             "published release identity changed during grant retrieval")
             public_release.verify_downloads(observed, assets)
+        else:
+            release.require(staged_assets.verify_acquisition(client=client, assets=assets,
+                source_sha=source_sha, release_tag=release_tag,
+                build_run_id=build_run_id, build_run_attempt=build_run_attempt) == staged_record,
+                "staged transport identity changed during grant retrieval")
         dispatch.registry_unchanged(held, output.parent)
         release.require({entry: dispatch.private_file(output / entry, 1048576) for entry in NAMES} == snapshot,
                         "initial grant files changed")
@@ -134,6 +145,8 @@ def acquire(*, client, assets: Path, gh: Path, cosign: Path, output: Path,
                       inventory_sha256=release.digest(i),
                       published_release_observation_sha256=(release.digest(release.encode(observed))
                                                             if observed is not None else None),
+                      staged_transport_sha256=(release.digest(release.encode(staged_record))
+                                               if staged_record is not None else None),
                       context_sha256=release.candidate_context_sha256(context),
                       acquired_at=int(clock()), nonce_consumed=False,
                       guest_dispatched=False, acceptance=False)

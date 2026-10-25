@@ -6,6 +6,7 @@ authorize a guest. The initial signed grant receiver must do that afterward.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 from pathlib import Path
 import re
@@ -17,6 +18,7 @@ import zipfile
 import installer_candidate_dispatch as dispatch
 import installer_candidate_grant_receive as archive_transport
 import installer_candidate_public_release as public_release
+import installer_candidate_public_bootstrap as public_bootstrap
 import installer_candidate_rendezvous as transport
 import installer_promote as promotion
 import installer_release as release
@@ -69,6 +71,25 @@ def preflight_zip(fd: int, size: int) -> None:
     release.require(position == len(raw), "staged ZIP central directory differs")
 
 
+def validated_members(archive: zipfile.ZipFile, limits: dict[str, int]) -> None:
+    entries = archive.infolist()
+    names = [entry.filename for entry in entries]
+    release.require(0 < len(entries) <= 100 and len(set(names)) == len(names)
+                    and set(limits) <= set(names), "staged artifact member closure differs")
+    total = 0
+    for entry in entries:
+        name = entry.filename
+        mode = entry.external_attr >> 16
+        release.require(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", name)
+                        and not entry.is_dir() and not entry.flag_bits & 1
+                        and stat.S_IFMT(mode) in (0, stat.S_IFREG)
+                        and entry.compress_type in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED)
+                        and 0 < entry.file_size <= (limits[name] if name in limits else 128 * 1024 * 1024),
+                        "staged artifact member differs")
+        total += entry.file_size
+        release.require(total <= EXPANDED_MAX, "staged artifact expansion exceeds bound")
+
+
 def extract_selected(stream, output: Path, parent_fd: int) -> None:
     limits = public_release.expected_assets()
     release.require(not output.exists(), "staged asset output already exists")
@@ -77,22 +98,7 @@ def extract_selected(stream, output: Path, parent_fd: int) -> None:
     held = dispatch._directory(output)
     try:
         with zipfile.ZipFile(stream) as archive:
-            entries = archive.infolist()
-            names = [entry.filename for entry in entries]
-            release.require(0 < len(entries) <= 100 and len(set(names)) == len(names)
-                            and set(limits) <= set(names), "staged artifact member closure differs")
-            total = 0
-            for entry in entries:
-                name = entry.filename
-                mode = entry.external_attr >> 16
-                release.require(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", name)
-                                and not entry.is_dir() and not entry.flag_bits & 1
-                                and stat.S_IFMT(mode) in (0, stat.S_IFREG)
-                                and entry.compress_type in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED)
-                                and 0 < entry.file_size <= (limits[name] if name in limits else 128 * 1024 * 1024),
-                                "staged artifact member differs")
-                total += entry.file_size
-                release.require(total <= EXPANDED_MAX, "staged artifact expansion exceeds bound")
+            validated_members(archive, limits)
             for name in sorted(limits):
                 entry = archive.getinfo(name)
                 fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
@@ -192,6 +198,106 @@ def acquire(*, client, output: Path, gh: Path, source_sha: str, release_tag: str
         dispatch.registry_unchanged(parent, output.parent)
         return result
     finally:
+        os.close(parent)
+
+
+def verify_acquisition(*, client, assets: Path, source_sha: str, release_tag: str,
+                       build_run_id: int, build_run_attempt: int) -> dict:
+    """Rebind staged files to the held original artifact before grant retrieval."""
+    release.identity(source_sha, release_tag, build_run_id, build_run_attempt)
+    release.require(release.classify_release_tag(release_tag)[0] == "nightly",
+                    "staged verification requires a nightly")
+    parent = dispatch._directory(assets.parent)
+    held = None
+    try:
+        held = dispatch._directory(assets)
+        record_path = Path(str(assets) + ".verified.json")
+        record_bytes = public_bootstrap.private_file(record_path, 65536)
+        record = release.decode(record_bytes)
+        release.exact(record, {"schema", "scope", "source_sha", "release_tag", "build_run_id",
+                               "build_run_attempt", "artifact", "archive_sha256", "selected_files",
+                               "acquired_at", "signatures_authenticated", "guest_dispatched",
+                               "acceptance"}, "staged transport record")
+        release.require(record["schema"] == "elevenid.installer-controller-staged-assets/v1"
+                        and record["scope"] == "controller-transport-only"
+                        and all(record[key] == value for key, value in dict(
+                            source_sha=source_sha, release_tag=release_tag,
+                            build_run_id=build_run_id, build_run_attempt=build_run_attempt).items())
+                        and record["selected_files"] == len(public_release.expected_assets())
+                        and record["signatures_authenticated"] is False
+                        and record["guest_dispatched"] is False and record["acceptance"] is False,
+                        "staged transport record identity differs")
+        release.sha(record["archive_sha256"], 64)
+        def observe():
+            promotion.check_run(client.request("GET", transport.REPO + "/actions/runs/" + str(build_run_id)),
+                run_id=build_run_id, attempt=build_run_attempt,
+                workflow=".github/workflows/nightly-release.yml", source=source_sha)
+            listing = client.request("GET", transport.REPO
+                                     + f"/actions/runs/{build_run_id}/artifacts?per_page=100")
+            item = archive_transport.selected_artifact(listing, run_id=build_run_id,
+                run_attempt=build_run_attempt, harness_source_sha=source_sha,
+                name=f"nightly-publication-assets-{build_run_id}", maximum=ARCHIVE_MAX)
+            release.require(item is not None and item == record["artifact"],
+                            "staged artifact identity changed")
+            return item
+        item = observe()
+        archive = Path(str(assets) + ".archive.zip")
+        fd = os.open(archive.name, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC,
+                     dir_fd=parent)
+        try:
+            info = os.fstat(fd)
+            release.require(stat.S_ISREG(info.st_mode) and info.st_uid == os.geteuid()
+                            and info.st_nlink == 1 and stat.S_IMODE(info.st_mode) == 0o600
+                            and info.st_size == item["size_in_bytes"],
+                            "staged archive identity differs")
+            digest, size = archive_transport.hash_fd(fd, ARCHIVE_MAX)
+            release.require(size == item["size_in_bytes"] and digest == record["archive_sha256"]
+                            and "sha256:" + digest == item["digest"],
+                            "staged archive digest changed")
+            preflight_zip(fd, size)
+            limits = public_release.expected_assets()
+            release.require({path.name for path in assets.iterdir()} == set(limits),
+                            "staged asset closure changed")
+            with os.fdopen(fd, "rb", closefd=False) as stream, zipfile.ZipFile(stream) as bundle:
+                validated_members(bundle, limits)
+                selected = {}
+                for name in sorted(limits):
+                    entry = bundle.getinfo(name)
+                    release.require(0 < entry.file_size <= limits[name],
+                                    "staged archive member exceeds bound")
+                    hashed = hashlib.sha256()
+                    copied = 0
+                    with bundle.open(entry) as source:
+                        while True:
+                            chunk = source.read(min(65536, limits[name] + 1 - copied))
+                            if not chunk:
+                                break
+                            copied += len(chunk)
+                            release.require(copied <= entry.file_size and copied <= limits[name],
+                                            "staged archive member changed")
+                            hashed.update(chunk)
+                    release.require(copied == entry.file_size
+                                    and dispatch.private_file(assets / name, limits[name])
+                                    == (hashed.hexdigest(), copied),
+                                    "staged selected file differs from artifact")
+                    selected[name] = (hashed.hexdigest(), copied)
+            again, again_size = archive_transport.hash_fd(fd, ARCHIVE_MAX)
+            release.require((again, again_size) == (digest, size)
+                            and os.fstat(fd).st_size == size, "staged archive changed")
+        finally:
+            os.close(fd)
+        observe()
+        release.require({name: dispatch.private_file(assets / name, limits[name])
+                         for name in sorted(limits)} == selected,
+                        "staged selected file changed after artifact observation")
+        release.require(public_bootstrap.private_file(record_path, 65536) == record_bytes,
+                        "staged transport record changed")
+        dispatch.registry_unchanged(held, assets)
+        dispatch.registry_unchanged(parent, assets.parent)
+        return record
+    finally:
+        if held is not None:
+            os.close(held)
         os.close(parent)
 
 

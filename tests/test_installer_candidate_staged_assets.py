@@ -1,6 +1,7 @@
 """Synthetic transport checks; signed build authenticity is checked at grant retrieval."""
 import hashlib
 import io
+import json
 import os
 from pathlib import Path
 import struct
@@ -70,6 +71,72 @@ def test_staged_transport_selects_only_fifteen_inputs(tmp_path):
     assert {path.name for path in kwargs["output"].iterdir()} == set(public_release.expected_assets())
     assert (tmp_path / "assets.verified.json").is_file()
     assert len(api.calls) == 4
+    bound = staged.verify_acquisition(client=api, assets=kwargs['output'],
+        source_sha=SOURCE, release_tag=TAG, build_run_id=77, build_run_attempt=2)
+    assert bound == result
+
+
+def test_staged_grant_binding_refuses_replaced_selected_file(tmp_path):
+    kwargs, api, _ = scenario(tmp_path)
+    staged.acquire(**kwargs)
+    victim = kwargs['output'] / 'install.sh'
+    victim.write_bytes(b'y')
+    with pytest.raises(ValueError, match='differs from artifact'):
+        staged.verify_acquisition(client=api, assets=kwargs['output'],
+            source_sha=SOURCE, release_tag=TAG, build_run_id=77, build_run_attempt=2)
+
+
+def test_staged_grant_binding_refuses_changed_archive(tmp_path):
+    kwargs, api, _ = scenario(tmp_path)
+    staged.acquire(**kwargs)
+    archive = tmp_path / 'assets.archive.zip'
+    archive.write_bytes(archive.read_bytes() + b'x')
+    with pytest.raises(ValueError, match='archive identity differs'):
+        staged.verify_acquisition(client=api, assets=kwargs['output'],
+            source_sha=SOURCE, release_tag=TAG, build_run_id=77, build_run_attempt=2)
+
+
+def test_staged_grant_binding_refuses_file_changed_during_final_api_call(tmp_path):
+    kwargs, api, _ = scenario(tmp_path)
+    staged.acquire(**kwargs)
+    original = api.request
+    listings = [0]
+    def mutate(method, path):
+        value = original(method, path)
+        if path.endswith('/artifacts?per_page=100'):
+            listings[0] += 1
+            if listings[0] == 2:
+                (kwargs['output'] / 'install.sh').write_bytes(b'y')
+        return value
+    api.request = mutate
+    with pytest.raises(ValueError, match='changed after artifact observation'):
+        staged.verify_acquisition(client=api, assets=kwargs['output'],
+            source_sha=SOURCE, release_tag=TAG, build_run_id=77, build_run_attempt=2)
+
+
+def test_staged_grant_binding_rejects_duplicate_zip_even_with_matching_local_record(tmp_path):
+    kwargs, api, _ = scenario(tmp_path)
+    staged.acquire(**kwargs)
+    source = io.BytesIO()
+    with zipfile.ZipFile(source, 'w') as archive:
+        for name in public_release.expected_assets():
+            archive.writestr(name, b'x')
+        with pytest.warns(UserWarning, match='Duplicate name'):
+            archive.writestr('install.sh', b'x')
+    raw = source.getvalue()
+    archive = tmp_path / 'assets.archive.zip'
+    archive.write_bytes(raw)
+    api.item['size_in_bytes'] = len(raw)
+    api.item['digest'] = 'sha256:' + hashlib.sha256(raw).hexdigest()
+    record_path = tmp_path / 'assets.verified.json'
+    record = json.loads(record_path.read_bytes())
+    record['archive_sha256'] = hashlib.sha256(raw).hexdigest()
+    record['artifact']['size_in_bytes'] = len(raw)
+    record['artifact']['digest'] = api.item['digest']
+    record_path.write_text(json.dumps(record))
+    with pytest.raises(ValueError, match='member closure differs'):
+        staged.verify_acquisition(client=api, assets=kwargs['output'],
+            source_sha=SOURCE, release_tag=TAG, build_run_id=77, build_run_attempt=2)
 
 
 def test_staged_transport_refuses_changed_artifact(tmp_path):
