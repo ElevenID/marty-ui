@@ -11,6 +11,7 @@ this observer requires the original process lifetime throughout.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -160,9 +161,31 @@ def held_writable_disk(process: Path, disk: Path, expected: os.stat_result) -> i
     return matches[0]
 
 
+def executable_digest(process: Path) -> str:
+    """Hash the live process image inode, not a replaceable executable pathname."""
+    fd = os.open(process / "exe", os.O_RDONLY | os.O_CLOEXEC)
+    try:
+        info = os.fstat(fd)
+        release.require(stat.S_ISREG(info.st_mode) and info.st_uid == 0
+                        and 0 < info.st_size <= 256 * 1024 * 1024,
+                        "VM executable identity invalid")
+        value = hashlib.sha256()
+        total = 0
+        while chunk := os.read(fd, 65536):
+            total += len(chunk)
+            release.require(total <= info.st_size, "VM executable changed")
+            value.update(chunk)
+        release.require(total == info.st_size, "VM executable changed")
+        return value.hexdigest()
+    finally:
+        os.close(fd)
+
+
 def validate_initial(initial: dict, installation_id: str) -> None:
     required = {"schema", "target", "observation_phase", "vm_boot_id",
-                "vm_config_sha256", "controller_key_sha256", "known_hosts_sha256",
+                "vm_config_sha256", "vm_executable_sha256", "controller_key_sha256",
+                "known_hosts_sha256", "vm_dir_path", "vm_dir_device", "vm_dir_inode",
+                "vm_uid", "vm_gid", "vm_disk_path", "ssh_port",
                 "guest_user", "guest_uid", "observed_at", "vm_pid",
                 "vm_start_ticks", "vm_disk_device", "vm_disk_inode", "vm_disk_fd",
                 "vm_memory_mib", "vm_cpus", "initial_docker_clean",
@@ -185,9 +208,17 @@ def validate_initial(initial: dict, installation_id: str) -> None:
                     and type(initial["guest_user"]) is str
                     and initial["guest_user"].isidentifier()
                     and type(initial["guest_uid"]) is int and initial["guest_uid"] > 0
+                    and type(initial["vm_dir_path"]) is str
+                    and Path(initial["vm_dir_path"]).is_absolute()
+                    and ".." not in Path(initial["vm_dir_path"]).parts
+                    and type(initial["vm_disk_path"]) is str
+                    and initial["vm_disk_path"] == initial["vm_dir_path"] + "/disk.qcow2"
+                    and type(initial["ssh_port"]) is int
+                    and 1 <= initial["ssh_port"] <= 65535
                     and all(type(initial[field]) is int and initial[field] >= 0
                             for field in ("vm_pid", "vm_disk_device", "vm_disk_inode",
-                                          "vm_disk_fd"))
+                                          "vm_disk_fd", "vm_dir_device", "vm_dir_inode",
+                                          "vm_uid", "vm_gid", "ssh_port"))
                     and type(initial["vm_start_ticks"]) is str
                     and initial["vm_start_ticks"].isdecimal(),
                     "initial VM observation invalid")
@@ -195,9 +226,12 @@ def validate_initial(initial: dict, installation_id: str) -> None:
 
 def require_same_vm(initial: dict, current: dict) -> None:
     for field in ("target", "guest_user", "guest_uid", "vm_boot_id",
+                  "vm_dir_path", "vm_dir_device", "vm_dir_inode",
+                  "vm_uid", "vm_gid", "vm_disk_path", "ssh_port",
                   "vm_pid", "vm_start_ticks",
                   "vm_disk_device", "vm_disk_inode", "vm_disk_fd",
-                  "vm_config_sha256", "controller_key_sha256", "known_hosts_sha256"):
+                  "vm_config_sha256", "vm_executable_sha256",
+                  "controller_key_sha256", "known_hosts_sha256"):
         release.require(initial.get(field) == current[field],
                         "VM changed after initial observation")
 
@@ -284,6 +318,7 @@ def _observe(vm_dir: Path, vm_parent: int, output_dir: Path, output_parent: int,
                     and os.readlink(process / "exe") == args[0],
                     "live VM process differs")
     start_ticks = (process / "stat").read_text().rsplit(")", 1)[1].split()[19]
+    exe_sha = executable_digest(process)
     disk_info = disk.lstat()
     release.require(stat.S_ISREG(disk_info.st_mode) and disk_info.st_uid == owner
                     and disk_info.st_nlink == 1, "VM disk identity differs")
@@ -357,7 +392,8 @@ def _observe(vm_dir: Path, vm_parent: int, output_dir: Path, output_parent: int,
         release.require(held_writable_disk(process, disk, disk_info) == disk_fd,
                         "VM disk descriptor changed during observation")
         release.require((process / "stat").read_text().rsplit(")", 1)[1].split()[19]
-                        == start_ticks and os.readlink(process / "exe") == args[0],
+                        == start_ticks and os.readlink(process / "exe") == args[0]
+                        and executable_digest(process) == exe_sha,
                         "VM process changed after disk observation")
         disk_identity = release.digest(release.encode(dict(vm_id=vm["id"], path=str(disk),
                             device=disk_info.st_dev, inode=disk_info.st_ino)))
@@ -365,8 +401,12 @@ def _observe(vm_dir: Path, vm_parent: int, output_dir: Path, output_parent: int,
                       installation_id=installation_id)
         evidence = dict(schema="elevenid.installer-qemu-trial-observation/v2", target=target,
                         observation_phase=phase, vm_boot_id=boot_id,
+                        vm_dir_path=str(vm_dir), vm_dir_device=directory.st_dev,
+                        vm_dir_inode=directory.st_ino, vm_uid=owner, vm_gid=directory.st_gid,
+                        vm_disk_path=str(disk), ssh_port=port,
                         guest_user=guest_user, guest_uid=int(account[0]),
                         vm_config_sha256=release.digest(vm_bytes),
+                        vm_executable_sha256=exe_sha,
                         controller_key_sha256=release.digest(key_bytes),
                         known_hosts_sha256=release.digest(known_hosts_bytes),
                         observed_at=int(time.time()), vm_pid=pid, vm_start_ticks=start_ticks,

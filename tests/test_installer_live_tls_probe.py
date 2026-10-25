@@ -1,8 +1,10 @@
 """Local TLS server exercises real verification; no installed-app claim."""
+import base64
 import json
 import http.client
 from pathlib import Path
 import shutil
+import signal
 import socket
 import ssl
 import subprocess
@@ -101,10 +103,16 @@ def test_discovery_rejects_cross_origin_metadata(tmp_path,key,value):
 
 
 def test_malformed_http_cli_refuses_without_reflecting_server_text(monkeypatch,capsys):
-    monkeypatch.setattr(sys,'argv',['probe','https://localhost:18443','invalid',INSTALLATION,ENGINE])
-    monkeypatch.setattr(probe,'probe',lambda *args:(_ for _ in ()).throw(
-        http.client.BadStatusLine('private-server-text')))
+    ca = base64.b64encode(b'public-ca-fixture').decode('ascii')
+    monkeypatch.setattr(sys,'argv',['probe','https://localhost:18443',ca,INSTALLATION,ENGINE])
+    called = []
+    def malformed_http(*args):
+        called.append(args)
+        raise http.client.BadStatusLine('private-server-text')
+    monkeypatch.setattr(probe,'probe',malformed_http)
     with pytest.raises(SystemExit,match='Installed TLS observation refused'):
         probe.main()
+    assert len(called) == 1
+    assert signal.alarm(0) == 0
     captured=capsys.readouterr()
     assert 'private-server-text' not in captured.out+captured.err

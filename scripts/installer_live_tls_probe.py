@@ -114,6 +114,10 @@ def main():
     except (ValueError, OSError, ssl.SSLError, TimeoutError, UnicodeError,
             json.JSONDecodeError, http.client.HTTPException):
         raise SystemExit("Installed TLS observation refused") from None
+    finally:
+        # main() is also exercised in-process by the release contracts. Never
+        # leave its process-wide deadline armed after a refused observation.
+        signal.alarm(0)
 
 
 if __name__ == "__main__":

@@ -25,7 +25,7 @@ RELEASE_TEST_COMMAND = (
     "trap 'status=$?; printf \"release-contract memory counters after:\\n\"; "
     "cat /sys/fs/cgroup/memory.events 2>/dev/null || true; "
     "grep \"^oom_kill \" /proc/vmstat 2>/dev/null || true; exit \"$status\"' EXIT\n"
-    "python -X faulthandler -m pytest tests -v --tb=short --durations=20\n"
+    "python -X faulthandler -m pytest tests -n 2 -v --tb=short --durations=20\n"
 )
 
 

@@ -1,5 +1,6 @@
 """QMP peer binding for the diagnostic-only owned-VM observer."""
 import json
+import hashlib
 import os
 from pathlib import Path
 import socket
@@ -106,8 +107,12 @@ def initial_observation(installation_id):
                 target=dict(guest_id=str(uuid.uuid4()), disk_id="disk", engine_id="engine",
                             installation_id=installation_id),
                 observation_phase="initial-empty", vm_boot_id=str(uuid.uuid4()),
-                vm_config_sha256="config", controller_key_sha256="client-key",
+                vm_config_sha256="config", vm_executable_sha256="executable",
+                controller_key_sha256="client-key",
                 known_hosts_sha256="host-key", guest_user="installer", guest_uid=1000,
+                vm_dir_path="/trusted/vm", vm_dir_device=1, vm_dir_inode=10,
+                vm_uid=1000, vm_gid=1000, vm_disk_path="/trusted/vm/disk.qcow2",
+                ssh_port=49000,
                 observed_at=1, vm_pid=42, vm_start_ticks="100", vm_disk_device=1,
                 vm_disk_inode=2, vm_disk_fd=3, vm_memory_mib=4096, vm_cpus=2,
                 initial_docker_clean=True, capacity_qualified=False,
@@ -123,6 +128,9 @@ def test_reobservation_refuses_target_or_process_substitution():
                                ("guest_user", "different"), ("guest_uid", 1001),
                                ("vm_pid", 43), ("vm_start_ticks", "101"),
                                ("vm_disk_inode", 4), ("vm_config_sha256", "different"),
+                               ("vm_dir_inode", 11), ("vm_uid", 1001),
+                               ("ssh_port", 49001),
+                               ("vm_executable_sha256", "different"),
                                ("controller_key_sha256", "different"),
                                ("known_hosts_sha256", "different")):
         changed = dict(initial, **{field: replacement})
@@ -220,3 +228,10 @@ def test_root_controller_accepts_only_selected_nonroot_vm_owner(tmp_path):
     os.close(parent)
     with pytest.raises(ValueError, match="untrusted"):
         observer.open_vm_dir(vm, owner + 1)
+
+
+def test_live_executable_hash_is_bound_to_process_image():
+    process = Path("/proc") / str(os.getpid())
+    with (process / "exe").open("rb") as stream:
+        expected = hashlib.file_digest(stream, "sha256").hexdigest()
+    assert observer.executable_digest(process) == expected
