@@ -28,3 +28,19 @@ and KMS-backed job resume in protected disposable acceptance. It records
 required to retire the migrated software routes. The simulator does not prove
 physical personalization. Do not activate these flags in production from this
 source change alone.
+
+Native bureau dispatch also requires the current delivery destination catalog
+entry. Issuance needs read access to
+`credential_template_service.delivery_destinations`; unavailable catalog data
+blocks dispatch. The entry must be enabled and belong to the job organization,
+or be a global system entry. Its provider, mode, target, credential format and
+protocol must identify physical document delivery. An explicit `connector_id`
+must match the configured bureau provider profile.
+
+The same Rust guard applies to first submission, batch submission, receipt
+completion and private reconciliation replay. Disabling or deleting a
+destination blocks new sends with HTTP 409. Re-enable or repair its configuration
+before replaying retained signed material. A policy change after reservation
+preserves that reservation and its exact material; it does not authorize a new
+signature or discard uncertain submission history. Reading an already accepted
+receipt does not send material and remains available.
