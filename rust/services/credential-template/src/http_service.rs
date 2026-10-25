@@ -1262,7 +1262,34 @@ fn template_response(template: &CredentialTemplate) -> Result<Value, CredentialT
         .filter(|value| !value.trim().is_empty())
         .ok_or_else(|| service_unavailable("CREDENTIAL_TEMPLATE.INVALID_STORED_COMPLIANCE"))?;
     let claims = template.claims.iter().map(public_claim).collect::<Vec<_>>();
-    let mut validity = Map::new();
+    // Expose every persisted public rule, including explicit zero/false/null.
+    // Keep the released seconds aliases below for existing consumers.
+    let mut validity = Map::from_iter([
+        (
+            "default_validity_days".to_owned(),
+            json!(template.validity_rules.default_validity_days),
+        ),
+        (
+            "max_validity_days".to_owned(),
+            json!(template.validity_rules.max_validity_days),
+        ),
+        (
+            "renewal_window_days".to_owned(),
+            json!(template.validity_rules.renewal_window_days),
+        ),
+        (
+            "not_before_offset_seconds".to_owned(),
+            json!(template.validity_rules.not_before_offset_seconds),
+        ),
+        (
+            "require_revalidation".to_owned(),
+            json!(template.validity_rules.require_revalidation),
+        ),
+        (
+            "revalidation_interval_days".to_owned(),
+            json!(template.validity_rules.revalidation_interval_days),
+        ),
+    ]);
     validity.insert(
         "ttl_seconds".to_owned(),
         json!(i64::from(template.validity_rules.default_validity_days) * 86_400),

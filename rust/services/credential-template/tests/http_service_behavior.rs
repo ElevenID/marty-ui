@@ -661,6 +661,88 @@ async fn private_derivation_parameters_are_rejected_before_create_or_update_pers
 }
 
 #[tokio::test]
+async fn public_validity_readback_retains_canonical_rules_and_legacy_seconds_aliases() {
+    let mut cases = Vec::new();
+    for (seconds, days) in [(1, 1), (3600, 1), (86399, 1), (86400, 1), (86401, 2)] {
+        cases.push((
+            json!({"ttl_seconds":seconds,"default_validity_days":9,
+                "max_validity_seconds":seconds,"max_validity_days":9,
+                "reissue_within_seconds":seconds,"renewal_window_days":9,
+                "renewable":false,"not_before_offset":-1,"not_before_offset_seconds":900,
+                "require_revalidation":true,"revalidation_interval_days":7}),
+            json!({"default_validity_days":days,"max_validity_days":days,
+                "renewal_window_days":days,"renewable":false,"not_before_offset_seconds":900,
+                "require_revalidation":true,"revalidation_interval_days":7}),
+        ));
+    }
+    cases.push((
+        json!({"default_validity_days":0,"max_validity_days":-1,"renewal_window_days":0,
+            "renewable":false,"require_revalidation":false}),
+        json!({"default_validity_days":0,"max_validity_days":-1,"renewal_window_days":0,
+            "renewable":false,"not_before_offset_seconds":0,"require_revalidation":false,
+            "revalidation_interval_days":null}),
+    ));
+    for (input, canonical) in cases {
+        let app = router();
+        let mut body = create_body();
+        body["validity_rules"] = input;
+        let response = app
+            .clone()
+            .oneshot(request("POST", "/v1/credential-templates", body, true))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let created = json_body(response).await;
+        let rules = &created["validity_rules"];
+        for (key, value) in canonical.as_object().unwrap() {
+            assert_eq!(&rules[key], value, "{key}");
+        }
+        assert_eq!(
+            rules["ttl_seconds"],
+            canonical["default_validity_days"].as_i64().unwrap() * 86_400
+        );
+        let renewal = canonical["renewal_window_days"].as_i64().unwrap();
+        if renewal == 0 {
+            assert!(rules.get("reissue_within_seconds").is_none());
+        } else {
+            assert_eq!(rules["reissue_within_seconds"], renewal * 86_400);
+        }
+        let path = format!(
+            "/v1/credential-templates/{}",
+            created["id"].as_str().unwrap()
+        );
+        let response = app
+            .clone()
+            .oneshot(request("GET", &path, json!({}), true))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(json_body(response).await["validity_rules"], *rules);
+        let response = app
+            .clone()
+            .oneshot(request(
+                "GET",
+                "/v1/credential-templates?organization_id=org-1",
+                json!({}),
+                true,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(json_body(response).await[0]["validity_rules"], *rules);
+        let response = app.clone().oneshot(request("PATCH", &path, json!({"name":"Renamed", "validity_rules":{"default_validity_days":null,"max_validity_days":null,"renewal_window_days":null,"require_revalidation":null,"revalidation_interval_days":null}}), true)).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(json_body(response).await["validity_rules"], *rules);
+        let response = app
+            .oneshot(request("GET", &path, json!({}), true))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(json_body(response).await["validity_rules"], *rules);
+    }
+}
+
+#[tokio::test]
 async fn create_get_update_activate_and_delete_expose_only_public_behavior() {
     let app = router();
     let response = app
