@@ -714,15 +714,11 @@ mod tests {
             {
                 (StatusCode::OK, Json(json!({"organization_id": "org-3"})))
             }
-            "/v1/credential-templates/template-1"
+            "/internal/v1/resource-owners/credential-templates/template-1"
                 if request
                     .headers()
-                    .get("authorization")
-                    .is_some_and(|value| value == "Bearer session")
-                    && request
-                        .headers()
-                        .get("x-user-id")
-                        .is_some_and(|value| value == "user-1")
+                    .get("x-api-key")
+                    .is_some_and(|value| value == "internal-secret")
                     && request
                         .headers()
                         .get(SERVICE_TOKEN_HEADER)
@@ -782,6 +778,46 @@ mod tests {
                 .expect("fixture server");
         });
         format!("http://{address}")
+    }
+
+    #[tokio::test]
+    async fn template_owner_lookup_precedes_api_key_tenant_authorization() {
+        let provider = HttpGatewayProvider::new(
+            BTreeMap::from([("credential-templates".into(), fixture_url().await)]),
+            "internal-secret",
+            None,
+            Some("service-secret".into()),
+            Some(4096),
+        )
+        .unwrap();
+        let lookup =
+            crate::authorization::resolve_resource_lookup("/v1/credential-templates/template-1")
+                .unwrap();
+        for actor_org in ["org-2", "foreign-org"] {
+            let context = ResourceOwnerContext {
+                headers: BTreeMap::from([
+                    ("x-api-key-id".into(), "key-1".into()),
+                    ("x-api-key-scopes".into(), "templates:write".into()),
+                    ("x-organization-id".into(), actor_org.into()),
+                ]),
+            };
+            let owner = provider
+                .resolve_organization(lookup.service, &lookup.path, &context)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(owner, "org-2");
+            assert_eq!(
+                crate::authorization::authorize_api_key(
+                    "credential-template:edit",
+                    &owner,
+                    Some(actor_org),
+                    &["templates:write".into()],
+                )
+                .is_ok(),
+                actor_org == "org-2",
+            );
+        }
     }
 
     #[tokio::test]
@@ -967,7 +1003,7 @@ mod tests {
             provider
                 .resolve_organization(
                     "credential-templates",
-                    "/v1/credential-templates/template-1",
+                    "/internal/v1/resource-owners/credential-templates/template-1",
                     &context,
                 )
                 .await

@@ -23,6 +23,7 @@ pub const CREDENTIAL_TEMPLATE_HTTP_ROUTES: &[&str] = &[
     "DELETE /v1/delivery-destinations/{destination_id}",
     "GET /internal/credential-templates/{template_id}/issuance-context",
     "GET /internal/credential-configurations",
+    "GET /internal/v1/resource-owners/credential-templates/{template_id}",
 ];
 
 pub const CREDENTIAL_TEMPLATE_GRPC_METHODS: &[&str] = &[
