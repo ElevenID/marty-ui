@@ -394,6 +394,24 @@ fn run() -> Result<(), String> {
         println!("{}", env!("MARTY_DEPLOY_BUILD_IDENTITY"));
         return Ok(());
     }
+    if args.first().is_some_and(|arg| arg == "trust-info") {
+        if args.len() != 3 || args[1] != "--install-dir" {
+            return Err("usage: marty-deploy trust-info --install-dir ABSOLUTE_PATH".into());
+        }
+        #[cfg(target_os = "linux")]
+        {
+            let report =
+                marty_deployment_catalog::installer_trust::inspect(std::path::Path::new(&args[2]))?;
+            println!(
+                "{}",
+                serde_json::to_string(&report)
+                    .map_err(|_| "cannot encode public trust information")?
+            );
+            return Ok(());
+        }
+        #[cfg(not(target_os = "linux"))]
+        return Err("installer trust information currently requires Linux".into());
+    }
     if args.first().is_some_and(|arg| arg == "status") {
         if args.len() != 3 || args[1] != "--install-dir" {
             return Err("usage: marty-deploy status --install-dir ABSOLUTE_PATH".into());

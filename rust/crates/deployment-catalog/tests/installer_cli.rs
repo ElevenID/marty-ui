@@ -3,6 +3,22 @@
 use marty_deployment_catalog::installer_state::{Identity, InstallerState, Phase, RuntimeBinding};
 use serde_json::Value;
 #[test]
+fn trust_info_rejects_mutating_options_without_echoing_them() {
+    for args in [
+        vec!["trust-info"],
+        vec!["trust-info", "--install-trust", "sensitive-value"],
+        vec!["trust-info", "--install-dir", "/missing", "--yes"],
+    ] {
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_marty-deploy"))
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+        assert!(!String::from_utf8_lossy(&output.stderr).contains("sensitive-value"));
+    }
+}
+#[test]
 fn candidate_cli_requires_explicit_authenticated_context_without_output_or_argument_echo() {
     let sensitive = "never-echo-candidate-input";
     for args in [

@@ -585,6 +585,24 @@ fn cleanup_summary(
     })
 }
 impl LockedInspection {
+    /// Bind path-based read-only helpers to the installation held by this lock.
+    pub(crate) fn require_path_binding(&self, path: &Path) -> Result<()> {
+        self.require_unchanged()?;
+        let (ancestor, leaf) = parent(path)?;
+        let current = open_at(&ancestor, &leaf, libc::O_RDONLY | libc::O_DIRECTORY, 0)?;
+        private(&current, true)?;
+        let held = self
+            .directory
+            .metadata()
+            .map_err(|_| "held installation unavailable")?;
+        let observed = current
+            .metadata()
+            .map_err(|_| "installation path unavailable")?;
+        if held.dev() != observed.dev() || held.ino() != observed.ino() {
+            return Err("installation path no longer names the locked directory".into());
+        }
+        Ok(())
+    }
     pub fn open(path: &Path) -> Result<Self> {
         let (ancestor, leaf) = parent(path)?;
         let directory = open_at(&ancestor, &leaf, libc::O_RDONLY | libc::O_DIRECTORY, 0)?;
