@@ -24,8 +24,9 @@ function ApiDocumentation() {
   useEffect(() => {
     let mounted = true;
     const redocScriptCandidates = [
-      'https://cdn.redoc.ly/redoc/latest/bundles/redoc.standalone.js',
-      'https://cdn.jsdelivr.net/npm/redoc@next/bundles/redoc.standalone.js',
+      // This page uses the Redoc 2 window.Redoc API; Redoc 3 is an ES module.
+      'https://cdn.redoc.ly/redoc/v2.5.3/bundles/redoc.standalone.js',
+      'https://cdn.jsdelivr.net/npm/redoc@2.5.3/bundles/redoc.standalone.js',
     ];
     const openApiCandidates = [
       import.meta.env.VITE_OPENAPI_URL,
