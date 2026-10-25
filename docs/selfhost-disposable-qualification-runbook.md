@@ -143,6 +143,25 @@ hashes. Cleanup must remove only that owned draft, never publish it, and retain
 the external nonce ledger permanently. The workflow does not delete transports
 automatically; failed creation retains a local intent for reconciliation.
 
+After receiving the final execution grant, the Linux controller uses
+`scripts/installer_candidate_dispatch.py` to transfer the exact 15 staged inputs,
+the two signed grant triplets, and pinned verifier binaries over SSH. Supply
+private `--context-file` and `--target-file` records from the independently chosen
+invocation and live controller observations, plus `--ledger` pointing to the
+original durable consumption record. The target record has exactly `guest_id`,
+`disk_id`, `engine_id`, and `installation_id`; copying these from an unverified
+download is not a physical target observation.
+
+The helper requires a dedicated non-root guest account with a private `0700`
+home at `/home/<user>`, a private key and pinned known-hosts file outside the
+guest, and root-owned SSH/SCP executables. It disables ambient SSH configuration,
+agents, proxies and forwarding. It verifies all seven signed subjects before
+creating a durable dispatch intent, checks expiry before every remote action,
+and checks transferred executable hashes before invoking `install-candidate`.
+Any interrupted transfer or incomplete installation preserves the intent and
+guest state and refuses a second dispatch. A zero command exit is recorded only
+as a transport result; it is never an installed-journey acceptance report.
+
 Candidate testing must use acceptance-only authorization rather than a fabricated
 consumer admission. The native candidate preparation library authenticates the
 acceptance workflow invocation, the exact inventory and all four payloads before
