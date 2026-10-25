@@ -2121,6 +2121,22 @@ jobs:
           export MARTY_RUST_CI_REDIS_IMAGE=redis:7.4-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
           docker compose -p marty-rust-ci -f .github/compose/rust-ci-fixtures.yml \
             down --volumes --remove-orphans
+      # Diagnostic identity only; never permission to skip merge-group qualification.
+      # success() includes all Rust checks and the owned cleanup above.
+      - name: Record successful PR Rust checkout identity
+        if: success() && github.event_name == 'pull_request' && (matrix.lane == 'canvas' || matrix.lane == 'contracts')
+        shell: bash
+        env:
+          MARTY_RUST_ATTESTATION_LANE: ${{ matrix.lane }}
+        run: python3 scripts/ci/write_pr_rust_checkout_attestation.py "$RUNNER_TEMP/pr-rust-checkout-attestation.json"
+      - name: Upload successful PR Rust checkout identity
+        if: success() && github.event_name == 'pull_request' && (matrix.lane == 'canvas' || matrix.lane == 'contracts')
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: pr-rust-checkout-${{ matrix.lane }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/pr-rust-checkout-attestation.json
+          if-no-files-found: error
+          retention-days: 7
   test-native-operator:
     name: Native KMS Operator (${{ matrix.arch }})
     needs: changes
