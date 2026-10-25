@@ -80,6 +80,35 @@ fn internal_ingress_provisioner_refuses_invalid_invocation_without_output() {
         assert!(output.stdout.is_empty());
     }
 }
+#[test]
+fn internal_renewal_bootstrap_refuses_unowned_invocation_without_output() {
+    for args in [
+        vec!["installer-renewal-bootstrap"],
+        vec![
+            "installer-renewal-bootstrap",
+            "--installation-id",
+            "invalid",
+        ],
+        vec![
+            "installer-renewal-bootstrap",
+            "--installation-id",
+            "00000000-0000-0000-0000-000000000000",
+        ],
+        vec![
+            "installer-renewal-bootstrap",
+            "--root-token",
+            "secret-sentinel",
+        ],
+    ] {
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_marty-deploy"))
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+        assert!(!String::from_utf8_lossy(&output.stderr).contains("secret-sentinel"));
+    }
+}
 use std::process::Command;
 
 #[test]

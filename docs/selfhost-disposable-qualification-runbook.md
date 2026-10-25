@@ -99,6 +99,27 @@ responsibilities. Permission failures or incomplete reads fail the probe rather
 than substituting a different filesystem or claiming a clean host. This record
 cannot replace the signed installed-journey acceptance report.
 
+### Native renewal bootstrap and root retirement
+
+The internal `installer-renewal-bootstrap` helper creates the existing scoped
+workload/Keycloak renewal identity from fixed, read-only container inputs. It
+validates the current 21-policy inventory, verifies a scoped login and retires
+that temporary verification token. Identity files remain private; pending and
+completed receipts distinguish an interrupted attempt from completed bootstrap.
+The helper is not yet connected to native installation orchestration. It must
+run only in a recorded, owned helper container with the reviewed input mounts.
+
+This step retains the bootstrap root. Initial workload and Keycloak credentials
+are root descendants, so revoking root before replacing them would break the
+installation. Replacement credentials need orphan-token verification, durable
+generation staging, controlled container recreation and rollback checks. The
+installer's UUID-specific ingress authority is separate from the 21-policy
+inventory and still needs its own renewal path for eight-hour credentials.
+Scoped snapshot/recovery checks and before/after lineage audits must pass before
+root revocation. Deleting `root.token` alone is insufficient: initialization
+records also contain that credential, and the separate orphaned `kms-bootstrap`
+token needs its own disposition.
+
 ## Experimental preview installer path
 
 An [experimental tester preview](https://github.com/ElevenID/marty-ui/releases)

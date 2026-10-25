@@ -256,6 +256,26 @@ fn run() -> Result<(), String> {
     let mut args: Vec<String> = env::args().skip(1).collect();
     if args
         .first()
+        .is_some_and(|arg| arg == "installer-renewal-bootstrap")
+    {
+        if args.len() != 3 || args[1] != "--installation-id" {
+            return Err("internal renewal bootstrap requires an owned container invocation".into());
+        }
+        #[cfg(target_os = "linux")]
+        {
+            let runtime = tokio::runtime::Runtime::new()
+                .map_err(|_| "cannot start renewal bootstrap runtime")?;
+            let count = runtime.block_on(
+                marty_deployment_catalog::installer_renewal_bootstrap::bootstrap(&args[2]),
+            )?;
+            println!("{}", serde_json::json!({"outputs_written":count}));
+            return Ok(());
+        }
+        #[cfg(not(target_os = "linux"))]
+        return Err("internal renewal bootstrap requires Linux".into());
+    }
+    if args
+        .first()
         .is_some_and(|arg| arg == "installer-ingress-provision")
     {
         if args.len() != 3 || args[1] != "--installation-id" {
