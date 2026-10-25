@@ -349,11 +349,11 @@ export function normalizeCredentialTemplateValidityRules(rules = {}) {
 
   return {
     ...rules,
-    ...(ttlSeconds != null ? { ttl_seconds: ttlSeconds, default_validity_days: daysFromSeconds(ttlSeconds) } : {}),
+    ...(ttlSeconds != null ? { ttl_seconds: ttlSeconds, default_validity_days: rules.ttl_seconds != null ? daysFromSeconds(ttlSeconds) : rules.default_validity_days } : {}),
     ...(reissueWithinSeconds != null
       ? {
           reissue_within_seconds: reissueWithinSeconds,
-          renewal_window_days: daysFromSeconds(reissueWithinSeconds),
+          renewal_window_days: rules.reissue_within_seconds != null ? daysFromSeconds(reissueWithinSeconds) : rules.renewal_window_days,
         }
       : {}),
     not_before_offset_seconds: notBeforeOffsetSeconds,
@@ -361,7 +361,7 @@ export function normalizeCredentialTemplateValidityRules(rules = {}) {
     ...(maxValiditySeconds != null
       ? {
           max_validity_seconds: maxValiditySeconds,
-          max_validity_days: daysFromSeconds(maxValiditySeconds),
+          max_validity_days: rules.max_validity_seconds != null ? daysFromSeconds(maxValiditySeconds) : rules.max_validity_days,
         }
       : {}),
   };
@@ -638,9 +638,6 @@ export function buildCredentialTemplatePayload(data = {}) {
     throw error;
   }
 
-  const validityRules = data.validity_rules
-    ? normalizeCredentialTemplateValidityRules(data.validity_rules)
-    : undefined;
   const claims = Array.isArray(data.claims)
     ? data.claims.map((claim) => normalizeCredentialTemplateClaim(claim))
     : [];
@@ -651,27 +648,17 @@ export function buildCredentialTemplatePayload(data = {}) {
     compliance_profile_id: complianceProfileId,
     vct: normalizeCredentialTemplateVct(data),
     claims,
-    ...(validityRules
-      ? {
-          validity_rules: {
-            default_validity_days: validityRules.default_validity_days,
-            max_validity_days: validityRules.max_validity_days,
-            renewable: validityRules.renewable ?? true,
-            renewal_window_days: validityRules.renewal_window_days,
-            not_before_offset_seconds: validityRules.not_before_offset_seconds,
-          },
-        }
-      : {}),
+    ...(data.validity_rules !== undefined ? { validity_rules: data.validity_rules } : {}),
   };
 }
 
 /**
  * Create a new presentation policy
  */
-export async function createPresentationPolicy(data) {
+export async function createPresentationPolicy(data, options = {}) {
   const payload = buildPresentationPolicyPayload(data);
   const shouldActivate = data?.activate_immediately === true || String(data?.status || '').toLowerCase() === 'active';
-  let result = await postWithIdempotency(PRESENTATION_POLICY_BASE, payload);
+  let result = await postWithIdempotency(PRESENTATION_POLICY_BASE, payload, options);
 
   if (shouldActivate && result?.id) {
     result = await activatePresentationPolicy(result.id);
@@ -826,8 +813,42 @@ export async function getCredentialTemplate(id) {
  * Update a credential template
  */
 export async function updateCredentialTemplate(id, data) {
-  const result = await patch(`${CREDENTIAL_TEMPLATE_BASE}/${id}`, buildCredentialTemplatePayload(data));
+  const result = await patch(`${CREDENTIAL_TEMPLATE_BASE}/${id}`, buildCredentialTemplatePatch(data));
   return normalizeCredentialTemplate(result);
+}
+
+// Match the native sparse update contract, rather than the create contract.
+export function buildCredentialTemplatePatch(data = {}) {
+  const fields = new Set([
+    'organization_id', 'name', 'description', 'claims', 'privacy_posture',
+    'selective_disclosure_fields', 'zk_predicate_claims', 'derived_attributes',
+    'display_style', 'validity_rules', 'supported_formats', 'application_template_id',
+    'trust_profile_id', 'revocation_profile_id', 'issuer_did',
+    'credential_payload_format', 'issuance_protocol',
+  ]);
+  const privateFields = new Set([
+    'key_reference', 'signing_service_id', 'signing_key_reference', 'issuer_profile_id',
+    'private_key', 'privatekeyjwk', 'access_token', 'auth_token', 'api_key', 'client_secret',
+  ]);
+  const inspect = (value, depth = 0) => {
+    if (depth > 48) throw new Error('Template update exceeds the supported nesting depth.');
+    if (value && typeof value === 'object') {
+      for (const [key, child] of Object.entries(value)) {
+        if (privateFields.has(key.toLowerCase())) throw new Error('Private custody fields are not supported in template updates.');
+        inspect(child, depth + 1);
+      }
+    }
+  };
+  const payload = { organization_id: requireOrganizationId(data) };
+  for (const [field, value] of Object.entries(data)) {
+    if (value === undefined) continue;
+    if (!fields.has(field)) throw new Error(`Unsupported template update field: ${field}`);
+    inspect(value);
+    if (field !== 'organization_id') payload[field] = value;
+  }
+  // Preserve sparse nested validity and claim representations; the gateway
+  // canonicalizes public aliases without manufacturing creation defaults.
+  return payload;
 }
 
 /**

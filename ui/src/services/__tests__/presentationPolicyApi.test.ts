@@ -800,10 +800,10 @@ describe('presentationPolicyApi', () => {
       })
 
       expect(receivedData.validity_rules).toMatchObject({
-        default_validity_days: 14,
+        ttl_seconds: 14 * 86400,
         renewable: false,
-        renewal_window_days: 3,
-        not_before_offset_seconds: 900,
+        reissue_within_seconds: 3 * 86400,
+        not_before_offset: 900,
       })
       expect(receivedData).not.toHaveProperty('supported_wallet_ids')
       expect(receivedData.issuance_protocol).toBe('oid4vci')

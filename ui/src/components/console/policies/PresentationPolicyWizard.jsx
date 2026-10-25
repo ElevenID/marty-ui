@@ -9,7 +9,7 @@
  * - Review and activation
  */
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useLayoutEffect, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import {
@@ -27,10 +27,12 @@ import {
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
-import { createPresentationPolicy } from '../../../services/presentationPolicyApi';
+import { validatePolicyCreationDependencies } from '../../../services/policyCreationDependencies';
+import { createPolicyCreationOperation } from '../../../services/policyCreationOperation';
 import { useConsole } from '../../../contexts/ConsoleContext';
 
 import { useWizard } from '../../../hooks/useWizard';
+import { useAuth } from '../../../hooks/useAuth';
 import {
   TrustProfileStep,
   TemplateSelectionStep,
@@ -73,6 +75,11 @@ const PresentationPolicyWizard = () => {
   const navigate = useNavigate();
   const { t } = useTranslation('console');
   const { activeOrgId } = useConsole();
+  const { user } = useAuth();
+  const principalId = user?.user_id;
+  const scopeEpoch = useRef(0);
+  const creation = useMemo(() => createPolicyCreationOperation(activeOrgId, principalId), [activeOrgId, principalId]);
+  const [createdDraft, setCreatedDraft] = useState(null);
   const [apiError, setApiError] = useState(null);
 
   // Validation function for each step
@@ -98,6 +105,9 @@ const PresentationPolicyWizard = () => {
   }, []);
 
   const handleSubmit = useCallback(async (data) => {
+    const epoch = scopeEpoch.current;
+    const isCurrent = () => epoch === scopeEpoch.current;
+    await validatePolicyCreationDependencies(data, activeOrgId, isCurrent);
     const credentialRequirements = Array.isArray(data.policyConfig.credential_requirements)
       ? data.policyConfig.credential_requirements.map((requirement) => ({
           ...requirement,
@@ -110,25 +120,39 @@ const PresentationPolicyWizard = () => {
       organization_id: activeOrgId,
       trust_profile_id: data.selectedTrustProfile?.id,
       template_id: data.selectedTemplate?.id,
-      status: data.activateImmediately ? 'active' : 'draft',
+      status: 'draft',
+      activate_immediately: data.activateImmediately,
     };
-    return createPresentationPolicy(payload);
-  }, [activeOrgId]);
+    try {
+      return await creation.submit(payload, { isCurrent });
+    } catch (error) {
+      if (epoch === scopeEpoch.current && error.createdResource) setCreatedDraft(error.createdResource);
+      throw error;
+    }
+  }, [activeOrgId, creation]);
 
   const wizard = useWizard({
+    scopeKey: `${activeOrgId}:${principalId}`,
     steps: getSteps(t),
     initialData: INITIAL_DATA,
     validateStep,
     onSubmit: handleSubmit,
     onComplete: () => {
-      setTimeout(() => {
-        navigate('/console/org/deploy/profiles');
-      }, 2000);
+      navigate('/console/org/deploy/profiles');
     },
     onCancel: () => {
       navigate('/console/org/policies');
     },
   });
+
+  const resetWizard = wizard.reset;
+  useLayoutEffect(() => {
+    scopeEpoch.current += 1;
+    resetWizard();
+    setCreatedDraft(null);
+    setApiError(null);
+    return () => { scopeEpoch.current += 1; };
+  }, [activeOrgId, principalId, resetWizard]);
 
   // Handle template selection - pre-populate config
   const handleTemplateSelect = (template) => {
@@ -244,6 +268,9 @@ const PresentationPolicyWizard = () => {
         </Stepper>
 
         {/* Error Alert */}
+        {createdDraft && <Alert severity="warning">Policy {createdDraft.id} was created. Retry to recover its activation.
+          <Button onClick={() => navigate(`/console/org/policies/presentation/${encodeURIComponent(createdDraft.id)}`)}>Open created draft</Button>
+        </Alert>}
         {(wizard.error || apiError) && (
           <Alert severity="error" sx={{ mb: 3 }} onClose={() => { setApiError(null); }}>
             {wizard.error || apiError}
@@ -286,7 +313,7 @@ const PresentationPolicyWizard = () => {
                 startIcon={wizard.loading ? <CircularProgress size={20} /> : <CheckCircleIcon />}
                 data-testid="wizard.policy.submit"
               >
-                {wizard.loading ? t('wizards.presentationPolicy.buttons.submitting') : t('wizards.presentationPolicy.buttons.submit')}
+                {wizard.loading ? t('wizards.presentationPolicy.buttons.submitting') : createdDraft ? 'Retry activation' : t('wizards.presentationPolicy.buttons.submit')}
               </Button>
             ) : (
               <Button

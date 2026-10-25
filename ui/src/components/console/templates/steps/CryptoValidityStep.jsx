@@ -63,7 +63,7 @@ const CryptoValidityStep = ({ data, onChange }) => {
   };
 
   // Helper to convert seconds to days
-  const secondsToDays = (seconds) => Math.floor(seconds / 86400);
+  const secondsToDays = (seconds) => Math.min(2147483647, Math.max(1, Math.ceil(seconds / 86400)));
   const daysToSeconds = (days) => days * 86400;
 
   return (
@@ -98,6 +98,7 @@ const CryptoValidityStep = ({ data, onChange }) => {
       <Typography variant="body2" color="text.secondary" paragraph>
         {t('wizards.credentialTemplate.cryptoValidityStep.validity.description')}
       </Typography>
+      <Alert severity="info" sx={{ mb: 2 }}>Validity and maximum lifetime are stored in whole days. Seconds-based durations round up to the next day; the not-before offset stays in seconds.</Alert>
       <Grid container spacing={3}>
         {/* TTL (Time to Live) */}
         <Grid item xs={12} md={6}>
@@ -149,7 +150,7 @@ const CryptoValidityStep = ({ data, onChange }) => {
           <strong>{t('wizards.credentialTemplate.cryptoValidityStep.validity.example')}</strong>{' '}
           {t('wizards.credentialTemplate.cryptoValidityStep.validity.exampleDescription', {
             days: secondsToDays(validity.ttl_seconds),
-            date: new Date(Date.now() + validity.ttl_seconds * 1000).toLocaleDateString(),
+            date: new Date(Date.now() + daysToSeconds(secondsToDays(validity.ttl_seconds)) * 1000).toLocaleDateString(),
           })}
         </Typography>
       </Box>
