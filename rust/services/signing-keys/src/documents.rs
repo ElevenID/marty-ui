@@ -18,6 +18,8 @@ use thiserror::Error;
 
 use crate::{private_material::contains_private_key, registry::RotationLease};
 
+pub const JWK_VERIFICATION_METHOD_TYPE: &str = "JsonWebKey2020";
+
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum DocumentError {
     #[error("{0}")]
@@ -1297,13 +1299,9 @@ fn prepare_did_publication(
             "fragment must contain only letters, numbers, '.', '_' or '-'.".to_string(),
         ));
     }
-    let verification_method_type = match request.relationship {
-        DidVerificationRelationship::AssertionMethod => "JsonWebKey",
-        DidVerificationRelationship::KeyAgreement => "JsonWebKey2020",
-    };
     let mut verification_method = json!({
         "id": format!("{did_id}#{fragment}"),
-        "type": verification_method_type,
+        "type": JWK_VERIFICATION_METHOD_TYPE,
         "controller": did_id,
         "publicKeyJwk": jwk,
     });
@@ -1829,6 +1827,38 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn assertion_publication_uses_interoperable_jwk_method_type() {
+        let did = "did:web:issuer.example:orgs:acme";
+        let result = build_did_document(
+            None,
+            "oid4vp-request-signing",
+            PublishDidRequest {
+                jwk: json!({
+                    "kty": "EC", "crv": "P-256",
+                    "x": URL_SAFE_NO_PAD.encode([7_u8; 32]),
+                    "y": URL_SAFE_NO_PAD.encode([8_u8; 32]),
+                }),
+                public_domain: "issuer.example".to_string(),
+                did_id: Some(did.to_string()),
+                org_slug: Some("acme".to_string()),
+                fragment: Some("oid4vp-verifier".to_string()),
+                key_reference: None,
+                cert_pem: None,
+                cert_chain_pem: None,
+                relationship: DidVerificationRelationship::AssertionMethod,
+            },
+        )
+        .unwrap();
+        let method_id = format!("{did}#oid4vp-verifier");
+        assert_eq!(
+            result.verification_method["type"],
+            json!(JWK_VERIFICATION_METHOD_TYPE)
+        );
+        assert_eq!(result.document["assertionMethod"], json!([method_id]));
+        assert_eq!(result.document["keyAgreement"], json!([]));
     }
 
     #[test]
