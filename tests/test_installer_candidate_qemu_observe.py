@@ -4,6 +4,7 @@ import hashlib
 import os
 from pathlib import Path
 import socket
+import subprocess
 import sys
 import threading
 import uuid
@@ -231,7 +232,18 @@ def test_root_controller_accepts_only_selected_nonroot_vm_owner(tmp_path):
 
 
 def test_live_executable_hash_is_bound_to_process_image():
-    process = Path("/proc") / str(os.getpid())
-    with (process / "exe").open("rb") as stream:
-        expected = hashlib.file_digest(stream, "sha256").hexdigest()
-    assert observer.executable_digest(process) == expected
+    # Hosted Python may live in a runner-owned toolcache. QEMU is a root-owned
+    # executable, so exercise the same production predicate with /usr/bin/sleep.
+    executable = Path("/usr/bin/sleep")
+    assert executable.lstat().st_uid == 0
+    child = subprocess.Popen([str(executable), "30"], stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL)
+    try:
+        process = Path("/proc") / str(child.pid)
+        with (process / "exe").open("rb") as stream:
+            expected = hashlib.file_digest(stream, "sha256").hexdigest()
+        assert observer.executable_digest(process) == expected
+    finally:
+        if child.poll() is None:
+            child.terminate()
+        child.wait(timeout=5)
