@@ -256,6 +256,37 @@ impl PostgresPassportRepository {
         .transpose()
     }
 
+    /// Resolve the live catalog entry at dispatch, rather than trusting the
+    /// destination ID captured when the flow or job was created.
+    pub async fn delivery_destination_allows_submission(
+        &self,
+        principal: &PassportTenantPrincipal,
+        job: &PassportJob,
+        provider_profile_id: Option<&str>,
+    ) -> Result<bool, sqlx::Error> {
+        if job.organization_id != principal.organization_id() {
+            return Ok(false);
+        }
+        sqlx::query_scalar(
+            "SELECT EXISTS (
+                 SELECT 1 FROM credential_template_service.delivery_destinations
+                 WHERE id=$1 AND is_enabled
+                   AND ((organization_id=$2 AND NOT is_system)
+                        OR (organization_id IS NULL AND is_system))
+                   AND provider='physical_document_bureau'
+                   AND mode='physical_document' AND delivery_target='physical_document'
+                   AND credential_format='ICAO_EMRTD'
+                   AND issuance_protocol='PHYSICAL_DOCUMENT'
+                   AND (connector_id IS NULL OR connector_id=$3)
+             )",
+        )
+        .bind(&job.delivery_destination_profile_id)
+        .bind(principal.organization_id())
+        .bind(provider_profile_id)
+        .fetch_one(&self.pool)
+        .await
+    }
+
     /// Claim the exact signed material before an external send. A timed-out
     /// request deliberately keeps this claim for private reconciliation.
     pub async fn reserve_submission(

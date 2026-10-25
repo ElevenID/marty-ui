@@ -26,6 +26,9 @@ use crate::{
     passport_test_vectors::{certificate_pem, public_passport_vectors},
 };
 
+#[path = "../tests/support/passport_delivery_destinations.rs"]
+mod delivery_destinations;
+
 static RECONCILIATION_DATABASE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 #[derive(Clone)]
@@ -338,6 +341,7 @@ async fn beta_reconciliation_replays_only_exact_material_and_binds_first_receipt
         .await
         .unwrap();
     migration::migrate_passport(&pool).await.unwrap();
+    delivery_destinations::seed(&pool).await;
     sqlx::raw_sql(include_str!("bin/passport_beta_bureau_schema.sql"))
         .execute(&pool)
         .await
@@ -444,6 +448,22 @@ async fn beta_reconciliation_replays_only_exact_material_and_binds_first_receipt
         &endpoint_sha256,
     )
     .await;
+    sqlx::query("UPDATE credential_template_service.delivery_destinations SET is_enabled=false WHERE id='destination'")
+        .execute(&pool).await.unwrap();
+    assert_eq!(
+        call_reconciler(&app, &absent.application_id).await,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(mock.calls.load(Ordering::SeqCst), 0);
+    let denied = repository
+        .get(&principal, &absent.application_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(denied.submission_intent_id, absent.submission_intent_id);
+    assert!(denied.bureau_job_id.is_none());
+    sqlx::query("UPDATE credential_template_service.delivery_destinations SET is_enabled=true, connector_id='passport-beta-bureau' WHERE id='destination'")
+        .execute(&pool).await.unwrap();
     assert_eq!(
         call_reconciler(&app, &absent.application_id).await,
         StatusCode::OK
@@ -456,6 +476,14 @@ async fn beta_reconciliation_replays_only_exact_material_and_binds_first_receipt
         .unwrap();
     assert!(bound.bureau_job_id.is_some());
     assert!(bound.submission_intent_id.is_none());
+    sqlx::query("UPDATE credential_template_service.delivery_destinations SET is_enabled=false WHERE id='destination'")
+        .execute(&pool).await.unwrap();
+    assert_eq!(
+        call_reconciler(&app, &absent.application_id).await,
+        StatusCode::OK
+    );
+    assert_eq!(mock.calls.load(Ordering::SeqCst), 1);
+    delivery_destinations::seed(&pool).await;
     let first = repository
         .beta_material_receipt(&principal, &absent.id)
         .await
@@ -677,6 +705,7 @@ async fn run_beta_batch_http_recovery(
         .await
         .unwrap();
     migration::migrate_passport(&pool).await.unwrap();
+    delivery_destinations::seed(&pool).await;
     sqlx::raw_sql(include_str!("bin/passport_beta_bureau_schema.sql"))
         .execute(&pool)
         .await
@@ -987,6 +1016,16 @@ async fn run_beta_batch_http_recovery(
                 .unwrap(),
         )
     };
+    sqlx::query("UPDATE credential_template_service.delivery_destinations SET is_enabled=false WHERE id='destination'")
+        .execute(&pool).await.unwrap();
+    assert_eq!(call(&app).await.unwrap().status(), StatusCode::CONFLICT);
+    assert_eq!(mock.calls.load(Ordering::SeqCst), 0);
+    assert!(repository
+        .beta_batch_jobs(&principal, batch_id)
+        .await
+        .unwrap()
+        .is_none());
+    delivery_destinations::seed(&pool).await;
     *mock.reject_single_for.lock().unwrap() = Some(jobs[0].id.clone());
     let first = call(&app).await.unwrap();
     let first_status = first.status();
@@ -1142,11 +1181,27 @@ async fn run_beta_batch_http_recovery(
         .unwrap();
     }
     let recovered = call(&app).await.unwrap();
-    assert_eq!(recovered.status(), StatusCode::OK);
-    assert_eq!(mock.calls.load(Ordering::SeqCst), 2);
+    let recovered_status = recovered.status();
     let recovered_body = axum::body::to_bytes(recovered.into_body(), 64 * 1024)
         .await
         .unwrap();
+    let intent_debug: Value = sqlx::query_scalar(
+        "SELECT jsonb_build_object(
+             'send_attempts', send_attempts,
+             'has_first_response', first_dispatch_response_seen_at IS NOT NULL,
+             'has_first_wire', first_dispatch_wire_ciphertext IS NOT NULL,
+             'send_window_elapsed', last_send_started_at <= clock_timestamp() - INTERVAL '130 seconds',
+             'completion_window_elapsed', last_receipt_completion_started_at IS NULL OR last_receipt_completion_started_at <= clock_timestamp() - INTERVAL '65 seconds',
+             'destination_enabled', (SELECT is_enabled FROM credential_template_service.delivery_destinations WHERE id='destination'))
+         FROM issuance_service.passport_beta_batch_intents WHERE batch_id=$1",
+    ).bind(batch_id).fetch_one(&pool).await.unwrap();
+    assert_eq!(
+        recovered_status,
+        StatusCode::OK,
+        "{}; intent: {intent_debug}",
+        String::from_utf8_lossy(&recovered_body)
+    );
+    assert_eq!(mock.calls.load(Ordering::SeqCst), 2);
     let recovered_body: Value = serde_json::from_slice(&recovered_body).unwrap();
     let stored_wire: Option<String> = sqlx::query_scalar(
         "SELECT first_dispatch_wire_ciphertext
@@ -1303,6 +1358,8 @@ async fn run_beta_batch_http_recovery(
             .unwrap()
             .unwrap();
     }
+    sqlx::query("UPDATE credential_template_service.delivery_destinations SET is_enabled=false WHERE id='destination'")
+        .execute(&pool).await.unwrap();
     let after_scrub = call(&app).await.unwrap();
     assert_eq!(after_scrub.status(), StatusCode::OK);
     assert_eq!(mock.calls.load(Ordering::SeqCst), 2);

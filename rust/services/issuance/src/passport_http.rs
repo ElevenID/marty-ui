@@ -412,6 +412,28 @@ impl PassportHttpService {
         self.bureau.as_ref().ok_or(PassportHttpError::MissingBureau)
     }
 
+    async fn require_delivery_destination(
+        &self,
+        principal: &PassportTenantPrincipal,
+        job: &PassportJob,
+    ) -> Result<(), PassportHttpError> {
+        self.bureau()?;
+        if self
+            .repository
+            .delivery_destination_allows_submission(
+                principal,
+                job,
+                self.bureau_provider_profile_id.as_deref(),
+            )
+            .await
+            .map_err(PassportHttpError::Storage)?
+        {
+            Ok(())
+        } else {
+            Err(PassportHttpError::DeliveryDestinationUnavailable)
+        }
+    }
+
     async fn job(
         &self,
         principal: &PassportTenantPrincipal,
@@ -563,6 +585,8 @@ enum PassportHttpError {
     MissingBureau,
     #[error("Personalization bureau provider is unavailable for this job")]
     ProviderUnavailable,
+    #[error("Physical document delivery destination is unavailable or incompatible")]
+    DeliveryDestinationUnavailable,
     #[error("{0}")]
     Bureau(BureauError),
     #[error("Document is not ready for quality verification")]
@@ -619,6 +643,7 @@ impl IntoResponse for PassportHttpError {
             | Self::QualityNotReady
             | Self::ActivationNotReady
             | Self::ConcurrentChange
+            | Self::DeliveryDestinationUnavailable
             | Self::AlreadySubmitted
             | Self::SignedMaterialUnavailable => StatusCode::CONFLICT,
             Self::Bureau(BureauError::InvalidWebhookSignature) => StatusCode::UNAUTHORIZED,
@@ -1033,6 +1058,9 @@ async fn submit_personalization(
     if job.submission_intent_id.is_some() {
         return wait_for_submission(&service, &principal, &application_id).await;
     }
+    service
+        .require_delivery_destination(&principal, &job)
+        .await?;
     let (prepared, submitted_sod_sha256, signed_artifact_ciphertext, signed) =
         prepared_personalization_job(&service, &job, false, None).await?;
     let bureau = service.bureau()?;
@@ -1083,6 +1111,11 @@ async fn submit_personalization(
     {
         return Err(PassportHttpError::ConcurrentChange);
     }
+    // A policy change during signing must block the wire send. Preserve any
+    // reserved material for exact private recovery; never silently re-sign it.
+    service
+        .require_delivery_destination(&principal, &reserved)
+        .await?;
     let outcome = bureau
         .submit(&prepared)
         .await
@@ -1286,6 +1319,13 @@ async fn submit_beta_batch(
         )
         .await;
     }
+    if !had_existing {
+        for job in &jobs {
+            service
+                .require_delivery_destination(&principal, job)
+                .await?;
+        }
+    }
     let historical = if had_existing {
         Some([
             serde_json::from_value::<SubmissionSigningProvenance>(
@@ -1472,6 +1512,11 @@ async fn submit_beta_batch(
         }
         [first.bureau_job_id, second.bureau_job_id]
     } else {
+        for job in &jobs {
+            service
+                .require_delivery_destination(&principal, job)
+                .await?;
+        }
         if had_existing
             && !service
                 .repository
@@ -1585,6 +1630,9 @@ async fn submit_beta_batch(
             if receipts[index].document_type.is_some() {
                 continue;
             }
+            service
+                .require_delivery_destination(&principal, &jobs[index])
+                .await?;
             let confirmed = bureau.submit(&prepared[index]).await;
             if let Ok(confirmed) = confirmed {
                 if confirmed
@@ -1821,6 +1869,9 @@ async fn recover_partial_beta_batch(
         {
             return Err(PassportHttpError::ConcurrentChange);
         }
+        service
+            .require_delivery_destination(principal, pending)
+            .await?;
         let result = bureau.submit(&prepared).await;
         receipt = service
             .repository
@@ -2236,6 +2287,9 @@ async fn reconcile_beta_submission(
         // The simulator is idempotent by tenant and source ID. One exact replay
         // can fill a missing row or return its first accepted UUID. Its HTTP
         // outcome alone is never proof: read the immutable receipt afterward.
+        service
+            .require_delivery_destination(&principal, &job)
+            .await?;
         let replay = bureau.submit(&prepared).await;
         receipt = service
             .repository
