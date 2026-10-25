@@ -9,8 +9,8 @@ use serde_json::{json, Map, Value};
 use uuid::Uuid;
 
 use crate::{
-    control_plane::mdoc_direct_pin_lifecycle_verified, EvaluatePresentationRequest,
-    PresentationPolicy, PresentationVerificationError, PresentationVerificationOrchestrator,
+    EvaluatePresentationRequest, PresentationPolicy, PresentationVerificationError,
+    PresentationVerificationOrchestrator,
 };
 
 /// Verifier-owned trust profile supplied to native credential kernels.
@@ -252,30 +252,9 @@ impl VerifiedFactsOrchestrator {
         };
 
         let evaluation_time = (self.clock)();
-        if !presentation_only
-            && format == DetectedCredentialFormat::Mdoc
-            && evidence.verified
-            && evidence.status.checked_at_epoch_seconds.is_none()
-            && trust_profile.as_ref().is_some_and(|profile| {
-                mdoc_direct_pin_lifecycle_verified(
-                    &profile.document,
-                    &issuer_id,
-                    chrono::DateTime::from_timestamp(
-                        i64::try_from(evaluation_time).unwrap_or(i64::MAX),
-                        0,
-                    )
-                    .unwrap_or_default(),
-                )
-            })
-        {
-            evidence.status = CredentialStatusEvidence {
-                checked_at_epoch_seconds: Some(evaluation_time),
-                not_revoked: Some(true),
-                credential_status: Some("active".into()),
-                warnings: Vec::new(),
-            };
-        }
-
+        // A trusted mDL issuer certificate says nothing about the status of
+        // this credential. Only credential-specific status evidence may set
+        // not_revoked; policies requiring it fail closed when none is present.
         if !presentation_only
             && evidence.verified
             && evidence.status.checked_at_epoch_seconds.is_none()
