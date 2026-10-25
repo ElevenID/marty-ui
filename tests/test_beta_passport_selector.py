@@ -256,6 +256,19 @@ def test_opt_in_kms_only_and_bureau_is_absent_when_disabled(tmp_path):
         VALIDATOR["validate_model"](model(tmp_path), passport_enabled=False, files=[PROFILE])
 
 
+@pytest.mark.parametrize("service,flag", [
+    ("gateway", "PASSPORT_NATIVE_GATEWAY_ENABLED"),
+    ("flow", "PASSPORT_NATIVE_FLOW_ENABLED"),
+    ("issuance-native", "PASSPORT_NATIVE_HTTP_ENABLED"),
+])
+@pytest.mark.parametrize("value", ["yes", "1", "on", "enabled", 1, None, "", 0])
+def test_disabled_owner_flags_reject_aliases_and_non_false_values(tmp_path, service, flag, value):
+    candidate = model(tmp_path, False)
+    candidate["services"][service]["environment"][flag] = value
+    with pytest.raises(VALIDATOR["PassportConfigurationError"], match="owner selection is inconsistent"):
+        validate(candidate, False)
+
+
 @pytest.mark.parametrize("operator_token", [None, "short", TOKEN, "synthetic-signing-credential"])
 def test_beta_reconciliation_requires_a_distinct_operator_token(tmp_path, operator_token):
     candidate = model(tmp_path)
@@ -1114,4 +1127,16 @@ def test_callback_signer_requires_token_file_preservation(tmp_path, value):
     else:
         env["PRESERVE_BAO_TOKEN_FILE"] = value
     with pytest.raises(VALIDATOR["PassportConfigurationError"]):
+        validate(candidate)
+
+
+@pytest.mark.parametrize("path", ["/untrusted/../marty", "/%2e/marty", "/marty/."])
+def test_rejects_normalized_database_paths(tmp_path, path):
+    candidate = model(tmp_path)
+    for name in ("issuance-native", "passport-beta-bureau"):
+        candidate["services"][name]["environment"]["DATABASE_URL"] = (
+            "postgresql://marty:synthetic@postgres:5432" + path
+        )
+    with pytest.raises(VALIDATOR["PassportConfigurationError"],
+                       match="database target is invalid"):
         validate(candidate)

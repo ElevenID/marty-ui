@@ -4140,6 +4140,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "marty-ci-execution"
+version = "0.1.0"
+dependencies = [
+ "regex",
+ "serde_json",
+]
+
+[[package]]
 name = "marty-claim-collection"
 version = "0.1.0"
 dependencies = [
@@ -4275,6 +4283,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "flate2",
+ "icu_normalizer",
  "libc",
  "marty-crypto",
  "marty-managed-key-reference",

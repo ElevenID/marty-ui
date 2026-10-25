@@ -578,3 +578,19 @@ def test_full_beta_compose_render_matches_physical_validator(tmp_path: Path) -> 
                     "provider_kind": "physical", "environment": "beta"}]}
     VALIDATOR["validate_model"](rendered, passport_enabled=True, files=files,
                                 physical_provider=True, provider_registry=registry)
+
+
+@pytest.mark.parametrize("endpoint", ["https://[::ffff:127.0.0.1]/jobs", "https://[2001:db8::1]/jobs"])
+def test_physical_endpoint_stays_dns_only_even_with_matching_approval(tmp_path, endpoint):
+    candidate = model(tmp_path)
+    candidate["services"]["issuance-native"]["environment"]["PERSONALIZATION_BUREAU_URL"] = endpoint
+    registry = {"schema": "marty.passport-beta-physical-provider-allowlist/v1", "status": "approved", "providers": [{"endpoint": endpoint, "profile_id": "physical-provider-marty-001", "provider_kind": "physical", "environment": "beta"}]}
+    with pytest.raises(VALIDATOR["PassportConfigurationError"], match="external HTTPS identity|must use DNS"):
+        VALIDATOR["validate_model"](candidate, passport_enabled=True, files=PROFILES, physical_provider=True, provider_registry=registry)
+
+
+def test_physical_ingress_keeps_its_database_secret(tmp_path):
+    candidate = model(tmp_path)
+    candidate["services"]["passport-provider-ingress"]["secrets"].remove("marty_db_password")
+    with pytest.raises(VALIDATOR["PassportConfigurationError"], match="callback ingress is invalid"):
+        validate(candidate)

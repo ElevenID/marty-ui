@@ -25,6 +25,7 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 from canvas_worker_runtime import classify_worker_launch  # noqa: E402
 from selfhost_native_operator import operator_command  # noqa: E402
+from passport_model_policy import evaluate as native_admission  # noqa: E402
 
 
 class CheckError(RuntimeError):
@@ -201,73 +202,48 @@ def validate_required_secret_files(secret_dir: Path, stack_name: str) -> str:
     return "files=" + ",".join(checked)
 
 
+def _dedicated_credential(secret_dir: Path, filename: str, label: str,
+                          others: tuple[str, ...], result: str) -> str:
+    # File reads and their order remain local; native policy sees values on stdin only.
+    key = read_required_secret(secret_dir / filename, label)
+    if not native_admission("selfhost-credential-admission", error_type=CheckError,
+                            credential=key, others=[]):
+        raise CheckError(f"{label} must contain at least 32 bytes.")
+    for name in others:
+        other = read_required_secret(secret_dir / name, name)
+        if not native_admission("selfhost-credential-admission", error_type=CheckError,
+                                credential=key, others=[other]):
+            raise CheckError(f"{label} must be dedicated.")
+    return result
+
+
 def validate_holder_service_credential(secret_dir: Path) -> str:
-    holder = read_required_secret(
-        secret_dir / "device_registration_signing_keys_key",
+    return _dedicated_credential(secret_dir, "device_registration_signing_keys_key",
         "Device Registration-to-Signing Keys credential",
-    )
-    if len(holder.encode("utf-8")) < 32:
-        raise CheckError("Device Registration-to-Signing Keys credential must contain at least 32 bytes.")
-    for name in (
-        "device_registration_gateway_key",
-        "grpc_service_token",
-        "issuance_api_key",
-    ):
-        if holder == read_required_secret(secret_dir / name, name):
-            raise CheckError(
-                "Device Registration-to-Signing Keys credential must be dedicated."
-            )
-    return "dedicated credential length and separation verified"
+        ("device_registration_gateway_key", "grpc_service_token", "issuance_api_key"),
+        "dedicated credential length and separation verified")
 
 
 def validate_service_sign_gateway_credential(secret_dir: Path) -> str:
-    key = read_required_secret(
-        secret_dir / "signing_keys_service_sign_gateway_key",
+    return _dedicated_credential(secret_dir, "signing_keys_service_sign_gateway_key",
         "Gateway-to-Signing Keys service signing credential",
-    )
-    if len(key.encode("utf-8")) < 32:
-        raise CheckError("Gateway-to-Signing Keys service signing credential must contain at least 32 bytes.")
-    for name in (
-        "issuance_api_key",
-        "grpc_service_token",
-        "device_registration_gateway_key",
-        "device_registration_signing_keys_key",
-    ):
-        if key == read_required_secret(secret_dir / name, name):
-            raise CheckError("Gateway-to-Signing Keys service signing credential must be dedicated.")
-    return "dedicated service signing credential length and separation verified"
+        ("issuance_api_key", "grpc_service_token", "device_registration_gateway_key",
+         "device_registration_signing_keys_key"),
+        "dedicated service signing credential length and separation verified")
 
 
 def validate_issuer_sign_credential(secret_dir: Path) -> str:
-    key = read_required_secret(
-        secret_dir / "signing_keys_issuer_sign_key", "Issuer DID signing credential",
-    )
-    if len(key.encode("utf-8")) < 32:
-        raise CheckError("Issuer DID signing credential must contain at least 32 bytes.")
-    for name in (
-        "issuance_api_key", "signing_keys_service_sign_gateway_key",
-        "grpc_service_token", "device_registration_gateway_key",
-        "device_registration_signing_keys_key",
-    ):
-        if key == read_required_secret(secret_dir / name, name):
-            raise CheckError("Issuer DID signing credential must be dedicated.")
-    return "dedicated issuer signing credential length and separation verified"
+    return _dedicated_credential(secret_dir, "signing_keys_issuer_sign_key", "Issuer DID signing credential",
+        ("issuance_api_key", "signing_keys_service_sign_gateway_key", "grpc_service_token",
+         "device_registration_gateway_key", "device_registration_signing_keys_key"),
+        "dedicated issuer signing credential length and separation verified")
 
 
 def validate_integration_secret_credential(secret_dir: Path) -> str:
-    key = read_required_secret(
-        secret_dir / "signing_keys_integration_secret_key", "Integration-secret credential",
-    )
-    if len(key.encode("utf-8")) < 32:
-        raise CheckError("Integration-secret credential must contain at least 32 bytes.")
-    for name in (
-        "issuance_api_key", "signing_keys_service_sign_gateway_key",
-        "signing_keys_issuer_sign_key", "grpc_service_token",
-        "device_registration_gateway_key", "device_registration_signing_keys_key",
-    ):
-        if key == read_required_secret(secret_dir / name, name):
-            raise CheckError("Integration-secret credential must be dedicated.")
-    return "dedicated integration-secret credential length and separation verified"
+    return _dedicated_credential(secret_dir, "signing_keys_integration_secret_key", "Integration-secret credential",
+        ("issuance_api_key", "signing_keys_service_sign_gateway_key", "signing_keys_issuer_sign_key",
+         "grpc_service_token", "device_registration_gateway_key", "device_registration_signing_keys_key"),
+        "dedicated integration-secret credential length and separation verified")
 
 
 def validate_signing_grant_credentials(secret_dir: Path) -> str:
@@ -290,7 +266,7 @@ def validate_signing_grant_credentials(secret_dir: Path) -> str:
     )
     grants = [read_required_secret(secret_dir / name, name) for name in grant_files]
     providers = [read_required_secret(secret_dir / name, name) for name in provider_files]
-    if len(set(grants + providers)) != len(grants) + len(providers):
+    if not native_admission("selfhost-credentials-distinct", error_type=CheckError, values=grants + providers):
         raise CheckError("Signing grant and provider KMS credentials must be distinct.")
     return "eight signing grant and five runtime provider credentials are distinct"
 

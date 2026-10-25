@@ -36,8 +36,11 @@ use marty_passport_auth::PassportTenantKeyring;
 use marty_signing_grant::{
     ceremony::{IssuerCsrIntent, ServiceCsrIntent},
     minter::{GrantMinter, GrantMinting},
-    GrantBinding, GrantError, SigningOrigin,
 };
+#[cfg(test)]
+use marty_signing_grant::{GrantBinding, GrantError, SigningOrigin};
+#[path = "runtime_signing_ceremony.rs"]
+mod signing_ceremony;
 use mmf_platform::{
     ContentTypeDecision, EntityTagDecision, EntityTagPolicy, GatewayProxy, GatewayRequest,
     GatewayResponse, HttpMethod, IdempotencyBegin, IdempotencyRequest, IdempotencyResponse,
@@ -47,6 +50,9 @@ use mmf_security::SecurityError;
 use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use signing_ceremony::{
+    mint_public_issuer_csr_grant, mint_public_service_csr_grant, mint_public_service_sign_grant,
+};
 use subtle::ConstantTimeEq;
 use tokio::sync::{mpsc, watch};
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
@@ -3410,260 +3416,6 @@ fn is_public_service_csr_path(path: &str) -> bool {
 
 fn is_public_issuer_csr_path(path: &str) -> bool {
     path == "/v1/signing-keys/issuer-identities/certificate-csr"
-}
-
-async fn mint_public_issuer_csr_grant(
-    state: &GatewayRuntimeState,
-    identity: &TrustedIdentityContext,
-    path: &str,
-    operation_id: &str,
-    body: Option<&[u8]>,
-    overrides: &ProxyOverrides,
-) -> Result<String, Response> {
-    let organization_id = identity
-        .organization_id
-        .as_deref()
-        .filter(|tenant| !tenant.trim().is_empty())
-        .ok_or_else(|| detail_response(403, "Trusted issuer CSR tenant is required."))?;
-    if identity.required_permission.as_deref() != Some("signing-key:create")
-        || overrides.headers.get("x-api-key") != state.issuer_sign_key.as_ref()
-    {
-        return Err(detail_response(
-            403,
-            "Issuer CSR operation is not authorized.",
-        ));
-    }
-    let request: IssuerCsrIntent = body
-        .and_then(|bytes| serde_json::from_slice(bytes).ok())
-        .ok_or_else(|| detail_response(422, "Issuer CSR request is invalid."))?;
-    if request
-        .organization_id
-        .as_deref()
-        .is_some_and(|tenant| tenant != organization_id)
-    {
-        return Err(detail_response(
-            403,
-            "Issuer CSR tenant does not match authorization.",
-        ));
-    }
-    if !request.issuer_did.starts_with("did:")
-        || !(matches!(request.key_purpose.as_str(), "csca" | "x509_doc_signer")
-            || (request.key_purpose == "mdoc_dsc"
-                && request.credential_format.eq_ignore_ascii_case("MDOC")))
-        || !matches!(request.algorithm.as_str(), "ES256" | "ES384" | "ES512")
-    {
-        return Err(detail_response(422, "Issuer CSR identity is invalid."));
-    }
-    let minter = state
-        .issuer_csr_grant_minter
-        .as_ref()
-        .ok_or_else(|| detail_response(503, "Issuer CSR grant minter is unavailable."))?;
-    let payload = request.bound_payload();
-    let binding = GrantBinding {
-        origin: SigningOrigin::GatewayIssuerDid,
-        operation_id,
-        organization_id,
-        route: path,
-        service_id: None,
-        issuer_did: Some(&request.issuer_did),
-        key_reference: None,
-        key_purpose: &request.key_purpose,
-        algorithm: &request.algorithm,
-        payload: &payload,
-    };
-    minter
-        .mint(&binding)
-        .await
-        .map_err(|error| match error {
-            GrantError::Malformed | GrantError::BindingMismatch | GrantError::Expired => {
-                detail_response(422, "Issuer CSR grant binding is invalid.")
-            }
-            _ => detail_response(503, "Issuer CSR grant minter is unavailable."),
-        })?
-        .to_header_value()
-        .map_err(|_| detail_response(503, "Issuer CSR grant minter is unavailable."))
-}
-
-async fn mint_public_service_csr_grant(
-    state: &GatewayRuntimeState,
-    identity: &TrustedIdentityContext,
-    path: &str,
-    operation_id: &str,
-    body: Option<&[u8]>,
-    overrides: &ProxyOverrides,
-) -> Result<String, Response> {
-    let organization_id = identity
-        .organization_id
-        .as_deref()
-        .filter(|tenant| !tenant.trim().is_empty())
-        .ok_or_else(|| detail_response(403, "Trusted CSR tenant is required."))?;
-    if identity.required_permission.as_deref() != Some("signing-key:create")
-        || overrides.headers.get("x-api-key") != state.service_sign_gateway_key.as_ref()
-    {
-        return Err(detail_response(403, "CSR operation is not authorized."));
-    }
-    let service_id = path
-        .strip_prefix("/v1/signing-keys/services/")
-        .and_then(|tail| tail.strip_suffix("/certificate-csr"))
-        .filter(|service_id| !service_id.is_empty() && !service_id.contains('/'))
-        .ok_or_else(|| detail_response(404, "CSR service route not found."))?;
-    let request: ServiceCsrIntent = body
-        .and_then(|bytes| serde_json::from_slice(bytes).ok())
-        .ok_or_else(|| detail_response(422, "CSR request is invalid."))?;
-    if request
-        .organization_id
-        .as_deref()
-        .is_some_and(|tenant| tenant != organization_id)
-    {
-        return Err(detail_response(
-            403,
-            "CSR tenant does not match authorization.",
-        ));
-    }
-    if request.key_reference.is_empty()
-        || request.key_reference != request.key_reference.trim()
-        || !matches!(request.algorithm.as_str(), "ES256" | "ES384" | "ES512")
-    {
-        return Err(detail_response(
-            422,
-            "CSR key reference or algorithm is invalid.",
-        ));
-    }
-    let minter = state
-        .service_sign_grant_minter
-        .as_ref()
-        .ok_or_else(|| detail_response(503, "CSR grant minter is unavailable."))?;
-    let payload = request.bound_payload();
-    let binding = GrantBinding {
-        origin: SigningOrigin::GatewayService,
-        operation_id,
-        organization_id,
-        route: path,
-        service_id: Some(service_id),
-        issuer_did: None,
-        key_reference: Some(&request.key_reference),
-        key_purpose: "x509_csr",
-        algorithm: &request.algorithm,
-        payload: &payload,
-    };
-    minter
-        .mint(&binding)
-        .await
-        .map_err(|error| match error {
-            GrantError::Malformed | GrantError::BindingMismatch | GrantError::Expired => {
-                detail_response(422, "CSR grant binding is invalid.")
-            }
-            _ => detail_response(503, "CSR grant minter is unavailable."),
-        })?
-        .to_header_value()
-        .map_err(|_| detail_response(503, "CSR grant minter is unavailable."))
-}
-
-async fn mint_public_service_sign_grant(
-    state: &GatewayRuntimeState,
-    identity: &TrustedIdentityContext,
-    path: &str,
-    operation_id: &str,
-    body: Option<&[u8]>,
-    overrides: &ProxyOverrides,
-) -> Result<String, Response> {
-    let organization_id = identity
-        .organization_id
-        .as_deref()
-        .filter(|tenant| !tenant.trim().is_empty())
-        .ok_or_else(|| detail_response(403, "Trusted signing tenant is required."))?;
-    if identity.required_permission.as_deref() != Some("signing-key:create")
-        || overrides.headers.get("x-api-key") != state.service_sign_gateway_key.as_ref()
-    {
-        return Err(detail_response(403, "Signing operation is not authorized."));
-    }
-    let service_id = path
-        .strip_prefix("/v1/signing-keys/services/")
-        .and_then(|tail| tail.strip_suffix("/sign"))
-        .filter(|service_id| !service_id.is_empty() && !service_id.contains('/'))
-        .ok_or_else(|| detail_response(404, "Signing service route not found."))?;
-    let request: Value = body
-        .and_then(|bytes| serde_json::from_slice(bytes).ok())
-        .ok_or_else(|| detail_response(422, "Signing request must be a JSON object."))?;
-    let payload = gateway_signing_payload(&request)
-        .ok_or_else(|| detail_response(422, "Signing payload is invalid."))?;
-    let request = request
-        .as_object()
-        .ok_or_else(|| detail_response(422, "Signing request must be a JSON object."))?;
-    if request
-        .get("organization_id")
-        .is_some_and(|value| value.as_str() != Some(organization_id))
-    {
-        return Err(detail_response(
-            403,
-            "Signing tenant does not match authorization.",
-        ));
-    }
-    let required = |name: &str| {
-        request
-            .get(name)
-            .and_then(Value::as_str)
-            .filter(|value| !value.is_empty() && *value == value.trim())
-    };
-    let (Some(key_reference), Some(key_purpose), Some(algorithm)) = (
-        required("key_reference"),
-        required("key_purpose"),
-        required("algorithm"),
-    ) else {
-        return Err(detail_response(
-            422,
-            "Signing key, purpose and algorithm are required.",
-        ));
-    };
-    let minter = state
-        .service_sign_grant_minter
-        .as_ref()
-        .ok_or_else(|| detail_response(503, "Signing grant minter is unavailable."))?;
-    let binding = GrantBinding {
-        origin: SigningOrigin::GatewayService,
-        operation_id,
-        organization_id,
-        route: path,
-        service_id: Some(service_id),
-        issuer_did: None,
-        key_reference: Some(key_reference),
-        key_purpose,
-        algorithm,
-        payload: &payload,
-    };
-    minter
-        .mint(&binding)
-        .await
-        .map_err(|error| match error {
-            GrantError::Malformed | GrantError::BindingMismatch | GrantError::Expired => {
-                detail_response(422, "Signing grant binding is invalid.")
-            }
-            _ => detail_response(503, "Signing grant minter is unavailable."),
-        })?
-        .to_header_value()
-        .map_err(|_| detail_response(503, "Signing grant minter is unavailable."))
-}
-
-fn gateway_signing_payload(request: &Value) -> Option<Vec<u8>> {
-    let field = |name: &str| {
-        request
-            .get(name)
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-    };
-    let payload = if let Some(encoded) = field("payload_b64") {
-        let unpadded = encoded.trim_end_matches('=');
-        URL_SAFE_NO_PAD
-            .decode(unpadded)
-            .or_else(|_| STANDARD_NO_PAD.decode(unpadded))
-            .or_else(|_| URL_SAFE.decode(encoded))
-            .or_else(|_| STANDARD.decode(encoded))
-            .ok()?
-    } else {
-        hex::decode(field("payload_hex")?).ok()?
-    };
-    (!payload.is_empty()).then_some(payload)
 }
 
 fn compatibility_upstream_path(

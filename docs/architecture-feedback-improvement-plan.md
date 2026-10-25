@@ -764,3 +764,66 @@ supply the signed source-matched `MARTY_DEPLOY_BIN` and its existing digest/sour
 release identity variables. A missing or outdated operator fails closed. The
 supported-consumer workflow installs that toolchain and builds the operator before
 collection. No previous-release binary without `passport-model` is accepted.
+
+### October 24: remaining deployment and execution consolidation
+
+Move deterministic Kubernetes admission and self-host credential policy into the
+existing Rust deployment operator. Keep kubectl/cluster UID and CA observations,
+Docker/HTTP inspection, secret-file reads and provisioning at their current owners.
+Python public preflight functions retain their error types and checks; source and
+installed workflows require the matching verified native operator.
+
+CI libtest selection, discovery, result-log parsing, exact roster/summary consistency
+and positive-summary policy now share the CI-only `marty-ci-execution` Rust helper.
+It is separate from the shipped deployment operator. Both use the same digest,
+source, release-tag and checkout identity verifier and shared CI build bootstrap.
+CI prepares the helper before consuming checks; source checkouts can build it
+with pinned Cargo 1.95.0 and the locked workspace. Candidate summary filtering
+keeps arbitrary child output outside the policy request; the CI-only stdin
+interface retains the old local parsers' input capacity.
+
+Keep the existing process-group cancellation/reaping, streaming, per-database
+scheduling, exact Cargo executable identity, runtime input checks, Python AST
+source inventory and evidence schemas. These enforce behavior and are not dead
+proof artifacts. The process supervisor is retained until a native replacement
+has equivalent signal-during-spawn and descendant cleanup qualification. A full
+orchestrator rewrite is not required to share deterministic policy.
+
+Python Canvas production launch compatibility is not yet a dead path. Read-only
+Docker inspection on October 24 found the elevenid-beta worker running the native
+binary, while `marty-selfhost-prod-canvas-sync-worker-1` still ran the Python
+loader and configured processor. The live self-host deployment must keep its
+preflight/rollback coverage until the deployment owner qualifies and deploys an
+accepted Rust-only release, verifies KMS/readiness/database/process behavior and
+records a rollback plan. Root/deployment owner owns that cutover; cleanup owns
+subsequent allowance removal. No production process, image or configuration was
+changed by this code cleanup. Historical published-image qualification remains
+independent. Retiring the allowance before that cutover would remove a live
+feature and is deferred rather than silently changing its supported scope.
+
+
+### October 24: Compose policy, signing ceremonies and Canvas response handling
+
+The source-matched Rust deployment operator now owns deterministic supported
+Compose topology/runtime checks and beta simulator/physical-provider admission.
+Python keeps canonical filesystem and mounted-file inspection, rendering, live
+identity/expiry observations, registry loading, provisioning and attestation.
+Both provider modes remain supported; passing static policy does not qualify a
+live release. Installed callers need the matching verified operator containing
+these Compose operations. Credential-bearing inputs remain on bounded stdin.
+Unicode authority validation uses the already locked ICU normalizer; no package
+version is changed.
+
+Gateway and Signing Keys share CSR intent validation and grant field construction
+through `marty-signing-grant`. Gateway keeps authorization and tenant scoping;
+Signing Keys independently checks the resolved KMS key, algorithm and actual
+bytes before consuming the one-use grant. No local signing fallback is added.
+Gateway ceremony orchestration lives in its own module and shares mint-error
+handling without merging the distinct public routes or purposes.
+
+Canvas catalog, OAuth and sync responses share bounded JSON body collection.
+Their status mapping, byte ceilings and pagination policies remain distinct.
+The sync reader still drives each chunk through the owned operation/inactivity
+timeout and cancellation path; the other clients retain their total deadlines.
+Pagination parsers are colocated without changing strict sync versus permissive
+catalog handling. The production Python Canvas cutover hold above still applies.

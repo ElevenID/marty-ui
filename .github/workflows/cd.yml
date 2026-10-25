@@ -2013,6 +2013,8 @@ jobs:
         with:
           toolchain: 1.95.0
           targets: ${{ matrix.target }}
+      - name: Prepare source-matched Rust execution policy
+        run: bash scripts/ci/prepare-native-ci-execution.sh
       - name: Build and test the native operator binary
         env:
           MARTY_DEPLOY_SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}

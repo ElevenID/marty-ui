@@ -29,6 +29,7 @@ mod canvas_credentials_urls;
 pub mod canvas_credentials_validation;
 pub mod canvas_event_status;
 pub mod canvas_event_status_postgres;
+mod canvas_http_response;
 pub mod canvas_issuance_guard;
 pub mod canvas_legacy_ingest;
 pub mod canvas_legacy_ingest_postgres;

@@ -10,6 +10,49 @@ from scripts.collect_passport_supported_acceptance import environment_flags, Sup
 ROOT = Path(__file__).resolve().parents[1]
 
 
+@pytest.mark.parametrize("mode,prefix", [("model", "MARTY_DEPLOY"),
+                                        ("execution", "MARTY_CI_EXECUTION")])
+def test_ci_bootstrap_keeps_host_tools_outside_bookworm_artifacts(tmp_path, mode, prefix):
+    import os
+    import shutil
+    import subprocess
+    git_bash = Path("C:/Program Files/Git/bin/bash.exe")
+    bash = str(git_bash) if git_bash.is_file() else shutil.which("bash")
+    if not bash:
+        pytest.skip("Bash is required for the CI bootstrap contract")
+    environment = dict(os.environ, TEST_MODE=mode, TEST_PREFIX=prefix,
+                       TEST_TEMP=tmp_path.as_posix())
+    environment.pop("BASH_ENV", None)
+    environment.pop("ENV", None)
+    result = subprocess.run(
+        [bash, "--noprofile", "--norc", "-s"], cwd=ROOT, env=environment,
+        input=r'''
+export RUNNER_TEMP="$(cd "$TEST_TEMP" && pwd)"
+export GITHUB_ENV="$RUNNER_TEMP/github-env"
+export FAKE_IDENTITY="$(git rev-parse HEAD):v0.0.0"
+cargo() {
+  local target binary
+  while (( $# )); do
+    case "$1" in
+      --target-dir) target="$2"; shift ;;
+      --bin) binary="$2"; shift ;;
+    esac
+    shift
+  done
+  [[ "$target" == "$RUNNER_TEMP/marty-native-tools" ]] || return 17
+  mkdir -p "$target/debug"
+  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$FAKE_IDENTITY"\n' > "$target/debug/$binary"
+  chmod +x "$target/debug/$binary"
+}
+export -f cargo
+bash scripts/ci/prepare-native-tool.sh "$TEST_MODE" || exit
+grep -F "${TEST_PREFIX}_BIN=$RUNNER_TEMP/marty-native-tools/debug/" "$GITHUB_ENV"
+grep -F "${TEST_PREFIX}_SOURCE_SHA=${FAKE_IDENTITY%:*}" "$GITHUB_ENV"
+'''.encode(), capture_output=True, timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+
+
 @pytest.mark.parametrize("value,expected", [
     ({"nested": [None, {"synthetic-credential-key": "public"}]}, True),
     ({"nested": [None, "prefix-synthetic-credential-suffix"]}, True),
@@ -45,9 +88,11 @@ def test_consumer_workflow_prepares_native_policy_before_collecting():
     command = "bash scripts/ci/prepare-native-model-operator.sh"
     assert steps[prepare]["run"] == command
     helper = (ROOT / "scripts/ci/prepare-native-model-operator.sh").read_text(encoding="utf-8")
+    assert 'prepare-native-tool.sh" model' in helper
+    helper = (ROOT / "scripts/ci/prepare-native-tool.sh").read_text(encoding="utf-8")
     for requirement in ("+1.95.0 build --locked", "marty-deployment-catalog", "--build-identity",
-                        "sha256sum", "MARTY_DEPLOY_BIN_SHA256", "MARTY_DEPLOY_SOURCE_SHA",
-                        "MARTY_DEPLOY_RELEASE_TAG", "rev-parse HEAD", '== "$source_sha:v0.0.0"', "GITHUB_ENV"):
+                        "sha256sum", "${prefix}_SOURCE_SHA", "${prefix}_RELEASE_TAG",
+                        "rev-parse HEAD", '== "$source_sha:v0.0.0"', "GITHUB_ENV"):
         assert requirement in helper
     ci = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8"))
     assert next(step for step in ci["jobs"]["test-release-contracts"]["steps"]

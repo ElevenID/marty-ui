@@ -144,6 +144,16 @@ impl ProviderResponse {
     }
 }
 
+impl crate::canvas_http_response::CanvasResponseBody for ProviderResponse {
+    type Error = CanvasProviderReadError;
+    fn content_length(&self) -> Option<u64> {
+        self.response().content_length()
+    }
+    async fn next_chunk(&mut self) -> Result<Option<Bytes>, Self::Error> {
+        self.chunk().await
+    }
+}
+
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum CollectionProtocol {
     CanvasRest,
@@ -1008,7 +1018,7 @@ async fn read_json_response(
     response: impl Into<ProviderResponse>,
     maximum_bytes: usize,
 ) -> Result<Value, CanvasProviderReadError> {
-    let mut body = response.into();
+    let body = response.into();
     let response = body.response();
     if response.status().is_redirection() {
         return Err(CanvasProviderReadError::InvalidConfiguration);
@@ -1022,20 +1032,12 @@ async fn read_json_response(
     if !response.status().is_success() {
         return Err(CanvasProviderReadError::Unavailable);
     }
-    let length = response
-        .content_length()
-        .and_then(|value| usize::try_from(value).ok());
-    if length.is_some_and(|value| value > maximum_bytes) {
-        return Err(CanvasProviderReadError::Unavailable);
-    }
-    let mut bytes = Vec::with_capacity(length.unwrap_or(0).min(maximum_bytes));
-    while let Some(chunk) = body.chunk().await? {
-        if bytes.len().saturating_add(chunk.len()) > maximum_bytes {
-            return Err(CanvasProviderReadError::Unavailable);
-        }
-        bytes.extend_from_slice(&chunk);
-    }
-    serde_json::from_slice(&bytes).map_err(|_| CanvasProviderReadError::Unavailable)
+    crate::canvas_http_response::bounded_json(body, maximum_bytes)
+        .await
+        .map_err(|error| match error {
+            crate::canvas_http_response::BodyError::Transport(error) => error,
+            _ => CanvasProviderReadError::Unavailable,
+        })
 }
 
 fn rate_limit_error(
@@ -1188,216 +1190,8 @@ fn link_header_values(
 }
 
 fn next_link(headers: &[String]) -> Result<Option<String>, CanvasProviderReadError> {
-    let mut next = None;
-    for header in headers {
-        parse_link_header(header, &mut next)?;
-    }
-    Ok(next)
-}
-
-fn parse_link_header(
-    header: &str,
-    next: &mut Option<String>,
-) -> Result<(), CanvasProviderReadError> {
-    if header.is_empty() || !header.is_ascii() {
-        return Err(CanvasProviderReadError::InvalidConfiguration);
-    }
-    let bytes = header.as_bytes();
-    let mut cursor = 0;
-    skip_optional_whitespace(bytes, &mut cursor);
-    if cursor == bytes.len() {
-        return Err(CanvasProviderReadError::InvalidConfiguration);
-    }
-    loop {
-        if bytes.get(cursor) != Some(&b'<') {
-            return Err(CanvasProviderReadError::InvalidConfiguration);
-        }
-        cursor += 1;
-        let target_start = cursor;
-        while bytes.get(cursor).is_some_and(|value| *value != b'>') {
-            if bytes[cursor].is_ascii_whitespace() || matches!(bytes[cursor], b'<' | b'"' | b'\\') {
-                return Err(CanvasProviderReadError::InvalidConfiguration);
-            }
-            cursor += 1;
-        }
-        if cursor == target_start || bytes.get(cursor) != Some(&b'>') {
-            return Err(CanvasProviderReadError::InvalidConfiguration);
-        }
-        let target = &header[target_start..cursor];
-        cursor += 1;
-        let mut relations = None;
-
-        loop {
-            skip_optional_whitespace(bytes, &mut cursor);
-            if cursor == bytes.len() || bytes[cursor] == b',' {
-                break;
-            }
-            if bytes[cursor] != b';' {
-                return Err(CanvasProviderReadError::InvalidConfiguration);
-            }
-            cursor += 1;
-            skip_optional_whitespace(bytes, &mut cursor);
-            let name_start = cursor;
-            while bytes.get(cursor).is_some_and(|value| is_token(*value)) {
-                cursor += 1;
-            }
-            if cursor == name_start {
-                return Err(CanvasProviderReadError::InvalidConfiguration);
-            }
-            let name = &header[name_start..cursor];
-            skip_optional_whitespace(bytes, &mut cursor);
-            if bytes.get(cursor) != Some(&b'=') {
-                return Err(CanvasProviderReadError::InvalidConfiguration);
-            }
-            cursor += 1;
-            skip_optional_whitespace(bytes, &mut cursor);
-            let value = parse_link_parameter_value(header, bytes, &mut cursor)?;
-            if name.eq_ignore_ascii_case("rel") {
-                if relations.is_some() {
-                    return Err(CanvasProviderReadError::InvalidConfiguration);
-                }
-                let parsed = value
-                    .split_ascii_whitespace()
-                    .map(str::to_owned)
-                    .collect::<Vec<_>>();
-                if parsed.is_empty() {
-                    return Err(CanvasProviderReadError::InvalidConfiguration);
-                }
-                relations = Some(parsed);
-            }
-        }
-
-        if relations.is_some_and(|relations| {
-            relations
-                .iter()
-                .any(|relation| relation.eq_ignore_ascii_case("next"))
-        }) && next.replace(target.to_owned()).is_some()
-        {
-            return Err(CanvasProviderReadError::InvalidConfiguration);
-        }
-
-        skip_optional_whitespace(bytes, &mut cursor);
-        if cursor == bytes.len() {
-            return Ok(());
-        }
-        if bytes[cursor] != b',' {
-            return Err(CanvasProviderReadError::InvalidConfiguration);
-        }
-        cursor += 1;
-        skip_optional_whitespace(bytes, &mut cursor);
-        if cursor == bytes.len() {
-            return Err(CanvasProviderReadError::InvalidConfiguration);
-        }
-    }
-}
-
-fn parse_link_parameter_value(
-    header: &str,
-    bytes: &[u8],
-    cursor: &mut usize,
-) -> Result<String, CanvasProviderReadError> {
-    if bytes.get(*cursor) == Some(&b'"') {
-        *cursor += 1;
-        let mut output = String::new();
-        loop {
-            let Some(value) = bytes.get(*cursor).copied() else {
-                return Err(CanvasProviderReadError::InvalidConfiguration);
-            };
-            *cursor += 1;
-            match value {
-                b'"' => return Ok(output),
-                b'\\' => {
-                    let Some(escaped) = bytes.get(*cursor).copied() else {
-                        return Err(CanvasProviderReadError::InvalidConfiguration);
-                    };
-                    if escaped.is_ascii_control() && escaped != b'\t' {
-                        return Err(CanvasProviderReadError::InvalidConfiguration);
-                    }
-                    output.push(char::from(escaped));
-                    *cursor += 1;
-                }
-                value if value.is_ascii_control() && value != b'\t' => {
-                    return Err(CanvasProviderReadError::InvalidConfiguration);
-                }
-                value => output.push(char::from(value)),
-            }
-        }
-    }
-    let start = *cursor;
-    while bytes
-        .get(*cursor)
-        .is_some_and(|value| is_parameter_token(*value))
-    {
-        *cursor += 1;
-    }
-    if *cursor == start {
-        return Err(CanvasProviderReadError::InvalidConfiguration);
-    }
-    Ok(header[start..*cursor].to_owned())
-}
-
-fn skip_optional_whitespace(bytes: &[u8], cursor: &mut usize) {
-    while bytes
-        .get(*cursor)
-        .is_some_and(|value| matches!(value, b' ' | b'\t'))
-    {
-        *cursor += 1;
-    }
-}
-
-fn is_token(value: u8) -> bool {
-    value.is_ascii_alphanumeric()
-        || matches!(
-            value,
-            b'!' | b'#'
-                | b'$'
-                | b'%'
-                | b'&'
-                | b'\''
-                | b'*'
-                | b'+'
-                | b'-'
-                | b'.'
-                | b'^'
-                | b'_'
-                | b'`'
-                | b'|'
-                | b'~'
-        )
-}
-
-fn is_parameter_token(value: u8) -> bool {
-    value.is_ascii_alphanumeric()
-        || matches!(
-            value,
-            b'!' | b'#'
-                | b'$'
-                | b'%'
-                | b'&'
-                | b'\''
-                | b'('
-                | b')'
-                | b'*'
-                | b'+'
-                | b'-'
-                | b'.'
-                | b'/'
-                | b':'
-                | b'<'
-                | b'='
-                | b'>'
-                | b'?'
-                | b'@'
-                | b'['
-                | b']'
-                | b'^'
-                | b'_'
-                | b'`'
-                | b'{'
-                | b'|'
-                | b'}'
-                | b'~'
-        )
+    crate::canvas_http_response::strict_next_link(headers)
+        .map_err(|_| CanvasProviderReadError::InvalidConfiguration)
 }
 
 fn selected_payload(value: &Value, keys: &[&str]) -> Map<String, Value> {

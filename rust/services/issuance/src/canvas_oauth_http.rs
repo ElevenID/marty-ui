@@ -240,21 +240,13 @@ impl CanvasOAuthProvider for HttpCanvasOAuthProvider {
     }
 }
 
-async fn limited_json(mut response: Response) -> Result<Value, CanvasOAuthProviderError> {
-    if response
-        .content_length()
-        .is_some_and(|length| length > TOKEN_RESPONSE_MAX_BYTES as u64)
-    {
-        return Err(provider_error(None));
-    }
-    let mut body = Vec::new();
-    while let Some(chunk) = response.chunk().await.map_err(transport_error)? {
-        if body.len().saturating_add(chunk.len()) > TOKEN_RESPONSE_MAX_BYTES {
-            return Err(provider_error(None));
-        }
-        body.extend_from_slice(&chunk);
-    }
-    serde_json::from_slice(&body).map_err(|_| provider_error(None))
+async fn limited_json(response: Response) -> Result<Value, CanvasOAuthProviderError> {
+    crate::canvas_http_response::bounded_json(response, TOKEN_RESPONSE_MAX_BYTES)
+        .await
+        .map_err(|error| match error {
+            crate::canvas_http_response::BodyError::Transport(error) => transport_error(error),
+            _ => provider_error(None),
+        })
 }
 
 fn provider_error(retry_after_seconds: Option<u64>) -> CanvasOAuthProviderError {

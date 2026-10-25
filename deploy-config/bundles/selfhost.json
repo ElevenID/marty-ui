@@ -28,6 +28,7 @@
     "scripts/provision_selfhost_keycloak_kms.py",
     "scripts/selfhost_openbao_client.py",
     "scripts/selfhost_native_operator.py",
+    "scripts/source_matched_native.py",
     "scripts/install-marty-deploy.sh",
     "scripts/operator-release-assets.sh",
     "scripts/nightly-release-assets.sh",
