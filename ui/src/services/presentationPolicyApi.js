@@ -638,9 +638,6 @@ export function buildCredentialTemplatePayload(data = {}) {
     throw error;
   }
 
-  const validityRules = data.validity_rules
-    ? normalizeCredentialTemplateValidityRules(data.validity_rules)
-    : undefined;
   const claims = Array.isArray(data.claims)
     ? data.claims.map((claim) => normalizeCredentialTemplateClaim(claim))
     : [];
@@ -651,17 +648,7 @@ export function buildCredentialTemplatePayload(data = {}) {
     compliance_profile_id: complianceProfileId,
     vct: normalizeCredentialTemplateVct(data),
     claims,
-    ...(validityRules
-      ? {
-          validity_rules: {
-            default_validity_days: validityRules.default_validity_days,
-            max_validity_days: validityRules.max_validity_days,
-            renewable: validityRules.renewable ?? true,
-            renewal_window_days: validityRules.renewal_window_days,
-            not_before_offset_seconds: validityRules.not_before_offset_seconds,
-          },
-        }
-      : {}),
+    ...(data.validity_rules !== undefined ? { validity_rules: data.validity_rules } : {}),
   };
 }
 

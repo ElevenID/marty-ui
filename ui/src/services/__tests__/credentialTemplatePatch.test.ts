@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { server } from '@test/mocks/server';
 import { http, HttpResponse } from 'msw';
-import { buildCredentialTemplatePatch as build, updateCredentialTemplate } from '../presentationPolicyApi';
+import { buildCredentialTemplatePatch as build, updateCredentialTemplate, buildCredentialTemplatePayload } from '../presentationPolicyApi';
 describe('sparse credential template update', () => {
   it('sends a sparse body through the exported update adapter', async () => {
     let received;
@@ -29,4 +29,13 @@ describe('sparse credential template update', () => {
     expect(() => build({ organization_id: 'org', derived_attributes: [{ parameters: { nested: [{ privateKeyJwk: {} }] } }] })).toThrow('Private custody');
   });
   it('requires organization scope', () => { expect(() => build({ name: 'Renamed' })).toThrow('organization'); });
+});
+
+describe('validity input preservation', () => {
+  it.each([1, 3600, 86399, 86400, 86401, 0, -1])('forwards %s seconds for authoritative native validation', (seconds) => {
+    const validity = { ttl_seconds: seconds, default_validity_days: 9, max_validity_seconds: seconds, reissue_within_seconds: seconds, not_before_offset_seconds: -900, require_revalidation: true, revalidation_interval_days: 7 };
+    const payload = buildCredentialTemplatePayload({ issuer_did: 'did:web:issuer.example', compliance_profile_id: 'profile', validity_rules: validity });
+    expect(payload.validity_rules).toEqual(validity);
+    expect(build({ organization_id: 'org', validity_rules: validity }).validity_rules).toEqual(validity);
+  });
 });
