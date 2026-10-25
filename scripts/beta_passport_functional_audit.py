@@ -630,8 +630,45 @@ def _run_bound_capture(capture) -> dict[str, Any]:
     require(len({session_id(custody["cscaSession"]), session_id(custody["dscSession"]), session_id(custody["flowSession"])}) == 3,
             "Canonical passport operations require three distinct dedicated sessions")
     capture._passport_failure_stage = "PRODUCTION_INVARIANTS"
-    before = production_snapshot()
-    attachments = production_attachment_sha256()
+    try:
+        before = production_snapshot()
+        attachments = production_attachment_sha256()
+    except Exception:
+        # Session preparation is already an owned beta side effect. A failed
+        # production preflight must retain its failure and retire that authority
+        # even though feature setup and its normal finally block never began.
+        cleanup = {"scope": "PRE_FEATURE_DEDICATED_SESSION_RETIREMENT",
+                   "complete": False, "sessionsRetired": 0,
+                   "featureResourcesCreated": False, "productionGuardPassed": False}
+        try:
+            with sync_playwright() as playwright:
+                browser = playwright.chromium.launch(headless=True)
+                ports = None
+                try:
+                    ports = ObservedPassportRequests(capture, browser,
+                        csca_session=custody["cscaSession"], dsc_session=custody["dscSession"],
+                        flow_session=custody["flowSession"], api_key="",
+                        callback_container_id=initial_runtime["containers"]["passport-beta-bureau"])
+                    cleanup["complete"] = ports.retire_sessions() is True
+                    if cleanup["complete"]:
+                        cleanup["sessionsRetired"] = 3
+                finally:
+                    try:
+                        if ports:
+                            ports.close()
+                    finally:
+                        browser.close()
+        except Exception as cleanup_error:
+            cleanup["complete"] = False
+            cleanup["errorType"] = type(cleanup_error).__name__
+        try:
+            output = Path(os.environ["DEMO_ARTIFACT_DIR"]) / "passport-owned-cleanup.json"
+            with output.open("x", encoding="utf8") as stream:
+                json.dump(cleanup, stream, indent=2)
+                stream.write("\n")
+        except (OSError, KeyError):
+            pass  # Never mask the original guard failure or overwrite evidence.
+        raise
 
     def recheck():
         for name in ("runtimeReceipt", "deploymentManifest", "sourceManifest", "stackManifest", "privateFixture"):
