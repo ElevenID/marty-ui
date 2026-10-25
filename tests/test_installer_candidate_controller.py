@@ -93,3 +93,96 @@ def test_concurrent_controller_owner_refuses_before_consumption(transaction):
         assert list(registry.iterdir()) == []
     finally:
         os.close(parent)
+
+
+def test_held_controller_lease_consumes_once_and_cannot_be_reused(transaction):
+    registry, authorization, inventory, options = transaction
+    lease = controller.ControllerLease(registry)
+    with pytest.raises(ValueError, match="lease is not held"):
+        lease.consume(authorization, inventory, **options)
+    with lease:
+        with pytest.raises(BlockingIOError):
+            controller.consume(registry, authorization, inventory, **options)
+        raw = lease.consume(authorization, inventory, **options)
+        assert (registry / (options["expected"]["nonce"] + ".json")).read_bytes() == raw
+        with pytest.raises(FileExistsError):
+            lease.consume(authorization, inventory, **options)
+    with pytest.raises(ValueError, match="lease is not held"):
+        lease.consume(authorization, inventory, **options)
+
+
+def test_failed_post_lock_revalidation_releases_inherited_descriptor(transaction, monkeypatch):
+    registry, _, _, _ = transaction
+    original = controller._directory
+    calls = 0
+    duplicate = None
+
+    def fail_after_acquire(path):
+        nonlocal calls, duplicate
+        calls += 1
+        if calls == 2:
+            raise OSError("synthetic registry revalidation failure")
+        fd = original(path)
+        if calls == 1:
+            duplicate = os.dup(fd)
+        return fd
+
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(controller, "_directory", fail_after_acquire)
+            with pytest.raises(OSError, match="revalidation failure"):
+                with controller.ControllerLease(registry):
+                    pass
+        with controller.ControllerLease(registry):
+            pass
+    finally:
+        if duplicate is not None:
+            os.close(duplicate)
+
+
+def test_interrupted_acquisition_after_kernel_lock_releases_duplicate(transaction, monkeypatch):
+    registry, _, _, _ = transaction
+    original = controller.fcntl.flock
+    duplicate = None
+
+    def interrupt_after_lock(fd, operation):
+        nonlocal duplicate
+        if operation & controller.fcntl.LOCK_EX:
+            duplicate = os.dup(fd)
+            original(fd, operation)
+            raise OSError("synthetic interruption after flock")
+        return original(fd, operation)
+
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(controller.fcntl, "flock", interrupt_after_lock)
+            with pytest.raises(OSError, match="after flock"):
+                with controller.ControllerLease(registry):
+                    pass
+        with controller.ControllerLease(registry):
+            pass
+    finally:
+        if duplicate is not None:
+            os.close(duplicate)
+
+
+def test_replaced_registry_after_write_cannot_return_receipt(transaction, monkeypatch):
+    registry, authorization, inventory, options = transaction
+    original = os.fsync
+    calls = 0
+    moved = registry.parent / "old-registry"
+
+    def replace_after_file_sync(fd):
+        nonlocal calls
+        calls += 1
+        original(fd)
+        if calls == 3:
+            registry.rename(moved)
+            registry.mkdir(mode=0o700)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(controller.os, "fsync", replace_after_file_sync)
+        with pytest.raises(ValueError, match="changed after consumption"):
+            controller.consume(registry, authorization, inventory, **options)
+    assert (moved / (options["expected"]["nonce"] + ".json")).is_file()
+    assert list(registry.iterdir()) == []
