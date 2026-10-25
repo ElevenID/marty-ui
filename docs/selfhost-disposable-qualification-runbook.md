@@ -2,16 +2,17 @@
 
 This procedure runs the exact prepared ZIP on an isolated Linux amd64 host. It
 does not qualify or publish the bundle: the runner writes an **unqualified**
-component report. Run it only after a signed Stack release was dispatched with
-`prepare_selfhost_lock=true` and its independent image digests. The public
+component report. Stack release now builds mandatory installer inputs and requires
+its independent image digests on every dispatch. The public
 release must already identify the same source commit. Do not use production
 credentials, a real CSCA/DSC, or a customer organization.
 
 The Stack publisher needs no tag secret. The first release run qualifies and
 promotes the five images, uploads `stack-release-promotion-complete-<run-id>`,
-then stops at the late tag gate. Use `prepare_selfhost_lock=false` on this
-intentionally failing first run to avoid preparing a bundle whose producer
-cannot pass the terminal-success binding. From a clean checkout of the
+then stops at the late tag gate. Its prepared inputs remain unqualified and
+cannot pass the terminal-success producer binding. There is no preparation
+bypass: the obsolete `prepare_selfhost_lock` dispatch input has been removed.
+From a clean checkout of the
 **same current main commit**, an operator with local `gh` authentication including workflow
 permission runs:
 
@@ -25,12 +26,19 @@ The helper validates the promoted transaction, current main, and all five
 registry digests before pushing the exact annotated tag. Resume Stack release
 from the same source with `claim_run_id`, `resume_run_id=<first run ID>`,
 `resume_artifact=stack-release-promotion-complete-<first run ID>`,
-`prepare_selfhost_lock=true`, and the **same four immutable external-image
-digests**. The resumed run verifies the tag, publishes the release, and, when
+and the **same four immutable external-image digests**. The resumed run verifies the tag, publishes the release, and, when
 all its jobs succeed, owns the prepared self-host bundle as a terminally
 successful producer. Reusing the first failed promotion run as a producer is
-not valid. Never put a cross-repository
-access token into an Actions secret for this handoff.
+not valid. Installer inputs bind the exact workflow run **and attempt** through
+local attestation bundles. After a failed build or publication attempt, use a
+**fresh Stack release dispatch** with the supported same-source transaction
+checkpoint described above. Rerunning failed jobs cannot relabel older artifacts
+with the new attempt; existing run-ID artifact names must not be overwritten to
+bypass that check. `installer-inputs-unqualified-<run-id>-<attempt>` is a mandatory
+build prerequisite, not installer acceptance, admission, signing, or public
+installer distribution. Existing stack qualifications and publishing contents
+remain unchanged. Never put a cross-repository access token into an Actions
+secret for this handoff.
 
 Use a host with at least 32 GiB RAM and 20 GiB free disk for all locked images and
 fresh database state, Docker Compose, Python 3.12 with the pinned integration
@@ -540,7 +548,7 @@ checkout into a fresh temporary Cargo home and target before startup. The host
 needs access to the locked Rust dependencies; ambient Cargo/compiler overrides
 and existing converter binaries are not accepted as custody evidence.
 
-An opt-in Stack release producer can now retain the **already exercised**
+Every Stack release producer now retains the **already exercised**
 release-mode converter and an exact-byte receipt with their two exact SLSA
 bundles for seven days. This is a temporary producer bridge, not a qualified
 public asset or proof of reproducible compilation. A local admission verifier

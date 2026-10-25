@@ -15,11 +15,6 @@ on:
         description: Exact transaction artifact name from resume_run_id
         required: false
         type: string
-      prepare_selfhost_lock:
-        description: Build digest-only self-host roles and stage an unqualified ZIP, lock, and receipt
-        required: false
-        default: false
-        type: boolean
       selfhost_public_profile:
         description: Public UI surface included in the separately built self-host image
         required: false
@@ -27,8 +22,8 @@ on:
         type: choice
         options: [tester, full]
       selfhost_external_images_json:
-        description: Exact service-to-digest JSON for independent infrastructure images
-        required: false
+        description: Required exact service-to-digest JSON for independent infrastructure images
+        required: true
         type: string
 
 concurrency:
@@ -280,7 +275,6 @@ jobs:
             echo "integration_digest=$(jq -er '.components[] | select(.name == "marty-integration-tests") | .artifacts[] | select(.type == "release") | .digest' "$LOCK_FILE")"
           } >> "$GITHUB_OUTPUT"
       - name: Reject invalid self-host image inputs before release builds
-        if: inputs.prepare_selfhost_lock == true
         env:
           EXTERNAL_IMAGES_JSON: ${{ inputs.selfhost_external_images_json }}
           VERSION: ${{ steps.components.outputs.version }}
@@ -1121,16 +1115,13 @@ jobs:
         working-directory: marty-ui/rust
         shell: bash
         env:
-          PREPARE_SELFHOST_LOCK: ${{ inputs.prepare_selfhost_lock }}
           SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
         run: |
           set -euo pipefail
-          if [[ "$PREPARE_SELFHOST_LOCK" = true ]]; then
-            test "$GITHUB_REF" = refs/heads/main
-            test "$GITHUB_SHA" = "$SOURCE_SHA"
-            test "$(git rev-parse 'HEAD^{commit}')" = "$SOURCE_SHA"
-            test "$(uname -m)" = x86_64
-          fi
+          test "$GITHUB_REF" = refs/heads/main
+          test "$GITHUB_SHA" = "$SOURCE_SHA"
+          test "$(git rev-parse 'HEAD^{commit}')" = "$SOURCE_SHA"
+          test "$(uname -m)" = x86_64
           cargo build --locked --release -p marty-release-evidence --bin public-kms-jwk
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
@@ -1278,7 +1269,6 @@ jobs:
             and (.blockers | length) == 0
           ' work/evidence/verifier-differential.json >/dev/null
       - name: Record the exercised self-host public-key helper
-        if: inputs.prepare_selfhost_lock == true
         env:
           SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
         shell: bash
@@ -1292,16 +1282,13 @@ jobs:
             --output selfhost-public-kms-jwk.json
       - id: attest-public-kms-binary
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
-        if: inputs.prepare_selfhost_lock == true
         with:
           subject-path: public-kms-jwk
       - id: attest-public-kms-receipt
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
-        if: inputs.prepare_selfhost_lock == true
         with:
           subject-path: selfhost-public-kms-jwk.json
       - name: Preserve exact public-key helper SLSA bundles
-        if: inputs.prepare_selfhost_lock == true
         env:
           BINARY_BUNDLE: ${{ steps.attest-public-kms-binary.outputs.bundle-path }}
           RECEIPT_BUNDLE: ${{ steps.attest-public-kms-receipt.outputs.bundle-path }}
@@ -1313,7 +1300,6 @@ jobs:
           cp -- "$BINARY_BUNDLE" public-kms-jwk.slsa-bundle.json
           cp -- "$RECEIPT_BUNDLE" selfhost-public-kms-jwk.slsa-bundle.json
       - name: Verify the just-attested helper source
-        if: inputs.prepare_selfhost_lock == true
         env:
           GH_TOKEN: ${{ github.token }}
           SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
@@ -1324,7 +1310,6 @@ jobs:
             --producer-attestations --directory . \
             --source-sha "$SOURCE_SHA" --run-id "$GITHUB_RUN_ID"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        if: inputs.prepare_selfhost_lock == true
         with:
           name: selfhost-public-kms-jwk-unqualified-${{ github.run_id }}
           path: |
@@ -1594,9 +1579,8 @@ jobs:
           retention-days: 90
 
   build-selfhost-lock-roles:
-    # Explicit official-release preparation only. These digest-only artifacts
+    # Mandatory official-release input preparation. These digest-only artifacts
     # cannot be promoted or included in the five-role stack publication.
-    if: inputs.prepare_selfhost_lock == true
     needs: [resolve-transaction, validate-stack, qualify-release, build-keycloak]
     runs-on: ubuntu-latest
     permissions:
@@ -1723,18 +1707,18 @@ jobs:
           cosign sign --yes "$CLOUDFLARED_WRAPPER_IMAGE@$CLOUDFLARED_DIGEST"
 
   prepare-selfhost-image-lock:
-    # Produces a short-lived ZIP/lock preparation artifact, never a release
-    # asset or transaction gate. The next protected gate must anonymously
+    # Produces mandatory build inputs, still unqualified and never implicitly
+    # an accepted installer release asset. The next protected gate must anonymously
     # install this exact extracted ZIP with disposable external state and prove
     # migrations, readiness, login, and an issuer/credential journey.
-    if: inputs.prepare_selfhost_lock == true
     needs: [resolve-transaction, validate-stack, build-services, build-keycloak, qualify-release, build-selfhost-lock-roles]
     runs-on: ubuntu-latest
     permissions:
       actions: read
       contents: read
       packages: read
-      attestations: read
+      attestations: write
+      id-token: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -1877,6 +1861,28 @@ jobs:
           jq -e '.services | type == "object" and length > 0' \
             "$RUNNER_TEMP/selfhost-extracted-compose.json" >/dev/null
           cp "$RUNNER_TEMP/selfhost-prepared.zip" prepared-selfhost-bundle.zip
+      - id: installer_prepared_provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+        with:
+          subject-path: |
+            prepared-selfhost-bundle.zip
+            prepared-selfhost-images.json
+            prepared-selfhost-bundle.json
+            prepared-selfhost-product-descriptor.json
+      - name: Preserve exact prepared-input producer attestation
+        env:
+          BUNDLE: ${{ steps.installer_prepared_provenance.outputs.bundle-path }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s "$BUNDLE"
+          cp -- "$BUNDLE" installer-prepared.provenance.jsonl
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: installer-prepared-provenance-${{ github.run_id }}
+          path: installer-prepared.provenance.jsonl
+          if-no-files-found: error
+          retention-days: 30
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: selfhost-lock-preparation-unqualified-${{ github.run_id }}
@@ -1890,7 +1896,6 @@ jobs:
 
   preflight-selfhost-prepared-consumer:
     # A separate artifact consumer, not a release or installed-runtime gate.
-    if: inputs.prepare_selfhost_lock == true
     needs: [prepare-selfhost-image-lock]
     runs-on: ubuntu-latest
     permissions:
@@ -2053,7 +2058,8 @@ jobs:
           source scripts/ci/rust_contract_execution.sh
           run_timed installer_compose_model cargo test --locked --manifest-path rust/Cargo.toml \
             -p marty-deployment-catalog --test installer_application_model -- --ignored
-      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+      - id: installer_operator_provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
         with:
           subject-path: marty-deploy-linux-${{ matrix.arch }}
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -2063,8 +2069,175 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
+      - name: Preserve exact operator producer attestation separately
+        env:
+          BUNDLE: ${{ steps.installer_operator_provenance.outputs.bundle-path }}
+          ARCH: ${{ matrix.arch }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s "$BUNDLE"
+          cp -- "$BUNDLE" "marty-deploy-linux-$ARCH.provenance.jsonl"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: operator-installer-provenance-${{ matrix.arch }}-${{ github.run_id }}
+          path: marty-deploy-linux-${{ matrix.arch }}.provenance.jsonl
+          if-no-files-found: error
+          retention-days: 30
+
+  prepare-installer-inputs:
+    # Mandatory build prerequisite only: no acceptance, admission, channel, or
+    # installer release assets are created by this job. Old producer attempts
+    # cannot be relabelled on a rerun-failed attempt. Use a fresh dispatch with
+    # the supported same-source transaction checkpoint; preserve old artifacts.
+    needs: [resolve-transaction, validate-stack, qualify-release, build-operator-catalog, prepare-selfhost-image-lock, preflight-selfhost-prepared-consumer, verifier-differential]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+    env:
+      SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
+      TAG: ${{ needs.resolve-transaction.outputs.tag }}
+      CLAIM_RUN_ID: ${{ needs.resolve-transaction.outputs.claim_run_id }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+      - name: Install exact input-contract parsers
+        run: python -m pip install PyYAML==6.0.3 jsonschema==4.25.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: stack-release-qualified-${{ github.run_id }}
+          path: ${{ runner.temp }}/installer-transaction
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: selfhost-lock-preparation-unqualified-${{ github.run_id }}
+          path: ${{ runner.temp }}/installer-prepared
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: installer-prepared-provenance-${{ github.run_id }}
+          path: ${{ runner.temp }}/installer-prepared-proof
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: operator-catalog-amd64-${{ github.run_id }}
+          path: ${{ runner.temp }}/installer-operator
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: operator-installer-provenance-amd64-${{ github.run_id }}
+          path: ${{ runner.temp }}/installer-operator-proof
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: selfhost-public-kms-jwk-unqualified-${{ github.run_id }}
+          path: ${{ runner.temp }}/installer-public-kms
+      - name: Prepare the installer-pinned provenance verifier
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          verifier="$RUNNER_TEMP/installer-gh"
+          mkdir "$verifier"
+          curl --fail --location --silent --show-error --proto '=https' --proto-redir '=https' \
+            --connect-timeout 20 --max-time 120 --max-filesize 15031001 \
+            https://github.com/cli/cli/releases/download/v2.103.2/gh_2.103.2_linux_amd64.tar.gz \
+            --output "$verifier/gh.tar.gz"
+          test "$(stat -c %s "$verifier/gh.tar.gz")" = 15031001
+          printf '%s  %s\n' 62ccf747115ddc61237efffdde66a3c8f70ba249433dc64f70801089b59c59c8 "$verifier/gh.tar.gz" | sha256sum --check --strict
+          tar -xzf "$verifier/gh.tar.gz" --no-same-owner --no-same-permissions -C "$verifier" gh_2.103.2_linux_amd64/bin/gh
+          chmod 700 "$verifier/gh_2.103.2_linux_amd64/bin/gh"
+      - name: Verify exact source, transaction, and current-attempt producer proofs
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          test "$GITHUB_REF" = refs/heads/main
+          test "$GITHUB_SHA" = "$SOURCE_SHA"
+          test "$(git rev-parse 'HEAD^{commit}')" = "$SOURCE_SHA"
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          git merge-base --is-ancestor "$SOURCE_SHA" refs/remotes/origin/main
+          python scripts/release_transaction.py validate \
+            --input "$RUNNER_TEMP/installer-transaction/release-transaction.json" \
+            --repository "$GITHUB_REPOSITORY" --source-sha "$SOURCE_SHA" \
+            --stack-lock release/stack-lock.json --claim-run-id "$CLAIM_RUN_ID" \
+            --output "$RUNNER_TEMP/installer-validated-transaction.json"
+          jq -e --arg tag "$TAG" '
+            .tag == $tag and (.state == "qualified" or .state == "promoting" or .state == "promoted")
+            and (.gates | length == 5)
+          ' "$RUNNER_TEMP/installer-validated-transaction.json" >/dev/null
+          for directory in installer-prepared installer-prepared-proof installer-operator installer-operator-proof installer-public-kms; do
+            chmod 700 "$RUNNER_TEMP/$directory"
+          done
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          from scripts.verify_installer_provenance import verify_subject
+          root = Path(os.environ["RUNNER_TEMP"])
+          gh = root / "installer-gh/gh_2.103.2_linux_amd64/bin/gh"
+          subjects = [(root / "installer-operator/marty-deploy-linux-amd64",
+                       root / "installer-operator-proof/marty-deploy-linux-amd64.provenance.jsonl")]
+          subjects += [(root / "installer-prepared" / name,
+                        root / "installer-prepared-proof/installer-prepared.provenance.jsonl")
+                       for name in ("prepared-selfhost-bundle.zip", "prepared-selfhost-images.json",
+                                    "prepared-selfhost-bundle.json", "prepared-selfhost-product-descriptor.json")]
+          subjects += [(root / "installer-public-kms" / name,
+                        root / "installer-public-kms" / bundle)
+                       for name, bundle in (("public-kms-jwk", "public-kms-jwk.slsa-bundle.json"),
+                                            ("selfhost-public-kms-jwk.json", "selfhost-public-kms-jwk.slsa-bundle.json"))]
+          for subject, bundle in subjects:
+              verify_subject(subject, bundle, gh=gh, workflow=".github/workflows/cd.yml",
+                             source_sha=os.environ["SOURCE_SHA"], run_id=int(os.environ["GITHUB_RUN_ID"]),
+                             run_attempt=int(os.environ["GITHUB_RUN_ATTEMPT"]))
+          PY
+          operator="$RUNNER_TEMP/installer-operator/marty-deploy-linux-amd64"
+          chmod 700 "$operator"
+          test "$("$operator" --build-identity)" = "$SOURCE_SHA:$TAG"
+          test "$(readelf -h "$operator" | sed -n 's/^[[:space:]]*Machine:[[:space:]]*//p')" = 'Advanced Micro Devices X86-64'
+          if readelf -l "$operator" | grep -q INTERP; then exit 1; fi
+          python scripts/check_prepared_selfhost_consumer.py \
+            --archive "$RUNNER_TEMP/installer-prepared/prepared-selfhost-bundle.zip" \
+            --image-lock "$RUNNER_TEMP/installer-prepared/prepared-selfhost-images.json" \
+            --transaction "$RUNNER_TEMP/installer-validated-transaction.json" \
+            --receipt "$RUNNER_TEMP/installer-prepared/prepared-selfhost-bundle.json" \
+            --descriptor "$RUNNER_TEMP/installer-prepared/prepared-selfhost-product-descriptor.json" \
+            --expected-source-sha "$SOURCE_SHA" --expected-run-id "$GITHUB_RUN_ID" \
+            --verify-archive-only
+      - name: Produce exact unqualified installer input inventory
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          inputs="$RUNNER_TEMP/installer-inputs"
+          output="$RUNNER_TEMP/installer-unqualified"
+          mkdir "$inputs" "$output"
+          cp install.sh "$inputs/install.sh"
+          cp "$RUNNER_TEMP/installer-operator/marty-deploy-linux-amd64" "$inputs/"
+          cp "$RUNNER_TEMP/installer-prepared/prepared-selfhost-bundle.zip" "$inputs/"
+          cp "$RUNNER_TEMP/installer-prepared/prepared-selfhost-images.json" "$inputs/"
+          export SELFHOST_IMAGE_PREFIX=ghcr.io/elevenid/marty-ui
+          export SELFHOST_IMAGE_TAG="${TAG#v}"
+          export MARTY_KEYCLOAK_KMS_IMAGE
+          MARTY_KEYCLOAK_KMS_IMAGE="$(jq -er '.services.keycloak' "$inputs/prepared-selfhost-images.json")"
+          docker compose --profile '*' --env-file .env.selfhost.production.example \
+            -f docker-compose.selfhost.prod.yml -f docker-compose.selfhost.bundle.override.yml \
+            config --format json > "$RUNNER_TEMP/installer-source-compose.json"
+          python scripts/installer_release.py inventory --artifacts "$inputs" \
+            --compose-model "$RUNNER_TEMP/installer-source-compose.json" \
+            --source-sha "$SOURCE_SHA" --release-tag "$TAG" \
+            --build-run-id "$GITHUB_RUN_ID" --build-run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --output "$output/installer-inventory.json"
+          cp "$inputs/"* "$output/"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: installer-inputs-unqualified-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/installer-unqualified/
+          if-no-files-found: error
+          retention-days: 30
+
   publish-manifest:
-    needs: [resolve-transaction, validate-stack, build-ui, build-services, build-openbao-didcomm, build-keycloak, qualify-release, build-operator-catalog, prepare-official-candidate]
+    needs: [resolve-transaction, validate-stack, build-ui, build-services, build-openbao-didcomm, build-keycloak, qualify-release, build-operator-catalog, prepare-official-candidate, prepare-installer-inputs]
     runs-on: ubuntu-latest
     environment: stack-release
     env:

@@ -700,7 +700,7 @@ def test_verifier_release_lineage_uses_hardened_core_and_native_issuance() -> No
     workflow = _text(".github/workflows/cd.yml")
     assert 'manifest_timestamp="$(git show -s --format=%cI "$SOURCE_SHA")"' in workflow
     assert '--generated-at "$manifest_timestamp" --output stack-manifest.json' in workflow
-    assert '`prepare_selfhost_lock=true`' in _text("docs/selfhost-disposable-qualification-runbook.md")
+    assert 'mandatory installer inputs' in _text("docs/selfhost-disposable-qualification-runbook.md")
     release_tag = "v" + lock["release"].removeprefix("marty-ui@")
     cutover_guide = _text("docs/keycloak-kms-installed-cutover.md")
     assert release_tag in cutover_guide
@@ -862,11 +862,11 @@ def test_exercised_public_kms_helper_is_attested_only_for_prepared_selfhost() ->
                   if step.get("with", {}).get("name", "").startswith("selfhost-public-kms-jwk-unqualified-"))
     assert len(attest) == 2
     assert build < exercise < record < attest[0] < attest[1] < bundles < verify < upload
-    assert steps[build]["env"]["PREPARE_SELFHOST_LOCK"] == "${{ inputs.prepare_selfhost_lock }}"
-    assert 'if [[ "$PREPARE_SELFHOST_LOCK" = true ]]; then' in steps[build]["run"]
+    assert "PREPARE_SELFHOST_LOCK" not in steps[build]["env"]
+    assert "PREPARE_SELFHOST_LOCK" not in steps[build]["run"]
     assert 'test "$GITHUB_SHA" = "$SOURCE_SHA"' in steps[build]["run"]
     assert "--bin public-kms-jwk" in steps[build]["run"]
-    assert all(steps[i]["if"] == "inputs.prepare_selfhost_lock == true"
+    assert all("if" not in steps[i]
                for i in (record, *attest, verify, upload))
     assert [steps[i]["with"]["subject-path"] for i in attest] == [
         "public-kms-jwk", "selfhost-public-kms-jwk.json"]
