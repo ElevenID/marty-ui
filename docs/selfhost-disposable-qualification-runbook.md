@@ -227,6 +227,20 @@ activation, rollback and clean-host release acceptance remain unqualified.
 Do not replace individual files in the existing `secrets` directory or treat
 candidate production or model preparation as readiness or root retirement.
 
+The separate opt-in
+`actual_application_generation_prepares_full_snapshot_without_starting_services`
+fixture exercises the production packager, ingress provisioning, complete
+snapshot preparation and filesystem admission without creating application
+containers. In addition to the operator, Engine and image inputs above, provide
+`MARTY_INSTALLER_COMPOSE_EXECUTABLE`, `MARTY_INSTALLER_TEST_ORIGINAL_IMAGE_LOCK`
+and `MARTY_INSTALLER_TEST_IMAGE_LOCK`. Preserve the downloaded nightly lock;
+the second lock is an explicitly unqualified local fixture copy whose only
+changed field is the release label matching the current source base version.
+All32 image mappings must remain identical and helper digests must match them.
+The fixture records both lock hashes/releases, source commit and operator hash.
+This adaptation tests current-source interoperability with immutable images;
+it supplies no signed release admission or source-image provenance proof.
+
 ## Experimental preview installer path
 
 An [experimental tester preview](https://github.com/ElevenID/marty-ui/releases)

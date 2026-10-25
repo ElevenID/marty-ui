@@ -10,11 +10,11 @@ use marty_deployment_catalog::{
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     fs,
     io::{Read, Seek, SeekFrom},
     net::TcpListener,
-    os::unix::fs::PermissionsExt,
+    os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
 };
 type Result<T> = std::result::Result<T, String>;
@@ -78,19 +78,261 @@ fn observe_owned(
 #[test]
 #[ignore = "requires explicit anonymously pullable OpenBao digest and exact local Engine; creates four isolated owned containers"]
 fn actual_four_role_openbao_records_ownership_before_start() -> Result<()> {
-    run_fixture(false, false)
+    run_fixture(false, false, false)
 }
 
 #[test]
 #[ignore = "requires current static operator, published services/OpenBao digests and exact local Engine; creates isolated owned OpenBao and sequential provisioning helpers"]
 fn actual_renewal_bootstrap_uses_live_keycloak_and_workload_inputs() -> Result<()> {
-    run_fixture(true, false)
+    run_fixture(true, false, false)
 }
 
 #[test]
 #[ignore = "requires current static operator, published digests and exact local Engine; creates isolated owned renewal and generation helpers"]
 fn actual_orphan_generation_stages_verified_candidate_without_activation() -> Result<()> {
-    run_fixture(true, true)
+    run_fixture(true, true, false)
+}
+
+#[test]
+#[ignore = "requires current static operator, exact immutable image lock, Compose plugin and local Engine; prepares real application generation without starting applications"]
+fn actual_application_generation_prepares_full_snapshot_without_starting_services() -> Result<()> {
+    run_fixture(true, true, true)
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FixtureImageLock {
+    schema: String,
+    release: String,
+    services: BTreeMap<String, String>,
+    openbao_didcomm_image: String,
+}
+fn bounded_fixture_lock(path: &Path) -> Result<Vec<u8>> {
+    require(path.is_absolute(), "image lock must be absolute")?;
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
+        .open(path)
+        .map_err(|_| "fixture image lock unavailable")?;
+    let m = file
+        .metadata()
+        .map_err(|_| "fixture image lock metadata unavailable")?;
+    require(
+        m.is_file() && m.nlink() == 1 && m.len() > 0 && m.len() <= 1024 * 1024,
+        "fixture image lock must be bounded ordinary file",
+    )?;
+    let mut bytes = Vec::new();
+    file.take(1024 * 1024 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| "cannot read fixture image lock")?;
+    require(bytes.len() as u64 == m.len(), "fixture image lock changed")?;
+    Ok(bytes)
+}
+
+fn source_head(source: &Path) -> Result<String> {
+    use std::{
+        process::{Command, Stdio},
+        time::{Duration, Instant},
+    };
+    let mut output = tempfile::tempfile().map_err(|_| "cannot capture source identity")?;
+    let mut child = Command::new("/usr/bin/git")
+        .args(["rev-parse", "--verify", "HEAD"])
+        .current_dir(source)
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .stdout(
+            output
+                .try_clone()
+                .map_err(|_| "cannot capture source identity")?,
+        )
+        .spawn()
+        .map_err(|_| "cannot inspect source identity")?;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let status = loop {
+        let bounded = output.metadata().is_ok_and(|m| m.len() <= 128);
+        if !bounded || Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("source identity command exceeded bounds".into());
+        }
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => std::thread::sleep(Duration::from_millis(10)),
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("cannot observe source identity command".into());
+            }
+        }
+    };
+    require(
+        status.success() && output.metadata().is_ok_and(|m| m.len() <= 128),
+        "source identity command failed",
+    )?;
+    output
+        .seek(SeekFrom::Start(0))
+        .map_err(|_| "cannot read source identity")?;
+    let mut value = String::new();
+    output
+        .take(129)
+        .read_to_string(&mut value)
+        .map_err(|_| "cannot read source identity")?;
+    let value = value.trim();
+    require(
+        value.len() == 40
+            && value
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)),
+        "source identity is invalid",
+    )?;
+    Ok(value.to_owned())
+}
+
+fn stage_application_bundle(
+    source: &Path,
+    root: &Path,
+    bundle: &Path,
+    bao: &str,
+    services: &str,
+    operator_sha: &str,
+    state: &mut InstallerState,
+) -> Result<BTreeMap<String, String>> {
+    let source_sha = source_head(source)?;
+    let supplied = PathBuf::from(
+        std::env::var("MARTY_INSTALLER_TEST_IMAGE_LOCK")
+            .map_err(|_| "set adapted fixture MARTY_INSTALLER_TEST_IMAGE_LOCK")?,
+    );
+    let bytes = bounded_fixture_lock(&supplied)?;
+    let original_path = PathBuf::from(
+        std::env::var("MARTY_INSTALLER_TEST_ORIGINAL_IMAGE_LOCK")
+            .map_err(|_| "set retained published MARTY_INSTALLER_TEST_ORIGINAL_IMAGE_LOCK")?,
+    );
+    let original_bytes = bounded_fixture_lock(&original_path)?;
+    let original: FixtureImageLock =
+        serde_json::from_slice(&original_bytes).map_err(|_| "invalid original image lock")?;
+    let lock: FixtureImageLock =
+        serde_json::from_slice(&bytes).map_err(|_| "invalid fixture image lock")?;
+    require(
+        original.schema == lock.schema
+            && original.services == lock.services
+            && original.openbao_didcomm_image == lock.openbao_didcomm_image
+            && original.release != lock.release,
+        "fixture adaptation may change only release label",
+    )?;
+    let original_local = root.join("fixture-original-image-lock.json");
+    fs::write(&original_local, &original_bytes).map_err(|_| "cannot retain original image lock")?;
+    fs::set_permissions(&original_local, fs::Permissions::from_mode(0o600))
+        .map_err(|_| "cannot protect original image lock")?;
+    let pinned = regex::Regex::new(r"\A[a-z0-9][a-z0-9._:/-]*@sha256:[0-9a-f]{64}\z").unwrap();
+    require(
+        lock.schema == "marty.selfhost-image-lock/v1"
+            && lock.services.len() == 32
+            && lock.openbao_didcomm_image == bao
+            && lock.services.values().all(|v| pinned.is_match(v)),
+        "fixture image lock closure or immutable digests differ",
+    )?;
+    for role in ["gateway", "signing-keys", "issuance", "issuance-native"] {
+        require(
+            lock.services.get(role).map(String::as_str) == Some(services),
+            "services image differs from provisioning helpers",
+        )?;
+    }
+    require(
+        lock.services.get("keycloak") == lock.services.get("keycloak-configurator"),
+        "Keycloak image role mismatch",
+    )?;
+    let stack: Value = serde_json::from_slice(
+        &fs::read(source.join("release/stack-lock.json"))
+            .map_err(|_| "source stack lock unavailable")?,
+    )
+    .map_err(|_| "source stack lock invalid")?;
+    require(
+        stack["release"] == lock.release,
+        "fixture lock must match source release",
+    )?;
+    let local = root.join("fixture-image-lock.json");
+    fs::write(&local, &bytes).map_err(|_| "cannot stage fixture image lock")?;
+    fs::set_permissions(&local, fs::Permissions::from_mode(0o600))
+        .map_err(|_| "cannot protect fixture image lock")?;
+    let executable = std::env::var_os("MARTY_INSTALLER_COMPOSE_EXECUTABLE")
+        .ok_or("set standalone MARTY_INSTALLER_COMPOSE_EXECUTABLE")?;
+    require(
+        Path::new(&executable).is_absolute(),
+        "Compose executable must be absolute",
+    )?;
+    marty_selfhost_bundle::package_with_image_lock(
+        &marty_selfhost_bundle::Options {
+            repo: source.into(),
+            output: bundle.into(),
+            archive: None,
+            replace: false,
+        },
+        |directory, args| {
+            marty_selfhost_bundle::process::compose(directory, args, Some(&executable))
+        },
+        &local,
+    )?;
+    // WSL source checkout permissions can reflect the mounted Windows filesystem.
+    // Normalize only freshly packaged public fixture assets to their ordinary
+    // container-readable modes; bytes/production marker remain unchanged.
+    fn protect(path: &Path) -> Result<()> {
+        let m = fs::symlink_metadata(path).map_err(|_| "fixture package metadata unavailable")?;
+        require(
+            !m.file_type().is_symlink(),
+            "fixture package contains a link",
+        )?;
+        if m.is_dir() {
+            for entry in fs::read_dir(path).map_err(|_| "fixture package unavailable")? {
+                protect(
+                    &entry
+                        .map_err(|_| "fixture package entry unavailable")?
+                        .path(),
+                )?;
+            }
+            fs::set_permissions(path, fs::Permissions::from_mode(0o755))
+                .map_err(|_| "cannot protect fixture package directory")?;
+        } else {
+            require(
+                m.is_file() && m.nlink() == 1,
+                "fixture package contains special file",
+            )?;
+            let executable = path.extension().is_some_and(|e| e == "sh");
+            fs::set_permissions(
+                path,
+                fs::Permissions::from_mode(if executable { 0o755 } else { 0o644 }),
+            )
+            .map_err(|_| "cannot protect fixture package file")?;
+        }
+        Ok(())
+    }
+    protect(bundle)?;
+    fs::set_permissions(bundle, fs::Permissions::from_mode(0o700))
+        .map_err(|_| "cannot protect fixture bundle root")?;
+    let marker: Value = serde_json::from_slice(
+        &fs::read(bundle.join(marty_selfhost_bundle::MARKER))
+            .map_err(|_| "package marker unavailable")?,
+    )
+    .map_err(|_| "package marker invalid")?;
+    for (name, expected) in marker["files"]
+        .as_object()
+        .ok_or("package marker files absent")?
+    {
+        require(
+            format!(
+                "{:x}",
+                Sha256::digest(fs::read(bundle.join(name)).map_err(|_| "packaged file absent")?)
+            ) == expected.as_str().ok_or("package marker hash invalid")?,
+            "fixture package bytes changed",
+        )?;
+    }
+    state.write_evidence("engine-fixture-package.json",&serde_json::to_vec(&json!({"schema":"elevenid.installer-engine-fixture-package/v1","source_sha":source_sha,"operator_sha256":operator_sha,"synthetic_journal_release":"v0.0.0","image_lock_sha256":format!("{:x}",Sha256::digest(&bytes)),"release":lock.release,"original_image_lock_sha256":format!("{:x}",Sha256::digest(&original_bytes)),"original_release":original.release,"adaptation":"release label only for source-based preparation qualification; image mapping unchanged","signed_release_admission":false,"application_started":false})).map_err(|_|"cannot encode package fixture receipt")?)?;
+    let mut images = lock.services;
+    images.insert("openbao_didcomm_image".into(), bao.into());
+    Ok(images)
 }
 
 fn persist_fixture_operator(root: &Path, state: &mut InstallerState) -> Result<String> {
@@ -163,7 +405,7 @@ fn persist_fixture_operator(root: &Path, state: &mut InstallerState) -> Result<S
     Ok(digest)
 }
 
-fn run_fixture(renewal: bool, generation: bool) -> Result<()> {
+fn run_fixture(renewal: bool, generation: bool, application: bool) -> Result<()> {
     let image = std::env::var("MARTY_INSTALLER_TEST_OPENBAO_IMAGE").map_err(|_| {
         "set MARTY_INSTALLER_TEST_OPENBAO_IMAGE to an actual published plugin digest"
     })?;
@@ -232,36 +474,53 @@ fn run_fixture(renewal: bool, generation: bool) -> Result<()> {
     state.advance(Phase::Provisioning)?;
     state.generate_local_credentials(&json!({"passwordPolicy":PASSWORD_POLICY}))?;
     let bundle = installation.join("bundle");
-    private_directory(&bundle)?;
-    private_directory(&bundle.join("docker"))?;
     let source = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..");
-    for resource in [
-        "docker-compose.selfhost.openbao.yml",
-        "docker/openbao-selfhost.hcl",
-        "docker/openbao-init.sh",
-        "docker/openbao-selfhost-init.sh",
-        "docker/openbao-haip-workload-policy.hcl",
-    ] {
-        let destination = bundle.join(resource);
-        fs::copy(source.join(resource), &destination)
-            .map_err(|_| "cannot stage canonical OpenBao resource")?;
-        fs::set_permissions(destination, fs::Permissions::from_mode(0o444))
-            .map_err(|_| "cannot protect staged resource")?;
-    }
-    if renewal {
-        for (input, output) in [
-            (
-                ".env.selfhost.production.example",
-                ".env.selfhost.production.example",
-            ),
-            ("docker-compose.selfhost.prod.yml", "docker-compose.yml"),
+    let application_images = if application {
+        Some(stage_application_bundle(
+            &source,
+            &root,
+            &bundle,
+            &image,
+            services_image
+                .as_deref()
+                .ok_or("application fixture needs services image")?,
+            operator_sha
+                .as_deref()
+                .ok_or("application fixture needs static operator")?,
+            &mut state,
+        )?)
+    } else {
+        private_directory(&bundle)?;
+        private_directory(&bundle.join("docker"))?;
+        for resource in [
+            "docker-compose.selfhost.openbao.yml",
+            "docker/openbao-selfhost.hcl",
+            "docker/openbao-init.sh",
+            "docker/openbao-selfhost-init.sh",
+            "docker/openbao-haip-workload-policy.hcl",
         ] {
-            fs::copy(source.join(input), bundle.join(output))
-                .map_err(|_| "cannot stage canonical TLS wiring")?;
-            fs::set_permissions(bundle.join(output), fs::Permissions::from_mode(0o644))
-                .map_err(|_| "cannot protect TLS wiring")?;
+            let destination = bundle.join(resource);
+            fs::copy(source.join(resource), &destination)
+                .map_err(|_| "cannot stage canonical OpenBao resource")?;
+            fs::set_permissions(destination, fs::Permissions::from_mode(0o444))
+                .map_err(|_| "cannot protect staged resource")?;
         }
-    }
+        if renewal {
+            for (input, output) in [
+                (
+                    ".env.selfhost.production.example",
+                    ".env.selfhost.production.example",
+                ),
+                ("docker-compose.selfhost.prod.yml", "docker-compose.yml"),
+            ] {
+                fs::copy(source.join(input), bundle.join(output))
+                    .map_err(|_| "cannot stage canonical TLS wiring")?;
+                fs::set_permissions(bundle.join(output), fs::Permissions::from_mode(0o644))
+                    .map_err(|_| "cannot protect TLS wiring")?;
+            }
+        }
+        None
+    };
     let docker = DockerRunner::new(
         &executable,
         "unix:///var/run/docker.sock",
@@ -317,6 +576,28 @@ fn run_fixture(renewal: bool, generation: bool) -> Result<()> {
             "tls-observation.json",
             &serde_json::to_vec(&tls).map_err(|_| "cannot encode TLS receipt")?,
         )?;
+        let ingress = if application {
+            let ingress = marty_deployment_catalog::installer_ingress::provision(
+                &executable,
+                &installation,
+                &bundle,
+                &mut state,
+                &receipt,
+                services,
+                operator,
+            )?;
+            require(
+                ingress.container_removed && !ingress.installation_ready,
+                "ingress helper did not complete scoped removal",
+            )?;
+            state.write_evidence(
+                "ingress-observation.json",
+                &serde_json::to_vec(&ingress).map_err(|_| "cannot encode ingress receipt")?,
+            )?;
+            Some(ingress)
+        } else {
+            None
+        };
         let renewed = marty_deployment_catalog::installer_renewal::provision(
             &executable,
             &installation,
@@ -369,6 +650,102 @@ fn run_fixture(renewal: bool, generation: bool) -> Result<()> {
         } else {
             None
         };
+
+        if application {
+            let mut original_hashes = BTreeMap::new();
+            for entry in fs::read_dir(installation.join("secrets"))
+                .map_err(|_| "original secrets unavailable")?
+            {
+                let entry = entry.map_err(|_| "original secret entry unavailable")?;
+                let metadata = fs::symlink_metadata(entry.path())
+                    .map_err(|_| "original secret metadata unavailable")?;
+                require(
+                    metadata.is_file()
+                        && !metadata.file_type().is_symlink()
+                        && metadata.nlink() == 1,
+                    "original secret must be ordinary",
+                )?;
+                original_hashes.insert(
+                    entry.file_name(),
+                    format!(
+                        "{:x}",
+                        Sha256::digest(
+                            fs::read(entry.path()).map_err(|_| "original secret unreadable")?
+                        )
+                    ),
+                );
+            }
+            let prepared =
+                marty_deployment_catalog::installer_application::prepare_with_generation(
+                    &executable,
+                    &installation,
+                    &bundle,
+                    &mut state,
+                    &receipt,
+                    application_images
+                        .as_ref()
+                        .ok_or("application image map absent")?,
+                )?;
+            let selected = marty_deployment_catalog::installer_generation_binding::load_verified(
+                &installation,
+                &state.journal().installation_id().to_string(),
+                &engine,
+            )?
+            .ok_or("application generation binding absent")?;
+            marty_deployment_catalog::installer_generation_binding::verify_model(
+                &installation,
+                &selected,
+                &prepared.plan,
+            )?;
+            marty_deployment_catalog::installer_application_observation::validate_inputs_with_generation(&prepared.plan,&installation,&bundle,Some(&selected))?;
+            require(
+                prepared.plan.model["services"]
+                    .as_object()
+                    .is_some_and(|s| s.len() == 30)
+                    && prepared.plan.selected_services.len() == 29
+                    && !prepared.plan.installation_ready
+                    && !selected.activated
+                    && !selected.root_retired
+                    && !selected.installation_ready,
+                "prepared application must remain unstarted and unready",
+            )?;
+            for (name, hash) in original_hashes {
+                require(
+                    format!(
+                        "{:x}",
+                        Sha256::digest(
+                            fs::read(installation.join("secrets").join(name))
+                                .map_err(|_| "original secret disappeared")?
+                        )
+                    ) == hash,
+                    "application preparation changed original secret",
+                )?;
+            }
+            let candidate = candidate
+                .as_ref()
+                .ok_or("application fixture candidate absent")?;
+            for (name, hash) in &candidate.candidate_sha256 {
+                require(selected.files.get(name).is_some_and(|f|f.source==marty_deployment_catalog::installer_generation_binding::GenerationSource::Candidate&&&f.sha256==hash)&&format!("{:x}",Sha256::digest(selected.read(&installation,name)?))==*hash,"selected candidate bytes differ")?;
+            }
+            require(
+                docker
+                    .run_checked(&[
+                        "ps",
+                        "-aq",
+                        "--no-trunc",
+                        "--filter",
+                        &format!(
+                            "label=com.docker.compose.project={}",
+                            state.journal().compose_project()
+                        ),
+                    ])?
+                    .trim()
+                    .is_empty(),
+                "application preparation unexpectedly created containers",
+            )?;
+            state.write_evidence("engine-fixture-application-prepared.json",&serde_json::to_vec(&json!({"schema":"elevenid.installer-engine-fixture-application/v1","files":selected.files.len(),"candidate_files":40,"selected_services":29,"execution_services":30,"application_started":false,"root_retired":false,"installation_ready":false})).map_err(|_|"cannot encode fixture preparation receipt")?)?;
+            drop(prepared); // release only this fixture's four still-held reservations
+        }
         let mut helpers = vec![
             ("keycloak", &keycloak.container_id),
             ("tls", &tls.container_id),
@@ -376,6 +753,9 @@ fn run_fixture(renewal: bool, generation: bool) -> Result<()> {
         ];
         if let Some(candidate) = &candidate {
             helpers.push(("generation", &candidate.container_id));
+        }
+        if let Some(ingress) = &ingress {
+            helpers.push(("ingress", &ingress.container_id));
         }
         for (stage, container) in helpers {
             let removed: Value = serde_json::from_slice(
