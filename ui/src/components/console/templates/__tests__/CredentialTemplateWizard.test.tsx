@@ -27,7 +27,7 @@ vi.mock('react-router', async () => {
 })
 
 vi.mock('../../../../hooks/useAuth', () => ({
-  useAuth: () => ({ organizationId: mockOrgContext.authOrganizationId }),
+  useAuth: () => ({ organizationId: mockOrgContext.authOrganizationId, user: { user_id: 'test-user' } }),
 }))
 
 vi.mock('../../../../contexts/ConsoleContext', () => ({

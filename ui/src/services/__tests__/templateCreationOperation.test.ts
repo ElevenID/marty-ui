@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { webcrypto } from 'node:crypto';
-import { createTemplateCreationOperation } from '../templateCreationOperation';
+import { createTemplateCreationOperation as createOperation } from '../templateCreationOperation';
 import { createCredentialTemplate, getCredentialTemplate, activateCredentialTemplate } from '../presentationPolicyApi';
 
 vi.mock('../presentationPolicyApi', () => ({
@@ -8,6 +8,7 @@ vi.mock('../presentationPolicyApi', () => ({
   createCredentialTemplate: vi.fn(), getCredentialTemplate: vi.fn(), activateCredentialTemplate: vi.fn(),
 }));
 const data = { organization_id: 'org-a', name: 'Template', activate_immediately: true };
+const createTemplateCreationOperation = (org: string) => createOperation(org, 'test-user');
 const draft = { id: 'template-a', organization_id: 'org-a', status: 'draft' };
 beforeEach(() => {
   vi.stubGlobal('crypto', webcrypto);
@@ -18,6 +19,22 @@ beforeEach(() => {
   vi.mocked(activateCredentialTemplate).mockResolvedValue({ ...draft, status: 'active' });
 });
 describe('template creation recovery', () => {
+  it('does not replay an unresolved key for a different principal in the same organization', async () => {
+    vi.mocked(createCredentialTemplate).mockRejectedValueOnce(Object.assign(new Error('lost response'), { operationStatusUnknown: true }));
+    await expect(createTemplateCreationOperation('org-a').submit(data)).rejects.toThrow();
+    await expect(createOperation('org-a', 'other-user').submit(data)).rejects.toThrow('previous account');
+    expect(createCredentialTemplate).toHaveBeenCalledTimes(1);
+  });
+  it('does not replay an unresolved create outside server cache retention', async () => {
+    vi.mocked(createCredentialTemplate).mockRejectedValueOnce(Object.assign(new Error('lost response'), { operationStatusUnknown: true }));
+    await expect(createTemplateCreationOperation('org-a').submit(data)).rejects.toThrow();
+    const key = 'marty:template-create:v1:org-a';
+    const record = JSON.parse(sessionStorage.getItem(key)!);
+    record.createdAt -= 86_400_000;
+    sessionStorage.setItem(key, JSON.stringify(record));
+    await expect(createTemplateCreationOperation('org-a').submit(data)).rejects.toThrow('safe retry window');
+    expect(createCredentialTemplate).toHaveBeenCalledTimes(1);
+  });
   it('does not create a different payload while the previous request is uncertain after remount', async () => {
     vi.mocked(createCredentialTemplate).mockRejectedValueOnce(Object.assign(new Error('lost response'), { operationStatusUnknown: true }));
     await expect(createTemplateCreationOperation('org-a').submit(data)).rejects.toThrow();

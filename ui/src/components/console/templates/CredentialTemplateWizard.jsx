@@ -26,6 +26,7 @@ import AccountTreeIcon from '@mui/icons-material/AccountTree';
 
 import { useWizard } from '../../../hooks/useWizard';
 import { useConsole } from '../../../contexts/ConsoleContext';
+import { useAuth } from '../../../hooks/useAuth';
 import { createTemplateCreationOperation } from '../../../services/templateCreationOperation';
 import BasicsStep from './steps/BasicsStep';
 import ClaimsStep from './steps/ClaimsStep';
@@ -47,9 +48,11 @@ const CredentialTemplateWizard = () => {
   const navigate = useNavigate();
   const { t } = useTranslation('console');
   const { activeOrgId } = useConsole();
+  const { user } = useAuth();
+  const principalId = user?.user_id;
   const effectiveOrganizationId = activeOrgId;
   const organizationEpoch = useRef(0);
-  const creation = useMemo(() => createTemplateCreationOperation(activeOrgId), [activeOrgId]);
+  const creation = useMemo(() => createTemplateCreationOperation(activeOrgId, principalId), [activeOrgId, principalId]);
   const [createdDraft, setCreatedDraft] = useState(null);
 
   const validateStep = useCallback((stepIndex, data) => {
@@ -105,7 +108,7 @@ const CredentialTemplateWizard = () => {
   }, [effectiveOrganizationId, t, creation]);
 
   const wizard = useWizard({
-    scopeKey: activeOrgId,
+    scopeKey: `${activeOrgId}:${principalId}`,
     steps: getSteps(t),
     initialData: {
       name: '',
@@ -139,7 +142,7 @@ const CredentialTemplateWizard = () => {
       revocation_profile_id: null, credential_payload_format: undefined, supported_formats: undefined,
       issuance_protocol: undefined, _issuer_selection: null });
     return () => { organizationEpoch.current += 1; };
-  }, [activeOrgId, updateWizardData]);
+  }, [activeOrgId, principalId, updateWizardData]);
 
   const renderStepContent = () => {
     switch (wizard.activeStep) {
