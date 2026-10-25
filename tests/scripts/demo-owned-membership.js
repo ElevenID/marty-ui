@@ -4,7 +4,7 @@
 const assert = require('node:assert/strict');
 const {
   cleanupApplicationCredential, createOwnedApplication, ensureApplicantProfile,
-  issueOwnedApplication, requireJson, requireOwnedApplication, submitOwnedApplication,
+  issueOwnedApplication, listResources, requireJson, requireOwnedApplication, submitOwnedApplication,
   approvedApplicationFlowPayload,
 } = require('./beta-demo-resource-helpers');
 const { createOwnedActiveConfiguration, retireOwnedConfiguration } = require('./demo-owned-configuration');
@@ -21,6 +21,13 @@ function createOwnedMembership(operator, inputs) {
       assert.equal(credential.status, 'ACTIVE');
       assert.equal(credential.credential_type, inputs.configurationId);
       assert.equal(credential.vct, inputs.vct);
+      const applicationSources = (await listResources(operator, '/v1/application-templates', owned.organizationId))
+        .filter(item => item.organization_id === owned.organizationId && item.status === 'ACTIVE'
+          && item.credential_template_id === credential.id);
+      assert.equal(applicationSources.length, 1, 'Require one active source membership application contract');
+      const applicationSource = applicationSources[0];
+      assert.ok(applicationSource.description?.trim(), 'Membership badge requires its governed description');
+      assert.ok(Array.isArray(applicationSource.form_fields) && Array.isArray(applicationSource.claim_collection_rules));
       const payload = Object.fromEntries(['organization_id', 'description', 'credential_type', 'vct', 'doctype',
         'privacy_posture', 'selective_disclosure_fields', 'zk_predicate_claims', 'derived_attributes',
         'display_style', 'validity_rules', 'supported_formats', 'trust_profile_id', 'revocation_profile_id',
@@ -47,13 +54,15 @@ function createOwnedMembership(operator, inputs) {
       assert.equal(ownCredential.credential_type, inputs.receiptConfigurationId);
       const application = await createOwnedActiveConfiguration(operator, owned, {
         collectionPath: '/v1/application-templates', name: 'First-party membership control',
-        payload: { organization_id: owned.organizationId, credential_template_id: owned.credentialTemplateId,
-          description: 'Run-owned membership application; shared issuer and login policy remain unchanged.',
-          form_fields: credential.claims.map(claim => ({ field_id: claim.name,
-            label: claim.name, field_type: 'TEXT', required: claim.required, claim_mapping: claim.name })),
-          evidence_requirements: [], required_checks: [], claim_collection_rules: [],
+        // Preserve the production Rust-generated collection contract. System
+        // claims (including badge description, role and member ID) must not be
+        // recreated as applicant-entered form fields by the recorder.
+        payload: { ...Object.fromEntries(['description', 'form_fields', 'evidence_requirements',
+          'required_checks', 'claim_collection_rules', 'application_validity_days', 'notification_config', 'ui_config']
+          .filter(key => applicationSource[key] !== undefined).map(key => [key, applicationSource[key]])),
+          organization_id: owned.organizationId, credential_template_id: owned.credentialTemplateId,
           approval_strategy: 'MANUAL', approval_policy_set_id: null, application_validity_days: 1,
-          notification_config: {}, ui_config: {} },
+        },
       });
       owned.applicationTemplateId = application.id;
       const flow = await createOwnedActiveConfiguration(operator, owned, {
@@ -72,9 +81,6 @@ function createOwnedMembership(operator, inputs) {
       owned.applicantId = profile.id;
       await createOwnedApplication(applicantPage, owned, { formData: {
         email: inputs.email, given_name: inputs.givenName, family_name: inputs.familyName,
-        member_id: `demo-${owned.runId}`, organization_id: owned.organizationId,
-        organization_name: 'ElevenID beta demo', role: 'applicant',
-        achievement_name: 'Marty Verified Member', issued_at: new Date().toISOString().slice(0, 10),
       }, integrationContext: { demo_scenario: 'first-party-browser-wallet' }, label: 'Create owned membership application' });
       await submitOwnedApplication(applicantPage, owned, 'Submit owned membership application');
       const root = `/v1/organizations/${encodeURIComponent(owned.organizationId)}/applicants/${encodeURIComponent(owned.applicationId)}`;
