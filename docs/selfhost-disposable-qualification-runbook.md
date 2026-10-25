@@ -117,6 +117,34 @@ Uninstall refuses a partial renewal stage or a still-present helper. Recovery
 retains these directories and receipts; it does not automatically repeat minting.
 Offline contract tests do not establish successful live bootstrap or renewal.
 
+For source-based Linux ownership qualification, run
+`bash scripts/qualify_installer_ownership.sh` as a developer with the build
+dependencies installed and passwordless sudo for the compiled test executable.
+This runs one explicitly selected root-only test with synthetic temporary files.
+It checks the real recipient UID/GID, clears supplementary groups, proves the
+recipient can read the delivered copy, and requires permission-denied errors for
+root originals and another user's access. On WSL without passwordless sudo, the
+same exact compiled test can be invoked with `wsl -u root` after verifying its
+test listing. This is component evidence, not clean-host release acceptance.
+The reviewed OpenBao image produces its public CA as UID 100. The fixed CA input
+therefore permits UID 0 or 100 with the existing read-only, mode and link checks;
+the root token still requires UID 0 and `0400`. This is compatibility with the
+pinned producer, not a general trust rule for certificates owned by UID 100.
+
+The opt-in `installer_openbao_engine` test
+`actual_renewal_bootstrap_uses_live_keycloak_and_workload_inputs` exercises actual
+OpenBao, Keycloak credential provisioning, workload TLS and renewal bootstrap.
+It requires explicit `MARTY_INSTALLER_TEST_ENGINE_ID`,
+`MARTY_INSTALLER_TEST_OPENBAO_IMAGE`, `MARTY_INSTALLER_TEST_SERVICES_IMAGE` and
+`MARTY_INSTALLER_TEST_OPERATOR` values. Use immutable published image digests and
+a current-source Linux amd64 static operator build; the test validates the ELF
+and persisted hash, while the caller records source/build provenance. Set
+`TMPDIR` to a persistent private recovery parent before running the exact test
+with `--exact --ignored --nocapture`. A failure retains owned resources and
+private state. Successful helper removal precedes exact four-role OpenBao
+cleanup and comparison with the original neighboring resource sets. This
+fixture has synthetic release admission and cannot qualify a version release.
+
 This step retains the bootstrap root. Initial workload and Keycloak credentials
 are root descendants, so revoking root before replacing them would break the
 installation. Replacement credentials need orphan-token verification, durable

@@ -24,6 +24,18 @@ use std::{
 };
 type Result<T> = std::result::Result<T, String>;
 const REFUSAL: &str = "Keycloak provisioning refused; preserve installation state for recovery";
+const SCRATCH_OPTIONS: &str = "rw,noexec,nosuid,nodev,size=1048576,mode=0700";
+const SCRATCH_PATHS: [&str; 2] = ["/openbao/file", "/openbao/logs"];
+
+fn scratch_configuration() -> Value {
+    json!({"/openbao/file":SCRATCH_OPTIONS,"/openbao/logs":SCRATCH_OPTIONS})
+}
+
+// Cover the admitted image's exact inherited volumes BEFORE Docker create;
+// unknown declarations must never allocate unrecorded anonymous volumes.
+fn image_volumes(image: &Value) -> Result<()> {
+    require(image["Config"]["Volumes"] == json!({"/openbao/file":{},"/openbao/logs":{}}))
+}
 #[derive(Serialize)]
 pub struct KeycloakReceipt {
     pub schema: &'static str,
@@ -91,6 +103,9 @@ fn command(contract: &Contract) -> Result<Vec<String>> {
         "--entrypoint".into(),
         "/input/marty-deploy".into(),
     ];
+    for target in SCRATCH_PATHS {
+        args.extend(["--tmpfs".into(), format!("{target}:{SCRATCH_OPTIONS}")]);
+    }
     for (target, (source, readonly)) in &contract.mounts {
         args.extend([
             "--mount".into(),
@@ -159,7 +174,7 @@ fn validate_observation(
             && empty_or_null(&host["Devices"])
             && empty_or_null(&host["DeviceRequests"])
             && empty_or_null(&host["Binds"])
-            && empty_or_null(&host["Tmpfs"]),
+            && host["Tmpfs"] == scratch_configuration(),
     )?;
     let networks = c["NetworkSettings"]["Networks"]
         .as_object()
@@ -324,6 +339,7 @@ pub fn provision(
                 .as_array()
                 .is_some_and(|digests| digests.contains(&json!(bao.image))),
     )?;
+    image_volumes(&images[0])?;
     let image_id = images[0]["Id"].as_str().ok_or(REFUSAL)?.to_owned();
     require(image_id.strip_prefix("sha256:").is_some_and(id))?;
     let contract = Contract {
@@ -488,7 +504,7 @@ mod tests {
         );
         json!({"Id":"d".repeat(64),"Image":contract.image_id,"Name":format!("/{}",contract.name),
             "Config":{"Image":contract.image,"User":"0:0","Entrypoint":["/input/marty-deploy"],"Cmd":["installer-keycloak-bridge","--nonce",contract.nonce],"Labels":{"com.elevenid.installer.id":contract.owner,"com.elevenid.installer.stage":"keycloak"}},
-            "HostConfig":{"ReadonlyRootfs":true,"Privileged":false,"CapDrop":["ALL"],"CapAdd":["DAC_OVERRIDE"],"SecurityOpt":["no-new-privileges"],"NetworkMode":contract.network_id,"AutoRemove":false,"RestartPolicy":{"Name":"no"},"PidMode":"","UsernsMode":"","IpcMode":"private","Binds":null,"PortBindings":{},"Devices":[],"DeviceRequests":null,"Tmpfs":{}},
+            "HostConfig":{"ReadonlyRootfs":true,"Privileged":false,"CapDrop":["ALL"],"CapAdd":["DAC_OVERRIDE"],"SecurityOpt":["no-new-privileges"],"NetworkMode":contract.network_id,"AutoRemove":false,"RestartPolicy":{"Name":"no"},"PidMode":"","UsernsMode":"","IpcMode":"private","Binds":null,"PortBindings":{},"Devices":[],"DeviceRequests":null,"Tmpfs":scratch_configuration()},
             "NetworkSettings":{"Networks":networks},"Mounts":mounts,"State":{"Running":false,"Status":if terminal {"exited"} else {"created"},"ExitCode":0,"OOMKilled":false}})
     }
     #[test]
@@ -500,9 +516,47 @@ mod tests {
             .iter()
             .any(|v| v == "--rm" || v == "--force" || v == "--privileged"));
         assert_eq!(args.iter().filter(|v| v.as_str() == "--mount").count(), 4);
+        assert_eq!(args.iter().filter(|v| v.as_str() == "--tmpfs").count(), 2);
+        for path in SCRATCH_PATHS {
+            assert!(args
+                .windows(2)
+                .any(|v| v == ["--tmpfs", &format!("{path}:{SCRATCH_OPTIONS}")]));
+        }
         assert!(args.contains(&"DAC_OVERRIDE".into()));
         c.mounts.get_mut("/output").unwrap().0 = PathBuf::from("/owned/comma,path");
         assert!(command(&c).is_err());
+    }
+    #[test]
+    fn inherited_image_volumes_require_exact_bounded_scratch_closure() {
+        image_volumes(&json!({"Config":{"Volumes":{"/openbao/file":{},"/openbao/logs":{}}}}))
+            .unwrap();
+        for volumes in [
+            Value::Null,
+            json!({}),
+            json!({"/openbao/file":{}}),
+            json!({"/openbao/file":{},"/openbao/logs":{},"/foreign":{}}),
+            json!({"/openbao/file":{"size":1},"/openbao/logs":{}}),
+        ] {
+            assert!(image_volumes(&json!({"Config":{"Volumes":volumes}})).is_err());
+        }
+        let contract = contract();
+        let container = "d".repeat(64);
+        for tmpfs in [
+            Value::Null,
+            json!({}),
+            json!({"/openbao/file":SCRATCH_OPTIONS}),
+            json!({"/openbao/file":"rw,size=1048576","/openbao/logs":SCRATCH_OPTIONS}),
+            json!({"/openbao/file":SCRATCH_OPTIONS,"/openbao/logs":SCRATCH_OPTIONS,"/tmp":SCRATCH_OPTIONS}),
+        ] {
+            let mut observed = observed(&contract, false);
+            observed["HostConfig"]["Tmpfs"] = tmpfs;
+            assert!(validate_observation(&observed, &container, &contract, false).is_err());
+        }
+        let mut anonymous = observed(&contract, true);
+        anonymous["Mounts"].as_array_mut().unwrap().push(
+            json!({"Type":"volume","Source":"/foreign","Destination":"/openbao/file","RW":true}),
+        );
+        assert!(validate_observation(&anonymous, &container, &contract, true).is_err());
     }
     #[test]
     fn exact_created_and_exited_contracts_refuse_mutations() {

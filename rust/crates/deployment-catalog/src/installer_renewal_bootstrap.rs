@@ -118,14 +118,19 @@ fn read_file(
     Ok(bytes)
 }
 
-fn input(path: &Path, maximum: u64, modes: &[u32]) -> Result<Vec<u8>> {
+const ROOT_OWNERS: &[u32] = &[0];
+// The reviewed pinned OpenBao TLS producer owns its public CA as UID 100.
+// Identity comes from the admitted container and exact read-only source mount,
+// not from this UID alone. This exception never applies to the root token.
+const CA_OWNERS: &[u32] = &[0, 100];
+fn input(path: &Path, maximum: u64, owners: &[u32], modes: &[u32]) -> Result<Vec<u8>> {
     require(path.is_absolute() && path.canonicalize().map_err(|_| REFUSED)? == path)?;
     let file = OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
         .open(path)
         .map_err(|_| REFUSED)?;
-    read_file(file, maximum, &[0], modes, true)
+    read_file(file, maximum, owners, modes, true)
 }
 
 fn entry(
@@ -231,12 +236,17 @@ pub async fn bootstrap(installation_id: &str) -> Result<usize> {
 async fn bootstrap_at(installation_id: &str, output_path: &Path) -> Result<usize> {
     require(unsafe { libc::geteuid() } == 0)?;
     validate_id(installation_id)?;
-    let root_bytes = input(Path::new("/input/root.token"), 4096, &[0o400])?;
+    let root_bytes = input(Path::new("/input/root.token"), 4096, ROOT_OWNERS, &[0o400])?;
     let root = std::str::from_utf8(&root_bytes)
         .map_err(|_| REFUSED)?
         .trim();
     require((20..=4096).contains(&root.len()) && root.bytes().all(|b| b.is_ascii_graphic()))?;
-    let ca = input(Path::new("/input/ca.crt"), 65536, &[0o444, 0o644])?;
+    let ca = input(
+        Path::new("/input/ca.crt"),
+        65536,
+        CA_OWNERS,
+        &[0o444, 0o644],
+    )?;
     let inputs = directory(Path::new("/input/current"), false, true)?;
     let before = current(&inputs)?;
     require(
@@ -270,8 +280,13 @@ async fn bootstrap_at(installation_id: &str, output_path: &Path) -> Result<usize
     .map_err(|_| REFUSED)?;
     require(
         current(&inputs)? == before
-            && input(Path::new("/input/root.token"), 4096, &[0o400])? == root_bytes
-            && input(Path::new("/input/ca.crt"), 65536, &[0o444, 0o644])? == ca,
+            && input(Path::new("/input/root.token"), 4096, ROOT_OWNERS, &[0o400])? == root_bytes
+            && input(
+                Path::new("/input/ca.crt"),
+                65536,
+                CA_OWNERS,
+                &[0o444, 0o644],
+            )? == ca,
     )?;
     receipt(
         &output,
@@ -402,6 +417,18 @@ fn deliver_file(directory: &File, name: &str, bytes: &[u8], uid: u32, gid: u32) 
         .map_err(|_| RECOVERY.into())
 }
 
+fn deliver_directory(directory: &File, parent: &File, uid: u32, gid: u32) -> Result<()> {
+    if unsafe { libc::fchown(directory.as_raw_fd(), uid, gid) } != 0 {
+        return Err(RECOVERY.into());
+    }
+    let metadata = directory.metadata().map_err(|_| RECOVERY)?;
+    require(metadata.uid() == uid && metadata.gid() == gid && metadata.mode() & 0o7777 == 0o700)?;
+    directory
+        .sync_all()
+        .and_then(|_| parent.sync_all())
+        .map_err(|_| RECOVERY.into())
+}
+
 /// Fixed private transfer wrapper. CHOWN is needed only for freshly created
 /// delivery file descriptors and their new directory. Original root-owned
 /// identity and receipts remain private and untouched for recovery.
@@ -439,10 +466,7 @@ pub async fn bootstrap_transfer(installation_id: &str) -> Result<usize> {
         for (name, bytes) in values { deliver_file(&delivered, &name, &bytes, owner.uid(), owner.gid())?; }
         let after = directory(Path::new("/transfer"), false, false)?.metadata().map_err(|_| RECOVERY)?;
         require((after.dev(),after.ino(),after.uid(),after.gid(),after.mode()) == (owner.dev(),owner.ino(),owner.uid(),owner.gid(),owner.mode()))?;
-        if unsafe { libc::fchown(delivered.as_raw_fd(), owner.uid(), owner.gid()) } != 0 { return Err(RECOVERY.into()); }
-        let m = delivered.metadata().map_err(|_| RECOVERY)?;
-        require(m.uid() == owner.uid() && m.gid() == owner.gid() && m.mode() & 0o7777 == 0o700)?;
-        delivered.sync_all().and_then(|_| parent.sync_all()).map_err(|_| RECOVERY)?;
+        deliver_directory(&delivered, &parent, owner.uid(), owner.gid())?;
         Ok(IDENTITY_FILES.len())
     }.await;
     result.map_err(|_| RECOVERY.into())
@@ -452,6 +476,160 @@ pub async fn bootstrap_transfer(installation_id: &str) -> Result<usize> {
 mod tests {
     use super::*;
     use std::os::unix::fs::{symlink, PermissionsExt};
+
+    #[test]
+    #[ignore = "explicit root-only Linux ownership qualification; synthetic files only"]
+    fn root_transfer_enforces_real_recipient_and_other_user_access() {
+        use std::{
+            os::unix::process::CommandExt,
+            process::{Command, Stdio},
+        };
+        assert_eq!(unsafe { libc::geteuid() }, 0, "qualification requires root");
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+        let control = temp.path().join("control");
+        std::fs::write(&control, b"public-control").unwrap();
+        std::fs::set_permissions(&control, std::fs::Permissions::from_mode(0o444)).unwrap();
+        let outer = directory(temp.path(), false, true);
+        // The production directory opener requires 0700, so hold the public
+        // fixture ancestor directly; the actual transfer directory stays 0700.
+        assert!(outer.is_err());
+        let outer = File::open(temp.path()).unwrap();
+        let parent = child(&outer, "transfer").unwrap();
+        let uid = 65534;
+        let gid = 65534;
+        assert_eq!(unsafe { libc::fchown(parent.as_raw_fd(), uid, gid) }, 0);
+        let original = child(&parent, "output").unwrap();
+        receipt(
+            &original,
+            "pending.json",
+            &json!({"synthetic":"root-original"}),
+        )
+        .unwrap();
+        let delivered = child(&parent, "delivered").unwrap();
+        deliver_file(
+            &delivered,
+            "renewal-secret-id",
+            b"synthetic-private-credential",
+            uid,
+            gid,
+        )
+        .unwrap();
+        deliver_directory(&delivered, &parent, uid, gid).unwrap();
+        let script = r#"import errno, os, pathlib, sys
+assert os.getuid() == os.geteuid() == int(sys.argv[2])
+assert os.getgid() == os.getegid() == int(sys.argv[2])
+assert os.getgroups() == []
+base = pathlib.Path(sys.argv[1])
+assert (base / 'control').read_bytes() == b'public-control'
+delivered = base / 'transfer/delivered/renewal-secret-id'
+denied = [base / 'transfer/output/pending.json']
+if os.geteuid() == 65534:
+    assert delivered.read_bytes() == b'synthetic-private-credential'
+else:
+    denied.append(delivered)
+for path in denied:
+    try:
+        path.read_bytes()
+    except OSError as error:
+        assert error.errno == errno.EACCES
+    else:
+        raise AssertionError('private file was readable')
+"#;
+        for target in [uid, 65533] {
+            let mut command = Command::new("/usr/bin/python3");
+            command
+                .args(["-I", "-c", script])
+                .arg(temp.path())
+                .arg(target.to_string())
+                .env_clear()
+                .current_dir("/")
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            unsafe {
+                command.pre_exec(move || {
+                    if libc::setgroups(0, std::ptr::null()) != 0
+                        || libc::setgid(target) != 0
+                        || libc::setuid(target) != 0
+                    {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    Ok(())
+                });
+            }
+            assert!(
+                command.status().unwrap().success(),
+                "recipient permission qualification failed"
+            );
+        }
+        assert_eq!(original.metadata().unwrap().uid(), 0);
+        assert_eq!(original.metadata().unwrap().mode() & 0o7777, 0o700);
+        assert!(entry(&original, "pending.json", &[0], &[0o600], false).is_ok());
+        assert!(deliver_file(&delivered, "renewal-secret-id", b"overwrite", uid, gid).is_err());
+        let ca_path = temp.path().join("synthetic-ca");
+        std::fs::write(&ca_path, b"public fixture bytes").unwrap();
+        let ca_file = File::open(&ca_path).unwrap();
+        assert_eq!(unsafe { libc::fchown(ca_file.as_raw_fd(), 100, 1000) }, 0);
+        for mode in [0o444, 0o644] {
+            std::fs::set_permissions(&ca_path, std::fs::Permissions::from_mode(mode)).unwrap();
+            assert!(read_file(
+                File::open(&ca_path).unwrap(),
+                65536,
+                CA_OWNERS,
+                &[0o444, 0o644],
+                false
+            )
+            .is_ok());
+            assert!(read_file(
+                File::open(&ca_path).unwrap(),
+                65536,
+                ROOT_OWNERS,
+                &[mode],
+                false
+            )
+            .is_err());
+        }
+        std::fs::set_permissions(&ca_path, std::fs::Permissions::from_mode(0o400)).unwrap();
+        assert!(read_file(
+            File::open(&ca_path).unwrap(),
+            4096,
+            ROOT_OWNERS,
+            &[0o400],
+            false
+        )
+        .is_err());
+        std::fs::set_permissions(&ca_path, std::fs::Permissions::from_mode(0o666)).unwrap();
+        assert!(read_file(
+            File::open(&ca_path).unwrap(),
+            65536,
+            CA_OWNERS,
+            &[0o444, 0o644],
+            false
+        )
+        .is_err());
+        std::fs::set_permissions(&ca_path, std::fs::Permissions::from_mode(0o444)).unwrap();
+        let linked = temp.path().join("linked-ca");
+        std::fs::hard_link(&ca_path, &linked).unwrap();
+        assert!(read_file(
+            File::open(&ca_path).unwrap(),
+            65536,
+            CA_OWNERS,
+            &[0o444, 0o644],
+            false
+        )
+        .is_err());
+        std::fs::remove_file(linked).unwrap();
+        assert_eq!(unsafe { libc::fchown(ca_file.as_raw_fd(), 101, 1000) }, 0);
+        assert!(read_file(
+            File::open(&ca_path).unwrap(),
+            65536,
+            CA_OWNERS,
+            &[0o444, 0o644],
+            false
+        )
+        .is_err());
+    }
 
     #[test]
     fn transfer_copies_are_private_exclusive_and_leave_originals() {
