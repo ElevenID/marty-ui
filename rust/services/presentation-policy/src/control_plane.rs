@@ -884,7 +884,12 @@ mod tests {
             )
             .unwrap()
         );
-        assert!(trust.verified);
+        assert_eq!(
+            trust.verified,
+            contract["expected"]["issuer_relationship_trusted"]
+                .as_bool()
+                .unwrap()
+        );
         let mut revoked = profile;
         revoked["issuer_relationships"][0]["revoked_at"] =
             Value::String("2026-08-20T00:00:00Z".into());

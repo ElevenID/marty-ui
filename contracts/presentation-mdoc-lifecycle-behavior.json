@@ -15,9 +15,7 @@
     "relationship_trust_level": 87,
     "relationship_compliance_statuses": ["ACCREDITED"],
     "relationship_accreditations": ["ISO27001"],
-    "direct_pin_lifecycle_verified": true,
-    "root_only_lifecycle_verified": false,
-    "ambiguous_pin_lifecycle_verified": false,
-    "revoked_relationship_lifecycle_verified": false
+    "issuer_relationship_trusted": true,
+    "credential_status_evidence_present": false
   }
 }
