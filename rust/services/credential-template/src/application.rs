@@ -7,12 +7,12 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::{
-    normalize_payload_format, resolve_validity_rules, validate_claim_definitions,
-    validate_credential_type, validate_protocol_requirements, ClaimDefinition, CredentialFormat,
-    CredentialTemplate, CredentialTemplateError, CredentialTemplateRepositoryError,
-    DerivedAttribute, DisplayStyle, IssuanceProtocol, IssuerRequirements,
-    PostgresCredentialTemplateStore, PrivacyPosture, TemplateStatus, ValidityRules,
-    ValidityRulesInput, WalletConfig,
+    ClaimDefinition, CredentialFormat, CredentialTemplate, CredentialTemplateError,
+    CredentialTemplateRepositoryError, DerivedAttribute, DisplayStyle, IssuanceProtocol,
+    IssuerRequirements, PostgresCredentialTemplateStore, PrivacyPosture, TemplateStatus,
+    ValidityRules, ValidityRulesInput, WalletConfig, normalize_payload_format,
+    resolve_validity_rules, validate_claim_definitions, validate_credential_type,
+    validate_protocol_requirements,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -288,6 +288,9 @@ impl CredentialTemplateApplication {
             created_at: command.now,
             updated_at: command.now,
         };
+        for attribute in &template.derived_attributes {
+            crate::public_configuration::validate_derivation_parameters(&attribute.parameters, 0)?;
+        }
         self.repository.save(&template).await?;
         Ok(template)
     }
@@ -376,6 +379,9 @@ impl CredentialTemplateApplication {
         candidate.credential_payload_format = payload_format.canonical().to_owned();
         candidate.issuer_did = Some(issuer.issuer_did);
         candidate.issuer_algorithm = Some(issuer.issuer_algorithm);
+        for attribute in &candidate.derived_attributes {
+            crate::public_configuration::validate_derivation_parameters(&attribute.parameters, 0)?;
+        }
         self.repository.save(&candidate).await?;
         Ok(candidate)
     }

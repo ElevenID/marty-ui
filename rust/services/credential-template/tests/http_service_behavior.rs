@@ -605,6 +605,64 @@ async fn nondefault_public_configuration_survives_create_list_and_metadata_edit(
 }
 
 #[tokio::test]
+async fn private_derivation_parameters_are_rejected_before_create_or_update_persistence() {
+    let app = router();
+    let bad = json!([{"name":"Derived", "source_claim":"age", "derivation_type":"age_over", "parameters":{"nested":[{"api_key":"forbidden"}]}}]);
+    let mut body = create_body();
+    body["derived_attributes"] = bad.clone();
+    let response = app
+        .clone()
+        .oneshot(request("POST", "/v1/credential-templates", body, true))
+        .await
+        .unwrap();
+    assert!(response.status().is_client_error());
+    let response = app
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/v1/credential-templates?organization_id=org-1",
+            json!({}),
+            true,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(json_body(response).await, json!([]));
+    let response = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/v1/credential-templates",
+            create_body(),
+            true,
+        ))
+        .await
+        .unwrap();
+    let created = json_body(response).await;
+    let id = created["id"].as_str().unwrap();
+    let response = app
+        .clone()
+        .oneshot(request(
+            "PATCH",
+            &format!("/v1/credential-templates/{id}"),
+            json!({"name":"must not save", "derived_attributes":bad}),
+            true,
+        ))
+        .await
+        .unwrap();
+    assert!(response.status().is_client_error());
+    let response = app
+        .oneshot(request(
+            "GET",
+            &format!("/v1/credential-templates/{id}"),
+            json!({}),
+            true,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(json_body(response).await, created);
+}
+
+#[tokio::test]
 async fn create_get_update_activate_and_delete_expose_only_public_behavior() {
     let app = router();
     let response = app

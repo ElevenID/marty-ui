@@ -62,6 +62,7 @@ pub fn canonicalize_create(body: &[u8]) -> Result<Value, CredentialTemplateContr
         .ok()
         .and_then(|value| value.as_object().cloned())
         .ok_or(CredentialTemplateContractError)?;
+    validate_write_parameters(&value)?;
     // No domain/storage representation exists for schema_uri yet.
     if value
         .get("schema_uri")
@@ -219,6 +220,7 @@ pub fn canonicalize_update(body: &[u8]) -> Result<Vec<u8>, CredentialTemplateCon
         .ok()
         .and_then(|value| value.as_object().cloned())
         .ok_or(CredentialTemplateContractError)?;
+    validate_write_parameters(&value)?;
     if let Some(claims) = value.get("claims").cloned() {
         value.insert("claims".into(), internal_claims(&claims)?);
     }
@@ -297,37 +299,22 @@ fn reject_private_parameters(
     value: &Value,
     depth: usize,
 ) -> Result<(), CredentialTemplateContractError> {
-    if depth > 48 {
-        return Err(CredentialTemplateContractError);
-    }
-    match value {
-        Value::Object(object) => {
-            for (key, value) in object {
-                if [
-                    "key_reference",
-                    "signing_service_id",
-                    "signing_key_reference",
-                    "issuer_profile_id",
-                    "private_key",
-                    "privatekeyjwk",
-                    "access_token",
-                    "auth_token",
-                    "api_key",
-                    "client_secret",
-                ]
-                .contains(&key.to_ascii_lowercase().as_str())
-                {
-                    return Err(CredentialTemplateContractError);
-                }
-                reject_private_parameters(value, depth + 1)?;
+    marty_credential_template::public_configuration::validate_derivation_parameters(value, depth)
+        .map_err(|_| CredentialTemplateContractError)
+}
+
+fn validate_write_parameters(
+    value: &Map<String, Value>,
+) -> Result<(), CredentialTemplateContractError> {
+    if let Some(attributes) = value.get("derived_attributes").filter(|v| !v.is_null()) {
+        for attribute in attributes
+            .as_array()
+            .ok_or(CredentialTemplateContractError)?
+        {
+            if let Some(parameters) = attribute.get("parameters") {
+                reject_private_parameters(parameters, 0)?;
             }
         }
-        Value::Array(values) => {
-            for value in values {
-                reject_private_parameters(value, depth + 1)?;
-            }
-        }
-        _ => {}
     }
     Ok(())
 }
@@ -388,17 +375,39 @@ mod tests {
     use super::*;
     use serde::Deserialize;
     #[test]
+    fn private_parameters_fail_before_forwarding_create_or_update() {
+        let contract: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/gateway-credential-template-behavior.json"
+        ))
+        .unwrap();
+        let mut create = contract["create_input"].clone();
+        create["derived_attributes"] = serde_json::json!([{"name":"Derived", "source_claim":"age", "derivation_type":"age_over", "parameters":{"api_key":"forbidden"}}]);
+        assert!(canonicalize_create(&serde_json::to_vec(&create).unwrap()).is_err());
+        let update = serde_json::json!({"derived_attributes":create["derived_attributes"]});
+        assert!(canonicalize_update(&serde_json::to_vec(&update).unwrap()).is_err());
+    }
+    #[test]
     fn nested_readback_omits_unknown_fields_and_rejects_custody_parameters() {
         let public = public_response(serde_json::json!({
             "display_style":{"background_color":"#123456", "key_reference":"private"},
             "derived_attributes":[{"id":"derived", "parameters":{"threshold":21},"issuer_profile_id":"private"}]
         })).unwrap();
         assert!(public["display_style"].get("key_reference").is_none());
-        assert!(public["derived_attributes"][0].get("issuer_profile_id").is_none());
-        assert_eq!(public["derived_attributes"][0]["parameters"]["threshold"], 21);
-        assert!(public_response(serde_json::json!({"derived_attributes":[{
-            "parameters":{"nested":[{"key_reference":"private"}]}
-        }]})).is_err());
+        assert!(
+            public["derived_attributes"][0]
+                .get("issuer_profile_id")
+                .is_none()
+        );
+        assert_eq!(
+            public["derived_attributes"][0]["parameters"]["threshold"],
+            21
+        );
+        assert!(
+            public_response(serde_json::json!({"derived_attributes":[{
+                "parameters":{"nested":[{"key_reference":"private"}]}
+            }]}))
+            .is_err()
+        );
     }
     #[test]
     fn public_configuration_is_retained_without_custody_selectors() {
