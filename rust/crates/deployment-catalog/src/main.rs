@@ -263,6 +263,14 @@ fn run() -> Result<(), String> {
         use marty_deployment_catalog::operator::{self, REFUSAL};
         use std::io::{Read, Write};
         let result = match args.get(1).map(String::as_str) {
+            Some("beta-runtime-config") if args.len() == 4 => {
+                let value = marty_deployment_catalog::beta_runtime_config::stage(
+                    std::path::Path::new(&args[2]),
+                    &args[3],
+                )?;
+                serde_json::to_writer(std::io::stdout(), &value).map_err(|_| REFUSAL)?;
+                Ok(())
+            }
             Some("passport-model") if args.len() == 3 => {
                 let mut input = Vec::new();
                 std::io::stdin()
@@ -686,16 +694,30 @@ fn run() -> Result<(), String> {
         .ok_or_else(|| "command is required".to_owned())?;
     let params = &args[1..];
     if params.iter().any(|arg| arg == "--help" || arg == "-h") {
+        if command == "kubernetes-secrets" {
+            println!("usage: marty-deploy kubernetes-secrets STACK NAMESPACE [CAPTURED_REQUIRED_NAMES]");
+            return Ok(());
+        }
         print!("{}", frozen_help(command));
         return Ok(());
     }
-    check_options(command, params)?;
+    if command != "kubernetes-secrets" {
+        check_options(command, params)?;
+    }
     let root = match root {
         Some(path) => path,
         None => root_from_executable()?,
     };
     let catalog = Catalog::load(root)?;
     match command {
+        "kubernetes-secrets" if matches!(params.len(), 2 | 3) => {
+            marty_deployment_catalog::kubernetes_secrets::apply(
+                &catalog,
+                &params[0],
+                &params[1],
+                params.get(2).map(String::as_str),
+            )?;
+        }
         "validate" => {
             println!("Deployment catalog validation passed.");
             println!(

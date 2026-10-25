@@ -118,8 +118,6 @@ def test_kubernetes_wires_the_generated_token_to_producer_and_consumer() -> None
         assert TOKEN_NAME not in env_names
 
     deploy_script = (ROOT / "scripts/deploy-kubernetes.sh").read_text(encoding="utf-8")
-    assert f"resolve_secret_input {TOKEN_NAME}" in deploy_script
-    assert (
-        '--from-literal=NOTIFICATION_APPLICANT_EVENT_TOKEN="$notification_applicant_event_token"'
-        in deploy_script
-    )
+    spec = json.loads((ROOT / "deploy-config/catalog/kubernetes-secrets.json").read_text())
+    assert spec["secrets"][0]["fields"][TOKEN_NAME] == {"env": TOKEN_NAME}
+    assert 'kubernetes-secrets "$K8S_STACK_NAME" "$NAMESPACE"' in deploy_script

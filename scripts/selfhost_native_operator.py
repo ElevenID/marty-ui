@@ -48,7 +48,7 @@ def operator_bytes(root: Path, *args: str, input: bytes | None = None) -> bytes:
     # Native requests remain individually bounded. Do not kill a mutating
     # transaction while it is revoking a leaf or rolling back remote authority.
     timeout = None if args[1:2] in (("export-snapshot",), ("approle-bootstrap",), ("approle-mint",),
-                                  ("approle-rotate",), ("approle-retire",), ("leaf-refresh",), ("keycloak-token",), ("keycloak-provision",), ("ca-issuer",)) else 300
+                                  ("approle-rotate",), ("approle-retire",), ("leaf-refresh",), ("keycloak-token",), ("keycloak-provision",), ("ca-issuer",), ("beta-runtime-config",)) else 300
     # Inventory combines the former token and certificate read-only phases.
     if args[1:2] == ("renewal-inventory",):
         timeout = 600

@@ -156,8 +156,9 @@ def test_beta_runtime_bind_mounts_survive_release_worktree_removal() -> None:
             line.lstrip().startswith("- ./") for line in compose.splitlines()
         )
 
+    native = text("rust/crates/deployment-catalog/src/beta_runtime_config.rs")
     staged = set(re.findall(r'"([A-Za-z0-9_./-]+)"',
-                           deploy.split("$runtimeSources = @(", 1)[1].split("\n    )", 1)[0]))
+                           native.split("const SOURCES:", 1)[1].split("];", 1)[0]))
     for compose_path in beta_compose_paths:
         for required in re.findall(r'\$\{MARTY_RUNTIME_CONFIG_ROOT:-\.\}/([A-Za-z0-9_./-]+)', text(compose_path)):
             assert (ROOT / required).exists(), f"Missing source runtime input: {required}"
@@ -166,10 +167,11 @@ def test_beta_runtime_bind_mounts_survive_release_worktree_removal() -> None:
                        for source in staged), f"Runtime input omitted from durable staging: {required}"
 
     assert "function Initialize-DurableRuntimeConfig" in deploy
-    assert "rev-parse --path-format=absolute --git-common-dir" in deploy
-    assert '"tests\\artifacts\\runtime-config"' in deploy
-    assert "marty_ui_revision = $SourceRevision" in deploy
-    assert '"runtime-config-manifest.json"' in deploy
+    assert '"--path-format=absolute", "--git-common-dir"' in native
+    assert '"tests/artifacts/runtime-config"' in native
+    assert '"marty_ui_revision"' in native
+    assert "stage_beta_runtime_config.py" in deploy
+    assert '"runtime-config-manifest.json"' in native
     assert "$env:MARTY_RUNTIME_CONFIG_ROOT = $script:RuntimeConfigRoot" in deploy
     assert "runtime_config_manifest_sha256 = Get-FileSha256" in deploy
     assert deploy.index('"--verify-manifest", $sourceManifestPath') < deploy.index(
@@ -187,7 +189,7 @@ def test_beta_runtime_bind_mounts_survive_release_worktree_removal() -> None:
         "docker/waltid/wallet-api/config",
         "nginx-tunnel.conf.template",
     ):
-        assert f'"{required_source}"' in deploy
+        assert f'"{required_source}"' in native
 
 
 def test_keycloak_custom_theme_is_source_pinned_and_mounted_read_only() -> None:

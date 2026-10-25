@@ -306,3 +306,30 @@ through `.github/workflows/tombstone-stack-release.yml`; never retarget or reuse
 the claimed coordinate. Do not create a tag or release by hand, substitute a
 different branch dispatch, or mix independently built component versions in
 beta.
+
+## Durable runtime configuration staging
+
+The local beta runner stages its unchanged runtime-input set through the Rust
+`marty-deploy operator beta-runtime-config` operation. The Python entrypoint is a
+thin adapter to the existing source-matched operator authentication. Staging stays
+under the primary checkout's `tests/artifacts/runtime-config/<source revision>`;
+removing a linked source worktree does not retire these runtime inputs.
+
+Existing snapshots are reused only when their manifest and actual file bytes
+match. Historical PowerShell manifest formatting and file ordering are accepted
+without rewriting that manifest. Linked/reparse source entries and redirected
+destination ancestors are refused; source files are bounded at 128 MiB each.
+
+The deployment mutex already surrounds this operation. Direct concurrent calls
+claim a generation exclusively: a contender may fail while the owner is still
+publishing, then retry after that owner completes. The manifest is written last.
+An interruption can leave a claimed generation without a complete manifest; it
+blocks reuse and is preserved for inspection. The operator must confirm the
+writer exited, inspect and preserve that incomplete generation, and move it aside
+before retrying. Never replace an existing generation to make a retry pass.
+
+This extraction does not replace the deployment transaction. Quiescence, snapshots,
+migration rehearsal, KMS custody checks, exact-container recovery, and the hold on
+physical-provider deployment/restoration remain required. Failures after live
+mutation still require reviewed forward repair; staging does not authorize an
+automatic rollback or resumed passport writes.

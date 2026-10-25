@@ -348,7 +348,8 @@ def test_signing_existing_service_and_kubernetes_dependency_sources_are_connecte
     ).read_text()
     assert '"07b-signing-keys.yaml"' in cli
     script = (ROOT / "scripts/deploy-kubernetes.sh").read_text(encoding="utf-8")
-    assert "OPENBAO_SERVICE_TOKEN=" in script
+    secret_spec = json.loads((ROOT / "deploy-config/catalog/kubernetes-secrets.json").read_text())
+    assert secret_spec["secrets"][0]["fields"]["OPENBAO_SERVICE_TOKEN"] == {"env": "OPENBAO_SERVICE_TOKEN"}
     assert "check_kubernetes_services_release.py" in script
     preflight = script.split("prepare_kubernetes_native_issuance() {", 1)[1].split("\n}", 1)[0]
     assert preflight.index('MARTY_ISSUANCE_IMAGE="$MARTY_SERVICES_IMAGE"') < preflight.index(
@@ -542,8 +543,10 @@ def test_didcomm_workload_token_is_required_and_distinct_from_signing_tokens():
     assert token["required_for"] == ["selfhost-production", "kubernetes-production"]
     assert token["placeholder_disallowed"] is True
     deploy = (ROOT / "scripts/deploy-kubernetes.sh").read_text(encoding="utf-8")
-    assert 'require_resolved_secret DIDCOMM_ISSUANCE_OPENBAO_TOKEN "$didcomm_issuance_openbao_token"' in deploy
-    assert '--from-literal=DIDCOMM_ISSUANCE_OPENBAO_TOKEN="$didcomm_issuance_openbao_token"' in deploy
+    spec = json.loads((ROOT / "deploy-config/catalog/kubernetes-secrets.json").read_text())
+    assert "DIDCOMM_ISSUANCE_OPENBAO_TOKEN" in spec["required"]
+    assert spec["secrets"][0]["fields"]["DIDCOMM_ISSUANCE_OPENBAO_TOKEN"] == {"env": "DIDCOMM_ISSUANCE_OPENBAO_TOKEN"}
+    assert 'kubernetes-secrets "$K8S_STACK_NAME" "$NAMESPACE"' in deploy
     template = yaml.safe_load((ROOT / "k8s/oracle/02-secrets-template.yaml").read_text())
     assert template["stringData"]["DIDCOMM_ISSUANCE_OPENBAO_TOKEN"].startswith("CHANGE_ME_")
 
