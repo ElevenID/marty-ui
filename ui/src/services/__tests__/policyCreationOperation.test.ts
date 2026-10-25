@@ -127,8 +127,36 @@ describe('template creation recovery', () => {
     const operation = createPolicyCreationOperation('org-a');
     vi.mocked(getPresentationPolicy).mockResolvedValue({ ...draft, organization_id: 'org-b' });
     await expect(operation.submit(data)).rejects.toThrow('ownership');
-    await expect(operation.submit({ ...data, name: 'changed' })).rejects.toThrow('already created');
+    await expect(operation.submit({ ...data, name: 'changed' })).rejects.toThrow('ownership');
     expect(createPresentationPolicy).toHaveBeenCalledTimes(1);
     expect(activatePresentationPolicy).not.toHaveBeenCalled();
+  });
+});
+
+describe('detail-page resolution of acknowledged policy drafts', () => {
+  it.each(['active', 'deleted'])('permits a different payload after the old draft is %s', async (resolution) => {
+    vi.mocked(activatePresentationPolicy).mockRejectedValueOnce(new Error('503'));
+    await expect(createPolicyCreationOperation('org-a').submit(data)).rejects.toThrow();
+    if (resolution === 'active') vi.mocked(getPresentationPolicy).mockResolvedValueOnce({ ...draft, status: 'ACTIVE' });
+    else vi.mocked(getPresentationPolicy).mockRejectedValueOnce(Object.assign(new Error('deleted'), { status: 404 }));
+    await createPolicyCreationOperation('org-a').submit({ ...data, name: 'New policy' });
+    expect(createPresentationPolicy).toHaveBeenCalledTimes(2);
+    const calls = vi.mocked(createPresentationPolicy).mock.calls;
+    expect(calls[0][1].idempotencyKey).not.toBe(calls[1][1].idempotencyKey);
+  });
+  it('rejects changed configuration while the acknowledged resource remains a draft', async () => {
+    vi.mocked(activatePresentationPolicy).mockRejectedValueOnce(new Error('503'));
+    await expect(createPolicyCreationOperation('org-a').submit(data)).rejects.toThrow();
+    await expect(createPolicyCreationOperation('org-a').submit({ ...data, name: 'New policy' })).rejects.toThrow('already created');
+    expect(createPresentationPolicy).toHaveBeenCalledTimes(1);
+    expect(sessionStorage.getItem('marty:policy-create:v1:org-a')).not.toBeNull();
+  });
+  it('keeps an acknowledged draft journal on forbidden readback', async () => {
+    vi.mocked(activatePresentationPolicy).mockRejectedValueOnce(new Error('503'));
+    await expect(createPolicyCreationOperation('org-a').submit(data)).rejects.toThrow();
+    vi.mocked(getPresentationPolicy).mockRejectedValueOnce(Object.assign(new Error('forbidden'), { status: 403 }));
+    await expect(createPolicyCreationOperation('org-a').submit({ ...data, name: 'New policy' })).rejects.toThrow('forbidden');
+    expect(createPresentationPolicy).toHaveBeenCalledTimes(1);
+    expect(sessionStorage.getItem('marty:policy-create:v1:org-a')).not.toBeNull();
   });
 });

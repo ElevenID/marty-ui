@@ -41,6 +41,25 @@ export function createResourceCreationOperation(organizationId, principalId, {
           needsReadback: Boolean(record.resourceId) };
       }
     }
+    // A draft may have been resolved through its detail page while this
+    // tab retained the journal. Verify its terminal state before a new payload.
+    if (operation?.resource && operation.fingerprint !== fingerprint) {
+      let resolved = false;
+      try {
+        const current = await getResource(operation.resource.id);
+        assertCurrent();
+        if (current.id !== operation.resource.id || current.organization_id !== organizationId) throw new Error(`${displayName} ownership could not be confirmed.`);
+        resolved = String(current.status).toUpperCase() === 'ACTIVE';
+      } catch (error) {
+        assertCurrent();
+        if ((error.status || error.response?.status) !== 404) throw error;
+        resolved = true;
+      }
+      if (resolved) {
+        sessionStorage.removeItem(journalKey);
+        operation = null;
+      }
+    }
     if (operation && operation.fingerprint !== fingerprint) {
       throw new Error(operation.resource
         ? `${displayName} ${operation.resource.id} was already created. Open that draft to edit it before activation.`
