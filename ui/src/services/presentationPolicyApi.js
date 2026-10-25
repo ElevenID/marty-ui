@@ -826,8 +826,42 @@ export async function getCredentialTemplate(id) {
  * Update a credential template
  */
 export async function updateCredentialTemplate(id, data) {
-  const result = await patch(`${CREDENTIAL_TEMPLATE_BASE}/${id}`, buildCredentialTemplatePayload(data));
+  const result = await patch(`${CREDENTIAL_TEMPLATE_BASE}/${id}`, buildCredentialTemplatePatch(data));
   return normalizeCredentialTemplate(result);
+}
+
+// Match the native sparse update contract, rather than the create contract.
+export function buildCredentialTemplatePatch(data = {}) {
+  const fields = new Set([
+    'organization_id', 'name', 'description', 'claims', 'privacy_posture',
+    'selective_disclosure_fields', 'zk_predicate_claims', 'derived_attributes',
+    'display_style', 'validity_rules', 'supported_formats', 'application_template_id',
+    'trust_profile_id', 'revocation_profile_id', 'issuer_did',
+    'credential_payload_format', 'issuance_protocol',
+  ]);
+  const privateFields = new Set([
+    'key_reference', 'signing_service_id', 'signing_key_reference', 'issuer_profile_id',
+    'private_key', 'privatekeyjwk', 'access_token', 'auth_token', 'api_key', 'client_secret',
+  ]);
+  const inspect = (value, depth = 0) => {
+    if (depth > 48) throw new Error('Template update exceeds the supported nesting depth.');
+    if (value && typeof value === 'object') {
+      for (const [key, child] of Object.entries(value)) {
+        if (privateFields.has(key.toLowerCase())) throw new Error('Private custody fields are not supported in template updates.');
+        inspect(child, depth + 1);
+      }
+    }
+  };
+  const payload = { organization_id: requireOrganizationId(data) };
+  for (const [field, value] of Object.entries(data)) {
+    if (value === undefined) continue;
+    if (!fields.has(field)) throw new Error(`Unsupported template update field: ${field}`);
+    inspect(value);
+    if (field !== 'organization_id') payload[field] = value;
+  }
+  // Preserve sparse nested validity and claim representations; the gateway
+  // canonicalizes public aliases without manufacturing creation defaults.
+  return payload;
 }
 
 /**
