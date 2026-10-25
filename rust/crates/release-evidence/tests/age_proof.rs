@@ -264,7 +264,7 @@ fn prepare_reuses_active_native_resources_and_produces_no_template_or_policy_mut
     let result = validate_age_proof("prepare", &prepare_input()).unwrap();
     let plan = &result["evidence"];
     assert_eq!(plan["trusted_issuance"]["path"], "/v1/issuance");
-    assert_eq!(plan["verification"]["path"], "/v1/flows/verification/start");
+    assert_eq!(plan["verification"]["path"], "/v1/flows/verify");
     assert_eq!(
         plan["trusted_issuance"]["body"]["credential_template_id"],
         "template-1"
