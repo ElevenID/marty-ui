@@ -40,3 +40,4 @@ libc = "0.2"
 
 [dev-dependencies]
 tokio-rustls.workspace = true
+marty-selfhost-bundle = { path = "../selfhost-bundle" }

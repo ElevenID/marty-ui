@@ -17,7 +17,16 @@ import yaml
 
 ROOT = Path(__file__).parents[1]
 CI_PATH = ROOT / ".github" / "workflows" / "ci.yml"
-RELEASE_TEST_COMMAND = "python -m pytest tests -n 2 -v --tb=short --durations=20"
+RELEASE_TEST_COMMAND = (
+    "set -euo pipefail\n"
+    "printf 'release-contract memory counters before:\\n'\n"
+    "cat /sys/fs/cgroup/memory.events 2>/dev/null || true\n"
+    "grep '^oom_kill ' /proc/vmstat 2>/dev/null || true\n"
+    "trap 'status=$?; printf \"release-contract memory counters after:\\n\"; "
+    "cat /sys/fs/cgroup/memory.events 2>/dev/null || true; "
+    "grep \"^oom_kill \" /proc/vmstat 2>/dev/null || true; exit \"$status\"' EXIT\n"
+    "python -X faulthandler -m pytest tests -n 2 -v --tb=short --durations=20\n"
+)
 
 
 def test_disposable_tls_root_contracts_have_executed_release_owner() -> None:
@@ -5735,7 +5744,7 @@ def test_registry_source_render_uses_pinned_renderer_without_changing_docker_plu
     assert prepare["if"] == release["if"]
     assert prepare["run"] == "bash scripts/ci/install-compose-renderer.sh"
     assert release["env"]["MARTY_COMPOSE_RENDERER"] == "${{ runner.temp }}/compose-render-v5.4.0"
-    assert release["run"] == "python -m pytest tests -n 2 -v --tb=short --durations=20"
+    assert release["run"] == RELEASE_TEST_COMMAND
     assert not prepare.get("continue-on-error", False)
 
 

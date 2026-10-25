@@ -23,5 +23,20 @@ RUN mkdir -p /work/remote-only/META-INF/services && \
     jar uf /out/keycloak-services.jar -C /work/remote-only META-INF/services/org.keycloak.keys.KeyProviderFactory
 
 FROM upstream
+# The configurator reads a scoped operator password file before contacting
+# Keycloak. Qualify its bounded, no-follow GNU utility contract in the exact
+# runtime image so a base-image change cannot defer failure until installation.
+RUN set -eu; \
+    probe_dir="$(mktemp -d /tmp/marty-credential-reader.XXXXXX)"; \
+    trap 'rm -f "$probe_dir/input" "$probe_dir/snapshot" "$probe_dir/invalid"; rmdir "$probe_dir"' EXIT; \
+    printf 'Aa1!credential-reader-check\n' > "$probe_dir/input"; \
+    chmod 0400 "$probe_dir/input"; \
+    test "$(readlink -f -- "$probe_dir/input")" = "$probe_dir/input"; \
+    test "$(stat -c '%a %h' -- "$probe_dir/input")" = '400 1'; \
+    dd if="$probe_dir/input" of="$probe_dir/snapshot" iflag=nofollow,nonblock,count_bytes count=4097 status=none; \
+    test "$(wc -c < "$probe_dir/snapshot")" -eq "$(stat -c '%s' -- "$probe_dir/input")"; \
+    LC_ALL=C tr -d '\12\40-\176' < "$probe_dir/snapshot" > "$probe_dir/invalid"; \
+    test "$(wc -c < "$probe_dir/invalid")" -eq 0; \
+    test "$(cat "$probe_dir/snapshot")" = 'Aa1!credential-reader-check'
 COPY --from=build /out/keycloak-services.jar /opt/keycloak/lib/lib/main/org.keycloak.keycloak-services-26.8.0.jar
 COPY --from=build /work/target/keycloak-openbao-provider-0.0.0-probe.jar /opt/keycloak/providers/marty-openbao-provider.jar

@@ -152,7 +152,7 @@ server {
         return 404 '{"error":"not_found"}';
     }
 
-    # did:web path-scoped issuer resolution — /orgs/{slug}/did.json.
+    # did:web path-scoped issuer resolution: /orgs/{slug}/did.json.
     # Wallets dereference did:web:{domain}:orgs:{slug} while verifying issued
     # SD-JWT/Open Badge credentials; route before the UI SPA fallback.
     location ~ "^/orgs/[a-zA-Z0-9._-]+/did\.json$" {

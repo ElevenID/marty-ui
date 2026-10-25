@@ -13,6 +13,8 @@
     "stack-manifest.json",
     "nightly-runtime.json",
     "marty-deploy-linux-amd64",
+    "install.sh",
+    "installer-inventory.json",
     "ui.sbom.cdx.json",
     "services.sbom.cdx.json",
     "migrations.sbom.cdx.json",

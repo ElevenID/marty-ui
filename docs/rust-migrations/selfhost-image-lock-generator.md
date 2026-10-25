@@ -55,9 +55,9 @@ A release producer must still verify
 provenance and anonymous pull for every image, qualify an extracted installed
 bundle, and sign/attest the eventual lock and archive before publication.
 
-The opt-in `Stack release` dispatch input `prepare_selfhost_lock` runs an
-official-release **preparation lane** after the existing stack qualification
-gates. It builds only the distinct self-host UI and pinned cloudflared wrapper
+Every `Stack release` dispatch runs the mandatory official-release
+**preparation lane** after the existing stack qualification gates; there is no
+`prepare_selfhost_lock` bypass. It builds only the distinct self-host UI and pinned cloudflared wrapper
 as digest-only, provenance-attested, signed images. It renders all Compose
 profiles from the exact claimed checkout, takes the issuance digest from the
 source stack lock, requires `selfhost_external_images_json` to name every

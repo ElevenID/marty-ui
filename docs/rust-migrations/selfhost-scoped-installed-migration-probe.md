@@ -3,7 +3,7 @@
 `scripts/probe_selfhost_installed_migrations.py` is an opt-in experiment. The
 downstream `selfhost-prepared-consumer.yml` workflow runs the signing-runtime
 continuation, which includes this migration probe exactly once, against a
-successful, first-attempt, opt-in Stack release preparation from the same
+successful, first-attempt Stack release preparation from the same
 protected-main source SHA. It is not a release or ordinary CI gate and reports
 `qualification: unqualified`.
 
@@ -22,14 +22,14 @@ python scripts/probe_selfhost_installed_migrations.py \
   --run-id NUMERIC_RUN_ID
 ```
 
-Dispatch `Stack release` on `main` with `prepare_selfhost_lock` explicitly
-enabled. Its successful completion triggers the read-only-cache consumer for
-that exact run; other Stack releases have no prepared bundle and skip the
-probe. The consumer rejects a rerun, an artifact from another source SHA, or a
+Dispatch `Stack release` on `main` with the required immutable external-image
+references. Prepared installer inputs are mandatory on every dispatch. Its
+successful completion triggers the read-only-cache consumer for that exact
+run. The consumer rejects a rerun, an artifact from another source SHA, or a
 preparation from an older `main` commit. It downloads only the exact unqualified bundle and its
 qualified Stack transaction, checks the archive before extraction, and uploads
 a sanitized unqualified migration-and-signing probe report for 30 days. If no prepared artifact
-exists for the current `main` SHA, a new opt-in preparation is required. This
+exists for the current `main` SHA, a new mandatory preparation run is required. This
 does not publish a self-host product or change Stack release qualification.
 
 The probe rechecks the exact ZIP, descriptor, receipt, lock, and extracted

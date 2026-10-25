@@ -14,6 +14,8 @@
 #   'make setup-keycloak' runs the Compose configurator with its pinned image.
 # =============================================================================
 set -euo pipefail
+# File-backed credentials must never be expanded by shell tracing.
+if [ -n "${MARTY_ORG_ADMIN_PASSWORD_FILE:-}" ]; then set +x; fi
 
 # ─── Configuration ───────────────────────────────────────────────────────────
 KC_URL="${KC_URL:-http://localhost:8180}"
@@ -81,11 +83,17 @@ log_success() {
 
 # ─── Helper Functions ────────────────────────────────────────────────────────
 cleanup_temp_files() {
+    local cleanup_status=0
     if [ -n "${TEMP_FILES:-}" ]; then
         for file in $TEMP_FILES; do
-            [ -f "$file" ] && rm -f "$file"
+            if [ -f "$file" ]; then
+                rm -f -- "$file" || cleanup_status=1
+            fi
         done
     fi
+    # Already removed secret files are expected; do not turn successful setup
+    # into an errexit failure from the EXIT trap's final file predicate.
+    return "$cleanup_status"
 }
 
 trap cleanup_temp_files EXIT
@@ -95,6 +103,55 @@ create_temp_file() {
     temp_file=$(mktemp /tmp/kc-setup-XXXXXX.json)
     TEMP_FILES="${TEMP_FILES:-} $temp_file"
     echo "$temp_file"
+}
+
+# The caller supplies a trusted readonly secret mount. Refuse aliases, special
+# files, shared writable files and ambiguous values; never export file contents.
+load_org_admin_password_file() {
+    local source="${MARTY_ORG_ADMIN_PASSWORD_FILE:-}"
+    [ -n "$source" ] || return 0
+    if [ -n "$MARTY_ORG_ADMIN_PASSWORD" ] || [ -z "$MARTY_ORG_ADMIN_EMAIL" ]; then
+        log_error "Operator password file requires email and no direct password"
+        return 1
+    fi
+    local metadata mode links size canonical snapshot contents invalid
+    canonical=$(readlink -f -- "$source") || return 1
+    if [[ "$source" != /* || "$canonical" != "$source" || ! -f "$source" || -L "$source" || ! -r "$source" ]]; then
+        log_error "Operator password file is not a readable ordinary canonical file"
+        return 1
+    fi
+    metadata=$(stat -c '%a %h %s %d:%i:%Y:%Z' -- "$source") || return 1
+    read -r mode links size _ <<< "$metadata"
+    if [[ ! "$mode" =~ ^[0-7]{3,4}$ ]] || (( (8#$mode & 8#7133) != 0 || links != 1 || size < 1 || size > 4096 )); then
+        log_error "Operator password file permissions, links or size are invalid"
+        return 1
+    fi
+    snapshot=$(mktemp /tmp/kc-setup-XXXXXX.json) || return 1
+    TEMP_FILES="${TEMP_FILES:-} $snapshot"
+    # GNU dd refuses a raced final symlink/FIFO and bounds every read. Metadata
+    # recheck detects replacement; the mounted source must remain caller-owned.
+    if ! dd if="$source" of="$snapshot" iflag=nofollow,nonblock,count_bytes count=4097 status=none 2>/dev/null ||
+       [ "$metadata" != "$(stat -c '%a %h %s %d:%i:%Y:%Z' -- "$source")" ] ||
+       [ "$(wc -c < "$snapshot")" -ne "$size" ]; then
+        log_error "Operator password file changed or could not be read"
+        return 1
+    fi
+    invalid=$(LC_ALL=C tr -d '\12\40-\176' < "$snapshot" | wc -c) || return 1
+    if [ "$invalid" -ne 0 ]; then
+        log_error "Operator password file contains unsupported bytes"
+        return 1
+    fi
+    # Sentinel preserves trailing newlines for exact single-line validation.
+    contents="$(cat "$snapshot" && printf '.')" || return 1
+    contents="${contents%.}"
+    contents="${contents%$'\n'}"
+    if [[ -z "$contents" || "$contents" == *$'\n'* ]]; then
+        log_error "Operator password file must contain one nonempty line"
+        return 1
+    fi
+    unset MARTY_ORG_ADMIN_PASSWORD
+    MARTY_ORG_ADMIN_PASSWORD="$contents"
+    rm -f -- "$snapshot"
 }
 
 kcadm_safe() {
@@ -192,22 +249,20 @@ json_escape() {
 }
 
 kcadm_secret_safe() {
-    local output
     local exit_code
 
-    if output=$("$KCADM" "$@" 2>&1); then
-        echo "$output"
+    if "$KCADM" "$@" >/dev/null 2>&1; then
         return 0
     else
         exit_code=$?
         log_error "kcadm command failed while applying secret-bearing configuration (exit $exit_code)"
-        log_error "Output: $output"
         return "$exit_code"
     fi
 }
 
 # ─── Main Setup ──────────────────────────────────────────────────────────────
 main() {
+    load_org_admin_password_file || return 1
     log_info "=== Keycloak Setup Starting ==="
     log_info "  URL   : $KC_URL"
     log_info "  Realm : $REALM"
@@ -525,6 +580,7 @@ EOF
 
     local password_payload password_value
     password_payload=$(create_temp_file)
+    TEMP_FILES="${TEMP_FILES:-} $password_payload"
     password_value="$(json_escape "$MARTY_ORG_ADMIN_PASSWORD")"
     cat > "$password_payload" <<EOF
 {
@@ -534,9 +590,11 @@ EOF
 }
 EOF
     if ! kcadm_secret_safe update "users/${user_id}/reset-password" -r "$REALM" -f "$password_payload" -n > /dev/null; then
+        rm -f -- "$password_payload"
         log_error "Failed to configure Marty organization admin password"
         return 1
     fi
+    rm -f -- "$password_payload"
     grant_realm_role_to_user "$user_id" "$MARTY_ORG_ADMIN_EMAIL" "administrator"
 }
 

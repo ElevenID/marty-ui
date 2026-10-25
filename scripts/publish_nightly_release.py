@@ -15,8 +15,48 @@ from check_prepared_selfhost_consumer import verify_descriptor, verify_receipt
 from nightly_release import WORKFLOW, file_digest, product_manifest, read, require, validate_preparation
 from run_nightly_runtime_smoke import CASES, SCHEMA as RUNTIME_SCHEMA
 from stage_selfhost_disposable_preview import verify_checksums
+from installer_release import verify_inventory_assets
+from verify_installer_provenance import verify_subject
 
 REPOSITORY = "ElevenID/marty-ui"
+INSTALLER_SUBJECTS = ("install.sh", "marty-deploy-linux-amd64", "prepared-selfhost-bundle.zip",
+                      "prepared-selfhost-images.json", "installer-inventory.json")
+PROVENANCE_LIMIT = 1024 * 1024  # install.sh's anonymous transport bound
+
+
+def provenance_files() -> set[str]:
+    return {name + ".provenance.jsonl" for name in INSTALLER_SUBJECTS}
+
+
+def verify_installer_provenance(assets: Path, candidate: dict, run_id: str, gh: Path) -> None:
+    for name in INSTALLER_SUBJECTS:
+        bundle = assets / (name + ".provenance.jsonl")
+        require(not bundle.is_symlink() and bundle.is_file()
+                and 0 < bundle.stat().st_size <= PROVENANCE_LIMIT,
+                "missing or oversized installer provenance sidecar")
+        verify_subject(assets / name, bundle, gh=gh,
+                       workflow=WORKFLOW, source_sha=candidate["source_sha"],
+                       run_id=int(run_id), run_attempt=int(os.environ["GITHUB_RUN_ATTEMPT"]))
+
+
+def export_provenance(assets: Path, source: Path, tag: str, run_id: str, bundle: Path, gh: Path) -> None:
+    """Export verified offline evidence; never attest sidecars recursively."""
+    candidate = verify_signed(assets, source, tag, run_id, with_provenance=False)
+    require(not bundle.is_symlink() and bundle.is_file(), "invalid provenance action output")
+    with bundle.open("rb") as stream:
+        raw = stream.read(PROVENANCE_LIMIT + 1)
+    require(0 < len(raw) <= PROVENANCE_LIMIT, "provenance bundle exceeds installer transport bound")
+    # Verify the held copy against every exact subject before exposing any output.
+    with tempfile.TemporaryDirectory(prefix="nightly-installer-provenance-") as temporary:
+        staged = Path(temporary).resolve() / "bundle.jsonl"
+        staged.write_bytes(raw)
+        for name in INSTALLER_SUBJECTS:
+            verify_subject(assets / name, staged, gh=gh,
+                           workflow=WORKFLOW, source_sha=candidate["source_sha"],
+                           run_id=int(run_id), run_attempt=int(os.environ["GITHUB_RUN_ATTEMPT"]))
+        for name in sorted(provenance_files()):
+            with (assets / name).open("xb") as output:
+                output.write(raw)
 
 
 def command(*args: str, data: dict | None = None) -> str:
@@ -32,7 +72,8 @@ def policy(source: Path) -> list[str]:
             and value["platform"] == "linux/amd64" and value["signer_workflow"] == WORKFLOW,
             "nightly asset policy changed")
     files = value["signed_inputs"]
-    require(len(files) == 17 and len(set(files)) == len(files)
+    require(len(files) == 19 and len(set(files)) == len(files)
+            and {"install.sh", "installer-inventory.json"}.issubset(files)
             and all(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]+", name) for name in files),
             "invalid nightly release inventory")
     return files
@@ -78,6 +119,11 @@ def validate(assets: Path, source: Path, tag: str, run_id: str) -> tuple[dict, l
     binary.chmod(0o755)
     require(command(str(binary), "--build-identity") == f"{revision}:{tag}",
             "nightly operator identity differs")
+    verify_inventory_assets(assets, source_sha=revision, release_tag=tag,
+                            build_run_id=int(run_id),
+                            build_run_attempt=int(os.environ["GITHUB_RUN_ATTEMPT"]))
+    require((assets / "install.sh").read_bytes() == (source / "install.sh").read_bytes(),
+            "installer bootstrap differs from exact source")
     return candidate, files
 
 
@@ -94,10 +140,12 @@ def sign(assets: Path, source: Path, tag: str, run_id: str) -> None:
             stream.write(file_digest(assets / name).removeprefix("sha256:") + "  " + name + "\n")
 
 
-def verify_signed(assets: Path, source: Path, tag: str, run_id: str) -> dict:
+def verify_signed(assets: Path, source: Path, tag: str, run_id: str, *,
+                  with_provenance: bool = True, gh: Path | None = None) -> dict:
     candidate, files = validate(assets, source, tag, run_id)
     inventory = set(files + [name + ".sigstore.json" for name in files])
-    require({path.name for path in assets.iterdir()} == inventory | {"RELEASE-SHA256SUMS"},
+    sidecars = provenance_files() if with_provenance else set()
+    require({path.name for path in assets.iterdir()} == inventory | {"RELEASE-SHA256SUMS"} | sidecars,
             "signed nightly inventory differs")
     require(all(not path.is_symlink() and path.is_file() and path.stat().st_size > 0
                 for path in assets.iterdir()), "linked or empty signed nightly asset")
@@ -114,12 +162,19 @@ def verify_signed(assets: Path, source: Path, tag: str, run_id: str) -> dict:
             str(assets / (name + ".sigstore.json")), "--certificate-identity",
             f"https://github.com/{REPOSITORY}/{WORKFLOW}@refs/heads/main",
             "--certificate-oidc-issuer", "https://token.actions.githubusercontent.com")
+    # Checksums cover signed payloads and signatures. Sidecars authenticate those
+    # same bytes independently; sidecars are not their own attestation subjects.
+    if with_provenance:
+        require(gh is not None, "explicit trusted GitHub verifier path required")
+        verify_installer_provenance(assets, candidate, run_id, gh)
     return candidate
 
 
-def publish(assets: Path, source: Path, tag: str, run_id: str) -> None:
-    candidate = verify_signed(assets, source, tag, run_id)
+def publish(assets: Path, source: Path, tag: str, run_id: str, gh: Path) -> None:
+    candidate = verify_signed(assets, source, tag, run_id, gh=gh)
     for path in sorted(assets.iterdir()):
+        if path.name in provenance_files():
+            continue
         command("gh", "attestation", "verify", str(path), "--repo", REPOSITORY,
                 "--signer-workflow", f"{REPOSITORY}/{WORKFLOW}",
                 "--source-digest", candidate["source_sha"], "--deny-self-hosted-runners")
@@ -170,14 +225,26 @@ def publish(assets: Path, source: Path, tag: str, run_id: str) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--phase", choices=["sign", "publish"], required=True)
+    parser.add_argument("--phase", choices=["sign", "export-provenance", "publish"], required=True)
+    parser.add_argument("--provenance-bundle", type=Path)
+    parser.add_argument("--gh", type=Path)
     parser.add_argument("--assets", required=True, type=Path)
     parser.add_argument("--source", required=True, type=Path)
     parser.add_argument("--tag", required=True)
     parser.add_argument("--run-id", required=True)
     args = parser.parse_args()
-    operation = sign if args.phase == "sign" else publish
-    operation(args.assets.resolve(), args.source.resolve(), args.tag, args.run_id)
+    if args.phase != "sign":
+        require(args.gh is not None and args.gh.is_absolute(), "explicit trusted GitHub verifier path required")
+    if args.phase == "export-provenance":
+        require(args.provenance_bundle is not None, "provenance action output is required")
+        export_provenance(args.assets.resolve(), args.source.resolve(), args.tag,
+                          args.run_id, args.provenance_bundle, args.gh)
+        return
+    require(args.provenance_bundle is None, "provenance bundle is only valid for export")
+    if args.phase == "sign":
+        sign(args.assets.resolve(), args.source.resolve(), args.tag, args.run_id)
+    else:
+        publish(args.assets.resolve(), args.source.resolve(), args.tag, args.run_id, args.gh)
 
 
 if __name__ == "__main__":
