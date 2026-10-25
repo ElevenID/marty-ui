@@ -354,7 +354,7 @@ pub fn install(args: &[String], build_identity: &str) -> Result<()> {
         "ingress-observation.json",
         &serde_json::to_vec(&ingress).map_err(|_| "cannot encode ingress observation")?,
     )?;
-    crate::installer_renewal::provision(
+    let renewal = crate::installer_renewal::provision(
         docker,
         &directory,
         &prepared.bundle,
@@ -363,7 +363,24 @@ pub fn install(args: &[String], build_identity: &str) -> Result<()> {
         services_image,
         &operator_sha,
     )?;
-    let application = crate::installer_application::prepare(
+    state.write_evidence(
+        "renewal-observation.json",
+        &serde_json::to_vec(&renewal).map_err(|_| "cannot encode renewal observation")?,
+    )?;
+    let generation = crate::installer_generation_host::provision(
+        docker,
+        &directory,
+        &prepared.bundle,
+        &mut state,
+        &infrastructure,
+        services_image,
+        &operator_sha,
+    )?;
+    state.write_evidence(
+        "generation-observation.json",
+        &serde_json::to_vec(&generation).map_err(|_| "cannot encode generation observation")?,
+    )?;
+    let application = crate::installer_application::prepare_with_generation(
         docker,
         &directory,
         &prepared.bundle,
