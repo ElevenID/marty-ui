@@ -17,6 +17,7 @@ import subprocess
 import sys
 import traceback
 import uuid
+from collections.abc import Mapping
 from functools import partial
 from http.cookies import SimpleCookie
 from pathlib import Path
@@ -29,21 +30,31 @@ ROLES = ("gateway", "flow", "signing-keys", "issuance-native",
          "passport-beta-bureau", "passport-callback-signer")
 CALLBACK_NETWORK = "elevenid-beta-passport-callback-signing"
 
-def local_native_overlay_binding() -> dict[str, Any] | None:
-    """Verify the shared developer overlay independently of release markers."""
+def local_native_overlay_binding(capture, image_source_id: str) -> dict[str, Any] | None:
+    """Bind the recorder's canonical live observation, not an imported verifier."""
     receipt = os.environ.get("DEMO_LOCAL_NATIVE_OVERLAY_RECEIPT")
+    context = getattr(capture, "native_runtime_binding", None)
     if not receipt:
+        require(context is None, "Unexpected native runtime binding without an overlay")
         return None
-    binder = Path(os.environ.get("DEMO_LOCAL_NATIVE_OVERLAY_BINDER", ""))
-    require(binder.is_absolute() and binder.is_file() and not binder.is_symlink()
-            and binder.name == "run-real-canvas-engineering-contract.py"
-            and hashlib.sha256(binder.read_bytes()).hexdigest()
-                == os.environ.get("DEMO_LOCAL_NATIVE_OVERLAY_BINDER_SHA256"),
-            "Local native overlay verifier is unavailable or changed")
-    specification = importlib.util.spec_from_file_location("local_native_overlay_verifier", binder)
-    module = importlib.util.module_from_spec(specification)
-    specification.loader.exec_module(module)
-    return module.verify_local_overlay(Path(receipt).resolve(strict=True), docker_context="desktop-linux")
+    path = Path(receipt)
+    require(os.environ.get("RECORD_VIDEO") == "0"
+            and os.environ.get("DEMO_LOCAL_NATIVE_LIVE_BINDING") == "1"
+            and isinstance(context, Mapping)
+            and set(context) == {"nativeSourceRevision", "receiptSha256", "imageSourceId",
+                                 "betaImageMarkersRemainBaseline", "releaseQualified"},
+            "Local native operations require the recorder-owned functional binding")
+    require(path.is_absolute() and path.is_file() and not path.is_symlink()
+            and context["receiptSha256"] == os.environ.get("DEMO_LOCAL_NATIVE_OVERLAY_SHA256")
+            == hashlib.sha256(path.read_bytes()).hexdigest()
+            and re.fullmatch(r"[a-f0-9]{40}", context["nativeSourceRevision"])
+            and context["imageSourceId"] == image_source_id
+            and context["betaImageMarkersRemainBaseline"] is True
+            and context["releaseQualified"] is False,
+            "Local native receipt or source differs from recorder observation")
+    # The recorder checks every actual native role before and after its owned
+    # child. Keep image markers separate and recheck receipt custody in Python.
+    return dict(context)
 FEATURES = {
     "gateway": {"PASSPORT_NATIVE_GATEWAY_ENABLED": "true",
                 "PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED": "false",
@@ -590,7 +601,7 @@ def _run_bound_capture(capture) -> dict[str, Any]:
     # receipt-bound, never inferred from a services image containing its binary.
     capture._passport_failure_stage = "PROTECTED_RUNTIME"
     initial_runtime = verify_runtime(receipt, deployment)
-    overlay_binding = local_native_overlay_binding()
+    overlay_binding = local_native_overlay_binding(capture, receipt["sourceId"])
     capture._passport_failure_stage = "PUBLIC_MARKERS"
     public = assert_beta()
     require(public.get("source_id") == receipt["sourceId"]
@@ -619,15 +630,52 @@ def _run_bound_capture(capture) -> dict[str, Any]:
     require(len({session_id(custody["cscaSession"]), session_id(custody["dscSession"]), session_id(custody["flowSession"])}) == 3,
             "Canonical passport operations require three distinct dedicated sessions")
     capture._passport_failure_stage = "PRODUCTION_INVARIANTS"
-    before = production_snapshot()
-    attachments = production_attachment_sha256()
+    try:
+        before = production_snapshot()
+        attachments = production_attachment_sha256()
+    except Exception:
+        # Session preparation is already an owned beta side effect. A failed
+        # production preflight must retain its failure and retire that authority
+        # even though feature setup and its normal finally block never began.
+        cleanup = {"scope": "PRE_FEATURE_DEDICATED_SESSION_RETIREMENT",
+                   "complete": False, "sessionsRetired": 0,
+                   "featureResourcesCreated": False, "productionGuardPassed": False}
+        try:
+            with sync_playwright() as playwright:
+                browser = playwright.chromium.launch(headless=True)
+                ports = None
+                try:
+                    ports = ObservedPassportRequests(capture, browser,
+                        csca_session=custody["cscaSession"], dsc_session=custody["dscSession"],
+                        flow_session=custody["flowSession"], api_key="",
+                        callback_container_id=initial_runtime["containers"]["passport-beta-bureau"])
+                    cleanup["complete"] = ports.retire_sessions() is True
+                    if cleanup["complete"]:
+                        cleanup["sessionsRetired"] = 3
+                finally:
+                    try:
+                        if ports:
+                            ports.close()
+                    finally:
+                        browser.close()
+        except Exception as cleanup_error:
+            cleanup["complete"] = False
+            cleanup["errorType"] = type(cleanup_error).__name__
+        try:
+            output = Path(os.environ["DEMO_ARTIFACT_DIR"]) / "passport-owned-cleanup.json"
+            with output.open("x", encoding="utf8") as stream:
+                json.dump(cleanup, stream, indent=2)
+                stream.write("\n")
+        except (OSError, KeyError):
+            pass  # Never mask the original guard failure or overwrite evidence.
+        raise
 
     def recheck():
         for name in ("runtimeReceipt", "deploymentManifest", "sourceManifest", "stackManifest", "privateFixture"):
             bound_json(scenario[name], private=name == "privateFixture")
         require(verify_runtime(receipt, deployment) == initial_runtime,
                 "Protected passport runtime changed during fresh operations")
-        require(local_native_overlay_binding() == overlay_binding,
+        require(local_native_overlay_binding(capture, receipt["sourceId"]) == overlay_binding,
                 "Local native overlay changed during fresh operations")
         require(assert_beta() == public, "Public beta source changed during fresh operations")
 

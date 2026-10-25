@@ -14,7 +14,46 @@ async function createDemoLiveEvidence() {
   assert.ok(helper && process.connected, 'Demo qualification requires recorder-owned live IPC');
   assert.equal(createHash('sha256').update(fs.readFileSync(helper)).digest('hex'),
     process.env.DEMO_EXECUTION_EVIDENCE_HELPER_SHA256, 'Recorder evidence helper hash mismatch');
-  return require(helper).createLiveEvidenceClient();
+  const client = await require(helper).createLiveEvidenceClient();
+  if (process.env.DEMO_LOCAL_NATIVE_LIVE_BINDING !== undefined) {
+    try {
+      assert.equal(process.env.DEMO_LOCAL_NATIVE_LIVE_BINDING, '1');
+      assert.equal(process.env.RECORD_VIDEO, '0', 'Local native evidence cannot record a release demo');
+      const binding = client.nativeRuntimeBinding;
+      assert.ok(binding, 'Recorder did not acknowledge the actual local native runtime');
+      assert.match(binding.nativeSourceRevision || '', /^[a-f0-9]{40}$/);
+      assert.match(binding.imageSourceId || '', /^[a-f0-9]{40}$/);
+      assert.equal(binding.receiptSha256, process.env.DEMO_LOCAL_NATIVE_OVERLAY_SHA256);
+      assert.equal(binding.releaseQualified, false);
+      assert.equal(binding.betaImageMarkersRemainBaseline, true);
+    } catch (error) { client.close(); throw error; }
+  }
+  return client;
+}
+
+// Apply only recorder-observed provenance after real operations and owned
+// cleanup. This never turns a failed feature or cleanup into a successful run.
+function applyLocalNativeReadiness(report, client, {ready, cleanupComplete}, environment=process.env) {
+  const binding = client.nativeRuntimeBinding;
+  if (!binding) {
+    assert.equal(environment.DEMO_LOCAL_NATIVE_LIVE_BINDING, undefined,
+      'Missing recorder-owned native runtime acknowledgement');
+    return report.releaseReady === true;
+  }
+  assert.equal(environment.DEMO_LOCAL_NATIVE_LIVE_BINDING, '1');
+  assert.equal(environment.RECORD_VIDEO, '0');
+  assert.equal(binding.releaseQualified, false);
+  assert.equal(binding.betaImageMarkersRemainBaseline, true);
+  assert.equal(binding.receiptSha256, environment.DEMO_LOCAL_NATIVE_OVERLAY_SHA256);
+  report.releaseReady = false;
+  report.qualification = 'LOCAL_MIXED_RUNTIME_FUNCTIONAL_OPERATIONS';
+  report.localOverlayBinding = {...binding};
+  report.signedManifestVerified = false;
+  report.demo_qualified = false;
+  report.cleanup = {...report.cleanup, complete:cleanupComplete === true};
+  report.functionalReady = ready === true && cleanupComplete === true && !report.error;
+  report.operations_verified = report.functionalReady;
+  return report.functionalReady;
 }
 
 async function acknowledgeDemoInputs(artifactDir, file, expected, client) {
@@ -26,4 +65,4 @@ async function acknowledgeDemoInputs(artifactDir, file, expected, client) {
   return actual;
 }
 
-module.exports = { createDemoLiveEvidence, acknowledgeDemoInputs };
+module.exports = { createDemoLiveEvidence, acknowledgeDemoInputs, applyLocalNativeReadiness };

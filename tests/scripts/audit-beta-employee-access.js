@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { chromium } = require('@playwright/test');
-const { createDemoLiveEvidence, acknowledgeDemoInputs } = require('./demo-live-evidence');
+const { createDemoLiveEvidence, acknowledgeDemoInputs, applyLocalNativeReadiness } = require('./demo-live-evidence');
 const { createOwnedActiveConfiguration, retireOwnedConfiguration } = require('./demo-owned-configuration');
 const { acquireWalletSession } = require('./demo-wallet-session');
 
@@ -41,6 +41,7 @@ const {
   issueOwnedApplication,
   requestedClaim,
   requireJson,
+  requireActiveComplianceProfile,
   requireNoConflictingApplications,
   requireOwnedApplication,
   resolveActiveIssuerDid,
@@ -297,6 +298,9 @@ async function ensureConfiguration(page, stamp, ownedResources) {
   if (!source.compliance_profile_id) {
     throw new Error('D-04 source Credential Template lacks a compliance binding');
   }
+  await requireActiveComplianceProfile(page, {
+    profileId:source.compliance_profile_id, organizationId:ORG_ID,
+  });
   const issuerDid = await resolveActiveIssuerDid(page, { organizationId: ORG_ID });
   const trustProfile = await ensureActiveResource(page, {
     organizationId: ORG_ID,
@@ -711,17 +715,23 @@ async function runEmployeeDemo(evidence) {
     });
     report.releaseReady = Boolean(journeyReady && walletClosed
       && report.cleanup?.ok === true && !report.cleanupError && report.finalizationFailures.length === 0);
-    if (report.releaseReady) {
+    applyLocalNativeReadiness(report, evidence, {ready:report.releaseReady,
+      cleanupComplete:report.cleanup?.ok === true && walletClosed && !report.cleanupError});
+    if (report.releaseReady || report.functionalReady) {
       try { await evidence.complete(); }
       catch (error) {
         report.releaseReady = false;
+        if (report.localOverlayBinding) {
+          report.functionalReady = false;
+          report.operations_verified = false;
+        }
         report.finalizationFailures.push({ operation: 'live_evidence_completion', error: redact(error.message) });
       }
     }
     report.finishedAt = new Date().toISOString();
     fs.writeFileSync(path.join(artifactDir, 'report.json'), JSON.stringify(report, null, 2));
     console.log(JSON.stringify(report, null, 2));
-    if (!report.releaseReady) process.exitCode = 1;
+    if (!report.releaseReady && !report.functionalReady) process.exitCode = 1;
   }
 }
 

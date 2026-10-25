@@ -13,7 +13,7 @@ const {
   login,
   selectOrg,
 } = require('./audit-beta-credential-lifecycle');
-const { createDemoLiveEvidence, acknowledgeDemoInputs } = require('./demo-live-evidence');
+const { createDemoLiveEvidence, acknowledgeDemoInputs, applyLocalNativeReadiness } = require('./demo-live-evidence');
 const {
   didWebResolutionUrl,
   receiveAndVerifyCredential,
@@ -741,17 +741,18 @@ async function main() {
 
       report.protectedStateAfter = await protectedFixtureState(page);
       report.protectedStateUnchanged = stateHash(report.protectedStateBefore) === stateHash(report.protectedStateAfter);
-      report.releaseReady = Boolean(
-        report.protectedStateUnchanged
-        && !qualificationError
-        && Object.values(report.behaviorAssertions || {}).every((passed) => passed === true)
+      const ownedCleanupComplete = Boolean(report.protectedStateUnchanged
         && report.cleanup?.retiredTemplate
         && report.cleanup?.revokedCredentials >= 3
         && report.cleanup?.removedGovernanceRelationships === 1
         && report.cleanup?.removedGovernedIssuers === 1
         && createdIdentityDids.length === 1
         && report.cleanup?.retiredIdentities === createdIdentityDids.length
-        && report.configRestored?.ok
+        && report.configRestored?.ok);
+      report.releaseReady = Boolean(
+        ownedCleanupComplete
+        && !qualificationError
+        && Object.values(report.behaviorAssertions || {}).every((passed) => passed === true)
         && report.loginTheme?.ok
         && report.pageErrors.length === 0
         && report.unexpectedResponses.length === 0
@@ -770,14 +771,16 @@ async function main() {
           }
         },
         writeReport: async () => {
+          applyLocalNativeReadiness(report, evidence, {ready:report.releaseReady,
+            cleanupComplete:ownedCleanupComplete});
           fs.writeFileSync(path.join(artifactDir, 'report.json'), JSON.stringify(report, null, 2));
           console.log(JSON.stringify(report, null, 2));
         },
         complete: () => evidence.complete(),
         closeEvidence: () => evidence.close(),
-        successful: () => report.releaseReady === true,
+        successful: () => report.releaseReady === true || report.functionalReady === true,
       });
-      if (!report.releaseReady) process.exitCode = 1;
+      if (!report.releaseReady && !report.functionalReady) process.exitCode = 1;
     } finally {
       if (context) await context.close().catch(() => {});
       await browser.close();

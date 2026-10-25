@@ -14,6 +14,36 @@ import pytest
 from scripts import beta_passport_functional_audit as audit
 
 
+def test_native_binding_requires_actual_parent_context_and_unchanged_receipt(tmp_path, monkeypatch):
+    receipt = tmp_path / "native.json"
+    receipt.write_text('{"source":"control-only"}', encoding="utf8")
+    context = {"nativeSourceRevision": "a" * 40, "receiptSha256": hashlib.sha256(receipt.read_bytes()).hexdigest(),
+               "imageSourceId": "b" * 40, "betaImageMarkersRemainBaseline": True, "releaseQualified": False}
+    for name, value in {"RECORD_VIDEO": "0", "DEMO_LOCAL_NATIVE_LIVE_BINDING": "1",
+                        "DEMO_LOCAL_NATIVE_OVERLAY_RECEIPT": str(receipt),
+                        "DEMO_LOCAL_NATIVE_OVERLAY_SHA256": context["receiptSha256"]}.items():
+        monkeypatch.setenv(name, value)
+    assert audit.local_native_overlay_binding(SimpleNamespace(native_runtime_binding=context), "b" * 40) == context
+    for changed in [None, {**context, "releaseQualified": True}, {**context, "imageSourceId": "c" * 40},
+                    {**context, "receiptSha256": "0" * 64}]:
+        with pytest.raises(audit.PassportPrerequisiteError):
+            audit.local_native_overlay_binding(SimpleNamespace(native_runtime_binding=changed), "b" * 40)
+    receipt.write_text('{}', encoding="utf8")
+    with pytest.raises(audit.PassportPrerequisiteError):
+        audit.local_native_overlay_binding(SimpleNamespace(native_runtime_binding=context), "b" * 40)
+
+
+def test_native_binding_cannot_claim_recording_or_substitute_an_unrequested_overlay(monkeypatch):
+    monkeypatch.delenv("DEMO_LOCAL_NATIVE_OVERLAY_RECEIPT", raising=False)
+    assert audit.local_native_overlay_binding(SimpleNamespace(native_runtime_binding=None), "b" * 40) is None
+    with pytest.raises(audit.PassportPrerequisiteError):
+        audit.local_native_overlay_binding(SimpleNamespace(native_runtime_binding={}), "b" * 40)
+    monkeypatch.setenv("DEMO_LOCAL_NATIVE_OVERLAY_RECEIPT", "/unavailable/native.json")
+    monkeypatch.setenv("RECORD_VIDEO", "1")
+    with pytest.raises(audit.PassportPrerequisiteError):
+        audit.local_native_overlay_binding(SimpleNamespace(native_runtime_binding={}), "b" * 40)
+
+
 def test_negative_callback_transport_in_recorder_top_level_loader():
     source = Path(audit.__file__)
     specification = importlib.util.spec_from_file_location('passport_recorder_client', source)
