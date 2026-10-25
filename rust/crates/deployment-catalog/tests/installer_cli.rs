@@ -7,6 +7,12 @@ fn internal_generation_refuses_unowned_invocation_without_output_or_argument_ech
     let secret = "never-echo-generation-input";
     for args in [
         vec!["installer-generation-provision"],
+        vec!["installer-generation-provision-transfer"],
+        vec![
+            "installer-generation-provision-transfer",
+            "--installation-id",
+            secret,
+        ],
         vec![
             "installer-generation-provision",
             "--installation-id",

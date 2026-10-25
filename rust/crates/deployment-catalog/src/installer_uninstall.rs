@@ -154,6 +154,33 @@ fn renewal_present(state: &LockedMaintenance) -> Result<bool> {
     }
     Ok(false)
 }
+// Candidate production is separate from activation. Even without an active
+// candidate, a partial helper must block normal uninstall and retain custody.
+fn generation_present(state: &LockedMaintenance) -> Result<bool> {
+    if state
+        .read_evidence("generation-container-removed.json")?
+        .is_some()
+    {
+        require(renewal_present(state)?)?;
+        return Ok(true);
+    }
+    for marker in [
+        "generation-pending.json",
+        "generation-container.json",
+        "generation-result.json",
+        "generation-observation.json",
+    ] {
+        require(state.read_evidence(marker)?.is_none())?;
+    }
+    for marker in [
+        "generation-inputs",
+        "generation-identity",
+        "generation-transfer",
+    ] {
+        require(state.read_record(marker)?.is_none())?;
+    }
+    Ok(false)
+}
 fn source(
     state: &LockedMaintenance,
     root: bool,
@@ -269,6 +296,9 @@ fn load(state: &LockedMaintenance) -> Result<Loaded> {
     if renewal_present(state)? {
         helpers.push(("renewal", "elevenid.installer-renewal-host/v1"));
     }
+    if generation_present(state)? {
+        helpers.push(("generation", "elevenid.installer-generation-host/v1"));
+    }
     for (stage, schema) in helpers {
         let record: Value = parse(&source(
             state,
@@ -335,6 +365,12 @@ fn load(state: &LockedMaintenance) -> Result<Loaded> {
 }
 fn unchanged(state: &LockedMaintenance, loaded: &Loaded) -> Result<()> {
     state.require_unchanged()?;
+    require(
+        generation_present(state)?
+            == loaded
+                .sources
+                .contains_key("evidence/generation-container-removed.json"),
+    )?;
     require(
         renewal_present(state)?
             == loaded
@@ -991,6 +1027,122 @@ else: sys.exit(98)
         live["Id"] = receipt["container_id"].clone();
         live["Name"] = json!(format!("/{}", receipt["container_name"].as_str().unwrap()));
         saved["containers"]["e".repeat(64)] = live;
+        fs::write(
+            root.path().join("ledger.json"),
+            serde_json::to_vec(&saved).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(uninstall(&args).unwrap_err(), REFUSED);
+        assert!(ledger(&root)["mutations"].as_array().unwrap().is_empty());
+    }
+    #[test]
+    fn generation_cleanup_refuses_partial_stage_and_tracks_completed_helper() {
+        use std::os::unix::fs::PermissionsExt;
+        let (root, args) = mock("success");
+        let installation = root.path().join("install");
+        let state = LockedMaintenance::open(&installation).unwrap();
+        let legacy = load(&state).unwrap();
+        let put = |name: &str, value: &Value| {
+            let path = installation.join("evidence").join(name);
+            fs::write(&path, serde_json::to_vec(value).unwrap()).unwrap();
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        };
+        for name in [
+            "generation-pending.json",
+            "generation-container.json",
+            "generation-result.json",
+            "generation-observation.json",
+        ] {
+            put(name, &json!({}));
+            assert!(load(&state).is_err());
+            assert!(unchanged(&state, &legacy).is_err());
+            fs::remove_file(installation.join("evidence").join(name)).unwrap();
+        }
+        for name in [
+            "generation-inputs",
+            "generation-identity",
+            "generation-transfer",
+        ] {
+            let path = installation.join(name);
+            fs::create_dir(&path).unwrap();
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
+            assert!(load(&state).is_err());
+            assert!(unchanged(&state, &legacy).is_err());
+            fs::remove_dir(path).unwrap();
+        }
+        let receipt = crate::installer_generation_host::GenerationReceipt {
+            schema: "elevenid.installer-generation-host/v1",
+            installation_id: legacy.plan.installation_id.clone(),
+            engine_id: legacy.plan.engine_id.clone(),
+            container_id: "f".repeat(64),
+            container_name: format!("{}-generation-inputs", legacy.plan.project),
+            network_id: legacy.plan.network_id.clone(),
+            image: "fixture-image".into(),
+            candidate_validated: true,
+            outputs: crate::installer_renewal_bootstrap::current_inputs()
+                .into_iter()
+                .collect(),
+            candidate_sha256: crate::installer_renewal_bootstrap::current_inputs()
+                .into_iter()
+                .map(|name| (name, "a".repeat(64)))
+                .collect(),
+            activated: false,
+            root_retired: false,
+            ingress_renewal: false,
+            container_removed: true,
+            installation_ready: false,
+        };
+        let candidate = serde_json::to_value(receipt).unwrap();
+        put("generation-container-removed.json", &candidate);
+        assert!(
+            load(&state).is_err(),
+            "generation cannot lack renewal evidence"
+        );
+        // The production generation receipt and historical renewal identity
+        // must both participate in cleanup's immutable source closure.
+        let renewal = serde_json::to_value(crate::installer_renewal::RenewalReceipt {
+            schema: "elevenid.installer-renewal-host/v1",
+            installation_id: legacy.plan.installation_id.clone(),
+            engine_id: legacy.plan.engine_id.clone(),
+            container_id: "e".repeat(64),
+            container_name: format!("{}-renewal-inputs", legacy.plan.project),
+            network_id: legacy.plan.network_id.clone(),
+            image: "fixture-image".into(),
+            root_retired: false,
+            ingress_renewal: false,
+            private_identity_validated: true,
+            outputs: [
+                "renewal-role-id",
+                "renewal-secret-id",
+                "renewal-leaf-policies.json",
+            ]
+            .map(String::from)
+            .to_vec(),
+            container_removed: true,
+            installation_ready: false,
+        })
+        .unwrap();
+        put("renewal-container-removed.json", &renewal);
+        let complete = load(&state).unwrap();
+        assert_eq!(complete.helper_ids.len(), 5);
+        assert_eq!(complete.plan.source_hashes.len(), 10);
+        assert_eq!(complete.plan.resources.len(), 34);
+        assert!(unchanged(&state, &legacy).is_err());
+        drop(state);
+        let mut saved = ledger(&root);
+        let mut live = saved["containers"]
+            .as_object()
+            .unwrap()
+            .values()
+            .next()
+            .unwrap()
+            .clone();
+        live["Id"] = candidate["container_id"].clone();
+        live["Name"] = json!(format!(
+            "/{}",
+            candidate["container_name"].as_str().unwrap()
+        ));
+        saved["containers"]["f".repeat(64)] = live;
         fs::write(
             root.path().join("ledger.json"),
             serde_json::to_vec(&saved).unwrap(),

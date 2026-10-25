@@ -417,7 +417,7 @@ fn deliver_file(directory: &File, name: &str, bytes: &[u8], uid: u32, gid: u32) 
         .map_err(|_| RECOVERY.into())
 }
 
-fn deliver_directory(directory: &File, parent: &File, uid: u32, gid: u32) -> Result<()> {
+pub(crate) fn deliver_directory(directory: &File, parent: &File, uid: u32, gid: u32) -> Result<()> {
     if unsafe { libc::fchown(directory.as_raw_fd(), uid, gid) } != 0 {
         return Err(RECOVERY.into());
     }

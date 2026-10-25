@@ -39,7 +39,11 @@ const IDENTITY: [&str; 3] = [
     "renewal-leaf-policies.json",
 ];
 fn require(value: bool) -> Result<()> {
-    if value { Ok(()) } else { Err(REFUSED.into()) }
+    if value {
+        Ok(())
+    } else {
+        Err(REFUSED.into())
+    }
 }
 
 #[derive(Deserialize)]
@@ -63,7 +67,7 @@ fn hex(value: &str, length: usize) -> bool {
             .bytes()
             .all(|v| v.is_ascii_digit() || (b'a'..=b'f').contains(&v))
 }
-fn original_nonce(bytes: &[u8], owner: &str) -> Result<String> {
+pub(crate) fn original_nonce(bytes: &[u8], owner: &str) -> Result<String> {
     let receipt: InitialKeycloak = serde_json::from_slice(bytes).map_err(|_| REFUSED)?;
     require(
         receipt.schema == "elevenid.installer-keycloak/v1"
@@ -108,6 +112,9 @@ fn binding(path: &Path, held: &File, root: bool, readonly: bool) -> Result<()> {
     )
 }
 fn write(dir: &File, name: &str, bytes: &[u8]) -> Result<()> {
+    write_open(dir, name, bytes).map(drop)
+}
+fn write_open(dir: &File, name: &str, bytes: &[u8]) -> Result<File> {
     require(
         !name.contains('/')
             && !name.contains('\\')
@@ -136,9 +143,10 @@ fn write(dir: &File, name: &str, bytes: &[u8]) -> Result<()> {
     file.write_all(bytes)
         .and_then(|_| file.sync_all())
         .and_then(|_| dir.sync_all())
-        .map_err(|_| RECOVERY.into())
+        .map_err(|_| RECOVERY.to_string())?;
+    Ok(file)
 }
-fn hashes(values: &BTreeMap<String, Vec<u8>>) -> BTreeMap<String, String> {
+pub(crate) fn hashes(values: &BTreeMap<String, Vec<u8>>) -> BTreeMap<String, String> {
     values
         .iter()
         .map(|(name, value)| (name.clone(), format!("{:x}", Sha256::digest(value))))
@@ -234,21 +242,30 @@ fn run_child(
         Err(RECOVERY.into())
     }
 }
-fn workload_environment(owner: &str) -> BTreeMap<String, String> {
+fn workload_environment(owner: &str, output: &Path) -> BTreeMap<String, String> {
     [
         ("PATH", "/usr/local/bin:/usr/bin:/bin".into()),
-        ("HOME", "/output".into()),
+        ("HOME", output.to_string_lossy().into_owned()),
         ("LANG", "C".into()),
         ("BAO_ADDR", "https://openbao:8200".into()),
         ("BAO_CACERT", "/input/ca.crt".into()),
-        ("BAO_RENEWAL_TOKEN_FILE", "/output/authority.token".into()),
+        (
+            "BAO_RENEWAL_TOKEN_FILE",
+            output
+                .join("authority.token")
+                .to_string_lossy()
+                .into_owned(),
+        ),
         ("MARTY_TLS_BOOTSTRAP_PROFILE", "selfhost-renew".into()),
         ("MARTY_SELFHOST_WORKLOAD_PKI_MOUNT", "workload-pki".into()),
         (
             "MARTY_SELFHOST_PROJECT",
             format!("marty-selfhost-disposable-{}", owner.replace('-', "")),
         ),
-        ("SELFHOST_TLS_OUTPUT_DIR", "/output/tls".into()),
+        (
+            "SELFHOST_TLS_OUTPUT_DIR",
+            output.join("tls").to_string_lossy().into_owned(),
+        ),
     ]
     .into_iter()
     .map(|(k, v)| (k.into(), v))
@@ -303,6 +320,10 @@ async fn retire(bao: &OpenBaoHttp, token: &str) -> Result<()> {
 /// /output/generation. No host delivery, activation, old-token revocation or root
 /// retirement. Caller must preserve this entire directory on every failure.
 pub async fn provision(owner: &str) -> Result<usize> {
+    provision_at(owner, Path::new("/output")).await
+}
+
+async fn provision_at(owner: &str, output_path: &Path) -> Result<usize> {
     require(unsafe { libc::geteuid() } == 0)?;
     fs::validate_id(owner)?;
     let current = fs::directory(Path::new("/input/current"), false, true)?;
@@ -325,7 +346,7 @@ pub async fn provision(owner: &str) -> Result<usize> {
         &[0, 100],
         &[0o444, 0o644],
     )?;
-    let output = fs::directory(Path::new("/output"), true, false)?;
+    let output = fs::directory(output_path, true, false)?;
     require(fs::names(&output)?.is_empty())?;
     workload_executable()?;
     let bao = OpenBaoHttp::connect(
@@ -348,7 +369,7 @@ pub async fn provision(owner: &str) -> Result<usize> {
         let produced: Result<()> = async {
             binding(Path::new("/input/current"),&current,false,true)?;
             binding(Path::new("/input/identity"),&identity,false,true)?;
-            binding(Path::new("/output"),&output,true,false)?;
+            binding(output_path,&output,true,false)?;
             require(fs::current(&current)? == before && identity_snapshot(&identity)? == credentials)?;
             require((20..=256).contains(&token.len()) && token.bytes().all(|v|v.is_ascii_graphic()))?;
             activation_preflight::authority(&bao,token,false).await.map_err(|_| RECOVERY)?;
@@ -356,16 +377,16 @@ pub async fn provision(owner: &str) -> Result<usize> {
             let tls = fs::child(&output,"tls")?;
             let keycloak = fs::child(&output,"keycloak")?;
             let candidate = fs::child(&output,"generation")?;
-            run_child(Path::new(EXECUTABLE),&workload_environment(owner),Path::new("/output"),Duration::from_secs(600))?;
+            run_child(Path::new(EXECUTABLE),&workload_environment(owner,output_path),output_path,Duration::from_secs(600))?;
             let values = keycloak_provision::provision(&bao,&json!({"token":token,"renew":true,"pki_mount":"keycloak-pki","nonce":nonce})).await.map_err(|_| RECOVERY)?;
             let values = values.as_object().ok_or(RECOVERY)?;
             require(values.keys().cloned().collect::<BTreeSet<_>>() == crate::installer_keycloak_bridge::OUTPUTS.map(String::from).into())?;
             for (name,value) in values { write(&keycloak,name,value.as_str().ok_or(RECOVERY)?.as_bytes())?; }
-            binding(Path::new("/output/tls"),&tls,true,false)?;
-            binding(Path::new("/output/keycloak"),&keycloak,true,false)?;
-            binding(Path::new("/output/generation"),&candidate,true,false)?;
+            binding(&output_path.join("tls"),&tls,true,false)?;
+            binding(&output_path.join("keycloak"),&keycloak,true,false)?;
+            binding(&output_path.join("generation"),&candidate,true,false)?;
             producer_outputs(&tls,&keycloak)?;
-            require(generation::stage(Path::new("/input/current"),Path::new("/output/tls"),Path::new("/output/keycloak"),Path::new("/output/generation"),false).map_err(|_| RECOVERY)? == 40)?;
+            require(generation::stage(Path::new("/input/current"),&output_path.join("tls"),&output_path.join("keycloak"),&output_path.join("generation"),false).map_err(|_| RECOVERY)? == 40)?;
             let mut next = BTreeMap::new();
             require(fs::names(&candidate)? == fs::current_inputs())?;
             for name in fs::current_inputs() {
@@ -373,11 +394,11 @@ pub async fn provision(owner: &str) -> Result<usize> {
             }
             fs::validate_current(&next)?;
             require(!next.values().any(|value|value.windows(token.len()).any(|part|part == token.as_bytes())))?;
-            let checks = json!({"token":token,"old":"/input/current","new":"/output/generation",
+            let checks = json!({"token":token,"old":"/input/current","new":output_path.join("generation"),
                 "minimum_ttl":3600,"require_orphan_new":true,"require_orphan_old":false,"replacement":null,"retiring":false});
             activation_preflight::tokens(&bao,&checks).await.map_err(|_| RECOVERY)?;
             activation_preflight::certificates(&bao,&checks).await.map_err(|_| RECOVERY)?;
-            require(generation::verify(Path::new("/input/current"),Path::new("/output/generation"),false,false).map_err(|_| RECOVERY)? == (40,39))?;
+            require(generation::verify(Path::new("/input/current"),&output_path.join("generation"),false,false).map_err(|_| RECOVERY)? == (40,39))?;
             tls.sync_all().and_then(|_|keycloak.sync_all()).and_then(|_|candidate.sync_all()).map_err(|_| RECOVERY)?;
             fs::receipt(&output,"validated.json",&json!({"schema":"elevenid.installer-generation-validation/v1","installation_id":owner,
                 "output_sha256":hashes(&next),"orphan_tokens":21,"remote_key_version":1,"ca_changed":false}))?;
@@ -389,7 +410,7 @@ pub async fn provision(owner: &str) -> Result<usize> {
         produced?;
         binding(Path::new("/input/current"),&current,false,true)?;
         binding(Path::new("/input/identity"),&identity,false,true)?;
-        binding(Path::new("/output"),&output,true,false)?;
+        binding(output_path,&output,true,false)?;
         require(fs::current(&current)? == before && identity_snapshot(&identity)? == credentials
             && fs::input(Path::new("/input/ca.crt"),65536,&[0,100],&[0o444,0o644])? == ca
             && fs::input(Path::new("/input/keycloak-receipt.json"),8192,&[0,input_owner],&[0o600])? == receipt)?;
@@ -402,11 +423,230 @@ pub async fn provision(owner: &str) -> Result<usize> {
     outcome.map_err(|_| RECOVERY.into())
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GenerationPending {
+    schema: String,
+    installation_id: String,
+    nonce: String,
+    input_sha256: BTreeMap<String, String>,
+    identity_sha256: BTreeMap<String, String>,
+    keycloak_receipt_sha256: String,
+    root_retired: bool,
+    activated: bool,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GenerationValidated {
+    schema: String,
+    installation_id: String,
+    output_sha256: BTreeMap<String, String>,
+    orphan_tokens: u64,
+    remote_key_version: u64,
+    ca_changed: bool,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GenerationCompleted {
+    schema: String,
+    installation_id: String,
+    files: u64,
+    changed_files: u64,
+    orphan_tokens: u64,
+    transient_revoked: bool,
+    activated: bool,
+    root_retired: bool,
+    ingress_renewal: bool,
+    installation_ready: bool,
+}
+pub(crate) struct GenerationProof<'a> {
+    pub owner: &'a str,
+    pub current: &'a BTreeMap<String, Vec<u8>>,
+    pub identity: &'a BTreeMap<String, Vec<u8>>,
+    pub keycloak_receipt: &'a [u8],
+}
+pub(crate) fn validate_records(
+    records: &BTreeMap<String, Vec<u8>>,
+    outputs: &BTreeMap<String, Vec<u8>>,
+    proof: &GenerationProof<'_>,
+) -> Result<BTreeMap<String, String>> {
+    require(
+        records.keys().map(String::as_str).collect::<BTreeSet<_>>()
+            == ["pending.json", "validated.json", "completed.json"].into(),
+    )?;
+    fs::validate_current(proof.current)?;
+    fs::validate_current(outputs)?;
+    let pending: GenerationPending =
+        serde_json::from_slice(&records["pending.json"]).map_err(|_| REFUSED)?;
+    let validated: GenerationValidated =
+        serde_json::from_slice(&records["validated.json"]).map_err(|_| REFUSED)?;
+    let completed: GenerationCompleted =
+        serde_json::from_slice(&records["completed.json"]).map_err(|_| REFUSED)?;
+    let digests = hashes(outputs);
+    require(
+        pending.schema == "elevenid.installer-generation-intent/v1"
+            && pending.installation_id == proof.owner
+            && pending.nonce == original_nonce(proof.keycloak_receipt, proof.owner)?
+            && pending.input_sha256 == hashes(proof.current)
+            && pending.identity_sha256 == hashes(proof.identity)
+            && proof
+                .identity
+                .keys()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>()
+                == IDENTITY.into()
+            && pending.keycloak_receipt_sha256
+                == format!("{:x}", Sha256::digest(proof.keycloak_receipt))
+            && !pending.root_retired
+            && !pending.activated,
+    )?;
+    require(
+        validated.schema == "elevenid.installer-generation-validation/v1"
+            && validated.installation_id == proof.owner
+            && validated.output_sha256 == digests
+            && validated.orphan_tokens == 21
+            && validated.remote_key_version == 1
+            && !validated.ca_changed,
+    )?;
+    require(
+        completed.schema == "elevenid.installer-generation-result/v1"
+            && completed.installation_id == proof.owner
+            && completed.files == 40
+            && completed.changed_files == 39
+            && completed.orphan_tokens == 21
+            && completed.transient_revoked
+            && !completed.activated
+            && !completed.root_retired
+            && !completed.ingress_renewal
+            && !completed.installation_ready,
+    )?;
+    for (name, value) in outputs {
+        require((value == &proof.current[name]) == (name == "workload_identity_ca_cert"))?;
+    }
+    Ok(digests)
+}
+fn deliver_copy(dir: &File, name: &str, bytes: &[u8], mode: u32, uid: u32, gid: u32) -> Result<()> {
+    require([0o444, 0o600].contains(&mode))?;
+    let file = write_open(dir, name, bytes)?;
+    let fd = file.as_raw_fd();
+    require(unsafe { libc::fchmod(fd, mode) } == 0 && unsafe { libc::fchown(fd, uid, gid) } == 0)?;
+    let info = file.metadata().map_err(|_| RECOVERY)?;
+    require(
+        info.is_file()
+            && info.nlink() == 1
+            && info.uid() == uid
+            && info.gid() == gid
+            && info.mode() & 0o7777 == mode,
+    )?;
+    file.sync_all()
+        .and_then(|_| dir.sync_all())
+        .map_err(|_| RECOVERY.into())
+}
+/// Single owned helper transaction, private originals retained under root700.
+/// Recipient UID/GID come only from the held host-created /transfer directory.
+pub async fn provision_transfer(owner: &str) -> Result<usize> {
+    require(unsafe { libc::geteuid() } == 0)?;
+    fs::validate_id(owner)?;
+    let parent = fs::directory(Path::new("/transfer"), false, false)?;
+    let recipient = parent.metadata().map_err(|_| REFUSED)?;
+    require(fs::names(&parent)?.is_empty())?;
+    fs::receipt(
+        &parent,
+        "transfer-pending.json",
+        &json!({"schema":"elevenid.installer-generation-transfer-intent/v1","installation_id":owner,"activated":false}),
+    )?;
+    let result: Result<usize> = async {
+        let output = fs::child(&parent, "output")?;
+        binding(Path::new("/transfer"), &parent, false, false)?;
+        binding(Path::new("/transfer/output"), &output, true, false)?;
+        provision_at(owner, Path::new("/transfer/output")).await?;
+        binding(Path::new("/transfer/output"), &output, true, false)?;
+        require(
+            fs::names(&output)?
+                == [
+                    "pending.json",
+                    "authority.token",
+                    "tls",
+                    "keycloak",
+                    "generation",
+                    "validated.json",
+                    "completed.json",
+                ]
+                .map(String::from)
+                .into(),
+        )?;
+        let current = fs::directory(Path::new("/input/current"), false, true)?;
+        let identity = fs::directory(Path::new("/input/identity"), false, true)?;
+        let before = fs::current(&current)?;
+        let credentials = identity_snapshot(&identity)?;
+        let input_owner = current.metadata().map_err(|_| RECOVERY)?.uid();
+        let receipt = fs::input(
+            Path::new("/input/keycloak-receipt.json"),
+            8192,
+            &[0, input_owner],
+            &[0o600],
+        )?;
+        let candidate = fs::directory(Path::new("/transfer/output/generation"), true, false)?;
+        require(fs::names(&candidate)? == fs::current_inputs())?;
+        let mut values = BTreeMap::new();
+        for name in fs::current_inputs() {
+            values.insert(
+                name.clone(),
+                fs::entry(&candidate, &name, &[0], &[0o444], false)?,
+            );
+        }
+        let mut records = BTreeMap::new();
+        for name in ["pending.json", "validated.json", "completed.json"] {
+            records.insert(
+                name.into(),
+                fs::entry(&output, name, &[0], &[0o600], false)?,
+            );
+        }
+        validate_records(
+            &records,
+            &values,
+            &GenerationProof {
+                owner,
+                current: &before,
+                identity: &credentials,
+                keycloak_receipt: &receipt,
+            },
+        )?;
+        let delivered = fs::child(&parent, "delivered")?;
+        for (name, value) in &values {
+            deliver_copy(
+                &delivered,
+                name,
+                value,
+                0o444,
+                recipient.uid(),
+                recipient.gid(),
+            )?;
+        }
+        for (name, value) in &records {
+            deliver_copy(
+                &delivered,
+                name,
+                value,
+                0o600,
+                recipient.uid(),
+                recipient.gid(),
+            )?;
+        }
+        binding(Path::new("/transfer"), &parent, false, false)?;
+        fs::deliver_directory(&delivered, &parent, recipient.uid(), recipient.gid())?;
+        binding(Path::new("/transfer"), &parent, false, false)?;
+        Ok(40)
+    }
+    .await;
+    result.map_err(|_| RECOVERY.into())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::Value;
-    use std::os::unix::fs::{PermissionsExt, symlink};
+    use std::os::unix::fs::{symlink, PermissionsExt};
     const OWNER: &str = "2e052c77-efe8-44c6-9421-9ef15fe8ee7c";
     fn private() -> tempfile::TempDir {
         let temp = tempfile::tempdir().unwrap();
@@ -459,16 +699,15 @@ mod tests {
     }
     #[test]
     fn environment_has_only_fixed_scoped_renewal_authority() {
-        let env = workload_environment(OWNER);
+        let env = workload_environment(OWNER, Path::new("/output"));
         assert_eq!(env["MARTY_TLS_BOOTSTRAP_PROFILE"], "selfhost-renew");
         assert_eq!(
             env["MARTY_SELFHOST_PROJECT"],
             "marty-selfhost-disposable-2e052c77efe844c694219ef15fe8ee7c"
         );
-        assert!(
-            !env.keys()
-                .any(|k| k.contains("ROOT") || k.contains("PROXY"))
-        );
+        assert!(!env
+            .keys()
+            .any(|k| k.contains("ROOT") || k.contains("PROXY")));
         assert!(env.values().all(|v| !v.contains("secret-token")));
     }
     fn script(root: &Path, body: &str) -> std::path::PathBuf {
@@ -522,5 +761,105 @@ mod tests {
         assert!(binding(temp.path(), &held, false, false).is_ok());
         let other = private();
         assert!(binding(other.path(), &held, false, false).is_err());
+    }
+    #[test]
+    fn delivery_keeps_exclusive_fd_private_and_refuses_existing_links() {
+        let temp = private();
+        let dir = File::open(temp.path()).unwrap();
+        let (uid, gid) = unsafe { (libc::geteuid(), libc::getegid()) };
+        for (name, mode) in [("candidate", 0o444), ("receipt", 0o600)] {
+            deliver_copy(&dir, name, b"synthetic", mode, uid, gid).unwrap();
+            let info = std::fs::metadata(temp.path().join(name)).unwrap();
+            assert_eq!(
+                (info.mode() & 0o7777, info.uid(), info.gid(), info.nlink()),
+                (mode, uid, gid, 1)
+            );
+            assert!(deliver_copy(&dir, name, b"replacement", mode, uid, gid).is_err());
+            assert_eq!(std::fs::read(temp.path().join(name)).unwrap(), b"synthetic");
+        }
+        symlink(temp.path().join("receipt"), temp.path().join("alias")).unwrap();
+        assert!(deliver_copy(&dir, "alias", b"replacement", 0o444, uid, gid).is_err());
+        assert_eq!(
+            std::fs::metadata(temp.path().join("receipt"))
+                .unwrap()
+                .mode()
+                & 0o7777,
+            0o600
+        );
+        assert!(deliver_copy(&dir, "../escape", b"synthetic", 0o600, uid, gid).is_err());
+    }
+    #[test]
+    fn delivered_proofs_bind_every_generation_and_reject_activation_claims() {
+        let current: BTreeMap<String, Vec<u8>> = fs::current_inputs()
+            .into_iter()
+            .map(|name| {
+                let bytes = if name.ends_with("_token") {
+                    format!("old-synthetic-credential-{name}")
+                } else {
+                    format!("-----BEGIN CERTIFICATE-----\nold-{name}\n-----END CERTIFICATE-----")
+                };
+                (name, bytes.into_bytes())
+            })
+            .collect();
+        let outputs: BTreeMap<String, Vec<u8>> = current
+            .iter()
+            .map(|(name, bytes)| {
+                (
+                    name.clone(),
+                    if name == "workload_identity_ca_cert" {
+                        bytes.clone()
+                    } else {
+                        String::from_utf8(bytes.clone())
+                            .unwrap()
+                            .replace("old-", "new-")
+                            .into_bytes()
+                    },
+                )
+            })
+            .collect();
+        let identity = IDENTITY
+            .into_iter()
+            .map(|name| (name.into(), format!("identity-{name}").into_bytes()))
+            .collect();
+        let receipt = serde_json::to_vec(&receipt()).unwrap();
+        let proof = GenerationProof {
+            owner: OWNER,
+            current: &current,
+            identity: &identity,
+            keycloak_receipt: &receipt,
+        };
+        let records: BTreeMap<String, Vec<u8>> = [
+            ("pending.json", json!({"schema":"elevenid.installer-generation-intent/v1","installation_id":OWNER,"nonce":"0123456789ab","input_sha256":hashes(&current),"identity_sha256":hashes(&identity),"keycloak_receipt_sha256":format!("{:x}",Sha256::digest(&receipt)),"root_retired":false,"activated":false})),
+            ("validated.json", json!({"schema":"elevenid.installer-generation-validation/v1","installation_id":OWNER,"output_sha256":hashes(&outputs),"orphan_tokens":21,"remote_key_version":1,"ca_changed":false})),
+            ("completed.json", json!({"schema":"elevenid.installer-generation-result/v1","installation_id":OWNER,"files":40,"changed_files":39,"orphan_tokens":21,"transient_revoked":true,"activated":false,"root_retired":false,"ingress_renewal":false,"installation_ready":false}))
+        ].into_iter().map(|(name, value)| (name.into(), serde_json::to_vec(&value).unwrap())).collect();
+        assert_eq!(
+            validate_records(&records, &outputs, &proof).unwrap(),
+            hashes(&outputs)
+        );
+        for (record, field, value) in [
+            ("pending.json", "identity_sha256", json!({})),
+            ("pending.json", "input_sha256", json!({})),
+            (
+                "pending.json",
+                "keycloak_receipt_sha256",
+                json!("f".repeat(64)),
+            ),
+            ("validated.json", "output_sha256", json!({})),
+            ("validated.json", "remote_key_version", json!(2)),
+            ("completed.json", "transient_revoked", json!(false)),
+            ("completed.json", "activated", json!(true)),
+            ("completed.json", "unknown", json!(false)),
+        ] {
+            let mut altered = records.clone();
+            let mut object: Value = serde_json::from_slice(&altered[record]).unwrap();
+            object[field] = value;
+            altered.insert(record.into(), serde_json::to_vec(&object).unwrap());
+            assert!(
+                validate_records(&altered, &outputs, &proof).is_err(),
+                "accepted {record}/{field}"
+            );
+        }
+        assert!(validate_records(&records, &current, &proof).is_err());
     }
 }

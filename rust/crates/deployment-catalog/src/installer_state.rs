@@ -450,6 +450,15 @@ fn cleanup_summary(
     {
         expected_sources.insert("evidence/renewal-container-removed.json");
     }
+    if plan
+        .source_hashes
+        .contains_key("evidence/generation-container-removed.json")
+    {
+        if !expected_sources.contains("evidence/renewal-container-removed.json") {
+            return Err("generation cleanup lacks renewal authority evidence".into());
+        }
+        expected_sources.insert("evidence/generation-container-removed.json");
+    }
     if plan.schema != "elevenid.installer-uninstall-plan/v1"
         || plan.installation_id != journal.installation_id().to_string()
         || plan.engine_id != binding.engine_id
@@ -871,6 +880,9 @@ impl InstallerState {
                 "ingress-output",
                 "renewal-inputs",
                 "renewal-transfer",
+                "generation-inputs",
+                "generation-identity",
+                "generation-transfer",
             ]
             .contains(&entry)
         {
@@ -1306,7 +1318,7 @@ mod tests {
         );
         assert!(lock(File::open(root.path()).unwrap()).is_ok());
     }
-    use std::os::unix::fs::{PermissionsExt, symlink};
+    use std::os::unix::fs::{symlink, PermissionsExt};
     fn identity() -> Identity {
         Identity {
             source_sha: "a".repeat(40),
@@ -1372,16 +1384,33 @@ mod tests {
         )
         .unwrap();
         assert_eq!(summary.state, CleanupState::Completed);
+        plan["source_hashes"]["evidence/generation-container-removed.json"] =
+            serde_json::json!("d".repeat(64));
+        assert!(cleanup_summary(
+            state.journal(),
+            Some(&serde_json::to_vec(&plan).unwrap()),
+            None
+        )
+        .is_ok());
+        let mut missing_renewal = plan.clone();
+        missing_renewal["source_hashes"]
+            .as_object_mut()
+            .unwrap()
+            .remove("evidence/renewal-container-removed.json");
+        assert!(cleanup_summary(
+            state.journal(),
+            Some(&serde_json::to_vec(&missing_renewal).unwrap()),
+            None
+        )
+        .is_err());
         plan["source_hashes"]["evidence/unknown-container-removed.json"] =
             serde_json::json!("c".repeat(64));
-        assert!(
-            cleanup_summary(
-                state.journal(),
-                Some(&serde_json::to_vec(&plan).unwrap()),
-                None
-            )
-            .is_err()
-        );
+        assert!(cleanup_summary(
+            state.journal(),
+            Some(&serde_json::to_vec(&plan).unwrap()),
+            None
+        )
+        .is_err());
     }
     #[test]
     fn cleanup_summary_tracks_records_without_changing_historical_ready_journal() {
@@ -1445,21 +1474,17 @@ mod tests {
         std::fs::write(&target, b"malformed").unwrap();
         std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600)).unwrap();
         assert!(InstallerState::resume(&path, &identity()).is_err());
-        assert!(
-            LockedInspection::open(&path)
-                .unwrap()
-                .cleanup_status()
-                .is_err()
-        );
+        assert!(LockedInspection::open(&path)
+            .unwrap()
+            .cleanup_status()
+            .is_err());
         std::fs::remove_file(&target).unwrap();
         symlink("absent.json", &target).unwrap();
         assert!(InstallerState::resume(&path, &identity()).is_err());
-        assert!(
-            LockedInspection::open(&path)
-                .unwrap()
-                .cleanup_status()
-                .is_err()
-        );
+        assert!(LockedInspection::open(&path)
+            .unwrap()
+            .cleanup_status()
+            .is_err());
         std::fs::remove_file(&target).unwrap();
         std::fs::write(&target, b"{}").unwrap();
         std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o644)).unwrap();
@@ -1513,17 +1538,13 @@ mod tests {
         let mut maintenance = LockedMaintenance::open(&path).unwrap();
         assert!(LockedInspection::open(&path).is_err());
         assert_eq!(maintenance.journal().phase(), Phase::Provisioning);
-        assert!(
-            maintenance
-                .read_evidence("uninstall-absent.json")
-                .unwrap()
-                .is_none()
-        );
-        assert!(
-            maintenance
-                .write_evidence_exclusive("application-plan.json", b"replace")
-                .is_err()
-        );
+        assert!(maintenance
+            .read_evidence("uninstall-absent.json")
+            .unwrap()
+            .is_none());
+        assert!(maintenance
+            .write_evidence_exclusive("application-plan.json", b"replace")
+            .is_err());
         maintenance
             .write_evidence_exclusive("uninstall-intent.json", b"exact resource intent")
             .unwrap();
@@ -1534,11 +1555,9 @@ mod tests {
                 .unwrap(),
             b"exact resource intent"
         );
-        assert!(
-            maintenance
-                .write_evidence_exclusive("uninstall-intent.json", b"replacement")
-                .is_err()
-        );
+        assert!(maintenance
+            .write_evidence_exclusive("uninstall-intent.json", b"replacement")
+            .is_err());
         assert!(maintenance.require_unchanged().is_err());
         drop(maintenance);
         let maintenance = LockedMaintenance::open(&path).unwrap();
@@ -1872,7 +1891,13 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("install");
         let mut state = InstallerState::create(&path, identity()).unwrap();
-        for entry in ["renewal-inputs", "renewal-transfer"] {
+        for entry in [
+            "renewal-inputs",
+            "renewal-transfer",
+            "generation-inputs",
+            "generation-identity",
+            "generation-transfer",
+        ] {
             state.create_private_directory(entry).unwrap();
             assert_eq!(
                 std::fs::metadata(path.join(entry)).unwrap().mode() & 0o777,
@@ -1950,11 +1975,9 @@ mod tests {
             InstallerState::inspect(&path).unwrap().phase(),
             Phase::Provisioning
         );
-        assert!(
-            InstallerState::resume(&path, &identity())
-                .unwrap_err_string()
-                .contains("indeterminate")
-        );
+        assert!(InstallerState::resume(&path, &identity())
+            .unwrap_err_string()
+            .contains("indeterminate"));
     }
     #[test]
     fn generates_distinct_private_credentials_without_overwrite() {
@@ -1965,11 +1988,9 @@ mod tests {
         assert!(state.generate_local_credentials(&realm).is_err());
         state.advance(Phase::Verified).unwrap();
         state.advance(Phase::Provisioning).unwrap();
-        assert!(
-            state
-                .generate_local_credentials(&serde_json::json!({}))
-                .is_err()
-        );
+        assert!(state
+            .generate_local_credentials(&serde_json::json!({}))
+            .is_err());
         assert!(!path.join("secrets").exists());
         state.generate_local_credentials(&realm).unwrap();
         let mut values = std::collections::BTreeSet::new();

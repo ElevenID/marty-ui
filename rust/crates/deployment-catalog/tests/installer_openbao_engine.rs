@@ -78,13 +78,19 @@ fn observe_owned(
 #[test]
 #[ignore = "requires explicit anonymously pullable OpenBao digest and exact local Engine; creates four isolated owned containers"]
 fn actual_four_role_openbao_records_ownership_before_start() -> Result<()> {
-    run_fixture(false)
+    run_fixture(false, false)
 }
 
 #[test]
 #[ignore = "requires current static operator, published services/OpenBao digests and exact local Engine; creates isolated owned OpenBao and sequential provisioning helpers"]
 fn actual_renewal_bootstrap_uses_live_keycloak_and_workload_inputs() -> Result<()> {
-    run_fixture(true)
+    run_fixture(true, false)
+}
+
+#[test]
+#[ignore = "requires current static operator, published digests and exact local Engine; creates isolated owned renewal and generation helpers"]
+fn actual_orphan_generation_stages_verified_candidate_without_activation() -> Result<()> {
+    run_fixture(true, true)
 }
 
 fn persist_fixture_operator(root: &Path, state: &mut InstallerState) -> Result<String> {
@@ -157,7 +163,7 @@ fn persist_fixture_operator(root: &Path, state: &mut InstallerState) -> Result<S
     Ok(digest)
 }
 
-fn run_fixture(renewal: bool) -> Result<()> {
+fn run_fixture(renewal: bool, generation: bool) -> Result<()> {
     let image = std::env::var("MARTY_INSTALLER_TEST_OPENBAO_IMAGE").map_err(|_| {
         "set MARTY_INSTALLER_TEST_OPENBAO_IMAGE to an actual published plugin digest"
     })?;
@@ -333,11 +339,45 @@ fn run_fixture(renewal: bool) -> Result<()> {
             "renewal-observation.json",
             &serde_json::to_vec(&renewed).map_err(|_| "cannot encode renewal receipt")?,
         )?;
-        for (stage, container) in [
+        let candidate = if generation {
+            let candidate = marty_deployment_catalog::installer_generation_host::provision(
+                &executable,
+                &installation,
+                &bundle,
+                &mut state,
+                &receipt,
+                services,
+                operator,
+            )?;
+            require(
+                candidate.container_removed
+                    && candidate.candidate_validated
+                    && candidate.outputs.len() == 40
+                    && candidate.candidate_sha256.len() == 40
+                    && !candidate.ingress_renewal
+                    && !candidate.activated
+                    && !candidate.root_retired
+                    && !candidate.installation_ready,
+                "candidate generation result differs",
+            )?;
+            state.write_evidence(
+                "generation-observation.json",
+                &serde_json::to_vec(&candidate)
+                    .map_err(|_| "cannot encode candidate generation receipt")?,
+            )?;
+            Some(candidate)
+        } else {
+            None
+        };
+        let mut helpers = vec![
             ("keycloak", &keycloak.container_id),
             ("tls", &tls.container_id),
             ("renewal", &renewed.container_id),
-        ] {
+        ];
+        if let Some(candidate) = &candidate {
+            helpers.push(("generation", &candidate.container_id));
+        }
+        for (stage, container) in helpers {
             let removed: Value = serde_json::from_slice(
                 &fs::read(installation.join(format!("evidence/{stage}-container-removed.json")))
                     .map_err(|_| "helper removal receipt absent")?,

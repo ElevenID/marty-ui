@@ -194,9 +194,24 @@ lifetime before the completed receipt can be written. Known login tokens are
 self-revoked even on producer failure; lost responses can leave unknown orphan
 leaves, so an interrupted attempt requires recovery and must not be replayed.
 
-This helper is not yet wired into host installation. Its filesystem and process
-tests do not prove actual generation execution. Host orchestration must bind
-the exact container, inputs, source hashes and output transfer, then assemble
+The owned `installer_generation_host` stage runs the transfer wrapper with the
+same pinned services image and current static operator. It stages the forty
+inputs and three identity files separately, binds the original Keycloak and
+renewal removal evidence, and records the helper identity before starting it.
+Root-owned originals remain under `generation-transfer/output`; the owner gets
+forty candidate files and three receipts under a private `delivered` directory.
+Source and candidate hashes must match before a result is recorded and the
+helper is removed. Partial generation state blocks normal uninstall; host data
+is retained. This stage does not activate credentials.
+
+The opt-in test
+`actual_orphan_generation_stages_verified_candidate_without_activation` uses
+the same exact-engine and static-operator requirements as the renewal fixture.
+It exercises fresh Keycloak/TLS/renewal setup, candidate generation, output
+delivery and exact helper removal before infrastructure cleanup. Contract tests
+alone do not qualify that actual execution or clean-host installation.
+
+Normal installation does not invoke this stage yet. Integration must assemble
 the complete immutable generation including unchanged scalar credentials.
 Application model, mount admission, logs and cleanup must select that recorded
 generation consistently before activation. Do not replace individual files in
