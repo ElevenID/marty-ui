@@ -30,6 +30,7 @@ pub mod installer_runtime;
 pub mod installer_state;
 pub mod installer_tls;
 pub mod installer_tls_outputs;
+pub mod installer_uninstall;
 pub mod installer_verify;
 pub mod passport_model;
 

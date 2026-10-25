@@ -391,6 +391,109 @@ impl LockedInspection {
     }
 }
 
+/// Exclusive cleanup access with append-only receipts. This deliberately has no
+/// phase-advance or provisioning-resume API, including for uncertain journals.
+pub(crate) struct LockedMaintenance {
+    inspection: LockedInspection,
+    poisoned: bool,
+}
+impl LockedMaintenance {
+    pub(crate) fn open(path: &Path) -> Result<Self> {
+        Ok(Self {
+            inspection: LockedInspection::open(path)?,
+            poisoned: false,
+        })
+    }
+    pub(crate) fn journal(&self) -> &Journal {
+        self.inspection.journal()
+    }
+    pub(crate) fn require_unchanged(&self) -> Result<()> {
+        if self.poisoned {
+            return Err("uncertain maintenance receipt; reopen and reconcile".into());
+        }
+        self.inspection.require_unchanged()
+    }
+    fn entry(entry: &str) -> Result<CString> {
+        if !regex::Regex::new(r"\A[a-z0-9][a-z0-9._-]{0,127}\z")
+            .unwrap()
+            .is_match(entry)
+        {
+            return Err("invalid maintenance record name".into());
+        }
+        Ok(name(entry))
+    }
+    fn evidence(&self) -> Result<File> {
+        let directory = open_at(
+            &self.inspection.directory,
+            &name("evidence"),
+            libc::O_RDONLY | libc::O_DIRECTORY,
+            0,
+        )?;
+        private(&directory, true)?;
+        Ok(directory)
+    }
+    fn read_optional(&self, directory: &File, entry: &str) -> Result<Option<Vec<u8>>> {
+        self.require_unchanged()?;
+        let entry = Self::entry(entry)?;
+        let fd = unsafe {
+            libc::openat(
+                directory.as_raw_fd(),
+                entry.as_ptr(),
+                libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK,
+            )
+        };
+        if fd < 0 {
+            let failure = std::io::Error::last_os_error();
+            if failure.raw_os_error() == Some(libc::ENOENT) {
+                self.require_unchanged()?;
+                return Ok(None);
+            }
+            return Err("cannot inspect maintenance record".into());
+        }
+        let file = unsafe { File::from_raw_fd(fd) };
+        private(&file, false)?;
+        let mut bytes = Vec::new();
+        file.take(4 * 1024 * 1024 + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|_| "cannot read maintenance record")?;
+        if bytes.is_empty() || bytes.len() > 4 * 1024 * 1024 {
+            return Err("maintenance record exceeds bounds".into());
+        }
+        self.require_unchanged()?;
+        Ok(Some(bytes))
+    }
+    pub(crate) fn read_record(&self, entry: &str) -> Result<Option<Vec<u8>>> {
+        self.read_optional(&self.inspection.directory, entry)
+    }
+    pub(crate) fn read_evidence(&self, entry: &str) -> Result<Option<Vec<u8>>> {
+        self.read_optional(&self.evidence()?, entry)
+    }
+    pub(crate) fn write_evidence_exclusive(&mut self, entry: &str, bytes: &[u8]) -> Result<()> {
+        self.require_unchanged()?;
+        let filename = Self::entry(entry)?;
+        if !entry.starts_with("uninstall-") || bytes.is_empty() || bytes.len() > 4 * 1024 * 1024 {
+            return Err("invalid maintenance evidence".into());
+        }
+        let directory = self.evidence()?;
+        self.poisoned = true;
+        let mut output = open_at(
+            &directory,
+            &filename,
+            libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL,
+            0o600,
+        )?;
+        private(&output, false)?;
+        output
+            .write_all(bytes)
+            .and_then(|_| output.sync_all())
+            .and_then(|_| directory.sync_all())
+            .map_err(|_| "cannot persist maintenance evidence")?;
+        self.inspection.require_unchanged()?;
+        self.poisoned = false;
+        Ok(())
+    }
+}
+
 pub struct InstallerState {
     directory: File,
     journal: Journal,
@@ -904,6 +1007,80 @@ mod tests {
             release_tag: "v1.2.3".into(),
             inventory_sha256: format!("sha256:{}", "b".repeat(64)),
         }
+    }
+    #[test]
+    fn maintenance_is_locked_append_only_and_never_resumes_provisioning() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("install");
+        let mut state = InstallerState::create(&path, identity()).unwrap();
+        state.create_private_directory("evidence").unwrap();
+        state.advance(Phase::Verified).unwrap();
+        state.advance(Phase::Provisioning).unwrap();
+        assert!(LockedMaintenance::open(&path).is_err());
+        drop(state);
+        let before = std::fs::read(path.join(JOURNAL)).unwrap();
+        let mut maintenance = LockedMaintenance::open(&path).unwrap();
+        assert!(LockedInspection::open(&path).is_err());
+        assert_eq!(maintenance.journal().phase(), Phase::Provisioning);
+        assert!(maintenance
+            .read_evidence("uninstall-absent.json")
+            .unwrap()
+            .is_none());
+        assert!(maintenance
+            .write_evidence_exclusive("application-plan.json", b"replace")
+            .is_err());
+        maintenance
+            .write_evidence_exclusive("uninstall-intent.json", b"exact resource intent")
+            .unwrap();
+        assert_eq!(
+            maintenance
+                .read_evidence("uninstall-intent.json")
+                .unwrap()
+                .unwrap(),
+            b"exact resource intent"
+        );
+        assert!(maintenance
+            .write_evidence_exclusive("uninstall-intent.json", b"replacement")
+            .is_err());
+        assert!(maintenance.require_unchanged().is_err());
+        drop(maintenance);
+        let maintenance = LockedMaintenance::open(&path).unwrap();
+        assert_eq!(
+            maintenance
+                .read_evidence("uninstall-intent.json")
+                .unwrap()
+                .unwrap(),
+            b"exact resource intent"
+        );
+        assert_eq!(std::fs::read(path.join(JOURNAL)).unwrap(), before);
+        drop(maintenance);
+        assert!(InstallerState::resume(&path, &identity()).is_err());
+    }
+    #[test]
+    fn maintenance_absence_is_not_a_link_permission_or_content_failure() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("install");
+        let mut state = InstallerState::create(&path, identity()).unwrap();
+        state.create_private_directory("evidence").unwrap();
+        drop(state);
+        let maintenance = LockedMaintenance::open(&path).unwrap();
+        assert!(maintenance.read_record("absent.json").unwrap().is_none());
+        assert!(maintenance.read_record("../outside").is_err());
+        symlink("absent.json", path.join("linked.json")).unwrap();
+        assert!(maintenance.read_record("linked.json").is_err());
+        let record = path.join("record.json");
+        std::fs::write(&record, b"{}").unwrap();
+        std::fs::set_permissions(&record, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(maintenance.read_record("record.json").is_err());
+        std::fs::set_permissions(&record, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert_eq!(
+            maintenance.read_record("record.json").unwrap().unwrap(),
+            b"{}"
+        );
+        std::fs::hard_link(&record, path.join("hard.json")).unwrap();
+        assert!(maintenance.read_record("record.json").is_err());
+        std::fs::write(path.join(JOURNAL), b"{}").unwrap();
+        assert!(maintenance.read_record("absent.json").is_err());
     }
     #[test]
     fn diagnostic_credentials_are_bounded_nofollow_and_protected() {

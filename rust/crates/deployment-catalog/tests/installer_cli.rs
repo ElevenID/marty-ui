@@ -3,6 +3,22 @@
 use marty_deployment_catalog::installer_state::{Identity, InstallerState, Phase, RuntimeBinding};
 use serde_json::Value;
 #[test]
+fn uninstall_cli_refuses_unbound_or_destructive_options_without_output() {
+    for args in [
+        vec!["uninstall"],
+        vec!["uninstall", "--install-dir", "/missing", "--purge", "true"],
+        vec!["uninstall", "--install-dir", "/missing", "--force", "true"],
+        vec!["uninstall", "--install-dir", "relative"],
+    ] {
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_marty-deploy"))
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+    }
+}
+#[test]
 fn log_cli_refuses_unbounded_or_unbound_requests_without_output() {
     for args in [
         vec!["logs"],

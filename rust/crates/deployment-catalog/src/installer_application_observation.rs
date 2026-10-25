@@ -345,6 +345,37 @@ enum ObservationKind {
     Application,
     OpenBao,
     Diagnostic,
+    OpenBaoDiagnostic,
+}
+
+/// Cleanup may inspect failed Bao workloads; ownership/configuration admission
+/// remains identical. This predicate does not itself authorize any removal.
+pub(crate) fn validate_openbao_container_for_cleanup(
+    c: &Value,
+    container_id: &str,
+    role: &str,
+    plan: &ApplicationModelPlan,
+    image: &Value,
+) -> Result<()> {
+    require(
+        [
+            "openbao",
+            "openbao-tls-init",
+            "openbao-bootstrap",
+            "openbao-unseal",
+        ]
+        .contains(&role)
+            && project(plan)?.ends_with("-bao"),
+    )?;
+    validate_container_inner(
+        c,
+        container_id,
+        role,
+        plan,
+        image,
+        ContainerPhase::Created,
+        ObservationKind::OpenBaoDiagnostic,
+    )
 }
 
 /// Same identity and execution admission for the separately owned Bao project.
@@ -387,8 +418,14 @@ fn validate_container_inner(
     phase: ContainerPhase,
     kind: ObservationKind,
 ) -> Result<()> {
-    let bao = matches!(kind, ObservationKind::OpenBao);
-    let diagnostic = matches!(kind, ObservationKind::Diagnostic);
+    let bao = matches!(
+        kind,
+        ObservationKind::OpenBao | ObservationKind::OpenBaoDiagnostic
+    );
+    let diagnostic = matches!(
+        kind,
+        ObservationKind::Diagnostic | ObservationKind::OpenBaoDiagnostic
+    );
     let s = service(plan, role)?;
     let p = project(plan)?;
     let config = &c["Config"];
