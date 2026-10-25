@@ -401,6 +401,7 @@ impl DockerRunner {
                     | &"run"
                     | &"create"
                     | &"start"
+                    | &"stop"
                     | &"wait"
                     | &"rm"
             )

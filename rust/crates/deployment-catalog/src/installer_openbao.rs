@@ -37,6 +37,35 @@ const ROLES: [&str; 4] = [
     "openbao-unseal",
     "openbao-bootstrap",
 ];
+const SCRATCH_TMPFS: [&str; 2] = [
+    "/openbao/file:rw,noexec,nosuid,nodev,size=1048576,mode=0700",
+    "/openbao/logs:rw,noexec,nosuid,nodev,size=1048576,mode=0700",
+];
+
+// These inherited image volumes are unused by the authenticated /bao/data
+// profile. Explicit bounded scratch mounts prevent anonymous Docker volumes.
+fn verify_runtime_model(
+    model: &Value,
+    image: &str,
+    state: &Path,
+    secrets: &Path,
+    bundle: &Path,
+    port: u16,
+    project: &str,
+) -> Result<()> {
+    let mut source = model.clone();
+    for role in ROLES {
+        require(
+            source["services"][role]["tmpfs"] == json!(SCRATCH_TMPFS),
+            "OpenBao inherited volume suppression differs",
+        )?;
+        source["services"][role]
+            .as_object_mut()
+            .ok_or("OpenBao service absent")?
+            .remove("tmpfs");
+    }
+    verify_model(&source, image, state, secrets, bundle, port, project)
+}
 
 #[derive(Debug, Serialize)]
 pub struct OpenBaoInventory {
@@ -551,7 +580,7 @@ fn observations(
         262144,
     )?)
     .map_err(|_| "invalid recorded OpenBao Compose model")?;
-    verify_model(&model, image, state, secrets, bundle, port, project)?;
+    verify_runtime_model(&model, image, state, secrets, bundle, port, project)?;
     require(
         discover(docker, project)? == created.container_ids,
         "OpenBao containers were replaced",
@@ -723,7 +752,7 @@ pub fn start_openbao(
     private(&state_root)?;
     exclusive(&env_file, env.as_bytes())?;
     let compose_file = bundle.join("docker-compose.selfhost.openbao.yml");
-    let base = vec![
+    let mut base = vec![
         "compose".into(),
         "--project-name".into(),
         project.clone(),
@@ -732,13 +761,40 @@ pub fn start_openbao(
         "-f".into(),
         compose_file.to_str().ok_or("compose path invalid")?.into(),
     ];
-    let model: Value = serde_json::from_str(&compose(
+    let mut model: Value = serde_json::from_str(&compose(
         &docker,
         &base,
         &["--profile", "kms-init", "config", "--format", "json"],
     )?)
     .map_err(|_| "invalid OpenBao Compose model")?;
     verify_model(
+        &model,
+        plugin_image,
+        &state_root,
+        &secrets,
+        bundle,
+        binding.openbao_port,
+        &project,
+    )?;
+    for role in ROLES {
+        model["services"][role]["tmpfs"] = json!(SCRATCH_TMPFS);
+    }
+    let runtime_file = installation.join("openbao-compose-runtime.json");
+    exclusive(
+        &runtime_file,
+        &crate::installer_application::compose_document(&model)?,
+    )?;
+    *base.last_mut().ok_or("OpenBao Compose path absent")? = runtime_file
+        .to_str()
+        .ok_or("OpenBao runtime path invalid")?
+        .into();
+    model = serde_json::from_str(&compose(
+        &docker,
+        &base,
+        &["--profile", "kms-init", "config", "--format", "json"],
+    )?)
+    .map_err(|_| "invalid normalized OpenBao runtime model")?;
+    verify_runtime_model(
         &model,
         plugin_image,
         &state_root,
@@ -774,6 +830,10 @@ pub fn start_openbao(
                 .as_array()
                 .is_some_and(|v| v.contains(&json!(plugin_image))),
         "OpenBao local image differs from admitted digest",
+    )?;
+    require(
+        local_image["Config"]["Volumes"] == json!({"/openbao/file":{},"/openbao/logs":{}}),
+        "OpenBao inherited image volumes differ; refusing unowned storage",
     )?;
     fresh(&docker, &project)?;
     state.require_live_phase(Phase::Provisioning)?;
@@ -963,6 +1023,36 @@ pub fn start_openbao(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn runtime_scratch_is_exact_and_does_not_widen_source_contract() {
+        let mut model = production_model();
+        for role in ROLES {
+            model["services"][role]["tmpfs"] = json!(SCRATCH_TMPFS);
+        }
+        let check = |candidate: &Value| {
+            verify_runtime_model(
+                candidate,
+                "image",
+                Path::new("/private/openbao-state"),
+                Path::new("/private/secrets"),
+                Path::new("/bundle"),
+                18200,
+                "owned",
+            )
+        };
+        check(&model).unwrap();
+        for tmpfs in [
+            json!([]),
+            json!(["/openbao/file:rw"]),
+            json!([SCRATCH_TMPFS[0], SCRATCH_TMPFS[1], "/foreign:rw"]),
+        ] {
+            let mut changed = model.clone();
+            changed["services"]["openbao"]["tmpfs"] = tmpfs;
+            assert!(check(&changed).is_err());
+        }
+        model["services"]["openbao"]["privileged"] = json!(true);
+        assert!(check(&model).is_err());
+    }
     use super::*;
     #[test]
     fn durable_created_inventory_requires_all_four_unique_exact_ids() {

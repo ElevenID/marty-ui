@@ -426,9 +426,19 @@ fn validate_container_inner(
             && list(&host["SecurityOpt"])? == list(&s["security_opt"])?
             && empty(&host["Devices"])
             && empty(&host["DeviceRequests"])
-            && empty(&host["VolumesFrom"])
-            && empty(&host["Tmpfs"]),
+            && empty(&host["VolumesFrom"]),
     )?;
+    if bao {
+        require(
+            host["Tmpfs"]
+                == json!({
+                    "/openbao/file": "rw,noexec,nosuid,nodev,size=1048576,mode=0700",
+                    "/openbao/logs": "rw,noexec,nosuid,nodev,size=1048576,mode=0700"
+                }),
+        )?;
+    } else {
+        require(empty(&host["Tmpfs"]))?;
+    }
     for field in ["PidMode", "UsernsMode", "UTSMode"] {
         require(host[field].as_str().unwrap_or("").is_empty())?;
     }
@@ -649,9 +659,30 @@ mod tests {
             json!(["owned-bao-openbao-1", "openbao"]);
         c["HostConfig"]["PortBindings"] =
             json!({"8200/tcp":[{"HostIp":"127.0.0.1","HostPort":"18200"}]});
+        c["HostConfig"]["Tmpfs"] = json!({
+            "/openbao/file":"rw,noexec,nosuid,nodev,size=1048576,mode=0700",
+            "/openbao/logs":"rw,noexec,nosuid,nodev,size=1048576,mode=0700"
+        });
         let cid = "d".repeat(64);
         validate_openbao_container(&c, &cid, "openbao", &plan, &image, ContainerPhase::Created)
             .unwrap();
+        for tmpfs in [
+            json!({}),
+            json!({"/openbao/file":"rw"}),
+            json!({"/foreign":"rw"}),
+        ] {
+            let mut changed = c.clone();
+            changed["HostConfig"]["Tmpfs"] = tmpfs;
+            assert!(validate_openbao_container(
+                &changed,
+                &cid,
+                "openbao",
+                &plan,
+                &image,
+                ContainerPhase::Created
+            )
+            .is_err());
+        }
         assert!(
             validate_container(&c, &cid, "openbao", &plan, &image, ContainerPhase::Created)
                 .is_err()
