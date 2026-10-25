@@ -52,6 +52,26 @@ def test_disposable_tls_root_contracts_have_executed_release_owner() -> None:
     assert "len(cases) != 6" in command
     for required in ('("tests", 6)', '("skipped", 0)', '("failures", 0)', '("errors", 0)'):
         assert required in command
+
+
+def test_fresh_vm_creation_has_required_root_release_owner() -> None:
+    _, workflow = _workflow(CI_PATH)
+    steps = workflow["jobs"]["test-release-contracts"]["steps"]
+    named = {step.get("name"): step for step in steps}
+    general = named["Run repository release checks"]
+    tls = named["Exercise root-owned disposable TLS staging contracts"]
+    vm = named["Exercise root-owned fresh VM creation contracts"]
+    assert vm["if"] == general["if"]
+    assert steps.index(vm) == steps.index(tls) + 1
+    assert vm["shell"] == "bash"
+    command = vm["run"]
+    assert "qemu-utils ubuntu-keyring" in command
+    assert "sudo env PYTHONPATH=packages PYTHONDONTWRITEBYTECODE=1" in command
+    assert command.count("tests/test_installer_candidate_vm_create.py") == 1
+    assert "-p no:cacheprovider --junitxml=" in command
+    for required in ('len(cases) != 5', '("tests", 5)', '("skipped", 0)',
+                     '("failures", 0)', '("errors", 0)'):
+        assert required in command
 CANVAS_COMPOSITION_COMMAND = (
     'MARTY_CANVAS_OPENBAO_URL="$kms_url" '
     'MARTY_CANVAS_OPENBAO_ROOT_TOKEN="$kms_root_token" '
