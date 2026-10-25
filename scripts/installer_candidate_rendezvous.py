@@ -96,9 +96,11 @@ class Client:
 
     def request(self, method, path, body=None):
         run = re.fullmatch(re.escape(REPO) + r"/actions/runs/([1-9][0-9]{0,15})", path)
-        if run:
-            positive_id(int(run.group(1)))
-            release.require(method == "GET" and body is None, "run observation is read-only")
+        artifacts = re.fullmatch(re.escape(REPO) + r"/actions/runs/([1-9][0-9]{0,15})/artifacts\?per_page=100", path)
+        artifact = re.fullmatch(re.escape(REPO) + r"/actions/artifacts/([1-9][0-9]{0,15})", path)
+        if run or artifacts or artifact:
+            positive_id(int((run or artifacts or artifact).group(1)))
+            release.require(method == "GET" and body is None, "Actions observation is read-only")
         else:
             release.require(path.startswith(REPO + "/releases") and not any(c in path for c in "#\r\n"),
                             "invalid transport API path")

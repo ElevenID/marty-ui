@@ -422,7 +422,6 @@ jobs:
             ${{ runner.temp }}/installer-staged-grant/grant/controller-consumption.json.provenance.jsonl
             ${{ runner.temp }}/installer-staged-grant/grant/controller-consumption.json.transport.json
             ${{ runner.temp }}/installer-staged-grant/grant/controller-transport.json
-            ${{ runner.temp }}/installer-staged-grant/context/published-release-identity.json
           if-no-files-found: error
           retention-days: 1
       - name: Receive same-invocation installed probe checkpoint

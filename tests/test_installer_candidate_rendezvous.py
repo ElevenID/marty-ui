@@ -10,6 +10,7 @@ import pytest
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/"scripts"))
 import installer_candidate_rendezvous as t
 import installer_candidate_receipt_upload as uploader
+import installer_candidate_grant_receive as grant_receiver
 import installer_release as r
 pytestmark=pytest.mark.skipif(os.name!="posix",reason="private Linux output contract")
 
@@ -283,3 +284,166 @@ def test_upload_http_boundary_is_fixed_and_never_redirects():
     assert req.get_method()=='POST' and req.data==b'ledger'
     assert req.get_header('Authorization')=='Bearer synthetic-token'
     assert req.get_header('Content-type')=='application/octet-stream'
+
+
+def grant_scenario(scenario,monkeypatch):
+    import hashlib, zipfile
+    args,descriptor,_,client=scenario
+    home=descriptor.parent
+    authorization=args['authorization'];inventory=args['inventory']
+    nonce=r.decode(client.raw)['nonce']
+    ledger=home/(nonce+'.json');ledger.write_bytes(client.raw)
+    context={key:r.decode(authorization.read_bytes())[key] for key in r.CONTEXT_FIELDS}
+    target={key:r.decode(client.raw)[key] for key in ('guest_id','disk_id','engine_id','installation_id')}
+    context_file=home/'context.json';context_file.write_bytes(r.encode(context))
+    target_file=home/'target.json';target_file.write_bytes(r.encode(target))
+    transport=r.encode(dict(receipt_sha256=r.digest(client.raw),authorization_sha256=r.digest(authorization.read_bytes()),
+        inventory_sha256=r.digest(inventory.read_bytes()),context_sha256=r.candidate_context_sha256(context),
+        controller_user_id=12345))
+    members={name:b'proof' for name in grant_receiver.NAMES}
+    members.update({'candidate-authorization.json':authorization.read_bytes(),
+        'controller-consumption.json':client.raw,'controller-transport.json':descriptor.read_bytes(),
+        'controller-consumption.json.transport.json':transport})
+    raw_zip=io.BytesIO()
+    with zipfile.ZipFile(raw_zip,'w') as bundle:
+        for name,data in members.items():bundle.writestr(name,data)
+    zip_bytes=raw_zip.getvalue()
+    item=dict(id=789,name='installer-candidate-execution-grant-99-3',size_in_bytes=len(zip_bytes),
+        digest='sha256:'+hashlib.sha256(zip_bytes).hexdigest(),expired=False,
+        created_at='fixed',updated_at='fixed',workflow_run=dict(id=99,repository_id=1140864197,
+        head_repository_id=1140864197,head_branch='main',head_sha='c'*40))
+    class API:
+        token='synthetic-token'
+        def __init__(self):self.item=copy.deepcopy(item);self.calls=[]
+        def request(self,method,path):
+            self.calls.append((method,path))
+            if '/actions/runs/99/artifacts?' in path:return dict(total_count=1,artifacts=[copy.deepcopy(self.item)])
+            if '/actions/artifacts/' in path:return copy.deepcopy(self.item)
+            return dict(repository=dict(full_name=r.REPOSITORY),id=99,run_attempt=3,
+                path=r.acceptance.WORKFLOW,head_sha='c'*40,head_branch='main',
+                event='workflow_dispatch',status='in_progress',conclusion=None)
+    api=API()
+    monkeypatch.setattr(uploader,'authenticate',lambda *a,**k:(authorization.read_bytes(),inventory.read_bytes()))
+    monkeypatch.setattr(grant_receiver.dispatch,'verify',lambda **k:None)
+    def download(_gh,_token,_id,path,held):
+        assert _id==789
+        fd=os.open(path.name,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600,dir_fd=held)
+        with os.fdopen(fd,'wb') as stream:stream.write(zip_bytes)
+    kwargs=dict(client=api,authorization=authorization,inventory=inventory,assets=home,
+        descriptor=descriptor,ledger=ledger,context_file=context_file,target_file=target_file,
+        gh=home/'gh',cosign=home/'cosign',output=home/'signed-grant',
+        harness_source_sha='c'*40,run_id=99,run_attempt=3,controller_user_id=12345,
+        clock=lambda:100000,downloader=download)
+    return kwargs,api,zip_bytes
+
+
+def test_receive_same_run_signed_grant_without_dispatch(scenario,monkeypatch):
+    kwargs,api,zip_bytes=grant_scenario(scenario,monkeypatch)
+    result=grant_receiver.receive(**kwargs)
+    assert result['guest_dispatched'] is False and result['acceptance'] is False
+    assert result['receipt_sha256']==r.digest(kwargs['ledger'].read_bytes())
+    assert {p.name for p in kwargs['output'].iterdir()}==grant_receiver.NAMES
+    assert Path(str(kwargs['output'])+'.archive.zip').read_bytes()==zip_bytes
+    assert Path(str(kwargs['output'])+'.verified.json').is_file()
+    assert any('/actions/artifacts/789' in path for _,path in api.calls)
+
+
+def test_grant_receiver_refuses_ambiguous_artifact_before_download(scenario,monkeypatch):
+    kwargs,api,_=grant_scenario(scenario,monkeypatch)
+    original=api.request
+    def duplicate(method,path):
+        value=original(method,path)
+        if '/artifacts?' in path:return dict(total_count=2,artifacts=[api.item,api.item])
+        return value
+    api.request=duplicate
+    with pytest.raises(ValueError,match='ambiguous'):grant_receiver.receive(**kwargs)
+    assert not kwargs['output'].exists()
+
+
+def test_grant_zip_rejects_extra_and_traversal_members(tmp_path):
+    import zipfile
+    tmp_path.chmod(0o700)
+    for extra in ('unexpected.json','../escape'):
+        archive=tmp_path/(extra.replace('/','_')+'.zip')
+        with zipfile.ZipFile(archive,'w') as bundle:
+            for name in grant_receiver.NAMES:bundle.writestr(name,b'x')
+            bundle.writestr(extra,b'bad')
+        with pytest.raises(ValueError,match='closure'):
+            with archive.open('rb') as stream:
+                held=os.open(tmp_path,os.O_RDONLY|os.O_DIRECTORY)
+                try:grant_receiver.extract_exact(stream,tmp_path/('out-'+extra.replace('/','_')),held)
+                finally:os.close(held)
+
+
+def test_credential_download_kills_descendants_before_reaping(tmp_path,monkeypatch):
+    import hashlib,time
+    tmp_path.chmod(0o700)
+    child=tmp_path/'child.pid'
+    script=tmp_path/'gh'
+    script.write_text('#!/bin/sh\nsleep 30 &\necho $! > '+str(child)+'\nprintf zip\nexit 0\n')
+    script.chmod(0o700)
+    monkeypatch.setitem(grant_receiver.dispatch.TOOLS,'gh',
+        (hashlib.sha256(script.read_bytes()).hexdigest(),script.stat().st_size))
+    held=os.open(tmp_path,os.O_RDONLY|os.O_DIRECTORY)
+    try:
+        grant_receiver.download_archive(script,'synthetic-token',789,tmp_path/'archive.zip',held,timeout=2)
+    finally:os.close(held)
+    assert (tmp_path/'archive.zip').read_bytes()==b'zip'
+    pid=int(child.read_text())
+    time.sleep(0.05)
+    status=Path(f'/proc/{pid}/stat')
+    assert not status.exists() or status.read_text().split()[2]=='Z'
+
+
+def test_grant_receiver_expiry_during_verification_retains_files(scenario,monkeypatch):
+    kwargs,_,_=grant_scenario(scenario,monkeypatch)
+    moment=[100000]
+    kwargs['clock']=lambda:moment[0]
+    expiry=r.decode(kwargs['authorization'].read_bytes())['expires_at']
+    def slow_verify(**_):moment[0]=expiry-t.RESERVE
+    monkeypatch.setattr(grant_receiver.dispatch,'verify',slow_verify)
+    with pytest.raises(ValueError,match='expired'):
+        grant_receiver.receive(**kwargs)
+    assert kwargs['output'].is_dir()
+    assert not Path(str(kwargs['output'])+'.verified.json').exists()
+
+
+def test_grant_receiver_refuses_returned_receipt_not_in_ledger(scenario,monkeypatch):
+    import hashlib,zipfile
+    kwargs,api,original_zip=grant_scenario(scenario,monkeypatch)
+    source=io.BytesIO(original_zip)
+    with zipfile.ZipFile(source) as bundle:
+        members={name:bundle.read(name) for name in grant_receiver.NAMES}
+    members['controller-consumption.json']=b'{}'
+    altered=io.BytesIO()
+    with zipfile.ZipFile(altered,'w') as bundle:
+        for name,data in members.items():bundle.writestr(name,data)
+    raw=altered.getvalue()
+    api.item['size_in_bytes']=len(raw)
+    api.item['digest']='sha256:'+hashlib.sha256(raw).hexdigest()
+    def download(_gh,_token,_id,path,held):
+        fd=os.open(path.name,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600,dir_fd=held)
+        with os.fdopen(fd,'wb') as stream:stream.write(raw)
+    kwargs['downloader']=download
+    with pytest.raises(ValueError,match='bytes differ'):
+        grant_receiver.receive(**kwargs)
+    assert kwargs['output'].is_dir()
+    assert not Path(str(kwargs['output'])+'.verified.json').exists()
+
+
+def test_grant_receiver_refuses_replaced_staging_parent(scenario,monkeypatch):
+    kwargs,_,_=grant_scenario(scenario,monkeypatch)
+    original=kwargs['downloader']
+    parent=kwargs['output'].parent
+    moved=parent.with_name(parent.name+'-moved')
+    def replace(*args):
+        original(*args)
+        os.rename(parent,moved)
+    kwargs['downloader']=replace
+    try:
+        with pytest.raises((ValueError,OSError)):
+            grant_receiver.receive(**kwargs)
+        assert (moved/(kwargs['output'].name+'.archive.zip')).is_file()
+    finally:
+        if moved.exists():os.rename(moved,parent)
+    assert not Path(str(kwargs['output'])+'.verified.json').exists()
