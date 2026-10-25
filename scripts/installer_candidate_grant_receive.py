@@ -46,7 +46,8 @@ def hash_fd(fd, maximum):
     return hashed.hexdigest(), total
 
 
-def selected_artifact(value, *, run_id, run_attempt, harness_source_sha, name=None):
+def selected_artifact(value, *, run_id, run_attempt, harness_source_sha, name=None,
+                      maximum=ARCHIVE_MAX):
     if name is None:
         name = f"installer-candidate-execution-grant-{run_id}-{run_attempt}"
     release.require(isinstance(value, dict) and value.get("total_count") is not None
@@ -62,7 +63,7 @@ def selected_artifact(value, *, run_id, run_attempt, harness_source_sha, name=No
     bound = item["workflow_run"]
     size = item.get("size_in_bytes")
     digest = item.get("digest")
-    release.require(item.get("expired") is False and type(size) is int and 0 < size <= ARCHIVE_MAX
+    release.require(item.get("expired") is False and type(size) is int and 0 < size <= maximum
                     and isinstance(digest, str) and re.fullmatch(r"sha256:[0-9a-f]{64}", digest)
                     and bound.get("id") == run_id and bound.get("repository_id") == 1140864197
                     and bound.get("head_repository_id") == 1140864197
