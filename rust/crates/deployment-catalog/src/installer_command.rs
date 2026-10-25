@@ -341,7 +341,15 @@ pub fn install(args: &[String], build_identity: &str) -> Result<()> {
         "tls-observation.json",
         &serde_json::to_vec(&tls).map_err(|_| "cannot encode TLS observation")?,
     )?;
-    Err("OpenBao, Keycloak and workload TLS provisioning recorded; application and local HTTPS stages are not yet implemented. Installation is incomplete; preserve the reported state for recovery.".into())
+    let _application = crate::installer_application::prepare(
+        docker,
+        &directory,
+        &prepared.bundle,
+        &mut state,
+        &infrastructure,
+        &prepared.inventory.images,
+    )?;
+    Err("OpenBao, Keycloak and workload TLS provisioning recorded; application inputs prepared. Application startup and localhost TLS identity are not yet implemented. Installation is incomplete; preserve the reported state for recovery.".into())
 }
 
 #[cfg(test)]

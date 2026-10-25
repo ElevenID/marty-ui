@@ -12,6 +12,14 @@ type Result<T> = std::result::Result<T, String>;
 const REFUSED: &str = "application environment differs from the reviewed installation contract";
 const EXAMPLE: &str = include_str!("../../../../.env.selfhost.production.example");
 pub const OPERATOR_EMAIL: &str = "operator@localhost";
+pub const OPTIONAL_EMPTY_SECRETS: [&str; 6] = [
+    "google_client_id",
+    "google_client_secret",
+    "google_analytics_measurement_id",
+    "google_site_verification",
+    "smtp_password",
+    "canvas_credentials_shared_secret",
+];
 
 pub struct ApplicationParameters {
     pub installation: PathBuf,
@@ -282,17 +290,10 @@ pub fn render(
         .into_iter()
         .map(|name| p.installation.join(name))
         .collect(),
-        optional_empty_secrets: [
-            "google_client_id",
-            "google_client_secret",
-            "google_analytics_measurement_id",
-            "google_site_verification",
-            "smtp_password",
-            "canvas_credentials_shared_secret",
-        ]
-        .into_iter()
-        .map(str::to_owned)
-        .collect(),
+        optional_empty_secrets: OPTIONAL_EMPTY_SECRETS
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
         operator_account_created: false,
         installation_ready: false,
     })

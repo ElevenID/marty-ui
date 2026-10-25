@@ -553,10 +553,11 @@ mod tests {
         assert!(docker.run_checked(&["ps", "-c", "unrelated"]).is_err());
         assert!(docker.run_checked(&["ps", "-cunrelated"]).is_err());
         script(parent.path(), &body.replace("test-engine", "replacement"));
-        assert!(docker
-            .run_checked(&["compose", "version"])
-            .unwrap_err()
-            .contains("identity"));
+        let refusal = docker.run_checked(&["compose", "version"]).unwrap_err();
+        assert!(
+            refusal.contains("identity"),
+            "unexpected refusal: {refusal}"
+        );
     }
     #[test]
     fn refuses_remote_endpoint_rootless_wrong_platform_and_unknown_fields() {

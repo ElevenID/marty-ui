@@ -254,7 +254,32 @@ fn print_plan(plan: &Value) {
 
 fn run() -> Result<(), String> {
     let mut args: Vec<String> = env::args().skip(1).collect();
-    if args.first().is_some_and(|arg| arg == "installer-tls-finalize") {
+    if args
+        .first()
+        .is_some_and(|arg| arg == "installer-ingress-provision")
+    {
+        if args.len() != 3 || args[1] != "--installation-id" {
+            return Err(
+                "internal ingress provisioner requires an owned container invocation".into(),
+            );
+        }
+        #[cfg(target_os = "linux")]
+        {
+            let runtime = tokio::runtime::Runtime::new()
+                .map_err(|_| "cannot start ingress provisioning runtime")?;
+            let count = runtime.block_on(
+                marty_deployment_catalog::installer_ingress_provision::provision(&args[2]),
+            )?;
+            println!("{}", serde_json::json!({"outputs_written":count}));
+            return Ok(());
+        }
+        #[cfg(not(target_os = "linux"))]
+        return Err("internal ingress provisioner requires Linux".into());
+    }
+    if args
+        .first()
+        .is_some_and(|arg| arg == "installer-tls-finalize")
+    {
         if args.len() != 1 {
             return Err("internal TLS finalizer accepts no arguments".into());
         }
@@ -267,14 +292,20 @@ fn run() -> Result<(), String> {
         #[cfg(not(target_os = "linux"))]
         return Err("internal TLS finalizer requires Linux".into());
     }
-    if args.first().is_some_and(|arg| arg == "installer-keycloak-bridge") {
+    if args
+        .first()
+        .is_some_and(|arg| arg == "installer-keycloak-bridge")
+    {
         if args.len() != 3 || args[1] != "--nonce" {
             return Err("internal Keycloak bridge requires an owned container invocation".into());
         }
         #[cfg(target_os = "linux")]
         {
-            let runtime = tokio::runtime::Runtime::new().map_err(|_| "cannot start Keycloak bridge runtime")?;
-            let count = runtime.block_on(marty_deployment_catalog::installer_keycloak_bridge::provision(&args[2]))?;
+            let runtime = tokio::runtime::Runtime::new()
+                .map_err(|_| "cannot start Keycloak bridge runtime")?;
+            let count = runtime.block_on(
+                marty_deployment_catalog::installer_keycloak_bridge::provision(&args[2]),
+            )?;
             println!("{}", serde_json::json!({"outputs_written":count}));
             return Ok(());
         }
@@ -283,7 +314,10 @@ fn run() -> Result<(), String> {
     }
     if args.first().is_some_and(|arg| arg == "install") {
         #[cfg(target_os = "linux")]
-        return marty_deployment_catalog::installer_command::install(&args[1..], env!("MARTY_DEPLOY_BUILD_IDENTITY"));
+        return marty_deployment_catalog::installer_command::install(
+            &args[1..],
+            env!("MARTY_DEPLOY_BUILD_IDENTITY"),
+        );
         #[cfg(not(target_os = "linux"))]
         return Err("installer currently requires Linux amd64".into());
     }
@@ -300,16 +334,20 @@ fn run() -> Result<(), String> {
             let journal = marty_deployment_catalog::installer_state::InstallerState::inspect(
                 std::path::Path::new(&args[2]),
             )?;
-            println!("{}", serde_json::json!({
-                "scope": "installation-journal", "runtime_observed": false, "journal": journal,
-            }));
+            println!(
+                "{}",
+                serde_json::json!({
+                    "scope": "installation-journal", "runtime_observed": false, "journal": journal,
+                })
+            );
             return Ok(());
         }
         #[cfg(not(target_os = "linux"))]
         return Err("installer status currently requires Linux".into());
     }
     if args.first().is_some_and(|arg| arg == "doctor") {
-        if !matches!(args.len(), 3 | 5) || args[1] != "--install-dir"
+        if !matches!(args.len(), 3 | 5)
+            || args[1] != "--install-dir"
             || (args.len() == 5 && args[3] != "--docker-bin")
         {
             return Err("usage: marty-deploy doctor --install-dir ABSOLUTE_PATH [--docker-bin ABSOLUTE_PATH]".into());
@@ -317,18 +355,28 @@ fn run() -> Result<(), String> {
         #[cfg(target_os = "linux")]
         {
             let directory = std::path::Path::new(&args[2]);
-            let journal = marty_deployment_catalog::installer_state::InstallerState::inspect(directory)?;
-            let runtime = journal.runtime().ok_or("installation has no recorded Docker binding; automatic adoption is refused")?;
-            let docker = std::path::Path::new(args.get(4).map(String::as_str).unwrap_or("/usr/bin/docker"));
+            let journal =
+                marty_deployment_catalog::installer_state::InstallerState::inspect(directory)?;
+            let runtime = journal.runtime().ok_or(
+                "installation has no recorded Docker binding; automatic adoption is refused",
+            )?;
+            let docker =
+                std::path::Path::new(args.get(4).map(String::as_str).unwrap_or("/usr/bin/docker"));
             let runner = marty_deployment_catalog::installer_runtime::DockerRunner::new(
-                docker, &runtime.docker_host, &runtime.engine_id, directory,
+                docker,
+                &runtime.docker_host,
+                &runtime.engine_id,
+                directory,
             )?;
             let observation = runner.preflight()?;
-            println!("{}", serde_json::json!({
-                "scope": "installation-host", "installation_id": journal.installation_id(),
-                "compose_project": journal.compose_project(), "docker": observation,
-                "services_observed": false, "installation_ready": false,
-            }));
+            println!(
+                "{}",
+                serde_json::json!({
+                    "scope": "installation-host", "installation_id": journal.installation_id(),
+                    "compose_project": journal.compose_project(), "docker": observation,
+                    "services_observed": false, "installation_ready": false,
+                })
+            );
             return Ok(());
         }
         #[cfg(not(target_os = "linux"))]

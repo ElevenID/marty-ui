@@ -337,7 +337,11 @@ impl InstallerState {
         // chmod leaves a safe, non-executable final file requiring reconciliation.
         // NOREPLACE also rejects existing links and leaves partial mode 0600.
         if unsafe {
-            libc::renameat2(
+            // Call the Linux syscall directly: some musl versions do not export
+            // a renameat2 libc wrapper. Preserve atomic NOREPLACE semantics;
+            // unsupported kernels fail closed instead of falling back to rename.
+            libc::syscall(
+                libc::SYS_renameat2,
                 self.directory.as_raw_fd(),
                 partial.as_ptr(),
                 self.directory.as_raw_fd(),
@@ -515,6 +519,60 @@ impl InstallerState {
         self.directory
             .sync_all()
             .map_err(|_| "sync operator credential")?;
+        self.poisoned = false;
+        Ok(())
+    }
+
+    /// Create only the fixed application directories and disabled-integration
+    /// placeholders. Existing state is never adopted; partial writes poison the
+    /// transaction and remain available for explicit recovery.
+    pub fn prepare_application_storage(&mut self) -> Result<()> {
+        self.require_live_phase(Phase::Provisioning)?;
+        private(&self.directory, true)?;
+        let secrets = open_at(
+            &self.directory,
+            &name("secrets"),
+            libc::O_RDONLY | libc::O_DIRECTORY,
+            0,
+        )?;
+        private(&secrets, true)?;
+        self.poisoned = true;
+        let make = |parent: &File, entry: &str| -> Result<File> {
+            if unsafe { libc::mkdirat(parent.as_raw_fd(), name(entry).as_ptr(), 0o700) } != 0 {
+                return Err(error("create application directory"));
+            }
+            let child = open_at(parent, &name(entry), libc::O_RDONLY | libc::O_DIRECTORY, 0)?;
+            private(&child, true)?;
+            child
+                .sync_all()
+                .and_then(|_| parent.sync_all())
+                .map_err(|_| "persist application directory")?;
+            Ok(child)
+        };
+        let state = make(&self.directory, "state")?;
+        for entry in ["postgres", "redis", "applicant"] {
+            make(&state, entry)?;
+        }
+        for entry in ["backups", "openbao-exports", "openbao-snapshot-identity"] {
+            make(&self.directory, entry)?;
+        }
+        for entry in crate::installer_application_env::OPTIONAL_EMPTY_SECRETS {
+            let file = open_at(
+                &secrets,
+                &name(entry),
+                libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL,
+                0o600,
+            )?;
+            private(&file, false)?;
+            if unsafe { libc::fchmod(file.as_raw_fd(), 0o444) } != 0 {
+                return Err(error("set disabled integration input mode"));
+            }
+            file.sync_all()
+                .map_err(|_| "persist disabled integration input")?;
+        }
+        secrets
+            .sync_all()
+            .map_err(|_| "persist application placeholders")?;
         self.poisoned = false;
         Ok(())
     }
@@ -992,12 +1050,11 @@ mod tests {
         assert!(!path.join("secrets").exists());
         state.generate_local_credentials(&realm).unwrap();
         let mut values = std::collections::BTreeSet::new();
+        let scalar_pattern = regex::Regex::new(r"\A[0-9a-f]{64}\z").unwrap();
         for entry in SCALAR_SECRETS {
             let file = path.join("secrets").join(entry);
             let value = std::fs::read_to_string(&file).unwrap();
-            assert!(regex::Regex::new(r"\A[0-9a-f]{64}\z")
-                .unwrap()
-                .is_match(&value));
+            assert!(scalar_pattern.is_match(&value));
             assert!(values.insert(value));
             assert_eq!(std::fs::metadata(file).unwrap().mode() & 0o777, 0o444);
         }
@@ -1013,6 +1070,57 @@ mod tests {
         assert_eq!(std::fs::metadata(&operator).unwrap().mode() & 0o777, 0o600);
         assert!(state.generate_local_credentials(&realm).is_err());
         assert_eq!(std::fs::read(operator).unwrap(), password);
+        assert!(state.advance(Phase::Provisioned).is_err());
+    }
+    #[test]
+    fn application_storage_is_private_exclusive_and_keeps_disabled_inputs_empty() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("install");
+        let mut state = InstallerState::create(&path, identity()).unwrap();
+        assert!(state.prepare_application_storage().is_err());
+        state.advance(Phase::Verified).unwrap();
+        state.advance(Phase::Provisioning).unwrap();
+        state
+            .generate_local_credentials(&serde_json::json!({"passwordPolicy": PASSWORD_POLICY}))
+            .unwrap();
+        state.prepare_application_storage().unwrap();
+        for entry in [
+            "state",
+            "state/postgres",
+            "state/redis",
+            "state/applicant",
+            "backups",
+            "openbao-exports",
+            "openbao-snapshot-identity",
+        ] {
+            let metadata = std::fs::metadata(path.join(entry)).unwrap();
+            assert!(metadata.is_dir());
+            assert_eq!(metadata.mode() & 0o777, 0o700);
+        }
+        for entry in crate::installer_application_env::OPTIONAL_EMPTY_SECRETS {
+            let metadata = std::fs::metadata(path.join("secrets").join(entry)).unwrap();
+            assert!(metadata.is_file());
+            assert_eq!(metadata.len(), 0);
+            assert_eq!(metadata.mode() & 0o777, 0o444);
+        }
+        assert!(state.prepare_application_storage().is_err());
+        assert!(state.advance(Phase::Provisioned).is_err());
+    }
+    #[test]
+    fn application_storage_never_follows_existing_state_link() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("install");
+        let outside = root.path().join("outside");
+        std::fs::create_dir(&outside).unwrap();
+        let mut state = InstallerState::create(&path, identity()).unwrap();
+        state.advance(Phase::Verified).unwrap();
+        state.advance(Phase::Provisioning).unwrap();
+        state
+            .generate_local_credentials(&serde_json::json!({"passwordPolicy": PASSWORD_POLICY}))
+            .unwrap();
+        std::os::unix::fs::symlink(&outside, path.join("state")).unwrap();
+        assert!(state.prepare_application_storage().is_err());
+        assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 0);
         assert!(state.advance(Phase::Provisioned).is_err());
     }
     #[test]

@@ -191,7 +191,7 @@ fn inspect(
     max_file: u64,
     max_total: u64,
 ) -> Result<Vec<Entry>> {
-    if archive.len() == 0 || archive.len() > MAX_ENTRIES {
+    if archive.is_empty() || archive.len() > MAX_ENTRIES {
         return Err("archive entry count exceeds bounds".into());
     }
     let mut declared = BTreeSet::new();

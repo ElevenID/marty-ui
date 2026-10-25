@@ -292,7 +292,8 @@ fn verify_model(
                     && ports[0]["host_ip"] == "127.0.0.1"
                     && ports[0]["target"] == 8200
                     && ports[0]["protocol"] == "tcp"
-                    && (ports[0]["published"] == port.to_string() || ports[0]["published"] == port),
+                    && (ports[0]["published"].as_str() == Some(port.to_string().as_str())
+                        || ports[0]["published"] == port),
                 "OpenBao loopback binding differs",
             )?;
         } else {
