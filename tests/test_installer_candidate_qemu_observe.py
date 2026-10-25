@@ -71,3 +71,30 @@ def test_qmp_accepts_exact_peer_and_writable_disk(tmp_path):
         finally:
             thread.join(timeout=5)
         assert not thread.is_alive()
+
+
+def test_held_disk_requires_exact_live_writable_descriptor(tmp_path):
+    disk = tmp_path / "disk.qcow2"
+    process = Path("/proc") / str(os.getpid())
+    descriptor = os.open(disk, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC, 0o600)
+    try:
+        expected = disk.stat()
+        assert observer.held_writable_disk(process, disk, expected) == descriptor
+        replacement = tmp_path / "replacement.qcow2"
+        replacement.write_bytes(b"new disk")
+        os.replace(replacement, disk)
+        with pytest.raises(ValueError, match="writable disk descriptor differs"):
+            observer.held_writable_disk(process, disk, disk.stat())
+    finally:
+        os.close(descriptor)
+
+
+def test_held_disk_refuses_read_only_descriptor(tmp_path):
+    disk = tmp_path / "disk.qcow2"
+    disk.write_bytes(b"qcow2")
+    descriptor = os.open(disk, os.O_RDONLY | os.O_CLOEXEC)
+    try:
+        with pytest.raises(ValueError, match="selected writable disk"):
+            observer.held_writable_disk(Path("/proc") / str(os.getpid()), disk, disk.stat())
+    finally:
+        os.close(descriptor)

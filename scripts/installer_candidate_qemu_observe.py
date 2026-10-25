@@ -3,12 +3,11 @@
 Run on the trusted Linux controller as root. This reads only the owned VM and
 guest Docker state. This experimental output must not authorize controller
 nonce consumption, dispatch, or installed-journey acceptance. It does not prove
-fresh image origin, held disk identity, or physical hardware capacity.
+fresh image origin, trusted control-directory custody, or physical capacity.
 """
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -85,6 +84,45 @@ def qmp(socket_path: Path, disk: Path, *, pid: int, uid: int) -> None:
                             and matching[0].get("ro") is False, "VM disk differs")
 
 
+def held_writable_disk(process: Path, disk: Path, expected: os.stat_result) -> int:
+    """Require a live process FD to hold this exact writable disk inode."""
+    fd_root = process / "fd"
+    names = os.listdir(fd_root)
+    release.require(len(names) <= 4096 and all(name.isdecimal() for name in names),
+                    "VM descriptor inventory invalid")
+    matches = []
+    for name in names:
+        fd_path = fd_root / name
+        try:
+            target = os.readlink(fd_path)
+        except FileNotFoundError:
+            continue  # A non-disk descriptor closed during the inventory.
+        if target != str(disk):
+            continue
+        info_path = process / "fdinfo" / name
+        info_fd = os.open(info_path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+        try:
+            raw = os.read(info_fd, 4097)
+        finally:
+            os.close(info_fd)
+        release.require(len(raw) <= 4096, "VM disk descriptor metadata oversized")
+        flags = [line.removeprefix(b"flags:").strip() for line in raw.splitlines()
+                 if line.startswith(b"flags:")]
+        release.require(len(flags) == 1 and flags[0]
+                        and all(byte in b"01234567" for byte in flags[0]),
+                        "VM disk descriptor flags invalid")
+        access = int(flags[0], 8) & os.O_ACCMODE
+        held = os.stat(fd_path)
+        release.require(access == os.O_RDWR
+                        and stat.S_ISREG(held.st_mode)
+                        and (held.st_dev, held.st_ino) == (expected.st_dev, expected.st_ino)
+                        and os.readlink(fd_path) == str(disk),
+                        "VM does not hold the selected writable disk")
+        matches.append(int(name))
+    release.require(len(matches) == 1, "VM writable disk descriptor differs")
+    return matches[0]
+
+
 def observe(vm_dir: Path, output_dir: Path, *, guest_user: str, ssh_host: str,
             ssh_bin: Path = Path("/usr/bin/ssh")) -> dict:
     release.require(os.geteuid() == 0 and vm_dir.is_absolute() and output_dir.is_absolute()
@@ -131,6 +169,7 @@ def observe(vm_dir: Path, output_dir: Path, *, guest_user: str, ssh_host: str,
     release.require(stat.S_ISREG(disk_info.st_mode) and disk_info.st_uid == owner
                     and disk_info.st_nlink == 1, "VM disk identity differs")
     qmp(vm_dir / "qmp.sock", disk, pid=pid, uid=owner)
+    disk_fd = held_writable_disk(process, disk, disk_info)
     key = vm_dir / "controller_ed25519"
     known_hosts = vm_dir / "known_hosts"
     key_bytes = private_file(key, owner, 65536)
@@ -193,6 +232,11 @@ def observe(vm_dir: Path, output_dir: Path, *, guest_user: str, ssh_host: str,
                         and private_file(vm_dir / "vm.json", owner, 65536) == vm_bytes,
                         "VM control root changed")
         qmp(vm_dir / "qmp.sock", disk, pid=pid, uid=owner)
+        release.require(held_writable_disk(process, disk, disk_info) == disk_fd,
+                        "VM disk descriptor changed during observation")
+        release.require((process / "stat").read_text().rsplit(")", 1)[1].split()[19]
+                        == start_ticks and os.readlink(process / "exe") == args[0],
+                        "VM process changed after disk observation")
         disk_identity = release.digest(release.encode(dict(vm_id=vm["id"], path=str(disk),
                             device=disk_info.st_dev, inode=disk_info.st_ino)))
         installation_id = str(uuid.uuid4())
@@ -201,6 +245,7 @@ def observe(vm_dir: Path, output_dir: Path, *, guest_user: str, ssh_host: str,
         evidence = dict(schema="elevenid.installer-qemu-trial-observation/v1", target=target,
                         observed_at=int(time.time()), vm_pid=pid, vm_start_ticks=start_ticks,
                         vm_disk_device=disk_info.st_dev, vm_disk_inode=disk_info.st_ino,
+                        vm_disk_fd=disk_fd,
                         vm_memory_mib=vm.get("memory_mib"), vm_cpus=vm.get("cpus"),
                         initial_docker_clean=True, capacity_qualified=False,
                         clean_host_qualified=False, dispatch_authorized=False)
