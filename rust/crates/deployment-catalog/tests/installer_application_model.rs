@@ -160,6 +160,59 @@ fn actual_source_compose_matches_installer_application_contract() {
     .unwrap();
     assert_eq!(plan.selected_services.len(), 29);
     assert!(!plan.installation_ready);
+    let order = marty_deployment_catalog::installer_application_graph::startup_order(
+        &plan.model,
+        &plan.selected_services,
+    )
+    .unwrap();
+    assert_eq!(order.len(), 30);
+    assert_eq!(order[4], "kms-initialize");
+    assert_eq!(
+        order[..4]
+            .iter()
+            .map(String::as_str)
+            .collect::<std::collections::BTreeSet<_>>(),
+        [
+            "postgres",
+            "redis",
+            "revocation-profile-migrate",
+            "db-migrate"
+        ]
+        .into_iter()
+        .collect()
+    );
+    for (role, spec) in plan.model["services"].as_object().unwrap() {
+        if let Some(position) = order.iter().position(|s| s == role) {
+            if let Some(deps) = spec["depends_on"].as_object() {
+                for peer in deps.keys() {
+                    assert!(order.iter().position(|s| s == peer).unwrap() < position);
+                }
+            }
+        }
+    }
+    let reject = |model: &Value, selected: &[String]| {
+        assert!(
+            marty_deployment_catalog::installer_application_graph::startup_order(model, selected)
+                .is_err()
+        );
+    };
+    let mut bad = plan.model.clone();
+    bad["services"]["postgres"]["depends_on"] =
+        serde_json::json!({"redis":{"condition":"service_healthy"}});
+    bad["services"]["redis"]["depends_on"] =
+        serde_json::json!({"postgres":{"condition":"service_healthy"}});
+    reject(&bad, &plan.selected_services);
+    bad = plan.model.clone();
+    bad["services"]["kms-initialize"]["depends_on"]["db-migrate"]["condition"] =
+        serde_json::json!("service_started");
+    reject(&bad, &plan.selected_services);
+    bad = plan.model.clone();
+    bad["services"]["postgres"]["healthcheck"]["disable"] = serde_json::json!(true);
+    reject(&bad, &plan.selected_services);
+    reject(&plan.model, &plan.selected_services[1..]);
+    let mut duplicate = plan.selected_services.clone();
+    duplicate[0] = duplicate[1].clone();
+    reject(&plan.model, &duplicate);
     assert!(
         plan.model["services"]["issuance"]["environment"]["DATABASE_URL_TEMPLATE"]
             .as_str()
