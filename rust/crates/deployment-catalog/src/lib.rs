@@ -9,6 +9,10 @@ pub mod passport_model;
 pub mod installer_state;
 pub mod installer_artifacts;
 pub mod installer_runtime;
+pub mod installer_release;
+pub mod installer_verify;
+pub mod installer_fetch;
+pub mod installer_prepare;
 
 use serde_json::{Map, Value};
 use std::collections::HashSet;

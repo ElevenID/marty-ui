@@ -51,7 +51,7 @@ fn executable(path: &Path) -> Result<()> {
     }
     Ok(())
 }
-fn private_parent(path: &Path) -> Result<()> {
+pub(crate) fn private_parent(path: &Path) -> Result<()> {
     trusted_ancestors(path)?;
     let metadata = fs::symlink_metadata(path).map_err(|_| "private runtime parent unavailable")?;
     if !path.is_absolute()
@@ -167,7 +167,7 @@ fn drain(stream: &mut impl Read, output: &mut Vec<u8>, limit: usize) -> Result<b
 struct BoundedRunner {
     executable: PathBuf,
     staging: tempfile::TempDir,
-    docker_host: String,
+    docker_host: Option<String>,
 }
 impl BoundedRunner {
     fn new(binary: &Path, host: &str, parent: &Path) -> Result<Self> {
@@ -183,7 +183,7 @@ impl BoundedRunner {
         Ok(Self {
             executable: binary.to_path_buf(),
             staging,
-            docker_host: host.into(),
+            docker_host: Some(host.into()),
         })
     }
     fn run(&self, args: &[&str], timeout: Duration, limit: usize) -> Result<String> {
@@ -201,7 +201,6 @@ impl BoundedRunner {
             .env("DOCKER_CONFIG", self.staging.path())
             .env("XDG_CONFIG_HOME", self.staging.path())
             .env("XDG_CACHE_HOME", self.staging.path())
-            .env("DOCKER_HOST", &self.docker_host)
             .env("LANG", "C")
             .env("LC_ALL", "C")
             .current_dir(self.staging.path())
@@ -209,6 +208,14 @@ impl BoundedRunner {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .process_group(0);
+        if let Some(host) = &self.docker_host {
+            command.env("DOCKER_HOST", host);
+        } else {
+            command
+                .env("GH_CONFIG_DIR", self.staging.path())
+                .env("GH_HOST", "github.com")
+                .env("GH_PROMPT_DISABLED", "1");
+        }
         let child = command.spawn().map_err(|_| "cannot start Docker command")?;
         let mut owned = OwnedChild {
             child,
@@ -250,6 +257,19 @@ impl BoundedRunner {
         owned.finish()?;
         String::from_utf8(output).map_err(|_| "Docker command returned non-UTF8 output".into())
     }
+}
+
+/// Invoke an already hash-pinned installer verifier with bounded execution and
+/// no inherited credentials/configuration. Only reviewed internal callers may
+/// construct arguments; caller authenticates binary and private input bytes.
+pub(crate) fn run_installer_verifier(
+    binary: &Path,
+    args: &[&str],
+    parent: &Path,
+) -> Result<String> {
+    let mut runner = BoundedRunner::new(binary, "unix:///var/run/docker.sock", parent)?;
+    runner.docker_host = None;
+    runner.run(args, Duration::from_secs(120), 4 * 1024 * 1024)
 }
 
 #[derive(Deserialize)]
