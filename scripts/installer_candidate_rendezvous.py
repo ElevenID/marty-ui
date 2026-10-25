@@ -98,8 +98,11 @@ class Client:
         run = re.fullmatch(re.escape(REPO) + r"/actions/runs/([1-9][0-9]{0,15})", path)
         artifacts = re.fullmatch(re.escape(REPO) + r"/actions/runs/([1-9][0-9]{0,15})/artifacts\?per_page=100", path)
         artifact = re.fullmatch(re.escape(REPO) + r"/actions/artifacts/([1-9][0-9]{0,15})", path)
-        if run or artifacts or artifact:
-            positive_id(int((run or artifacts or artifact).group(1)))
+        tag_ref = re.fullmatch(re.escape(REPO) + r"/git/ref/tags/(v[0-9A-Za-z._%-]{1,127})", path)
+        tag_object = re.fullmatch(re.escape(REPO) + r"/git/tags/([0-9a-f]{40})", path)
+        if run or artifacts or artifact or tag_ref or tag_object:
+            if run or artifacts or artifact:
+                positive_id(int((run or artifacts or artifact).group(1)))
             release.require(method == "GET" and body is None, "Actions observation is read-only")
         else:
             release.require(path.startswith(REPO + "/releases") and not any(c in path for c in "#\r\n"),
