@@ -6,7 +6,7 @@ import { loadScopedCatalog } from '../../../../services/loadScopedCatalog';
  * If none exist, shows a message with a redirect to Trust Profile management.
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useLayoutEffect, useCallback, useRef } from 'react';
 import {
   Box,
   Typography,
@@ -49,8 +49,11 @@ const TrustProfileStep = ({ selectedTrustProfile, onSelectTrustProfile }) => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [trustProfiles, setTrustProfiles] = useState([]);
+  const generation = useRef(0);
 
   const fetchTrustProfiles = useCallback(async () => {
+    const request = ++generation.current;
+    setTrustProfiles([]);
     setLoading(true);
     setError(null);
 
@@ -60,7 +63,8 @@ const TrustProfileStep = ({ selectedTrustProfile, onSelectTrustProfile }) => {
       }
 
       const response = await loadScopedCatalog(listTrustProfiles, activeOrgId);
-      const profiles = response.data || response || [];
+      if (request !== generation.current) return;
+      const profiles = response.filter((profile) => profile.organization_id === activeOrgId && String(profile.status).toUpperCase() === 'ACTIVE');
       setTrustProfiles(profiles);
 
       // Auto-select if only one profile exists
@@ -68,16 +72,18 @@ const TrustProfileStep = ({ selectedTrustProfile, onSelectTrustProfile }) => {
         onSelectTrustProfile(profiles[0]);
       }
     } catch (err) {
+      if (request !== generation.current) return;
       logTrustProfileStepError('Failed to fetch trust profiles:', err);
       setTrustProfiles([]);
       setError(err?.message || t('wizards.presentationPolicy.trustProfileStep.errors.failedToLoadTrustProfiles'));
     } finally {
-      setLoading(false);
+      if (request === generation.current) setLoading(false);
     }
   }, [activeOrgId, selectedTrustProfile, onSelectTrustProfile, t]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     fetchTrustProfiles();
+    return () => { generation.current += 1; };
   }, [fetchTrustProfiles]);
 
   const handleGoToTrustProfiles = () => {

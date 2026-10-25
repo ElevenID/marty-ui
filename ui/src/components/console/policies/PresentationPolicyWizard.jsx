@@ -268,7 +268,9 @@ const PresentationPolicyWizard = () => {
         </Stepper>
 
         {/* Error Alert */}
-        {createdDraft && <Alert severity="warning">Policy {createdDraft.id} was created. Retry to recover its activation.</Alert>}
+        {createdDraft && <Alert severity="warning">Policy {createdDraft.id} was created. Retry to recover its activation.
+          <Button onClick={() => navigate(`/console/org/policies/presentation/${encodeURIComponent(createdDraft.id)}`)}>Open created draft</Button>
+        </Alert>}
         {(wizard.error || apiError) && (
           <Alert severity="error" sx={{ mb: 3 }} onClose={() => { setApiError(null); }}>
             {wizard.error || apiError}
@@ -311,7 +313,7 @@ const PresentationPolicyWizard = () => {
                 startIcon={wizard.loading ? <CircularProgress size={20} /> : <CheckCircleIcon />}
                 data-testid="wizard.policy.submit"
               >
-                {wizard.loading ? t('wizards.presentationPolicy.buttons.submitting') : t('wizards.presentationPolicy.buttons.submit')}
+                {wizard.loading ? t('wizards.presentationPolicy.buttons.submitting') : createdDraft ? 'Retry activation' : t('wizards.presentationPolicy.buttons.submit')}
               </Button>
             ) : (
               <Button
