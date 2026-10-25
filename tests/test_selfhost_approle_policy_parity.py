@@ -33,6 +33,12 @@ GOLDEN = {
 def test_native_approle_policy_matches_reviewed_python_bytes(role: str) -> None:
     context = {"names": NAMES} if role in {"renewal", "ca-rotation"} else {}
     acl = approle_policy(role, **context)
+    # The installer adds only self-revocation to Renewal. Preserve the
+    # independent historical golden for every other byte and every other role.
+    if role == "renewal":
+        suffix = '\npath "auth/token/revoke-self" { capabilities = ["update"] }'
+        assert acl.endswith(suffix)
+        acl = acl.removesuffix(suffix)
     expected_length, expected_sha256 = GOLDEN[role]
     encoded = acl.encode("utf-8")
     assert len(encoded) == expected_length
@@ -47,6 +53,12 @@ def test_renewal_and_ca_rotation_keep_distinct_secret_id_authority() -> None:
     secret_id = 'path "auth/selfhost-renew/role/kms-renewer/secret-id"'
     assert secret_id in renewal
     assert secret_id not in ca_rotation
+    assert 'path "auth/token/revoke-self" { capabilities = ["update"] }' in renewal
+    for acl in (renewal, ca_rotation):
+        assert 'path "auth/token/revoke"' not in acl
+        assert 'path "auth/token/revoke-orphan"' not in acl
+        assert 'path "auth/token/lookup-self"' not in acl
+    assert 'path "auth/token/revoke-self"' not in ca_rotation
     assert 'path "sys/mounts/workload-pki-v8"' in ca_rotation
     assert 'path "sys/mounts/workload-pki-v9"' not in ca_rotation
     assert len(KEY_NAMES) == 16

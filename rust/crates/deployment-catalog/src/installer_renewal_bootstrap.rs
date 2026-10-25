@@ -3,7 +3,7 @@
 //! bind the exact readonly inputs, record its ID before start, and retain the
 //! durable pending receipt and surviving outputs after uncertainty. The shared
 //! AppRole bootstrap may roll back some authority and identity files on failure;
-//! that does not authorize replay. No installer entrypoint invokes this helper yet.
+//! that does not authorize replay. The owned installer renewal stage invokes it.
 #![cfg(target_os = "linux")]
 
 use crate::{activation_preflight, approle, operator_http};
@@ -60,7 +60,7 @@ fn readonly(file: &File) -> Result<()> {
     require(unsafe { info.assume_init() }.f_flag & libc::ST_RDONLY != 0)
 }
 
-fn directory(path: &Path, root_owned: bool, read_only: bool) -> Result<File> {
+pub(crate) fn directory(path: &Path, root_owned: bool, read_only: bool) -> Result<File> {
     require(path.is_absolute() && path.canonicalize().map_err(|_| REFUSED)? == path)?;
     let file = OpenOptions::new()
         .read(true)
@@ -75,7 +75,7 @@ fn directory(path: &Path, root_owned: bool, read_only: bool) -> Result<File> {
     Ok(file)
 }
 
-fn names(dir: &File) -> Result<BTreeSet<String>> {
+pub(crate) fn names(dir: &File) -> Result<BTreeSet<String>> {
     std::fs::read_dir(format!("/proc/self/fd/{}", dir.as_raw_fd()))
         .map_err(|_| REFUSED)?
         .map(|entry| {
@@ -123,7 +123,7 @@ const ROOT_OWNERS: &[u32] = &[0];
 // Identity comes from the admitted container and exact read-only source mount,
 // not from this UID alone. This exception never applies to the root token.
 const CA_OWNERS: &[u32] = &[0, 100];
-fn input(path: &Path, maximum: u64, owners: &[u32], modes: &[u32]) -> Result<Vec<u8>> {
+pub(crate) fn input(path: &Path, maximum: u64, owners: &[u32], modes: &[u32]) -> Result<Vec<u8>> {
     require(path.is_absolute() && path.canonicalize().map_err(|_| REFUSED)? == path)?;
     let file = OpenOptions::new()
         .read(true)
@@ -133,7 +133,7 @@ fn input(path: &Path, maximum: u64, owners: &[u32], modes: &[u32]) -> Result<Vec
     read_file(file, maximum, owners, modes, true)
 }
 
-fn entry(
+pub(crate) fn entry(
     dir: &File,
     name: &str,
     owners: &[u32],
@@ -180,7 +180,7 @@ pub(crate) fn validate_current(values: &BTreeMap<String, Vec<u8>>) -> Result<()>
     Ok(())
 }
 
-fn current(dir: &File) -> Result<BTreeMap<String, Vec<u8>>> {
+pub(crate) fn current(dir: &File) -> Result<BTreeMap<String, Vec<u8>>> {
     require(names(dir)? == current_inputs())?;
     let owner = dir.metadata().map_err(|_| REFUSED)?.uid();
     let values = current_inputs()
@@ -194,7 +194,7 @@ fn current(dir: &File) -> Result<BTreeMap<String, Vec<u8>>> {
     Ok(values)
 }
 
-fn receipt(dir: &File, name: &str, value: &Value) -> Result<()> {
+pub(crate) fn receipt(dir: &File, name: &str, value: &Value) -> Result<()> {
     let data = serde_json::to_vec(value).map_err(|_| RECOVERY)?;
     require(data.len() <= 8192)?;
     let name = CString::new(name).map_err(|_| RECOVERY)?;
@@ -217,7 +217,7 @@ fn receipt(dir: &File, name: &str, value: &Value) -> Result<()> {
         .map_err(|_| RECOVERY.into())
 }
 
-fn validate_id(id: &str) -> Result<()> {
+pub(crate) fn validate_id(id: &str) -> Result<()> {
     let parsed = uuid::Uuid::parse_str(id).map_err(|_| REFUSED)?;
     require(
         parsed.to_string() == id
@@ -332,17 +332,17 @@ async fn bootstrap_at(installation_id: &str, output_path: &Path) -> Result<usize
     operator_http::request(
         &bao,
         Method::POST,
-        "auth/token/revoke",
-        Some(&json!({"token":transient})),
-        Some(root),
+        "auth/token/revoke-self",
+        None,
+        Some(transient),
     )
     .await
     .map_err(|_| RECOVERY)?;
     let denial = operator_http::builder(
         &bao,
-        Method::GET,
-        "auth/token/lookup-self",
-        None,
+        Method::POST,
+        "auth/token/lookup",
+        Some(&json!({"token":transient})),
         Some(transient),
     )
     .send()
@@ -365,7 +365,7 @@ async fn bootstrap_at(installation_id: &str, output_path: &Path) -> Result<usize
     outcome.map_err(|_| RECOVERY.into())
 }
 
-fn child(parent: &File, name: &str) -> Result<File> {
+pub(crate) fn child(parent: &File, name: &str) -> Result<File> {
     let name = CString::new(name).map_err(|_| RECOVERY)?;
     if unsafe { libc::mkdirat(parent.as_raw_fd(), name.as_ptr(), 0o700) } != 0 {
         return Err(RECOVERY.into());

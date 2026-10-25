@@ -106,6 +106,14 @@ workload/Keycloak renewal identity from fixed, read-only container inputs. It
 validates the current 21-policy inventory, verifies a scoped login and retires
 that temporary verification token. Identity files remain private; pending and
 completed receipts distinguish an interrupted attempt from completed bootstrap.
+The renewal policy grants self-revocation so temporary operators can retire
+their own login without bootstrap root. It does not grant revocation of other
+tokens or change CA-rotation authority. Successful self-revocation must be
+followed by a denied authenticated token lookup. Existing renewal identities
+using the older exact policy are incompatible and fail validation; do not
+silently rewrite that policy or replay bootstrap against retained state.
+Use a fresh owned stack for qualification of the new policy. Migration of an
+existing installation requires a separately reviewed recovery procedure.
 Native installation runs it after ingress provisioning and before application
 startup, through the internal `installer-renewal-bootstrap-transfer` wrapper in
 a recorded, owned helper container. Forty reviewed inputs are staged read-only.
@@ -163,6 +171,28 @@ Scoped snapshot/recovery checks and before/after lineage audits must pass before
 root revocation. Deleting `root.token` alone is insufficient: initialization
 records also contain that credential, and the separate orphaned `kms-bootstrap`
 token needs its own disposition.
+
+The internal `installer-generation-provision --installation-id UUID` helper
+implements candidate credential production only. It requires an externally
+admitted container with the pinned services image and current static operator,
+fixed read-only mounts for the forty current inputs, three private renewal
+identity files, OpenBao CA, and original Keycloak removal receipt. A fresh,
+root-owned private `/output` holds the durable intent and surviving outputs.
+It receives no bootstrap root. Workload and Keycloak producers use the scoped
+renewal login, retain existing remote key versions and issuers, and stage forty
+files with thirty-nine replacements and an unchanged CA. Live checks require
+orphan tokens, correct scopes, certificate chains and sufficient remaining
+lifetime before the completed receipt can be written. Known login tokens are
+self-revoked even on producer failure; lost responses can leave unknown orphan
+leaves, so an interrupted attempt requires recovery and must not be replayed.
+
+This helper is not yet wired into host installation. Its filesystem and process
+tests do not prove actual generation execution. Host orchestration must bind
+the exact container, inputs, source hashes and output transfer, then assemble
+the complete immutable generation including unchanged scalar credentials.
+Application model, mount admission, logs and cleanup must select that recorded
+generation consistently before activation. Do not replace individual files in
+the existing `secrets` directory or treat candidate production as readiness.
 
 ## Experimental preview installer path
 

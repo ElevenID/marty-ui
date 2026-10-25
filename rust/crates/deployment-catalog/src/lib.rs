@@ -15,6 +15,7 @@ pub mod installer_artifacts;
 pub mod installer_bundle;
 pub mod installer_command;
 pub mod installer_fetch;
+pub mod installer_generation;
 pub mod installer_ingress;
 pub mod installer_ingress_config;
 pub mod installer_ingress_model;

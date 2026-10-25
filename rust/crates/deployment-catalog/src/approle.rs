@@ -245,7 +245,10 @@ pub fn policy(role: Role, context: &Value) -> Result<String> {
                 role == Role::Renewal && context["allow_secret_id_rotation"] != false,
             )?;
             if role == Role::Renewal {
-                return Ok(base);
+                // Renewal operators must retire their own short-lived login
+                // without mounting bootstrap root or gaining authority to
+                // revoke other tokens. Orphan leaves remain independent.
+                return Ok(base + "\n" + &line("auth/token/revoke-self", &["update"]));
             }
             let mut paths = BTreeMap::new();
             paths.insert(format!("sys/policies/acl/{CA_POLICY}"), vec!["read"]);

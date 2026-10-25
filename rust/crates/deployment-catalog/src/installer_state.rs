@@ -236,11 +236,42 @@ fn parent(path: &Path) -> Result<(File, CString)> {
     }
     Ok((directory, leaf))
 }
-fn lock(directory: &File) -> Result<()> {
+/// flock belongs to the open file description, which a concurrent fork can
+/// inherit until exec despite CLOEXEC. Explicit unlock ends this owner's
+/// critical section even while an inherited descriptor remains open.
+struct LockedDirectory {
+    file: File,
+    owner_pid: libc::pid_t,
+}
+impl std::ops::Deref for LockedDirectory {
+    type Target = File;
+    fn deref(&self) -> &File {
+        &self.file
+    }
+}
+impl Drop for LockedDirectory {
+    fn drop(&mut self) {
+        // A forked child's destructor must not release its parent's live lock.
+        if unsafe { libc::getpid() } != self.owner_pid {
+            return;
+        }
+        loop {
+            if unsafe { libc::flock(self.file.as_raw_fd(), libc::LOCK_UN) } == 0
+                || std::io::Error::last_os_error().kind() != std::io::ErrorKind::Interrupted
+            {
+                break;
+            }
+        }
+    }
+}
+fn lock(directory: File) -> Result<LockedDirectory> {
     if unsafe { libc::flock(directory.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
         return Err(error("installation is locked"));
     }
-    Ok(())
+    Ok(LockedDirectory {
+        file: directory,
+        owner_pid: unsafe { libc::getpid() },
+    })
 }
 fn read(directory: &File) -> Result<Journal> {
     let file = open_at(
@@ -267,7 +298,7 @@ fn read(directory: &File) -> Result<Journal> {
 /// another lifecycle operation, including while the journal is Provisioning.
 /// It intentionally exposes no phase transition or provisioning replay API.
 pub struct LockedInspection {
-    directory: File,
+    directory: LockedDirectory,
     journal: Journal,
 }
 
@@ -490,7 +521,7 @@ impl LockedInspection {
         let (ancestor, leaf) = parent(path)?;
         let directory = open_at(&ancestor, &leaf, libc::O_RDONLY | libc::O_DIRECTORY, 0)?;
         private(&directory, true)?;
-        lock(&directory)?;
+        let directory = lock(directory)?;
         let journal = read(&directory)?;
         Ok(Self { directory, journal })
     }
@@ -718,7 +749,7 @@ impl LockedMaintenance {
 }
 
 pub struct InstallerState {
-    directory: File,
+    directory: LockedDirectory,
     journal: Journal,
     poisoned: bool,
 }
@@ -1124,7 +1155,7 @@ impl InstallerState {
         }
         let directory = open_at(&parent, &leaf, libc::O_RDONLY | libc::O_DIRECTORY, 0)?;
         private(&directory, true)?;
-        lock(&directory)?;
+        let directory = lock(directory)?;
         parent.sync_all().map_err(|e| e.to_string())?;
         let journal = Journal {
             schema: SCHEMA.into(),
@@ -1149,7 +1180,7 @@ impl InstallerState {
         let (parent, leaf) = parent(path)?;
         let directory = open_at(&parent, &leaf, libc::O_RDONLY | libc::O_DIRECTORY, 0)?;
         private(&directory, true)?;
-        lock(&directory)?;
+        let directory = lock(directory)?;
         let journal = read(&directory)?;
         if &journal.identity != identity {
             return Err("installation candidate differs".into());
@@ -1231,7 +1262,51 @@ impl InstallerState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::os::unix::fs::{symlink, PermissionsExt};
+    #[test]
+    fn lock_owner_drop_unlocks_despite_inherited_open_file_description() {
+        let root = tempfile::tempdir().unwrap();
+        let guard = lock(File::open(root.path()).unwrap()).unwrap();
+        let inherited = guard.file.try_clone().unwrap();
+        assert!(lock(File::open(root.path()).unwrap()).is_err());
+        drop(guard);
+        let successor = lock(File::open(root.path()).unwrap()).unwrap();
+        // Closing the older duplicate must not release the new owner's lock.
+        drop(inherited);
+        assert!(lock(File::open(root.path()).unwrap()).is_err());
+        drop(successor);
+        assert!(lock(File::open(root.path()).unwrap()).is_ok());
+    }
+    #[test]
+    fn lock_guard_releases_on_post_acquisition_error_path() {
+        let root = tempfile::tempdir().unwrap();
+        let mut inherited = None;
+        let outcome: Result<()> = (|| {
+            let guard = lock(File::open(root.path()).unwrap())?;
+            inherited = Some(guard.file.try_clone().unwrap());
+            // Match failed journal/schema/candidate validation after acquire.
+            Err("synthetic post-lock validation refusal".into())
+        })();
+        assert!(outcome.is_err());
+        assert!(inherited.is_some());
+        assert!(lock(File::open(root.path()).unwrap()).is_ok());
+    }
+    #[test]
+    fn different_process_guard_drop_does_not_unlock_parent_description() {
+        let root = tempfile::tempdir().unwrap();
+        let mut guard = lock(File::open(root.path()).unwrap()).unwrap();
+        let inherited = guard.file.try_clone().unwrap();
+        // Exercise the post-fork PID mismatch branch without unsafe fork in a
+        // multithreaded test runner. The retained duplicate models the parent.
+        guard.owner_pid = -1;
+        drop(guard);
+        assert!(lock(File::open(root.path()).unwrap()).is_err());
+        assert_eq!(
+            unsafe { libc::flock(inherited.as_raw_fd(), libc::LOCK_UN) },
+            0
+        );
+        assert!(lock(File::open(root.path()).unwrap()).is_ok());
+    }
+    use std::os::unix::fs::{PermissionsExt, symlink};
     fn identity() -> Identity {
         Identity {
             source_sha: "a".repeat(40),
@@ -1299,12 +1374,14 @@ mod tests {
         assert_eq!(summary.state, CleanupState::Completed);
         plan["source_hashes"]["evidence/unknown-container-removed.json"] =
             serde_json::json!("c".repeat(64));
-        assert!(cleanup_summary(
-            state.journal(),
-            Some(&serde_json::to_vec(&plan).unwrap()),
-            None
-        )
-        .is_err());
+        assert!(
+            cleanup_summary(
+                state.journal(),
+                Some(&serde_json::to_vec(&plan).unwrap()),
+                None
+            )
+            .is_err()
+        );
     }
     #[test]
     fn cleanup_summary_tracks_records_without_changing_historical_ready_journal() {
@@ -1368,17 +1445,21 @@ mod tests {
         std::fs::write(&target, b"malformed").unwrap();
         std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600)).unwrap();
         assert!(InstallerState::resume(&path, &identity()).is_err());
-        assert!(LockedInspection::open(&path)
-            .unwrap()
-            .cleanup_status()
-            .is_err());
+        assert!(
+            LockedInspection::open(&path)
+                .unwrap()
+                .cleanup_status()
+                .is_err()
+        );
         std::fs::remove_file(&target).unwrap();
         symlink("absent.json", &target).unwrap();
         assert!(InstallerState::resume(&path, &identity()).is_err());
-        assert!(LockedInspection::open(&path)
-            .unwrap()
-            .cleanup_status()
-            .is_err());
+        assert!(
+            LockedInspection::open(&path)
+                .unwrap()
+                .cleanup_status()
+                .is_err()
+        );
         std::fs::remove_file(&target).unwrap();
         std::fs::write(&target, b"{}").unwrap();
         std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o644)).unwrap();
@@ -1432,13 +1513,17 @@ mod tests {
         let mut maintenance = LockedMaintenance::open(&path).unwrap();
         assert!(LockedInspection::open(&path).is_err());
         assert_eq!(maintenance.journal().phase(), Phase::Provisioning);
-        assert!(maintenance
-            .read_evidence("uninstall-absent.json")
-            .unwrap()
-            .is_none());
-        assert!(maintenance
-            .write_evidence_exclusive("application-plan.json", b"replace")
-            .is_err());
+        assert!(
+            maintenance
+                .read_evidence("uninstall-absent.json")
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            maintenance
+                .write_evidence_exclusive("application-plan.json", b"replace")
+                .is_err()
+        );
         maintenance
             .write_evidence_exclusive("uninstall-intent.json", b"exact resource intent")
             .unwrap();
@@ -1449,9 +1534,11 @@ mod tests {
                 .unwrap(),
             b"exact resource intent"
         );
-        assert!(maintenance
-            .write_evidence_exclusive("uninstall-intent.json", b"replacement")
-            .is_err());
+        assert!(
+            maintenance
+                .write_evidence_exclusive("uninstall-intent.json", b"replacement")
+                .is_err()
+        );
         assert!(maintenance.require_unchanged().is_err());
         drop(maintenance);
         let maintenance = LockedMaintenance::open(&path).unwrap();
@@ -1863,9 +1950,11 @@ mod tests {
             InstallerState::inspect(&path).unwrap().phase(),
             Phase::Provisioning
         );
-        assert!(InstallerState::resume(&path, &identity())
-            .unwrap_err_string()
-            .contains("indeterminate"));
+        assert!(
+            InstallerState::resume(&path, &identity())
+                .unwrap_err_string()
+                .contains("indeterminate")
+        );
     }
     #[test]
     fn generates_distinct_private_credentials_without_overwrite() {
@@ -1876,9 +1965,11 @@ mod tests {
         assert!(state.generate_local_credentials(&realm).is_err());
         state.advance(Phase::Verified).unwrap();
         state.advance(Phase::Provisioning).unwrap();
-        assert!(state
-            .generate_local_credentials(&serde_json::json!({}))
-            .is_err());
+        assert!(
+            state
+                .generate_local_credentials(&serde_json::json!({}))
+                .is_err()
+        );
         assert!(!path.join("secrets").exists());
         state.generate_local_credentials(&realm).unwrap();
         let mut values = std::collections::BTreeSet::new();

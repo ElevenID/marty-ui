@@ -3,6 +3,32 @@
 use marty_deployment_catalog::installer_state::{Identity, InstallerState, Phase, RuntimeBinding};
 use serde_json::Value;
 #[test]
+fn internal_generation_refuses_unowned_invocation_without_output_or_argument_echo() {
+    let secret = "never-echo-generation-input";
+    for args in [
+        vec!["installer-generation-provision"],
+        vec![
+            "installer-generation-provision",
+            "--installation-id",
+            secret,
+        ],
+        vec![
+            "installer-generation-provision",
+            "--installation-id",
+            "00000000-0000-0000-0000-000000000000",
+        ],
+        vec!["installer-generation-provision", "--root-token", secret],
+    ] {
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_marty-deploy"))
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+        assert!(!String::from_utf8_lossy(&output.stderr).contains(secret));
+    }
+}
+#[test]
 fn uninstall_cli_refuses_unbound_or_destructive_options_without_output() {
     for args in [
         vec!["uninstall"],
