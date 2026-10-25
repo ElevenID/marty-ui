@@ -128,6 +128,7 @@ fn persisted_operator_runs_after_bootstrap_storage_is_removed() {
     assert!(output.status.success(), "{:?}", output.stderr);
     let report: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(report["runtime_observed"], false);
+    assert_eq!(report["cleanup"]["state"], "not_started");
 }
 
 #[test]
@@ -188,6 +189,7 @@ esac
     assert_eq!(report["compose_project"], project);
     assert_eq!(report["services_observed"], false);
     assert_eq!(report["installation_ready"], false);
+    assert_eq!(report["cleanup"]["state"], "not_started");
     std::fs::write(&binary, script.replace("test-engine", "replacement-engine")).unwrap();
     let output = invoke();
     assert!(!output.status.success());
@@ -215,6 +217,17 @@ fn status_reports_uncertain_journal_without_checkout_or_secret_values() {
     state.advance(Phase::Verified).unwrap();
     state.advance(Phase::Provisioning).unwrap();
     std::fs::write(path.join("operator-password"), "secret-sentinel").unwrap();
+    let active = Command::new(env!("CARGO_BIN_EXE_marty-deploy"))
+        .args(["status", "--install-dir"])
+        .arg(&path)
+        .output()
+        .unwrap();
+    assert!(
+        !active.status.success(),
+        "status must not mix active cleanup and journal state"
+    );
+    assert!(active.stdout.is_empty());
+    drop(state);
     let output = Command::new(env!("CARGO_BIN_EXE_marty-deploy"))
         .current_dir(root.path())
         .arg("status")
@@ -233,7 +246,6 @@ fn status_reports_uncertain_journal_without_checkout_or_secret_values() {
     assert!(output.stderr.is_empty());
 
     // A legacy/preparation-only journal must not adopt the caller's daemon.
-    drop(state);
     let doctor = Command::new(env!("CARGO_BIN_EXE_marty-deploy"))
         .current_dir(root.path())
         .args(["doctor", "--install-dir"])

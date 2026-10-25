@@ -331,13 +331,17 @@ fn run() -> Result<(), String> {
         }
         #[cfg(target_os = "linux")]
         {
-            let journal = marty_deployment_catalog::installer_state::InstallerState::inspect(
+            let inspection = marty_deployment_catalog::installer_state::LockedInspection::open(
                 std::path::Path::new(&args[2]),
             )?;
+            let journal = inspection.journal();
+            let cleanup = inspection.cleanup_status()?;
+            inspection.require_unchanged()?;
             println!(
                 "{}",
                 serde_json::json!({
                     "scope": "installation-journal", "runtime_observed": false, "journal": journal,
+                    "cleanup": cleanup,
                 })
             );
             return Ok(());
@@ -370,6 +374,7 @@ fn run() -> Result<(), String> {
                 directory,
             )?;
             let observation = runner.preflight()?;
+            let cleanup = inspection.cleanup_status()?;
             inspection.require_unchanged()?;
             println!(
                 "{}",
@@ -377,6 +382,7 @@ fn run() -> Result<(), String> {
                     "scope": "installation-host", "installation_id": journal.installation_id(),
                     "compose_project": journal.compose_project(), "docker": observation,
                     "services_observed": false, "installation_ready": false,
+                    "cleanup": cleanup,
                 })
             );
             return Ok(());

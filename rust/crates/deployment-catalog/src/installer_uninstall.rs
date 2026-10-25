@@ -909,6 +909,17 @@ else: sys.exit(98)
             let result: Value = parse(output.as_bytes()).unwrap();
             assert_eq!(result["containers_removed"], 34);
             assert_eq!(result["host_data_retained"], true);
+            let inspection =
+                crate::installer_state::LockedInspection::open(&root.path().join("install"))
+                    .unwrap();
+            let cleanup = inspection.cleanup_status().unwrap();
+            assert_eq!(
+                cleanup.state,
+                crate::installer_state::CleanupState::Completed
+            );
+            assert!(!cleanup.runtime_observed);
+            assert_eq!(cleanup.data_retained, Some(true));
+            drop(inspection);
             let s = ledger(&root);
             assert!(s["containers"].as_object().unwrap().is_empty());
             assert_eq!(s["network_exists"], false);
