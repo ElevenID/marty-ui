@@ -2,8 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@test/utils';
 import CustomFlowBuilder from '../CustomFlowBuilder';
 
-const mocks = vi.hoisted(() => ({ org: 'org-1', navigate: vi.fn(), capabilities: vi.fn(), list: vi.fn(), create: vi.fn() }));
-vi.mock('react-router', async () => ({ ...await vi.importActual('react-router'), useNavigate: () => mocks.navigate }));
+const mocks = vi.hoisted(() => ({ org: 'org-1', search: '', navigate: vi.fn(), capabilities: vi.fn(), list: vi.fn(), create: vi.fn() }));
+vi.mock('react-router', async () => ({ ...await vi.importActual('react-router'), useNavigate: () => mocks.navigate, useSearchParams: () => [new URLSearchParams(mocks.search)] }));
 vi.mock('../../../../contexts/ConsoleContext', () => ({ useConsole: () => ({ activeOrgId: mocks.org }) }));
 vi.mock('../../../../services/flowsApi', () => ({ getFlowCapabilities: mocks.capabilities, createFlow: mocks.create }));
 vi.mock('../../../../services/presentationPolicyApi', () => ({ listCredentialTemplates: mocks.list }));
@@ -21,6 +21,18 @@ async function approved(user: any) {
 }
 
 describe('CustomFlowBuilder', () => {
+  it.each([true, false])('validates a linked template before preselection (eligible=%s)', async (eligible) => {
+    mocks.search = 'templateId=credential-1';
+    mocks.list.mockResolvedValue([{ ...template, organization_id: eligible ? 'org-1' : 'foreign-org' }]);
+    try {
+      render(<CustomFlowBuilder />);
+      const select = await screen.findByRole('combobox', { name: /Credential template/ });
+      await waitFor(() => expect(select).toBeEnabled());
+      if (eligible) await waitFor(() => expect(select).toHaveTextContent('Tenant membership'));
+      else expect(await screen.findByText(/linked template is unavailable or incompatible/)).toBeInTheDocument();
+      expect(mocks.create).not.toHaveBeenCalled();
+    } finally { mocks.search = ''; }
+  });
   beforeEach(() => {
     vi.clearAllMocks(); mocks.org = 'org-1';
     mocks.capabilities.mockResolvedValue(capabilities);
