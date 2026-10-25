@@ -102,7 +102,7 @@
     {"path":"/v1/compliance-profiles/cp1","service":"compliance-profiles","lookup_path":"/internal/v1/resource-owners/compliance-profiles/cp1"},
     {"path":"/v1/deployment-profiles/dp1","service":"deployment-profiles","lookup_path":"/internal/v1/resource-owners/deployment-profiles/dp1"},
     {"path":"/v1/revocation-profiles/rp1","service":"revocation-profiles","lookup_path":"/internal/v1/resource-owners/revocation-profiles/rp1"},
-    {"path":"/v1/credential-templates/t1/activate","service":"credential-templates","lookup_path":"/v1/credential-templates/t1"},
+    {"path":"/v1/credential-templates/t1/activate","service":"credential-templates","lookup_path":"/internal/v1/resource-owners/credential-templates/t1"},
     {"path":"/v1/trust-profiles/t1","service":"trust-profiles","lookup_path":"/internal/v1/resource-owners/trust-profiles/t1"},
     {"path":"/v1/issuer-entities/i1","service":"trust-profiles","lookup_path":"/internal/v1/resource-owners/issuer-entities/i1"},
     {"path":"/v1/application-templates/a1","service":"issuance-native","lookup_path":"/internal/v1/resource-owners/application-templates/a1"},
