@@ -21,6 +21,7 @@ import installer_release as r
 import installer_candidate_dispatch as dispatch
 from installer_candidate_authorize import read_record, write_exclusive
 from installer_host_probe import command, DEVTOOLS
+from installer_host_admission import host_admission
 import verify_installer_provenance as provenance
 
 SCHEMA = 'elevenid.installer-acceptance-checkpoint/v3'
@@ -185,26 +186,6 @@ def validate(record, *, context, target, authorization, receipt, inventory):
     else:r.require(record['tls_observation_sha256'] is None,'unverified TLS claimed')
     r.require(record['trust_inspection']=='verified_public_record' or record['tls_inspection']=='not_attempted',
         'TLS probe before trust export')
-
-
-def host_admission(raw,engine):
-    value=r.decode(raw)
-    r.require(value.get('schema')=='elevenid.installer-host-observation/v1'
-        and value.get('acceptance') is False and value.get('engine_id')==engine, 'host identity differs')
-    for key in ('docker_memory_bytes','guest_memory_bytes'):
-        r.require(type(value.get(key)) is int and value[key]>=r.acceptance.MIN_MEMORY_BYTES,'qualification RAM unavailable')
-    disk=value.get('docker_data_filesystem',{})
-    r.require(type(disk.get('free_bytes')) is int and disk['free_bytes']>=r.acceptance.MIN_DISK_FREE_BYTES,'qualification disk unavailable')
-    r.require(value.get('predicates')==dict(capacity=True,initial_docker_clean=True),'guest pre-pull state differs')
-    r.require(value.get('resource_counts')==dict(containers=0,images=0,volumes=0,networks=3),'guest resources present')
-    r.exact(value.get('credential_file_presence'),{'docker_config','containers_auth','runtime_containers_auth'},'credential observation')
-    r.exact(value.get('development_tool_presence'),set(DEVTOOLS),'development-tool observation')
-    r.require(value.get('credential_environment_names')==[] and isinstance(value.get('credential_file_presence'),dict)
-        and all(v is False for v in value['credential_file_presence'].values())
-        and isinstance(value.get('development_tool_presence'),dict)
-        and all(v is False for v in value['development_tool_presence'].values()),'observed credential/development tool present')
-    # These are narrow observations, never proof of exhaustive source/credential absence.
-    return value
 
 
 def probe_source():
