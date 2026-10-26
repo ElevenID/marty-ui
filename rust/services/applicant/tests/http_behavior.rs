@@ -124,6 +124,11 @@ fn app_with_dependencies(
         issuance_url,
         issuance_api_key: None,
         client: reqwest::Client::new(),
+        management_client: reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(std::time::Duration::from_secs(10))
+            .build()
+            .unwrap(),
     });
     (app, service)
 }
@@ -598,6 +603,183 @@ async fn withdrawal_routes_return_conflict_for_issuance_without_lifecycle_side_e
             assert_eq!(*service.store().read().await, before);
         }
     }
+}
+
+#[tokio::test]
+async fn offer_retirement_requires_both_scopes_and_matching_issuer_revocation() {
+    let revocations = Arc::new(AtomicUsize::new(0));
+    let observed = revocations.clone();
+    let issuer = axum::Router::new().route(
+        "/v1/issuance/transactions/transaction-1/cancel-unissued",
+        axum::routing::post(
+            move |headers: axum::http::HeaderMap, axum::Json(body): axum::Json<Value>| {
+                let observed = observed.clone();
+                async move {
+                    assert_eq!(headers["x-organization-id"], "issuer-org");
+                    assert_eq!(body["application_id"], "application-1");
+                    assert_eq!(body["reason"], "Retire synthetic offer");
+                    observed.fetch_add(1, Ordering::SeqCst);
+                    axum::Json(json!({"id":"transaction-1","status":"revoked"}))
+                }
+            },
+        ),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let origin = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move { axum::serve(listener, issuer).await.unwrap() });
+    let mut before = withdrawal_store(LifecycleStatus::Offered);
+    before.applications[0].claim_state = marty_applicant::ClaimState::OfferReady;
+    before.applications[0]
+        .system_data
+        .insert("issuance_transaction_id".into(), json!("transaction-1"));
+    let (app, service) = app_with_issuance(before.clone(), origin);
+    let path = "/v1/organizations/issuer-org/applicants/application-1/retire-offer";
+    for permissions in ["application:review", "issuance:revoke"] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::post(path)
+                    .header("content-type", "application/json")
+                    .header("x-user-id", "operator-1")
+                    .header("x-organization-id", "issuer-org")
+                    .header("x-org-permissions", permissions)
+                    .body(Body::from(r#"{"reason":"Retire synthetic offer"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+    assert_eq!(revocations.load(Ordering::SeqCst), 0);
+    assert_eq!(*service.store().read().await, before);
+    let response = app
+        .clone()
+        .oneshot(
+            Request::post(path)
+                .header("content-type", "application/json")
+                .header("x-user-id", "operator-1")
+                .header("x-organization-id", "issuer-org")
+                .header("x-org-permissions", "application:review,issuance:revoke")
+                .body(Body::from(r#"{"reason":"Retire synthetic offer"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(revocations.load(Ordering::SeqCst), 1);
+    let body: Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap();
+    assert_eq!(body["status"], "WITHDRAWN");
+    assert_eq!(
+        service.store().read().await.applications[0].claim_state,
+        marty_applicant::ClaimState::Expired
+    );
+    let retry = app
+        .oneshot(
+            Request::post(path)
+                .header("content-type", "application/json")
+                .header("x-user-id", "operator-1")
+                .header("x-organization-id", "issuer-org")
+                .header("x-org-permissions", "application:review,issuance:revoke")
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(retry.status(), StatusCode::OK);
+    assert_eq!(revocations.load(Ordering::SeqCst), 1);
+    server.abort();
+}
+
+#[tokio::test]
+async fn offer_retirement_rejects_mismatched_revocation_without_local_mutation() {
+    let issuer = axum::Router::new().route(
+        "/v1/issuance/transactions/transaction-1/cancel-unissued",
+        axum::routing::post(|| async {
+            axum::Json(json!({"id":"another-transaction","status":"revoked"}))
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let origin = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move { axum::serve(listener, issuer).await.unwrap() });
+    let mut before = withdrawal_store(LifecycleStatus::Offered);
+    before.applications[0].claim_state = marty_applicant::ClaimState::OfferReady;
+    before.applications[0]
+        .system_data
+        .insert("issuance_transaction_id".into(), json!("transaction-1"));
+    let (app, service) = app_with_issuance(before.clone(), origin);
+    let response = app
+        .oneshot(
+            Request::post("/v1/organizations/issuer-org/applicants/application-1/retire-offer")
+                .header("content-type", "application/json")
+                .header("x-user-id", "operator-1")
+                .header("x-organization-id", "issuer-org")
+                .header("x-org-permissions", "application:review,issuance:revoke")
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    assert_eq!(*service.store().read().await, before);
+    server.abort();
+}
+
+#[tokio::test]
+async fn offer_retirement_refuses_a_replaced_local_offer_after_upstream_cancellation() {
+    let service_slot = Arc::new(std::sync::Mutex::new(
+        None::<Arc<marty_applicant::service::ApplicantService>>,
+    ));
+    let callback_slot = service_slot.clone();
+    let issuer = axum::Router::new().route(
+        "/v1/issuance/transactions/transaction-1/cancel-unissued",
+        axum::routing::post(move || {
+            let service = callback_slot.lock().unwrap().as_ref().unwrap().clone();
+            async move {
+                service.store().write().await.applications[0]
+                    .system_data
+                    .insert(
+                        "issuance_transaction_id".into(),
+                        json!("replacement-transaction"),
+                    );
+                axum::Json(json!({"id":"transaction-1","status":"revoked"}))
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let origin = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move { axum::serve(listener, issuer).await.unwrap() });
+    let mut before = withdrawal_store(LifecycleStatus::Offered);
+    before.applications[0].claim_state = marty_applicant::ClaimState::OfferReady;
+    before.applications[0]
+        .system_data
+        .insert("issuance_transaction_id".into(), json!("transaction-1"));
+    let (app, service) = app_with_issuance(before, origin);
+    *service_slot.lock().unwrap() = Some(service.clone());
+    let response = app
+        .oneshot(
+            Request::post("/v1/organizations/issuer-org/applicants/application-1/retire-offer")
+                .header("content-type", "application/json")
+                .header("x-user-id", "operator-1")
+                .header("x-organization-id", "issuer-org")
+                .header("x-org-permissions", "application:review,issuance:revoke")
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let current = &service.store().read().await.applications[0];
+    assert_eq!(current.status, LifecycleStatus::Offered);
+    assert_eq!(
+        current.system_data["issuance_transaction_id"],
+        "replacement-transaction"
+    );
+    assert!(current
+        .system_data
+        .get("retired_issuance_transaction_id")
+        .is_none());
+    server.abort();
 }
 
 #[tokio::test]

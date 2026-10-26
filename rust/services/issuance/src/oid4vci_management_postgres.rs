@@ -43,6 +43,24 @@ const REVOKE_TRANSACTION: &str = "UPDATE issuance_service.issuance_transactions
      WHERE id = $1
      RETURNING id, organization_id, status, revoked_at, revocation_reason";
 
+// Lock first, then issue the guarded update as a fresh READ COMMITTED
+// statement. A generic revoke can change issued -> revoked while this waits;
+// the second statement must see any credential committed with that change.
+const LOCK_UNISSUED_TRANSACTION: &str = "SELECT id FROM issuance_service.issuance_transactions
+     WHERE id = $1 AND organization_id = $2 AND application_id = $3 FOR UPDATE";
+const CANCEL_UNISSUED_TRANSACTION: &str =
+    "UPDATE issuance_service.issuance_transactions AS candidate
+     SET status = 'revoked',
+         revoked_at = CASE WHEN status = 'revoked' THEN revoked_at ELSE clock_timestamp() END,
+         revocation_reason = CASE WHEN status = 'revoked' THEN revocation_reason ELSE $4 END
+     WHERE id = $1 AND organization_id = $2 AND application_id = $3
+       AND status IN ('pending', 'expired', 'failed', 'revoked')
+       AND reserved_credential_id IS NULL
+       AND NOT EXISTS (
+           SELECT 1 FROM issuance_service.issued_credentials issued
+           WHERE issued.transaction_id = candidate.id)
+     RETURNING id, organization_id, status, revoked_at, revocation_reason";
+
 #[derive(Clone, Debug)]
 pub struct PostgresOid4vciManagementRepository {
     pool: PgPool,
@@ -134,6 +152,39 @@ impl Oid4vciManagementRepository for PostgresOid4vciManagementRepository {
             .map_err(repository_error)?
             .ok_or(Oid4vciManagementRepositoryError)?;
         transaction(&row)
+    }
+
+    async fn cancel_unissued_transaction(
+        &self,
+        transaction_id: &str,
+        organization_id: &str,
+        application_id: &str,
+        reason: Option<&str>,
+    ) -> Result<Option<ManagementTransaction>, Oid4vciManagementRepositoryError> {
+        let mut database = self.pool.begin().await.map_err(repository_error)?;
+        if sqlx::query(LOCK_UNISSUED_TRANSACTION)
+            .bind(transaction_id)
+            .bind(organization_id)
+            .bind(application_id)
+            .fetch_optional(&mut *database)
+            .await
+            .map_err(repository_error)?
+            .is_none()
+        {
+            return Ok(None);
+        }
+        let result = sqlx::query(CANCEL_UNISSUED_TRANSACTION)
+            .bind(transaction_id)
+            .bind(organization_id)
+            .bind(application_id)
+            .bind(reason)
+            .fetch_optional(&mut *database)
+            .await
+            .map_err(repository_error)?
+            .map(|row| transaction(&row))
+            .transpose()?;
+        database.commit().await.map_err(repository_error)?;
+        Ok(result)
     }
 }
 
