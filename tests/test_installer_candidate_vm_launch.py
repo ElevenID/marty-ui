@@ -177,6 +177,27 @@ def test_mocked_live_launch_records_exact_process(
     assert (registry / f"{VM_ID}.launch-receipt.json").is_file()
 
 
+def test_live_observation_rejects_replaced_named_disk_before_retry(tmp_path, monkeypatch):
+    process = Path("/proc") / str(os.getpid())
+    args = (process / "cmdline").read_bytes().rstrip(b"\0").decode().split("\0")
+    disk = tmp_path / "disk.qcow2"
+    disk.write_bytes(b"replacement")
+    info = disk.stat()
+    monkeypatch.setattr(launch, "QEMU", Path(os.readlink(process / "exe")))
+    monkeypatch.setattr(launch.observer, "executable_digest", lambda _process: "fixed")
+    monkeypatch.setattr(launch, "_process_credentials", lambda *_args: None)
+
+    def unexpected_descriptor(*_args):
+        raise AssertionError("changed disk must fail before descriptor retry")
+
+    monkeypatch.setattr(launch.observer, "held_writable_disk", unexpected_descriptor)
+    with pytest.raises(ValueError, match="VM launch writable disk differs"):
+        launch._live(
+            os.getpid(), args, os.getuid(), os.getgid(), os.getgid(),
+            disk, info.st_dev, info.st_ino + 1, "fixed",
+        )
+
+
 @pytest.mark.parametrize("legacy", [False, True])
 def test_post_spawn_failure_keeps_pid_and_recovers_same_process(
     root_trial, runtime_parent, monkeypatch, legacy
