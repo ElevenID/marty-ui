@@ -282,8 +282,7 @@ pub(crate) async fn validate_schema(connection: &mut PgConnection) -> Result<(),
         .split("$cancellation_acl_guard$")
         .nth(1)
         .expect("embedded cancellation ACL contract");
-    if !acl_body
-        .is_some_and(|body| body.replace("\r\n", "\n") == expected_acl.replace("\r\n", "\n"))
+    if acl_body.is_none_or(|body| body.replace("\r\n", "\n") != expected_acl.replace("\r\n", "\n"))
     {
         return Err(sqlx::Error::Protocol(
             "passport cancellation ACL contract is incompatible".into(),
