@@ -133,8 +133,9 @@ def test_privilege_drop_observation_is_real():
         process.wait(timeout=5)
 
 
+@pytest.mark.parametrize("disk_open_delay", [False, True])
 def test_mocked_live_launch_records_exact_process(
-    root_trial, runtime_parent, monkeypatch
+    root_trial, runtime_parent, monkeypatch, disk_open_delay
 ):
     source, registry, parent = _seeded(root_trial, runtime_parent, monkeypatch)
     monkeypatch.setattr(launch, "_idle_uid", lambda _uid: None)
@@ -157,8 +158,19 @@ def test_mocked_live_launch_records_exact_process(
         ),
     )
     live = {"pid": 12345, "start_ticks": "123", "disk_fd": 7}
-    monkeypatch.setattr(launch, "_live", lambda *_a, **_k: live)
+    calls = 0
+
+    def observe(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        if disk_open_delay and calls == 1:
+            raise launch.observer.DiskNotOpenedYet("VM writable disk descriptor not open yet")
+        return live
+
+    monkeypatch.setattr(launch, "_live", observe)
+    monkeypatch.setattr(launch.time, "sleep", lambda _seconds: None)
     receipt = launch.launch(source, registry, parent, runtime_parent, vm_id=VM_ID)
+    assert calls == (3 if disk_open_delay else 2)
     assert receipt["phase"] == "launched" and receipt["pid"] == 12345
     assert receipt["qualified"] is False and receipt["dispatch_authorized"] is False
     assert (registry / f"{VM_ID}.launch-pid.json").is_file()

@@ -503,7 +503,12 @@ def _launch_held(
                     qemu_sha256,
                 )
                 break
-            except (FileNotFoundError, ConnectionRefusedError, socket.timeout):
+            except (
+                FileNotFoundError,
+                ConnectionRefusedError,
+                socket.timeout,
+                observer.DiskNotOpenedYet,
+            ):
                 time.sleep(0.25)
         release.require(live is not None, "VM process observation timed out")
         release.require(
