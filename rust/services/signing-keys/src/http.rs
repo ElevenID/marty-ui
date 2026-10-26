@@ -1889,7 +1889,7 @@ fn strong_config_if_match(headers: &HeaderMap) -> Result<Option<String>, ()> {
         .strip_prefix("\"r-")
         .and_then(|value| value.strip_suffix('"'))
         .ok_or(())?;
-    if token != "legacy" && uuid::Uuid::parse_str(token).is_err() {
+    if uuid::Uuid::parse_str(token).is_err() {
         return Err(());
     }
     Ok(Some(value.to_owned()))
@@ -6371,10 +6371,7 @@ mod public_contract_tests {
             assert!(strong_config_if_match(&headers).is_err());
         }
         headers.insert(IF_MATCH, "\"r-legacy\"".parse().unwrap());
-        assert_eq!(
-            strong_config_if_match(&headers),
-            Ok(Some("\"r-legacy\"".into()))
-        );
+        assert!(strong_config_if_match(&headers).is_err());
         let revision = format!("\"r-{}\"", uuid::Uuid::new_v4());
         headers.insert(IF_MATCH, revision.parse().unwrap());
         assert_eq!(strong_config_if_match(&headers), Ok(Some(revision)));
@@ -6448,7 +6445,7 @@ mod public_contract_tests {
             .oneshot(
                 Request::patch(uri.as_str())
                     .header("content-type", "application/json")
-                    .header(IF_MATCH, &first_revision)
+                    .header(IF_MATCH, first_revision.as_str())
                     .body(Body::from(second_body.to_string()))
                     .unwrap(),
             )
@@ -6464,7 +6461,7 @@ mod public_contract_tests {
             .oneshot(
                 Request::patch(uri.as_str())
                     .header("content-type", "application/json")
-                    .header(IF_MATCH, &first_revision)
+                    .header(IF_MATCH, first_revision.as_str())
                     .body(Body::from(first_body.to_string()))
                     .unwrap(),
             )
@@ -6486,7 +6483,7 @@ mod public_contract_tests {
             .oneshot(
                 Request::patch(uri.as_str())
                     .header("content-type", "application/json")
-                    .header(IF_MATCH, &second_revision)
+                    .header(IF_MATCH, second_revision.as_str())
                     .body(Body::from(first_body.to_string()))
                     .unwrap(),
             )
@@ -6518,7 +6515,7 @@ mod public_contract_tests {
             .oneshot(
                 Request::patch(uri.as_str())
                     .header("content-type", "application/json")
-                    .header(IF_MATCH, &restored_revision)
+                    .header(IF_MATCH, restored_revision.as_str())
                     .body(Body::from(first_body.to_string()))
                     .unwrap(),
             )
@@ -6561,10 +6558,10 @@ mod public_contract_tests {
                 &lease,
             )
             .await;
-        assert_eq!(
-            refused.unwrap_err(),
-            registry::RegistryError::PreconditionFailed
-        );
+        assert!(matches!(
+            refused,
+            Err(registry::RegistryError::PreconditionFailed)
+        ));
         lease.release().await.unwrap();
         assert_eq!(
             store.load(&organization_id).await.unwrap()["services"][0]["name"],
