@@ -374,7 +374,7 @@ async fn configured_identity_and_haip_gates_apply_before_persistence() {
     assert_eq!(
         prepared.instance.context["oid4vp_client_id"],
         format!(
-            "https://verifier.example/v1/flows/instances/{}/submit",
+            "redirect_uri:https://verifier.example/v1/flows/instances/{}/submit",
             prepared.instance.id
         )
     );

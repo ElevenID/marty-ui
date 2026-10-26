@@ -254,9 +254,260 @@ fn print_plan(plan: &Value) {
 
 fn run() -> Result<(), String> {
     let mut args: Vec<String> = env::args().skip(1).collect();
+    if args.first().is_some_and(|arg| {
+        matches!(
+            arg.as_str(),
+            "installer-generation-provision" | "installer-generation-provision-transfer"
+        )
+    }) {
+        if args.len() != 3 || args[1] != "--installation-id" {
+            return Err(
+                "internal generation provisioning requires an owned container invocation".into(),
+            );
+        }
+        #[cfg(target_os = "linux")]
+        {
+            let runtime = tokio::runtime::Runtime::new()
+                .map_err(|_| "cannot start generation provisioning runtime")?;
+            let count = if args[0] == "installer-generation-provision-transfer" {
+                runtime.block_on(
+                    marty_deployment_catalog::installer_generation::provision_transfer(&args[2]),
+                )?
+            } else {
+                runtime.block_on(marty_deployment_catalog::installer_generation::provision(
+                    &args[2],
+                ))?
+            };
+            println!("{}", serde_json::json!({"outputs_written":count}));
+            return Ok(());
+        }
+        #[cfg(not(target_os = "linux"))]
+        return Err("internal generation provisioning requires Linux".into());
+    }
+    if args.first().is_some_and(|arg| {
+        matches!(
+            arg.as_str(),
+            "installer-renewal-bootstrap" | "installer-renewal-bootstrap-transfer"
+        )
+    }) {
+        if args.len() != 3 || args[1] != "--installation-id" {
+            return Err("internal renewal bootstrap requires an owned container invocation".into());
+        }
+        #[cfg(target_os = "linux")]
+        {
+            let runtime = tokio::runtime::Runtime::new()
+                .map_err(|_| "cannot start renewal bootstrap runtime")?;
+            let count = if args[0] == "installer-renewal-bootstrap-transfer" {
+                runtime.block_on(
+                    marty_deployment_catalog::installer_renewal_bootstrap::bootstrap_transfer(
+                        &args[2],
+                    ),
+                )?
+            } else {
+                runtime.block_on(
+                    marty_deployment_catalog::installer_renewal_bootstrap::bootstrap(&args[2]),
+                )?
+            };
+            println!("{}", serde_json::json!({"outputs_written":count}));
+            return Ok(());
+        }
+        #[cfg(not(target_os = "linux"))]
+        return Err("internal renewal bootstrap requires Linux".into());
+    }
+    if args
+        .first()
+        .is_some_and(|arg| arg == "installer-ingress-provision")
+    {
+        if args.len() != 3 || args[1] != "--installation-id" {
+            return Err(
+                "internal ingress provisioner requires an owned container invocation".into(),
+            );
+        }
+        #[cfg(target_os = "linux")]
+        {
+            let runtime = tokio::runtime::Runtime::new()
+                .map_err(|_| "cannot start ingress provisioning runtime")?;
+            let count = runtime.block_on(
+                marty_deployment_catalog::installer_ingress_provision::provision(&args[2]),
+            )?;
+            println!("{}", serde_json::json!({"outputs_written":count}));
+            return Ok(());
+        }
+        #[cfg(not(target_os = "linux"))]
+        return Err("internal ingress provisioner requires Linux".into());
+    }
+    if args
+        .first()
+        .is_some_and(|arg| arg == "installer-tls-finalize")
+    {
+        if args.len() != 1 {
+            return Err("internal TLS finalizer accepts no arguments".into());
+        }
+        #[cfg(target_os = "linux")]
+        {
+            let count = marty_deployment_catalog::installer_tls_outputs::finalize()?;
+            println!("{}", serde_json::json!({"outputs_validated":count}));
+            return Ok(());
+        }
+        #[cfg(not(target_os = "linux"))]
+        return Err("internal TLS finalizer requires Linux".into());
+    }
+    if args
+        .first()
+        .is_some_and(|arg| arg == "installer-keycloak-bridge")
+    {
+        if args.len() != 3 || args[1] != "--nonce" {
+            return Err("internal Keycloak bridge requires an owned container invocation".into());
+        }
+        #[cfg(target_os = "linux")]
+        {
+            let runtime = tokio::runtime::Runtime::new()
+                .map_err(|_| "cannot start Keycloak bridge runtime")?;
+            let count = runtime.block_on(
+                marty_deployment_catalog::installer_keycloak_bridge::provision(&args[2]),
+            )?;
+            println!("{}", serde_json::json!({"outputs_written":count}));
+            return Ok(());
+        }
+        #[cfg(not(target_os = "linux"))]
+        return Err("internal Keycloak bridge requires Linux".into());
+    }
+    if args
+        .first()
+        .is_some_and(|arg| arg == "fetch-published-candidate")
+    {
+        #[cfg(target_os = "linux")]
+        return marty_deployment_catalog::installer_candidate_command::fetch_published(
+            &args[1..],
+            env!("MARTY_DEPLOY_BUILD_IDENTITY"),
+        );
+        #[cfg(not(target_os = "linux"))]
+        return Err("acceptance-only public acquisition requires Linux amd64".into());
+    }
+    if args.first().is_some_and(|arg| arg == "install-candidate") {
+        #[cfg(target_os = "linux")]
+        return marty_deployment_catalog::installer_candidate_command::install(
+            &args[1..],
+            env!("MARTY_DEPLOY_BUILD_IDENTITY"),
+        );
+        #[cfg(not(target_os = "linux"))]
+        return Err("acceptance-only candidate execution requires Linux amd64".into());
+    }
+    if args.first().is_some_and(|arg| arg == "install") {
+        #[cfg(target_os = "linux")]
+        return marty_deployment_catalog::installer_command::install(
+            &args[1..],
+            env!("MARTY_DEPLOY_BUILD_IDENTITY"),
+        );
+        #[cfg(not(target_os = "linux"))]
+        return Err("installer currently requires Linux amd64".into());
+    }
     if args == ["--build-identity"] {
         println!("{}", env!("MARTY_DEPLOY_BUILD_IDENTITY"));
         return Ok(());
+    }
+    if args.first().is_some_and(|arg| arg == "trust-info") {
+        if args.len() != 3 || args[1] != "--install-dir" {
+            return Err("usage: marty-deploy trust-info --install-dir ABSOLUTE_PATH".into());
+        }
+        #[cfg(target_os = "linux")]
+        {
+            let report =
+                marty_deployment_catalog::installer_trust::inspect(std::path::Path::new(&args[2]))?;
+            println!(
+                "{}",
+                serde_json::to_string(&report)
+                    .map_err(|_| "cannot encode public trust information")?
+            );
+            return Ok(());
+        }
+        #[cfg(not(target_os = "linux"))]
+        return Err("installer trust information currently requires Linux".into());
+    }
+    if args.first().is_some_and(|arg| arg == "status") {
+        if args.len() != 3 || args[1] != "--install-dir" {
+            return Err("usage: marty-deploy status --install-dir ABSOLUTE_PATH".into());
+        }
+        #[cfg(target_os = "linux")]
+        {
+            let inspection = marty_deployment_catalog::installer_state::LockedInspection::open(
+                std::path::Path::new(&args[2]),
+            )?;
+            let journal = inspection.journal();
+            let cleanup = inspection.cleanup_status()?;
+            inspection.require_unchanged()?;
+            println!(
+                "{}",
+                serde_json::json!({
+                    "scope": "installation-journal", "runtime_observed": false, "journal": journal,
+                    "cleanup": cleanup,
+                })
+            );
+            return Ok(());
+        }
+        #[cfg(not(target_os = "linux"))]
+        return Err("installer status currently requires Linux".into());
+    }
+    if args.first().is_some_and(|arg| arg == "doctor") {
+        if !matches!(args.len(), 3 | 5)
+            || args[1] != "--install-dir"
+            || (args.len() == 5 && args[3] != "--docker-bin")
+        {
+            return Err("usage: marty-deploy doctor --install-dir ABSOLUTE_PATH [--docker-bin ABSOLUTE_PATH]".into());
+        }
+        #[cfg(target_os = "linux")]
+        {
+            let directory = std::path::Path::new(&args[2]);
+            let inspection =
+                marty_deployment_catalog::installer_state::LockedInspection::open(directory)?;
+            let journal = inspection.journal();
+            let runtime = journal.runtime().ok_or(
+                "installation has no recorded Docker binding; automatic adoption is refused",
+            )?;
+            let docker =
+                std::path::Path::new(args.get(4).map(String::as_str).unwrap_or("/usr/bin/docker"));
+            let runner = marty_deployment_catalog::installer_runtime::DockerRunner::new(
+                docker,
+                &runtime.docker_host,
+                &runtime.engine_id,
+                directory,
+            )?;
+            let observation = runner.preflight()?;
+            let cleanup = inspection.cleanup_status()?;
+            inspection.require_unchanged()?;
+            println!(
+                "{}",
+                serde_json::json!({
+                    "scope": "installation-host", "installation_id": journal.installation_id(),
+                    "compose_project": journal.compose_project(), "docker": observation,
+                    "services_observed": false, "installation_ready": false,
+                    "cleanup": cleanup,
+                })
+            );
+            return Ok(());
+        }
+        #[cfg(not(target_os = "linux"))]
+        return Err("installer doctor currently requires Linux".into());
+    }
+    if args.first().is_some_and(|arg| arg == "logs") {
+        #[cfg(target_os = "linux")]
+        {
+            let report = marty_deployment_catalog::installer_logs::logs(&args[1..])?;
+            println!("{report}");
+            return Ok(());
+        }
+        #[cfg(not(target_os = "linux"))]
+        return Err("installer logs currently requires Linux".into());
+    }
+    if args.first().is_some_and(|arg| arg == "uninstall") {
+        #[cfg(target_os = "linux")]
+        {
+            let report = marty_deployment_catalog::installer_uninstall::uninstall(&args[1..])?;
+            println!("{report}");
+            return Ok(());
+        }
+        #[cfg(not(target_os = "linux"))]
+        return Err("installer uninstall currently requires Linux".into());
     }
     // KMS operator commands do not read the catalog or require a source checkout.
     if args.first().is_some_and(|a| a == "operator") {

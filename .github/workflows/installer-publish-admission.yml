@@ -1,0 +1,154 @@
+# Requires stack-release secret INSTALLER_REPOSITORY_POLICY_TOKEN with Administration:read.
+# Policy credential is used only for the fixed immutable-releases GET; no policy changes.
+name: Publish immutable installer admission
+run-name: Publish installer admission for ${{ inputs.release_tag }}
+'on':
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        required: true
+        type: string
+        description: Exact admitted installer source SHA
+      release_tag:
+        required: true
+        type: string
+        description: Exact admitted stable/nightly version
+      promotion_source_sha:
+        required: true
+        type: string
+        description: Exact main source SHA of successful admission gate
+      promotion_run_id:
+        required: true
+        type: string
+        description: Successful Installer admission gate run
+      promotion_run_attempt:
+        required: true
+        type: string
+        description: Exact admission gate attempt
+permissions: {}
+concurrency:
+  group: installer-admission-publication-${{ inputs.release_tag }}
+  cancel-in-progress: false
+jobs:
+  publish-admission:
+    if: github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && github.repository == 'ElevenID/marty-ui'
+    runs-on: ubuntu-24.04
+    environment: stack-release
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      actions: read
+      attestations: read
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+    - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      with:
+        python-version: '3.12'
+    - name: Authenticate the exact archived promotion invocation
+      id: context
+      env:
+        GH_TOKEN: ${{ github.token }}
+        SOURCE_SHA: ${{ inputs.source_sha }}
+        RELEASE_TAG: ${{ inputs.release_tag }}
+        PROMOTION_SOURCE_SHA: ${{ inputs.promotion_source_sha }}
+        PROMOTION_RUN_ID: ${{ inputs.promotion_run_id }}
+        PROMOTION_RUN_ATTEMPT: ${{ inputs.promotion_run_attempt }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        umask 077
+        python - <<'PY'
+        import os,json,sys,urllib.request
+        from pathlib import Path
+        sys.path.insert(0,'scripts')
+        import installer_release as r
+        import installer_promote as p
+        class NoRedirect(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self,*a,**k): raise ValueError('redirect refused')
+        opener=urllib.request.build_opener(urllib.request.ProxyHandler({}),NoRedirect())
+        def api(path):
+            request=urllib.request.Request('https://api.github.com/repos/ElevenID/marty-ui/'+path,headers={
+                'Authorization':'Bearer '+os.environ['GH_TOKEN'],'Accept':'application/vnd.github+json','X-GitHub-Api-Version':'2026-03-10'})
+            with opener.open(request,timeout=30) as response: raw=response.read(1048577)
+            r.require(len(raw)<=1048576,'API response exceeds bound')
+            return json.loads(raw)
+        try:
+            run_id,attempt=int(os.environ['PROMOTION_RUN_ID']),int(os.environ['PROMOTION_RUN_ATTEMPT'])
+            r.positive(run_id);r.positive(attempt);r.sha(os.environ['SOURCE_SHA']);r.classify_release_tag(os.environ['RELEASE_TAG'])
+            run=api('actions/runs/'+str(run_id))
+            p.check_run(run,run_id=run_id,attempt=attempt,workflow=r.PROMOTION_WORKFLOW,source=os.environ['PROMOTION_SOURCE_SHA'])
+            listing=api('actions/runs/'+str(run_id)+'/artifacts?per_page=100')
+            r.require(listing['total_count']<=100,'artifact listing exceeds bound')
+            found=[a for a in listing['artifacts'] if a['name']==f'installer-admission-{run_id}-{attempt}']
+            r.require(len(found)==1 and found[0]['expired'] is False,'exact promotion archive missing')
+            artifact=found[0];r.positive(artifact['id'])
+            r.require(artifact['workflow_run']['id']==run_id and artifact['workflow_run']['head_sha']==run['head_sha'],'archive producer differs')
+            base=Path(os.environ['RUNNER_TEMP'])/'installer-admission-publication';base.mkdir(mode=0o700)
+            for name in ('assets','context','tools','evidence'): (base/name).mkdir(mode=0o700)
+            keys=('id','run_attempt','path','head_sha','head_branch','event','status','conclusion')
+            record=dict(repository={'full_name':run['repository']['full_name']},**{k:run[k] for k in keys})
+            with (base/'context/promotion-run.json').open('xb') as stream: stream.write(r.encode(record))
+            with open(os.environ['GITHUB_OUTPUT'],'a') as stream: stream.write('artifact_id='+str(artifact['id'])+'\n')
+        except (OSError,ValueError,KeyError,TypeError):
+            raise SystemExit('Admission publication context refused') from None
+        PY
+    - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      with:
+        artifact-ids: ${{ steps.context.outputs.artifact_id }}
+        run-id: ${{ inputs.promotion_run_id }}
+        github-token: ${{ github.token }}
+        merge-multiple: true
+        path: ${{ runner.temp }}/installer-admission-publication/assets
+    - name: Prepare exact installer verifier binaries
+      shell: bash
+      run: |
+        set -euo pipefail
+        umask 077
+        tools="$RUNNER_TEMP/installer-admission-publication/tools"
+        curl --fail --location --silent --show-error --proto '=https' --proto-redir '=https' \
+          --connect-timeout 20 --max-time 180 --max-filesize 145688404 \
+          https://github.com/sigstore/cosign/releases/download/v3.1.4/cosign-linux-amd64 --output "$tools/cosign"
+        test "$(stat -c %s "$tools/cosign")" = 145688404
+        printf '%s  %s\n' 424e2c97d0b45fd7a6b608a87f090f35633f4c23ece5f092d48bba11aaf4bbfa "$tools/cosign" | sha256sum --check --strict
+        curl --fail --location --silent --show-error --proto '=https' --proto-redir '=https' \
+          --connect-timeout 20 --max-time 120 --max-filesize 15031001 \
+          https://github.com/cli/cli/releases/download/v2.103.2/gh_2.103.2_linux_amd64.tar.gz --output "$tools/gh.tar.gz"
+        test "$(stat -c %s "$tools/gh.tar.gz")" = 15031001
+        printf '%s  %s\n' 62ccf747115ddc61237efffdde66a3c8f70ba249433dc64f70801089b59c59c8 "$tools/gh.tar.gz" | sha256sum --check --strict
+        tar -xzf "$tools/gh.tar.gz" --no-same-owner --no-same-permissions -C "$tools" gh_2.103.2_linux_amd64/bin/gh
+        chmod 700 "$tools/cosign" "$tools/gh_2.103.2_linux_amd64/bin/gh"
+    - name: Publish only the exact immutable admission metadata release
+      env:
+        GH_TOKEN: ${{ github.token }}
+        INSTALLER_REPOSITORY_POLICY_TOKEN: ${{ secrets.INSTALLER_REPOSITORY_POLICY_TOKEN }}
+        SOURCE_SHA: ${{ inputs.source_sha }}
+        RELEASE_TAG: ${{ inputs.release_tag }}
+        PROMOTION_SOURCE_SHA: ${{ inputs.promotion_source_sha }}
+        PROMOTION_RUN_ID: ${{ inputs.promotion_run_id }}
+        PROMOTION_RUN_ATTEMPT: ${{ inputs.promotion_run_attempt }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        umask 077
+        base="$RUNNER_TEMP/installer-admission-publication"
+        chmod 700 "$base/assets"
+        python scripts/installer_publish_admission.py --assets "$base/assets" --run-record "$base/context/promotion-run.json" \
+          --gh "$base/tools/gh_2.103.2_linux_amd64/bin/gh" --cosign "$base/tools/cosign" --evidence "$base/evidence" \
+          --source-sha "$SOURCE_SHA" --release-tag "$RELEASE_TAG" --promotion-source-sha "$PROMOTION_SOURCE_SHA" \
+          --promotion-run-id "$PROMOTION_RUN_ID" --promotion-run-attempt "$PROMOTION_RUN_ATTEMPT"
+    - name: Retain publication evidence even after uncertainty
+      if: always()
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: installer-admission-publication-${{ github.run_id }}-${{ github.run_attempt }}
+        path: |-
+          ${{ runner.temp }}/installer-admission-publication/evidence/
+          ${{ runner.temp }}/installer-admission-publication/context/
+        if-no-files-found: warn
+        retention-days: 90
+    - name: Record the publication boundary
+      shell: bash
+      run: |
+        printf '%s\n' 'Separate immutable admission metadata only. Original version assets, channels and repository immutability settings were not changed. Uncertain drafts require reviewed recovery; no automatic adoption or deletion.' >> "$GITHUB_STEP_SUMMARY"

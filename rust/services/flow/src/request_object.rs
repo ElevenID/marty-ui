@@ -419,11 +419,16 @@ pub async fn build_profiled_request_object(
             .ok_or(FlowRequestObjectError::Serialization)?
             .insert("wallet_nonce".into(), json!(wallet_nonce));
     }
+    let request_kid = verifier_did
+        .as_deref()
+        .map(|did| verifier_request_kid(&identity, did, options.verifier_did_method))
+        .transpose()?;
     let compact_jwt = sign_payload(
         identity_provider.as_ref(),
         &instance.id,
         &identity,
         &payload,
+        request_kid.as_deref(),
         request_x5c.as_deref(),
     )
     .await?;
@@ -603,6 +608,23 @@ fn verifier_did(
     }
 }
 
+fn verifier_request_kid(
+    identity: &SigningIdentity,
+    verifier_did: &str,
+    method: VerifierDidMethod,
+) -> Result<String, FlowRequestObjectError> {
+    match method {
+        VerifierDidMethod::Web => Ok(identity.verification_method_id.clone()),
+        VerifierDidMethod::Jwk => Ok(format!("{verifier_did}#0")),
+        VerifierDidMethod::Key => {
+            let fingerprint = verifier_did.strip_prefix("did:key:").ok_or_else(|| {
+                FlowRequestObjectError::InvalidIdentity("derived did:key is malformed".into())
+            })?;
+            Ok(format!("{verifier_did}#{fingerprint}"))
+        }
+    }
+}
+
 pub(crate) fn resolve_oid4vp_client_identity(
     identity: &SigningIdentity,
     response_uri: &str,
@@ -612,7 +634,9 @@ pub(crate) fn resolve_oid4vp_client_identity(
     match options.compatibility {
         RequestObjectCompatibility::Lissi => Ok((verifier_did.clone(), verifier_did, None)),
         RequestObjectCompatibility::Standard => match options.client_id_scheme {
-            Oid4vpClientIdScheme::RedirectUri => Ok((response_uri.to_owned(), verifier_did, None)),
+            Oid4vpClientIdScheme::RedirectUri => {
+                Ok((format!("redirect_uri:{response_uri}"), verifier_did, None))
+            }
             Oid4vpClientIdScheme::DecentralizedIdentifier => Ok((
                 format!("decentralized_identifier:{verifier_did}"),
                 verifier_did,
@@ -674,11 +698,12 @@ async fn sign_payload(
     operation_id: &str,
     identity: &SigningIdentity,
     payload: &Value,
+    request_kid: Option<&str>,
     x5c: Option<&[String]>,
 ) -> Result<String, FlowRequestObjectError> {
     let mut header = json!({
         "alg": REQUEST_ALGORITHM,
-        "kid": identity.verification_method_id,
+        "kid": request_kid.unwrap_or(&identity.verification_method_id),
         "typ": REQUEST_FORMAT
     });
     if let Some(x5c) = x5c.filter(|values| !values.is_empty()) {

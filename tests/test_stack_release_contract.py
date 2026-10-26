@@ -244,7 +244,7 @@ def test_release_checksums_cover_every_published_asset_once(tmp_path: Path) -> N
         if step.get("name") == "Sign and checksum manifest evidence"
     )
     assert 'sha256sum "${OPERATOR_CHECKSUM_INPUTS[@]}" > SHA256SUMS' in signing
-    assert "operator_release_require_local_assets" in signing
+    assert "operator_release_require_pre_provenance_assets" in signing
 
     subjects = {
         "stack-manifest.json",
@@ -256,9 +256,15 @@ def test_release_checksums_cover_every_published_asset_once(tmp_path: Path) -> N
         "marty-deploy-linux-arm64",
         "marty-ui-openbao-didcomm-sbom.cdx.json",
         "marty-ui-keycloak-sbom.cdx.json",
+        "install.sh", "installer-inventory.json",
+        "prepared-selfhost-bundle.zip", "prepared-selfhost-images.json",
     }
+    proofs = {name + ".provenance.jsonl" for name in (
+        "install.sh", "installer-inventory.json", "marty-deploy-linux-amd64",
+        "prepared-selfhost-bundle.zip", "prepared-selfhost-images.json",
+    )}
     expected_assets = subjects | {f"{name}.sigstore.json" for name in subjects}
-    for name in expected_assets:
+    for name in expected_assets | proofs:
         (tmp_path / name).write_bytes(f"fixture:{name}\n".encode())
 
     # Windows' system bash can be an unconfigured WSL launcher; use Git Bash.
@@ -289,7 +295,7 @@ def test_release_checksums_cover_every_published_asset_once(tmp_path: Path) -> N
 
     published = [flat_name(line) for line in result.stdout.splitlines()]
     assert len(published) == len(set(published))
-    assert set(published) == expected_assets | {"SHA256SUMS"}
+    assert set(published) == expected_assets | proofs | {"SHA256SUMS"}
     checksummed = []
     for line in (tmp_path / "SHA256SUMS").read_text().splitlines():
         match = re.fullmatch(r"([0-9a-f]{64}) [ *](.+)", line)
@@ -300,7 +306,7 @@ def test_release_checksums_cover_every_published_asset_once(tmp_path: Path) -> N
         assert digest == hashlib.sha256((tmp_path / name).read_bytes()).hexdigest()
         checksummed.append(name)
     assert len(checksummed) == len(set(checksummed))
-    assert set(checksummed) == set(published) - {"SHA256SUMS"}
+    assert set(checksummed) == set(published) - proofs - {"SHA256SUMS"}
 
     def verify() -> subprocess.CompletedProcess[str]:
         return subprocess.run(
@@ -329,6 +335,95 @@ def test_release_checksums_cover_every_published_asset_once(tmp_path: Path) -> N
     )
     assert unexpected.returncode != 0
     assert "exact release assets" in unexpected.stderr
+
+
+@pytest.mark.skipif(os.name == "nt", reason="real jq/Bash policy qualification runs on Linux")
+def test_legacy_operator_policy_requires_explicit_exact_remote_set(tmp_path: Path) -> None:
+    assert shutil.which("jq"), "jq is required for actual release policy execution"
+    bash = shutil.which("bash")
+    assert bash
+    legacy_subjects = {
+        "stack-manifest.json", "release-transaction.json", "marty-ui-sbom.cdx.json",
+        "marty-ui-services-sbom.cdx.json", "marty-ui-migrations-sbom.cdx.json",
+        "marty-ui-openbao-didcomm-sbom.cdx.json", "marty-ui-keycloak-sbom.cdx.json",
+        "marty-deploy-linux-amd64", "marty-deploy-linux-arm64",
+    }
+    added = {"install.sh", "installer-inventory.json", "prepared-selfhost-bundle.zip",
+             "prepared-selfhost-images.json"}
+    proofs = {name + ".provenance.jsonl" for name in added | {"marty-deploy-linux-amd64"}}
+    legacy = legacy_subjects | {name + ".sigstore.json" for name in legacy_subjects} | {"SHA256SUMS"}
+    modern = legacy | added | {name + ".sigstore.json" for name in added} | proofs
+    assert len(legacy) == 19 and len(modern) == 32
+    def run(document, command):
+        path = tmp_path / "response.json"
+        path.write_text(json.dumps(document), encoding="utf-8")
+        return subprocess.run([bash, "--noprofile", "--norc", "-euo", "pipefail", "-c",
+                               'source "$ASSET_SCRIPT"\n' + command],
+                              env={**os.environ, "ASSET_SCRIPT": str(ROOT / "scripts/operator-release-assets.sh"),
+                                   "RESPONSE": str(path)}, capture_output=True, text=True, timeout=30)
+    def response(names):
+        return {"assets": [{"name": name, "state": "uploaded", "size": 1} for name in sorted(names)]}
+    result = run(response(modern), 'operator_release_require_remote_allowlist "$RESPONSE"\n'
+                 'if operator_release_select_legacy_consumer_policy "$RESPONSE"; then exit 9; fi\n'
+                 'test "${#OPERATOR_RELEASE_ASSETS[@]}" = 32')
+    assert result.returncode == 0, result.stderr
+    result = run(response(legacy), 'if operator_release_require_remote_allowlist "$RESPONSE"; then exit 9; fi\n'
+                 'operator_release_select_legacy_consumer_policy "$RESPONSE"\n'
+                 'operator_release_require_remote_allowlist "$RESPONSE"\n'
+                 'test "${#OPERATOR_RELEASE_ASSETS[@]}" = 19\n'
+                 'test "${#OPERATOR_PROVENANCE_INPUTS[@]}" = 0')
+    assert result.returncode == 0, result.stderr
+    malformed = response(legacy)
+    malformed["assets"][0]["state"] = "new"
+    duplicate = response(legacy)
+    duplicate["assets"].append(duplicate["assets"][0])
+    invalid_size = response(legacy)
+    invalid_size["assets"][0]["size"] = "not-a-size"
+    for document in (response(legacy | {"install.sh"}), response(legacy - {"SHA256SUMS"}),
+                     malformed, duplicate, invalid_size, {"assets": None}):
+        result = run(document, 'if operator_release_select_legacy_consumer_policy "$RESPONSE"; then exit 9; fi\n'
+                     'test "${#OPERATOR_RELEASE_ASSETS[@]}" = 32\n'
+                     'test "${#OPERATOR_PROVENANCE_INPUTS[@]}" = 5')
+        assert result.returncode == 0, result.stderr
+    installer = _text("scripts/install-marty-deploy.sh")
+    assert 'operator_release_select_legacy_consumer_policy /dev/stdin' in installer
+    publisher = yaml.safe_load(_text(".github/workflows/cd.yml"))["jobs"]["publish-manifest"]
+    assert "select_legacy" not in str(publisher)
+
+
+def test_stable_installer_publication_closes_payload_proofs_and_remote_bytes() -> None:
+    steps = yaml.safe_load(_text(".github/workflows/cd.yml"))["jobs"]["publish-manifest"]["steps"]
+    names = {step.get("name"): i for i, step in enumerate(steps)}
+    checks = names["Revalidate exact installer inputs before any publication signing"]
+    signing = names["Sign and checksum manifest evidence"]
+    attest = next(i for i, step in enumerate(steps) if step.get("id") == "stable_installer_publication_provenance")
+    export = names["Export and verify offline stable installer proofs"]
+    late_tag = names["Create or verify the late annotated source tag"]
+    publish = names["Publish the qualified GitHub release and exact assets"]
+    assert checks < signing < attest < export < late_tag < publish
+    subjects = steps[attest]["with"]["subject-path"].splitlines()
+    assert len(subjects) == len(set(subjects)) == 27
+    assert not any(name.endswith(".provenance.jsonl") for name in subjects)
+    assert "SHA256SUMS" in subjects
+    for asset in ("install.sh", "installer-inventory.json", "marty-deploy-linux-amd64",
+                  "prepared-selfhost-bundle.zip", "prepared-selfhost-images.json"):
+        assert asset in subjects and asset + ".sigstore.json" in subjects
+    source = steps[checks]["run"]
+    assert '--phase verify-inputs' in source
+    assert '--run-attempt "$GITHUB_RUN_ATTEMPT"' in source
+    source = steps[export]["run"]
+    assert '--phase export-provenance' in source and '--phase verify-published' in source
+    assert source.index('--phase export-provenance') < source.index('operator_release_require_local_assets')
+    fresh = steps[publish]["run"]
+    assert 'gh release download "$TAG" --dir published-release-assets' in fresh
+    assert 'operator_release_verify_published_assets published-release-assets' in fresh
+    assert 'for asset in "${OPERATOR_RELEASE_ASSETS[@]}"' in fresh
+    assert 'cmp --silent "$asset" "published-release-assets/$asset"' in fresh
+    existing = steps[names["Detect only an exact resumable immutable release"]]["run"]
+    assert 'for payload in install.sh marty-deploy-linux-amd64 prepared-selfhost-bundle.zip prepared-selfhost-images.json' in existing
+    assert 'cmp --silent installer-inventory.json' not in existing
+    assert 'cmp --silent "$payload" "existing-release/$payload"' in existing
+    assert all("continue-on-error" not in steps[i] for i in (checks, signing, attest, export, publish))
 
 
 def test_operator_release_builds_native_arches_and_verifies_provenance() -> None:
@@ -391,6 +486,8 @@ def test_release_resume_accepts_original_signed_assets_after_bundle_regeneration
             "marty-ui-keycloak-sbom.cdx.json",
             "marty-deploy-linux-amd64",
             "marty-deploy-linux-arm64",
+            "install.sh", "installer-inventory.json",
+            "prepared-selfhost-bundle.zip", "prepared-selfhost-images.json",
         )
         for name in subjects:
             (directory / name).write_bytes(f"qualified:{name}\n".encode())
@@ -400,6 +497,9 @@ def test_release_resume_accepts_original_signed_assets_after_bundle_regeneration
             for path in directory.iterdir()
         )
         (directory / "SHA256SUMS").write_bytes(checksums.encode())
+        for name in ("install.sh", "installer-inventory.json", "marty-deploy-linux-amd64",
+                     "prepared-selfhost-bundle.zip", "prepared-selfhost-images.json"):
+            (directory / (name + ".provenance.jsonl")).write_bytes(b"fixture-proof")
 
     assert (old / "SHA256SUMS").read_bytes() != (new / "SHA256SUMS").read_bytes()
     if os.name == "nt":
@@ -413,8 +513,10 @@ def test_release_resume_accepts_original_signed_assets_after_bundle_regeneration
         'source "$ASSET_SCRIPT"\n'
         'cosign() { printf "cosign:%s\\n" "$3" >> "$VERIFY_LOG"; }\n'
         'gh() { printf "gh:%s\\n" "$3" >> "$VERIFY_LOG"; }\n'
+        'python() { printf "installer:offline-proof-verification\\n" >> "$VERIFY_LOG"; }\n'
         'operator_release_verify_published_assets "$PUBLISHED" '
-        '"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" ElevenID/marty-ui\n'
+        '"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" ElevenID/marty-ui '
+        '/test-only/helper.py v1.2.3 /test-only/gh\n'
     )
     log = tmp_path / "verification.log"
     result = subprocess.run(
@@ -425,9 +527,9 @@ def test_release_resume_accepts_original_signed_assets_after_bundle_regeneration
     )
     assert result.returncode == 0, result.stderr
     calls = log.read_text(encoding="utf-8").splitlines()
-    assert len(calls) == 18  # Nine Cosign signatures and nine source attestations.
-    assert sum(call.startswith("cosign:") for call in calls) == 9
-    assert sum(call.startswith("gh:") for call in calls) == 9
+    assert len(calls) == 27  # Thirteen signature/source pairs, then offline installer verification.
+    assert sum(call.startswith("cosign:") for call in calls) == 13
+    assert sum(call.startswith("gh:") for call in calls) == 13
 
     (old / "marty-deploy-linux-arm64").write_bytes(b"tampered")
     tampered = subprocess.run(
@@ -700,7 +802,7 @@ def test_verifier_release_lineage_uses_hardened_core_and_native_issuance() -> No
     workflow = _text(".github/workflows/cd.yml")
     assert 'manifest_timestamp="$(git show -s --format=%cI "$SOURCE_SHA")"' in workflow
     assert '--generated-at "$manifest_timestamp" --output stack-manifest.json' in workflow
-    assert '`prepare_selfhost_lock=true`' in _text("docs/selfhost-disposable-qualification-runbook.md")
+    assert 'mandatory installer inputs' in _text("docs/selfhost-disposable-qualification-runbook.md")
     release_tag = "v" + lock["release"].removeprefix("marty-ui@")
     cutover_guide = _text("docs/keycloak-kms-installed-cutover.md")
     assert release_tag in cutover_guide
@@ -862,11 +964,11 @@ def test_exercised_public_kms_helper_is_attested_only_for_prepared_selfhost() ->
                   if step.get("with", {}).get("name", "").startswith("selfhost-public-kms-jwk-unqualified-"))
     assert len(attest) == 2
     assert build < exercise < record < attest[0] < attest[1] < bundles < verify < upload
-    assert steps[build]["env"]["PREPARE_SELFHOST_LOCK"] == "${{ inputs.prepare_selfhost_lock }}"
-    assert 'if [[ "$PREPARE_SELFHOST_LOCK" = true ]]; then' in steps[build]["run"]
+    assert "PREPARE_SELFHOST_LOCK" not in steps[build]["env"]
+    assert "PREPARE_SELFHOST_LOCK" not in steps[build]["run"]
     assert 'test "$GITHUB_SHA" = "$SOURCE_SHA"' in steps[build]["run"]
     assert "--bin public-kms-jwk" in steps[build]["run"]
-    assert all(steps[i]["if"] == "inputs.prepare_selfhost_lock == true"
+    assert all("if" not in steps[i]
                for i in (record, *attest, verify, upload))
     assert [steps[i]["with"]["subject-path"] for i in attest] == [
         "public-kms-jwk", "selfhost-public-kms-jwk.json"]

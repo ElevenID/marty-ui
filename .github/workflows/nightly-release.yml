@@ -231,6 +231,17 @@ jobs:
           CC_x86_64_unknown_linux_musl=musl-gcc cargo build --locked --release \
             --target x86_64-unknown-linux-musl --manifest-path rust/Cargo.toml \
             --target-dir "$RUNNER_TEMP/tools" -p marty-deployment-catalog --bin marty-deploy
+      - name: Require real Compose installer model compatibility
+        shell: bash
+        run: |
+          set -euo pipefail
+          export MARTY_INSTALLER_COMPOSE_EXECUTABLE=
+          for plugin in /usr/libexec/docker/cli-plugins/docker-compose /usr/lib/docker/cli-plugins/docker-compose /usr/local/lib/docker/cli-plugins/docker-compose /usr/local/libexec/docker/cli-plugins/docker-compose; do
+            if [ -x "$plugin" ]; then export MARTY_INSTALLER_COMPOSE_EXECUTABLE="$plugin"; break; fi
+          done
+          test -n "$MARTY_INSTALLER_COMPOSE_EXECUTABLE"
+          cargo test --locked --manifest-path rust/Cargo.toml --target-dir "$RUNNER_TEMP/tools" \
+            -p marty-deployment-catalog --test installer_application_model -- --ignored
       - name: Package digest-locked installation assets
         env:
           TAG: ${{ needs.admit.outputs.tag }}
@@ -252,6 +263,34 @@ jobs:
           # The six-file staging inventory stays separate from release signatures.
           (cd "$RUNNER_TEMP/prepared" && sha256sum --check --strict SHA256SUMS)
           # The extracted copy is rebuildable; only the owned ZIP is uploaded.
+      - name: Record exact installer inputs from the source Compose service inventory
+        # Inventory binds this producer attempt. After a failed sign/publish job,
+        # rerun all jobs to rebuild/requalify inputs; never relabel old artifacts
+        # with the current attempt or rerun only the failed publication job.
+        env:
+          TAG: ${{ needs.admit.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          inputs="$RUNNER_TEMP/installer-inputs"
+          mkdir "$inputs"
+          cp install.sh "$RUNNER_TEMP/prepared/install.sh"
+          for asset in install.sh marty-deploy-linux-amd64 prepared-selfhost-bundle.zip prepared-selfhost-images.json; do
+            cp "$RUNNER_TEMP/prepared/$asset" "$inputs/$asset"
+          done
+          export SELFHOST_IMAGE_PREFIX=ghcr.io/elevenid/marty-ui
+          export SELFHOST_IMAGE_TAG="${TAG#v}"
+          export MARTY_KEYCLOAK_KMS_IMAGE
+          MARTY_KEYCLOAK_KMS_IMAGE="$(jq -er '.services.keycloak' "$inputs/prepared-selfhost-images.json")"
+          docker compose --profile '*' --env-file .env.selfhost.production.example \
+            -f docker-compose.selfhost.prod.yml -f docker-compose.selfhost.bundle.override.yml \
+            config --format json > "$RUNNER_TEMP/installer-source-compose.json"
+          python scripts/installer_release.py inventory --artifacts "$inputs" \
+            --compose-model "$RUNNER_TEMP/installer-source-compose.json" \
+            --source-sha "$GITHUB_SHA" --release-tag "$TAG" \
+            --build-run-id "$GITHUB_RUN_ID" --build-run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --output "$RUNNER_TEMP/prepared/installer-inventory.json"
       - name: Require anonymously pullable Linux amd64 installation images
         shell: bash
         run: |
@@ -268,6 +307,7 @@ jobs:
             ${{ runner.temp }}/prepared/*.json
             ${{ runner.temp }}/prepared/*.zip
             ${{ runner.temp }}/prepared/*.md
+            ${{ runner.temp }}/prepared/*.sh
             ${{ runner.temp }}/prepared/SHA256SUMS
             ${{ runner.temp }}/prepared/marty-deploy-linux-amd64
           if-no-files-found: error
@@ -370,9 +410,38 @@ jobs:
           python -m pip install --requirement scripts/selfhost-preview-tools.requirements.txt
           python scripts/publish_nightly_release.py --phase sign --assets "$RUNNER_TEMP/publish" \
             --source "$GITHUB_WORKSPACE" --tag "$TAG" --run-id "$GITHUB_RUN_ID"
-      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+      - id: installer_provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
         with:
           subject-path: ${{ runner.temp }}/publish/*
+      - name: Prepare the installer-pinned provenance verifier
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          verifier="$RUNNER_TEMP/installer-gh"
+          mkdir "$verifier"
+          curl --fail --location --silent --show-error --proto '=https' --proto-redir '=https' \
+            --connect-timeout 20 --max-time 120 --max-filesize 15031001 \
+            https://github.com/cli/cli/releases/download/v2.103.2/gh_2.103.2_linux_amd64.tar.gz \
+            --output "$verifier/gh.tar.gz"
+          test "$(stat -c %s "$verifier/gh.tar.gz")" = 15031001
+          printf '%s  %s\n' 62ccf747115ddc61237efffdde66a3c8f70ba249433dc64f70801089b59c59c8 "$verifier/gh.tar.gz" | sha256sum --check --strict
+          tar -xzf "$verifier/gh.tar.gz" --no-same-owner --no-same-permissions -C "$verifier" gh_2.103.2_linux_amd64/bin/gh
+          chmod 700 "$verifier/gh_2.103.2_linux_amd64/bin/gh"
+      - name: Export verified offline installer provenance sidecars
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.admit.outputs.tag }}
+          PROVENANCE_BUNDLE: ${{ steps.installer_provenance.outputs.bundle-path }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod 700 "$RUNNER_TEMP/publish"
+          python scripts/publish_nightly_release.py --phase export-provenance --assets "$RUNNER_TEMP/publish" \
+            --source "$GITHUB_WORKSPACE" --tag "$TAG" --run-id "$GITHUB_RUN_ID" \
+            --provenance-bundle "$PROVENANCE_BUNDLE" \
+            --gh "$RUNNER_TEMP/installer-gh/gh_2.103.2_linux_amd64/bin/gh"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: nightly-publication-assets-${{ github.run_id }}
@@ -401,6 +470,21 @@ jobs:
           name: nightly-publication-assets-${{ github.run_id }}
           path: ${{ runner.temp }}/publish
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6
+      - name: Prepare the installer-pinned provenance verifier
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          verifier="$RUNNER_TEMP/installer-gh"
+          mkdir "$verifier"
+          curl --fail --location --silent --show-error --proto '=https' --proto-redir '=https' \
+            --connect-timeout 20 --max-time 120 --max-filesize 15031001 \
+            https://github.com/cli/cli/releases/download/v2.103.2/gh_2.103.2_linux_amd64.tar.gz \
+            --output "$verifier/gh.tar.gz"
+          test "$(stat -c %s "$verifier/gh.tar.gz")" = 15031001
+          printf '%s  %s\n' 62ccf747115ddc61237efffdde66a3c8f70ba249433dc64f70801089b59c59c8 "$verifier/gh.tar.gz" | sha256sum --check --strict
+          tar -xzf "$verifier/gh.tar.gz" --no-same-owner --no-same-permissions -C "$verifier" gh_2.103.2_linux_amd64/bin/gh
+          chmod 700 "$verifier/gh_2.103.2_linux_amd64/bin/gh"
       - name: Publish and verify the immutable installation-test prerelease
         env:
           GH_TOKEN: ${{ github.token }}
@@ -409,5 +493,20 @@ jobs:
         run: |
           set -euo pipefail
           python -m pip install --requirement scripts/selfhost-preview-tools.requirements.txt
+          chmod 700 "$RUNNER_TEMP/publish"
           python scripts/publish_nightly_release.py --phase publish --assets "$RUNNER_TEMP/publish" \
-            --source "$GITHUB_WORKSPACE" --tag "$TAG" --run-id "$GITHUB_RUN_ID"
+            --source "$GITHUB_WORKSPACE" --tag "$TAG" --run-id "$GITHUB_RUN_ID" \
+            --gh "$RUNNER_TEMP/installer-gh/gh_2.103.2_linux_amd64/bin/gh"
+      - name: Record required installer release qualification
+        env:
+          TAG: ${{ needs.admit.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            printf '### Installer release qualification pending\n\n'
+            printf 'Published candidate `%s` from `%s`, build run `%s` attempt `%s`.\n\n' \
+              "$TAG" "$GITHUB_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"
+            printf 'Before this version can become the nightly one-line installer channel, run the main-only staged installed-journey acceptance, replay the published version anonymously on a clean host, run the installer admission gate with both signed reports, publish its separate immutable admission metadata, and promote a signed nightly channel generation with a compare-and-swap pointer update.\n'
+            printf 'This candidate release alone does not authorize installation or channel promotion.\n'
+          } >> "$GITHUB_STEP_SUMMARY"

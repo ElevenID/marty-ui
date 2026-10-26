@@ -602,7 +602,7 @@ async fn presentation_only_verification_bypasses_credential_trust_status_and_ced
 }
 
 #[tokio::test]
-async fn exact_mdoc_direct_pin_relationship_supplies_governed_lifecycle_status() {
+async fn mdoc_issuer_relationship_does_not_prove_credential_non_revocation() {
     let contract: Value = serde_json::from_str(include_str!(
         "../../../../contracts/presentation-mdoc-lifecycle-behavior.json"
     ))
@@ -682,11 +682,17 @@ async fn exact_mdoc_direct_pin_relationship_supplies_governed_lifecycle_status()
 
     let facts = orchestrator.verify(&mdoc_policy, &request).await.unwrap();
     assert_eq!(
-        facts["credentials"][0]["revocation_checked_at_epoch_seconds"], 1_787_240_300_u64,
-        "{facts}"
+        !facts["credentials"][0]["not_revoked"].is_null(),
+        contract["expected"]["credential_status_evidence_present"]
+            .as_bool()
+            .unwrap()
     );
-    assert_eq!(facts["credentials"][0]["not_revoked"], true);
-    assert_eq!(facts["external_authorization"]["allowed"], true);
+    assert!(facts["credentials"][0]["revocation_checked_at_epoch_seconds"].is_null());
+    assert_eq!(facts["external_authorization"]["allowed"], false);
+    assert!(facts["external_authorization"]["errors"][0]
+        .as_str()
+        .unwrap()
+        .contains("non-revocation"));
     assert!(status.calls.lock().unwrap().is_empty());
 }
 

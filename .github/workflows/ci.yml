@@ -2961,7 +2961,14 @@ jobs:
         if: needs.changes.outputs.rollback_test_only != 'true' && needs.changes.outputs.k8s_policy_test_only != 'true' && needs.changes.outputs.didcomm_release_test_only != 'true'
         env:
           MARTY_COMPOSE_RENDERER: ${{ runner.temp }}/compose-render-v5.4.0
-        run: python -m pytest tests -n 2 -v --tb=short --durations=20
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf 'release-contract memory counters before:\n'
+          cat /sys/fs/cgroup/memory.events 2>/dev/null || true
+          grep '^oom_kill ' /proc/vmstat 2>/dev/null || true
+          trap 'status=$?; printf "release-contract memory counters after:\n"; cat /sys/fs/cgroup/memory.events 2>/dev/null || true; grep "^oom_kill " /proc/vmstat 2>/dev/null || true; exit "$status"' EXIT
+          python -X faulthandler -m pytest tests -n 2 -v --tb=short --durations=20
       - name: Exercise root-owned disposable TLS staging contracts
         if: needs.changes.outputs.rollback_test_only != 'true' && needs.changes.outputs.k8s_policy_test_only != 'true' && needs.changes.outputs.didcomm_release_test_only != 'true'
         shell: bash
@@ -3351,3 +3358,93 @@ jobs:
             ]).addRaw(`Longest observed queue delay: ${maxQueue}s.`);
             if (maxQueue > 300) core.warning(`Runner queue delay reached ${maxQueue}s.`);
             await core.summary.write();
+
+  installer-trial-image:
+    name: Installer trial image (nonpublishing)
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'feat/github-installer-release'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    env:
+      DOCKER_BUILD_RECORD_UPLOAD: "false"
+    steps:
+      - name: Check out the exact PR head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Bind this disposable build to its source
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = 'ElevenID/marty-ui'
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          mkdir -p "$RUNNER_TEMP/installer-trial-image"
+      - name: Configure pinned OCI exporter
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+        with:
+          version: v0.36.1
+          driver: docker-container
+          driver-opts: image=moby/buildkit@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8
+      - name: Build exact-head gateway image for an unqualified VM trial
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        with:
+          context: .
+          file: services/Dockerfile
+          push: false
+          pull: true
+          platforms: linux/amd64
+          tags: docker.io/elevenid/marty-ui-installer-trial:pr-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
+          build-args: |
+            SERVICE_NAME=gateway
+            MARTY_RELEASE_VERSION=engineering-trial
+            MARTY_UI_SHA=${{ github.event.pull_request.head.sha }}
+          outputs: type=oci,dest=${{ runner.temp }}/installer-trial-image/services.oci.tar,compression=gzip,force-compression=true
+          provenance: false
+          sbom: false
+      - name: Record archive identity without claiming release provenance
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          archive = Path(os.environ['RUNNER_TEMP']) / 'installer-trial-image/services.oci.tar'
+          size = archive.stat().st_size
+          if not 0 < size <= 4 * 1024**3:
+              raise SystemExit('trial OCI archive size invalid')
+          with archive.open('rb') as stream:
+              digest = hashlib.file_digest(stream, 'sha256').hexdigest()
+          record = {
+              'schema': 'elevenid.installer-engineering-image/v1',
+              'repository': os.environ['GITHUB_REPOSITORY'],
+              'source_sha': os.environ['EXPECTED_SHA'],
+              'pr': int(os.environ['PR_NUMBER']),
+              'run_id': int(os.environ['GITHUB_RUN_ID']),
+              'run_attempt': int(os.environ['GITHUB_RUN_ATTEMPT']),
+              'archive': 'services.oci.tar',
+              'archive_sha256': digest,
+              'archive_bytes': size,
+              'qualified': False,
+          }
+          output = archive.with_name('trial-image.json')
+          output.write_text(json.dumps(record, sort_keys=True, separators=(',', ':')) + '\n')
+          PY
+      - name: Upload short-lived engineering image
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: installer-trial-image-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/installer-trial-image/
+          if-no-files-found: error
+          retention-days: 3
+          compression-level: 0

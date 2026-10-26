@@ -2302,7 +2302,9 @@ def test_execution_policy_is_prepared_before_workflow_consumers():
     for workflow, job in [("ci.yml", "test-rust-services"), ("ci.yml", "test-release-contracts"), ("cd.yml", "build-operator-catalog")]:
         steps = yaml.safe_load((ROOT / ".github/workflows" / workflow).read_text())["jobs"][job]["steps"]
         prepared = next(i for i, step in enumerate(steps) if step.get("run") == "bash scripts/ci/prepare-native-ci-execution.sh")
-        consumed = next(i for i, step in enumerate(steps) if "rust_contract_execution.sh" in step.get("run", "") or "python -m pytest tests -n" in step.get("run", ""))
+        consumed = next(i for i, step in enumerate(steps) if "rust_contract_execution.sh" in step.get("run", "") or step.get("name") == "Run repository release checks")
+        if job == "test-release-contracts":
+            assert "-m pytest tests " in steps[consumed]["run"]
         assert prepared < consumed
 
 

@@ -1,0 +1,507 @@
+name: Installer candidate grant preparation
+
+run-name: Prepare ${{ inputs.phase }} installer grant for build ${{ inputs.build_run_id }} attempt ${{ inputs.build_run_attempt }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      phase:
+        description: Staged build artifact or independently downloaded public release
+        required: true
+        type: choice
+        options:
+          - staged
+          - published
+      execute:
+        description: Wait for a real controller execution checkpoint (currently always incomplete; cannot produce acceptance)
+        required: true
+        type: boolean
+        default: false
+      build_run_id:
+        description: Successful Nightly installation release run ID
+        required: true
+        type: string
+      build_run_attempt:
+        description: Exact original successful build attempt
+        required: true
+        type: string
+      source_sha:
+        description: Exact 40-character source SHA of that build
+        required: true
+        type: string
+      release_tag:
+        description: Exact installation nightly tag recorded in its inventory
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: installer-${{ inputs.phase }}-grant-${{ inputs.build_run_id }}-${{ inputs.build_run_attempt }}
+  cancel-in-progress: false
+
+jobs:
+  prepare-candidate-grant:
+    if: github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && github.repository == 'ElevenID/marty-ui'
+    # This job signs grants and an authenticated controller consumption record.
+    # It performs no guest execution and issues no acceptance, admission or channel.
+    # A new dispatch is a new authorization; it does not resume a consumed dispatch.
+    runs-on: ubuntu-24.04
+    environment: stack-release
+    timeout-minutes: 90
+    permissions:
+      contents: write
+      actions: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12'
+      - name: Authenticate the original nightly build and current acceptance invocation
+        id: context
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUILD_RUN_ID: ${{ inputs.build_run_id }}
+          BUILD_RUN_ATTEMPT: ${{ inputs.build_run_attempt }}
+          BUILD_SOURCE_SHA: ${{ inputs.source_sha }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          PHASE: ${{ inputs.phase }}
+          CONTROLLER_USER_ID: ${{ vars.INSTALLER_CONTROLLER_USER_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          python - <<'PY'
+          import json, os, re, sys, urllib.parse, urllib.request
+          from pathlib import Path
+          sys.path.insert(0, 'scripts')
+          import installer_release as release
+          import installer_candidate_public_release as public_release
+          def require(value):
+              if not value:
+                  raise SystemExit('Installer grant context refused')
+          require(os.environ['GITHUB_REPOSITORY'] == 'ElevenID/marty-ui')
+          require(os.environ['GITHUB_REF'] == 'refs/heads/main')
+          require(os.environ['GITHUB_EVENT_NAME'] == 'workflow_dispatch')
+          build = os.environ['BUILD_RUN_ID']
+          attempt = os.environ['BUILD_RUN_ATTEMPT']
+          require(re.fullmatch(r'[1-9][0-9]{0,15}', build) is not None)
+          require(re.fullmatch(r'[1-9][0-9]{0,15}', attempt) is not None)
+          release.identity(os.environ['BUILD_SOURCE_SHA'], os.environ['RELEASE_TAG'], int(build), int(attempt))
+          require(release.classify_release_tag(os.environ['RELEASE_TAG'])[0] == 'nightly')
+          require(os.environ['PHASE'] in ('staged', 'published'))
+          class NoRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, *args, **kwargs):
+                  raise ValueError('API redirect refused')
+          opener = urllib.request.build_opener(NoRedirect)
+          def api(path):
+              request = urllib.request.Request('https://api.github.com/repos/ElevenID/marty-ui/' + path,
+                  headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],
+                           'Accept': 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28'})
+              with opener.open(request, timeout=30) as response:
+                  raw = response.read(1048577)
+              require(len(raw) <= 1048576)
+              return json.loads(raw)
+          try:
+              run = api('actions/runs/' + build)
+              require(run['repository']['full_name'] == 'ElevenID/marty-ui'
+                  and run['id'] == int(build) and run['run_attempt'] == int(attempt)
+                  and run['path'] == '.github/workflows/nightly-release.yml'
+                  and run['head_sha'] == os.environ['BUILD_SOURCE_SHA'] and run['head_branch'] == 'main'
+                  and run['event'] == 'workflow_dispatch' and run['status'] == 'completed'
+                  and run['conclusion'] == 'success')
+              artifact = None
+              published_observation = None
+              if os.environ['PHASE'] == 'staged':
+                  artifacts = api('actions/runs/' + build + '/artifacts?per_page=100')
+                  require(artifacts['total_count'] <= 100)
+                  matches = [a for a in artifacts['artifacts']
+                             if a['name'] == 'nightly-publication-assets-' + build]
+                  require(len(matches) == 1)
+                  artifact = matches[0]
+                  require(not artifact['expired'] and type(artifact['id']) is int and artifact['id'] > 0)
+                  require(artifact['workflow_run']['id'] == int(build)
+                      and artifact['workflow_run']['head_sha'] == os.environ['BUILD_SOURCE_SHA'])
+              else:
+                  published_observation = public_release.observe(
+                      api, os.environ['RELEASE_TAG'], os.environ['BUILD_SOURCE_SHA'])
+              current = api('actions/runs/' + os.environ['GITHUB_RUN_ID'])
+              require(current['id'] == int(os.environ['GITHUB_RUN_ID'])
+                  and current['run_attempt'] == int(os.environ['GITHUB_RUN_ATTEMPT'])
+                  and current['head_sha'] == os.environ['GITHUB_SHA']
+                  and current['path'] == '.github/workflows/installer-acceptance.yml'
+                  and current['head_branch'] == 'main' and current['event'] == 'workflow_dispatch'
+                  and current['status'] == 'in_progress' and current['conclusion'] is None)
+              controller = os.environ['CONTROLLER_USER_ID']
+              require(re.fullmatch(r'[1-9][0-9]{0,15}', controller) is not None)
+              # The repository variable pins a numeric human principal. Resolve it
+              # through authenticated GitHub, never from a submitted receipt.
+              request = urllib.request.Request('https://api.github.com/user/' + controller,
+                  headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],
+                           'Accept': 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28'})
+              with opener.open(request, timeout=30) as response:
+                  raw = response.read(65537)
+              require(len(raw) <= 65536)
+              actor = json.loads(raw)
+              require(actor['id'] == int(controller) and actor['type'] == 'User')
+              base = Path(os.environ['RUNNER_TEMP']) / 'installer-staged-grant'
+              base.mkdir(mode=0o700)
+              for name in ('inputs', 'context', 'tools', 'grant'):
+                  (base / name).mkdir(mode=0o700)
+              with (base / 'context' / 'acceptance-run.json').open('xb') as stream:
+                  stream.write(release.encode(current))
+              if published_observation is not None:
+                  with (base / 'context' / 'published-release-identity.json').open('xb') as stream:
+                      stream.write(release.encode(published_observation))
+              with open(os.environ['GITHUB_OUTPUT'], 'a') as stream:
+                  if artifact is not None:
+                      stream.write('artifact_id=' + str(artifact['id']) + '\n')
+                  stream.write('controller_user_id=' + controller + '\n')
+          except (KeyError, ValueError, OSError):
+              raise SystemExit('Installer grant API context refused') from None
+          PY
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        if: inputs.phase == 'staged'
+        with:
+          artifact-ids: ${{ steps.context.outputs.artifact_id }}
+          run-id: ${{ inputs.build_run_id }}
+          github-token: ${{ github.token }}
+          merge-multiple: true
+          path: ${{ runner.temp }}/installer-staged-grant/inputs
+      - name: Download the public version assets anonymously for authorizer verification
+        if: inputs.phase == 'published'
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          python - <<'PY'
+          import os,sys
+          from pathlib import Path
+          sys.path.insert(0,'scripts')
+          import installer_candidate_public_bootstrap as public
+          import installer_release as release
+          directory=Path(os.environ['RUNNER_TEMP'])/'installer-staged-grant/inputs'
+          held=public.private_directory(directory)
+          try:
+              for name in ['installer-inventory.json',*sorted(release.ARTIFACTS)]:
+                  for suffix in public.SUFFIXES:
+                      asset=name+suffix
+                      limit=(1048576 if suffix else 65536 if name=='installer-inventory.json'
+                             else release.ARTIFACT_MAX_BYTES[name])
+                      url=f"https://github.com/ElevenID/marty-ui/releases/download/{os.environ['RELEASE_TAG']}/{asset}"
+                      public.download(url,directory/asset,held,limit)
+          finally:
+              os.close(held)
+          PY
+      - name: Preserve bounded published release observation
+        if: always() && inputs.phase == 'published'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: installer-published-release-observation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/installer-staged-grant/context/published-release-identity.json
+          if-no-files-found: warn
+          retention-days: 1
+      - name: Recheck published release identity and anonymous asset bytes
+        if: inputs.phase == 'published'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUILD_SOURCE_SHA: ${{ inputs.source_sha }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          python - <<'PY'
+          import json, os, sys, urllib.request
+          from pathlib import Path
+          sys.path.insert(0, 'scripts')
+          import installer_candidate_public_release as public_release
+          import installer_release as release
+          class NoRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, *args, **kwargs):
+                  raise ValueError('API redirect refused')
+          opener = urllib.request.build_opener(NoRedirect)
+          def api(path):
+              request = urllib.request.Request('https://api.github.com/repos/ElevenID/marty-ui/' + path,
+                  headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],
+                           'Accept': 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28'})
+              with opener.open(request, timeout=30) as response:
+                  raw = response.read(1048577)
+              if len(raw) > 1048576:
+                  raise ValueError('API response exceeds bound')
+              return json.loads(raw)
+          base = Path(os.environ['RUNNER_TEMP']) / 'installer-staged-grant'
+          snapshot = release.decode((base / 'context/published-release-identity.json').read_bytes())
+          if public_release.observe(api, os.environ['RELEASE_TAG'], os.environ['BUILD_SOURCE_SHA']) != snapshot:
+              raise SystemExit('Published release identity changed during acquisition')
+          public_release.verify_downloads(snapshot, base / 'inputs')
+          PY
+      - name: Prepare exact installer verifier binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          tools="$RUNNER_TEMP/installer-staged-grant/tools"
+          curl --fail --location --silent --show-error --proto '=https' --proto-redir '=https' \
+            --connect-timeout 20 --max-time 180 --max-filesize 145688404 \
+            https://github.com/sigstore/cosign/releases/download/v3.1.4/cosign-linux-amd64 --output "$tools/cosign"
+          test "$(stat -c %s "$tools/cosign")" = 145688404
+          printf '%s  %s\n' 424e2c97d0b45fd7a6b608a87f090f35633f4c23ece5f092d48bba11aaf4bbfa "$tools/cosign" | sha256sum --check --strict
+          curl --fail --location --silent --show-error --proto '=https' --proto-redir '=https' \
+            --connect-timeout 20 --max-time 120 --max-filesize 15031001 \
+            https://github.com/cli/cli/releases/download/v2.103.2/gh_2.103.2_linux_amd64.tar.gz --output "$tools/gh.tar.gz"
+          test "$(stat -c %s "$tools/gh.tar.gz")" = 15031001
+          printf '%s  %s\n' 62ccf747115ddc61237efffdde66a3c8f70ba249433dc64f70801089b59c59c8 "$tools/gh.tar.gz" | sha256sum --check --strict
+          tar -xzf "$tools/gh.tar.gz" --no-same-owner --no-same-permissions -C "$tools" gh_2.103.2_linux_amd64/bin/gh
+          chmod 700 "$tools/cosign" "$tools/gh_2.103.2_linux_amd64/bin/gh"
+      - name: Verify exact candidate payloads and issue an unsigned short-lived authorization
+        env:
+          BUILD_RUN_ID: ${{ inputs.build_run_id }}
+          BUILD_RUN_ATTEMPT: ${{ inputs.build_run_attempt }}
+          BUILD_SOURCE_SHA: ${{ inputs.source_sha }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          PHASE: ${{ inputs.phase }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          base="$RUNNER_TEMP/installer-staged-grant"
+          chmod 700 "$base/inputs"
+          python scripts/installer_candidate_authorize.py \
+            --assets "$base/inputs" --acceptance-run "$base/context/acceptance-run.json" \
+            --gh "$base/tools/gh_2.103.2_linux_amd64/bin/gh" --cosign "$base/tools/cosign" \
+            --source-sha "$BUILD_SOURCE_SHA" --release-tag "$RELEASE_TAG" \
+            --build-run-id "$BUILD_RUN_ID" --build-run-attempt "$BUILD_RUN_ATTEMPT" \
+            --phase "$PHASE" \
+            --harness-source-sha "$GITHUB_SHA" --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --output "$base/grant/candidate-authorization.json"
+      - name: Sign the acceptance-only authorization
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          base="$RUNNER_TEMP/installer-staged-grant"
+          "$base/tools/cosign" sign-blob --yes \
+            --bundle "$base/grant/candidate-authorization.json.sigstore.json" \
+            "$base/grant/candidate-authorization.json" >/dev/null
+      - id: authorization_provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+        with:
+          subject-path: ${{ runner.temp }}/installer-staged-grant/grant/candidate-authorization.json
+      - name: Export and verify the same-invocation offline authorization proof
+        env:
+          PROVENANCE_BUNDLE: ${{ steps.authorization_provenance.outputs.bundle-path }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          python - <<'PY'
+          import os, sys
+          from pathlib import Path
+          sys.path.insert(0, 'scripts')
+          import installer_candidate_authorize as authorizer
+          import installer_release as release
+          import verify_installer_provenance as provenance
+          base = Path(os.environ['RUNNER_TEMP']) / 'installer-staged-grant'
+          subject = base / 'grant' / 'candidate-authorization.json'
+          source = Path(os.environ['PROVENANCE_BUNDLE'])
+          provenance.local_file(source, maximum=1048576)
+          with source.open('rb') as stream:
+              bundle = stream.read(1048577)
+          release.require(0 < len(bundle) <= 1048576, 'authorization provenance exceeds bound')
+          proof = base / 'grant' / 'candidate-authorization.json.provenance.jsonl'
+          authorizer.write_exclusive(proof, bundle)
+          provenance.verify_subject(subject, proof,
+              gh=base / 'tools' / 'gh_2.103.2_linux_amd64' / 'bin' / 'gh',
+              workflow='.github/workflows/installer-acceptance.yml', source_sha=os.environ['GITHUB_SHA'],
+              run_id=int(os.environ['GITHUB_RUN_ID']), run_attempt=int(os.environ['GITHUB_RUN_ATTEMPT']),
+              cosign=base / 'tools' / 'cosign',
+              signature_bundle=base / 'grant' / 'candidate-authorization.json.sigstore.json')
+          PY
+      - name: Create the owned draft receipt transport
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CONTROLLER_USER_ID: ${{ steps.context.outputs.controller_user_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          base="$RUNNER_TEMP/installer-staged-grant"
+          python scripts/installer_candidate_rendezvous.py prepare \
+            --authorization "$base/grant/candidate-authorization.json" --inventory "$base/inputs/installer-inventory.json" \
+            --harness-source-sha "$GITHUB_SHA" --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --controller-user-id "$CONTROLLER_USER_ID" --output "$base/grant/controller-transport.json"
+      - name: Archive the signed authorization and controller transport descriptor
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: installer-${{ inputs.phase }}-grant-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/installer-staged-grant/grant/candidate-authorization.json
+            ${{ runner.temp }}/installer-staged-grant/grant/candidate-authorization.json.sigstore.json
+            ${{ runner.temp }}/installer-staged-grant/grant/candidate-authorization.json.provenance.jsonl
+            ${{ runner.temp }}/installer-staged-grant/grant/controller-transport.json
+          if-no-files-found: error
+          retention-days: 1
+      - name: Receive the approved controller's durable consumption receipt
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CONTROLLER_USER_ID: ${{ steps.context.outputs.controller_user_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          base="$RUNNER_TEMP/installer-staged-grant"
+          python scripts/installer_candidate_rendezvous.py receive \
+            --authorization "$base/grant/candidate-authorization.json" --inventory "$base/inputs/installer-inventory.json" \
+            --harness-source-sha "$GITHUB_SHA" --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --controller-user-id "$CONTROLLER_USER_ID" --descriptor "$base/grant/controller-transport.json" \
+            --output "$base/grant/controller-consumption.json"
+      - name: Sign the authenticated controller consumption receipt
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          base="$RUNNER_TEMP/installer-staged-grant"
+          "$base/tools/cosign" sign-blob --yes \
+            --bundle "$base/grant/controller-consumption.json.sigstore.json" \
+            "$base/grant/controller-consumption.json" >/dev/null
+      - id: controller_provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+        with:
+          subject-path: ${{ runner.temp }}/installer-staged-grant/grant/controller-consumption.json
+      - name: Verify the controller receipt signature and same-invocation offline proof
+        env:
+          PROVENANCE_BUNDLE: ${{ steps.controller_provenance.outputs.bundle-path }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          python - <<'PY'
+          import os, sys, time
+          from pathlib import Path
+          sys.path.insert(0, 'scripts')
+          import installer_candidate_authorize as authorizer
+          import installer_release as release
+          import verify_installer_provenance as provenance
+          base = Path(os.environ['RUNNER_TEMP']) / 'installer-staged-grant'
+          subject = base / 'grant' / 'controller-consumption.json'
+          source = Path(os.environ['PROVENANCE_BUNDLE'])
+          provenance.local_file(source, maximum=1048576)
+          with source.open('rb') as stream:
+              bundle = stream.read(1048577)
+          release.require(0 < len(bundle) <= 1048576, 'controller provenance exceeds bound')
+          proof = base / 'grant' / 'controller-consumption.json.provenance.jsonl'
+          authorizer.write_exclusive(proof, bundle)
+          provenance.verify_subject(subject, proof,
+              gh=base / 'tools' / 'gh_2.103.2_linux_amd64' / 'bin' / 'gh',
+              workflow='.github/workflows/installer-acceptance.yml', source_sha=os.environ['GITHUB_SHA'],
+              run_id=int(os.environ['GITHUB_RUN_ID']), run_attempt=int(os.environ['GITHUB_RUN_ATTEMPT']),
+              cosign=base / 'tools' / 'cosign',
+              signature_bundle=base / 'grant' / 'controller-consumption.json.sigstore.json')
+          # Refuse an expired grant after signing; no dispatch is performed here.
+          release.validate_candidate_authorization(release.decode(authorizer.read_record(
+              base / 'grant' / 'candidate-authorization.json')), now=int(time.time()))
+          PY
+      - name: Archive the complete candidate execution grant package
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: installer-candidate-execution-grant-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/installer-staged-grant/grant/candidate-authorization.json
+            ${{ runner.temp }}/installer-staged-grant/grant/candidate-authorization.json.sigstore.json
+            ${{ runner.temp }}/installer-staged-grant/grant/candidate-authorization.json.provenance.jsonl
+            ${{ runner.temp }}/installer-staged-grant/grant/controller-consumption.json
+            ${{ runner.temp }}/installer-staged-grant/grant/controller-consumption.json.sigstore.json
+            ${{ runner.temp }}/installer-staged-grant/grant/controller-consumption.json.provenance.jsonl
+            ${{ runner.temp }}/installer-staged-grant/grant/controller-consumption.json.transport.json
+            ${{ runner.temp }}/installer-staged-grant/grant/controller-transport.json
+          if-no-files-found: error
+          retention-days: 1
+      - name: Receive same-invocation installed probe checkpoint
+        if: inputs.execute
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CONTROLLER_USER_ID: ${{ steps.context.outputs.controller_user_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          base="$RUNNER_TEMP/installer-staged-grant"
+          mkdir -m 700 "$base/checkpoint"
+          python scripts/installer_acceptance_return.py \
+            --authorization "$base/grant/candidate-authorization.json" --inventory "$base/inputs/installer-inventory.json" \
+            --receipt "$base/grant/controller-consumption.json" --descriptor "$base/grant/controller-transport.json" \
+            --harness-source-sha "$GITHUB_SHA" --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --controller-user-id "$CONTROLLER_USER_ID" --output "$base/checkpoint/installer-acceptance-checkpoint.json"
+      - name: Sign distinct incomplete checkpoint only
+        if: inputs.execute
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="$RUNNER_TEMP/installer-staged-grant"
+          "$base/tools/cosign" sign-blob --yes \
+            --bundle "$base/checkpoint/installer-acceptance-checkpoint.json.sigstore.json" \
+            "$base/checkpoint/installer-acceptance-checkpoint.json" >/dev/null
+      - id: checkpoint_provenance
+        if: inputs.execute
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+        with:
+          subject-path: ${{ runner.temp }}/installer-staged-grant/checkpoint/installer-acceptance-checkpoint.json
+      - name: Verify checkpoint signature and exact invocation proof
+        if: inputs.execute
+        env:
+          PROVENANCE_BUNDLE: ${{ steps.checkpoint_provenance.outputs.bundle-path }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          python - <<'PY'
+          import os,sys
+          from pathlib import Path
+          sys.path.insert(0,'scripts')
+          import installer_release as r
+          import verify_installer_provenance as p
+          from installer_candidate_authorize import write_exclusive
+          base=Path(os.environ['RUNNER_TEMP'])/'installer-staged-grant'
+          subject=base/'checkpoint/installer-acceptance-checkpoint.json'
+          source=Path(os.environ['PROVENANCE_BUNDLE'])
+          p.local_file(source,maximum=1048576)
+          with source.open('rb') as stream: raw=stream.read(1048577)
+          r.require(0<len(raw)<=1048576,'checkpoint proof exceeds bound')
+          proof=Path(str(subject)+'.provenance.jsonl');write_exclusive(proof,raw)
+          p.verify_subject(subject,proof,gh=base/'tools/gh_2.103.2_linux_amd64/bin/gh',cosign=base/'tools/cosign',
+              signature_bundle=Path(str(subject)+'.sigstore.json'),workflow=r.acceptance.WORKFLOW,
+              source_sha=os.environ['GITHUB_SHA'],run_id=int(os.environ['GITHUB_RUN_ID']),run_attempt=int(os.environ['GITHUB_RUN_ATTEMPT']))
+          PY
+      - name: Archive incomplete checkpoint and authenticated transport evidence
+        if: always() && inputs.execute
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: installer-incomplete-checkpoint-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/installer-staged-grant/checkpoint/
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Refuse incomplete execution as installed acceptance
+        if: inputs.execute
+        shell: bash
+        run: |
+          printf '%s\n' 'Real controller probe checkpoint is retained. Installed browser/business/recovery cases remain incomplete; no staged/published acceptance report, admission or channel promotion is issued.' >> "$GITHUB_STEP_SUMMARY"
+          exit 1
+      - name: Preserve partial grant and transport evidence
+        if: failure() || cancelled()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: installer-candidate-transport-recovery-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/installer-staged-grant/grant/
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Record the boundary of this workflow
+        shell: bash
+        run: |
+          printf '%s\n' 'Candidate execution grants only. Authorization expires within one hour. Controller guest/disk/engine identity is an authenticated controller assertion, not a hosted-runner observation. No guest execution, installed-journey acceptance, admission or channel promotion was performed. The owned draft receipt transport is retained until the local controller archives its evidence; this workflow never deletes it.' >> "$GITHUB_STEP_SUMMARY"
