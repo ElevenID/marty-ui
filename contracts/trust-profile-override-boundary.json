@@ -1,0 +1,64 @@
+{
+  "supported": [
+    {
+      "name": "empty",
+      "overrides": {}
+    },
+    {
+      "name": "public_jwk_and_policy",
+      "overrides": {
+        "did:web:issuer.example": {
+          "action": "ALLOW",
+          "verification_keys": [
+            {
+              "kty": "EC",
+              "crv": "P-256",
+              "x": "public-x",
+              "y": "public-y"
+            }
+          ],
+          "public_extension": {
+            "note": "visible"
+          }
+        }
+      }
+    }
+  ],
+  "rejected": [
+    {
+      "name": "nested_mixed_case_custody",
+      "overrides": {
+        "did:web:issuer.example": {
+          "nested": [
+            {
+              "Provider": "synthetic-private"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "private_jwk",
+      "overrides": {
+        "did:web:issuer.example": {
+          "verification_keys": [
+            {
+              "KTY": "EC",
+              "D": "synthetic-private"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "nested_key_reference",
+      "overrides": {
+        "did:web:issuer.example": {
+          "nested": {
+            "key_reference": "synthetic-private"
+          }
+        }
+      }
+    }
+  ]
+}

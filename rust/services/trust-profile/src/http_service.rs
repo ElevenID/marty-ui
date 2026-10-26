@@ -358,7 +358,7 @@ async fn create_profile(
         )
         .await
         .map_err(application_error)?;
-    Ok(Json(profile_response(&profile)))
+    Ok(Json(profile_response(&profile)?))
 }
 
 async fn list_profiles(
@@ -382,7 +382,10 @@ async fn list_profiles(
         .await
         .map_err(application_error)?;
     Ok(Json(Value::Array(
-        profiles.iter().map(profile_response).collect(),
+        profiles
+            .iter()
+            .map(profile_response)
+            .collect::<Result<Vec<_>, _>>()?,
     )))
 }
 
@@ -417,7 +420,7 @@ async fn get_profile(
                 .await
         }
         .map_err(application_error)?;
-    Ok(Json(profile_response(&profile)))
+    Ok(Json(profile_response(&profile)?))
 }
 
 async fn update_profile(
@@ -518,7 +521,7 @@ async fn update_profile(
         .update_profile(&user_id, profile_id, patch, Utc::now())
         .await
         .map_err(application_error)?;
-    Ok(Json(profile_response(&profile)))
+    Ok(Json(profile_response(&profile)?))
 }
 
 async fn activate_profile(
@@ -535,7 +538,7 @@ async fn activate_profile(
         )
         .await
         .map_err(application_error)?;
-    Ok(Json(profile_response(&profile)))
+    Ok(Json(profile_response(&profile)?))
 }
 
 async fn suspend_profile(
@@ -552,7 +555,7 @@ async fn suspend_profile(
         )
         .await
         .map_err(application_error)?;
-    Ok(Json(profile_response(&profile)))
+    Ok(Json(profile_response(&profile)?))
 }
 
 async fn delete_profile(
@@ -1176,7 +1179,7 @@ async fn internal_profile(
             "verification_keys": keys,
         }));
     }
-    let mut response = profile_response(&profile);
+    let mut response = profile_response(&profile)?;
     response
         .as_object_mut()
         .expect("profile response is an object")
@@ -1387,7 +1390,9 @@ async fn issuer_owner(
     Ok(Json(json!({"organization_id": organization_id})))
 }
 
-fn profile_response(profile: &TrustProfile) -> Value {
+fn profile_response(profile: &TrustProfile) -> Result<Value, TrustProfileHttpError> {
+    crate::reject_private_custody_metadata(&Value::Object(profile.system_issuer_overrides.clone()))
+        .map_err(|_| unavailable("Trust Profile contains private custody metadata"))?;
     let mut methods = Vec::new();
     if profile.revocation_policy.check_crl {
         methods.push("CRL");
@@ -1402,7 +1407,7 @@ fn profile_response(profile: &TrustProfile) -> Value {
         .time_policy
         .credential_freshness_hours
         .map(|hours| hours * 3600);
-    strip_nulls(json!({
+    Ok(strip_nulls(json!({
         "id": profile.id,
         "organization_id": profile.organization_id,
         "name": profile.name,
@@ -1439,7 +1444,7 @@ fn profile_response(profile: &TrustProfile) -> Value {
         "auto_generated": profile.auto_generated,
         "created_at": profile.created_at,
         "updated_at": profile.updated_at,
-    }))
+    })))
 }
 
 fn public_trust_source(source: &TrustSource) -> Value {

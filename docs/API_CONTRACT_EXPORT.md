@@ -71,6 +71,17 @@ This validates the same organization readback cases exercised by the gateway
 projector and rejects private fields and invented response envelopes. CI runs
 it against the export from the actual gateway image.
 
+Trust-profile issuer overrides must contain public configuration only. The
+public gateway and native owner reject nested private custody selectors and
+private JWK parameters, including case variants and values inside arrays,
+before saving a create or patch. Public JWKs remain valid configuration.
+Readback rejects a legacy profile containing such private override data instead
+of returning it; a native collection containing that profile fails as a whole.
+The stored record is preserved for operator remediation. An authorized patch
+with `system_issuer_overrides: {}` clears that map and restores readback; it
+does not replace the profile or change its other configuration. A successful export
+or structurally valid profile does not qualify its trust anchors or issuers.
+
 Template create and patch bodies use native-owned write components. Creation
 requires organization, name, credential type, compliance profile, public issuer
 DID and a nonempty claims array. Public claim display/type/namespace aliases are
