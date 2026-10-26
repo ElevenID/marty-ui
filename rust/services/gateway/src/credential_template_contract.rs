@@ -375,6 +375,44 @@ mod tests {
     use super::*;
     use serde::Deserialize;
     #[test]
+    fn shared_write_fixtures_match_actual_gateway_canonicalization() {
+        let fixtures: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/credential-template-write-behavior.json"
+        ))
+        .unwrap();
+        for case in fixtures["valid_create"].as_array().unwrap() {
+            assert_eq!(
+                canonicalize_create(&serde_json::to_vec(&case["public"]).unwrap()).unwrap(),
+                case["canonical"],
+                "{}",
+                case["name"]
+            );
+        }
+        for case in fixtures["valid_update"].as_array().unwrap() {
+            let output =
+                canonicalize_update(&serde_json::to_vec(&case["public"]).unwrap()).unwrap();
+            assert_eq!(
+                serde_json::from_slice::<Value>(&output).unwrap(),
+                case["canonical"],
+                "{}",
+                case["name"]
+            );
+        }
+        for case in fixtures["invalid"].as_array().unwrap() {
+            let body = serde_json::to_vec(&case["public"]).unwrap();
+            let result = if case["method"] == "POST" {
+                canonicalize_create(&body)
+            } else {
+                canonicalize_update(&body).map(|body| serde_json::from_slice(&body).unwrap())
+            };
+            if case["phase"] == "gateway" {
+                assert!(result.is_err(), "{}", case["name"]);
+            } else {
+                assert_eq!(result.unwrap(), case["canonical"], "{}", case["name"]);
+            }
+        }
+    }
+    #[test]
     fn private_parameters_fail_before_forwarding_create_or_update() {
         let contract: Value = serde_json::from_str(include_str!(
             "../../../../contracts/gateway-credential-template-behavior.json"
