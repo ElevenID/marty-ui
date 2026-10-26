@@ -15,6 +15,7 @@ from installer_candidate_controller import ControllerLease
 from installer_candidate_vm_create import _read_record, _write
 from installer_candidate_vm_host_preflight import preflight, verify_consumed_intent
 import installer_candidate_vm_host_probe as host_probe
+import installer_candidate_vm_live_observe as live_vm
 import installer_candidate_receipt_upload as uploader
 import installer_candidate_grant_receive as receiver
 import installer_candidate_dispatch as dispatch
@@ -101,7 +102,8 @@ def dispatch_once(*, registry: Path, runtime_parent: Path, vm_id: str,
                   gh: Path, cosign: Path, grants: Path, ssh: Path, scp: Path,
                   clock=time.time, verifier=provenance.command,
                   guest_probe=host_probe.probe,
-                  invoke=dispatch.dispatch) -> dict:
+                  invoke=dispatch.dispatch,
+                  process_observer=live_vm.observe) -> dict:
     """Re-admit the same live VM and invoke the signed installer once."""
     release.require(os.geteuid() == 0 and registry.is_absolute(),
                     "root controller required for VM dispatch")
@@ -223,17 +225,55 @@ def dispatch_once(*, registry: Path, runtime_parent: Path, vm_id: str,
                             == stage_raw
                             and 0 <= int(clock()) - current["probe_finished_at"] <= 60,
                             "VM remote dispatch stage changed or expired")
-        result = invoke(
-            assets=assets, grants=grants, context_file=context_file,
-            target_file=target_file, ledger=ledger, gh=gh, cosign=cosign,
-            ssh=ssh, scp=scp, key=key, known_hosts=known_hosts,
-            host=fresh["ssh"]["host"], port=fresh["ssh"]["port"],
-            user=fresh["ssh"]["user"], home="/home/" + fresh["ssh"]["user"],
-            clock=clock, verifier=verifier, lease=lease,
-            approved_ssh=dict(key_sha256=fresh["ssh"]["controller_key_sha256"],
-                              known_hosts_sha256=fresh["ssh"]["known_hosts_sha256"]),
-            admission_gate=admission_gate)
-        release.require(result["installation_ready"] is False
-                        and result["acceptance_report"] is False,
-                        "dispatch falsely claims installed acceptance")
+        command_error = None
+        result = None
+        try:
+            result = invoke(
+                assets=assets, grants=grants, context_file=context_file,
+                target_file=target_file, ledger=ledger, gh=gh, cosign=cosign,
+                ssh=ssh, scp=scp, key=key, known_hosts=known_hosts,
+                host=fresh["ssh"]["host"], port=fresh["ssh"]["port"],
+                user=fresh["ssh"]["user"], home="/home/" + fresh["ssh"]["user"],
+                clock=clock, verifier=verifier, lease=lease,
+                approved_ssh=dict(key_sha256=fresh["ssh"]["controller_key_sha256"],
+                                  known_hosts_sha256=fresh["ssh"]["known_hosts_sha256"]),
+                admission_gate=admission_gate)
+        except (ValueError, OSError) as error:
+            command_error = error
+        if command_error is None:
+            release.require(result["installation_ready"] is False
+                            and result["acceptance_report"] is False,
+                            "dispatch falsely claims installed acceptance")
+        check_id = str(uuid.uuid4())
+        process = process_observer(
+            registry, runtime_parent, vm_id=vm_id,
+            process_check_id=check_id, lease=lease)
+        process_name = vm_id + ".process-check-" + check_id + ".json"
+        process_raw, persisted_process = _read_record(lease.parent, process_name)
+        release.require(persisted_process == process
+                        and process["schema"] == live_vm.PROCESS_CHECK_SCHEMA
+                        and process["vm_id"] == vm_id
+                        and process["observation_id"] == check_id
+                        and process["initial_guest_readiness_sha256"]
+                        == fresh["initial_guest_readiness_sha256"],
+                        "post-dispatch VM process differs")
+        post = dict(schema="elevenid.installer-vm-post-dispatch/v1",
+                    nonce=nonce, vm_id=vm_id,
+                    installation_id=installation_id,
+                    approval_sha256=release.digest(approval_raw),
+                    intent_sha256=bound["intent_sha256"],
+                    receipt_sha256=bound["receipt_sha256"],
+                    process_check_sha256=release.digest(process_raw),
+                    command_returned_zero=command_error is None,
+                    installation_ready=False, acceptance=False,
+                    observed_at=int(clock()))
+        post_name = nonce + ".vm-post-dispatch.json"
+        _write(lease.parent, post_name, post)
+        dispatch.registry_unchanged(lease.parent, registry)
+        release.require(_read_record(lease.parent, post_name)[1] == post
+                        and _read_record(lease.parent, process_name)[0]
+                        == process_raw,
+                        "post-dispatch VM evidence changed")
+        if command_error is not None:
+            raise command_error
         return result
