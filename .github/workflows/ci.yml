@@ -2093,7 +2093,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.rust == 'true'
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 15
+    timeout-minutes: ${{ matrix.timeout_minutes }}
     permissions:
       contents: read
     strategy:
@@ -2102,10 +2102,12 @@ jobs:
         include:
           - runner: ubuntu-24.04
             arch: amd64
+            timeout_minutes: 30
             target: x86_64-unknown-linux-musl
             elf_machine: 'Advanced Micro Devices X86-64'
           - runner: ubuntu-24.04-arm
             arch: arm64
+            timeout_minutes: 15
             target: aarch64-unknown-linux-musl
             elf_machine: AArch64
     env:
