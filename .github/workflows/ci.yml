@@ -2093,7 +2093,10 @@ jobs:
     needs: changes
     if: needs.changes.outputs.rust == 'true'
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 15
+    # Cold static compilation plus the required HTTPS/custody matrix exceeded
+    # fifteen minutes while tests were still progressing. Keep all cases and
+    # native operation deadlines, with a bounded job budget for both runners.
+    timeout-minutes: 25
     permissions:
       contents: read
     strategy:
