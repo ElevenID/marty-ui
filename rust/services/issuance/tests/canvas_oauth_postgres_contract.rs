@@ -704,7 +704,7 @@ async fn setup_schema(pool: &sqlx::PgPool) {
             organization_id text NOT NULL,
             canvas_base_url text,
             config_version integer NOT NULL,
-            connection_config jsonb NOT NULL DEFAULT '{}'::jsonb,
+            connection_config json NOT NULL DEFAULT '{}'::json,
             last_validated_at timestamptz,
             last_connection_error text,
             archived_at timestamptz,
@@ -796,6 +796,14 @@ async fn local_admin_eligibility_requires_exact_tenant_and_absence_of_oauth_hist
         .unwrap();
     setup_schema(&pool).await;
     seed_platform(&pool).await;
+    // The production baseline stores JSON, so JSONB-only fixtures hide operator errors.
+    let column_type: String = sqlx::query_scalar(
+        "SELECT pg_typeof(connection_config)::text FROM issuance_service.canvas_platforms WHERE id='platform-1'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(column_type, "json");
     let repository = PostgresCanvasOAuthRepository::new(pool.clone());
     assert!(repository
         .local_admin_fallback_eligible("org-1", "platform-1")
@@ -852,7 +860,7 @@ async fn local_admin_eligibility_requires_exact_tenant_and_absence_of_oauth_hist
         "oauth_capabilities",
         "granted_scopes",
     ] {
-        sqlx::query("UPDATE issuance_service.canvas_platforms SET connection_config=jsonb_build_object($1::text, '') WHERE id='platform-1'")
+        sqlx::query("UPDATE issuance_service.canvas_platforms SET connection_config=json_build_object($1::text, '') WHERE id='platform-1'")
             .bind(marker).execute(&pool).await.unwrap();
         assert!(!repository
             .local_admin_fallback_eligible("org-1", "platform-1")
