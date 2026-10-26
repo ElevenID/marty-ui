@@ -42,6 +42,7 @@ use sqlx::postgres::PgPoolOptions;
 use tokio::sync::{oneshot, Barrier};
 use tower::ServiceExt;
 
+<<<<<<< HEAD
 // Reuse the session-scoped test helper shared with the Flow schema-reset tests.
 #[path = "../../flow/tests/support/flow_schema.rs"]
 mod shared_schema_lock;
@@ -196,6 +197,12 @@ async fn readonly_passport_job_get_is_tenant_scoped_and_has_no_side_effects() {
     pool.close().await;
 }
 
+=======
+// Share the existing dedicated session lock for every passport schema reset.
+#[path = "../../flow/tests/support/flow_schema.rs"]
+mod shared_schema_lock;
+
+>>>>>>> fix/passport-administrative-cancellation
 /// The companion SQL fixture provisions an isolated cluster using the actual
 /// finalizer. Explicit invocation prevents an absent URL becoming pass evidence.
 #[tokio::test]
