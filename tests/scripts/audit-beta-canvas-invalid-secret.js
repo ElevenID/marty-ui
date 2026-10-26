@@ -18,24 +18,27 @@ function requireMartyInvalidSecret(url,platformId,{codeIssuedForSameClient,provi
  assert.equal(url.searchParams.get('error_code'),'oauth_token_exchange_failed');
  return {outcome:'error',errorCode:'oauth_token_exchange_failed',providerInvalidSecret:true};
 }
-function planWrongSecretCase(){return {
- scope:'VALID_ENABLED_CANVAS_CLIENT_WRONG_SECRET_FUNCTIONAL_ONLY',releaseQualified:false,recordingQualified:false,
- owns:['fresh stock Canvas OAuth Developer Key','fresh Marty draft platform','fresh KMS-backed wrong-secret reference'],
+function planWrongSecretCase({recoverWithValidSecret=false}={}){assert.equal(typeof recoverWithValidSecret,'boolean');return {
+ stockLogoutScope:'Audit-test-account global logout stamp under exclusive lease; owned old-cookie denial is verified, not a targeted-only session retirement.',
+ scope:recoverWithValidSecret?'VALID_CLIENT_WRONG_SECRET_AND_FRESH_VALID_SECRET_RECOVERY_FUNCTIONAL_ONLY':'VALID_ENABLED_CANVAS_CLIENT_WRONG_SECRET_FUNCTIONAL_ONLY',releaseQualified:false,recordingQualified:false,
+ owns:['fresh stock Canvas OAuth Developer Key','fresh Marty draft platform','fresh KMS-backed wrong-secret reference',...(recoverWithValidSecret?['fresh KMS-backed correct-secret reference','server-owned OAuth access/optional-refresh references']:[])],
  phases:['bind all actual executable roles and reviewed mixed runtime receipts','fresh governed beta and stock Canvas sessions',
  'stock production Developer Key wizard and enabled-client readback','fresh provider-issued code: explicit invalid_client on wrong-secret token exchange',
  'second fresh code: real Marty callback typed oauth_token_exchange_failed; draft remains disconnected',
  'archive owned Marty platform and delete secret; delete owned Canvas key via stock UI; retire both sessions'],
- optionalRecovery:'Not enabled in this negative-only slice; future recovery must use a fresh real authorization, never reuse codes.',
+ optionalRecovery:recoverWithValidSecret?'Third fresh server-owned state/code; new owned correct KMS client-secret ref; shared native authorization, catalog read and native disconnect before owned retirement.':'Not enabled in this negative-only slice; future recovery must use a fresh real authorization, never reuse codes.',
  forbiddenEvidence:['unknown client ID','invented/expired/reused code','bad state','network/TLS error','generic provider error'],
  executionStarted:false};}
 async function executeWrongSecretCase({result,save,gateway,admin,adminPage,organizationId,runId,canvasCredentials,retainPrivateAuthority,recoverWithValidSecret=false}){
  assert(canvasCredentials&&canvasCredentials.email&&canvasCredentials.password);
  assert.equal(typeof retainPrivateAuthority,'function','Owned stock authority needs protected recovery custody');
- assert.equal(recoverWithValidSecret,false,'Correct-secret recovery is not enabled by this reviewed negative-only plan');
+ assert.equal(typeof recoverWithValidSecret,'boolean','Recovery requires an explicit reviewed boolean');
+ if(recoverWithValidSecret)assert(result?.functionalRuntimeBinding?.scope==='FUNCTIONAL_ONLY'&&result.functionalRuntimeBinding.releaseQualified===false
+  &&result.functionalRuntimeBinding.recordingQualified===false&&result.functionalRuntimeBinding.roles?.length===22,'Recovery requires the reviewed all22 functional runtime binding before browser authority');
  const stock=require('./run-canvas-oss-standard-contract');
  const browser=adminPage.context().browser(),context=await browser.newContext(),page=await context.newPage();
  const owned={scope:'OWNED_CANVAS_SETUP_RESOURCES',runSuffix:runId,resources:{}};
- result.validClientSecretCase={state:'STARTED',stage:'CANVAS_LOGIN',loginHttp:[],ownedMarty:[],ownedCanvas:owned,qualification:false};save();
+ result.validClientSecretCase={state:'STARTED',stockLogoutScope:'AUDIT_TEST_ACCOUNT_GLOBAL_LOGOUT_UNDER_EXCLUSIVE_LEASE',stage:'CANVAS_LOGIN',loginHttp:[],ownedMarty:[],ownedCanvas:owned,qualification:false};save();
  const stage=value=>{result.validClientSecretCase.stage=value;save();};
  const observeResponse=response=>{
   const url=new URL(response.url());if(url.origin!==CANVAS||!['/login/canvas','/login','/logout','/api/v1/users/self/profile'].includes(url.pathname))return;
@@ -49,7 +52,7 @@ async function executeWrongSecretCase({result,save,gateway,admin,adminPage,organ
  // Private credential bytes and authorization codes remain only in this closure.
  let primaryFailure=null,cleanupFailure=null;
  const describe=error=>safeCanvasFailure(error,stock.ContractFailure);
- let clientId,correctSecret,platform,wrongRef;const wrong=crypto.randomBytes(32).toString('hex');
+ let clientId,correctSecret,platform,wrongRef,oauthMayExist=false;const authorizationStates=new Set(),authorizationCodes=new Set();const wrong=crypto.randomBytes(32).toString('hex');
  async function create(collection,body){
   const row={collection,name:body.name||body.display_name,state:'CREATING'};
   result.validClientSecretCase.ownedMarty.push(row);save();
@@ -60,20 +63,22 @@ async function executeWrongSecretCase({result,save,gateway,admin,adminPage,organ
   assert.match(response.payload.id,/^[a-f0-9-]{36}$/i);
   row.id=response.payload.id;row.state='CREATED';save();return response.payload;
  }
- async function start(){
-  stage('AUTHORIZATION_START');
+ async function start(secretRef=wrongRef,phase='AUTHORIZATION_START'){
+  stage(phase);
   const started=await gateway('/v1/integrations/canvas/platforms/'+platform.id+'/oauth/authorizations',
-   {...admin,method:'POST',body:{client_id:clientId,client_secret_secret_id:wrongRef.id,capabilities:['catalog']}});
+   {...admin,method:'POST',body:{client_id:clientId,client_secret_secret_id:secretRef.id,capabilities:['catalog']}});
   result.validClientSecretCase.authorizationStarts=result.validClientSecretCase.authorizationStarts||[];
   const observation={status:started.status};result.validClientSecretCase.authorizationStarts.push(observation);save();
   assert.equal(started.status,200);
   const url=new URL(started.payload.authorization_url);Object.assign(observation,authorizationBoundaryChecks(url,clientId));save();
   assert.equal(url.origin,CANVAS);assert.equal(url.pathname,'/login/oauth2/auth');assert.equal(url.searchParams.get('client_id'),clientId);
-  assert(url.searchParams.get('state'));assert.equal(url.searchParams.get('redirect_uri'),MARTY+'/v1/integrations/canvas/oauth/callback');return url;
+  assert(url.searchParams.get('state'));assert.equal(url.searchParams.get('redirect_uri'),MARTY+'/v1/integrations/canvas/oauth/callback');
+  observation.freshState=!authorizationStates.has(url.searchParams.get('state'));save();requireFreshOAuthValue(authorizationStates,url.searchParams.get('state'));return url;
  }
  async function authorize(url,intercept){
-  return stock.authorizeCanvasOAuth(page,url,{canvasOrigin:CANVAS,martyOrigin:MARTY,captureAtProvider:intercept,
+  const captured=await stock.authorizeCanvasOAuth(page,url,{canvasOrigin:CANVAS,martyOrigin:MARTY,captureAtProvider:intercept,
    observe:value=>{result.validClientSecretCase.oauthAuthorizationObservations=result.validClientSecretCase.oauthAuthorizationObservations||[];result.validClientSecretCase.oauthAuthorizationObservations.push({independentControl:intercept,...value});save();}});
+  const freshCode=!authorizationCodes.has(captured.code);result.validClientSecretCase.authorizationCodeFreshness=result.validClientSecretCase.authorizationCodeFreshness||[];result.validClientSecretCase.authorizationCodeFreshness.push({freshCode});save();requireFreshOAuthValue(authorizationCodes,captured.code);return captured;
  }
  try{
   await stock.loginCanvas(page,CANVAS,canvasCredentials.email,canvasCredentials.password,{observe:value=>stage('CANVAS_'+value)});
@@ -118,6 +123,38 @@ async function executeWrongSecretCase({result,save,gateway,admin,adminPage,organ
   assert.equal(after.status,200);assert.equal(after.payload.enabled,false);
   assert.notEqual(after.payload.connection_config?.oauth_status,'connected');
   result.validClientSecretCase.state='VALID_CLIENT_WRONG_SECRET_DENIED';save();
+  if(recoverWithValidSecret){
+   const recovery=result.validClientSecretCase.recovery={state:'STARTED',qualified:false};save();
+   stage('RECOVERY_INITIAL_REFS');const initialRefs=await readOwnedOAuthReferences(gateway,admin,organizationId,platform.id);
+   assert.equal(initialRefs.length,0,'Fresh disconnected draft must not adopt previous OAuth authority');
+   stage('RECOVERY_OAUTH_SOURCE_BINDING');recovery.oauthSelectionBefore=observeOAuthSelection(result.functionalRuntimeBinding);save();
+   stage('RECOVERY_CORRECT_SECRET');
+   const correctRef=await create('/v1/integrations/canvas/integration-secrets',{organization_id:organizationId,name:'Correct-secret recovery '+runId,
+    provider:'canvas',purpose:'oauth_client_secret',secret_value:correctSecret,metadata:{audit_run_id:runId,platform_id:platform.id},enabled:true});
+   // Mark before authorization starts: an interrupted callback still needs the
+   // native disconnect path, never an assumption that no token was published.
+   oauthMayExist=true;const third=await start(correctRef,'RECOVERY_AUTHORIZATION_START');
+   recovery.distinctFreshState=authorizationStates.size===3;save();assert.equal(recovery.distinctFreshState,true);
+   stage('RECOVERY_PROVIDER_AUTHORIZE');await authorize(third,false);recovery.distinctFreshCode=authorizationCodes.size===3;save();assert.equal(recovery.distinctFreshCode,true);
+   stock.assertCanvasOauthCompletion(new URL(page.url()),MARTY,platform.id);
+   stage('RECOVERY_CONNECTED_READBACK');
+   const connected=await gateway('/v1/integrations/canvas/platforms/'+platform.id,admin);
+   assert.equal(connected.status,200);assert.equal(connected.payload.organization_id,organizationId);assert.equal(connected.payload.enabled,false);
+   assert.equal(connected.payload.connection_config?.oauth_status,'connected');assert.equal(connected.payload.connection_config?.oauth_client_id,clientId);
+   const beforeCatalog=await readOwnedOAuthReferences(gateway,admin,organizationId,platform.id,{requireAccess:true});
+   recovery.beforeCatalog=beforeCatalog;save();stage('RECOVERY_OWNED_OAUTH_CATALOG');
+   const catalog=await readOwnedCanvasScope(gateway,admin,organizationId,platform.id);
+   const afterCatalog=await readOwnedOAuthReferences(gateway,admin,organizationId,platform.id,{requireAccess:true});
+   const firstAccess=beforeCatalog.find(row=>row.purpose==='oauth_access_token'),lastAccess=afterCatalog.find(row=>row.purpose==='oauth_access_token');
+   recovery.afterCatalog=afterCatalog;recovery.oauthSelectionAfter=observeOAuthSelection(result.functionalRuntimeBinding);assert.deepEqual(recovery.oauthSelectionAfter,recovery.oauthSelectionBefore);recovery.catalog=catalog;
+   // Metadata reads are SELECT-only. Timestamp movement is corroboration, not
+   // an invented activity gate: refresh may return newly saved token bytes.
+   recovery.accessRefRotated=firstAccess.id!==lastAccess.id;
+   recovery.lastUsedAdvanced=lastAccess.lastUsedAt!==null&&(firstAccess.lastUsedAt===null||Date.parse(lastAccess.lastUsedAt)>Date.parse(firstAccess.lastUsedAt));
+   recovery.state='NATIVE_OAUTH_CONNECTED_AND_CATALOG_READ';save();
+   result.validClientSecretCase.state='WRONG_SECRET_DENIED_AND_VALID_SECRET_RECOVERED';save();
+  }
+
  }catch(error){
   primaryFailure=error;
   result.validClientSecretCase.failureStage=result.validClientSecretCase.stage;
@@ -126,6 +163,9 @@ async function executeWrongSecretCase({result,save,gateway,admin,adminPage,organ
  }finally{
   let retired=false;
   try{
+   if(oauthMayExist){stage('RECOVERY_NATIVE_DISCONNECT');
+    result.validClientSecretCase.recovery.disconnect=await retireOwnedOAuthConnection(gateway,admin,organizationId,platform.id,
+     value=>{result.validClientSecretCase.recovery.disconnect=value;save();},{requireAccess:!primaryFailure&&result.validClientSecretCase.recovery.state==='NATIVE_OAUTH_CONNECTED_AND_CATALOG_READ'});oauthMayExist=false;save();}
    for(const row of [...result.validClientSecretCase.ownedMarty].sort((a,b)=>Number(b.collection.endsWith('/platforms'))-Number(a.collection.endsWith('/platforms')))){
     assert.equal(row.state,'CREATED','Unknown creation requires reconciliation');
     await requireOwnedMartyResource(gateway,admin,row,organizationId);
@@ -138,7 +178,8 @@ async function executeWrongSecretCase({result,save,gateway,admin,adminPage,organ
    assert(!result.validClientSecretCase.canvasKeyIntent||owned.resources.oauthDeveloperKey,'Ambiguous Canvas creation needs reconciliation');
    const cleanup=await stock.retireCanvasSetupFixtures(state,retired,true);
    assert.equal(cleanup.complete,true);result.validClientSecretCase.canvasCleanup=cleanup;
-   result.validClientSecretCase.allOwnedAuthorityRetired=retired;save();
+   result.validClientSecretCase.allOwnedAuthorityRetired=retired;
+   save();
   }catch(error){
    cleanupFailure=error;result.validClientSecretCase.resourceCleanupFailure=describe(error);save();
   }finally{
@@ -151,7 +192,69 @@ async function executeWrongSecretCase({result,save,gateway,admin,adminPage,organ
  }
  if(primaryFailure)throw primaryFailure;
  if(cleanupFailure)throw cleanupFailure;
- return result.validClientSecretCase;
+ if(recoverWithValidSecret)result.validClientSecretCase.recovery.localOperationsAndOwnedCleanupPassed=true;
+ // The caller still owns beta-session retirement and all22 after-binding; this function never promotes qualification.
+ save();return result.validClientSecretCase;
+}
+function requireFreshOAuthValue(seen,value){
+ assert.equal(typeof value,'string');assert(value.length>0);assert.equal(seen.has(value),false,'Fresh server-issued OAuth value required');seen.add(value);return true;
+}
+function oauthFallbackPresence(raw){
+ const seen=new Set(),presence={fallbackEnabled:false,adminTokenScalarPresent:false,adminTokenFileReferencePresent:false};
+ for(const entry of raw.split('\0').filter(value=>value.includes('='))){const at=entry.indexOf('='),name=entry.slice(0,at);
+  if(!['CANVAS_ALLOW_LOCAL_ADMIN_TOKEN_FALLBACK','CANVAS_ADMIN_API_TOKEN','CANVAS_ADMIN_API_TOKEN_FILE'].includes(name))continue;
+  assert.equal(seen.has(name),false,'Ambiguous process fallback configuration');seen.add(name);const value=entry.slice(at+1).trim();
+  if(name==='CANVAS_ALLOW_LOCAL_ADMIN_TOKEN_FALLBACK')presence.fallbackEnabled=['1','true','yes','on'].includes(value.toLowerCase());
+  else presence[name==='CANVAS_ADMIN_API_TOKEN'?'adminTokenScalarPresent':'adminTokenFileReferencePresent']=Boolean(value);
+ }
+ return presence;
+}
+function observeOAuthSelection(binding,{read=args=>require('node:child_process').execFileSync('docker',args,{encoding:'utf8',timeout:30000,maxBuffer:4*1024*1024,windowsHide:true})}={}){
+ assert(binding&&['marty.functional-mixed-runtime-binding/v1','marty.functional-mixed-runtime-binding/v2'].includes(binding.schema));
+ assert.equal(binding.scope,'FUNCTIONAL_ONLY');assert.equal(binding.releaseQualified,false);assert.equal(binding.recordingQualified,false);assert.equal(binding.roles.length,22);
+ return ['issuance','issuance-native'].map(role=>{
+  const selected=binding.roles.filter(row=>row.role===role);assert.equal(selected.length,1);const row=selected[0];assert.match(row.containerId,/^[a-f0-9]{64}$/);
+  const before=JSON.parse(read(['inspect',row.containerId]))[0];assert.equal(before.Id,row.containerId);assert.equal(before.State.Running,true);
+  assert.equal(before.State.Pid,row.hostPid);assert.equal(before.State.StartedAt,row.startedAt);
+  const presence=oauthFallbackPresence(read(['exec',row.containerId,'cat','/proc/1/environ']));
+  const after=JSON.parse(read(['inspect',row.containerId]))[0];assert.equal(after.Id,before.Id);assert.equal(after.State.Pid,before.State.Pid);assert.equal(after.State.StartedAt,before.State.StartedAt);
+  assert.equal(presence.fallbackEnabled,false,'OAuth recovery must not be masked by local administrator fallback');
+  return {role,containerId:row.containerId,hostPid:row.hostPid,startedAt:row.startedAt,...presence};
+ });
+}
+function ownedOAuthReferences(payload,organizationId,platformId,{requireAccess=false}={}){
+ assert.equal(typeof requireAccess,'boolean');
+ assert(Array.isArray(payload));assert(payload.every(row=>row.organization_id===organizationId&&row.provider==='canvas'),'Secret inventory is not tenant/provider bound');
+ const owned=payload.filter(row=>row.metadata?.platform_id===platformId&&['oauth_access_token','oauth_refresh_token'].includes(row.purpose));
+ assert.equal(new Set(owned.map(row=>row.id)).size,owned.length,'Ambiguous owned OAuth references');
+ for(const row of owned){assert.match(row.id,/^[a-f0-9-]{36}$/i);assert.equal(typeof row.enabled,'boolean');if(requireAccess)assert.equal(row.enabled,true);
+  assert(row.last_used_at==null||Number.isFinite(Date.parse(row.last_used_at)),'Invalid last-used metadata');}
+ if(requireAccess){assert.equal(owned.filter(row=>row.purpose==='oauth_access_token').length,1);assert(owned.filter(row=>row.purpose==='oauth_refresh_token').length<=1);}
+ return owned.map(row=>({id:row.id,organizationId,platformId,purpose:row.purpose,enabled:row.enabled,lastUsedAt:row.last_used_at??null}));
+}
+async function readOwnedOAuthReferences(gateway,admin,organizationId,platformId,options={}){
+ const response=await gateway('/v1/integrations/canvas/integration-secrets?organization_id='+encodeURIComponent(organizationId)+'&provider=canvas',admin);
+ assert.equal(response.status,200);return ownedOAuthReferences(response.payload,organizationId,platformId,options);
+}
+async function readOwnedCanvasScope(gateway,admin,organizationId,platformId){
+ const response=await gateway('/v1/integrations/canvas/platforms/'+encodeURIComponent(platformId)+'/scope-discovery',
+  {...admin,method:'POST',body:{include_courses:true,include_assignments:false,include_quizzes:false,include_modules:false,limit:1}});
+ assert.equal(response.status,200);assert.equal(response.payload.platform_id,platformId);assert.equal(response.payload.organization_id,organizationId);
+ assert.equal(response.payload.canvas_base_url,CANVAS);assert(Array.isArray(response.payload.courses));
+ return {status:200,platformMatches:true,organizationMatches:true,originMatches:true,courseCount:response.payload.courses.length};
+}
+async function retireOwnedOAuthConnection(gateway,admin,organizationId,platformId,observe=()=>{},{requireAccess=false}={}){
+ assert.equal(typeof requireAccess,'boolean');
+ const before=await readOwnedOAuthReferences(gateway,admin,organizationId,platformId,{requireAccess});
+ const response=await gateway('/v1/integrations/canvas/platforms/'+encodeURIComponent(platformId)+'/oauth',{...admin,method:'DELETE'});
+ const evidence={status:response.status,typedDisconnectedAck:false,ownedReferenceIds:before.map(row=>row.id),atomicMetadataAbsence:false,
+  providerStatusDirectlyObserved:false,serverHeldBearerProbed:false,normalSuccessCleanup:requireAccess,providerRevokeAckSourceBound:false};observe({...evidence});
+ assert.equal(response.status,200);assert.equal(response.payload.platform_id,platformId);assert.equal(response.payload.status,'disconnected');
+ assert(Array.isArray(response.payload.scopes)&&response.payload.scopes.length===0);evidence.typedDisconnectedAck=true;observe({...evidence});
+ const after=await readOwnedOAuthReferences(gateway,admin,organizationId,platformId);
+ assert.equal(after.length,0,'Owned OAuth authority remains; preserve recovery custody');evidence.atomicMetadataAbsence=true;
+ evidence.providerRevokeAckSourceBound=requireAccess;
+ evidence.nativeAckSemantics=requireAccess?'source-bound provider DELETE accepted200/204/404 before atomic connection/secret removal':'partial-failure disconnect/readback completed; no independent provider revoke claim';observe({...evidence});return evidence;
 }
 async function canvasFailureDiagnostic(page){
  const url=new URL(page.url());
@@ -241,5 +344,5 @@ async function runWrongSecretCase(options){
   throw new Error('Canvas valid-client wrong-secret control failed; preserve its owned journal for review.');
  }
 }
-module.exports={requestStatelessTokenDenial,authorizationBoundaryChecks,providerDenialObservation,safeCanvasFailure,canvasFailureDiagnostic,assertCanvasLoginIdentity,requireOwnedMartyResource,retireCanvasSession,planWrongSecretCase,requireProviderInvalidSecret,requireMartyInvalidSecret,runWrongSecretCase};
+module.exports={readOwnedCanvasScope,requireFreshOAuthValue,oauthFallbackPresence,observeOAuthSelection,ownedOAuthReferences,readOwnedOAuthReferences,retireOwnedOAuthConnection,requestStatelessTokenDenial,authorizationBoundaryChecks,providerDenialObservation,safeCanvasFailure,canvasFailureDiagnostic,assertCanvasLoginIdentity,requireOwnedMartyResource,retireCanvasSession,planWrongSecretCase,requireProviderInvalidSecret,requireMartyInvalidSecret,runWrongSecretCase};
 if(require.main===module){assert.deepEqual(process.argv.slice(2),['--plan'],'Offline plan only; execution requires reviewed existing capability runner');console.log(JSON.stringify(planWrongSecretCase(),null,2));}
