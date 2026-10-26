@@ -222,6 +222,87 @@ def probe_source():
     finally:os.close(fd)
 
 
+def observe_after_dispatch(*, checkpoint, output, context, target, authorization, receipt,
+        inventory, ssh, key, known_hosts, port, host, user, home, bootstrap_source,
+        tls_source, unchanged, guarded_execute, clock=time.time):
+    """Collect bound read-only status, trust and TLS after one dispatch attempt.
+
+    This function never starts the installer or qualifies an installed journey.
+    The caller supplies custody and live-target guards for every SSH operation.
+    """
+    validate(checkpoint, context=context, target=target, authorization=authorization,
+             receipt=receipt, inventory=inventory)
+    r.require(checkpoint['host_preflight']=='passed'
+              and checkpoint['dispatch']!='not_attempted',
+              'post-dispatch observation requires admitted invocation')
+    unchanged()
+    # Native startup deliberately exits incomplete. Query its locked public
+    # trust record through the same pinned SSH route; absence remains explicit.
+    # This does not modify a trust store, contact the app, or qualify login.
+    base, _, _ = dispatch.remote_plan(home,user,context,target,authorization=authorization,
+        bootstrap_source=bootstrap_source)
+    operator=(base+'/bootstrap/marty-deploy-linux-amd64' if context['phase']=='published'
+        else base+'/marty-deploy')
+    installation=home+'/marty-install-'+target['installation_id']
+    quoted_operator=shlex.quote(operator)
+    remote_prefix=('set -eu; PATH=/usr/bin:/bin; export PATH; '
+        'test "$(id -un)" = '+shlex.quote(user)+'; '
+        'printf "%s  %s\\n" '+shlex.quote(context['operator_sha256'])+' '+quoted_operator+
+        ' | /usr/bin/sha256sum --check --status --strict; '
+        'exec env -i HOME='+shlex.quote(home)+' PATH=/usr/bin:/bin '+quoted_operator)
+    checkpoint['trust_inspection']='unavailable'
+    try:
+        with tempfile.TemporaryDirectory(prefix='installer-trust-controller-') as private:
+            args=[str(ssh),*dispatch.ssh_options(key,known_hosts,port),'-T',user+'@'+host]
+            status_command=remote_prefix+' status --install-dir '+shlex.quote(installation)
+            status_raw=guarded_execute([*args,status_command],
+                env=dict(HOME=private,PATH='/usr/bin:/bin',LANG='C',LC_ALL='C'),timeout=120,limit=65536)
+            status_observation(status_raw,context,target,authorization,inventory)
+            raw=guarded_execute([*args,remote_prefix+' trust-info --install-dir '+shlex.quote(installation)],
+                env=dict(HOME=private,PATH='/usr/bin:/bin',LANG='C',LC_ALL='C'),timeout=120,limit=65536)
+            status_again=guarded_execute([*args,status_command],
+                env=dict(HOME=private,PATH='/usr/bin:/bin',LANG='C',LC_ALL='C'),timeout=120,limit=65536)
+            r.require(status_again==status_raw,'candidate status changed across trust export')
+        trust_value=trust_observation(raw,target,int(clock()))
+        unchanged()
+        write_exclusive(output/STATUS_NAME,status_raw)
+        write_exclusive(output/TRUST_NAME,raw)
+        checkpoint['status_observation_sha256']=r.digest(status_raw)
+        checkpoint['trust_info_sha256']=r.digest(raw)
+        checkpoint['trust_inspection']='verified_public_record'
+    except (ValueError,OSError):
+        unchanged()
+    if checkpoint['trust_inspection']=='verified_public_record':
+        checkpoint['tls_inspection']='unavailable'
+        try:
+            code=("import base64;exec(compile(base64.b64decode("+
+                repr(base64.b64encode(tls_source.encode('utf-8')).decode())+
+                "),'installer-live-tls-probe','exec'))")
+            ca_encoded=base64.b64encode(trust_value['ca_certificate_pem'].encode('ascii')).decode('ascii')
+            tls_remote=('set -eu; test "$(id -un)" = '+shlex.quote(user)+'; exec env -i HOME='+
+                shlex.quote(home)+' PATH=/usr/bin:/bin /usr/bin/python3 -I -c '+
+                shlex.join([code,trust_value['origin'],ca_encoded,target['installation_id'],target['engine_id']]))
+            with tempfile.TemporaryDirectory(prefix='installer-tls-controller-') as private:
+                args=[str(ssh),*dispatch.ssh_options(key,known_hosts,port),'-T',user+'@'+host]
+                tls_raw=guarded_execute([*args,tls_remote],
+                    env=dict(HOME=private,PATH='/usr/bin:/bin',LANG='C',LC_ALL='C'),timeout=120,limit=65536)
+                tls_observation(tls_raw,trust_value,target,int(clock()))
+                status_after=guarded_execute([*args,status_command],
+                    env=dict(HOME=private,PATH='/usr/bin:/bin',LANG='C',LC_ALL='C'),timeout=120,limit=65536)
+                trust_after=guarded_execute([*args,remote_prefix+' trust-info --install-dir '+shlex.quote(installation)],
+                    env=dict(HOME=private,PATH='/usr/bin:/bin',LANG='C',LC_ALL='C'),timeout=120,limit=65536)
+            r.require(status_after==status_raw and trust_after==raw,'candidate changed across live TLS probe')
+            unchanged()
+            write_exclusive(output/TLS_NAME,tls_raw)
+            checkpoint['tls_observation_sha256']=r.digest(tls_raw)
+            checkpoint['tls_inspection']='verified_local_https'
+        except (ValueError,OSError):
+            unchanged()
+    checkpoint['observed_at']=int(clock())
+    validate(checkpoint,context=context,target=target,authorization=authorization,receipt=receipt,inventory=inventory)
+    write_exclusive(output/NAME,r.encode(checkpoint));return checkpoint
+
+
 def run(*, output, assets, grants, context_file, target_file, ledger, gh, cosign,
         ssh, scp, key, known_hosts, host, port, user, home,
         clock=time.time, verifier=provenance.command, execute=command,
@@ -297,72 +378,12 @@ def run(*, output, assets, grants, context_file, target_file, ledger, gh, cosign
         checkpoint['dispatch']='returned_zero_unqualified'
     except (ValueError,OSError):
         pass # No error bodies, tokens, automatic cleanup or replay.
-    unchanged()
-    # Native startup deliberately exits incomplete. Query its locked public
-    # trust record through the same pinned SSH route; absence remains explicit.
-    # This does not modify a trust store, contact the app, or qualify login.
-    base, _, _ = dispatch.remote_plan(home,user,context,target,authorization=authorization,
-        bootstrap_source=bootstrap_source)
-    operator=(base+'/bootstrap/marty-deploy-linux-amd64' if context['phase']=='published'
-        else base+'/marty-deploy')
-    installation=home+'/marty-install-'+target['installation_id']
-    quoted_operator=shlex.quote(operator)
-    remote_prefix=('set -eu; PATH=/usr/bin:/bin; export PATH; '
-        'test "$(id -un)" = '+shlex.quote(user)+'; '
-        'printf "%s  %s\\n" '+shlex.quote(context['operator_sha256'])+' '+quoted_operator+
-        ' | /usr/bin/sha256sum --check --status --strict; '
-        'exec env -i HOME='+shlex.quote(home)+' PATH=/usr/bin:/bin '+quoted_operator)
-    checkpoint['trust_inspection']='unavailable'
-    try:
-        with tempfile.TemporaryDirectory(prefix='installer-trust-controller-') as private:
-            args=[str(ssh),*dispatch.ssh_options(key,known_hosts,port),'-T',user+'@'+host]
-            status_command=remote_prefix+' status --install-dir '+shlex.quote(installation)
-            status_raw=guarded_execute([*args,status_command],
-                env=dict(HOME=private,PATH='/usr/bin:/bin',LANG='C',LC_ALL='C'),timeout=120,limit=65536)
-            status_observation(status_raw,context,target,authorization,inventory)
-            raw=guarded_execute([*args,remote_prefix+' trust-info --install-dir '+shlex.quote(installation)],
-                env=dict(HOME=private,PATH='/usr/bin:/bin',LANG='C',LC_ALL='C'),timeout=120,limit=65536)
-            status_again=guarded_execute([*args,status_command],
-                env=dict(HOME=private,PATH='/usr/bin:/bin',LANG='C',LC_ALL='C'),timeout=120,limit=65536)
-            r.require(status_again==status_raw,'candidate status changed across trust export')
-        trust_value=trust_observation(raw,target,int(clock()))
-        unchanged()
-        write_exclusive(output/STATUS_NAME,status_raw)
-        write_exclusive(output/TRUST_NAME,raw)
-        checkpoint['status_observation_sha256']=r.digest(status_raw)
-        checkpoint['trust_info_sha256']=r.digest(raw)
-        checkpoint['trust_inspection']='verified_public_record'
-    except (ValueError,OSError):
-        unchanged()
-    if checkpoint['trust_inspection']=='verified_public_record':
-        checkpoint['tls_inspection']='unavailable'
-        try:
-            code=("import base64;exec(compile(base64.b64decode("+
-                repr(base64.b64encode(tls_source.encode('utf-8')).decode())+
-                "),'installer-live-tls-probe','exec'))")
-            ca_encoded=base64.b64encode(trust_value['ca_certificate_pem'].encode('ascii')).decode('ascii')
-            tls_remote=('set -eu; test "$(id -un)" = '+shlex.quote(user)+'; exec env -i HOME='+
-                shlex.quote(home)+' PATH=/usr/bin:/bin /usr/bin/python3 -I -c '+
-                shlex.join([code,trust_value['origin'],ca_encoded,target['installation_id'],target['engine_id']]))
-            with tempfile.TemporaryDirectory(prefix='installer-tls-controller-') as private:
-                args=[str(ssh),*dispatch.ssh_options(key,known_hosts,port),'-T',user+'@'+host]
-                tls_raw=guarded_execute([*args,tls_remote],
-                    env=dict(HOME=private,PATH='/usr/bin:/bin',LANG='C',LC_ALL='C'),timeout=120,limit=65536)
-                tls_observation(tls_raw,trust_value,target,int(clock()))
-                status_after=guarded_execute([*args,status_command],
-                    env=dict(HOME=private,PATH='/usr/bin:/bin',LANG='C',LC_ALL='C'),timeout=120,limit=65536)
-                trust_after=guarded_execute([*args,remote_prefix+' trust-info --install-dir '+shlex.quote(installation)],
-                    env=dict(HOME=private,PATH='/usr/bin:/bin',LANG='C',LC_ALL='C'),timeout=120,limit=65536)
-            r.require(status_after==status_raw and trust_after==raw,'candidate changed across live TLS probe')
-            unchanged()
-            write_exclusive(output/TLS_NAME,tls_raw)
-            checkpoint['tls_observation_sha256']=r.digest(tls_raw)
-            checkpoint['tls_inspection']='verified_local_https'
-        except (ValueError,OSError):
-            unchanged()
-    checkpoint['observed_at']=int(clock())
-    validate(checkpoint,context=context,target=target,authorization=authorization,receipt=receipt,inventory=inventory)
-    write_exclusive(output/NAME,r.encode(checkpoint));return checkpoint
+    return observe_after_dispatch(
+        checkpoint=checkpoint, output=output, context=context, target=target,
+        authorization=authorization, receipt=receipt, inventory=inventory,
+        ssh=ssh, key=key, known_hosts=known_hosts, port=port, host=host, user=user,
+        home=home, bootstrap_source=bootstrap_source, tls_source=tls_source,
+        unchanged=unchanged, guarded_execute=guarded_execute, clock=clock)
 
 
 def main(argv=None):

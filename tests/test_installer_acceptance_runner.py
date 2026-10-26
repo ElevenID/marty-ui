@@ -112,6 +112,27 @@ def test_real_probe_before_dispatch_and_never_claims_acceptance(candidate):
     assert len(calls)==8
 
 
+@pytest.mark.parametrize('field,value', [('host_preflight', 'failed'),
+                                         ('dispatch', 'not_attempted')])
+def test_extracted_observer_refuses_unadmitted_or_unattempted_checkpoint(
+        candidate, field, value):
+    args,calls,context,target,auth,receipt,inv=candidate
+    checkpoint=a.run(**args)
+    checkpoint[field]=value
+    seen=len(calls)
+    def unexpected(*_args, **_kwargs):
+        raise AssertionError('post-dispatch guard or remote operation ran')
+    with pytest.raises(ValueError):
+        a.observe_after_dispatch(
+            checkpoint=checkpoint, output=args['output'], context=context,
+            target=target, authorization=auth, receipt=receipt, inventory=inv,
+            ssh=args['ssh'], key=args['key'], known_hosts=args['known_hosts'],
+            port=args['port'], host=args['host'], user=args['user'], home=args['home'],
+            bootstrap_source=None, tls_source='', unchanged=unexpected,
+            guarded_execute=unexpected, clock=args['clock'])
+    assert len(calls)==seen
+
+
 def test_host_probe_must_match_signed_harness(candidate,monkeypatch):
     args,calls,*_=candidate
     monkeypatch.setattr(a.dispatch,'verified_harness_script',lambda source,name:'print("drift")')
