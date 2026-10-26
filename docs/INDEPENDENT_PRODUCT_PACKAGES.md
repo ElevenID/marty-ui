@@ -43,10 +43,26 @@ depend on a console; console absence must preserve backend routing and failure
 propagation. The existing API-only composition and edge tests are the source
 foundation for that runtime boundary.
 
-The remaining packaging implementation is to wire these independent plans into
-the producer workflow and digest-bound package manifests, expose independently
-versioned deployment composition, and retain compatibility with the combined
-release path. Source and local development tests belong to this work. Installer
-implementation and independent release-artifact verification belong to the
-other assigned workers. Build plans alone do not complete this packaging work
-or establish a new supported distribution.
+The `Independent product packages` workflow consumes the selected plan on exact
+protected-main source. Selecting the server builds its four backend roles;
+selecting the console builds only its UI role. The workflow pushes images by
+digest, requests BuildKit SBOM/provenance and emits GitHub build attestations.
+It does not write a stable version tag or create a supported release.
+
+Each image receipt binds its product, version, source, role, image URI, workflow
+run and attempt. Package assembly requires every expected role from the same
+attempt and rejects missing, extra or mismatched receipts. It rechecks the
+frozen plan against the source inputs before emitting `product-package.json`,
+the build plan and checksum inventory as an attested workflow artifact.
+`deploy-config/schemas/product-package.schema.json` defines this versioned
+consumer interface. Its state remains experimental/unqualified; a producer
+receipt is not independent verification of an image or compatibility result.
+
+The remaining packaging implementation is independently versioned deployment
+composition and a qualified publication/promotion path that consumes the
+verification owner's exact candidate evidence. Existing combined releases
+retain their current transaction and qualification gates. Source and local
+development tests belong to this work. Installer implementation and independent
+release-artifact verification belong to the other assigned workers. Candidate
+production alone does not complete this packaging work or establish a new
+supported distribution.

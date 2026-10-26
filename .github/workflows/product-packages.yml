@@ -1,0 +1,185 @@
+name: Independent product packages
+
+on:
+  workflow_dispatch:
+    inputs:
+      product:
+        description: Independent product to build as an unqualified candidate
+        type: choice
+        required: true
+        options: [marty-server, marty-console]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: product-packages-${{ inputs.product }}
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    if: github.repository == 'ElevenID/marty-ui'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      product: ${{ steps.plan.outputs.product }}
+      version: ${{ steps.plan.outputs.version }}
+    steps:
+      - name: Require protected main producer source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Freeze only the selected product's source inputs
+        id: plan
+        env:
+          PRODUCT: ${{ inputs.product }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir product-plan
+          python scripts/product_package_plan.py --product "$PRODUCT" \
+            --source-sha "$GITHUB_SHA" --output product-plan/build-plan.json
+          {
+            echo "matrix=$(jq -c '{include: .images}' product-plan/build-plan.json)"
+            echo "product=$(jq -r .product product-plan/build-plan.json)"
+            echo "version=$(jq -r .version product-plan/build-plan.json)"
+          } >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: product-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          path: product-plan/build-plan.json
+          if-no-files-found: error
+
+  build:
+    needs: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+        with:
+          driver-opts: image=moby/buildkit:buildx-stable-1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Pass bounded source-derived build arguments
+        id: args
+        env:
+          IMAGE_PLAN: ${{ toJSON(matrix) }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo 'value<<PRODUCT_BUILD_ARGS'
+            jq -r '.build_args | to_entries[] | "\(.key)=\(.value)"' <<< "$IMAGE_PLAN"
+            echo PRODUCT_BUILD_ARGS
+          } >> "$GITHUB_OUTPUT"
+      - name: Build only this product's image role
+        id: image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          target: ${{ matrix.target }}
+          platforms: ${{ matrix.platform }}
+          outputs: type=image,name=${{ matrix.image }},push-by-digest=true,name-canonical=true,push=true
+          build-args: ${{ steps.args.outputs.value }}
+          labels: |
+            io.elevenid.product=${{ needs.plan.outputs.product }}
+            io.elevenid.qualification=unqualified
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha,scope=product-${{ needs.plan.outputs.product }}-${{ matrix.role }}
+          cache-to: type=gha,mode=max,scope=product-${{ needs.plan.outputs.product }}-${{ matrix.role }}
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+        with:
+          subject-name: ${{ matrix.image }}
+          subject-digest: ${{ steps.image.outputs.digest }}
+          push-to-registry: true
+      - name: Record this exact producer attempt's digest
+        env:
+          PRODUCT: ${{ needs.plan.outputs.product }}
+          VERSION: ${{ needs.plan.outputs.version }}
+          ROLE: ${{ matrix.role }}
+          IMAGE: ${{ matrix.image }}
+          DIGEST: ${{ steps.image.outputs.digest }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir image-receipt
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          value = {key.lower(): os.environ[key] for key in ('PRODUCT', 'VERSION', 'ROLE', 'IMAGE', 'DIGEST')}
+          value.update(source_sha=os.environ['GITHUB_SHA'], run_id=os.environ['GITHUB_RUN_ID'], run_attempt=os.environ['GITHUB_RUN_ATTEMPT'])
+          Path('image-receipt', value['role'] + '.json').write_text(json.dumps(value) + '\n')
+          PY
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: product-image-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.role }}
+          path: image-receipt/*.json
+          if-no-files-found: error
+
+  package:
+    needs: [plan, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: product-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          path: product-plan
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: product-image-${{ github.run_id }}-${{ github.run_attempt }}-*
+          merge-multiple: true
+          path: image-receipts
+      - name: Assemble complete digest-bound package without a support claim
+        env:
+          PRODUCT: ${{ needs.plan.outputs.product }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir product-package
+          python scripts/product_package_plan.py --product "$PRODUCT" --source-sha "$GITHUB_SHA" \
+            --input-plan product-plan/build-plan.json --images-dir image-receipts \
+            --build-run-id "$GITHUB_RUN_ID" --build-run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --output product-package/product-package.json
+          cp product-plan/build-plan.json product-package/build-plan.json
+          (cd product-package && sha256sum build-plan.json product-package.json > SHA256SUMS)
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+        with:
+          subject-path: product-package/*
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: ${{ needs.plan.outputs.product }}-${{ needs.plan.outputs.version }}-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: product-package/*
+          if-no-files-found: error

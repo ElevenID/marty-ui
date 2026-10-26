@@ -106,14 +106,58 @@ def build_plan(root: Path, product: str, source_sha: str) -> dict:
     }
 
 
+def assemble_package(root: Path, plan: dict, images_dir: Path, run_id: str, attempt: str) -> dict:
+    """Bind this producer attempt's complete role set; do not qualify payloads."""
+    require(isinstance(plan, dict), "build plan must be an object")
+    require(plan == build_plan(root, plan.get("product"), plan.get("source_sha")), "frozen build plan differs from source")
+    require(re.fullmatch(r"[1-9][0-9]*", run_id) is not None, "producer run ID is invalid")
+    require(re.fullmatch(r"[1-9][0-9]*", attempt) is not None, "producer attempt is invalid")
+    expected = {image["role"] + ".json" for image in plan["images"]}
+    entries = list(images_dir.iterdir())
+    require({path.name for path in entries} == expected, "producer image receipts are incomplete or unexpected")
+    require(all(path.is_file() and not path.is_symlink() for path in entries), "producer receipt must be a regular file")
+    images = []
+    for image in plan["images"]:
+        path = images_dir / (image["role"] + ".json")
+        require(path.stat().st_size <= 65536, "producer receipt is too large")
+        receipt = json.loads(path.read_bytes())
+        identity = {
+            "product": plan["product"], "version": plan["version"], "source_sha": plan["source_sha"],
+            "role": image["role"], "image": image["image"], "run_id": run_id, "run_attempt": attempt,
+        }
+        require(set(receipt) == set(identity) | {"digest"}, "producer receipt fields changed")
+        require(all(receipt[key] == value for key, value in identity.items()), "producer receipt identity differs")
+        require(isinstance(receipt["digest"], str) and re.fullmatch(r"sha256:[0-9a-f]{64}", receipt["digest"]) is not None, "producer image digest is invalid")
+        images.append({"role": image["role"], "uri": image["image"], "digest": receipt["digest"], "platform": image["platform"]})
+    canonical_plan = json.dumps(plan, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return {
+        "schema": "marty.product-package/v1", "product": plan["product"], "version": plan["version"],
+        "tag": plan["tag"], "source": {"repository": plan["repository"], "commit": plan["source_sha"]},
+        "api": plan["api"], "platforms": ["linux/amd64"], "images": images,
+        "build_plan_sha256": "sha256:" + hashlib.sha256(canonical_plan).hexdigest(),
+        "producer": {"workflow": ".github/workflows/product-packages.yml", "run_id": run_id, "run_attempt": attempt},
+        "support_state": "experimental", "qualification": "unqualified",
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--product", choices=PRODUCTS, required=True)
     parser.add_argument("--source-sha", required=True)
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--input-plan", type=Path)
+    parser.add_argument("--images-dir", type=Path)
+    parser.add_argument("--build-run-id")
+    parser.add_argument("--build-run-attempt")
     args = parser.parse_args()
     plan = build_plan(args.root, args.product, args.source_sha)
+    assembly = (args.input_plan, args.images_dir, args.build_run_id, args.build_run_attempt)
+    if any(value is not None for value in assembly):
+        require(all(value is not None for value in assembly), "all package assembly arguments are required")
+        frozen = json.loads(args.input_plan.read_bytes())
+        require(frozen == plan, "input plan differs from selected source/product")
+        plan = assemble_package(args.root, frozen, args.images_dir, args.build_run_id, args.build_run_attempt)
     args.output.write_text(json.dumps(plan, sort_keys=True, indent=2) + "\n", encoding="utf-8")
 
 
