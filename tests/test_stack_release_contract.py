@@ -103,6 +103,8 @@ def test_stack_release_consumes_only_immutable_public_components() -> None:
     assert "scripts/admit_client_packages.py --lock release/stack-lock.json" in workflow
     assert workflow.count("name: stack-release-client-packages-${{ github.run_id }}") == 2
     assert '--offline --ignore-scripts --omit=dev --no-audit --no-fund' in workflow
+    assert 'test ! -e "$RUNNER_TEMP/client-install"' in workflow
+    assert 'test ! -e "$RUNNER_TEMP/client-npm-cache"' in workflow
     assert 'elevenid-marty-cli-linux-x64-$CLIENT_VERSION.tgz' in workflow
     assert 'test "$("$client_bin/marty" --version)" = "$CLIENT_VERSION"' in workflow
     assert '"$client_bin/marty" api-keys create --help' in workflow

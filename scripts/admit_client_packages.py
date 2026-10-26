@@ -55,7 +55,8 @@ def archive_manifest(payload, name, version):
         for member in members:
             path = PurePosixPath(member.name)
             require(path.parts and not path.is_absolute() and ".." not in path.parts and path.parts[0] == "package"
-                    and "\\" not in member.name and (member.isfile() or member.isdir())
+                    and path.as_posix() == member.name.rstrip("/")
+                    and "\\" not in member.name and ":" not in member.name and (member.isfile() or member.isdir())
                     and member.name not in names, "Client archive has unsafe or duplicate entries")
             names.add(member.name)
         require("package/package.json" in names and "package/LICENSE" in names, "Client metadata/license is missing")

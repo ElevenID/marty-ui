@@ -1022,6 +1022,8 @@ jobs:
         run: | # zizmor: ignore[adhoc-packages]
           set -euo pipefail
           python -m pip install .
+          test ! -e "$RUNNER_TEMP/client-install"
+          test ! -e "$RUNNER_TEMP/client-npm-cache"
           npm install --prefix "$RUNNER_TEMP/client-install" --cache "$RUNNER_TEMP/client-npm-cache" \
             --offline --ignore-scripts --omit=dev --no-audit --no-fund \
             "$RUNNER_TEMP/client-packages/elevenid-marty-api-core-$CLIENT_VERSION.tgz" \

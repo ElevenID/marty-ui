@@ -134,7 +134,8 @@ def test_rejects_unbound_or_incomplete_inventory(mutation):
         MODULE.sbom_identity(document, name, VERSION)
 
 
-@pytest.mark.parametrize("member", ["../escape", "package/../escape", "package/package.json", "symlink"])
+@pytest.mark.parametrize("member", ["../escape", "package/../escape", "package/package.json", "symlink",
+                                    "package//package.json", "package/./package.json", "package/file:stream"])
 def test_rejects_unsafe_or_duplicate_archive_entries(member):
     entry = tarfile.TarInfo(member)
     if member == "symlink":
