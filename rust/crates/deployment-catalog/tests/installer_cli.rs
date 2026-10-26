@@ -296,6 +296,17 @@ esac
     assert_eq!(report["docker"]["engine_id"], "test-engine");
     assert_eq!(report["compose_project"], project);
     assert_eq!(report["services_observed"], false);
+    assert_eq!(
+        report["service_inspection"]["reason"],
+        "recorded_creation_inventory_incomplete"
+    );
+    assert!(
+        report["service_inspection"]["missing_records"]
+            .as_array()
+            .unwrap()
+            .len()
+            == 5
+    );
     assert_eq!(report["installation_ready"], false);
     assert_eq!(report["cleanup"]["state"], "not_started");
     std::fs::write(&binary, script.replace("test-engine", "replacement-engine")).unwrap();

@@ -474,13 +474,19 @@ fn run() -> Result<(), String> {
             )?;
             let observation = runner.preflight()?;
             let cleanup = inspection.cleanup_status()?;
+            let services = marty_deployment_catalog::installer_doctor::services(
+                &inspection,
+                directory,
+                &runner,
+            )?;
             inspection.require_unchanged()?;
             println!(
                 "{}",
                 serde_json::json!({
                     "scope": "installation-host", "installation_id": journal.installation_id(),
                     "compose_project": journal.compose_project(), "docker": observation,
-                    "services_observed": false, "installation_ready": false,
+                    "services_observed": services["services_observed"], "installation_ready": false,
+                    "service_inspection": services,
                     "cleanup": cleanup,
                 })
             );
