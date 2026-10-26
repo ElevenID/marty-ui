@@ -1032,6 +1032,9 @@ held lease, releases that lease for the existing signed exchange, persists the
 exchange result exclusively, then invokes one dispatch. A failed or incomplete
 command retains all owned state and exits nonzero; invoking it again cannot
 resume the same consumed nonce. Run `--help` for the explicit path arguments.
+Run the controller from a fixed Linux checkout of the reviewed source. Guest
+probe authentication compares local bytes with the immutable Git blob; a Windows
+checkout with CRLF conversion cannot be normalized at that trust boundary.
 
 During the one attempt, run the reviewed `installer_resource_probe.py` through
 the same pinned SSH identity and retain its source digest and raw JSONL with the
