@@ -13,9 +13,9 @@
  *   - ElevenID's public/management APIs and OID4VCI credential endpoint.
  *
  * It must never use Rails runner/console, direct database access, patched
- * Canvas source, a Canvas plugin, custom event ingestion, or persisted browser
- * state. Runtime credentials remain in memory and are never written to the
- * observation or video artifacts.
+ * Canvas source, a Canvas plugin, custom event ingestion, or shared persisted browser
+ * state. Exact run-owned recovery authority may enter the protected private
+ * mount; credentials are never written to observation or video artifacts.
  */
 
 const assert = require('node:assert/strict');
@@ -1875,6 +1875,9 @@ async function prepareCanvasCaptureFixtures({ browser, ledger, markActive = () =
   pass = () => {}, runSuffix, state = {}, prerequisiteDirectory = '/artifacts', ownershipDirectory }) {
   requireCondition(browser && /^[A-Za-z0-9-]{8,100}$/.test(runSuffix || ''),
     'canvas_run_identity_invalid', 'A fresh Canvas capture run identity is required.');
+  if(process.env.DEMO_LOCAL_FUNCTIONAL_RUNTIME_RECEIPT) requireCondition(
+    process.env.DEMO_CANVAS_PRIVATE_RECOVERY_DIRECTORY==='/capture-private',
+    'canvas_private_custody_missing','Functional runtime capture requires its protected recovery mount.');
   if (process.env.DEMO_CANVAS_PRIVATE_RECOVERY_DIRECTORY) state.custody ||= createCanvasCaptureCustody(runSuffix);
   let marty, adminContext, learnerContext, platformId, integrationSecretId;
     const canvasOrigin = normalizePinnedOrigin(
@@ -2270,6 +2273,43 @@ async function retireCanvasBetaSession(context, custody) {
   return {logoutStatus:response.status(),oldCookieAuthenticated:false};
 }
 
+async function retireCanvasEngineeringSetup(state, observeSessions = () => {}) {
+  let retired={scope:'OWNED_CANVAS_FIXTURE_RETIREMENT',complete:false,resources:[]};
+  const failures=[];
+  try {
+      requireCanvasSetupMutationReconciliation(state);
+      const issuanceRetirement = await retireCanvasApplication({ marty:state.marty, organizationId: state.organizationId,
+        applicationId: state.applicationId, credentialTemplateId: state.templates?.credential?.id,
+        bindingId: state.binding?.id,
+        transactionId: state.transactionId, reconcile() {
+          assert.ok(!state.approvalInFlight, 'Unknown Canvas approval requires reconciliation');
+        } });
+      if (state.marty && state.platformId && (state.oauthConnected||state.oauthMayExist)) {
+        await retireCanvasOAuthAuthority(state, value => {state.oauthRetirement=value}, {requireAccess:false});
+        state.oauthConnected = false;state.oauthMayExist=false;
+      }
+      if (state.marty) await retireCanvasOwnedReferences(state);
+      retired = await retireCanvasSetupFixtures(state, true, !state.oauthConnected);
+      retired.issuanceRetirement = issuanceRetirement;
+  } catch(error) {failures.push({stage:'OWNED_RESOURCES',location:contractFailureLocation(error,'owned_fixture_cleanup')});}
+  if (state.custody) {
+    try {
+      retired.sessionRetirement=await retireCanvasCaptureSessions(state,value=>{retired.sessionRetirement=value;observeSessions(value)});
+      retired.sessionsRetired=true;
+    } catch(error) {failures.push({stage:'OWNED_SESSIONS',location:contractFailureLocation(error,'owned_session_cleanup')});}
+    if(failures.length===0) {
+      try {retired.privateAuthorityRetired=state.custody.retire();}
+      catch(error) {failures.push({stage:'PRIVATE_AUTHORITY',location:contractFailureLocation(error,'private_authority_cleanup')});}
+    }
+  }
+  if(failures.length) {
+    retired.complete=false;retired.privateAuthorityRetired=false;retired.failures=failures;
+    const error=new ContractFailure('owned_canvas_cleanup_incomplete','Run-owned Canvas authority requires recovery; custody is retained.');
+    error.canvasCleanupEvidence=retired;throw error;
+  }
+  return retired;
+}
+
 async function main() {
   let args;
   try {
@@ -2529,29 +2569,14 @@ async function main() {
     adminContext ||= preparationState.adminContext;
     learnerContext ||= preparationState.learnerContext;
     try {
-      requireCanvasSetupMutationReconciliation(preparationState);
-      const issuanceRetirement = await retireCanvasApplication({ marty, organizationId: preparationState.organizationId,
-        applicationId: preparationState.applicationId, credentialTemplateId: preparationState.templates?.credential?.id,
-        bindingId: preparationState.binding?.id,
-        transactionId: preparationState.transactionId, reconcile() {
-          assert.ok(!preparationState.approvalInFlight, 'Unknown Canvas approval requires reconciliation');
-        } });
-      if (marty && platformId && (preparationState.oauthConnected||preparationState.oauthMayExist)) {
-        await retireCanvasOAuthAuthority(preparationState, value => {preparationState.oauthRetirement=value}, {requireAccess:false});
-        preparationState.oauthConnected = false;preparationState.oauthMayExist=false;
-      }
-      if (marty) await retireCanvasOwnedReferences(preparationState);
-      const retired = await retireCanvasSetupFixtures(preparationState, true, !preparationState.oauthConnected);
-      retired.issuanceRetirement = issuanceRetirement;
-      if (preparationState.custody) {
-        retired.sessionRetirement=await retireCanvasCaptureSessions(preparationState,value=>fs.writeFileSync(
-          path.join(path.dirname(args.observations),'owned-canvas-session-retirement.json'),JSON.stringify(value,null,2)+'\n'));
-        retired.sessionsRetired=true;retired.privateAuthorityRetired=preparationState.custody.retire();
-      }
+      const retired=await retireCanvasEngineeringSetup(preparationState,value=>fs.writeFileSync(
+        path.join(path.dirname(args.observations),'owned-canvas-session-retirement.json'),JSON.stringify(value,null,2)+'\n'));
       fs.writeFileSync(path.join(path.dirname(args.observations), 'owned-canvas-cleanup.json'),
         JSON.stringify(retired, null, 2) + '\n', { flag: 'wx' });
     } catch (error) {
       failure ||= new ContractFailure('owned_canvas_cleanup_incomplete', 'Run-owned Canvas resources require recovery; custody is retained.');
+      if(error.canvasCleanupEvidence) fs.writeFileSync(path.join(path.dirname(args.observations),'owned-canvas-cleanup.json'),
+        JSON.stringify(error.canvasCleanupEvidence,null,2)+'\n',{flag:'wx'});
       const cleanupFailure = contractFailureLocation(error, 'owned_fixture_cleanup');
       ledger.driverFailure ||= cleanupFailure;
       fs.writeFileSync(path.join(path.dirname(args.observations), 'owned-canvas-cleanup-failure.json'),
@@ -2592,6 +2617,7 @@ module.exports = {
   retireCanvasOwnedReferences,
   retireCanvasCaptureSessions,
   retireCanvasBetaSession,
+  retireCanvasEngineeringSetup,
   createLtiDeveloperKey,
   retireCanvasApplication,
   retireCanvasSetupFixtures,

@@ -882,3 +882,29 @@ test('capture retirement uses the shared typed OAuth authority path and rejects 
   assert.equal(result.typedDisconnectedAck,true);assert.equal(result.atomicMetadataAbsence,true);assert.equal(result.serverHeldBearerProbed,false);
   assert.deepEqual(calls.map(row=>row.method),['GET','DELETE','GET']);assert(calls.every(row=>row.includeStatus===true));
 });
+
+
+test('engineering unresolved resources still retire independent owned sessions and retain private recovery',async()=>{
+  const {retireCanvasEngineeringSetup,prepareCanvasCaptureFixtures}=require('./run-canvas-oss-standard-contract');
+  const priorReceipt=process.env.DEMO_LOCAL_FUNCTIONAL_RUNTIME_RECEIPT,priorRecovery=process.env.DEMO_CANVAS_PRIVATE_RECOVERY_DIRECTORY;
+  try {
+    process.env.DEMO_LOCAL_FUNCTIONAL_RUNTIME_RECEIPT='/capture-prerequisites/functional-runtime.json';
+    delete process.env.DEMO_CANVAS_PRIVATE_RECOVERY_DIRECTORY;
+    await assert.rejects(prepareCanvasCaptureFixtures({browser:{},runSuffix:'CONTROLLED-RUN'}),error=>error.code==='canvas_private_custody_missing');
+  } finally {
+    if(priorReceipt===undefined)delete process.env.DEMO_LOCAL_FUNCTIONAL_RUNTIME_RECEIPT;else process.env.DEMO_LOCAL_FUNCTIONAL_RUNTIME_RECEIPT=priorReceipt;
+    if(priorRecovery===undefined)delete process.env.DEMO_CANVAS_PRIVATE_RECOVERY_DIRECTORY;else process.env.DEMO_CANVAS_PRIVATE_RECOVERY_DIRECTORY=priorRecovery;
+  }
+  const probes=[];let privateRetired=false;
+  const context=role=>({cookies:async()=>[{name:'_csrf_token',value:'CONTROLLED'}],request:{get:async()=>{probes.push(role);return {status:()=>401}}}});
+  const state={bindingActivationPossible:true,canvasOrigin:'https://canvas-test.elevenidllc.com',
+    adminContext:context('admin'),learnerContext:context('learner'),custody:{retire(){privateRetired=true;return true}}};
+  await assert.rejects(retireCanvasEngineeringSetup(state),error=>{
+    assert.equal(error.code,'owned_canvas_cleanup_incomplete');
+    assert.equal(error.canvasCleanupEvidence.complete,false);
+    assert.equal(error.canvasCleanupEvidence.sessionsRetired,true);
+    assert.equal(error.canvasCleanupEvidence.privateAuthorityRetired,false);
+    assert.equal(error.canvasCleanupEvidence.failures[0].stage,'OWNED_RESOURCES');return true;
+  });
+  assert.deepEqual(probes,['learner','admin']);assert.equal(privateRetired,false);
+});
