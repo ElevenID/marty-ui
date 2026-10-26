@@ -1147,17 +1147,12 @@ pub(crate) fn managed_key_reference_for_fields(
     credential_format: &str,
     algorithm: &str,
 ) -> String {
-    let tuple =
-        format!("{organization_id}|{issuer_did}|{key_purpose}|{credential_format}|{algorithm}");
-    let token = Uuid::new_v5(&Uuid::NAMESPACE_URL, tuple.as_bytes())
-        .simple()
-        .to_string();
-    let prefix =
-        crate::domain::managed_key_prefix_for_purpose(key_purpose).unwrap_or("cred-issuer-");
-    format!(
-        "{prefix}{}-{}",
-        &token[..20],
-        algorithm.to_ascii_lowercase()
+    marty_managed_key_reference::issuer_identity_reference(
+        organization_id,
+        issuer_did,
+        key_purpose,
+        credential_format,
+        algorithm,
     )
 }
 

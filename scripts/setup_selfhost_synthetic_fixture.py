@@ -325,7 +325,7 @@ async def provision(fixture: dict[str, str]) -> dict:
                     credential_format="SD_JWT_VC", algorithm="ES256")
                 if not isinstance(resolved, dict) or resolved.get("identity") != profile:
                     raise ValueError("resolved public identity differs from created profile")
-                reference = managed_reference(org, purpose)
+                reference = managed_reference(org, purpose, did)
                 if resolved.get("managed_key_binding_sha256") != managed_key_binding(org,
                                                                                      reference):
                     raise ValueError("resolved public identity uses an unexpected managed key")

@@ -766,6 +766,10 @@ fn run() -> Result<(), String> {
                 let context: Value = serde_json::from_slice(&input).map_err(|_| REFUSAL)?;
                 let reference = marty_managed_key_reference::selfhost_reference(
                     context["org"].as_str().ok_or(REFUSAL)?,
+                    context["issuer_did"]
+                        .as_str()
+                        .filter(|value| !value.is_empty())
+                        .ok_or(REFUSAL)?,
                     context["purpose"].as_str().ok_or(REFUSAL)?,
                 )
                 .ok_or(REFUSAL)?;

@@ -950,7 +950,7 @@ def custody_profile_proofs(environment: dict[str, str]) -> list[dict]:
         proofs.append({
             "profile_selector": {"issuer_did": did, "key_purpose": purpose,
                                  "credential_format": "SD_JWT_VC", "algorithm": "ES256"},
-            "key_reference": managed_reference(environment["SELFHOST_ORG_ID"], purpose),
+            "key_reference": managed_reference(environment["SELFHOST_ORG_ID"], purpose, did),
             "key_version": 1,
         })
     return proofs

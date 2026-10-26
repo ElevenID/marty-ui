@@ -8,7 +8,6 @@ import ssl
 import subprocess
 import sys
 import threading
-import uuid
 from pathlib import Path
 
 import httpx
@@ -388,15 +387,16 @@ def test_signed_profile_selector_has_no_null_private_id() -> None:
 def test_purpose_specific_managed_key_references_are_distinct() -> None:
     values = fixture_env()
     org = values["SELFHOST_ORG_ID"]
-    issuer = managed_reference(org, "vc_jwt_issuer")
-    verifier = managed_reference(org, "oid4vp_request_signing")
-    tenant = uuid.uuid5(uuid.NAMESPACE_URL, org).hex
-    assert issuer == f"cred-issuer-{tenant}-marty-es256"
-    assert verifier == f"oid4vp-verifier-{tenant}-marty-es256"
+    did = values["SELFHOST_ISSUER_DID"]
+    issuer = managed_reference(org, "vc_jwt_issuer", did)
+    verifier = managed_reference(org, "oid4vp_request_signing", did)
+    assert issuer.startswith("cred-issuer-") and issuer.endswith("-es256")
+    assert verifier.startswith("oid4vp-verifier-") and verifier.endswith("-es256")
     assert issuer != verifier
     with pytest.raises(ValueError, match="unsupported"):
-        managed_reference(org, "mdoc_dsc")
-    assert managed_reference("another-org", "vc_jwt_issuer") != issuer
+        managed_reference(org, "mdoc_dsc", did)
+    assert managed_reference("another-org", "vc_jwt_issuer", did) != issuer
+    assert managed_reference(org, "vc_jwt_issuer", "did:web:another") != issuer
 
 
 def test_managed_key_binding_is_scoped_to_org_service_and_reference() -> None:

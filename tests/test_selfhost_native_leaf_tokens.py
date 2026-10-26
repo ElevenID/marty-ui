@@ -70,12 +70,15 @@ def test_fixture_custody_scope_keeps_its_historical_set_semantics(policies, vali
             operator_bytes(root, "operator", "leaf-metadata", input=data)
 
 
-@pytest.mark.parametrize("org,namespace", [("00000000-0000-0000-0000-000000000001", "52224a0cec8a56149d0967de03fadd5c"),
-                                           ("Acme", "fc98e4867bf95735b25748954893b06b"),
-                                           ("acme", "7efecc64b5ed5dbfb37990a0ffcfe6df")])
-def test_managed_reference_bridge_matches_independent_literal_vectors(org, namespace):
+@pytest.mark.parametrize("org,issuer,verifier", [
+    ("00000000-0000-0000-0000-000000000001", "cred-issuer-dcd4d4b4b9575a019d8a-es256", "oid4vp-verifier-f9483881590356239d44-es256"),
+    ("Acme", "cred-issuer-de0cc6bbc03b5f6282ed-es256", "oid4vp-verifier-7c65bd7cee1156a4a0ef-es256"),
+    ("acme", "cred-issuer-8554d7a2f8075315a14d-es256", "oid4vp-verifier-de52b913b1aa5304b876-es256"),
+])
+def test_managed_reference_bridge_matches_independent_literal_vectors(org, issuer, verifier):
     from scripts.selfhost_managed_reference import managed_reference
-    assert managed_reference(org, "vc_jwt_issuer") == f"cred-issuer-{namespace}-marty-es256"
-    assert managed_reference(org, "oid4vp_request_signing") == f"oid4vp-verifier-{namespace}-marty-es256"
+    did = "did:web:marty.test:orgs:marty"
+    assert managed_reference(org, "vc_jwt_issuer", did) == issuer
+    assert managed_reference(org, "oid4vp_request_signing", did) == verifier
     with pytest.raises(ValueError):
-        managed_reference(org, "holder_binding")
+        managed_reference(org, "holder_binding", did)

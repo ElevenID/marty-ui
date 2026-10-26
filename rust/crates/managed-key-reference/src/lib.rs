@@ -1,4 +1,4 @@
-//! Stable tenant namespace for standard remote bootstrap keys, not registered holder keys.
+//! Canonical tenant and public-identity namespaces for remote keys.
 
 pub const MANAGED_KEY_PREFIXES: &[&str] = &[
     "cred-issuer-",
@@ -20,19 +20,89 @@ pub fn tenant_standard_key_reference(org: &str, id: &str) -> Option<String> {
     Some(format!("{prefix}{tenant}-{}", &id[prefix.len()..]))
 }
 
-/// Only the two managed profiles consumed by the installed self-host journey.
-pub fn selfhost_reference(org: &str, purpose: &str) -> Option<String> {
-    let id = match purpose {
-        "vc_jwt_issuer" => "cred-issuer-marty-es256",
-        "oid4vp_request_signing" => "oid4vp-verifier-marty-es256",
-        _ => return None,
-    };
-    tenant_standard_key_reference(org, id)
+pub fn managed_key_prefix_for_purpose(purpose: &str) -> Option<&'static str> {
+    match purpose {
+        "vc_jwt_issuer" | "jwks_signing" => Some("cred-issuer-"),
+        "mdoc_dsc" | "x509_doc_signer" | "vdsnc_signing" | "csca" => Some("cred-dsc-"),
+        "lti_tool_signing" => Some("lti-tool-"),
+        "oid4vp_request_signing" => Some("oid4vp-verifier-"),
+        "holder_binding" => Some("cred-holder-"),
+        "presentation_signing" => Some("cred-presenter-"),
+        _ => None,
+    }
+}
+
+/// Preserve the existing public API's exact tuple encoding and key names.
+pub fn issuer_identity_reference(
+    org: &str,
+    issuer_did: &str,
+    purpose: &str,
+    credential_format: &str,
+    algorithm: &str,
+) -> String {
+    let tuple = format!("{org}|{issuer_did}|{purpose}|{credential_format}|{algorithm}");
+    let token = uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_URL, tuple.as_bytes())
+        .simple()
+        .to_string();
+    let prefix = managed_key_prefix_for_purpose(purpose).unwrap_or("cred-issuer-");
+    format!(
+        "{prefix}{}-{}",
+        &token[..20],
+        algorithm.to_ascii_lowercase()
+    )
+}
+
+/// The installed journey creates these two identities through the public API.
+pub fn selfhost_reference(org: &str, issuer_did: &str, purpose: &str) -> Option<String> {
+    if !matches!(purpose, "vc_jwt_issuer" | "oid4vp_request_signing") {
+        return None;
+    }
+    Some(issuer_identity_reference(
+        org,
+        issuer_did,
+        purpose,
+        "SD_JWT_VC",
+        "ES256",
+    ))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn public_identity_names_preserve_bytes_and_bind_the_full_tuple() {
+        let org = "00000000-0000-0000-0000-000000000001";
+        let did = "did:web:marty.test:orgs:marty";
+        let reference = issuer_identity_reference(org, did, "vc_jwt_issuer", "SD_JWT_VC", "ES256");
+        assert_eq!(reference, "cred-issuer-dcd4d4b4b9575a019d8a-es256");
+        assert_eq!(
+            selfhost_reference(org, did, "vc_jwt_issuer"),
+            Some(reference.clone())
+        );
+        assert_eq!(
+            selfhost_reference(org, did, "oid4vp_request_signing").as_deref(),
+            Some("oid4vp-verifier-f9483881590356239d44-es256")
+        );
+        for tuple in [
+            ("another-org", did, "vc_jwt_issuer", "SD_JWT_VC", "ES256"),
+            (
+                org,
+                "did:web:another",
+                "vc_jwt_issuer",
+                "SD_JWT_VC",
+                "ES256",
+            ),
+            (org, did, "oid4vp_request_signing", "SD_JWT_VC", "ES256"),
+            (org, did, "vc_jwt_issuer", "VC_JWT", "ES256"),
+            (org, did, "vc_jwt_issuer", "SD_JWT_VC", "ES384"),
+        ] {
+            assert_ne!(
+                reference,
+                issuer_identity_reference(tuple.0, tuple.1, tuple.2, tuple.3, tuple.4)
+            );
+        }
+    }
 
     #[test]
     fn literal_names_and_raw_organization_bytes_remain_stable() {
@@ -50,16 +120,8 @@ mod tests {
                     Some(format!("{prefix}{namespace}-marty-es256"))
                 );
             }
-            assert_eq!(
-                selfhost_reference(org, "vc_jwt_issuer"),
-                Some(format!("cred-issuer-{namespace}-marty-es256"))
-            );
-            assert_eq!(
-                selfhost_reference(org, "oid4vp_request_signing"),
-                Some(format!("oid4vp-verifier-{namespace}-marty-es256"))
-            );
         }
         assert!(tenant_standard_key_reference("org", "unknown-key").is_none());
-        assert!(selfhost_reference("org", "holder_binding").is_none());
+        assert!(selfhost_reference("org", "did:example:issuer", "holder_binding").is_none());
     }
 }
