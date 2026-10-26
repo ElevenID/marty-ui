@@ -1735,5 +1735,19 @@ mod write_contract_tests {
             };
             assert!(result.is_err(), "{}", case["name"]);
         }
+        // The public gateway adds a format-context gate beyond this owner's
+        // intrinsic DTO validation. Its actual-router test proves rejection.
+        for case in fixtures["invalid"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|case| case["phase"] == "gateway_context")
+        {
+            assert!(
+                validate_create(case["canonical"].clone()).is_ok(),
+                "{}",
+                case["name"]
+            );
+        }
     }
 }

@@ -76,6 +76,9 @@ requires organization, name, credential type, compliance profile, public issuer
 DID and a nonempty claims array. Public claim display/type/namespace aliases are
 translated before the native DTO is decoded. Custody selectors are not write
 inputs, and `schema_uri` only accepts null while persistence is unsupported.
+When supplied on creation, `supported_formats` must contain at least one format:
+the public gateway's compliance-context gate rejects an empty list before issuer
+resolution or owner writes, even though the internal native DTO can decode it.
 
 Patch fields differ from creation: tenant, credential type, compliance profile,
 vct and doctype cannot be changed through this body. Null optional fields usually
