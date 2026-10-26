@@ -21,9 +21,10 @@ const CANVAS_MIRROR_TAG: &str = "canvas-mirror";
 const RETENTION_TAG: &str = "retention";
 const NATIVE_EXTENSION_TAG: &str = "native-extension";
 // Base public extensions are always registered; passport adds its separate,
-// explicitly opt-in administrative operation.
+// explicitly opt-in observation and administrative operations.
 pub(crate) const NATIVE_EXTENSION_ROUTE_COUNT: usize = 3;
-pub(crate) const PASSPORT_NATIVE_EXTENSION_ROUTE_COUNT: usize = 1;
+pub(crate) const PASSPORT_NATIVE_EXTENSION_ROUTE_COUNT: usize = 2;
+const PASSPORT_READ_PATH: &str = "/v1/passport/applications/{application_id}";
 const PASSPORT_CANCEL_PATH: &str = "/v1/passport/applications/{application_id}/cancel";
 const CANVAS_CLAIM_PATH: &str = "/v1/integrations/canvas/lti/experience-sessions/current/claim";
 const CANVAS_REVIEW_RECOVERY_PATH: &str =
@@ -82,6 +83,11 @@ fn validate_native_extensions(coverage: &Coverage) -> Result<(), &'static str> {
                 "reconcile_canvas_review_revocation",
                 "rust/services/issuance/src/canvas_review_resolution.rs",
                 "rust/services/issuance/tests/canvas_award_candidate_postgres_contract.rs",
+            ),
+            (HttpMethod::Get, PASSPORT_READ_PATH) => (
+                "read_passport_application",
+                "rust/services/issuance/src/passport_http.rs",
+                "rust/services/issuance/tests/passport_postgres_contract.rs",
             ),
             (HttpMethod::Post, PASSPORT_CANCEL_PATH) => (
                 "administratively_cancel_passport_job",
@@ -215,7 +221,11 @@ pub(crate) fn add_public_native_extensions(
     validate_native_extensions(&coverage)
         .map_err(|error| PlatformError::InvalidConfiguration(error.into()))?;
     for extension in coverage.native_extension_http {
-        if extension.path == PASSPORT_CANCEL_PATH && !passport_native {
+        if matches!(
+            extension.path.as_str(),
+            PASSPORT_CANCEL_PATH | PASSPORT_READ_PATH
+        ) && !passport_native
+        {
             continue;
         }
         // Reuse the validated native route and the public gateway's canonical
@@ -256,7 +266,8 @@ static PASSPORT_PUBLIC_ROUTES: LazyLock<Vec<NativeHttpRoute>> = LazyLock::new(||
 #[must_use]
 pub fn is_passport_public_http(method: HttpMethod, path: &str) -> bool {
     is_canonical_absolute_path(path)
-        && (is_passport_administrative_cancel(method, path)
+        && ((method == HttpMethod::Get && exact_template_shape(PASSPORT_READ_PATH, path))
+            || is_passport_administrative_cancel(method, path)
             || PASSPORT_PUBLIC_ROUTES
                 .iter()
                 .any(|route| route.method == method && exact_template_shape(&route.path, path)))

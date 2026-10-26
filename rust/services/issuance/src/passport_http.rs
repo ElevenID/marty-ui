@@ -607,6 +607,8 @@ enum PassportHttpError {
     InvalidStartIdempotencyKey,
     #[error("Administrative passport cancellation request is invalid")]
     InvalidCancellationRequest,
+    #[error("Read-only passport job request must not contain query options or a body")]
+    InvalidReadRequest,
     #[error("Physical document cannot be administratively cancelled in its current state")]
     CancellationConflict,
     #[error("Physical document cancellation key is bound to another request")]
@@ -677,6 +679,7 @@ impl IntoResponse for PassportHttpError {
             Self::OrganizationMismatch => StatusCode::FORBIDDEN,
             Self::InvalidRequest(_)
             | Self::InvalidStartIdempotencyKey
+            | Self::InvalidReadRequest
             | Self::InvalidCancellationRequest
             | Self::MissingDataGroups
             | Self::Signer(SignerError::MissingIssuerDid) => StatusCode::UNPROCESSABLE_ENTITY,
@@ -750,10 +753,31 @@ fn safe(job: &PassportJob) -> Value {
     serde_json::to_value(PassportSafeResponse::from(job)).expect("safe response serializes")
 }
 
+// Observation is deliberately separate from production_status: no bureau
+// polling, artifact decryption, signing, or state transition is permitted here.
+async fn read_application(
+    State(service): State<PassportHttpService>,
+    Path(application_id): Path<String>,
+    uri: axum::http::Uri,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Json<Value>, PassportHttpError> {
+    let principal = service.authenticate(&headers)?;
+    if uri.query().is_some() || !body.is_empty() {
+        return Err(PassportHttpError::InvalidReadRequest);
+    }
+    let job = service.job(&principal, &application_id).await?;
+    Ok(Json(safe(&job)))
+}
+
 pub fn router(service: PassportHttpService) -> Router {
     Router::new()
         .route("/v1/passport/capabilities", get(capabilities))
         .route("/v1/passport/applications", post(create_application))
+        .route(
+            "/v1/passport/applications/{application_id}",
+            get(read_application),
+        )
         .route(
             "/internal/passport/flow-starts/{flow_instance_id}",
             get(read_flow_start),

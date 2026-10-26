@@ -42,6 +42,160 @@ use sqlx::postgres::PgPoolOptions;
 use tokio::sync::{oneshot, Barrier};
 use tower::ServiceExt;
 
+// Reuse the session-scoped test helper shared with the Flow schema-reset tests.
+#[path = "../../flow/tests/support/flow_schema.rs"]
+mod shared_schema_lock;
+
+#[tokio::test]
+async fn readonly_passport_job_get_is_tenant_scoped_and_has_no_side_effects() {
+    let Ok(database_url) = std::env::var("MARTY_PASSPORT_POSTGRES_TEST_URL") else {
+        eprintln!("explicit disposable PostgreSQL URL required for actual readback proof");
+        return;
+    };
+    let parsed = url::Url::parse(&database_url).unwrap();
+    assert!(matches!(parsed.host_str(), Some("127.0.0.1" | "localhost")));
+    assert_eq!(parsed.path(), "/marty_passport_contract_test");
+    let _schema_guard =
+        shared_schema_lock::lock_shared_test_schemas(&database_url.parse().unwrap())
+            .await
+            .unwrap();
+    let pool = PgPoolOptions::new()
+        .max_connections(2)
+        .connect(&database_url)
+        .await
+        .unwrap();
+    sqlx::query("DROP SCHEMA IF EXISTS issuance_service CASCADE")
+        .execute(&pool)
+        .await
+        .unwrap();
+    migration::migrate_passport(&pool).await.unwrap();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let counter = calls.clone();
+    let mock = Router::new().fallback(move || {
+        let counter = counter.clone();
+        async move {
+            counter.fetch_add(1, Ordering::SeqCst);
+            StatusCode::INTERNAL_SERVER_ERROR
+        }
+    });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move { axum::serve(listener, mock).await.unwrap() });
+    let ring = PassportTenantKeyring::from_json(&format!(
+        "{{\"org-a\":\"{}\",\"org-b\":\"{}\"}}",
+        "a".repeat(32),
+        "b".repeat(32)
+    ))
+    .unwrap();
+    let principal = ring
+        .authenticate(Some("org-a"), Some(&"a".repeat(32)))
+        .unwrap();
+    let repository = PostgresPassportRepository::new(pool.clone());
+    // A counting bureau is configured, while no KMS/decrypt/signer exists.
+    // Deliberately undecryptable test custody must never be opened by this GET.
+    let app = passport_router(PassportHttpService::new(
+        ring,
+        repository.clone(),
+        None,
+        None,
+        Some(BureauClient::new(&base, "synthetic-bureau-key").unwrap()),
+    ));
+    for status in [
+        "DRAFT",
+        "SOD_SIGNED",
+        "SUBMITTED",
+        "READY_FOR_ACTIVATION",
+        "ACTIVE",
+        "FAILED",
+        "CANCELLED",
+    ] {
+        let id = uuid::Uuid::new_v4().to_string();
+        let application = uuid::Uuid::new_v4().to_string();
+        repository
+            .insert(
+                &principal,
+                &PassportJobInsert {
+                    id: id.clone(),
+                    application_id: application.clone(),
+                    flow_execution_id: "owned-read-flow".into(),
+                    application_template_id: "synthetic-application".into(),
+                    credential_template_id: "synthetic-credential".into(),
+                    revocation_profile_id: None,
+                    delivery_destination_profile_id: "synthetic-destination".into(),
+                    document_type: "P".into(),
+                    country_code: "UTO".into(),
+                    issuer_did: None,
+                    secure_artifact_ciphertext: "must-not-decrypt-test-custody".into(),
+                    secure_artifact_reference: "opaque-public-test-reference".into(),
+                },
+                Utc::now(),
+            )
+            .await
+            .unwrap();
+        sqlx::query("UPDATE issuance_service.physical_document_jobs SET status=$2,bureau_job_id=$3 WHERE id=$1")
+            .bind(&id).bind(status).bind(format!("bureau-{id}")).execute(&pool).await.unwrap();
+        let before: Value = sqlx::query_scalar(
+            "SELECT to_jsonb(job) FROM issuance_service.physical_document_jobs job WHERE id=$1",
+        )
+        .bind(&id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        for (organization, key, expected) in [
+            (Some("org-a"), Some("a".repeat(32)), StatusCode::OK),
+            (Some("org-b"), Some("b".repeat(32)), StatusCode::NOT_FOUND),
+            (Some("org-a"), None, StatusCode::UNAUTHORIZED),
+            (None, Some("a".repeat(32)), StatusCode::UNAUTHORIZED),
+        ] {
+            let mut request =
+                Request::builder().uri(format!("/v1/passport/applications/{application}"));
+            if let Some(org) = organization {
+                request = request.header("x-organization-id", org);
+            }
+            if let Some(key) = key {
+                request = request.header("x-api-key", key);
+            }
+            let response = app
+                .clone()
+                .oneshot(request.body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), expected);
+            if expected == StatusCode::OK {
+                let value: Value =
+                    serde_json::from_slice(&to_bytes(response.into_body(), 32768).await.unwrap())
+                        .unwrap();
+                assert_eq!(value["id"], id);
+                assert_eq!(value["status"], status);
+                for sensitive in [
+                    "secure_artifact_ciphertext",
+                    "submission_intent_id",
+                    "bureau_provider_profile_id",
+                    "sod_sha256",
+                ] {
+                    assert!(value.get(sensitive).is_none(), "{sensitive}");
+                }
+            }
+        }
+        let after: Value = sqlx::query_scalar(
+            "SELECT to_jsonb(job) FROM issuance_service.physical_document_jobs job WHERE id=$1",
+        )
+        .bind(&id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(before, after, "read mutated {status} job");
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            0,
+            "read contacted bureau for {status}"
+        );
+    }
+    server.abort();
+    let _ = server.await;
+    pool.close().await;
+}
+
 /// The companion SQL fixture provisions an isolated cluster using the actual
 /// finalizer. Explicit invocation prevents an absent URL becoming pass evidence.
 #[tokio::test]
@@ -184,6 +338,10 @@ async fn administrative_cancellation_preserves_history_and_closes_terminal_races
     let parsed = url::Url::parse(&database_url).unwrap();
     assert!(matches!(parsed.host_str(), Some("127.0.0.1" | "localhost")));
     assert_eq!(parsed.path(), "/marty_passport_contract_test");
+    let _schema_guard =
+        shared_schema_lock::lock_shared_test_schemas(&database_url.parse().unwrap())
+            .await
+            .unwrap();
     let pool = PgPoolOptions::new()
         .max_connections(6)
         .connect(&database_url)
@@ -699,6 +857,10 @@ async fn keyed_physical_start_creates_one_tenant_owned_job_and_preserves_legacy_
     let parsed = url::Url::parse(&database_url).unwrap();
     assert!(matches!(parsed.host_str(), Some("127.0.0.1" | "localhost")));
     assert_eq!(parsed.path(), "/marty_passport_contract_test");
+    let _schema_guard =
+        shared_schema_lock::lock_shared_test_schemas(&database_url.parse().unwrap())
+            .await
+            .unwrap();
     let pool = PgPoolOptions::new()
         .max_connections(4)
         .connect(&database_url)
@@ -2246,6 +2408,10 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
         database_name, "marty_passport_contract_test",
         "passport contract requires its dedicated disposable database"
     );
+    let _schema_guard =
+        shared_schema_lock::lock_shared_test_schemas(&database_url.parse().unwrap())
+            .await
+            .unwrap();
     let pool = PgPoolOptions::new()
         .max_connections(2)
         .connect(&database_url)

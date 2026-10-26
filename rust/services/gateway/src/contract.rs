@@ -965,6 +965,18 @@ mod tests {
             assert!(new.route.auth_required, "{path} must stay authenticated");
         }
         assert_eq!(public_count, 8);
+        let read = "/v1/passport/applications/job-1";
+        assert!(route_for(&legacy, HttpMethod::Get, read).is_err());
+        let read_route = route_for(&native, HttpMethod::Get, read).unwrap();
+        assert_eq!(
+            read_route.route.upstream_service,
+            issuance_native::NATIVE_SERVICE
+        );
+        assert!(read_route.route.auth_required);
+        assert_eq!(
+            issuance_native::passport_required_permission(HttpMethod::Get, read),
+            Some("issuance:view")
+        );
         let cancel = "/v1/passport/applications/job-1/cancel";
         assert!(route_for(&legacy, HttpMethod::Post, cancel).is_err());
         let administrative = route_for(&native, HttpMethod::Post, cancel).unwrap();
