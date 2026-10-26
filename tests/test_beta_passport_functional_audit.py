@@ -14,6 +14,23 @@ import pytest
 from scripts import beta_passport_functional_audit as audit
 
 
+def test_owned_flow_lookup_is_only_array_permitted_by_browser_transport():
+    ports = object.__new__(audit.ObservedPassportRequests)
+    ports.capture = SimpleNamespace(failed=False, completed=False)
+    observed = []
+    def evaluate(source, arguments):
+        observed.append(arguments["allowOwnedFlowList"])
+        assert "Array.isArray(value) && !allowOwnedFlowList" in source
+        return {"status": 200, "value": [] if arguments["allowOwnedFlowList"] else {}}
+    ports.pages = {"flow": SimpleNamespace(evaluate=evaluate)}
+    path = ("/v1/flows/instances?organization_id=org-1"
+            "&flow_definition_id=owned-definition&limit=100&offset=0")
+    assert ports._fetch("flow", "GET", path, None) == (200, [])
+    assert ports._fetch("flow", "GET", "/v1/flows/instances?organization_id=org-1", None) == (200, {})
+    assert ports._fetch("flow", "GET", "/v1/flows/definitions/owned-definition", None) == (200, {})
+    assert observed == [True, False, False]
+
+
 def test_native_binding_requires_actual_parent_context_and_unchanged_receipt(tmp_path, monkeypatch):
     receipt = tmp_path / "native.json"
     receipt.write_text('{"source":"control-only"}', encoding="utf8")

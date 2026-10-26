@@ -22,7 +22,7 @@ from functools import partial
 from http.cookies import SimpleCookie
 from pathlib import Path
 from typing import Any, Callable
-from urllib.parse import quote, urlsplit
+from urllib.parse import parse_qs, quote, urlsplit
 
 
 ORIGIN = "https://beta.elevenidllc.com"
@@ -275,7 +275,13 @@ class ObservedPassportRequests:
                 "Unexpected protected passport browser request")
         require(not self.capture.failed and not self.capture.completed,
                 "Passport live evidence stopped before the next operation")
-        result = self.pages[role].evaluate("""async ({method, path, body, headers, credentialed}) => {
+        query = parse_qs(endpoint.query, strict_parsing=True)
+        allow_owned_flow_list = (role == "flow" and method == "GET"
+            and endpoint.path == "/v1/flows/instances"
+            and set(query) == {"organization_id", "flow_definition_id", "limit", "offset"}
+            and len(query["organization_id"]) == len(query["flow_definition_id"]) == 1
+            and query["limit"] == ["100"] and query["offset"] == ["0"])
+        result = self.pages[role].evaluate("""async ({method, path, body, headers, credentialed, allowOwnedFlowList}) => {
           const url = new URL(path, location.origin);
           if (url.origin !== 'https://beta.elevenidllc.com') throw Error('Unexpected passport origin');
           const response = await fetch(url.href, {method, body, headers,
@@ -284,11 +290,14 @@ class ObservedPassportRequests:
           const bytes = new Uint8Array(await response.arrayBuffer());
           if (bytes.length > 131072) throw Error('Passport response exceeds bounds');
           const value = JSON.parse(new TextDecoder('utf-8', {fatal:true}).decode(bytes));
-          if (!value || typeof value !== 'object' || Array.isArray(value)) throw Error('Passport response is not an object');
+          if (!value || typeof value !== 'object' ||
+              (Array.isArray(value) && !allowOwnedFlowList))
+            throw Error('Passport response shape is invalid');
           return {status:response.status, value};
         }""", {"method": method, "path": path, "body": encoded_body,
                  "headers": {"Accept": "application/json", "Content-Type": "application/json",
-                             **(headers or {})}, "credentialed": role != "api"})
+                             **(headers or {})}, "credentialed": role != "api",
+                "allowOwnedFlowList": allow_owned_flow_list})
         require(not self.capture.failed, "Passport HTTP observation failed")
         return result["status"], result["value"]
 
@@ -699,6 +708,14 @@ def _run_bound_capture(capture) -> dict[str, Any]:
                 owned.create_issuers(owned_plan)
                 api_key = owned.create_key()
                 ports.api_key = api_key
+                def owned_flow_request(method, path, body, session):
+                    if method == "POST" and path == "/v1/flows/instances":
+                        require(session == custody["flowSession"],
+                                "Selected Flow start authority changed")
+                        return owned.start_selected_flow(body,
+                            lambda action, route, payload: ports.flow_request(
+                                action, route, payload, session))
+                    return ports.flow_request(method, path, body, session)
                 capture._passport_failure_stage = "FRESH_OPERATIONS"
                 result = fresh.exercise(owned_plan, source_commit=receipt["sourceRevision"],
                     stack_manifest_sha256=scenario["stackManifest"]["sha256"],
@@ -712,7 +729,7 @@ def _run_bound_capture(capture) -> dict[str, Any]:
                     prepare_selected_flow=lambda verified: owned.create_inputs(
                         verified, fixture["resourcePlan"])["selected_flow"],
                     chain_probe=partial(chain.exercise, request=ports.chain_request),
-                    flow_probe=partial(flow.exercise, request=ports.flow_request,
+                    flow_probe=partial(flow.exercise, request=owned_flow_request,
                                        passport_request=ports.passport_request),
                     batch_probe=partial(batch.exercise, gateway_request=ports.passport_request),
                     negative_probe=partial(negative.exercise, request=ports.passport_request,

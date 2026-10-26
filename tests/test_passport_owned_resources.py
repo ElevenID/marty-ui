@@ -96,6 +96,9 @@ def owned(tmp_path, monkeypatch):
                       "standalone_companion_execution_id": "passport-native-batch-companion"})
     selected = {"application_id": "app-0", "source_job_id": "job-0", "bureau_job_id": "bureau-0",
                 "flow_instance_id": "new-instance"}
+    journal.value["flow_start"] = {"state": "OBSERVED", "instance_id": "new-instance",
+                                    "application_id": "app-0", "source_job_id": "job-0"}
+    journal.save()
     kwargs = {"selected": selected, "certificate_id": fresh["certificate_plan"]["csca"]["certificate_id"],
               "check_key_denied": lambda: status["key_denied"], "retire_sessions": lambda: status["sessions_denied"]}
     return journal, calls, records, kwargs, status
@@ -139,7 +142,7 @@ def test_rejected_key_response_retains_exact_authority_for_teardown(tmp_path):
     assert journal.key_path.exists()
 
 
-@pytest.mark.parametrize("failure", ["foreign-job", "duplicate-job", "pending-mutation", "changed-resource", "key-revived", "session-revived"])
+@pytest.mark.parametrize("failure", ["foreign-job", "duplicate-job", "pending-mutation", "unknown-start", "changed-resource", "key-revived", "session-revived"])
 def test_cleanup_never_qualifies_incomplete_or_changed_authority(owned, failure):
     journal, calls, records, kwargs, status = owned
     before = len(calls)
@@ -149,6 +152,8 @@ def test_cleanup_never_qualifies_incomplete_or_changed_authority(owned, failure)
         journal.value["jobs"][0]["jobs"][1] = journal.value["jobs"][0]["jobs"][0]
     elif failure == "pending-mutation":
         journal.value["operations"].append({"response_received": False})
+    elif failure == "unknown-start":
+        journal.value["flow_start"]["state"] = "UNKNOWN"
     elif failure == "changed-resource":
         next(iter(records.values()))["name"] = "unowned replacement"
     elif failure == "key-revived":
@@ -160,7 +165,7 @@ def test_cleanup_never_qualifies_incomplete_or_changed_authority(owned, failure)
     assert journal.value["cleanup_complete"] is False
     if failure == "key-revived":
         assert journal.key_path.exists()
-    if failure in ("foreign-job", "duplicate-job", "pending-mutation"):
+    if failure in ("foreign-job", "duplicate-job", "pending-mutation", "unknown-start"):
         assert len(calls) == before
 
 
@@ -173,3 +178,71 @@ def test_setup_refuses_resource_id_adoption_and_reused_journal(owned):
     with pytest.raises(PassportOwnershipError, match="cannot adopt"):
         journal.create_inputs(journal.value["plan"], reference_plan)
     assert len(calls) == before
+
+
+def test_flow_start_intent_precedes_one_input_and_binds_exact_job(owned):
+    journal, _, _, _, _ = owned
+    journal.value["flow_start"] = None
+    journal.save()
+    definition = journal.value["resources"]["flow_definition_id"]["id"]
+    body = {"organization_id": journal.organization, "flow_definition_id": definition,
+            "initial_context": {"physical_document": {"synthetic": True}}}
+    row = {"id": "fresh-instance", "organization_id": journal.organization,
+           "flow_id": definition, "flow_type": "physical_document_issuance",
+           "status": "IN_PROGRESS", "context_data": {"physical_document_job": {
+               "id": "fresh-job", "application_id": "fresh-application",
+               "organization_id": journal.organization, "flow_execution_id": "fresh-instance",
+               "status": "DRAFT",
+               "issuer_did": journal.value["plan"]["application"]["issuer_did"]}}}
+    calls = []
+    def request(method, path, payload):
+        calls.append((method, path))
+        assert json.loads(journal.path.read_text())["flow_start"]["state"] == "INTENT"
+        assert payload == body
+        return 200, row
+    assert journal.start_selected_flow(body, request) == (200, row)
+    assert calls == [("POST", "/v1/flows/instances")]
+    assert journal.value["flow_start"]["state"] == "OBSERVED"
+    assert journal.value["flow_start"]["source_job_id"] == "fresh-job"
+    with pytest.raises(PassportOwnershipError):
+        journal.start_selected_flow(body, request)
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("listing,expected", [("one", "RECONCILED_AFTER_UNKNOWN_RESPONSE"),
+    ("none", "UNKNOWN"), ("two", "UNKNOWN"), ("foreign", "UNKNOWN"),
+    ("read-failed", "UNKNOWN")])
+def test_lost_flow_start_never_retries_and_reconciles_only_unique_owned_projection(owned, listing, expected):
+    journal, _, _, _, _ = owned
+    journal.value["flow_start"] = None
+    journal.save()
+    definition = journal.value["resources"]["flow_definition_id"]["id"]
+    body = {"organization_id": journal.organization, "flow_definition_id": definition,
+            "initial_context": {"physical_document": {"synthetic": True}}}
+    row = {"id": "fresh-instance", "organization_id": journal.organization,
+           "flow_id": definition, "flow_type": "physical_document_issuance",
+           "status": "IN_PROGRESS", "context_data": {"physical_document_job": {
+               "id": "fresh-job", "application_id": "fresh-application",
+               "organization_id": journal.organization, "flow_execution_id": "fresh-instance",
+               "status": "DRAFT",
+               "issuer_did": journal.value["plan"]["application"]["issuer_did"]}}}
+    calls = []
+    def request(method, path, payload):
+        calls.append((method, path))
+        if method == "POST":
+            assert json.loads(journal.path.read_text())["flow_start"]["state"] == "INTENT"
+            raise ConnectionError("response lost")
+        assert method == "GET" and payload is None
+        assert "organization_id=" + journal.organization in path
+        assert "flow_definition_id=" + definition in path
+        if listing == "read-failed":
+            raise ConnectionError("read failed")
+        if listing == "foreign":
+            return 200, [{**row, "organization_id": "foreign"}]
+        return 200, [row] if listing == "one" else [] if listing == "none" else [row, row]
+    with pytest.raises(ConnectionError, match="response lost"):
+        journal.start_selected_flow(body, request)
+    assert [method for method, _ in calls] == ["POST", "GET"]
+    assert journal.value["flow_start"]["state"] == expected
+    assert json.loads(journal.path.read_text())["flow_start"]["state"] == expected
+    assert "synthetic" not in journal.path.read_text()
