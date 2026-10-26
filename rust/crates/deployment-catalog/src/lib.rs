@@ -30,6 +30,7 @@ pub mod installer_ingress_config;
 pub mod installer_ingress_model;
 pub mod installer_ingress_outputs;
 pub mod installer_ingress_provision;
+pub mod installer_ingress_renewal;
 pub mod installer_keycloak;
 pub mod installer_keycloak_bridge;
 pub mod installer_logs;
