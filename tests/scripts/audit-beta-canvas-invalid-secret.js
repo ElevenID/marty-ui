@@ -77,7 +77,7 @@ async function executeWrongSecretCase({result,save,gateway,admin,adminPage,organ
   state.adminCanvas=new stock.CanvasSessionClient(CANVAS,context);
   const accounts=await state.adminCanvas.request('GET','/api/v1/accounts?per_page=100');assert(Array.isArray(accounts));
   const account=accounts.find(row=>!row.parent_account_id);assert(account?.id);state.accountId=String(account.id);
-  const profile=await state.adminCanvas.request('GET','/api/v1/users/self/profile');assert(profile?.id);state.adminId=String(profile.id);
+  const profile=await state.adminCanvas.request('GET','/api/v1/users/self/profile');assertCanvasLoginIdentity(profile,canvasCredentials.email);state.adminId=String(profile.id);
   result.validClientSecretCase.canvasKeyIntent={name:'Marty OAuth '+runId,accountId:state.accountId,state:'CREATING'};save();
   const key=await stock.createOauthDeveloperKey(page,{canvasOrigin:CANVAS,accountId:state.accountId,ownerEmail:canvasCredentials.email,
    name:'Marty OAuth '+runId,redirectUri:MARTY+'/v1/integrations/canvas/oauth/callback',
@@ -130,6 +130,12 @@ async function executeWrongSecretCase({result,save,gateway,admin,adminPage,organ
  }
  return result.validClientSecretCase;
 }
+function assertCanvasLoginIdentity(profile,email){
+ assert(profile?.id,'Stock Canvas self-profile must identify the authenticated user');
+ const identities=[profile.primary_email,profile.login_id].filter(value=>typeof value==='string');
+ assert(identities.some(value=>value.toLowerCase()===email.toLowerCase()),'Stock Canvas self-profile must match the configured governed login identity');
+ return true;
+}
 async function requireOwnedMartyResource(gateway,admin,row,organizationId){
  assert.equal(row.state,'CREATED');
  const platform=row.collection==='/v1/integrations/canvas/platforms';
@@ -165,5 +171,5 @@ async function runWrongSecretCase(options){
   throw new Error('Canvas valid-client wrong-secret control failed; preserve its owned journal for review.');
  }
 }
-module.exports={requireOwnedMartyResource,retireCanvasSession,planWrongSecretCase,requireProviderInvalidSecret,requireMartyInvalidSecret,runWrongSecretCase};
+module.exports={assertCanvasLoginIdentity,requireOwnedMartyResource,retireCanvasSession,planWrongSecretCase,requireProviderInvalidSecret,requireMartyInvalidSecret,runWrongSecretCase};
 if(require.main===module){assert.deepEqual(process.argv.slice(2),['--plan'],'Offline plan only; execution requires reviewed existing capability runner');console.log(JSON.stringify(planWrongSecretCase(),null,2));}

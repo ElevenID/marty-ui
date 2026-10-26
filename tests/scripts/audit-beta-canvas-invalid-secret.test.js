@@ -1,6 +1,6 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict');
-const {requireProviderInvalidSecret,requireMartyInvalidSecret,planWrongSecretCase,runWrongSecretCase,retireCanvasSession,requireOwnedMartyResource}=require('./audit-beta-canvas-invalid-secret');
+const {requireProviderInvalidSecret,requireMartyInvalidSecret,planWrongSecretCase,runWrongSecretCase,retireCanvasSession,requireOwnedMartyResource,assertCanvasLoginIdentity}=require('./audit-beta-canvas-invalid-secret');
 const valid={status:401,error:'invalid_client',description:'invalid client',issuedCode:true,clientEnabled:true,clientId:'100',issuedClientId:'100'};
 test('only enabled same-client issued-code credential error counts',()=>{assert.equal(requireProviderInvalidSecret(valid).validEnabledClient,true)});
 for(const patch of [{description:'unknown client'},{description:undefined},{error:'invalid_grant'},{error:'access_denied'},{error:'unknown_client'},{status:500},{status:200},{issuedCode:false},{clientEnabled:false},{issuedClientId:'101'}])test('reject confounded denial '+JSON.stringify(patch),()=>{assert.throws(()=>requireProviderInvalidSecret({...valid,...patch}));});
@@ -26,4 +26,10 @@ test('resource retirement refuses changed identity, foreign organization and amb
   assert.deepEqual(calls,['GET']);
  }
  assert.equal((await requireOwnedMartyResource(async()=>({status:200,payload:[value]}),{},row,'org')).id,'owned');
+});
+
+test('stock self-profile must confirm the actual configured admin identity',()=>{
+ assert.equal(assertCanvasLoginIdentity({id:12,primary_email:'admin@governed.org'},'admin@governed.org'),true);
+ assert.equal(assertCanvasLoginIdentity({id:12,login_id:'Admin@Governed.org'},'admin@governed.org'),true);
+ for(const profile of [{id:12},{id:12,primary_email:'other@governed.org'},{primary_email:'admin@governed.org'}])assert.throws(()=>assertCanvasLoginIdentity(profile,'admin@governed.org'));
 });
