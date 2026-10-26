@@ -84,14 +84,14 @@
     {
       "name": "marty-integration-tests",
       "repository": "ElevenID/marty-integration-tests",
-      "version": "1.2.84",
-      "commit": "64d30543752e8838743e6950e2ef3a862e0facc7",
+      "version": "1.2.85",
+      "commit": "f3e9e4b01fb10bf77dde31c6672998399ad2d88e",
       "artifacts": [{
         "type": "release",
-        "uri": "https://github.com/ElevenID/marty-integration-tests/releases/download/v1.2.84/marty-integration-tests-1.2.84-source.tar.gz",
-        "digest": "sha256:73ae9f338138b439b0803cde3204351583d3addee9882a62e4b995f58385bb47",
-        "sbom": "https://github.com/ElevenID/marty-integration-tests/releases/download/v1.2.84/marty-integration-tests.spdx.json",
-        "provenance": "https://github.com/ElevenID/marty-integration-tests/releases/download/v1.2.84/marty-integration-tests-1.2.84-source.tar.gz.sigstore.json"
+        "uri": "https://github.com/ElevenID/marty-integration-tests/releases/download/v1.2.85/marty-integration-tests-1.2.85-source.tar.gz",
+        "digest": "sha256:8cdbf705cfe5aed7ca523fb2888b281604bd5e280b87e103c6a511aeb218424d",
+        "sbom": "https://github.com/ElevenID/marty-integration-tests/releases/download/v1.2.85/marty-integration-tests.spdx.json",
+        "provenance": "https://github.com/ElevenID/marty-integration-tests/releases/download/v1.2.85/marty-integration-tests-1.2.85-source.tar.gz.sigstore.json"
       }]
     }
   ]

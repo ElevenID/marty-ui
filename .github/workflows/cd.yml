@@ -819,7 +819,7 @@ jobs:
           python ../marty-ui/scripts/wait_for_public_services.py \
             --url http://127.0.0.1:28000/health/services --timeout 120
           exited_services="$(docker compose --env-file .env.stack ps --status exited --services)"
-          unexpected_exits="$(printf '%s\n' "$exited_services" | awk '$0 != "" && $0 != "migrations" && $0 != "issuance-migrations" && $0 != "revocation-profile-migrations"')"
+          unexpected_exits="$(printf '%s\n' "$exited_services" | awk '$0 != "" && $0 != "migrations" && $0 != "issuance-migrations" && $0 != "revocation-profile-migrations" && $0 != "openbao-grant-bootstrap" && $0 != "signing-integration-tls-bootstrap"')"
           if [ -n "$unexpected_exits" ]; then
             echo "Public-stack services exited unexpectedly:"
             echo "$unexpected_exits"
