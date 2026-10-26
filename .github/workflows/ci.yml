@@ -2093,6 +2093,9 @@ jobs:
     needs: changes
     if: needs.changes.outputs.rust == 'true'
     runs-on: ${{ matrix.runner }}
+    # Cold static compilation plus the required HTTPS/custody matrix exceeded
+    # fifteen minutes while tests were still progressing. Keep all cases and
+    # native operation deadlines, with a bounded job budget for both runners.
     timeout-minutes: ${{ matrix.timeout_minutes }}
     permissions:
       contents: read
@@ -2107,7 +2110,7 @@ jobs:
             elf_machine: 'Advanced Micro Devices X86-64'
           - runner: ubuntu-24.04-arm
             arch: arm64
-            timeout_minutes: 15
+            timeout_minutes: 25
             target: aarch64-unknown-linux-musl
             elf_machine: AArch64
     env:
@@ -3042,7 +3045,12 @@ jobs:
             tests/test_installer_candidate_vm_runtime.py \
             tests/test_installer_candidate_vm_seed.py \
             tests/test_installer_candidate_vm_launch.py \
-            tests/test_installer_candidate_vm_live_observe.py -p no:cacheprovider --junitxml="$report"
+            tests/test_installer_candidate_vm_live_observe.py \
+            tests/test_installer_candidate_vm_target.py \
+            tests/test_installer_candidate_vm_host_probe.py \
+            tests/test_installer_candidate_vm_host_preflight.py \
+            tests/test_installer_candidate_vm_exchange.py \
+            tests/test_installer_engineering_trial.py -p no:cacheprovider --junitxml="$report"
           python - "$report" <<'PY'
           import sys
           import xml.etree.ElementTree as ET
@@ -3053,9 +3061,9 @@ jobs:
           if suite is None or suite.tag != "testsuite":
               raise SystemExit("root-owned VM creation test report is missing")
           cases = list(suite.iter("testcase"))
-          if len(cases) != 52 or any(
+          if len(cases) != 108 or any(
               int(suite.attrib.get(name, "-1")) != expected
-              for name, expected in (("tests", 52), ("skipped", 0),
+              for name, expected in (("tests", 108), ("skipped", 0),
                                      ("failures", 0), ("errors", 0))
           ):
               raise SystemExit("root-owned VM creation cases did not all execute and pass")

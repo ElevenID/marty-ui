@@ -20,6 +20,7 @@ import tempfile
 import time
 
 import installer_release as release
+from installer_candidate_controller import ControllerLease
 import verify_installer_provenance as provenance
 from installer_candidate_authorize import read_record, write_exclusive
 from installer_candidate_controller import _directory
@@ -219,8 +220,15 @@ def registry_unchanged(held, path):
 
 def dispatch(*, assets, grants, context_file, target_file, ledger, gh, cosign,
              ssh, scp, key, known_hosts, host, port, user, home,
-             clock=time.time, verifier=provenance.command, run=command):
+             clock=time.time, verifier=provenance.command, run=command,
+             lease: ControllerLease | None = None, approved_ssh: dict | None = None,
+             admission_gate=None):
     release.require(os.name == 'posix', 'Linux controller required')
+    if lease is not None:
+        release.require(lease.registry == ledger.parent and lease.parent is not None
+                        and lease.owner_pid == os.getpid(),
+                        'selected controller lease is not held')
+        registry_unchanged(lease.parent, ledger.parent)
     release.require(re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9.-]{0,252}', host) is not None,
                     'invalid pinned guest host')
     release.require(type(port) is int and 1 <= port <= 65535, 'invalid guest SSH port')
@@ -229,13 +237,25 @@ def dispatch(*, assets, grants, context_file, target_file, ledger, gh, cosign,
     for path in (key, known_hosts, ledger, context_file, target_file):
         private_file(path, 65536)
     ssh_inputs = {path: private_file(path, 65536) for path in (key, known_hosts)}
+    if approved_ssh is not None:
+        release.exact(approved_ssh, {'key_sha256', 'known_hosts_sha256'},
+                      'approved VM SSH hashes')
+        release.require(ssh_inputs[key][0] == approved_ssh['key_sha256']
+                        and ssh_inputs[known_hosts][0]
+                        == approved_ssh['known_hosts_sha256'],
+                        'approved VM SSH material differs')
     context, target = release.decode(read_record(context_file)), release.decode(read_record(target_file))
-    parent = _directory(ledger.parent)
+    if lease is not None:
+        parent = lease.parent
+        registry_unchanged(parent, ledger.parent)
+    else:
+        parent = _directory(ledger.parent)
     locked = False
     owner = os.getpid()
     try:
-        locked = True
-        fcntl.flock(parent, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        if lease is None:
+            locked = True
+            fcntl.flock(parent, fcntl.LOCK_EX | fcntl.LOCK_NB)
         registry_unchanged(parent, ledger.parent)
         authorization, receipt, inventory, files = verify(assets=assets, grants=grants, context=context,
             target=target, ledger=ledger, gh=gh, cosign=cosign, now=int(clock()), runner=verifier)
@@ -254,25 +274,36 @@ def dispatch(*, assets, grants, context_file, target_file, ledger, gh, cosign,
         options = ssh_options(key, known_hosts, port)
         with tempfile.TemporaryDirectory(prefix='marty-candidate-dispatch-') as local_home:
             env = {'HOME': local_home, 'PATH': '/usr/bin:/bin', 'LANG': 'C', 'LC_ALL': 'C'}
-            def guarded_run(argv, timeout):
+            def guarded_run(argv, timeout, stage):
+                if admission_gate is not None:
+                    release.require(lease is not None and lease.parent is not None,
+                                    'held VM lease required for admission gate')
+                    admission_gate(stage)
                 registry_unchanged(parent, ledger.parent)
                 release.require(read_record(ledger) == receipt, 'controller ledger changed')
                 release.bind_controller_consumption(receipt, authorization, inventory, expected=context,
                     expected_engine=target['engine_id'], now=int(clock()))
                 for path, expected in ssh_inputs.items():
                     release.require(private_file(path, 65536) == expected, 'SSH custody changed')
+                if approved_ssh is not None:
+                    release.require(private_file(key, 65536)[0]
+                                    == approved_ssh['key_sha256']
+                                    and private_file(known_hosts, 65536)[0]
+                                    == approved_ssh['known_hosts_sha256'],
+                                    'approved VM SSH material differs')
                 return run(argv, env=env, timeout=timeout)
-            def remote(script, timeout=60):
-                return guarded_run([str(ssh), *options, '-T', user + '@' + host, script], timeout)
-            remote(setup)
+            def remote(script, timeout=60, stage='setup'):
+                return guarded_run([str(ssh), *options, '-T', user + '@' + host, script],
+                                   timeout, stage)
+            remote(setup, stage='setup')
             transfers = []
             if context['phase'] == 'staged':
                 transfers.append(([assets / (n + s) for n in SUBJECTS for s in SUFFIXES], '/inputs'))
             transfers.append(([grants / (n + s) for n in ('candidate-authorization.json', 'controller-consumption.json') for s in SUFFIXES], '/grants'))
             for names, destination in transfers:
-                guarded_run([str(scp), *options, *map(str, names), user + '@' + host + ':' + base + destination + '/'], 300)
+                guarded_run([str(scp), *options, *map(str, names), user + '@' + host + ':' + base + destination + '/'], 300, 'transfer')
             for name, source in [('gh', gh), ('cosign', cosign)]:
-                guarded_run([str(scp), *options, str(source), user + '@' + host + ':' + base + '/tools/' + name], 180)
+                guarded_run([str(scp), *options, str(source), user + '@' + host + ':' + base + '/tools/' + name], 180, 'transfer')
             for path, expected in files.items():
                 release.require(private_file(path, expected[1], executable=path in (gh, cosign)) == expected,
                                 'dispatch source changed')
@@ -283,7 +314,7 @@ def dispatch(*, assets, grants, context_file, target_file, ledger, gh, cosign,
             write_exclusive(Path(str(ledger) + '.invoke.json'), release.encode(dict(
                 schema='elevenid.installer-candidate-invocation/v1', receipt_sha256=release.digest(receipt),
                 installation_id=target['installation_id'], invoked_at=int(clock()), installation_ready=False)))
-            remote(invoke, timeout=1800)
+            remote(invoke, timeout=1800, stage='invoke')
         result = dict(schema='elevenid.installer-candidate-dispatch-result/v1',
                       installation_id=target['installation_id'], command_returned_zero=True,
                       installation_ready=False, acceptance_report=False)
@@ -300,7 +331,8 @@ def dispatch(*, assets, grants, context_file, target_file, ledger, gh, cosign,
                     except InterruptedError:
                         continue
         finally:
-            os.close(parent)
+            if lease is None:
+                os.close(parent)
 
 
 def main(argv=None):

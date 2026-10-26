@@ -12,6 +12,63 @@ use std::{
 };
 pub type Result<T> = std::result::Result<T, String>;
 const REFUSED: &str = "Application observation differs from authenticated owned resources";
+
+// Docker may print a Hub RepoDigest without docker.io and the official-image
+// library namespace. Normalize those defaults only, never a foreign registry,
+// digest, tag, or the container's recorded Config.Image.
+// Default naming: https://docs.docker.com/reference/cli/docker/image/tag/
+fn canonical_repo_digest(reference: &str) -> Option<String> {
+    if reference.len() > 512 {
+        return None;
+    }
+    let (repository, digest) = reference.split_once("@sha256:")?;
+    if !id(digest) {
+        return None;
+    }
+    let (first, rest) = repository.split_once('/').unwrap_or((repository, ""));
+    let explicit_registry = first.contains('.') || first.contains(':') || first == "localhost";
+    let (registry, path) = if explicit_registry {
+        (first, rest)
+    } else {
+        ("docker.io", repository)
+    };
+    if registry.is_empty()
+        || !registry
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b".-:".contains(&b))
+    {
+        return None;
+    }
+    static COMPONENT: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let component = COMPONENT
+        .get_or_init(|| regex::Regex::new(r"\A[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*\z").unwrap());
+    if !path.split('/').all(|part| component.is_match(part)) {
+        return None;
+    }
+    let path = if registry == "docker.io" && !path.contains('/') {
+        format!("library/{path}")
+    } else {
+        path.into()
+    };
+    Some(format!("{registry}/{path}@sha256:{digest}"))
+}
+
+/// Bind inspected image identity and repository digest, accounting only for
+/// Docker Hub's omitted default registry/namespace in RepoDigests output.
+pub(crate) fn validate_image_digest(image: &Value, reference: &str) -> Result<()> {
+    let expected = canonical_repo_digest(reference).ok_or(REFUSED)?;
+    require(
+        image["Id"]
+            .as_str()
+            .and_then(|s| s.strip_prefix("sha256:"))
+            .is_some_and(id)
+            && image["RepoDigests"].as_array().is_some_and(|entries| {
+                entries.iter().any(|value| {
+                    value.as_str().and_then(canonical_repo_digest).as_ref() == Some(&expected)
+                })
+            }),
+    )
+}
 #[derive(Clone, Copy)]
 pub enum ContainerPhase {
     Created,
@@ -457,13 +514,8 @@ fn validate_container_inner(
     let host = &c["HostConfig"];
     let image_ref = text(&s["image"])?;
     let image_id = text(&image["Id"])?;
-    require(
-        id(container_id)
-            && image_id.strip_prefix("sha256:").is_some_and(id)
-            && image["RepoDigests"]
-                .as_array()
-                .is_some_and(|v| v.contains(&json!(image_ref))),
-    )?;
+    require(id(container_id))?;
+    validate_image_digest(image, image_ref)?;
     require(
         c["Id"] == container_id
             && c["Image"] == image_id
@@ -683,6 +735,89 @@ pub fn validate_volume(v: &Value, plan: &ApplicationModelPlan) -> Result<()> {
 mod tests {
     use super::*;
     use std::os::unix::fs::{symlink, PermissionsExt};
+    #[test]
+    fn retained_postgres_digest_accepts_only_hub_default_aliases() {
+        // Exact nonsecret Id/RepoDigests projection from the failed engineering
+        // trial (Engine29.1.3, Compose2.40.3). This is not a whole-image fixture.
+        let actual: Value = serde_json::from_str(include_str!(
+            "../../../../tests/fixtures/installer-postgres-image-inspect-projection.json"
+        ))
+        .unwrap();
+        let digest = "a8e042598834300dfaa17a54f695b87b7f25d3490433bbbe2ef3bffbb9747f24";
+        let requested = format!("docker.io/library/postgres@sha256:{digest}");
+        validate_image_digest(&actual, &requested).unwrap();
+        for repository in [
+            "postgres",
+            "library/postgres",
+            "docker.io/postgres",
+            "docker.io/library/postgres",
+        ] {
+            let mut image = actual.clone();
+            image["RepoDigests"] = json!([format!("{repository}@sha256:{digest}")]);
+            validate_image_digest(&image, &requested).unwrap();
+        }
+        for bad in [
+            format!("evil.example/library/postgres@sha256:{digest}"),
+            format!("ghcr.io/library/postgres@sha256:{digest}"),
+            format!("registry-1.docker.io/library/postgres@sha256:{digest}"),
+            format!("index.docker.io/library/postgres@sha256:{digest}"),
+            format!("docker.io:443/library/postgres@sha256:{digest}"),
+            format!("team/postgres@sha256:{digest}"),
+            format!("postgres/extra@sha256:{digest}"),
+            format!("redis@sha256:{digest}"),
+            format!("postgres@sha256:{}", "f".repeat(64)),
+            format!("postgres:16@sha256:{digest}"),
+            format!("docker.io//postgres@sha256:{digest}"),
+            format!("docker.io/library/../postgres@sha256:{digest}"),
+            format!("Postgres@sha256:{digest}"),
+            format!("postgres@sha256:{digest}\n"),
+            "postgres:16".into(),
+        ] {
+            let mut image = actual.clone();
+            image["RepoDigests"] = json!([bad]);
+            assert!(
+                validate_image_digest(&image, &requested).is_err(),
+                "accepted {bad}"
+            );
+        }
+        for bad in [Value::Null, json!([]), json!([null]), json!([actual["Id"]])] {
+            let mut image = actual.clone();
+            image["RepoDigests"] = bad;
+            assert!(validate_image_digest(&image, &requested).is_err());
+        }
+        let mut bad_id = actual;
+        bad_id["Id"] = json!("sha256:short");
+        assert!(validate_image_digest(&bad_id, &requested).is_err());
+    }
+    #[test]
+    fn hub_digest_alias_does_not_relax_container_config_or_image_identity() {
+        let (mut plan, mut image, mut observed) = fixture();
+        let requested = format!("docker.io/library/postgres@sha256:{}", "a".repeat(64));
+        plan.model["services"]["app"]["image"] = json!(requested);
+        observed["Config"]["Image"] = json!(requested);
+        image["RepoDigests"] = json!([format!("postgres@sha256:{}", "a".repeat(64))]);
+        let id = "d".repeat(64);
+        validate_container(
+            &observed,
+            &id,
+            "app",
+            &plan,
+            &image,
+            ContainerPhase::Created,
+        )
+        .unwrap();
+        validate_container_for_logs(&observed, &id, "app", &plan, &image).unwrap();
+        let mut changed = observed.clone();
+        changed["Config"]["Image"] = image["RepoDigests"][0].clone();
+        assert!(validate_container_for_logs(&changed, &id, "app", &plan, &image).is_err());
+        changed = observed;
+        changed["Image"] = json!(format!("sha256:{}", "e".repeat(64)));
+        assert!(validate_container_for_logs(&changed, &id, "app", &plan, &image).is_err());
+        let private = format!("ghcr.io/team/postgres@sha256:{}", "a".repeat(64));
+        assert!(validate_image_digest(&image, &private).is_err());
+        image["RepoDigests"] = json!([private]);
+        validate_image_digest(&image, &private).unwrap();
+    }
     fn fixture() -> (ApplicationModelPlan, Value, Value) {
         let digest = format!("ghcr.io/elevenid/services@sha256:{}", "a".repeat(64));
         let image_id = format!("sha256:{}", "b".repeat(64));
