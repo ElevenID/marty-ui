@@ -1,0 +1,9 @@
+# Opt-in source profile. Apply after selfhost production/bundle overlays.
+# Product packaging and installed-profile qualification remain separate gates.
+services:
+  ui: !reset null
+  edge:
+    environment:
+      SELFHOST_CONSOLE_ENABLED: "false"
+    depends_on:
+      ui: !reset null

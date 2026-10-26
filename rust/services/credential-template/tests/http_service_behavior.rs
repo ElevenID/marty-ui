@@ -1037,6 +1037,11 @@ async fn wallet_registry_routes_preserve_catalog_tenancy_routing_and_crud_behavi
         .unwrap()
         .iter()
         .all(|entry| entry.get("organization_id").is_none()));
+    assert!(global_wallets
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|entry| entry["is_system"] == true && entry["is_override"] == false));
 
     let response = app
         .clone()
@@ -1064,6 +1069,9 @@ async fn wallet_registry_routes_preserve_catalog_tenancy_routing_and_crud_behavi
     );
     let created = json_body(response).await;
     let wallet_id = created["id"].as_str().unwrap();
+    assert_eq!(created["is_system"], false);
+    assert_eq!(created["is_override"], true);
+    assert_eq!(created["organization_id"], "org-1");
     assert_eq!(
         created["credential_format"],
         contract["normalization"]["credential_format"][1]

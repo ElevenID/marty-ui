@@ -5,6 +5,11 @@
 Microservice-based control plane and UI for Marty credential, trust, policy,
 applicant, and flow management.
 
+For custom applications and CLI consumers, see
+[machine API authentication](docs/API_MACHINE_AUTHENTICATION.md), including
+organization-scoped API keys, credential lifecycle and the current OAuth
+limitation.
+
 ## 🚀 Quick Start
 
 ### Local Development (Recommended)
@@ -33,6 +38,10 @@ Primary local URLs:
 - UI dev server: <http://localhost:5173>
 
 ### Production Deployment
+
+The [console-free self-host source profile](docs/SELFHOST_API_ONLY.md) separates
+API routing from console startup. Its published installer and artifact
+qualification status is documented in that guide.
 
 ```bash
 # Production deployment is environment-specific.

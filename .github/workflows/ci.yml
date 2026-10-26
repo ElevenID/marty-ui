@@ -2820,6 +2820,10 @@ jobs:
         run: uv pip install --system -r requirements-services.txt 'jsonschema[format]>=4.23'
       - name: Enforce public response contract
         run: python scripts/check_gateway_public_protocol_contract.py --protocol-root marty-protocol
+      - name: Exercise console-free public edge routing
+        run: |
+          docker pull nginx@sha256:582c496ccf79d8aa6f8203a79d32aaf7ffd8b13362c60a701a2f9ac64886c93d
+          python scripts/probe_selfhost_api_only_edge.py
       - name: Enforce pinned public OpenAPI schemas
         run: python scripts/generate_public_openapi_schemas.py --protocol-root marty-protocol --check
       - name: Test public schemas and executable examples

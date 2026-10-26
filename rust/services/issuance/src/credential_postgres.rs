@@ -1640,7 +1640,7 @@ async fn finalize_credential(
         get::<Option<String>>(&authoritative, "renewal_of_credential_id")?.as_deref(),
     )
     .await?;
-    insert_credential(database, credential).await?;
+    insert_credential(database, transaction, credential).await?;
     if let Some(notification_id) = notification_id {
         insert_notification_binding(database, transaction, credential, notification_id).await?;
     }
@@ -1692,8 +1692,28 @@ async fn credential_exists(
 
 async fn insert_credential(
     database: &mut Transaction<'_, Postgres>,
+    transaction: &CredentialTransaction,
     credential: &IssuedCredential,
 ) -> Result<(), CredentialIssuanceError> {
+    let mdoc_status_reference = if matches!(
+        crate::credential::remote_credential_format(&transaction.credential_payload_format)
+            .as_deref(),
+        Ok("mso_mdoc")
+    ) {
+        Some(
+            marty_mdoc_status_binding::MdocStatusReference::from_issuer_signed_base64(
+                &credential.credential,
+            )
+            .map_err(|_| {
+                CredentialIssuanceError::SigningUnavailable(
+                    "Invalid authenticated mdoc lifecycle binding".into(),
+                )
+            })?
+            .to_string(),
+        )
+    } else {
+        None
+    };
     sqlx::query(
         "INSERT INTO issuance_service.issued_credentials
              (id, transaction_id, organization_id, credential_template_id, applicant_id,
@@ -1720,6 +1740,24 @@ async fn insert_credential(
     .execute(&mut **database)
     .await
     .map_err(repository_error)?;
+    if let Some(reference) = mdoc_status_reference {
+        // Same transaction as the issuance row and finalization: collisions
+        // abort the whole issuance rather than adopting an older status row.
+        let updated = sqlx::query(
+            "UPDATE issuance_service.issued_credentials SET mdoc_status_reference=$1
+             WHERE id=$2 AND organization_id=$3 AND transaction_id=$4",
+        )
+        .bind(reference)
+        .bind(&credential.id)
+        .bind(&credential.organization_id)
+        .bind(&credential.transaction_id)
+        .execute(&mut **database)
+        .await
+        .map_err(repository_error)?;
+        if updated.rows_affected() != 1 {
+            return Err(CredentialIssuanceError::RepositoryUnavailable);
+        }
+    }
     Ok(())
 }
 

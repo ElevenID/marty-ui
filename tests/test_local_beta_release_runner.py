@@ -18,6 +18,7 @@ def text(path: str) -> str:
 
 def test_local_release_runner_is_backup_and_rehearsal_gated() -> None:
     script = text("scripts/deploy-local-beta-release.ps1")
+    native = text("rust/crates/deployment-catalog/src/beta_rehearsal.rs")
 
     assert 'if ($BetaOrigin -cne "https://beta.elevenidllc.com")' in script
     assert script.index(
@@ -30,11 +31,12 @@ def test_local_release_runner_is_backup_and_rehearsal_gated() -> None:
     assert "applicant_store.json" in script
     assert "redis-dump.rdb" in script
     assert "openbao-data.tar.gz" in script
-    assert "elevenid-beta-copy-" in script
-    assert "migration-rehearsal.log" in script
-    assert "--verify-only" in script
+    assert "elevenid-beta-copy-" in native
+    assert "migration-rehearsal.log" in native
+    assert "--verify-only" in native
     assert "MARTY_KMS_BOOTSTRAP_ENABLED=true" not in script
-    assert script.count("MARTY_KMS_BOOTSTRAP_ENABLED=false") == 3
+    assert script.count("MARTY_KMS_BOOTSTRAP_ENABLED=false") == 1
+    assert native.count('("MARTY_KMS_BOOTSTRAP_ENABLED", "false")') == 2
     assert '"REDIS_URL=redis://:${encodedRedisPassword}@redis:6379"' in script
     assert re.search(r'"db-migrate"\s*\)', script)
     assert '"BAO_ADDR=http://openbao:8200"' not in script
@@ -49,12 +51,11 @@ def test_local_release_runner_is_backup_and_rehearsal_gated() -> None:
     )
     assert "$rehearsalKmsEnabled" not in script
     assert "$kmsBootstrapEnabled" not in script
-    assert '"elevenid-beta-copy-openbao-' in script
-    assert '"elevenid-beta-copy-redis-' in script
-    assert (
-        "$rehearsalContainers = @($copyContainer, $copyOpenBaoContainer, $copyRedisContainer)"
-        in script
-    )
+    assert '"elevenid-beta-copy-openbao-' in native
+    assert '"elevenid-beta-copy-redis-' in native
+    assert "rehearse_beta_migrations.py" in script
+    assert "Native beta migration rehearsal failed; do not enter live maintenance" in script
+    assert script.index("rehearse_beta_migrations.py") < script.index('Write-Step "Enter maintenance window and apply live migration"')
     assert '-Phase "maintenance_quiesced"' in script
     assert "-WritersStopped $true" in script
     assert "supervised-recovery.txt" not in script
@@ -871,85 +872,48 @@ def test_beta_runner_uses_immutable_images_without_python_migration_inputs() -> 
     assert "MARTY_RS_URI" not in script
     assert "MARTY_VERIFICATION_URI" not in script
     assert "MARTY_ISO18013_URI" not in script
-    assert "marty-migration-bootstrap" in script
+    assert "marty-migration-bootstrap" in text("rust/crates/deployment-catalog/src/beta_rehearsal.rs")
     assert "MARTY_ISSUANCE_IMAGE" not in script
     assert '$env:MARTY_SERVICES_IMAGE = [string]$officialPlan.images.services.reference' in script
     assert "com.docker.compose.service=docs" in script
     assert "Existing beta docs image is not immutable" in script
 
 
-def test_beta_runner_authenticates_backups_and_uses_the_packaged_migration_path() -> (
-    None
-):
+def test_beta_runner_authenticates_backups_and_uses_the_packaged_migration_path() -> None:
     script = text("scripts/deploy-local-beta-release.ps1")
-
+    native = text("rust/crates/deployment-catalog/src/beta_rehearsal.rs")
     assert 'Get-DotEnvValue -Path $GeneratedEnvFile -Name "REDIS_PASSWORD"' in script
     assert "$encodedRedisPassword = [Uri]::EscapeDataString($redisPassword)" in script
-    assert (
-        'docker exec --env "REDISCLI_AUTH=$RedisPassword" $redis redis-cli SAVE'
-        in script
-    )
+    assert 'docker exec --env "REDISCLI_AUTH=$RedisPassword" $redis redis-cli SAVE' in script
     assert 'throw "Authenticated beta Redis snapshot failed"' in script
-    assert '"redis-server", "--requirepass", $copyRedisPassword' in script
-    assert (
-        "$redisProbe = Invoke-BetaDockerReadinessProbe -Arguments @('exec', $copyRedisContainer, 'redis-cli', '--no-auth-warning', '-a', $copyRedisPassword, 'ping')"
-        in script
-    )
-    assert "$redisProbe.exit_code -eq 0 -and $redisProbe.output -contains 'PONG'" in script
-    assert (
-        "$encodedCopyRedisPassword = [Uri]::EscapeDataString($copyRedisPassword)"
-        in script
-    )
-    assert (
-        '"REDIS_URL=redis://:${encodedCopyRedisPassword}@${copyRedisContainer}:6379"'
-        in script
-    )
+    assert 'request.env("REDISCLI_AUTH", &redis_password)' in native
+    assert 'redis://:{redis_password}@{redis}:6379' in native
     assert '"REDIS_URL=redis://:${encodedRedisPassword}@redis:6379"' in script
-    assert '"REDIS_URL=redis://redis:6379"' not in script
     assert script.count("-RedisPassword $redisPassword") == 2
-    assert '"/usr/local/bin/marty-migration-bootstrap", "--verify-only"' in script
-    assert '"/app/run_all_migrations.py"' not in script
-    assert script.count('"issuance-migrations"') == 4
-    assert "issuance-migration-rehearsal.log" in script
-    assert "issuance-migration-rehearsal-verify.log" in script
-    assert "issuance-migration-live.log" in script
-    assert "issuance-migration-live-verify.log" in script
-    # The actual verifier runtime must exist before its schema can be rehearsed.
-    # All rehearsals still complete before maintenance/live mutation begins.
-    assert (
-        script.index('Write-Step "Build marker-bearing application images"')
-        < script.index("issuance-migration-rehearsal.log")
-        < script.index('Write-Step "Enter maintenance window and apply live migration"')
-    )
-    assert script.index("migration-live.log") < script.index(
-        "issuance-migration-live.log"
-    )
+    assert '"/usr/local/bin/marty-migration-bootstrap"' in native
+    assert '"--verify-only"' in native
+    assert '"/app/run_all_migrations.py"' not in script + native
+    assert script.count('"issuance-migrations"') == 2
+    for log in ("issuance-migration-rehearsal.log", "issuance-migration-rehearsal-verify.log"):
+        assert log in native
+    for log in ("issuance-migration-live.log", "issuance-migration-live-verify.log"):
+        assert log in script
+    assert script.index('Write-Step "Build marker-bearing application images"') < script.index("rehearse_beta_migrations.py") < script.index('Write-Step "Enter maintenance window and apply live migration"')
+    assert script.index("migration-live.log") < script.index("issuance-migration-live.log")
 
 
 def test_beta_runner_always_isolates_required_openbao_migration_state() -> None:
     script = text("scripts/deploy-local-beta-release.ps1")
-
+    native = text("rust/crates/deployment-catalog/src/beta_rehearsal.rs")
     assert 'Get-DotEnvValue -Path $GeneratedEnvFile -Name "BAO_DEV_ROOT_TOKEN"' not in script
-    assert (
-        "$rehearsalContainers = "
-        "@($copyContainer, $copyOpenBaoContainer, $copyRedisContainer)"
-    ) in script
-    assert '"BAO_DEV_ROOT_TOKEN_ID=$copyBaoToken"' in script
-    assert '"BAO_ADDR=https://localhost:8200"' in script
-    assert "Read-BetaContainerPublicCertificate -Container $copyOpenBaoContainer -Path '/tmp/bao-tls/vault-ca.pem'" in script
-    assert '-ca-cert=/tmp/bao-tls/vault-ca.pem' in script
-    assert '"--network", "container:$copyOpenBaoContainer"' in script
-    assert '"--mount", $copyCaMount' in script
-    assert '"BAO_CACERT=/bao-public-ca/ca.crt"' in script
-    assert '"BAO_TOKEN=$copyBaoToken"' in script
-    assert '"NOTIFICATION_OPENBAO_TOKEN=$copyNotificationToken"' in script
-    assert '"NOTIFICATION_OPENBAO_TOKEN=$liveNotificationToken"' not in script
-    assert script.count("-policy=notification-webhook-service -no-default-policy -orphan") == 1
+    for value in ("BAO_DEV_ROOT_TOKEN_ID", "https://localhost:8200", "/tmp/bao-tls/vault-ca.pem", "-ca-cert=/tmp/bao-tls/vault-ca.pem", "container:{bao}", "/bao-public-ca/ca.crt", "NOTIFICATION_OPENBAO_TOKEN", "-policy=notification-webhook-service", "-no-default-policy", "-orphan", "-ttl=2h"):
+        assert value in native
+    assert "bao_request(false)" in native
+    assert "migration must not inherit root authority" in native
     assert "$env:BAO_TOKEN = $baoDevRootToken" not in script
-    assert re.search(r'"db-migrate"\s*\)', script)
-    assert '"BAO_ADDR=http://openbao:8200"' not in script
-    assert script.count('"--env", "BAO_TOKEN"') == 0
-    assert '"dev-only-token"' not in script
+    assert '"BAO_ADDR=http://openbao:8200"' not in script + native
+    assert '"NOTIFICATION_OPENBAO_TOKEN=$liveNotificationToken"' not in script
+    assert '"dev-only-token"' not in script + native
 
 
 def test_beta_runner_uses_shared_rust_issuance_image_role() -> None:
@@ -969,17 +933,17 @@ def test_beta_runner_uses_shared_rust_issuance_image_role() -> None:
 
 def test_issuance_migrations_use_rust_in_both_beta_modes() -> None:
     script = text("scripts/deploy-local-beta-release.ps1")
+    native = text("rust/crates/deployment-catalog/src/beta_rehearsal.rs")
     assert 'UseRustIssuance' not in script
-    assert '"postgresql://marty:$copyPassword@${copyContainer}:5432/marty"' in script
+    assert 'postgresql://marty:{password}@{pg}:5432/marty' in native
     assert '"postgresql://marty:${martyDbPassword}@postgres:5432/marty"' in script
-    assert "manage_migrations.py" not in script
-    for prefix, verify_name in (("rehearsal", "$rehearsalIssuanceVerify"),
-                                ("live", "$liveIssuanceVerify")):
-        upgrade_log = script.index(f'"issuance-migration-{prefix}.log"')
-        verify_args = script.index(f"-Arguments {verify_name}", upgrade_log)
-        verify_log = script.index(f'"issuance-migration-{prefix}-verify.log"', verify_args)
-        assert upgrade_log < verify_args < verify_log
-    assert script.count('"issuance-migrations")') >= 4
+    assert "manage_migrations.py" not in script + native
+    upgrade = script.index('"issuance-migration-live.log"')
+    verify = script.index("-Arguments $liveIssuanceVerify", upgrade)
+    assert upgrade < verify < script.index('"issuance-migration-live-verify.log"', verify)
+    assert '"issuance-migration-rehearsal.log"' in native
+    assert '"issuance-migration-rehearsal-verify.log"' in native
+    assert script.count('"issuance-migrations")') == 2
 
 
 def test_beta_runner_proves_the_split_native_issuance_runtime() -> None:
