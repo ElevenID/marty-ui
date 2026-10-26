@@ -12,6 +12,20 @@ limitation.
 
 ## 🚀 Quick Start
 
+### Nightly installer bootstrap
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/ElevenID/marty-ui/main/install.sh | sh -s -- --channel nightly
+```
+
+Initially supports Linux amd64 with an accessible Docker Engine and Compose.
+A published, signed admission for the selected release is required; unavailable
+or unqualified releases are refused. Use `--version TAG` instead of `--channel
+nightly` to select an exact admitted version.
+
+See [bootstrap usage and platform support](docs/installer-bootstrap.md) for
+requirements and the boundary between the bootstrap and deployment operations.
+
 ### Local Development (Recommended)
 
 ```bash
