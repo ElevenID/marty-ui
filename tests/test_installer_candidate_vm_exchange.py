@@ -106,10 +106,13 @@ def test_mismatched_signed_grant_refuses_completion(arranged):
     assert calls == ["verify", "upload", "receive"]
 
 
-@pytest.mark.parametrize("incomplete", [False, True])
-@pytest.mark.parametrize("observer_failure", [False, True])
+@pytest.mark.parametrize("incomplete,observer_failure,replace_output", [
+    (False, False, False), (True, False, False),
+    (False, True, False), (True, True, False),
+    (False, False, True)])
 def test_post_grant_same_vm_dispatch_keeps_lease(arranged, monkeypatch,
-                                                  incomplete, observer_failure):
+                                                  incomplete, observer_failure,
+                                                  replace_output):
     args, verified, calls = arranged
     registry = args["registry"]
     control = registry / "control"
@@ -123,10 +126,12 @@ def test_post_grant_same_vm_dispatch_keeps_lease(arranged, monkeypatch,
     verified["ssh"]["controller_key_sha256"] = release.digest(key.read_bytes())
     verified["ssh"]["known_hosts_sha256"] = release.digest(known_hosts.read_bytes())
     verified["receipt_sha256"] = release.digest(b"receipt")
+    host_raw = release.encode({"synthetic": "previously admitted host"})
     fresh = dict(target=verified["target"], ssh=verified["ssh"],
                  authorization_sha256=release.digest(b"authorization"),
                  inventory_sha256=release.digest(b"inventory"),
                  initial_guest_readiness_sha256=release.digest(b"initial VM"),
+                 host_observation_sha256=release.digest(host_raw),
                  probe_finished_at=100000)
     vm_id = verified["target"]["guest_id"]
     observation_id = "33333333-3333-4333-8333-333333333333"
@@ -135,10 +140,17 @@ def test_post_grant_same_vm_dispatch_keeps_lease(arranged, monkeypatch,
         exchange._write(lease.parent,
                         vm_id + "." + kwargs["observation_id"] + ".host-preflight.json",
                         fresh)
+        exchange._write(lease.parent,
+                        vm_id + "." + kwargs["observation_id"] + ".host-observation.json",
+                        release.decode(host_raw))
         return fresh
     monkeypatch.setattr(exchange, "preflight", preflight)
     monkeypatch.setattr(exchange.dispatch, "verify", lambda **_kwargs:
                         (b"authorization", b"receipt", b"inventory", {}))
+    monkeypatch.setattr(exchange.dispatch, "verified_harness_script",
+                        lambda *_args: "synthetic signed TLS probe")
+    monkeypatch.setattr(exchange.dispatch, "verified_bootstrap",
+                        lambda *_args: "synthetic signed bootstrap")
     def invoke(**kwargs):
         calls.append("invoke")
         assert kwargs["lease"].parent is not None
@@ -171,6 +183,19 @@ def test_post_grant_same_vm_dispatch_keeps_lease(arranged, monkeypatch,
                         vm_id + ".process-check-" + process_check_id + ".json",
                         record)
         return record
+    def observe_installed(**kwargs):
+        calls.append("installed")
+        assert kwargs["checkpoint"]["acceptance"] is False
+        assert kwargs["checkpoint"]["dispatch"] == (
+            "failed_or_incomplete" if incomplete else "returned_zero_unqualified")
+        if replace_output:
+            kwargs["output"].rename(kwargs["output"].with_name(
+                kwargs["output"].name + ".held"))
+            kwargs["output"].mkdir(mode=0o700)
+        kwargs["unchanged"]()
+        kwargs["writer"](exchange.acceptance.NAME,
+                         release.encode(kwargs["checkpoint"]))
+        return kwargs["checkpoint"]
     with ControllerLease(registry) as lease:
         exchange._write(lease.parent, args["expected"]["nonce"] + ".context.json",
                         args["expected"])
@@ -188,17 +213,27 @@ def test_post_grant_same_vm_dispatch_keeps_lease(arranged, monkeypatch,
     if observer_failure:
         with pytest.raises(OSError, match="VM observation failed"):
             exchange.dispatch_once(**common, invoke=invoke,
-                                   process_observer=process_observer)
+                                   process_observer=process_observer,
+                                   observe_installed=observe_installed)
+    elif replace_output:
+        with pytest.raises(ValueError, match="registry replaced"):
+            exchange.dispatch_once(**common, invoke=invoke,
+                                   process_observer=process_observer,
+                                   observe_installed=observe_installed)
     elif incomplete:
         with pytest.raises(ValueError, match="acceptance incomplete"):
             exchange.dispatch_once(**common, invoke=invoke,
-                                   process_observer=process_observer)
+                                   process_observer=process_observer,
+                                   observe_installed=observe_installed)
     else:
         result = exchange.dispatch_once(**common, invoke=invoke,
-                                        process_observer=process_observer)
+                                        process_observer=process_observer,
+                                        observe_installed=observe_installed)
         assert result["installation_ready"] is False
-    assert calls == ["verify", "fresh", "verify", "invoke", "fresh", "fresh",
-                     "process"]
+    assert calls[:7] == ["verify", "fresh", "verify", "invoke", "fresh",
+                        "fresh", "process"]
+    assert calls.count("invoke") == 1
+    assert calls.count("installed") == (0 if observer_failure else 1)
     post_path = registry / (args["expected"]["nonce"] +
                             ".vm-post-dispatch.json")
     if observer_failure:
@@ -208,8 +243,18 @@ def test_post_grant_same_vm_dispatch_keeps_lease(arranged, monkeypatch,
         assert post["command_returned_zero"] is (not incomplete)
         assert post["installation_ready"] is False
         assert post["acceptance"] is False
+        output = registry / (args["expected"]["nonce"] +
+                             ".installed-observations")
+        if replace_output:
+            assert not (output / exchange.acceptance.NAME).exists()
+            assert (output.with_name(output.name + ".held") /
+                    "vm-binding.json").is_file()
+        else:
+            assert (output / exchange.acceptance.NAME).is_file()
+    before_retry = len(calls)
     with pytest.raises(FileExistsError):
         exchange.dispatch_once(**common, invoke=invoke,
-                               process_observer=process_observer)
-    assert calls == ["verify", "fresh", "verify", "invoke", "fresh", "fresh",
-                     "process", "verify", "fresh"]
+                               process_observer=process_observer,
+                               observe_installed=observe_installed)
+    assert calls[before_retry:] == ["verify", "fresh"]
+    assert calls.count("invoke") == 1

@@ -13,9 +13,10 @@ import uuid
 
 from installer_candidate_controller import ControllerLease
 from installer_candidate_vm_create import _read_record, _write
-from installer_candidate_vm_host_preflight import preflight, verify_consumed_intent
+from installer_candidate_vm_host_preflight import preflight, verify_consumed_intent, _raw_bytes_at
 import installer_candidate_vm_host_probe as host_probe
 import installer_candidate_vm_live_observe as live_vm
+import installer_acceptance_runner as acceptance
 import installer_candidate_receipt_upload as uploader
 import installer_candidate_grant_receive as receiver
 import installer_candidate_dispatch as dispatch
@@ -103,7 +104,9 @@ def dispatch_once(*, registry: Path, runtime_parent: Path, vm_id: str,
                   clock=time.time, verifier=provenance.command,
                   guest_probe=host_probe.probe,
                   invoke=dispatch.dispatch,
-                  process_observer=live_vm.observe) -> dict:
+                  process_observer=live_vm.observe,
+                  observe_installed=acceptance.observe_after_dispatch,
+                  execute=host_probe.command) -> dict:
     """Re-admit the same live VM and invoke the signed installer once."""
     release.require(os.geteuid() == 0 and registry.is_absolute(),
                     "root controller required for VM dispatch")
@@ -140,7 +143,7 @@ def dispatch_once(*, registry: Path, runtime_parent: Path, vm_id: str,
                         and _read_record(lease.parent, target_file.name)[1]
                         == bound["target"],
                         "independent dispatch inputs changed")
-        a, receipt, i, _ = dispatch.verify(
+        a, receipt, i, files = dispatch.verify(
             assets=assets, grants=grants, context=expected,
             target=bound["target"], ledger=ledger, gh=gh, cosign=cosign,
             now=int(clock()), runner=verifier)
@@ -274,6 +277,125 @@ def dispatch_once(*, registry: Path, runtime_parent: Path, vm_id: str,
                         and _read_record(lease.parent, process_name)[0]
                         == process_raw,
                         "post-dispatch VM evidence changed")
-        if command_error is not None:
-            raise command_error
-        return result
+        output_name = nonce + ".installed-observations"
+        os.mkdir(output_name, mode=0o700, dir_fd=lease.parent)
+        os.fsync(lease.parent)
+        output = registry / output_name
+        output_fd = dispatch._directory(output)
+        try:
+            def write_output(name, raw):
+                release.require(type(name) is str and name
+                                and "/" not in name and "\\" not in name
+                                and name not in (".", "..")
+                                and type(raw) is bytes and len(raw) <= 65536,
+                                "installed observation output invalid")
+                dispatch.registry_unchanged(output_fd, output)
+                fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL
+                             | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600,
+                             dir_fd=output_fd)
+                try:
+                    os.fsync(output_fd)
+                    with os.fdopen(fd, "wb", closefd=False) as stream:
+                        stream.write(raw)
+                        stream.flush()
+                        os.fsync(fd)
+                    os.fsync(output_fd)
+                finally:
+                    os.close(fd)
+                dispatch.registry_unchanged(output_fd, output)
+            host_name = vm_id + "." + observation_id + ".host-observation.json"
+            host_raw = _raw_bytes_at(lease.parent, host_name)
+            release.require(release.digest(host_raw)
+                            == fresh["host_observation_sha256"],
+                            "post-dispatch host admission differs")
+            write_output("host-observation.json", host_raw)
+            binding = dict(schema="elevenid.installer-vm-installed-observation-binding/v1",
+                           nonce=nonce, vm_id=vm_id,
+                           context_sha256=release.candidate_context_sha256(expected),
+                           post_dispatch_sha256=release.digest(release.encode(post)),
+                           host_observation_sha256=release.digest(host_raw),
+                           receipt_sha256=bound["receipt_sha256"],
+                           installation_ready=False, acceptance=False)
+            binding_raw = release.encode(binding)
+            write_output("vm-binding.json", binding_raw)
+            def unchanged():
+                dispatch.registry_unchanged(lease.parent, registry)
+                dispatch.registry_unchanged(output_fd, output)
+                current = verify_consumed_intent(
+                    lease, registry, authorization=authorization, assets=assets,
+                    expected=expected, gh=gh, cosign=cosign, clock=clock,
+                    verifier=verifier)
+                release.require(current["intent_sha256"] == bound["intent_sha256"]
+                                and current["receipt_sha256"] == bound["receipt_sha256"]
+                                and current["target"] == bound["target"]
+                                and current["ssh"] == bound["ssh"]
+                                and _read_record(lease.parent, post_name)[1] == post
+                                and _read_record(lease.parent, process_name)[0]
+                                == process_raw
+                                and _raw_bytes_at(lease.parent, host_name) == host_raw
+                                and _raw_bytes_at(output_fd, "host-observation.json")
+                                == host_raw
+                                and _read_record(output_fd, "vm-binding.json")[0]
+                                == binding_raw,
+                                "installed observation binding changed")
+                release.require(dispatch.private_file(key, 8192)[0]
+                                == fresh["ssh"]["controller_key_sha256"]
+                                and dispatch.private_file(known_hosts, 4096)[0]
+                                == fresh["ssh"]["known_hosts_sha256"],
+                                "installed observation SSH custody changed")
+                for path, expected_file in files.items():
+                    release.require(dispatch.private_file(
+                        path, expected_file[1], executable=path in (gh, cosign))
+                        == expected_file, "installed candidate custody changed")
+                check = str(uuid.uuid4())
+                checked = process_observer(
+                    registry, runtime_parent, vm_id=vm_id,
+                    process_check_id=check, lease=lease)
+                checked_raw, persisted = _read_record(
+                    lease.parent, vm_id + ".process-check-" + check + ".json")
+                release.require(persisted == checked
+                                and checked["schema"] == live_vm.PROCESS_CHECK_SCHEMA
+                                and checked["vm_id"] == vm_id
+                                and checked["observation_id"] == check
+                                and checked["initial_guest_readiness_sha256"]
+                                == process["initial_guest_readiness_sha256"]
+                                and checked_raw == release.encode(checked),
+                                "installed observation VM process changed")
+                dispatch.registry_unchanged(lease.parent, registry)
+                dispatch.registry_unchanged(output_fd, output)
+            def guarded_execute(argv, **kwargs):
+                unchanged()
+                raw = execute(argv, **kwargs)
+                unchanged()
+                return raw
+            checkpoint = acceptance.incomplete_checkpoint(
+                context=expected, target=bound["target"], authorization=a,
+                receipt=receipt, inventory=i,
+                host_observation_sha256=release.digest(host_raw),
+                host_preflight="passed",
+                dispatch_status=("returned_zero_unqualified"
+                                 if command_error is None else "failed_or_incomplete"),
+                observed_at=int(clock()))
+            tls_source = dispatch.verified_harness_script(
+                expected["harness_source_sha"], "installer_live_tls_probe.py")
+            bootstrap_source = (dispatch.verified_bootstrap(
+                expected["harness_source_sha"])
+                if expected["phase"] == "published" else None)
+            observed = observe_installed(
+                checkpoint=checkpoint, output=output, context=expected,
+                target=bound["target"], authorization=a, receipt=receipt,
+                inventory=i, ssh=ssh, key=key, known_hosts=known_hosts,
+                port=fresh["ssh"]["port"], host=fresh["ssh"]["host"],
+                user=fresh["ssh"]["user"], home="/home/" + fresh["ssh"]["user"],
+                bootstrap_source=bootstrap_source, tls_source=tls_source,
+                unchanged=unchanged, guarded_execute=guarded_execute,
+                clock=clock, writer=write_output)
+            acceptance.validate(observed, context=expected,
+                                target=bound["target"], authorization=a,
+                                receipt=receipt, inventory=i)
+            unchanged()
+            if command_error is not None:
+                raise command_error
+            return result
+        finally:
+            os.close(output_fd)

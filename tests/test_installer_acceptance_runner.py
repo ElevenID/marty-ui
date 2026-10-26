@@ -72,7 +72,8 @@ def candidate(tmp_path,monkeypatch):
     monkeypatch.setattr(a.dispatch,'executable',lambda _:None)
     monkeypatch.setattr(a.dispatch,'verify',lambda **_: (auth,receipt,inv,{}))
     monkeypatch.setattr(a.dispatch,'verified_harness_script',
-        lambda source,name:(Path(__file__).resolve().parents[1]/'scripts'/name).read_text())
+        lambda source,name:(Path(__file__).resolve().parents[1]/'scripts'/name)
+        .read_bytes().decode('utf-8'))
     calls=[]
     def execute(argv,**kwargs):
         if ' status --install-dir ' in argv[-1]:

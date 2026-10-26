@@ -222,9 +222,33 @@ def probe_source():
     finally:os.close(fd)
 
 
+def incomplete_checkpoint(*, context, target, authorization, receipt, inventory,
+                          host_observation_sha256=None,
+                          host_preflight='failed', dispatch_status='not_attempted',
+                          observed_at):
+    """Create the shared false-authority checkpoint for one candidate attempt."""
+    identity={key:context[key] for key in ('source_sha','release_tag','harness_source_sha',
+                                          'run_id','run_attempt','phase','nonce')}
+    checkpoint=dict(schema=SCHEMA,repository=r.REPOSITORY,
+        workflow=r.acceptance.WORKFLOW,**identity,target=target,
+        authorization_sha256=r.digest(authorization),receipt_sha256=r.digest(receipt),
+        inventory_sha256=r.digest(inventory),
+        cases={name:('passed' if name=='artifact-verification' else 'blocked')
+               for name in r.acceptance.CASES},
+        host_observation_sha256=host_observation_sha256,
+        host_preflight=host_preflight,dispatch=dispatch_status,
+        trust_info_sha256=None,status_observation_sha256=None,
+        trust_inspection='not_attempted',acceptance=False,
+        tls_observation_sha256=None,tls_inspection='not_attempted',
+        installation_ready=False,observed_at=observed_at)
+    validate(checkpoint,context=context,target=target,authorization=authorization,
+             receipt=receipt,inventory=inventory)
+    return checkpoint
+
+
 def observe_after_dispatch(*, checkpoint, output, context, target, authorization, receipt,
         inventory, ssh, key, known_hosts, port, host, user, home, bootstrap_source,
-        tls_source, unchanged, guarded_execute, clock=time.time):
+        tls_source, unchanged, guarded_execute, clock=time.time, writer=None):
     """Collect bound read-only status, trust and TLS after one dispatch attempt.
 
     This function never starts the installer or qualifies an installed journey.
@@ -235,6 +259,8 @@ def observe_after_dispatch(*, checkpoint, output, context, target, authorization
     r.require(checkpoint['host_preflight']=='passed'
               and checkpoint['dispatch']!='not_attempted',
               'post-dispatch observation requires admitted invocation')
+    if writer is None:
+        writer=lambda name, raw: write_exclusive(output/name, raw)
     unchanged()
     # Native startup deliberately exits incomplete. Query its locked public
     # trust record through the same pinned SSH route; absence remains explicit.
@@ -265,8 +291,8 @@ def observe_after_dispatch(*, checkpoint, output, context, target, authorization
             r.require(status_again==status_raw,'candidate status changed across trust export')
         trust_value=trust_observation(raw,target,int(clock()))
         unchanged()
-        write_exclusive(output/STATUS_NAME,status_raw)
-        write_exclusive(output/TRUST_NAME,raw)
+        writer(STATUS_NAME,status_raw)
+        writer(TRUST_NAME,raw)
         checkpoint['status_observation_sha256']=r.digest(status_raw)
         checkpoint['trust_info_sha256']=r.digest(raw)
         checkpoint['trust_inspection']='verified_public_record'
@@ -293,14 +319,17 @@ def observe_after_dispatch(*, checkpoint, output, context, target, authorization
                     env=dict(HOME=private,PATH='/usr/bin:/bin',LANG='C',LC_ALL='C'),timeout=120,limit=65536)
             r.require(status_after==status_raw and trust_after==raw,'candidate changed across live TLS probe')
             unchanged()
-            write_exclusive(output/TLS_NAME,tls_raw)
+            writer(TLS_NAME,tls_raw)
             checkpoint['tls_observation_sha256']=r.digest(tls_raw)
             checkpoint['tls_inspection']='verified_local_https'
         except (ValueError,OSError):
             unchanged()
     checkpoint['observed_at']=int(clock())
     validate(checkpoint,context=context,target=target,authorization=authorization,receipt=receipt,inventory=inventory)
-    write_exclusive(output/NAME,r.encode(checkpoint));return checkpoint
+    unchanged()
+    writer(NAME,r.encode(checkpoint))
+    unchanged()
+    return checkpoint
 
 
 def run(*, output, assets, grants, context_file, target_file, ledger, gh, cosign,
@@ -332,14 +361,9 @@ def run(*, output, assets, grants, context_file, target_file, ledger, gh, cosign
         if context['phase']=='published' else None)
     dispatch.remote_plan(home,user,context,target,authorization=authorization,
         bootstrap_source=bootstrap_source) # Validate fixed guest account/path contract.
-    identity={key:context[key] for key in ('source_sha','release_tag','harness_source_sha','run_id','run_attempt','phase','nonce')}
-    checkpoint=dict(schema=SCHEMA,repository=r.REPOSITORY,workflow=r.acceptance.WORKFLOW,**identity,
-        target=target,authorization_sha256=r.digest(authorization),receipt_sha256=r.digest(receipt),
-        inventory_sha256=r.digest(inventory),cases={name:('passed' if name=='artifact-verification' else 'blocked') for name in r.acceptance.CASES},
-        host_observation_sha256=None,host_preflight='failed',dispatch='not_attempted',
-        trust_info_sha256=None,status_observation_sha256=None,trust_inspection='not_attempted',acceptance=False,
-        tls_observation_sha256=None,tls_inspection='not_attempted',
-        installation_ready=False,observed_at=int(clock()))
+    checkpoint=incomplete_checkpoint(context=context,target=target,
+        authorization=authorization,receipt=receipt,inventory=inventory,
+        observed_at=int(clock()))
     write_exclusive(output/'runner-intent.json',r.encode(dict(schema='elevenid.installer-acceptance-runner-intent/v1',
         context_sha256=r.candidate_context_sha256(context),receipt_sha256=r.digest(receipt),target=target)))
     probe=probe_source()

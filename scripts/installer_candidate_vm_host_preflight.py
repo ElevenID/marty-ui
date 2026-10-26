@@ -78,7 +78,9 @@ def _unchanged_raw(parent: int, name: str, raw: bytes) -> None:
 
 
 def _raw_bytes_at(parent: int, name: str) -> bytes:
-    release.require(name.endswith(".host-observation.json") and "/" not in name,
+    release.require((name == "host-observation.json"
+                     or name.endswith(".host-observation.json"))
+                    and "/" not in name,
                     "VM raw host evidence name invalid")
     before = os.stat(name, dir_fd=parent, follow_symlinks=False)
     release.require(stat.S_ISREG(before.st_mode) and before.st_uid == 0
