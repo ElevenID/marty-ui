@@ -55,28 +55,19 @@ def test_both_modes_pin_the_actual_runtime_before_schema_rehearsal() -> None:
 
 def test_rehearsal_repeat_and_live_migration_gate_application_startup() -> None:
     script = RUNNER.read_text(encoding="utf-8")
-    rehearsal = script.index("foreach ($verificationPass in 1..2)")
-    cleanup = script.index(
-        "foreach ($expectedContainer in $rehearsalContainers)", rehearsal
-    )
-    maintenance = script.index(
-        'Write-Step "Enter maintenance window and apply live migration"'
-    )
+    native = (ROOT / "rust/crates/deployment-catalog/src/beta_rehearsal.rs").read_text(encoding="utf-8")
+    rehearsal = script.index("rehearse_beta_migrations.py")
+    completed = script.index("Native beta migration rehearsal failed; do not enter live maintenance")
+    maintenance = script.index('Write-Step "Enter maintenance window and apply live migration"')
     backup = script.index('-Phase "maintenance_quiesced"')
-    live = script.index(
-        '-LogPath (Join-Path $logsDir "verification-migration-live.log")'
-    )
-    cutover = script.index(
-        'Write-Step "Recreate application containers from coordinated images"'
-    )
-    assert rehearsal < cleanup < maintenance < backup < live < cutover
-    assert "-Image $verificationMigrationImage -DatabaseUrl $copyUrl" in script
+    live = script.index('-LogPath (Join-Path $logsDir "verification-migration-live.log")')
+    cutover = script.index('Write-Step "Recreate application containers from coordinated images"')
+    assert rehearsal < completed < maintenance < backup < live < cutover
+    assert "for pass in 1..=2" in native
+    assert "verification_image = $verificationMigrationImage" in script
     assert '$liveDatabaseUrl = "postgresql://marty:${martyDbPassword}@postgres:5432/marty"' in script
     assert "-DatabaseUrl $liveDatabaseUrl" in script
-    assert (
-        script.count("Invoke-VerificationMigration -Image $verificationMigrationImage")
-        == 2
-    )
+    assert script.count("Invoke-VerificationMigration -Image $verificationMigrationImage") == 1
 
 
 @pytest.mark.skipif(
