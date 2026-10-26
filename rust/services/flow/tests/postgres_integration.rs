@@ -21,6 +21,9 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use sqlx::{postgres::PgConnectOptions, PgPool};
 
+#[path = "support/flow_schema.rs"]
+mod flow_schema;
+
 const TEST_DATABASE_NAME: &str = "marty_atomic_test";
 const FIRST_INSTANCE_ID: &str = "90000000-0000-0000-0000-000000000001";
 const EXPIRED_INSTANCE_ID: &str = "90000000-0000-0000-0000-000000000002";
@@ -41,6 +44,7 @@ async fn physical_start_intent_claim_replay_and_atomic_finalization() -> TestRes
     )?;
     assert!(matches!(options.get_host(), "127.0.0.1" | "localhost"));
     assert_eq!(options.get_database(), Some(TEST_DATABASE_NAME));
+    let _schema_lock = flow_schema::lock_shared_test_schemas(&options).await?;
     let pool = PgPool::connect_with(options).await?;
     reset_schema(&pool).await?;
     validate_flow_schema(&pool).await?;
@@ -535,6 +539,7 @@ async fn postgres_finalization_and_callback_leases_are_atomic() -> TestResult {
         Some(TEST_DATABASE_NAME),
         "Flow PostgreSQL tests require the isolated test database"
     );
+    let _schema_lock = flow_schema::lock_shared_test_schemas(&options).await?;
     let pool = PgPool::connect_with(options).await?;
 
     reset_schema(&pool).await?;

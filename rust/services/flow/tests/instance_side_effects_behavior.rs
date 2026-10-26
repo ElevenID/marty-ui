@@ -25,6 +25,9 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use sqlx::{postgres::PgConnectOptions, PgPool};
 
+#[path = "support/flow_schema.rs"]
+mod flow_schema;
+
 #[derive(Deserialize)]
 struct Contract {
     schema_version: u32,
@@ -249,6 +252,9 @@ async fn physical_service_start_recovers_lost_provider_and_flow_finalize_respons
             .unwrap();
     assert!(matches!(options.get_host(), "127.0.0.1" | "localhost"));
     assert_eq!(options.get_database(), Some("marty_atomic_test"));
+    let _schema_lock = flow_schema::lock_shared_test_schemas(&options)
+        .await
+        .unwrap();
     let pool = PgPool::connect_with(options).await.unwrap();
     sqlx::raw_sql(
         "DROP SCHEMA IF EXISTS flow_service CASCADE;
