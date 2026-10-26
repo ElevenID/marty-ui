@@ -93,6 +93,7 @@ async function executeWrongSecretCase({result,save,gateway,admin,adminPage,organ
   result.validClientSecretCase.canvasKeyIntent={name:'Marty OAuth '+runId,accountId:state.accountId,state:'CREATING'};save();
   const key=await stock.createOauthDeveloperKey(page,{canvasOrigin:CANVAS,accountId:state.accountId,ownerEmail:canvasCredentials.email,
    name:'Marty OAuth '+runId,redirectUri:MARTY+'/v1/integrations/canvas/oauth/callback',observe:value=>stage('CANVAS_KEY_'+value),
+   observeBinding:value=>{result.validClientSecretCase.enabledBindingChecks=value;save();},
    onOwned:id=>{owned.resources.oauthDeveloperKey=String(id);result.validClientSecretCase.canvasKeyIntent.state='ID_RECEIVED';save();}});
   result.validClientSecretCase.canvasKeyIntent.state='CREATED';save();
   clientId=key.clientId;correctSecret=key.clientSecret;retainPrivateAuthority('canvasOwnedClientSecret',correctSecret);assert.notEqual(wrong,correctSecret);
