@@ -46,6 +46,10 @@ const NATIVE_MIGRATIONS: &[(&str, &str)] = &[
         "0010_passport_start_idempotency",
         include_str!("../migrations/0010_passport_start_idempotency.sql"),
     ),
+    (
+        "0011_passport_administrative_cancellation",
+        include_str!("../migrations/0011_passport_administrative_cancellation.sql"),
+    ),
 ];
 const BASE_TABLES: &[&str] = &[
     "application_templates",
@@ -660,6 +664,11 @@ pub async fn migrate_passport(pool: &PgPool) -> Result<(), sqlx::Error> {
     ))
     .execute(&mut *transaction)
     .await?;
+    sqlx::raw_sql(include_str!(
+        "../migrations/0011_passport_administrative_cancellation.sql"
+    ))
+    .execute(&mut *transaction)
+    .await?;
     validate_passport_connection(&mut transaction).await?;
     transaction.commit().await
 }
@@ -909,6 +918,7 @@ async fn validate_passport_connection(
             "passport bureau provider/job index is incompatible".into(),
         ));
     }
+    crate::passport_repository::validate_administrative_cancellation_schema(connection).await?;
     Ok(())
 }
 

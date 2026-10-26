@@ -911,6 +911,15 @@
       "source": "rust/services/issuance/src/canvas_review_resolution.rs",
       "behavior_test": "rust/services/issuance/tests/canvas_award_candidate_postgres_contract.rs",
       "adaptation": "Explicit native-only recovery for an open review whose credential is already revoked; preserves the frozen resolve endpoint's repeated-revocation error."
+    },
+    {
+      "method": "POST",
+      "path": "/v1/passport/applications/{application_id}/cancel",
+      "operation": "administratively_cancel_passport_job",
+      "owner": "issuance-native",
+      "source": "rust/services/issuance/src/passport_cancellation_http.rs",
+      "behavior_test": "rust/services/issuance/tests/passport_postgres_contract.rs",
+      "adaptation": "Native-only tenant-authorized local administrative abandonment; never a physical bureau or Flow cancellation request. Frozen Python passport routes remain unchanged."
     }
   ],
   "native_grpc": [

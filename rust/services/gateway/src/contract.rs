@@ -170,7 +170,7 @@ impl GatewayContract {
                 }]),
             })?;
         }
-        issuance_native::add_public_native_extensions(&mut table)?;
+        issuance_native::add_public_native_extensions(&mut table, passport_native)?;
         table.add(RouteConfig {
             name: "flow-native:physical-start-intents".into(),
             pattern: "/v1/flows/physical-start-intents".into(),
@@ -929,7 +929,10 @@ mod tests {
         let provider_ingress = contract
             .proxy_route_table_with_passport_selectors(true, true)
             .unwrap();
-        assert_eq!(legacy.routes().len(), native.routes().len());
+        assert_eq!(
+            legacy.routes().len() + issuance_native::PASSPORT_NATIVE_EXTENSION_ROUTE_COUNT,
+            native.routes().len()
+        );
         assert_eq!(provider_ingress.routes().len(), native.routes().len());
         let mut public_count = 0;
         for route in frozen.routes {
@@ -962,6 +965,14 @@ mod tests {
             assert!(new.route.auth_required, "{path} must stay authenticated");
         }
         assert_eq!(public_count, 8);
+        let cancel = "/v1/passport/applications/job-1/cancel";
+        assert!(route_for(&legacy, HttpMethod::Post, cancel).is_err());
+        let administrative = route_for(&native, HttpMethod::Post, cancel).unwrap();
+        assert_eq!(
+            administrative.route.upstream_service,
+            issuance_native::NATIVE_SERVICE
+        );
+        assert!(administrative.route.auth_required);
         assert!(route_for(
             &native,
             HttpMethod::Post,

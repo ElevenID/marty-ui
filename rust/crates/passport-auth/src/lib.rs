@@ -102,6 +102,18 @@ pub enum PassportTenantAuthError {
     InvalidKey,
 }
 
+/// Exact operation-key syntax, shared by gateway pre-cache guards and native
+/// cancellation validation. Trimming at the cache boundary must not create a
+/// replay alias for a key the native endpoint would reject.
+#[must_use]
+pub fn valid_operation_idempotency_key(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'-'))
+}
+
 /// An organization identity that was proven with its own passport API key.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PassportTenantPrincipal {

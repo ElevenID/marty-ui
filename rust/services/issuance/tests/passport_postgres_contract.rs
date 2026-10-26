@@ -43,6 +43,485 @@ use tokio::sync::{oneshot, Barrier};
 use tower::ServiceExt;
 
 #[tokio::test]
+async fn administrative_cancellation_preserves_history_and_closes_terminal_races() {
+    let Ok(database_url) = std::env::var("MARTY_PASSPORT_POSTGRES_TEST_URL") else {
+        eprintln!(
+            "MARTY_PASSPORT_POSTGRES_TEST_URL required for actual cancellation PostgreSQL evidence"
+        );
+        return;
+    };
+    let parsed = url::Url::parse(&database_url).unwrap();
+    assert!(matches!(parsed.host_str(), Some("127.0.0.1" | "localhost")));
+    assert_eq!(parsed.path(), "/marty_passport_contract_test");
+    let pool = PgPoolOptions::new()
+        .max_connections(6)
+        .connect(&database_url)
+        .await
+        .unwrap();
+    sqlx::query("DROP SCHEMA IF EXISTS issuance_service CASCADE")
+        .execute(&pool)
+        .await
+        .unwrap();
+    migration::migrate_passport(&pool).await.unwrap();
+    migration::validate_passport(&pool).await.unwrap();
+    let ring = PassportTenantKeyring::from_json(&format!(
+        "{{\"org-a\":\"{}\",\"org-b\":\"{}\"}}",
+        "a".repeat(32),
+        "b".repeat(32),
+    ))
+    .unwrap();
+    let principal = ring
+        .authenticate(Some("org-a"), Some(&"a".repeat(32)))
+        .unwrap();
+    let repository = PostgresPassportRepository::new(pool.clone());
+    // Cancellation needs no decrypt/sign/bureau provider. Dummy encrypted test
+    // custody must remain byte-identical; it is not a usable document fixture.
+    let app = passport_router(PassportHttpService::new(
+        ring.clone(),
+        repository.clone(),
+        None,
+        None,
+        None,
+    ));
+
+    async fn seed(
+        pool: &sqlx::PgPool,
+        repository: &PostgresPassportRepository,
+        principal: &marty_passport_auth::PassportTenantPrincipal,
+        status: &str,
+    ) -> (String, String) {
+        let id = uuid::Uuid::new_v4().to_string();
+        let application = uuid::Uuid::new_v4().to_string();
+        repository
+            .insert(
+                principal,
+                &PassportJobInsert {
+                    id: id.clone(),
+                    application_id: application.clone(),
+                    flow_execution_id: "owned-flow".into(),
+                    application_template_id: "owned-application-template".into(),
+                    credential_template_id: "owned-credential-template".into(),
+                    revocation_profile_id: None,
+                    delivery_destination_profile_id: "owned-destination".into(),
+                    document_type: "P".into(),
+                    country_code: "USA".into(),
+                    issuer_did: Some("did:web:test.example:issuer".into()),
+                    secure_artifact_ciphertext: "opaque-original-ciphertext".into(),
+                    secure_artifact_reference: "opaque-original-reference".into(),
+                },
+                Utc::now(),
+            )
+            .await
+            .unwrap();
+        sqlx::query("UPDATE issuance_service.physical_document_jobs SET status=$2, sod_sha256=$3,
+            quality_result=$4,tracking_number='original-tracking',error_code='original-error',error_message='original-detail' WHERE id=$1")
+            .bind(&id).bind(status).bind("a".repeat(64)).bind(json!({"passed":true,"checked_by":"original"}))
+            .execute(pool).await.unwrap();
+        (id, application)
+    }
+    fn request(
+        application: &str,
+        id: &str,
+        organization: &str,
+        key: &str,
+        reason: &str,
+    ) -> Request<Body> {
+        Request::builder().method("POST").uri(format!("/v1/passport/applications/{application}/cancel"))
+            .header("content-type","application/json").header("x-organization-id",organization)
+            .header("x-api-key",if organization=="org-a" {"a".repeat(32)} else {"b".repeat(32)})
+            .header("idempotency-key",key).header("x-user-id","untrusted-human-claim")
+            .body(Body::from(json!({"expected_job_id":id,"reason_code":"ADMINISTRATIVE_ABANDONMENT","reason":reason}).to_string())).unwrap()
+    }
+    async fn body(response: axum::response::Response) -> Value {
+        serde_json::from_slice(&to_bytes(response.into_body(), 32768).await.unwrap()).unwrap()
+    }
+    async fn snapshot(pool: &sqlx::PgPool, id: &str) -> Value {
+        sqlx::query_scalar("SELECT to_jsonb(job)-'status'-'updated_at' FROM issuance_service.physical_document_jobs job WHERE id=$1")
+            .bind(id).fetch_one(pool).await.unwrap()
+    }
+    let (id, application) = seed(&pool, &repository, &principal, "READY_FOR_ACTIVATION").await;
+    sqlx::query("UPDATE issuance_service.physical_document_jobs SET bureau_job_id='owned-cancelled-bureau' WHERE id=$1").bind(&id).execute(&pool).await.unwrap();
+    let original = snapshot(&pool, &id).await;
+    for (org, expected_id) in [
+        ("org-b", id.clone()),
+        ("org-a", uuid::Uuid::new_v4().to_string()),
+    ] {
+        let denied = app
+            .clone()
+            .oneshot(request(
+                &application,
+                &expected_id,
+                org,
+                "owned-cancel-1",
+                "End failed attempt",
+            ))
+            .await
+            .unwrap();
+        assert_eq!(denied.status(), StatusCode::NOT_FOUND);
+    }
+    let mut duplicate = request(
+        &application,
+        &id,
+        "org-a",
+        "owned-cancel-1",
+        "End failed attempt",
+    );
+    duplicate
+        .headers_mut()
+        .append("idempotency-key", "other".parse().unwrap());
+    assert_eq!(
+        app.clone().oneshot(duplicate).await.unwrap().status(),
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    let malformed=app.clone().oneshot(Request::builder().method("POST")
+        .uri(format!("/v1/passport/applications/{application}/cancel"))
+        .header("content-type","application/json").header("x-organization-id","org-a")
+        .header("x-api-key","a".repeat(32)).header("idempotency-key","owned-cancel-1")
+        .body(Body::from(format!(r#"{{"expected_job_id":"{id}","expected_job_id":"{id}","reason_code":"ADMINISTRATIVE_ABANDONMENT","reason":"End failed attempt"}}"#))).unwrap()).await.unwrap();
+    assert_eq!(malformed.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let cancelled = app
+        .clone()
+        .oneshot(request(
+            &application,
+            &id,
+            "org-a",
+            "owned-cancel-1",
+            "End failed attempt",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(cancelled.status(), StatusCode::OK);
+    let first = body(cancelled).await;
+    assert_eq!(first["job"]["status"], "CANCELLED");
+    assert_eq!(first["bureau_cancellation_requested"], false);
+    assert_eq!(first["flow_cancellation_requested"], false);
+    assert_eq!(
+        first["administrative_cancellation"]["actor_kind"],
+        "AUTHENTICATED_PASSPORT_TENANT"
+    );
+    assert_eq!(
+        first["administrative_cancellation"]["actor_organization_id"],
+        "org-a"
+    );
+    assert_eq!(snapshot(&pool, &id).await, original);
+    let replay = app
+        .clone()
+        .oneshot(request(
+            &application,
+            &id,
+            "org-a",
+            "owned-cancel-1",
+            "End failed attempt",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(replay.status(), StatusCode::OK);
+    let replay = body(replay).await;
+    assert_eq!(first["job"], replay["job"]);
+    assert_eq!(
+        first["administrative_cancellation"],
+        replay["administrative_cancellation"]
+    );
+    assert_eq!(replay["replayed"], true);
+    let conflict = app
+        .clone()
+        .oneshot(request(
+            &application,
+            &id,
+            "org-a",
+            "owned-cancel-1",
+            "Different reason",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(conflict.status(), StatusCode::CONFLICT);
+    let count:i64=sqlx::query_scalar("SELECT count(*) FROM issuance_service.passport_job_administrative_cancellations WHERE job_id=$1").bind(&id).fetch_one(&pool).await.unwrap();
+    assert_eq!(count, 1);
+    assert!(repository
+        .update(
+            &principal,
+            &application,
+            "CANCELLED",
+            &PassportJobPatch::new(PassportJobStatus::SodSigned),
+            Utc::now()
+        )
+        .await
+        .unwrap()
+        .is_none());
+    for mutation in [
+        "UPDATE issuance_service.physical_document_jobs SET status='SOD_SIGNED' WHERE id=$1",
+        "UPDATE issuance_service.physical_document_jobs SET secure_artifact_ciphertext='replacement' WHERE id=$1",
+        "UPDATE issuance_service.physical_document_jobs SET quality_result='{\"passed\":false}'::json WHERE id=$1",
+        "DELETE FROM issuance_service.physical_document_jobs WHERE id=$1",
+        "UPDATE issuance_service.passport_job_administrative_cancellations SET reason='rewritten' WHERE job_id=$1",
+        "DELETE FROM issuance_service.passport_job_administrative_cancellations WHERE job_id=$1",
+    ] { assert!(sqlx::query(mutation).bind(&id).execute(&pool).await.is_err(),"{mutation}"); }
+    for action in [
+        "generate-data-groups",
+        "generate-sod",
+        "activate",
+        "quality-verify",
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/v1/passport/applications/{application}/{action}"))
+                    .header("x-organization-id", "org-a")
+                    .header("x-api-key", "a".repeat(32))
+                    .header("content-type", "application/json")
+                    .body(Body::from("{\"passed\":true}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT, "{action}");
+    }
+    assert!(
+        sqlx::query("TRUNCATE issuance_service.passport_job_administrative_cancellations")
+            .execute(&pool)
+            .await
+            .is_err()
+    );
+    assert_eq!(snapshot(&pool, &id).await, original);
+    let poll = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/v1/passport/applications/{application}/production-status"
+                ))
+                .header("x-organization-id", "org-a")
+                .header("x-api-key", "a".repeat(32))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(poll.status(), StatusCode::OK); // no bureau provider is installed
+    assert_eq!(body(poll).await["status"], "CANCELLED");
+    let kms = passport_mock_artifact_kms::start().await;
+    let callback=serde_json::to_vec(&json!({"organization_id":"org-a","bureau_job_id":"owned-cancelled-bureau","status":"SHIPPED","metadata":{"tracking_number":"late-override"}})).unwrap();
+    let event = kms.verified_callback(&callback).await;
+    let unchanged = repository
+        .apply_verified_webhook(&event, Utc::now())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(unchanged.status, "CANCELLED");
+    assert_eq!(snapshot(&pool, &id).await, original);
+    kms.server.abort();
+    let (unsubmitted, unsubmitted_app) = seed(&pool, &repository, &principal, "DRAFT").await;
+    let old_status = repository
+        .get(&principal, &unsubmitted_app)
+        .await
+        .unwrap()
+        .unwrap()
+        .status;
+    assert_eq!(
+        app.clone()
+            .oneshot(request(
+                &unsubmitted_app,
+                &unsubmitted,
+                "org-a",
+                "unsubmitted-cancel",
+                "End failed attempt"
+            ))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::OK
+    );
+    for action in ["generate-data-groups", "generate-sod"] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!(
+                        "/v1/passport/applications/{unsubmitted_app}/{action}"
+                    ))
+                    .header("x-organization-id", "org-a")
+                    .header("x-api-key", "a".repeat(32))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        assert_eq!(
+            body(response).await["detail"],
+            "Physical document job is terminal"
+        );
+    }
+    assert!(repository
+        .update(
+            &principal,
+            &unsubmitted_app,
+            &old_status,
+            &PassportJobPatch::new(PassportJobStatus::SodSigned),
+            Utc::now()
+        )
+        .await
+        .unwrap()
+        .is_none());
+    for status in ["ACTIVE", "FAILED"] {
+        let (id, application) = seed(&pool, &repository, &principal, status).await;
+        let response = app
+            .clone()
+            .oneshot(request(
+                &application,
+                &id,
+                "org-a",
+                "terminal-cancel",
+                "End failed attempt",
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+    }
+    let (reserved, reserved_app) = seed(&pool, &repository, &principal, "SOD_SIGNED").await;
+    sqlx::query(
+        "UPDATE issuance_service.physical_document_jobs SET submission_intent_id=$2,
+        submission_intent_started_at=now(),submission_intent_bureau_endpoint_sha256=$3 WHERE id=$1",
+    )
+    .bind(&reserved)
+    .bind(uuid::Uuid::new_v4())
+    .bind("b".repeat(64))
+    .execute(&pool)
+    .await
+    .unwrap();
+    let response = app
+        .clone()
+        .oneshot(request(
+            &reserved_app,
+            &reserved,
+            "org-a",
+            "reserved-cancel",
+            "End failed attempt",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+
+    // Deterministic real row-lock ordering in both directions. This tests the
+    // persistence race, not interruption of externally started KMS/bureau work.
+    async fn wait_for_lock(pool: &sqlx::PgPool, name: &str) {
+        for _ in 0..200 {
+            let waiting:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE application_name=$1 AND wait_event_type='Lock')").bind(name).fetch_one(pool).await.unwrap();
+            if waiting {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+        panic!("owned race actor did not reach its row lock: {name}");
+    }
+    let cancellation_pool = PgPoolOptions::new()
+        .max_connections(1)
+        .connect_with(
+            database_url
+                .parse::<sqlx::postgres::PgConnectOptions>()
+                .unwrap()
+                .application_name("passport-cancel-race"),
+        )
+        .await
+        .unwrap();
+    let activation_pool = PgPoolOptions::new()
+        .max_connections(1)
+        .connect_with(
+            database_url
+                .parse::<sqlx::postgres::PgConnectOptions>()
+                .unwrap()
+                .application_name("passport-activate-race"),
+        )
+        .await
+        .unwrap();
+    let race_app = passport_router(PassportHttpService::new(
+        ring,
+        PostgresPassportRepository::new(cancellation_pool.clone()),
+        None,
+        None,
+        None,
+    ));
+    for cancel_first in [true, false] {
+        let (id, application) = seed(&pool, &repository, &principal, "READY_FOR_ACTIVATION").await;
+        let mut blocker = pool.begin().await.unwrap();
+        sqlx::query(
+            "SELECT id FROM issuance_service.physical_document_jobs WHERE id=$1 FOR UPDATE",
+        )
+        .bind(&id)
+        .fetch_one(&mut *blocker)
+        .await
+        .unwrap();
+        let cancel_request = request(
+            &application,
+            &id,
+            "org-a",
+            "race-cancel",
+            "End failed attempt",
+        );
+        let router = race_app.clone();
+        let activate_repo = PostgresPassportRepository::new(activation_pool.clone());
+        let activate_org = principal.clone();
+        let activate_app = application.clone();
+        let activate = async move {
+            activate_repo
+                .update(
+                    &activate_org,
+                    &activate_app,
+                    "READY_FOR_ACTIVATION",
+                    &PassportJobPatch::new(PassportJobStatus::Active),
+                    Utc::now(),
+                )
+                .await
+                .unwrap()
+        };
+        let cancel = async move { router.oneshot(cancel_request).await.unwrap() };
+        let (cancel_handle, activate_handle) = if cancel_first {
+            let c = tokio::spawn(cancel);
+            wait_for_lock(&pool, "passport-cancel-race").await;
+            let a = tokio::spawn(activate);
+            wait_for_lock(&pool, "passport-activate-race").await;
+            (c, a)
+        } else {
+            let a = tokio::spawn(activate);
+            wait_for_lock(&pool, "passport-activate-race").await;
+            let c = tokio::spawn(cancel);
+            wait_for_lock(&pool, "passport-cancel-race").await;
+            (c, a)
+        };
+        blocker.commit().await.unwrap();
+        let cancelled = cancel_handle.await.unwrap();
+        let activated = activate_handle.await.unwrap();
+        if cancel_first {
+            assert_eq!(cancelled.status(), StatusCode::OK);
+            assert!(activated.is_none());
+        } else {
+            assert_eq!(cancelled.status(), StatusCode::CONFLICT);
+            assert!(activated.is_some());
+        }
+        let actual = repository
+            .get(&principal, &application)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            actual.status,
+            if cancel_first { "CANCELLED" } else { "ACTIVE" }
+        );
+    }
+    // Validator must reject a same-name guard with a changed body.
+    sqlx::raw_sql("CREATE OR REPLACE FUNCTION issuance_service.guard_administratively_cancelled_passport_job() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END; $$").execute(&pool).await.unwrap();
+    assert!(migration::validate_passport(&pool).await.is_err());
+    migration::migrate_passport(&pool).await.unwrap();
+    migration::validate_passport(&pool).await.unwrap();
+    cancellation_pool.close().await;
+    activation_pool.close().await;
+    pool.close().await;
+}
+
+#[tokio::test]
 async fn keyed_physical_start_creates_one_tenant_owned_job_and_preserves_legacy_calls() {
     let Ok(database_url) = std::env::var("MARTY_PASSPORT_POSTGRES_TEST_URL") else {
         eprintln!(

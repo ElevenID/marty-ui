@@ -20,7 +20,11 @@ const OID4VCI_AUTHORIZATION_TAG: &str = "oid4vci-authorization";
 const CANVAS_MIRROR_TAG: &str = "canvas-mirror";
 const RETENTION_TAG: &str = "retention";
 const NATIVE_EXTENSION_TAG: &str = "native-extension";
+// Base public extensions are always registered; passport adds its separate,
+// explicitly opt-in administrative operation.
 pub(crate) const NATIVE_EXTENSION_ROUTE_COUNT: usize = 3;
+pub(crate) const PASSPORT_NATIVE_EXTENSION_ROUTE_COUNT: usize = 1;
+const PASSPORT_CANCEL_PATH: &str = "/v1/passport/applications/{application_id}/cancel";
 const CANVAS_CLAIM_PATH: &str = "/v1/integrations/canvas/lti/experience-sessions/current/claim";
 const CANVAS_REVIEW_RECOVERY_PATH: &str =
     "/v1/integrations/canvas/evidence-policy-reviews/{id}/reconcile-revocation";
@@ -79,6 +83,11 @@ fn validate_native_extensions(coverage: &Coverage) -> Result<(), &'static str> {
                 "rust/services/issuance/src/canvas_review_resolution.rs",
                 "rust/services/issuance/tests/canvas_award_candidate_postgres_contract.rs",
             ),
+            (HttpMethod::Post, PASSPORT_CANCEL_PATH) => (
+                "administratively_cancel_passport_job",
+                "rust/services/issuance/src/passport_cancellation_http.rs",
+                "rust/services/issuance/tests/passport_postgres_contract.rs",
+            ),
             _ => return Err("unreviewed native extension method or path"),
         };
         if route.operation != operation
@@ -95,7 +104,7 @@ fn validate_native_extensions(coverage: &Coverage) -> Result<(), &'static str> {
             return Err("native extension differs from reviewed contract");
         }
     }
-    if operations.len() != NATIVE_EXTENSION_ROUTE_COUNT {
+    if operations.len() != NATIVE_EXTENSION_ROUTE_COUNT + PASSPORT_NATIVE_EXTENSION_ROUTE_COUNT {
         return Err("native extensions require every reviewed operation");
     }
     Ok(())
@@ -195,7 +204,10 @@ static NATIVE_ROUTES: LazyLock<RouteTable> = LazyLock::new(|| {
 
 /// Register the reviewed native-only public routes as well as selecting their
 /// upstream. The frozen gateway inventory cannot register new operations.
-pub(crate) fn add_public_native_extensions(table: &mut RouteTable) -> Result<(), PlatformError> {
+pub(crate) fn add_public_native_extensions(
+    table: &mut RouteTable,
+    passport_native: bool,
+) -> Result<(), PlatformError> {
     let coverage: Coverage = serde_json::from_str(include_str!(
         "../../../../contracts/issuance-native-coverage.json"
     ))
@@ -203,6 +215,9 @@ pub(crate) fn add_public_native_extensions(table: &mut RouteTable) -> Result<(),
     validate_native_extensions(&coverage)
         .map_err(|error| PlatformError::InvalidConfiguration(error.into()))?;
     for extension in coverage.native_extension_http {
+        if extension.path == PASSPORT_CANCEL_PATH && !passport_native {
+            continue;
+        }
         // Reuse the validated native route and the public gateway's canonical
         // ownership policy. The upstream selector's authentication-free metadata
         // is not an authorization policy for newly registered public routes.
@@ -241,9 +256,17 @@ static PASSPORT_PUBLIC_ROUTES: LazyLock<Vec<NativeHttpRoute>> = LazyLock::new(||
 #[must_use]
 pub fn is_passport_public_http(method: HttpMethod, path: &str) -> bool {
     is_canonical_absolute_path(path)
-        && PASSPORT_PUBLIC_ROUTES
-            .iter()
-            .any(|route| route.method == method && exact_template_shape(&route.path, path))
+        && (is_passport_administrative_cancel(method, path)
+            || PASSPORT_PUBLIC_ROUTES
+                .iter()
+                .any(|route| route.method == method && exact_template_shape(&route.path, path)))
+}
+
+#[must_use]
+pub(crate) fn is_passport_administrative_cancel(method: HttpMethod, path: &str) -> bool {
+    method == HttpMethod::Post
+        && is_canonical_absolute_path(path)
+        && exact_template_shape(PASSPORT_CANCEL_PATH, path)
 }
 
 #[must_use]
@@ -259,7 +282,9 @@ pub fn passport_required_permission(method: HttpMethod, path: &str) -> Option<&'
     if !is_passport_public_http(method, path) {
         return None;
     }
-    if method == HttpMethod::Get {
+    if is_passport_administrative_cancel(method, path) {
+        Some("issuance:revoke")
+    } else if method == HttpMethod::Get {
         Some("issuance:view")
     } else {
         Some("issuance:initiate")
