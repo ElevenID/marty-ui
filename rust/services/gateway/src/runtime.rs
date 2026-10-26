@@ -5295,6 +5295,20 @@ mod tests {
             .into_response()
     }
 
+    async fn ownerless_system_wallet(request: Request) -> Response {
+        assert_eq!(request.uri().path(), "/v1/wallet-registry/wr-spruce-001");
+        assert_eq!(request.headers().get("x-user-id").unwrap(), "user-1");
+        (
+            StatusCode::OK,
+            Json(json!({
+                "id": "wr-spruce-001",
+                "is_system": true,
+                "is_override": false
+            })),
+        )
+            .into_response()
+    }
+
     #[tokio::test]
     async fn native_owner_failure_is_opaque_and_stops_before_proxy() {
         let contract: Value = serde_json::from_str(include_str!(
@@ -7378,6 +7392,59 @@ mod tests {
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].0, "credential-templates");
         assert_eq!(calls[0].1.header("x-organization-id"), Some("org-1"));
+    }
+
+    #[tokio::test]
+    async fn system_wallet_open_link_still_requires_membership_and_wallet_view() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("owner fixture listener");
+        let origin = format!("http://{}", listener.local_addr().expect("fixture address"));
+        tokio::spawn(async move {
+            axum::serve(
+                listener,
+                Router::new().fallback(axum::routing::any(ownerless_system_wallet)),
+            )
+            .await
+            .expect("owner fixture server");
+        });
+        let owners = HttpGatewayProvider::new(
+            BTreeMap::from([("credential-templates".into(), origin)]),
+            "internal-signing-key",
+            None,
+            Some("service-secret".into()),
+            Some(4_096),
+        )
+        .expect("HTTP owner provider");
+        for (authenticated, permission, organization, expected) in [
+            (false, "wallet:view", "org-1", StatusCode::UNAUTHORIZED),
+            (true, "wallet:write", "org-1", StatusCode::FORBIDDEN),
+            (true, "wallet:view", "org-other", StatusCode::FORBIDDEN),
+            (true, "wallet:view", "org-1", StatusCode::OK),
+        ] {
+            let recorder = Arc::new(ActorRecordingUpstream::default());
+            let mut state = runtime_state_with_upstream(Arc::new(NoOwner), recorder.clone());
+            let owned = Arc::get_mut(&mut state).expect("unique runtime state");
+            owned.memberships = Arc::new(SingleGrantMembership(permission));
+            owned.owners = Arc::new(owners.clone());
+            let mut request = Request::builder().uri(format!(
+                "/v1/wallet-registry/wr-spruce-001/open-link?organization_id={organization}"
+            ));
+            if authenticated {
+                request = request.header("cookie", "sessionId=valid");
+            }
+            let response = gateway_router(state)
+                .oneshot(request.body(Body::empty()).expect("request"))
+                .await
+                .expect("gateway response");
+            assert_eq!(response.status(), expected);
+            let calls = recorder.0.lock().expect("upstream calls");
+            assert_eq!(calls.len(), usize::from(expected == StatusCode::OK));
+            if expected == StatusCode::OK {
+                assert_eq!(calls[0].0, "credential-templates");
+                assert_eq!(calls[0].1.header("x-organization-id"), Some("org-1"));
+            }
+        }
     }
 
     #[tokio::test]

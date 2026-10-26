@@ -1164,6 +1164,7 @@ fn wallet_response(wallet: &WalletRegistryEntry) -> Value {
     without_nulls(json!({
         "id":wallet.id,
         "organization_id":wallet.organization_id,
+        "is_system":wallet.organization_id.is_none() && !wallet.is_override,
         "is_override":wallet.is_override,
         "override_precedence":wallet.override_precedence,
         "merge_strategy":wallet.merge_strategy.as_str(),

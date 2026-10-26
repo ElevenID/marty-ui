@@ -137,6 +137,34 @@ impl HttpGatewayProvider {
     }
 }
 
+fn ownerless_system_catalog_entry(service: &str, path: &str, value: &serde_json::Value) -> bool {
+    let organization_id = value.get("organization_id");
+    if service == "compliance-profiles" {
+        return organization_id.is_none_or(serde_json::Value::is_null)
+            && value.get("is_system").and_then(serde_json::Value::as_bool) == Some(true);
+    }
+    if service != "credential-templates" {
+        return false;
+    }
+    for (prefix, system_field, system_value) in [
+        ("/v1/delivery-destinations/", "is_system", true),
+        ("/v1/wallet-registry/", "is_override", false),
+    ] {
+        if let Some(id) = path
+            .strip_prefix(prefix)
+            .filter(|id| !id.is_empty() && !id.contains('/'))
+        {
+            return organization_id.is_none_or(serde_json::Value::is_null)
+                && value.get("id").and_then(serde_json::Value::as_str) == Some(id)
+                && value.get(system_field).and_then(serde_json::Value::as_bool)
+                    == Some(system_value)
+                && (prefix != "/v1/wallet-registry/"
+                    || value.get("is_system").and_then(serde_json::Value::as_bool) == Some(true));
+        }
+    }
+    false
+}
+
 #[async_trait]
 impl ResourceOwnerProvider for HttpGatewayProvider {
     async fn resolve_organization(
@@ -176,20 +204,7 @@ impl ResourceOwnerProvider for HttpGatewayProvider {
         // System catalog entries deliberately have no tenant owner. Keep normal
         // gateway membership/scope authorization and native immutability; do not
         // mistake these explicit catalog shapes for failed owner lookups.
-        let ownerless_system_catalog_entry = service == "compliance-profiles"
-            || (service == "credential-templates"
-                && path
-                    .strip_prefix("/v1/delivery-destinations/")
-                    .filter(|id| !id.is_empty() && !id.contains('/'))
-                    .is_some_and(|id| {
-                        value.get("id").and_then(serde_json::Value::as_str) == Some(id)
-                    }));
-        if ownerless_system_catalog_entry
-            && value.get("is_system").and_then(serde_json::Value::as_bool) == Some(true)
-            && value
-                .get("organization_id")
-                .is_none_or(serde_json::Value::is_null)
-        {
+        if ownerless_system_catalog_entry(service, path, &value) {
             return Ok(None);
         }
         let organization_id = value
@@ -753,6 +768,42 @@ mod tests {
                     "organization_id": null
                 })),
             ),
+            "/v1/wallet-registry/wr-spruce-001" => (
+                StatusCode::OK,
+                Json(json!({"id": "wr-spruce-001", "is_system": true, "is_override": false})),
+            ),
+            "/v1/wallet-registry/tenant-wallet" => (
+                StatusCode::OK,
+                Json(
+                    json!({"id": "tenant-wallet", "is_system": false, "is_override": true, "organization_id": "org-2"}),
+                ),
+            ),
+            "/v1/wallet-registry/ownerless-override" => (
+                StatusCode::OK,
+                Json(
+                    json!({"id": "ownerless-override", "is_system": true, "is_override": true, "organization_id": null}),
+                ),
+            ),
+            "/v1/wallet-registry/mismatched" => (
+                StatusCode::OK,
+                Json(
+                    json!({"id": "wr-spruce-001", "is_system": true, "is_override": false, "organization_id": null}),
+                ),
+            ),
+            "/v1/wallet-registry/malformed" => (
+                StatusCode::OK,
+                Json(json!({"id": "malformed", "is_system": true, "organization_id": null})),
+            ),
+            "/v1/wallet-registry/missing-owner" => (
+                StatusCode::OK,
+                Json(json!({"id": "missing-owner", "is_override": false})),
+            ),
+            "/v1/wallet-registry/spoofed-system" => (
+                StatusCode::OK,
+                Json(
+                    json!({"id": "spoofed-system", "is_system": true, "is_override": false, "organization_id": "org-2"}),
+                ),
+            ),
             "/malformed" => (StatusCode::OK, Json(json!({"unexpected": true}))),
             "/system-profile" => (StatusCode::OK, Json(json!({"is_system": true}))),
             "/system-profile-null" => (
@@ -951,6 +1002,74 @@ mod tests {
                 .await
                 .is_err());
         }
+    }
+
+    #[tokio::test]
+    async fn system_wallet_is_ownerless_but_tenant_and_malformed_wallets_are_not() {
+        let provider = HttpGatewayProvider::new(
+            BTreeMap::from([("credential-templates".into(), fixture_url().await)]),
+            "internal-secret",
+            None,
+            None,
+            Some(4096),
+        )
+        .unwrap();
+        let context = ResourceOwnerContext::default();
+        assert_eq!(
+            provider
+                .resolve_organization(
+                    "credential-templates",
+                    "/v1/wallet-registry/wr-spruce-001",
+                    &context,
+                )
+                .await
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            provider
+                .resolve_organization(
+                    "credential-templates",
+                    "/v1/wallet-registry/tenant-wallet",
+                    &context,
+                )
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("org-2")
+        );
+        assert_eq!(
+            provider
+                .resolve_organization(
+                    "credential-templates",
+                    "/v1/wallet-registry/spoofed-system",
+                    &context,
+                )
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("org-2")
+        );
+        for id in [
+            "ownerless-override",
+            "mismatched",
+            "malformed",
+            "missing-owner",
+        ] {
+            assert!(provider
+                .resolve_organization(
+                    "credential-templates",
+                    &format!("/v1/wallet-registry/{id}"),
+                    &context,
+                )
+                .await
+                .is_err());
+        }
+        assert!(!ownerless_system_catalog_entry(
+            "credential-templates",
+            "/v1/wallet-registry/wr-spruce-001/open-link",
+            &json!({"id": "wr-spruce-001", "is_system": true, "is_override": false, "organization_id": null})
+        ));
     }
 
     #[tokio::test]
