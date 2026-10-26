@@ -124,8 +124,10 @@ stay within the shared engine's memory budget.
 The owned Linux integration primary is reused for
 `fix/eudi-observe-public-expiry`, checkpoint
 `3249fd56759b4c804d65ef0b6dbdf4c8202c8837`, based on accepted integration main
-`2fa551c2a5e2751c3d20e3750bd995987d7106ca`. `/root` owns the branch; PR/publication
-is pending local acceptance. Its test waits for the public HTTP Date to cross
+`2fa551c2a5e2751c3d20e3750bd995987d7106ca`. `/root` owns the branch;
+[integration PR #488](https://github.com/ElevenID/marty-integration-tests/pull/488)
+merged into protected main at `531e07f2c4481e107127633d86f4f3fca09aea6c`.
+Its test waits for the public HTTP Date to cross
 the declared request expiry within a monotonic deadline, then runs the original
 official-library rejection assertions. It records the observed boundary, never
 manufactures an expired request, and changes no product clock or JWT validation.
@@ -145,14 +147,18 @@ release, and the earlier intermittent positive rejection remains an open finding
 The self-host component reached 28 healthy services. Its failed synthetic setup
 was preserved and its application databases rebuilt with the canonical one-time
 KMS initialization and matching public hostname. A real custody check then
-identified a stale acceptance assumption: the helper derives standard bootstrap
+identified a stale acceptance assumption: the helper derived standard bootstrap
 key slots, whereas the public API derives the remote key from the full
-organization/DID/purpose/format/algorithm tuple. `/root` is consolidating that
+organization/DID/purpose/format/algorithm tuple. `/root` consolidated that
 existing API derivation and purpose-prefix mapping in the shared Rust reference
 crate and updating native operator, fixture, audit and evidence callers to require
 the DID. This preserves current API key names and removes the incorrect bootstrap
-assumption; do not relax the binding check. That implementation and its runtime
-retest are pending. No accepted public business journey, activation or bootstrap
+assumption; the binding check remains strict. Implementation checkpoint
+`10a41d70cca61c38d5fa10761565705994dbc77d` passed both shared-reference Rust tests,
+all 29 production service builds, the native operator, three additional migration
+executables, bundle packager and console build. The expanded POSIX custody batch
+passed 803 tests with three skips. Full component runtime retesting remains
+pending. No accepted public business journey, activation or bootstrap
 root retirement is claimed for the component yet.
 The historical image descriptors and KMS-only initial bootstrap remain
 explicitly identified; local native overlays cannot qualify a signed release.
@@ -173,8 +179,9 @@ authority created internal non-exportable v2 workload and Keycloak issuers and
 staged another 21 orphan tokens/certificates over unchanged version-one remote
 keys. Native overlap, lifetime, scope and generation checks passed; activation
 and CA retirement are still pending. A current-source self-host component model
-is prepared with 32 declared services and 80 secret inputs. No application
-services have started yet. The planned controlled initial-token fixture uses
+is prepared with 32 declared services and 80 secret inputs. Its 28 application
+services previously reached healthy state; they are stopped for the corrected
+source transition. The planned controlled initial-token fixture uses
 the production renewal role with an explicit 20-minute TTL; product defaults and
 root-retirement minimum lifetimes are unchanged. Existing installations are untouched.
 
