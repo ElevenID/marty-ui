@@ -638,17 +638,23 @@ impl CanvasPlatformManagementHttpService {
                 .ok_or(CanvasManagementHttpError::DiscoveryUnavailable {
                     retry_after_seconds: None,
                 })?;
-        let token = runtime
+        let selection = runtime
             .oauth
-            .access_token(
+            .token_selection(
                 platform_id,
                 header(headers, "X-API-Key"),
                 header(headers, "X-Organization-ID"),
             )
             .await
-            .map_err(map_discovery_oauth_error)?
-            .or_else(|| runtime.local_admin_token.clone())
-            .ok_or(CanvasManagementHttpError::DiscoveryOAuthRequired)?;
+            .map_err(map_discovery_oauth_error)?;
+        let token = match selection {
+            crate::canvas_oauth::CanvasCatalogToken::OAuth(token) => Some(token),
+            crate::canvas_oauth::CanvasCatalogToken::LocalAdminEligible => {
+                runtime.local_admin_token.clone()
+            }
+            crate::canvas_oauth::CanvasCatalogToken::OAuthUnavailable => None,
+        }
+        .ok_or(CanvasManagementHttpError::DiscoveryOAuthRequired)?;
         let canvas_base_url = platform
             .canvas_base_url
             .clone()

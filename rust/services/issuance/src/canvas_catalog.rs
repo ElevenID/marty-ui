@@ -13,7 +13,7 @@ use url::Url;
 
 use crate::{
     canvas_management::CanvasScopeDiscoveryRequest,
-    canvas_oauth::{CanvasOAuthError, CanvasOAuthService},
+    canvas_oauth::{CanvasCatalogToken, CanvasOAuthError, CanvasOAuthService},
     canvas_provider_http::{
         canvas_retry_after_seconds, client_for_canvas_origin, CanvasHttpClientPolicy,
     },
@@ -21,6 +21,23 @@ use crate::{
 
 #[async_trait]
 pub trait CanvasCatalogOAuth: Send + Sync {
+    async fn token_selection(
+        &self,
+        platform_id: &str,
+        api_key: Option<&str>,
+        trusted_organization_id: Option<&str>,
+    ) -> Result<CanvasCatalogToken, CanvasOAuthError> {
+        Ok(
+            match self
+                .access_token(platform_id, api_key, trusted_organization_id)
+                .await?
+            {
+                Some(token) => CanvasCatalogToken::OAuth(token),
+                None => CanvasCatalogToken::OAuthUnavailable,
+            },
+        )
+    }
+
     async fn access_token(
         &self,
         platform_id: &str,
@@ -39,6 +56,16 @@ pub trait CanvasCatalogOAuth: Send + Sync {
 
 #[async_trait]
 impl CanvasCatalogOAuth for CanvasOAuthService {
+    async fn token_selection(
+        &self,
+        platform_id: &str,
+        api_key: Option<&str>,
+        trusted_organization_id: Option<&str>,
+    ) -> Result<CanvasCatalogToken, CanvasOAuthError> {
+        self.catalog_token(platform_id, api_key, trusted_organization_id)
+            .await
+    }
+
     async fn access_token(
         &self,
         platform_id: &str,

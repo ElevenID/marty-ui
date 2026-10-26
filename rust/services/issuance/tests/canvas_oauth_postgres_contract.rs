@@ -780,3 +780,136 @@ async fn seed_platform(pool: &sqlx::PgPool) {
     .await
     .unwrap();
 }
+
+#[tokio::test]
+#[ignore = "requires its own disposable *_test PostgreSQL database; no KMS required"]
+async fn local_admin_eligibility_requires_exact_tenant_and_absence_of_oauth_history() {
+    let database_url = database_url().expect("dedicated disposable PostgreSQL database required");
+    assert!(url::Url::parse(&database_url)
+        .unwrap()
+        .path()
+        .ends_with("_test"));
+    let pool = PgPoolOptions::new()
+        .max_connections(2)
+        .connect(&database_url)
+        .await
+        .unwrap();
+    setup_schema(&pool).await;
+    seed_platform(&pool).await;
+    let repository = PostgresCanvasOAuthRepository::new(pool.clone());
+    assert!(repository
+        .local_admin_fallback_eligible("org-1", "platform-1")
+        .await
+        .unwrap());
+    for (org, platform) in [("foreign-org", "platform-1"), ("org-1", "missing")] {
+        assert!(!repository
+            .local_admin_fallback_eligible(org, platform)
+            .await
+            .unwrap());
+    }
+    for invalid in [
+        Value::Null,
+        json!([]),
+        json!("not-an-object"),
+        json!(42),
+        json!(true),
+    ] {
+        sqlx::query("UPDATE issuance_service.canvas_platforms SET connection_config=$1 WHERE id='platform-1'")
+            .bind(invalid).execute(&pool).await.unwrap();
+        assert!(!repository
+            .local_admin_fallback_eligible("org-1", "platform-1")
+            .await
+            .unwrap());
+    }
+    sqlx::query("ALTER TABLE issuance_service.canvas_platforms ALTER COLUMN connection_config DROP NOT NULL")
+        .execute(&pool).await.unwrap();
+    sqlx::query(
+        "UPDATE issuance_service.canvas_platforms SET connection_config=NULL WHERE id='platform-1'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert!(!repository
+        .local_admin_fallback_eligible("org-1", "platform-1")
+        .await
+        .unwrap());
+    sqlx::query(
+        "UPDATE issuance_service.canvas_platforms SET connection_config='{}' WHERE id='platform-1'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "ALTER TABLE issuance_service.canvas_platforms ALTER COLUMN connection_config SET NOT NULL",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    for marker in [
+        "oauth_status",
+        "oauth_client_id",
+        "oauth_pending_authorization_id",
+        "oauth_capabilities",
+        "granted_scopes",
+    ] {
+        sqlx::query("UPDATE issuance_service.canvas_platforms SET connection_config=jsonb_build_object($1::text, '') WHERE id='platform-1'")
+            .bind(marker).execute(&pool).await.unwrap();
+        assert!(!repository
+            .local_admin_fallback_eligible("org-1", "platform-1")
+            .await
+            .unwrap());
+    }
+    sqlx::query("UPDATE issuance_service.canvas_platforms SET connection_config='{}', archived_at=clock_timestamp() WHERE id='platform-1'")
+        .execute(&pool).await.unwrap();
+    assert!(!repository
+        .local_admin_fallback_eligible("org-1", "platform-1")
+        .await
+        .unwrap());
+    sqlx::query(
+        "UPDATE issuance_service.canvas_platforms SET archived_at=NULL WHERE id='platform-1'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO issuance_service.canvas_oauth_authorizations
+        (id,organization_id,platform_id,canvas_base_url,platform_config_version,client_id,client_secret_ref,
+         state_hash,capabilities,scopes,redirect_uri,expires_at,consumed_at,created_at)
+        VALUES ('history','org-1','platform-1','https://canvas.example.edu',3,'client','org_secret://org-1/client',
+         repeat('a',64),'[]','[]','https://marty.example.edu/callback',clock_timestamp(),clock_timestamp(),clock_timestamp())")
+        .execute(&pool).await.unwrap();
+    assert!(!repository
+        .local_admin_fallback_eligible("org-1", "platform-1")
+        .await
+        .unwrap());
+    assert!(repository
+        .local_admin_fallback_eligible("org-1", "platform-2")
+        .await
+        .unwrap());
+    sqlx::query("INSERT INTO issuance_service.canvas_oauth_connections
+        (id,organization_id,platform_id,canvas_base_url,platform_config_version,client_id,client_secret_ref,
+         capabilities,scopes,status,connected_at,created_at,updated_at)
+        VALUES ('connection','org-1','platform-2','https://canvas.example.edu',4,'client','org_secret://org-1/client',
+         '[]','[]','revocation_pending',clock_timestamp(),clock_timestamp(),clock_timestamp())")
+        .execute(&pool).await.unwrap();
+    assert!(!repository
+        .local_admin_fallback_eligible("org-1", "platform-2")
+        .await
+        .unwrap());
+    // Completed disconnect removes its connection; retained consumed history
+    // must continue to deny compatibility, even with no config markers.
+    sqlx::query("UPDATE issuance_service.canvas_oauth_authorizations SET platform_id='platform-2' WHERE id='history'")
+        .execute(&pool).await.unwrap();
+    sqlx::query("DELETE FROM issuance_service.canvas_oauth_connections WHERE id='connection'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(!repository
+        .local_admin_fallback_eligible("org-1", "platform-2")
+        .await
+        .unwrap());
+    assert!(repository
+        .local_admin_fallback_eligible("org-1", "platform-1")
+        .await
+        .unwrap());
+    pool.close().await;
+}
