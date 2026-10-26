@@ -6407,8 +6407,8 @@ mod public_contract_tests {
 
         let organization_id = format!("conditional-config-{}", uuid::Uuid::new_v4().simple());
         let base = json!({"services": [{
-            "id": "service-a", "name": "Original", "service_type": "openbao-transit",
-            "endpoint": "https://kms.example.test", "key_reference": "issuer-key",
+            "id": "service-a", "name": "Original", "service_type": "aws-kms",
+            "region": "us-east-1", "auth_mode": "iam_role",
             "algorithms": ["ES256"], "key_purposes": ["vc_jwt_issuer"]
         }]});
         store.save(&organization_id, &base).await.unwrap();
