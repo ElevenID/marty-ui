@@ -45,6 +45,9 @@ PROJECT = re.compile(r"marty-selfhost-qual-[0-9a-f]{16}\Z")
 FIXTURE_PATH = "scripts/setup_selfhost_synthetic_fixture.py"
 KEYCLOAK_SQL_PATH = "scripts/sql/keycloak-kms-only-verify.sql"
 JOURNEY = "tests/oss_stack/selfhost_customer_journey.py"
+MACHINE_JOURNEY = "tests/oss_stack/selfhost_machine_customer_journey.py"
+MACHINE_WRAPPER = "scripts/run_selfhost_machine_journey.py"
+MACHINE_RECEIPT = "machine-operator-lifecycle.json"
 JOURNEY_INPUTS = ("SELFHOST_GATEWAY_URL", "SELFHOST_KEYCLOAK_URL",
                   "SELFHOST_PUBLIC_DOMAIN", "SELFHOST_TEST_USERNAME",
                   "SELFHOST_TEST_PASSWORD", "SELFHOST_ORG_ID",
@@ -236,7 +239,7 @@ def pinned_integration_checkout(root: Path, revision: str) -> None:
         raise ValueError("pinned integration checkout lacks the public journey")
 
 
-def live_services(raw: str, model: dict) -> dict[str, str]:
+def live_services(raw: str, model: dict, *, console_stopped: bool = False) -> dict[str, str]:
     parsed = parse_status(raw)
     services = model.get("services")
     if not isinstance(services, dict) or set(services) != EXPECTED_SERVICES:
@@ -256,7 +259,10 @@ def live_services(raw: str, model: dict) -> dict[str, str]:
         healthcheck = services[name].get("healthcheck")
         if healthcheck is not None and not isinstance(healthcheck, dict):
             raise ValueError(f"installed healthcheck model is invalid: {name}")
-        if name in COMPLETED:
+        if name == "ui" and console_stopped:
+            if state != "exited":
+                raise ValueError("installed console is not stopped during machine journey")
+        elif name in COMPLETED:
             if state != "exited" or exit_code != 0:
                 raise ValueError(f"installed one-shot service did not complete: {name}")
         elif state != "running":
@@ -265,6 +271,51 @@ def live_services(raw: str, model: dict) -> dict[str, str]:
               and health != "healthy"):
             raise ValueError(f"installed runtime service is not healthy: {name}")
         states[name] = state
+    return states
+
+
+def installed_machine_phase(compose: list[str], install_root: Path, state_root: Path,
+                            model: dict, integration_checkout: Path,
+                            environment: dict[str, str], source_checkout: Path,
+                            source_sha: str) -> dict[str, str]:
+    """Stop only the owned console, then require its identity/state around the journey."""
+    wrapper = source_checkout / MACHINE_WRAPPER
+    if wrapper.is_symlink() or not wrapper.is_file():
+        raise ValueError("release source lacks the machine wrapper")
+    reviewed = command(["git", "show", f"{source_sha}:{MACHINE_WRAPPER}"], cwd=source_checkout)
+    if wrapper.read_text(encoding="utf-8") != reviewed:
+        raise ValueError("machine wrapper differs from exact release source")
+    receipt = state_root / MACHINE_RECEIPT
+    if receipt.exists() or receipt.is_symlink():
+        raise ValueError("machine lifecycle receipt exists before the owned run")
+
+    def observe(stopped: bool) -> tuple[dict[str, str], str]:
+        raw = command([*compose, "ps", "--all", "--format", "json"],
+                      cwd=install_root, env=environment)
+        states = live_services(raw, model, console_stopped=stopped)
+        identity = next(item.get("ID") for item in parse_status(raw) if item["Service"] == "ui")
+        if not isinstance(identity, str) or re.fullmatch(r"[0-9a-f]{64}", identity) is None:
+            raise ValueError("owned console container identity is absent")
+        return states, identity
+
+    _, original = observe(False)
+    command([*compose, "stop", "--timeout", "30", "ui"], cwd=install_root,
+            env=environment, timeout=60)
+    if observe(True)[1] != original:
+        raise ValueError("owned console container was replaced before machine journey")
+    command([sys.executable, str(wrapper), "--integration-checkout", str(integration_checkout),
+             "--receipt", str(receipt)], cwd=integration_checkout, env=environment, timeout=1200)
+    states, final = observe(True)
+    if final != original:
+        raise ValueError("owned console container was replaced during machine journey")
+    if receipt.is_symlink() or not receipt.is_file():
+        raise ValueError("public machine operator lifecycle receipt is absent")
+    lifecycle = json.loads(receipt.read_text(encoding="utf-8"))
+    if (lifecycle.get("schema") != "marty.selfhost-machine-operator/v1"
+            or lifecycle.get("organization_id") != environment["SELFHOST_ORG_ID"]
+            or lifecycle.get("component") != "passed"
+            or lifecycle.get("retirement") != "revoked_and_rejected"):
+        raise ValueError("public machine operator lifecycle did not complete")
     return states
 
 
@@ -550,6 +601,7 @@ def installed_journey(compose: list[str], install_root: Path, state_root: Path,
                       source_checkout: Path | None = None,
                       openbao_state_root: Path | None = None,
                       openbao_project: str | None = None,
+                      with_machine_journey: bool = False,
                       ) -> tuple[dict[str, str], str]:
     """Own only a preflighted, empty disposable project; always tear it down."""
     with measured(diagnostics, "fresh_project"):
@@ -638,6 +690,11 @@ def installed_journey(compose: list[str], install_root: Path, state_root: Path,
                                               environment)
         with measured(diagnostics, "marty_database_custody"):
             verify_marty_database_custody(compose, install_root, environment)
+        if with_machine_journey:
+            with measured(diagnostics, "console_stopped_machine_journey"):
+                states = installed_machine_phase(
+                    compose, install_root, state_root, model, integration_checkout,
+                    journey_env, source_checkout, preflight["source_sha"])
     except Exception as error:
         failure = error
     finally:
@@ -685,6 +742,13 @@ def validate_inputs(args: argparse.Namespace) -> None:
     if missing:
         raise ValueError("public journey fixture inputs are absent: " + ", ".join(missing))
     pinned_integration_checkout(args.integration_checkout, args.integration_sha)
+    if (getattr(args, "with_machine_journey", False)
+            and not (args.integration_checkout / MACHINE_JOURNEY).is_file()):
+        raise ValueError("pinned integration release lacks the machine journey")
+    if getattr(args, "with_machine_journey", False):
+        wrapper = args.source_checkout / MACHINE_WRAPPER
+        if wrapper.is_symlink() or not wrapper.is_file():
+            raise ValueError("release source lacks the machine wrapper")
     if command(["git", "rev-parse", "HEAD^{commit}"], cwd=args.source_checkout).strip() != args.source_sha:
         raise ValueError("source checkout differs from prepared ZIP source")
     validate_operator_password(os.environ["SELFHOST_TEST_PASSWORD"],
@@ -775,8 +839,9 @@ def run(args: argparse.Namespace, diagnostics: RunDiagnostics | None = None) -> 
             args.kms_custody_public_key, preflight, diagnostics,
             source_checkout=args.source_checkout,
             openbao_state_root=args.openbao_state_root,
-            openbao_project=args.openbao_project)
-    return {"schema": "marty.selfhost-installed-business-journey/v1",
+            openbao_project=args.openbao_project,
+            with_machine_journey=getattr(args, "with_machine_journey", False))
+    result = {"schema": "marty.selfhost-installed-business-journey/v1",
             "qualification": "unqualified", "source_sha": args.source_sha,
             "archive_sha256": preflight["archive_sha256"],
             "image_lock_sha256": preflight["image_lock_sha256"],
@@ -789,6 +854,13 @@ def run(args: argparse.Namespace, diagnostics: RunDiagnostics | None = None) -> 
             "keycloak_database_custody": "passed",
             "marty_database_custody": "passed",
             "owned_teardown": "observed", "observed_services": sorted(states)}
+    if getattr(args, "with_machine_journey", False):
+        result["machine_journey"] = {
+            "status": "passed", "console": "stopped-before-and-after",
+            "operator_lifecycle_sha256": hashlib.sha256(
+                (args.state_root / MACHINE_RECEIPT).read_bytes()).hexdigest(),
+        }
+    return result
 
 
 def diagnostic_target(args: argparse.Namespace) -> Path | None:
@@ -823,6 +895,8 @@ def main() -> int:
                         help="optional redacted timing and host-resource report")
     parser.add_argument("--public-kms-helper-dir", type=Path,
                         help="experimental exact four-file public companion; invalid input fails closed")
+    parser.add_argument("--with-machine-journey", action="store_true",
+                        help="also stop the owned console and require the public API-key journey")
     args = parser.parse_args()
     try:
         target = diagnostic_target(args)

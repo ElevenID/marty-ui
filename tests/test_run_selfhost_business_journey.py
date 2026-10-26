@@ -469,6 +469,72 @@ def status_fixture() -> tuple[str, dict]:
     return json.dumps(rows), model
 
 
+@pytest.mark.parametrize("fault", [None, "running_before", "running_after", "replace_before",
+                                   "replace_after", "unhealthy_peer", "missing_receipt",
+                                   "retirement", "changed_wrapper", "child_failure"])
+def test_machine_phase_requires_stopped_console_and_complete_lifecycle(monkeypatch, tmp_path, fault):
+    raw, model = status_fixture()
+    source = tmp_path / "source"
+    wrapper = source / runner.MACHINE_WRAPPER
+    wrapper.parent.mkdir(parents=True)
+    wrapper.write_text("# reviewed wrapper\n", encoding="utf-8")
+    receipt = tmp_path / runner.MACHINE_RECEIPT
+    calls = []
+    observations = 0
+    org = "11111111-1111-4111-8111-111111111111"
+
+    def command(argv, **kwargs):
+        nonlocal observations
+        calls.append(argv)
+        if argv[:2] == ["git", "show"]:
+            return "changed" if fault == "changed_wrapper" else wrapper.read_text(encoding="utf-8")
+        if "ps" in argv:
+            rows = json.loads(raw)
+            for row in rows:
+                row["ID"] = "a" * 64
+                if row["Service"] == "ui" and observations:
+                    row["State"] = "exited"
+                    if (fault == "running_before" and observations == 1
+                            or fault == "running_after" and observations == 2):
+                        row["State"] = "running"
+                    if (fault == "replace_before" and observations == 1
+                            or fault == "replace_after" and observations == 2):
+                        row["ID"] = "b" * 64
+                if fault == "unhealthy_peer" and observations == 1 and row["Service"] == "gateway":
+                    row["Health"] = "unhealthy"
+            observations += 1
+            return json.dumps(rows)
+        if "stop" in argv:
+            assert argv[-1] == "ui" and kwargs["timeout"] == 60
+            return ""
+        assert argv[1] == str(wrapper) and argv[-1] == str(receipt)
+        assert kwargs["timeout"] == 1200
+        if fault == "child_failure":
+            raise ValueError("public machine wrapper failed")
+        if fault != "missing_receipt":
+            receipt.write_text(json.dumps({
+                "schema": "marty.selfhost-machine-operator/v1", "organization_id": org,
+                "component": "passed", "retirement": "revoked_and_rejected" if fault != "retirement" else "not_confirmed",
+            }), encoding="utf-8")
+        return ""
+
+    monkeypatch.setattr(runner, "command", command)
+    arguments = (["docker", "compose"], tmp_path, tmp_path, model, tmp_path,
+                 {"SELFHOST_ORG_ID": org}, source, "c" * 40)
+    if fault:
+        with pytest.raises(ValueError):
+            runner.installed_machine_phase(*arguments)
+    else:
+        result = runner.installed_machine_phase(*arguments)
+        assert result["ui"] == "exited" and result["gateway"] == "running"
+        assert observations == 3
+    child = [call for call in calls if call[0] == sys.executable]
+    if fault in ("running_before", "replace_before", "unhealthy_peer", "changed_wrapper"):
+        assert child == []
+    else:
+        assert len(child) == 1
+
+
 def disabled_optional_model() -> dict:
     _, model = status_fixture()
     model["services"]["keycloak-configurator"]["environment"] = {
