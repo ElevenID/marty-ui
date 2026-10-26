@@ -18,6 +18,7 @@ RUN --mount=type=cache,target=/root/.npm \
     && npm audit --audit-level=high \
     && npm cache clean --force
 
+COPY --chown=pwuser:pwuser tests/scripts/canvas-secret-files.js ./scripts/canvas-secret-files.js
 COPY --chown=pwuser:pwuser tests/scripts/run-canvas-oss-standard-contract.js ./scripts/run-canvas-oss-standard-contract.js
 COPY --chown=pwuser:pwuser tests/scripts/run-canvas-oss-standard-contract.test.js ./scripts/run-canvas-oss-standard-contract.test.js
 COPY --chown=pwuser:pwuser scripts/canvas-oss/beta-continuity-monitor.mjs ./scripts/beta-continuity-monitor.mjs
