@@ -8,6 +8,62 @@ main() (
     usage() {
         printf '%s\n' 'Usage: install.sh [--channel nightly|stable | --version TAG] [--install-dir PATH] [--yes]'
     }
+    # Host-specific behavior stays behind the selected platform adapter.
+    linux_preflight() {
+        [ "$(id -u)" -ne 0 ] || fail 'Run as your regular Docker-enabled user; privileged provisioning is requested separately'
+        for tool in curl sha256sum mktemp tar chmod rm wc cut grep docker mkdir env; do
+            command -v "$tool" >/dev/null 2>&1 || fail "Required tool is missing: $tool"
+        done
+        if [ -n "${DOCKER_CONTEXT:-}" ]; then
+            docker_endpoint=$(docker context inspect "$DOCKER_CONTEXT" --format '{{.Endpoints.docker.Host}}')
+        elif [ -n "${DOCKER_HOST:-}" ]; then
+            docker_endpoint=$DOCKER_HOST
+        else
+            docker_endpoint=$(docker context inspect --format '{{.Endpoints.docker.Host}}')
+        fi
+        case "$docker_endpoint" in unix:///*) ;; *) fail 'A local Unix-socket Docker Engine is required; remote contexts are refused' ;; esac
+        unset DOCKER_CONTEXT DOCKER_TLS_VERIFY DOCKER_CERT_PATH
+        export DOCKER_HOST="$docker_endpoint"
+        docker info >/dev/null 2>&1 || fail 'Docker Engine must be running and accessible'
+        security_options=$(docker info --format '{{range .SecurityOptions}}{{println .}}{{end}}')
+        if printf '%s\n' "$security_options" | grep -Eq '^name=rootless(,|$)'; then
+            fail 'Rootless Docker is not supported by this installer'
+        fi
+        if printf '%s\n' "$security_options" | grep -Eq '^name=userns(,|$)'; then
+            fail 'Docker user namespace remapping is not supported by this installer'
+        fi
+        docker_engine_id=$(docker info --format '{{.ID}}')
+        [ -n "$docker_engine_id" ] || fail 'Docker Engine identity is unavailable'
+        docker compose version >/dev/null 2>&1 || fail 'Docker Compose plugin is required'
+    }
+    linux_digest() { sha256sum < "$1" | cut -d ' ' -f 1; }
+    select_platform() {
+        host_os=$(uname -s) || fail 'Cannot detect host operating system'
+        host_arch=$(uname -m) || fail 'Cannot detect host architecture'
+        # Each supported adapter owns the complete, reviewed trust-anchor tuple.
+        # Never construct verifier URLs or hashes from untrusted host strings.
+        unset platform operator_asset preflight digest_adapter jq_url jq_sha jq_size
+        unset cosign_url cosign_sha cosign_size gh_url gh_sha gh_size gh_member
+        case "$host_os:$host_arch" in
+            Linux:x86_64|Linux:amd64)
+                platform=linux/amd64
+                operator_asset=marty-deploy-linux-amd64
+                preflight=linux_preflight
+                digest_adapter=linux_digest
+                jq_url=https://github.com/jqlang/jq/releases/download/jq-1.8.1/jq-linux-amd64
+                jq_sha=020468de7539ce70ef1bceaf7cde2e8c4f2ca6c3afb84642aabc5c97d9fc2a0d
+                jq_size=2255816
+                cosign_url=https://github.com/sigstore/cosign/releases/download/v3.1.4/cosign-linux-amd64
+                cosign_sha=424e2c97d0b45fd7a6b608a87f090f35633f4c23ece5f092d48bba11aaf4bbfa
+                cosign_size=145688404
+                gh_url=https://github.com/cli/cli/releases/download/v2.103.2/gh_2.103.2_linux_amd64.tar.gz
+                gh_sha=62ccf747115ddc61237efffdde66a3c8f70ba249433dc64f70801089b59c59c8
+                gh_size=15031001
+                gh_member=gh_2.103.2_linux_amd64/bin/gh
+                ;;
+            *) fail "Unsupported platform: $host_os/$host_arch. Currently supported: Linux amd64" ;;
+        esac
+    }
     channel=nightly
     version=
     selection=
@@ -33,35 +89,11 @@ main() (
     done
     [ "$complete" = true ] || fail 'Incomplete bootstrap download; retry the original command'
     case "$channel" in nightly|stable) ;; *) fail 'Channel must be nightly or stable' ;; esac
+    select_platform
     if [ -n "$version" ]; then
         printf '%s\n' "$version" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-nightly\.20[0-9]{6}\.[1-9][0-9]*)?$' || fail 'Invalid version'
     fi
-    [ "$(uname -s):$(uname -m)" = Linux:x86_64 ] || fail 'This installer requires Linux amd64'
-    [ "$(id -u)" -ne 0 ] || fail 'Run as your regular Docker-enabled user; privileged provisioning is requested separately'
-    for tool in curl sha256sum mktemp tar chmod rm wc cut grep docker mkdir env; do
-        command -v "$tool" >/dev/null 2>&1 || fail "Required tool is missing: $tool"
-    done
-    if [ -n "${DOCKER_CONTEXT:-}" ]; then
-        docker_endpoint=$(docker context inspect "$DOCKER_CONTEXT" --format '{{.Endpoints.docker.Host}}')
-    elif [ -n "${DOCKER_HOST:-}" ]; then
-        docker_endpoint=$DOCKER_HOST
-    else
-        docker_endpoint=$(docker context inspect --format '{{.Endpoints.docker.Host}}')
-    fi
-    case "$docker_endpoint" in unix:///*) ;; *) fail 'A local Unix-socket Docker Engine is required; remote contexts are refused' ;; esac
-    unset DOCKER_CONTEXT DOCKER_TLS_VERIFY DOCKER_CERT_PATH
-    export DOCKER_HOST="$docker_endpoint"
-    docker info >/dev/null 2>&1 || fail 'Docker Engine must be running and accessible'
-    security_options=$(docker info --format '{{range .SecurityOptions}}{{println .}}{{end}}')
-    if printf '%s\n' "$security_options" | grep -Eq '^name=rootless(,|$)'; then
-        fail 'Rootless Docker is not supported by this installer'
-    fi
-    if printf '%s\n' "$security_options" | grep -Eq '^name=userns(,|$)'; then
-        fail 'Docker user namespace remapping is not supported by this installer'
-    fi
-    docker_engine_id=$(docker info --format '{{.ID}}')
-    [ -n "$docker_engine_id" ] || fail 'Docker Engine identity is unavailable'
-    docker compose version >/dev/null 2>&1 || fail 'Docker Compose plugin is required'
+    "$preflight"
     stage=$(mktemp -d /tmp/marty-installer.XXXXXXXX) || fail 'Cannot create private download directory'
     trap 'rm -rf -- "$stage"' EXIT
     trap 'exit 130' INT
@@ -78,21 +110,16 @@ main() (
             --output "$2" "$1" || fail 'Download failed; check connectivity and public GitHub rate limits'
         [ "$(wc -c < "$2")" -le "$3" ] || fail 'Downloaded asset exceeds its size limit'
     }
-    digest() { sha256sum < "$1" | cut -d ' ' -f 1; }
+    digest() { "$digest_adapter" "$1"; }
     pinned() {
         fetch "$1" "$2" "$4"
         [ "$(digest "$2")" = "$3" ] || fail 'Verification tool digest mismatch'
     }
-    # Trust anchors are literal digests reviewed with this bootstrap, never fetched
-    # beside a verifier at installation time. Rotate versions and digests together.
-    pinned https://github.com/jqlang/jq/releases/download/jq-1.8.1/jq-linux-amd64 \
-        "$stage/jq" 020468de7539ce70ef1bceaf7cde2e8c4f2ca6c3afb84642aabc5c97d9fc2a0d 2255816
-    pinned https://github.com/sigstore/cosign/releases/download/v3.1.4/cosign-linux-amd64 \
-        "$stage/cosign" 424e2c97d0b45fd7a6b608a87f090f35633f4c23ece5f092d48bba11aaf4bbfa 145688404
-    pinned https://github.com/cli/cli/releases/download/v2.103.2/gh_2.103.2_linux_amd64.tar.gz \
-        "$stage/gh.tar.gz" 62ccf747115ddc61237efffdde66a3c8f70ba249433dc64f70801089b59c59c8 15031001
-    tar -xzf "$stage/gh.tar.gz" -C "$stage" gh_2.103.2_linux_amd64/bin/gh
-    gh="$stage/gh_2.103.2_linux_amd64/bin/gh"
+    pinned "$jq_url" "$stage/jq" "$jq_sha" "$jq_size"
+    pinned "$cosign_url" "$stage/cosign" "$cosign_sha" "$cosign_size"
+    pinned "$gh_url" "$stage/gh.tar.gz" "$gh_sha" "$gh_size"
+    tar -xzf "$stage/gh.tar.gz" -C "$stage" "$gh_member"
+    gh="$stage/$gh_member"
     chmod 700 "$stage/jq" "$stage/cosign" "$gh"
     jq="$stage/jq"
     repo=ElevenID/marty-ui
@@ -174,9 +201,9 @@ main() (
     promotion_source=$("$jq" -er '.promotion_source_sha | select(test("^[0-9a-f]{40}$"))' "$stage/admission.json")
     verify "$stage/admission.json" installer-promote.yml "$promotion_source" \
         "$(run_field "$stage/admission.json" promotion_run_id)" "$(run_field "$stage/admission.json" promotion_run_attempt)"
-    "$jq" -e --arg tag "$version" '
+    "$jq" -e --arg tag "$version" --arg platform "$platform" '
         .schema == "elevenid.installer-admission/v1" and .repository == "ElevenID/marty-ui"
-        and .release_tag == $tag and .platform == "linux/amd64" and .status == "accepted"
+        and .release_tag == $tag and .platform == $platform and .status == "accepted"
         and (.operator_sha256 | test("^[0-9a-f]{64}$"))
         and (.inventory_sha256 | test("^[0-9a-f]{64}$"))' "$stage/admission.json" >/dev/null
     if [ -f "$stage/channel.json" ]; then
@@ -184,7 +211,7 @@ main() (
         [ "$source" = "$("$jq" -er '.source_sha' "$stage/channel.json")" ] || fail 'Channel source differs'
     fi
     case "$version" in *-nightly.*) workflow=nightly-release.yml ;; *) workflow=cd.yml ;; esac
-    signed_download "$base/$version/marty-deploy-linux-amd64" "$stage/marty-deploy" 536870912
+    signed_download "$base/$version/$operator_asset" "$stage/marty-deploy" 536870912
     [ "$(digest "$stage/marty-deploy")" = "$("$jq" -er '.operator_sha256' "$stage/admission.json")" ] || fail 'Operator digest differs from admitted version'
     verify "$stage/marty-deploy" "$workflow" "$source" \
         "$(run_field "$stage/admission.json" build_run_id)" "$(run_field "$stage/admission.json" build_run_attempt)"
