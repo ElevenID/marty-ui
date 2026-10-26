@@ -157,7 +157,7 @@ async fn fenced_cancellation_role_can_append_but_not_rewrite_history() {
         ("GRANT UPDATE ON issuance_service.passport_job_administrative_cancellations TO marty", "REVOKE UPDATE ON issuance_service.passport_job_administrative_cancellations FROM marty"),
         ("GRANT UPDATE(reason) ON issuance_service.passport_job_administrative_cancellations TO marty", "REVOKE UPDATE(reason) ON issuance_service.passport_job_administrative_cancellations FROM marty"),
         ("GRANT SELECT ON issuance_service.passport_job_administrative_cancellations TO PUBLIC", "REVOKE SELECT ON issuance_service.passport_job_administrative_cancellations FROM PUBLIC"),
-        ("ALTER TABLE issuance_service.passport_job_administrative_cancellations OWNER TO marty", "ALTER TABLE issuance_service.passport_job_administrative_cancellations OWNER TO marty_passport_fence_owner"),
+        ("ALTER TABLE issuance_service.passport_job_administrative_cancellations OWNER TO marty", "ALTER TABLE issuance_service.passport_job_administrative_cancellations OWNER TO marty_passport_fence_owner; GRANT SELECT,INSERT ON issuance_service.passport_job_administrative_cancellations TO marty"),
     ] {
         sqlx::raw_sql(tamper).execute(&admin).await.unwrap();
         let ready: bool = sqlx::query_scalar("SELECT issuance_service.passport_cancellation_acl_ready()")
