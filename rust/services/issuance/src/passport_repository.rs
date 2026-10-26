@@ -209,14 +209,31 @@ impl PostgresPassportRepository {
         job: &PassportJobInsert,
         now: DateTime<Utc>,
     ) -> Result<PassportJob, sqlx::Error> {
-        let row = sqlx::query(
+        let row = self
+            .insert_with_start_binding(principal, job, now, None)
+            .await?
+            .ok_or(sqlx::Error::RowNotFound)?;
+        row_to_job(&row)
+    }
+
+    async fn insert_with_start_binding(
+        &self,
+        principal: &PassportTenantPrincipal,
+        job: &PassportJobInsert,
+        now: DateTime<Utc>,
+        binding: Option<(&str, &str)>,
+    ) -> Result<Option<PgRow>, sqlx::Error> {
+        sqlx::query(
             "INSERT INTO issuance_service.physical_document_jobs (
                 id, organization_id, flow_execution_id, application_id,
                 application_template_id, credential_template_id, revocation_profile_id,
                 delivery_destination_profile_id, document_type, country_code, issuer_did,
-                secure_artifact_ciphertext, secure_artifact_reference, status,
+                secure_artifact_ciphertext, secure_artifact_reference,
+                start_idempotency_key_hash, start_idempotency_request_hash, status,
                 created_at, updated_at
-            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'DRAFT',$14,$14)
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,'DRAFT',$16,$16)
+            ON CONFLICT (organization_id, start_idempotency_key_hash)
+              WHERE start_idempotency_key_hash IS NOT NULL DO NOTHING
             RETURNING *",
         )
         .bind(&job.id)
@@ -232,10 +249,59 @@ impl PostgresPassportRepository {
         .bind(&job.issuer_did)
         .bind(&job.secure_artifact_ciphertext)
         .bind(&job.secure_artifact_reference)
+        .bind(binding.map(|value| value.0))
+        .bind(binding.map(|value| value.1))
         .bind(now)
-        .fetch_one(&self.pool)
+        .fetch_optional(&self.pool)
+        .await
+    }
+
+    /// The job and its key/digest binding are one INSERT. A duplicate key
+    /// returns the original job only when the tenant, request, and Flow agree.
+    pub async fn insert_idempotent(
+        &self,
+        principal: &PassportTenantPrincipal,
+        job: &PassportJobInsert,
+        now: DateTime<Utc>,
+        key_hash: &str,
+        request_hash: &str,
+    ) -> Result<Option<(PassportJob, bool)>, sqlx::Error> {
+        if let Some(row) = self
+            .insert_with_start_binding(principal, job, now, Some((key_hash, request_hash)))
+            .await?
+        {
+            return Ok(Some((row_to_job(&row)?, true)));
+        }
+        let Some((existing, stored_hash)) = self.get_by_start_key(principal, key_hash).await?
+        else {
+            return Ok(None);
+        };
+        if stored_hash != request_hash || existing.flow_execution_id != job.flow_execution_id {
+            return Ok(None);
+        }
+        Ok(Some((existing, false)))
+    }
+
+    pub async fn get_by_start_key(
+        &self,
+        principal: &PassportTenantPrincipal,
+        key_hash: &str,
+    ) -> Result<Option<(PassportJob, String)>, sqlx::Error> {
+        let row = sqlx::query(
+            "SELECT * FROM issuance_service.physical_document_jobs
+             WHERE organization_id=$1 AND start_idempotency_key_hash=$2",
+        )
+        .bind(principal.organization_id())
+        .bind(key_hash)
+        .fetch_optional(&self.pool)
         .await?;
-        row_to_job(&row)
+        row.map(|row| {
+            Ok((
+                row_to_job(&row)?,
+                row.try_get("start_idempotency_request_hash")?,
+            ))
+        })
+        .transpose()
     }
 
     pub async fn get(

@@ -13,12 +13,13 @@ use serde_json::{json, Value};
 
 use crate::{
     advance_instance_record, apply_physical_advance_side_effect, create_definition_record,
-    definition_references, flow_application_routes, flow_verification_routes, parse_request,
-    prepare_instance_start, prepare_oid4vci_retry, start_instance_record, update_definition_record,
-    validate_definition_record, AdvanceFlowRequest, CreateFlowDefinitionRequest, DefinitionStatus,
+    definition_references, effective_flow_type, flow_application_routes, flow_verification_routes,
+    parse_request, prepare_instance_start, prepare_oid4vci_retry, start_instance_record,
+    start_physical_instance, update_definition_record, validate_definition_record,
+    validated_client_key, AdvanceFlowRequest, CreateFlowDefinitionRequest, DefinitionStatus,
     FlowDefinitionMutationError, FlowInstanceExecutionError, FlowInstanceSideEffectError,
-    FlowProviderError, FlowProviderRegistry, FlowRecordError, FlowType, PostgresFlowRepository,
-    RepositoryError, StartFlowRequest, UpdateFlowDefinitionRequest,
+    FlowProviderError, FlowProviderRegistry, FlowRecordError, FlowType, PhysicalStartError,
+    PostgresFlowRepository, RepositoryError, StartFlowRequest, UpdateFlowDefinitionRequest,
 };
 
 const MIP_VERSION: &str = "0.5.0";
@@ -138,6 +139,10 @@ pub fn flow_read_router(state: FlowHttpState) -> Router {
         .route(
             "/v1/flows/instances",
             get(list_instances).post(start_instance),
+        )
+        .route(
+            "/v1/flows/physical-start-intents",
+            get(list_pending_physical_starts),
         )
         .route("/v1/flows/instances/{instance_id}", get(get_instance))
         .route(
@@ -566,6 +571,92 @@ async fn list_instances(
     Ok(Json(json!(instances)))
 }
 
+#[derive(Deserialize)]
+struct PendingPhysicalStartsQuery {
+    organization_id: String,
+    #[serde(default = "default_page_size")]
+    limit: usize,
+    #[serde(default)]
+    offset: usize,
+}
+
+async fn list_pending_physical_starts(
+    FlowRequestState(state): FlowRequestState,
+    headers: HeaderMap,
+    Query(query): Query<PendingPhysicalStartsQuery>,
+) -> Result<Json<Value>, FlowHttpError> {
+    validate_page(query.limit)?;
+    authorize(
+        &state,
+        &headers,
+        &query.organization_id,
+        "flow-instance:view",
+    )
+    .await?;
+    let pending = state
+        .repository
+        .pending_physical_starts(
+            &query.organization_id,
+            i64::try_from(query.limit).map_err(|_| {
+                FlowHttpError::new(
+                    StatusCode::BAD_REQUEST,
+                    "page_invalid",
+                    "Page size is invalid",
+                )
+            })?,
+            i64::try_from(query.offset).map_err(|_| {
+                FlowHttpError::new(StatusCode::BAD_REQUEST, "page_invalid", "Offset is invalid")
+            })?,
+        )
+        .await?;
+    Ok(Json(json!(pending
+        .into_iter()
+        .map(|item| json!({
+            "flow_instance_id": item.instance_id,
+            "flow_definition_id": item.flow_definition_id,
+            "created_at": item.created_at,
+            "recovery": if item.key_source == "generated" {
+                "original_input_and_flow_instance_id_as_idempotency_key_required"
+            } else {
+                "original_input_and_original_idempotency_key_required"
+            },
+        }))
+        .collect::<Vec<_>>())))
+}
+
+fn physical_start_header_key(headers: &HeaderMap) -> Result<Option<&str>, FlowHttpError> {
+    let mut values = headers.get_all("idempotency-key").iter();
+    let first = values.next();
+    if values.next().is_some() {
+        return Err(PhysicalStartError::InvalidKey.into());
+    }
+    let raw = first
+        .map(|value| value.to_str().map_err(|_| PhysicalStartError::InvalidKey))
+        .transpose()?;
+    validated_client_key(raw).map_err(Into::into)
+}
+
+#[cfg(test)]
+mod physical_start_header_tests {
+    use super::*;
+
+    #[test]
+    fn physical_http_start_rejects_duplicate_or_ambiguous_keys() {
+        let mut headers = HeaderMap::new();
+        assert_eq!(physical_start_header_key(&headers).unwrap(), None);
+        headers.append("idempotency-key", "owned-1".parse().unwrap());
+        assert_eq!(
+            physical_start_header_key(&headers).unwrap(),
+            Some("owned-1")
+        );
+        headers.append("idempotency-key", "owned-2".parse().unwrap());
+        assert!(physical_start_header_key(&headers).is_err());
+        headers.remove("idempotency-key");
+        headers.append("idempotency-key", "owned-1,owned-2".parse().unwrap());
+        assert!(physical_start_header_key(&headers).is_err());
+    }
+}
+
 async fn start_instance(
     FlowRequestState(state): FlowRequestState,
     headers: HeaderMap,
@@ -586,6 +677,21 @@ async fn start_instance(
     )
     .await?;
     let now = chrono::Utc::now();
+    if effective_flow_type(&definition) == FlowType::PhysicalDocumentIssuance {
+        let key = physical_start_header_key(&headers)?;
+        let result = start_physical_instance(
+            &state.repository,
+            &state.providers,
+            &definition,
+            request,
+            &principal,
+            &state.public_base_url,
+            now,
+            key,
+        )
+        .await?;
+        return Ok(Json(json!(result.instance.projection()?)));
+    }
     let instance = start_instance_record(&definition, request, &principal, now)?;
     let prepared = prepare_instance_start(
         &state.providers,
@@ -968,12 +1074,49 @@ fn not_found(detail: &str) -> FlowHttpError {
 }
 
 impl From<RepositoryError> for FlowHttpError {
-    fn from(_error: RepositoryError) -> Self {
+    fn from(error: RepositoryError) -> Self {
+        if matches!(error, RepositoryError::PhysicalStartKeyConflict) {
+            return Self::new(
+                StatusCode::CONFLICT,
+                "physical_start_key_conflict",
+                "Idempotency-Key is bound to another physical Flow request",
+            );
+        }
         Self::new(
             StatusCode::SERVICE_UNAVAILABLE,
             "flow_repository_unavailable",
             "Flow persistence is unavailable",
         )
+    }
+}
+
+impl From<PhysicalStartError> for FlowHttpError {
+    fn from(error: PhysicalStartError) -> Self {
+        match error {
+            PhysicalStartError::InvalidKey => Self::new(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "physical_start_key_invalid",
+                "Idempotency-Key is invalid",
+            ),
+            PhysicalStartError::InProgress => Self::new(
+                StatusCode::CONFLICT,
+                "physical_start_in_progress",
+                "Physical Flow start is in progress",
+            ),
+            PhysicalStartError::Conflict => Self::new(
+                StatusCode::CONFLICT,
+                "physical_start_conflict",
+                "Physical Flow start identity changed",
+            ),
+            PhysicalStartError::StoredIncomplete => Self::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "physical_start_incomplete",
+                "Stored physical Flow start is incomplete",
+            ),
+            PhysicalStartError::Execution(error) => error.into(),
+            PhysicalStartError::SideEffect(error) => error.into(),
+            PhysicalStartError::Repository(error) => error.into(),
+        }
     }
 }
 

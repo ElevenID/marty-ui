@@ -45,13 +45,31 @@ pub enum FlowInstanceSideEffectError {
 pub async fn prepare_instance_start(
     providers: &FlowProviderRegistry,
     definition: &FlowDefinitionRecord,
-    mut instance: FlowInstanceRecord,
+    instance: FlowInstanceRecord,
     public_base_url: &str,
     now: DateTime<Utc>,
 ) -> Result<PreparedInstanceStart, FlowInstanceSideEffectError> {
+    prepare_instance_start_with_key(providers, definition, instance, public_base_url, now, None)
+        .await
+}
+
+pub async fn prepare_instance_start_with_key(
+    providers: &FlowProviderRegistry,
+    definition: &FlowDefinitionRecord,
+    mut instance: FlowInstanceRecord,
+    public_base_url: &str,
+    now: DateTime<Utc>,
+    start_idempotency_key: Option<&str>,
+) -> Result<PreparedInstanceStart, FlowInstanceSideEffectError> {
     match effective_flow_type(definition) {
         FlowType::PhysicalDocumentIssuance => {
-            initialize_physical_document(providers, definition, &mut instance).await?;
+            initialize_physical_document(
+                providers,
+                definition,
+                &mut instance,
+                start_idempotency_key,
+            )
+            .await?;
             Ok(PreparedInstanceStart {
                 instance,
                 artifact: None,
@@ -171,6 +189,7 @@ pub async fn apply_physical_advance_side_effect(
             organization_id: instance.organization_id.clone(),
             flow_instance_id: instance.id.clone(),
             operation,
+            start_idempotency_key: None,
             data: request_data,
         })
         .await?;
@@ -241,6 +260,7 @@ async fn initialize_physical_document(
     providers: &FlowProviderRegistry,
     definition: &FlowDefinitionRecord,
     instance: &mut FlowInstanceRecord,
+    start_idempotency_key: Option<&str>,
 ) -> Result<(), FlowInstanceSideEffectError> {
     let physical = context_mut(instance)?
         .remove("physical_document")
@@ -310,6 +330,7 @@ async fn initialize_physical_document(
             organization_id: instance.organization_id.clone(),
             flow_instance_id: instance.id.clone(),
             operation: PhysicalDocumentOperation::Initialize,
+            start_idempotency_key: start_idempotency_key.map(str::to_owned),
             data,
         })
         .await?;

@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "routes": [
+    ["GET", "/v1/flows/physical-start-intents", "flow-instance:view"]
+  ],
+  "recovery": {
+    "client_key": "original_input_and_original_idempotency_key_required",
+    "generated_key": "original_input_and_flow_instance_id_as_idempotency_key_required",
+    "native_outcome": "unobserved_until_tenant_scoped_internal_readback"
+  }
+}

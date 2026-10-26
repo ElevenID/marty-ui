@@ -84,6 +84,30 @@ fn complete_transport_surface_is_frozen() {
 }
 
 #[test]
+fn physical_start_recovery_is_an_additive_native_route() {
+    let extension: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/flow-physical-start-extension.json"
+    ))
+    .expect("native Flow extension contract");
+    assert_eq!(extension["schema_version"], 1);
+    assert_eq!(
+        extension["routes"],
+        json!([[
+            "GET",
+            "/v1/flows/physical-start-intents",
+            "flow-instance:view"
+        ]])
+    );
+    assert_eq!(
+        PHYSICAL_START_HTTP_ROUTES,
+        &[("GET", "/v1/flows/physical-start-intents")]
+    );
+    assert!(HTTP_ROUTES
+        .iter()
+        .all(|(_, path)| *path != "/v1/flows/physical-start-intents"));
+}
+
+#[test]
 fn all_flow_types_references_and_sequences_match_the_behavior_contract() {
     let contract = contract();
     assert_eq!(contract.flow_types.len(), 12);

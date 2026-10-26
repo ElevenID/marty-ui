@@ -10,12 +10,13 @@ use chrono::{Duration, Utc};
 use marty_flow::{
     deliver_due_callbacks, migrate_flow_schema, validate_flow_schema, ApplicationEventReceipt,
     ApprovalStrategy, ArtifactStatus, CallbackDeliveryConfig, CallbackEvent, DefinitionStatus,
-    FlowArtifactRecord, FlowDefinitionRecord, FlowInstanceRecord, PlannedApplicationFlowRecord,
-    PostgresFlowRepository,
+    FlowArtifactRecord, FlowDefinitionRecord, FlowInstanceRecord, PhysicalStartReservation,
+    PlannedApplicationFlowRecord, PostgresFlowRepository,
 };
 use marty_verification::flow::FlowInstanceStatus;
 use mmf_push::WebhookDestinationRegistry;
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use sqlx::{postgres::PgConnectOptions, PgPool};
 
 const TEST_DATABASE_NAME: &str = "marty_atomic_test";
@@ -26,6 +27,216 @@ const REJECTED_CALLBACK_INSTANCE_ID: &str = "90000000-0000-0000-0000-00000000000
 
 type TestResult = Result<(), Box<dyn Error + Send + Sync>>;
 type CallbackReceiver = Arc<Mutex<Option<tokio::sync::oneshot::Sender<(HeaderMap, Value)>>>>;
+
+#[tokio::test]
+async fn physical_start_intent_claim_replay_and_atomic_finalization() -> TestResult {
+    let Ok(database_url) = env::var("FLOW_POSTGRES_TEST_URL") else {
+        eprintln!("FLOW_POSTGRES_TEST_URL is not configured; PostgreSQL contract skipped");
+        return Ok(());
+    };
+    let options = PgConnectOptions::from_str(
+        &database_url.replace("postgresql+asyncpg://", "postgresql://"),
+    )?;
+    assert!(matches!(options.get_host(), "127.0.0.1" | "localhost"));
+    assert_eq!(options.get_database(), Some(TEST_DATABASE_NAME));
+    let pool = PgPool::connect_with(options).await?;
+    reset_schema(&pool).await?;
+    let repository = PostgresFlowRepository::new(pool.clone());
+    let now = chrono::DateTime::from_timestamp_micros(Utc::now().timestamp_micros())
+        .expect("current timestamp");
+    let key = hex::encode(Sha256::digest(
+        b"marty:physical-flow-start-key:v1:client-owned-1",
+    ));
+    let digest = "b".repeat(64);
+    let instance_id = "90000000-0000-0000-0000-000000000041";
+    let (first, concurrent) = tokio::join!(
+        repository.reserve_physical_start(
+            "org-1",
+            "physical-1",
+            "client-owned-1",
+            &key,
+            &digest,
+            false,
+            instance_id,
+            now
+        ),
+        repository.reserve_physical_start(
+            "org-1",
+            "physical-1",
+            "client-owned-1",
+            &key,
+            &digest,
+            false,
+            "90000000-0000-0000-0000-000000000042",
+            now
+        ),
+    );
+    let results = [first?, concurrent?];
+    let token = results
+        .iter()
+        .find_map(|result| match result {
+            PhysicalStartReservation::Acquired { claim_token, .. } => Some(*claim_token),
+            _ => None,
+        })
+        .expect("one claimant");
+    assert_eq!(
+        results
+            .iter()
+            .filter(|result| matches!(result, PhysicalStartReservation::Acquired { .. }))
+            .count(),
+        1
+    );
+    assert_eq!(
+        results
+            .iter()
+            .filter(|result| matches!(result, PhysicalStartReservation::InProgress { .. }))
+            .count(),
+        1
+    );
+    let owned_id = results
+        .iter()
+        .find_map(|result| match result {
+            PhysicalStartReservation::Acquired { instance_id, .. } => Some(instance_id.clone()),
+            _ => None,
+        })
+        .expect("owned instance");
+    let pending = repository.pending_physical_starts("org-1", 10, 0).await?;
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].key_source, "client");
+    assert_eq!(pending[0].instance_id, owned_id);
+    assert!(repository
+        .pending_physical_starts("org-2", 10, 0)
+        .await?
+        .is_empty());
+    assert!(repository
+        .reserve_physical_start(
+            "org-1",
+            "physical-1",
+            "client-owned-1",
+            &key,
+            &"c".repeat(64),
+            false,
+            &owned_id,
+            now
+        )
+        .await
+        .is_err());
+    // A readback UUID cannot replace an explicit client key. The old intent
+    // remains the sole owned start and no alias intent can dispatch native.
+    let wrong_alias_hash = hex::encode(Sha256::digest(
+        format!("marty:physical-flow-start-key:v1:{owned_id}").as_bytes(),
+    ));
+    assert!(repository
+        .reserve_physical_start(
+            "org-1",
+            "physical-1",
+            &owned_id,
+            &wrong_alias_hash,
+            &digest,
+            false,
+            "90000000-0000-0000-0000-000000000044",
+            now
+        )
+        .await
+        .is_err());
+    assert_eq!(
+        repository
+            .pending_physical_starts("org-1", 10, 0)
+            .await?
+            .len(),
+        1
+    );
+
+    let mut wrong = terminal_instance("90000000-0000-0000-0000-000000000043", now, "wrong");
+    wrong.flow_definition_id = "physical-1".into();
+    assert!(
+        !repository
+            .save_started_physical_instance(&wrong, &key, token)
+            .await?
+    );
+    assert!(repository.instance(&wrong.id).await?.is_none());
+
+    let retry = repository
+        .reserve_physical_start(
+            "org-1",
+            "physical-1",
+            "client-owned-1",
+            &key,
+            &digest,
+            false,
+            &owned_id,
+            now + Duration::seconds(61),
+        )
+        .await?;
+    let retry_token = match retry {
+        PhysicalStartReservation::Acquired {
+            instance_id,
+            claim_token,
+        } => {
+            assert_eq!(instance_id, owned_id);
+            claim_token
+        }
+        _ => panic!("expired claim must be recoverable with original input"),
+    };
+    let mut stored = terminal_instance(&owned_id, now, "stored");
+    stored.flow_definition_id = "physical-1".into();
+    assert!(
+        !repository
+            .save_started_physical_instance(&stored, &key, token)
+            .await?
+    );
+    assert!(
+        repository
+            .save_started_physical_instance(&stored, &key, retry_token)
+            .await?
+    );
+    assert!(
+        matches!(repository.reserve_physical_start("org-1", "physical-1", "client-owned-1", &key,
+        &digest, false, &owned_id, now + Duration::seconds(62)).await?,
+        PhysicalStartReservation::Completed { instance_id } if instance_id == owned_id)
+    );
+    assert!(repository
+        .pending_physical_starts("org-1", 10, 0)
+        .await?
+        .is_empty());
+    assert_eq!(repository.instance(&owned_id).await?, Some(stored));
+    let generated_id = "90000000-0000-0000-0000-000000000045";
+    let generated_key_hash = hex::encode(Sha256::digest(
+        format!("marty:physical-flow-start-key:v1:{generated_id}").as_bytes(),
+    ));
+    assert!(matches!(
+        repository
+            .reserve_physical_start(
+                "org-1",
+                "physical-1",
+                generated_id,
+                &generated_key_hash,
+                &digest,
+                true,
+                generated_id,
+                now
+            )
+            .await?,
+        PhysicalStartReservation::Acquired { .. }
+    ));
+    let pending = repository.pending_physical_starts("org-1", 10, 0).await?;
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].key_source, "generated");
+    assert!(
+        matches!(repository.reserve_physical_start("org-1", "physical-1",
+        generated_id, &generated_key_hash, &digest, false,
+        "90000000-0000-0000-0000-000000000046", now + Duration::seconds(61)).await?,
+        PhysicalStartReservation::Acquired { instance_id, .. } if instance_id == generated_id)
+    );
+    sqlx::raw_sql(
+        "DROP SCHEMA IF EXISTS flow_service CASCADE;
+        DROP SCHEMA IF EXISTS deployment_profile_service CASCADE;",
+    )
+    .execute(&pool)
+    .await?;
+    pool.close().await;
+    Ok(())
+}
 
 #[tokio::test]
 async fn postgres_finalization_and_callback_leases_are_atomic() -> TestResult {

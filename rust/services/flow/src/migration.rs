@@ -1,7 +1,7 @@
 use sqlx::{PgPool, Row};
 use thiserror::Error;
 
-const MIGRATION_VERSION: &str = "rust_flow_0001";
+const MIGRATION_VERSION: &str = "rust_flow_0002";
 const ADVISORY_LOCK_ID: i64 = 718_431_211;
 
 #[derive(Debug, Error)]
@@ -24,6 +24,11 @@ pub async fn migrate_flow_schema(pool: &PgPool) -> Result<(), FlowMigrationError
     sqlx::raw_sql(include_str!("../migrations/0002_builtin_flows.sql"))
         .execute(&mut *transaction)
         .await?;
+    sqlx::raw_sql(include_str!(
+        "../migrations/0003_physical_start_intents.sql"
+    ))
+    .execute(&mut *transaction)
+    .await?;
     validate_connection(&mut transaction).await?;
     transaction.commit().await?;
     Ok(())
@@ -94,6 +99,8 @@ async fn validate_connection(
         ("flow_instance_artifacts", "credential_offer_uris"),
         ("flow_callback_outbox", "lease_token"),
         ("flow_application_event_receipts", "payload_sha256"),
+        ("physical_start_intents", "request_hash"),
+        ("physical_start_intents", "key_source"),
     ];
     let rows = sqlx::query(
         "SELECT table_name, column_name FROM information_schema.columns \
@@ -111,6 +118,10 @@ async fn validate_connection(
     }
     for (table, key) in [
         ("flow_service.flow_nonce_consumptions", "nonce_digest"),
+        (
+            "flow_service.physical_start_intents",
+            "organization_id, key_hash",
+        ),
         (
             "flow_service.flow_application_event_receipts",
             "event_id_sha256",

@@ -1,4 +1,4 @@
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use marty_verification::flow::FlowInstanceStatus;
 use mmf_messaging::Message;
 use serde::de::DeserializeOwned;
@@ -30,6 +30,28 @@ pub struct PostgresFlowRepository {
     pool: PgPool,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum PhysicalStartReservation {
+    Acquired {
+        instance_id: String,
+        claim_token: Uuid,
+    },
+    InProgress {
+        instance_id: String,
+    },
+    Completed {
+        instance_id: String,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PendingPhysicalStart {
+    pub instance_id: String,
+    pub flow_definition_id: String,
+    pub key_source: String,
+    pub created_at: DateTime<Utc>,
+}
+
 impl PostgresFlowRepository {
     #[must_use]
     pub fn new(pool: PgPool) -> Self {
@@ -39,6 +61,146 @@ impl PostgresFlowRepository {
     #[must_use]
     pub const fn pool(&self) -> &PgPool {
         &self.pool
+    }
+
+    pub async fn reserve_physical_start(
+        &self,
+        organization_id: &str,
+        definition_id: &str,
+        operation_key: &str,
+        key_hash: &str,
+        request_hash: &str,
+        generated_key: bool,
+        proposed_instance_id: &str,
+        now: DateTime<Utc>,
+    ) -> Result<PhysicalStartReservation, RepositoryError> {
+        if !valid_sha256(key_hash) || !valid_sha256(request_hash) {
+            return Err(RepositoryError::InvalidReplayDigest);
+        }
+        let token = Uuid::new_v4();
+        let expires = now + Duration::seconds(60);
+        let mut transaction = self.pool.begin().await.map_err(storage)?;
+        // A pending client-key start exposes its instance UUID for readback,
+        // but that UUID is not a substitute for the original client key.
+        if Uuid::parse_str(operation_key)
+            .ok()
+            .is_some_and(|id| id.to_string() == operation_key)
+        {
+            let reserved_by_other_key: bool = sqlx::query_scalar(
+                "SELECT EXISTS (SELECT 1 FROM flow_service.physical_start_intents
+                 WHERE organization_id=$1 AND instance_id=$2 AND key_hash<>$3)",
+            )
+            .bind(organization_id)
+            .bind(operation_key)
+            .bind(key_hash)
+            .fetch_one(&mut *transaction)
+            .await
+            .map_err(storage)?;
+            if reserved_by_other_key {
+                return Err(RepositoryError::PhysicalStartKeyConflict);
+            }
+        }
+        let inserted = sqlx::query(
+            "INSERT INTO flow_service.physical_start_intents
+             (organization_id,key_hash,request_hash,key_source,flow_definition_id,instance_id,
+              status,claim_token,claim_expires_at,created_at,updated_at)
+             VALUES ($1,$2,$3,$4,$5,$6,'pending',$7,$8,$9,$9)
+             ON CONFLICT (organization_id,key_hash) DO NOTHING RETURNING instance_id",
+        )
+        .bind(organization_id)
+        .bind(key_hash)
+        .bind(request_hash)
+        .bind(if generated_key { "generated" } else { "client" })
+        .bind(definition_id)
+        .bind(proposed_instance_id)
+        .bind(token)
+        .bind(expires)
+        .bind(now)
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(storage)?;
+        if inserted.is_some() {
+            transaction.commit().await.map_err(storage)?;
+            return Ok(PhysicalStartReservation::Acquired {
+                instance_id: proposed_instance_id.to_owned(),
+                claim_token: token,
+            });
+        }
+        let row = sqlx::query(
+            "SELECT request_hash,flow_definition_id,instance_id,status,claim_expires_at
+             FROM flow_service.physical_start_intents
+             WHERE organization_id=$1 AND key_hash=$2 FOR UPDATE",
+        )
+        .bind(organization_id)
+        .bind(key_hash)
+        .fetch_one(&mut *transaction)
+        .await
+        .map_err(storage)?;
+        let prior_hash: String = row.try_get("request_hash").map_err(storage)?;
+        let prior_definition: String = row.try_get("flow_definition_id").map_err(storage)?;
+        let instance_id: String = row.try_get("instance_id").map_err(storage)?;
+        if prior_hash != request_hash || prior_definition != definition_id {
+            return Err(RepositoryError::PhysicalStartKeyConflict);
+        }
+        let status: String = row.try_get("status").map_err(storage)?;
+        if status == "completed" {
+            transaction.commit().await.map_err(storage)?;
+            return Ok(PhysicalStartReservation::Completed { instance_id });
+        }
+        let prior_expiry: Option<DateTime<Utc>> =
+            row.try_get("claim_expires_at").map_err(storage)?;
+        if prior_expiry.is_some_and(|expiry| expiry > now) {
+            transaction.commit().await.map_err(storage)?;
+            return Ok(PhysicalStartReservation::InProgress { instance_id });
+        }
+        sqlx::query(
+            "UPDATE flow_service.physical_start_intents
+             SET claim_token=$3,claim_expires_at=$4,updated_at=$5
+             WHERE organization_id=$1 AND key_hash=$2 AND status='pending'",
+        )
+        .bind(organization_id)
+        .bind(key_hash)
+        .bind(token)
+        .bind(expires)
+        .bind(now)
+        .execute(&mut *transaction)
+        .await
+        .map_err(storage)?;
+        transaction.commit().await.map_err(storage)?;
+        Ok(PhysicalStartReservation::Acquired {
+            instance_id,
+            claim_token: token,
+        })
+    }
+
+    pub async fn pending_physical_starts(
+        &self,
+        organization_id: &str,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<PendingPhysicalStart>, RepositoryError> {
+        let rows = sqlx::query(
+            "SELECT instance_id,flow_definition_id,key_source,created_at
+             FROM flow_service.physical_start_intents
+             WHERE organization_id=$1 AND status='pending'
+             ORDER BY created_at,instance_id LIMIT $2 OFFSET $3",
+        )
+        .bind(organization_id)
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(storage)?;
+        rows.into_iter()
+            .map(|row| {
+                Ok(PendingPhysicalStart {
+                    instance_id: row.try_get("instance_id").map_err(storage)?,
+                    flow_definition_id: row.try_get("flow_definition_id").map_err(storage)?,
+                    key_source: row.try_get("key_source").map_err(storage)?,
+                    created_at: row.try_get("created_at").map_err(storage)?,
+                })
+            })
+            .collect()
     }
 
     pub async fn save_definition(
@@ -193,6 +355,29 @@ impl PostgresFlowRepository {
         instance: &FlowInstanceRecord,
         artifact: Option<&FlowArtifactRecord>,
     ) -> Result<bool, RepositoryError> {
+        self.save_started_instance_with_intent(instance, artifact, None)
+            .await
+    }
+
+    pub async fn save_started_physical_instance(
+        &self,
+        instance: &FlowInstanceRecord,
+        key_hash: &str,
+        claim_token: Uuid,
+    ) -> Result<bool, RepositoryError> {
+        if !valid_sha256(key_hash) {
+            return Err(RepositoryError::InvalidReplayDigest);
+        }
+        self.save_started_instance_with_intent(instance, None, Some((key_hash, claim_token)))
+            .await
+    }
+
+    async fn save_started_instance_with_intent(
+        &self,
+        instance: &FlowInstanceRecord,
+        artifact: Option<&FlowArtifactRecord>,
+        physical_intent: Option<(&str, Uuid)>,
+    ) -> Result<bool, RepositoryError> {
         validate_instance_record(instance)?;
         if let Some(artifact) = artifact {
             validate_artifact_record(artifact)?;
@@ -266,6 +451,26 @@ impl PostgresFlowRepository {
             .await
             .map_err(storage)?;
             if inserted.rows_affected() != 1 {
+                transaction.rollback().await.map_err(storage)?;
+                return Ok(false);
+            }
+        }
+        if let Some((key_hash, claim_token)) = physical_intent {
+            let updated = sqlx::query(
+                "UPDATE flow_service.physical_start_intents
+                 SET status='completed',claim_token=NULL,claim_expires_at=NULL,updated_at=$5
+                 WHERE organization_id=$1 AND key_hash=$2 AND instance_id=$3
+                   AND claim_token=$4 AND status='pending'",
+            )
+            .bind(&instance.organization_id)
+            .bind(key_hash)
+            .bind(&instance.id)
+            .bind(claim_token)
+            .bind(instance.updated_at)
+            .execute(&mut *transaction)
+            .await
+            .map_err(storage)?;
+            if updated.rows_affected() != 1 {
                 transaction.rollback().await.map_err(storage)?;
                 return Ok(false);
             }

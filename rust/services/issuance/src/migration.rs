@@ -42,6 +42,10 @@ const NATIVE_MIGRATIONS: &[(&str, &str)] = &[
         "0009_authenticated_mdoc_status_binding",
         include_str!("../migrations/0009_authenticated_mdoc_status_binding.sql"),
     ),
+    (
+        "0010_passport_start_idempotency",
+        include_str!("../migrations/0010_passport_start_idempotency.sql"),
+    ),
 ];
 const BASE_TABLES: &[&str] = &[
     "application_templates",
@@ -387,6 +391,8 @@ const PASSPORT_REQUIRED_COLUMNS: &[&str] = &[
     "issuer_did",
     "secure_artifact_ciphertext",
     "secure_artifact_reference",
+    "start_idempotency_key_hash",
+    "start_idempotency_request_hash",
     "sod_sha256",
     "bureau_job_id",
     "bureau_provider_profile_id",
@@ -649,6 +655,11 @@ pub async fn migrate_passport(pool: &PgPool) -> Result<(), sqlx::Error> {
     ))
     .execute(&mut *transaction)
     .await?;
+    sqlx::raw_sql(include_str!(
+        "../migrations/0010_passport_start_idempotency.sql"
+    ))
+    .execute(&mut *transaction)
+    .await?;
     validate_passport_connection(&mut transaction).await?;
     transaction.commit().await
 }
@@ -778,6 +789,42 @@ async fn validate_passport_connection(
                 "passport schema is missing compatible {table}.{column} key"
             )));
         }
+    }
+    let start_key_index = sqlx::query(
+        "SELECT indisunique, indisvalid, indisready, indnkeyatts, indnatts,
+                pg_get_indexdef(indexrelid, 1, false) AS first_key,
+                pg_get_indexdef(indexrelid, 2, false) AS second_key,
+                pg_get_expr(indpred, indrelid) AS predicate
+         FROM pg_index
+         WHERE indexrelid=to_regclass('issuance_service.ux_physical_document_jobs_org_start_key')
+           AND indrelid=to_regclass('issuance_service.physical_document_jobs')",
+    )
+    .fetch_optional(&mut *connection)
+    .await?;
+    let Some(start_key_index) = start_key_index else {
+        return Err(sqlx::Error::Protocol(
+            "passport start key index is missing".into(),
+        ));
+    };
+    if !start_key_index.try_get::<bool, _>("indisunique")?
+        || !start_key_index.try_get::<bool, _>("indisvalid")?
+        || !start_key_index.try_get::<bool, _>("indisready")?
+        || start_key_index.try_get::<i16, _>("indnkeyatts")? != 2
+        || start_key_index.try_get::<i16, _>("indnatts")? != 2
+        || normalize_catalog_expression(&start_key_index.try_get::<String, _>("first_key")?)
+            != "organization_id"
+        || normalize_catalog_expression(&start_key_index.try_get::<String, _>("second_key")?)
+            != "start_idempotency_key_hash"
+        || start_key_index
+            .try_get::<Option<String>, _>("predicate")?
+            .as_deref()
+            .map(normalize_catalog_expression)
+            .as_deref()
+            != Some("start_idempotency_key_hashISNOTNULL")
+    {
+        return Err(sqlx::Error::Protocol(
+            "passport start key index is incompatible".into(),
+        ));
     }
     let intent_guard = sqlx::query(
         "SELECT t.tgenabled::text AS tgenabled, t.tgtype::integer AS trigger_type,
