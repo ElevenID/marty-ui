@@ -99,12 +99,16 @@ def test_stack_release_consumes_only_immutable_public_components() -> None:
     assert "stack-release-integration-source-${{ github.run_id }}" in workflow
     assert "scripts/extract_verified_source.py" in workflow
     assert "--expected-sha256 \"$INTEGRATION_DIGEST\"" in workflow
-    assert "API_CORE_URI: ${{ needs.validate-stack.outputs.api_core_uri }}" in workflow
-    assert (
-        "API_CORE_DIGEST: ${{ needs.validate-stack.outputs.api_core_digest }}"
-        in workflow
-    )
-    assert "npm install --global /tmp/marty-api-core.tgz /tmp/marty-cli.tgz" in workflow
+    assert "CLIENT_VERSION: ${{ needs.validate-stack.outputs.cli_version }}" in workflow
+    assert "scripts/admit_client_packages.py --lock release/stack-lock.json" in workflow
+    assert workflow.count("name: stack-release-client-packages-${{ github.run_id }}") == 2
+    assert '--offline --ignore-scripts --omit=dev --no-audit --no-fund' in workflow
+    assert 'test ! -e "$RUNNER_TEMP/client-install"' in workflow
+    assert 'test ! -e "$RUNNER_TEMP/client-npm-cache"' in workflow
+    assert 'elevenid-marty-cli-linux-x64-$CLIENT_VERSION.tgz' in workflow
+    assert 'test "$("$client_bin/marty" --version)" = "$CLIENT_VERSION"' in workflow
+    assert '"$client_bin/marty" api-keys create --help' in workflow
+    assert "requireInstalled.resolve('@elevenid/marty-api-core')" in workflow
     assert "Render the exact Rust-only public stack images" in workflow
     assert "--previous-manifest" not in workflow
     assert "marty-subscriptions" not in workflow

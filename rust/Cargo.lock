@@ -4648,6 +4648,7 @@ dependencies = [
  "marty-didcomm",
  "marty-emrtd-issuance",
  "marty-key-material-policy",
+ "marty-mdoc-status-binding",
  "marty-oid4vci",
  "marty-openbao-http",
  "marty-passport-auth",
@@ -4744,6 +4745,18 @@ name = "marty-managed-key-reference"
 version = "0.1.0"
 dependencies = [
  "uuid",
+]
+
+[[package]]
+name = "marty-mdoc-status-binding"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "coset",
+ "hex",
+ "isomdl",
+ "sha2 0.10.9",
+ "thiserror 2.0.20",
 ]
 
 [[package]]
@@ -4928,10 +4941,12 @@ dependencies = [
  "chrono",
  "ed25519-dalek 2.2.0",
  "hex",
+ "isomdl",
  "marty-api-key-policy",
  "marty-crypto",
  "marty-issuer-key-resolution",
  "marty-key-material-policy",
+ "marty-mdoc-status-binding",
  "marty-oid4vci",
  "marty-oid4vp-contract",
  "marty-service-runtime",

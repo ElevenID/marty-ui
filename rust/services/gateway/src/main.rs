@@ -1,9 +1,10 @@
-use std::{error::Error, fs, sync::Arc, time::Duration};
+use std::{error::Error, ffi::OsStr, fs, io::Write, sync::Arc, time::Duration};
 
 use marty_gateway::{
     authorization::OrganizationMembershipProvider,
     config::GatewayConfig,
     contract::GatewayContract,
+    discovery::release_version_label,
     middleware::{GatewayIdentityProvider, GatewayRateLimiter},
     providers::{
         DistributedProviderConfig, GatewayDistributedProviders, GrpcEventStreamProvider,
@@ -26,6 +27,20 @@ use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
+    if std::env::args_os().nth(1).as_deref() == Some(OsStr::new("--export-openapi")) {
+        if std::env::args_os().len() != 2 {
+            return Err("--export-openapi accepts no additional arguments".into());
+        }
+        let raw_version = std::env::var("MARTY_RELEASE_VERSION").ok();
+        let document = GatewayContract::load()?
+            .openapi_document(&release_version_label(raw_version.as_deref()));
+        let stdout = std::io::stdout();
+        let mut output = stdout.lock();
+        serde_json::to_writer_pretty(&mut output, &document)?;
+        writeln!(output)?;
+        return Ok(());
+    }
+
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
         .json()

@@ -304,12 +304,13 @@ async fn assert_write_failure_boundary(
 
 async fn write_attempts(pool: &PgPool) -> [i64; 3] {
     let (lease, target, process): (i64, i64, i64) = sqlx::query_as(
-        "SELECT CASE WHEN l.is_called THEN l.last_value ELSE 0 END,
-                CASE WHEN t.is_called THEN t.last_value ELSE 0 END,
-                CASE WHEN p.is_called THEN p.last_value ELSE 0 END
-         FROM issuance_service.renewal_lease_attempts l,
-              issuance_service.renewal_target_attempts t,
-              issuance_service.renewal_process_attempts p",
+        // A heap scan of a sequence tuple can observe nextval's temporary
+        // WAL-preallocated value (32 ahead). The supported accessor holds the
+        // sequence buffer lock, so these remain exact ATTEMPT counts even while
+        // the actual worker is renewing. NULL means nextval has not been called.
+        "SELECT COALESCE(pg_sequence_last_value('issuance_service.renewal_lease_attempts'), 0),
+                COALESCE(pg_sequence_last_value('issuance_service.renewal_target_attempts'), 0),
+                COALESCE(pg_sequence_last_value('issuance_service.renewal_process_attempts'), 0)",
     )
     .fetch_one(pool)
     .await

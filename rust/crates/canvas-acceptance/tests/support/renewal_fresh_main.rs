@@ -16,6 +16,9 @@ use super::remote_didcomm_sender::RemoteSenderFixture;
 
 use super::renewal_reference_fixture as reference;
 
+#[path = "renewal_startup_snapshot.rs"]
+mod startup_snapshot;
+
 const TOKEN_HMAC_KEY: &str = "synthetic-fresh-main-hmac";
 const LEGACY_ACCESS_TOKEN: &str = "synthetic-legacy-access-token";
 const CREDENTIAL_GRANT_KEY: &str =
@@ -554,6 +557,8 @@ async fn run_with_profile(database_url: &str, rendered_redis: Option<&str>, ingr
         let mut expected_after_startup = source_before_startup;
         expected_after_startup["transaction"]["access_token_expires_at"] =
             source_before["transaction"]["access_token_expires_at"].clone();
+        let expected_after_startup =
+            startup_snapshot::legacy_snapshot_with_nullable_mdoc_reference(expected_after_startup);
         assert_eq!(
             source_before, expected_after_startup,
             "startup migration changed seeded renewal domain state"

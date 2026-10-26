@@ -39,6 +39,10 @@ Primary local URLs:
 
 ### Production Deployment
 
+The [console-free self-host source profile](docs/SELFHOST_API_ONLY.md) separates
+API routing from console startup. Its published installer and artifact
+qualification status is documented in that guide.
+
 ```bash
 # Production deployment is environment-specific.
 # For local production-like verification, build the UI and run the backend stack:

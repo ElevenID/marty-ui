@@ -3324,6 +3324,7 @@ dependencies = [
  "marty-didcomm",
  "marty-emrtd-issuance",
  "marty-key-material-policy",
+ "marty-mdoc-status-binding",
  "marty-oid4vci",
  "marty-openbao-http",
  "marty-passport-auth",
@@ -3376,6 +3377,18 @@ version = "0.1.0"
 dependencies = [
  "marty-response-compat",
  "serde_json",
+]
+
+[[package]]
+name = "marty-mdoc-status-binding"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "coset",
+ "hex",
+ "isomdl",
+ "sha2 0.10.9",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

@@ -192,3 +192,33 @@ def test_default_selfhost_compose_never_mounts_bootstrap_root() -> None:
     assert "BAO_TOKEN_FILE" not in migration["environment"]
     assert "openbao_bootstrap_token" not in {
         item["source"] for item in migration["secrets"]}
+
+
+@pytest.mark.parametrize("profiles", [[], ["--profile", "*"]], ids=["default", "all-profiles"])
+def test_api_only_overlay_excludes_only_console_and_preserves_backend_dependencies(
+    profiles: list[str],
+) -> None:
+    env = {**os.environ, "SELFHOST_STATE_DIR": str(ROOT / "_test_state"),
+           "SELFHOST_SECRET_DIR": str(ROOT / "_test_secrets"),
+           "MARTY_KEYCLOAK_KMS_IMAGE": "ghcr.io/elevenid/marty-ui-oss/keycloak@sha256:" + "e" * 64}
+    env.pop("COMPOSE_PROFILES", None)
+    command = ["docker", "compose", "--env-file", ".env.selfhost.production.example",
+               "-f", "docker-compose.selfhost.prod.yml",
+               "-f", "docker-compose.selfhost.bundle.override.yml"]
+
+    def render(extra: list[str]) -> dict:
+        result = subprocess.run([*command, *extra, "config", "--format", "json"],
+                                cwd=ROOT, env=env, check=True, capture_output=True,
+                                text=True, timeout=60)
+        return json.loads(result.stdout)["services"]
+
+    original = render(profiles)
+    actual = render([*profiles, "-f", "docker-compose.selfhost.api-only.yml"])
+    assert "ui" in original
+    assert "ui" not in actual
+    expected = copy.deepcopy(original)
+    expected.pop("ui")
+    expected["edge"]["depends_on"].pop("ui")
+    expected["edge"]["environment"]["SELFHOST_CONSOLE_ENABLED"] = "false"
+    assert actual == expected
+    assert "canvas-sync-worker" in actual
