@@ -253,6 +253,48 @@ function externalTransitPrerequisites(env = process.env) {
   };
 }
 
+function existingProviderBInput(env = process.env) {
+  const names = ['D02_EXISTING_PROVIDER_B_SERVICE_ID', 'D02_EXISTING_PROVIDER_B_SERVICE_TYPE',
+    'D02_EXISTING_PROVIDER_B_PROVIDER', 'D02_EXISTING_PROVIDER_B_KEY_REFERENCE'];
+  if (!names.some((name) => env[name])) return null;
+  if (names.slice(0, 3).some((name) => !/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/.test(env[name] || ''))
+      || !env[names[3]] || env[names[3]].length > 512 || /[\s\x00-\x1f\x7f]/.test(env[names[3]])) {
+    throw new Error('Existing provider B requires exact nonsecret service, type, provider and key identity');
+  }
+  return {
+    serviceId: env[names[0]], serviceType: env[names[1]],
+    provider: env[names[2]], keyReference: env[names[3]],
+  };
+}
+
+function boundExistingProviderB(config, expected, baselineEndpoint) {
+  if (!expected) throw new Error('Existing provider B identity is required');
+  const supportedProviders = {
+    'hashicorp-vault-transit': 'hashicorp-vault',
+    'aws-kms': 'aws', 'azure-key-vault': 'azure', 'gcp-cloud-kms': 'gcp',
+  };
+  if (supportedProviders[expected.serviceType] !== expected.provider) {
+    throw new Error('Existing provider B requires a supported distinct KMS product');
+  }
+  const matches = config?.services?.filter((service) => service.id === expected.serviceId) || [];
+  if (matches.length !== 1) throw new Error('Existing provider B service is missing or ambiguous');
+  const service = matches[0];
+  if (service.managed || service.status !== 'configured'
+      || service.service_type !== expected.serviceType || service.provider !== expected.provider
+      || service.key_reference !== expected.keyReference
+      || service.service_type === 'openbao-transit' || service.provider === 'openbao'
+      || (service.endpoint && new URL(service.endpoint).hostname === new URL(baselineEndpoint).hostname)
+      || !Array.isArray(service.algorithms) || !service.algorithms.includes('ES256')
+      || !Array.isArray(service.key_purposes) || !service.key_purposes.includes('vc_jwt_issuer')) {
+    throw new Error('Existing provider B identity or signing capability does not match');
+  }
+  return service;
+}
+
+function observedRemoteSigner(existingInput, issuance, credential, selected, serviceId) {
+  return Boolean(existingInput && issuance?.ok && credential?.verified && selected === serviceId);
+}
+
 function transitService(id, name, keyReference, endpoint, credentials) {
   managedTransitEndpoint({ services: [{ id: MANAGED_SERVICE_ID, endpoint }] });
   if (!endpoint.startsWith('https:') || !credentials?.token || !credentials?.caCertFile) {
@@ -269,7 +311,7 @@ function transitService(id, name, keyReference, endpoint, credentials) {
   };
 }
 
-async function createTemplateVersion(page, issuerDid, stamp) {
+async function createTemplateVersion(page, issuerDid, stamp, custodyScope, externalAuthentication) {
   const result = await page.evaluate(async ({ issuer, sourceTemplateId, versionStamp }) => {
     const sourceResponse = await fetch(
       `/v1/credential-templates/${encodeURIComponent(sourceTemplateId)}`,
@@ -321,8 +363,8 @@ async function createTemplateVersion(page, issuerDid, stamp) {
   }, {
     issuer: issuerDid,
     sourceTemplateId: SOURCE_TEMPLATE_ID,
-    custodyScope: 'Two provider configurations and distinct keys on one beta OpenBao backend; not two independent KMS products.',
-    externalAuthentication: { mode: 'token', explicitCa: true, scopedFixtureKey: true },
+    custodyScope,
+    externalAuthentication,
     versionStamp: stamp,
   });
   return {
@@ -529,6 +571,7 @@ async function main() {
   if (!email || !password) throw new Error('Missing beta operator credentials');
 
   const externalTransit = externalTransitPrerequisites();
+  const existingProviderB = existingProviderBInput();
   const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\..+/, '').toLowerCase();
   const artifactDir = createArtifactDir(ROOT, `beta-issuer-provider-switch-${stamp}`);
   const evidence = await createDemoLiveEvidence();
@@ -540,7 +583,11 @@ async function main() {
       organizationId: ORG_ID,
       issuerDid,
       sourceTemplateId: SOURCE_TEMPLATE_ID,
-      custodyScope: 'Two provider configurations and distinct keys on one beta OpenBao backend; not two independent KMS products.',
+      custodyScope: existingProviderB
+        ? 'Preprovisioned non-OpenBao service B; actual signing is checked during issuance, product provenance remains unverified.'
+        : 'Two provider configurations and distinct keys on one beta OpenBao backend; not two independent KMS products.',
+      independentKmsProductsProved: false,
+      differentProviderRemoteSignerObserved: false,
       externalAuthentication: { mode: 'token', explicitCa: true, scopedFixtureKey: true },
       pageErrors: [],
       unexpectedResponses: [],
@@ -590,6 +637,10 @@ async function main() {
       report.orgSelection = await selectOrg(page);
       if (!report.orgSelection.ok) throw new Error(`Cannot select organization ${ORG_ID}`);
       originalConfig = await loadSigningConfig(page);
+      if (existingProviderB) {
+        boundExistingProviderB(originalConfig, existingProviderB,
+          managedTransitEndpoint(originalConfig));
+      }
       report.protectedStateBefore = await protectedFixtureState(page);
       report.originalWritableConfigSha256 = stateHash(writableConfig(originalConfig));
       const transitEndpoint = managedTransitEndpoint(originalConfig);
@@ -641,7 +692,8 @@ async function main() {
           relationshipCreated: governance.relationshipCreated,
         };
 
-        report.template = await createTemplateVersion(page, issuerDid, input.stamp);
+        report.template = await createTemplateVersion(page, issuerDid, input.stamp,
+          report.custodyScope, report.externalAuthentication);
         templateId = report.template.templateId || null;
         if (!report.template.ok || !report.template.template?.id) {
           throw new Error(`D-02 template setup failed: ${report.template.error}`);
@@ -662,17 +714,18 @@ async function main() {
         requireProviderStage(report, 'issue_with_provider_a');
         await showProviderStep(page, 'Credential signed by provider A', 'The first credential verifies against the DID method published by managed custody.');
 
-        const providerBKey = externalTransit.keyReference;
         const latestConfig = await loadSigningConfig(page);
-        const providerB = transitService(providerBId, `D-02 Provider B ${stamp}`, providerBKey, transitEndpoint, externalTransit);
+        const providerB = existingProviderB
+          ? boundExistingProviderB(latestConfig, existingProviderB, transitEndpoint)
+          : transitService(providerBId, `D-02 Provider B ${stamp}`, externalTransit.keyReference, transitEndpoint, externalTransit);
         const providerBConfig = await saveSigningConfig(page, writableConfig(latestConfig, {
-          extraServices: [providerB],
-          defaultServiceId: providerBId,
+          extraServices: existingProviderB ? [] : [providerB],
+          defaultServiceId: providerB.id,
           resetDefaults: true,
         }));
         report.providerBConfig = {
           defaultServiceId: providerBConfig.default_service_id,
-          serviceId: providerBId,
+          serviceId: providerB.id,
         };
 
         report.rebind = await rebindThroughConsole(page, issuerDid, recording);
@@ -690,6 +743,10 @@ async function main() {
         report.providerA.reverifiedAfterSwitch = oldReverification.verified;
         report.didAfterSwitch = { assertionMethodIds: oldReverification.assertionMethodIds };
         requireProviderStage(report, 'switch_signing_provider', 'verify_same_did_identity');
+        report.differentProviderRemoteSignerObserved = observedRemoteSigner(
+          existingProviderB, providerBResult.issuance, providerBResult.credential,
+          providerBConfig.default_service_id, providerB.id,
+        );
         await showProviderStep(page, 'One DID, both credentials valid', 'New issuance uses provider B while the provider-A credential remains verifiable through the retained DID method.');
 
         const beforeFailureConfig = await loadSigningConfig(page);
@@ -801,6 +858,9 @@ module.exports = {
   prepareProviderInputs,
   cleanup,
   externalTransitPrerequisites,
+  existingProviderBInput,
+  boundExistingProviderB,
+  observedRemoteSigner,
   managedTransitEndpoint,
   restoredConfigurationEvidence,
   credentialEvidence,

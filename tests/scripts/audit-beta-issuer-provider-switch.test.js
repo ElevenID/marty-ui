@@ -11,12 +11,56 @@ const {
   prepareProviderInputs,
   managedTransitEndpoint,
   externalTransitPrerequisites,
+  existingProviderBInput,
+  boundExistingProviderB,
+  observedRemoteSigner,
   restoredConfigurationEvidence,
   governedIssuerRequest,
   identityRequest,
   transitService,
   writableConfig,
 } = require('./audit-beta-issuer-provider-switch');
+
+test('preprovisioned provider B requires exact identity and a distinct supported signer', async () => {
+  assert.equal(existingProviderBInput({}), null);
+  assert.throws(() => existingProviderBInput({ D02_EXISTING_PROVIDER_B_SERVICE_ID: 'b' }), /exact nonsecret/);
+  const expected = existingProviderBInput({
+    D02_EXISTING_PROVIDER_B_SERVICE_ID: 'existing-vault',
+    D02_EXISTING_PROVIDER_B_SERVICE_TYPE: 'hashicorp-vault-transit',
+    D02_EXISTING_PROVIDER_B_PROVIDER: 'hashicorp-vault',
+    D02_EXISTING_PROVIDER_B_KEY_REFERENCE: 'issuer-b',
+  });
+  assert.equal(existingProviderBInput({
+    D02_EXISTING_PROVIDER_B_SERVICE_ID: 'aws-b',
+    D02_EXISTING_PROVIDER_B_SERVICE_TYPE: 'aws-kms',
+    D02_EXISTING_PROVIDER_B_PROVIDER: 'aws',
+    D02_EXISTING_PROVIDER_B_KEY_REFERENCE: 'arn:aws:kms:us-east-1:123456789012:key/1234',
+  }).keyReference, 'arn:aws:kms:us-east-1:123456789012:key/1234');
+  const service = {
+    id: expected.serviceId, service_type: expected.serviceType, provider: expected.provider,
+    key_reference: expected.keyReference, endpoint: 'https://vault.example.test:8200',
+    status: 'configured', algorithms: ['ES256'], key_purposes: ['vc_jwt_issuer'],
+  };
+  const baseline = 'https://openbao:8200';
+  assert.equal(boundExistingProviderB({ services: [service] }, expected, baseline), service);
+  const selected = writableConfig({ services: [service], default_service_id: 'managed-openbao-transit' }, {
+    defaultServiceId: service.id, resetDefaults: true,
+  });
+  assert.equal(selected.services[0], service);
+  assert.equal(selected.default_service_id, service.id);
+  assert.throws(() => boundExistingProviderB({ services: [] }, expected, baseline), /missing or ambiguous/);
+  assert.throws(() => boundExistingProviderB({ services: [service, service] }, expected, baseline), /missing or ambiguous/);
+  assert.throws(() => boundExistingProviderB({ services: [{ ...service, provider: 'openbao' }] }, expected, baseline), /does not match/);
+  assert.throws(() => boundExistingProviderB({ services: [service] }, { ...expected, provider: 'openbao' }, baseline), /supported distinct/);
+  assert.throws(() => boundExistingProviderB({ services: [{ ...service, endpoint: baseline }] }, expected, baseline), /does not match/);
+  assert.throws(() => boundExistingProviderB({ services: [{ ...service, key_reference: 'wrong' }] }, expected, baseline), /does not match/);
+  assert.throws(() => boundExistingProviderB({ services: [{ ...service, status: 'disabled' }] }, expected, baseline), /does not match/);
+  assert.equal(observedRemoteSigner(null, { ok: true }, { verified: true }, service.id, service.id), false);
+  assert.equal(observedRemoteSigner(expected, { ok: false }, { verified: true }, service.id, service.id), false);
+  assert.equal(observedRemoteSigner(expected, { ok: true }, { verified: false }, service.id, service.id), false);
+  assert.equal(observedRemoteSigner(expected, { ok: true }, { verified: true }, 'other', service.id), false);
+  assert.equal(observedRemoteSigner(expected, { ok: true }, { verified: true }, service.id, service.id), true);
+});
 const {
   validateElevenIdLoginTheme,
 } = require('./audit-beta-credential-lifecycle');
