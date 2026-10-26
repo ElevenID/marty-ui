@@ -114,6 +114,7 @@ CANVAS_COMPOSITION_TEST_FILES = (
     "support/renewal_fresh_main.rs",
     "support/renewal_gateway_replay.rs",
     "support/renewal_main_replay.rs",
+    "support/renewal_startup_snapshot.rs",
     "support/resolved_kubernetes_runtime.rs",
     "support/resolved_runtime.rs",
     "support/runtime_failure_diagnostics.rs",

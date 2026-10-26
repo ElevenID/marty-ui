@@ -34,6 +34,7 @@ path = "src/bin/passport_provider_ingress.rs"
 test = true
 
 [dependencies]
+marty-mdoc-status-binding = { path = "../../crates/mdoc-status-binding" }
 marty-service-runtime = { path = "../../crates/service-runtime" }
 marty-claim-collection.workspace = true
 axum.workspace = true
@@ -326,3 +327,7 @@ path = "tests/retention_postgres_contract.rs"
 [[test]]
 name = "passport_postgres_contract"
 path = "tests/passport_postgres_contract.rs"
+
+[[test]]
+name = "mdoc_status_postgres_contract"
+path = "tests/mdoc_status_postgres_contract.rs"

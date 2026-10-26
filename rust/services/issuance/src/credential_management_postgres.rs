@@ -69,6 +69,27 @@ impl CredentialManagementRepository for PostgresCredentialManagementRepository {
         .transpose()
     }
 
+    async fn get_by_mdoc_reference(
+        &self,
+        organization_id: &str,
+        reference: &marty_mdoc_status_binding::MdocStatusReference,
+    ) -> Result<Option<ManagedCredential>, CredentialManagementPortError> {
+        sqlx::query(
+            "SELECT id, transaction_id, organization_id, credential_template_id, issuer_did, status,
+                    status_updated_at, revoked, revoked_at, revocation_reason,
+                    revocation_profile_id, status_list_entries
+             FROM issuance_service.issued_credentials
+             WHERE organization_id = $1 AND mdoc_status_reference = $2",
+        )
+        .bind(organization_id)
+        .bind(reference.to_string())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(port_error)?
+        .map(|row| managed_credential(&row))
+        .transpose()
+    }
+
     async fn persist(
         &self,
         credential: &ManagedCredential,
