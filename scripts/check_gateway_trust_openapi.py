@@ -18,6 +18,9 @@ OPERATIONS = (
 
 
 def validate(document, behavior, privacy):
+    for name, component in document["components"]["schemas"].items():
+        if name in {"runtime__trust_profile_response", "runtime__trust_source", "runtime__trust_did_resolution", "runtime__trust_public_value"}:
+            Draft202012Validator.check_schema(component)
     cases = [case["expected"] for case in behavior["cases"]]
     rejected = []
     for case in privacy["rejected"]:

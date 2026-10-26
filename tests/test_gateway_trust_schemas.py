@@ -44,3 +44,8 @@ def test_credential_and_machine_require_their_own_format_contract(index,field):
     payload = copy.deepcopy(CASES[index]["expected"])
     del payload[field]
     assert not VALIDATOR.is_valid(payload)
+
+
+@pytest.mark.parametrize("name", SCHEMAS)
+def test_each_native_component_is_valid_json_schema(name):
+    Draft202012Validator.check_schema(SCHEMAS[name])
