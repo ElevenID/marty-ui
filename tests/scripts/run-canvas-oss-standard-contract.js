@@ -2230,6 +2230,7 @@ async function retireCanvasOwnedReferences(state) {
 async function retireCanvasCaptureSessions(state, observe = () => {}) {
   const {retireCanvasSession}=require('./audit-beta-canvas-invalid-secret');
   const evidence={},failures=[];
+  const emit=()=>{try {observe(JSON.parse(JSON.stringify(evidence)));} catch(error) {failures.push(error);}};
   for(const [role,context] of [['canvasLearnerSession',state.learnerContext],['canvasAdminSession',state.adminContext]]) {
     if(!context) continue;
     try {
@@ -2242,10 +2243,10 @@ async function retireCanvasCaptureSessions(state, observe = () => {}) {
       assert.equal(response.status(),200);
       await context.addCookies(cookies.map(cookie=>({...cookie})));
       await retireCanvasSession(context,(_,value)=>state.custody.retain(role,value),
-        {observe:value=>{evidence[role]=value;observe({...evidence})}});
+        {observe:value=>{evidence[role]=value;emit()}});
     }
-    observe({...evidence});
-    } catch(error) {failures.push(error);evidence[role]={retired:false,failureType:'OWNED_SESSION_RETIREMENT_FAILED'};observe({...evidence});}
+    emit();
+    } catch(error) {failures.push(error);evidence[role]={retired:false,failureType:'OWNED_SESSION_RETIREMENT_FAILED'};emit();}
   }
   requireCondition(failures.length===0,'canvas_capture_sessions_incomplete','Owned Canvas sessions require reconciliation.');
   return evidence;
@@ -2541,7 +2542,8 @@ async function main() {
       const retired = await retireCanvasSetupFixtures(preparationState, true, !preparationState.oauthConnected);
       retired.issuanceRetirement = issuanceRetirement;
       if (preparationState.custody) {
-        retired.sessionRetirement=await retireCanvasCaptureSessions(preparationState);
+        retired.sessionRetirement=await retireCanvasCaptureSessions(preparationState,value=>fs.writeFileSync(
+          path.join(path.dirname(args.observations),'owned-canvas-session-retirement.json'),JSON.stringify(value,null,2)+'\n'));
         retired.sessionsRetired=true;retired.privateAuthorityRetired=preparationState.custody.retire();
       }
       fs.writeFileSync(path.join(path.dirname(args.observations), 'owned-canvas-cleanup.json'),
