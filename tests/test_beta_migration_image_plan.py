@@ -9,11 +9,36 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_actual_rehearsal_context_binds_pinned_inputs_without_credentials(tmp_path):
+@pytest.mark.parametrize("path_mode", ["relative", "absolute", "missing", "relative-reused"])
+def test_actual_rehearsal_context_binds_pinned_inputs_without_credentials(tmp_path, path_mode):
     shell = shutil.which('powershell') or shutil.which('pwsh')
     if not shell:
         pytest.skip('PowerShell is required')
     source = str(ROOT / 'scripts/deploy-local-beta-release.ps1').replace("'", "''")
+    invocation = tmp_path / 'invocation'
+    invocation.mkdir()
+    env_paths = [invocation / 'first credential.env', invocation / 'second.env']
+    for path in env_paths:
+        path.write_text('CONTROLLED_NOT_A_CREDENTIAL=synthetic\n')
+    dsc = 'controlled-dsc-operator-' + 'd' * 32
+    csca = 'controlled-csca-operator-' + 'c' * 32
+    env_paths[1].write_text(f'SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY={dsc}\nSIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY={csca}\n')
+    if path_mode == 'relative-reused':
+        env_paths[0].write_text(f'ANOTHER_BETA_SETTING={dsc}\n')
+    repo = tmp_path / 'different-repo'
+    repo.mkdir()
+    # Decoys establish that relative parameters belong to the caller's CWD.
+    for path in env_paths:
+        (repo / path.name).write_text('CONTROLLED_DECOY=unused\n')
+    supplied = [str(path) if path_mode == 'absolute' else path.name for path in env_paths]
+    if path_mode == 'missing':
+        env_paths[1].unlink()
+    def literal(value):
+        return "'" + str(value).replace("'", "''") + "'"
+    runner_source = (ROOT / 'scripts/deploy-local-beta-release.ps1').read_text()
+    guard_start = runner_source.index('$operatorGatewayKeys = @{}')
+    guard_end = runner_source.index('\nforeach ($envFile in $script:EnvFiles) {', guard_start)
+    credential_guard = runner_source[guard_start:guard_end]
     script = tmp_path / 'rehearsal.ps1'
     script.write_text(f'''$ErrorActionPreference='Stop'
 $tokens=$null; $errors=$null
@@ -25,24 +50,57 @@ $assignments=@($ast.FindAll({{param($node)
  $node.Left.VariablePath.UserPath -eq 'rehearsalContext'
 }},$true))
 if ($assignments.Count -ne 1) {{ throw 'Rehearsal context is ambiguous' }}
-$script:RepoRoot='controlled-repo'; $script:ArtifactDir='controlled-artifacts'
+$script:RepoRoot={literal(repo)}; $script:ArtifactDir='controlled-artifacts'
+$envAssignments=@($ast.FindAll({{param($node)
+ $node -is [Management.Automation.Language.AssignmentStatementAst] -and
+ $node.Left -is [Management.Automation.Language.VariableExpressionAst] -and
+ $node.Left.VariablePath.UserPath -eq 'script:EnvFiles'
+}},$true))
+if ($envAssignments.Count -ne 2) {{ throw 'Environment setup is ambiguous' }}
+$TunnelEnvFile={literal(supplied[0])}; $GeneratedEnvFile={literal(supplied[1])}
+$start=$envAssignments[0].Extent.StartOffset
+$end=$envAssignments[-1].Extent.EndOffset
+Invoke-Expression $ast.Extent.Text.Substring($start,$end-$start)
+$definitions=@($ast.FindAll({{param($node)
+ $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-DotEnvValue'
+}},$true))
+if ($definitions.Count -ne 1) {{ throw 'Environment reader is ambiguous' }}
+Invoke-Expression $definitions[0].Extent.Text
+$EnablePassportNative=$true; $EnablePassportPhysicalProvider=$true
+Invoke-Expression {literal(credential_guard)}
 $preflightBackupDir='controlled-backup'; $logsDir='controlled-logs'
 $sourceId='a'*40; $migrationImage='sha256:'+('b'*64); $verificationMigrationImage='sha256:'+('c'*64)
-$script:EnvFiles=@('first.env','second.env'); $script:ComposeFiles=@('base.yml','frozen-images.yml')
+$script:ComposeFiles=@('base.yml','frozen-images.yml')
 $migrationAdminEmail='operator@example.invalid'; $BetaOrigin='https://beta.elevenidllc.com'
 $PilotOrganizationId='00000000-0000-0000-0000-000000000001'
 Invoke-Expression $assignments[0].Extent.Text
 $rehearsalContext | ConvertTo-Json
 ''', encoding='utf8')
     result = subprocess.run([shell, '-NoProfile', '-File', str(script)],
-                            capture_output=True, text=True, check=True, timeout=20)
+                            capture_output=True, text=True, cwd=invocation, timeout=20)
+    if path_mode == 'missing':
+        assert result.returncode != 0
+        assert 'Required beta environment file is missing' in result.stderr
+        assert result.stdout.strip() == ''
+        return
+    if path_mode == 'relative-reused':
+        assert result.returncode != 0
+        assert 'operator credential is reused by another beta setting' in result.stderr
+        assert result.stdout.strip() == ''
+        assert dsc not in result.stderr
+        return
+    assert result.returncode == 0, result.stderr
     context = json.loads(result.stdout)
+    assert [Path(path) for path in context['env_files']] == env_paths
+    assert all(Path(path).is_absolute() for path in context['env_files'])
+    context['env_files'] = [str(Path(path)) for path in context['env_files']]
+    context['repo_root'] = str(Path(context['repo_root']))
     assert context == {
-        'repo_root': 'controlled-repo', 'artifact_dir': 'controlled-artifacts',
+        'repo_root': str(repo), 'artifact_dir': 'controlled-artifacts',
         'backup_dir': 'controlled-backup', 'logs_dir': 'controlled-logs',
         'source_id': 'a'*40, 'migration_image': 'sha256:'+'b'*64,
         'verification_image': 'sha256:'+'c'*64,
-        'env_files': ['first.env', 'second.env'], 'compose_files': ['base.yml', 'frozen-images.yml'],
+        'env_files': [str(path) for path in env_paths], 'compose_files': ['base.yml', 'frozen-images.yml'],
         'migration_admin_email': 'operator@example.invalid', 'beta_origin': 'https://beta.elevenidllc.com',
         'pilot_organization_id': '00000000-0000-0000-0000-000000000001',
     }

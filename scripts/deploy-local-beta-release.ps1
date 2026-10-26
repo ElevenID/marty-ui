@@ -76,6 +76,10 @@ $script:EnvFiles = @($TunnelEnvFile, $GeneratedEnvFile)
 foreach ($envFile in $script:EnvFiles) {
     if (-not (Test-Path -LiteralPath $envFile -PathType Leaf)) { throw "Required beta environment file is missing: $envFile" }
 }
+# Resolve against the invocation directory once for every downstream consumer.
+$TunnelEnvFile = (Resolve-Path -LiteralPath $TunnelEnvFile -ErrorAction Stop).ProviderPath
+$GeneratedEnvFile = (Resolve-Path -LiteralPath $GeneratedEnvFile -ErrorAction Stop).ProviderPath
+$script:EnvFiles = @($TunnelEnvFile, $GeneratedEnvFile)
 if ([string]::IsNullOrWhiteSpace($TunnelTokenEnvFile)) {
     throw "TunnelTokenEnvFile must name the active protected beta connector environment file"
 }
