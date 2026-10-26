@@ -42,6 +42,10 @@ use sqlx::postgres::PgPoolOptions;
 use tokio::sync::{oneshot, Barrier};
 use tower::ServiceExt;
 
+// Share the existing dedicated session lock for every passport schema reset.
+#[path = "../../flow/tests/support/flow_schema.rs"]
+mod shared_schema_lock;
+
 /// The companion SQL fixture provisions an isolated cluster using the actual
 /// finalizer. Explicit invocation prevents an absent URL becoming pass evidence.
 #[tokio::test]
@@ -184,6 +188,10 @@ async fn administrative_cancellation_preserves_history_and_closes_terminal_races
     let parsed = url::Url::parse(&database_url).unwrap();
     assert!(matches!(parsed.host_str(), Some("127.0.0.1" | "localhost")));
     assert_eq!(parsed.path(), "/marty_passport_contract_test");
+    let _schema_guard =
+        shared_schema_lock::lock_shared_test_schemas(&database_url.parse().unwrap())
+            .await
+            .unwrap();
     let pool = PgPoolOptions::new()
         .max_connections(6)
         .connect(&database_url)
@@ -699,6 +707,10 @@ async fn keyed_physical_start_creates_one_tenant_owned_job_and_preserves_legacy_
     let parsed = url::Url::parse(&database_url).unwrap();
     assert!(matches!(parsed.host_str(), Some("127.0.0.1" | "localhost")));
     assert_eq!(parsed.path(), "/marty_passport_contract_test");
+    let _schema_guard =
+        shared_schema_lock::lock_shared_test_schemas(&database_url.parse().unwrap())
+            .await
+            .unwrap();
     let pool = PgPoolOptions::new()
         .max_connections(4)
         .connect(&database_url)
@@ -2246,6 +2258,10 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
         database_name, "marty_passport_contract_test",
         "passport contract requires its dedicated disposable database"
     );
+    let _schema_guard =
+        shared_schema_lock::lock_shared_test_schemas(&database_url.parse().unwrap())
+            .await
+            .unwrap();
     let pool = PgPoolOptions::new()
         .max_connections(2)
         .connect(&database_url)
