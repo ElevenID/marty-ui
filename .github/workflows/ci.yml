@@ -1,8 +1,8 @@
 name: CI
 
 env:
-  MARTY_API_CORE_URI: https://github.com/ElevenID/marty-cli/releases/download/v0.2.7/elevenid-marty-api-core-0.2.7.tgz
-  MARTY_API_CORE_DIGEST: sha256:c4ee1a9d325ae54d44465862eaaaf8172de08338e59381220b901ec0e1ac6682
+  MARTY_API_CORE_URI: https://github.com/ElevenID/marty-cli/releases/download/v0.3.1/elevenid-marty-api-core-0.3.1.tgz
+  MARTY_API_CORE_DIGEST: sha256:fb8147cad34d83445a31a243a6cfa1c023ccc51d54c6aecb61353c993cb2a21d
   MARTY_BLOG_URI: https://github.com/ElevenID/marty-blog/releases/download/v0.1.9/elevenid-marty-blog-0.1.9.tgz
   MARTY_BLOG_DIGEST: sha256:1dda635bd284d9cb254e3c2c51fc09890cfae21b48a4c2095985621ad86cb358
   MARTY_PROTOCOL_REF: 76c37dc229b328afe002b911a26624543f814a64
