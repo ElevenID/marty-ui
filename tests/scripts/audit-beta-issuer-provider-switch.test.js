@@ -13,6 +13,9 @@ const {
   externalTransitPrerequisites,
   existingProviderBInput,
   boundExistingProviderB,
+  managedBindingHash,
+  matchesManagedBinding,
+  verifySelectedIssuerBinding,
   observedRemoteSigner,
   restoredConfigurationEvidence,
   governedIssuerRequest,
@@ -55,11 +58,28 @@ test('preprovisioned provider B requires exact identity and a distinct supported
   assert.throws(() => boundExistingProviderB({ services: [{ ...service, endpoint: baseline }] }, expected, baseline), /does not match/);
   assert.throws(() => boundExistingProviderB({ services: [{ ...service, key_reference: 'wrong' }] }, expected, baseline), /does not match/);
   assert.throws(() => boundExistingProviderB({ services: [{ ...service, status: 'disabled' }] }, expected, baseline), /does not match/);
-  assert.equal(observedRemoteSigner(null, { ok: true }, { verified: true }, service.id, service.id), false);
-  assert.equal(observedRemoteSigner(expected, { ok: false }, { verified: true }, service.id, service.id), false);
-  assert.equal(observedRemoteSigner(expected, { ok: true }, { verified: false }, service.id, service.id), false);
-  assert.equal(observedRemoteSigner(expected, { ok: true }, { verified: true }, 'other', service.id), false);
-  assert.equal(observedRemoteSigner(expected, { ok: true }, { verified: true }, service.id, service.id), true);
+  const bound = { selectedServiceBound: true, issuedSignatureMatchesBoundKey: true };
+  const resolved = {
+    identity: { issuer_did: 'did:example:issuer' }, public_jwk: { kty: 'EC' },
+    managed_key_binding_sha256: managedBindingHash(
+      process.env.BETA_AUDIT_ORG_ID || '00000000-0000-0000-0000-000000000001',
+      service.id, service.key_reference,
+    ),
+  };
+  assert.equal(matchesManagedBinding(resolved, 'did:example:issuer', service.id, service.key_reference), true);
+  assert.equal(matchesManagedBinding(resolved, 'did:example:issuer', 'old-service', service.key_reference), false);
+  assert.equal(matchesManagedBinding(resolved, 'did:example:issuer', service.id, 'old-key'), false);
+  await assert.rejects(
+    verifySelectedIssuerBinding(
+      fakePage([{ ok: true, status: 200, body: resolved }]),
+      'did:example:issuer', { ...service, id: 'old-service' }, { credential: 'unused' },
+    ),
+    /does not match selected signing service and key/,
+  );
+  assert.equal(observedRemoteSigner(null, { ok: true }, { verified: true }, service.id, service.id, bound), false);
+  assert.equal(observedRemoteSigner(expected, { ok: true }, { verified: true }, service.id, service.id, null), false);
+  assert.equal(observedRemoteSigner(expected, { ok: true }, { verified: true }, 'old-service', service.id, bound), false);
+  assert.equal(observedRemoteSigner(expected, { ok: true }, { verified: true }, service.id, service.id, bound), true);
 });
 const {
   validateElevenIdLoginTheme,

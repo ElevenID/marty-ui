@@ -291,8 +291,38 @@ function boundExistingProviderB(config, expected, baselineEndpoint) {
   return service;
 }
 
-function observedRemoteSigner(existingInput, issuance, credential, selected, serviceId) {
-  return Boolean(existingInput && issuance?.ok && credential?.verified && selected === serviceId);
+function managedBindingHash(organizationId, serviceId, keyReference) {
+  const digest = crypto.createHash('sha256');
+  for (const value of ['marty-managed-key-binding-v1', organizationId, serviceId, keyReference]) {
+    digest.update(value).update(Buffer.from([0]));
+  }
+  return digest.digest('hex');
+}
+
+function matchesManagedBinding(resolved, issuerDid, serviceId, keyReference) {
+  return resolved?.identity?.issuer_did === issuerDid
+    && resolved.managed_key_binding_sha256 === managedBindingHash(ORG_ID, serviceId, keyReference)
+    && Boolean(resolved.public_jwk);
+}
+
+async function verifySelectedIssuerBinding(page, issuerDid, service, issued) {
+  const response = await browserJson(page,
+    `/v1/signing-keys/issuer-identities/resolve?organization_id=${encodeURIComponent(ORG_ID)}`,
+    { method: 'POST', body: JSON.stringify(identityRequest(issuerDid)) });
+  if (!response.ok || !matchesManagedBinding(response.body, issuerDid, service.id, service.key_reference)) {
+    throw new Error('Resolved issuer binding does not match selected signing service and key');
+  }
+  const compact = issued.credential.split('~')[0];
+  const verified = verifyCompactJws(compact, response.body.public_jwk);
+  if (verified.payload.iss !== issuerDid) {
+    throw new Error('Issued credential does not verify under selected issuer binding');
+  }
+  return { selectedServiceBound: true, issuedSignatureMatchesBoundKey: true };
+}
+
+function observedRemoteSigner(existingInput, issuance, credential, selected, serviceId, binding) {
+  return Boolean(existingInput && issuance?.ok && credential?.verified && selected === serviceId
+    && binding?.selectedServiceBound && binding?.issuedSignatureMatchesBoundKey);
 }
 
 function transitService(id, name, keyReference, endpoint, credentials) {
@@ -311,7 +341,7 @@ function transitService(id, name, keyReference, endpoint, credentials) {
   };
 }
 
-async function createTemplateVersion(page, issuerDid, stamp, custodyScope, externalAuthentication) {
+async function createTemplateVersion(page, issuerDid, stamp) {
   const result = await page.evaluate(async ({ issuer, sourceTemplateId, versionStamp }) => {
     const sourceResponse = await fetch(
       `/v1/credential-templates/${encodeURIComponent(sourceTemplateId)}`,
@@ -363,8 +393,6 @@ async function createTemplateVersion(page, issuerDid, stamp, custodyScope, exter
   }, {
     issuer: issuerDid,
     sourceTemplateId: SOURCE_TEMPLATE_ID,
-    custodyScope,
-    externalAuthentication,
     versionStamp: stamp,
   });
   return {
@@ -588,7 +616,7 @@ async function main() {
         : 'Two provider configurations and distinct keys on one beta OpenBao backend; not two independent KMS products.',
       independentKmsProductsProved: false,
       differentProviderRemoteSignerObserved: false,
-      externalAuthentication: { mode: 'token', explicitCa: true, scopedFixtureKey: true },
+      openBaoACExternalAuthentication: { mode: 'token', explicitCa: true, scopedFixtureKey: true },
       pageErrors: [],
       unexpectedResponses: [],
     };
@@ -692,8 +720,7 @@ async function main() {
           relationshipCreated: governance.relationshipCreated,
         };
 
-        report.template = await createTemplateVersion(page, issuerDid, input.stamp,
-          report.custodyScope, report.externalAuthentication);
+        report.template = await createTemplateVersion(page, issuerDid, input.stamp);
         templateId = report.template.templateId || null;
         if (!report.template.ok || !report.template.template?.id) {
           throw new Error(`D-02 template setup failed: ${report.template.error}`);
@@ -735,6 +762,8 @@ async function main() {
         await showProviderStep(page, 'Issuer identity updated', 'The service confirmed the provider change. Next, verify the new credential and the earlier credential.');
 
         const providerBResult = await issueAndVerify(page, template);
+        report.providerBBinding = await verifySelectedIssuerBinding(page, issuerDid,
+          providerB, providerBResult.issued);
         report.providerB = {
           issuance: providerBResult.issuance,
           credential: providerBResult.credential,
@@ -745,7 +774,7 @@ async function main() {
         requireProviderStage(report, 'switch_signing_provider', 'verify_same_did_identity');
         report.differentProviderRemoteSignerObserved = observedRemoteSigner(
           existingProviderB, providerBResult.issuance, providerBResult.credential,
-          providerBConfig.default_service_id, providerB.id,
+          providerBConfig.default_service_id, providerB.id, report.providerBBinding,
         );
         await showProviderStep(page, 'One DID, both credentials valid', 'New issuance uses provider B while the provider-A credential remains verifiable through the retained DID method.');
 
@@ -860,6 +889,9 @@ module.exports = {
   externalTransitPrerequisites,
   existingProviderBInput,
   boundExistingProviderB,
+  managedBindingHash,
+  matchesManagedBinding,
+  verifySelectedIssuerBinding,
   observedRemoteSigner,
   managedTransitEndpoint,
   restoredConfigurationEvidence,
