@@ -292,18 +292,9 @@ fn authorize(
 }
 
 fn authentication_error(error: TransactionReadError) -> Response {
-    match error {
-        TransactionReadError::ApiKeyNotConfigured => detail_response(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "ISSUANCE_API_KEY not configured on server",
-        ),
-        TransactionReadError::ApiKeyMissing => {
-            detail_response(StatusCode::UNAUTHORIZED, "X-API-Key header is missing")
-        }
-        TransactionReadError::InvalidApiKey => {
-            detail_response(StatusCode::UNAUTHORIZED, "Invalid API Key")
-        }
-        _ => internal_error(),
+    match crate::management_http::authentication_error(&error) {
+        Some((status, detail)) => detail_response(status, detail),
+        None => internal_error(),
     }
 }
 
@@ -547,6 +538,41 @@ fn truthy_query_value(raw_query: Option<&str>, expected: &str) -> Option<String>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn shared_authentication_keeps_json_errors_and_plain_internal_fallback() {
+        for (error, status, detail) in [
+            (
+                TransactionReadError::ApiKeyNotConfigured,
+                StatusCode::SERVICE_UNAVAILABLE,
+                "ISSUANCE_API_KEY not configured on server",
+            ),
+            (
+                TransactionReadError::ApiKeyMissing,
+                StatusCode::UNAUTHORIZED,
+                "X-API-Key header is missing",
+            ),
+            (
+                TransactionReadError::InvalidApiKey,
+                StatusCode::UNAUTHORIZED,
+                "Invalid API Key",
+            ),
+        ] {
+            let response = authentication_error(error);
+            assert_eq!(response.status(), status);
+            let body = axum::body::to_bytes(response.into_body(), 4096)
+                .await
+                .unwrap();
+            let actual: Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(actual, json!({"detail": detail}));
+        }
+        let response = authentication_error(TransactionReadError::RepositoryUnavailable);
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        assert_eq!(body.as_ref(), b"Internal Server Error");
+    }
 
     #[test]
     fn query_parsing_uses_python_integer_boolean_and_last_value_rules() {

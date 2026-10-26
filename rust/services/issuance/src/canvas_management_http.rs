@@ -1847,23 +1847,18 @@ fn service_failure(error: CanvasPlatformManagementError) -> Response {
         )
             .into_response();
     }
+    if let CanvasPlatformManagementError::Security(authentication) = &error {
+        if let Some((status, detail)) = crate::management_http::authentication_error(authentication)
+        {
+            return (status, Json(json!({"detail": detail}))).into_response();
+        }
+    }
     let (status, detail) = match error {
         CanvasPlatformManagementError::CanvasCredentialsValidationFailed => {
             // Match the published exception boundary without operator details.
             return (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response();
         }
         CanvasPlatformManagementError::Security(error) => match error {
-            TransactionReadError::ApiKeyNotConfigured => (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "ISSUANCE_API_KEY not configured on server".to_owned(),
-            ),
-            TransactionReadError::ApiKeyMissing => (
-                StatusCode::UNAUTHORIZED,
-                "X-API-Key header is missing".to_owned(),
-            ),
-            TransactionReadError::InvalidApiKey => {
-                (StatusCode::UNAUTHORIZED, "Invalid API Key".to_owned())
-            }
             TransactionReadError::TrustedOrganizationRequired => (
                 StatusCode::BAD_REQUEST,
                 "X-Organization-ID is required for Canvas management".to_owned(),
@@ -2048,6 +2043,45 @@ mod tests {
     use chrono::TimeZone;
 
     use super::*;
+
+    #[tokio::test]
+    async fn shared_authentication_keeps_canvas_resource_hiding_and_tenant_policy() {
+        for (error, status, detail) in [
+            (
+                TransactionReadError::ApiKeyNotConfigured,
+                StatusCode::SERVICE_UNAVAILABLE,
+                "ISSUANCE_API_KEY not configured on server",
+            ),
+            (
+                TransactionReadError::ApiKeyMissing,
+                StatusCode::UNAUTHORIZED,
+                "X-API-Key header is missing",
+            ),
+            (
+                TransactionReadError::InvalidApiKey,
+                StatusCode::UNAUTHORIZED,
+                "Invalid API Key",
+            ),
+            (
+                TransactionReadError::OrganizationMismatch,
+                StatusCode::NOT_FOUND,
+                "Canvas resource not found",
+            ),
+            (
+                TransactionReadError::TrustedOrganizationRequired,
+                StatusCode::BAD_REQUEST,
+                "X-Organization-ID is required for Canvas management",
+            ),
+        ] {
+            let response = service_failure(CanvasPlatformManagementError::Security(error));
+            assert_eq!(response.status(), status);
+            let body = axum::body::to_bytes(response.into_body(), 4096)
+                .await
+                .unwrap();
+            let actual: Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(actual, json!({"detail": detail}));
+        }
+    }
 
     #[test]
     fn response_projects_only_the_legacy_public_connection_keys() {

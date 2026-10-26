@@ -199,17 +199,12 @@ impl IntoResponse for InitiationDidcommHttpError {
 
 impl InitiationDidcommHttpError {
     fn failure(&self) -> (StatusCode, &'static str) {
+        if let Self::Security(error) = self {
+            if let Some(response) = crate::management_http::authentication_error(error) {
+                return response;
+            }
+        }
         match self {
-            Self::Security(TransactionReadError::ApiKeyNotConfigured) => (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "ISSUANCE_API_KEY not configured on server",
-            ),
-            Self::Security(TransactionReadError::ApiKeyMissing) => {
-                (StatusCode::UNAUTHORIZED, "X-API-Key header is missing")
-            }
-            Self::Security(TransactionReadError::InvalidApiKey) => {
-                (StatusCode::UNAUTHORIZED, "Invalid API Key")
-            }
             Self::Security(TransactionReadError::TrustedOrganizationRequired) => (
                 StatusCode::FORBIDDEN,
                 "Trusted organization context is required",
@@ -328,6 +323,42 @@ fn header<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shared_authentication_keeps_didcomm_tenant_policy() {
+        for (error, status, detail) in [
+            (
+                TransactionReadError::ApiKeyNotConfigured,
+                StatusCode::SERVICE_UNAVAILABLE,
+                "ISSUANCE_API_KEY not configured on server",
+            ),
+            (
+                TransactionReadError::ApiKeyMissing,
+                StatusCode::UNAUTHORIZED,
+                "X-API-Key header is missing",
+            ),
+            (
+                TransactionReadError::InvalidApiKey,
+                StatusCode::UNAUTHORIZED,
+                "Invalid API Key",
+            ),
+            (
+                TransactionReadError::OrganizationMismatch,
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Management authentication is unavailable",
+            ),
+            (
+                TransactionReadError::TrustedOrganizationRequired,
+                StatusCode::FORBIDDEN,
+                "Trusted organization context is required",
+            ),
+        ] {
+            assert_eq!(
+                InitiationDidcommHttpError::Security(error).failure(),
+                (status, detail)
+            );
+        }
+    }
 
     #[test]
     fn status_mapping_is_stable_and_does_not_expose_internal_errors() {
