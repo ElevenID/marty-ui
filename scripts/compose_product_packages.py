@@ -111,7 +111,7 @@ def metadata(package: dict) -> dict:
     }
 
 
-def server_composition(base: dict, package: dict) -> dict:
+def server_composition(base: dict, package: dict, runtime_dir: Path | None = None) -> dict:
     images = package_images(package)
     require(
         package["product"] == "marty-server",
@@ -198,6 +198,14 @@ def server_composition(base: dict, package: dict) -> dict:
                     not in str(mount.get("source", "")).replace("\\", "/").split("/"),
                     "backend retains frontend source assets",
                 )
+    if runtime_dir is not None:
+        for relative in PLAN["SERVER_RUNTIME_FILES"]:
+            PLAN["source_file"](runtime_dir, relative)
+        for name, service in services.items():
+            targets = PLAN["SERVER_RUNTIME_MOUNTS"].get(name, {})
+            for mount in service.get("volumes", []):
+                if mount.get("type") == "bind" and mount.get("target") in targets:
+                    mount["source"] = str((runtime_dir / targets[mount["target"]]).resolve())
     for kind in ("secrets", "configs"):
         used = {
             ref["source"] if isinstance(ref, dict) else ref
@@ -253,6 +261,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--package", type=Path, required=True)
     parser.add_argument("--base", type=Path)
+    parser.add_argument("--runtime-dir", type=Path)
     parser.add_argument("--server-origin")
     parser.add_argument("--console-port", type=int, default=3002)
     parser.add_argument("--output", type=Path, required=True)
@@ -263,10 +272,10 @@ def main() -> None:
             args.base is not None and args.server_origin is None,
             "server composition needs only a normalized base model",
         )
-        result = server_composition(json.loads(args.base.read_bytes()), package)
+        result = server_composition(json.loads(args.base.read_bytes()), package, args.runtime_dir)
     else:
         require(
-            args.base is None and args.server_origin is not None,
+            args.base is None and args.runtime_dir is None and args.server_origin is not None,
             "console composition needs only a public server origin",
         )
         result = console_composition(package, args.server_origin, args.console_port)

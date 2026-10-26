@@ -28,6 +28,10 @@ def repository(tmp_path, product):
         target.write_text("FROM scratch\n")
     if product == "marty-server":
         (tmp_path / "release/server-version.txt").write_text("2.3.4\n")
+        for name in MODULE.SERVER_RUNTIME_FILES:
+            path = tmp_path / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes((ROOT / name).read_bytes())
     else:
         (tmp_path / "release/console-version.txt").write_text("5.6.7\n")
         (tmp_path / "release/stack-lock.json").write_bytes((ROOT / "release/stack-lock.json").read_bytes())
@@ -53,6 +57,7 @@ def test_console_build_has_its_own_version_and_no_native_server_build(tmp_path):
     plan = MODULE.build_plan(root, "marty-console", SHA)
     assert not (root / "release/server-version.txt").exists()
     assert not (root / "rust").exists()
+    assert plan["runtime_files"] == []
     assert plan["version"] == "5.6.7"
     assert plan["tag"] == "console-v5.6.7"
     assert len(plan["images"]) == 1
@@ -213,3 +218,18 @@ def test_actual_cli_produces_and_assembles_the_selected_source_plan(tmp_path, pr
     invalid_output = tmp_path / "incomplete.json"
     assert subprocess.run([*base, "--input-plan", str(plan_path), "--output", str(invalid_output)], check=False, capture_output=True).returncode != 0
     assert not invalid_output.exists()
+
+
+def test_frozen_server_plan_binds_runtime_assets_but_console_has_none(tmp_path):
+    root = repository(tmp_path, "marty-server")
+    for relative in ["scripts/compose_product_packages.py", "scripts/product_package_plan.py", "deploy-config/schemas/product-package.schema.json", "docs/INDEPENDENT_PRODUCT_PACKAGES.md", "LICENSE"]:
+        target = root / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes((ROOT / relative).read_bytes())
+    plan = MODULE.build_plan(root, "marty-server", SHA)
+    assert len(plan["runtime_files"]) == 27
+    target = root / "scripts/load-secrets-env.sh"
+    target.write_bytes(target.read_bytes() + b"\n# changed local source\n")
+    with pytest.raises(ValueError, match="runtime source inputs changed"):
+        MODULE.write_bundle(root, plan, {"product": "marty-server"}, tmp_path / "bundle")
+    assert not (tmp_path / "bundle").exists()

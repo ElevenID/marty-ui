@@ -71,7 +71,7 @@ installer owner supplies the resolved server runtime layout and prerequisites.
 
 ```sh
 python scripts/compose_product_packages.py --package server-package.json \
-  --base resolved-server-base.json --output server.compose.json
+  --base resolved-server-base.json --runtime-dir runtime --output server.compose.json
 python scripts/compose_product_packages.py --package console-package.json \
   --server-origin https://api.example.com --output console.compose.json
 ```
@@ -92,6 +92,25 @@ backend mounts, commands and health/dependency conditions stay with that layout.
 The installer owner's legacy full-stack DAG validator therefore needs an
 explicit independent-product mode when consuming this output; its current
 combined-product contract is preserved here.
+
+The server bundle includes an explicit allowlist of 27 existing container runtime
+files under `runtime/`: edge configuration, database initialization, container
+entrypoints and Keycloak realm/theme assets. The packaged realm omits all seeded
+development users and literal client secrets; the deployment owner provisions
+real identities and credentials. The shared source realm remains unchanged.
+Both input and emitted file hashes are bound into the frozen build plan; emitted
+bytes also appear in the bundle checksum inventory. No secrets, state,
+installer scripts or UI application source are copied. The console bundle does
+not include those server files.
+
+Run the example from the extracted bundle. `--runtime-dir runtime` explicitly
+selects its static assets and replaces only the known service/mount-target pairs;
+all state mounts, secret references, health checks and other runtime settings
+remain supplied by the normalized deployment layout. Missing required assets
+fail before a composition is written. Omit that option to retain an existing
+custom layout's asset paths. The renderer does not modify the supplied assets,
+prepare state or secrets, run Keycloak setup, or start any services. The existing
+container commands consume those files when the deployment owner starts them.
 
 The console renderer produces one UI service with no backend images, secret
 mounts or startup dependencies. `MARTY_SERVER_ORIGIN` is a reachable public

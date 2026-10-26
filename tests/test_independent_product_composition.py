@@ -311,14 +311,62 @@ def test_shipped_renderer_needs_no_repository_frontend_or_nonstdlib_install(sour
     assert not (bundle / "ui").exists() and not (bundle / "rust").exists()
     assert (bundle / "LICENSE").read_bytes() == (ROOT / "LICENSE").read_bytes()
     assert (bundle / "docker-compose.console.yml").exists() == (product == "marty-console")
+    assert (bundle / "runtime").exists() == (product == "marty-server")
+    if product == "marty-server":
+        actual = {path.relative_to(bundle / "runtime").as_posix() for path in (bundle / "runtime").rglob("*") if path.is_file()}
+        assert actual == set(MODULE.PLAN["SERVER_RUNTIME_FILES"])
+        for relative in actual:
+            payload = (bundle / "runtime" / relative).read_bytes()
+            if relative == "config/keycloak/11id-realm.json":
+                original = json.loads((ROOT / relative).read_bytes())
+                sanitized = json.loads(payload)
+                assert "users" not in sanitized
+                assert all("secret" not in client for client in sanitized["clients"])
+                original.pop("users")
+                for client in original["clients"]:
+                    client.pop("secret", None)
+                assert sanitized == original
+            else:
+                assert payload == (ROOT / relative).read_bytes()
+
     base = tmp_path / "base.json"
     base.write_text(json.dumps(pinned_base(source_model)))
     output = tmp_path / "selected-compose.json"
     args = [sys.executable, str(bundle / "scripts/compose_product_packages.py"), "--package", str(bundle / "product-package.json"), "--output", str(output)]
-    args += ["--base", str(base)] if product == "marty-server" else ["--server-origin", "https://api.example"]
+    args += ["--base", str(base), "--runtime-dir", str(bundle / "runtime")] if product == "marty-server" else ["--server-origin", "https://api.example"]
     env = dict(os.environ)
     env.pop("PYTHONPATH", None)
     subprocess.run(args, cwd=tmp_path, env=env, check=True)
     assert json.loads(output.read_bytes())["x-marty-product"]["product"] == product
     with pytest.raises(ValueError, match="must be new"):
         MODULE.PLAN["write_bundle"](ROOT, plan, selected, bundle)
+
+
+def test_packaged_runtime_replaces_only_known_static_mounts(tmp_path, source_model):
+    runtime = tmp_path / "runtime"
+    for relative in MODULE.PLAN["SERVER_RUNTIME_FILES"]:
+        path = runtime / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes((ROOT / relative).read_bytes())
+    base = pinned_base(source_model)
+    original = copy.deepcopy(base)
+    result = MODULE.server_composition(base, package("marty-server"), runtime)
+    assert base == original
+    mapped = 0
+    for name, service in result["services"].items():
+        targets = MODULE.PLAN["SERVER_RUNTIME_MOUNTS"].get(name, {})
+        for mount in service.get("volumes", []):
+            if mount.get("type") != "bind":
+                continue
+            previous = next(v for v in base["services"][name]["volumes"] if v["target"] == mount["target"])
+            if mount["target"] in targets:
+                assert mount["source"] == str((runtime / targets[mount["target"]]).resolve())
+                assert {k: v for k, v in mount.items() if k != "source"} == {k: v for k, v in previous.items() if k != "source"}
+                mapped += 1
+            else:
+                assert mount == previous
+    assert mapped == 12
+    assert result["secrets"] == MODULE.server_composition(base, package("marty-server"))["secrets"]
+    (runtime / "scripts/load-secrets-env.sh").unlink()
+    with pytest.raises(ValueError, match="source path escapes or is missing"):
+        MODULE.server_composition(base, package("marty-server"), runtime)

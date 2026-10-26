@@ -17,6 +17,47 @@ VERSION = re.compile(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)")
 SHA = re.compile(r"[0-9a-f]{40}")
 
 
+SERVER_RUNTIME_FILES = ('docker/nginx-selfhost.prod.conf.template',
+ 'docker/init-databases.sh',
+ 'scripts/nginx-entrypoint-selfhost.sh',
+ 'scripts/load-openbao-token-and-start.sh',
+ 'scripts/load-secrets-env.sh',
+ 'scripts/keycloak-selfhost-start.sh',
+ 'scripts/setup-keycloak.sh',
+ 'scripts/setup-keycloak-selfhost-production.sh',
+ 'config/keycloak/11id-realm.json',
+ 'config/keycloak/themes/11id/email/html/template.ftl',
+ 'config/keycloak/themes/11id/email/theme.properties',
+ 'config/keycloak/themes/11id/login/auth-options.ftl',
+ 'config/keycloak/themes/11id/login/error.ftl',
+ 'config/keycloak/themes/11id/login/login-update-password.ftl',
+ 'config/keycloak/themes/11id/login/login-username.ftl',
+ 'config/keycloak/themes/11id/login/login.ftl',
+ 'config/keycloak/themes/11id/login/messages/messages_de.properties',
+ 'config/keycloak/themes/11id/login/messages/messages_en.properties',
+ 'config/keycloak/themes/11id/login/messages/messages_es.properties',
+ 'config/keycloak/themes/11id/login/messages/messages_fr.properties',
+ 'config/keycloak/themes/11id/login/messages/messages_ja.properties',
+ 'config/keycloak/themes/11id/login/messages/messages_nl.properties',
+ 'config/keycloak/themes/11id/login/register.ftl',
+ 'config/keycloak/themes/11id/login/resources/css/marty.css',
+ 'config/keycloak/themes/11id/login/resources/img/favicon.ico',
+ 'config/keycloak/themes/11id/login/template.ftl',
+ 'config/keycloak/themes/11id/login/theme.properties')
+SERVER_RUNTIME_MOUNTS = {'edge': {'/etc/nginx/conf.d/default.conf.template': 'docker/nginx-selfhost.prod.conf.template',
+          '/docker-entrypoint.d/40-render-selfhost.sh': 'scripts/nginx-entrypoint-selfhost.sh'},
+ 'postgres': {'/docker-entrypoint-initdb.d/init-databases.sh': 'docker/init-databases.sh'},
+ 'issuance': {'/app/load-openbao-token-and-start.sh': 'scripts/load-openbao-token-and-start.sh'},
+ 'issuance-migrations': {'/app/load-secrets-env.sh': 'scripts/load-secrets-env.sh'},
+ 'keycloak': {'/opt/keycloak/data/import': 'config/keycloak',
+              '/opt/keycloak/themes': 'config/keycloak/themes',
+              '/scripts/load-secrets-env.sh': 'scripts/load-secrets-env.sh',
+              '/scripts/keycloak-selfhost-start.sh': 'scripts/keycloak-selfhost-start.sh'},
+ 'keycloak-configurator': {'/scripts/setup-keycloak.sh': 'scripts/setup-keycloak.sh',
+                           '/scripts/setup-keycloak-selfhost-production.sh': 'scripts/setup-keycloak-selfhost-production.sh',
+                           '/scripts/load-secrets-env.sh': 'scripts/load-secrets-env.sh'}}
+
+
 def require(condition: bool, message: str) -> None:
     if not condition:
         raise ValueError(message)
@@ -31,6 +72,25 @@ def source_file(root: Path, relative: str) -> Path:
 
 def digest(path: Path) -> str:
     return "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def runtime_payload(root: Path, relative: str) -> bytes:
+    payload = source_file(root, relative).read_bytes()
+    if relative == "config/keycloak/11id-realm.json":
+        realm = json.loads(payload)
+        # Production deployment supplies operator identities and client secrets.
+        # Never distribute the development realm's seeded accounts/credentials.
+        realm.pop("users", None)
+        for client in realm.get("clients", []):
+            client.pop("secret", None)
+        payload = (json.dumps(realm, sort_keys=True, indent=2) + "\n").encode("utf-8")
+    return payload
+
+
+def runtime_inputs(root: Path, product: str) -> list[dict[str, str]]:
+    return [{"path": name, "source_sha256": digest(source_file(root, name)),
+             "sha256": "sha256:" + hashlib.sha256(runtime_payload(root, name)).hexdigest()}
+            for name in SERVER_RUNTIME_FILES] if product == "marty-server" else []
 
 
 def console_dependencies(root: Path) -> tuple[dict[str, str], str]:
@@ -102,7 +162,7 @@ def build_plan(root: Path, product: str, source_sha: str) -> dict:
         "version_source": version_source, "version_source_sha256": digest(version_path),
         "catalog_sha256": digest(catalog_path), "api": spec["api"],
         "dependency_lock_sha256": dependency_lock_sha256,
-        "qualification": "unqualified", "images": images,
+        "qualification": "unqualified", "images": images, "runtime_files": runtime_inputs(root, product),
     }
 
 
@@ -149,18 +209,21 @@ def write_bundle(root: Path, plan: dict, package: dict, output: Path) -> None:
             "deploy-config/schemas/product-package.schema.json", "docs/INDEPENDENT_PRODUCT_PACKAGES.md", "LICENSE",
         )
     }
+    require(plan["runtime_files"] == runtime_inputs(root, package["product"]), "runtime source inputs changed")
+    for item in plan["runtime_files"]:
+        files["runtime/" + item["path"]] = runtime_payload(root, item["path"])
     if package["product"] == "marty-console":
         files["docker-compose.console.yml"] = source_file(root, "docker-compose.console.yml").read_bytes()
     for name, value in [("build-plan.json", plan), ("product-package.json", package)]:
         files[name] = (json.dumps(value, sort_keys=True, indent=2) + "\n").encode("utf-8")
-    arguments = ("--base resolved-server-base.json --output server.compose.json" if package["product"] == "marty-server"
+    arguments = ("--base resolved-server-base.json --runtime-dir runtime --output server.compose.json" if package["product"] == "marty-server"
                  else "--server-origin https://api.example.com --output console.compose.json")
     readme = (
         f"# {package['product']} {package['version']} candidate\n\n"
         "This producer candidate is experimental and unqualified. Independent release verification is separate.\n\n"
         f"Source revision: https://github.com/{plan['repository']}/tree/{plan['source_sha']}\n\n"
         "The optional renderer requires Python 3.11+ with only its standard library; no repository checkout, UI build or npm installation is needed. "
-        "It writes Compose JSON without installing software, starting containers or preparing secrets. The deployment owner supplies any existing server runtime layout and external image pins.\n\n"
+        "It writes Compose JSON without installing software, starting containers or preparing secrets. The deployment owner supplies the normalized server runtime layout, state/secrets and external image pins. Server container configuration and entrypoint assets are included under runtime/; --runtime-dir explicitly binds those packaged assets instead of checkout paths.\n\n"
         f"```sh\npython scripts/compose_product_packages.py --package product-package.json {arguments}\n```\n\n"
         "The image references are immutable digests. A build receipt or successful render does not establish payload, deployment or product compatibility qualification. "
         "See docs/INDEPENDENT_PRODUCT_PACKAGES.md for the source contracts and limits.\n"
