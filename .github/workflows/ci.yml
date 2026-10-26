@@ -2434,6 +2434,11 @@ jobs:
             --expected-source "${{ github.event.pull_request.head.sha || github.sha }}" \
             --protocol-revision "$MARTY_PROTOCOL_REF" \
             --output "$RUNNER_TEMP/gateway-openapi.json"
+      - name: Validate native trust readbacks against the actual export
+        run: |
+          python3 -m venv "$RUNNER_TEMP/trust-schema-venv"
+          "$RUNNER_TEMP/trust-schema-venv/bin/python" -m pip install jsonschema==4.23.0
+          "$RUNNER_TEMP/trust-schema-venv/bin/python" scripts/check_gateway_trust_openapi.py --openapi "$RUNNER_TEMP/gateway-openapi.json"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: gateway-openapi-${{ github.run_id }}-${{ github.run_attempt }}

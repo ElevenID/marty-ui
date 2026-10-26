@@ -1,0 +1,489 @@
+{
+  "runtime__trust_public_value": {
+    "description": "Public JSON extension values; private custody names and private JWK parameters are forbidden recursively. This describes public configuration, not a trust or interoperability decision.",
+    "anyOf": [
+      {
+        "type": [
+          "string",
+          "number",
+          "boolean",
+          "null"
+        ]
+      },
+      {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/runtime__trust_public_value"
+        }
+      },
+      {
+        "type": "object",
+        "propertyNames": {
+          "not": {
+            "pattern": "^(?:[Ii][Ss][Ss][Uu][Ee][Rr]_[Aa][Ll][Gg][Oo][Rr][Ii][Tt][Hh][Mm]|[Ii][Ss][Ss][Uu][Ee][Rr]_[Pp][Rr][Oo][Ff][Ii][Ll][Ee]_[Ii][Dd]|[Ii][Ss][Ss][Uu][Ee][Rr]_[Kk][Ee][Yy]_[Ii][Dd]|[Kk][Ee][Yy]_[Aa][Cc][Cc][Ee][Ss][Ss]_[Mm][Oo][Dd][Ee]|[Kk][Ee][Yy]_[Bb][Ii][Nn][Dd][Ii][Nn][Gg]|[Kk][Ee][Yy]_[Mm][Aa][Nn][Aa][Gg][Ee][Mm][Ee][Nn][Tt]|[Kk][Ee][Yy]_[Nn][Aa][Mm][Ee]|[Kk][Ee][Yy]_[Rr][Ee][Ff][Ee][Rr][Ee][Nn][Cc][Ee]|[Kk][Ee][Yy]_[Vv][Ee][Rr][Ss][Ii][Oo][Nn]|[Kk][Mm][Ss]_[Aa][Rr][Nn]|[Kk][Mm][Ss]_[Pp][Rr][Oo][Vv][Ii][Dd][Ee][Rr]|[Kk][Mm][Ss]_[Rr][Ee][Gg][Ii][Oo][Nn]|[Mm][Aa][Nn][Aa][Gg][Ee][Dd]_[Kk][Ee][Yy]_[Ii][Dd]|[Pp][Rr][Oo][Vv][Ii][Dd][Ee][Rr]|[Ss][Ee][Rr][Vv][Ii][Cc][Ee]_[Ii][Dd]|[Ss][Ii][Gg][Nn][Ii][Nn][Gg]_[Aa][Gg][Ee][Nn][Tt]_[Aa][Uu][Tt][Hh]|[Ss][Ii][Gg][Nn][Ii][Nn][Gg]_[Aa][Gg][Ee][Nn][Tt]_[Uu][Rr][Ll]|[Ss][Ii][Gg][Nn][Ii][Nn][Gg]_[Kk][Ee][Yy]_[Rr][Ee][Ff][Ee][Rr][Ee][Nn][Cc][Ee]|[Ss][Ii][Gg][Nn][Ii][Nn][Gg]_[Ss][Ee][Rr][Vv][Ii][Cc][Ee]_[Ii][Dd]|[Tt][Rr][Aa][Nn][Ss][Ii][Tt]_[Mm][Oo][Uu][Nn][Tt]|[Vv][Ee][Rr][Ii][Ff][Ii][Cc][Aa][Tt][Ii][Oo][Nn]_[Mm][Ee][Tt][Hh][Oo][Dd]_[Ii][Dd])$"
+          }
+        },
+        "additionalProperties": {
+          "$ref": "#/components/schemas/runtime__trust_public_value"
+        },
+        "allOf": [
+          {
+            "if": {
+              "not": {
+                "propertyNames": {
+                  "not": {
+                    "pattern": "^[Kk][Tt][Yy]$"
+                  }
+                }
+              }
+            },
+            "then": {
+              "propertyNames": {
+                "not": {
+                  "anyOf": [
+                    {
+                      "pattern": "^[Dd]$"
+                    },
+                    {
+                      "pattern": "^[Pp]$"
+                    },
+                    {
+                      "pattern": "^[Qq]$"
+                    },
+                    {
+                      "pattern": "^[Dd][Pp]$"
+                    },
+                    {
+                      "pattern": "^[Dd][Qq]$"
+                    },
+                    {
+                      "pattern": "^[Qq][Ii]$"
+                    },
+                    {
+                      "pattern": "^[Oo][Tt][Hh]$"
+                    },
+                    {
+                      "pattern": "^[Kk]$"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "runtime__trust_did_resolution": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "resolver_type": {
+        "type": "string",
+        "enum": [
+          "ORGANIZATION_REGISTRY",
+          "PUBLIC_DID",
+          "ORGANIZATION_REGISTRY_WITH_PUBLIC_FALLBACK"
+        ]
+      },
+      "allow_public_fallback": {
+        "type": "boolean"
+      },
+      "cache_ttl_seconds": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 18446744073709551615
+      }
+    },
+    "required": [
+      "resolver_type",
+      "allow_public_fallback",
+      "cache_ttl_seconds"
+    ]
+  },
+  "runtime__trust_source": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "source_type": {
+        "type": "string",
+        "enum": [
+          "TRUST_LIST",
+          "PINNED_ISSUER",
+          "ROOT_CA",
+          "PKD_URL",
+          "REGISTRY"
+        ]
+      },
+      "url": {
+        "type": "string"
+      },
+      "certificate_pem": {
+        "type": "string"
+      },
+      "issuer_did": {
+        "type": "string"
+      },
+      "organization_id": {
+        "type": "string"
+      },
+      "verification_method_ids": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "did_resolution": {
+        "$ref": "#/components/schemas/runtime__trust_did_resolution"
+      },
+      "purposes": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "enum": [
+            "CREDENTIAL_ISSUER",
+            "MACHINE_IDENTITY_CA",
+            "MANUFACTURER_ENDORSER",
+            "ATTESTATION_VERIFIER",
+            "DEPLOYMENT_AUTHORITY",
+            "EVIDENCE_SIGNER"
+          ]
+        },
+        "minItems": 1,
+        "uniqueItems": true
+      },
+      "description": {
+        "type": "string"
+      },
+      "pinned_certificates": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "registry_sync": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "protocol": {
+            "const": "MARTY_TRUST_REGISTRY_SYNC_V1"
+          },
+          "refresh_interval_hours": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 720
+          }
+        },
+        "required": [
+          "protocol",
+          "refresh_interval_hours"
+        ]
+      }
+    },
+    "required": [
+      "source_type",
+      "pinned_certificates"
+    ]
+  },
+  "runtime__trust_profile_response": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "id": {
+        "type": "string",
+        "format": "uuid"
+      },
+      "organization_id": {
+        "type": "string"
+      },
+      "name": {
+        "type": "string"
+      },
+      "description": {
+        "type": "string"
+      },
+      "status": {
+        "type": "string",
+        "enum": [
+          "draft",
+          "active",
+          "suspended",
+          "archived"
+        ]
+      },
+      "profile_type": {
+        "type": "string",
+        "enum": [
+          "ICAO",
+          "AAMVA",
+          "EUDI",
+          "CUSTOM"
+        ]
+      },
+      "compliance_status": {
+        "type": "string",
+        "enum": [
+          "COMPLIANT",
+          "NEEDS_ATTENTION",
+          "SETUP_REQUIRED"
+        ]
+      },
+      "trust_purposes": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "enum": [
+            "CREDENTIAL_ISSUER",
+            "MACHINE_IDENTITY_CA",
+            "MANUFACTURER_ENDORSER",
+            "ATTESTATION_VERIFIER",
+            "DEPLOYMENT_AUTHORITY",
+            "EVIDENCE_SIGNER"
+          ]
+        },
+        "minItems": 1,
+        "uniqueItems": true
+      },
+      "trust_sources": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/runtime__trust_source"
+        }
+      },
+      "allowed_algorithms": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "revocation_policy": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "check_mode": {
+            "type": "string",
+            "enum": [
+              "HARD_FAIL",
+              "SOFT_FAIL",
+              "SKIP"
+            ]
+          },
+          "cache_ttl_seconds": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 235926000
+          }
+        },
+        "required": [
+          "check_mode",
+          "cache_ttl_seconds"
+        ]
+      },
+      "revocation_services": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled_methods": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "CRL",
+                "OCSP",
+                "STATUS_LIST"
+              ]
+            },
+            "uniqueItems": true
+          },
+          "auto_discover": {
+            "const": false
+          },
+          "merge_discovered": {
+            "const": false
+          }
+        },
+        "required": [
+          "enabled_methods",
+          "auto_discover",
+          "merge_discovered"
+        ]
+      },
+      "revocation_profile_id": {
+        "type": "string"
+      },
+      "time_policy": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "clock_skew_seconds": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 4294967295
+          },
+          "max_credential_age_seconds": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 4294967295
+          },
+          "require_freshness": {
+            "type": "boolean"
+          },
+          "freshness_window_seconds": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 4294967295
+          }
+        },
+        "required": [
+          "clock_skew_seconds",
+          "require_freshness"
+        ]
+      },
+      "supported_formats": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "enum": [
+            "MDOC",
+            "SD_JWT_VC",
+            "VC_JWT",
+            "JSON_LD",
+            "VDS_NC"
+          ]
+        },
+        "minItems": 1,
+        "uniqueItems": true
+      },
+      "trusted_assertion_formats": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "enum": [
+            "X509_CERTIFICATE",
+            "EAT",
+            "TPM_QUOTE",
+            "JWT",
+            "CWT",
+            "CUSTOM"
+          ]
+        },
+        "minItems": 1,
+        "uniqueItems": true
+      },
+      "allowed_issuers": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "denied_issuers": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "system_issuer_overrides": {
+        "allOf": [
+          {
+            "type": "object"
+          },
+          {
+            "$ref": "#/components/schemas/runtime__trust_public_value"
+          }
+        ]
+      },
+      "compatible_compliance_codes": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "verification_policy_set_id": {
+        "type": "string"
+      },
+      "auto_generated": {
+        "type": "boolean"
+      },
+      "created_at": {
+        "type": "string",
+        "format": "date-time"
+      },
+      "updated_at": {
+        "type": "string",
+        "format": "date-time"
+      }
+    },
+    "required": [
+      "id",
+      "organization_id",
+      "name",
+      "status",
+      "profile_type",
+      "compliance_status",
+      "trust_sources",
+      "allowed_algorithms",
+      "system_issuer_overrides",
+      "compatible_compliance_codes",
+      "auto_generated",
+      "created_at"
+    ],
+    "description": "Native public trust profile readback. Optional/null native fields are omitted. Some legacy projected readbacks omit updated_at and inline policies. Credential trust requires supported_formats; machine trust requires trusted_assertion_formats. Native provider, authorization and state validation still apply.",
+    "allOf": [
+      {
+        "if": {
+          "anyOf": [
+            {
+              "not": {
+                "required": [
+                  "trust_purposes"
+                ]
+              }
+            },
+            {
+              "properties": {
+                "trust_purposes": {
+                  "contains": {
+                    "const": "CREDENTIAL_ISSUER"
+                  }
+                }
+              },
+              "required": [
+                "trust_purposes"
+              ]
+            }
+          ]
+        },
+        "then": {
+          "required": [
+            "supported_formats"
+          ]
+        }
+      },
+      {
+        "if": {
+          "properties": {
+            "trust_purposes": {
+              "contains": {
+                "enum": [
+                  "MACHINE_IDENTITY_CA",
+                  "MANUFACTURER_ENDORSER",
+                  "ATTESTATION_VERIFIER",
+                  "DEPLOYMENT_AUTHORITY",
+                  "EVIDENCE_SIGNER"
+                ]
+              }
+            }
+          },
+          "required": [
+            "trust_purposes"
+          ]
+        },
+        "then": {
+          "required": [
+            "trusted_assertion_formats"
+          ]
+        }
+      }
+    ]
+  }
+}
