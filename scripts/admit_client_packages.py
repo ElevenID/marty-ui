@@ -70,6 +70,14 @@ def archive_manifest(payload, name, version):
         stream = archive.extractfile("package/package.json")
         require(stream is not None, "Client manifest is not a regular file")
         manifest = json.load(stream)
+        if name == "marty-api-core":
+            require(manifest.get("types") == "src/index.d.ts"
+                    and manifest.get("exports") == {".": {
+                        "types": "./src/index.d.ts", "default": "./src/index.js"}},
+                    "SDK public type export is missing or differs from the factory contract")
+            declaration = "package/src/index.d.ts"
+            require(declaration in names and archive.getmember(declaration).isfile(),
+                    "SDK public type declaration is missing")
     require(manifest.get("name") == "@elevenid/" + name and manifest.get("version") == version,
             "Client archive describes the wrong package/version")
     require(not manifest.get("dependencies") and not manifest.get("peerDependencies"), "Unreviewed client runtime dependencies")
