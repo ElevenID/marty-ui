@@ -10,7 +10,7 @@ use std::{
 use marty_passport_auth::{PassportTenantCredentialSource, PassportTenantKeyring};
 use thiserror::Error;
 
-use crate::discovery::ReleaseIdentity;
+use crate::discovery::{release_version_label, ReleaseIdentity};
 
 const DEFAULT_READY_SERVICES: &[&str] = &[
     "auth",
@@ -674,8 +674,9 @@ impl GatewayConfig {
             hosted_pilot_auto_purge_interval_seconds,
             hosted_pilot_auto_purge_batch_size,
             release_identity: ReleaseIdentity {
-                release_version: value(values, "MARTY_RELEASE_VERSION")
-                    .unwrap_or_else(|| "development".into()),
+                release_version: release_version_label(
+                    values.get("MARTY_RELEASE_VERSION").map(String::as_str),
+                ),
                 stack_version: value(values, "ELEVENID_STACK_VERSION")
                     .unwrap_or_else(|| "development".into()),
                 marty_ui_sha: value(values, "MARTY_UI_SHA").unwrap_or_else(|| "unknown".into()),

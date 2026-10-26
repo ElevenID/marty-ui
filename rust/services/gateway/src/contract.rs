@@ -462,6 +462,14 @@ fn add_gateway_documentation_routes(table: &mut RouteTable) -> Result<(), Platfo
 }
 
 fn operation_id(method: HttpMethod, path: &str) -> String {
+    // Both URLs remain supported by the same notification handler. Keep the
+    // UI's nested path ID stable and disambiguate its dashed compatibility alias.
+    if path == "/v1/notifications/unread-count" {
+        return format!(
+            "{}_v1_notifications_unread_count_legacy_alias",
+            method_name(method).to_ascii_lowercase()
+        );
+    }
     let normalized = path
         .chars()
         .map(|character| {
@@ -1077,6 +1085,35 @@ mod tests {
                 "{method:?} {path}"
             );
         }
+    }
+
+    #[test]
+    fn openapi_operation_ids_are_unique_and_notification_aliases_remain_present() {
+        let contract = GatewayContract::load().unwrap();
+        let document = contract.openapi_document("test");
+        let mut identifiers = BTreeSet::new();
+        for path in document["paths"].as_object().unwrap().values() {
+            for operation in path.as_object().unwrap().values() {
+                let id = operation["operationId"].as_str().unwrap();
+                assert!(identifiers.insert(id), "duplicate operation ID: {id}");
+            }
+        }
+        assert_eq!(
+            identifiers.len(),
+            contract
+                .routes
+                .iter()
+                .filter(|route| route.include_in_schema)
+                .count()
+        );
+        assert_eq!(
+            document["paths"]["/v1/notifications/unread/count"]["get"]["operationId"],
+            "get_v1_notifications_unread_count"
+        );
+        assert_eq!(
+            document["paths"]["/v1/notifications/unread-count"]["get"]["operationId"],
+            "get_v1_notifications_unread_count_legacy_alias"
+        );
     }
 
     #[test]

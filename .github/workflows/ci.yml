@@ -2427,6 +2427,19 @@ jobs:
             MARTY_UI_SHA=${{ github.event.pull_request.head.sha || github.sha }}
           provenance: false
           cache-from: type=gha,scope=marty-ui-rust-service-images
+      - name: Export the actual gateway contract without service startup
+        run: |
+          python3 scripts/check_gateway_openapi_export.py \
+            --image marty-gateway:ci --expected-version ci \
+            --expected-source "${{ github.event.pull_request.head.sha || github.sha }}" \
+            --protocol-revision "$MARTY_PROTOCOL_REF" \
+            --output "$RUNNER_TEMP/gateway-openapi.json"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: gateway-openapi-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/gateway-openapi.json
+          if-no-files-found: error
+          retention-days: 14
       - name: Build revocation-profile image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
         with:
