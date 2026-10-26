@@ -14,6 +14,7 @@ import uuid
 from installer_candidate_controller import ControllerLease
 from installer_candidate_vm_create import _read_record, _write
 from installer_candidate_vm_host_preflight import preflight, verify_consumed_intent, _raw_bytes_at
+from installer_candidate_vm_host_preflight import QUALIFICATION, ENGINEERING, purpose_policy
 import installer_candidate_vm_host_probe as host_probe
 import installer_candidate_vm_live_observe as live_vm
 import installer_acceptance_runner as acceptance
@@ -24,14 +25,37 @@ import installer_release as release
 import verify_installer_provenance as provenance
 
 
+def _schema(name: str, purpose: str) -> str:
+    purpose_policy(purpose)
+    return "elevenid.installer-vm-" + (
+        "engineering-" if purpose == ENGINEERING else "") + name + "/v1"
+
+
+def _scope(purpose: str) -> dict:
+    purpose_policy(purpose)
+    return (dict(purpose=ENGINEERING, qualification_eligible=False)
+            if purpose == ENGINEERING else {})
+
+
+def _bound_scope(record: dict, purpose: str) -> None:
+    expected = _scope(purpose)
+    release.require(all(record.get(key) == value and type(record.get(key)) is type(value)
+                        for key, value in expected.items())
+                    and (purpose == ENGINEERING
+                         or "purpose" not in record and "qualification_eligible" not in record),
+                    "VM signed exchange purpose differs")
+
+
 def exchange(*, client, registry: Path, authorization: Path, assets: Path,
              expected: dict, gh: Path, cosign: Path, descriptor: Path,
              upload_output: Path, grant_output: Path, controller_user_id: int,
              clock=time.time, verifier=provenance.command,
-             upload=uploader.upload, receive=receiver.receive) -> dict:
+             upload=uploader.upload, receive=receiver.receive,
+             purpose: str = QUALIFICATION) -> dict:
     """Verify, upload once, retrieve once, then reverify durable VM binding."""
     release.require(os.geteuid() == 0 and registry.is_absolute(),
                     "root controller registry required for signed exchange")
+    purpose_policy(purpose)
     nonce = expected["nonce"]
     ledger = registry / (nonce + ".json")
     context_file = registry / (nonce + ".context.json")
@@ -40,7 +64,8 @@ def exchange(*, client, registry: Path, authorization: Path, assets: Path,
         before = verify_consumed_intent(
             lease, registry, authorization=authorization, assets=assets,
             expected=expected, gh=gh, cosign=cosign, clock=clock,
-            verifier=verifier)
+            verifier=verifier, purpose=purpose)
+        _bound_scope(before, purpose)
         _write(lease.parent, context_file.name, expected)
         _write(lease.parent, target_file.name, before["target"])
         dispatch.registry_unchanged(lease.parent, registry)
@@ -77,7 +102,8 @@ def exchange(*, client, registry: Path, authorization: Path, assets: Path,
         after = verify_consumed_intent(
             lease, registry, authorization=authorization, assets=assets,
             expected=expected, gh=gh, cosign=cosign, clock=clock,
-            verifier=verifier)
+            verifier=verifier, purpose=purpose)
+        _bound_scope(after, purpose)
         release.require(after["receipt_sha256"] == before["receipt_sha256"]
                         and after["intent_sha256"] == before["intent_sha256"]
                         and after["target"] == before["target"]
@@ -86,14 +112,14 @@ def exchange(*, client, registry: Path, authorization: Path, assets: Path,
                         == expected and _read_record(lease.parent, target_file.name)[1]
                         == before["target"],
                         "consumed VM changed during signed exchange")
-    return dict(schema="elevenid.installer-vm-signed-exchange/v1",
+    return dict(schema=_schema("signed-exchange", purpose),
                 nonce=nonce, intent_sha256=before["intent_sha256"],
                 receipt_sha256=before["receipt_sha256"],
                 target=before["target"], ssh=before["ssh"],
                 upload_sha256=release.digest(release.encode(uploaded)),
                 grant_sha256=release.digest(release.encode(retrieved)),
                 verified_at=int(clock()), guest_dispatched=False,
-                acceptance=False)
+                acceptance=False, **_scope(purpose))
 
 
 def dispatch_once(*, registry: Path, runtime_parent: Path, vm_id: str,
@@ -106,10 +132,12 @@ def dispatch_once(*, registry: Path, runtime_parent: Path, vm_id: str,
                   invoke=dispatch.dispatch,
                   process_observer=live_vm.observe,
                   observe_installed=acceptance.observe_after_dispatch,
-                  execute=host_probe.command) -> dict:
+                  execute=host_probe.command,
+                  purpose: str = QUALIFICATION) -> dict:
     """Re-admit the same live VM and invoke the signed installer once."""
     release.require(os.geteuid() == 0 and registry.is_absolute(),
                     "root controller required for VM dispatch")
+    purpose_policy(purpose)
     nonce = expected["nonce"]
     ledger = registry / (nonce + ".json")
     context_file = registry / (nonce + ".context.json")
@@ -118,9 +146,11 @@ def dispatch_once(*, registry: Path, runtime_parent: Path, vm_id: str,
         bound = verify_consumed_intent(
             lease, registry, authorization=authorization, assets=assets,
             expected=expected, gh=gh, cosign=cosign, clock=clock,
-            verifier=verifier)
+            verifier=verifier, purpose=purpose)
+        _bound_scope(bound, purpose)
+        _bound_scope(exchange_result, purpose)
         release.require(exchange_result["schema"]
-                        == "elevenid.installer-vm-signed-exchange/v1"
+                        == _schema("signed-exchange", purpose)
                         and exchange_result["nonce"] == nonce
                         and exchange_result["intent_sha256"] == bound["intent_sha256"]
                         and exchange_result["receipt_sha256"] == bound["receipt_sha256"]
@@ -135,7 +165,7 @@ def dispatch_once(*, registry: Path, runtime_parent: Path, vm_id: str,
             final_observation_id=final_observation_id,
             authorization=authorization, assets=assets, expected=expected,
             gh=gh, cosign=cosign, clock=clock, verifier=verifier,
-            guest_probe=guest_probe)
+            guest_probe=guest_probe, purpose=purpose)
         release.require(fresh["target"] == bound["target"]
                         and fresh["ssh"] == bound["ssh"],
                         "post-grant VM differs from consumed target")
@@ -162,7 +192,8 @@ def dispatch_once(*, registry: Path, runtime_parent: Path, vm_id: str,
         rebound = verify_consumed_intent(
             lease, registry, authorization=authorization, assets=assets,
             expected=expected, gh=gh, cosign=cosign, clock=clock,
-            verifier=verifier)
+            verifier=verifier, purpose=purpose)
+        _bound_scope(rebound, purpose)
         release.require(rebound["intent_sha256"] == bound["intent_sha256"]
                         and rebound["receipt_sha256"] == bound["receipt_sha256"]
                         and rebound["target"] == bound["target"]
@@ -173,7 +204,7 @@ def dispatch_once(*, registry: Path, runtime_parent: Path, vm_id: str,
         release.require(preflight_record == fresh,
                         "fresh VM preflight changed before dispatch")
         approval_name = nonce + ".vm-dispatch-approval.json"
-        approval = dict(schema="elevenid.installer-vm-dispatch-approval/v1",
+        approval = dict(schema=_schema("dispatch-approval", purpose),
                         nonce=nonce, vm_id=vm_id,
                         installation_id=installation_id,
                         exchange_sha256=release.digest(release.encode(exchange_result)),
@@ -182,7 +213,7 @@ def dispatch_once(*, registry: Path, runtime_parent: Path, vm_id: str,
                         fresh_preflight_sha256=release.digest(preflight_raw),
                         target=bound["target"], ssh=bound["ssh"],
                         approved_at=int(clock()),
-                        installation_ready=False, acceptance=False)
+                        installation_ready=False, acceptance=False, **_scope(purpose))
         approval_raw = _write(lease.parent, approval_name, approval)
         dispatch.registry_unchanged(lease.parent, registry)
         release.require(_read_record(lease.parent, approval_name)[1] == approval
@@ -202,7 +233,7 @@ def dispatch_once(*, registry: Path, runtime_parent: Path, vm_id: str,
                 final_observation_id=final_id,
                 authorization=authorization, assets=assets, expected=expected,
                 gh=gh, cosign=cosign, clock=clock, verifier=verifier,
-                guest_probe=guest_probe)
+                guest_probe=guest_probe, purpose=purpose)
             release.require(current["target"] == bound["target"]
                             and current["ssh"] == bound["ssh"],
                             "VM changed before remote dispatch stage")
@@ -213,13 +244,13 @@ def dispatch_once(*, registry: Path, runtime_parent: Path, vm_id: str,
                             "VM remote dispatch admission is stale")
             stage_name = nonce + ".vm-dispatch-" + check_id + ".json"
             _write(lease.parent, stage_name, dict(
-                schema="elevenid.installer-vm-dispatch-stage/v1",
+                schema=_schema("dispatch-stage", purpose),
                 nonce=nonce, stage=stage, vm_id=vm_id,
                 approval_sha256=release.digest(approval_raw),
                 preflight_sha256=release.digest(stage_raw),
                 target=bound["target"], ssh=bound["ssh"],
                 observed_at=int(clock()), installation_ready=False,
-                acceptance=False))
+                acceptance=False, **_scope(purpose)))
             dispatch.registry_unchanged(lease.parent, registry)
             release.require(_read_record(lease.parent, stage_name)[1]["stage"] == stage
                             and _read_record(
@@ -260,7 +291,7 @@ def dispatch_once(*, registry: Path, runtime_parent: Path, vm_id: str,
                         and process["initial_guest_readiness_sha256"]
                         == fresh["initial_guest_readiness_sha256"],
                         "post-dispatch VM process differs")
-        post = dict(schema="elevenid.installer-vm-post-dispatch/v1",
+        post = dict(schema=_schema("post-dispatch", purpose),
                     nonce=nonce, vm_id=vm_id,
                     installation_id=installation_id,
                     approval_sha256=release.digest(approval_raw),
@@ -269,7 +300,7 @@ def dispatch_once(*, registry: Path, runtime_parent: Path, vm_id: str,
                     process_check_sha256=release.digest(process_raw),
                     command_returned_zero=command_error is None,
                     installation_ready=False, acceptance=False,
-                    observed_at=int(clock()))
+                    observed_at=int(clock()), **_scope(purpose))
         post_name = nonce + ".vm-post-dispatch.json"
         _write(lease.parent, post_name, post)
         dispatch.registry_unchanged(lease.parent, registry)
@@ -277,6 +308,12 @@ def dispatch_once(*, registry: Path, runtime_parent: Path, vm_id: str,
                         and _read_record(lease.parent, process_name)[0]
                         == process_raw,
                         "post-dispatch VM evidence changed")
+        if purpose == ENGINEERING:
+            # Trial evidence is never sent through the qualification checkpoint
+            # producer or its signing/upload route, including on a large host.
+            if command_error is not None:
+                raise command_error
+            return post
         output_name = nonce + ".installed-observations"
         os.mkdir(output_name, mode=0o700, dir_fd=lease.parent)
         os.fsync(lease.parent)
@@ -324,7 +361,7 @@ def dispatch_once(*, registry: Path, runtime_parent: Path, vm_id: str,
                 current = verify_consumed_intent(
                     lease, registry, authorization=authorization, assets=assets,
                     expected=expected, gh=gh, cosign=cosign, clock=clock,
-                    verifier=verifier)
+                    verifier=verifier, purpose=purpose)
                 release.require(current["intent_sha256"] == bound["intent_sha256"]
                                 and current["receipt_sha256"] == bound["receipt_sha256"]
                                 and current["target"] == bound["target"]

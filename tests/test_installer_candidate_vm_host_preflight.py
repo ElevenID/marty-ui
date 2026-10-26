@@ -188,8 +188,10 @@ def test_consume_rejects_replaced_vm_target_before_nonce(arranged):
                 cosign=args["cosign"], clock=args["clock"])
 
 
-def test_real_held_lease_consumes_exact_nonce_once(arranged):
+@pytest.mark.parametrize("purpose", [preflight.QUALIFICATION, preflight.ENGINEERING])
+def test_real_held_lease_consumes_exact_nonce_once(arranged, purpose):
     args, _, _, monkeypatch = arranged
+    args["purpose"] = purpose
     fixture = json.loads((Path(__file__).resolve().parents[1]
                           / "rust/crates/deployment-catalog/tests/fixtures/installer-candidate-records.json")
                          .read_text())
@@ -206,7 +208,14 @@ def test_real_held_lease_consumes_exact_nonce_once(arranged):
                       observation_id=FIRST_ID, preflight_record=record,
                       authorization=args["authorization"], assets=args["assets"],
                       expected=args["expected"], gh=args["gh"], cosign=args["cosign"],
-                      clock=args["clock"])
+                      clock=args["clock"], purpose=purpose)
+        other = (preflight.QUALIFICATION if purpose == preflight.ENGINEERING
+                 else preflight.ENGINEERING)
+        with pytest.raises(ValueError, match="preflight purpose differs"):
+            preflight.consume_preflight(
+                lease, args["registry"], args["runtime_parent"],
+                consumption_observation_id="55555555-5555-4555-8555-555555555555",
+                **dict(common, purpose=other))
         receipt = preflight.consume_preflight(
             lease, args["registry"], args["runtime_parent"],
             consumption_observation_id="55555555-5555-4555-8555-555555555555",
@@ -231,10 +240,19 @@ def test_real_held_lease_consumes_exact_nonce_once(arranged):
         checked = preflight.verify_consumed_intent(
             lease, args["registry"], authorization=args["authorization"],
             assets=args["assets"], expected=args["expected"], gh=args["gh"],
-            cosign=args["cosign"], clock=args["clock"])
+            cosign=args["cosign"], clock=args["clock"], purpose=purpose)
         assert checked["receipt_sha256"] == release.digest(receipt)
         assert checked["intent_sha256"] == release.digest(intent_bytes)
         assert checked["target"] == record["target"]
+        with pytest.raises(ValueError):
+            preflight.verify_consumed_intent(
+                lease, args["registry"], authorization=args["authorization"],
+                assets=args["assets"], expected=args["expected"], gh=args["gh"],
+                cosign=args["cosign"], clock=args["clock"], purpose=other)
+        if purpose == preflight.ENGINEERING:
+            assert intent["purpose"] == preflight.ENGINEERING
+            assert intent["qualification_eligible"] is False
+            assert "host_admission_passed" not in record
         original_bind_consumption = release.bind_controller_consumption
         evidence_paths = (
             args["registry"] / f"{VM_ID}.{FIRST_ID}.host-preflight.json",
@@ -254,7 +272,8 @@ def test_real_held_lease_consumes_exact_nonce_once(arranged):
                     preflight.verify_consumed_intent(
                         lease, args["registry"], authorization=args["authorization"],
                         assets=args["assets"], expected=args["expected"],
-                        gh=args["gh"], cosign=args["cosign"], clock=args["clock"])
+                        gh=args["gh"], cosign=args["cosign"], clock=args["clock"],
+                        purpose=purpose)
             finally:
                 evidence_path.write_bytes(original_bytes)
                 monkeypatch.setattr(release, "bind_controller_consumption",
@@ -274,6 +293,29 @@ def test_real_held_lease_consumes_exact_nonce_once(arranged):
         with pytest.raises(BlockingIOError):
             with ControllerLease(args["registry"]):
                 pass
+
+
+@pytest.mark.parametrize("purpose", [preflight.QUALIFICATION, preflight.ENGINEERING])
+def test_small_vm_preflight_retains_failed_production_capacity(arranged, purpose):
+    args, _, _, _ = arranged
+    value = host()
+    value.update(docker_memory_bytes=4 * 1024**3, guest_memory_bytes=4 * 1024**3)
+    value["predicates"]["capacity"] = False
+    raw = release.encode(value)
+    args.update(purpose=purpose, guest_probe=lambda *_args: raw)
+    with ControllerLease(args["registry"]) as lease:
+        if purpose == preflight.QUALIFICATION:
+            with pytest.raises(ValueError, match="qualification RAM unavailable"):
+                preflight.preflight(lease, **args)
+        else:
+            record = preflight.preflight(lease, **args)
+            assert record["schema"] == preflight.ENGINEERING_SCHEMA
+            assert record["engineering_admission_passed"] is True
+            assert record["qualification_eligible"] is False
+            assert record["production_capacity_passed"] is False
+            assert "host_admission_passed" not in record
+        assert preflight._raw_bytes_at(
+            lease.parent, f"{VM_ID}.{FIRST_ID}.host-observation.json") == raw
 
 
 def test_slow_intent_persistence_cannot_consume_stale_evidence(arranged):

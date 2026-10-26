@@ -19,12 +19,16 @@ from installer_candidate_vm_target import bind_target
 import installer_candidate_dispatch as dispatch
 import installer_candidate_receipt_upload as uploader
 import installer_candidate_vm_host_probe as host_probe
-from installer_acceptance_runner import host_admission
+from installer_host_admission import host_admission, engineering_host_admission
 import installer_release as release
 import verify_installer_provenance as provenance
 
 SCHEMA = "elevenid.installer-vm-host-preflight/v1"
 CONSUMPTION_INTENT_SCHEMA = "elevenid.installer-vm-consumption-intent/v1"
+QUALIFICATION = "qualification"
+ENGINEERING = "engineering-trial"
+ENGINEERING_SCHEMA = "elevenid.installer-vm-engineering-preflight/v1"
+ENGINEERING_INTENT_SCHEMA = "elevenid.installer-vm-engineering-consumption-intent/v1"
 CONSUMPTION_INTENT_FIELDS = {
     "schema", "nonce", "vm_id", "installation_id", "preflight_observation_id",
     "consumption_observation_id", "preflight_sha256",
@@ -32,6 +36,31 @@ CONSUMPTION_INTENT_FIELDS = {
     "authorization_sha256", "inventory_sha256", "context_sha256", "target",
     "consumed_at", "nonce_consumed", "dispatch_authorized",
 }
+
+
+def purpose_policy(purpose: str) -> tuple:
+    release.require(type(purpose) is str and purpose in (QUALIFICATION, ENGINEERING),
+                    "VM admission purpose invalid")
+    if purpose == ENGINEERING:
+        return (ENGINEERING_SCHEMA, ENGINEERING_INTENT_SCHEMA,
+                "engineering_admission_passed", engineering_host_admission)
+    return SCHEMA, CONSUMPTION_INTENT_SCHEMA, "host_admission_passed", host_admission
+
+
+def _record_purpose(record: dict, purpose: str) -> None:
+    schema, _, passed, _ = purpose_policy(purpose)
+    release.require(record["schema"] == schema and record.get(passed) is True,
+                    "VM preflight purpose differs")
+    if purpose == ENGINEERING:
+        release.require(record.get("purpose") == ENGINEERING
+                        and record.get("qualification_eligible") is False
+                        and "host_admission_passed" not in record,
+                        "VM engineering purpose differs")
+    else:
+        release.require("purpose" not in record
+                        and "engineering_admission_passed" not in record
+                        and "qualification_eligible" not in record,
+                        "VM qualification purpose differs")
 
 
 def _raw_at(parent: int, name: str, raw: bytes) -> None:
@@ -115,8 +144,10 @@ def preflight(lease: ControllerLease, registry: Path, runtime_parent: Path, *,
               vm_id: str, installation_id: str, observation_id: str,
               final_observation_id: str, authorization: Path, assets: Path,
               expected: dict, gh: Path, cosign: Path, clock=time.time,
-              verifier=provenance.command, guest_probe=host_probe.probe) -> dict:
+              verifier=provenance.command, guest_probe=host_probe.probe,
+              purpose: str = QUALIFICATION) -> dict:
     """Authenticate, probe and admit the exact same live VM without consuming."""
+    schema, _, passed, admit = purpose_policy(purpose)
     release.require(os.geteuid() == 0 and lease.registry == registry
                     and lease.parent is not None and lease.owner_pid == os.getpid(),
                     "root controller lease required for host preflight")
@@ -170,7 +201,7 @@ def preflight(lease: ControllerLease, registry: Path, runtime_parent: Path, *,
                     and first_bound["initial_guest_readiness_sha256"]
                     == final_bound["initial_guest_readiness_sha256"],
                     "VM target changed during host probe")
-    host_admission(raw, final_bound["target"]["engine_id"])
+    admitted = admit(raw, final_bound["target"]["engine_id"])
     release.require(0 <= int(clock()) - probe_finished_at <= 60,
                     "VM host measurement is stale")
     release.bind_candidate_authorization(
@@ -185,7 +216,7 @@ def preflight(lease: ControllerLease, registry: Path, runtime_parent: Path, *,
     published_at = int(clock())
     release.require(0 <= published_at - probe_finished_at <= 60,
                     "VM host measurement is stale")
-    record = dict(schema=SCHEMA, vm_id=vm_id,
+    record = dict(schema=schema, vm_id=vm_id,
                   installation_id=installation_id, target=final_bound["target"],
                   ssh=final_bound["ssh"],
                   provisioning_sha256=final_bound["provisioning_sha256"],
@@ -200,8 +231,12 @@ def preflight(lease: ControllerLease, registry: Path, runtime_parent: Path, *,
                   started_at=started_at, probe_started_at=probe_started_at,
                   probe_finished_at=probe_finished_at,
                   observed_at=published_at,
-                  host_admission_passed=True, nonce_consumed=False,
+                  nonce_consumed=False,
                   qualified=False, dispatch_authorized=False)
+    record[passed] = True
+    if purpose == ENGINEERING:
+        record.update(purpose=ENGINEERING, qualification_eligible=False,
+                      production_capacity_passed=admitted["predicates"]["capacity"])
     _write(lease.parent, vm_id + "." + observation_id + ".host-preflight.json",
            record)
     _same_path(registry, lease.parent, dispatch._directory)
@@ -213,18 +248,20 @@ def consume_preflight(lease: ControllerLease, registry: Path, runtime_parent: Pa
                       consumption_observation_id: str, preflight_record: dict,
                       authorization: Path, assets: Path, expected: dict,
                       gh: Path, cosign: Path, clock=time.time,
-                      verifier=provenance.command) -> bytes:
+                      verifier=provenance.command,
+                      purpose: str = QUALIFICATION) -> bytes:
     """Rebind a fresh live VM and durably consume its one candidate nonce."""
+    _, intent_schema, _, admit = purpose_policy(purpose)
     release.require(os.geteuid() == 0 and lease.registry == registry
                     and lease.parent is not None and lease.owner_pid == os.getpid(),
                     "root controller lease required for consumption")
     _same_path(registry, lease.parent, dispatch._directory)
     name = vm_id + "." + observation_id + ".host-preflight.json"
     preflight_raw, persisted = _read_record(lease.parent, name)
-    release.require(persisted == preflight_record and persisted["schema"] == SCHEMA
+    _record_purpose(persisted, purpose)
+    release.require(persisted == preflight_record
                     and persisted["vm_id"] == vm_id
                     and persisted["installation_id"] == installation_id
-                    and persisted["host_admission_passed"] is True
                     and persisted["nonce_consumed"] is False
                     and persisted["qualified"] is False
                     and persisted["dispatch_authorized"] is False,
@@ -238,7 +275,11 @@ def consume_preflight(lease: ControllerLease, registry: Path, runtime_parent: Pa
     release.require(release.digest(raw) == persisted["host_observation_sha256"],
                     "VM host evidence differs")
     _unchanged_raw(lease.parent, raw_name, raw)
-    host_admission(raw, persisted["target"]["engine_id"])
+    admitted = admit(raw, persisted["target"]["engine_id"])
+    if purpose == ENGINEERING:
+        release.require(persisted["production_capacity_passed"]
+                        is admitted["predicates"]["capacity"],
+                        "VM engineering capacity record differs")
     a, i = uploader.authenticate(authorization, assets / "installer-inventory.json",
                                  assets, gh, cosign, runner=verifier)
     release.bind_candidate_authorization(a, i, expected=expected, now=int(clock()))
@@ -287,7 +328,7 @@ def consume_preflight(lease: ControllerLease, registry: Path, runtime_parent: Pa
     release.require(0 <= consumed_at - persisted["probe_finished_at"] <= 60,
                     "VM host measurement is stale")
     intent_name = expected["nonce"] + ".vm-consumption-intent.json"
-    intent = dict(schema=CONSUMPTION_INTENT_SCHEMA, nonce=expected["nonce"],
+    intent = dict(schema=intent_schema, nonce=expected["nonce"],
                   vm_id=vm_id, installation_id=installation_id,
                   preflight_observation_id=observation_id,
                   consumption_observation_id=consumption_observation_id,
@@ -299,6 +340,8 @@ def consume_preflight(lease: ControllerLease, registry: Path, runtime_parent: Pa
                   context_sha256=release.candidate_context_sha256(expected),
                   target=target, consumed_at=consumed_at,
                   nonce_consumed=False, dispatch_authorized=False)
+    if purpose == ENGINEERING:
+        intent.update(purpose=ENGINEERING, qualification_eligible=False)
     _write(lease.parent, intent_name, intent)
     _same_path(registry, lease.parent, dispatch._directory)
     release.require(_read_record(lease.parent, intent_name)[1] == intent
@@ -321,8 +364,10 @@ def consume_preflight(lease: ControllerLease, registry: Path, runtime_parent: Pa
 def verify_consumed_intent(lease: ControllerLease, registry: Path, *,
                            authorization: Path, assets: Path, expected: dict,
                            gh: Path, cosign: Path, clock=time.time,
-                           verifier=provenance.command) -> dict:
+                           verifier=provenance.command,
+                           purpose: str = QUALIFICATION) -> dict:
     """Prove a durable nonce ledger matches its exact controller VM evidence."""
+    _, intent_schema, _, admit = purpose_policy(purpose)
     release.require(os.geteuid() == 0 and lease.registry == registry
                     and lease.parent is not None and lease.owner_pid == os.getpid(),
                     "root controller lease required for consumed VM verification")
@@ -334,8 +379,14 @@ def verify_consumed_intent(lease: ControllerLease, registry: Path, *,
     nonce = expected["nonce"]
     intent_raw, intent = _read_record(
         lease.parent, nonce + ".vm-consumption-intent.json")
-    release.exact(intent, CONSUMPTION_INTENT_FIELDS, "VM consumption intent")
-    release.require(intent["schema"] == CONSUMPTION_INTENT_SCHEMA
+    purpose_fields = {"purpose", "qualification_eligible"} if purpose == ENGINEERING else set()
+    release.exact(intent, CONSUMPTION_INTENT_FIELDS | purpose_fields,
+                  "VM consumption intent")
+    if purpose == ENGINEERING:
+        release.require(intent["purpose"] == ENGINEERING
+                        and intent["qualification_eligible"] is False,
+                        "VM consumption purpose differs")
+    release.require(intent["schema"] == intent_schema
                     and intent["nonce"] == nonce
                     and intent["nonce_consumed"] is False
                     and intent["dispatch_authorized"] is False
@@ -355,16 +406,15 @@ def verify_consumed_intent(lease: ControllerLease, registry: Path, *,
         lease.parent, vm_id + ".pre-dispatch-" + consumption_id + ".json")
     host_raw = _raw_bytes_at(
         lease.parent, vm_id + "." + preflight_id + ".host-observation.json")
+    _record_purpose(preflight_record, purpose)
     release.require(release.digest(preflight_raw) == intent["preflight_sha256"]
                     and release.digest(observation_raw)
                     == intent["consumption_observation_sha256"]
                     and release.digest(host_raw) == intent["host_observation_sha256"]
-                    and preflight_record["schema"] == SCHEMA
                     and preflight_record["vm_id"] == vm_id
                     and preflight_record["installation_id"]
                     == intent["installation_id"]
                     and preflight_record["target"] == intent["target"]
-                    and preflight_record["host_admission_passed"] is True
                     and preflight_record["nonce_consumed"] is False
                     and preflight_record["qualified"] is False
                     and preflight_record["dispatch_authorized"] is False
@@ -377,7 +427,11 @@ def verify_consumed_intent(lease: ControllerLease, registry: Path, *,
                     and observation_record["vm_id"] == vm_id
                     and observation_record["observation_id"] == consumption_id,
                     "VM consumption evidence differs")
-    host_admission(host_raw, intent["target"]["engine_id"])
+    admitted = admit(host_raw, intent["target"]["engine_id"])
+    if purpose == ENGINEERING:
+        release.require(preflight_record["production_capacity_passed"]
+                        is admitted["predicates"]["capacity"],
+                        "VM engineering capacity record differs")
     _unchanged_raw(lease.parent,
                    vm_id + "." + preflight_id + ".host-observation.json", host_raw)
     ledger_raw, ledger = _read_record(lease.parent, nonce + ".json")
@@ -401,8 +455,11 @@ def verify_consumed_intent(lease: ControllerLease, registry: Path, *,
             lease.parent, vm_id + "." + preflight_id + ".host-observation.json")
         == host_raw,
         "VM consumed nonce evidence changed")
-    return dict(intent_sha256=release.digest(intent_raw),
+    result = dict(intent_sha256=release.digest(intent_raw),
                 receipt_sha256=release.digest(ledger_raw), target=intent["target"],
                 ssh=preflight_record["ssh"],
                 nonce=nonce, verified_at=int(clock()),
                 guest_dispatched=False, acceptance=False)
+    if purpose == ENGINEERING:
+        result.update(purpose=ENGINEERING, qualification_eligible=False)
+    return result

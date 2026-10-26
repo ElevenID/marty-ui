@@ -1002,3 +1002,22 @@ guest, ledger, creation receipt and incomplete checkpoint for recovery. A 4 GiB
 guest may test this machinery only as an engineering trial; release acceptance
 still enforces the existing 32 GiB RAM and 20 GiB free-space predicate until a
 complete measured installed journey and policy change justify another profile.
+
+The controller APIs now support an explicit `purpose="engineering-trial"` on
+`preflight`, `consume_preflight`, `verify_consumed_intent`, `exchange` and
+`dispatch_once`. Supply the same purpose at every boundary. The default remains
+qualification. Engineering records use distinct schemas, retain the actual RAM
+and production-capacity predicate, and persist `qualification_eligible=false`
+before nonce consumption. They preserve the existing disk-space, clean-Docker,
+credential, signed-source, nonce, process, SSH and freshness requirements.
+Qualification readers refuse engineering records even on a larger host.
+
+For this trial use the normal signed candidate grant workflow with `execute=false`
+and a new installation UUID and nonce. The native candidate remains unchanged.
+Engineering dispatch writes its own false-authority post-dispatch record and
+returns or rethrows the one attempt's error before the qualification-checkpoint
+producer. It does not create or upload an acceptance checkpoint. Preserve native
+state after an incomplete exit; collect bounded resource observations and inspect
+the same installation rather than retrying provisioning. The engineering API
+path still requires Linux behavioral validation and an actual signed installation
+trial; its existence is not evidence that a 4 GiB installation succeeds.

@@ -49,8 +49,11 @@ def arranged(tmp_path, monkeypatch):
     return args, verified, calls
 
 
-def test_exchange_releases_lease_for_transport_and_reverifies(arranged):
+@pytest.mark.parametrize("purpose", [exchange.QUALIFICATION, exchange.ENGINEERING])
+def test_exchange_releases_lease_for_transport_and_reverifies(arranged, purpose):
     args, verified, calls = arranged
+    args["purpose"] = purpose
+    verified.update(exchange._scope(purpose))
     def upload(**kwargs):
         calls.append("upload")
         with ControllerLease(args["registry"]):
@@ -71,6 +74,9 @@ def test_exchange_releases_lease_for_transport_and_reverifies(arranged):
     assert calls == ["verify", "upload", "receive", "verify"]
     assert result["guest_dispatched"] is False and result["acceptance"] is False
     assert result["intent_sha256"] == verified["intent_sha256"]
+    assert result["schema"] == exchange._schema("signed-exchange", purpose)
+    if purpose == exchange.ENGINEERING:
+        assert result["purpose"] == purpose and result["qualification_eligible"] is False
 
 
 def test_uncertain_upload_stops_without_retrieval_or_retry(arranged):
@@ -106,14 +112,20 @@ def test_mismatched_signed_grant_refuses_completion(arranged):
     assert calls == ["verify", "upload", "receive"]
 
 
-@pytest.mark.parametrize("incomplete,observer_failure,replace_output", [
-    (False, False, False), (True, False, False),
-    (False, True, False), (True, True, False),
-    (False, False, True)])
+@pytest.mark.parametrize("incomplete,observer_failure,replace_output,purpose", [
+    (False, False, False, exchange.QUALIFICATION),
+    (True, False, False, exchange.QUALIFICATION),
+    (False, True, False, exchange.QUALIFICATION),
+    (True, True, False, exchange.QUALIFICATION),
+    (False, False, True, exchange.QUALIFICATION),
+    (False, False, False, exchange.ENGINEERING),
+    (True, False, False, exchange.ENGINEERING),
+    (False, True, False, exchange.ENGINEERING)])
 def test_post_grant_same_vm_dispatch_keeps_lease(arranged, monkeypatch,
                                                   incomplete, observer_failure,
-                                                  replace_output):
+                                                  replace_output, purpose):
     args, verified, calls = arranged
+    verified.update(exchange._scope(purpose))
     registry = args["registry"]
     control = registry / "control"
     control.mkdir(mode=0o700)
@@ -136,6 +148,7 @@ def test_post_grant_same_vm_dispatch_keeps_lease(arranged, monkeypatch,
     vm_id = verified["target"]["guest_id"]
     observation_id = "33333333-3333-4333-8333-333333333333"
     def preflight(lease, _registry, _runtime, **kwargs):
+        assert kwargs["purpose"] == purpose
         calls.append("fresh")
         exchange._write(lease.parent,
                         vm_id + "." + kwargs["observation_id"] + ".host-preflight.json",
@@ -164,12 +177,12 @@ def test_post_grant_same_vm_dispatch_keeps_lease(arranged, monkeypatch,
         if incomplete:
             raise ValueError("native startup recorded; acceptance incomplete")
         return dict(installation_ready=False, acceptance_report=False)
-    signed = dict(schema="elevenid.installer-vm-signed-exchange/v1",
+    signed = dict(schema=exchange._schema("signed-exchange", purpose),
                   nonce=args["expected"]["nonce"],
                   intent_sha256=verified["intent_sha256"],
                   receipt_sha256=verified["receipt_sha256"],
                   target=verified["target"], ssh=verified["ssh"],
-                  guest_dispatched=False, acceptance=False)
+                  guest_dispatched=False, acceptance=False, **exchange._scope(purpose))
     def process_observer(_registry, _runtime, *, vm_id, process_check_id,
                          lease):
         calls.append("process")
@@ -184,6 +197,7 @@ def test_post_grant_same_vm_dispatch_keeps_lease(arranged, monkeypatch,
                         record)
         return record
     def observe_installed(**kwargs):
+        assert purpose == exchange.QUALIFICATION, "engineering reached acceptance producer"
         calls.append("installed")
         assert kwargs["checkpoint"]["acceptance"] is False
         assert kwargs["checkpoint"]["dispatch"] == (
@@ -209,7 +223,14 @@ def test_post_grant_same_vm_dispatch_keeps_lease(arranged, monkeypatch,
                   assets=args["assets"], expected=args["expected"], gh=args["gh"],
                   cosign=args["cosign"], grants=registry / "signed-grant",
                   ssh=Path("/usr/bin/ssh"), scp=Path("/usr/bin/scp"),
-                  clock=args["clock"])
+                  clock=args["clock"], purpose=purpose)
+    other = (exchange.QUALIFICATION if purpose == exchange.ENGINEERING
+             else exchange.ENGINEERING)
+    with pytest.raises(ValueError, match="purpose differs"):
+        exchange.dispatch_once(**dict(common, purpose=other), invoke=invoke,
+                               process_observer=process_observer,
+                               observe_installed=observe_installed)
+    calls.clear()
     if observer_failure:
         with pytest.raises(OSError, match="VM observation failed"):
             exchange.dispatch_once(**common, invoke=invoke,
@@ -233,7 +254,8 @@ def test_post_grant_same_vm_dispatch_keeps_lease(arranged, monkeypatch,
     assert calls[:7] == ["verify", "fresh", "verify", "invoke", "fresh",
                         "fresh", "process"]
     assert calls.count("invoke") == 1
-    assert calls.count("installed") == (0 if observer_failure else 1)
+    assert calls.count("installed") == (
+        0 if observer_failure or purpose == exchange.ENGINEERING else 1)
     post_path = registry / (args["expected"]["nonce"] +
                             ".vm-post-dispatch.json")
     if observer_failure:
@@ -243,9 +265,18 @@ def test_post_grant_same_vm_dispatch_keeps_lease(arranged, monkeypatch,
         assert post["command_returned_zero"] is (not incomplete)
         assert post["installation_ready"] is False
         assert post["acceptance"] is False
+        assert post["schema"] == exchange._schema("post-dispatch", purpose)
         output = registry / (args["expected"]["nonce"] +
                              ".installed-observations")
-        if replace_output:
+        if purpose == exchange.ENGINEERING:
+            assert post["purpose"] == purpose
+            assert post["qualification_eligible"] is False
+            assert not output.exists()
+            with pytest.raises(ValueError):
+                exchange.acceptance.validate(
+                    post, context=args["expected"], target=verified["target"],
+                    authorization=b"authorization", receipt=b"receipt", inventory=b"inventory")
+        elif replace_output:
             assert not (output / exchange.acceptance.NAME).exists()
             assert (output.with_name(output.name + ".held") /
                     "vm-binding.json").is_file()
