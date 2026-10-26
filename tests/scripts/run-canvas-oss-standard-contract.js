@@ -2293,6 +2293,7 @@ async function main() {
 module.exports = {
   parseArgs,
   loginCanvas,
+  createOauthDeveloperKey,
   retireCanvasApplication,
   retireCanvasSetupFixtures,
   CanvasClient,

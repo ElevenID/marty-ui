@@ -233,3 +233,20 @@ test('an already revoked credential uses explicit review recovery without changi
     `/v1/integrations/canvas/evidence-policy-reviews/${f.review.id}/reconcile-revocation`);
   assert.deepEqual(f.state.reviews, [f.unrelated]);
 });
+
+test('OAuth-key-only cleanup does not invent or delete a learner', async () => {
+  const { input, calls } = fixture();
+  input.owned.resources = { oauthDeveloperKey: '50' };
+  delete input.owned.learnerEmail;
+  const result = await retireOwnedCanvasFixtures(input);
+  assert.equal(result.complete, true);
+  assert.deepEqual(result.resources, [{ kind: 'oauthDeveloperKey', id: '50', state: 'RETIRED' }]);
+  assert.equal(calls.filter(call => call.method === 'DELETE').length, 0);
+  assert.equal(calls.filter(call => call.method === 'UI_DELETE').length, 1);
+});
+test('a journaled learner still requires its genuine run nonce before mutation', async () => {
+  const { input, calls } = fixture();
+  delete input.owned.learnerEmail;
+  await assert.rejects(retireOwnedCanvasFixtures(input), /run-owned synthetic learner/);
+  assert.equal(calls.filter(call => call.method === 'DELETE' || call.method === 'UI_DELETE').length, 0);
+});
