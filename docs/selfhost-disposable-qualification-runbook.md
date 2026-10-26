@@ -1032,3 +1032,14 @@ held lease, releases that lease for the existing signed exchange, persists the
 exchange result exclusively, then invokes one dispatch. A failed or incomplete
 command retains all owned state and exits nonzero; invoking it again cannot
 resume the same consumed nonce. Run `--help` for the explicit path arguments.
+
+During the one attempt, run the reviewed `installer_resource_probe.py` through
+the same pinned SSH identity and retain its source digest and raw JSONL with the
+VM/installation binding. It samples memory, swap, OOM counters, memory pressure
+and the `/var/lib/docker` filesystem without reading credentials or application
+data. Independently confirm that this is the admitted Engine's data filesystem;
+the probe alone does not establish its DockerRootDir. Send `stop\n` or close
+stdin for a final sample. The probe is bounded to 30 minutes, 362 records of at
+most 2048 bytes, and a five-second watchdog grace. Exit 124 or any missing final
+record means incomplete observation; preserve partial output instead of claiming
+that no resource failure occurred. Resource samples cannot establish acceptance.
