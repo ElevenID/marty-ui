@@ -122,6 +122,10 @@ def qmp(socket_path: Path, disk: Path, *, pid: int, uid: int) -> None:
                             and matching[0].get("ro") is False, "VM disk differs")
 
 
+class DiskNotOpenedYet(ValueError):
+    """QEMU has not opened its selected disk during initial startup."""
+
+
 def held_writable_disk(process: Path, disk: Path, expected: os.stat_result) -> int:
     """Require a live process FD to hold this exact writable disk inode."""
     fd_root = process / "fd"
@@ -157,6 +161,8 @@ def held_writable_disk(process: Path, disk: Path, expected: os.stat_result) -> i
                         and os.readlink(fd_path) == str(disk),
                         "VM does not hold the selected writable disk")
         matches.append(int(name))
+    if not matches:
+        raise DiskNotOpenedYet("VM writable disk descriptor not open yet")
     release.require(len(matches) == 1, "VM writable disk descriptor differs")
     return matches[0]
 

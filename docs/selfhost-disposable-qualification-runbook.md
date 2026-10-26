@@ -930,3 +930,75 @@ After the native application startup has written a complete locked local receipt
 The controller's incomplete acceptance checkpoint v3 may retain `installer-status-observation.json`, `installer-trust-info-observation.json` and a separate `installer-live-tls-observation.json` after candidate dispatch. It invokes the pinned operator over the already authenticated SSH route, binds the acceptance-only journal and guest nonce-consumption digest to the exact candidate, and requires identical status bytes before and after the public trust export. The checkpoint hashes the status and trust records only when native inspection succeeds; otherwise it records `trust_inspection: unavailable`. A separate pinned probe can observe live local HTTPS and OIDC discovery. The status and trust exports remain historical read-only startup/certificate observations; the HTTPS probe does not prove browser trust, login or a completed installed journey. None of these records can satisfy the blocked installed-journey cases.
 
 For acceptance-only published replay, dispatch invokes the authenticated guest bootstrap, which acquires the operator from GitHub before executing it. Native `fetch_published_inputs` then requires a signed published-phase authorization, anonymously downloads the exact version's inventory, four installer payloads and their ten signature/provenance sidecars over the fixed GitHub release transport, and binds original download receipts to the private bytes used for verification. The bootstrap persists an acquisition intent and receipts; failed attempts retain partial files. This implemented path remains unqualified until a clean host completes the actual published installed journey. It grants no admission, installed acceptance or Ready state.
+
+### Fresh VM authority and controller ordering (pending implementation)
+
+An independently trusted Linux controller must create each acceptance guest from an
+authenticated, digest-pinned base image. Before launch it records an exclusive
+fresh overlay, exact backing image, seed/configuration hashes, and a durable
+creation receipt outside the guest. The reviewed QEMU and image tools, fixed
+loopback-only SSH/QMP arguments, dedicated VM identity, and a host key established
+by the controlled seed belong to that receipt. Neither a VM-owned `vm.json` nor
+an earlier diagnostic observation is proof of creation or approval. The guest
+must have no source checkout, personal credentials, or cached application images.
+
+The authoritative provisioner must keep two distinct custody roots. A root-owned
+`0700` controller directory holds launch intent/receipt, `vm.json`, the PID record,
+the controller SSH private key, and the approved `known_hosts`; QEMU must have no
+traverse access to it. A separate runtime directory grants a dedicated unprivileged
+QEMU identity only the writable overlay, private QMP socket, and read-only seed
+media it needs. The controller binds both directory device/inode identities,
+their paths, the exact disk and QMP paths, and the QEMU UID/GID in a new closed
+record schema. The existing diagnostic observer's VM-directory-owned controller
+key layout cannot authorize a release; changing only the key file's owner inside
+a QEMU-writable directory would still let that process replace its pathname.
+Existing diagnostic observations and v1 approvals remain historical evidence,
+not silently upgraded authority.
+
+Seeding and launching are separate durable transitions. Under the controller
+lease, verify the v2 creation receipt and pristine overlay, persist an exclusive
+seed intent, generate dedicated controller and guest host keys, derive the pinned
+host entry from the generated public key before first contact, and build a fixed
+cloud-init seed. The seed is secret-bearing: hold private directories and files,
+use exclusive no-follow writes, hash its bytes and configuration into a completion
+receipt, and flush files and directories. The seed policy must fix guest account,
+package source and exact package versions; successful network installation alone
+does not prove reproducible guest provenance. Reject a repeated or uncertain seed
+attempt without overwriting its evidence.
+
+Before spawning QEMU, verify unchanged seed and overlay, reserve the selected
+loopback SSH port, bind the reviewed executable and exact closed arguments, and
+persist an exclusive launch intent. Run QEMU under the dedicated UID with a clean
+environment, no host shares or public listeners, and a read-only seed. A spawn
+failure or crash before a PID receipt remains uncertain; preserve it and never
+retry automatically. Authenticate the live process executable, PID/start time,
+arguments, held writable disk, QMP peer, and pinned SSH host key before writing
+a launch observation. Wait boundedly for cloud-init and Docker readiness, record
+the actual installed package versions and Engine identity, and keep
+`qualified=false` and `dispatch_authorized=false` until the later acceptance
+gates prove otherwise. A 4 GiB boot remains engineering evidence only.
+
+Provisioning may precede the acceptance invocation. After the invocation issues
+its initial signed authorization, the controller binds that exact authorization,
+candidate context, creation receipt, and preallocated installation UUID into a
+short-lived approval. Under `ControllerLease` it observes initial-empty Docker,
+binds the approval to the exact observation bytes, and consumes the nonce once.
+The controller durably links approval, initial observation, and ledger receipt
+hashes. It releases the lease before uploading the exact consumption receipt,
+because the uploader takes the registry lock itself.
+
+Only after the same invocation returns its complete signed execution grant does
+the controller reacquire the lease and make the exclusive pre-dispatch observation.
+It authenticates the earlier observation and approval, rechecks the live process,
+QMP peer, writable disk inode/backing chain, SSH host key, Docker Engine and
+expiry, and binds the new observation immediately before dispatch. Dispatch takes
+the registry lock separately. Waiting for signatures before this observation
+avoids spending its short freshness window on an external grant wait.
+
+A consumed nonce is never regenerated after an uncertain upload, grant, launch,
+or dispatch. Changed VM/process/disk/Engine/SSH identity stops the transaction;
+replacement requires a new reconciled authorization and guest. Preserve the
+guest, ledger, creation receipt and incomplete checkpoint for recovery. A 4 GiB
+guest may test this machinery only as an engineering trial; release acceptance
+still enforces the existing 32 GiB RAM and 20 GiB free-space predicate until a
+complete measured installed journey and policy change justify another profile.

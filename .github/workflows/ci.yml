@@ -2999,6 +2999,40 @@ jobs:
           )):
               raise SystemExit("root-owned TLS cases did not all execute and pass")
           PY
+      - name: Exercise root-owned fresh VM creation contracts
+        if: needs.changes.outputs.rollback_test_only != 'true' && needs.changes.outputs.k8s_policy_test_only != 'true' && needs.changes.outputs.didcomm_release_test_only != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends qemu-utils ubuntu-keyring cloud-image-utils openssh-client cloud-init
+          stat -c 'Ubuntu cloud-image keyring: %F uid=%u mode=%a links=%h bytes=%s' /usr/share/keyrings/ubuntu-cloudimage-keyring.gpg
+          dpkg-query -W -f='ubuntu-keyring version: ${Version}\n' ubuntu-keyring
+          python_bin="$(command -v python)"
+          report="$RUNNER_TEMP/installer-root-vm-creation.xml"
+          sudo env PYTHONPATH=packages PYTHONDONTWRITEBYTECODE=1 "$python_bin" -m pytest -q \
+            tests/test_installer_candidate_vm_create.py \
+            tests/test_installer_candidate_vm_runtime.py \
+            tests/test_installer_candidate_vm_seed.py \
+            tests/test_installer_candidate_vm_launch.py \
+            tests/test_installer_candidate_vm_live_observe.py -p no:cacheprovider --junitxml="$report"
+          python - "$report" <<'PY'
+          import sys
+          import xml.etree.ElementTree as ET
+
+          suite = ET.parse(sys.argv[1]).getroot()
+          if suite.tag == "testsuites":
+              suite = suite.find("testsuite")
+          if suite is None or suite.tag != "testsuite":
+              raise SystemExit("root-owned VM creation test report is missing")
+          cases = list(suite.iter("testcase"))
+          if len(cases) != 52 or any(
+              int(suite.attrib.get(name, "-1")) != expected
+              for name, expected in (("tests", 52), ("skipped", 0),
+                                     ("failures", 0), ("errors", 0))
+          ):
+              raise SystemExit("root-owned VM creation cases did not all execute and pass")
+          PY
       - name: Configure the pinned containerd image store
         if: needs.changes.outputs.rollback_test_only != 'true' && needs.changes.outputs.k8s_policy_test_only != 'true' && needs.changes.outputs.didcomm_release_test_only != 'true'
         uses: docker/setup-docker-action@2bf61fb9464cc67f0cbdeabed6aa0380accd1c70 # v5.5.0
