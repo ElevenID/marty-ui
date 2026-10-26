@@ -25,6 +25,13 @@ import verify_installer_provenance as provenance
 
 SCHEMA = "elevenid.installer-vm-host-preflight/v1"
 CONSUMPTION_INTENT_SCHEMA = "elevenid.installer-vm-consumption-intent/v1"
+CONSUMPTION_INTENT_FIELDS = {
+    "schema", "nonce", "vm_id", "installation_id", "preflight_observation_id",
+    "consumption_observation_id", "preflight_sha256",
+    "consumption_observation_sha256", "host_observation_sha256",
+    "authorization_sha256", "inventory_sha256", "context_sha256", "target",
+    "consumed_at", "nonce_consumed", "dispatch_authorized",
+}
 
 
 def _raw_at(parent: int, name: str, raw: bytes) -> None:
@@ -280,6 +287,8 @@ def consume_preflight(lease: ControllerLease, registry: Path, runtime_parent: Pa
     intent_name = expected["nonce"] + ".vm-consumption-intent.json"
     intent = dict(schema=CONSUMPTION_INTENT_SCHEMA, nonce=expected["nonce"],
                   vm_id=vm_id, installation_id=installation_id,
+                  preflight_observation_id=observation_id,
+                  consumption_observation_id=consumption_observation_id,
                   preflight_sha256=release.digest(preflight_raw),
                   consumption_observation_sha256=release.digest(observation_raw),
                   host_observation_sha256=release.digest(raw),
@@ -305,3 +314,92 @@ def consume_preflight(lease: ControllerLease, registry: Path, runtime_parent: Pa
                          disk_id=target["disk_id"], engine_id=target["engine_id"],
                          installation_id=target["installation_id"],
                          consumed_at=consumed_at, now=fresh_now)
+
+
+def verify_consumed_intent(lease: ControllerLease, registry: Path, *,
+                           authorization: Path, assets: Path, expected: dict,
+                           gh: Path, cosign: Path, clock=time.time,
+                           verifier=provenance.command) -> dict:
+    """Prove a durable nonce ledger matches its exact controller VM evidence."""
+    release.require(os.geteuid() == 0 and lease.registry == registry
+                    and lease.parent is not None and lease.owner_pid == os.getpid(),
+                    "root controller lease required for consumed VM verification")
+    _same_path(registry, lease.parent, dispatch._directory)
+    a, i = uploader.authenticate(authorization, assets / "installer-inventory.json",
+                                 assets, gh, cosign, runner=verifier)
+    now = int(clock())
+    release.bind_candidate_authorization(a, i, expected=expected, now=now)
+    nonce = expected["nonce"]
+    intent_raw, intent = _read_record(
+        lease.parent, nonce + ".vm-consumption-intent.json")
+    release.exact(intent, CONSUMPTION_INTENT_FIELDS, "VM consumption intent")
+    release.require(intent["schema"] == CONSUMPTION_INTENT_SCHEMA
+                    and intent["nonce"] == nonce
+                    and intent["nonce_consumed"] is False
+                    and intent["dispatch_authorized"] is False
+                    and intent["authorization_sha256"] == release.digest(a)
+                    and intent["inventory_sha256"] == release.digest(i)
+                    and intent["context_sha256"]
+                    == release.candidate_context_sha256(expected),
+                    "VM consumption intent candidate differs")
+    release.exact(intent["target"], dispatch.TARGET_FIELDS,
+                  "VM consumption intent target")
+    vm_id = intent["vm_id"]
+    preflight_id = intent["preflight_observation_id"]
+    consumption_id = intent["consumption_observation_id"]
+    preflight_raw, preflight_record = _read_record(
+        lease.parent, vm_id + "." + preflight_id + ".host-preflight.json")
+    observation_raw, observation_record = _read_record(
+        lease.parent, vm_id + ".pre-dispatch-" + consumption_id + ".json")
+    host_raw = _raw_bytes_at(
+        lease.parent, vm_id + "." + preflight_id + ".host-observation.json")
+    release.require(release.digest(preflight_raw) == intent["preflight_sha256"]
+                    and release.digest(observation_raw)
+                    == intent["consumption_observation_sha256"]
+                    and release.digest(host_raw) == intent["host_observation_sha256"]
+                    and preflight_record["schema"] == SCHEMA
+                    and preflight_record["vm_id"] == vm_id
+                    and preflight_record["installation_id"]
+                    == intent["installation_id"]
+                    and preflight_record["target"] == intent["target"]
+                    and preflight_record["host_admission_passed"] is True
+                    and preflight_record["nonce_consumed"] is False
+                    and preflight_record["qualified"] is False
+                    and preflight_record["dispatch_authorized"] is False
+                    and preflight_record["authorization_sha256"] == release.digest(a)
+                    and preflight_record["inventory_sha256"] == release.digest(i)
+                    and preflight_record["context_sha256"]
+                    == release.candidate_context_sha256(expected)
+                    and preflight_record["host_observation_sha256"]
+                    == intent["host_observation_sha256"]
+                    and observation_record["vm_id"] == vm_id
+                    and observation_record["observation_id"] == consumption_id,
+                    "VM consumption evidence differs")
+    host_admission(host_raw, intent["target"]["engine_id"])
+    _unchanged_raw(lease.parent,
+                   vm_id + "." + preflight_id + ".host-observation.json", host_raw)
+    ledger_raw, ledger = _read_record(lease.parent, nonce + ".json")
+    bound = release.bind_controller_consumption(
+        ledger_raw, a, i, expected=expected,
+        expected_engine=intent["target"]["engine_id"], now=int(clock()))
+    release.require(ledger == bound and ledger["consumed_at"] == intent["consumed_at"]
+                    and all(bound[key] == value for key, value in intent["target"].items()),
+                    "VM consumed nonce differs from intent")
+    _same_path(registry, lease.parent, dispatch._directory)
+    release.require(_read_record(
+        lease.parent, nonce + ".vm-consumption-intent.json")[0] == intent_raw
+        and _read_record(lease.parent, nonce + ".json")[0] == ledger_raw
+        and _read_record(
+            lease.parent, vm_id + "." + preflight_id + ".host-preflight.json")[0]
+        == preflight_raw
+        and _read_record(
+            lease.parent, vm_id + ".pre-dispatch-" + consumption_id + ".json")[0]
+        == observation_raw
+        and _raw_bytes_at(
+            lease.parent, vm_id + "." + preflight_id + ".host-observation.json")
+        == host_raw,
+        "VM consumed nonce evidence changed")
+    return dict(intent_sha256=release.digest(intent_raw),
+                receipt_sha256=release.digest(ledger_raw), target=intent["target"],
+                nonce=nonce, verified_at=int(clock()),
+                guest_dispatched=False, acceptance=False)

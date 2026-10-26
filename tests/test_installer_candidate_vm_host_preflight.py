@@ -48,7 +48,8 @@ def arranged(tmp_path, monkeypatch):
                         lambda *_a, **_k: "print('{}')")
     def observe(*_a, **kwargs):
         calls.append("observe:" + kwargs["pre_dispatch_id"])
-        observed = {"id": kwargs["pre_dispatch_id"], "observed_at": 100000}
+        observed = {"vm_id": VM_ID, "observation_id": kwargs["pre_dispatch_id"],
+                    "observed_at": 100000}
         _write(kwargs["lease"].parent,
                VM_ID + ".pre-dispatch-" + kwargs["pre_dispatch_id"] + ".json",
                observed)
@@ -223,8 +224,41 @@ def test_real_held_lease_consumes_exact_nonce_once(arranged):
         assert intent["consumption_observation_sha256"] == release.digest(observation_raw)
         assert intent["target"] == record["target"]
         assert intent["nonce"] == grant["nonce"]
+        assert intent["preflight_observation_id"] == FIRST_ID
+        assert intent["consumption_observation_id"] == "55555555-5555-4555-8555-555555555555"
         assert intent["nonce_consumed"] is False
         assert intent["dispatch_authorized"] is False
+        checked = preflight.verify_consumed_intent(
+            lease, args["registry"], authorization=args["authorization"],
+            assets=args["assets"], expected=args["expected"], gh=args["gh"],
+            cosign=args["cosign"], clock=args["clock"])
+        assert checked["receipt_sha256"] == release.digest(receipt)
+        assert checked["intent_sha256"] == release.digest(intent_bytes)
+        assert checked["target"] == record["target"]
+        original_bind_consumption = release.bind_controller_consumption
+        evidence_paths = (
+            args["registry"] / f"{VM_ID}.{FIRST_ID}.host-preflight.json",
+            args["registry"] / f"{VM_ID}.pre-dispatch-55555555-5555-4555-8555-555555555555.json",
+            args["registry"] / f"{VM_ID}.{FIRST_ID}.host-observation.json",
+        )
+        for evidence_path in evidence_paths:
+            original_bytes = evidence_path.read_bytes()
+            def mutate_during_ledger_binding(*a, **k):
+                bound = original_bind_consumption(*a, **k)
+                evidence_path.write_bytes(release.encode({}))
+                return bound
+            monkeypatch.setattr(release, "bind_controller_consumption",
+                                mutate_during_ledger_binding)
+            try:
+                with pytest.raises(ValueError, match="VM consumed nonce evidence changed"):
+                    preflight.verify_consumed_intent(
+                        lease, args["registry"], authorization=args["authorization"],
+                        assets=args["assets"], expected=args["expected"],
+                        gh=args["gh"], cosign=args["cosign"], clock=args["clock"])
+            finally:
+                evidence_path.write_bytes(original_bytes)
+                monkeypatch.setattr(release, "bind_controller_consumption",
+                                    original_bind_consumption)
         bound = release.bind_controller_consumption(
             receipt, authorization, inventory, expected=args["expected"],
             expected_engine=record["target"]["engine_id"], now=100000)
