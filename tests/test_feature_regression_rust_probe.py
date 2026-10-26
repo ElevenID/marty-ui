@@ -168,6 +168,23 @@ def test_probe_manifest_has_one_fixed_binary_and_real_candidate_dependency() -> 
         assert forbidden_expected_output not in subject
 
 
+def test_probe_framework_lock_sources_match_the_production_workspace() -> None:
+    production = tomllib.loads((ROOT / "rust/Cargo.lock").read_text(encoding="utf-8"))
+    probe = tomllib.loads(LOCK.read_text(encoding="utf-8"))
+
+    def framework_packages(lock):
+        return {
+            (package["name"], package["version"]): package["source"]
+            for package in lock["package"]
+            if "github.com/ElevenID/marty-microservices-framework" in package.get("source", "")
+        }
+
+    expected = framework_packages(production)
+    actual = framework_packages(probe)
+    assert actual, "the probe must exercise the production framework"
+    assert all(expected.get(package) == source for package, source in actual.items())
+
+
 def test_ci_runs_the_frozen_offline_probe_twice_and_compares_exact_output() -> None:
     workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
         encoding="utf-8"
