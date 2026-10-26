@@ -298,6 +298,13 @@ mod tests {
         valid_response: Value,
         expected_response: Value,
         private_response_field: String,
+        response_cases: Vec<ResponseCase>,
+    }
+    #[derive(Deserialize)]
+    struct ResponseCase {
+        name: String,
+        input: Value,
+        expected: Value,
     }
     #[derive(Deserialize)]
     struct RequestCase {
@@ -347,5 +354,21 @@ mod tests {
         let mut private = contract.valid_response;
         private[contract.private_response_field] = json!({"private": true});
         assert!(project_response(private, false).is_err());
+        assert_eq!(project_response(json!([]), true).unwrap(), json!([]));
+        for case in contract.response_cases {
+            assert_eq!(
+                project_response(case.input.clone(), false).unwrap(),
+                case.expected,
+                "{}",
+                case.name
+            );
+            assert_eq!(
+                project_response(json!([case.input]), true).unwrap(),
+                json!([case.expected]),
+                "{}",
+                case.name
+            );
+        }
+        assert!(project_response(json!({"items": []}), true).is_err());
     }
 }

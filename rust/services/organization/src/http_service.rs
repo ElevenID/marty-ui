@@ -1589,6 +1589,47 @@ mod tests {
     use super::*;
 
     #[test]
+    fn organization_readback_omits_absent_optional_membership_metadata() {
+        let (organization, mut owner) = Organization::create(crate::OrganizationCreate {
+            name: "readback-contract".into(),
+            owner_id: "owner".into(),
+            org_type: OrganizationType::Startup,
+            display_name: None,
+            description: None,
+            join_mechanism: JoinMechanism::Invite,
+            requires_approval: false,
+            is_discoverable: false,
+            now: Utc::now(),
+        })
+        .unwrap();
+        owner.roles.push(crate::Role {
+            id: Uuid::new_v4(),
+            organization_id: organization.id,
+            name: "owner".into(),
+            display_name: None,
+            description: None,
+            is_system: true,
+            is_default_for_new_members: false,
+            permissions: vec![],
+            created_at: organization.created_at,
+            updated_at: organization.updated_at,
+        });
+        owner.joined_at = None;
+        for role in &mut owner.roles {
+            role.display_name = None;
+        }
+        let response =
+            serde_json::to_value(organization_response(&organization, Some(&owner))).unwrap();
+        let membership = &response["membership"];
+        assert!(membership.get("joined_at").is_none());
+        for role in membership["roles"].as_array().unwrap() {
+            assert!(role.get("display_name").is_none());
+        }
+        assert!(membership["has_org_console_access"].is_boolean());
+        assert_eq!(membership["is_owner"], true);
+    }
+
+    #[test]
     fn environment_response_preserves_explicit_unset_and_configured_values() {
         let (mut organization, _) = Organization::create(crate::OrganizationCreate {
             name: "environment-contract".into(),

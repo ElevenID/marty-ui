@@ -242,6 +242,25 @@ fn build_application(
 }
 
 #[tokio::test]
+async fn empty_claims_fail_before_control_plane_or_persistence() {
+    let (repository, application) = build_application(ControlPlane {
+        deny_membership: true,
+        deny_revocation: true,
+        deny_trust: true,
+    });
+    let mut input = command();
+    input.claims.clear();
+    let error = application.create_template(input).await.unwrap_err();
+    assert!(matches!(
+        error,
+        marty_credential_template::application::CredentialTemplateApplicationError::Domain(
+            marty_credential_template::CredentialTemplateError::MissingClaims
+        )
+    ));
+    assert!(repository.templates.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn create_update_and_list_are_tenant_bound_and_lossless() {
     let (repository, application) = build_application(ControlPlane {
         deny_membership: false,
