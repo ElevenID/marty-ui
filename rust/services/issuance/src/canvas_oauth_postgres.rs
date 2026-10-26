@@ -157,8 +157,11 @@ impl CanvasOAuthRepository for PostgresCanvasOAuthRepository {
              AND NOT (p.connection_config ?| ARRAY[
                 'oauth_status', 'oauth_client_id', 'oauth_pending_authorization_id',
                 'oauth_capabilities', 'granted_scopes'])
-             FROM issuance_service.canvas_platforms p
-             WHERE p.organization_id = $1 AND p.id = $2 AND p.archived_at IS NULL",
+             FROM (
+                SELECT id, organization_id, connection_config::jsonb AS connection_config
+                FROM issuance_service.canvas_platforms
+                WHERE organization_id = $1 AND id = $2 AND archived_at IS NULL
+             ) p",
         )
         .bind(organization_id)
         .bind(platform_id)
