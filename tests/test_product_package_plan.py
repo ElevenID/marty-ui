@@ -58,7 +58,7 @@ def test_console_build_has_its_own_version_and_no_native_server_build(tmp_path):
     assert len(plan["images"]) == 1
     image = plan["images"][0]
     assert image["role"] == "ui"
-    assert image["target"] == "selfhost"
+    assert image["target"] == "console"
     assert image["build_args"]["UI_VARIANT"] == "selfhost"
     assert image["build_args"]["NGINX_CONFIG"] == "nginx.spa.conf"
     assert image["build_args"]["MARTY_RELEASE_VERSION"] == "5.6.7"

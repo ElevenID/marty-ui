@@ -16,7 +16,10 @@ unchanged for existing consumers and the separately owned installer work.
 `release/product-packages.json` declares the producer boundary. The server plan
 requires no frontend source, frontend version, npm package lock or UI image.
 The console plan uses only its frontend Docker build and its pinned SDK/blog
-dependencies; it does not build Rust server binaries. Each product uses its own
+dependencies; it does not build Rust server binaries. Its explicit `console`
+Docker target adds the public-server proxy to the existing static UI. The
+legacy public and self-host image targets keep their existing behavior.
+Each product uses its own
 registry namespace under `ghcr.io/elevenid/`.
 
 Generate source-bound plans without an installer or registry access:
@@ -58,11 +61,61 @@ the build plan and checksum inventory as an attested workflow artifact.
 consumer interface. Its state remains experimental/unqualified; a producer
 receipt is not independent verification of an image or compatibility result.
 
-The remaining packaging implementation is independently versioned deployment
-composition and a qualified publication/promotion path that consumes the
-verification owner's exact candidate evidence. Existing combined releases
-retain their current transaction and qualification gates. Source and local
-development tests belong to this work. Installer implementation and independent
-release-artifact verification belong to the other assigned workers. Candidate
-production alone does not complete this packaging work or establish a new
-supported distribution.
+## Runtime composition
+
+`scripts/compose_product_packages.py` renders Compose JSON from the selected
+product package. It binds OCI digests and product metadata; it does not install
+software, generate secrets, start containers or verify release signatures.
+The release verification owner supplies the verified package inputs. The
+installer owner supplies the resolved server runtime layout and prerequisites.
+
+```sh
+python scripts/compose_product_packages.py --package server-package.json \
+  --base resolved-server-base.json --output server.compose.json
+python scripts/compose_product_packages.py --package console-package.json \
+  --server-origin https://api.example.com --output console.compose.json
+```
+
+The server renderer preserves backend health checks, mounts, commands, secrets
+and dependency conditions while binding the server image roles and release
+version. It removes the UI dependency and UI-only secrets, selects the existing
+console-free edge behavior, and omits the legacy vendor tunnel services for
+direct API ingress. The existing Canvas backend worker remains; this is not a
+minimal or no-Canvas distribution. External runtime images in the supplied base
+must already be digest-pinned. Unresolved includes/extensions, unbound source
+builds and hidden frontend dependencies fail instead of becoming runtime inputs.
+Existing combined deployment defaults and installer scripts are unchanged.
+The base is an existing fully resolved runtime layout, not an installer recipe.
+With all current profiles selected, the source model changes from 32 services
+to 28 by excluding the UI and three tunnel services. Bootstrap profile selection,
+backend mounts, commands and health/dependency conditions stay with that layout.
+The installer owner's legacy full-stack DAG validator therefore needs an
+explicit independent-product mode when consuming this output; its current
+combined-product contract is preserved here.
+
+The console renderer produces one UI service with no backend images, secret
+mounts or startup dependencies. `MARTY_SERVER_ORIGIN` is a reachable public
+HTTP(S) origin, with no credentials, path, query or fragment. The console serves
+its assets independently and proxies API, identity and metadata namespaces to
+that server. API failures stay failures. HTTPS verifies both certificate trust
+and hostname against `/etc/ssl/cert.pem`; a private-CA deployment provides its
+approved public CA bundle through its container trust configuration. Server
+callback/allowed-origin configuration must include the console's public origin.
+The source template `docker-compose.console.yml` exposes the same interface.
+
+The required public-protocol CI lane exercises the real console Nginx renderer
+with HTTP/TLS fixtures, including missing server, denied API responses, invalid
+origins, untrusted certificates and wrong hostnames. These are source routing
+tests, not a complete login/business journey or release qualification.
+Locally, the same routing probe can use a compiled self-host frontend through
+`--assets-dir <dist-selfhost>`; it compares the served console entry bytes and
+retains the same API, failure and TLS assertions. The probe owns and removes
+only its labelled fixture containers/network and records its cleanup result.
+
+The remaining packaging implementation is qualified publication/promotion that
+consumes the verification owner's exact candidate evidence and the applicable
+runtime/compatibility results. Existing combined releases retain their current
+transaction and qualification gates. Source and local development tests belong
+to this work. Installer implementation and independent release-artifact
+verification belong to the other assigned workers. Candidate production and
+composition rendering alone do not establish a supported distribution.

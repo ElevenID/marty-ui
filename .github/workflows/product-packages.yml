@@ -168,18 +168,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir product-package
           python scripts/product_package_plan.py --product "$PRODUCT" --source-sha "$GITHUB_SHA" \
             --input-plan product-plan/build-plan.json --images-dir image-receipts \
             --build-run-id "$GITHUB_RUN_ID" --build-run-attempt "$GITHUB_RUN_ATTEMPT" \
-            --output product-package/product-package.json
-          cp product-plan/build-plan.json product-package/build-plan.json
-          (cd product-package && sha256sum build-plan.json product-package.json > SHA256SUMS)
+            --output product-package/product-package.json --bundle-dir product-package
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
         with:
-          subject-path: product-package/*
+          subject-path: product-package/**/*
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: ${{ needs.plan.outputs.product }}-${{ needs.plan.outputs.version }}-candidate-${{ github.run_id }}-${{ github.run_attempt }}
-          path: product-package/*
+          path: product-package/
           if-no-files-found: error

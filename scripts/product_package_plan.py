@@ -140,6 +140,41 @@ def assemble_package(root: Path, plan: dict, images_dir: Path, run_id: str, atte
     }
 
 
+def write_bundle(root: Path, plan: dict, package: dict, output: Path) -> None:
+    """Ship the renderer and its stdlib-only module without a source checkout."""
+    require(not output.exists() and not output.is_symlink(), "package bundle directory must be new")
+    files = {
+        name: source_file(root, name).read_bytes() for name in (
+            "scripts/compose_product_packages.py", "scripts/product_package_plan.py",
+            "deploy-config/schemas/product-package.schema.json", "docs/INDEPENDENT_PRODUCT_PACKAGES.md", "LICENSE",
+        )
+    }
+    if package["product"] == "marty-console":
+        files["docker-compose.console.yml"] = source_file(root, "docker-compose.console.yml").read_bytes()
+    for name, value in [("build-plan.json", plan), ("product-package.json", package)]:
+        files[name] = (json.dumps(value, sort_keys=True, indent=2) + "\n").encode("utf-8")
+    arguments = ("--base resolved-server-base.json --output server.compose.json" if package["product"] == "marty-server"
+                 else "--server-origin https://api.example.com --output console.compose.json")
+    readme = (
+        f"# {package['product']} {package['version']} candidate\n\n"
+        "This producer candidate is experimental and unqualified. Independent release verification is separate.\n\n"
+        f"Source revision: https://github.com/{plan['repository']}/tree/{plan['source_sha']}\n\n"
+        "The optional renderer requires Python 3.11+ with only its standard library; no repository checkout, UI build or npm installation is needed. "
+        "It writes Compose JSON without installing software, starting containers or preparing secrets. The deployment owner supplies any existing server runtime layout and external image pins.\n\n"
+        f"```sh\npython scripts/compose_product_packages.py --package product-package.json {arguments}\n```\n\n"
+        "The image references are immutable digests. A build receipt or successful render does not establish payload, deployment or product compatibility qualification. "
+        "See docs/INDEPENDENT_PRODUCT_PACKAGES.md for the source contracts and limits.\n"
+    )
+    files["README.md"] = readme.encode("utf-8")
+    output.mkdir(parents=True)
+    for name, payload in sorted(files.items()):
+        path = output / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(payload)
+    inventory = "".join(hashlib.sha256(payload).hexdigest() + "  " + name + "\n" for name, payload in sorted(files.items()))
+    (output / "SHA256SUMS").write_text(inventory, encoding="utf-8", newline="\n")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--product", choices=PRODUCTS, required=True)
@@ -150,6 +185,7 @@ def main() -> None:
     parser.add_argument("--images-dir", type=Path)
     parser.add_argument("--build-run-id")
     parser.add_argument("--build-run-attempt")
+    parser.add_argument("--bundle-dir", type=Path)
     args = parser.parse_args()
     plan = build_plan(args.root, args.product, args.source_sha)
     assembly = (args.input_plan, args.images_dir, args.build_run_id, args.build_run_attempt)
@@ -158,6 +194,11 @@ def main() -> None:
         frozen = json.loads(args.input_plan.read_bytes())
         require(frozen == plan, "input plan differs from selected source/product")
         plan = assemble_package(args.root, frozen, args.images_dir, args.build_run_id, args.build_run_attempt)
+    if args.bundle_dir is not None:
+        require(all(value is not None for value in assembly), "bundle requires complete producer assembly inputs")
+        require(args.output.resolve() == (args.bundle_dir / "product-package.json").resolve(), "bundle output must name its product-package.json")
+        write_bundle(args.root, frozen, plan, args.bundle_dir)
+        return
     args.output.write_text(json.dumps(plan, sort_keys=True, indent=2) + "\n", encoding="utf-8")
 
 

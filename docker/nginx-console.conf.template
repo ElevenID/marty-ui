@@ -1,0 +1,60 @@
+# The independent console has one public API upstream, not a local server stack.
+server {
+    listen 80;
+    server_name localhost;
+    absolute_redirect off;
+    root /usr/share/nginx/html;
+    index index.html;
+    resolver 127.0.0.11 valid=30s;
+    set $marty_server '${MARTY_SERVER_ORIGIN}';
+
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+
+    location = /.well-known/ai-plugin.json { try_files $uri =404; }
+
+    # Preserve API errors and machine-readable namespaces before any SPA route.
+    location ~ ^/(v1(/|$)|api(/|$)|auth(/|$)|realms(/|$)|resources(/|$)|org(/|$)|orgs(/|$)|oid4vp(/|$)|credentials(/|$)|\.well-known(/|$)|openapi\.(json|yaml)$|docs(/|$)|redoc(/|$)|ready(/|$)|health(/|$)) {
+        proxy_pass $marty_server$request_uri;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host $proxy_host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_buffering off;
+        proxy_read_timeout 600s;
+        proxy_ssl_server_name on;
+        proxy_ssl_name ${MARTY_SERVER_HOST};
+        proxy_ssl_verify on;
+        proxy_ssl_trusted_certificate /etc/ssl/cert.pem;
+        proxy_ssl_verify_depth 5;
+        proxy_redirect ${MARTY_SERVER_ORIGIN}/ /;
+        proxy_cookie_domain ${MARTY_SERVER_HOST} $host;
+    }
+
+    location = /robots.txt { default_type text/plain; try_files $uri =404; }
+    location = /sitemap.xml { types { application/xml xml; } try_files $uri =404; }
+    location = /sitemap-index.xml { types { application/xml xml; } try_files $uri =404; }
+    location ~ ^/sitemap-[0-9]+\.xml$ { types { application/xml xml; } try_files $uri =404; }
+    location = /console {
+        try_files /console/index.html =404;
+        add_header Cache-Control "no-cache, no-store, must-revalidate" always;
+    }
+    location ^~ /console/ {
+        try_files $uri $uri/ /console/index.html;
+        add_header Cache-Control "no-cache, no-store, must-revalidate" always;
+    }
+    location ^~ /locales/ { try_files $uri =404; }
+    location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2)$ {
+        try_files $uri =404;
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+    }
+    location / {
+        try_files $uri $uri/ /index.html;
+        add_header Cache-Control "no-cache, no-store, must-revalidate" always;
+    }
+}
