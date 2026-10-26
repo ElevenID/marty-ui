@@ -223,6 +223,55 @@ def test_fresh_pre_dispatch_binds_initial_and_can_be_reobserved(
         "initial_guest_readiness_sha256"]
 
 
+def test_named_process_checks_reobserve_without_empty_docker_probe(
+    root_trial, runtime_parent, monkeypatch
+):
+    registry = _launched(root_trial, runtime_parent, monkeypatch)
+    monkeypatch.setattr(live, "pinned_guest", lambda *_a, **_k: {
+        "guest_uid": 1000, "docker_engine_id": "engine-1",
+        "docker_initially_empty": True})
+    initial = live.observe(registry, runtime_parent, vm_id=VM_ID,
+                           guest_readiness=True)
+    monkeypatch.setattr(live, "pinned_guest", lambda *_a, **_k:
+                        pytest.fail("process check must not require empty Docker"))
+    ids = ("66666666-6666-4666-8666-666666666666",
+           "77777777-7777-4777-8777-777777777777")
+    with ControllerLease(registry) as lease:
+        records = [live.observe(registry, runtime_parent, vm_id=VM_ID,
+                                process_check_id=identity, lease=lease)
+                   for identity in ids]
+        assert lease.parent is not None
+    assert [record["observation_id"] for record in records] == list(ids)
+    assert all(record["schema"] == live.PROCESS_CHECK_SCHEMA
+               and record["phase"] == "process-check"
+               and record["initial_guest_readiness_sha256"]
+               == launch.release.digest(launch.release.encode(initial))
+               and record["dispatch_authorized"] is False
+               and "guest" not in record for record in records)
+    with pytest.raises(FileExistsError):
+        live.observe(registry, runtime_parent, vm_id=VM_ID,
+                     process_check_id=ids[0])
+    assert all((registry / f"{VM_ID}.process-check-{identity}.json").is_file()
+               for identity in ids)
+
+
+def test_named_process_check_refuses_replaced_process(
+    root_trial, runtime_parent, monkeypatch
+):
+    registry = _launched(root_trial, runtime_parent, monkeypatch)
+    monkeypatch.setattr(live, "pinned_guest", lambda *_a, **_k: {
+        "guest_uid": 1000, "docker_engine_id": "engine-1",
+        "docker_initially_empty": True})
+    live.observe(registry, runtime_parent, vm_id=VM_ID, guest_readiness=True)
+    monkeypatch.setattr(launch, "_live", lambda *_a, **_k:
+                        {"pid": 12345, "start_ticks": "124", "disk_fd": 7})
+    identity = "88888888-8888-4888-8888-888888888888"
+    with pytest.raises(ValueError, match="process differs"):
+        live.observe(registry, runtime_parent, vm_id=VM_ID,
+                     process_check_id=identity)
+    assert not (registry / f"{VM_ID}.process-check-{identity}.json").exists()
+
+
 def test_pre_dispatch_refuses_engine_change(
     root_trial, runtime_parent, monkeypatch
 ):
