@@ -201,7 +201,10 @@ fn source(
     );
     Ok(bytes)
 }
-fn require_no_selected_generation(installation: &Path, plan: &ApplicationModelPlan) -> Result<()> {
+pub(crate) fn require_no_selected_generation(
+    installation: &Path,
+    plan: &ApplicationModelPlan,
+) -> Result<()> {
     let root = installation.join("application-generation");
     let check = |value: &Value| -> Result<()> {
         let value = text(value)?;
@@ -760,14 +763,14 @@ fn uninstall_inner(args: &[String]) -> Result<String> {
     serde_json::to_string(&result).map_err(|_| REFUSED.into())
 }
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::installer_state::{Identity, InstallerState, RuntimeBinding};
     use std::{fs, os::unix::fs::PermissionsExt};
     fn save(path: impl AsRef<std::path::Path>, value: &Value) {
         fs::write(path, serde_json::to_vec(value).unwrap()).unwrap();
     }
-    fn mock(mode: &str) -> (tempfile::TempDir, Vec<String>) {
+    pub(crate) fn mock(mode: &str) -> (tempfile::TempDir, Vec<String>) {
         let root = tempfile::tempdir().unwrap();
         fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
         let installation = root.path().join("install");

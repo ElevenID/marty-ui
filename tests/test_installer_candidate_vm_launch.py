@@ -29,6 +29,10 @@ def _seeded(root_trial, runtime_parent, monkeypatch):
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as reserved:
         reserved.bind(("127.0.0.1", 0))
         port = reserved.getsockname()[1]
+    # These synthetic custody fixtures test identities, not host clock steps.
+    # A WSL wall-clock correction must not make a seed finish before it starts.
+    observed_at = int(time.time())
+    monkeypatch.setattr(time, "time", lambda: observed_at)
     seed.prepare(source, registry, parent, runtime_parent, vm_id=VM_ID, ssh_port=port)
     monkeypatch.setattr(launch, "_trusted_tool", lambda _path: "a" * 64)
     monkeypatch.setattr(launch, "_kvm_group", lambda: 993)

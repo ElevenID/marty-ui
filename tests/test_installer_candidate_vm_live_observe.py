@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import installer_candidate_vm_launch as launch
 import installer_candidate_vm_live_observe as live
+from installer_candidate_controller import ControllerLease
 from test_installer_candidate_vm_launch import _seeded
 from test_installer_candidate_vm_create import root_trial as root_trial
 from test_installer_candidate_vm_runtime import runtime_parent as runtime_parent
@@ -57,6 +58,50 @@ def test_exact_live_observation_is_diagnostic_only(
     with pytest.raises(FileExistsError):
         live.observe(registry, runtime_parent, vm_id=VM_ID)
     assert output.read_bytes() == before
+
+
+def test_observation_can_borrow_live_controller_lease(
+    root_trial, runtime_parent, monkeypatch
+):
+    registry = _launched(root_trial, runtime_parent, monkeypatch)
+    with ControllerLease(registry) as lease:
+        record = live.observe(registry, runtime_parent, vm_id=VM_ID,
+                              lease=lease)
+        assert record["process_pid"] == 12345
+        assert lease.parent is not None
+        with pytest.raises(BlockingIOError):
+            with ControllerLease(registry):
+                pass
+    assert (registry / f"{VM_ID}.live-process-observation.json").is_file()
+    with pytest.raises(ValueError, match="not held"):
+        live.observe(registry, runtime_parent, vm_id=VM_ID, lease=lease)
+
+
+def test_observation_rejects_lease_for_other_registry(
+    root_trial, runtime_parent, monkeypatch
+):
+    registry = _launched(root_trial, runtime_parent, monkeypatch)
+    other = registry.parent / "other-registry"
+    other.mkdir(mode=0o700)
+    with ControllerLease(other) as lease:
+        with pytest.raises(ValueError, match="not held"):
+            live.observe(registry, runtime_parent, vm_id=VM_ID, lease=lease)
+        with pytest.raises(BlockingIOError):
+            with ControllerLease(other):
+                pass
+    assert not (registry / f"{VM_ID}.live-process-observation.json").exists()
+    displaced = registry.parent / "displaced-registry"
+    with ControllerLease(registry) as lease:
+        registry.rename(displaced)
+        registry.mkdir(mode=0o700)
+        monkeypatch.setattr(launch, "_live", lambda *_a, **_k: pytest.fail(
+            "VM process must not be probed after registry replacement"))
+        with pytest.raises(ValueError, match="VM custody path changed"):
+            live.observe(registry, runtime_parent, vm_id=VM_ID, lease=lease)
+        with pytest.raises(BlockingIOError):
+            with ControllerLease(displaced):
+                pass
+    assert not (registry / f"{VM_ID}.live-process-observation.json").exists()
 
 
 def test_legacy_launch_cannot_gain_live_candidate_evidence(
@@ -176,6 +221,55 @@ def test_fresh_pre_dispatch_binds_initial_and_can_be_reobserved(
     assert later["observation_id"] == second_id
     assert later["initial_guest_readiness_sha256"] == record[
         "initial_guest_readiness_sha256"]
+
+
+def test_named_process_checks_reobserve_without_empty_docker_probe(
+    root_trial, runtime_parent, monkeypatch
+):
+    registry = _launched(root_trial, runtime_parent, monkeypatch)
+    monkeypatch.setattr(live, "pinned_guest", lambda *_a, **_k: {
+        "guest_uid": 1000, "docker_engine_id": "engine-1",
+        "docker_initially_empty": True})
+    initial = live.observe(registry, runtime_parent, vm_id=VM_ID,
+                           guest_readiness=True)
+    monkeypatch.setattr(live, "pinned_guest", lambda *_a, **_k:
+                        pytest.fail("process check must not require empty Docker"))
+    ids = ("66666666-6666-4666-8666-666666666666",
+           "77777777-7777-4777-8777-777777777777")
+    with ControllerLease(registry) as lease:
+        records = [live.observe(registry, runtime_parent, vm_id=VM_ID,
+                                process_check_id=identity, lease=lease)
+                   for identity in ids]
+        assert lease.parent is not None
+    assert [record["observation_id"] for record in records] == list(ids)
+    assert all(record["schema"] == live.PROCESS_CHECK_SCHEMA
+               and record["phase"] == "process-check"
+               and record["initial_guest_readiness_sha256"]
+               == launch.release.digest(launch.release.encode(initial))
+               and record["dispatch_authorized"] is False
+               and "guest" not in record for record in records)
+    with pytest.raises(FileExistsError):
+        live.observe(registry, runtime_parent, vm_id=VM_ID,
+                     process_check_id=ids[0])
+    assert all((registry / f"{VM_ID}.process-check-{identity}.json").is_file()
+               for identity in ids)
+
+
+def test_named_process_check_refuses_replaced_process(
+    root_trial, runtime_parent, monkeypatch
+):
+    registry = _launched(root_trial, runtime_parent, monkeypatch)
+    monkeypatch.setattr(live, "pinned_guest", lambda *_a, **_k: {
+        "guest_uid": 1000, "docker_engine_id": "engine-1",
+        "docker_initially_empty": True})
+    live.observe(registry, runtime_parent, vm_id=VM_ID, guest_readiness=True)
+    monkeypatch.setattr(launch, "_live", lambda *_a, **_k:
+                        {"pid": 12345, "start_ticks": "124", "disk_fd": 7})
+    identity = "88888888-8888-4888-8888-888888888888"
+    with pytest.raises(ValueError, match="process differs"):
+        live.observe(registry, runtime_parent, vm_id=VM_ID,
+                     process_check_id=identity)
+    assert not (registry / f"{VM_ID}.process-check-{identity}.json").exists()
 
 
 def test_pre_dispatch_refuses_engine_change(

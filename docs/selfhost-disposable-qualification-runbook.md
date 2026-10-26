@@ -1002,3 +1002,47 @@ guest, ledger, creation receipt and incomplete checkpoint for recovery. A 4 GiB
 guest may test this machinery only as an engineering trial; release acceptance
 still enforces the existing 32 GiB RAM and 20 GiB free-space predicate until a
 complete measured installed journey and policy change justify another profile.
+
+The controller APIs now support an explicit `purpose="engineering-trial"` on
+`preflight`, `consume_preflight`, `verify_consumed_intent`, `exchange` and
+`dispatch_once`. Supply the same purpose at every boundary. The default remains
+qualification. Engineering records use distinct schemas, retain the actual RAM
+and production-capacity predicate, and persist `qualification_eligible=false`
+before nonce consumption. They preserve the existing disk-space, clean-Docker,
+credential, signed-source, nonce, process, SSH and freshness requirements.
+Qualification readers refuse engineering records even on a larger host.
+
+For this trial use the normal signed candidate grant workflow with `execute=false`
+and a new installation UUID and nonce. The native candidate remains unchanged.
+Engineering dispatch writes its own false-authority post-dispatch record and
+returns or rethrows the one attempt's error before the qualification-checkpoint
+producer. It does not create or upload an acceptance checkpoint. Preserve native
+state after an incomplete exit; collect bounded resource observations and inspect
+the same installation rather than retrying provisioning. The engineering API
+path still requires Linux behavioral validation and an actual signed installation
+trial; its existence is not evidence that a 4 GiB installation succeeds.
+
+`scripts/run_installer_engineering_trial.py` is the thin controller entry point
+after the existing staged/published acquisition and initial-grant helpers have
+verified their inputs. It requires an independent private context file, exact
+assets and authorization, controller transport descriptor, pinned verifier
+binaries, selected VM and fresh installation UUID, and the approved numeric
+controller identity. Its scope is fixed to engineering. It consumes under the
+held lease, releases that lease for the existing signed exchange, persists the
+exchange result exclusively, then invokes one dispatch. A failed or incomplete
+command retains all owned state and exits nonzero; invoking it again cannot
+resume the same consumed nonce. Run `--help` for the explicit path arguments.
+Run the controller from a fixed Linux checkout of the reviewed source. Guest
+probe authentication compares local bytes with the immutable Git blob; a Windows
+checkout with CRLF conversion cannot be normalized at that trust boundary.
+
+During the one attempt, run the reviewed `installer_resource_probe.py` through
+the same pinned SSH identity and retain its source digest and raw JSONL with the
+VM/installation binding. It samples memory, swap, OOM counters, memory pressure
+and the `/var/lib/docker` filesystem without reading credentials or application
+data. Independently confirm that this is the admitted Engine's data filesystem;
+the probe alone does not establish its DockerRootDir. Send `stop\n` or close
+stdin for a final sample. The probe is bounded to 30 minutes, 362 records of at
+most 2048 bytes, and a five-second watchdog grace. Exit 124 or any missing final
+record means incomplete observation; preserve partial output instead of claiming
+that no resource failure occurred. Resource samples cannot establish acceptance.
