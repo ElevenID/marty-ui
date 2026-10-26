@@ -9,7 +9,9 @@ from urllib.parse import urlsplit
 
 import pytest
 
-from scripts.passport_owned_resources import OwnedPassportResources, PassportOwnershipError
+from scripts.passport_owned_resources import (
+    OwnedPassportResources, PassportOwnershipError, retire_failed_owned_resources,
+)
 from scripts import probe_passport_beta_native_batch as batch
 from tests.test_passport_fresh_operations import plan
 
@@ -206,7 +208,7 @@ def failed_owned(owned):
                 "bureau_cancellation_requested": False, "flow_cancellation_requested": False,
                 "replayed": len(model["native_posts"]) > 1}
         if path.startswith("/v1/flows/instances?"):
-            return 200, [flow()] + ([{**flow(), "id": "unowned-extra"}] if model["extra_flow"] else [])
+            return 200, model.get("list_override", [flow()] + ([{**flow(), "id": "unowned-extra"}] if model["extra_flow"] else []))
         if path.startswith("/v1/flows/instances/"):
             if method == "POST":
                 assert path.endswith("/cancel")
@@ -253,6 +255,66 @@ def test_failed_cleanup_lost_native_response_requires_explicit_same_key_recovery
     assert resumed.retire_failed(retire_cleanup_authority=lambda: True)["qualificationEligible"] is False
     assert model["native_posts"][0] == model["native_posts"][1]
     assert all(Path(name).read_bytes() == raw for name, raw in snapshots.items())
+
+
+def test_failed_cleanup_authority_only_resume_verifies_retired_state_without_repeat_mutation(failed_owned):
+    _, calls, _, _, model, args, path, snapshots = failed_owned
+    continuation = OwnedPassportResources.failed_continuation(path, **args)
+    with pytest.raises(PassportOwnershipError, match="authority is not retired"):
+        continuation.retire_failed(retire_cleanup_authority=lambda: False)
+    assert json.loads(path.read_text())["failed_cleanup"]["stage"] == "RESOURCES_RETIRED_AUTHORITY_PENDING"
+    start, native_posts, flow_posts = len(calls), len(model["native_posts"]), model["flow_posts"]
+    result = retire_failed_owned_resources(path, resume=True, **args, retire_cleanup_authority=lambda: True)
+    assert result["complete"] and result["authorityOnlyResume"] and result["qualificationEligible"] is False
+    assert len(model["native_posts"]) == native_posts and model["flow_posts"] == flow_posts
+    assert all(method == "GET" or (method == "POST" and "/issuer-identities/resolve" in route)
+               for _, method, route in calls[start:])
+    assert all(Path(name).read_bytes() == raw for name, raw in snapshots.items())
+
+
+@pytest.mark.parametrize("gap", ["active-template", "missing-certificate", "changed-companion",
+                                  "foreign-singleton", "nonterminal-singleton"])
+def test_failed_cleanup_authority_only_resume_denies_missing_or_changed_terminal_readback(failed_owned, gap):
+    original, calls, records, _, model, args, path, _ = failed_owned
+    continuation = OwnedPassportResources.failed_continuation(path, **args)
+    with pytest.raises(PassportOwnershipError):
+        continuation.retire_failed(retire_cleanup_authority=lambda: False)
+    if gap == "active-template":
+        identifier = original.value["resources"]["credential_template_id"]["id"]
+        records["/v1/credential-templates/" + identifier]["status"] = "ACTIVE"
+    elif gap == "missing-certificate":
+        args["private_signing"] = lambda *a: {}
+    elif gap == "changed-companion":
+        next(row for row in model["jobs"].values() if row["status"] == "ACTIVE")["tracking_number"] = "changed"
+    else:
+        _, rows = args["request"]("flow", "GET", "/v1/flows/instances?source-control", None)
+        if gap == "foreign-singleton":
+            rows[0]["id"] = "foreign-instance"
+        else:
+            rows[0]["status"] = "IN_PROGRESS"
+        model["list_override"] = rows
+        # A mutable local digest must not override explicit terminal ownership.
+        continuation.value["failed_cleanup"]["owned_flow_instances_readback_sha256"] = hashlib.sha256(json.dumps(rows, sort_keys=True).encode()).hexdigest()
+        continuation.save()
+    start, native_posts, flow_posts = len(calls), len(model["native_posts"]), model["flow_posts"]
+    with pytest.raises(PassportOwnershipError):
+        retire_failed_owned_resources(path, resume=True, **args, retire_cleanup_authority=lambda: True)
+    assert json.loads(path.read_text())["cleanup_complete"] is False
+    assert len(model["native_posts"]) == native_posts and model["flow_posts"] == flow_posts
+    assert all(method == "GET" or (method == "POST" and "/issuer-identities/resolve" in route)
+               for _, method, route in calls[start:])
+
+
+def test_failed_cleanup_controller_closes_dedicated_authority_on_constructor_failure(failed_owned):
+    _, _, _, _, model, args, path, _ = failed_owned
+    closed = []
+    def unavailable():
+        raise OSError("runtime verifier unavailable")
+    args["verify_runtime"] = unavailable
+    with pytest.raises(OSError, match="runtime verifier"):
+        retire_failed_owned_resources(path, **args, retire_cleanup_authority=lambda: closed.append(True) or True)
+    assert closed == [True] and not path.exists()
+    assert model["native_posts"] == [] and model["flow_posts"] == 0
 
 
 @pytest.mark.parametrize("gap", ["extra-job", "wrong-companion", "unknown-start"])

@@ -580,11 +580,17 @@ class OwnedPassportResources:
             expected_intent = cls._failed_cancel_intent(journal_ref["sha256"], selected["id"])
             require(instance.value.get("cleanup_complete") is False
                     and state.get("qualificationEligible") is False
-                    and state.get("stage") in {"PREFLIGHT", "CANCEL_INTENT", "NATIVE_CANCELLED"}
+                    and state.get("stage") in {"PREFLIGHT", "CANCEL_INTENT", "NATIVE_CANCELLED",
+                                               "RESOURCES_RETIRED_AUTHORITY_PENDING"}
                     and (state.get("cancel_intent") == expected_intent if state["stage"] != "PREFLIGHT"
                          else "cancel_intent" not in state)
                     and ("flow_cancel_intent" not in state or state["flow_cancel_intent"] is True),
                     "Continuation cancellation intent/stage is invalid or needs separate lifecycle reconciliation")
+            if state["stage"] == "RESOURCES_RETIRED_AUTHORITY_PENDING":
+                require(all(isinstance(state.get(key), str) and batch.SHA256.fullmatch(state[key]) for key in
+                            ("successful_companion_sha256", "selected_cancelled_sha256", "owned_flow_instances_readback_sha256"))
+                        and isinstance(state.get("cancellation_audit"), dict),
+                        "Authority-only recovery lacks recorded terminal readbacks")
         else:
             batch.ensure_private_state_available(path)
             instance.value = copy.deepcopy(original)
@@ -643,6 +649,8 @@ class OwnedPassportResources:
         require(hasattr(self, "_failed_guard"), "Failed cleanup was not privately bound")
         self._failed_guard()
         state = self.value["failed_cleanup"]
+        if state["stage"] == "RESOURCES_RETIRED_AUTHORITY_PENDING":
+            return self._verify_failed_retired_state()
         selected, companion = self._failed_jobs
         allowed_pending = {
             "/v1/passport/applications/" + quote(selected["application_id"], safe="") + "/cancel",
@@ -669,6 +677,9 @@ class OwnedPassportResources:
             return actual
         before, successful = job(selected), job(companion)
         require(successful.get("status") == "ACTIVE" and successful.get("completed_at"), "Successful companion changed")
+        successful_sha256 = hashlib.sha256(json.dumps(successful, sort_keys=True).encode()).hexdigest()
+        require(state.get("successful_companion_sha256", successful_sha256) == successful_sha256,
+                "Successful companion differs from the original readback")
         allowed = {"DRAFT", "DATA_GENERATED", "SOD_SIGNED", "SUBMITTED", "IN_PRODUCTION", "QUALITY_CHECK", "READY_FOR_ACTIVATION"}
         require(before.get("status") in allowed or (before.get("status") == "CANCELLED" and "cancel_intent" in state),
                 "Successful or unrelated terminal job cannot enter failed cancellation")
@@ -676,18 +687,14 @@ class OwnedPassportResources:
         flow_path = "/v1/flows/instances/" + quote(flow_id, safe="")
         code, flow = self.call("flow", "GET", flow_path)
         def owned_flow(value):
-            context = value.get("context_data", {}).get("physical_document_job", {})
-            return (value.get("id") == flow_id and value.get("organization_id") == self.organization
-                    and value.get("flow_id") == self.value["resources"]["flow_definition_id"]["id"]
-                    and all(context.get(key) == selected[key] for key in
-                            ("id", "organization_id", "application_id", "flow_execution_id", "bureau_job_id")))
+            return self._failed_owned_flow(value, selected)
         require(code == 200 and owned_flow(flow) and (str(flow.get("status")).upper() == "IN_PROGRESS"
                 or (str(flow.get("status")).upper() == "CANCELLED" and state.get("flow_cancel_intent") is True)),
                 "Current Flow is not the exact failed owned instance")
         intent = self._failed_cancel_intent(state["sources"]["journal"]["sha256"], selected["id"])
         key, body = intent["key"], intent["body"]
         require(state.get("cancel_intent", intent) == intent, "Cancellation replay identity changed")
-        state.update(cancel_intent=intent, stage="CANCEL_INTENT")
+        state.update(cancel_intent=intent, stage="CANCEL_INTENT", successful_companion_sha256=successful_sha256)
         self.save()  # Same exact key/body is durable before any native mutation.
         code, cancelled = self.call("api", "POST", "/v1/passport/applications/" + quote(selected["application_id"], safe="") + "/cancel",
                                     body, {"idempotency-key": key})
@@ -716,7 +723,8 @@ class OwnedPassportResources:
         current = job(selected)
         require(current.get("status") == "CANCELLED" and job(companion) == successful,
                 "Native cancellation or successful companion readback changed")
-        state.update(stage="NATIVE_CANCELLED", cancellation_audit=copy.deepcopy(audit))
+        state.update(stage="NATIVE_CANCELLED", cancellation_audit=copy.deepcopy(audit),
+                     selected_cancelled_sha256=hashlib.sha256(json.dumps(current, sort_keys=True).encode()).hexdigest())
         self.save()
         if str(flow.get("status")).upper() != "CANCELLED":
             state["flow_cancel_intent"] = True
@@ -742,9 +750,102 @@ class OwnedPassportResources:
                 "selectedJobCancelled": True, "successfulCompanionPreserved": True,
                 "flowCancelled": True, "bureauCancellationRequested": False, "historyRetained": True}
 
+    def _failed_owned_flow(self, value, selected):
+        if not isinstance(value, dict) or not isinstance(value.get("context_data"), dict):
+            return False
+        context = value["context_data"].get("physical_document_job")
+        return (isinstance(context, dict) and value.get("id") == selected["flow_execution_id"]
+                and value.get("organization_id") == self.organization
+                and value.get("flow_id") == self.value["resources"]["flow_definition_id"]["id"]
+                and all(context.get(key) == selected[key] for key in
+                        ("id", "organization_id", "application_id", "flow_execution_id", "bureau_job_id")))
+
+    def _verify_failed_retired_state(self):
+        """Authority-only recovery re-observes retirement, never repeats it."""
+        state = self.value["failed_cleanup"]
+        selected, companion = self._failed_jobs
+        for row, digest, status in [(selected, "selected_cancelled_sha256", "CANCELLED"),
+                                    (companion, "successful_companion_sha256", "ACTIVE")]:
+            code, current = self.call("api", "GET", "/v1/passport/applications/" + quote(row["application_id"], safe=""))
+            require(code == 200 and current.get("status") == status
+                    and all(current.get(key) == row[key] for key in
+                            ("id", "organization_id", "application_id", "flow_execution_id", "bureau_job_id"))
+                    and hashlib.sha256(json.dumps(current, sort_keys=True).encode()).hexdigest() == state[digest],
+                    "Authority-only recovery has changed native history")
+        flow_path = "/v1/flows/instances/" + quote(selected["flow_execution_id"], safe="")
+        code, flow = self.call("flow", "GET", flow_path)
+        require(code == 200 and self._failed_owned_flow(flow, selected)
+                and str(flow.get("status")).upper() == "CANCELLED",
+                "Authority-only recovery has no exact terminal Flow")
+        self._failed_guard()
+        code, instances = self.request("flow", "GET", "/v1/flows/instances?organization_id=" + quote(self.organization, safe="")
+            + "&flow_definition_id=" + quote(self.value["resources"]["flow_definition_id"]["id"], safe="") + "&limit=100&offset=0", None)
+        require(code == 200 and isinstance(instances, list) and len(instances) == 1
+                and self._failed_owned_flow(instances[0], selected)
+                and str(instances[0].get("status")).upper() == "CANCELLED"
+                and hashlib.sha256(json.dumps(instances, sort_keys=True).encode()).hexdigest()
+                    == state["owned_flow_instances_readback_sha256"],
+                "Authority-only recovery has changed owned Flow history")
+        for field in ("flow_definition_id", "delivery_destination_profile_id"):
+            code, _ = self.call("flow", "GET", COLLECTIONS[field] + "/" + quote(self.value["resources"][field]["id"], safe=""))
+            require(code == 404, "Retired owned resource is available again")
+        for field in ("credential_template_id", "application_template_id"):
+            owned = self.value["resources"][field]
+            current = self.check_resource(COLLECTIONS[field] + "/" + quote(owned["id"], safe=""), owned)
+            require(str(current.get("status")).upper() == "DEPRECATED", "Owned template is not retired")
+        certificate_id = self.value["plan"]["certificate_plan"]["csca"]["certificate_id"]
+        certificate = self.private_call("/internal/documents/" + quote(self.organization, safe="")
+                                       + "/csca-certificates/" + quote(certificate_id, safe=""))
+        csca = next(row for row in self.value["issuer_identities"] if row["role"] == "csca")
+        require(certificate.get("certificate_id") == certificate_id and certificate.get("status") == "REVOKED"
+                and certificate.get("revoked_at")
+                and certificate.get("metadata", {}).get("issuer_did") == csca["tuple"]["issuer_did"]
+                and public_key(certificate.get("public_jwk")) == csca["public_key"],
+                "Authority-only recovery has no exact revoked certificate")
+        for identity in self.value["issuer_identities"]:
+            code, _ = self.call(identity["role"], "POST", self.scoped("/v1/signing-keys/issuer-identities/resolve"), identity["tuple"])
+            require(code == 404, "Retired issuer identity resolves again")
+        self._failed_guard()
+        state["authority_only_terminal_readbacks_verified"] = True
+        self.save()
+        return {"originalFailurePreserved": True, "selectedJobCancelled": True,
+                "successfulCompanionPreserved": True, "flowCancelled": True,
+                "bureauCancellationRequested": False, "historyRetained": True, "authorityOnlyResume": True}
+
     def check_resource(self, path, owned):
         require(owned.get("creation_returned") is True, "Resource ownership is unproven")
         code, current = self.call("flow", "GET", path)
         require(code == 200 and all(current.get(key) == owned[key]
                 for key in ("id", "organization_id", "name")), "Owned passport resource changed identity")
         return current
+
+
+def retire_failed_owned_resources(path, *, journal_ref, wire_ref, failure_ref, fixture_ref,
+                                 request, private_signing, verify_runtime, retire_cleanup_authority,
+                                 resume=False):
+    """Own the supplied dedicated authority even when source construction fails.
+
+    The caller provisions and binds only its fresh cleanup authority. This
+    function never accepts/revives the original failed run's credentials.
+    """
+    attempted, failure = False, None
+    def close():
+        nonlocal attempted
+        attempted = True
+        return retire_cleanup_authority()
+    try:
+        continuation = OwnedPassportResources.failed_continuation(path, journal_ref=journal_ref,
+            wire_ref=wire_ref, failure_ref=failure_ref, fixture_ref=fixture_ref, request=request,
+            private_signing=private_signing, verify_runtime=verify_runtime, resume=resume)
+        return continuation.retire_failed(retire_cleanup_authority=close)
+    except BaseException as exc:
+        failure = exc
+        raise
+    finally:
+        if not attempted:
+            try:
+                retired = close() is True
+            except Exception:
+                retired = False
+            if not retired and failure is not None:
+                failure.add_note("Dedicated cleanup authority retirement is unverified")
