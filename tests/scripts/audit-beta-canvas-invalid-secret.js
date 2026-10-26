@@ -61,15 +61,21 @@ async function executeWrongSecretCase({result,save,gateway,admin,adminPage,organ
   row.id=response.payload.id;row.state='CREATED';save();return response.payload;
  }
  async function start(){
+  stage('AUTHORIZATION_START');
   const started=await gateway('/v1/integrations/canvas/platforms/'+platform.id+'/oauth/authorizations',
    {...admin,method:'POST',body:{client_id:clientId,client_secret_secret_id:wrongRef.id,capabilities:['catalog']}});
-  assert.equal(started.status,200);const url=new URL(started.payload.authorization_url);
+  result.validClientSecretCase.authorizationStarts=result.validClientSecretCase.authorizationStarts||[];
+  const observation={status:started.status};result.validClientSecretCase.authorizationStarts.push(observation);save();
+  assert.equal(started.status,200);
+  const url=new URL(started.payload.authorization_url);Object.assign(observation,authorizationBoundaryChecks(url,clientId));save();
   assert.equal(url.origin,CANVAS);assert.equal(url.pathname,'/login/oauth2/auth');assert.equal(url.searchParams.get('client_id'),clientId);
   assert(url.searchParams.get('state'));assert.equal(url.searchParams.get('redirect_uri'),MARTY+'/v1/integrations/canvas/oauth/callback');return url;
  }
  async function authorize(url,intercept){
   let captured;const callback=MARTY+'/v1/integrations/canvas/oauth/callback';
   const handler=async route=>{const target=new URL(route.request().url());
+   result.validClientSecretCase.callbackChecks=result.validClientSecretCase.callbackChecks||[];
+   result.validClientSecretCase.callbackChecks.push({intercepted:intercept,...callbackBoundaryChecks(target,url.searchParams.get('state'))});save();
    assert.equal(target.origin,MARTY);assert.equal(target.pathname,'/v1/integrations/canvas/oauth/callback');
    assert.equal(target.searchParams.get('state'),url.searchParams.get('state'));assert(target.searchParams.get('code'));
    assert(!target.searchParams.has('error'));captured={code:target.searchParams.get('code'),state:target.searchParams.get('state')};
@@ -100,20 +106,26 @@ async function executeWrongSecretCase({result,save,gateway,admin,adminPage,organ
   const enabled=await stock.findCanvasDeveloperKey(state,{id:clientId,name:'Marty OAuth '+runId});
   assert.equal(String(enabled?.id),clientId);assert.equal(enabled.workflow_state,'active');
   assert.equal(enabled.developer_key_account_binding?.workflow_state,'on');
+  stage('PLATFORM_CREATE');
   platform=await create('/v1/integrations/canvas/platforms',{display_name:'Wrong-secret audit '+runId,canvas_base_url:CANVAS,enabled:false});
   assert.equal(platform.enabled,false);
+  stage('SECRET_CREATE');
   wrongRef=await create('/v1/integrations/canvas/integration-secrets',{organization_id:organizationId,name:'Wrong-secret audit '+runId,
    provider:'canvas',purpose:'oauth_client_secret',secret_value:wrong,metadata:{audit_run_id:runId},enabled:true});
-  const first=await start(),issued=await authorize(first,true);
-  const denied=await context.request.post(CANVAS+'/login/oauth2/token',{form:{grant_type:'authorization_code',client_id:clientId,
-   client_secret:wrong,code:issued.code,redirect_uri:MARTY+'/v1/integrations/canvas/oauth/callback'},maxRedirects:0,timeout:30000});
-  const body=await denied.json();
-  result.validClientSecretCase.providerDenial=requireProviderInvalidSecret({status:denied.status(),error:body.error,description:body.error_description,
+  const first=await start();stage('PROVIDER_AUTHORIZE');const issued=await authorize(first,true);
+  stage('TOKEN_DENIAL');
+  const denied=await requestStatelessTokenDenial(require('@playwright/test').request,{grant_type:'authorization_code',client_id:clientId,
+   client_secret:wrong,code:issued.code,redirect_uri:MARTY+'/v1/integrations/canvas/oauth/callback'},
+   {observe:value=>{result.validClientSecretCase.providerTokenObservation=value;save();}});
+  const body=denied.body;
+  result.validClientSecretCase.providerDenial=requireProviderInvalidSecret({status:denied.status,error:body.error,description:body.error_description,
    clientEnabled:true,issuedCode:true,clientId,issuedClientId:first.searchParams.get('client_id')});save();
-  const second=await start();assert.notEqual(second.searchParams.get('state'),first.searchParams.get('state'));
-  await authorize(second,false);
-  result.validClientSecretCase.martyDenial=requireMartyInvalidSecret(new URL(page.url()),platform.id,
+  const second=await start();result.validClientSecretCase.distinctAuthorizationState=second.searchParams.get('state')!==first.searchParams.get('state');save();assert.notEqual(second.searchParams.get('state'),first.searchParams.get('state'));
+  stage('MARTY_CALLBACK');await authorize(second,false);
+  const martyUrl=new URL(page.url());result.validClientSecretCase.martyCallbackObservation={originExpected:martyUrl.origin===MARTY,platformMatches:martyUrl.searchParams.get('platform_id')===platform.id,outcomeExpected:martyUrl.searchParams.get('outcome')==='error',errorCodeExpected:martyUrl.searchParams.get('error_code')==='oauth_token_exchange_failed'};save();
+  result.validClientSecretCase.martyDenial=requireMartyInvalidSecret(martyUrl,platform.id,
    {codeIssuedForSameClient:true,providerInvalidSecret:true});
+  stage('DRAFT_DISCONNECTED_READBACK');
   const after=await gateway('/v1/integrations/canvas/platforms/'+platform.id,admin);
   assert.equal(after.status,200);assert.equal(after.payload.enabled,false);
   assert.notEqual(after.payload.connection_config?.oauth_status,'connected');
@@ -184,6 +196,28 @@ async function requireOwnedMartyResource(gateway,admin,row,organizationId){
  if(!platform){assert.equal(value.provider,'canvas');assert.equal(value.purpose,'oauth_client_secret');}
  return value;
 }
+async function requestStatelessTokenDenial(requestFactory,form,{observe=()=>{}}={}){
+ // Match the production Rust provider: independent HTTP client, no browser cookies or TLS bypass.
+ const isolated=await requestFactory.newContext({storageState:{cookies:[],origins:[]},ignoreHTTPSErrors:false,extraHTTPHeaders:{Accept:'application/json'}});
+ try{
+  const initial=await isolated.storageState();assert(Array.isArray(initial.cookies)&&initial.cookies.length===0,'Token control must start without browser authority');
+  const response=await isolated.post(CANVAS+'/login/oauth2/token',{form,maxRedirects:0,timeout:30000});
+  const status=response.status();observe({status,transport:'STATELESS_API_CONTEXT',initialCookieCount:0,bodyJsonParsed:false});
+  const body=await response.json();observe({...providerDenialObservation(status,body),transport:'STATELESS_API_CONTEXT',initialCookieCount:0,bodyJsonParsed:true});
+  return {status,body};
+ }finally{await isolated.dispose();}
+}
+function authorizationBoundaryChecks(url,clientId){
+ return {originExpected:url.origin===CANVAS,pathExpected:url.pathname==='/login/oauth2/auth',clientIdMatches:url.searchParams.get('client_id')===clientId,redirectUriExpected:url.searchParams.get('redirect_uri')===MARTY+'/v1/integrations/canvas/oauth/callback',statePresent:Boolean(url.searchParams.get('state'))};
+}
+function callbackBoundaryChecks(url,state){
+ return {originExpected:url.origin===MARTY,pathExpected:url.pathname==='/v1/integrations/canvas/oauth/callback',stateMatches:url.searchParams.get('state')===state,codePresent:Boolean(url.searchParams.get('code')),providerErrorPresent:url.searchParams.has('error')};
+}
+function providerDenialObservation(status,body){
+ const errors=new Set(['invalid_client','invalid_grant','invalid_request','access_denied','unsupported_grant_type']);
+ const description=body?.error_description;
+ return {status,errorClass:errors.has(body?.error)?body.error:'UNRECOGNIZED',errorFieldPresent:Object.hasOwn(body||{},'error'),descriptionFieldPresent:Object.hasOwn(body||{},'error_description'),descriptionClass:description==='invalid client'?'INVALID_CLIENT_SECRET':description==='unknown client'?'UNKNOWN_CLIENT':description==='authorization_code not found'?'INVALID_AUTHORIZATION_CODE':typeof description==='string'?'OTHER':'ABSENT'};
+}
 function safeCanvasFailure(error,ContractFailure){
  if(ContractFailure&&error instanceof ContractFailure)return {type:'ContractFailure',code:/^[a-z0-9_]{1,100}$/.test(error.code)?error.code:'stock_contract_failure'};
  return {type:['AssertionError','TimeoutError'].includes(error?.name)?error.name:'Error'};
@@ -222,5 +256,5 @@ async function runWrongSecretCase(options){
   throw new Error('Canvas valid-client wrong-secret control failed; preserve its owned journal for review.');
  }
 }
-module.exports={safeCanvasFailure,canvasFailureDiagnostic,assertCanvasLoginIdentity,requireOwnedMartyResource,retireCanvasSession,planWrongSecretCase,requireProviderInvalidSecret,requireMartyInvalidSecret,runWrongSecretCase};
+module.exports={requestStatelessTokenDenial,authorizationBoundaryChecks,callbackBoundaryChecks,providerDenialObservation,safeCanvasFailure,canvasFailureDiagnostic,assertCanvasLoginIdentity,requireOwnedMartyResource,retireCanvasSession,planWrongSecretCase,requireProviderInvalidSecret,requireMartyInvalidSecret,runWrongSecretCase};
 if(require.main===module){assert.deepEqual(process.argv.slice(2),['--plan'],'Offline plan only; execution requires reviewed existing capability runner');console.log(JSON.stringify(planWrongSecretCase(),null,2));}

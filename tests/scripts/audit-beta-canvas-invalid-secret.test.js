@@ -1,6 +1,6 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict');
-const {requireProviderInvalidSecret,requireMartyInvalidSecret,planWrongSecretCase,runWrongSecretCase,retireCanvasSession,requireOwnedMartyResource,assertCanvasLoginIdentity,canvasFailureDiagnostic,safeCanvasFailure}=require('./audit-beta-canvas-invalid-secret');
+const {requireProviderInvalidSecret,requireMartyInvalidSecret,planWrongSecretCase,runWrongSecretCase,retireCanvasSession,requireOwnedMartyResource,assertCanvasLoginIdentity,canvasFailureDiagnostic,safeCanvasFailure,authorizationBoundaryChecks,callbackBoundaryChecks,providerDenialObservation,requestStatelessTokenDenial}=require('./audit-beta-canvas-invalid-secret');
 const valid={status:401,error:'invalid_client',description:'invalid client',issuedCode:true,clientEnabled:true,clientId:'100',issuedClientId:'100'};
 test('only enabled same-client issued-code credential error counts',()=>{assert.equal(requireProviderInvalidSecret(valid).validEnabledClient,true)});
 for(const patch of [{description:'unknown client'},{description:undefined},{error:'invalid_grant'},{error:'access_denied'},{error:'unknown_client'},{status:500},{status:200},{issuedCode:false},{clientEnabled:false},{issuedClientId:'101'}])test('reject confounded denial '+JSON.stringify(patch),()=>{assert.throws(()=>requireProviderInvalidSecret({...valid,...patch}));});
@@ -67,4 +67,21 @@ test('primary stock contract failure survives a separate cleanup failure and ses
  finally{Module._load=load;}
  assert.deepEqual(result.validClientSecretCase.operationFailure,{type:'ContractFailure',code:'canvas_oauth_scope_controls_missing'});assert.deepEqual(result.validClientSecretCase.resourceCleanupFailure,{type:'Error'});assert.equal(result.validClientSecretCase.failureType,'ContractFailure');assert.equal(result.validClientSecretCase.canvasSessionRetired,true);assert.equal(closed,true);
  assert.deepEqual(safeCanvasFailure(Object.assign(Error('secret'),{code:'secret'}),StockFailure),{type:'Error'});
+});
+
+test('OAuth boundary observations expose only booleans and known error classes, never secret values',()=>{
+ const secret='NEVER-PUBLISH-STATE-CODE-OR-SECRET';
+ const start=new URL('https://canvas-test.elevenidllc.com/login/oauth2/auth');start.searchParams.set('client_id',secret);start.searchParams.set('state',secret);start.searchParams.set('redirect_uri','https://beta.elevenidllc.com/v1/integrations/canvas/oauth/callback');
+ assert.deepEqual(authorizationBoundaryChecks(start,secret),{originExpected:true,pathExpected:true,clientIdMatches:true,redirectUriExpected:true,statePresent:true});
+ const callback=new URL('https://beta.elevenidllc.com/v1/integrations/canvas/oauth/callback');callback.searchParams.set('state',secret);callback.searchParams.set('code',secret);assert.equal(callbackBoundaryChecks(callback,secret).codePresent,true);
+ const observations=[authorizationBoundaryChecks(start,secret),callbackBoundaryChecks(callback,secret),providerDenialObservation(401,{error:secret,error_description:secret})];assert(!JSON.stringify(observations).includes(secret));
+ assert.equal(providerDenialObservation(401,{error:'invalid_client',error_description:'invalid client'}).descriptionClass,'INVALID_CLIENT_SECRET');assert.equal(providerDenialObservation(401,{error:'invalid_client',error_description:'unknown client'}).descriptionClass,'UNKNOWN_CLIENT');assert.equal(providerDenialObservation(401,{errors:[{message:secret}]}).errorClass,'UNRECOGNIZED');
+});
+
+test('negative token transport is isolated from browser cookies and disposed on every outcome',async()=>{
+ for(const mode of ['response','parse-failure','cookie-injection']){
+  const events=[];const factory={newContext:async options=>{assert.deepEqual(options,{storageState:{cookies:[],origins:[]},ignoreHTTPSErrors:false,extraHTTPHeaders:{Accept:'application/json'}});return {storageState:async()=>({cookies:mode==='cookie-injection'?[{name:'browser',value:'NEVER-LOG'}]:[]}),post:async(url,options)=>{events.push('post');assert.equal(url,'https://canvas-test.elevenidllc.com/login/oauth2/token');assert.equal(options.maxRedirects,0);assert.equal(options.timeout,30000);assert.equal(options.headers,undefined);return {status:()=>401,json:async()=>{if(mode==='parse-failure')throw Error('private body');return {error:'invalid_client',error_description:'invalid client'}}}},dispose:async()=>events.push('dispose')};}};
+  if(mode==='response'){const observations=[];const value=await requestStatelessTokenDenial(factory,{code:'private-code',client_secret:'private-secret'},{observe:row=>observations.push(row)});assert.equal(value.status,401);assert.equal(observations.at(-1).initialCookieCount,0);assert(!JSON.stringify(observations).includes('private'));assert.deepEqual(events,['post','dispose']);}
+  else{await assert.rejects(requestStatelessTokenDenial(factory,{code:'private-code'}));assert.deepEqual(events,mode==='cookie-injection'?['dispose']:['post','dispose']);}
+ }
 });
