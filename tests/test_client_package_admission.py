@@ -17,13 +17,16 @@ SPEC = importlib.util.spec_from_file_location(
 )
 MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)
-VERSION = "0.3.3"
+VERSION = "0.3.4"
 SOURCE = "b" * 40
 BASE = f"https://github.com/ElevenID/marty-cli/releases/download/v{VERSION}/"
 
 
-def archive(name, *, extra=None, version=VERSION, license=True):
+def archive(name, *, extra=None, version=VERSION, license=True, typed=True, declaration=True, exports=None):
     manifest = {"name": "@elevenid/" + name, "version": version}
+    if name == "marty-api-core" and typed:
+        manifest.update(types="src/index.d.ts", exports=exports or {
+            ".": {"types": "./src/index.d.ts", "default": "./src/index.js"}})
     if name == "marty-cli":
         manifest["optionalDependencies"] = {"@elevenid/marty-cli-" + p: version for p in MODULE.PLATFORMS}
     if name == "marty-cli-linux-x64":
@@ -33,6 +36,8 @@ def archive(name, *, extra=None, version=VERSION, license=True):
     files = {"package/package.json": json.dumps(manifest).encode(), "package/" + entry: b"fixture"}
     if name == "marty-api-core":
         files["package/src/index.js"] = b"fixture"
+        if declaration:
+            files["package/src/index.d.ts"] = b"export function createApiClient(): unknown;"
     if license:
         files["package/LICENSE"] = b"fixture license"
     output = io.BytesIO()
@@ -116,6 +121,16 @@ def test_rejects_wrong_archive_or_sbom_release_location():
 def test_rejects_sdk_sbom_that_actually_describes_the_cli():
     with pytest.raises(ValueError, match="wrong package"):
         MODULE.sbom_identity(bom("marty-cli"), "marty-api-core", VERSION)
+
+
+@pytest.mark.parametrize("options", [
+    {"typed": False},
+    {"declaration": False},
+    {"exports": {".": {"types": "./src/wasm/marty_api_client.d.ts", "default": "./src/index.js"}}},
+])
+def test_rejects_runtime_packages_without_the_public_factory_type_contract(options):
+    with pytest.raises(ValueError, match="public type"):
+        MODULE.archive_manifest(archive("marty-api-core", **options), "marty-api-core", VERSION)
 
 
 @pytest.mark.parametrize("mutation", ["version", "scope", "edge", "extra", "wasm"])
