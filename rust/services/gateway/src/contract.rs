@@ -425,7 +425,12 @@ impl GatewayContract {
             "components": {
                 "schemas": crate::openapi::schemas(),
                 "securitySchemes": {
-                    "bearerAuth": {"type": "http", "scheme": "bearer", "bearerFormat": "JWT"},
+                    "bearerAuth": {
+                        "type": "http",
+                        "scheme": "bearer",
+                        "bearerFormat": "Marty API key",
+                        "description": "Use an organization-bound Marty API key with an mk_live_, mk_test_, pk_live_ or pk_test_ prefix. OAuth access tokens and ID tokens are not accepted by this gateway authentication scheme. API-key scopes and tenant authorization still apply."
+                    },
                     "apiKeyAuth": {"type": "apiKey", "in": "header", "name": "X-API-Key"},
                     "sessionCookie": {"type": "apiKey", "in": "cookie", "name": "sessionId"}
                 }
@@ -1072,6 +1077,34 @@ mod tests {
                 "{method:?} {path}"
             );
         }
+    }
+
+    #[test]
+    fn openapi_bearer_scheme_matches_gateway_key_authentication() {
+        let document = GatewayContract::load().unwrap().openapi_document("test");
+        let scheme = &document["components"]["securitySchemes"]["bearerAuth"];
+        assert_eq!(scheme["type"], "http");
+        assert_eq!(scheme["scheme"], "bearer");
+        assert_eq!(scheme["bearerFormat"], "Marty API key");
+        let description = scheme["description"].as_str().unwrap();
+        for prefix in ["mk_live_", "mk_test_", "pk_live_", "pk_test_"] {
+            let key = format!("{prefix}contract-test");
+            let headers = std::collections::BTreeMap::from([(
+                "authorization".to_owned(),
+                format!("Bearer {key}"),
+            )]);
+            assert!(description.contains(prefix));
+            assert_eq!(
+                crate::middleware::extract_api_key(&headers),
+                Some(key.as_str())
+            );
+        }
+        let jwt_headers = std::collections::BTreeMap::from([(
+            "authorization".to_owned(),
+            "Bearer eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJjbGllbnQifQ.signature".to_owned(),
+        )]);
+        assert!(crate::middleware::extract_api_key(&jwt_headers).is_none());
+        assert!(description.contains("OAuth access tokens and ID tokens are not accepted"));
     }
 
     #[test]

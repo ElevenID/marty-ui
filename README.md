@@ -5,6 +5,11 @@
 Microservice-based control plane and UI for Marty credential, trust, policy,
 applicant, and flow management.
 
+For custom applications and CLI consumers, see
+[machine API authentication](docs/API_MACHINE_AUTHENTICATION.md), including
+organization-scoped API keys, credential lifecycle and the current OAuth
+limitation.
+
 ## 🚀 Quick Start
 
 ### Local Development (Recommended)
