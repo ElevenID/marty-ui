@@ -557,7 +557,12 @@ async fn run_with_profile(database_url: &str, rendered_redis: Option<&str>, ingr
         let mut expected_after_startup = source_before_startup;
         expected_after_startup["transaction"]["access_token_expires_at"] =
             source_before["transaction"]["access_token_expires_at"].clone();
-        startup_snapshot::assert_migrated_legacy_snapshot(expected_after_startup, &source_before);
+        let expected_after_startup =
+            startup_snapshot::legacy_snapshot_with_nullable_mdoc_reference(expected_after_startup);
+        assert_eq!(
+            source_before, expected_after_startup,
+            "startup migration changed seeded renewal domain state"
+        );
         let gateway_fixture = if gateway {
             let fixture = super::base_runtime_gateway::GatewayFixture::start(
                 rendered_model.as_ref().unwrap(),
