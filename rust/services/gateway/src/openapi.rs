@@ -42,6 +42,16 @@ pub fn schemas() -> Value {
         "../../../../contracts/credential-template-validity-input.json"
     ))
     .expect("native template validity input schema");
+    let template_writes: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/credential-template-write-schemas.json"
+    ))
+    .expect("native template write schemas");
+    schemas.as_object_mut().expect("schemas").extend(
+        template_writes
+            .as_object()
+            .expect("template write schemas")
+            .clone(),
+    );
     schemas["runtime__issuer_identity_capabilities"] = serde_json::from_str(include_str!(
         "../../../../contracts/issuer-identity-capabilities-response.json"
     ))
@@ -354,14 +364,14 @@ pub fn describe_operation(operation: &mut Value, method: HttpMethod, path: &str,
     if (method == Post && path == "/v1/credential-templates")
         || (method == Patch && path == "/v1/credential-templates/{template_id}")
     {
-        // Document this reconciled field without claiming the rest of the
-        // service-owned request DTO has been fully described.
+        let component = if method == Post { "create" } else { "update" };
         operation["requestBody"] = json!({"required":true,"content":{"application/json":{"schema":{
-            "type":"object","properties":{"validity_rules":{"anyOf":[
-                {"$ref":"#/components/schemas/runtime__credential_template_validity_input"},
-                {"type":"null"}
-            ]}}
+            "$ref":format!("#/components/schemas/runtime__credential_template_{component}_request")
         }}}});
+        operation["description"] = json!(
+            "Requires the existing tenant-scoped template write permission. Creation requires a public issuer DID, nonempty claims and a live compatible compliance/issuer binding; custody selectors are not public inputs. PATCH applies only to drafts, with null optional fields generally preserving stored values. Schema validation describes write DTOs, not authorization, readiness or successful issuance; native format/protocol, cross-claim and provider checks still apply."
+        );
+        operation["x-marty-request-schema-documented"] = json!(true);
         operation["x-marty-validity-rules-schema-documented"] = json!(true);
     }
     let template_response = (matches!(method, Get | Post) && path == "/v1/credential-templates")
@@ -937,11 +947,15 @@ mod tests {
             if (method == HttpMethod::Post && path == "/v1/credential-templates")
                 || method == HttpMethod::Patch
             {
-                assert_eq!(operation["x-marty-request-schema-documented"], false);
+                assert_eq!(operation["x-marty-request-schema-documented"], true);
                 assert_eq!(operation["x-marty-validity-rules-schema-documented"], true);
+                let reference = operation["requestBody"]["content"]["application/json"]["schema"]
+                    ["$ref"]
+                    .as_str()
+                    .unwrap();
+                let name = reference.strip_prefix("#/components/schemas/").unwrap();
                 assert_eq!(
-                    operation["requestBody"]["content"]["application/json"]["schema"]["properties"]
-                        ["validity_rules"]["anyOf"][0]["$ref"],
+                    schemas[name]["properties"]["validity_rules"]["anyOf"][0]["$ref"],
                     "#/components/schemas/runtime__credential_template_validity_input"
                 );
             }
