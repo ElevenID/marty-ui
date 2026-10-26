@@ -76,6 +76,10 @@ $script:EnvFiles = @($TunnelEnvFile, $GeneratedEnvFile)
 foreach ($envFile in $script:EnvFiles) {
     if (-not (Test-Path -LiteralPath $envFile -PathType Leaf)) { throw "Required beta environment file is missing: $envFile" }
 }
+# Resolve against the invocation directory once for every downstream consumer.
+$TunnelEnvFile = (Resolve-Path -LiteralPath $TunnelEnvFile -ErrorAction Stop).ProviderPath
+$GeneratedEnvFile = (Resolve-Path -LiteralPath $GeneratedEnvFile -ErrorAction Stop).ProviderPath
+$script:EnvFiles = @($TunnelEnvFile, $GeneratedEnvFile)
 if ([string]::IsNullOrWhiteSpace($TunnelTokenEnvFile)) {
     throw "TunnelTokenEnvFile must name the active protected beta connector environment file"
 }
@@ -1463,116 +1467,31 @@ Write-Utf8Text -Path (Join-Path $script:ArtifactDir 'native-migration-image-plan
 } | ConvertTo-Json) + "`n")
 
 Write-Step "Rehearse one-way migration on isolated beta copy"
-$copySuffix = $sourceId.Substring(0, 12)
-$copyContainer = "elevenid-beta-copy-$copySuffix"
-$copyRedisContainer = "elevenid-beta-copy-redis-$copySuffix"
-$copyOpenBaoContainer = "elevenid-beta-copy-openbao-$copySuffix"
-$copyPassword = -join ((1..32) | ForEach-Object { '{0:x}' -f (Get-Random -Maximum 16) })
-$copyRedisPassword = -join ((1..32) | ForEach-Object { '{0:x}' -f (Get-Random -Maximum 16) })
-$encodedCopyRedisPassword = [Uri]::EscapeDataString($copyRedisPassword)
-$copyBaoToken = -join ((1..40) | ForEach-Object { '{0:x}' -f (Get-Random -Maximum 16) })
-$copyBaoImage = "quay.io/openbao/openbao@sha256:6c75c97223873807260352f269640935a07db0c26b3dbf12a98a36ec43ad9878"
-$rehearsalContainers = @($copyContainer, $copyOpenBaoContainer, $copyRedisContainer)
-try {
-    foreach ($candidate in $rehearsalContainers) {
-        $existing = docker ps -a --filter "name=^/$candidate$" --format '{{.Names}}'
-        if ($existing -and $candidate.StartsWith("elevenid-beta-copy-")) {
-            Invoke-Checked -FilePath docker -Arguments @("rm", "--force", $candidate)
-        }
-    }
-    Invoke-Checked -FilePath docker -Arguments @("run", "--detach", "--name", $copyContainer, "--network", $script:BetaNetwork, "--env", "POSTGRES_PASSWORD=$copyPassword", "postgres:15-alpine")
-    Invoke-Checked -FilePath docker -Arguments @("run", "--detach", "--name", $copyOpenBaoContainer, "--network", $script:BetaNetwork, "--tmpfs", "/tmp/bao-tls:rw,mode=1777", "--env", "BAO_DEV_ROOT_TOKEN_ID=$copyBaoToken", "--env", "BAO_DEV_LISTEN_ADDRESS=0.0.0.0:8200", $copyBaoImage, "server", "-dev", "-dev-tls", "-dev-tls-cert-dir=/tmp/bao-tls")
-    Invoke-Checked -FilePath docker -Arguments @(
-        "run", "--detach", "--name", $copyRedisContainer, "--network", $script:BetaNetwork,
-        "redis:7-alpine", "redis-server", "--requirepass", $copyRedisPassword
-    )
-    $ready = $false
-    foreach ($attempt in 1..60) {
-        $probe = Invoke-BetaDockerReadinessProbe -Arguments @('exec', $copyContainer, 'pg_isready', '-U', 'postgres')
-        if ($probe.exit_code -eq 0) { $ready = $true; break }
-        Start-Sleep -Seconds 2
-    }
-    if (-not $ready) { throw "Rehearsal PostgreSQL did not become ready" }
-    $redisReady = $false
-    $openBaoReady = $false
-    foreach ($attempt in 1..60) {
-        $redisProbe = Invoke-BetaDockerReadinessProbe -Arguments @('exec', $copyRedisContainer, 'redis-cli', '--no-auth-warning', '-a', $copyRedisPassword, 'ping')
-        if ($redisProbe.exit_code -eq 0 -and $redisProbe.output -contains 'PONG') { $redisReady = $true }
-        $baoProbe = Invoke-BetaDockerReadinessProbe -Arguments @('exec', $copyOpenBaoContainer, 'bao', 'status', '-address=https://127.0.0.1:8200', '-ca-cert=/tmp/bao-tls/vault-ca.pem')
-        if ($baoProbe.exit_code -eq 0) { $openBaoReady = $true }
-        if ($redisReady -and $openBaoReady) { break }
-        Start-Sleep -Seconds 2
-    }
-    if (-not $redisReady) { throw "Rehearsal Redis did not become ready" }
-    if (-not $openBaoReady) { throw "Rehearsal OpenBao did not become ready" }
-    $copyCaPath = Join-Path $logsDir "openbao-copy-public-ca.crt"
-    # Docker's archive/cp API cannot read this tmpfs mount on the beta host.
-    $copyCaContent = Read-BetaContainerPublicCertificate -Container $copyOpenBaoContainer -Path '/tmp/bao-tls/vault-ca.pem'
-    Write-Utf8Text -Path $copyCaPath -Content $copyCaContent
-    $copyCaMount = "type=bind,src=$copyCaPath,dst=/bao-public-ca/ca.crt,readonly"
-    Invoke-Checked -FilePath docker -Arguments @(
-        "run", "--rm", "--network", "container:$copyOpenBaoContainer",
-        "--mount", $copyCaMount,
-        "--env", "BAO_ADDR=https://localhost:8200",
-        "--env", "BAO_CACERT=/bao-public-ca/ca.crt",
-        "--env", "BAO_TOKEN=$copyBaoToken",
-        "--mount", "type=bind,src=$((Resolve-Path (Join-Path $script:RepoRoot 'docker/openbao-init.sh')).Path),dst=/scripts/openbao-init.sh,readonly",
-        "--entrypoint", "/bin/sh", $copyBaoImage, "/scripts/openbao-init.sh"
-    )
-    $copyNotificationToken = & docker run --rm --network "container:$copyOpenBaoContainer" `
-        --mount $copyCaMount `
-        --env "BAO_ADDR=https://localhost:8200" --env "BAO_CACERT=/bao-public-ca/ca.crt" --env "BAO_TOKEN=$copyBaoToken" `
-        $copyBaoImage bao token create -policy=notification-webhook-service -no-default-policy -orphan -ttl=2h -renewable=false -field=token
-    if ($LASTEXITCODE -ne 0 -or -not $copyNotificationToken) { throw "Rehearsal Notification token creation failed" }
-    Invoke-Checked -FilePath docker -Arguments @("exec", $copyContainer, "psql", "-U", "postgres", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-c", "CREATE ROLE marty LOGIN PASSWORD '$copyPassword';")
-    Invoke-Checked -FilePath docker -Arguments @("exec", $copyContainer, "createdb", "-U", "postgres", "-O", "marty", "marty")
-    Invoke-Checked -FilePath docker -Arguments @("cp", (Join-Path $preflightBackupDir "postgres-marty.dump"), "${copyContainer}:/tmp/marty.dump")
-    Invoke-Checked -FilePath docker -Arguments @("exec", $copyContainer, "pg_restore", "-U", "postgres", "-d", "marty", "--no-owner", "--role=marty", "/tmp/marty.dump")
-    $copyUrl = "postgresql://marty:$copyPassword@${copyContainer}:5432/marty"
-    Invoke-ComposeLogged -Arguments @('run', '--rm', '--no-deps', '--env', "DATABASE_URL=$copyUrl", 'revocation-profile-migrate') `
-        -LogPath (Join-Path $logsDir 'revocation-migration-rehearsal.log') -FailureMessage 'Native revocation migration rehearsal failed'
-    $rehearsalArguments = @(
-        "run", "--rm", "--network", "container:$copyOpenBaoContainer",
-        "--mount", $copyCaMount,
-        "--env", "DATABASE_URL=$copyUrl",
-        "--env", "MARTY_DB_PASSWORD=$copyPassword",
-        "--env", "MARTY_ORG_ADMIN_EMAIL=$migrationAdminEmail",
-        "--env", "PUBLIC_API_URL=$BetaOrigin",
-        "--env", "MARTY_MIGRATION_PROFILE=beta",
-        "--env", "MARTY_KMS_BOOTSTRAP_ENABLED=false",
-        "--env", "BAO_ADDR=https://localhost:8200",
-        "--env", "BAO_CACERT=/bao-public-ca/ca.crt",
-        "--env", "NOTIFICATION_OPENBAO_CA_CERT_FILE=/bao-public-ca/ca.crt",
-        "--env", "NOTIFICATION_OPENBAO_TOKEN=$copyNotificationToken",
-        "--env", "REDIS_URL=redis://:${encodedCopyRedisPassword}@${copyRedisContainer}:6379",
-        "--env", "MARTY_ORG_ID=$PilotOrganizationId"
-    )
-    $rehearsalArguments += @($migrationImage)
-    Invoke-DockerLogged -Arguments $rehearsalArguments -LogPath (Join-Path $logsDir "migration-rehearsal.log") -FailureMessage "Migration rehearsal failed"
-    $verifyArguments = @("run", "--rm", "--network", "container:$copyOpenBaoContainer", "--mount", $copyCaMount, "--env", "DATABASE_URL=$copyUrl", "--env", "PUBLIC_API_URL=$BetaOrigin", "--env", "MARTY_MIGRATION_PROFILE=beta", "--env", "MARTY_KMS_BOOTSTRAP_ENABLED=false", "--env", "BAO_ADDR=https://localhost:8200", "--env", "BAO_CACERT=/bao-public-ca/ca.crt", $migrationImage, "/usr/local/bin/marty-migration-bootstrap", "--verify-only")
-    Invoke-DockerLogged -Arguments $verifyArguments -LogPath (Join-Path $logsDir "migration-rehearsal-verify.log") -FailureMessage "Migration rehearsal verification failed"
-    $copyIssuanceUrl = "postgresql://marty:$copyPassword@${copyContainer}:5432/marty"
-    $rehearsalIssuanceVerify = @("run", "--rm", "--no-deps", "--env", "DATABASE_URL=$copyIssuanceUrl", "issuance-migrations")
-    Invoke-ComposeLogged `
-        -Arguments @("run", "--rm", "--no-deps", "--env", "DATABASE_URL=$copyIssuanceUrl", "issuance-migrations") `
-        -LogPath (Join-Path $logsDir "issuance-migration-rehearsal.log") `
-        -FailureMessage "Issuance migration rehearsal failed"
-    Invoke-ComposeLogged `
-        -Arguments $rehearsalIssuanceVerify `
-        -LogPath (Join-Path $logsDir "issuance-migration-rehearsal-verify.log") `
-        -FailureMessage "Issuance migration rehearsal verification failed"
-    foreach ($verificationPass in 1..2) {
-        Invoke-VerificationMigration -Image $verificationMigrationImage -DatabaseUrl $copyUrl `
-            -LogPath (Join-Path $logsDir "verification-migration-rehearsal-$verificationPass.log")
-    }
+$rehearsalContext = [ordered]@{
+    repo_root = $script:RepoRoot
+    artifact_dir = $script:ArtifactDir
+    backup_dir = $preflightBackupDir
+    logs_dir = $logsDir
+    source_id = $sourceId
+    migration_image = $migrationImage
+    verification_image = $verificationMigrationImage
+    env_files = @($script:EnvFiles)
+    compose_files = @($script:ComposeFiles)
+    migration_admin_email = $migrationAdminEmail
+    pilot_organization_id = $PilotOrganizationId
+    beta_origin = $BetaOrigin
 }
-finally {
-    foreach ($expectedContainer in $rehearsalContainers) {
-        $candidate = docker ps -a --filter "name=^/$expectedContainer$" --format '{{.Names}}'
-        if ($candidate -eq $expectedContainer -and $expectedContainer.StartsWith("elevenid-beta-copy-")) {
-            docker rm --force $expectedContainer | Out-Null
-        }
-    }
+$previousOutputEncoding = $OutputEncoding
+try {
+    $OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+    $rehearsalResponse = ($rehearsalContext | ConvertTo-Json -Depth 4 -Compress) |
+        & python (Join-Path $script:RepoRoot "scripts/rehearse_beta_migrations.py")
+    $rehearsalExitCode = $LASTEXITCODE
+}
+finally { $OutputEncoding = $previousOutputEncoding }
+if ($rehearsalExitCode -ne 0 -or
+    (($rehearsalResponse -join "`n") | ConvertFrom-Json).completed -ne $true) {
+    throw "Native beta migration rehearsal failed; do not enter live maintenance"
 }
 
 if (-not $OfficialStackRelease -and -not $UsePreparedLocalImages) {

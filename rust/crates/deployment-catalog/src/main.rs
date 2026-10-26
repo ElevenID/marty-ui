@@ -514,6 +514,20 @@ fn run() -> Result<(), String> {
         use marty_deployment_catalog::operator::{self, REFUSAL};
         use std::io::{Read, Write};
         let result = match args.get(1).map(String::as_str) {
+            Some("beta-rehearsal") if args.len() == 2 => {
+                let mut input = Vec::new();
+                std::io::stdin()
+                    .take(64 * 1024 + 1)
+                    .read_to_end(&mut input)
+                    .map_err(|_| REFUSAL)?;
+                if input.len() > 64 * 1024 {
+                    return Err(REFUSAL.into());
+                }
+                let context: Value = serde_json::from_slice(&input).map_err(|_| REFUSAL)?;
+                let result = marty_deployment_catalog::beta_rehearsal::run(context)?;
+                serde_json::to_writer(std::io::stdout(), &result).map_err(|_| REFUSAL)?;
+                Ok(())
+            }
             Some("beta-runtime-config") if args.len() == 4 => {
                 let value = marty_deployment_catalog::beta_runtime_config::stage(
                     std::path::Path::new(&args[2]),
@@ -1092,6 +1106,7 @@ fn main() {
             marty_deployment_catalog::approle::CLEANUP_REFRESH,
             marty_deployment_catalog::keycloak::RECOVERY,
             marty_deployment_catalog::ca_issuer::RECOVERY,
+            marty_deployment_catalog::beta_rehearsal::RECOVERY,
         ]
         .contains(&error.as_str())
         {
