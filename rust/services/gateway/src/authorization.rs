@@ -419,6 +419,11 @@ static SPECIAL_RULES: LazyLock<Vec<RouteRule>> = LazyLock::new(|| {
             "application",
         ),
         rule(
+            r"^/v1/organizations/[^/]+/applicants/[^/]+/retire-offer$",
+            &[("POST", "issuance:revoke")],
+            "application",
+        ),
+        rule(
             r"^/v1/organizations/[^/]+/applicants(?:/[^/]+)?$",
             &[
                 ("GET", "application:view"),
@@ -1264,6 +1269,13 @@ mod tests {
             .expect("approval route");
         assert_eq!(approve.permission, "application:approve");
         assert!(!api_key_allowed(approve.permission, &read_scopes));
+        let retire = resolve_action(
+            "POST",
+            "/v1/organizations/org-1/applicants/app-1/retire-offer",
+        )
+        .expect("offer retirement route");
+        assert_eq!(retire.permission, "issuance:revoke");
+        assert!(!api_key_allowed(retire.permission, &read_scopes));
     }
 
     #[test]

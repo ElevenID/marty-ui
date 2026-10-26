@@ -138,6 +138,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             issuance_url: issuance_native_url,
             issuance_api_key,
             client: Client::new(),
+            management_client: Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .timeout(std::time::Duration::from_secs(10))
+                .build()?,
         }),
     )
     .with_graceful_shutdown(shutdown())

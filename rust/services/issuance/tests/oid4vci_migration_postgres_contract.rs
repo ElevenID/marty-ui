@@ -404,6 +404,7 @@ async fn management_repository_preserves_registration_and_idempotent_revocation_
          CREATE TABLE issuance_service.issuance_transactions (
              id text PRIMARY KEY, organization_id text NOT NULL,
              application_id text, status text NOT NULL,
+             reserved_credential_id text,
              revoked_at timestamptz, revocation_reason text);
          CREATE TABLE issuance_service.issued_credentials (
              id text PRIMARY KEY, transaction_id text NOT NULL UNIQUE,
@@ -425,12 +426,30 @@ async fn management_repository_preserves_registration_and_idempotent_revocation_
              VALUES ('tx-a', 'org-a', 'issued'),
                     ('tx-concurrent', 'org-a', 'issued'),
                     ('tx-service-concurrent', 'org-a', 'issued');
+         INSERT INTO issuance_service.issuance_transactions
+             (id, organization_id, application_id, status, reserved_credential_id)
+             VALUES ('tx-cancel-pending', 'org-a', 'app-a', 'pending', NULL),
+                    ('tx-cancel-http', 'org-a', 'app-a', 'pending', NULL),
+                    ('tx-cancel-race', 'org-a', 'app-a', 'pending', NULL),
+                    ('tx-cancel-authorized', 'org-a', 'app-a', 'authorized', NULL),
+                    ('tx-cancel-signing', 'org-a', 'app-a', 'signing', 'credential-reserved'),
+                    ('tx-cancel-issued', 'org-a', 'app-a', 'issued', NULL),
+                    ('tx-cancel-revoked-issued', 'org-a', 'app-a', 'revoked', NULL),
+                    ('tx-cancel-has-credential', 'org-a', 'app-a', 'pending', NULL),
+                    ('tx-cancel-foreign', 'org-b', 'app-a', 'pending', NULL),
+                    ('tx-cancel-other-app', 'org-a', 'app-b', 'pending', NULL);
          INSERT INTO issuance_service.issued_credentials
              (id, transaction_id, organization_id, credential_template_id,
               status, status_updated_at, revoked, status_list_entries)
              VALUES ('credential-a', 'tx-a', 'org-a', 'template-a',
                      'active', clock_timestamp(), false, '[]'::jsonb),
                     ('credential-service-concurrent', 'tx-service-concurrent',
+                     'org-a', 'template-a', 'active', clock_timestamp(), false,
+                     '[]'::jsonb),
+                    ('credential-cancel-existing', 'tx-cancel-has-credential',
+                     'org-a', 'template-a', 'active', clock_timestamp(), false,
+                     '[]'::jsonb),
+                    ('credential-cancel-revoked', 'tx-cancel-revoked-issued',
                      'org-a', 'template-a', 'active', clock_timestamp(), false,
                      '[]'::jsonb);
          INSERT INTO issuance_service.credential_delivery_records
@@ -489,6 +508,61 @@ async fn management_repository_preserves_registration_and_idempotent_revocation_
     assert_eq!(binding.id, "credential-a");
     assert_eq!(binding.organization_id, "org-a");
 
+    let cancelled = repository
+        .cancel_unissued_transaction("tx-cancel-pending", "org-a", "app-a", Some("retire"))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(cancelled.status, "revoked");
+    let retried_cancel = repository
+        .cancel_unissued_transaction("tx-cancel-pending", "org-a", "app-a", Some("new reason"))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(retried_cancel.revoked_at, cancelled.revoked_at);
+    assert_eq!(
+        retried_cancel.revocation_reason,
+        cancelled.revocation_reason
+    );
+    for transaction_id in [
+        "tx-cancel-authorized",
+        "tx-cancel-signing",
+        "tx-cancel-issued",
+        "tx-cancel-revoked-issued",
+        "tx-cancel-has-credential",
+        "tx-cancel-foreign",
+        "tx-cancel-other-app",
+    ] {
+        assert!(repository
+            .cancel_unissued_transaction(transaction_id, "org-a", "app-a", None)
+            .await
+            .unwrap()
+            .is_none());
+    }
+    let raced_repository = repository.clone();
+    let (cancel_result, authorize_result) = tokio::join!(
+        raced_repository.cancel_unissued_transaction("tx-cancel-race", "org-a", "app-a", None),
+        sqlx::query("UPDATE issuance_service.issuance_transactions SET status = 'authorized' WHERE id = 'tx-cancel-race' AND status = 'pending'")
+            .execute(&pool),
+    );
+    let cancelled_race = cancel_result.unwrap().is_some();
+    let authorized_race = authorize_result.unwrap().rows_affected() == 1;
+    assert_ne!(cancelled_race, authorized_race);
+    let final_status: String = sqlx::query_scalar(
+        "SELECT status FROM issuance_service.issuance_transactions WHERE id = 'tx-cancel-race'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        final_status,
+        if cancelled_race {
+            "revoked"
+        } else {
+            "authorized"
+        }
+    );
+
     let revoked = repository
         .revoke_transaction("tx-a", Some("holder request"))
         .await
@@ -539,6 +613,29 @@ async fn management_repository_preserves_registration_and_idempotent_revocation_
         Some("management-key"),
     );
     let app = oid4vci_management_http::router(service);
+    let cancel_path = "/v1/issuance/transactions/tx-cancel-http/cancel-unissued";
+    let cancel_request = |application_id: &str| {
+        Request::post(cancel_path)
+            .header("x-api-key", "management-key")
+            .header("x-organization-id", "org-a")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                json!({"application_id": application_id}).to_string(),
+            ))
+            .unwrap()
+    };
+    let wrong_application = app.clone().oneshot(cancel_request("app-b")).await.unwrap();
+    assert_eq!(wrong_application.status(), StatusCode::CONFLICT);
+    let cancellation = app.clone().oneshot(cancel_request("app-a")).await.unwrap();
+    assert_eq!(cancellation.status(), StatusCode::OK);
+    let cancelled_body: Value = serde_json::from_slice(
+        &to_bytes(cancellation.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(cancelled_body["id"], "tx-cancel-http");
+    assert_eq!(cancelled_body["status"], "revoked");
     let request = |reason: &str| {
         Request::post("/v1/issuance/transactions/tx-service-concurrent/revoke")
             .header("x-api-key", "management-key")

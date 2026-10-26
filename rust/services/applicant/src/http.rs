@@ -1,7 +1,8 @@
 use crate::{
     service::{ApplicantService, Identity, ReviewRequestContext, ServiceError},
-    Applicant, ApplicantError, Application, Biometric, Evidence, EvidenceStatus, EvidenceUpload,
-    ReviewerLock, VettingCheck, LOCK_TTL_SECONDS, MAX_EVIDENCE_BYTES,
+    Applicant, ApplicantError, Application, Biometric, ClaimState, Evidence, EvidenceStatus,
+    EvidenceUpload, LifecycleStatus, ReviewerLock, VettingCheck, LOCK_TTL_SECONDS,
+    MAX_EVIDENCE_BYTES,
 };
 use axum::{
     body::{Body, Bytes},
@@ -28,6 +29,7 @@ pub struct HttpState {
     pub issuance_url: String,
     pub issuance_api_key: Option<String>,
     pub client: Client,
+    pub management_client: Client,
 }
 
 pub fn router(state: HttpState) -> Router {
@@ -111,6 +113,10 @@ pub fn router(state: HttpState) -> Router {
         .route(
             "/v1/organizations/{organization_id}/applicants/{application_id}/withdraw",
             post(withdraw_organization),
+        )
+        .route(
+            "/v1/organizations/{organization_id}/applicants/{application_id}/retire-offer",
+            post(retire_offer),
         )
         .route("/health", get(health))
         .route("/ready", get(ready))
@@ -1189,6 +1195,106 @@ async fn withdraw_organization(
             )
             .await?,
     )))
+}
+
+async fn retire_offer(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path((organization_id, application_id)): Path<(String, String)>,
+    body: Option<Json<WithdrawRequest>>,
+) -> Result<Json<Value>, ApiError> {
+    organization_identity(&headers, &organization_id, "application:review")?;
+    organization_identity(&headers, &organization_id, "issuance:revoke")?;
+    let (application, _) = state
+        .service
+        .organization_application(&organization_id, &application_id)
+        .await?;
+    let transaction_id = application
+        .system_data
+        .get("issuance_transaction_id")
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty() && !id.starts_with("local-"))
+        .ok_or(ServiceError::WithdrawalRequiresIssuanceReconciliation)?;
+    if application.status == LifecycleStatus::Withdrawn
+        && application
+            .system_data
+            .get("retired_issuance_transaction_id")
+            .and_then(Value::as_str)
+            == Some(transaction_id)
+        && application
+            .system_data
+            .get("issuance_status")
+            .and_then(Value::as_str)
+            == Some("revoked")
+    {
+        return Ok(Json(application_json(&application)));
+    }
+    if application.status != LifecycleStatus::Offered
+        || !matches!(
+            application.claim_state,
+            ClaimState::OfferReady | ClaimState::Expired
+        )
+        || application.issued_at.is_some()
+        || application
+            .system_data
+            .contains_key("active_issuance_attempt")
+    {
+        return Err(ServiceError::WithdrawalRequiresIssuanceReconciliation.into());
+    }
+    let reason = body.and_then(|Json(value)| value.reason);
+    let mut url = reqwest::Url::parse(&format!(
+        "{}/v1/issuance/transactions/",
+        state.issuance_url.trim_end_matches('/')
+    ))
+    .map_err(|_| ApiError::new(StatusCode::SERVICE_UNAVAILABLE, "Issuance URL is invalid"))?;
+    url.path_segments_mut()
+        .map_err(|_| ApiError::new(StatusCode::SERVICE_UNAVAILABLE, "Issuance URL is invalid"))?
+        .pop_if_empty()
+        .push(transaction_id)
+        .push("cancel-unissued");
+    let mut request = state.management_client.post(url);
+    request = request.header("x-organization-id", &organization_id);
+    if let Some(api_key) = &state.issuance_api_key {
+        request = request.header("x-api-key", api_key);
+    }
+    let response = request
+        .json(&json!({"application_id": application_id, "reason": reason.as_deref()}))
+        .send()
+        .await
+        .map_err(|_| {
+            ApiError::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Issuance revocation is temporarily unavailable",
+            )
+        })?;
+    if response.status() == StatusCode::CONFLICT {
+        return Err(ServiceError::WithdrawalRequiresIssuanceReconciliation.into());
+    }
+    if !response.status().is_success() {
+        return Err(ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Issuance revocation was not confirmed",
+        ));
+    }
+    let confirmation: Value = response.json().await.map_err(|_| {
+        ApiError::new(
+            StatusCode::BAD_GATEWAY,
+            "Issuance revocation response is malformed",
+        )
+    })?;
+    if confirmation.get("id").and_then(Value::as_str) != Some(transaction_id)
+        || confirmation.get("status").and_then(Value::as_str) != Some("revoked")
+    {
+        return Err(ApiError::new(
+            StatusCode::BAD_GATEWAY,
+            "Issuance revocation response did not match the offer",
+        ));
+    }
+    let withdrawn = state
+        .service
+        .withdraw_revoked_offer(&application_id, transaction_id, reason, Utc::now())
+        .await?;
+    Ok(Json(application_json(&withdrawn)))
 }
 
 async fn issued_credentials(
