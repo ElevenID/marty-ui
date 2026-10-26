@@ -577,7 +577,8 @@ async fn validate_mdoc_status_binding(
     )
     .fetch_one(&mut *connection)
     .await?;
-    let index: Option<(bool, bool, bool, i16, String, String, Option<String>)> = sqlx::query_as(
+    type MdocStatusIndexCatalogRow = (bool, bool, bool, i16, String, String, Option<String>);
+    let index: Option<MdocStatusIndexCatalogRow> = sqlx::query_as(
         "SELECT i.indisunique,i.indisvalid,i.indisready,i.indnkeyatts,
                 pg_get_indexdef(i.indexrelid,1,false),pg_get_indexdef(i.indexrelid,2,false),
                 pg_get_expr(i.indpred,i.indrelid)

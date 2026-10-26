@@ -307,7 +307,7 @@ async fn authenticated_mdoc_status_requires_exact_reference_and_certificate_then
     for reference in &refs[2..] {
         assert_eq!(
             control
-                .resolve(organization_id, &issuer, &[reference.clone()])
+                .resolve(organization_id, &issuer, std::slice::from_ref(reference))
                 .await
                 .unwrap(),
             Default::default()
