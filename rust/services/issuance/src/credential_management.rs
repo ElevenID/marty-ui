@@ -105,6 +105,8 @@ pub struct CredentialLifecycleAuditRecord {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct CredentialStatusView {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mdoc_status_reference: Option<String>,
     pub id: String,
     pub issuer_did: Option<String>,
     pub status: String,
@@ -169,6 +171,17 @@ pub trait CredentialManagementRepository: Send + Sync {
         &self,
         credential_id: &str,
     ) -> Result<Option<ManagedCredential>, CredentialManagementPortError>;
+
+    /// Resolve only an authenticated mdoc reference within the caller's tenant.
+    /// Repositories without an index return unknown; they must not adopt a UUID
+    /// or fabricate non-revocation from issuer trust.
+    async fn get_by_mdoc_reference(
+        &self,
+        _organization_id: &str,
+        _reference: &marty_mdoc_status_binding::MdocStatusReference,
+    ) -> Result<Option<ManagedCredential>, CredentialManagementPortError> {
+        Ok(None)
+    }
 
     async fn persist(
         &self,
@@ -243,12 +256,31 @@ impl CredentialManagementService {
         credential_id: &str,
         trusted_organization_id: Option<&str>,
     ) -> Result<CredentialStatusView, CredentialManagementError> {
-        let credential = self.load(credential_id).await?;
+        let reference =
+            if marty_mdoc_status_binding::MdocStatusReference::is_reference(credential_id) {
+                Some(
+                    marty_mdoc_status_binding::MdocStatusReference::parse(credential_id)
+                        .map_err(|_| CredentialManagementError::NotFound)?,
+                )
+            } else {
+                None
+            };
+        let credential = if let Some(reference) = &reference {
+            let organization_id = trusted_organization_id
+                .filter(|value| !value.trim().is_empty())
+                .ok_or(CredentialManagementError::NotFound)?;
+            self.repository
+                .get_by_mdoc_reference(organization_id, reference)
+                .await
+                .map_err(|error| CredentialManagementError::RepositoryUnavailable(error.0))?
+                .ok_or(CredentialManagementError::NotFound)?
+        } else {
+            self.load(credential_id).await?
+        };
         enforce_organization(&credential, trusted_organization_id)?;
-        Ok(status_view(
-            &credential,
-            credential.revocation_reason.clone(),
-        ))
+        let mut view = status_view(&credential, credential.revocation_reason.clone());
+        view.mdoc_status_reference = reference.map(|value| value.to_string());
+        Ok(view)
     }
 
     pub async fn transition(
@@ -543,6 +575,7 @@ fn validate_transition(
 
 fn status_view(credential: &ManagedCredential, reason: Option<String>) -> CredentialStatusView {
     CredentialStatusView {
+        mdoc_status_reference: None,
         id: credential.id.clone(),
         issuer_did: credential.issuer_did.clone(),
         status: credential.status.as_str().to_owned(),
@@ -629,6 +662,18 @@ mod tests {
                 .expect("credential")
                 .clone()
                 .filter(|credential| credential.id == credential_id))
+        }
+
+        async fn get_by_mdoc_reference(
+            &self,
+            organization_id: &str,
+            reference: &marty_mdoc_status_binding::MdocStatusReference,
+        ) -> Result<Option<ManagedCredential>, CredentialManagementPortError> {
+            self.calls.lock().unwrap().push("load-mdoc".into());
+            let expected = format!("urn:mdoc-status:v1:{}:{}", "a".repeat(64), "b".repeat(64));
+            Ok(self.credential.lock().unwrap().clone().filter(|row| {
+                row.organization_id == organization_id && reference.to_string() == expected
+            }))
         }
 
         async fn persist(
@@ -1182,5 +1227,72 @@ mod tests {
             .expect_err("4001 astral Unicode scalars");
         assert_eq!(error, CredentialManagementError::CommentsTooLong);
         assert_eq!(*harness.calls.lock().expect("calls"), ["load"]);
+    }
+
+    #[tokio::test]
+    async fn authenticated_mdoc_status_lookup_is_tenant_scoped_and_reads_actual_lifecycle_state() {
+        let harness = Harness::new(ManagedCredentialStatus::Active);
+        let reference = format!("urn:mdoc-status:v1:{}:{}", "a".repeat(64), "b".repeat(64));
+        let service = harness.service();
+        let active = service.get_status(&reference, Some("org-a")).await.unwrap();
+        assert_eq!(active.id, "credential-a");
+        assert_eq!(active.status, "active");
+        assert_eq!(
+            active.mdoc_status_reference.as_deref(),
+            Some(reference.as_str())
+        );
+        for organization in [None, Some(""), Some("foreign")] {
+            assert_eq!(
+                service
+                    .get_status(&reference, organization)
+                    .await
+                    .unwrap_err(),
+                CredentialManagementError::NotFound
+            );
+        }
+        let unknown = reference.replace(&"b".repeat(64), &"c".repeat(64));
+        assert_eq!(
+            service
+                .get_status(&unknown, Some("org-a"))
+                .await
+                .unwrap_err(),
+            CredentialManagementError::NotFound
+        );
+        assert_eq!(
+            service
+                .get_status("urn:mdoc-status:v1:invalid", Some("org-a"))
+                .await
+                .unwrap_err(),
+            CredentialManagementError::NotFound
+        );
+        let http = crate::credential_management_http::CredentialManagementHttpService::new(
+            service.clone(),
+            Some("control-management-key"),
+        );
+        assert!(http
+            .get_status(&reference, None, Some("org-a"))
+            .await
+            .is_err());
+        service
+            .transition(
+                "credential-a",
+                Some("org-a"),
+                CredentialLifecycleAction::Revoke,
+                Some("Owned control"),
+            )
+            .await
+            .unwrap();
+        let revoked = http
+            .get_status(&reference, Some("control-management-key"), Some("org-a"))
+            .await
+            .unwrap();
+        assert_eq!(revoked.status, "revoked");
+        assert_eq!(revoked.mdoc_status_reference, Some(reference));
+        assert!(service
+            .get_status("credential-a", Some("org-a"))
+            .await
+            .unwrap()
+            .mdoc_status_reference
+            .is_none());
     }
 }

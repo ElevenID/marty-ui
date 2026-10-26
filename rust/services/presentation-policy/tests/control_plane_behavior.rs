@@ -236,3 +236,102 @@ async fn ca_verified_organization_client_rejects_plaintext() {
         Err(PresentationVerificationError::Failed(_))
     ));
 }
+
+#[tokio::test]
+async fn authenticated_mdoc_status_requires_exact_reference_and_certificate_then_reports_active_or_revoked(
+) {
+    let organization_id = Uuid::from_u128(2);
+    let issuer = format!("x509-sha256:{}", "a".repeat(64));
+    let refs = (0..5)
+        .map(|i| {
+            format!(
+                "urn:mdoc-status:v1:{}:{}",
+                "a".repeat(64),
+                format!("{i:x}").repeat(64)
+            )
+        })
+        .collect::<Vec<_>>();
+    let fixture = Arc::new(Fixture {
+        profile: Value::Null,
+        organization_id: organization_id.to_string(),
+        statuses: BTreeMap::from([
+            (
+                refs[0].clone(),
+                serde_json::json!({"id":"owned","mdoc_status_reference":refs[0],"issuer_did":"did:web:issuer.invalid","status":"active"}),
+            ),
+            (
+                refs[1].clone(),
+                serde_json::json!({"id":"owned","mdoc_status_reference":refs[1],"status":"revoked"}),
+            ),
+            (
+                refs[2].clone(),
+                serde_json::json!({"id":"owned","mdoc_status_reference":refs[0],"status":"active"}),
+            ),
+            (
+                refs[3].clone(),
+                serde_json::json!({"id":"owned","issuer_did":issuer,"status":"active"}),
+            ),
+            (
+                refs[4].clone(),
+                serde_json::json!({"id":"","mdoc_status_reference":refs[4],"status":"active"}),
+            ),
+        ]),
+    });
+    let app = Router::new()
+        .route("/status/{credential_id}", get(credential_status))
+        .with_state(fixture);
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let control = NativePresentationControlPlane::connect_lazy(
+        "http://127.0.0.1:9",
+        &format!("http://{address}"),
+        &format!("http://{address}/status/{{credential_id}}"),
+        None,
+        Some("behavioral-issuance-key"),
+        Duration::from_secs(2),
+    )
+    .unwrap();
+    let active = control
+        .resolve(organization_id, &issuer, &[refs[0].clone()])
+        .await
+        .unwrap();
+    assert_eq!(active.not_revoked, Some(true));
+    assert!(active.checked_at_epoch_seconds.is_some());
+    let revoked = control
+        .resolve(organization_id, &issuer, &[refs[1].clone()])
+        .await
+        .unwrap();
+    assert_eq!(revoked.not_revoked, Some(false));
+    assert_eq!(revoked.credential_status.as_deref(), Some("revoked"));
+    for reference in &refs[2..] {
+        assert_eq!(
+            control
+                .resolve(organization_id, &issuer, &[reference.clone()])
+                .await
+                .unwrap(),
+            Default::default()
+        );
+    }
+    assert_eq!(
+        control
+            .resolve(
+                organization_id,
+                &format!("x509-sha256:{}", "c".repeat(64)),
+                &[refs[0].clone()]
+            )
+            .await
+            .unwrap(),
+        Default::default()
+    );
+    let unknown = format!("urn:mdoc-status:v1:{}:{}", "a".repeat(64), "f".repeat(64));
+    assert_eq!(
+        control
+            .resolve(organization_id, &issuer, &[unknown])
+            .await
+            .unwrap(),
+        Default::default()
+    );
+    server.abort();
+    let _ = server.await;
+}

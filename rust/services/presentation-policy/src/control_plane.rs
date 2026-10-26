@@ -317,16 +317,36 @@ impl CredentialStatusResolver for NativePresentationControlPlane {
             let object = payload
                 .as_object()
                 .ok_or(PresentationVerificationError::Unavailable)?;
-            let Some(recorded_issuer) = object
-                .get("issuer_did")
-                .and_then(Value::as_str)
-                .map(normalize_issuer)
-                .filter(|issuer| !issuer.is_empty())
-            else {
-                continue;
-            };
-            if recorded_issuer != presented_issuer {
-                continue;
+            if marty_mdoc_status_binding::MdocStatusReference::is_reference(credential_id) {
+                let Ok(reference) =
+                    marty_mdoc_status_binding::MdocStatusReference::parse(credential_id)
+                else {
+                    continue;
+                };
+                // A DID string is not the mdoc issuer. Match the DSC that Core
+                // authenticated and the exact tenant-scoped stored reference.
+                if reference.issuer_id() != presented_issuer
+                    || object.get("mdoc_status_reference").and_then(Value::as_str)
+                        != Some(credential_id)
+                    || object
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .is_none_or(str::is_empty)
+                {
+                    continue;
+                }
+            } else {
+                let Some(recorded_issuer) = object
+                    .get("issuer_did")
+                    .and_then(Value::as_str)
+                    .map(normalize_issuer)
+                    .filter(|issuer| !issuer.is_empty())
+                else {
+                    continue;
+                };
+                if recorded_issuer != presented_issuer {
+                    continue;
+                }
             }
             let status = object
                 .get("status")

@@ -50,6 +50,7 @@ ISSUANCE_MIGRATION_VERSIONS = sorted((
     "0004_passport_submission_intent", "0005_passport_submission_provenance",
     "0006_passport_beta_batch_identity", "0007_passport_beta_batch_provenance",
     "0008_passport_beta_batch_wire_evidence",
+    "0009_authenticated_mdoc_status_binding",
 ))
 
 
