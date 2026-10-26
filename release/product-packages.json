@@ -1,0 +1,26 @@
+{
+  "schema": "marty.product-packages/v1",
+  "products": {
+    "marty-server": {
+      "version": {"path": "release/server-version.txt", "json_field": null},
+      "tag_prefix": "server-v",
+      "image_namespace": "ghcr.io/elevenid/marty-server",
+      "api": {"http": "v1", "mip": "0.5.0"},
+      "images": {
+        "services": {"dockerfile": "services/Dockerfile", "target": ""},
+        "migrations": {"dockerfile": "services/Dockerfile.migrations", "target": ""},
+        "openbao-didcomm": {"dockerfile": "openbao/didcomm-authcrypt/Dockerfile", "target": ""},
+        "keycloak": {"dockerfile": "keycloak/openbao-provider/Dockerfile", "target": ""}
+      }
+    },
+    "marty-console": {
+      "version": {"path": "release/console-version.txt", "json_field": null},
+      "tag_prefix": "console-v",
+      "image_namespace": "ghcr.io/elevenid/marty-console",
+      "api": {"http": "v1", "mip": "0.5.0"},
+      "images": {
+        "ui": {"dockerfile": "docker/ui.Dockerfile", "target": "selfhost"}
+      }
+    }
+  }
+}
