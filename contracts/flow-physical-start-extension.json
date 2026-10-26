@@ -6,6 +6,8 @@
   "recovery": {
     "client_key": "original_input_and_original_idempotency_key_required",
     "generated_key": "original_input_and_flow_instance_id_as_idempotency_key_required",
-    "native_outcome": "unobserved_until_tenant_scoped_internal_readback"
+    "native_outcome": "unobserved_until_tenant_scoped_internal_readback",
+    "original_deadline_field": "original_deadline_at",
+    "expired_pending": "expired_pending_native_outcome_reconciliation_required"
   }
 }

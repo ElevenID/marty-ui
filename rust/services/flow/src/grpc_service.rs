@@ -19,8 +19,8 @@ use tonic::{Request, Response, Status};
 use uuid::Uuid;
 
 use crate::{
-    advance_instance_record, apply_physical_advance_side_effect, definition_references,
-    effective_flow_type, execute_application_event_plan,
+    advance_instance_record, apply_physical_advance_side_effect, bound_definition_for_instance,
+    definition_references, effective_flow_type, execute_application_event_plan,
     flow_proto::{
         flow_service_server::FlowService, ActivateFlowDefinitionRequest,
         AdvanceFlowRequest as ProtoAdvanceFlowRequest, ApplicationApprovedEvent,
@@ -34,12 +34,13 @@ use crate::{
         ListFlowInstancesRequest, ListFlowInstancesResponse, StartFlowRequest as ProtoStartFlow,
         StartVerificationRequest, StreamFlowUpdatesRequest, VerificationRequestResponse,
     },
-    prepare_instance_start, prepare_profiled_verification_start, start_instance_record,
-    start_physical_instance, validated_client_key, ApplicationApprovalError,
-    ApplicationApprovedWebhook, ApprovalStrategy, ArtifactStatus, DefinitionStatus, FlowApiError,
-    FlowArtifactRecord, FlowDefinitionRecord, FlowGrpcSecurity, FlowInstanceExecutionError,
-    FlowInstanceRecord, FlowInstanceSideEffectError, FlowProviderError, FlowProviderRegistry,
-    FlowRecordError, FlowServiceConfig, Oid4vpProfile, PhysicalStartError, PostgresFlowRepository,
+    physical_start_snapshot_for_definition_key, prepare_instance_start,
+    prepare_profiled_verification_start, start_instance_record, start_physical_instance,
+    validated_client_key, ApplicationApprovalError, ApplicationApprovedWebhook, ApprovalStrategy,
+    ArtifactStatus, DefinitionStatus, FlowApiError, FlowArtifactRecord, FlowDefinitionRecord,
+    FlowGrpcSecurity, FlowInstanceExecutionError, FlowInstanceRecord, FlowInstanceSideEffectError,
+    FlowProviderError, FlowProviderRegistry, FlowRecordError, FlowServiceConfig, Oid4vpProfile,
+    PhysicalStartError, PhysicalStartInvocation, PostgresFlowRepository,
     RedisApplicationEventReplayStore, RepositoryError, RequestTransport, RequestUriMethod,
     StartFlowRequest, StartVerificationFlowRequest, VerificationResponseType,
     VerificationStartContext, VerificationStartOptions,
@@ -307,13 +308,27 @@ impl FlowService for FlowGrpcService {
         request: Request<ProtoStartFlow>,
     ) -> Result<Response<ProtoInstance>, Status> {
         self.security.authenticate_service(&request)?;
-        let definition = self
-            .required_definition(&request.get_ref().flow_definition_id)
-            .await?;
+        let client_key = grpc_physical_start_key(request.metadata())?;
+        let prior = if let Some(key) = client_key.as_deref() {
+            physical_start_snapshot_for_definition_key(
+                &self.repository,
+                &request.get_ref().flow_definition_id,
+                key,
+            )
+            .await
+            .map_err(physical_start_status)?
+        } else {
+            None
+        };
+        let definition = if let Some(snapshot) = prior {
+            snapshot.definition
+        } else {
+            self.required_definition(&request.get_ref().flow_definition_id)
+                .await?
+        };
         let principal = self
             .authorize(&request, &definition.organization_id, "flow-instance:start")
             .await?;
-        let client_key = grpc_physical_start_key(request.metadata())?;
         let input = request.into_inner();
         let now = Utc::now();
         let start_request = StartFlowRequest {
@@ -329,11 +344,13 @@ impl FlowService for FlowGrpcService {
                 &self.repository,
                 &self.providers,
                 &definition,
-                start_request,
-                &principal,
-                &self.public_base_url,
-                now,
-                client_key.as_deref(),
+                PhysicalStartInvocation {
+                    request: start_request,
+                    actor: &principal,
+                    public_base_url: &self.public_base_url,
+                    now,
+                    client_key: client_key.as_deref(),
+                },
             )
             .await
             .map_err(physical_start_status)?;
@@ -430,9 +447,10 @@ impl FlowService for FlowGrpcService {
         let principal = self
             .authorize(&request, &current.organization_id, "flow-instance:advance")
             .await?;
-        let definition = self
-            .required_definition(&current.flow_definition_id)
-            .await?;
+        let definition = bound_definition_for_instance(&self.repository, &current)
+            .await
+            .map_err(physical_start_status)?
+            .ok_or_else(|| Status::not_found("Flow Definition not found"))?;
         let input = request.into_inner();
         let outcome = parse_transition_outcome(default_success(&input.step_result))?;
         let expected_status = current.status;
@@ -1233,6 +1251,9 @@ fn physical_start_status(error: PhysicalStartError) -> Status {
         PhysicalStartError::StoredIncomplete => {
             Status::unavailable("Stored physical Flow start is incomplete")
         }
+        PhysicalStartError::Expired => Status::failed_precondition(
+            "Original physical Flow deadline expired; native outcome requires reconciliation",
+        ),
         PhysicalStartError::Execution(error) => execution_status(error),
         PhysicalStartError::SideEffect(error) => side_effect_status(error),
         PhysicalStartError::Repository(error) => repository_status(error),
