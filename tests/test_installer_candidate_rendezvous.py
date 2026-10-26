@@ -349,6 +349,50 @@ def test_receive_same_run_signed_grant_without_dispatch(scenario,monkeypatch):
     assert any('/actions/artifacts/789' in path for _,path in api.calls)
 
 
+@pytest.mark.parametrize('completed_from', [1, 2])
+def test_grant_receiver_accepts_successful_completion_at_either_boundary(scenario,monkeypatch,completed_from):
+    kwargs,api,_=grant_scenario(scenario,monkeypatch)
+    original=api.request
+    observed=[]
+    def request(method,path):
+        value=original(method,path)
+        if path.endswith('/actions/runs/99'):
+            if len(observed)+1 >= completed_from:
+                value.update(status='completed',conclusion='success')
+            observed.append(value['status'])
+        return value
+    api.request=request
+    result=grant_receiver.receive(**kwargs)
+    assert observed == (['completed','completed'] if completed_from==1 else ['in_progress','completed'])
+    assert result['guest_dispatched'] is False and result['acceptance'] is False
+    assert Path(str(kwargs['output'])+'.verified.json').is_file()
+
+
+@pytest.mark.parametrize('boundary', [1, 2])
+@pytest.mark.parametrize('change', [
+    {'status':'completed','conclusion':outcome}
+    for outcome in ('failure','cancelled','timed_out','skipped')
+] + [{'status':'completed','conclusion':'success','head_sha':'d'*40},
+     {'status':'completed','conclusion':'success','run_attempt':4}])
+def test_grant_receiver_refuses_failed_or_foreign_run_at_both_boundaries(scenario,monkeypatch,boundary,change):
+    kwargs,api,_=grant_scenario(scenario,monkeypatch)
+    original=api.request
+    count=[0]
+    ledger=kwargs['ledger'].read_bytes()
+    def request(method,path):
+        value=original(method,path)
+        if path.endswith('/actions/runs/99'):
+            count[0]+=1
+            if count[0]==boundary:value.update(change)
+        return value
+    api.request=request
+    with pytest.raises(ValueError):grant_receiver.receive(**kwargs)
+    assert count[0]==boundary
+    assert kwargs['output'].exists() == (boundary==2)
+    assert not Path(str(kwargs['output'])+'.verified.json').exists()
+    assert kwargs['ledger'].read_bytes()==ledger
+
+
 def test_grant_receiver_refuses_ambiguous_artifact_before_download(scenario,monkeypatch):
     kwargs,api,_=grant_scenario(scenario,monkeypatch)
     original=api.request
@@ -397,7 +441,14 @@ def test_credential_download_kills_descendants_before_reaping(tmp_path,monkeypat
 
 
 def test_grant_receiver_expiry_during_verification_retains_files(scenario,monkeypatch):
-    kwargs,_,_=grant_scenario(scenario,monkeypatch)
+    kwargs,api,_=grant_scenario(scenario,monkeypatch)
+    original=api.request
+    def completed(method,path):
+        value=original(method,path)
+        if path.endswith('/actions/runs/99'):
+            value.update(status='completed',conclusion='success')
+        return value
+    api.request=completed
     moment=[100000]
     kwargs['clock']=lambda:moment[0]
     expiry=r.decode(kwargs['authorization'].read_bytes())['expires_at']

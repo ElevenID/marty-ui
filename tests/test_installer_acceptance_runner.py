@@ -72,7 +72,8 @@ def candidate(tmp_path,monkeypatch):
     monkeypatch.setattr(a.dispatch,'executable',lambda _:None)
     monkeypatch.setattr(a.dispatch,'verify',lambda **_: (auth,receipt,inv,{}))
     monkeypatch.setattr(a.dispatch,'verified_harness_script',
-        lambda source,name:(Path(__file__).resolve().parents[1]/'scripts'/name).read_text())
+        lambda source,name:(Path(__file__).resolve().parents[1]/'scripts'/name)
+        .read_bytes().decode('utf-8'))
     calls=[]
     def execute(argv,**kwargs):
         if ' status --install-dir ' in argv[-1]:
@@ -110,6 +111,27 @@ def test_real_probe_before_dispatch_and_never_claims_acceptance(candidate):
     assert (args['output']/a.NAME).exists() and not (args['output']/'installer-acceptance.json').exists()
     with pytest.raises(FileExistsError):a.run(**args)
     assert len(calls)==8
+
+
+@pytest.mark.parametrize('field,value', [('host_preflight', 'failed'),
+                                         ('dispatch', 'not_attempted')])
+def test_extracted_observer_refuses_unadmitted_or_unattempted_checkpoint(
+        candidate, field, value):
+    args,calls,context,target,auth,receipt,inv=candidate
+    checkpoint=a.run(**args)
+    checkpoint[field]=value
+    seen=len(calls)
+    def unexpected(*_args, **_kwargs):
+        raise AssertionError('post-dispatch guard or remote operation ran')
+    with pytest.raises(ValueError):
+        a.observe_after_dispatch(
+            checkpoint=checkpoint, output=args['output'], context=context,
+            target=target, authorization=auth, receipt=receipt, inventory=inv,
+            ssh=args['ssh'], key=args['key'], known_hosts=args['known_hosts'],
+            port=args['port'], host=args['host'], user=args['user'], home=args['home'],
+            bootstrap_source=None, tls_source='', unchanged=unexpected,
+            guarded_execute=unexpected, clock=args['clock'])
+    assert len(calls)==seen
 
 
 def test_host_probe_must_match_signed_harness(candidate,monkeypatch):
