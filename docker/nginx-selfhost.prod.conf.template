@@ -3,6 +3,7 @@ resolver 127.0.0.11 valid=30s ipv6=off;
 server {
     listen 80;
     server_name ${PUBLIC_DOMAIN};
+    set $console_disabled ${CONSOLE_DISABLED};
 
     client_max_body_size 50M;
     proxy_buffer_size 128k;
@@ -57,6 +58,7 @@ server {
     }
 
     location = /.well-known/ai-plugin.json {
+        if ($console_disabled) { return 404; }
         set $ui_upstream ${UI_UPSTREAM};
         proxy_pass http://$ui_upstream/.well-known/ai-plugin.json;
         proxy_http_version 1.1;
@@ -262,7 +264,23 @@ server {
         add_header Access-Control-Allow-Origin * always;
     }
 
+    # Public API documentation belongs to the gateway, independently of the SPA.
+    location = /docs {
+        set $backend_api ${GATEWAY_UPSTREAM};
+        proxy_pass http://$backend_api/docs;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+    }
+
+    location = /redoc {
+        set $backend_api ${GATEWAY_UPSTREAM};
+        proxy_pass http://$backend_api/redoc;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+    }
+
     location = /console {
+        if ($console_disabled) { return 404; }
         set $ui_upstream ${UI_UPSTREAM};
         proxy_pass http://$ui_upstream/console;
         proxy_http_version 1.1;
@@ -274,6 +292,7 @@ server {
     }
 
     location ^~ /console/ {
+        if ($console_disabled) { return 404; }
         set $ui_upstream ${UI_UPSTREAM};
         proxy_pass http://$ui_upstream/console;
         proxy_http_version 1.1;
@@ -287,6 +306,7 @@ server {
     # Canvas LTI embedded experience. This route is the React landing page after
     # the verified launch callback and must render inside the Canvas iframe.
     location = /canvas/lti/experience {
+        if ($console_disabled) { return 404; }
         set $ui_upstream ${UI_UPSTREAM};
         proxy_pass http://$ui_upstream;
         proxy_http_version 1.1;
@@ -303,6 +323,7 @@ server {
     }
 
     location / {
+        if ($console_disabled) { return 404; }
         set $ui_upstream ${UI_UPSTREAM};
         proxy_pass http://$ui_upstream;
         proxy_http_version 1.1;
