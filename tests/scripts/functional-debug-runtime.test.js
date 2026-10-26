@@ -26,6 +26,15 @@ for(const change of ['process','mounted','pidPath','health','tenant','container'
 test('changed receipt rejects before runtime observation',t=>{const {profile}=fixture(t);fs.appendFileSync(profile.debugBuild.path,' ');assert.throws(()=>verifyFunctionalRuntime(profile,{observe:()=>assert.fail('No observation')}),/changed/);});
 test('missing retained source cannot be silently labeled R32',t=>{const {profile}=fixture(t);delete profile.retainedBuilds.flow;assert.throws(()=>expectedRuntime(profile));});
 
+test('failed observation identifies its role without leaking command errors or producing a binding',t=>{
+ const {profile,observe}=fixture(t);const visited=[];
+ assert.throws(()=>verifyFunctionalRuntime(profile,{observe:row=>{
+  visited.push(row.role);if(row.role==='gateway')throw Error('private-command-error');return observe(row);
+ }}),error=>error.code==='FUNCTIONAL_RUNTIME_OBSERVATION_FAILED'&&error.role==='gateway'
+  &&error.message.includes('gateway')&&!error.message.includes('private-command-error'));
+ assert.equal(visited.at(-1),'gateway');
+});
+
 test('prior in-place canonical overlay is explicit rather than relabeled R32',t=>{
  const {profile,observe,write}=fixture(t),roles=expectedRuntime(profile).filter(row=>row.binary);
  const files=[...new Set(roles.map(row=>row.binary))].map(binary_name=>({binary_name,sha256:H('5')}));

@@ -107,7 +107,13 @@ function verifyFunctionalRuntime(profile,{qualification='FUNCTIONAL_ONLY',observ
  assert.equal(qualification,'FUNCTIONAL_ONLY','Mixed/debug stack cannot qualify release or recording');
  const expected=expectedRuntime(profile),roles=[];
  for(const row of expected){
-  const actual=observe(row);assert.equal(actual.role,row.role);assert.equal(actual.project,row.project);
+  let actual;
+  try{actual=observe(row);}catch{
+   // Identify the failed role without exposing Docker arguments or stderr.
+   const error=new Error('Functional runtime observation failed for role '+row.role);
+   error.code='FUNCTIONAL_RUNTIME_OBSERVATION_FAILED';error.role=row.role;throw error;
+  }
+  assert.equal(actual.role,row.role);assert.equal(actual.project,row.project);
   assert.equal(actual.service,row.role);assert.equal(actual.imageId,row.imageId);assert(HASH.test(actual.containerId));
   if(row.requiredContainerId)assert.equal(actual.containerId,row.requiredContainerId,'Reviewed debug container changed');
   assert.equal(actual.running,true);assert.equal(actual.status,'running');
