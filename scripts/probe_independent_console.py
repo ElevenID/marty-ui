@@ -292,6 +292,12 @@ def probe(output: Path, assets_dir: Path | None = None) -> dict:
             "set-cookie", ""
         ):
             raise RuntimeError("console changed auth cookie attributes")
+        html_headers = request(plain, "/console/organization")["headers"]
+        if (
+            html_headers.get("x-frame-options") != "SAMEORIGIN"
+            or html_headers.get("x-content-type-options") != "nosniff"
+        ):
+            raise RuntimeError("console cache headers removed HTML security headers")
         untrusted = console("untrusted", "https://backend:8443")
         if request(untrusted, "/v1/profiles")["status"] != 502:
             raise RuntimeError("console accepted an untrusted TLS certificate")
