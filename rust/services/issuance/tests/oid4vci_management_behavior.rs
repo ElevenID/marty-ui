@@ -1,4 +1,7 @@
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc, Mutex,
+};
 
 use async_trait::async_trait;
 use axum::{
@@ -95,6 +98,16 @@ impl Oid4vciManagementRepository for ManagementRepository {
         _reason: Option<&str>,
     ) -> Result<ManagementTransaction, Oid4vciManagementRepositoryError> {
         Err(Oid4vciManagementRepositoryError)
+    }
+
+    async fn cancel_unissued_transaction(
+        &self,
+        _transaction_id: &str,
+        _organization_id: &str,
+        _application_id: &str,
+        _reason: Option<&str>,
+    ) -> Result<Option<ManagementTransaction>, Oid4vciManagementRepositoryError> {
+        Ok(None)
     }
 }
 
@@ -599,6 +612,8 @@ struct RevocationManagementRepository {
     reasons: Arc<Mutex<Vec<String>>>,
     transaction: Option<ManagementTransaction>,
     binding: Option<TransactionCredentialBinding>,
+    late_binding: Option<TransactionCredentialBinding>,
+    lookups: AtomicUsize,
 }
 
 #[async_trait]
@@ -631,7 +646,12 @@ impl Oid4vciManagementRepository for RevocationManagementRepository {
         _transaction_id: &str,
     ) -> Result<Option<TransactionCredentialBinding>, Oid4vciManagementRepositoryError> {
         self.order.lock().unwrap().push("credential-binding:get");
-        Ok(self.binding.clone())
+        let read = self.lookups.fetch_add(1, Ordering::SeqCst);
+        Ok(if read == 0 {
+            self.binding.clone()
+        } else {
+            self.late_binding.clone().or_else(|| self.binding.clone())
+        })
     }
 
     async fn revoke_transaction(
@@ -651,6 +671,16 @@ impl Oid4vciManagementRepository for RevocationManagementRepository {
             revoked_at: Some(Utc.with_ymd_and_hms(2026, 9, 21, 13, 0, 0).unwrap()),
             revocation_reason: reason.map(str::to_owned),
         })
+    }
+
+    async fn cancel_unissued_transaction(
+        &self,
+        _transaction_id: &str,
+        _organization_id: &str,
+        _application_id: &str,
+        _reason: Option<&str>,
+    ) -> Result<Option<ManagementTransaction>, Oid4vciManagementRepositoryError> {
+        Ok(None)
     }
 }
 
@@ -747,6 +777,7 @@ fn revocation_app(
         ManagedCredentialStatus::Active,
         None,
         publication_fails,
+        None,
     )
 }
 
@@ -760,6 +791,7 @@ fn revocation_app_with_credential(
     credential_status: ManagedCredentialStatus,
     credential_reason: Option<&str>,
     publication_fails: bool,
+    late_binding: Option<TransactionCredentialBinding>,
 ) -> axum::Router {
     let now = Utc.with_ymd_and_hms(2026, 9, 21, 12, 34, 56).unwrap();
     let lifecycle = CredentialManagementService::new(
@@ -794,6 +826,8 @@ fn revocation_app_with_credential(
             reasons,
             transaction,
             binding,
+            late_binding,
+            lookups: AtomicUsize::new(0),
         }),
         Arc::new(CredentialRepository {
             calls: Arc::default(),
@@ -888,6 +922,75 @@ async fn revocation_orders_canonical_and_local_credential_before_transaction_com
 }
 
 #[tokio::test]
+async fn revocation_rechecks_a_credential_finalized_during_the_transaction_fence() {
+    let order = Arc::new(Mutex::new(vec![]));
+    let app = revocation_app_with_credential(
+        order.clone(),
+        Arc::default(),
+        Some(transaction("org-a")),
+        None,
+        "org-a",
+        ManagedCredentialStatus::Active,
+        None,
+        false,
+        Some(binding("org-a")),
+    );
+    let (status, body) = response(revoke_request("org-a"), app).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["status"], "revoked");
+    assert_eq!(
+        *order.lock().unwrap(),
+        vec![
+            "transaction:get",
+            "credential-binding:get",
+            "transaction:save",
+            "credential-binding:get",
+            "credential:get",
+            "canonical:publish",
+            "credential:persist",
+            "canvas:sync",
+            "event:emit",
+        ]
+    );
+}
+
+#[tokio::test]
+async fn late_credential_publication_failure_refuses_success_and_retry_reconciles() {
+    let failed_order = Arc::new(Mutex::new(vec![]));
+    let failed = revocation_app_with_credential(
+        failed_order.clone(),
+        Arc::default(),
+        Some(transaction("org-a")),
+        None,
+        "org-a",
+        ManagedCredentialStatus::Active,
+        None,
+        true,
+        Some(binding("org-a")),
+    );
+    let (status, _) = response(revoke_request("org-a"), failed).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        failed_order.lock().unwrap().last(),
+        Some(&"canonical:publish")
+    );
+    let mut revoked = transaction("org-a");
+    revoked.status = "revoked".into();
+    let retry_order = Arc::new(Mutex::new(vec![]));
+    let retry = revocation_app(
+        retry_order.clone(),
+        Some(revoked),
+        Some(binding("org-a")),
+        "org-a",
+        false,
+    );
+    let (status, body) = response(revoke_request("org-a"), retry).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["status"], "revoked");
+    assert!(retry_order.lock().unwrap().contains(&"credential:persist"));
+}
+
+#[tokio::test]
 async fn revocation_retry_uses_the_persisted_credential_reason_everywhere() {
     let order = Arc::new(Mutex::new(vec![]));
     let reasons = Arc::new(Mutex::new(vec![]));
@@ -900,6 +1003,7 @@ async fn revocation_retry_uses_the_persisted_credential_reason_everywhere() {
         ManagedCredentialStatus::Revoked,
         Some("original reason"),
         false,
+        None,
     );
 
     let (status, body) = response(

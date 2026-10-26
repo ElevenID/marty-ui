@@ -29,6 +29,10 @@ pub fn router(service: Oid4vciManagementService) -> Router {
             "/v1/issuance/transactions/{transaction_id}/revoke",
             post(revoke_transaction),
         )
+        .route(
+            "/v1/issuance/transactions/{transaction_id}/cancel-unissued",
+            post(cancel_unissued_transaction),
+        )
         .route("/v1/issuance/credentials", get(list_credentials))
         .with_state(service)
 }
@@ -136,6 +140,57 @@ async fn revoke_transaction(
     }
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CancelUnissuedRequest {
+    application_id: String,
+    reason: Option<String>,
+}
+
+async fn cancel_unissued_transaction(
+    State(service): State<Oid4vciManagementService>,
+    Path(transaction_id): Path<String>,
+    request: Request,
+) -> Response {
+    let headers = request.headers().clone();
+    if let Err(error) = service.preflight(header(&headers, API_KEY_HEADER)) {
+        return management_error(error, None);
+    }
+    let Json(body) = match Json::<CancelUnissuedRequest>::from_request(request, &()).await {
+        Ok(body) => body,
+        Err(error) => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(json!({"detail": error.body_text()})),
+            )
+                .into_response()
+        }
+    };
+    if body.application_id.is_empty() {
+        return validation_error(Value::Null, "application_id is required");
+    }
+    let Some(organization) = header(&headers, ORGANIZATION_HEADER) else {
+        return management_error(
+            Oid4vciManagementError::Security(TransactionReadError::TrustedOrganizationRequired),
+            None,
+        );
+    };
+    match service
+        .cancel_unissued_transaction(
+            &transaction_id,
+            organization,
+            &body.application_id,
+            body.reason.as_deref(),
+            header(&headers, API_KEY_HEADER),
+            Some(organization),
+        )
+        .await
+    {
+        Ok(response) => (StatusCode::OK, Json(response)).into_response(),
+        Err(error) => management_error(error, None),
+    }
+}
+
 fn management_error(error: Oid4vciManagementError, input: Option<Value>) -> Response {
     if matches!(
         error,
@@ -164,6 +219,10 @@ fn management_error(error: Oid4vciManagementError, input: Option<Value>) -> Resp
         Oid4vciManagementError::TransactionNotFound => {
             (StatusCode::NOT_FOUND, "Transaction not found")
         }
+        Oid4vciManagementError::UnissuedCancellationConflict => (
+            StatusCode::CONFLICT,
+            "Transaction is not an unissued offer for this application",
+        ),
         Oid4vciManagementError::CredentialTenantMismatch => (
             StatusCode::CONFLICT,
             "Issued credential organization does not match its transaction",

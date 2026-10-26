@@ -922,6 +922,58 @@ impl ApplicantService {
         Ok(application)
     }
 
+    /// Complete an organization withdrawal only after the issuance service has
+    /// confirmed revocation of the exact transaction bound to this offer.
+    pub(crate) async fn withdraw_revoked_offer(
+        &self,
+        application_id: &str,
+        expected_transaction_id: &str,
+        reason: Option<String>,
+        now: DateTime<Utc>,
+    ) -> Result<Application, ServiceError> {
+        let mut store = self.store.write().await;
+        let index = application_index(&store, application_id)?;
+        let mut application = store.applications[index].clone();
+        if application.status != LifecycleStatus::Offered
+            || !matches!(
+                application.claim_state,
+                ClaimState::OfferReady | ClaimState::Expired
+            )
+            || application.issued_at.is_some()
+            || application
+                .system_data
+                .contains_key("active_issuance_attempt")
+            || application
+                .system_data
+                .get("issuance_transaction_id")
+                .and_then(Value::as_str)
+                != Some(expected_transaction_id)
+        {
+            return Err(ServiceError::WithdrawalRequiresIssuanceReconciliation);
+        }
+        let applicant_index = store
+            .applicants
+            .iter()
+            .position(|applicant| applicant.id == application.applicant_id)
+            .ok_or(ServiceError::ApplicantNotFound)?;
+        let mut applicant = store.applicants[applicant_index].clone();
+        reconcile_transaction(&mut application, &mut applicant, "revoked", None, now)?;
+        application.status = LifecycleStatus::Withdrawn;
+        application.updated_at = now;
+        application.system_data.insert(
+            "withdrawal_reason".into(),
+            reason.map(Value::String).unwrap_or(Value::Null),
+        );
+        application.system_data.insert(
+            "retired_issuance_transaction_id".into(),
+            Value::String(expected_transaction_id.to_owned()),
+        );
+        store.applicants[applicant_index] = applicant;
+        store.applications[index] = application.clone();
+        self.persistence.persist(&store)?;
+        Ok(application)
+    }
+
     pub async fn reconcile_issuance(
         &self,
         application_id: &str,

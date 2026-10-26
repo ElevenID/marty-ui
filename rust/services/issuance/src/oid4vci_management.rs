@@ -133,6 +133,14 @@ pub trait Oid4vciManagementRepository: Send + Sync {
         transaction_id: &str,
         reason: Option<&str>,
     ) -> Result<ManagementTransaction, Oid4vciManagementRepositoryError>;
+
+    async fn cancel_unissued_transaction(
+        &self,
+        transaction_id: &str,
+        organization_id: &str,
+        application_id: &str,
+        reason: Option<&str>,
+    ) -> Result<Option<ManagementTransaction>, Oid4vciManagementRepositoryError>;
 }
 
 #[derive(Clone, Copy, Debug, Error, Eq, PartialEq)]
@@ -161,6 +169,8 @@ pub enum Oid4vciManagementError {
     RegisteredClientNotPersisted,
     #[error("Transaction not found")]
     TransactionNotFound,
+    #[error("Transaction is not an unissued offer for this application")]
+    UnissuedCancellationConflict,
     #[error("Issued credential organization does not match its transaction")]
     CredentialTenantMismatch,
     #[error("OID4VCI management service is temporarily unavailable")]
@@ -277,12 +287,12 @@ impl Oid4vciManagementService {
             true,
         )?;
         let mut effective_reason = reason.map(str::to_owned);
-        if let Some(credential) = self
+        let initial_binding = self
             .repository
             .credential_for_transaction(&transaction.id)
             .await
-            .map_err(|_| Oid4vciManagementError::RepositoryUnavailable)?
-        {
+            .map_err(|_| Oid4vciManagementError::RepositoryUnavailable)?;
+        if let Some(credential) = &initial_binding {
             if credential.transaction_id != transaction.id
                 || credential.organization_id != transaction.organization_id
             {
@@ -302,6 +312,50 @@ impl Oid4vciManagementService {
                 .await
                 .map_err(|_| Oid4vciManagementError::RepositoryUnavailable)?
         };
+        if transaction.status != "revoked" {
+            return Err(Oid4vciManagementError::RepositoryUnavailable);
+        }
+        if initial_binding.is_none() {
+            // Finalization may commit between the first credential read and
+            // this transaction fence. The fresh read occurs after the row
+            // update; signing cannot finalize after that revoked status.
+            if let Some(credential) = self
+                .repository
+                .credential_for_transaction(&transaction.id)
+                .await
+                .map_err(|_| Oid4vciManagementError::RepositoryUnavailable)?
+            {
+                if credential.transaction_id != transaction.id
+                    || credential.organization_id != transaction.organization_id
+                {
+                    return Err(Oid4vciManagementError::CredentialTenantMismatch);
+                }
+                self.lifecycle
+                    .reconcile_revocation(&credential.id, trusted_organization, reason)
+                    .await?;
+            }
+        }
+        Ok(project_revoked_transaction(transaction))
+    }
+
+    pub async fn cancel_unissued_transaction(
+        &self,
+        transaction_id: &str,
+        organization_id: &str,
+        application_id: &str,
+        reason: Option<&str>,
+        api_key: Option<&str>,
+        trusted_organization: Option<&str>,
+    ) -> Result<RevokedTransactionResponse, Oid4vciManagementError> {
+        self.security.authorize(api_key)?;
+        self.security
+            .require_organization(trusted_organization, organization_id, true)?;
+        let transaction = self
+            .repository
+            .cancel_unissued_transaction(transaction_id, organization_id, application_id, reason)
+            .await
+            .map_err(|_| Oid4vciManagementError::RepositoryUnavailable)?
+            .ok_or(Oid4vciManagementError::UnissuedCancellationConflict)?;
         Ok(project_revoked_transaction(transaction))
     }
 }
