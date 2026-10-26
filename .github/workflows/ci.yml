@@ -1,8 +1,8 @@
 name: CI
 
 env:
-  MARTY_API_CORE_URI: https://github.com/ElevenID/marty-cli/releases/download/v0.2.7/elevenid-marty-api-core-0.2.7.tgz
-  MARTY_API_CORE_DIGEST: sha256:c4ee1a9d325ae54d44465862eaaaf8172de08338e59381220b901ec0e1ac6682
+  MARTY_API_CORE_URI: https://github.com/ElevenID/marty-cli/releases/download/v0.3.4/elevenid-marty-api-core-0.3.4.tgz
+  MARTY_API_CORE_DIGEST: sha256:d5904d0c757220430525778db50b1689b0126034c7f8b904880c1774e6c96a62
   MARTY_BLOG_URI: https://github.com/ElevenID/marty-blog/releases/download/v0.1.9/elevenid-marty-blog-0.1.9.tgz
   MARTY_BLOG_DIGEST: sha256:1dda635bd284d9cb254e3c2c51fc09890cfae21b48a4c2095985621ad86cb358
   MARTY_PROTOCOL_REF: 76c37dc229b328afe002b911a26624543f814a64
@@ -2093,7 +2093,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.rust == 'true'
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 15
+    timeout-minutes: ${{ matrix.timeout_minutes }}
     permissions:
       contents: read
     strategy:
@@ -2102,10 +2102,12 @@ jobs:
         include:
           - runner: ubuntu-24.04
             arch: amd64
+            timeout_minutes: 30
             target: x86_64-unknown-linux-musl
             elf_machine: 'Advanced Micro Devices X86-64'
           - runner: ubuntu-24.04-arm
             arch: arm64
+            timeout_minutes: 15
             target: aarch64-unknown-linux-musl
             elf_machine: AArch64
     env:
@@ -2425,6 +2427,19 @@ jobs:
             MARTY_UI_SHA=${{ github.event.pull_request.head.sha || github.sha }}
           provenance: false
           cache-from: type=gha,scope=marty-ui-rust-service-images
+      - name: Export the actual gateway contract without service startup
+        run: |
+          python3 scripts/check_gateway_openapi_export.py \
+            --image marty-gateway:ci --expected-version ci \
+            --expected-source "${{ github.event.pull_request.head.sha || github.sha }}" \
+            --protocol-revision "$MARTY_PROTOCOL_REF" \
+            --output "$RUNNER_TEMP/gateway-openapi.json"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: gateway-openapi-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/gateway-openapi.json
+          if-no-files-found: error
+          retention-days: 14
       - name: Build revocation-profile image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
         with:
@@ -2820,6 +2835,10 @@ jobs:
         run: uv pip install --system -r requirements-services.txt 'jsonschema[format]>=4.23'
       - name: Enforce public response contract
         run: python scripts/check_gateway_public_protocol_contract.py --protocol-root marty-protocol
+      - name: Exercise console-free public edge routing
+        run: |
+          docker pull nginx@sha256:582c496ccf79d8aa6f8203a79d32aaf7ffd8b13362c60a701a2f9ac64886c93d
+          python scripts/probe_selfhost_api_only_edge.py
       - name: Enforce pinned public OpenAPI schemas
         run: python scripts/generate_public_openapi_schemas.py --protocol-root marty-protocol --check
       - name: Test public schemas and executable examples

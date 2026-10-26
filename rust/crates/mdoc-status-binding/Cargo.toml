@@ -1,0 +1,16 @@
+[package]
+name = "marty-mdoc-status-binding"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+base64.workspace = true
+coset.workspace = true
+hex.workspace = true
+isomdl.workspace = true
+sha2.workspace = true
+thiserror.workspace = true

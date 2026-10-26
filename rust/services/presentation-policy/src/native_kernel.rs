@@ -458,7 +458,18 @@ fn project_mdoc_result(
         .as_object()
         .cloned()
         .ok_or_else(|| invalid_native("mDoc claims were not a JSON object"))?;
-    Ok(project_authenticated_mdoc(document, claims, context))
+    // These exact bytes have passed complete issuer and device authentication.
+    // Bind the issuer-signed MSO, not selectively disclosed claim values.
+    let reference =
+        marty_mdoc_status_binding::MdocStatusReference::from_authenticated_presentation(
+            mdoc_bytes,
+            &document.document_type,
+            &document.issuer_certificate_sha256,
+        )
+        .map_err(|_| invalid_native("Authenticated mdoc lifecycle binding is invalid"))?;
+    let mut evidence = project_authenticated_mdoc(document, claims, context);
+    evidence.credential_status_ids.push(reference.to_string());
+    Ok(evidence)
 }
 
 fn project_authenticated_mdoc(
@@ -1762,9 +1773,90 @@ mod tests {
         assert!(evidence.challenge_verified);
         assert!(evidence.audience_verified);
 
+        // Authentication denial must happen before parsing or indexing any
+        // holder-provided status identity, even when document evidence exists.
+        for failure in 0..3 {
+            let mut rejected = result.clone();
+            match failure {
+                0 => rejected.issuer_signature_valid = false,
+                1 => rejected.issuer_trusted = false,
+                _ => rejected.device_authentication_valid = false,
+            }
+            let denied =
+                project_mdoc_result(b"untrusted holder bytes", rejected, &verification_context)
+                    .unwrap();
+            assert!(!denied.verified);
+            assert!(denied.credential_status_ids.is_empty());
+        }
         let mut incomplete = result;
         incomplete.document_evidence.clear();
         assert!(authenticated_mdoc_document(&incomplete).is_none());
+    }
+
+    #[test]
+    fn authenticated_mdoc_signed_fixture_preserves_status_identity_after_selective_disclosure() {
+        use isomdl::definitions::{device_response::DeviceResponse, helpers::NonEmptyVec};
+        use marty_mdoc_status_binding::MdocStatusReference;
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/mdoc_presentation_signed_public.json"
+        ))
+        .unwrap();
+        let decode = |field: &str| {
+            base64::engine::general_purpose::STANDARD
+                .decode(fixture[field].as_str().unwrap())
+                .unwrap()
+        };
+        let full_bytes = decode("response_b64");
+        let transcript = decode("transcript_b64");
+        let certificate = fixture["certificate_pem"].as_str().unwrap().to_owned();
+        let mut response: DeviceResponse = isomdl::cbor::from_slice(&full_bytes).unwrap();
+        assert_eq!(response.documents.as_ref().unwrap().len(), 1);
+        let mut document = response.documents.as_ref().unwrap()[0].clone();
+        // This is the same IssuerSigned representation returned by issuance.
+        let issued = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(isomdl::cbor::to_vec(&document.issuer_signed).unwrap());
+        let expected = MdocStatusReference::from_issuer_signed_base64(&issued).unwrap();
+        let mut namespaces = document.issuer_signed.namespaces.take().unwrap();
+        let (namespace, items) = namespaces.iter().next().unwrap();
+        let namespace = namespace.clone();
+        assert_eq!(items.len(), 2);
+        let disclosed = items[0].clone();
+        namespaces.insert(namespace, NonEmptyVec::new(disclosed));
+        document.issuer_signed.namespaces = Some(namespaces);
+        response.documents = Some(NonEmptyVec::new(document));
+        let selective_bytes = isomdl::cbor::to_vec(&response).unwrap();
+        let mut verification_context = context(Value::Null);
+        verification_context.format = DetectedCredentialFormat::Mdoc;
+        for bytes in [&full_bytes, &selective_bytes] {
+            let result = verify_mdoc_presentation(
+                bytes,
+                &transcript,
+                &[],
+                std::slice::from_ref(&certificate),
+            );
+            assert!(
+                result.issuer_signature_valid
+                    && result.issuer_trusted
+                    && result.device_authentication_valid,
+                "Real signed fixture authentication failed: {:?}",
+                result.error
+            );
+            let evidence = project_mdoc_result(bytes, result, &verification_context).unwrap();
+            assert!(evidence.verified);
+            assert_eq!(evidence.credential_status_ids, [expected.to_string()]);
+        }
+        let selective_claims = disclosed_claims(&selective_bytes).unwrap();
+        assert_eq!(selective_claims["given_name"], "Ada");
+        assert!(selective_claims.get("family_name").is_none());
+        let mut wrong_transcript = transcript;
+        *wrong_transcript.last_mut().unwrap() ^= 1;
+        let result =
+            verify_mdoc_presentation(&selective_bytes, &wrong_transcript, &[], &[certificate]);
+        assert!(result.issuer_signature_valid);
+        assert!(!result.device_authentication_valid);
+        let denied = project_mdoc_result(&selective_bytes, result, &verification_context).unwrap();
+        assert!(!denied.verified);
+        assert!(denied.credential_status_ids.is_empty());
     }
 
     #[test]

@@ -72,6 +72,7 @@ rust/crates/canvas-acceptance/tests/support/renewal_canvas_binding.rs
 rust/crates/canvas-acceptance/tests/support/renewal_fresh_main.rs
 rust/crates/canvas-acceptance/tests/support/renewal_gateway_replay.rs
 rust/crates/canvas-acceptance/tests/support/renewal_main_replay.rs
+rust/crates/canvas-acceptance/tests/support/renewal_startup_snapshot.rs
 rust/crates/canvas-acceptance/tests/support/resolved_kubernetes_runtime.rs
 rust/crates/canvas-acceptance/tests/support/resolved_runtime.rs
 rust/crates/canvas-acceptance/tests/support/runtime_failure_diagnostics.rs

@@ -9,6 +9,7 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
+marty-mdoc-status-binding = { path = "../../crates/mdoc-status-binding" }
 marty-service-runtime = { path = "../../crates/service-runtime" }
 marty-api-key-policy = { path = "../../crates/api-key-policy" }
 marty-issuer-key-resolution = { path = "../../crates/issuer-key-resolution" }
@@ -45,6 +46,7 @@ url.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+isomdl.workspace = true
 ed25519-dalek.workspace = true
 serde_json.workspace = true
 tower.workspace = true

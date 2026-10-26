@@ -293,10 +293,19 @@ pub struct ReleaseIdentity {
     pub image_digests: BTreeMap<String, String>,
 }
 
+/// The same release label is used by running discovery and offline OpenAPI.
+#[must_use]
+pub fn release_version_label(raw: Option<&str>) -> String {
+    raw.map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("development")
+        .to_owned()
+}
+
 impl Default for ReleaseIdentity {
     fn default() -> Self {
         Self {
-            release_version: "development".into(),
+            release_version: release_version_label(None),
             stack_version: "development".into(),
             marty_ui_sha: "unknown".into(),
             component_revisions: BTreeMap::new(),

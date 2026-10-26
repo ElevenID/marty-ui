@@ -2674,6 +2674,8 @@ struct CredentialStatusRequest {
 
 #[derive(Debug, Serialize)]
 struct CredentialStatusHttpResponse {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mdoc_status_reference: Option<String>,
     id: String,
     issuer_did: Option<String>,
     status: String,
@@ -2684,6 +2686,7 @@ struct CredentialStatusHttpResponse {
 impl From<CredentialStatusView> for CredentialStatusHttpResponse {
     fn from(value: CredentialStatusView) -> Self {
         Self {
+            mdoc_status_reference: value.mdoc_status_reference,
             id: value.id,
             issuer_did: value.issuer_did,
             status: value.status,

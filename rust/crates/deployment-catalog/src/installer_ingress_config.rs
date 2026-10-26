@@ -74,6 +74,9 @@ pub fn render(template: &str, origin: &str) -> Result<String> {
                 // Exact-source matching above closes this finite substitution
                 // table. Runtime nginx variables ($1, $host, etc.) are untouched.
                 let resolved = line
+                    // This installer profile still includes the console. A
+                    // console-free installer needs separate profile admission.
+                    .replace("${CONSOLE_DISABLED}", "0")
                     .replace("${UI_UPSTREAM}", "ui:80")
                     .replace("${GATEWAY_UPSTREAM}", "gateway:8000")
                     .replace("${FLOW_UPSTREAM}", "flow:8011")
@@ -113,6 +116,7 @@ mod tests {
         let output = render(TEMPLATE, "https://localhost:18443").unwrap();
         assert_eq!(route_lines(TEMPLATE), route_lines(&output));
         assert!(output.contains("server_name localhost;"));
+        assert!(output.contains("set $console_disabled 0;"));
         assert!(output.contains("listen 80;\n    absolute_redirect off;\n"));
         assert!(!output.contains("${"));
         assert!(!output.contains("proxy_set_header Host $host;"));

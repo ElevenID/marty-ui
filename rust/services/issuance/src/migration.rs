@@ -38,6 +38,10 @@ const NATIVE_MIGRATIONS: &[(&str, &str)] = &[
         "0008_passport_beta_batch_wire_evidence",
         include_str!("../migrations/0008_passport_beta_batch_wire_evidence.sql"),
     ),
+    (
+        "0009_authenticated_mdoc_status_binding",
+        include_str!("../migrations/0009_authenticated_mdoc_status_binding.sql"),
+    ),
 ];
 const BASE_TABLES: &[&str] = &[
     "application_templates",
@@ -485,6 +489,11 @@ pub async fn migrate(pool: &PgPool) -> Result<(), sqlx::Error> {
     ))
     .execute(&mut *transaction)
     .await?;
+    sqlx::raw_sql(include_str!(
+        "../migrations/0009_authenticated_mdoc_status_binding.sql"
+    ))
+    .execute(&mut *transaction)
+    .await?;
     validate_oid4vci(&mut transaction).await?;
     transaction.commit().await
 }
@@ -500,6 +509,7 @@ pub async fn validate(pool: &PgPool) -> Result<(), sqlx::Error> {
 }
 
 async fn validate_oid4vci(connection: &mut sqlx::PgConnection) -> Result<(), sqlx::Error> {
+    validate_mdoc_status_binding(connection).await?;
     let rows = sqlx::query(
         "SELECT table_name, column_name, udt_name
          FROM information_schema.columns
@@ -552,6 +562,46 @@ async fn validate_oid4vci(connection: &mut sqlx::PgConnection) -> Result<(), sql
     {
         return Err(sqlx::Error::Protocol(
             "OID4VCI notification binding index is incompatible".into(),
+        ));
+    }
+    Ok(())
+}
+
+async fn validate_mdoc_status_binding(
+    connection: &mut sqlx::PgConnection,
+) -> Result<(), sqlx::Error> {
+    let column: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM information_schema.columns
+         WHERE table_schema='issuance_service' AND table_name='issued_credentials'
+           AND column_name='mdoc_status_reference' AND udt_name='text' AND is_nullable='YES')",
+    )
+    .fetch_one(&mut *connection)
+    .await?;
+    type MdocStatusIndexCatalogRow = (bool, bool, bool, i16, String, String, Option<String>);
+    let index: Option<MdocStatusIndexCatalogRow> = sqlx::query_as(
+        "SELECT i.indisunique,i.indisvalid,i.indisready,i.indnkeyatts,
+                pg_get_indexdef(i.indexrelid,1,false),pg_get_indexdef(i.indexrelid,2,false),
+                pg_get_expr(i.indpred,i.indrelid)
+         FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid
+         JOIN pg_namespace n ON n.oid=c.relnamespace
+         WHERE n.nspname='issuance_service' AND c.relname='issued_credentials_tenant_mdoc_status_reference'
+           AND i.indrelid='issuance_service.issued_credentials'::regclass",
+    ).fetch_optional(&mut *connection).await?;
+    let valid = index.is_some_and(|(unique, valid, ready, count, first, second, predicate)| {
+        unique
+            && valid
+            && ready
+            && count == 2
+            && first == "organization_id"
+            && second == "mdoc_status_reference"
+            && predicate.is_some_and(|value| {
+                normalize_catalog_expression(&value)
+                    .eq_ignore_ascii_case("mdoc_status_referenceisnotnull")
+            })
+    });
+    if !column || !valid {
+        return Err(sqlx::Error::Protocol(
+            "Authenticated mdoc status index is missing or incompatible".into(),
         ));
     }
     Ok(())

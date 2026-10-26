@@ -316,6 +316,18 @@ jobs:
             printf '%s  %s\n' "${digest#sha256:}" "$artifact" | sha256sum --check --strict
             gh attestation verify "$artifact" --repo "$repository"
           done
+      - name: Admit exact signed client packages and inventory identities
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          python scripts/admit_client_packages.py --lock release/stack-lock.json
+          --output "$RUNNER_TEMP/client-packages"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: stack-release-client-packages-${{ github.run_id }}
+          path: ${{ runner.temp }}/client-packages/*
+          if-no-files-found: error
+          retention-days: 90
       - name: Reject retired Credentials image from the Rust-only stack
         env:
           LOCK_FILE: release/stack-lock.json
@@ -906,6 +918,10 @@ jobs:
         with:
           node-version: "24"
           registry-url: https://registry.npmjs.org
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: stack-release-client-packages-${{ github.run_id }}
+          path: ${{ runner.temp }}/client-packages
       - name: Build candidate stack manifest
         env:
           LOCK_FILE: release/stack-lock.json
@@ -1000,19 +1016,31 @@ jobs:
       - name: Install the released test interface
         working-directory: integration-tests
         env:
-          API_CORE_URI: ${{ needs.validate-stack.outputs.api_core_uri }}
-          API_CORE_DIGEST: ${{ needs.validate-stack.outputs.api_core_digest }}
-          CLI_URI: ${{ needs.validate-stack.outputs.cli_uri }}
-          CLI_DIGEST: ${{ needs.validate-stack.outputs.cli_digest }}
-        # Both local tarballs are immutable stack-lock inputs whose SHA-256 was
-        # checked immediately before installation; no registry resolution occurs.
+          CLIENT_VERSION: ${{ needs.validate-stack.outputs.cli_version }}
+        # Same-run admitted archives include the launcher and its native package.
+        # A fresh offline cache prevents hidden registry or preinstalled inputs.
         run: | # zizmor: ignore[adhoc-packages]
+          set -euo pipefail
           python -m pip install .
-          curl --fail --location --silent --show-error "$API_CORE_URI" --output /tmp/marty-api-core.tgz
-          curl --fail --location --silent --show-error "$CLI_URI" --output /tmp/marty-cli.tgz
-          echo "${API_CORE_DIGEST#sha256:}  /tmp/marty-api-core.tgz" | sha256sum --check --strict
-          echo "${CLI_DIGEST#sha256:}  /tmp/marty-cli.tgz" | sha256sum --check --strict
-          npm install --global /tmp/marty-api-core.tgz /tmp/marty-cli.tgz
+          test ! -e "$RUNNER_TEMP/client-install"
+          test ! -e "$RUNNER_TEMP/client-npm-cache"
+          npm install --prefix "$RUNNER_TEMP/client-install" --cache "$RUNNER_TEMP/client-npm-cache" \
+            --offline --ignore-scripts --omit=dev --no-audit --no-fund \
+            "$RUNNER_TEMP/client-packages/elevenid-marty-api-core-$CLIENT_VERSION.tgz" \
+            "$RUNNER_TEMP/client-packages/elevenid-marty-cli-$CLIENT_VERSION.tgz" \
+            "$RUNNER_TEMP/client-packages/elevenid-marty-cli-linux-x64-$CLIENT_VERSION.tgz"
+          client_bin="$RUNNER_TEMP/client-install/node_modules/.bin"
+          test "$("$client_bin/marty" --version)" = "$CLIENT_VERSION"
+          "$client_bin/marty" api-keys create --help
+          echo "$client_bin" >> "$GITHUB_PATH"
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          import { createRequire } from 'node:module';
+          const requireInstalled = createRequire(process.env.RUNNER_TEMP + '/client-install/package.json');
+          const sdk = await import(requireInstalled.resolve('@elevenid/marty-api-core'));
+          assert.equal(typeof sdk.createApiClient, 'function');
+          assert.equal(sdk.MIP_VERSION, '0.5.0');
+          JS
       - name: Render the exact Rust-only public stack images
         working-directory: integration-tests
         shell: bash

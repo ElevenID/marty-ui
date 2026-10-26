@@ -68,9 +68,41 @@ marty orgs switch <organization-uuid>
 marty --global-output json health
 ```
 
-Use the CLI package's actual `--help` and versioned README for operation flags.
-API-key management commands are not currently part of its command set; use the
-public HTTP operations above. API discovery is served at `/openapi.json`, with
-interactive documentation at `/docs`. Schema presence describes an HTTP
-contract; supported-product and protocol qualification require their separate
-release evidence.
+The published [CLI v0.3.4 release](https://github.com/ElevenID/marty-cli/releases/tag/v0.3.4)
+includes key lifecycle commands. With an already provisioned operator key in
+`MARTY_API_KEY`, use an explicit organization and explicit consumer scopes:
+
+```sh
+marty api-keys list --organization-id <organization-uuid>
+marty api-keys create --organization-id <organization-uuid> \
+  --name credential-reader --scope credentials:read
+marty api-keys revoke <owned-key-id> --organization-id <organization-uuid>
+```
+
+Creation returns the one-time secret in the JSON `key` field. Capture that output
+privately in the application's secret store; shared terminal or build logs must
+not receive it. Creating a consumer key does not replace the operator's saved
+login. Organization overrides do not change saved configuration. Repeat
+`--scope` for multiple scopes; `--expires-at` accepts a future RFC 3339 timestamp.
+Create and revoke support `--dry-run`. Use the installed command's `--help` and
+[versioned CLI guide](https://github.com/ElevenID/marty-cli/blob/v0.3.4/README.md)
+for the complete flags. These commands manage keys after operator bootstrap;
+they do not provision the initial tenant or establish full headless qualification.
+
+## JavaScript consumption
+
+Custom Node and browser applications can install the independently distributed
+`@elevenid/marty-api-core` tarball from the same release. The
+[versioned SDK guide](https://github.com/ElevenID/marty-cli/blob/v0.3.4/packages/api-core/README.md)
+describes the JavaScript factory and installation. Node consumers require Node
+24 or later and can provide `X-API-Key` through the synchronous `requestOptions`
+callback without a console session. Package version `0.3.4` is distinct from
+its MIP protocol version `0.5.0`. The published v0.3.4 package includes public
+TypeScript declarations for the transport factory. Its JSON response generics
+assert a caller-provided shape without runtime schema validation. Use the
+versioned SDK guide's Node and browser compiler examples; no UI aliases or
+ambient declarations are required.
+
+API discovery is served at `/openapi.json`, with interactive documentation at
+`/docs`. Schema presence describes an HTTP contract; supported-product and
+protocol qualification require their separate release evidence.
