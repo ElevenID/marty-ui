@@ -32,6 +32,17 @@ NAMES = {name + suffix for name in ("candidate-authorization.json", "controller-
                                               "controller-transport.json"}
 
 
+def check_grant_run(run, *, run_id, run_attempt, harness_source_sha):
+    """A signed artifact may outlive its successful grant-only workflow job."""
+    release.require(isinstance(run, dict) and
+                    (run.get("status"), run.get("conclusion")) in
+                    (("in_progress", None), ("completed", "success")),
+                    "execution grant run outcome differs")
+    promotion.check_run(run, run_id=run_id, attempt=run_attempt,
+                        workflow=release.acceptance.WORKFLOW, source=harness_source_sha,
+                        active=run["status"] == "in_progress")
+
+
 def hash_fd(fd, maximum):
     os.lseek(fd, 0, os.SEEK_SET)
     hashed = hashlib.sha256()
@@ -195,8 +206,8 @@ def receive(*, client, authorization, inventory, assets, descriptor, ledger,
     selected = None
     while int(clock()) < deadline:
         run = client.request("GET", transport.REPO + "/actions/runs/" + str(run_id))
-        promotion.check_run(run, run_id=run_id, attempt=run_attempt,
-            workflow=release.acceptance.WORKFLOW, source=harness_source_sha, active=True)
+        check_grant_run(run, run_id=run_id, run_attempt=run_attempt,
+                        harness_source_sha=harness_source_sha)
         listing = client.request("GET", transport.REPO + f"/actions/runs/{run_id}/artifacts?per_page=100")
         selected = selected_artifact(listing, run_id=run_id, run_attempt=run_attempt,
                                      harness_source_sha=harness_source_sha)
@@ -265,9 +276,8 @@ def _receive_archive(*, client, selected, output, held, gh, downloader, a, i,
                     run_id=run_id, run_attempt=run_attempt,
                     harness_source_sha=harness_source_sha) == selected,
                     "execution grant artifact changed")
-    promotion.check_run(client.request("GET", transport.REPO + "/actions/runs/" + str(run_id)),
-        run_id=run_id, attempt=run_attempt, workflow=release.acceptance.WORKFLOW,
-        source=harness_source_sha, active=True)
+    check_grant_run(client.request("GET", transport.REPO + "/actions/runs/" + str(run_id)),
+        run_id=run_id, run_attempt=run_attempt, harness_source_sha=harness_source_sha)
     release.require(int(clock()) < deadline and read_record(ledger) == raw_ledger,
                     "execution grant expired or controller ledger changed")
     dispatch.registry_unchanged(held, output.parent)
