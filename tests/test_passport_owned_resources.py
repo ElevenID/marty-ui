@@ -1,13 +1,16 @@
 """Source-only ownership/race controls; these ports never qualify a live demo."""
 import copy
+import hashlib
 import json
 from uuid import uuid4
+from pathlib import Path
 from scripts.passport_supported_flow_start import STEPS
 from urllib.parse import urlsplit
 
 import pytest
 
 from scripts.passport_owned_resources import OwnedPassportResources, PassportOwnershipError
+from scripts import probe_passport_beta_native_batch as batch
 from tests.test_passport_fresh_operations import plan
 
 
@@ -124,6 +127,216 @@ def test_exact_fresh_setup_and_retirement_preserve_terminal_history(owned):
     assert persisted["cleanup_complete"] is True and len(persisted["jobs"][0]["jobs"]) == 2
     assert "k" * 40 not in journal.path.read_text()
     assert not journal.key_path.exists()
+
+
+@pytest.fixture
+def failed_owned(owned):
+    """Protocol/control fixture only; never a production cleanup result."""
+    original, calls, records, _, authority = owned
+    canonical_journal = original.path.with_name("native-handoff.owned-resources.json")
+    original.path.rename(canonical_journal)
+    original.path = canonical_journal
+    batch.clear_private_state(original.key_path)  # Simulate already-retired original authority.
+    bound = original.value["jobs"][0]
+    bound["batch_id"] = str(uuid4())
+    for row in bound["jobs"]:
+        row.update(id=str(uuid4()), application_id=str(uuid4()))
+    selected, companion = bound["jobs"]
+    original.value.pop("flow_start")  # Actual older journals predate PR1579.
+    original.value["jobs"].append({"event": "companion_terminal", **companion,
+        "status": "ACTIVE", "completed_at": "2026-10-21T00:00:00Z"})
+    original.value["jobs"].append({"event": "companion_created", **companion,
+        "flow_instance_created": False, "issuer_did": original.value["plan"]["application"]["issuer_did"]})
+    original.value["authority_retirement"] = {"complete": True, "keyDenied": True,
+        "sessionsRetired": 3, "qualificationEligible": False}
+    original.save()
+    wire = {"schema": "marty.passport-beta-native-pending/v1", "state": "dispatching",
+        "organization_id": original.organization, "batch_id": bound["batch_id"],
+        "selected_source_job_id": selected["id"], "selected_application_id": selected["application_id"],
+        "selected_flow_instance_id": selected["flow_execution_id"],
+        "companion_source_job_id": companion["id"], "companion_application_id": companion["application_id"],
+        "companion_flow_execution_id": companion["flow_execution_id"], "wire_key_b64": "NEVER_COPY_WIRE_KEY"}
+    def source(name, value):
+        path = original.path.with_name(name)
+        batch._write_private_state(path, value, initial=True)
+        return {"path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+    refs = {"journal_ref": {"path": str(original.path), "sha256": hashlib.sha256(original.path.read_bytes()).hexdigest()},
+        "wire_ref": source("failed-wire.json", wire),
+        "failure_ref": source("passport-failure-" + uuid4().hex + ".json", {"schema": "marty.passport-private-failure/v1",
+            "stage": "material-continuity", "errorType": "MissingFlowSod", "qualificationEligible": False})}
+    refs["fixture_ref"] = source("fixture.json", {"schema": "marty.passport-fresh-private/v3",
+        "privateStatePath": refs["wire_ref"]["path"],
+        "privateHandoffPath": str(original.path.with_name("native-handoff.json")),
+        "plan": {"application": {"organization_id": original.organization}},
+        "custody": {"serviceToken": "NEVER_COPY_FIXTURE_TOKEN"}})
+    snapshots = {ref["path"]: Path(ref["path"]).read_bytes() for ref in refs.values()}
+    base = {"credential_template_id": original.value["resources"]["credential_template_id"]["id"],
+            "delivery_destination_profile_id": original.value["resources"]["delivery_destination_profile_id"]["id"],
+            "issuer_did": original.value["plan"]["application"]["issuer_did"]}
+    jobs = {row["id"]: {**row, **base, "status": "READY_FOR_ACTIVATION" if row is selected else "ACTIVE",
+        "completed_at": None if row is selected else "2026-10-21T00:00:00Z"} for row in bound["jobs"]}
+    model = {"jobs": jobs, "flow_status": "IN_PROGRESS", "lost_cancel": False,
+             "wrong_audit": False, "extra_flow": False, "native_posts": [], "flow_posts": 0}
+    real = original.request
+    def flow():
+        return {"id": selected["flow_execution_id"], "organization_id": original.organization,
+            "flow_id": original.value["resources"]["flow_definition_id"]["id"],
+            "status": model["flow_status"], "context_data": {"physical_document_job": copy.deepcopy(selected)}}
+    def request(role, method, path, body=None, headers=None):
+        if role == "api":
+            row = next(job for job in jobs.values() if job["application_id"] in path)
+            if method == "GET":
+                assert not path.endswith("production-status")
+                return 200, copy.deepcopy(row)
+            assert row["id"] == selected["id"] and path.endswith("/cancel")
+            model["native_posts"].append((copy.deepcopy(body), copy.deepcopy(headers)))
+            row["status"] = "CANCELLED"
+            model.setdefault("audit", {"event_id": str(uuid4()), "job_id": selected["id"],
+                "organization_id": original.organization, "actor_kind": "AUTHENTICATED_PASSPORT_TENANT",
+                "actor_organization_id": original.organization, "prior_status": "READY_FOR_ACTIVATION",
+                "reason_code": body["reason_code"], "reason": body["reason"],
+                "recorded_at": "2026-10-26T00:00:00Z", "bureau_cancellation_requested": False})
+            audit = copy.deepcopy(model["audit"])
+            if model["wrong_audit"]:
+                audit["actor_organization_id"] = "foreign"
+            if model["lost_cancel"]:
+                model["lost_cancel"] = False
+                raise OSError("response lost after actual model mutation")
+            return 200, {"job": copy.deepcopy(row), "administrative_cancellation": audit,
+                "bureau_cancellation_requested": False, "flow_cancellation_requested": False,
+                "replayed": len(model["native_posts"]) > 1}
+        if path.startswith("/v1/flows/instances?"):
+            return 200, [flow()] + ([{**flow(), "id": "unowned-extra"}] if model["extra_flow"] else [])
+        if path.startswith("/v1/flows/instances/"):
+            if method == "POST":
+                assert path.endswith("/cancel")
+                model["flow_posts"] += 1
+                model["flow_status"] = "CANCELLED"
+            return 200, flow()
+        return real(role, method, path, body, headers)
+    args = {**refs, "request": request, "private_signing": original.private_signing,
+            "verify_runtime": lambda: "a" * 64}
+    path = original.path.with_name("failed-continuation.json")
+    return original, calls, records, authority, model, args, path, snapshots
+
+
+def test_failed_cleanup_uses_original_ownership_without_qualifying_or_copying_secrets(failed_owned):
+    original, calls, _, _, model, args, path, snapshots = failed_owned
+    start = len(calls)
+    continuation = OwnedPassportResources.failed_continuation(path, **args)
+    result = continuation.retire_failed(retire_cleanup_authority=lambda: True)
+    assert result["complete"] and result["qualificationEligible"] is False
+    assert result["bureauCancellationRequested"] is False
+    assert len(model["native_posts"]) == model["flow_posts"] == 1
+    assert "NEVER_COPY_WIRE_KEY" not in path.read_text()
+    assert "NEVER_COPY_FIXTURE_TOKEN" not in path.read_text()
+    assert "k" * 40 not in path.read_text()
+    assert "flow_start" not in continuation.value
+    assert not any("api-keys/new-key" in row[2] for row in calls[start:])
+    assert original.value["cleanup_complete"] is False
+    assert all(Path(name).read_bytes() == raw for name, raw in snapshots.items())
+    with pytest.raises(PassportOwnershipError, match="cannot qualify"):
+        continuation.retire(selected={}, certificate_id="", check_key_denied=lambda: True, retire_sessions=lambda: True)
+
+
+def test_failed_cleanup_lost_native_response_requires_explicit_same_key_recovery(failed_owned):
+    _, _, _, _, model, args, path, snapshots = failed_owned
+    continuation = OwnedPassportResources.failed_continuation(path, **args)
+    model["lost_cancel"] = True
+    with pytest.raises(OSError, match="response lost"):
+        continuation.retire_failed(retire_cleanup_authority=lambda: True)
+    assert len(model["native_posts"]) == 1 and model["flow_posts"] == 0
+    assert json.loads(path.read_text())["cleanup_complete"] is False
+    with pytest.raises(PassportOwnershipError, match="already exists"):
+        OwnedPassportResources.failed_continuation(path, **args)
+    resumed = OwnedPassportResources.failed_continuation(path, resume=True, **args)
+    assert resumed.retire_failed(retire_cleanup_authority=lambda: True)["qualificationEligible"] is False
+    assert model["native_posts"][0] == model["native_posts"][1]
+    assert all(Path(name).read_bytes() == raw for name, raw in snapshots.items())
+
+
+@pytest.mark.parametrize("gap", ["extra-job", "wrong-companion", "unknown-start"])
+def test_failed_cleanup_rejects_ambiguous_creation_before_requests(failed_owned, gap):
+    original, _, _, _, model, args, path, _ = failed_owned
+    if gap == "extra-job":
+        original.value["jobs"].append(copy.deepcopy(original.value["jobs"][-1]))
+    elif gap == "wrong-companion":
+        original.value["jobs"][-1]["id"] = str(uuid4())
+    else:
+        original.value["flow_start"] = {"state": "UNKNOWN"}
+    original.save()
+    args["journal_ref"]["sha256"] = hashlib.sha256(original.path.read_bytes()).hexdigest()
+    with pytest.raises(PassportOwnershipError):
+        OwnedPassportResources.failed_continuation(path, **args)
+    assert not path.exists() and model["native_posts"] == []
+
+
+@pytest.mark.parametrize("gap", ["other-directory", "ambiguous-failure", "wrong-fixture-path"])
+def test_failed_cleanup_requires_original_producer_failure_provenance(failed_owned, gap):
+    original, _, _, _, model, args, path, _ = failed_owned
+    if gap == "other-directory":
+        directory = original.path.parent / "other-run"
+        directory.mkdir(mode=0o700)
+        changed = directory / Path(args["failure_ref"]["path"]).name
+        batch._write_private_state(changed, json.loads(Path(args["failure_ref"]["path"]).read_bytes()), initial=True)
+        args["failure_ref"] = {"path": str(changed), "sha256": hashlib.sha256(changed.read_bytes()).hexdigest()}
+    elif gap == "ambiguous-failure":
+        changed = original.path.with_name("passport-failure-" + uuid4().hex + ".json")
+        batch._write_private_state(changed, json.loads(Path(args["failure_ref"]["path"]).read_bytes()), initial=True)
+    else:
+        changed = Path(args["fixture_ref"]["path"])
+        value = json.loads(changed.read_bytes())
+        value["privateStatePath"] = str(changed.with_name("unrelated-wire.json"))
+        batch._write_private_state(changed, value, initial=False)
+        args["fixture_ref"]["sha256"] = hashlib.sha256(changed.read_bytes()).hexdigest()
+    with pytest.raises(PassportOwnershipError):
+        OwnedPassportResources.failed_continuation(path, **args)
+    assert not path.exists() and model["native_posts"] == []
+
+
+@pytest.mark.parametrize("gap", ["duplicate-json-key", "changed-intent", "invented-stage"])
+def test_failed_cleanup_resume_rejects_changed_or_ambiguous_state(failed_owned, gap):
+    _, _, _, _, model, args, path, _ = failed_owned
+    continuation = OwnedPassportResources.failed_continuation(path, **args)
+    model["lost_cancel"] = True
+    with pytest.raises(OSError):
+        continuation.retire_failed(retire_cleanup_authority=lambda: True)
+    value = json.loads(path.read_text())
+    if gap == "changed-intent":
+        value["failed_cleanup"]["cancel_intent"]["body"]["expected_job_id"] = str(uuid4())
+    elif gap == "invented-stage":
+        value["failed_cleanup"]["stage"] = "READY_TO_ACTIVATE"
+    encoded = json.dumps(value)
+    if gap == "duplicate-json-key":
+        encoded = '{"cleanup_complete":true,' + encoded[1:]
+    path.write_text(encoded)
+    with pytest.raises(PassportOwnershipError):
+        OwnedPassportResources.failed_continuation(path, resume=True, **args)
+    assert len(model["native_posts"]) == 1 and model["flow_posts"] == 0
+
+
+@pytest.mark.parametrize("gap", ["selected-active", "wrong-audit", "extra-flow", "authority-not-retired", "runtime-changed"])
+def test_failed_cleanup_stops_without_success_claim_on_gaps(failed_owned, gap):
+    _, _, _, _, model, args, path, _ = failed_owned
+    continuation = OwnedPassportResources.failed_continuation(path, **args)
+    if gap == "selected-active":
+        next(row for row in model["jobs"].values() if row["status"] != "ACTIVE")["status"] = "ACTIVE"
+    elif gap == "wrong-audit":
+        model["wrong_audit"] = True
+    elif gap == "extra-flow":
+        model["extra_flow"] = True
+    elif gap == "runtime-changed":
+        # The verifier is a bound operation port, never an imported report flag.
+        args["verify_runtime"] = lambda: "b" * 64
+        with pytest.raises(PassportOwnershipError, match="runtime changed"):
+            OwnedPassportResources.failed_continuation(path, resume=True, **args)
+        return
+    with pytest.raises(PassportOwnershipError):
+        continuation.retire_failed(retire_cleanup_authority=lambda: gap != "authority-not-retired")
+    assert json.loads(path.read_text())["cleanup_complete"] is False
+    assert json.loads(path.read_text())["failed_cleanup"]["qualificationEligible"] is False
+    if gap == "selected-active":
+        assert model["native_posts"] == [] and model["flow_posts"] == 0
 
 
 def test_rejected_key_response_retains_exact_authority_for_teardown(tmp_path):

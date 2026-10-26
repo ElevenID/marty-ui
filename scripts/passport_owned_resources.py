@@ -8,10 +8,11 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import quote
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 if __package__:
     from . import probe_passport_beta_native_batch as batch
@@ -64,6 +65,8 @@ class OwnedPassportResources:
         batch._write_private_state(self.path, self.value, initial=initial)
 
     def call(self, role, method, path, body=None, headers=None):
+        if guard := getattr(self, "_failed_guard", None):
+            guard()
         # Commit intent before dispatch: ambiguous failures remain recoverable.
         item = {"role": role, "method": method, "path": path,
                 "request_sha256": hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest(),
@@ -82,6 +85,8 @@ class OwnedPassportResources:
         return path + "?organization_id=" + quote(self.organization, safe="")
 
     def private_call(self, path, body=None):
+        if guard := getattr(self, "_failed_guard", None):
+            guard()
         item = {"role": "governed-signing-service", "method": "POST" if body else "GET",
                 "path": path, "response_received": False}
         self.value["operations"].append(item)
@@ -288,6 +293,7 @@ class OwnedPassportResources:
             pass  # Preserve UNKNOWN and the original failed start, without retry.
 
     def retire(self, *, selected, certificate_id, check_key_denied, retire_sessions):
+        require("failed_cleanup" not in self.value, "Failed cleanup cannot qualify successful retirement")
         require(self.value.get("plan") and len(self.value["issuer_identities"]) == 2,
                 "Owned passport setup is incomplete")
         require(all(item["response_received"] for item in self.value["operations"]),
@@ -332,6 +338,23 @@ class OwnedPassportResources:
                     and instance.get("organization_id") == self.organization
                     and instance.get("flow_id") == self.value["resources"]["flow_definition_id"]["id"]
                     and str(instance.get("status")).upper() == "COMPLETED", "Owned passport Flow is not terminal")
+        self._retire_owned_material(certificate_id)
+        # Key ownership is supplied only by the same run's actual create port.
+        api_key_id = self.value.get("api_key_id")
+        require(isinstance(api_key_id, str) and bool(api_key_id), "Cannot revoke unowned passport API authority")
+        code, response = self.call("flow", "DELETE", self.scoped("/v1/api-keys/" + quote(api_key_id, safe="")))
+        require(code == 200 and response.get("success") is True, "Owned passport key revocation failed")
+        require(check_key_denied() is True, "Retired passport key is still accepted")
+        batch.clear_private_state(self.key_path)
+        require(retire_sessions() is True, "Owned passport session retirement is incomplete")
+        self.value["cleanup_complete"] = True
+        self.save()
+        return {"complete": True, "terminal_jobs": 2, "flow_retired": True,
+                "templates_deprecated": True, "issuer_tuples_retired": True,
+                "csca_revoked": True, "api_key_denied": True,
+                "sessions_denied": True, "history_retained": True}
+
+    def _retire_owned_material(self, certificate_id):
         owned = self.value["resources"]["flow_definition_id"]
         path = COLLECTIONS["flow_definition_id"] + "/" + quote(owned["id"], safe="")
         self.check_resource(path, owned)
@@ -387,20 +410,337 @@ class OwnedPassportResources:
         require(code == 200, "Owned delivery destination retirement failed")
         code, _ = self.call("flow", "GET", path)
         require(code == 404, "Owned delivery destination remains available")
-        # Key ownership is supplied only by the same run's actual create port.
-        api_key_id = self.value.get("api_key_id")
-        require(isinstance(api_key_id, str) and bool(api_key_id), "Cannot revoke unowned passport API authority")
-        code, response = self.call("flow", "DELETE", self.scoped("/v1/api-keys/" + quote(api_key_id, safe="")))
-        require(code == 200 and response.get("success") is True, "Owned passport key revocation failed")
-        require(check_key_denied() is True, "Retired passport key is still accepted")
-        batch.clear_private_state(self.key_path)
-        require(retire_sessions() is True, "Owned passport session retirement is incomplete")
+
+    @classmethod
+    def failed_continuation(cls, path, *, journal_ref, wire_ref, failure_ref, fixture_ref,
+                            request, private_signing, verify_runtime, resume=False):
+        """Continue a hash-bound failed batch, never adopt it as a fresh demo.
+
+        Ports retain the existing bound transport contract. verify_runtime must
+        verify the actual runtime and return its reviewed profile SHA-256, not a
+        report's qualification flag. No credential or wire key is imported.
+        """
+        def unique(pairs):
+            result = {}
+            for key, value in pairs:
+                require(key not in result, "Failed cleanup JSON has duplicate fields")
+                result[key] = value
+            return result
+
+        def read(ref):
+            require(isinstance(ref, dict) and set(ref) == {"path", "sha256"}
+                    and isinstance(ref["sha256"], str) and batch.SHA256.fullmatch(ref["sha256"]),
+                    "Failed cleanup source reference is invalid")
+            source = Path(ref["path"])
+            require(source.is_absolute() and source.is_file() and not source.is_symlink()
+                    and source.resolve() == source.absolute()
+                    and Path.cwd().resolve() not in source.resolve().parents,
+                    "Failed cleanup source must be an existing private regular file")
+            if os.name == "posix":
+                require(source.parent.stat().st_mode & 0o077 == 0
+                        and source.stat().st_mode & 0o077 == 0, "Failed cleanup source is not private")
+            raw = source.read_bytes()
+            require(hashlib.sha256(raw).hexdigest() == ref["sha256"], "Failed cleanup source changed")
+            return json.loads(raw, object_pairs_hook=unique)
+
+        original, wire, failure = (read(ref) for ref in (journal_ref, wire_ref, failure_ref))
+        raw_fixture = read(fixture_ref)
+        # Project only existing provenance metadata. Never retain fixture.custody.
+        fixture = {"schema": raw_fixture.get("schema"), "wire": raw_fixture.get("privateStatePath"),
+                   "handoff": raw_fixture.get("privateHandoffPath"),
+                   "organization_id": raw_fixture.get("plan", {}).get("application", {}).get("organization_id")}
+        del raw_fixture
+        producer_directory = Path(fixture_ref["path"]).parent
+        require(fixture["schema"] == "marty.passport-fresh-private/v3"
+                and isinstance(fixture["wire"], str) and isinstance(fixture["handoff"], str)
+                and Path(fixture["wire"]) == Path(wire_ref["path"])
+                and Path(fixture["handoff"]).with_name(Path(fixture["handoff"]).stem + ".owned-resources.json")
+                    == Path(journal_ref["path"])
+                and all(Path(ref["path"]).parent == producer_directory for ref in (journal_ref, wire_ref, failure_ref))
+                and Path(fixture["handoff"]).parent == producer_directory,
+                "Producer fixture does not bind these exact journal/wire paths")
+        failure_path = Path(failure_ref["path"])
+        token = failure_path.name.removeprefix("passport-failure-").removesuffix(".json")
+        try:
+            require(failure_path.name == "passport-failure-" + UUID(token).hex + ".json"
+                    and set(producer_directory.glob("passport-failure-*.json")) == {failure_path},
+                    "Producer failure reference is ambiguous")
+        except (ValueError, TypeError, AttributeError) as exc:
+            raise PassportOwnershipError("Producer failure reference is invalid") from exc
+        require(set(failure) <= {"schema", "stage", "errorType", "qualificationEligible", "sourceTrace",
+                                "captureFailureType", "captureFailureTrace"}
+                and isinstance(failure.get("stage"), str) and bool(failure["stage"])
+                and isinstance(failure.get("errorType"), str) and bool(failure["errorType"]),
+                "Failure record differs from its privacy-preserving producer contract")
+        require(original.get("schema") == "marty.passport-owned-resources/v1"
+                and original.get("cleanup_complete") is False
+                and failure.get("schema") == "marty.passport-private-failure/v1"
+                and failure.get("qualificationEligible") is False
+                and wire.get("schema") == "marty.passport-beta-native-pending/v1",
+                "Sources do not describe an unresolved failed owned batch")
+        organization, run = original.get("organization_id"), original.get("run_id")
+        require(isinstance(run, str) and len(run) == 32 and all(c in "0123456789abcdef" for c in run)
+                and isinstance(organization, str) and organization
+                and fixture["organization_id"] == organization
+                and wire.get("organization_id") == organization
+                and all(item.get("response_received") is True for item in original["operations"]),
+                "Original batch has ambiguous authority or operations")
+        authority = original.get("authority_retirement", {})
+        require(authority.get("complete") is True and authority.get("keyDenied") is True
+                and authority.get("qualificationEligible") is False,
+                "Original failed-run authority has not been retired")
+        resources, plan = original["resources"], original["plan"]
+        require(set(resources) == set(COLLECTIONS) and all(
+            row.get("creation_returned") is True and row.get("organization_id") == organization
+            and isinstance(row.get("id"), str) and row["id"]
+            and isinstance(row.get("name"), str) and run in row["name"]
+            for row in resources.values()), "Original resources are not genuinely owned")
+        require(plan["selected_flow"]["flow_definition_id"] == resources["flow_definition_id"]["id"]
+                and all(plan["selected_flow"]["references"].get(key) == resources[key]["id"]
+                        for key in resources if key != "flow_definition_id"),
+                "Original plan and resource ownership disagree")
+        identities = original["issuer_identities"]
+        require(len(identities) == 2 and {row.get("role") for row in identities} == {"csca", "dsc"}
+                and all(row.get("creation_returned") is True and run in row.get("tuple", {}).get("issuer_did", "")
+                        and public_key(row.get("public_key")) for row in identities)
+                and plan["certificate_plan"]["organization_id"] == organization
+                and plan["certificate_plan"]["csca"]["certificate_id"] == "demo-csca-" + run,
+                "Original certificate/issuer ownership is incomplete")
+        bound = [item for item in original["jobs"] if item.get("event") == "batch_bound"]
+        events = [row.get("event") for row in original["jobs"]]
+        require(len(events) == 3 and set(events) == {"companion_created", "batch_bound", "companion_terminal"}
+                and len(bound) == 1 and len(bound[0].get("jobs", [])) == 2
+                and bound[0].get("organization_id") == organization
+                and bound[0].get("batch_id") == wire.get("batch_id"), "Batch ownership is ambiguous")
+        jobs = bound[0]["jobs"]
+        fields = ("id", "organization_id", "application_id", "flow_execution_id", "bureau_job_id")
+        require(all(job.get("organization_id") == organization and all(
+            isinstance(job.get(key), str) and job[key] for key in fields) for job in jobs)
+            and all(len({job[key] for job in jobs}) == 2 for key in ("id", "application_id", "bureau_job_id")),
+            "Batch has foreign or duplicate jobs")
+        try:
+            require(all(str(UUID(job[key])) == job[key] for job in jobs for key in ("id", "application_id")),
+                    "Native job identity is not canonical")
+        except (ValueError, TypeError, AttributeError) as exc:
+            raise PassportOwnershipError("Native job identity is not canonical") from exc
+        selected = next((job for job in jobs if job["id"] == wire.get("selected_source_job_id")), None)
+        companion = next((job for job in jobs if job["id"] == wire.get("companion_source_job_id")), None)
+        require(selected is not None and companion is not None and selected is not companion
+                and selected["application_id"] == wire.get("selected_application_id")
+                and selected["flow_execution_id"] == wire.get("selected_flow_instance_id")
+                and companion["application_id"] == wire.get("companion_application_id")
+                and companion["flow_execution_id"] == wire.get("companion_flow_execution_id")
+                and bound[0].get("owned_flow_instance_ids") == [selected["flow_execution_id"]]
+                and bound[0].get("standalone_companion_execution_id") == companion["flow_execution_id"]
+                and companion["flow_execution_id"].startswith("passport-native-batch-"),
+                "Private wire identity differs from the owned batch")
+        created = next(row for row in original["jobs"] if row["event"] == "companion_created")
+        require(created.get("flow_instance_created") is False
+                and all(created.get(key) == companion[key] for key in
+                        ("id", "organization_id", "application_id", "flow_execution_id"))
+                and created.get("issuer_did") == plan["application"]["issuer_did"],
+                "Companion creation is not the exact standalone owned job")
+        start = original.get("flow_start")
+        if start is not None:
+            require(start.get("state") == "OBSERVED" and start.get("instance_id") == selected["flow_execution_id"]
+                    and start.get("application_id") == selected["application_id"]
+                    and start.get("source_job_id") == selected["id"], "Unknown Flow start cannot be adopted")
+        # Pre-1579 journals have no flow_start. Keep that absence truthful: the
+        # wire/batch correlation and fresh owned Flow readback are separate proof.
+        terminal = [row for row in original["jobs"] if row.get("event") == "companion_terminal"]
+        require(len(terminal) == 1 and terminal[0].get("status") == "ACTIVE"
+                and terminal[0].get("completed_at") and all(terminal[0].get(key) == companion[key] for key in fields),
+                "The companion is not the recorded successful job")
+        source_refs = {"journal": journal_ref, "wire": wire_ref, "failure": failure_ref, "fixture": fixture_ref}
+        require(isinstance(path, Path) and path.is_absolute() and not path.is_symlink()
+                and path.resolve() == path.absolute() and Path.cwd().resolve() not in path.resolve().parents
+                and all(path != Path(ref["path"]) for ref in source_refs.values()),
+                "Failed continuation must be a separate private path")
+        if os.name == "posix" and path.exists():
+            require(path.parent.stat().st_mode & 0o077 == 0 and path.stat().st_mode & 0o077 == 0,
+                    "Failed continuation is not private")
+        profile = verify_runtime()
+        require(isinstance(profile, str) and batch.SHA256.fullmatch(profile), "Runtime binding is unverified")
+        instance = cls.__new__(cls)
+        instance.path, instance.organization = path, organization
+        instance.key_path = path.with_name(path.stem + ".key-recovery.json")
+        instance.api_key, instance.request, instance.private_signing = None, request, private_signing
+        immutable = ("schema", "run_id", "organization_id", "resources", "plan", "issuer_identities", "jobs", "api_key_id",
+                     "flow_start", "authority_retirement")
+        if path.exists():
+            require(resume and not path.is_symlink(), "Failed cleanup continuation already exists")
+            instance.value = json.loads(path.read_bytes(), object_pairs_hook=unique)
+            require(all(instance.value.get(key) == original.get(key) for key in immutable)
+                    and ("flow_start" in instance.value) == ("flow_start" in original)
+                    and instance.value.get("operations", [])[:len(original["operations"])] == original["operations"]
+                    and instance.value.get("failed_cleanup", {}).get("sources") == source_refs
+                    and instance.value["failed_cleanup"].get("runtime_profile_sha256") == profile,
+                    "Continuation identity or runtime changed")
+            state = instance.value["failed_cleanup"]
+            expected_intent = cls._failed_cancel_intent(journal_ref["sha256"], selected["id"])
+            require(instance.value.get("cleanup_complete") is False
+                    and state.get("qualificationEligible") is False
+                    and state.get("stage") in {"PREFLIGHT", "CANCEL_INTENT", "NATIVE_CANCELLED"}
+                    and (state.get("cancel_intent") == expected_intent if state["stage"] != "PREFLIGHT"
+                         else "cancel_intent" not in state)
+                    and ("flow_cancel_intent" not in state or state["flow_cancel_intent"] is True),
+                    "Continuation cancellation intent/stage is invalid or needs separate lifecycle reconciliation")
+        else:
+            batch.ensure_private_state_available(path)
+            instance.value = copy.deepcopy(original)
+            instance.value["failed_cleanup"] = {"sources": copy.deepcopy(source_refs),
+                "runtime_profile_sha256": profile, "qualificationEligible": False,
+                "failure_body_has_identity_fields": False,
+                "failure_correlation": "OPERATOR_PINNED_HASH_AND_EXISTING_PRODUCER_FIXTURE_DIRECTORY_ONLY",
+                "driver_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(), "stage": "PREFLIGHT"}
+            instance.save(initial=True)
+        def guard():
+            for ref in source_refs.values():
+                read(ref)
+            require(verify_runtime() == profile and all(instance.value.get(key) == original.get(key) for key in immutable)
+                    and set(producer_directory.glob("passport-failure-*.json")) == {failure_path}
+                    and instance.value["failed_cleanup"]["qualificationEligible"] is False
+                    and instance.value["failed_cleanup"]["driver_sha256"]
+                        == hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+                    "Failed cleanup ownership/runtime changed")
+        instance._failed_guard = guard
+        instance._failed_jobs = selected, companion
+        return instance
+
+    @staticmethod
+    def _failed_cancel_intent(journal_sha256, job_id):
+        return {"key": "passport-failed-" + hashlib.sha256((journal_sha256 + job_id).encode()).hexdigest(),
+                "body": {"expected_job_id": job_id, "reason_code": "ADMINISTRATIVE_ABANDONMENT",
+                         "reason": "Original owned demo failed; administratively retire its local job"}}
+
+    def retire_failed(self, *, retire_cleanup_authority):
+        """Always close the separately owned cleanup authority, including on error."""
+        require(hasattr(self, "_failed_guard"), "Failed cleanup was not privately bound")
+        def close_authority():
+            state = self.value["failed_cleanup"]
+            try:
+                retired = retire_cleanup_authority() is True
+            except Exception as exc:
+                retired = False
+                state["cleanup_authority_error_type"] = type(exc).__name__
+            state["cleanup_authority_retired"] = retired
+            self.save()
+            return retired
+        try:
+            result = self._retire_failed_resources()
+        except Exception:
+            close_authority()
+            raise
+        require(close_authority(), "Fresh cleanup authority is not retired")
+        self._failed_guard()
+        self.value["failed_cleanup"].update(stage="RETIRED_FAILED_ONLY", qualificationEligible=False)
         self.value["cleanup_complete"] = True
         self.save()
-        return {"complete": True, "terminal_jobs": 2, "flow_retired": True,
-                "templates_deprecated": True, "issuer_tuples_retired": True,
-                "csca_revoked": True, "api_key_denied": True,
-                "sessions_denied": True, "history_retained": True}
+        return {"complete": True, "qualificationEligible": False, **result}
+
+    def _retire_failed_resources(self):
+        """Failed-only terminal disposition; never qualifies the original demo."""
+        require(hasattr(self, "_failed_guard"), "Failed cleanup was not privately bound")
+        self._failed_guard()
+        state = self.value["failed_cleanup"]
+        selected, companion = self._failed_jobs
+        allowed_pending = {
+            "/v1/passport/applications/" + quote(selected["application_id"], safe="") + "/cancel",
+            "/v1/flows/instances/" + quote(selected["flow_execution_id"], safe="") + "/cancel",
+        }
+        original_count = len(json.loads(Path(state["sources"]["journal"]["path"]).read_bytes())["operations"])
+        require(all(item.get("response_received") is True or
+                    (item.get("method") == "POST" and item.get("path") in allowed_pending)
+                    for item in self.value["operations"][original_count:]),
+                "Ambiguous lifecycle mutation requires separate readback reconciliation")
+        for field, owned in self.value["resources"].items():
+            current = self.check_resource(COLLECTIONS[field] + "/" + quote(owned["id"], safe=""), owned)
+            if field == "flow_definition_id":
+                require(all(current.get(key) == value for key, value in self.value["plan"]["selected_flow"]["references"].items()),
+                        "Owned Flow references changed")
+        def job(row):
+            code, actual = self.call("api", "GET", "/v1/passport/applications/" + quote(row["application_id"], safe=""))
+            require(code == 200 and all(actual.get(key) == row[key] for key in
+                    ("id", "organization_id", "application_id", "flow_execution_id", "bureau_job_id"))
+                    and actual.get("credential_template_id") == self.value["resources"]["credential_template_id"]["id"]
+                    and actual.get("delivery_destination_profile_id") == self.value["resources"]["delivery_destination_profile_id"]["id"]
+                    and actual.get("issuer_did") == self.value["plan"]["application"]["issuer_did"],
+                    "Current native job differs from original ownership")
+            return actual
+        before, successful = job(selected), job(companion)
+        require(successful.get("status") == "ACTIVE" and successful.get("completed_at"), "Successful companion changed")
+        allowed = {"DRAFT", "DATA_GENERATED", "SOD_SIGNED", "SUBMITTED", "IN_PRODUCTION", "QUALITY_CHECK", "READY_FOR_ACTIVATION"}
+        require(before.get("status") in allowed or (before.get("status") == "CANCELLED" and "cancel_intent" in state),
+                "Successful or unrelated terminal job cannot enter failed cancellation")
+        flow_id = selected["flow_execution_id"]
+        flow_path = "/v1/flows/instances/" + quote(flow_id, safe="")
+        code, flow = self.call("flow", "GET", flow_path)
+        def owned_flow(value):
+            context = value.get("context_data", {}).get("physical_document_job", {})
+            return (value.get("id") == flow_id and value.get("organization_id") == self.organization
+                    and value.get("flow_id") == self.value["resources"]["flow_definition_id"]["id"]
+                    and all(context.get(key) == selected[key] for key in
+                            ("id", "organization_id", "application_id", "flow_execution_id", "bureau_job_id")))
+        require(code == 200 and owned_flow(flow) and (str(flow.get("status")).upper() == "IN_PROGRESS"
+                or (str(flow.get("status")).upper() == "CANCELLED" and state.get("flow_cancel_intent") is True)),
+                "Current Flow is not the exact failed owned instance")
+        intent = self._failed_cancel_intent(state["sources"]["journal"]["sha256"], selected["id"])
+        key, body = intent["key"], intent["body"]
+        require(state.get("cancel_intent", intent) == intent, "Cancellation replay identity changed")
+        state.update(cancel_intent=intent, stage="CANCEL_INTENT")
+        self.save()  # Same exact key/body is durable before any native mutation.
+        code, cancelled = self.call("api", "POST", "/v1/passport/applications/" + quote(selected["application_id"], safe="") + "/cancel",
+                                    body, {"idempotency-key": key})
+        audit = cancelled.get("administrative_cancellation", {})
+        returned = cancelled.get("job", {})
+        require(isinstance(audit, dict) and isinstance(returned, dict), "Native cancellation response is malformed")
+        require(code == 200 and cancelled.get("bureau_cancellation_requested") is False
+                and cancelled.get("flow_cancellation_requested") is False
+                and audit.get("bureau_cancellation_requested") is False
+                and audit.get("job_id") == selected["id"] and audit.get("organization_id") == self.organization
+                and audit.get("actor_kind") == "AUTHENTICATED_PASSPORT_TENANT"
+                and audit.get("actor_organization_id") == self.organization
+                and audit.get("prior_status") in allowed
+                and audit.get("reason_code") == body["reason_code"] and audit.get("reason") == body["reason"]
+                and audit.get("recorded_at") and audit.get("event_id")
+                and returned.get("status") == "CANCELLED"
+                and all(returned.get(key) == selected[key] for key in
+                        ("id", "organization_id", "application_id", "flow_execution_id", "bureau_job_id")),
+                "Native cancellation audit is unproven")
+        try:
+            require(str(UUID(audit["event_id"])) == audit["event_id"]
+                    and datetime.fromisoformat(audit["recorded_at"]).utcoffset() is not None,
+                    "Native cancellation audit identity/time is invalid")
+        except (ValueError, TypeError, AttributeError) as exc:
+            raise PassportOwnershipError("Native cancellation audit identity/time is invalid") from exc
+        current = job(selected)
+        require(current.get("status") == "CANCELLED" and job(companion) == successful,
+                "Native cancellation or successful companion readback changed")
+        state.update(stage="NATIVE_CANCELLED", cancellation_audit=copy.deepcopy(audit))
+        self.save()
+        if str(flow.get("status")).upper() != "CANCELLED":
+            state["flow_cancel_intent"] = True
+            self.save()
+            code, result = self.call("flow", "POST", flow_path + "/cancel")
+            require(code == 200 and owned_flow(result) and str(result.get("status")).upper() == "CANCELLED",
+                    "Separate Flow cancellation was not returned")
+        code, flow = self.call("flow", "GET", flow_path)
+        require(code == 200 and owned_flow(flow) and str(flow.get("status")).upper() == "CANCELLED",
+                "Owned Flow cancellation did not persist")
+        self._failed_guard()
+        code, instances = self.request("flow", "GET", "/v1/flows/instances?organization_id=" + quote(self.organization, safe="")
+            + "&flow_definition_id=" + quote(self.value["resources"]["flow_definition_id"]["id"], safe="") + "&limit=100&offset=0", None)
+        require(code == 200 and isinstance(instances, list) and len(instances) == 1 and owned_flow(instances[0])
+                and str(instances[0].get("status")).upper() == "CANCELLED", "Additional or nonterminal Flow instances block retirement")
+        state["owned_flow_instances_readback_sha256"] = hashlib.sha256(json.dumps(instances, sort_keys=True).encode()).hexdigest()
+        self.save()
+        self._retire_owned_material(self.value["plan"]["certificate_plan"]["csca"]["certificate_id"])
+        self._failed_guard()
+        state.update(stage="RESOURCES_RETIRED_AUTHORITY_PENDING", qualificationEligible=False)
+        self.save()
+        return {"originalFailurePreserved": True,
+                "selectedJobCancelled": True, "successfulCompanionPreserved": True,
+                "flowCancelled": True, "bureauCancellationRequested": False, "historyRetained": True}
 
     def check_resource(self, path, owned):
         require(owned.get("creation_returned") is True, "Resource ownership is unproven")
