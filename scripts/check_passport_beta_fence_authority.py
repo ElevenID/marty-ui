@@ -127,6 +127,7 @@ PROTECTED_FILES = (
     "rust/services/issuance/migrations/0009_authenticated_mdoc_status_binding.sql",
     "rust/services/flow/migrations/0001_flow_schema.sql",
     "rust/services/flow/migrations/0002_builtin_flows.sql",
+    "rust/services/flow/migrations/0003_physical_start_intents.sql",
 )
 RELEASE_SCHEMA_VALIDATION_MARKERS = {
     "rust/crates/schema-startup/src/lib.rs": (

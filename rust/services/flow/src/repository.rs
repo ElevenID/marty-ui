@@ -46,6 +46,8 @@ pub enum RepositoryError {
     ApplicationOfferConflict(String),
     #[error("FLOW.INVALID_REPLAY_DIGEST")]
     InvalidReplayDigest,
+    #[error("FLOW.INVALID_PHYSICAL_START_SNAPSHOT")]
+    InvalidPhysicalStartSnapshot,
     #[error("FLOW.ARTIFACT_CONFLICT: {0}")]
     ArtifactConflict(String),
     #[error(transparent)]

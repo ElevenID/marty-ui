@@ -8,7 +8,8 @@ use uuid::Uuid;
 
 use crate::{
     checked_public_record, ApplicationEventReceipt, FlowArtifactRecord, FlowDefinitionRecord,
-    FlowInstanceRecord, FlowRecordError, PlannedApplicationFlowRecord, RepositoryError,
+    FlowInstanceRecord, FlowRecordError, PhysicalStartSnapshot, PlannedApplicationFlowRecord,
+    RepositoryError,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -30,6 +31,27 @@ pub struct PostgresFlowRepository {
     pool: PgPool,
 }
 
+pub struct PhysicalStartReservationInput<'a> {
+    pub organization_id: &'a str,
+    pub definition_id: &'a str,
+    pub operation_key: &'a str,
+    pub key_hash: &'a str,
+    pub request_hash: &'a str,
+    pub definition_snapshot: &'a PhysicalStartSnapshot,
+    pub initial_actor: &'a str,
+    pub original_deadline_at: DateTime<Utc>,
+    pub generated_key: bool,
+    pub proposed_instance_id: &'a str,
+    pub now: DateTime<Utc>,
+}
+
+pub struct PhysicalStartOrigin {
+    pub definition_snapshot: Value,
+    pub created_at: DateTime<Utc>,
+    pub initial_actor: String,
+    pub original_deadline_at: DateTime<Utc>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PhysicalStartReservation {
     Acquired {
@@ -37,6 +59,9 @@ pub enum PhysicalStartReservation {
         claim_token: Uuid,
     },
     InProgress {
+        instance_id: String,
+    },
+    Expired {
         instance_id: String,
     },
     Completed {
@@ -50,6 +75,7 @@ pub struct PendingPhysicalStart {
     pub flow_definition_id: String,
     pub key_source: String,
     pub created_at: DateTime<Utc>,
+    pub original_deadline_at: DateTime<Utc>,
 }
 
 impl PostgresFlowRepository {
@@ -63,20 +89,119 @@ impl PostgresFlowRepository {
         &self.pool
     }
 
-    pub async fn reserve_physical_start(
+    pub async fn physical_start_snapshot(
         &self,
         organization_id: &str,
-        definition_id: &str,
-        operation_key: &str,
         key_hash: &str,
-        request_hash: &str,
-        generated_key: bool,
-        proposed_instance_id: &str,
-        now: DateTime<Utc>,
+    ) -> Result<Option<Value>, RepositoryError> {
+        Ok(self
+            .physical_start_origin(organization_id, key_hash)
+            .await?
+            .map(|origin| origin.definition_snapshot))
+    }
+
+    pub async fn physical_start_origin(
+        &self,
+        organization_id: &str,
+        key_hash: &str,
+    ) -> Result<Option<PhysicalStartOrigin>, RepositoryError> {
+        if !valid_sha256(key_hash) {
+            return Err(RepositoryError::InvalidReplayDigest);
+        }
+        sqlx::query(
+            "SELECT definition_snapshot,created_at,initial_actor,original_deadline_at
+             FROM flow_service.physical_start_intents
+             WHERE organization_id=$1 AND key_hash=$2",
+        )
+        .bind(organization_id)
+        .bind(key_hash)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(storage)?
+        .map(|row| {
+            Ok(PhysicalStartOrigin {
+                definition_snapshot: row.try_get("definition_snapshot").map_err(storage)?,
+                created_at: row.try_get("created_at").map_err(storage)?,
+                initial_actor: row.try_get("initial_actor").map_err(storage)?,
+                original_deadline_at: row.try_get("original_deadline_at").map_err(storage)?,
+            })
+        })
+        .transpose()
+    }
+
+    pub async fn physical_start_snapshot_by_instance(
+        &self,
+        organization_id: &str,
+        instance_id: &str,
+    ) -> Result<Option<Value>, RepositoryError> {
+        sqlx::query_scalar(
+            "SELECT definition_snapshot FROM flow_service.physical_start_intents
+             WHERE organization_id=$1 AND instance_id=$2",
+        )
+        .bind(organization_id)
+        .bind(instance_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(storage)
+    }
+
+    pub async fn physical_start_snapshot_by_definition_key(
+        &self,
+        definition_id: &str,
+        key_hash: &str,
+    ) -> Result<Option<(String, Value)>, RepositoryError> {
+        if !valid_sha256(key_hash) {
+            return Err(RepositoryError::InvalidReplayDigest);
+        }
+        let rows = sqlx::query(
+            "SELECT organization_id,definition_snapshot
+             FROM flow_service.physical_start_intents
+             WHERE flow_definition_id=$1 AND key_hash=$2 LIMIT 2",
+        )
+        .bind(definition_id)
+        .bind(key_hash)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(storage)?;
+        if rows.len() > 1 {
+            return Err(RepositoryError::PhysicalStartKeyConflict);
+        }
+        rows.into_iter()
+            .next()
+            .map(|row| {
+                Ok((
+                    row.try_get("organization_id").map_err(storage)?,
+                    row.try_get("definition_snapshot").map_err(storage)?,
+                ))
+            })
+            .transpose()
+    }
+
+    pub async fn reserve_physical_start(
+        &self,
+        input: PhysicalStartReservationInput<'_>,
     ) -> Result<PhysicalStartReservation, RepositoryError> {
+        let PhysicalStartReservationInput {
+            organization_id,
+            definition_id,
+            operation_key,
+            key_hash,
+            request_hash,
+            definition_snapshot,
+            initial_actor,
+            original_deadline_at,
+            generated_key,
+            proposed_instance_id,
+            now,
+        } = input;
         if !valid_sha256(key_hash) || !valid_sha256(request_hash) {
             return Err(RepositoryError::InvalidReplayDigest);
         }
+        if !definition_snapshot.matches(organization_id, definition_id) {
+            return Err(RepositoryError::InvalidPhysicalStartSnapshot);
+        }
+        let snapshot_json = serde_json::to_value(definition_snapshot)
+            .map_err(|_| RepositoryError::InvalidPhysicalStartSnapshot)?;
         let token = Uuid::new_v4();
         let expires = now + Duration::seconds(60);
         let mut transaction = self.pool.begin().await.map_err(storage)?;
@@ -102,14 +227,17 @@ impl PostgresFlowRepository {
         }
         let inserted = sqlx::query(
             "INSERT INTO flow_service.physical_start_intents
-             (organization_id,key_hash,request_hash,key_source,flow_definition_id,instance_id,
+             (organization_id,key_hash,request_hash,definition_snapshot,initial_actor,original_deadline_at,key_source,flow_definition_id,instance_id,
               status,claim_token,claim_expires_at,created_at,updated_at)
-             VALUES ($1,$2,$3,$4,$5,$6,'pending',$7,$8,$9,$9)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'pending',$10,$11,$12,$12)
              ON CONFLICT (organization_id,key_hash) DO NOTHING RETURNING instance_id",
         )
         .bind(organization_id)
         .bind(key_hash)
         .bind(request_hash)
+        .bind(snapshot_json)
+        .bind(initial_actor)
+        .bind(original_deadline_at)
         .bind(if generated_key { "generated" } else { "client" })
         .bind(definition_id)
         .bind(proposed_instance_id)
@@ -127,7 +255,7 @@ impl PostgresFlowRepository {
             });
         }
         let row = sqlx::query(
-            "SELECT request_hash,flow_definition_id,instance_id,status,claim_expires_at
+            "SELECT request_hash,flow_definition_id,instance_id,status,claim_expires_at,original_deadline_at
              FROM flow_service.physical_start_intents
              WHERE organization_id=$1 AND key_hash=$2 FOR UPDATE",
         )
@@ -146,6 +274,12 @@ impl PostgresFlowRepository {
         if status == "completed" {
             transaction.commit().await.map_err(storage)?;
             return Ok(PhysicalStartReservation::Completed { instance_id });
+        }
+        let original_deadline_at: DateTime<Utc> =
+            row.try_get("original_deadline_at").map_err(storage)?;
+        if now >= original_deadline_at {
+            transaction.commit().await.map_err(storage)?;
+            return Ok(PhysicalStartReservation::Expired { instance_id });
         }
         let prior_expiry: Option<DateTime<Utc>> =
             row.try_get("claim_expires_at").map_err(storage)?;
@@ -180,7 +314,7 @@ impl PostgresFlowRepository {
         offset: i64,
     ) -> Result<Vec<PendingPhysicalStart>, RepositoryError> {
         let rows = sqlx::query(
-            "SELECT instance_id,flow_definition_id,key_source,created_at
+            "SELECT instance_id,flow_definition_id,key_source,created_at,original_deadline_at
              FROM flow_service.physical_start_intents
              WHERE organization_id=$1 AND status='pending'
              ORDER BY created_at,instance_id LIMIT $2 OFFSET $3",
@@ -198,6 +332,7 @@ impl PostgresFlowRepository {
                     flow_definition_id: row.try_get("flow_definition_id").map_err(storage)?,
                     key_source: row.try_get("key_source").map_err(storage)?,
                     created_at: row.try_get("created_at").map_err(storage)?,
+                    original_deadline_at: row.try_get("original_deadline_at").map_err(storage)?,
                 })
             })
             .collect()

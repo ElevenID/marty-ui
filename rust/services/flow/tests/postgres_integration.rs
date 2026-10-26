@@ -8,10 +8,12 @@ use std::{
 use axum::{extract::State, http::HeaderMap, routing::post, Json, Router};
 use chrono::{Duration, Utc};
 use marty_flow::{
-    deliver_due_callbacks, migrate_flow_schema, validate_flow_schema, ApplicationEventReceipt,
-    ApprovalStrategy, ArtifactStatus, CallbackDeliveryConfig, CallbackEvent, DefinitionStatus,
-    FlowArtifactRecord, FlowDefinitionRecord, FlowInstanceRecord, PhysicalStartReservation,
-    PlannedApplicationFlowRecord, PostgresFlowRepository,
+    create_definition_record, deliver_due_callbacks, migrate_flow_schema, parse_request,
+    validate_flow_schema, ApplicationEventReceipt, ApprovalStrategy, ArtifactStatus,
+    CallbackDeliveryConfig, CallbackEvent, CreateFlowDefinitionRequest, DefinitionStatus,
+    FlowArtifactRecord, FlowDefinitionRecord, FlowInstanceRecord, FlowType,
+    PhysicalStartReservation, PhysicalStartReservationInput, PhysicalStartSnapshot,
+    PlannedApplicationFlowRecord, PostgresFlowRepository, RepositoryError,
 };
 use marty_verification::flow::FlowInstanceStatus;
 use mmf_push::WebhookDestinationRegistry;
@@ -41,6 +43,7 @@ async fn physical_start_intent_claim_replay_and_atomic_finalization() -> TestRes
     assert_eq!(options.get_database(), Some(TEST_DATABASE_NAME));
     let pool = PgPool::connect_with(options).await?;
     reset_schema(&pool).await?;
+    validate_flow_schema(&pool).await?;
     let repository = PostgresFlowRepository::new(pool.clone());
     let now = chrono::DateTime::from_timestamp_micros(Utc::now().timestamp_micros())
         .expect("current timestamp");
@@ -48,28 +51,101 @@ async fn physical_start_intent_claim_replay_and_atomic_finalization() -> TestRes
         b"marty:physical-flow-start-key:v1:client-owned-1",
     ));
     let digest = "b".repeat(64);
+    let definition_request: CreateFlowDefinitionRequest = parse_request(json!({
+        "organization_id":"org-1", "name":"Physical issuance",
+        "flow_type":"physical_document_issuance",
+        "credential_template_id":"template-1",
+        "application_template_id":"application-template-1",
+        "delivery_destination_profile_id":"delivery-1"
+    }))?;
+    let mut definition = create_definition_record(definition_request, now)?;
+    definition.id = "physical-1".into();
+    definition.status = DefinitionStatus::Active;
+    let snapshot = PhysicalStartSnapshot {
+        definition,
+        issuer_did: "did:example:test".into(),
+    };
+    let snapshot_value = serde_json::to_value(&snapshot)?;
+    for extra in ["initial_context", "holder"] {
+        let mut unsafe_shape = snapshot_value.clone();
+        unsafe_shape[extra] = json!({});
+        assert!(serde_json::from_value::<PhysicalStartSnapshot>(unsafe_shape.clone()).is_err());
+        let rejected = sqlx::query(
+            "INSERT INTO flow_service.physical_start_intents
+             (organization_id,key_hash,request_hash,definition_snapshot,initial_actor,
+              original_deadline_at,key_source,flow_definition_id,instance_id,created_at,updated_at)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$10)",
+        )
+        .bind("org-1")
+        .bind(if extra == "holder" {
+            "a".repeat(64)
+        } else {
+            "c".repeat(64)
+        })
+        .bind(&digest)
+        .bind(unsafe_shape)
+        .bind("actor-1")
+        .bind(now + Duration::seconds(3600))
+        .bind("client")
+        .bind("physical-1")
+        .bind("90000000-0000-0000-0000-000000000049")
+        .bind(now)
+        .execute(&pool)
+        .await;
+        assert!(rejected.is_err());
+    }
+    let mut foreign_snapshot = snapshot.clone();
+    foreign_snapshot.definition.organization_id = "org-2".into();
+    let mut wrong_type_snapshot = snapshot.clone();
+    wrong_type_snapshot.definition.flow_type = FlowType::Custom;
+    for invalid in [&foreign_snapshot, &wrong_type_snapshot] {
+        assert!(matches!(
+            repository
+                .reserve_physical_start(PhysicalStartReservationInput {
+                    organization_id: "org-1",
+                    definition_id: "physical-1",
+                    operation_key: "invalid-snapshot",
+                    key_hash: &"d".repeat(64),
+                    request_hash: &digest,
+                    definition_snapshot: invalid,
+                    initial_actor: "actor-1",
+                    original_deadline_at: now + Duration::seconds(3600),
+                    generated_key: false,
+                    proposed_instance_id: "90000000-0000-0000-0000-000000000048",
+                    now,
+                })
+                .await,
+            Err(RepositoryError::InvalidPhysicalStartSnapshot)
+        ));
+    }
     let instance_id = "90000000-0000-0000-0000-000000000041";
     let (first, concurrent) = tokio::join!(
-        repository.reserve_physical_start(
-            "org-1",
-            "physical-1",
-            "client-owned-1",
-            &key,
-            &digest,
-            false,
-            instance_id,
-            now
-        ),
-        repository.reserve_physical_start(
-            "org-1",
-            "physical-1",
-            "client-owned-1",
-            &key,
-            &digest,
-            false,
-            "90000000-0000-0000-0000-000000000042",
-            now
-        ),
+        repository.reserve_physical_start(PhysicalStartReservationInput {
+            organization_id: "org-1",
+            definition_id: "physical-1",
+            operation_key: "client-owned-1",
+            key_hash: &key,
+            request_hash: &digest,
+            definition_snapshot: &snapshot,
+            initial_actor: "actor-1",
+            original_deadline_at: now + Duration::seconds(3600),
+            generated_key: false,
+            proposed_instance_id: instance_id,
+            now,
+        }),
+        repository.reserve_physical_start(PhysicalStartReservationInput {
+            organization_id: "org-1",
+            definition_id: "physical-1",
+            operation_key: "client-owned-1",
+            key_hash: &key,
+            request_hash: &digest,
+            definition_snapshot: &snapshot,
+            initial_actor: "actor-1",
+            original_deadline_at: now + Duration::seconds(3600),
+            generated_key: false,
+            proposed_instance_id: "90000000-0000-0000-0000-000000000042",
+            now,
+        }),
     );
     let results = [first?, concurrent?];
     let token = results
@@ -104,21 +180,49 @@ async fn physical_start_intent_claim_replay_and_atomic_finalization() -> TestRes
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0].key_source, "client");
     assert_eq!(pending[0].instance_id, owned_id);
+    assert_eq!(
+        pending[0].original_deadline_at,
+        now + Duration::seconds(3600)
+    );
+    let origin = repository
+        .physical_start_origin("org-1", &key)
+        .await?
+        .unwrap();
+    assert_eq!(origin.created_at, now);
+    assert_eq!(origin.initial_actor, "actor-1");
+    assert_eq!(origin.original_deadline_at, now + Duration::seconds(3600));
+    assert_eq!(
+        repository.physical_start_snapshot("org-1", &key).await?,
+        Some(snapshot_value.clone())
+    );
+    assert_eq!(
+        repository
+            .physical_start_snapshot_by_instance("org-1", &owned_id)
+            .await?,
+        Some(snapshot_value.clone())
+    );
+    assert!(repository
+        .physical_start_snapshot("org-2", &key)
+        .await?
+        .is_none());
     assert!(repository
         .pending_physical_starts("org-2", 10, 0)
         .await?
         .is_empty());
     assert!(repository
-        .reserve_physical_start(
-            "org-1",
-            "physical-1",
-            "client-owned-1",
-            &key,
-            &"c".repeat(64),
-            false,
-            &owned_id,
-            now
-        )
+        .reserve_physical_start(PhysicalStartReservationInput {
+            organization_id: "org-1",
+            definition_id: "physical-1",
+            operation_key: "client-owned-1",
+            key_hash: &key,
+            request_hash: &"c".repeat(64),
+            definition_snapshot: &snapshot,
+            initial_actor: "actor-1",
+            original_deadline_at: now + Duration::seconds(3600),
+            generated_key: false,
+            proposed_instance_id: &owned_id,
+            now,
+        })
         .await
         .is_err());
     // A readback UUID cannot replace an explicit client key. The old intent
@@ -127,16 +231,19 @@ async fn physical_start_intent_claim_replay_and_atomic_finalization() -> TestRes
         format!("marty:physical-flow-start-key:v1:{owned_id}").as_bytes(),
     ));
     assert!(repository
-        .reserve_physical_start(
-            "org-1",
-            "physical-1",
-            &owned_id,
-            &wrong_alias_hash,
-            &digest,
-            false,
-            "90000000-0000-0000-0000-000000000044",
-            now
-        )
+        .reserve_physical_start(PhysicalStartReservationInput {
+            organization_id: "org-1",
+            definition_id: "physical-1",
+            operation_key: &owned_id,
+            key_hash: &wrong_alias_hash,
+            request_hash: &digest,
+            definition_snapshot: &snapshot,
+            initial_actor: "actor-1",
+            original_deadline_at: now + Duration::seconds(3600),
+            generated_key: false,
+            proposed_instance_id: "90000000-0000-0000-0000-000000000044",
+            now,
+        })
         .await
         .is_err());
     assert_eq!(
@@ -157,16 +264,19 @@ async fn physical_start_intent_claim_replay_and_atomic_finalization() -> TestRes
     assert!(repository.instance(&wrong.id).await?.is_none());
 
     let retry = repository
-        .reserve_physical_start(
-            "org-1",
-            "physical-1",
-            "client-owned-1",
-            &key,
-            &digest,
-            false,
-            &owned_id,
-            now + Duration::seconds(61),
-        )
+        .reserve_physical_start(PhysicalStartReservationInput {
+            organization_id: "org-1",
+            definition_id: "physical-1",
+            operation_key: "client-owned-1",
+            key_hash: &key,
+            request_hash: &digest,
+            definition_snapshot: &snapshot,
+            initial_actor: "actor-1",
+            original_deadline_at: now + Duration::seconds(3600),
+            generated_key: false,
+            proposed_instance_id: &owned_id,
+            now: now + Duration::seconds(61),
+        })
         .await?;
     let retry_token = match retry {
         PhysicalStartReservation::Acquired {
@@ -191,8 +301,13 @@ async fn physical_start_intent_claim_replay_and_atomic_finalization() -> TestRes
             .await?
     );
     assert!(
-        matches!(repository.reserve_physical_start("org-1", "physical-1", "client-owned-1", &key,
-        &digest, false, &owned_id, now + Duration::seconds(62)).await?,
+        matches!(repository.reserve_physical_start(PhysicalStartReservationInput {
+            organization_id: "org-1", definition_id: "physical-1", operation_key: "client-owned-1",
+            key_hash: &key, request_hash: &digest, definition_snapshot: &snapshot,
+            initial_actor: "actor-1",
+            original_deadline_at: now + Duration::seconds(3600),
+            generated_key: false, proposed_instance_id: &owned_id, now: now + Duration::seconds(62),
+        }).await?,
         PhysicalStartReservation::Completed { instance_id } if instance_id == owned_id)
     );
     assert!(repository
@@ -206,16 +321,19 @@ async fn physical_start_intent_claim_replay_and_atomic_finalization() -> TestRes
     ));
     assert!(matches!(
         repository
-            .reserve_physical_start(
-                "org-1",
-                "physical-1",
-                generated_id,
-                &generated_key_hash,
-                &digest,
-                true,
-                generated_id,
-                now
-            )
+            .reserve_physical_start(PhysicalStartReservationInput {
+                organization_id: "org-1",
+                definition_id: "physical-1",
+                operation_key: generated_id,
+                key_hash: &generated_key_hash,
+                request_hash: &digest,
+                definition_snapshot: &snapshot,
+                initial_actor: "actor-1",
+                original_deadline_at: now + Duration::seconds(3600),
+                generated_key: true,
+                proposed_instance_id: generated_id,
+                now,
+            })
             .await?,
         PhysicalStartReservation::Acquired { .. }
     ));
@@ -223,10 +341,31 @@ async fn physical_start_intent_claim_replay_and_atomic_finalization() -> TestRes
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0].key_source, "generated");
     assert!(
-        matches!(repository.reserve_physical_start("org-1", "physical-1",
-        generated_id, &generated_key_hash, &digest, false,
-        "90000000-0000-0000-0000-000000000046", now + Duration::seconds(61)).await?,
+        matches!(repository.reserve_physical_start(PhysicalStartReservationInput {
+            organization_id: "org-1", definition_id: "physical-1", operation_key: generated_id,
+            key_hash: &generated_key_hash, request_hash: &digest, definition_snapshot: &snapshot,
+            initial_actor: "actor-1",
+            original_deadline_at: now + Duration::seconds(3600),
+            generated_key: false, proposed_instance_id: "90000000-0000-0000-0000-000000000046",
+            now: now + Duration::seconds(61),
+        }).await?,
         PhysicalStartReservation::Acquired { instance_id, .. } if instance_id == generated_id)
+    );
+    assert!(
+        matches!(repository.reserve_physical_start(PhysicalStartReservationInput {
+        organization_id: "org-1", definition_id: "physical-1", operation_key: generated_id,
+        key_hash: &generated_key_hash, request_hash: &digest, definition_snapshot: &snapshot,
+        initial_actor: "actor-later", original_deadline_at: now + Duration::seconds(7200),
+        generated_key: false, proposed_instance_id: "90000000-0000-0000-0000-000000000047",
+        now: now + Duration::seconds(3601),
+    }).await?, PhysicalStartReservation::Expired { instance_id } if instance_id == generated_id)
+    );
+    assert_eq!(
+        repository
+            .pending_physical_starts("org-1", 10, 0)
+            .await?
+            .len(),
+        1
     );
     sqlx::raw_sql(
         "DROP SCHEMA IF EXISTS flow_service CASCADE;
@@ -234,6 +373,147 @@ async fn physical_start_intent_claim_replay_and_atomic_finalization() -> TestRes
     )
     .execute(&pool)
     .await?;
+    pool.close().await;
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires an isolated fenced marty role and explicit FLOW_FENCED_APP_TEST_URL"]
+async fn fenced_physical_start_role_can_claim_finalize_but_not_rewrite_identity() -> TestResult {
+    let database_url = env::var("FLOW_FENCED_APP_TEST_URL")
+        .expect("an explicit disposable fenced app database URL is required");
+    let options = PgConnectOptions::from_str(
+        &database_url.replace("postgresql+asyncpg://", "postgresql://"),
+    )?;
+    assert!(matches!(options.get_host(), "127.0.0.1" | "localhost"));
+    assert_eq!(options.get_database(), Some("marty"));
+    let pool = PgPool::connect_with(options).await?;
+    let identity: (String, bool) = sqlx::query_as(
+        "SELECT current_user, EXISTS (
+           SELECT 1 FROM pg_namespace WHERE nspname='passport_cutover')",
+    )
+    .fetch_one(&pool)
+    .await?;
+    assert_eq!(identity.0, "marty");
+    assert!(identity.1);
+    validate_flow_schema(&pool).await?;
+    let acl_ready: bool = sqlx::query_scalar("SELECT flow_service.physical_start_acl_ready()")
+        .fetch_one(&pool)
+        .await?;
+    assert!(acl_ready);
+
+    let now = chrono::DateTime::from_timestamp_micros(Utc::now().timestamp_micros())
+        .expect("current timestamp");
+    let definition_request: CreateFlowDefinitionRequest = parse_request(json!({
+        "organization_id":"org-1", "name":"Scoped physical role test",
+        "flow_type":"physical_document_issuance",
+        "credential_template_id":"template-1",
+        "application_template_id":"application-template-1",
+        "delivery_destination_profile_id":"delivery-1"
+    }))?;
+    let mut definition = create_definition_record(definition_request, now)?;
+    definition.id = uuid::Uuid::new_v4().to_string();
+    definition.status = DefinitionStatus::Active;
+    let snapshot = PhysicalStartSnapshot {
+        definition: definition.clone(),
+        issuer_did: "did:example:scoped-test".into(),
+    };
+    let instance_id = uuid::Uuid::new_v4().to_string();
+    let operation_key = format!("fenced-test:{instance_id}");
+    let key_hash = hex::encode(Sha256::digest(
+        format!("marty:physical-flow-start-key:v1:{operation_key}").as_bytes(),
+    ));
+    let request_hash = "b".repeat(64);
+    let deadline = now + Duration::seconds(3600);
+    let repository = PostgresFlowRepository::new(pool.clone());
+    let input = PhysicalStartReservationInput {
+        organization_id: "org-1",
+        definition_id: &definition.id,
+        operation_key: &operation_key,
+        key_hash: &key_hash,
+        request_hash: &request_hash,
+        definition_snapshot: &snapshot,
+        initial_actor: "original-actor",
+        original_deadline_at: deadline,
+        generated_key: false,
+        proposed_instance_id: &instance_id,
+        now,
+    };
+    let first = repository.reserve_physical_start(input).await?;
+    assert!(matches!(first, PhysicalStartReservation::Acquired { .. }));
+    let retry_proposed_id = uuid::Uuid::new_v4().to_string();
+    let retry = repository
+        .reserve_physical_start(PhysicalStartReservationInput {
+            organization_id: "org-1",
+            definition_id: &definition.id,
+            operation_key: &operation_key,
+            key_hash: &key_hash,
+            request_hash: &request_hash,
+            definition_snapshot: &snapshot,
+            initial_actor: "retry-actor",
+            original_deadline_at: deadline + Duration::seconds(3600),
+            generated_key: false,
+            proposed_instance_id: &retry_proposed_id,
+            now: now + Duration::seconds(61),
+        })
+        .await?;
+    let claim_token = match retry {
+        PhysicalStartReservation::Acquired {
+            instance_id: owned,
+            claim_token,
+        } => {
+            assert_eq!(owned, instance_id);
+            claim_token
+        }
+        other => panic!("expected fenced claim renewal, got {other:?}"),
+    };
+    let origin = repository
+        .physical_start_origin("org-1", &key_hash)
+        .await?
+        .unwrap();
+    assert_eq!(origin.initial_actor, "original-actor");
+    assert_eq!(origin.created_at, now);
+    assert_eq!(origin.original_deadline_at, deadline);
+    let mut started = terminal_instance(&instance_id, now, "fenced");
+    started.flow_definition_id = definition.id.clone();
+    assert!(
+        repository
+            .save_started_physical_instance(&started, &key_hash, claim_token)
+            .await?
+    );
+    assert_eq!(repository.instance(&instance_id).await?, Some(started));
+    assert!(
+        matches!(repository.reserve_physical_start(PhysicalStartReservationInput {
+        organization_id: "org-1", definition_id: &definition.id,
+        operation_key: &operation_key, key_hash: &key_hash, request_hash: &request_hash,
+        definition_snapshot: &snapshot, initial_actor: "another-actor",
+        original_deadline_at: deadline, generated_key: false,
+        proposed_instance_id: &instance_id, now: now + Duration::seconds(62),
+    }).await?, PhysicalStartReservation::Completed { instance_id: owned } if owned == instance_id)
+    );
+
+    for statement in [
+        "UPDATE flow_service.physical_start_intents SET definition_snapshot=definition_snapshot WHERE organization_id=$1 AND key_hash=$2",
+        "UPDATE flow_service.physical_start_intents SET initial_actor=initial_actor WHERE organization_id=$1 AND key_hash=$2",
+        "UPDATE flow_service.physical_start_intents SET original_deadline_at=original_deadline_at WHERE organization_id=$1 AND key_hash=$2",
+        "UPDATE flow_service.physical_start_intents SET instance_id=instance_id WHERE organization_id=$1 AND key_hash=$2",
+        "UPDATE flow_service.physical_start_intents SET organization_id=organization_id WHERE organization_id=$1 AND key_hash=$2",
+    ] {
+        assert!(sqlx::query(statement)
+            .bind("org-1")
+            .bind(&key_hash)
+            .execute(&pool)
+            .await
+            .is_err());
+    }
+    assert_eq!(
+        repository
+            .physical_start_origin("org-1", &key_hash)
+            .await?
+            .unwrap()
+            .initial_actor,
+        "original-actor"
+    );
     pool.close().await;
     Ok(())
 }

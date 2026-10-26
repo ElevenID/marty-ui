@@ -100,6 +100,9 @@ async fn validate_connection(
         ("flow_callback_outbox", "lease_token"),
         ("flow_application_event_receipts", "payload_sha256"),
         ("physical_start_intents", "request_hash"),
+        ("physical_start_intents", "definition_snapshot"),
+        ("physical_start_intents", "initial_actor"),
+        ("physical_start_intents", "original_deadline_at"),
         ("physical_start_intents", "key_source"),
     ];
     let rows = sqlx::query(
@@ -114,6 +117,37 @@ async fn validate_connection(
                 && row.get::<String, _>("column_name") == column
         }) {
             return Err(incompatible(&format!("{table}.{column} is missing")));
+        }
+    }
+    let acl_guard_shape: bool = sqlx::query_scalar(
+        "SELECT EXISTS (
+           SELECT 1 FROM pg_proc AS procedure
+           JOIN pg_namespace AS namespace ON namespace.oid=procedure.pronamespace
+           JOIN pg_language AS language ON language.oid=procedure.prolang
+           WHERE namespace.nspname='flow_service'
+             AND procedure.proname='physical_start_acl_ready'
+             AND procedure.pronargs=0 AND procedure.prorettype='boolean'::regtype
+             AND language.lanname='sql' AND NOT procedure.prosecdef)",
+    )
+    .fetch_one(&mut *connection)
+    .await?;
+    if !acl_guard_shape {
+        return Err(incompatible("Physical start ACL guard is missing"));
+    }
+    let fenced_app: bool = sqlx::query_scalar(
+        "SELECT current_user='marty' AND EXISTS (
+           SELECT 1 FROM pg_namespace WHERE nspname='passport_cutover')",
+    )
+    .fetch_one(&mut *connection)
+    .await?;
+    if fenced_app {
+        let acl_ready: bool = sqlx::query_scalar("SELECT flow_service.physical_start_acl_ready()")
+            .fetch_one(&mut *connection)
+            .await?;
+        if !acl_ready {
+            return Err(incompatible(
+                "Fenced physical start intent access is incomplete",
+            ));
         }
     }
     for (table, key) in [
