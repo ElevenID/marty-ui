@@ -2346,7 +2346,8 @@ fn map_profile_error(error: profiles::ProfileError) -> CompatibilityError {
 
 fn map_registry_binding_error(error: crate::registry::RegistryError) -> CompatibilityError {
     match error {
-        crate::registry::RegistryError::Conflict => {
+        crate::registry::RegistryError::Conflict
+        | crate::registry::RegistryError::PreconditionFailed => {
             CompatibilityError::Conflict("Signing registry update is already in progress.".into())
         }
         crate::registry::RegistryError::Invalid(detail) => CompatibilityError::Invalid(detail),

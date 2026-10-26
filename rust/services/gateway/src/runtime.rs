@@ -1138,6 +1138,11 @@ async fn proxy_handler(
             Ok(path) => path,
             Err((status, detail)) => return detail_response(status, detail),
         };
+    // The generic proxy stores headers in a map. Reject ambiguity before it
+    // could collapse two preconditions into one at the signing service.
+    if ambiguous_config_precondition(&parts.method, &public_path, &parts.headers) {
+        return detail_response(400, "Exactly one If-Match revision is allowed");
+    }
     if public_path == "/v1/signing-keys/issuer-identities/dsc-certificate"
         && state.dsc_issue_gateway_key.is_none()
     {
@@ -3385,6 +3390,16 @@ fn request_headers(headers: &axum::http::HeaderMap) -> BTreeMap<String, String> 
         .collect()
 }
 
+fn ambiguous_config_precondition(
+    method: &axum::http::Method,
+    path: &str,
+    headers: &axum::http::HeaderMap,
+) -> bool {
+    *method == axum::http::Method::PATCH
+        && path == "/v1/signing-keys/config"
+        && headers.get_all(header::IF_MATCH).iter().count() > 1
+}
+
 fn cookies(headers: &axum::http::HeaderMap) -> BTreeMap<String, String> {
     headers
         .get_all(header::COOKIE)
@@ -3908,6 +3923,29 @@ fn map_failure(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn duplicate_config_preconditions_are_rejected_before_header_projection() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.append(header::IF_MATCH, "\"r-legacy\"".parse().unwrap());
+        assert!(!ambiguous_config_precondition(
+            &axum::http::Method::PATCH,
+            "/v1/signing-keys/config",
+            &headers
+        ));
+        headers.append(header::IF_MATCH, "\"r-other\"".parse().unwrap());
+        assert!(ambiguous_config_precondition(
+            &axum::http::Method::PATCH,
+            "/v1/signing-keys/config",
+            &headers
+        ));
+        assert!(!ambiguous_config_precondition(
+            &axum::http::Method::GET,
+            "/v1/signing-keys/config",
+            &headers
+        ));
+    }
+
     #[tokio::test]
     async fn object_admission_keeps_body_limit_and_json_object_errors_distinct() {
         let request = |body: &'static str| Request::new(Body::from(body));

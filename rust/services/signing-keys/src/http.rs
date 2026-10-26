@@ -54,7 +54,10 @@ use crate::vc_api_holder_proof::{
 };
 use axum::{
     extract::{Path, Query, State},
-    http::{HeaderMap, StatusCode},
+    http::{
+        header::{CACHE_CONTROL, ETAG, IF_MATCH},
+        HeaderMap, StatusCode,
+    },
     response::{Html, IntoResponse, Response},
     routing::{get, post},
     Json, Router,
@@ -1548,8 +1551,12 @@ async fn public_config(
             "Signing registry is unavailable.",
         );
     };
-    match store.load(&scope.organization_id).await {
-        Ok(registry) => Json(public_config_document(&state, registry)).into_response(),
+    match store.load_with_revision(&scope.organization_id).await {
+        Ok((registry, revision)) => (
+            [(ETAG, revision), (CACHE_CONTROL, "no-store".to_owned())],
+            Json(public_config_document(&state, registry)),
+        )
+            .into_response(),
         Err(error) => public_error(StatusCode::SERVICE_UNAVAILABLE, &error.to_string()),
     }
 }
@@ -1869,9 +1876,29 @@ async fn public_certificate_expiry_alerts(
     }
 }
 
+fn strong_config_if_match(headers: &HeaderMap) -> Result<Option<String>, ()> {
+    let mut values = headers.get_all(IF_MATCH).iter();
+    let Some(value) = values.next() else {
+        return Ok(None);
+    };
+    if values.next().is_some() {
+        return Err(());
+    }
+    let value = value.to_str().map_err(|_| ())?;
+    let token = value
+        .strip_prefix("\"r-")
+        .and_then(|value| value.strip_suffix('"'))
+        .ok_or(())?;
+    if token != "legacy" && uuid::Uuid::parse_str(token).is_err() {
+        return Err(());
+    }
+    Ok(Some(value.to_owned()))
+}
+
 async fn save_public_config(
     State(state): State<AppState>,
     Query(scope): Query<OrganizationScope>,
+    headers: HeaderMap,
     Json(mut body): Json<Value>,
 ) -> Response {
     if !body.is_object() {
@@ -1880,6 +1907,15 @@ async fn save_public_config(
             "Signing configuration must be an object.",
         );
     }
+    let expected_revision = match strong_config_if_match(&headers) {
+        Ok(revision) => revision,
+        Err(()) => {
+            return public_error(
+                StatusCode::BAD_REQUEST,
+                "If-Match must be one strong registry revision.",
+            )
+        }
+    };
     let Some(store) = state.registry_store.as_ref() else {
         return public_error(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -1897,7 +1933,13 @@ async fn save_public_config(
         Err(error) => return public_error(StatusCode::SERVICE_UNAVAILABLE, &error.to_string()),
     };
     let saved = async {
-        let existing = store.load(&scope.organization_id).await?;
+        let (existing, revision) = store.load_with_revision(&scope.organization_id).await?;
+        if expected_revision
+            .as_deref()
+            .is_some_and(|expected| expected != revision.as_str())
+        {
+            return Err(registry::RegistryError::PreconditionFailed);
+        }
         preserve_unchanged_auth_references(&mut body, &existing);
         if let Some(config) = body.as_object_mut() {
             let bindings = config
@@ -1911,17 +1953,33 @@ async fn save_public_config(
                 .cloned()
                 .unwrap_or_else(|| json!({}));
         }
-        let normalized = store
-            .save_requested_with_rotation_lease(&scope.organization_id, &body, &existing, &lease)
+        let (normalized, new_revision) = store
+            .save_requested_with_rotation_lease_and_revision(
+                &scope.organization_id,
+                &body,
+                &existing,
+                &lease,
+            )
             .await?;
-        Ok(store
-            .with_managed_service(&scope.organization_id, normalized)
-            .await)
+        Ok((
+            store
+                .with_managed_service(&scope.organization_id, normalized)
+                .await,
+            new_revision,
+        ))
     }
     .await;
     let _ = lease.release().await;
     match saved {
-        Ok(registry) => Json(public_config_document(&state, registry)).into_response(),
+        Ok((registry, revision)) => (
+            [(ETAG, revision), (CACHE_CONTROL, "no-store".to_owned())],
+            Json(public_config_document(&state, registry)),
+        )
+            .into_response(),
+        Err(registry::RegistryError::PreconditionFailed) => public_error(
+            StatusCode::PRECONDITION_FAILED,
+            "Signing registry changed since the supplied revision.",
+        ),
         Err(registry::RegistryError::Conflict) => public_error(
             StatusCode::CONFLICT,
             "Signing registry update is already in progress.",
@@ -5283,6 +5341,7 @@ fn registry_error(error: registry::RegistryError) -> RegistryHttpError {
         registry::RegistryError::Storage(_) => StatusCode::SERVICE_UNAVAILABLE,
         registry::RegistryError::Corrupt(_) => StatusCode::INTERNAL_SERVER_ERROR,
         registry::RegistryError::Conflict => StatusCode::CONFLICT,
+        registry::RegistryError::PreconditionFailed => StatusCode::PRECONDITION_FAILED,
     };
     (
         status,
@@ -6283,6 +6342,154 @@ mod public_contract_tests {
         middleware::{self, Next},
     };
     use tower::ServiceExt;
+
+    #[test]
+    fn config_if_match_requires_one_strong_opaque_revision() {
+        let mut headers = HeaderMap::new();
+        assert_eq!(strong_config_if_match(&headers), Ok(None));
+        for invalid in [
+            "*",
+            "W/\"r-legacy\"",
+            "\"r-not-a-uuid\"",
+            "\"r-legacy\", \"r-legacy\"",
+        ] {
+            headers.insert(IF_MATCH, invalid.parse().unwrap());
+            assert!(strong_config_if_match(&headers).is_err());
+        }
+        headers.insert(IF_MATCH, "\"r-legacy\"".parse().unwrap());
+        assert_eq!(
+            strong_config_if_match(&headers),
+            Ok(Some("\"r-legacy\"".into()))
+        );
+        let revision = format!("\"r-{}\"", uuid::Uuid::new_v4());
+        headers.insert(IF_MATCH, revision.parse().unwrap());
+        assert_eq!(strong_config_if_match(&headers), Ok(Some(revision)));
+        headers.append(IF_MATCH, "\"r-legacy\"".parse().unwrap());
+        assert!(strong_config_if_match(&headers).is_err());
+    }
+
+    #[tokio::test]
+    #[ignore = "requires guarded disposable MARTY_TEST_REDIS_URL"]
+    async fn conditional_config_restore_rejects_intervening_edit() {
+        let redis_url = std::env::var("MARTY_TEST_REDIS_URL").expect("disposable Redis URL");
+        let parsed = reqwest::Url::parse(&redis_url).unwrap();
+        assert!(matches!(
+            parsed.host_str(),
+            Some("127.0.0.1" | "localhost" | "::1")
+        ));
+        assert!(parsed
+            .path()
+            .trim_start_matches('/')
+            .parse::<u8>()
+            .is_ok_and(|db| db >= 13));
+        let nonce =
+            std::env::var("MARTY_TEST_REDIS_DISPOSABLE_NONCE").expect("disposable sentinel");
+        assert!(nonce.len() >= 16);
+        let store = RegistryStore::connect(&redis_url).await.unwrap();
+        let mut connection = store.connection();
+        let observed: Option<String> = redis::cmd("GET")
+            .arg("marty:tests:disposable-guard")
+            .query_async(&mut connection)
+            .await
+            .unwrap();
+        assert_eq!(observed.as_deref(), Some(nonce.as_str()));
+
+        let organization_id = format!("conditional-config-{}", uuid::Uuid::new_v4().simple());
+        let base = json!({"services": [{
+            "id": "service-a", "name": "Original", "service_type": "openbao-transit",
+            "endpoint": "https://kms.example.test", "key_reference": "issuer-key",
+            "algorithms": ["ES256"], "key_purposes": ["vc_jwt_issuer"]
+        }]});
+        store.save(&organization_id, &base).await.unwrap();
+        let app = router_with_dependencies(
+            "test-key".into(),
+            Some(store.clone()),
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+        let uri = format!("/v1/signing-keys/config?organization_id={organization_id}");
+        let first = app
+            .clone()
+            .oneshot(Request::get(&uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(first.status(), StatusCode::OK);
+        let first_revision = first.headers()[ETAG].to_str().unwrap().to_owned();
+        let first_body: Value = serde_json::from_slice(
+            &axum::body::to_bytes(first.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(first_body["services"][0]["auth_reference"], "");
+
+        // Actor B edits after actor A has captured the original revision.
+        let mut second_body = first_body.clone();
+        second_body["services"][0]["name"] = json!("Intervening");
+        let second = app
+            .clone()
+            .oneshot(
+                Request::patch(&uri)
+                    .header("content-type", "application/json")
+                    .header(IF_MATCH, &first_revision)
+                    .body(Body::from(second_body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(second.status(), StatusCode::OK);
+        let second_revision = second.headers()[ETAG].to_str().unwrap().to_owned();
+        assert_ne!(first_revision, second_revision);
+
+        // Actor A's stale full-document restoration must not erase B's edit.
+        let stale = app
+            .clone()
+            .oneshot(
+                Request::patch(&uri)
+                    .header("content-type", "application/json")
+                    .header(IF_MATCH, &first_revision)
+                    .body(Body::from(first_body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(stale.status(), StatusCode::PRECONDITION_FAILED);
+        assert_eq!(
+            store.load(&organization_id).await.unwrap()["services"][0]["name"],
+            "Intervening"
+        );
+        assert_eq!(
+            store.load_with_revision(&organization_id).await.unwrap().1,
+            second_revision
+        );
+
+        // A fresh revision permits the intended restoration.
+        let restored = app
+            .clone()
+            .oneshot(
+                Request::patch(&uri)
+                    .header("content-type", "application/json")
+                    .header(IF_MATCH, &second_revision)
+                    .body(Body::from(first_body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(restored.status(), StatusCode::OK);
+        assert_eq!(
+            store.load(&organization_id).await.unwrap()["services"][0]["name"],
+            "Original"
+        );
+        let _: i32 = redis::cmd("DEL")
+            .arg(registry::storage_key(&organization_id))
+            .arg(registry::revision_key(&organization_id))
+            .query_async(&mut connection)
+            .await
+            .unwrap();
+    }
 
     #[tokio::test]
     async fn service_signing_denies_api_key_without_a_bound_grant() {

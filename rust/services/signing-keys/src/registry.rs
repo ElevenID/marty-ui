@@ -239,6 +239,8 @@ pub enum RegistryError {
     Corrupt(String),
     #[error("signing registry update is in progress for this tenant")]
     Conflict,
+    #[error("signing registry revision no longer matches")]
+    PreconditionFailed,
 }
 
 #[derive(Clone)]
@@ -529,6 +531,7 @@ impl RegistryStore {
              redis.call('SADD', KEYS[4], KEYS[3])
              redis.call('SET', KEYS[3], ARGV[3])
              redis.call('SET', KEYS[2], ARGV[2])
+             redis.call('SET', KEYS[6], ARGV[4])
              return 1",
         )
         .key(&lease.key)
@@ -536,9 +539,11 @@ impl RegistryStore {
         .key(marker_key)
         .key(index_key)
         .key(GLOBAL_ROTATION_FENCE_KEY)
+        .key(revision_key(organization_id))
         .arg(&lease.owner)
         .arg(registry_payload)
         .arg(marker_payload)
+        .arg(Uuid::new_v4().to_string())
         .invoke_async(&mut connection)
         .await
         .map_err(|error| RegistryError::Storage(error.to_string()))?;
@@ -805,11 +810,32 @@ impl RegistryStore {
     }
 
     pub async fn load(&self, organization_id: &str) -> Result<Value, RegistryError> {
+        self.load_with_revision(organization_id)
+            .await
+            .map(|(registry, _)| registry)
+    }
+
+    pub async fn load_with_revision(
+        &self,
+        organization_id: &str,
+    ) -> Result<(Value, String), RegistryError> {
         let mut connection = self.connection.clone();
-        let payload: Option<String> = connection
-            .get(storage_key(organization_id))
+        // MGET is one Redis command, so the document and opaque revision are a snapshot.
+        let (payload, revision): (Option<String>, Option<String>) = redis::cmd("MGET")
+            .arg(storage_key(organization_id))
+            .arg(revision_key(organization_id))
+            .query_async(&mut connection)
             .await
             .map_err(|error| RegistryError::Storage(error.to_string()))?;
+        let revision = match revision {
+            Some(value) if Uuid::parse_str(&value).is_ok() => format!("\"r-{value}\""),
+            Some(_) => {
+                return Err(RegistryError::Corrupt(
+                    "registry revision is malformed".into(),
+                ))
+            }
+            None => "\"r-legacy\"".to_owned(),
+        };
         let registry = match payload {
             Some(payload) => {
                 let parsed = serde_json::from_str(&payload)
@@ -821,7 +847,10 @@ impl RegistryStore {
             }
             None => empty_registry(),
         };
-        Ok(self.with_managed_service(organization_id, registry).await)
+        Ok((
+            self.with_managed_service(organization_id, registry).await,
+            revision,
+        ))
     }
 
     pub async fn save(
@@ -849,9 +878,26 @@ impl RegistryStore {
         existing: &Value,
         lease: &RotationLease,
     ) -> Result<Value, RegistryError> {
+        self.save_requested_with_rotation_lease_and_revision(
+            organization_id,
+            requested,
+            existing,
+            lease,
+        )
+        .await
+        .map(|(registry, _)| registry)
+    }
+
+    pub async fn save_requested_with_rotation_lease_and_revision(
+        &self,
+        organization_id: &str,
+        requested: &Value,
+        existing: &Value,
+        lease: &RotationLease,
+    ) -> Result<(Value, String), RegistryError> {
         let mut merged = normalize_requested_registry(requested)?;
         preserve_rotation_fields(&mut merged, existing);
-        self.save_with_rotation_lease(organization_id, &merged, lease)
+        self.save_with_rotation_lease_and_revision(organization_id, &merged, lease)
             .await
     }
 
@@ -861,6 +907,17 @@ impl RegistryStore {
         registry: &Value,
         lease: &RotationLease,
     ) -> Result<Value, RegistryError> {
+        self.save_with_rotation_lease_and_revision(organization_id, registry, lease)
+            .await
+            .map(|(registry, _)| registry)
+    }
+
+    async fn save_with_rotation_lease_and_revision(
+        &self,
+        organization_id: &str,
+        registry: &Value,
+        lease: &RotationLease,
+    ) -> Result<(Value, String), RegistryError> {
         if lease.key != rotation_lease_key(organization_id) {
             return Err(RegistryError::Conflict);
         }
@@ -870,19 +927,23 @@ impl RegistryStore {
                 .await?;
         let payload = serde_json::to_string(&sealed)
             .map_err(|error| RegistryError::Invalid(error.to_string()))?;
+        let revision = Uuid::new_v4().to_string();
         let mut connection = self.connection.clone();
         let saved: i32 = redis::Script::new(
             "if redis.call('GET', KEYS[1]) ~= ARGV[1] then return 0 end
              local fence = redis.call('GET', KEYS[3])
              if fence and fence ~= ARGV[1] then return 0 end
              redis.call('SET', KEYS[2], ARGV[2])
+             redis.call('SET', KEYS[4], ARGV[3])
              return 1",
         )
         .key(&lease.key)
         .key(storage_key(organization_id))
         .key(GLOBAL_ROTATION_FENCE_KEY)
+        .key(revision_key(organization_id))
         .arg(&lease.owner)
         .arg(payload)
+        .arg(&revision)
         .invoke_async(&mut connection)
         .await
         .map_err(|error| RegistryError::Storage(error.to_string()))?;
@@ -890,7 +951,7 @@ impl RegistryStore {
             return Err(RegistryError::Conflict);
         }
         self.managed_inventory.write().await.remove(organization_id);
-        Ok(normalized)
+        Ok((normalized, format!("\"r-{revision}\"")))
     }
 
     pub async fn bind_profile(
@@ -1512,6 +1573,10 @@ pub fn empty_registry() -> Value {
 
 pub fn storage_key(organization_id: &str) -> String {
     format!("org:{organization_id}:signing-key-services")
+}
+
+pub(crate) fn revision_key(organization_id: &str) -> String {
+    format!("org:{organization_id}:signing-key-services-revision")
 }
 
 fn normalize_service_value(service: &Value) -> Result<Option<Value>, RegistryError> {
