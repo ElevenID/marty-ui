@@ -1021,3 +1021,14 @@ state after an incomplete exit; collect bounded resource observations and inspec
 the same installation rather than retrying provisioning. The engineering API
 path still requires Linux behavioral validation and an actual signed installation
 trial; its existence is not evidence that a 4 GiB installation succeeds.
+
+`scripts/run_installer_engineering_trial.py` is the thin controller entry point
+after the existing staged/published acquisition and initial-grant helpers have
+verified their inputs. It requires an independent private context file, exact
+assets and authorization, controller transport descriptor, pinned verifier
+binaries, selected VM and fresh installation UUID, and the approved numeric
+controller identity. Its scope is fixed to engineering. It consumes under the
+held lease, releases that lease for the existing signed exchange, persists the
+exchange result exclusively, then invokes one dispatch. A failed or incomplete
+command retains all owned state and exits nonzero; invoking it again cannot
+resume the same consumed nonce. Run `--help` for the explicit path arguments.
