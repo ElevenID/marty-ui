@@ -62,22 +62,33 @@ print('observed')
         root = self.root
         for interruption in (KeyboardInterrupt, SystemExit):
             with self.subTest(interruption=interruption):
+                pid_name = interruption.__name__ + ".pid"
+                pid_path = root / pid_name
                 class InterruptedSelector(original):
                     def select(self, timeout=None):
                         deadline = time.monotonic() + 2
-                        while not (root / "parent.pid").exists():
+                        while not pid_path.exists():
                             if time.monotonic() >= deadline:
                                 raise AssertionError("owned process did not start")
                             time.sleep(0.01)
                         raise interruption()
                 with mock.patch.object(probe.selectors, "DefaultSelector", InterruptedSelector):
                     with self.assertRaises(interruption):
+                        # Publish only after the PID bytes have been closed;
+                        # existence must not expose an empty, newly opened file.
+                        code = (
+                            "import os,time\n"
+                            f"with open({pid_name + '.pending'!r}, 'w') as stream:\n"
+                            "    stream.write(str(os.getpid()))\n"
+                            f"os.replace({pid_name + '.pending'!r}, {pid_name!r})\n"
+                            "time.sleep(30)\n"
+                        )
                         probe.command([sys.executable, "-c",
-                                       "import os,time;open('parent.pid','w').write(str(os.getpid()));time.sleep(30)"],
+                                       code],
                                       env=self.env)
-                pid = int((root / "parent.pid").read_text())
+                pid = int(pid_path.read_text())
                 self.assertFalse(Path(f"/proc/{pid}").exists())
-                (root / "parent.pid").unlink()
+                pid_path.unlink()
 
 
 if __name__ == "__main__":

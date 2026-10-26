@@ -20,6 +20,7 @@ pub mod installer_candidate_command;
 pub mod installer_candidate_nonce;
 pub mod installer_candidate_prepare;
 pub mod installer_command;
+pub mod installer_doctor;
 pub mod installer_fetch;
 pub mod installer_generation;
 pub mod installer_generation_binding;

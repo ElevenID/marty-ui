@@ -49,3 +49,24 @@ Exporting a document does not complete missing endpoint schemas, generate typed
 endpoint DTOs, validate response payloads, or qualify a headless business journey.
 Independent contract packaging, publication and compatibility checks remain
 part of the API-first implementation plan.
+
+Organization list, discovery and current-user collection responses are arrays
+of the organization component, without a pagination envelope or total count.
+List and discovery accept unsigned 32-bit `limit` and `offset`, defaulting to
+100 and 0; the owner clamps page sizes above 1000. Only discovery applies
+`search`, `org_type` and `join_mechanism` filters. The current-user collection
+does not paginate. These are authenticated routes, not initial operator
+bootstrap APIs. Organization membership readbacks can omit `joined_at` and role
+`display_name`; the exported component reconciles these optional native fields
+without changing the pinned protocol source bundle.
+
+For local schema validation after exporting a matching executable or image:
+
+```sh
+python -m pip install jsonschema==4.23.0
+python scripts/check_gateway_organization_openapi.py --openapi marty-openapi.json
+```
+
+This validates the same organization readback cases exercised by the gateway
+projector and rejects private fields and invented response envelopes. CI runs
+it against the export from the actual gateway image.

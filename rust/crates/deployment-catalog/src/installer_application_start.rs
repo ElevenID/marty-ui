@@ -307,15 +307,7 @@ pub fn start(
         state.require_live_phase(Phase::Provisioning)?;
         docker.run_checked_with_timeout(&["pull", reference], Duration::from_secs(600))?;
         let image = object_output(&docker.run_checked(&["image", "inspect", reference])?)?;
-        require(
-            image["Id"]
-                .as_str()
-                .and_then(|s| s.strip_prefix("sha256:"))
-                .is_some_and(id)
-                && image["RepoDigests"]
-                    .as_array()
-                    .is_some_and(|v| v.contains(&json!(reference))),
-        )?;
+        observation::validate_image_digest(&image, reference)?;
         images.insert(reference.to_owned(), image);
     }
     bound_document(installation, &plan)?;

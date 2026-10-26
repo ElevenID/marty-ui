@@ -729,6 +729,60 @@ impl LockedInspection {
         self.require_unchanged()?;
         Ok(bytes)
     }
+
+    /// Read-only diagnostics distinguish an absent receipt from invalid evidence.
+    /// Root records and evidence remain confined to the held installation FD.
+    pub(crate) fn diagnostic_record(&self, entry: &str, evidence: bool) -> Result<Option<Vec<u8>>> {
+        self.require_unchanged()?;
+        let entry = LockedMaintenance::entry(entry)?;
+        let directory = if evidence {
+            let fd = unsafe {
+                libc::openat(
+                    self.directory.as_raw_fd(),
+                    name("evidence").as_ptr(),
+                    libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+                )
+            };
+            if fd < 0 {
+                if std::io::Error::last_os_error().raw_os_error() == Some(libc::ENOENT) {
+                    self.require_unchanged()?;
+                    return Ok(None);
+                }
+                return Err("cannot inspect diagnostic evidence directory".into());
+            }
+            unsafe { File::from_raw_fd(fd) }
+        } else {
+            self.directory
+                .try_clone()
+                .map_err(|_| "cannot hold diagnostic directory")?
+        };
+        private(&directory, true)?;
+        let fd = unsafe {
+            libc::openat(
+                directory.as_raw_fd(),
+                entry.as_ptr(),
+                libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK,
+            )
+        };
+        if fd < 0 {
+            if std::io::Error::last_os_error().raw_os_error() == Some(libc::ENOENT) {
+                self.require_unchanged()?;
+                return Ok(None);
+            }
+            return Err("cannot read diagnostic record".into());
+        }
+        let file = unsafe { File::from_raw_fd(fd) };
+        private(&file, false)?;
+        let mut bytes = Vec::new();
+        file.take(4 * 1024 * 1024 + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|_| "cannot read diagnostic record")?;
+        if bytes.is_empty() || bytes.len() > 4 * 1024 * 1024 {
+            return Err("diagnostic record exceeds bounds".into());
+        }
+        self.require_unchanged()?;
+        Ok(Some(bytes))
+    }
 }
 
 /// Exclusive cleanup access with append-only receipts. This deliberately has no
