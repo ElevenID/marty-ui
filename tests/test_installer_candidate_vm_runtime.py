@@ -106,6 +106,7 @@ def test_transfer_rejects_non_dedicated_runtime_account(root_trial, runtime_pare
     assert not (registry / f"{VM_ID}.runtime-intent.json").exists()
 
 
+@pytest.mark.skipif(os.geteuid() != 0, reason="root controller trial required")
 def test_base_must_be_traversable_and_readable(runtime_parent):
     image = runtime_parent / "public-image.qcow2"
     image.write_bytes(b"base")

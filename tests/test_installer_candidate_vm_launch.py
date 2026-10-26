@@ -1,6 +1,7 @@
 """Root-only transition tests for the single-use engineering VM launcher."""
 
 import json
+import os
 import socket
 
 from pathlib import Path
@@ -97,6 +98,7 @@ def test_launch_rejects_qemu_option_delimiters_in_runtime_path():
         launch._arguments(Path("/var/tmp/guest\nunsafe"), VM_ID, 22022)
 
 
+@pytest.mark.skipif(os.geteuid() != 0, reason="root controller trial required")
 def test_privilege_drop_observation_is_real():
     command = [
         str(launch.SETPRIV),
