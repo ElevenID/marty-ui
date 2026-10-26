@@ -13,6 +13,20 @@ static BUNDLE: LazyLock<Value> = LazyLock::new(|| {
 
 pub fn schemas() -> Value {
     let mut schemas = BUNDLE["schemas"].clone();
+    // The native owner and gateway omit absent optional membership fields.
+    // Keep the protocol pin intact while reconciling this public readback.
+    let membership = &mut schemas["schemas__organization"]["properties"]["membership"]["oneOf"][0];
+    membership["required"]
+        .as_array_mut()
+        .expect("membership required fields")
+        .retain(|name| name != "joined_at");
+    membership["properties"]["roles"]["items"]["required"]
+        .as_array_mut()
+        .expect("role required fields")
+        .retain(|name| name != "display_name");
+    schemas["schemas__organization"]["x-marty-runtime-extension"] = json!(
+        "Native organization readback omits absent membership joined_at and role display_name."
+    );
     let readback: Value = serde_json::from_str(include_str!(
         "../../../../contracts/credential-template-readback-properties.json"
     ))
@@ -363,7 +377,57 @@ pub fn describe_operation(operation: &mut Value, method: HttpMethod, path: &str,
             json!({"application/json":{"schema":response_schema}});
         operation["x-marty-response-schema-documented"] = json!(true);
     }
+    if method == Get
+        && matches!(
+            path,
+            "/v1/organizations" | "/v1/organizations/discover" | "/v1/organizations/mine"
+        )
+    {
+        describe_organization_collection(operation, path, status);
+    }
     describe_trust_readback(operation, method, path, status);
+}
+
+fn describe_organization_collection(operation: &mut Value, path: &str, status: u16) {
+    operation["responses"][status.to_string()]["content"] = json!({
+        "application/json":{"schema":{"type":"array","items":schema("organization")}}
+    });
+    operation["x-marty-response-schema-documented"] = json!(true);
+    operation["description"] = json!(match path {
+        "/v1/organizations/mine" => "Organizations with memberships for the authenticated user. Returns an array without a total count. This route does not accept pagination or bootstrap an unauthenticated operator.",
+        "/v1/organizations/discover" => "Active discoverable organizations, with optional discovery filters. Returns an array without a total count. Requires gateway authentication; this is not anonymous tenant bootstrap.",
+        _ => "Organization collection exposed through the authenticated gateway. Returns an array without a total count. Discovery filters apply only to /v1/organizations/discover; this route uses limit and offset only."
+    });
+    if path == "/v1/organizations/mine" {
+        return;
+    }
+    let mut parameters = vec![];
+    for (name, default, description) in [
+        ("limit", 100, "Requested page size; the native owner clamps values above 1000 to 1000. Zero is accepted."),
+        ("offset", 0, "Number of organizations to skip."),
+    ] {
+        parameters.push(json!({
+            "name":name,"in":"query","required":false,"description":description,
+            "schema":{"type":"integer","minimum":0,"maximum":u32::MAX,"default":default}
+        }));
+    }
+    if path == "/v1/organizations/discover" {
+        let mut search = query_parameter("search", "Match organization name or display name.");
+        search["required"] = json!(false);
+        parameters.push(search);
+        for name in ["org_type", "join_mechanism"] {
+            parameters.push(json!({
+                "name":name,"in":"query","required":false,
+                "description": if name == "org_type" {
+                    "Organization type, trimmed and case-insensitive. Canonical values are shown as examples; vendor aliases enterprise and nonprofit aliases individual. Unknown values are rejected."
+                } else {
+                    "Join mechanism, trimmed and case-insensitive. Supported canonical values are shown as examples. Unknown values are rejected."
+                },
+                "schema":{"type":"string","examples": BUNDLE["schemas"]["schemas__organization"]["properties"][name]["enum"]}
+            }));
+        }
+    }
+    operation["parameters"] = json!(parameters);
 }
 
 fn describe_trust_readback(operation: &mut Value, method: HttpMethod, path: &str, status: u16) {
@@ -779,6 +843,76 @@ mod tests {
         );
     }
     use super::*;
+    #[test]
+    fn organization_collections_document_native_arrays_and_query_boundaries() {
+        let document = crate::contract::GatewayContract::load()
+            .unwrap()
+            .openapi_document("test");
+        for path in [
+            "/v1/organizations",
+            "/v1/organizations/discover",
+            "/v1/organizations/mine",
+        ] {
+            assert_eq!(
+                crate::organization_contract::response_shape("GET", path),
+                Some(true)
+            );
+            let operation = &document["paths"][path]["get"];
+            assert_eq!(operation["x-marty-response-schema-documented"], true);
+            assert!(operation.get("requestBody").is_none());
+            assert_eq!(
+                operation["responses"]["200"]["content"]["application/json"]["schema"],
+                json!({"type":"array","items":{"$ref":"#/components/schemas/schemas__organization"}})
+            );
+            if path.ends_with("/mine") {
+                assert!(operation.get("parameters").is_none());
+            } else {
+                let parameters = operation["parameters"].as_array().unwrap();
+                assert_eq!(
+                    parameters[0]["schema"],
+                    json!({"type":"integer","minimum":0,"maximum":u32::MAX,"default":100})
+                );
+                assert_eq!(parameters[1]["schema"]["default"], 0);
+                assert!(parameters
+                    .iter()
+                    .all(|parameter| parameter["required"] == false));
+                assert_eq!(
+                    parameters.len(),
+                    if path.ends_with("/discover") { 5 } else { 2 }
+                );
+                if path.ends_with("/discover") {
+                    assert_eq!(
+                        parameters[3]["schema"]["examples"],
+                        schemas()["schemas__organization"]["properties"]["org_type"]["enum"]
+                    );
+                    assert_eq!(
+                        parameters[4]["schema"]["examples"],
+                        schemas()["schemas__organization"]["properties"]["join_mechanism"]["enum"]
+                    );
+                }
+            }
+        }
+        let schema = schemas();
+        let membership = &schema["schemas__organization"]["properties"]["membership"]["oneOf"][0];
+        assert_eq!(membership["additionalProperties"], false);
+        assert!(!membership["required"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("joined_at")));
+        assert_eq!(
+            membership["properties"]["roles"]["items"]["required"],
+            json!(["id", "name"])
+        );
+        // The immutable protocol bundle remains unchanged by runtime reconciliation.
+        assert!(
+            BUNDLE["schemas"]["schemas__organization"]["properties"]["membership"]["oneOf"][0]
+                ["required"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("joined_at"))
+        );
+    }
+
     #[test]
     fn template_readback_schema_covers_native_response_operations() {
         let schemas = schemas();
