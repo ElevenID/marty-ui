@@ -1,6 +1,96 @@
 # Remote KMS hardening implementation and landing plan
 
-Status: active qualification requirements. Updated: 2026-10-16 (America/Denver).
+Status: active qualification work resumed by the maintainer on 2026-10-26 (America/Denver).
+
+## Current acceptance work (2026-10-26)
+
+The maintainer assigned the remaining official interoperability, renewal/recovery,
+fresh-database/root-retirement, and branch/tracker reconciliation work. `/root`
+owns `feat/kms-final-acceptance` in the existing
+`worktrees/kms-hardening-integration-20261007` checkout, based on protected main
+`d7285b9ddd4c3782a5c764f0971e0e90740b5c4f`. No additional checkout was created.
+Other writers retain their existing branches and runtime custody. The old
+`security/remote-kms-hardening-20261007` checkpoint `4f21844a2` remains preserved;
+its historical v1.1.261 release instructions are superseded by this section.
+Keep other protected-main merges flowing; do not request a release freeze.
+
+Core #355 and Credentials #313 are merged. UI #1446, #1460, #1474, #1484,
+#1485, #1486, #1488, #1489, #1493, #1501, #1503 and #1516 are also merged.
+They cover installed-journey repairs, Rust database custody audits, the seven-lane
+official release gate, conformance fixes, scoped snapshot/AppRole/renewal work,
+certificate validation, Keycloak provisioning and KMS-only production dependency
+checks. Reuse these implementations rather than reintroducing old candidates.
+The signed v1.1.262 release predates several of these changes. Main's eligible
+lock is v1.1.263; that stable release is not published. Failed candidate
+39902897491 and its immutable claim remain failed evidence, not a candidate to
+resume with different source.
+
+| Assigned gate | Required next evidence | Current disposition |
+| --- | --- | --- |
+| Official interoperability | Fresh unchanged seven-lane suite on one fixed candidate; explicit authorized REVIEW dispositions; retain original statuses and failures. | Historical local OIDF/W3C/EUDI runs and real Android wallet diagnostics exist in the demo audit, but do not qualify current main or a released stack. The previous blanket statement that no physical-wallet access exists is stale. Respect current device/beta custody. |
+| Renewal and recovery | Actual expiry crossing with business/session continuity, CA overlap/retirement, KMS-loss refusal and coordinated restored-state execution. | Source tooling and narrower rootless Raft/token probes exist. A full current-candidate installed journey remains required. |
+| Database custody and root retirement | Fresh Marty and Keycloak schemas plus representative writes, negative audit controls, independently scoped active/rollback generations, root revocation and rootless restore. | Reuse the native audits and existing retirement preflight. Never retire a live production root to obtain test evidence. |
+| Reconciliation | Compare selected branches/content with main; preserve dirty variants, runtime consumers and immutable failed artifacts. | This checkout is active for `/root`. The old qualification-fixes checkout at `80a4e8a8` has three uncommitted historical release/CI edits and is deferred, preserved, pending content disposition. The former conformance checkout is active under another writer on PR #1561 and must not be moved. |
+
+Local execution must coexist with the Docker Desktop production website on its
+16 GiB engine. A fresh Ubuntu WSL command again failed with
+`Wsl/Service/0x8007274c`; do not restart WSL or Docker globally. Use uniquely owned
+disposable Docker resources and record their source, images and cleanup. Existing
+beta/demo observations and manually overlaid binaries remain diagnostic evidence.
+Cloud-provider credentials remain an external acceptance dependency. Publishing
+a release and replacing existing deployments are separate remaining goal items.
+
+Current Windows marty-ui registry census: 26 checkouts, one primary and 25 linked.
+No checkout was removed. Preserve the unrelated untracked
+`rust/crates/canvas-acceptance/%SystemDrive%/` data in this checkout. Fresh activity,
+mount, source-consumer, ignored-data and recovery checks are required before any
+inactive checkout can be parked or removed under AGENTS.md.
+
+Reconciliation evidence: continuous-credential head `7c50d8555` was accepted in
+#1436 (`3a1cc0160`); installed-qualification head `b4d8fbe99` in #1446
+(`a2fb60a21`); and original official-KMS head `c610e04c1` in #1466
+(`953c518c1`). All three accepted merge commits are ancestors of the selected
+main. These original branch heads were squash integrated, so their failure to
+appear as direct ancestors is not evidence of missing implementation. Their
+refs stay preserved. The dirty `80a4e8a8` checkout has an obsolete 1.2.84-to-1.2.85
+integration pin/test update and a two-bootstrap-job exit allowance. Main already
+uses integration 1.2.90 and explicitly handles both one-shot roles in its evolved
+public smoke procedure. Those edits are superseded for this candidate; leave
+the user's uncommitted files intact. Parking remains deferred until data,
+activity and runtime/source-consumer checks are complete.
+
+Local execution checkpoint: the current OpenBao image passed Go tests/vet and
+the real three-voter forwarding/rotation/failover probe. Both native operator
+builds and all 29 production Rust service binaries built. The current console
+also built for same-origin local feedback. An unchanged source probe passed
+HTTPS/Raft bootstrap, cold-copy and snapshot restore, root revocation and scoped
+token recovery after actual three-second expiry. The current Keycloak image
+passed fresh PostgreSQL custody after master/11id browser/cookie rotation,
+CIBA, token/refresh/JWKS and KMS-loss refusal. These are isolated local proofs,
+not a signed full installed acceptance or production cutover.
+
+The POSIX custody batch initially reported 714 passed, three skipped and one
+failure before an HTTP request. A second AppRole run failed at a different case.
+Read-only TLS instrumentation then demonstrated the host clock moving backward:
+the failed handshake observed wall time `1793026705.434675`, while the freshly
+generated fixture certificate began at `1793026706`. Native TLS correctly refused
+it. The shared disposable HTTPS listener fixture now has a one-minute notBefore
+margin, preserving the same one-day expiry and exact loopback IP SAN. A real
+OpenSSL verification regression covers the preceding 30 seconds, rejects a time
+before the margin, rejects expiry, and rejects another IP. No production TLS
+clock or certificate validation is relaxed. Re-run the affected native contracts
+before treating this repair as qualified. Host clock stability remains a separate
+concern for real protocol-expiry and installed acceptance.
+
+Local reports and reproducible commands are retained under
+`audits/demo-audit-20261018/kms-final-acceptance-20261026` in the workspace. The
+Linux runner owns volume/container prefix `marty-kms-final-20261026-r1`; its
+private fixed-source clones, build caches and reports must be reconciled before
+retirement. Docker Desktop does not route its published host-loopback sockets
+back into the tooling container: a local opaque TCP adapter forwards only the
+exact disposable node ports, while the unchanged probes and native client
+continue verifying the original TLS certificate name and CA. The first failed
+network attempts and original test failures remain preserved.
 
 Owner: Codex working with the repository maintainer. This file is the canonical
 cross-repository requirements and qualification tracker. Keep current decisions
