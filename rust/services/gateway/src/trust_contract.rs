@@ -196,7 +196,7 @@ pub fn response_shape(method: &str, path: &str) -> Option<(ResponseKind, bool)> 
     if direct_child(path, "/v1/trust-profiles/") && matches!(method, "GET" | "PATCH") {
         return Some((ResponseKind::TrustProfile, false));
     }
-    if activation(path) && method == "POST" {
+    if profile_lifecycle(path) && method == "POST" {
         return Some((ResponseKind::TrustProfile, false));
     }
     if path == "/v1/issuer-entities" {
@@ -292,11 +292,13 @@ fn relationship_member(path: &str) -> bool {
         && !segments[2].is_empty()
 }
 
-fn activation(path: &str) -> bool {
+fn profile_lifecycle(path: &str) -> bool {
     path.strip_prefix("/v1/trust-profiles/")
         .is_some_and(|tail| {
             let segments = tail.split('/').collect::<Vec<_>>();
-            segments.len() == 2 && !segments[0].is_empty() && segments[1] == "activate"
+            segments.len() == 2
+                && !segments[0].is_empty()
+                && matches!(segments[1], "activate" | "suspend")
         })
 }
 

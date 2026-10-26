@@ -371,16 +371,51 @@ impl TrustProfileApplication {
         actor: &marty_api_key_policy::GatewayApiKeyActor,
         profile_id: Uuid,
     ) -> Result<TrustProfile, TrustProfileApplicationError> {
+        self.profile_for_gateway_permission(actor, profile_id, "trust-profile:view")
+            .await
+    }
+
+    async fn profile_for_gateway_permission(
+        &self,
+        actor: &marty_api_key_policy::GatewayApiKeyActor,
+        profile_id: Uuid,
+        permission: &str,
+    ) -> Result<TrustProfile, TrustProfileApplicationError> {
         let profile = self.required_profile(profile_id).await?;
-        if !actor.authorizes(
-            &actor.principal_id(),
-            &profile.organization_id,
-            "trust-profile:view",
-        ) {
+        if !actor.authorizes(&actor.principal_id(), &profile.organization_id, permission) {
             return Err(TrustProfileApplicationError::Forbidden(
                 "API_KEY_SCOPE_REQUIRED",
             ));
         }
+        Ok(profile)
+    }
+
+    pub async fn activate_profile_for_gateway_api_key(
+        &self,
+        actor: &marty_api_key_policy::GatewayApiKeyActor,
+        profile_id: Uuid,
+        now: DateTime<Utc>,
+    ) -> Result<TrustProfile, TrustProfileApplicationError> {
+        let mut profile = self
+            .profile_for_gateway_permission(actor, profile_id, "trust-profile:activate")
+            .await?;
+        validate_registry_sources_for_decision(&profile, now)?;
+        profile.activate(now);
+        self.repository.save_profile(&profile, None).await?;
+        Ok(profile)
+    }
+
+    pub async fn suspend_profile_for_gateway_api_key(
+        &self,
+        actor: &marty_api_key_policy::GatewayApiKeyActor,
+        profile_id: Uuid,
+        now: DateTime<Utc>,
+    ) -> Result<TrustProfile, TrustProfileApplicationError> {
+        let mut profile = self
+            .profile_for_gateway_permission(actor, profile_id, "trust-profile:suspend")
+            .await?;
+        profile.suspend(now);
+        self.repository.save_profile(&profile, None).await?;
         Ok(profile)
     }
 

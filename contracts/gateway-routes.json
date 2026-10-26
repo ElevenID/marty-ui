@@ -21,7 +21,7 @@
       "MIPVersionMiddleware"
     ]
   },
-  "route_count": 461,
+  "route_count": 462,
   "routes": [
     {
       "include_in_schema": true,
@@ -2553,6 +2553,12 @@
       "include_in_schema": true,
       "method": "POST",
       "path": "/v1/trust-profiles/{profile_id}/activate",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/trust-profiles/{profile_id}/suspend",
       "status_code": 200
     },
     {

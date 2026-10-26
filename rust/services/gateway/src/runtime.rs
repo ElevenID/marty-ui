@@ -4216,6 +4216,24 @@ mod tests {
             key: &str,
         ) -> Result<Option<ApiKeyIdentity>, SecurityError> {
             Ok(match key {
+                "trust-writer" | "trust-reader" | "trust-other" => Some(ApiKeyIdentity {
+                    api_key_id: "trust-key-1".into(),
+                    organization_id: Some(
+                        if key == "trust-other" {
+                            "org-other"
+                        } else {
+                            "org-1"
+                        }
+                        .into(),
+                    ),
+                    key_prefix: None,
+                    scopes: vec![if key == "trust-reader" {
+                        "trust:read"
+                    } else {
+                        "trust:write"
+                    }
+                    .into()],
+                }),
                 "passport-gateway-key-org-1"
                 | "passport-gateway-key-org-2"
                 | "passport-gateway-read-only-org-1" => Some(ApiKeyIdentity {
@@ -5584,6 +5602,20 @@ mod tests {
                     value.clone()
                 }
             });
+            let trust = (instance.service_name == "trust-profiles").then(|| {
+                let fixtures: Value = serde_json::from_str(include_str!(
+                    "../../../../contracts/trust-profile-readback-behavior.json"
+                ))
+                .unwrap();
+                let mut value = fixtures["cases"][0]["expected"].clone();
+                value["organization_id"] = json!("org-1");
+                value["status"] = json!(if request.path.ends_with("/suspend") {
+                    "suspended"
+                } else {
+                    "active"
+                });
+                value
+            });
             self.0
                 .lock()
                 .expect("owned request recorder")
@@ -5592,7 +5624,9 @@ mod tests {
                 status_code: 200,
                 set_cookies: Vec::new(),
                 headers: BTreeMap::from([("content-type".into(), "application/json".into())]),
-                body: Some(if let Some(notification) = notification {
+                body: Some(if let Some(trust) = trust {
+                    serde_json::to_vec(&trust).unwrap()
+                } else if let Some(notification) = notification {
                     serde_json::to_vec(&notification).unwrap()
                 } else if issued_credential {
                     serde_json::to_vec(&json!({
@@ -9022,6 +9056,83 @@ mod tests {
         assert_eq!(body["accreditations"], json!(["ISO27001"]));
         assert!(body.get("description").is_none());
         assert!(body.get("trust_anchor_id").is_none());
+    }
+
+    #[tokio::test]
+    async fn trust_lifecycle_requires_exact_action_tenant_and_machine_write_scope() {
+        for action in ["activate", "suspend"] {
+            let exact = if action == "activate" {
+                "trust-profile:activate"
+            } else {
+                "trust-profile:suspend"
+            };
+            for (permission, owner, credential, expected) in [
+                (exact, "org-1", "", StatusCode::UNAUTHORIZED),
+                (exact, "org-1", "valid", StatusCode::OK),
+                (
+                    "trust-profile:create",
+                    "org-1",
+                    "valid",
+                    StatusCode::FORBIDDEN,
+                ),
+                (
+                    "trust-profile:edit",
+                    "org-1",
+                    "valid",
+                    StatusCode::FORBIDDEN,
+                ),
+                (exact, "org-other", "valid", StatusCode::FORBIDDEN),
+                (exact, "org-1", "trust-writer", StatusCode::OK),
+                (exact, "org-1", "trust-reader", StatusCode::FORBIDDEN),
+                (exact, "org-1", "trust-other", StatusCode::FORBIDDEN),
+            ] {
+                let recorder = Arc::new(ActorRecordingUpstream::default());
+                let mut state = runtime_state_with_upstream(Arc::new(NoOwner), recorder.clone());
+                let owned = Arc::get_mut(&mut state).unwrap();
+                owned.memberships = Arc::new(SingleGrantMembership(permission));
+                owned.owners = Arc::new(ScriptedOwner(Some(owner.into())));
+                let path = format!("/v1/trust-profiles/profile-one/{action}");
+                let mut request = Request::builder().method("POST").uri(&path);
+                if credential == "valid" {
+                    request = request.header("cookie", "sessionId=valid");
+                } else if !credential.is_empty() {
+                    request = request.header("x-api-key", credential);
+                }
+                let response = gateway_router(state)
+                    .oneshot(request.body(Body::empty()).unwrap())
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    response.status(),
+                    expected,
+                    "{action} {permission} {owner} {credential}"
+                );
+                let payload = to_bytes(response.into_body(), DEFAULT_MAXIMUM_BODY_BYTES)
+                    .await
+                    .unwrap();
+                let calls = recorder.0.lock().unwrap();
+                assert_eq!(calls.len(), usize::from(expected == StatusCode::OK));
+                if expected == StatusCode::OK {
+                    let (service, forwarded) = &calls[0];
+                    assert_eq!(service, "trust-profiles");
+                    assert_eq!(forwarded.path, path);
+                    assert_eq!(
+                        forwarded.header("x-service-token"),
+                        Some("s".repeat(32).as_str())
+                    );
+                    assert_eq!(forwarded.header("x-api-key"), None);
+                    let payload: Value = serde_json::from_slice(&payload).unwrap();
+                    assert_eq!(
+                        payload["status"],
+                        if action == "suspend" {
+                            "suspended"
+                        } else {
+                            "active"
+                        }
+                    );
+                }
+            }
+        }
     }
 
     #[tokio::test]
