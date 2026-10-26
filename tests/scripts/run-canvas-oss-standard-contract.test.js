@@ -731,3 +731,22 @@ test('Compose secret boundary still rejects raw environment values and non-Compo
  try{process.env[name]='raw-secret';assert.throws(()=>requireSecretFile(name));delete process.env[name];process.env[name+'_FILE']='C:/private/secret';assert.throws(()=>requireSecretFile(name));process.env[name+'_FILE']='/run/secrets/../outside';assert.throws(()=>requireSecretFile(name));}
  finally{if(original===undefined)delete process.env[name];else process.env[name]=original;if(originalFile===undefined)delete process.env[name+'_FILE'];else process.env[name+'_FILE']=originalFile;}
 });
+
+test('Developer Key ID is journaled before a later modal failure, once and only for exact trusted name',async()=>{
+ const {saveDeveloperKey}=require('./run-canvas-oss-standard-contract');const events=[];
+ const response={url:()=> 'https://canvas-test.elevenidllc.com/api/v1/accounts/1/developer_keys',request:()=>({method:()=> 'POST'}),status:()=>201,json:async()=>({developer_key:{id:42,name:'Owned run',api_key:'private'}})};
+ const page={url:()=> 'https://canvas-test.elevenidllc.com/accounts/1/developer_keys',waitForResponse:async predicate=>{assert.equal(predicate(response),true);assert.equal(predicate({...response,url:()=> 'https://foreign.test/api/v1/accounts/1/developer_keys'}),false);return response}};
+ const modal={getByRole:()=>({click:async()=>events.push('submit')}),waitFor:async()=>{events.push('hidden-wait');throw Error('late modal failure')}};
+ await assert.rejects(saveDeveloperKey(page,modal,'Owned run',id=>events.push('owned:'+id)),/late modal failure/);assert.deepEqual(events,['submit','owned:42','hidden-wait']);
+ events.length=0;response.json=async()=>({developer_key:{id:42,name:'Foreign run',api_key:'private'}});await assert.rejects(saveDeveloperKey(page,modal,'Owned run',id=>events.push('owned:'+id)),error=>error.code==='canvas_developer_key_identity_mismatch');assert.deepEqual(events,['submit']);
+});
+
+test('Developer Key creation waits for the exact pinned API versus LTI account route',async()=>{
+ const {saveDeveloperKey}=require('./run-canvas-oss-standard-contract');
+ for(const kind of ['api','lti']){
+  const expected=kind==='api'?'/api/v1/accounts/1/developer_keys':'/api/lti/accounts/1/developer_keys/tool_configuration';
+  const response={url:()=> 'https://canvas-test.elevenidllc.com'+expected,request:()=>({method:()=> 'POST'}),status:()=>201,json:async()=>({developer_key:{id:42,name:'Owned run'}})};
+  const page={url:()=> 'https://canvas-test.elevenidllc.com/accounts/1/developer_keys',waitForResponse:async predicate=>{assert(predicate(response));for(const wrong of ['/api/v1/developer_keys','/api/v1/accounts/2/developer_keys','/api/v1/accounts/1/developer_keys/tool_configuration',kind==='api'?'/api/lti/accounts/1/developer_keys/tool_configuration':'/api/v1/accounts/1/developer_keys'])assert(!predicate({...response,url:()=> 'https://canvas-test.elevenidllc.com'+wrong}));return response;}};
+  let calls=0;await saveDeveloperKey(page,{getByRole:()=>({click:async()=>{}}),waitFor:async()=>{}},'Owned run',()=>{calls++},{kind});assert.equal(calls,1);
+ }
+});

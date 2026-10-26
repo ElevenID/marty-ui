@@ -1,6 +1,6 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict');
-const {requireProviderInvalidSecret,requireMartyInvalidSecret,planWrongSecretCase,runWrongSecretCase,retireCanvasSession,requireOwnedMartyResource,assertCanvasLoginIdentity,canvasFailureDiagnostic}=require('./audit-beta-canvas-invalid-secret');
+const {requireProviderInvalidSecret,requireMartyInvalidSecret,planWrongSecretCase,runWrongSecretCase,retireCanvasSession,requireOwnedMartyResource,assertCanvasLoginIdentity,canvasFailureDiagnostic,safeCanvasFailure}=require('./audit-beta-canvas-invalid-secret');
 const valid={status:401,error:'invalid_client',description:'invalid client',issuedCode:true,clientEnabled:true,clientId:'100',issuedClientId:'100'};
 test('only enabled same-client issued-code credential error counts',()=>{assert.equal(requireProviderInvalidSecret(valid).validEnabledClient,true)});
 for(const patch of [{description:'unknown client'},{description:undefined},{error:'invalid_grant'},{error:'access_denied'},{error:'unknown_client'},{status:500},{status:200},{issuedCode:false},{clientEnabled:false},{issuedClientId:'101'}])test('reject confounded denial '+JSON.stringify(patch),()=>{assert.throws(()=>requireProviderInvalidSecret({...valid,...patch}));});
@@ -16,7 +16,7 @@ test('Canvas cleanup uses supported DELETE and verifies the original cookie afte
   get:async(url,options)=>{assert.equal(options.maxRedirects,0);assert.equal(options.headers.Accept,'application/json');events.push('old-cookie-probe');return {status:()=>401}}}};
  assert.equal(await retireCanvasSession(context,()=>{}),true);assert.deepEqual(events,['delete','reinjected','old-cookie-probe']);
 });
-test('Canvas successful profile read never counts as logout',async()=>{const context={cookies:async()=>[{name:'_csrf_token',value:'csrf'}],addCookies:async()=>{},request:{delete:async()=>({status:()=>302}),get:async()=>({status:()=>200})}};await assert.rejects(retireCanvasSession(context,()=>{}),/remains authorized/);});
+test('Canvas successful profile read never counts as logout',async()=>{let clock=0;const context={cookies:async()=>[{name:'_csrf_token',value:'csrf'}],addCookies:async()=>{},request:{delete:async()=>({status:()=>302}),get:async()=>({status:()=>200})}};await assert.rejects(retireCanvasSession(context,()=>{},{now:()=>clock,wait:async ms=>{clock+=ms}}),/remains authorized/);});
 
 test('resource retirement refuses changed identity, foreign organization and ambiguous inventory before DELETE',async()=>{
  const row={collection:'/v1/integrations/canvas/integration-secrets',id:'owned',name:'owned-name',state:'CREATED'};
@@ -46,4 +46,25 @@ test('failure labels match the pinned stock controller messages without classify
  const result=await canvasFailureDiagnostic({url:()=> 'https://canvas-test.elevenidllc.com/login/canvas',locator:()=>locator,getByText:pattern=>{patterns.push(pattern);return locator}});
  for(const message of ['Please verify your username or password and try again.','Invalid Authenticity Token','No password was given','To protect your account, it has been locked.','Too many failed login attempts.','You have recently logged in multiple times too quickly.'])assert(patterns.some(pattern=>pattern.test(message)));
  assert(!patterns.some(pattern=>pattern.test('400 Bad Request')));assert.equal(result.credentialErrorVisible,false);assert.equal(result.csrfErrorVisible,false);
+});
+
+test('Canvas delayed revocation probes the same original cookies until observed denial',async()=>{
+ let clock=0,reads=0,current='original';const evidence=[];const original=[{name:'_csrf_token',value:'csrf'},{name:'_normandy_session',value:'original'}];
+ const context={cookies:async()=>original,addCookies:async cookies=>{assert.equal(cookies[1].value,'original');current=cookies[1].value},request:{delete:async(_url,options)=>{assert.equal(options.timeout,12000);return {status:()=>302}},get:async()=>{assert.equal(current,'original');current='refreshed-response-cookie';reads++;return {status:()=>reads<3?200:401}}}};
+ assert.equal(await retireCanvasSession(context,()=>{},{now:()=>clock,wait:async ms=>{clock+=ms},observe:value=>evidence.push(value)}),true);
+ assert.deepEqual(evidence.at(-1).probes,[{status:200,elapsedMs:0},{status:200,elapsedMs:1000},{status:401,elapsedMs:2000}]);assert.equal(original[1].value,'original');
+});
+test('unknown logout/transport/readback failures cannot qualify even when a cookie probe denies',async()=>{
+ for(const kind of ['unknown-logout','logout-transport','unknown-probe']){let probes=0;const context={cookies:async()=>[{name:'_csrf_token',value:'csrf'}],addCookies:async()=>{},request:{delete:async()=>{if(kind==='logout-transport')throw Error('private');return {status:()=>kind==='unknown-logout'?200:302}},get:async()=>{probes++;return {status:()=>kind==='unknown-probe'?500:401}}}};await assert.rejects(retireCanvasSession(context,()=>{}));assert.equal(probes,1);}
+});
+test('primary stock contract failure survives a separate cleanup failure and session teardown',async()=>{
+ const Module=require('node:module'),load=Module._load;class StockFailure extends Error{constructor(){super('untrusted provider detail');this.name='ContractFailure';this.code='canvas_oauth_scope_controls_missing'}}
+ let closed=false;const locator={first(){return this},isVisible:async()=>false};const page={on(){},off(){},url:()=> 'https://canvas-test.elevenidllc.com/login/canvas',locator:()=>locator,getByText:()=>locator};
+ const context={newPage:async()=>page,cookies:async()=>[{name:'_csrf_token',value:'csrf'}],addCookies:async()=>{},close:async()=>{closed=true},request:{delete:async()=>({status:()=>302}),get:async()=>({status:()=>401})}};
+ const stock={ContractFailure:StockFailure,loginCanvas:async()=>{throw new StockFailure()},retireCanvasSetupFixtures:async()=>{throw Error('separate private cleanup detail')}};
+ const result={};Module._load=function(request,parent,...rest){if(request==='./run-canvas-oss-standard-contract'&&parent.filename.endsWith('audit-beta-canvas-invalid-secret.js'))return stock;return load.call(this,request,parent,...rest)};
+ try{await assert.rejects(runWrongSecretCase({result,save:()=>{},adminPage:{context:()=>({browser:()=>({newContext:async()=>context})})},runId:'owned-run-123',canvasCredentials:{email:'owned@local.test',password:'private'},retainPrivateAuthority:()=>{}}),/control failed/);}
+ finally{Module._load=load;}
+ assert.deepEqual(result.validClientSecretCase.operationFailure,{type:'ContractFailure',code:'canvas_oauth_scope_controls_missing'});assert.deepEqual(result.validClientSecretCase.resourceCleanupFailure,{type:'Error'});assert.equal(result.validClientSecretCase.failureType,'ContractFailure');assert.equal(result.validClientSecretCase.canvasSessionRetired,true);assert.equal(closed,true);
+ assert.deepEqual(safeCanvasFailure(Object.assign(Error('secret'),{code:'secret'}),StockFailure),{type:'Error'});
 });

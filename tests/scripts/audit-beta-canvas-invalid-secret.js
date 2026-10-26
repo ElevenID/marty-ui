@@ -47,6 +47,8 @@ async function executeWrongSecretCase({result,save,gateway,admin,adminPage,organ
  const state={owned,runSuffix:runId,canvasOrigin:CANVAS,adminPage:page,
   persistOwned:save};
  // Private credential bytes and authorization codes remain only in this closure.
+ let primaryFailure=null,cleanupFailure=null;
+ const describe=error=>safeCanvasFailure(error,stock.ContractFailure);
  let clientId,correctSecret,platform,wrongRef;const wrong=crypto.randomBytes(32).toString('hex');
  async function create(collection,body){
   const row={collection,name:body.name||body.display_name,state:'CREATING'};
@@ -117,8 +119,10 @@ async function executeWrongSecretCase({result,save,gateway,admin,adminPage,organ
   assert.notEqual(after.payload.connection_config?.oauth_status,'connected');
   result.validClientSecretCase.state='VALID_CLIENT_WRONG_SECRET_DENIED';save();
  }catch(error){
+  primaryFailure=error;
   result.validClientSecretCase.failureStage=result.validClientSecretCase.stage;
-  result.validClientSecretCase.failureDom=await canvasFailureDiagnostic(page).catch(()=>({diagnosticUnavailable:true}));save();throw error;
+  result.validClientSecretCase.operationFailure=describe(error);
+  result.validClientSecretCase.failureDom=await canvasFailureDiagnostic(page).catch(()=>({diagnosticUnavailable:true}));save();
  }finally{
   let retired=false;
   try{
@@ -135,13 +139,18 @@ async function executeWrongSecretCase({result,save,gateway,admin,adminPage,organ
    const cleanup=await stock.retireCanvasSetupFixtures(state,retired,true);
    assert.equal(cleanup.complete,true);result.validClientSecretCase.canvasCleanup=cleanup;
    result.validClientSecretCase.allOwnedAuthorityRetired=retired;save();
+  }catch(error){
+   cleanupFailure=error;result.validClientSecretCase.resourceCleanupFailure=describe(error);save();
   }finally{
-   // Retire this new Canvas password session through its actual stock logout flow.
+   // Session teardown must not replace the original operation or resource-cleanup failure.
    try{
-    result.validClientSecretCase.canvasSessionRetired=await retireCanvasSession(context,retainPrivateAuthority);save();
-   }finally{page.off('response',observeResponse);await context.close();correctSecret=undefined;}
+    result.validClientSecretCase.canvasSessionRetired=await retireCanvasSession(context,retainPrivateAuthority,{observe:value=>{result.validClientSecretCase.canvasSessionRetirement=value;save();}});save();
+   }catch(error){cleanupFailure=cleanupFailure||error;result.validClientSecretCase.sessionCleanupFailure=describe(error);save();}
+   finally{page.off('response',observeResponse);try{await context.close();}catch(error){cleanupFailure=cleanupFailure||error;result.validClientSecretCase.contextCleanupFailure=describe(error);save();}correctSecret=undefined;}
   }
  }
+ if(primaryFailure)throw primaryFailure;
+ if(cleanupFailure)throw cleanupFailure;
  return result.validClientSecretCase;
 }
 async function canvasFailureDiagnostic(page){
@@ -175,27 +184,43 @@ async function requireOwnedMartyResource(gateway,admin,row,organizationId){
  if(!platform){assert.equal(value.provider,'canvas');assert.equal(value.purpose,'oauth_client_secret');}
  return value;
 }
-async function retireCanvasSession(context,retainPrivateAuthority){
- const cookies=await context.cookies(CANVAS),csrf=cookies.find(row=>row.name==='_csrf_token');
- // Preserve actual authority even when login failed after the server issued cookies.
+function safeCanvasFailure(error,ContractFailure){
+ if(ContractFailure&&error instanceof ContractFailure)return {type:'ContractFailure',code:/^[a-z0-9_]{1,100}$/.test(error.code)?error.code:'stock_contract_failure'};
+ return {type:['AssertionError','TimeoutError'].includes(error?.name)?error.name:'Error'};
+}
+async function retireCanvasSession(context,retainPrivateAuthority,{observe=()=>{},now=Date.now,wait=ms=>new Promise(resolve=>setTimeout(resolve,ms))}={}){
+ const cookies=(await context.cookies(CANVAS)).map(row=>({...row})),csrf=cookies.find(row=>row.name==='_csrf_token');
+ const started=now(),evidence={logoutStatus:null,probes:[]};
+ const emit=()=>observe(JSON.parse(JSON.stringify(evidence)));
  try{retainPrivateAuthority('canvasSession',JSON.stringify(cookies));}catch{/* Logout must still execute. */}
  assert(csrf?.value,'Stock Canvas session lacks required CSRF evidence');
- const response=await context.request.delete(CANVAS+'/logout',{headers:{'X-CSRF-Token':decodeURIComponent(csrf.value)},maxRedirects:0});
- assert([302,303].includes(response.status()),'Stock DELETE /logout must complete its supported redirect');
- await context.addCookies(cookies);
- const old=await context.request.get(CANVAS+'/api/v1/users/self/profile',{headers:{Accept:'application/json'},maxRedirects:0});
- assert([401,403].includes(old.status()),'The original Canvas session remains authorized');
- return true;
+ let logoutFailure=null;
+ try{const response=await context.request.delete(CANVAS+'/logout',{headers:{'X-CSRF-Token':decodeURIComponent(csrf.value)},maxRedirects:0,timeout:Math.max(1,12000-(now()-started))});evidence.logoutStatus=response.status();emit();}
+ catch(error){logoutFailure=error;evidence.logoutTransportFailed=true;emit();}
+ const expectedRedirect=[302,303].includes(evidence.logoutStatus);
+ // Stock caches the eager-loaded pseudonym user for default5s. Never probe a refreshed cookie.
+ for(;;){
+  await context.addCookies(cookies.map(row=>({...row})));
+  let status;
+  try{const old=await context.request.get(CANVAS+'/api/v1/users/self/profile',{headers:{Accept:'application/json'},maxRedirects:0,timeout:Math.max(1,12000-(now()-started))});status=old.status();}
+  catch(error){evidence.probeTransportFailed=true;emit();throw error;}
+  evidence.probes.push({status,elapsedMs:now()-started});emit();
+  assert(!logoutFailure&&expectedRedirect,'Stock DELETE /logout must complete its supported redirect');
+  assert([200,401,403].includes(status),'Unrecognized session readback cannot prove retirement');
+  if([401,403].includes(status))return true;
+  assert(now()-started<12000,'The original Canvas session remains authorized after bounded cache propagation');
+  await wait(Math.min(1000,12000-(now()-started)));
+ }
 }
 async function runWrongSecretCase(options){
  try{return await executeWrongSecretCase(options);}catch(error){
   if(options?.result?.validClientSecretCase){
-   options.result.validClientSecretCase.failureType=['AssertionError','TimeoutError','Error'].includes(error.name)?error.name:'Error';
+   options.result.validClientSecretCase.failureType=options.result.validClientSecretCase.operationFailure?.type||safeCanvasFailure(error).type;
    try{options.save();}catch{/* Retain the original sanitized failure even if persistence failed. */}
   }
   // Never surface a Playwright URL, code, provider body, token or supplied secret.
   throw new Error('Canvas valid-client wrong-secret control failed; preserve its owned journal for review.');
  }
 }
-module.exports={canvasFailureDiagnostic,assertCanvasLoginIdentity,requireOwnedMartyResource,retireCanvasSession,planWrongSecretCase,requireProviderInvalidSecret,requireMartyInvalidSecret,runWrongSecretCase};
+module.exports={safeCanvasFailure,canvasFailureDiagnostic,assertCanvasLoginIdentity,requireOwnedMartyResource,retireCanvasSession,planWrongSecretCase,requireProviderInvalidSecret,requireMartyInvalidSecret,runWrongSecretCase};
 if(require.main===module){assert.deepEqual(process.argv.slice(2),['--plan'],'Offline plan only; execution requires reviewed existing capability runner');console.log(JSON.stringify(planWrongSecretCase(),null,2));}
