@@ -577,9 +577,15 @@ async function createPersonalAccessToken(page, origin, purpose, onOwned = () => 
   return visible;
 }
 
+function canvasDeveloperKeysUrl(origin, accountId) {
+  const url = new URL(`/accounts/${encodeURIComponent(accountId)}/developer_keys`, origin);
+  url.searchParams.set('session_locale', 'en');
+  return url.href;
+}
+
 async function openDeveloperKeyModal(page, origin, accountId, kind, {observe = () => {}} = {}) {
   observe('NAVIGATE');
-  await page.goto(`${origin}/accounts/${encodeURIComponent(accountId)}/developer_keys`, {
+  await page.goto(canvasDeveloperKeysUrl(origin, accountId), {
     waitUntil: 'domcontentloaded',
     timeout: DEFAULT_TIMEOUT_MS,
   });
@@ -1966,7 +1972,7 @@ async function retireCanvasSetupFixtures(state, retirementConfirmed, oauthDiscon
   const selectKey = async key => {
     // Recovery sessions have not created the token that normally selects English.
     // Pin only this browser session before using English accessible action names.
-    await adminPage.goto(`${canvasOrigin}/accounts/${accountId}/developer_keys?session_locale=en`, {
+    await adminPage.goto(canvasDeveloperKeysUrl(canvasOrigin, accountId), {
       waitUntil: 'domcontentloaded', timeout: DEFAULT_TIMEOUT_MS,
     });
     const row = adminPage.getByRole('row').filter({ has: adminPage.getByText(key.name, { exact: true }) });

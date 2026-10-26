@@ -754,13 +754,14 @@ test('Developer Key creation waits for the exact pinned API versus LTI account r
  }
 });
 
-test('Developer Key setup failure retains only static shared API and LTI phases',async()=>{
+test('Developer Key setup declares English before shared API and LTI phases',async()=>{
  const {createOauthDeveloperKey,createLtiDeveloperKey}=require('./run-canvas-oss-standard-contract');
  for(const create of [createOauthDeveloperKey,createLtiDeveloperKey]){
-  const stages=[],locator={or(){return this},first(){return this},waitFor:async()=>{},click:async()=>{}};
+  const stages=[],navigations=[],locator={or(){return this},first(){return this},waitFor:async()=>{},click:async()=>{}};
   const modal={waitFor:async()=>{},getByRole:()=>locator,getByTestId:name=>({fill:async()=>{if(name==='owner-email-input')throw Error('private field value')}})};
-  const page={goto:async()=>{},locator:()=>locator,getByRole:role=>role==='dialog'?modal:locator};
+  const page={goto:async url=>navigations.push(url),locator:()=>locator,getByRole:role=>role==='dialog'?modal:locator};
   await assert.rejects(create(page,{canvasOrigin:'https://canvas-test.elevenidllc.com',accountId:'1',name:'Owned run',ownerEmail:'private@owned.test',observe:value=>stages.push(value)}),/private field value/);
+  assert.deepEqual(navigations,['https://canvas-test.elevenidllc.com/accounts/1/developer_keys?session_locale=en']);
   assert.deepEqual(stages,['NAVIGATE','TRIGGER','MENU','MODAL','FILL']);assert(!JSON.stringify(stages).includes('private'));
  }
 });
