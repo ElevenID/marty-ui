@@ -78,6 +78,16 @@ PUBLISHED_MATRIX_PROBE_NAMES = frozenset(
         ).read_text(encoding="utf-8")
     )["cases"]
 )
+BORROWED_PREFLIGHT_SCENARIOS = frozenset(
+    {
+        "timeout.application_prompt",
+        "timeout.application_delayed_headers",
+        "timeout.roster_prompt",
+        "timeout.roster_delayed_headers",
+        "lease-expiry.renewal_lock_early_release",
+        "lease-expiry.renewal_lock_crosses_expiry",
+    }
+)
 SCENARIO_NAMES = REST_SCENARIOS | frozenset(
     f"{scenario}.{case['name']}"
     for scenario in MATRIX_SCENARIOS
@@ -209,7 +219,10 @@ TIMING_NAMES = {
         }
     ),
     "fixture_seed": FIXTURE_NAMES | frozenset({"status_native_seed"}),
-    "scenario": SCENARIO_NAMES | REPOSITORY_MATRIX_NAMES | JSON_DEPTH_ROUTE_CASE_NAMES,
+    "scenario": SCENARIO_NAMES
+    | REPOSITORY_MATRIX_NAMES
+    | JSON_DEPTH_ROUTE_CASE_NAMES
+    | BORROWED_PREFLIGHT_SCENARIOS,
     "oracle_case": JSON_CONSUMER_CASE_NAMES,
     "oracle_phase": frozenset(
         {
