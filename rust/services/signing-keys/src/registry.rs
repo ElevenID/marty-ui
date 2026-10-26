@@ -253,6 +253,15 @@ struct ManagedInventorySnapshot {
 
 type ManagedInventoryCache = Arc<RwLock<BTreeMap<String, ManagedInventorySnapshot>>>;
 
+// The raw sealed bytes stay inside the service and are used only by the
+// conditional fenced write. The public ETag contains the random revision only.
+pub struct RegistryRevisionSnapshot {
+    pub registry: Value,
+    pub etag: String,
+    raw: Option<String>,
+    sidecar: String,
+}
+
 #[derive(Clone)]
 pub struct RegistryStore {
     connection: ConnectionManager,
@@ -519,6 +528,7 @@ impl RegistryStore {
                 .await?;
         let registry_payload = serde_json::to_string(&sealed)
             .map_err(|error| RegistryError::Invalid(error.to_string()))?;
+        let sidecar = revision_sidecar(&Uuid::new_v4().to_string(), Some(&registry_payload));
         let marker_payload = serde_json::to_string(marker)
             .map_err(|error| RegistryError::Invalid(error.to_string()))?;
         let mut connection = self.connection.clone();
@@ -543,7 +553,7 @@ impl RegistryStore {
         .arg(&lease.owner)
         .arg(registry_payload)
         .arg(marker_payload)
-        .arg(Uuid::new_v4().to_string())
+        .arg(sidecar)
         .invoke_async(&mut connection)
         .await
         .map_err(|error| RegistryError::Storage(error.to_string()))?;
@@ -819,38 +829,81 @@ impl RegistryStore {
         &self,
         organization_id: &str,
     ) -> Result<(Value, String), RegistryError> {
+        self.load_with_revision_snapshot(organization_id)
+            .await
+            .map(|snapshot| (snapshot.registry, snapshot.etag))
+    }
+
+    pub async fn load_with_revision_snapshot(
+        &self,
+        organization_id: &str,
+    ) -> Result<RegistryRevisionSnapshot, RegistryError> {
         let mut connection = self.connection.clone();
-        // MGET is one Redis command, so the document and opaque revision are a snapshot.
-        let (payload, revision): (Option<String>, Option<String>) = redis::cmd("MGET")
-            .arg(storage_key(organization_id))
-            .arg(revision_key(organization_id))
-            .query_async(&mut connection)
+        let data_key = storage_key(organization_id);
+        let sidecar_key = revision_key(organization_id);
+        for _ in 0..3 {
+            // One Redis read observes the exact stored bytes and their private binding.
+            let (payload, sidecar): (Option<String>, Option<String>) = redis::cmd("MGET")
+                .arg(&data_key)
+                .arg(&sidecar_key)
+                .query_async(&mut connection)
+                .await
+                .map_err(|error| RegistryError::Storage(error.to_string()))?;
+            if let Some(revision) = sidecar
+                .as_deref()
+                .map(|value| checked_revision(value, payload.as_deref()))
+                .transpose()?
+                .flatten()
+            {
+                let registry = match payload.as_deref() {
+                    Some(payload) => {
+                        let parsed = serde_json::from_str(payload)
+                            .map_err(|error| RegistryError::Corrupt(error.to_string()))?;
+                        let unsealed = unseal_auth_references(
+                            &parsed,
+                            organization_id,
+                            self.auth_envelopes.as_ref(),
+                        )
+                        .await?;
+                        normalize_stored_registry(&unsealed)?
+                    }
+                    None => empty_registry(),
+                };
+                return Ok(RegistryRevisionSnapshot {
+                    registry: self.with_managed_service(organization_id, registry).await,
+                    etag: format!("\"r-{revision}\""),
+                    raw: payload,
+                    sidecar: sidecar.expect("validated sidecar exists"),
+                });
+            }
+            // A legacy writer or legacy document changed the bytes without updating
+            // the sidecar. Refresh ONLY that sidecar, conditional on both raw values.
+            let next = revision_sidecar(&Uuid::new_v4().to_string(), payload.as_deref());
+            let refreshed: i32 = redis::Script::new(
+                "local data = redis.call('GET', KEYS[1])
+                 local prior = redis.call('GET', KEYS[2])
+                 if (data ~= false) ~= (ARGV[1] == '1') then return 0 end
+                 if data ~= false and data ~= ARGV[2] then return 0 end
+                 if (prior ~= false) ~= (ARGV[3] == '1') then return 0 end
+                 if prior ~= false and prior ~= ARGV[4] then return 0 end
+                 redis.call('SET', KEYS[2], ARGV[5])
+                 return 1",
+            )
+            .key(&data_key)
+            .key(&sidecar_key)
+            .arg(if payload.is_some() { "1" } else { "0" })
+            .arg(payload.as_deref().unwrap_or_default())
+            .arg(if sidecar.is_some() { "1" } else { "0" })
+            .arg(sidecar.as_deref().unwrap_or_default())
+            .arg(next)
+            .invoke_async(&mut connection)
             .await
             .map_err(|error| RegistryError::Storage(error.to_string()))?;
-        let revision = match revision {
-            Some(value) if Uuid::parse_str(&value).is_ok() => format!("\"r-{value}\""),
-            Some(_) => {
-                return Err(RegistryError::Corrupt(
-                    "registry revision is malformed".into(),
-                ))
+            if refreshed == 0 {
+                continue;
             }
-            None => "\"r-legacy\"".to_owned(),
-        };
-        let registry = match payload {
-            Some(payload) => {
-                let parsed = serde_json::from_str(&payload)
-                    .map_err(|error| RegistryError::Corrupt(error.to_string()))?;
-                let unsealed =
-                    unseal_auth_references(&parsed, organization_id, self.auth_envelopes.as_ref())
-                        .await?;
-                normalize_stored_registry(&unsealed)?
-            }
-            None => empty_registry(),
-        };
-        Ok((
-            self.with_managed_service(organization_id, registry).await,
-            revision,
-        ))
+        }
+        Err(RegistryError::Conflict)
     }
 
     pub async fn save(
@@ -897,7 +950,20 @@ impl RegistryStore {
     ) -> Result<(Value, String), RegistryError> {
         let mut merged = normalize_requested_registry(requested)?;
         preserve_rotation_fields(&mut merged, existing);
-        self.save_with_rotation_lease_and_revision(organization_id, &merged, lease)
+        self.save_with_rotation_lease_and_revision(organization_id, &merged, lease, None)
+            .await
+    }
+
+    pub async fn save_requested_if_unchanged_with_rotation_lease(
+        &self,
+        organization_id: &str,
+        requested: &Value,
+        snapshot: &RegistryRevisionSnapshot,
+        lease: &RotationLease,
+    ) -> Result<(Value, String), RegistryError> {
+        let mut merged = normalize_requested_registry(requested)?;
+        preserve_rotation_fields(&mut merged, &snapshot.registry);
+        self.save_with_rotation_lease_and_revision(organization_id, &merged, lease, Some(snapshot))
             .await
     }
 
@@ -907,7 +973,7 @@ impl RegistryStore {
         registry: &Value,
         lease: &RotationLease,
     ) -> Result<Value, RegistryError> {
-        self.save_with_rotation_lease_and_revision(organization_id, registry, lease)
+        self.save_with_rotation_lease_and_revision(organization_id, registry, lease, None)
             .await
             .map(|(registry, _)| registry)
     }
@@ -917,6 +983,7 @@ impl RegistryStore {
         organization_id: &str,
         registry: &Value,
         lease: &RotationLease,
+        expected: Option<&RegistryRevisionSnapshot>,
     ) -> Result<(Value, String), RegistryError> {
         if lease.key != rotation_lease_key(organization_id) {
             return Err(RegistryError::Conflict);
@@ -928,11 +995,18 @@ impl RegistryStore {
         let payload = serde_json::to_string(&sealed)
             .map_err(|error| RegistryError::Invalid(error.to_string()))?;
         let revision = Uuid::new_v4().to_string();
+        let sidecar = revision_sidecar(&revision, Some(&payload));
         let mut connection = self.connection.clone();
         let saved: i32 = redis::Script::new(
             "if redis.call('GET', KEYS[1]) ~= ARGV[1] then return 0 end
              local fence = redis.call('GET', KEYS[3])
              if fence and fence ~= ARGV[1] then return 0 end
+             if ARGV[4] == '1' then
+                 local before = redis.call('GET', KEYS[2])
+                 if (before ~= false) ~= (ARGV[5] == '1') then return -1 end
+                 if before ~= false and before ~= ARGV[6] then return -1 end
+                 if redis.call('GET', KEYS[4]) ~= ARGV[7] then return -1 end
+             end
              redis.call('SET', KEYS[2], ARGV[2])
              redis.call('SET', KEYS[4], ARGV[3])
              return 1",
@@ -943,10 +1017,34 @@ impl RegistryStore {
         .key(revision_key(organization_id))
         .arg(&lease.owner)
         .arg(payload)
-        .arg(&revision)
+        .arg(sidecar)
+        .arg(if expected.is_some() { "1" } else { "0" })
+        .arg(
+            if expected
+                .and_then(|snapshot| snapshot.raw.as_ref())
+                .is_some()
+            {
+                "1"
+            } else {
+                "0"
+            },
+        )
+        .arg(
+            expected
+                .and_then(|snapshot| snapshot.raw.as_deref())
+                .unwrap_or_default(),
+        )
+        .arg(
+            expected
+                .map(|snapshot| snapshot.sidecar.as_str())
+                .unwrap_or_default(),
+        )
         .invoke_async(&mut connection)
         .await
         .map_err(|error| RegistryError::Storage(error.to_string()))?;
+        if saved == -1 {
+            return Err(RegistryError::PreconditionFailed);
+        }
         if saved != 1 {
             return Err(RegistryError::Conflict);
         }
@@ -1577,6 +1675,37 @@ pub fn storage_key(organization_id: &str) -> String {
 
 pub(crate) fn revision_key(organization_id: &str) -> String {
     format!("org:{organization_id}:signing-key-services-revision")
+}
+
+fn registry_payload_digest(payload: Option<&str>) -> String {
+    let mut digest = Sha256::new();
+    match payload {
+        Some(value) => {
+            digest.update(b"present\0");
+            digest.update(value.as_bytes());
+        }
+        None => digest.update(b"absent\0"),
+    }
+    format!("{:x}", digest.finalize())
+}
+
+fn revision_sidecar(revision: &str, payload: Option<&str>) -> String {
+    format!("{revision}:{}", registry_payload_digest(payload))
+}
+
+fn checked_revision(sidecar: &str, payload: Option<&str>) -> Result<Option<String>, RegistryError> {
+    let (revision, digest) = sidecar
+        .split_once(':')
+        .ok_or_else(|| RegistryError::Corrupt("registry revision is malformed".into()))?;
+    if Uuid::parse_str(revision).is_err()
+        || digest.len() != 64
+        || !digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Err(RegistryError::Corrupt(
+            "registry revision is malformed".into(),
+        ));
+    }
+    Ok((digest == registry_payload_digest(payload)).then(|| revision.to_owned()))
 }
 
 fn normalize_service_value(service: &Value) -> Result<Option<Value>, RegistryError> {

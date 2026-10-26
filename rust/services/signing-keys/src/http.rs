@@ -1933,10 +1933,13 @@ async fn save_public_config(
         Err(error) => return public_error(StatusCode::SERVICE_UNAVAILABLE, &error.to_string()),
     };
     let saved = async {
-        let (existing, revision) = store.load_with_revision(&scope.organization_id).await?;
+        let snapshot = store
+            .load_with_revision_snapshot(&scope.organization_id)
+            .await?;
+        let existing = &snapshot.registry;
         if expected_revision
             .as_deref()
-            .is_some_and(|expected| expected != revision.as_str())
+            .is_some_and(|expected| expected != snapshot.etag.as_str())
         {
             return Err(registry::RegistryError::PreconditionFailed);
         }
@@ -1953,14 +1956,25 @@ async fn save_public_config(
                 .cloned()
                 .unwrap_or_else(|| json!({}));
         }
-        let (normalized, new_revision) = store
-            .save_requested_with_rotation_lease_and_revision(
-                &scope.organization_id,
-                &body,
-                &existing,
-                &lease,
-            )
-            .await?;
+        let (normalized, new_revision) = if expected_revision.is_some() {
+            store
+                .save_requested_if_unchanged_with_rotation_lease(
+                    &scope.organization_id,
+                    &body,
+                    &snapshot,
+                    &lease,
+                )
+                .await?
+        } else {
+            store
+                .save_requested_with_rotation_lease_and_revision(
+                    &scope.organization_id,
+                    &body,
+                    existing,
+                    &lease,
+                )
+                .await?
+        };
         Ok((
             store
                 .with_managed_service(&scope.organization_id, normalized)
@@ -6413,7 +6427,7 @@ mod public_contract_tests {
         let uri = format!("/v1/signing-keys/config?organization_id={organization_id}");
         let first = app
             .clone()
-            .oneshot(Request::get(&uri).body(Body::empty()).unwrap())
+            .oneshot(Request::get(uri.as_str()).body(Body::empty()).unwrap())
             .await
             .unwrap();
         assert_eq!(first.status(), StatusCode::OK);
@@ -6432,7 +6446,7 @@ mod public_contract_tests {
         let second = app
             .clone()
             .oneshot(
-                Request::patch(&uri)
+                Request::patch(uri.as_str())
                     .header("content-type", "application/json")
                     .header(IF_MATCH, &first_revision)
                     .body(Body::from(second_body.to_string()))
@@ -6448,7 +6462,7 @@ mod public_contract_tests {
         let stale = app
             .clone()
             .oneshot(
-                Request::patch(&uri)
+                Request::patch(uri.as_str())
                     .header("content-type", "application/json")
                     .header(IF_MATCH, &first_revision)
                     .body(Body::from(first_body.to_string()))
@@ -6470,7 +6484,7 @@ mod public_contract_tests {
         let restored = app
             .clone()
             .oneshot(
-                Request::patch(&uri)
+                Request::patch(uri.as_str())
                     .header("content-type", "application/json")
                     .header(IF_MATCH, &second_revision)
                     .body(Body::from(first_body.to_string()))
@@ -6479,9 +6493,82 @@ mod public_contract_tests {
             .await
             .unwrap();
         assert_eq!(restored.status(), StatusCode::OK);
+        let restored_revision = restored.headers()[ETAG].to_str().unwrap().to_owned();
         assert_eq!(
             store.load(&organization_id).await.unwrap()["services"][0]["name"],
             "Original"
+        );
+        // Simulate an older writer changing the raw document without touching
+        // the revision sidecar. The next conditional write must still fail.
+        let raw: String = redis::cmd("GET")
+            .arg(registry::storage_key(&organization_id))
+            .query_async(&mut connection)
+            .await
+            .unwrap();
+        let mut legacy: Value = serde_json::from_str(&raw).unwrap();
+        legacy["services"][0]["name"] = json!("Legacy writer edit");
+        let _: () = redis::cmd("SET")
+            .arg(registry::storage_key(&organization_id))
+            .arg(legacy.to_string())
+            .query_async(&mut connection)
+            .await
+            .unwrap();
+        let stale_legacy = app
+            .clone()
+            .oneshot(
+                Request::patch(uri.as_str())
+                    .header("content-type", "application/json")
+                    .header(IF_MATCH, &restored_revision)
+                    .body(Body::from(first_body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(stale_legacy.status(), StatusCode::PRECONDITION_FAILED);
+        assert_eq!(
+            store.load(&organization_id).await.unwrap()["services"][0]["name"],
+            "Legacy writer edit"
+        );
+        // Force the second race window: an old/out-of-band writer changes the
+        // raw document after the precondition read but before the fenced SET.
+        let snapshot = store
+            .load_with_revision_snapshot(&organization_id)
+            .await
+            .unwrap();
+        let lease = store
+            .acquire_rotation_lease(&organization_id)
+            .await
+            .unwrap()
+            .unwrap();
+        let raw: String = redis::cmd("GET")
+            .arg(registry::storage_key(&organization_id))
+            .query_async(&mut connection)
+            .await
+            .unwrap();
+        let mut raced: Value = serde_json::from_str(&raw).unwrap();
+        raced["services"][0]["name"] = json!("Between-read-and-save edit");
+        let _: () = redis::cmd("SET")
+            .arg(registry::storage_key(&organization_id))
+            .arg(raced.to_string())
+            .query_async(&mut connection)
+            .await
+            .unwrap();
+        let refused = store
+            .save_requested_if_unchanged_with_rotation_lease(
+                &organization_id,
+                &first_body,
+                &snapshot,
+                &lease,
+            )
+            .await;
+        assert_eq!(
+            refused.unwrap_err(),
+            registry::RegistryError::PreconditionFailed
+        );
+        lease.release().await.unwrap();
+        assert_eq!(
+            store.load(&organization_id).await.unwrap()["services"][0]["name"],
+            "Between-read-and-save edit"
         );
         let _: i32 = redis::cmd("DEL")
             .arg(registry::storage_key(&organization_id))
