@@ -203,7 +203,8 @@ async fn administrative_cancellation_preserves_history_and_closes_terminal_races
         .nth(1)
         .unwrap();
     let newline_body = history_body.replace("\r\n", "\n").replace('\n', "\r\n");
-    sqlx::raw_sql(&format!("CREATE OR REPLACE FUNCTION issuance_service.guard_passport_cancellation_history() RETURNS trigger LANGUAGE plpgsql AS $body${newline_body}$body$"))
+    // Audited fixture DDL: body comes only from the embedded committed migration.
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!("CREATE OR REPLACE FUNCTION issuance_service.guard_passport_cancellation_history() RETURNS trigger LANGUAGE plpgsql AS $body${newline_body}$body$")))
         .execute(&pool).await.unwrap();
     migration::validate_passport(&pool).await.unwrap();
     for (name, wrong_definition) in [
@@ -218,13 +219,15 @@ async fn administrative_cancellation_preserves_history_and_closes_terminal_races
     ] {
         let original: String = sqlx::query_scalar("SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid='issuance_service.passport_job_administrative_cancellations'::regclass AND conname=$1")
             .bind(name).fetch_one(&pool).await.unwrap();
-        sqlx::raw_sql(&format!("ALTER TABLE issuance_service.passport_job_administrative_cancellations DROP CONSTRAINT {name}, ADD CONSTRAINT {name} {wrong_definition}"))
+        // Fixed local allowlist; no request-derived identifiers or definitions.
+        sqlx::raw_sql(sqlx::AssertSqlSafe(format!("ALTER TABLE issuance_service.passport_job_administrative_cancellations DROP CONSTRAINT {name}, ADD CONSTRAINT {name} {wrong_definition}")))
             .execute(&pool).await.unwrap();
         assert!(
             migration::validate_passport(&pool).await.is_err(),
             "quoted SQL content must remain significant: {name}"
         );
-        sqlx::raw_sql(&format!("ALTER TABLE issuance_service.passport_job_administrative_cancellations DROP CONSTRAINT {name}, ADD CONSTRAINT {name} {original}"))
+        // Restore only the catalog definition captured in this owned empty fixture.
+        sqlx::raw_sql(sqlx::AssertSqlSafe(format!("ALTER TABLE issuance_service.passport_job_administrative_cancellations DROP CONSTRAINT {name}, ADD CONSTRAINT {name} {original}")))
             .execute(&pool).await.unwrap();
         migration::validate_passport(&pool).await.unwrap();
     }
