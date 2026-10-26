@@ -126,6 +126,13 @@ def test_post_grant_same_vm_dispatch_keeps_lease(arranged, monkeypatch,
                                                   replace_output, purpose):
     args, verified, calls = arranged
     verified.update(exchange._scope(purpose))
+    moment = [100000]
+    args["clock"] = lambda: moment[0]
+    original_verify = exchange.verify_consumed_intent
+    def slow_verify(*values, **kwargs):
+        moment[0] += 61
+        return original_verify(*values, **kwargs)
+    monkeypatch.setattr(exchange, "verify_consumed_intent", slow_verify)
     registry = args["registry"]
     control = registry / "control"
     control.mkdir(mode=0o700)
@@ -137,7 +144,15 @@ def test_post_grant_same_vm_dispatch_keeps_lease(arranged, monkeypatch,
     verified["ssh"]["control_dir"] = str(control)
     verified["ssh"]["controller_key_sha256"] = release.digest(key.read_bytes())
     verified["ssh"]["known_hosts_sha256"] = release.digest(known_hosts.read_bytes())
-    verified["receipt_sha256"] = release.digest(b"receipt")
+    receipt_raw = release.encode({"synthetic": "receipt"})
+    intent_raw = release.encode({"synthetic": "intent"})
+    verified["receipt_sha256"] = release.digest(receipt_raw)
+    verified["intent_sha256"] = release.digest(intent_raw)
+    for suffix, raw in ((".json", receipt_raw),
+                        (".vm-consumption-intent.json", intent_raw)):
+        path = registry / (args["expected"]["nonce"] + suffix)
+        path.write_bytes(raw)
+        path.chmod(0o600)
     host_raw = release.encode({"synthetic": "previously admitted host"})
     fresh = dict(target=verified["target"], ssh=verified["ssh"],
                  authorization_sha256=release.digest(b"authorization"),
@@ -150,6 +165,7 @@ def test_post_grant_same_vm_dispatch_keeps_lease(arranged, monkeypatch,
     def preflight(lease, _registry, _runtime, **kwargs):
         assert kwargs["purpose"] == purpose
         calls.append("fresh")
+        fresh["probe_finished_at"] = moment[0]
         exchange._write(lease.parent,
                         vm_id + "." + kwargs["observation_id"] + ".host-preflight.json",
                         fresh)
@@ -158,8 +174,11 @@ def test_post_grant_same_vm_dispatch_keeps_lease(arranged, monkeypatch,
                         release.decode(host_raw))
         return fresh
     monkeypatch.setattr(exchange, "preflight", preflight)
-    monkeypatch.setattr(exchange.dispatch, "verify", lambda **_kwargs:
-                        (b"authorization", b"receipt", b"inventory", {}))
+    def slow_payload_verify(**_kwargs):
+        calls.append("payloads")
+        moment[0] += 61
+        return b"authorization", receipt_raw, b"inventory", {}
+    monkeypatch.setattr(exchange.dispatch, "verify", slow_payload_verify)
     monkeypatch.setattr(exchange.dispatch, "verified_harness_script",
                         lambda *_args: "synthetic signed TLS probe")
     monkeypatch.setattr(exchange.dispatch, "verified_bootstrap",
@@ -251,8 +270,8 @@ def test_post_grant_same_vm_dispatch_keeps_lease(arranged, monkeypatch,
                                         process_observer=process_observer,
                                         observe_installed=observe_installed)
         assert result["installation_ready"] is False
-    assert calls[:7] == ["verify", "fresh", "verify", "invoke", "fresh",
-                        "fresh", "process"]
+    assert calls[:8] == ["verify", "payloads", "verify", "fresh", "invoke",
+                        "fresh", "fresh", "process"]
     assert calls.count("invoke") == 1
     assert calls.count("installed") == (
         0 if observer_failure or purpose == exchange.ENGINEERING else 1)
@@ -287,5 +306,5 @@ def test_post_grant_same_vm_dispatch_keeps_lease(arranged, monkeypatch,
         exchange.dispatch_once(**common, invoke=invoke,
                                process_observer=process_observer,
                                observe_installed=observe_installed)
-    assert calls[before_retry:] == ["verify", "fresh"]
+    assert calls[before_retry:] == ["verify", "payloads", "verify", "fresh"]
     assert calls.count("invoke") == 1

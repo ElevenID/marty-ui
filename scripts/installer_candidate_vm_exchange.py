@@ -159,6 +159,29 @@ def dispatch_once(*, registry: Path, runtime_parent: Path, vm_id: str,
                         and exchange_result["guest_dispatched"] is False
                         and exchange_result["acceptance"] is False,
                         "signed exchange differs from consumed VM")
+        # Complete slow cryptographic checks before starting the final host
+        # measurement's freshness window. The held lease and byte comparisons
+        # below preserve the exact consumed inputs across that measurement.
+        a, receipt, i, files = dispatch.verify(
+            assets=assets, grants=grants, context=expected,
+            target=bound["target"], ledger=ledger, gh=gh, cosign=cosign,
+            now=int(clock()), runner=verifier)
+        rebound = verify_consumed_intent(
+            lease, registry, authorization=authorization, assets=assets,
+            expected=expected, gh=gh, cosign=cosign, clock=clock,
+            verifier=verifier, purpose=purpose)
+        _bound_scope(rebound, purpose)
+        release.require(rebound["intent_sha256"] == bound["intent_sha256"]
+                        and rebound["receipt_sha256"] == bound["receipt_sha256"]
+                        and rebound["target"] == bound["target"]
+                        and rebound["ssh"] == bound["ssh"],
+                        "consumed VM changed before dispatch")
+        intent_name = nonce + ".vm-consumption-intent.json"
+        intent_raw = _read_record(lease.parent, intent_name)[0]
+        release.require(release.digest(intent_raw) == rebound["intent_sha256"]
+                        and release.digest(receipt) == rebound["receipt_sha256"]
+                        and _read_record(lease.parent, ledger.name)[0] == receipt,
+                        "consumed VM bytes differ before fresh measurement")
         fresh = preflight(
             lease, registry, runtime_parent, vm_id=vm_id,
             installation_id=installation_id, observation_id=observation_id,
@@ -171,14 +194,11 @@ def dispatch_once(*, registry: Path, runtime_parent: Path, vm_id: str,
                         "post-grant VM differs from consumed target")
         release.require(_read_record(lease.parent, context_file.name)[1] == expected
                         and _read_record(lease.parent, target_file.name)[1]
-                        == bound["target"],
+                        == bound["target"]
+                        and _read_record(lease.parent, intent_name)[0] == intent_raw
+                        and _read_record(lease.parent, ledger.name)[0] == receipt,
                         "independent dispatch inputs changed")
-        a, receipt, i, files = dispatch.verify(
-            assets=assets, grants=grants, context=expected,
-            target=bound["target"], ledger=ledger, gh=gh, cosign=cosign,
-            now=int(clock()), runner=verifier)
-        release.require(release.digest(receipt) == bound["receipt_sha256"]
-                        and release.digest(a) == fresh["authorization_sha256"]
+        release.require(release.digest(a) == fresh["authorization_sha256"]
                         and release.digest(i) == fresh["inventory_sha256"],
                         "signed grant differs from fresh VM admission")
         control_dir = Path(fresh["ssh"]["control_dir"])
@@ -189,16 +209,6 @@ def dispatch_once(*, registry: Path, runtime_parent: Path, vm_id: str,
                         and dispatch.private_file(known_hosts, 4096)[0]
                         == fresh["ssh"]["known_hosts_sha256"],
                         "VM dispatch SSH material differs")
-        rebound = verify_consumed_intent(
-            lease, registry, authorization=authorization, assets=assets,
-            expected=expected, gh=gh, cosign=cosign, clock=clock,
-            verifier=verifier, purpose=purpose)
-        _bound_scope(rebound, purpose)
-        release.require(rebound["intent_sha256"] == bound["intent_sha256"]
-                        and rebound["receipt_sha256"] == bound["receipt_sha256"]
-                        and rebound["target"] == bound["target"]
-                        and rebound["ssh"] == bound["ssh"],
-                        "consumed VM changed before dispatch")
         preflight_raw, preflight_record = _read_record(
             lease.parent, vm_id + "." + observation_id + ".host-preflight.json")
         release.require(preflight_record == fresh,
