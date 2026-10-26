@@ -49,3 +49,15 @@ Exporting a document does not complete missing endpoint schemas, generate typed
 endpoint DTOs, validate response payloads, or qualify a headless business journey.
 Independent contract packaging, publication and compatibility checks remain
 part of the API-first implementation plan.
+
+
+Trust-profile issuer overrides must contain public configuration only. The
+public gateway and native owner reject nested private custody selectors and
+private JWK parameters, including case variants and values inside arrays,
+before saving a create or patch. Public JWKs remain valid configuration.
+Readback rejects a legacy profile containing such private override data instead
+of returning it; a native collection containing that profile fails as a whole.
+The stored record is preserved for operator remediation. An authorized patch
+with `system_issuer_overrides: {}` clears that map and restores readback; it
+does not replace the profile or change its other configuration. A successful export
+or structurally valid profile does not qualify its trust anchors or issuers.

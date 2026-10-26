@@ -988,6 +988,7 @@ fn validate_organization_profile(
 }
 
 fn validate_profile(profile: &TrustProfile) -> Result<(), TrustProfileApplicationError> {
+    reject_private_custody_metadata(&Value::Object(profile.system_issuer_overrides.clone()))?;
     if profile.organization_id.trim().is_empty() {
         return Err(TrustProfileApplicationError::Invalid("organization_id"));
     }
