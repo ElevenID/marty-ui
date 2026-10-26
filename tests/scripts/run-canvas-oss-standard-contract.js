@@ -1944,7 +1944,8 @@ async function prepareCanvasCaptureFixtures({ browser, ledger, markActive = () =
       enabled: true,
     }, [200]);
     owned.martyPlatformIntent.returnedId=platform?.id;owned.martyPlatformIntent.state='RESPONSE_UNVERIFIED';persistOwned();
-    requireCondition(platform?.display_name===owned.martyPlatformIntent.name&&String(platform.organization_id)===organizationId,
+    requireCondition(typeof platform?.id==='string'&&/^[a-f0-9-]{36}$/i.test(platform.id)
+      &&platform.display_name===owned.martyPlatformIntent.name&&String(platform.organization_id)===organizationId,
       'marty_canvas_platform_identity_mismatch','Created Canvas platform must match its exact owned name and tenant.');
     owned.martyPlatformIntent.state='CREATED';
     state.platformId = platformId = String(platform?.id || '');
@@ -2020,7 +2021,8 @@ async function prepareCanvasCaptureFixtures({ browser, ledger, markActive = () =
       enabled: true,
     }, [200, 201]);
     owned.martySecretIntent.returnedId=integrationSecret?.id;owned.martySecretIntent.state='RESPONSE_UNVERIFIED';persistOwned();
-    requireCondition(integrationSecret?.organization_id===organizationId&&integrationSecret.name===owned.martySecretIntent.name
+    requireCondition(typeof integrationSecret?.id==='string'&&/^[a-f0-9-]{36}$/i.test(integrationSecret.id)
+      &&integrationSecret.organization_id===organizationId&&integrationSecret.name===owned.martySecretIntent.name
       &&integrationSecret.provider==='canvas'&&integrationSecret.purpose==='oauth_client_secret',
       'marty_oauth_secret_identity_mismatch','Created OAuth reference must match its exact owned identity.');
     owned.martySecretIntent.state='CREATED';
