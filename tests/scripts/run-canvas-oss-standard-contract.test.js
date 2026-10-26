@@ -765,3 +765,32 @@ test('Developer Key setup declares English before shared API and LTI phases',asy
   assert.deepEqual(stages,['NAVIGATE','TRIGGER','MENU','MODAL','FILL']);assert(!JSON.stringify(stages).includes('private'));
  }
 });
+
+test('real local redirect chains hold provider codes and observe native callbacks without routing redirected URLs',async()=>{
+ const http=require('node:http');const {chromium}=require('@playwright/test');const {authorizeCanvasOAuth}=require('./run-canvas-oss-standard-contract');
+ const servers=[];let browser,canvasOrigin,martyOrigin,current;
+ const listen=async handler=>{const server=http.createServer(handler);servers.push(server);await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));return 'http://127.0.0.1:'+server.address().port};
+ try{
+  martyOrigin=await listen((req,res)=>{const url=new URL(req.url,martyOrigin);if(url.pathname==='/v1/integrations/canvas/oauth/callback'){current.callbackHits++;res.writeHead(302,{Location:'/result?outcome=error'});res.end();}else{res.writeHead(200,{'Content-Type':'text/html'});res.end('<p>Owned local callback result</p>');}});
+  canvasOrigin=await listen(async(req,res)=>{
+   const url=new URL(req.url,canvasOrigin);const redirect=()=>{const target=new URL('/v1/integrations/canvas/oauth/callback',current.wrongOrigin?canvasOrigin:martyOrigin);target.searchParams.set('state',current.wrongState?'different-private-state':current.state);target.searchParams.set('code',current.code);res.writeHead(302,{Location:target.href});res.end();};
+   if(req.method==='GET'&&url.pathname==='/login/oauth2/auth'){current.authHits++;if(current.immediate)return redirect();res.writeHead(302,{Location:'/login/oauth2/confirm','Set-Cookie':'owned_control=unchanged; Path=/; HttpOnly'});res.end();}
+   else if(req.method==='GET'&&url.pathname==='/login/oauth2/confirm'){res.writeHead(200,{'Content-Type':'text/html'});res.end('<form id="oauth2_accept_form" method="post" action="/login/oauth2/accept"><input type="hidden" name="custom_csrf_token" value="owned-control"><button>Authorize</button></form>');}
+   else if(req.method==='POST'&&url.pathname==='/login/oauth2/accept'){const chunks=[];for await(const chunk of req)chunks.push(chunk);current.acceptBody=Buffer.concat(chunks).toString();current.acceptCookie=req.headers.cookie;current.acceptHits++;redirect();}
+   else{res.writeHead(404);res.end();}
+  });
+  browser=await chromium.launch();
+  for(const scenario of [{name:'consent-held',capture:true},{name:'immediate-held',capture:true,immediate:true},{name:'native',capture:false},{name:'wrong-state',capture:true,immediate:true,wrongState:true},{name:'wrong-origin',capture:true,immediate:true,wrongOrigin:true}]){
+   current={...scenario,state:'private-state-'+scenario.name,code:'private-code-'+scenario.name,callbackHits:0,authHits:0,acceptHits:0};
+   const observations=[],blocked=[],context=await browser.newContext({serviceWorkers:'block'});
+   // Install local-only network confinement before creating a page.
+   await context.route('**/*',async route=>{const origin=new URL(route.request().url()).origin;if([canvasOrigin,martyOrigin].includes(origin))await route.fallback();else{blocked.push('NONLOCAL_REQUEST');await route.abort();}});
+   try{const page=await context.newPage();const url=new URL('/login/oauth2/auth',canvasOrigin);url.searchParams.set('client_id','owned-client');url.searchParams.set('state',current.state);url.searchParams.set('redirect_uri',martyOrigin+'/v1/integrations/canvas/oauth/callback');
+    const operation=authorizeCanvasOAuth(page,url,{canvasOrigin,martyOrigin,captureAtProvider:scenario.capture,observe:row=>observations.push(row),timeout:5000});
+    if(scenario.wrongState||scenario.wrongOrigin){await assert.rejects(operation,error=>error.code==='canvas_oauth_redirect_binding_failed');assert.equal(current.callbackHits,0);}
+    else{const issued=await operation;assert.equal(issued.code,current.code);assert.equal(issued.state,current.state);assert.equal(current.callbackHits,scenario.capture?0:1);if(!scenario.immediate){assert.equal(current.acceptHits,1);assert.equal(current.acceptBody,'custom_csrf_token=owned-control');assert.match(current.acceptCookie,/owned_control=unchanged/);}if(!scenario.capture)assert(observations.some(row=>row.phase==='NATIVE_CALLBACK_REQUEST'));}
+    assert.equal(current.authHits,1);assert.deepEqual(blocked,[]);assert(!JSON.stringify(observations).includes('private-state'));assert(!JSON.stringify(observations).includes('private-code'));
+   }finally{await context.close();}
+  }
+ }finally{if(browser)await browser.close();await Promise.all(servers.map(server=>new Promise(resolve=>{server.closeAllConnections();server.close(resolve)})));}
+});

@@ -1,6 +1,6 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict');
-const {requireProviderInvalidSecret,requireMartyInvalidSecret,planWrongSecretCase,runWrongSecretCase,retireCanvasSession,requireOwnedMartyResource,assertCanvasLoginIdentity,canvasFailureDiagnostic,safeCanvasFailure,authorizationBoundaryChecks,callbackBoundaryChecks,providerDenialObservation,requestStatelessTokenDenial}=require('./audit-beta-canvas-invalid-secret');
+const {requireProviderInvalidSecret,requireMartyInvalidSecret,planWrongSecretCase,runWrongSecretCase,retireCanvasSession,requireOwnedMartyResource,assertCanvasLoginIdentity,canvasFailureDiagnostic,safeCanvasFailure,authorizationBoundaryChecks,providerDenialObservation,requestStatelessTokenDenial}=require('./audit-beta-canvas-invalid-secret');
 const valid={status:401,error:'invalid_client',description:'invalid client',issuedCode:true,clientEnabled:true,clientId:'100',issuedClientId:'100'};
 test('only enabled same-client issued-code credential error counts',()=>{assert.equal(requireProviderInvalidSecret(valid).validEnabledClient,true)});
 for(const patch of [{description:'unknown client'},{description:undefined},{error:'invalid_grant'},{error:'access_denied'},{error:'unknown_client'},{status:500},{status:200},{issuedCode:false},{clientEnabled:false},{issuedClientId:'101'}])test('reject confounded denial '+JSON.stringify(patch),()=>{assert.throws(()=>requireProviderInvalidSecret({...valid,...patch}));});
@@ -73,8 +73,7 @@ test('OAuth boundary observations expose only booleans and known error classes, 
  const secret='NEVER-PUBLISH-STATE-CODE-OR-SECRET';
  const start=new URL('https://canvas-test.elevenidllc.com/login/oauth2/auth');start.searchParams.set('client_id',secret);start.searchParams.set('state',secret);start.searchParams.set('redirect_uri','https://beta.elevenidllc.com/v1/integrations/canvas/oauth/callback');
  assert.deepEqual(authorizationBoundaryChecks(start,secret),{originExpected:true,pathExpected:true,clientIdMatches:true,redirectUriExpected:true,statePresent:true});
- const callback=new URL('https://beta.elevenidllc.com/v1/integrations/canvas/oauth/callback');callback.searchParams.set('state',secret);callback.searchParams.set('code',secret);assert.equal(callbackBoundaryChecks(callback,secret).codePresent,true);
- const observations=[authorizationBoundaryChecks(start,secret),callbackBoundaryChecks(callback,secret),providerDenialObservation(401,{error:secret,error_description:secret})];assert(!JSON.stringify(observations).includes(secret));
+ const observations=[authorizationBoundaryChecks(start,secret),providerDenialObservation(401,{error:secret,error_description:secret})];assert(!JSON.stringify(observations).includes(secret));
  assert.equal(providerDenialObservation(401,{error:'invalid_client',error_description:'invalid client'}).descriptionClass,'INVALID_CLIENT_SECRET');assert.equal(providerDenialObservation(401,{error:'invalid_client',error_description:'unknown client'}).descriptionClass,'UNKNOWN_CLIENT');assert.equal(providerDenialObservation(401,{errors:[{message:secret}]}).errorClass,'UNRECOGNIZED');
 });
 

@@ -72,20 +72,8 @@ async function executeWrongSecretCase({result,save,gateway,admin,adminPage,organ
   assert(url.searchParams.get('state'));assert.equal(url.searchParams.get('redirect_uri'),MARTY+'/v1/integrations/canvas/oauth/callback');return url;
  }
  async function authorize(url,intercept){
-  let captured;const callback=MARTY+'/v1/integrations/canvas/oauth/callback';
-  const handler=async route=>{const target=new URL(route.request().url());
-   result.validClientSecretCase.callbackChecks=result.validClientSecretCase.callbackChecks||[];
-   result.validClientSecretCase.callbackChecks.push({intercepted:intercept,...callbackBoundaryChecks(target,url.searchParams.get('state'))});save();
-   assert.equal(target.origin,MARTY);assert.equal(target.pathname,'/v1/integrations/canvas/oauth/callback');
-   assert.equal(target.searchParams.get('state'),url.searchParams.get('state'));assert(target.searchParams.get('code'));
-   assert(!target.searchParams.has('error'));captured={code:target.searchParams.get('code'),state:target.searchParams.get('state')};
-   if(intercept)await route.fulfill({status:200,contentType:'text/plain',body:'Owned OAuth code observed for explicit credential-denial control.'});else await route.continue();};
-  await page.route(callback+'**',handler);
-  try{await page.goto(url.href,{waitUntil:'domcontentloaded',timeout:60000});
-   if(!captured)await page.locator('#oauth2_accept_form').getByRole('button',{name:/^authorize$/i}).click();
-   await page.waitForURL(value=>value.origin===MARTY&&(intercept||value.searchParams.has('outcome')),{timeout:60000});
-   assert(captured,'Stock provider did not issue a code');return captured;
-  }finally{await page.unroute(callback+'**',handler);}
+  return stock.authorizeCanvasOAuth(page,url,{canvasOrigin:CANVAS,martyOrigin:MARTY,captureAtProvider:intercept,
+   observe:value=>{result.validClientSecretCase.oauthAuthorizationObservations=result.validClientSecretCase.oauthAuthorizationObservations||[];result.validClientSecretCase.oauthAuthorizationObservations.push({independentControl:intercept,...value});save();}});
  }
  try{
   await stock.loginCanvas(page,CANVAS,canvasCredentials.email,canvasCredentials.password,{observe:value=>stage('CANVAS_'+value)});
@@ -210,9 +198,6 @@ async function requestStatelessTokenDenial(requestFactory,form,{observe=()=>{}}=
 function authorizationBoundaryChecks(url,clientId){
  return {originExpected:url.origin===CANVAS,pathExpected:url.pathname==='/login/oauth2/auth',clientIdMatches:url.searchParams.get('client_id')===clientId,redirectUriExpected:url.searchParams.get('redirect_uri')===MARTY+'/v1/integrations/canvas/oauth/callback',statePresent:Boolean(url.searchParams.get('state'))};
 }
-function callbackBoundaryChecks(url,state){
- return {originExpected:url.origin===MARTY,pathExpected:url.pathname==='/v1/integrations/canvas/oauth/callback',stateMatches:url.searchParams.get('state')===state,codePresent:Boolean(url.searchParams.get('code')),providerErrorPresent:url.searchParams.has('error')};
-}
 function providerDenialObservation(status,body){
  const errors=new Set(['invalid_client','invalid_grant','invalid_request','access_denied','unsupported_grant_type']);
  const description=body?.error_description;
@@ -256,5 +241,5 @@ async function runWrongSecretCase(options){
   throw new Error('Canvas valid-client wrong-secret control failed; preserve its owned journal for review.');
  }
 }
-module.exports={requestStatelessTokenDenial,authorizationBoundaryChecks,callbackBoundaryChecks,providerDenialObservation,safeCanvasFailure,canvasFailureDiagnostic,assertCanvasLoginIdentity,requireOwnedMartyResource,retireCanvasSession,planWrongSecretCase,requireProviderInvalidSecret,requireMartyInvalidSecret,runWrongSecretCase};
+module.exports={requestStatelessTokenDenial,authorizationBoundaryChecks,providerDenialObservation,safeCanvasFailure,canvasFailureDiagnostic,assertCanvasLoginIdentity,requireOwnedMartyResource,retireCanvasSession,planWrongSecretCase,requireProviderInvalidSecret,requireMartyInvalidSecret,runWrongSecretCase};
 if(require.main===module){assert.deepEqual(process.argv.slice(2),['--plan'],'Offline plan only; execution requires reviewed existing capability runner');console.log(JSON.stringify(planWrongSecretCase(),null,2));}

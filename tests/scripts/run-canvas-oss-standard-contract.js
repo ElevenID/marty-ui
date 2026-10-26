@@ -577,6 +577,92 @@ async function createPersonalAccessToken(page, origin, purpose, onOwned = () => 
   return visible;
 }
 
+function canvasOAuthRedirectChecks(target, authorizationUrl, martyOrigin) {
+  return {originExpected:target.origin===martyOrigin,pathExpected:target.pathname==='/v1/integrations/canvas/oauth/callback',stateMatches:target.searchParams.get('state')===authorizationUrl.searchParams.get('state'),codePresent:Boolean(target.searchParams.get('code')),providerErrorPresent:target.searchParams.has('error')};
+}
+
+async function authorizeCanvasOAuth(page, authorizationUrl, {canvasOrigin, martyOrigin, captureAtProvider = false, observe = () => {}, timeout = DEFAULT_TIMEOUT_MS} = {}) {
+  requireCondition(authorizationUrl.origin===canvasOrigin && authorizationUrl.pathname==='/login/oauth2/auth'
+    && authorizationUrl.searchParams.get('state') && authorizationUrl.searchParams.get('client_id')
+    && authorizationUrl.searchParams.get('redirect_uri')===martyOrigin+'/v1/integrations/canvas/oauth/callback',
+  'canvas_oauth_authorization_unbound', 'OAuth authorization must bind the expected provider, client and callback.');
+  let captured = null, observationFailure = null, nativeRequestObserved = false, timer;
+  let completed;
+  const captureReady = new Promise(resolve => {completed = resolve;});
+  const pending = new Set();
+  const inspectCallback = (target, phase, status) => {
+    const checks = canvasOAuthRedirectChecks(target, authorizationUrl, martyOrigin);
+    observe({phase,...(status===undefined?{}:{status}),...checks});
+    requireCondition(checks.originExpected && checks.pathExpected && checks.stateMatches && checks.codePresent && !checks.providerErrorPresent,
+      'canvas_oauth_redirect_binding_failed', 'Provider redirect did not bind the expected callback, nonce and issued code.');
+    const value = {code:target.searchParams.get('code'),state:target.searchParams.get('state')};
+    requireCondition(!captured || (captured.code===value.code && captured.state===value.state),
+      'canvas_oauth_redirect_inconsistent', 'Observed OAuth redirects disagree.');
+    captured = value;completed();
+  };
+  const providerRequest = request => {
+    const url = new URL(request.url());
+    return url.origin===canvasOrigin && ((request.method()==='GET' && url.pathname==='/login/oauth2/auth')
+      || (request.method()==='POST' && url.pathname==='/login/oauth2/accept'));
+  };
+  const providerUrl = url => url.origin===canvasOrigin && ['/login/oauth2/auth','/login/oauth2/accept'].includes(url.pathname);
+  const routeHandler = async route => {
+    if (!providerRequest(route.request())) {await route.continue();return;}
+    try {
+      // Forward this real browser request unchanged; never follow its code-bearing redirect.
+      const response = await route.fetch({maxRedirects:0,maxRetries:0,timeout});
+      const location = response.headers().location;
+      observe({phase:'PROVIDER_RESPONSE',status:response.status(),locationPresent:Boolean(location)});
+      if (location && [302,303].includes(response.status())) {
+        const target = new URL(location, canvasOrigin);
+        if (target.origin!==canvasOrigin || target.pathname==='/v1/integrations/canvas/oauth/callback') {
+          inspectCallback(target,'PROVIDER_CODE_HELD',response.status());
+          await route.fulfill({status:200,contentType:'text/plain',body:'Diagnostic: a real provider-issued code was held before its native callback. No provider result was fabricated.'});
+          return;
+        }
+      }
+      await route.fulfill({response});
+    } catch (error) {observationFailure=error;completed();await route.abort().catch(()=>{});}
+  };
+  const requestObserver = request => {
+    const target = new URL(request.url());
+    if (target.origin!==martyOrigin || target.pathname!=='/v1/integrations/canvas/oauth/callback') return;
+    try {inspectCallback(target,'NATIVE_CALLBACK_REQUEST');nativeRequestObserved=true;}
+    catch(error) {observationFailure=error;completed();}
+  };
+  const responseObserver = response => {
+    if (!providerRequest(response.request()) || ![302,303].includes(response.status())) return;
+    const task = (async()=>{
+      const headers=await response.allHeaders(),location=headers.location;
+      observe({phase:'NATIVE_PROVIDER_RESPONSE',status:response.status(),locationPresent:Boolean(location)});
+      if (location) {const target=new URL(location,canvasOrigin);if(target.origin!==canvasOrigin || target.pathname==='/v1/integrations/canvas/oauth/callback')inspectCallback(target,'NATIVE_PROVIDER_REDIRECT',response.status());}
+    })().catch(error=>{observationFailure=error;completed();});
+    pending.add(task);task.finally(()=>pending.delete(task));
+  };
+  if (captureAtProvider) await page.route(providerUrl,routeHandler);
+  else {page.on('request',requestObserver);page.on('response',responseObserver);}
+  try {
+    await page.goto(authorizationUrl.href,{waitUntil:'domcontentloaded',timeout});
+    if (observationFailure) throw observationFailure;
+    if (!captured) await page.locator('#oauth2_accept_form').getByRole('button',{name:/^authorize$/i}).click();
+    if (captureAtProvider) {
+      await Promise.race([captureReady,new Promise((_,reject)=>{timer=setTimeout(()=>reject(new ContractFailure('canvas_oauth_code_not_observed','The real provider-issued redirect was not observed.')),timeout);})]);
+    } else {
+      await page.waitForURL(url=>url.origin===martyOrigin && url.searchParams.has('outcome'),{timeout});
+      await Promise.all([...pending]);
+      requireCondition(nativeRequestObserved,'canvas_oauth_native_callback_not_observed','The real native callback request was not observed.');
+    }
+    if (observationFailure) throw observationFailure;
+    requireCondition(captured,'canvas_oauth_code_not_observed','The real provider-issued redirect was not observed.');
+    return captured;
+  } catch(error) {throw observationFailure||error;}
+  finally {
+    clearTimeout(timer);
+    if(captureAtProvider)await page.unroute(providerUrl,routeHandler);
+    else{page.off('request',requestObserver);page.off('response',responseObserver);await Promise.all([...pending]);}
+  }
+}
+
 function canvasDeveloperKeysUrl(origin, accountId) {
   const url = new URL(`/accounts/${encodeURIComponent(accountId)}/developer_keys`, origin);
   url.searchParams.set('session_locale', 'en');
@@ -1903,12 +1989,7 @@ async function prepareCanvasCaptureFixtures({ browser, ledger, markActive = () =
     }, [200]);
     const oauthUrl = new URL(String(oauthStart?.authorization_url || ''));
     requireCondition(oauthUrl.origin === canvasOrigin, 'canvas_oauth_url_unpinned', 'Marty returned an OAuth authorization URL outside Canvas.');
-    await adminPage.goto(oauthUrl.href, { waitUntil: 'domcontentloaded', timeout: DEFAULT_TIMEOUT_MS });
-    // Stock Canvas can render Cancel as an earlier submit button. Bind the
-    // action to the actual acceptance form and its explicit Authorize control.
-    const authorize = adminPage.locator('#oauth2_accept_form').getByRole('button', { name: /^authorize$/i });
-    await authorize.click();
-    await adminPage.waitForURL((url) => url.origin === martyOrigin && url.searchParams.has('outcome'), { timeout: DEFAULT_TIMEOUT_MS });
+    await authorizeCanvasOAuth(adminPage,oauthUrl,{canvasOrigin,martyOrigin});
     assertCanvasOauthCompletion(new URL(adminPage.url()), martyOrigin, platformId);
     const connectedPlatform = await marty.get(`/v1/integrations/canvas/platforms/${encodeURIComponent(platformId)}`);
     requireCondition(connectedPlatform?.connection_config?.oauth_status === 'connected', 'canvas_oauth_not_connected', 'Canvas OAuth callback did not publish a connected organization-scoped connection.');
@@ -2326,6 +2407,8 @@ async function main() {
 }
 
 module.exports = {
+  authorizeCanvasOAuth,
+  canvasOAuthRedirectChecks,
   saveDeveloperKey,
   requireSecretFile,
   parseArgs,
