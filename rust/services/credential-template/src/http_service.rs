@@ -228,6 +228,60 @@ struct CreateTemplateRequest {
     _schema_uri: Option<Value>,
 }
 
+impl CreateTemplateRequest {
+    fn into_command(
+        self,
+        user_id: String,
+    ) -> Result<CreateTemplateCommand, CredentialTemplateHttpError> {
+        let input = self;
+        if input._schema_uri.is_some() {
+            return Err(bad_request(
+                "schema_uri is not supported by template storage",
+            ));
+        }
+        let claims = input
+            .claims
+            .into_iter()
+            .map(ClaimRequest::into_domain)
+            .collect::<Result<Vec<_>, _>>()?;
+        let supported_formats = parse_formats(&input.supported_formats)?;
+        let validity_rules = input
+            .validity_rules
+            .map(|rules| resolve_validity_rules(&rules, None).map_err(domain_error))
+            .transpose()?;
+        Ok(CreateTemplateCommand {
+            user_id,
+            organization_id: input.organization_id,
+            name: input.name,
+            description: input.description,
+            credential_type: input.credential_type,
+            vct: input.vct,
+            doctype: input.doctype,
+            claims,
+            privacy_posture: parse_privacy(input.privacy_posture)?,
+            selective_disclosure_fields: input.selective_disclosure_fields,
+            zk_predicate_claims: input.zk_predicate_claims,
+            derived_attributes: input
+                .derived_attributes
+                .into_iter()
+                .map(DerivedAttribute::from)
+                .collect(),
+            display_style: input.display_style,
+            validity_rules,
+            supported_formats,
+            application_template_id: input.application_template_id,
+            trust_profile_id: input.trust_profile_id,
+            revocation_profile_id: input.revocation_profile_id,
+            compliance_profile: None,
+            compliance_profile_id: input.compliance_profile_id,
+            issuer_did: input.issuer_did,
+            credential_payload_format: input.credential_payload_format,
+            issuance_protocol: input.issuance_protocol,
+            now: Utc::now(),
+        })
+    }
+}
+
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct UpdateTemplateRequest {
@@ -455,53 +509,10 @@ async fn create_template(
     Json(input): Json<CreateTemplateRequest>,
 ) -> Result<Json<Value>, CredentialTemplateHttpError> {
     let user_id = trusted_user_id(&state, &headers)?;
-    if input._schema_uri.is_some() {
-        return Err(bad_request(
-            "schema_uri is not supported by template storage",
-        ));
-    }
-    let claims = input
-        .claims
-        .into_iter()
-        .map(ClaimRequest::into_domain)
-        .collect::<Result<Vec<_>, _>>()?;
-    let supported_formats = parse_formats(&input.supported_formats)?;
-    let validity_rules = input
-        .validity_rules
-        .map(|rules| resolve_validity_rules(&rules, None).map_err(domain_error))
-        .transpose()?;
+    let command = input.into_command(user_id)?;
     let template = state
         .application
-        .create_template(CreateTemplateCommand {
-            user_id,
-            organization_id: input.organization_id,
-            name: input.name,
-            description: input.description,
-            credential_type: input.credential_type,
-            vct: input.vct,
-            doctype: input.doctype,
-            claims,
-            privacy_posture: parse_privacy(input.privacy_posture)?,
-            selective_disclosure_fields: input.selective_disclosure_fields,
-            zk_predicate_claims: input.zk_predicate_claims,
-            derived_attributes: input
-                .derived_attributes
-                .into_iter()
-                .map(DerivedAttribute::from)
-                .collect(),
-            display_style: input.display_style,
-            validity_rules,
-            supported_formats,
-            application_template_id: input.application_template_id,
-            trust_profile_id: input.trust_profile_id,
-            revocation_profile_id: input.revocation_profile_id,
-            compliance_profile: None,
-            compliance_profile_id: input.compliance_profile_id,
-            issuer_did: input.issuer_did,
-            credential_payload_format: input.credential_payload_format,
-            issuance_protocol: input.issuance_protocol,
-            now: Utc::now(),
-        })
+        .create_template(command)
         .await
         .map_err(application_error)?;
     Ok(Json(template_response(&template)?))
@@ -1657,4 +1668,86 @@ fn default_destination_target() -> String {
 
 fn empty_object() -> Value {
     Value::Object(Map::new())
+}
+
+#[cfg(test)]
+mod write_contract_tests {
+    use super::*;
+
+    fn validate_create(value: Value) -> Result<(), ()> {
+        let input: CreateTemplateRequest = serde_json::from_value(value).map_err(|_| ())?;
+        let command = input.into_command("owner-fixture".into()).map_err(|_| ())?;
+        crate::application::validate_create_command(&command).map_err(|_| ())
+    }
+
+    fn validate_update(value: Value) -> Result<(), ()> {
+        let input: UpdateTemplateRequest = serde_json::from_value(value).map_err(|_| ())?;
+        if let Some(claims) = input.claims {
+            let claims = claims
+                .into_iter()
+                .map(ClaimRequest::into_domain)
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|_| ())?;
+            crate::persistence::validate_claim_definitions(&claims).map_err(|_| ())?;
+        }
+        if let Some(privacy) = input.privacy_posture {
+            parse_privacy(privacy).map_err(|_| ())?;
+        }
+        if let Some(validity) = input.validity_rules {
+            resolve_validity_rules(&validity, None).map_err(|_| ())?;
+        }
+        if let Some(formats) = input.supported_formats {
+            parse_formats(&formats).map_err(|_| ())?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn shared_gateway_inputs_pass_actual_native_deserialization_and_validation() {
+        let fixtures: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/credential-template-write-behavior.json"
+        ))
+        .unwrap();
+        for case in fixtures["valid_create"].as_array().unwrap() {
+            assert!(
+                validate_create(case["canonical"].clone()).is_ok(),
+                "{}",
+                case["name"]
+            );
+        }
+        for case in fixtures["valid_update"].as_array().unwrap() {
+            assert!(
+                validate_update(case["canonical"].clone()).is_ok(),
+                "{}",
+                case["name"]
+            );
+        }
+        for case in fixtures["invalid"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|case| case["phase"] == "native")
+        {
+            let result = if case["method"] == "POST" {
+                validate_create(case["canonical"].clone())
+            } else {
+                validate_update(case["canonical"].clone())
+            };
+            assert!(result.is_err(), "{}", case["name"]);
+        }
+        // The public gateway adds a format-context gate beyond this owner's
+        // intrinsic DTO validation. Its actual-router test proves rejection.
+        for case in fixtures["invalid"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|case| case["phase"] == "gateway_context")
+        {
+            assert!(
+                validate_create(case["canonical"].clone()).is_ok(),
+                "{}",
+                case["name"]
+            );
+        }
+    }
 }
