@@ -25,9 +25,11 @@ function requireOwnedLedger(owned, runSuffix) {
     assert.ok(TYPES.has(kind), 'Unknown Canvas resource needs explicit retirement');
     assert.match(String(id), ID);
   }
-  const email = /^([a-z0-9._-]+)\+([a-f0-9]{16})@(marty\.demo|[a-z0-9.-]+\.test)$/i.exec(owned.learnerEmail || '');
-  assert.ok(email, 'Canvas cleanup requires a run-owned synthetic learner');
-  same(email[2], crypto.createHash('sha256').update(runSuffix).digest('hex').slice(0, 16), 'learner nonce');
+  if (owned.resources.learner) {
+    const email = /^([a-z0-9._-]+)\+([a-f0-9]{16})@(marty\.demo|[a-z0-9.-]+\.test)$/i.exec(owned.learnerEmail || '');
+    assert.ok(email, 'Canvas cleanup requires a run-owned synthetic learner');
+    same(email[2], crypto.createHash('sha256').update(runSuffix).digest('hex').slice(0, 16), 'learner nonce');
+  }
   if (['assignment', 'quiz', 'question', 'module', 'externalAssignment'].some(kind => owned.resources[kind])) {
     assert.ok(owned.resources.course, 'Canvas child resources lack an owned course');
   }
