@@ -86,7 +86,7 @@ def test_held_disk_requires_exact_live_writable_descriptor(tmp_path):
         replacement = tmp_path / "replacement.qcow2"
         replacement.write_bytes(b"new disk")
         os.replace(replacement, disk)
-        with pytest.raises(ValueError, match="writable disk descriptor differs"):
+        with pytest.raises(observer.DiskNotOpenedYet):
             observer.held_writable_disk(process, disk, disk.stat())
     finally:
         os.close(descriptor)
