@@ -2229,9 +2229,10 @@ async function retireCanvasOwnedReferences(state) {
 
 async function retireCanvasCaptureSessions(state, observe = () => {}) {
   const {retireCanvasSession}=require('./audit-beta-canvas-invalid-secret');
-  const evidence={};
+  const evidence={},failures=[];
   for(const [role,context] of [['canvasLearnerSession',state.learnerContext],['canvasAdminSession',state.adminContext]]) {
     if(!context) continue;
+    try {
     const cookies=await context.cookies(state.canvasOrigin);
     requireCondition(cookies.length>0,'canvas_session_custody_missing','Owned Canvas session acquisition requires reconciliation.');
     const response=await context.request.get(state.canvasOrigin+'/api/v1/users/self/profile',
@@ -2244,7 +2245,9 @@ async function retireCanvasCaptureSessions(state, observe = () => {}) {
         {observe:value=>{evidence[role]=value;observe({...evidence})}});
     }
     observe({...evidence});
+    } catch(error) {failures.push(error);evidence[role]={retired:false,failureType:'OWNED_SESSION_RETIREMENT_FAILED'};observe({...evidence});}
   }
+  requireCondition(failures.length===0,'canvas_capture_sessions_incomplete','Owned Canvas sessions require reconciliation.');
   return evidence;
 }
 

@@ -844,6 +844,9 @@ test('capture session cleanup distinguishes deleted learner denial from real adm
   const custody={retain:(role)=>retained.push(role)};
   const result=await retireCanvasCaptureSessions({canvasOrigin:'https://canvas-test.elevenidllc.com',learnerContext:context('learner'),adminContext:context('admin'),custody});
   assert.equal(result.canvasLearnerSession.alreadyDenied,true);assert.deepEqual(calls,['admin']);assert.equal(result.canvasAdminSession.probes.at(-1).status,401);
+  adminReads=0;calls.length=0;
+  await assert.rejects(retireCanvasCaptureSessions({canvasOrigin:'https://canvas-test.elevenidllc.com',learnerContext:{cookies:async()=>[]},adminContext:context('admin'),custody}),error=>error.code==='canvas_capture_sessions_incomplete');
+  assert.deepEqual(calls,['admin'],'One unknown owned session cannot block independent admin retirement');
   let originalHeader;const beta={cookies:async()=>[{name:'sessionId',value:'CONTROLLED_OWNED_SESSION'}],request:{post:async()=>({status:()=>303}),get:async(_,options)=>{originalHeader=options.headers.Cookie;return {status:()=>200,json:async()=>({authenticated:false,user:null})}}}};
   assert.equal((await retireCanvasBetaSession(beta,custody)).oldCookieAuthenticated,false);assert.equal(originalHeader,'sessionId=CONTROLLED_OWNED_SESSION');
 });

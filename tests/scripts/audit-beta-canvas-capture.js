@@ -254,7 +254,7 @@ async function main() {
     });
     if (state.custody) {
       if (adminPage) await cleanup('beta-admin-session',async()=>{report.betaSessionRetirement=await stock.retireCanvasBetaSession(adminPage.context(),state.custody)});
-      await cleanup('stock-sessions',async()=>{report.stockSessionRetirement=await stock.retireCanvasCaptureSessions(state)});
+      await cleanup('stock-sessions',async()=>{report.stockSessionRetirement=await stock.retireCanvasCaptureSessions(state,value=>{report.stockSessionRetirement=value})});
       if(cleanupComplete) await cleanup('private-authority',async()=>{report.privateAuthorityRetired=state.custody.retire()});
     }
     for (const context of contexts) await cleanup('recording-context', () => context.close());
