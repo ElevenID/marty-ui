@@ -1,8 +1,8 @@
 name: CI
 
 env:
-  MARTY_API_CORE_URI: https://github.com/ElevenID/marty-cli/releases/download/v0.2.7/elevenid-marty-api-core-0.2.7.tgz
-  MARTY_API_CORE_DIGEST: sha256:c4ee1a9d325ae54d44465862eaaaf8172de08338e59381220b901ec0e1ac6682
+  MARTY_API_CORE_URI: https://github.com/ElevenID/marty-cli/releases/download/v0.3.4/elevenid-marty-api-core-0.3.4.tgz
+  MARTY_API_CORE_DIGEST: sha256:d5904d0c757220430525778db50b1689b0126034c7f8b904880c1774e6c96a62
   MARTY_BLOG_URI: https://github.com/ElevenID/marty-blog/releases/download/v0.1.9/elevenid-marty-blog-0.1.9.tgz
   MARTY_BLOG_DIGEST: sha256:1dda635bd284d9cb254e3c2c51fc09890cfae21b48a4c2095985621ad86cb358
   MARTY_PROTOCOL_REF: 76c37dc229b328afe002b911a26624543f814a64
@@ -2096,7 +2096,7 @@ jobs:
     # Cold static compilation plus the required HTTPS/custody matrix exceeded
     # fifteen minutes while tests were still progressing. Keep all cases and
     # native operation deadlines, with a bounded job budget for both runners.
-    timeout-minutes: 25
+    timeout-minutes: ${{ matrix.timeout_minutes }}
     permissions:
       contents: read
     strategy:
@@ -2105,10 +2105,12 @@ jobs:
         include:
           - runner: ubuntu-24.04
             arch: amd64
+            timeout_minutes: 30
             target: x86_64-unknown-linux-musl
             elf_machine: 'Advanced Micro Devices X86-64'
           - runner: ubuntu-24.04-arm
             arch: arm64
+            timeout_minutes: 25
             target: aarch64-unknown-linux-musl
             elf_machine: AArch64
     env:
