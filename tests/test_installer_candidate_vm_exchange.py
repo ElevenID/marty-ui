@@ -28,7 +28,10 @@ def arranged(tmp_path, monkeypatch):
                   disk_id="e" * 64, engine_id="test-engine-12345678",
                   installation_id="22222222-2222-4222-8222-222222222222")
     verified = dict(intent_sha256="a" * 64, receipt_sha256="b" * 64,
-                    target=target)
+                    target=target, ssh=dict(host="127.0.0.1", port=2222,
+                                            user="installer", control_dir="/root/control",
+                                            controller_key_sha256="c" * 64,
+                                            known_hosts_sha256="d" * 64))
     calls = []
     def verify(lease, _registry, **_kwargs):
         assert lease.parent is not None
@@ -101,3 +104,72 @@ def test_mismatched_signed_grant_refuses_completion(arranged):
     with pytest.raises(ValueError, match="signed execution grant differs"):
         exchange.exchange(**args, upload=upload, receive=receive)
     assert calls == ["verify", "upload", "receive"]
+
+
+def test_post_grant_same_vm_dispatch_keeps_lease(arranged, monkeypatch):
+    args, verified, calls = arranged
+    registry = args["registry"]
+    control = registry / "control"
+    control.mkdir(mode=0o700)
+    key, known_hosts = control / "controller_ed25519", control / "known_hosts"
+    key.write_bytes(b"synthetic private key")
+    known_hosts.write_bytes(b"synthetic pinned host")
+    key.chmod(0o600)
+    known_hosts.chmod(0o600)
+    verified["ssh"]["control_dir"] = str(control)
+    verified["ssh"]["controller_key_sha256"] = release.digest(key.read_bytes())
+    verified["ssh"]["known_hosts_sha256"] = release.digest(known_hosts.read_bytes())
+    verified["receipt_sha256"] = release.digest(b"receipt")
+    fresh = dict(target=verified["target"], ssh=verified["ssh"],
+                 authorization_sha256=release.digest(b"authorization"),
+                 inventory_sha256=release.digest(b"inventory"),
+                 probe_finished_at=100000)
+    vm_id = verified["target"]["guest_id"]
+    observation_id = "33333333-3333-4333-8333-333333333333"
+    def preflight(lease, _registry, _runtime, **kwargs):
+        calls.append("fresh")
+        exchange._write(lease.parent,
+                        vm_id + "." + kwargs["observation_id"] + ".host-preflight.json",
+                        fresh)
+        return fresh
+    monkeypatch.setattr(exchange, "preflight", preflight)
+    monkeypatch.setattr(exchange.dispatch, "verify", lambda **_kwargs:
+                        (b"authorization", b"receipt", b"inventory", {}))
+    def invoke(**kwargs):
+        calls.append("invoke")
+        assert kwargs["lease"].parent is not None
+        assert kwargs["host"] == "127.0.0.1"
+        assert kwargs["key"] == key
+        assert kwargs["approved_ssh"]["key_sha256"] == release.digest(key.read_bytes())
+        assert (registry / (args["expected"]["nonce"] +
+                           ".vm-dispatch-approval.json")).is_file()
+        kwargs["admission_gate"]("setup")
+        kwargs["admission_gate"]("invoke")
+        return dict(installation_ready=False, acceptance_report=False)
+    signed = dict(schema="elevenid.installer-vm-signed-exchange/v1",
+                  nonce=args["expected"]["nonce"],
+                  intent_sha256=verified["intent_sha256"],
+                  receipt_sha256=verified["receipt_sha256"],
+                  target=verified["target"], ssh=verified["ssh"],
+                  guest_dispatched=False, acceptance=False)
+    with ControllerLease(registry) as lease:
+        exchange._write(lease.parent, args["expected"]["nonce"] + ".context.json",
+                        args["expected"])
+        exchange._write(lease.parent, args["expected"]["nonce"] + ".target.json",
+                        verified["target"])
+    common = dict(registry=registry, runtime_parent=registry,
+                  vm_id=vm_id, installation_id=verified["target"]["installation_id"],
+                  observation_id=observation_id,
+                  final_observation_id="44444444-4444-4444-8444-444444444444",
+                  exchange_result=signed, authorization=args["authorization"],
+                  assets=args["assets"], expected=args["expected"], gh=args["gh"],
+                  cosign=args["cosign"], grants=registry / "signed-grant",
+                  ssh=Path("/usr/bin/ssh"), scp=Path("/usr/bin/scp"),
+                  clock=args["clock"])
+    result = exchange.dispatch_once(**common, invoke=invoke)
+    assert result["installation_ready"] is False
+    assert calls == ["verify", "fresh", "verify", "invoke", "fresh", "fresh"]
+    with pytest.raises(FileExistsError):
+        exchange.dispatch_once(**common, invoke=invoke)
+    assert calls == ["verify", "fresh", "verify", "invoke", "fresh", "fresh",
+                     "verify", "fresh"]

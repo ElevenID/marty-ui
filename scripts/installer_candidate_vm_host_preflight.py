@@ -401,5 +401,6 @@ def verify_consumed_intent(lease: ControllerLease, registry: Path, *,
         "VM consumed nonce evidence changed")
     return dict(intent_sha256=release.digest(intent_raw),
                 receipt_sha256=release.digest(ledger_raw), target=intent["target"],
+                ssh=preflight_record["ssh"],
                 nonce=nonce, verified_at=int(clock()),
                 guest_dispatched=False, acceptance=False)

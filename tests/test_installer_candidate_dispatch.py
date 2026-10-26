@@ -120,6 +120,55 @@ def test_dispatch_can_borrow_held_controller_lease(staged):
     assert len(calls) == 6
 
 
+def test_held_admission_gate_runs_after_verification_before_every_remote(staged):
+    options, calls, proofs = staged
+    stages = []
+    approved = dict(key_sha256=r.digest(options['key'].read_bytes()),
+                    known_hosts_sha256=r.digest(options['known_hosts'].read_bytes()))
+    def gate(stage):
+        assert len(proofs) == 7
+        stages.append(stage)
+        assert len(calls) == len(stages) - 1
+    with ControllerLease(options['ledger'].parent) as lease:
+        d.dispatch(**options, lease=lease, approved_ssh=approved,
+                   admission_gate=gate)
+    assert stages == ['setup', 'transfer', 'transfer', 'transfer', 'transfer',
+                      'invoke']
+    assert len(calls) == 6
+
+
+def test_gate_refuses_stale_admission_after_transfers_before_native_invoke(staged):
+    options, calls, _ = staged
+    approved = dict(key_sha256=r.digest(options['key'].read_bytes()),
+                    known_hosts_sha256=r.digest(options['known_hosts'].read_bytes()))
+    def gate(stage):
+        if stage == 'invoke':
+            raise ValueError('VM admission expired after transfers')
+    with ControllerLease(options['ledger'].parent) as lease:
+        with pytest.raises(ValueError, match='VM admission expired'):
+            d.dispatch(**options, lease=lease, approved_ssh=approved,
+                       admission_gate=gate)
+        assert lease.parent is not None
+    assert len(calls) == 5
+    assert Path(str(options['ledger']) + '.dispatch.json').is_file()
+    assert Path(str(options['ledger']) + '.invoke.json').is_file()
+
+
+def test_approved_ssh_replacement_after_gate_refuses_before_remote(staged):
+    options, calls, _ = staged
+    approved = dict(key_sha256=r.digest(options['key'].read_bytes()),
+                    known_hosts_sha256=r.digest(options['known_hosts'].read_bytes()))
+    def gate(stage):
+        assert stage == 'setup'
+        options['known_hosts'].write_bytes(b'substituted host key')
+    with ControllerLease(options['ledger'].parent) as lease:
+        with pytest.raises(ValueError, match='SSH custody changed'):
+            d.dispatch(**options, lease=lease, approved_ssh=approved,
+                       admission_gate=gate)
+    assert calls == []
+    assert Path(str(options['ledger']) + '.dispatch.json').is_file()
+
+
 def test_dispatch_rejects_closed_or_other_registry_lease(staged):
     options, calls, _ = staged
     with ControllerLease(options['ledger'].parent) as lease:
