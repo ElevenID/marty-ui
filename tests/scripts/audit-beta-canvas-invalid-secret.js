@@ -96,7 +96,9 @@ async function executeWrongSecretCase({result,save,gateway,admin,adminPage,organ
    onOwned:id=>{owned.resources.oauthDeveloperKey=String(id);result.validClientSecretCase.canvasKeyIntent.state='ID_RECEIVED';save();}});
   result.validClientSecretCase.canvasKeyIntent.state='CREATED';save();
   clientId=key.clientId;correctSecret=key.clientSecret;retainPrivateAuthority('canvasOwnedClientSecret',correctSecret);assert.notEqual(wrong,correctSecret);
+  stage('CANVAS_KEY_ENABLED_READBACK');
   const enabled=await stock.findCanvasDeveloperKey(state,{id:clientId,name:'Marty OAuth '+runId});
+  result.validClientSecretCase.enabledClientReadback={identityMatches:String(enabled?.id)===clientId,active:enabled?.workflow_state==='active',bindingOn:enabled?.developer_key_account_binding?.workflow_state==='on'};save();
   assert.equal(String(enabled?.id),clientId);assert.equal(enabled.workflow_state,'active');
   assert.equal(enabled.developer_key_account_binding?.workflow_state,'on');
   stage('PLATFORM_CREATE');

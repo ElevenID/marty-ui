@@ -1667,17 +1667,18 @@ async fn catalog_selection_never_promotes_failed_refresh_or_origin_drift_to_loca
     for config_drift in [false, true] {
         let (service, repository, vault, _) = fixture();
         install_connected_token_fixture(&repository, &vault, None);
-        let mut state = repository.state.lock().unwrap();
-        let connection = state
-            .connections
-            .get_mut(&("org-1".into(), "platform-1".into()))
-            .unwrap();
-        if config_drift {
-            connection.platform_config_version += 1;
-        } else {
-            connection.canvas_base_url = "https://different.example.edu".into();
+        {
+            let mut state = repository.state.lock().unwrap();
+            let connection = state
+                .connections
+                .get_mut(&("org-1".into(), "platform-1".into()))
+                .unwrap();
+            if config_drift {
+                connection.platform_config_version += 1;
+            } else {
+                connection.canvas_base_url = "https://different.example.edu".into();
+            }
         }
-        drop(state);
         assert!(matches!(
             service
                 .catalog_token("platform-1", Some("management-key"), Some("org-1"))

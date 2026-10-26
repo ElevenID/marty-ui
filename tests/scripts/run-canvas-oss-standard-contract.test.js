@@ -794,3 +794,22 @@ test('real local redirect chains hold provider codes and observe native callback
   }
  }finally{if(browser)await browser.close();await Promise.all(servers.map(server=>new Promise(resolve=>{server.closeAllConnections();server.close(resolve)})));}
 });
+
+
+test('developer key enable awaits real exact binding acknowledgement beyond optimistic checkbox', async () => {
+  const {enableDeveloperKey}=require('./run-canvas-oss-standard-contract');
+  for(const variant of [{status:200},{status:201},{status:200,developer_key_id:43},{status:200,account_id:2},{status:200,workflow_state:'off'}]) {
+    const {status}=variant;let checked=false,acknowledged=false,resolveResponse;
+    const responsePromise=new Promise(resolve=>{resolveResponse=resolve});
+    const toggle={isChecked:async()=>checked,getAttribute:async()=> 'owned-toggle'};
+    const row={waitFor:async()=>{},getByRole:()=>({first:()=>toggle}),locator:()=>({click:async()=>{checked=true}})};
+    const page={url:()=> 'https://canvas.example/accounts/1/developer_keys',getByRole:(_,options)=>options?.name?{first:()=>({isVisible:async()=>false})}:{filter:()=>({first:()=>row})},
+      waitForResponse:(predicate)=>{assert.equal(predicate({url:()=> 'https://canvas.example/api/v1/accounts/1/developer_keys/42/developer_key_account_bindings',request:()=>({method:()=> 'POST'})}),true);assert.equal(predicate({url:()=> 'https://canvas.example/api/v1/accounts/1/developer_keys/43/developer_key_account_bindings',request:()=>({method:()=> 'POST'})}),false);return responsePromise;}};
+    let completed=false;const pending=enableDeveloperKey(page,'Owned',42).then(()=>{completed=true});
+    await new Promise(resolve=>setImmediate(resolve));assert.equal(checked,true);assert.equal(completed,false);
+    resolveResponse({status:()=>status,json:async()=>{acknowledged=true;return {developer_key_id:variant.developer_key_id||42,account_id:variant.account_id||1,workflow_state:variant.workflow_state||'on'}}});
+    if(Object.keys(variant).length===1){await pending;assert.equal(completed,true)}
+    else {await assert.rejects(pending,error=>error.code==='canvas_key_binding_identity_mismatch');assert.equal(completed,false)}
+    assert.equal(acknowledged,true);
+  }
+});
