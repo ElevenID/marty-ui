@@ -8,7 +8,7 @@ The maintainer assigned the remaining official interoperability, renewal/recover
 fresh-database/root-retirement, and branch/tracker reconciliation work. `/root`
 owns `feat/kms-final-acceptance` in the existing
 `worktrees/kms-hardening-integration-20261007` checkout, based on protected main
-`d7285b9ddd4c3782a5c764f0971e0e90740b5c4f`. No additional checkout was created.
+`d7285b9ddd4c3782a5c764f0971e0e90740b5c4f`. No additional Windows checkout was created.
 Other writers retain their existing branches and runtime custody. The old
 `security/remote-kms-hardening-20261007` checkpoint `4f21844a2` remains preserved;
 its historical v1.1.261 release instructions are superseded by this section.
@@ -27,7 +27,7 @@ resume with different source.
 
 | Assigned gate | Required next evidence | Current disposition |
 | --- | --- | --- |
-| Official interoperability | Fresh unchanged seven-lane suite on one fixed candidate; explicit authorized REVIEW dispositions; retain original statuses and failures. | Historical local OIDF/W3C/EUDI runs and real Android wallet diagnostics exist in the demo audit, but do not qualify current main or a released stack. The previous blanket statement that no physical-wallet access exists is stale. Respect current device/beta custody. |
+| Official interoperability | Fresh unchanged seven-lane suite on one fixed candidate; explicit authorized REVIEW dispositions; retain original statuses and failures. | Historical local OIDF/W3C/EUDI runs and stock Android wallet diagnostics exist in the demo audit, but do not qualify current main or a released stack. The observed Cuttlefish device is virtual; it does not establish physical-hardware acceptance. Respect current device/beta custody. |
 | Renewal and recovery | Actual expiry crossing with business/session continuity, CA overlap/retirement, KMS-loss refusal and coordinated restored-state execution. | Source tooling and narrower rootless Raft/token probes exist. A full current-candidate installed journey remains required. |
 | Database custody and root retirement | Fresh Marty and Keycloak schemas plus representative writes, negative audit controls, independently scoped active/rollback generations, root revocation and rootless restore. | Reuse the native audits and existing retirement preflight. Never retire a live production root to obtain test evidence. |
 | Reconciliation | Compare selected branches/content with main; preserve dirty variants, runtime consumers and immutable failed artifacts. | This checkout is active for `/root`. The old qualification-fixes checkout at `80a4e8a8` has three uncommitted historical release/CI edits and is deferred, preserved, pending content disposition. The former conformance checkout is active under another writer on PR #1561 and must not be moved. |
@@ -78,9 +78,125 @@ it. The shared disposable HTTPS listener fixture now has a one-minute notBefore
 margin, preserving the same one-day expiry and exact loopback IP SAN. A real
 OpenSSL verification regression covers the preceding 30 seconds, rejects a time
 before the margin, rejects expiry, and rejects another IP. No production TLS
-clock or certificate validation is relaxed. Re-run the affected native contracts
-before treating this repair as qualified. Host clock stability remains a separate
+clock or certificate validation is relaxed. The complete affected POSIX batch
+then passed 716 cases with three skips at candidate `dc977fe575857b8a5e48c8b6805f54e3d27961f2`.
+Host clock stability remains a separate
 concern for real protocol-expiry and installed acceptance.
+
+Current local suite inputs bind all native runtime and migration executables and
+the current SQL before application startup. The earlier post-start overlay failed
+safely because new Issuance rejected an old bootstrap's missing authenticated mdoc
+status index. Do not remove that guard or treat the mixed old initialization as a
+current-source failure. All 29 service binaries, three additional migration
+executables and the console have built; the issuer lane subsequently passed 12
+official cases and two declared optional skips. Its first database audit correctly
+refused an incorrect expected infrastructure pin; the corrected audit passed on
+the rendered conformance model's immutable Postgres pin. It inspected 198 Marty
+and Keycloak tables, 1,847 columns and 164 JSON columns, with zero private-key
+schema/content matches. Nested private-JWK and private-table negative controls
+were rejected and rolled back. The signed-request verifier lane completed seven
+PASSED modules and four raw REVIEW modules, with complete plan coverage, no
+unexpected skips, passing public browser smoke and another passing database audit.
+`/root` visually inspected all four hash-matched official-export image attachments:
+each showed the real Marty Verified dialog, accepted issuer trust, valid credential
+signature and presented claims. Local review dispositions are retained separately;
+the upstream REVIEW outcomes remain unchanged. URL-query completed seven PASSED
+and two REVIEW modules, mdoc one PASSED and three REVIEW modules, and HAIP seven
+PASSED and four REVIEW modules. Their database audits passed, their plan coverage
+is complete, and `/root` inspected and accepted all nine additional hash-matched
+screenshots locally. W3C passed with another passing database audit. EUDI's first
+attempt stopped before protocol assertions because the reused local facade
+readback still required the previous project's name prefix. That ownership check
+is corrected for this exact namespace; both failed-attempt projects were removed
+through the canonical teardown and EUDI is rerunning. Do not count the failed
+attempt or its absent database audit as passed evidence. The next EUDI run
+completed 44 of 45 tests but accepted a request after the test's nominal
+61-second sleep. Pass-through observation of the unchanged test then measured
+61.061 monotonic seconds against only 55.806 wall-clock seconds: the host clock
+moved backward during the wait. That observed run also had a separate positive
+credential-verification rejection (`signature_invalid`,
+`trust_profile_not_verified`, `claim_missing`), whose cause is not yet established.
+Both failures remain retained; do not dismiss the positive failure as clock skew
+without further evidence. Database custody passed on both completed attempts.
+Lanes run serially to
+stay within the shared engine's memory budget.
+
+The owned Linux integration primary is reused for
+`fix/eudi-observe-public-expiry`, checkpoint
+`3249fd56759b4c804d65ef0b6dbdf4c8202c8837`, based on accepted integration main
+`2fa551c2a5e2751c3d20e3750bd995987d7106ca`. `/root` owns the branch; PR/publication
+is pending local acceptance. Its test waits for the public HTTP Date to cross
+the declared request expiry within a monotonic deadline, then runs the original
+official-library rejection assertions. It records the observed boundary, never
+manufactures an expired request, and changes no product clock or JWT validation.
+All 1,299 harness unit tests passed with two existing skips, including backward
+clock, missing-clock and timeout controls. EUDI is rerunning on this harness
+checkpoint with the same UI/native candidate `dc977fe5`; earlier evidence retains
+its original harness/source identities. The official JVM library/facade inputs
+are unchanged. Windows Time reports unsynchronized status, no successful sync
+and Local CMOS Clock as its source. This was a read-only observation; no host
+clock, WSL or Docker restart was performed. EUDI subsequently passed all 45 tests
+and its fresh-database audit on that checkpoint. The expired request declared
+`17:32:14.455206863Z`; the recorded public HTTP clock reached `17:32:17Z` before
+the official resolver correctly rejected it. Local results now cover all seven
+lanes and 13 inspected REVIEW attachments; they still do not qualify a signed
+release, and the earlier intermittent positive rejection remains an open finding.
+
+The self-host component reached 28 healthy services. Its failed synthetic setup
+was preserved and its application databases rebuilt with the canonical one-time
+KMS initialization and matching public hostname. A real custody check then
+identified a stale acceptance assumption: the helper derives standard bootstrap
+key slots, whereas the public API derives the remote key from the full
+organization/DID/purpose/format/algorithm tuple. `/root` is consolidating that
+existing API derivation and purpose-prefix mapping in the shared Rust reference
+crate and updating native operator, fixture, audit and evidence callers to require
+the DID. This preserves current API key names and removes the incorrect bootstrap
+assumption; do not relax the binding check. That implementation and its runtime
+retest are pending. No accepted public business journey, activation or bootstrap
+root retirement is claimed for the component yet.
+The historical image descriptors and KMS-only initial bootstrap remain
+explicitly identified; local native overlays cannot qualify a signed release.
+
+A separate fresh source-component Raft fixture now has the current workload and
+Keycloak remote keys, initial public certificates/scoped tokens, and a scoped
+renewal AppRole. Renewal produced and assembled a complete 72-file replacement
+generation without root authority. Native preflight accepted all 21 replacement
+orphan tokens/scopes and certificate lifetimes. This is staging evidence only:
+no full self-host activation, business/session continuity, CA retirement or real
+operational-generation expiry crossing is claimed. Bootstrap root retirement
+remains gated on independently qualified live/rollback generations and coordinated
+restore. The fixture is owned by `/root`, project
+`marty-selfhost-disposable-kms-final-r1`; preserve its private recovery inputs and
+retire consumers before cleanup. CA-rotation, snapshot-reader, snapshot-rotator
+and evidence identities have also been bootstrapped. The separately scoped CA
+authority created internal non-exportable v2 workload and Keycloak issuers and
+staged another 21 orphan tokens/certificates over unchanged version-one remote
+keys. Native overlap, lifetime, scope and generation checks passed; activation
+and CA retirement are still pending. A current-source self-host component model
+is prepared with 32 declared services and 80 secret inputs. No application
+services have started yet. The planned controlled initial-token fixture uses
+the production renewal role with an explicit 20-minute TTL; product defaults and
+root-retirement minimum lifetimes are unchanged. Existing installations are untouched.
+
+Additional reconciliation: `refactor/native-beta-rehearsal` at `573c6a551`
+(including `4b7e48421`) is exactly the accepted head of #1542, squash merged as
+`bac05243f`. It is not missing from main merely because the branch head is not a
+direct ancestor. Its clean `native-deploy-replay-runtime` checkout is preserved;
+`/root` must establish its writer and source-regeneration/runtime consumers before
+parking it. The former conformance checkout advanced under its other writer to
+`79a3c9aec` while this work ran; do not move it. This is a scoped lifecycle audit,
+not authorization to stop other writers or services.
+
+Fresh Windows registry scope now includes UI (26: one primary, 25 linked), Core
+(five: one primary, four linked), and Credentials (two: one primary, one linked).
+Their primary user changes remain untouched. Original accepted branch names have
+been deleted remotely by GitHub; the exact published checkpoints are still
+verified at `refs/pull/1436/head`, `refs/pull/1446/head`, and
+`refs/pull/1466/head`, in addition to retained local refs. The owned Linux UI clone
+has one primary fixed candidate and one linked historical-bootstrap verification
+tree; the owned integration clone has one primary fixed source. These are active
+inputs for the isolated suite, with `/root` responsible for consumer retirement
+and safe cleanup after qualification. No Windows checkout has been removed.
 
 Local reports and reproducible commands are retained under
 `audits/demo-audit-20261018/kms-final-acceptance-20261026` in the workspace. The

@@ -40,7 +40,7 @@ def test_policy_accepts_the_production_slug_character_set() -> None:
     slug = "Acme_team.v2"
     did = f"did:web:localhost:orgs:{slug}"
     _, paths = audit.policy_for(ORG, slug, did)
-    assert paths[0] == f"transit/keys/{audit.managed_reference(ORG, 'vc_jwt_issuer')}"
+    assert paths[0] == f"transit/keys/{audit.managed_reference(ORG, 'vc_jwt_issuer', did)}"
     audit.policy_for(ORG, "a" * 128, f"did:web:localhost:orgs:{'a' * 128}")
     with pytest.raises(ValueError, match="slug"):
         audit.policy_for(ORG, "a" * 129, f"did:web:localhost:orgs:{'a' * 129}")

@@ -203,15 +203,7 @@ pub fn key_purposes() -> Vec<KeyPurpose> {
 pub use marty_managed_key_reference::MANAGED_KEY_PREFIXES;
 
 pub fn managed_key_prefix_for_purpose(purpose: &str) -> Option<&'static str> {
-    match purpose {
-        "vc_jwt_issuer" | "jwks_signing" => Some("cred-issuer-"),
-        "mdoc_dsc" | "x509_doc_signer" | "vdsnc_signing" | "csca" => Some("cred-dsc-"),
-        "lti_tool_signing" => Some("lti-tool-"),
-        "oid4vp_request_signing" => Some("oid4vp-verifier-"),
-        "holder_binding" => Some("cred-holder-"),
-        "presentation_signing" => Some("cred-presenter-"),
-        _ => None,
-    }
+    marty_managed_key_reference::managed_key_prefix_for_purpose(purpose)
 }
 
 pub fn managed_key_purposes(reference: &str) -> &'static [&'static str] {
