@@ -182,13 +182,7 @@ pub(crate) async fn validate_schema(connection: &mut PgConnection) -> Result<(),
     )
     .fetch_all(&mut *connection)
     .await?;
-    let normalize = |value: &str| {
-        value
-            .replace("::text", "")
-            .chars()
-            .filter(|c| !c.is_ascii_whitespace() && !matches!(c, '(' | ')'))
-            .collect::<String>()
-    };
+    let normalize = crate::migration::normalize_catalog_expression;
     for (name, definition) in [
         ("pk_passport_administrative_cancellation", "PRIMARY KEY (job_id)"),
         ("ux_passport_cancellation_event", "UNIQUE (event_id)"),
@@ -263,13 +257,37 @@ pub(crate) async fn validate_schema(connection: &mut PgConnection) -> Result<(),
                 && row.try_get::<String, _>("function_name").ok().as_deref() == Some(function)
                 && row.try_get::<String, _>("function_schema").ok().as_deref()
                     == Some("issuance_service")
-                && row.try_get::<String, _>("body").ok().as_deref() == Some(expected)
+                && row.try_get::<String, _>("body").ok().is_some_and(|body| {
+                    body.replace("\r\n", "\n") == expected.replace("\r\n", "\n")
+                })
         });
         if !valid {
             return Err(sqlx::Error::Protocol(format!(
                 "passport cancellation guard {trigger} is missing or incompatible"
             )));
         }
+    }
+    let acl_body: Option<String> = sqlx::query_scalar(
+        "SELECT proc.prosrc FROM pg_proc AS proc
+         JOIN pg_namespace AS namespace ON namespace.oid=proc.pronamespace
+         JOIN pg_language AS language ON language.oid=proc.prolang
+         WHERE namespace.nspname='issuance_service'
+           AND proc.proname='passport_cancellation_acl_ready' AND proc.pronargs=0
+           AND proc.prorettype='boolean'::regtype AND proc.provolatile='s'
+           AND NOT proc.prosecdef AND language.lanname='sql'",
+    )
+    .fetch_optional(&mut *connection)
+    .await?;
+    let expected_acl = migration
+        .split("$cancellation_acl_guard$")
+        .nth(1)
+        .expect("embedded cancellation ACL contract");
+    if !acl_body
+        .is_some_and(|body| body.replace("\r\n", "\n") == expected_acl.replace("\r\n", "\n"))
+    {
+        return Err(sqlx::Error::Protocol(
+            "passport cancellation ACL contract is incompatible".into(),
+        ));
     }
     Ok(())
 }

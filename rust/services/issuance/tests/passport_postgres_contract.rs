@@ -42,6 +42,137 @@ use sqlx::postgres::PgPoolOptions;
 use tokio::sync::{oneshot, Barrier};
 use tower::ServiceExt;
 
+/// The companion SQL fixture provisions an isolated cluster using the actual
+/// finalizer. Explicit invocation prevents an absent URL becoming pass evidence.
+#[tokio::test]
+#[ignore = "requires uniquely owned disposable fenced-role PostgreSQL fixture"]
+async fn fenced_cancellation_role_can_append_but_not_rewrite_history() {
+    let database_url =
+        std::env::var("PASSPORT_FENCED_APP_TEST_URL").expect("explicit owned fixture URL");
+    let parsed = url::Url::parse(&database_url).unwrap();
+    assert!(matches!(parsed.host_str(), Some("127.0.0.1" | "localhost")));
+    assert_eq!(parsed.path(), "/marty");
+    assert_eq!(parsed.username(), "marty");
+    let pool = PgPoolOptions::new()
+        .max_connections(2)
+        .connect(&database_url)
+        .await
+        .unwrap();
+    let (actor, marker): (String, Option<String>) = sqlx::query_as(
+        "SELECT current_user::text,current_setting('marty.disposable_test_owner',true)",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(actor, "marty");
+    assert_eq!(marker.as_deref(), Some("android-wallet-d12-role-fixture"));
+    migration::validate_passport(&pool).await.unwrap();
+    let ready: bool = sqlx::query_scalar("SELECT issuance_service.passport_cancellation_acl_ready() AND flow_service.physical_start_acl_ready()")
+        .fetch_one(&pool).await.unwrap();
+    assert!(ready);
+    let ring =
+        PassportTenantKeyring::from_json(&format!("{{\"org-fenced\":\"{}\"}}", "f".repeat(32)))
+            .unwrap();
+    let principal = ring
+        .authenticate(Some("org-fenced"), Some(&"f".repeat(32)))
+        .unwrap();
+    let repository = PostgresPassportRepository::new(pool.clone());
+    let id = uuid::Uuid::new_v4().to_string();
+    let application = uuid::Uuid::new_v4().to_string();
+    repository
+        .insert(
+            &principal,
+            &PassportJobInsert {
+                id: id.clone(),
+                application_id: application.clone(),
+                flow_execution_id: "fenced-role-only".into(),
+                application_template_id: "synthetic-application".into(),
+                credential_template_id: "synthetic-credential".into(),
+                revocation_profile_id: None,
+                delivery_destination_profile_id: "synthetic-destination".into(),
+                document_type: "P".into(),
+                country_code: "UTO".into(),
+                issuer_did: None,
+                secure_artifact_ciphertext: "opaque-non-document-test-custody".into(),
+                secure_artifact_reference: "synthetic-only".into(),
+            },
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+    let app = passport_router(PassportHttpService::new(ring, repository, None, None, None));
+    let request = Request::builder().method("POST")
+        .uri(format!("/v1/passport/applications/{application}/cancel"))
+        .header("content-type","application/json").header("x-organization-id","org-fenced")
+        .header("x-api-key","f".repeat(32)).header("idempotency-key","fenced-role-cancel")
+        .body(Body::from(json!({"expected_job_id":id,"reason_code":"ADMINISTRATIVE_ABANDONMENT","reason":"isolated actual-role permission test"}).to_string())).unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM issuance_service.passport_job_administrative_cancellations WHERE job_id=$1")
+        .bind(&id).fetch_one(&pool).await.unwrap();
+    assert_eq!(count, 1);
+    // These must fail on app privileges, independently of immutable-row triggers.
+    for statement in [
+        "UPDATE issuance_service.passport_job_administrative_cancellations SET reason='changed'",
+        "DELETE FROM issuance_service.passport_job_administrative_cancellations",
+        "TRUNCATE issuance_service.passport_job_administrative_cancellations",
+        "CREATE TRIGGER forbidden_history_trigger BEFORE INSERT ON issuance_service.passport_job_administrative_cancellations FOR EACH ROW EXECUTE FUNCTION issuance_service.guard_passport_cancellation_history()",
+        "ALTER TABLE issuance_service.passport_job_administrative_cancellations OWNER TO marty",
+        "CREATE TABLE issuance_service.forbidden_app_ddl(id integer)",
+    ] {
+        let error = sqlx::raw_sql(statement).execute(&pool).await.unwrap_err();
+        assert_eq!(error.as_database_error().and_then(|error| error.code()).as_deref(),Some("42501"),"{statement}: {error}");
+    }
+    let owner: String = sqlx::query_scalar("SELECT pg_get_userbyid(relowner) FROM pg_class WHERE oid='issuance_service.passport_job_administrative_cancellations'::regclass")
+        .fetch_one(&pool).await.unwrap();
+    assert_eq!(owner, "marty_passport_fence_owner");
+    let admin_url =
+        std::env::var("PASSPORT_FENCED_FIXTURE_ADMIN_TEST_URL").expect("owned fixture admin URL");
+    let admin_parsed = url::Url::parse(&admin_url).unwrap();
+    assert_eq!(admin_parsed.host_str(), parsed.host_str());
+    assert_eq!(
+        admin_parsed.port_or_known_default(),
+        parsed.port_or_known_default()
+    );
+    assert_eq!(admin_parsed.path(), "/marty");
+    let admin = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&admin_url)
+        .await
+        .unwrap();
+    let admin_marker: Option<String> =
+        sqlx::query_scalar("SELECT current_setting('marty.disposable_test_owner',true)")
+            .fetch_one(&admin)
+            .await
+            .unwrap();
+    assert_eq!(
+        admin_marker.as_deref(),
+        Some("android-wallet-d12-role-fixture")
+    );
+    assert!(
+        migration::validate_passport(&admin).await.is_err(),
+        "fenced non-marty application startup must refuse"
+    );
+    for (tamper,restore) in [
+        ("GRANT UPDATE ON issuance_service.passport_job_administrative_cancellations TO marty", "REVOKE UPDATE ON issuance_service.passport_job_administrative_cancellations FROM marty"),
+        ("GRANT UPDATE(reason) ON issuance_service.passport_job_administrative_cancellations TO marty", "REVOKE UPDATE(reason) ON issuance_service.passport_job_administrative_cancellations FROM marty"),
+        ("GRANT SELECT ON issuance_service.passport_job_administrative_cancellations TO PUBLIC", "REVOKE SELECT ON issuance_service.passport_job_administrative_cancellations FROM PUBLIC"),
+        ("ALTER TABLE issuance_service.passport_job_administrative_cancellations OWNER TO marty", "ALTER TABLE issuance_service.passport_job_administrative_cancellations OWNER TO marty_passport_fence_owner"),
+    ] {
+        sqlx::raw_sql(tamper).execute(&admin).await.unwrap();
+        let ready: bool = sqlx::query_scalar("SELECT issuance_service.passport_cancellation_acl_ready()")
+            .fetch_one(&pool).await.unwrap();
+        let validation = migration::validate_passport(&pool).await;
+        // Restore before assertions so a regression does not strand widened ACLs.
+        sqlx::raw_sql(restore).execute(&admin).await.unwrap();
+        assert!(!ready,"changed ACL was accepted: {tamper}");
+        assert!(validation.is_err(),"app startup accepted changed ACL: {tamper}");
+        migration::validate_passport(&pool).await.unwrap();
+    }
+    admin.close().await;
+    pool.close().await;
+}
+
 #[tokio::test]
 async fn administrative_cancellation_preserves_history_and_closes_terminal_races() {
     let Ok(database_url) = std::env::var("MARTY_PASSPORT_POSTGRES_TEST_URL") else {
@@ -64,6 +195,39 @@ async fn administrative_cancellation_preserves_history_and_closes_terminal_races
         .unwrap();
     migration::migrate_passport(&pool).await.unwrap();
     migration::validate_passport(&pool).await.unwrap();
+    // Catalog formatting may use platform newlines, never different SQL semantics.
+    let cancellation_sql =
+        include_str!("../migrations/0011_passport_administrative_cancellation.sql");
+    let history_body = cancellation_sql
+        .split("$cancellation_history_guard$")
+        .nth(1)
+        .unwrap();
+    let newline_body = history_body.replace("\r\n", "\n").replace('\n', "\r\n");
+    sqlx::raw_sql(&format!("CREATE OR REPLACE FUNCTION issuance_service.guard_passport_cancellation_history() RETURNS trigger LANGUAGE plpgsql AS $body${newline_body}$body$"))
+        .execute(&pool).await.unwrap();
+    migration::validate_passport(&pool).await.unwrap();
+    for (name, wrong_definition) in [
+        (
+            "ck_passport_cancel_reason_code",
+            "CHECK (reason_code = 'ADMINISTRATIVE ABANDONMENT')",
+        ),
+        (
+            "ck_passport_cancel_key_hash",
+            "CHECK (idempotency_key_hash ~ '^[0-9a-f] {64}$')",
+        ),
+    ] {
+        let original: String = sqlx::query_scalar("SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid='issuance_service.passport_job_administrative_cancellations'::regclass AND conname=$1")
+            .bind(name).fetch_one(&pool).await.unwrap();
+        sqlx::raw_sql(&format!("ALTER TABLE issuance_service.passport_job_administrative_cancellations DROP CONSTRAINT {name}, ADD CONSTRAINT {name} {wrong_definition}"))
+            .execute(&pool).await.unwrap();
+        assert!(
+            migration::validate_passport(&pool).await.is_err(),
+            "quoted SQL content must remain significant: {name}"
+        );
+        sqlx::raw_sql(&format!("ALTER TABLE issuance_service.passport_job_administrative_cancellations DROP CONSTRAINT {name}, ADD CONSTRAINT {name} {original}"))
+            .execute(&pool).await.unwrap();
+        migration::validate_passport(&pool).await.unwrap();
+    }
     let ring = PassportTenantKeyring::from_json(&format!(
         "{{\"org-a\":\"{}\",\"org-b\":\"{}\"}}",
         "a".repeat(32),
