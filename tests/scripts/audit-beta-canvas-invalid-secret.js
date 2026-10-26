@@ -35,7 +35,15 @@ async function executeWrongSecretCase({result,save,gateway,admin,adminPage,organ
  const stock=require('./run-canvas-oss-standard-contract');
  const browser=adminPage.context().browser(),context=await browser.newContext(),page=await context.newPage();
  const owned={scope:'OWNED_CANVAS_SETUP_RESOURCES',runSuffix:runId,resources:{}};
- result.validClientSecretCase={state:'STARTED',ownedMarty:[],ownedCanvas:owned,qualification:false};save();
+ result.validClientSecretCase={state:'STARTED',stage:'CANVAS_LOGIN',loginHttp:[],ownedMarty:[],ownedCanvas:owned,qualification:false};save();
+ const stage=value=>{result.validClientSecretCase.stage=value;save();};
+ const observeResponse=response=>{
+  const url=new URL(response.url());if(url.origin!==CANVAS||!['/login/canvas','/login','/logout','/api/v1/users/self/profile'].includes(url.pathname))return;
+  const method=response.request().method();if(!['GET','POST','DELETE'].includes(method))return;
+  if(result.validClientSecretCase.loginHttp.length<16)result.validClientSecretCase.loginHttp.push({method,path:url.pathname,status:response.status()});
+  else result.validClientSecretCase.additionalLoginHttp=(result.validClientSecretCase.additionalLoginHttp||0)+1;save();
+ };
+ page.on('response',observeResponse);
  const state={owned,runSuffix:runId,canvasOrigin:CANVAS,adminPage:page,
   persistOwned:save};
  // Private credential bytes and authorization codes remain only in this closure.
@@ -72,12 +80,15 @@ async function executeWrongSecretCase({result,save,gateway,admin,adminPage,organ
   }finally{await page.unroute(callback+'**',handler);}
  }
  try{
-  await stock.loginCanvas(page,CANVAS,canvasCredentials.email,canvasCredentials.password);
+  await stock.loginCanvas(page,CANVAS,canvasCredentials.email,canvasCredentials.password,{observe:value=>stage('CANVAS_'+value)});
   retainPrivateAuthority('canvasSession',JSON.stringify(await context.cookies(CANVAS)));
   state.adminCanvas=new stock.CanvasSessionClient(CANVAS,context);
+  stage('CANVAS_ACCOUNTS');
   const accounts=await state.adminCanvas.request('GET','/api/v1/accounts?per_page=100');assert(Array.isArray(accounts));
   const account=accounts.find(row=>!row.parent_account_id);assert(account?.id);state.accountId=String(account.id);
+  stage('CANVAS_PROFILE');
   const profile=await state.adminCanvas.request('GET','/api/v1/users/self/profile');assertCanvasLoginIdentity(profile,canvasCredentials.email);state.adminId=String(profile.id);
+  stage('CANVAS_KEY_CREATE');
   result.validClientSecretCase.canvasKeyIntent={name:'Marty OAuth '+runId,accountId:state.accountId,state:'CREATING'};save();
   const key=await stock.createOauthDeveloperKey(page,{canvasOrigin:CANVAS,accountId:state.accountId,ownerEmail:canvasCredentials.email,
    name:'Marty OAuth '+runId,redirectUri:MARTY+'/v1/integrations/canvas/oauth/callback',
@@ -105,6 +116,9 @@ async function executeWrongSecretCase({result,save,gateway,admin,adminPage,organ
   assert.equal(after.status,200);assert.equal(after.payload.enabled,false);
   assert.notEqual(after.payload.connection_config?.oauth_status,'connected');
   result.validClientSecretCase.state='VALID_CLIENT_WRONG_SECRET_DENIED';save();
+ }catch(error){
+  result.validClientSecretCase.failureStage=result.validClientSecretCase.stage;
+  result.validClientSecretCase.failureDom=await canvasFailureDiagnostic(page).catch(()=>({diagnosticUnavailable:true}));save();throw error;
  }finally{
   let retired=false;
   try{
@@ -125,10 +139,22 @@ async function executeWrongSecretCase({result,save,gateway,admin,adminPage,organ
    // Retire this new Canvas password session through its actual stock logout flow.
    try{
     result.validClientSecretCase.canvasSessionRetired=await retireCanvasSession(context,retainPrivateAuthority);save();
-   }finally{await context.close();correctSecret=undefined;}
+   }finally{page.off('response',observeResponse);await context.close();correctSecret=undefined;}
   }
  }
  return result.validClientSecretCase;
+}
+async function canvasFailureDiagnostic(page){
+ const url=new URL(page.url());
+ const path=url.origin===CANVAS&&['/login/canvas','/login','/'].includes(url.pathname)?url.pathname:'OTHER';
+ const visible=async locator=>locator.first().isVisible({timeout:1000}).catch(()=>false);
+ return {path,identifierVisible:await visible(page.locator('#pseudonym_session_unique_id, input[name="pseudonym_session[unique_id]"]')),
+  passwordVisible:await visible(page.locator('#pseudonym_session_password, input[name="pseudonym_session[password]"]')),
+  credentialErrorVisible:await visible(page.getByText(/please verify your username or password|incorrect username or password entries/i)),
+  csrfErrorVisible:await visible(page.getByText(/invalid authenticity token/i)),
+  passwordMissingVisible:await visible(page.getByText(/no password was given/i)),
+  accountLockedVisible:await visible(page.getByText(/it has been locked/i)),
+  loginRateLimitedVisible:await visible(page.getByText(/too many failed login attempts|recently logged in multiple times too quickly/i))};
 }
 function assertCanvasLoginIdentity(profile,email){
  assert(profile?.id,'Stock Canvas self-profile must identify the authenticated user');
@@ -171,5 +197,5 @@ async function runWrongSecretCase(options){
   throw new Error('Canvas valid-client wrong-secret control failed; preserve its owned journal for review.');
  }
 }
-module.exports={assertCanvasLoginIdentity,requireOwnedMartyResource,retireCanvasSession,planWrongSecretCase,requireProviderInvalidSecret,requireMartyInvalidSecret,runWrongSecretCase};
+module.exports={canvasFailureDiagnostic,assertCanvasLoginIdentity,requireOwnedMartyResource,retireCanvasSession,planWrongSecretCase,requireProviderInvalidSecret,requireMartyInvalidSecret,runWrongSecretCase};
 if(require.main===module){assert.deepEqual(process.argv.slice(2),['--plan'],'Offline plan only; execution requires reviewed existing capability runner');console.log(JSON.stringify(planWrongSecretCase(),null,2));}

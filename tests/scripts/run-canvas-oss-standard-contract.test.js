@@ -713,3 +713,21 @@ test('engineering CLI permits explicit media-free mode while recorded mode requi
   assert.equal(recorded.functionalRerun,false);
   assert.match(recorded.video,/contract\.webm$/);
 });
+
+test('shared stock login emits only static stages and preserves original navigation failure',async()=>{
+ const {loginCanvas}=require('./run-canvas-oss-standard-contract');const stages=[];
+ const locator={first(){return this},fill:async()=>{},click:async()=>{},isVisible:async()=>false};
+ const page={goto:async()=>{},locator:()=>locator,getByRole:()=>locator,waitForURL:async()=>{throw Object.assign(Error('private redirect'),{name:'TimeoutError'})}};
+ await assert.rejects(loginCanvas(page,'https://canvas-test.elevenidllc.com','private-login','private-password',{observe:value=>stages.push(value)}),/private redirect/);
+ assert.deepEqual(stages,['NAVIGATE_LOGIN','FILL_LOGIN','SUBMIT_LOGIN']);
+ page.waitForURL=async()=>{};stages.length=0;await loginCanvas(page,'https://canvas-test.elevenidllc.com','private-login','private-password',{observe:value=>stages.push(value)});
+ assert.deepEqual(stages,['NAVIGATE_LOGIN','FILL_LOGIN','SUBMIT_LOGIN','POST_LOGIN_ACCEPT','LOGIN_COMPLETE']);
+ await loginCanvas(page,'https://canvas-test.elevenidllc.com','private-login','private-password');
+});
+
+test('Compose secret boundary still rejects raw environment values and non-Compose file paths before IO',()=>{
+ const {requireSecretFile}=require('./run-canvas-oss-standard-contract');const name='CANVAS_SECRET_BOUNDARY_TEST';
+ const original=process.env[name],originalFile=process.env[name+'_FILE'];
+ try{process.env[name]='raw-secret';assert.throws(()=>requireSecretFile(name));delete process.env[name];process.env[name+'_FILE']='C:/private/secret';assert.throws(()=>requireSecretFile(name));process.env[name+'_FILE']='/run/secrets/../outside';assert.throws(()=>requireSecretFile(name));}
+ finally{if(original===undefined)delete process.env[name];else process.env[name]=original;if(originalFile===undefined)delete process.env[name+'_FILE'];else process.env[name+'_FILE']=originalFile;}
+});

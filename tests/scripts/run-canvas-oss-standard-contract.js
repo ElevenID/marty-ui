@@ -23,6 +23,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { chromium } = require('@playwright/test');
+const {readBoundedSecretFile}=require('./canvas-secret-files');
 const { retireOwnedCanvasFixtures, retireCanvasApplication, findCanvasInventoryRecord } = require('./canvas-owned-fixture-cleanup');
 
 const SCHEMA_VERSION = 1;
@@ -233,8 +234,7 @@ function requireSecretFile(name) {
   );
   let value = '';
   try {
-    requireCondition(fs.lstatSync(filePath).isFile(), 'secret_file_invalid', `${name} secret path is not a file.`);
-    value = fs.readFileSync(filePath, 'utf8').replace(/\r?\n$/, '');
+    value = readBoundedSecretFile(filePath,{root:'/run/secrets',maxBytes:1024*1024}).value;
   } catch (error) {
     if (error instanceof ContractFailure) throw error;
     fail('secret_file_unreadable', `${name} Compose secret is unreadable.`);
@@ -483,18 +483,23 @@ function extractDeveloperKeyRecord(payload, expectedName) {
     || null;
 }
 
-async function loginCanvas(page, origin, email, password) {
+async function loginCanvas(page, origin, email, password, { observe = () => {} } = {}) {
+  observe('NAVIGATE_LOGIN');
   await page.goto(`${origin}/login/canvas`, { waitUntil: 'domcontentloaded', timeout: DEFAULT_TIMEOUT_MS });
   const identifier = page.locator('#pseudonym_session_unique_id, input[name="pseudonym_session[unique_id]"]').first();
   const passwordInput = page.locator('#pseudonym_session_password, input[name="pseudonym_session[password]"]').first();
+  observe('FILL_LOGIN');
   await identifier.fill(email);
   await passwordInput.fill(password);
+  observe('SUBMIT_LOGIN');
   await Promise.all([
     page.waitForURL((url) => url.origin === origin && !url.pathname.startsWith('/login'), { timeout: DEFAULT_TIMEOUT_MS }),
     page.locator('button[type="submit"], input[type="submit"]').first().click(),
   ]);
+  observe('POST_LOGIN_ACCEPT');
   const accepted = page.getByRole('button', { name: /accept|agree|continue/i }).first();
   if (await accepted.isVisible().catch(() => false)) await accepted.click();
+  observe('LOGIN_COMPLETE');
 }
 
 function canvasTokenExpiration(now, timeZone, deadlineEpoch = process.env.CANVAS_OSS_CONTRACT_DEADLINE_EPOCH || '') {
@@ -2291,6 +2296,7 @@ async function main() {
 }
 
 module.exports = {
+  requireSecretFile,
   parseArgs,
   loginCanvas,
   createOauthDeveloperKey,
