@@ -68,7 +68,7 @@ marty orgs switch <organization-uuid>
 marty --global-output json health
 ```
 
-The published [CLI v0.3.3 release](https://github.com/ElevenID/marty-cli/releases/tag/v0.3.3)
+The published [CLI v0.3.4 release](https://github.com/ElevenID/marty-cli/releases/tag/v0.3.4)
 includes key lifecycle commands. With an already provisioned operator key in
 `MARTY_API_KEY`, use an explicit organization and explicit consumer scopes:
 
@@ -85,7 +85,7 @@ not receive it. Creating a consumer key does not replace the operator's saved
 login. Organization overrides do not change saved configuration. Repeat
 `--scope` for multiple scopes; `--expires-at` accepts a future RFC 3339 timestamp.
 Create and revoke support `--dry-run`. Use the installed command's `--help` and
-[versioned CLI guide](https://github.com/ElevenID/marty-cli/blob/v0.3.3/README.md)
+[versioned CLI guide](https://github.com/ElevenID/marty-cli/blob/v0.3.4/README.md)
 for the complete flags. These commands manage keys after operator bootstrap;
 they do not provision the initial tenant or establish full headless qualification.
 
@@ -93,13 +93,15 @@ they do not provision the initial tenant or establish full headless qualificatio
 
 Custom Node and browser applications can install the independently distributed
 `@elevenid/marty-api-core` tarball from the same release. The
-[versioned SDK guide](https://github.com/ElevenID/marty-cli/blob/v0.3.3/packages/api-core/README.md)
+[versioned SDK guide](https://github.com/ElevenID/marty-cli/blob/v0.3.4/packages/api-core/README.md)
 describes the JavaScript factory and installation. Node consumers require Node
 24 or later and can provide `X-API-Key` through the synchronous `requestOptions`
-callback without a console session. Package version `0.3.3` is distinct from
-its MIP protocol version `0.5.0`. Public package-root TypeScript declarations
-are being prepared in v0.3.4; do not assume they are present in v0.3.3 or use
-an unpublished version's download URL.
+callback without a console session. Package version `0.3.4` is distinct from
+its MIP protocol version `0.5.0`. The published v0.3.4 package includes public
+TypeScript declarations for the transport factory. Its JSON response generics
+assert a caller-provided shape without runtime schema validation. Use the
+versioned SDK guide's Node and browser compiler examples; no UI aliases or
+ambient declarations are required.
 
 API discovery is served at `/openapi.json`, with interactive documentation at
 `/docs`. Schema presence describes an HTTP contract; supported-product and
