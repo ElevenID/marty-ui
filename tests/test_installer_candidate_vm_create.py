@@ -30,6 +30,10 @@ def root_trial(tmp_path, monkeypatch):
     image.chmod(0o444)
     (source / "SHA256SUMS").write_bytes(b"mock signed manifest")
     (source / "SHA256SUMS.gpg").write_bytes(b"mock signature")
+    keyring = tmp_path / "synthetic-cloudimage-keyring.gpg"
+    keyring.write_bytes(b"synthetic pinned Ubuntu image signing key")
+    keyring.chmod(0o400)
+    monkeypatch.setattr(creation, "KEYRING", keyring)
     provenance = dict(image_path=str(image), image_sha256=creation._digest_file(image, creation.MAX_IMAGE),
                       manifest_sha256=release.digest(b"mock signed manifest"),
                       signature_sha256=release.digest(b"mock signature"),
