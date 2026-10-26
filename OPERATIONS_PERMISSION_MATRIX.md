@@ -19,9 +19,9 @@ The current RBAC model is defined by the organization service and loaded into th
 
 Primary implementation references:
 
-- `services/organization/infrastructure/migrations/versions/20260215_0001_add_rbac_tables.py`
-- `services/organization/application/rbac_use_cases.py`
-- `ElevenID/Marty` package `marty-common` (`marty_common.org_authorization`)
+- [Rust organization permission catalog and role templates](rust/services/organization/src/catalog.rs)
+- [Rust organization RBAC routes](rust/services/organization/src/rbac_http.rs)
+- [Rust gateway authentication middleware](rust/services/gateway/src/middleware.rs)
 - `ui/src/config/permissions.js`
 - `ui/src/hooks/usePermissions.js`
 - `ui/src/components/console/org/RolesPage.jsx`
@@ -229,3 +229,41 @@ For support and QA, use the following rules of thumb:
 The product direction increasingly uses `admin`, `developer`, and `operator` terminology in the UI, but the seeded backend system roles are still `owner`, `admin`, `member`, and `viewer`.
 
 That mismatch should remain tracked as a readiness item until docs, UI copy, tests, and backend defaults all agree on the same canonical role model.
+
+## Organization authorization qualification
+
+The historical `ORG_AUTHORIZATION_PHASE2_MIGRATION.md` report is retired. Its
+Python service examples, mutable-image build receipts, endpoint counts and
+completion claims are recoverable at UI commit
+`83c6ac3da39e515965e9fc3a2ac49f2e155ecd66`; they are not current deployment or
+authorization instructions. Use the Rust source owners above and the owning
+service's authorization tests, rather than restoring its Python middleware.
+
+Keep these open acceptance requirements when qualifying a release:
+
+- Exercise same-organization success and cross-organization denial for trust,
+  flow, compliance, presentation, deployment and revocation resources, including
+  reads, lists, creation, mutation, activation, subordinate records and artifacts.
+  Prove allowed and denied operations for member, administrator, viewer and
+  custom-role principals against the current permission catalog. The old
+  report's blanket admin-only labels do not override current role permissions.
+- Qualify deployment-profile API-key generation separately from organization
+  authentication keys. Verify least privilege and tenant ownership at both the
+  gateway and service, including forged/missing caller context and direct
+  service requests; UI visibility and database schema separation are insufficient.
+- Preserve intended wallet request/submission, presentation evaluation, signed
+  webhooks and internal revocation operations through their actual protocol or
+  service authentication. Historical descriptions of these as public or
+  unauthenticated are not exemptions from current authorization requirements.
+- Retain authorization-failure audit events, privacy-safe organization/request
+  correlation, denial metrics/alerts, membership-verification rate limits and
+  automated cross-organization attack checks as qualification requirements.
+- Measure membership lookup behavior under load and permission changes. The
+  old `<50 ms p99` membership target is an unqualified historical performance
+  goal, not a measured release promise. Review cache lifetime, invalidation and
+  revocation behavior with the current owner; fixed old cache TTLs, replicas and
+  message-bus suggestions are not required architecture.
+
+Role terminology normalization and these runtime/security/performance checks
+remain open until their owners provide current evidence. Removing the report
+implements none of them and does not establish complete endpoint coverage.

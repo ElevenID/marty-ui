@@ -494,7 +494,7 @@ DEBUG:marty_common.org_authorization:API key validated: mk_abc1
 
 ## Related Documentation
 
-- [ORG_AUTHORIZATION_PHASE2_MIGRATION.md](./ORG_AUTHORIZATION_PHASE2_MIGRATION.md) - Service migration guide
+- [Organization permissions and qualification requirements](./OPERATIONS_PERMISSION_MATRIX.md#organization-authorization-qualification)
 - Organization service API documentation: http://localhost:8002/docs
 
 ## Changelog
