@@ -577,25 +577,29 @@ async function createPersonalAccessToken(page, origin, purpose, onOwned = () => 
   return visible;
 }
 
-async function openDeveloperKeyModal(page, origin, accountId, kind) {
+async function openDeveloperKeyModal(page, origin, accountId, kind, {observe = () => {}} = {}) {
+  observe('NAVIGATE');
   await page.goto(`${origin}/accounts/${encodeURIComponent(accountId)}/developer_keys`, {
     waitUntil: 'domcontentloaded',
     timeout: DEFAULT_TIMEOUT_MS,
   });
+  observe('TRIGGER');
   const trigger = page.locator('#add-developer-key-button').or(page.getByRole('button', { name: /create.*developer key|developer key/i })).first();
   await trigger.waitFor({ state: 'visible', timeout: DEFAULT_TIMEOUT_MS });
   await trigger.click();
+  observe('MENU');
   const menuName = kind === 'lti' ? /LTI Key$/i : /API Key$/i;
   await page.getByRole('menuitem', { name: menuName }).click();
   // Canvas labels the dialog "Create Developer Key"; "Key Settings" is its
   // visible heading, not the dialog's accessible name.
+  observe('MODAL');
   const modal = page.getByRole('dialog', { name: /create developer key/i });
   await modal.waitFor({ state: 'visible', timeout: DEFAULT_TIMEOUT_MS });
   await modal.getByRole('heading', { name: /^key settings$/i }).waitFor({ state: 'visible', timeout: DEFAULT_TIMEOUT_MS });
   return modal;
 }
 
-async function saveDeveloperKey(page, modal, expectedName, onOwned, {kind = 'api'} = {}) {
+async function saveDeveloperKey(page, modal, expectedName, onOwned, {kind = 'api', observe = () => {}} = {}) {
   const expectedOrigin = new URL(page.url()).origin;
   const account = /^\/accounts\/([1-9][0-9]*)\/developer_keys$/.exec(new URL(page.url()).pathname);
   requireCondition(account, 'canvas_developer_key_account_missing', 'Developer Key creation requires its exact stock account page.');
@@ -608,7 +612,9 @@ async function saveDeveloperKey(page, modal, expectedName, onOwned, {kind = 'api
     return response.request().method() === 'POST' && parsed.origin === expectedOrigin
       && parsed.pathname === expectedPath;
   }, { timeout: DEFAULT_TIMEOUT_MS });
+  observe('SUBMIT');
   await modal.getByRole('button', { name: /^save$/i }).click();
+  observe('RESPONSE');
   const response = await responsePromise;
   const payload = await responseJson(response, 'canvas_developer_key_save_failed', 'Canvas Developer Key save failed', [200, 201]);
   const record = extractDeveloperKeyRecord(payload, expectedName);
@@ -616,6 +622,8 @@ async function saveDeveloperKey(page, modal, expectedName, onOwned, {kind = 'api
     && (typeof record.id !== 'number' || Number.isSafeInteger(record.id)),
     'canvas_developer_key_identity_mismatch', 'Canvas Developer Key response must identify the exact run-owned name and client ID.');
   onOwned?.(record.id);
+  observe('JOURNAL');
+  observe('HIDE');
   await modal.waitFor({ state: 'hidden', timeout: DEFAULT_TIMEOUT_MS });
   return record;
 }
@@ -638,14 +646,17 @@ function escapeRegExp(value) {
 }
 
 async function createLtiDeveloperKey(page, config) {
-  const modal = await openDeveloperKeyModal(page, config.canvasOrigin, config.accountId, 'lti');
+  const observe = config.observe || (() => {});
+  const modal = await openDeveloperKeyModal(page, config.canvasOrigin, config.accountId, 'lti', {observe});
+  observe('FILL');
   await modal.getByTestId('key-name-input').fill(config.name);
   await modal.getByTestId('owner-email-input').fill(config.ownerEmail);
   const method = modal.getByLabel(/^method$/i);
   await method.click();
   await page.getByRole('option', { name: /^enter url$/i }).click();
   await modal.getByLabel(/^json url\b/i).fill(config.registrationConfigUrl);
-  const record = await saveDeveloperKey(page, modal, config.name, config.onOwned, {kind:'lti'});
+  const record = await saveDeveloperKey(page, modal, config.name, config.onOwned, {kind:'lti', observe});
+  observe('ENABLE');
   await enableDeveloperKey(page, config.name);
   return { clientId: String(record.id) };
 }
@@ -694,16 +705,20 @@ function assertCanvasOauthCompletion(url, martyOrigin, platformId) {
 }
 
 async function createOauthDeveloperKey(page, config) {
-  const modal = await openDeveloperKeyModal(page, config.canvasOrigin, config.accountId, 'api');
+  const observe = config.observe || (() => {});
+  const modal = await openDeveloperKeyModal(page, config.canvasOrigin, config.accountId, 'api', {observe});
+  observe('FILL');
   await modal.getByTestId('key-name-input').fill(config.name);
   await modal.getByTestId('owner-email-input').fill(config.ownerEmail);
   await modal.getByTestId('redirect-uris-input').fill(config.redirectUri);
+  observe('SCOPES');
   await selectCanvasOauthScopes(modal, CANVAS_OAUTH_SCOPES);
-  const record = await saveDeveloperKey(page, modal, config.name, config.onOwned);
+  const record = await saveDeveloperKey(page, modal, config.name, config.onOwned, {observe});
   requireCondition(record.require_scopes === true && Array.isArray(record.scopes)
     && record.scopes.length === CANVAS_OAUTH_SCOPES.length
     && CANVAS_OAUTH_SCOPES.every(scope => record.scopes.includes(scope)),
     'canvas_oauth_scope_grant_mismatch', 'Canvas must persist exactly the required enforced OAuth scope allowlist.');
+  observe('ENABLE');
   await enableDeveloperKey(page, config.name);
   const secret = String(record.api_key || record.client_secret || '').trim();
   requireCondition(secret.length >= 20, 'canvas_oauth_secret_missing', 'Canvas did not return the OAuth client secret from the stock Developer Key flow.');
@@ -2310,6 +2325,7 @@ module.exports = {
   parseArgs,
   loginCanvas,
   createOauthDeveloperKey,
+  createLtiDeveloperKey,
   retireCanvasApplication,
   retireCanvasSetupFixtures,
   CanvasClient,

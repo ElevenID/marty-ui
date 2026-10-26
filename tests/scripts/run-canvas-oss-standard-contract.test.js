@@ -739,6 +739,9 @@ test('Developer Key ID is journaled before a later modal failure, once and only 
  const modal={getByRole:()=>({click:async()=>events.push('submit')}),waitFor:async()=>{events.push('hidden-wait');throw Error('late modal failure')}};
  await assert.rejects(saveDeveloperKey(page,modal,'Owned run',id=>events.push('owned:'+id)),/late modal failure/);assert.deepEqual(events,['submit','owned:42','hidden-wait']);
  events.length=0;response.json=async()=>({developer_key:{id:42,name:'Foreign run',api_key:'private'}});await assert.rejects(saveDeveloperKey(page,modal,'Owned run',id=>events.push('owned:'+id)),error=>error.code==='canvas_developer_key_identity_mismatch');assert.deepEqual(events,['submit']);
+ events.length=0;response.json=async()=>({developer_key:{id:42,name:'Owned run'}});
+ await assert.rejects(saveDeveloperKey(page,modal,'Owned run',id=>events.push('owned:'+id),{observe:phase=>{if(phase==='JOURNAL'){events.push('journal');throw Error('observer failed')}}}),/observer failed/);
+ assert.deepEqual(events,['submit','owned:42','journal']);
 });
 
 test('Developer Key creation waits for the exact pinned API versus LTI account route',async()=>{
@@ -748,5 +751,16 @@ test('Developer Key creation waits for the exact pinned API versus LTI account r
   const response={url:()=> 'https://canvas-test.elevenidllc.com'+expected,request:()=>({method:()=> 'POST'}),status:()=>201,json:async()=>({developer_key:{id:42,name:'Owned run'}})};
   const page={url:()=> 'https://canvas-test.elevenidllc.com/accounts/1/developer_keys',waitForResponse:async predicate=>{assert(predicate(response));for(const wrong of ['/api/v1/developer_keys','/api/v1/accounts/2/developer_keys','/api/v1/accounts/1/developer_keys/tool_configuration',kind==='api'?'/api/lti/accounts/1/developer_keys/tool_configuration':'/api/v1/accounts/1/developer_keys'])assert(!predicate({...response,url:()=> 'https://canvas-test.elevenidllc.com'+wrong}));return response;}};
   let calls=0;await saveDeveloperKey(page,{getByRole:()=>({click:async()=>{}}),waitFor:async()=>{}},'Owned run',()=>{calls++},{kind});assert.equal(calls,1);
+ }
+});
+
+test('Developer Key setup failure retains only static shared API and LTI phases',async()=>{
+ const {createOauthDeveloperKey,createLtiDeveloperKey}=require('./run-canvas-oss-standard-contract');
+ for(const create of [createOauthDeveloperKey,createLtiDeveloperKey]){
+  const stages=[],locator={or(){return this},first(){return this},waitFor:async()=>{},click:async()=>{}};
+  const modal={waitFor:async()=>{},getByRole:()=>locator,getByTestId:name=>({fill:async()=>{if(name==='owner-email-input')throw Error('private field value')}})};
+  const page={goto:async()=>{},locator:()=>locator,getByRole:role=>role==='dialog'?modal:locator};
+  await assert.rejects(create(page,{canvasOrigin:'https://canvas-test.elevenidllc.com',accountId:'1',name:'Owned run',ownerEmail:'private@owned.test',observe:value=>stages.push(value)}),/private field value/);
+  assert.deepEqual(stages,['NAVIGATE','TRIGGER','MENU','MODAL','FILL']);assert(!JSON.stringify(stages).includes('private'));
  }
 });
