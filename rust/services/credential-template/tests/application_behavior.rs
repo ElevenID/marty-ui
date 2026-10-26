@@ -261,6 +261,44 @@ async fn empty_claims_fail_before_control_plane_or_persistence() {
 }
 
 #[tokio::test]
+async fn empty_patch_claims_do_not_replace_persisted_definition() {
+    let (repository, application) = build_application(ControlPlane {
+        deny_membership: false,
+        deny_revocation: false,
+        deny_trust: false,
+    });
+    let created = application.create_template(command()).await.unwrap();
+    let error = application
+        .update_template(UpdateTemplateCommand {
+            user_id: "user-1".into(),
+            template_id: created.id.clone(),
+            patch: UpdateTemplatePatch {
+                claims: Some(vec![]),
+                ..UpdateTemplatePatch::default()
+            },
+            now: created.updated_at,
+        })
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        marty_credential_template::application::CredentialTemplateApplicationError::Domain(
+            marty_credential_template::CredentialTemplateError::MissingClaims
+        )
+    ));
+    assert_eq!(
+        repository
+            .templates
+            .lock()
+            .unwrap()
+            .get(&created.id)
+            .unwrap()
+            .claims,
+        created.claims
+    );
+}
+
+#[tokio::test]
 async fn create_update_and_list_are_tenant_bound_and_lossless() {
     let (repository, application) = build_application(ControlPlane {
         deny_membership: false,

@@ -236,7 +236,8 @@ async fn template_issuer_options_fail_closed_on_stale_scope_private_material_and
 #[tokio::test]
 async fn actual_template_creation_enforces_the_same_compliance_and_unambiguous_issuer_contract() {
     let base = json!({"organization_id":"org-1", "compliance_profile_id":"profile-1", "name":"Test", "credential_type":"EmployeeCredential",
-        "issuer_did":"did:example:allowed", "vct":"https://issuer.example/credentials/employee", "supported_formats":["sd_jwt_vc"], "claims":[]});
+        "issuer_did":"did:example:allowed", "vct":"https://issuer.example/credentials/employee", "supported_formats":["sd_jwt_vc"],
+        "claims":[{"name":"given_name","display":{"label":"Given name"}}]});
     for (mode, expected) in [
         ("valid", 200),
         ("stale", 409),
@@ -275,5 +276,25 @@ async fn actual_template_creation_enforces_the_same_compliance_and_unambiguous_i
     let (status, _, upstream) =
         template_options_request("valid", "/v1/credential-templates", mismatch).await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(upstream.writes.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn empty_create_formats_are_rejected_before_issuer_resolution_or_owner_write() {
+    let fixtures: Value = serde_json::from_str(include_str!(
+        "../../../../../contracts/credential-template-write-behavior.json"
+    ))
+    .unwrap();
+    let case = fixtures["invalid"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|case| case["name"] == "empty_create_formats_at_gateway_context")
+        .unwrap();
+    let (status, body, upstream) =
+        template_options_request("valid", "/v1/credential-templates", case["public"].clone()).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(body["detail"], "At least one supported format is required.");
+    assert!(upstream.resolutions.lock().unwrap().is_empty());
     assert!(upstream.writes.lock().unwrap().is_empty());
 }

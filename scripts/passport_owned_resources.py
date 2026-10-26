@@ -56,7 +56,8 @@ class OwnedPassportResources:
         self.request, self.private_signing = request, private_signing
         self.value = {"schema": "marty.passport-owned-resources/v1", "run_id": uuid4().hex,
                       "organization_id": organization, "resources": {}, "issuer_identities": [],
-                      "jobs": [], "operations": [], "cleanup_complete": False}
+                      "jobs": [], "operations": [], "flow_start": None,
+                      "cleanup_complete": False}
         self.save(initial=True)
 
     def save(self, *, initial=False):
@@ -218,11 +219,85 @@ class OwnedPassportResources:
         self.value["jobs"].append({"event": event, **record})
         self.save()
 
+    def start_selected_flow(self, body, request):
+        """Journal one owned start before dispatch; a lost response never authorizes retry."""
+        definition = self.value["resources"].get("flow_definition_id", {})
+        require(self.value["flow_start"] is None
+                and isinstance(body, dict) and set(body) == {
+                    "organization_id", "flow_definition_id", "initial_context"}
+                and body["organization_id"] == self.organization
+                and body["flow_definition_id"] == definition.get("id")
+                and definition.get("creation_returned") is True,
+                "Selected Flow start is not bound to this owned definition")
+        self.value["flow_start"] = {
+            "state": "INTENT", "organization_id": self.organization,
+            "flow_definition_id": definition["id"],
+            "request_sha256": hashlib.sha256(json.dumps(body, sort_keys=True,
+                separators=(",", ":")).encode()).hexdigest(),
+        }
+        self.save()
+        try:
+            status, response = request("POST", "/v1/flows/instances", body)
+        except Exception:
+            self._reconcile_selected_flow_start(request)
+            raise
+        if status != 200 or not self._owned_started_flow(response):
+            self._reconcile_selected_flow_start(request)
+            raise PassportOwnershipError("Selected Flow start response is not owned")
+        self.value["flow_start"].update(state="OBSERVED", instance_id=response["id"],
+                                         application_id=response["context_data"]["physical_document_job"]["application_id"],
+                                         source_job_id=response["context_data"]["physical_document_job"]["id"])
+        self.save()
+        return status, response
+
+    def _owned_started_flow(self, response):
+        if not isinstance(response, dict):
+            return False
+        context = response.get("context_data")
+        job = context.get("physical_document_job") if isinstance(context, dict) else None
+        start = self.value["flow_start"]
+        return (isinstance(job, dict) and isinstance(response.get("id"), str)
+                and bool(response["id"]) and response.get("organization_id") == self.organization
+                and response.get("flow_id") == start["flow_definition_id"]
+                and response.get("flow_type") == "physical_document_issuance"
+                and response.get("status") == "IN_PROGRESS"
+                and job.get("organization_id") == self.organization
+                and job.get("flow_execution_id") == response["id"]
+                and job.get("issuer_did") == self.value["plan"]["application"]["issuer_did"]
+                and job.get("status") == "DRAFT"
+                and all(isinstance(job.get(key), str) and bool(job[key])
+                        for key in ("id", "application_id")))
+
+    def _reconcile_selected_flow_start(self, request):
+        start = self.value["flow_start"]
+        start["state"] = "UNKNOWN"
+        self.save()
+        path = ("/v1/flows/instances?organization_id=" + quote(self.organization, safe="")
+                + "&flow_definition_id=" + quote(start["flow_definition_id"], safe="")
+                + "&limit=100&offset=0")
+        try:
+            status, rows = request("GET", path, None)
+            if (status == 200 and isinstance(rows, list) and len(rows) == 1
+                    and self._owned_started_flow(rows[0])):
+                job = rows[0]["context_data"]["physical_document_job"]
+                start.update(state="RECONCILED_AFTER_UNKNOWN_RESPONSE",
+                             instance_id=rows[0]["id"], application_id=job["application_id"],
+                             source_job_id=job["id"])
+                self.save()
+        except Exception:
+            pass  # Preserve UNKNOWN and the original failed start, without retry.
+
     def retire(self, *, selected, certificate_id, check_key_denied, retire_sessions):
         require(self.value.get("plan") and len(self.value["issuer_identities"]) == 2,
                 "Owned passport setup is incomplete")
         require(all(item["response_received"] for item in self.value["operations"]),
                 "Ambiguous passport mutation requires explicit reconciliation")
+        start = self.value.get("flow_start")
+        require(isinstance(start, dict) and start.get("state") == "OBSERVED"
+                and start.get("instance_id") == selected["flow_instance_id"]
+                and start.get("application_id") == selected["application_id"]
+                and start.get("source_job_id") == selected["source_job_id"],
+                "Selected Flow start is not durably observed with exact owned job")
         bound = [item for item in self.value["jobs"] if item["event"] == "batch_bound"]
         require(len(bound) == 1 and len(bound[0].get("jobs", [])) == 2,
                 "Exact two-job ownership journal is unavailable")

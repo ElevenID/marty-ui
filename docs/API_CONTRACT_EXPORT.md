@@ -70,3 +70,35 @@ python scripts/check_gateway_organization_openapi.py --openapi marty-openapi.jso
 This validates the same organization readback cases exercised by the gateway
 projector and rejects private fields and invented response envelopes. CI runs
 it against the export from the actual gateway image.
+
+Template create and patch bodies use native-owned write components. Creation
+requires organization, name, credential type, compliance profile, public issuer
+DID and a nonempty claims array. Public claim display/type/namespace aliases are
+translated before the native DTO is decoded. Custody selectors are not write
+inputs, and `schema_uri` only accepts null while persistence is unsupported.
+When supplied on creation, `supported_formats` must contain at least one format:
+the public gateway's compliance-context gate rejects an empty list before issuer
+resolution or owner writes, even though the internal native DTO can decode it.
+
+Patch fields differ from creation: tenant, credential type, compliance profile,
+vct and doctype cannot be changed through this body. Null optional fields usually
+preserve stored state; `claims: null` is rejected by the gateway and an empty
+claim list is rejected by the owner. An empty revocation profile string is the
+native explicit clear operation. Native draft, format/protocol, active-profile,
+issuer and tenant checks still determine whether a structurally valid request
+succeeds. Derivation parameters forbid private credential/custody field names
+recursively; their native depth limit of 48 is not encoded by recursive JSON
+Schema. Display schemas describe supported fields; ignored legacy extras are
+not advertised as configuration.
+
+Shared public/canonical fixtures are exercised by actual gateway translation,
+native request conversion/intrinsic validation, and JSON Schema validation of
+the real executable/image export. Run the latter in the same schema environment:
+
+```sh
+python scripts/check_gateway_template_openapi.py --openapi marty-openapi.json
+```
+
+These components describe request DTOs. Provider readiness, stored-state changes,
+authorization, successful issuance and complete endpoint SDK generation still
+need their own qualification.
