@@ -70,6 +70,14 @@ pub fn schemas() -> Value {
             .expect("notification schemas")
             .clone(),
     );
+    let api_keys: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/api-key-http-schemas.json"
+    ))
+    .expect("native API-key HTTP schemas");
+    schemas
+        .as_object_mut()
+        .expect("schemas")
+        .extend(api_keys.as_object().expect("API-key schemas").clone());
     schemas
 }
 pub fn protocol_revision() -> &'static str {
@@ -87,6 +95,10 @@ fn schema(name: &str) -> Value {
 
 pub fn describe_operation(operation: &mut Value, method: HttpMethod, path: &str, status: u16) {
     use HttpMethod::{Get, Patch, Post};
+    if path == "/v1/api-keys" || path == "/v1/api-keys/{key_id}" {
+        describe_api_keys(operation, method, status);
+        return;
+    }
     if method == Get && path == "/v1/protocol-support" {
         operation["summary"] = json!("Discover product support for protocol abstractions");
         operation["description"] = json!(
@@ -537,6 +549,68 @@ fn describe_notification(operation: &mut Value, method: HttpMethod, path: &str, 
     operation["x-marty-response-schema-documented"] = json!(true);
 }
 
+fn describe_api_keys(operation: &mut Value, method: HttpMethod, status: u16) {
+    operation["summary"] = json!("Manage organization-bound machine API keys");
+    operation["description"] = json!(
+        "Requires the corresponding api-key:view, api-key:create or api-key:revoke permission. An organization-bound admin:full API key can manage keys within its own organization; ordinary credential scopes cannot. This API does not bootstrap an unauthenticated operator or accept OAuth access tokens. The secret key is returned only by creation."
+    );
+    if !operation["parameters"].is_array() {
+        operation["parameters"] = json!([]);
+    }
+    let mut organization = query_parameter(
+        "organization_id",
+        "Authorized organization. May be omitted only when the authenticated identity already provides organization context.",
+    );
+    organization["required"] = json!(false);
+    operation["parameters"]
+        .as_array_mut()
+        .unwrap()
+        .push(organization);
+    let response = match method {
+        HttpMethod::Post => {
+            operation["requestBody"] = json!({"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/runtime__api_key_create_request"}}}});
+            json!({"$ref":"#/components/schemas/runtime__api_key_response"})
+        }
+        HttpMethod::Get => {
+            operation["parameters"].as_array_mut().unwrap().extend([
+                json!({"name":"limit","in":"query","schema":{"type":"integer","minimum":0,"maximum":500,"default":100}}),
+                json!({"name":"offset","in":"query","schema":{"type":"integer","minimum":0,"default":0}}),
+            ]);
+            json!({"type":"array","items":{"$ref":"#/components/schemas/runtime__api_key_response"}})
+        }
+        HttpMethod::Delete => {
+            json!({"type":"object","required":["success"],"properties":{"success":{"const":true}}})
+        }
+        _ => return,
+    };
+    operation["responses"][status.to_string()]["content"] =
+        json!({"application/json":{"schema":response}});
+    for (code, description) in [
+        (
+            400,
+            "Invalid key scope, expiry or pagination, or malformed query.",
+        ),
+        (
+            401,
+            "Authentication required or API key invalid, expired or revoked.",
+        ),
+        (
+            403,
+            "Organization mismatch or required API-key management permission missing.",
+        ),
+        (404, "Organization or key not found."),
+        (
+            422,
+            "JSON payload cannot be deserialized into the key creation request.",
+        ),
+        (503, "A required backend is unavailable."),
+    ] {
+        operation["responses"][code.to_string()] = json!({"description":description});
+    }
+    operation["x-marty-request-schema-documented"] = json!(true);
+    operation["x-marty-response-schema-documented"] = json!(true);
+}
+
 fn query_parameter(name: &str, description: &str) -> Value {
     json!({"name":name,"in":"query","required":true,"description":description,"schema":{"type":"string","minLength":1}})
 }
@@ -611,6 +685,48 @@ fn describe_vc_api(operation: &mut Value, path: &str, status: u16) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn api_key_operations_document_scoped_management_and_one_time_secret() {
+        let document = crate::contract::GatewayContract::load()
+            .unwrap()
+            .openapi_document("test");
+        let paths = &document["paths"];
+        let create = &paths["/v1/api-keys"]["post"];
+        assert_eq!(
+            create["requestBody"]["content"]["application/json"]["schema"]["$ref"],
+            "#/components/schemas/runtime__api_key_create_request"
+        );
+        assert_eq!(
+            create["responses"]["200"]["content"]["application/json"]["schema"]["$ref"],
+            "#/components/schemas/runtime__api_key_response"
+        );
+        assert_eq!(
+            paths["/v1/api-keys"]["get"]["responses"]["200"]["content"]["application/json"]
+                ["schema"]["type"],
+            "array"
+        );
+        let revoke = &paths["/v1/api-keys/{key_id}"]["delete"];
+        assert_eq!(revoke["parameters"][0]["name"], "key_id");
+        assert_eq!(revoke["parameters"][1]["name"], "organization_id");
+        assert_eq!(revoke["parameters"][1]["required"], false);
+        assert_eq!(
+            revoke["responses"]["200"]["content"]["application/json"]["schema"]["properties"]
+                ["success"]["const"],
+            true
+        );
+        let schemas = &document["components"]["schemas"];
+        assert_eq!(
+            schemas["runtime__api_key_create_request"]["additionalProperties"],
+            false
+        );
+        assert!(schemas["runtime__api_key_create_request"]["properties"]
+            .get("organization_id")
+            .is_none());
+        assert_eq!(
+            schemas["runtime__api_key_response"]["properties"]["key"]["readOnly"],
+            true
+        );
+    }
     use super::*;
     #[test]
     fn template_readback_schema_covers_native_response_operations() {
