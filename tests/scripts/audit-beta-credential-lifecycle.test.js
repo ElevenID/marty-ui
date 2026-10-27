@@ -33,6 +33,7 @@ const {
   selectIssuedCredential,
   selectRenewedCredential,
   showRenewalLineage,
+  verify,
 } = require('./audit-beta-credential-lifecycle');
 const {
   DEFAULT_BETA_ORGANIZATION_ID,
@@ -999,4 +1000,48 @@ test('each lifecycle stage requires its action, current state and completed veri
       assert.throws(() => requireLifecycleActionEvidence(action, failure), /current-state evidence|completed wallet presentation|denial reason/);
     }
   }
+});
+
+
+function verificationBrowserFixture(walletStatus,walletBody,polls=[]){
+ const request={path:'/v1/flows/verify',method:'POST',status:201,body:{instance_id:'SOURCE_ONLY_INSTANCE',request_uri:'openid4vp://SOURCE_ONLY_REQUEST'}};
+ const page=scriptedBrowser([request,...polls.map(p=>({path:'/v1/flows/instances/SOURCE_ONLY_INSTANCE/result',...p}))]);let clicks=0;
+ const walletPage={getByLabel:()=>({fill:async()=>{},evaluate:async()=>{}}),getByRole:()=>({click:async()=>{clicks++;}}),
+  waitForResponse:async predicate=>{const response={url:()=>`${process.env.MARTY_TEST_WALLET_ORIGIN||'http://127.0.0.1:8787'}/api/present`,request:()=>({method:()=> 'POST'}),ok:()=>walletStatus>=200&&walletStatus<300,status:()=>walletStatus,json:async()=>walletBody};assert(predicate(response));return response;}};
+ return {page,walletPage,get clicks(){return clicks;},run:options=>verify(page,walletPage,'SOURCE_ONLY_VERIFY',{issuerDid:'did:example:source-only',resultTimeoutMs:10,resultIntervalMs:0,...options})};
+}
+
+test('verification retains a rejected wallet response and does not poll a presentation that was never submitted',async()=>{
+ const f=verificationBrowserFixture(422,{ok:false,error:'SD-JWT error: issuer verification failed eyJzb3VyY2Vfb25seSI6dHJ1ZX0.payload.signature Bearer SOURCE_ONLY_SECRET'});const r=await f.run();
+ assert.equal(r.wallet.ok,false);assert.equal(r.wallet.status,422);assert.equal(r.wallet.errorClass,'SD-JWT error');assert(r.wallet.errorIndicators.includes('issuer verification failed'));assert(!r.wallet.error.includes('SOURCE_ONLY_SECRET'));assert(!r.wallet.error.includes('eyJzb3VyY2V'));assert.match(r.wallet.errorSha256,/^[a-f0-9]{64}$/);
+ assert.equal(r.result,null);assert.equal(r.diagnostic.outcome,'REJECTED_BEFORE_SUBMISSION');assert.equal(r.session.requestUri,'[present]');assert.equal(initialActiveVerificationPassed(r),false);assert.equal(f.page.requests.length,1);assert.equal(f.clicks,1);
+});
+
+test('submitted verifier denial still requires its real terminal result and successful presentation preserves ALLOW',async()=>{
+ for(const denied of [false,true]){
+  const f=verificationBrowserFixture(denied?400:200,denied?{ok:false,error:'Verifier rejected presentation',submission:{submitted:true,verifier_http_status:400,verifier_error:'invalid_presentation'}}:{ok:true},[{status:200,body:{status:denied?'FAILED':'COMPLETED',result:denied?'failed':'passed',decision:denied?'deny':'allow'}}]);
+  const r=await f.run();assert.equal(r.result.decision,denied?'deny':'allow');require('./beta-demo-review-ui').requireVerificationDecision(r,denied?'deny':'allow');assert.equal(initialActiveVerificationPassed(r),!denied);assert.equal(f.page.requests.length,2);
+ }
+});
+
+test('pending409 timeout and poll transport failure retain wallet/session evidence without inventing a verifier decision',async()=>{
+ for(const transport of [false,true]){
+  const f=verificationBrowserFixture(200,{ok:true},transport?[{error:Error('SOURCE_ONLY_POLL_TRANSPORT')}]:Array.from({length:200},()=>({status:409,body:{status:'PENDING'}})));
+  const r=await f.run();assert.equal(r.wallet.ok,true);assert.equal(r.session.ok,true);assert.equal(r.result,null);assert.equal(initialActiveVerificationPassed(r),false);assert.equal(r.diagnostic.outcome,transport?'POLL_FAILED':'POLL_TIMEOUT');
+  if(!transport){assert(r.diagnostic.pollCount>0);assert.equal(r.diagnostic.lastHttpStatus,409);}
+  assert.throws(()=>require('./beta-demo-review-ui').requireVerificationDecision(r,'allow'));assert.throws(()=>require('./beta-demo-review-ui').requireVerificationDecision(r,'deny'));
+ }
+});
+
+test('wallet control transport failure retains the created session and refuses result polling',async()=>{
+ const f=verificationBrowserFixture(200,{ok:true});f.walletPage.getByRole=()=>({click:async()=>{throw Error('SOURCE_ONLY_CLICK_FAILED');}});const r=await f.run();
+ assert.equal(r.session.ok,true);assert.equal(r.wallet,null);assert.equal(r.result,null);assert.equal(r.diagnostic.outcome,'TRANSPORT_FAILED');assert.equal(f.page.requests.length,1);
+});
+
+
+test('HTTP200 body failure retains sanitized reason and only whitelisted submission metadata',async()=>{
+ const secret='SOURCE_ONLY_BODY_SECRET',f=verificationBrowserFixture(200,{ok:false,error:'JWT error: Bearer '+secret,
+  submission:{submitted:false,verifier_http_status:'400',verifier_error:'https://'+secret,token:secret,claims:{secret}}});const r=await f.run();
+ assert.equal(r.wallet.ok,false);assert.equal(r.wallet.status,200);assert.equal(r.wallet.errorClass,'JWT error');assert(r.wallet.error.includes('[redacted]'));assert(!JSON.stringify(r).includes(secret));
+ assert.deepEqual(r.wallet.submission,{submitted:false,verifier_http_status:null,verifier_error:null});assert.equal(r.diagnostic.outcome,'REJECTED_BEFORE_SUBMISSION');assert.equal(r.result,null);assert.equal(f.page.requests.length,1);
 });
