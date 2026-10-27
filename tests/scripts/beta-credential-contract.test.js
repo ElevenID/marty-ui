@@ -6,15 +6,32 @@ const {
   DEFAULT_BETA_ORGANIZATION_ID,
   DEFAULT_LIFECYCLE_POLICY_ID,
   DEFAULT_LIFECYCLE_SOURCE_TEMPLATE_ID,
+  requireLifecycleSourceSelection,
   DEFAULT_LOGIN_BADGE_CONFIGURATION_ID,
   DEFAULT_LOGIN_BADGE_TEMPLATE_ID,
   credentialConfigurationIdForWaltid,
   credentialLifecycleBehaviorAssertions,
   credentialInventoryEvidence,
   membershipLoginBehaviorAssertions,
+  requireCompletedLoginNonce,
+  isTerminalLoginNonceStatus,
   verificationResultEvidence,
   verificationSessionRequest,
 } = require('./beta-credential-contract');
+
+test('functional lifecycle requires explicit governed source before fixture intake; released default remains unchanged',()=>{
+  for(const value of [undefined,'',' ',' source','source\n'])
+    assert.throws(()=>requireLifecycleSourceSelection({RECORD_VIDEO:'0',BETA_AUDIT_TEMPLATE_ID:value}),/explicit governed/);
+  for(const name of ['DEMO_LOCAL_FUNCTIONAL_RUNTIME_RECEIPT','DEMO_LOCAL_FUNCTIONAL_RUNTIME_SHA256',
+    'DEMO_LOCAL_FUNCTIONAL_WALLET_RECEIPT','DEMO_LOCAL_FUNCTIONAL_WALLET_SHA256',
+    'DEMO_LOCAL_FUNCTIONAL_WALLET_AUTHORITY_INPUT','DEMO_LOCAL_FUNCTIONAL_WALLET_AUTHORITY_SHA256']){
+    for(const value of ['', 'SOURCE_ONLY_INPUT'])assert.throws(()=>requireLifecycleSourceSelection({RECORD_VIDEO:'1',[name]:value}),/explicit governed/);
+    assert.equal(requireLifecycleSourceSelection({[name]:'SOURCE_ONLY_INPUT',BETA_AUDIT_TEMPLATE_ID:'owned-current-source'}),'owned-current-source');
+  }
+  assert.equal(requireLifecycleSourceSelection({RECORD_VIDEO:'0',BETA_AUDIT_TEMPLATE_ID:'owned-current-source'}),'owned-current-source');
+  assert.equal(requireLifecycleSourceSelection({RECORD_VIDEO:'1'}),DEFAULT_LIFECYCLE_SOURCE_TEMPLATE_ID);
+  assert.equal(requireLifecycleSourceSelection({}),DEFAULT_LIFECYCLE_SOURCE_TEMPLATE_ID);
+});
 
 test('beta gates target the canonical Marty organization and Open Badge login contract', () => {
   assert.equal(DEFAULT_BETA_ORGANIZATION_ID, '00000000-0000-0000-0000-000000000001');
@@ -140,18 +157,35 @@ test('verification session request fails closed without exact public identifiers
 });
 
 test('membership recording exposes the three exact happy-path behavior assertions', () => {
+  for (const status of ['completed', 'failed', 'expired']) {
+    assert.equal(isTerminalLoginNonceStatus({ status }), true);
+  }
+  for (const status of ['pending', 'pending-timeout', undefined]) {
+    assert.equal(isTerminalLoginNonceStatus({ status }), false);
+  }
+  assert.doesNotThrow(() => requireCompletedLoginNonce('completed'));
+  for (const status of ['failed', 'expired', 'pending-timeout', undefined]) {
+    assert.throws(() => requireCompletedLoginNonce(status), /nonce did not complete/);
+  }
   assert.deepEqual(membershipLoginBehaviorAssertions({
     badge: {
       offerSource: 'canonical-ui', loggedOut: true, accepted: true, storedExpectedCredential: true,
     },
     presentation: { accepted: true },
-    completion: { status: 'completed', authenticated: true },
+    completion: { status: 'completed', observedNonceStatus: 'completed', authenticated: true },
   }), {
     governed_claim: true,
     conformant_open_badge_issuance: true,
     same_device_passwordless_login: true,
   });
   assert.equal(membershipLoginBehaviorAssertions({}).governed_claim, false);
+  for (const observedNonceStatus of ['failed', 'expired', 'pending-timeout', null]) {
+    assert.equal(membershipLoginBehaviorAssertions({
+      presentation: { accepted: true },
+      completion: { status: 'completed', observedNonceStatus, authenticated: true },
+    }).same_device_passwordless_login, false,
+    'An authenticated browser cannot substitute for completion of this login nonce');
+  }
 });
 
 test('lifecycle recording requires status-aware allow and deny decisions', () => {

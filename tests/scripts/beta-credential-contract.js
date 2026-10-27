@@ -2,9 +2,22 @@
 
 const DEFAULT_BETA_ORGANIZATION_ID = '00000000-0000-0000-0000-000000000001';
 const DEFAULT_LOGIN_BADGE_TEMPLATE_ID = '50000000-0000-0000-0000-000000000040';
+const DEFAULT_LOGIN_BADGE_APPLICATION_TEMPLATE_ID = '0ab66d45-0d84-5fbd-837f-25788d32279e';
 const DEFAULT_LOGIN_BADGE_CONFIGURATION_ID = 'open_badge';
 const DEFAULT_LIFECYCLE_POLICY_ID = '50000000-0000-0000-0000-000000000002';
 const DEFAULT_LIFECYCLE_SOURCE_TEMPLATE_ID = '50000000-0000-0000-0000-000000000010';
+
+function requireLifecycleSourceSelection(environment=process.env) {
+  const explicit=environment.BETA_AUDIT_TEMPLATE_ID;
+  const functional=environment.RECORD_VIDEO==='0'||['DEMO_LOCAL_FUNCTIONAL_RUNTIME_RECEIPT','DEMO_LOCAL_FUNCTIONAL_RUNTIME_SHA256',
+    'DEMO_LOCAL_FUNCTIONAL_WALLET_RECEIPT','DEMO_LOCAL_FUNCTIONAL_WALLET_SHA256',
+    'DEMO_LOCAL_FUNCTIONAL_WALLET_AUTHORITY_INPUT','DEMO_LOCAL_FUNCTIONAL_WALLET_AUTHORITY_SHA256'].some(name=>environment[name]!==undefined);
+  if(functional&&!(typeof explicit==='string'&&explicit.trim()===explicit&&explicit.length>0
+    &&explicit.length<=255&&!/[\x00-\x1f\x7f]/.test(explicit))) {
+    throw new Error('Functional lifecycle runs require an explicit governed BETA_AUDIT_TEMPLATE_ID');
+  }
+  return explicit||DEFAULT_LIFECYCLE_SOURCE_TEMPLATE_ID;
+}
 
 function credentialInventoryEvidence(inventory, { vct = null, configurationId = null } = {}) {
   const text = typeof inventory === 'string' ? inventory : '';
@@ -91,8 +104,17 @@ function membershipLoginBehaviorAssertions(report) {
       && report?.badge?.storedExpectedCredential === true,
     same_device_passwordless_login: report?.presentation?.accepted === true
       && report?.completion?.status === 'completed'
+      && report?.completion?.observedNonceStatus === 'completed'
       && report?.completion?.authenticated === true,
   };
+}
+
+function requireCompletedLoginNonce(status) {
+  if (status !== 'completed') throw new Error('Credential login nonce did not complete');
+}
+
+function isTerminalLoginNonceStatus(body) {
+  return ['completed', 'failed', 'expired'].includes(body?.status);
 }
 
 function credentialLifecycleBehaviorAssertions(report) {
@@ -116,15 +138,19 @@ function credentialLifecycleBehaviorAssertions(report) {
 }
 
 module.exports = {
+  DEFAULT_LOGIN_BADGE_APPLICATION_TEMPLATE_ID,
   DEFAULT_BETA_ORGANIZATION_ID,
   DEFAULT_LIFECYCLE_POLICY_ID,
   DEFAULT_LIFECYCLE_SOURCE_TEMPLATE_ID,
+  requireLifecycleSourceSelection,
   DEFAULT_LOGIN_BADGE_CONFIGURATION_ID,
   DEFAULT_LOGIN_BADGE_TEMPLATE_ID,
   credentialConfigurationIdForWaltid,
   credentialLifecycleBehaviorAssertions,
   credentialInventoryEvidence,
   membershipLoginBehaviorAssertions,
+  requireCompletedLoginNonce,
+  isTerminalLoginNonceStatus,
   verificationResultEvidence,
   verificationSessionRequest,
 };
