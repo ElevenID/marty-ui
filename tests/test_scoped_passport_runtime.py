@@ -148,12 +148,17 @@ class ScopeTests(unittest.TestCase):
                     return SimpleNamespace(stdout="SOURCE_ONLY_ENGINE")
                 if "inspect" in args:
                     return SimpleNamespace(stdout=json.dumps([{"Id": plan["builderImage"], "Os": "linux", "Architecture": "amd64"}]))
+                intent = json.loads((root / "build-apply-intent.json").read_bytes())
+                journal = json.loads((root / "build-state.json").read_bytes())
+                self.assertEqual(intent["state"], "BUILD_CREATE_INTENT")
+                self.assertTrue(journal["intentDurability"]["fileFsync"])
+                self.assertIn("supported", journal["intentDurability"]["parentDirectory"])
                 calls.append(args)
                 raise TimeoutError("source-only dispatched outcome unknown")
             helper = SimpleNamespace(__file__="SOURCE_ONLY_VERIFIED_HELPER", VOLUMES=build.VOLUMES, run=run,
                                      resources=lambda *args: {"scope": "SOURCE_ONLY_RESOURCE_FIXTURE"})
             real_sha = build.sha
-            with mock.patch.object(build, "verify", return_value=(root, output)), mock.patch.object(build, "sha", side_effect=lambda p: build.REVIEWED_BUILD_HELPER_SHA256 if str(p)==helper.__file__ else real_sha(p)), mock.patch.dict(os.environ, {"DOCKER_CONTEXT": "desktop-linux"}):
+            with mock.patch.object(build, "verify", return_value=(root, output)), mock.patch.object(build, "sha", side_effect=lambda p: build.REVIEWED_BUILD_HELPER_SHA256 if str(p)==helper.__file__ else real_sha(p)), mock.patch.dict(os.environ, {"DOCKER_CONTEXT": "desktop-linux"}), mock.patch.object(shared, "sync_parent", return_value={"supported": True, "synced": True}):
                 with self.assertRaises(TimeoutError):
                     build.start(bound, helper, lambda args: b"")
                 self.assertEqual(len(calls), 1)
@@ -163,6 +168,15 @@ class ScopeTests(unittest.TestCase):
                 with self.assertRaises(FileExistsError):
                     build.start(bound, helper, lambda args: b"")
                 self.assertEqual(len(calls), 1)
+            # A distinct SOURCE_ONLY intent with unsupported parent sync cannot dispatch.
+            for file in (root / "build-apply-intent.json", root / "build-state.json"):
+                file.unlink()
+            calls.clear()
+            with mock.patch.object(build, "verify", return_value=(root, output)), mock.patch.object(build, "sha", side_effect=lambda p: build.REVIEWED_BUILD_HELPER_SHA256 if str(p)==helper.__file__ else real_sha(p)), mock.patch.dict(os.environ, {"DOCKER_CONTEXT": "desktop-linux"}), mock.patch.object(shared, "sync_parent", return_value={"supported": False, "reason": "SOURCE_ONLY_UNSUPPORTED"}):
+                with self.assertRaisesRegex(ValueError, "DURABLE_INTENT_AND_JOURNAL_REQUIRED"):
+                    build.start(bound, helper, lambda args: b"")
+                self.assertEqual(calls, [])
+                self.assertEqual(json.loads((root / "build-state.json").read_bytes())["state"], "BUILD_DURABILITY_BLOCKED_NO_DOCKER_DISPATCH")
 
     def test_changed_prepared_build_bytes_refuse_before_any_helper_call(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -258,10 +272,39 @@ class OverlayTests(unittest.TestCase):
                 overlay.validate_runtime_after(before, changed, binaries, [])
 
     def test_compose_arguments_do_not_build_pull_or_recreate_primary_issuance(self):
-        args = overlay.compose_recreate_arguments(["docker", "compose", "-p", "elevenid-beta", "-f", "frozen.json"], "overlay.json")
+        args = overlay.compose_recreate_arguments(["docker", "compose", "-p", "elevenid-beta", "--project-directory", "/owned/project", "-f", "/owned/frozen.json"], "/owned/overlay.json")
         self.assertEqual(args[-3:], ["flow", "issuance-native", "gateway"])
         self.assertIn("--no-build", args)
         self.assertEqual(args[args.index("--pull")+1], "never")
+
+
+    def test_compose_base_rejects_subcommands_options_foreign_project_and_bad_paths(self):
+        base = ["docker", "compose", "-p", "elevenid-beta", "--project-directory", "/owned/project", "-f", "/owned/frozen.json"]
+        invalid = [base + ["ps"], base + ["--profile", "foreign"], base + ["up", "/foreign"],
+                   [*base[:3], "production", *base[4:]], base + ["--project-directory", "/other"],
+                   [*base[:-1], "--help"], [*base[:-1], "/owned/../foreign"]]
+        for args in invalid:
+            with self.assertRaises(ValueError):
+                overlay.compose_recreate_arguments(args, "/owned/overlay.json")
+
+    def test_private_writer_flushes_parent_after_create_and_replace(self):
+        with tempfile.TemporaryDirectory() as temp:
+            file = Path(temp) / "journal.json"
+            events = []
+            real_replace = shared.os.replace
+            def sync(path):
+                self.assertTrue(Path(path).exists())
+                events.append("parent-sync")
+                return {"supported": True, "synced": True}
+            def replace(source, target):
+                events.append("replace")
+                return real_replace(source, target)
+            with mock.patch.object(shared, "sync_parent", side_effect=sync), mock.patch.object(shared.os, "replace", side_effect=replace):
+                proof = shared.save_exclusive(file, {"state": "INTENT"})
+                self.assertTrue(proof["fileFsync"])
+                shared.save_state(file, {"state": "ACK"})
+            self.assertEqual(events, ["parent-sync", "parent-sync", "replace", "parent-sync"])
+            self.assertEqual(json.loads(file.read_bytes())["state"], "ACK")
 
 
 if __name__ == "__main__":

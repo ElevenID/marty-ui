@@ -10,7 +10,7 @@ import os
 from pathlib import Path
 import re
 from scoped_native_runtime import (CORE_REVISION, UI_REVISION, ROLE_BINARIES,
-    daemon_source, read_ref, ref, require, save_exclusive, save_state, selected_sources, sha)
+    daemon_source, durable_barrier, read_ref, ref, require, save_exclusive, save_state, selected_sources, sha)
 
 PACKAGES = ("marty-flow", "marty-gateway", "marty-issuance-service")
 CARGO_ARGV = ["cargo", "build", "--locked", "--offline", "--message-format=json"] + [item for package in PACKAGES for item in ("-p", package, "--bin", package)]
@@ -149,9 +149,13 @@ def start(prepared_ref, helper, git):
     require(helper.run("docker", "--context", "desktop-linux", "info", "--format", "{{.ID}}").stdout.strip() == plan["engineId"], "ENGINE_CHANGED_AFTER_RESOURCE_CHECK")
     state = {"state": "BUILD_CREATE_INTENT", "runId": plan["runId"], "preparationSha256": preparation_sha, "resourcesBefore": resource, "releaseQualified": False, "recordingQualified": False}
     intent = private / "build-apply-intent.json"
-    save_exclusive(intent, state)
+    state["intentDurability"] = save_exclusive(intent, state)
     journal = private / "build-state.json"
-    save_state(journal, state)
+    journal_barrier = save_state(journal, state)
+    if not (durable_barrier(state["intentDurability"]) and durable_barrier(journal_barrier)):
+        state["state"] = "BUILD_DURABILITY_BLOCKED_NO_DOCKER_DISPATCH"
+        save_state(journal, state)
+        raise ValueError("DURABLE_INTENT_AND_JOURNAL_REQUIRED")
     try:
         result = helper.run(*build_arguments(plan))
         cid = result.stdout.strip()

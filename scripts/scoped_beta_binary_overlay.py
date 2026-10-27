@@ -103,5 +103,15 @@ def validate_runtime_after(before, after, binaries, maintenance_restart_roles):
 def compose_recreate_arguments(frozen_arguments, overlay_path):
     # Existing operator invokes this only AFTER reviewed maintenance/SQL/backup
     # gates, while holding the host operation lock. It is not an apply function.
-    require(frozen_arguments[:3] == ["docker", "compose", "-p"], "FROZEN_COMPOSE_ARGUMENTS_REQUIRED")
+    require(frozen_arguments[:4] == ["docker", "compose", "-p", "elevenid-beta"], "FROZEN_BETA_COMPOSE_ARGUMENTS_REQUIRED")
+    require(len(frozen_arguments) >= 8 and len(frozen_arguments[4:]) % 2 == 0, "EXACT_BASE_COMPOSE_GRAMMAR_REQUIRED")
+    counts = {"--project-directory": 0, "--env-file": 0, "-f": 0}
+    for flag, value in zip(frozen_arguments[4::2], frozen_arguments[5::2]):
+        require(flag in counts and isinstance(value, str) and value and not value.startswith("-"), "UNEXPECTED_BASE_COMPOSE_ARGUMENT")
+        require(not re.search(r"[\x00-\x1f\x7f]", value), "INVALID_COMPOSE_INPUT_PATH")
+        normalized = value.replace("\\", "/")
+        require(normalized.startswith("/") or re.match(r"^[cCdD]:/", normalized), "ABSOLUTE_COMPOSE_INPUT_REQUIRED")
+        require(all(part not in (".", "..") for part in normalized.split("/")), "TRAVERSING_COMPOSE_INPUT")
+        counts[flag] += 1
+    require(counts["--project-directory"] == 1 and counts["-f"] >= 1, "EXACT_COMPOSE_PROJECT_DIRECTORY_REQUIRED")
     return [*frozen_arguments, "-f", str(overlay_path), "up", "--detach", "--no-build", "--no-deps", "--pull", "never", "--force-recreate", "flow", "issuance-native", "gateway"]
