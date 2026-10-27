@@ -115,6 +115,22 @@ The installer owner's legacy full-stack DAG validator therefore needs an
 explicit independent-product mode when consuming this output; its current
 combined-product contract is preserved here.
 
+Before attempting to start the rendered server model, run the input preflight
+on the same host that will read its bind mounts and secret files:
+
+```sh
+python scripts/check_product_runtime_inputs.py --compose server.compose.json \
+  --package product-package.json --output runtime-input-preflight.json
+```
+
+It checks the package-bound model, console absence, exact owned image digests,
+external image pins, existing secret files and bind sources. A missing input or
+synthetic external-image digest produces a `blocked_missing_runtime_inputs`
+record and a nonzero exit. A clean result is only `ready_for_runtime_attempt`:
+it does not test credential contents, external OpenBao availability, container
+readiness or any business operation. The deployment owner still prepares those
+inputs and the qualification runner must exercise the exact candidate images.
+
 The server bundle includes an explicit allowlist of 27 existing container runtime
 files under `runtime/`: edge configuration, database initialization, container
 entrypoints and Keycloak realm/theme assets. The packaged realm omits all seeded
