@@ -55,6 +55,26 @@ struct RepositoryState {
 
 #[async_trait]
 impl CanvasOAuthRepository for MemoryRepository {
+    async fn local_admin_fallback_eligible(
+        &self,
+        organization_id: &str,
+        platform_id: &str,
+    ) -> Result<bool, CanvasOAuthError> {
+        let state = self.state.lock().unwrap();
+        Ok(state
+            .platforms
+            .get(platform_id)
+            .is_some_and(|p| p.organization_id == organization_id && !p.archived)
+            && !state
+                .authorizations
+                .values()
+                .any(|a| a.organization_id == organization_id && a.platform_id == platform_id)
+            && !state
+                .connections
+                .contains_key(&(organization_id.to_owned(), platform_id.to_owned()))
+            && state.patches.is_empty())
+    }
+
     async fn management_platform(
         &self,
         organization_id: &str,
@@ -1560,5 +1580,111 @@ fn oauth_debug_output_redacts_states_codes_tokens_and_secret_material() {
             !output.contains(secret),
             "debug output included a redacted field"
         );
+    }
+}
+
+#[tokio::test]
+async fn catalog_selection_distinguishes_never_configured_and_unavailable_oauth() {
+    use marty_issuance_service::canvas_oauth::CanvasCatalogToken;
+    let (service, repository, vault, _) = fixture();
+    assert!(matches!(
+        service
+            .catalog_token("platform-1", Some("management-key"), Some("org-1"))
+            .await
+            .unwrap(),
+        CanvasCatalogToken::LocalAdminEligible
+    ));
+    assert!(matches!(
+        service
+            .catalog_token("platform-1", Some("management-key"), Some("foreign-org"))
+            .await,
+        Err(CanvasOAuthError::PlatformNotFound)
+    ));
+    install_connected_token_fixture(&repository, &vault, None);
+    assert!(
+        matches!(service.catalog_token("platform-1", Some("management-key"), Some("org-1")).await.unwrap(),
+        CanvasCatalogToken::OAuth(token) if token == "current-access-token")
+    );
+    for status in ["revocation_pending", "reauthorization_required"] {
+        repository
+            .state
+            .lock()
+            .unwrap()
+            .connections
+            .get_mut(&("org-1".into(), "platform-1".into()))
+            .unwrap()
+            .status = status.into();
+        assert!(matches!(
+            service
+                .catalog_token("platform-1", Some("management-key"), Some("org-1"))
+                .await
+                .unwrap(),
+            CanvasCatalogToken::OAuthUnavailable
+        ));
+    }
+    repository.state.lock().unwrap().connections.clear();
+    repository
+        .state
+        .lock()
+        .unwrap()
+        .patches
+        .push(CanvasOAuthPlatformPatch::Disconnected);
+    assert!(matches!(
+        service
+            .catalog_token("platform-1", Some("management-key"), Some("org-1"))
+            .await
+            .unwrap(),
+        CanvasCatalogToken::OAuthUnavailable
+    ));
+}
+
+#[tokio::test]
+async fn catalog_selection_never_promotes_failed_refresh_or_origin_drift_to_local_admin() {
+    use marty_issuance_service::canvas_oauth::CanvasCatalogToken;
+    for error in [
+        CanvasOAuthProviderError::RefreshRejected,
+        CanvasOAuthProviderError::Timeout,
+        CanvasOAuthProviderError::Failed {
+            retry_after_seconds: None,
+        },
+        CanvasOAuthProviderError::RevocationRejected,
+    ] {
+        let (service, repository, vault, provider) = fixture();
+        install_connected_token_fixture(
+            &repository,
+            &vault,
+            Some(Utc::now() - Duration::seconds(1)),
+        );
+        provider.state.lock().unwrap().refresh_error = Some(error);
+        assert!(matches!(
+            service
+                .catalog_token("platform-1", Some("management-key"), Some("org-1"))
+                .await
+                .unwrap(),
+            CanvasCatalogToken::OAuthUnavailable
+        ));
+    }
+    for config_drift in [false, true] {
+        let (service, repository, vault, _) = fixture();
+        install_connected_token_fixture(&repository, &vault, None);
+        {
+            let mut state = repository.state.lock().unwrap();
+            let connection = state
+                .connections
+                .get_mut(&("org-1".into(), "platform-1".into()))
+                .unwrap();
+            if config_drift {
+                connection.platform_config_version += 1;
+            } else {
+                connection.canvas_base_url = "https://different.example.edu".into();
+            }
+        }
+        assert!(matches!(
+            service
+                .catalog_token("platform-1", Some("management-key"), Some("org-1"))
+                .await
+                .unwrap(),
+            CanvasCatalogToken::OAuthUnavailable
+        ));
     }
 }

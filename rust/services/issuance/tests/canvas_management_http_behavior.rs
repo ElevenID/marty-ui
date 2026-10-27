@@ -534,6 +534,7 @@ struct DriftProbe;
 
 #[derive(Default)]
 struct FixedCatalogOAuth {
+    local_admin_eligible: Mutex<bool>,
     token: Mutex<Option<String>>,
     calls: Mutex<Vec<OAuthCall>>,
     rejected_tokens: Mutex<Vec<String>>,
@@ -543,6 +544,27 @@ type OAuthCall = (String, Option<String>, Option<String>);
 
 #[async_trait]
 impl CanvasCatalogOAuth for FixedCatalogOAuth {
+    async fn token_selection(
+        &self,
+        platform_id: &str,
+        api_key: Option<&str>,
+        trusted_organization_id: Option<&str>,
+    ) -> Result<marty_issuance_service::canvas_oauth::CanvasCatalogToken, CanvasOAuthError> {
+        use marty_issuance_service::canvas_oauth::CanvasCatalogToken;
+        Ok(
+            match self
+                .access_token(platform_id, api_key, trusted_organization_id)
+                .await?
+            {
+                Some(token) => CanvasCatalogToken::OAuth(token),
+                None if *self.local_admin_eligible.lock().unwrap() => {
+                    CanvasCatalogToken::LocalAdminEligible
+                }
+                None => CanvasCatalogToken::OAuthUnavailable,
+            },
+        )
+    }
+
     async fn access_token(
         &self,
         platform_id: &str,
@@ -2620,6 +2642,7 @@ async fn discovery_authenticates_before_body_and_preserves_validation_and_oauth_
 async fn discovery_preserves_the_explicit_local_admin_token_compatibility_path() {
     let repository = Arc::new(MemoryRepository::default());
     let oauth = Arc::new(FixedCatalogOAuth::default());
+    *oauth.local_admin_eligible.lock().unwrap() = true;
     let provider = Arc::new(FixedCatalogProvider::default());
     let app = app_with_catalog_options(
         repository.clone(),
@@ -3857,4 +3880,32 @@ async fn event_status_authenticates_before_lookup_hides_tenants_and_projects_exa
         json!({"detail":"Canvas evidence event status is temporarily unavailable"})
     );
     assert_eq!(repository.calls.load(Ordering::SeqCst), 3);
+}
+
+#[tokio::test]
+async fn discovery_never_substitutes_admin_for_unavailable_oauth_and_prefers_owned_token() {
+    for token in [None, Some("owned-oauth-token".to_owned())] {
+        let repository = Arc::new(MemoryRepository::default());
+        let oauth = Arc::new(FixedCatalogOAuth::default());
+        *oauth.token.lock().unwrap() = token.clone();
+        let provider = Arc::new(FixedCatalogProvider::default());
+        let app = app_with_catalog_options(
+            repository.clone(),
+            oauth,
+            provider.clone(),
+            Some("privileged-local-token".to_owned()),
+        );
+        let platform_id = seed_platform(&app, &repository).await;
+        let response = app.oneshot(management_request(Request::post(format!(
+            "/v1/integrations/canvas/platforms/{platform_id}/scope-discovery")),
+            json!({"include_assignments": false, "include_quizzes": false, "include_modules": false})))
+            .await.unwrap();
+        if token.is_some() {
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(provider.calls.lock().unwrap()[0].0, "owned-oauth-token");
+        } else {
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+            assert!(provider.calls.lock().unwrap().is_empty());
+        }
+    }
 }
