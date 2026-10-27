@@ -909,3 +909,76 @@ async fn public_profile_overrides_round_trip_without_private_material() {
         );
     }
 }
+
+#[tokio::test]
+async fn shared_native_trust_readbacks_match_http_and_pagination() {
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/trust-profile-readback-behavior.json"
+    ))
+    .unwrap();
+    let repository = Arc::new(MemoryTrustProfileRepository::default());
+    for case in fixture["cases"].as_array().unwrap() {
+        let stored: TrustProfile = serde_json::from_value(case["stored"].clone()).unwrap();
+        repository.save_profile(&stored, None).await.unwrap();
+        let response = request(
+            service_with_repository(repository.clone()),
+            "GET",
+            &format!("/v1/trust-profiles/{}", stored.id),
+            None,
+        )
+        .await;
+        assert_eq!(response.status(), 200, "{}", case["name"]);
+        assert_eq!(body(response).await, case["expected"], "{}", case["name"]);
+    }
+    for (query, length) in [
+        ("limit=0", 0),
+        ("limit=1", 1),
+        ("offset=1", 2),
+        ("limit=501", 3),
+        ("offset=18446744073709551615", 0),
+    ] {
+        let response = request(
+            service_with_repository(repository.clone()),
+            "GET",
+            &format!("/v1/trust-profiles?organization_id=org-1&{query}"),
+            None,
+        )
+        .await;
+        assert_eq!(response.status(), 200, "{query}");
+        assert_eq!(
+            body(response).await.as_array().unwrap().len(),
+            length,
+            "{query}"
+        );
+    }
+    for query in [
+        "limit=-1",
+        "offset=-1",
+        "limit=18446744073709551616",
+        "offset=18446744073709551616",
+    ] {
+        let response = request(
+            service_with_repository(repository.clone()),
+            "GET",
+            &format!("/v1/trust-profiles?organization_id=org-1&{query}"),
+            None,
+        )
+        .await;
+        assert_eq!(response.status(), 400, "{query}");
+    }
+    for index in 4..=501 {
+        let mut stored: TrustProfile =
+            serde_json::from_value(fixture["cases"][0]["stored"].clone()).unwrap();
+        stored.id = Uuid::from_u128(index);
+        repository.save_profile(&stored, None).await.unwrap();
+    }
+    let response = request(
+        service_with_repository(repository),
+        "GET",
+        "/v1/trust-profiles?organization_id=org-1&limit=501",
+        None,
+    )
+    .await;
+    assert_eq!(response.status(), 200);
+    assert_eq!(body(response).await.as_array().unwrap().len(), 500);
+}

@@ -59,6 +59,15 @@
           }
         }
       }
+    },
+    {
+      "name": "private_jwk_at_override_root",
+      "overrides": {
+        "KTY": {},
+        "D": {
+          "note": "synthetic-private"
+        }
+      }
     }
   ]
 }
