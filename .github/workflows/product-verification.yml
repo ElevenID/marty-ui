@@ -104,7 +104,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir candidate
-          gh run download "$PRODUCER_RUN_ID" --repo ElevenID/marty-ui \
+          gh run download "$PRODUCER_RUN_ID" --repo "$GITHUB_REPOSITORY" \
             --name "$ARTIFACT_NAME" --dir candidate
           test "$(find candidate -maxdepth 1 -type f | wc -l)" -eq 2
       - name: Verify archive on Linux
@@ -151,8 +151,8 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Path candidate | Out-Null
-          gh run download $env:PRODUCER_RUN_ID --repo ElevenID/marty-ui `
-            --name $env:ARTIFACT_NAME --dir candidate
+          $GITHUB_REPOSITORY = $env:GITHUB_REPOSITORY
+          gh run download $env:PRODUCER_RUN_ID --repo "$GITHUB_REPOSITORY" --name $env:ARTIFACT_NAME --dir candidate
           if ($LASTEXITCODE -ne 0) { throw 'candidate download failed' }
           if ((Get-ChildItem candidate -File).Count -ne 2) { throw 'candidate file count changed' }
       - name: Verify archive on Windows
@@ -214,7 +214,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir candidate
-          gh run download "$PRODUCER_RUN_ID" --repo ElevenID/marty-ui \
+          gh run download "$PRODUCER_RUN_ID" --repo "$GITHUB_REPOSITORY" \
             --name "$ARTIFACT_NAME" --dir candidate
           python scripts/verify_product_registry.py --payload-report linux/payload.json \
             --output registry.json
