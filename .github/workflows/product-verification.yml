@@ -1,0 +1,331 @@
+name: Independent product verification
+
+on:
+  workflow_dispatch:
+    inputs:
+      product:
+        description: Exact independent product candidate to verify
+        required: true
+        type: choice
+        options: [marty-server, marty-console]
+      producer_run_id:
+        description: Successful protected-main product producer run ID
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  identify:
+    if: github.repository == 'ElevenID/marty-ui'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      source_sha: ${{ steps.candidate.outputs.source_sha }}
+      attempt: ${{ steps.candidate.outputs.attempt }}
+      artifact_name: ${{ steps.candidate.outputs.artifact_name }}
+      artifact_id: ${{ steps.candidate.outputs.artifact_id }}
+      artifact_digest: ${{ steps.candidate.outputs.artifact_digest }}
+    steps:
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.11'
+      - name: Authenticate exact protected producer run and artifact
+        id: candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PRODUCT: ${{ inputs.product }}
+          PRODUCER_RUN_ID: ${{ inputs.producer_run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          python - <<'PY'
+          import json, os, re, subprocess
+          run_id = os.environ['PRODUCER_RUN_ID']
+          product = os.environ['PRODUCT']
+          assert re.fullmatch(r'[1-9][0-9]*', run_id)
+          assert product in ('marty-server', 'marty-console')
+          def api(path):
+              return json.loads(subprocess.check_output(
+                  ['gh', 'api', 'repos/ElevenID/marty-ui/' + path], text=True))
+          run = api('actions/runs/' + run_id)
+          assert (run['id'] == int(run_id)
+                  and run['repository']['full_name'] == 'ElevenID/marty-ui'
+                  and run['path'] == '.github/workflows/product-packages.yml'
+                  and run['event'] == 'workflow_dispatch'
+                  and run['head_branch'] == 'main'
+                  and run['status'] == 'completed'
+                  and run['conclusion'] == 'success'
+                  and re.fullmatch(r'[0-9a-f]{40}', run['head_sha']))
+          attempt = str(run['run_attempt'])
+          artifacts = api('actions/runs/' + run_id + '/artifacts')['artifacts']
+          pattern = re.compile(re.escape(product) + r'-[0-9]+\.[0-9]+\.[0-9]+'
+                               + r'-candidate-' + run_id + '-' + attempt + r'\Z')
+          found = [item for item in artifacts if pattern.fullmatch(item['name'])]
+          assert len(found) == 1 and found[0]['expired'] is False
+          artifact = found[0]
+          assert re.fullmatch(r'sha256:[0-9a-f]{64}', artifact['digest'])
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
+              for key, value in (
+                  ('source_sha', run['head_sha']), ('attempt', attempt),
+                  ('artifact_name', artifact['name']),
+                  ('artifact_id', str(artifact['id'])),
+                  ('artifact_digest', artifact['digest']),
+              ):
+                  output.write(f'{key}={value}\n')
+          PY
+
+  payload-linux:
+    needs: identify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.11'
+      - name: Download authenticated candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PRODUCER_RUN_ID: ${{ inputs.producer_run_id }}
+          ARTIFACT_NAME: ${{ needs.identify.outputs.artifact_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir candidate
+          gh run download "$PRODUCER_RUN_ID" --repo "$GITHUB_REPOSITORY" \
+            --name "$ARTIFACT_NAME" --dir candidate
+          test "$(find candidate -maxdepth 1 -type f | wc -l)" -eq 2
+      - name: Verify archive on Linux
+        env:
+          PRODUCT: ${{ inputs.product }}
+          PRODUCER_RUN_ID: ${{ inputs.producer_run_id }}
+          ATTEMPT: ${{ needs.identify.outputs.attempt }}
+          SOURCE_SHA: ${{ needs.identify.outputs.source_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/verify_product_candidate.py \
+            --archive candidate/product-package.tar.gz \
+            --checksum candidate/product-package.tar.gz.sha256 \
+            --product "$PRODUCT" --producer-run-id "$PRODUCER_RUN_ID" \
+            --producer-run-attempt "$ATTEMPT" --source-sha "$SOURCE_SHA" \
+            --output payload.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: product-payload-linux
+          path: payload.json
+          if-no-files-found: error
+
+  payload-windows:
+    needs: identify
+    runs-on: windows-2022
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.11'
+      - name: Download authenticated candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PRODUCER_RUN_ID: ${{ inputs.producer_run_id }}
+          ARTIFACT_NAME: ${{ needs.identify.outputs.artifact_name }}
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path candidate | Out-Null
+          $GITHUB_REPOSITORY = $env:GITHUB_REPOSITORY
+          gh run download $env:PRODUCER_RUN_ID --repo "$GITHUB_REPOSITORY" --name $env:ARTIFACT_NAME --dir candidate
+          if ($LASTEXITCODE -ne 0) { throw 'candidate download failed' }
+          if ((Get-ChildItem candidate -File).Count -ne 2) { throw 'candidate file count changed' }
+      - name: Verify archive on Windows
+        env:
+          PRODUCT: ${{ inputs.product }}
+          PRODUCER_RUN_ID: ${{ inputs.producer_run_id }}
+          ATTEMPT: ${{ needs.identify.outputs.attempt }}
+          SOURCE_SHA: ${{ needs.identify.outputs.source_sha }}
+        shell: pwsh
+        run: |
+          python scripts/verify_product_candidate.py `
+            --archive candidate/product-package.tar.gz `
+            --checksum candidate/product-package.tar.gz.sha256 `
+            --product $env:PRODUCT --producer-run-id $env:PRODUCER_RUN_ID `
+            --producer-run-attempt $env:ATTEMPT --source-sha $env:SOURCE_SHA `
+            --output payload.json
+          if ($LASTEXITCODE -ne 0) { throw 'Windows candidate verification failed' }
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: product-payload-windows
+          path: payload.json
+          if-no-files-found: error
+
+  attest:
+    needs: [identify, payload-linux, payload-windows]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      actions: read
+      packages: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.11'
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: product-payload-linux
+          path: linux
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: product-payload-windows
+          path: windows
+      - name: Require exact Windows and Linux agreement
+        shell: bash
+        run: cmp linux/payload.json windows/payload.json
+      - name: Download candidate and inspect OCI SBOM and provenance
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PRODUCER_RUN_ID: ${{ inputs.producer_run_id }}
+          ARTIFACT_NAME: ${{ needs.identify.outputs.artifact_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir candidate
+          gh run download "$PRODUCER_RUN_ID" --repo "$GITHUB_REPOSITORY" \
+            --name "$ARTIFACT_NAME" --dir candidate
+          python scripts/verify_product_registry.py --payload-report linux/payload.json \
+            --output registry.json
+      - name: Verify signed producer subjects and invocation
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ needs.identify.outputs.source_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir attestations
+          verify_one() {
+            local subject="$1" output="$2"
+            for trial in 1 2 3; do
+              if gh attestation verify "$subject" --repo ElevenID/marty-ui \
+                --signer-workflow ElevenID/marty-ui/.github/workflows/product-packages.yml \
+                --source-digest "$SOURCE_SHA" --source-ref refs/heads/main \
+                --deny-self-hosted-runners --format json > "$output"; then
+                return 0
+              fi
+              sleep "$trial"
+            done
+            return 1
+          }
+          verify_one candidate/product-package.tar.gz attestations/archive.json
+          verify_one candidate/product-package.tar.gz.sha256 attestations/checksum.json
+          jq -c '.images[]' linux/payload.json | while read -r image; do
+            role="$(jq -r .role <<< "$image")"
+            uri="$(jq -r .uri <<< "$image")"
+            digest="$(jq -r .digest <<< "$image")"
+            verify_one "oci://$uri@$digest" "attestations/$role.json"
+          done
+          python scripts/verify_product_attestations.py \
+            --payload-report linux/payload.json --registry-report registry.json \
+            --checksum candidate/product-package.tar.gz.sha256 \
+            --attestations attestations --output producer-attestations.json
+      - name: Emit exact candidate verification report
+        env:
+          PRODUCT: ${{ inputs.product }}
+          PRODUCER_RUN_ID: ${{ inputs.producer_run_id }}
+          SOURCE_SHA: ${{ needs.identify.outputs.source_sha }}
+          ATTEMPT: ${{ needs.identify.outputs.attempt }}
+          PRODUCER_ARTIFACT_ID: ${{ needs.identify.outputs.artifact_id }}
+          PRODUCER_ARTIFACT_DIGEST: ${{ needs.identify.outputs.artifact_digest }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          payload = json.loads(Path('linux/payload.json').read_text())
+          registry = json.loads(Path('registry.json').read_text())
+          signed = json.loads(Path('producer-attestations.json').read_text())
+          assert payload['result'] == registry['result'] == signed['result'] == 'pass'
+          assert payload['product'] == os.environ['PRODUCT']
+          assert payload['source_sha'] == os.environ['SOURCE_SHA']
+          assert payload['producer_run_id'] == os.environ['PRODUCER_RUN_ID']
+          assert payload['producer_run_attempt'] == os.environ['ATTEMPT']
+          product = payload['product']
+          version = payload['version']
+          report = {
+              'schema': 'marty.product-artifact-verification/v1',
+              'candidate': {
+                  'archive_sha256': payload['archive_sha256'],
+                  'package_sha256': payload['package_sha256'],
+                  'product': product, 'version': version,
+                  'tag': ('server-v' if product == 'marty-server' else 'console-v') + version,
+                  'source': {'repository': 'ElevenID/marty-ui',
+                             'commit': payload['source_sha']},
+                  'producer': {'workflow': '.github/workflows/product-packages.yml',
+                               'run_id': payload['producer_run_id'],
+                               'run_attempt': payload['producer_run_attempt']},
+                  'images': payload['images'],
+              },
+              'verification': {
+                  'repository': 'ElevenID/marty-ui',
+                  'workflow': '.github/workflows/product-verification.yml',
+                  'run_id': os.environ['GITHUB_RUN_ID'],
+                  'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'],
+                  'conclusion': 'success',
+              },
+              'checks': {name: 'pass' for name in
+                         ('payload', 'provenance', 'sbom', 'cross_host')},
+              'result': 'pass',
+          }
+          detail = {
+              'schema': 'marty.product-artifact-verification-detail/v1',
+              'producer_artifact_id': os.environ['PRODUCER_ARTIFACT_ID'],
+              'producer_artifact_digest': os.environ['PRODUCER_ARTIFACT_DIGEST'],
+              'payload': payload, 'registry': registry,
+              'producer_attestations': signed,
+              'cross_host_report_sha256': 'sha256:' + hashlib.sha256(
+                  Path('linux/payload.json').read_bytes()).hexdigest(),
+          }
+          Path('verification.json').write_text(json.dumps(report, sort_keys=True, indent=2) + '\n')
+          Path('verification-detail.json').write_text(json.dumps(detail, sort_keys=True, indent=2) + '\n')
+          Path('verification.json.sha256').write_text(
+              hashlib.sha256(Path('verification.json').read_bytes()).hexdigest()
+              + '  verification.json\n')
+          PY
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+        with:
+          subject-path: |
+            verification.json
+            verification-detail.json
+            verification.json.sha256
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: product-verification-${{ inputs.product }}-${{ inputs.producer_run_id }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            verification.json
+            verification-detail.json
+            verification.json.sha256
+          if-no-files-found: error
