@@ -123,6 +123,15 @@ function unchangedOwnedRevision(snapshot, lastOwnedRevision) {
   return snapshot.config;
 }
 
+function withoutAuthReferences(config) {
+  const publicValue = structuredClone(config);
+  for (const service of publicValue?.services || []) {
+    delete service.auth_reference;
+    delete service.auth_reference_envelope;
+  }
+  return publicValue;
+}
+
 function createConfigMutationJournal(artifactDir, originalConfig, revision) {
   if (!STRONG_CONFIG_REVISION.test(revision || '')) {
     throw new Error('Cannot journal an unbound signing configuration');
@@ -145,11 +154,7 @@ function createConfigMutationJournal(artifactDir, originalConfig, revision) {
     }
   };
   try {
-    const originalPublicConfig = structuredClone(writableConfig(originalConfig));
-    for (const service of originalPublicConfig.services) {
-      delete service.auth_reference;
-      delete service.auth_reference_envelope;
-    }
+    const originalPublicConfig = withoutAuthReferences(writableConfig(originalConfig));
     append({ stage: 'ORIGINAL', organizationId: ORG_ID, originalPublicConfig,
       lastOwnedRevision: revision });
   } catch (error) {
@@ -164,7 +169,7 @@ function createConfigMutationJournal(artifactDir, originalConfig, revision) {
         throw new Error('Cannot dispatch an unbound signing mutation');
       }
       append({ stage: 'INPUT_OUTCOME_UNKNOWN', action, expectedRevision,
-        requestSha256: stateHash(body) });
+        requestPublicSha256: stateHash(withoutAuthReferences(body)) });
     },
     confirmed: (action, nextRevision) => {
       if (!STRONG_CONFIG_REVISION.test(nextRevision || '')) {

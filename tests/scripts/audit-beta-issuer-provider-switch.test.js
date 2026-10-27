@@ -200,15 +200,19 @@ test('D02 private journal seals original public config and unknown input before 
     journal.intent('select-provider-b', revision, { default_service_id: 'provider-b' });
     journal.confirmed('select-provider-b', '"r-00000000-0000-4000-8000-000000000002"');
     journal.intent('restore-original-config', '"r-00000000-0000-4000-8000-000000000002"', original);
+    journal.intent('restore-original-config', '"r-00000000-0000-4000-8000-000000000002"',
+      { ...original, services: [{ ...original.services[0], auth_reference_envelope: 'another-secret' }] });
     journal.close();
     const raw = fs.readFileSync(path.join(directory, 'signing-config-mutations.private.jsonl'), 'utf8');
     const entries = raw.trim().split('\n').map(JSON.parse);
     assert.deepEqual(entries.map((entry) => entry.stage),
-      ['ORIGINAL', 'INPUT_OUTCOME_UNKNOWN', 'CONFIRMED', 'INPUT_OUTCOME_UNKNOWN']);
+      ['ORIGINAL', 'INPUT_OUTCOME_UNKNOWN', 'CONFIRMED', 'INPUT_OUTCOME_UNKNOWN', 'INPUT_OUTCOME_UNKNOWN']);
+    assert.equal(entries[3].requestPublicSha256, entries[4].requestPublicSha256);
     assert.equal(entries[0].originalPublicConfig.services[0].auth_reference, undefined);
     assert.equal(entries[0].originalPublicConfig.services[0].auth_reference_envelope, undefined);
     assert.equal(original.services[0].auth_reference_envelope, 'must-not-copy');
     assert.equal(raw.includes('must-not-copy'), false);
+    assert.equal(raw.includes('another-secret'), false);
     assert.throws(() => createConfigMutationJournal(directory, original, revision), /EEXIST/);
   } finally {
     assert.ok(path.resolve(directory).startsWith(path.resolve(os.tmpdir()) + path.sep));
