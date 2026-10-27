@@ -356,6 +356,20 @@ def test_shipped_renderer_needs_no_repository_frontend_or_nonstdlib_install(sour
     env.pop("PYTHONPATH", None)
     subprocess.run(args, cwd=tmp_path, env=env, check=True)
     assert json.loads(output.read_bytes())["x-marty-product"]["product"] == product
+    if product == "marty-server":
+        preflight = tmp_path / "runtime-input-preflight.json"
+        check = subprocess.run([
+            sys.executable, str(bundle / "scripts/check_product_runtime_inputs.py"),
+            "--compose", str(output), "--package", str(bundle / "product-package.json"),
+            "--output", str(preflight),
+        ], cwd=tmp_path, env=env, check=False, capture_output=True, text=True)
+        assert check.returncode == 2, check.stderr
+        result = json.loads(preflight.read_bytes())
+        assert result["result"] == "blocked_missing_runtime_inputs"
+        assert result["checks"]["placeholder_external_images"] > 0
+    else:
+        assert not (bundle / "scripts/check_product_runtime_inputs.py").exists()
+        assert not (bundle / "scripts/product_evidence_intake.py").exists()
     with pytest.raises(ValueError, match="must be new"):
         MODULE.PLAN["write_bundle"](ROOT, plan, selected, bundle)
 
