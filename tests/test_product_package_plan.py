@@ -230,7 +230,7 @@ def test_actual_cli_produces_and_assembles_the_selected_source_plan(tmp_path, pr
 
 def test_frozen_server_plan_binds_runtime_assets_but_console_has_none(tmp_path):
     root = repository(tmp_path, "marty-server")
-    for relative in ["scripts/compose_product_packages.py", "scripts/product_package_plan.py", "deploy-config/schemas/product-package.schema.json", "docs/INDEPENDENT_PRODUCT_PACKAGES.md", "LICENSE"]:
+    for relative in ["scripts/compose_product_packages.py", "scripts/product_package_plan.py", "scripts/check_product_runtime_inputs.py", "scripts/product_evidence_intake.py", "deploy-config/schemas/product-package.schema.json", "docs/INDEPENDENT_PRODUCT_PACKAGES.md", "LICENSE"]:
         target = root / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes((ROOT / relative).read_bytes())

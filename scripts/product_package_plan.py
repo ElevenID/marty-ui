@@ -217,7 +217,10 @@ def write_bundle(root: Path, plan: dict, package: dict, output: Path) -> None:
     require(plan["runtime_files"] == runtime_inputs(root, package["product"]), "runtime source inputs changed")
     for item in plan["runtime_files"]:
         files["runtime/" + item["path"]] = runtime_payload(root, item["path"])
-    if package["product"] == "marty-console":
+    if package["product"] == "marty-server":
+        for name in ("scripts/check_product_runtime_inputs.py", "scripts/product_evidence_intake.py"):
+            files[name] = source_file(root, name).read_bytes()
+    else:
         files["docker-compose.console.yml"] = source_file(root, "docker-compose.console.yml").read_bytes()
     for name, value in [("build-plan.json", plan), ("product-package.json", package)]:
         files[name] = (json.dumps(value, sort_keys=True, indent=2) + "\n").encode("utf-8")
