@@ -182,3 +182,25 @@ record must be a separate, digest-bound object. Support windows and supported
 profile claims need the relevant product decision and qualifying runtime and
 upgrade/recovery evidence before publication. No new version tag or supported
 release is created by the candidate producer.
+
+`scripts/product_evidence_intake.py` defines the structural report boundary.
+It accepts the extracted candidate `product-package.json`, its original tarball,
+an external JSON report, and the expected SHA-256 of that report. The report
+schema is `marty.product-artifact-verification/v1`. Its `candidate` object must
+exactly name the archive and package file SHA-256 values, product, version, tag,
+source, producer run/attempt and sorted image role/URI/digest/platform entries.
+Its `verification` object names the repository, workflow path, run ID, attempt
+and successful conclusion; `checks` must have passing `payload`, `provenance`,
+`sbom` and `cross_host` verdicts, and `result` must be `pass`. This is the
+machine-readable intake contract for the independent verifier; the report
+artifact name remains a workflow input.
+
+The intake emits `marty.product-evidence-intake/v1` with state
+`pending_authenticated_promotion`. It only checks report structure, checksums
+and identity equality. Its caller-provided expected checksum and run fields do
+not authenticate the report. A promotion workflow must independently confirm
+the trusted report checksum and originating workflow/run/attempt against the
+connected source and attestation, then require product runtime and compatibility
+results before publishing a qualification record or version tag. Until that
+workflow and real verifier evidence exist, the intake is an unpublished
+development boundary and confers no support status.
