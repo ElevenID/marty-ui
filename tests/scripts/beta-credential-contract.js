@@ -104,8 +104,13 @@ function membershipLoginBehaviorAssertions(report) {
       && report?.badge?.storedExpectedCredential === true,
     same_device_passwordless_login: report?.presentation?.accepted === true
       && report?.completion?.status === 'completed'
+      && report?.completion?.observedNonceStatus === 'completed'
       && report?.completion?.authenticated === true,
   };
+}
+
+function requireCompletedLoginNonce(status) {
+  if (status !== 'completed') throw new Error('Credential login nonce did not complete');
 }
 
 function credentialLifecycleBehaviorAssertions(report) {
@@ -140,6 +145,7 @@ module.exports = {
   credentialLifecycleBehaviorAssertions,
   credentialInventoryEvidence,
   membershipLoginBehaviorAssertions,
+  requireCompletedLoginNonce,
   verificationResultEvidence,
   verificationSessionRequest,
 };

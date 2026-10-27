@@ -13,6 +13,7 @@ const {
   credentialLifecycleBehaviorAssertions,
   credentialInventoryEvidence,
   membershipLoginBehaviorAssertions,
+  requireCompletedLoginNonce,
   verificationResultEvidence,
   verificationSessionRequest,
 } = require('./beta-credential-contract');
@@ -155,18 +156,29 @@ test('verification session request fails closed without exact public identifiers
 });
 
 test('membership recording exposes the three exact happy-path behavior assertions', () => {
+  assert.doesNotThrow(() => requireCompletedLoginNonce('completed'));
+  for (const status of ['failed', 'expired', 'pending-timeout', undefined]) {
+    assert.throws(() => requireCompletedLoginNonce(status), /nonce did not complete/);
+  }
   assert.deepEqual(membershipLoginBehaviorAssertions({
     badge: {
       offerSource: 'canonical-ui', loggedOut: true, accepted: true, storedExpectedCredential: true,
     },
     presentation: { accepted: true },
-    completion: { status: 'completed', authenticated: true },
+    completion: { status: 'completed', observedNonceStatus: 'completed', authenticated: true },
   }), {
     governed_claim: true,
     conformant_open_badge_issuance: true,
     same_device_passwordless_login: true,
   });
   assert.equal(membershipLoginBehaviorAssertions({}).governed_claim, false);
+  for (const observedNonceStatus of ['failed', 'expired', 'pending-timeout', null]) {
+    assert.equal(membershipLoginBehaviorAssertions({
+      presentation: { accepted: true },
+      completion: { status: 'completed', observedNonceStatus, authenticated: true },
+    }).same_device_passwordless_login, false,
+    'An authenticated browser cannot substitute for completion of this login nonce');
+  }
 });
 
 test('lifecycle recording requires status-aware allow and deny decisions', () => {

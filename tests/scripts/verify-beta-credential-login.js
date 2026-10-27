@@ -29,6 +29,7 @@ const {
   DEFAULT_BETA_ORGANIZATION_ID,
   credentialInventoryEvidence,
   membershipLoginBehaviorAssertions,
+  requireCompletedLoginNonce,
 } = require('./beta-credential-contract');
 const {
   installUiCandidateRoute,
@@ -364,6 +365,9 @@ async function runCredentialLogin({ retainedFirstParty = false, evidence = null 
       const body = await response.json().catch(() => null);
       return body?.status && body.status !== 'pending' ? body : null;
     }, loginRequest.nonce), 60_000, 1_000).catch(() => ({ status: 'pending-timeout' }));
+    report.completion = { status: completion?.status || null,
+      observedNonceStatus: completion?.status || null, authenticated: false };
+    requireCompletedLoginNonce(completion?.status);
     if (completion?.redirect_to) {
       await loginPage.goto(new URL(completion.redirect_to, BETA_ORIGIN).href, {
         waitUntil: 'domcontentloaded', timeout: 60_000,
@@ -382,11 +386,8 @@ async function runCredentialLogin({ retainedFirstParty = false, evidence = null 
     });
     await loginPage.screenshot({ path: path.join(artifactDir, '02-login-complete.png'), fullPage: true });
 
-    const effectiveCompletionStatus = auth.body?.authenticated === true
-      ? 'completed'
-      : completion?.status || null;
     report.completion = {
-      status: effectiveCompletionStatus,
+      status: completion.status,
       observedNonceStatus: completion?.status || null,
       authenticated: auth.body?.authenticated === true,
       authStatus: auth.status,
