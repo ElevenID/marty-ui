@@ -14,6 +14,7 @@ const {
   credentialInventoryEvidence,
   membershipLoginBehaviorAssertions,
   requireCompletedLoginNonce,
+  isTerminalLoginNonceStatus,
   verificationResultEvidence,
   verificationSessionRequest,
 } = require('./beta-credential-contract');
@@ -156,6 +157,12 @@ test('verification session request fails closed without exact public identifiers
 });
 
 test('membership recording exposes the three exact happy-path behavior assertions', () => {
+  for (const status of ['completed', 'failed', 'expired']) {
+    assert.equal(isTerminalLoginNonceStatus({ status }), true);
+  }
+  for (const status of ['pending', 'pending-timeout', undefined]) {
+    assert.equal(isTerminalLoginNonceStatus({ status }), false);
+  }
   assert.doesNotThrow(() => requireCompletedLoginNonce('completed'));
   for (const status of ['failed', 'expired', 'pending-timeout', undefined]) {
     assert.throws(() => requireCompletedLoginNonce(status), /nonce did not complete/);

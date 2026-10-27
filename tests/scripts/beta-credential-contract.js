@@ -113,6 +113,10 @@ function requireCompletedLoginNonce(status) {
   if (status !== 'completed') throw new Error('Credential login nonce did not complete');
 }
 
+function isTerminalLoginNonceStatus(body) {
+  return ['completed', 'failed', 'expired'].includes(body?.status);
+}
+
 function credentialLifecycleBehaviorAssertions(report) {
   const suspended = report?.suspend?.verification?.result;
   const reinstated = report?.reinstate?.verification?.result;
@@ -146,6 +150,7 @@ module.exports = {
   credentialInventoryEvidence,
   membershipLoginBehaviorAssertions,
   requireCompletedLoginNonce,
+  isTerminalLoginNonceStatus,
   verificationResultEvidence,
   verificationSessionRequest,
 };
