@@ -213,7 +213,12 @@ impl Journal {
         self.identity.validate()?;
         match &self.scope {
             ExecutionScope::AcceptanceOnly(scope) => scope.validate()?,
-            ExecutionScope::CandidateTest(scope) => scope.validate()?,
+            ExecutionScope::CandidateTest(scope) => {
+                scope.validate()?;
+                if self.identity.inventory_sha256 != format!("sha256:{}", scope.inventory_sha256) {
+                    return Err("candidate test inventory identity differs".into());
+                }
+            }
             ExecutionScope::Unclassified => {}
         }
         if !matches!(self.scope, ExecutionScope::Unclassified) && self.phase == Phase::Ready {
@@ -1451,6 +1456,9 @@ impl InstallerState {
     ) -> Result<Self> {
         runtime.validate()?;
         scope.validate()?;
+        if identity.inventory_sha256 != format!("sha256:{}", scope.inventory_sha256) {
+            return Err("candidate test inventory identity differs".into());
+        }
         Self::create_internal(
             path,
             identity,
@@ -1723,10 +1731,20 @@ mod tests {
         std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
         let path = root.path().join("nightly-test");
         let scope = CandidateTestScope {
-            inventory_sha256: "a".repeat(64),
+            inventory_sha256: "b".repeat(64),
             build_run_id: 42,
             build_run_attempt: 1,
         };
+        let mut wrong = scope.clone();
+        wrong.inventory_sha256 = "a".repeat(64);
+        assert!(InstallerState::create_test_with_runtime(
+            &path,
+            identity(),
+            acceptance_runtime(),
+            wrong,
+        )
+        .is_err());
+        assert!(!path.exists());
         let mut state = InstallerState::create_test_with_runtime(
             &path,
             identity(),
