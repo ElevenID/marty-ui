@@ -296,6 +296,8 @@ pub struct PhysicalDocumentRequest {
     pub organization_id: String,
     pub flow_instance_id: String,
     pub operation: PhysicalDocumentOperation,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_idempotency_key: Option<String>,
     #[serde(default)]
     pub data: BTreeMap<String, Value>,
 }

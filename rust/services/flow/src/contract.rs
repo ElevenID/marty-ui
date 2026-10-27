@@ -32,6 +32,11 @@ pub const HTTP_ROUTES: &[(&str, &str)] = &[
     ("GET", "/health/native-backend"),
 ];
 
+/// Additive native physical-start recovery surface. The published Flow v1
+/// route list above remains frozen for legacy consumers.
+pub const PHYSICAL_START_HTTP_ROUTES: &[(&str, &str)] =
+    &[("GET", "/v1/flows/physical-start-intents")];
+
 pub const GRPC_METHODS: &[&str] = &[
     "CreateFlowDefinition",
     "GetFlowDefinition",

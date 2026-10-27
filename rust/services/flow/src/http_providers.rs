@@ -28,6 +28,7 @@ struct RequestContext<'a> {
     principal_id: Option<&'a str>,
     organization_id: Option<&'a str>,
     grant: Option<&'a str>,
+    idempotency_key: Option<&'a str>,
     gateway_api_key_actor: Option<&'a marty_api_key_policy::GatewayApiKeyActor>,
 }
 
@@ -136,6 +137,19 @@ impl BoundedHttpClient {
         body: Option<Value>,
         organization_id: &str,
     ) -> Result<T, FlowProviderError> {
+        self.json_for_organization_with_key(method, path, query, body, organization_id, None)
+            .await
+    }
+
+    async fn json_for_organization_with_key<T: DeserializeOwned>(
+        &self,
+        method: Method,
+        path: &str,
+        query: &[(&str, &str)],
+        body: Option<Value>,
+        organization_id: &str,
+        idempotency_key: Option<&str>,
+    ) -> Result<T, FlowProviderError> {
         self.json_with_context(
             method,
             path,
@@ -143,6 +157,7 @@ impl BoundedHttpClient {
             body,
             RequestContext {
                 organization_id: Some(organization_id),
+                idempotency_key,
                 ..RequestContext::default()
             },
         )
@@ -188,6 +203,9 @@ impl BoundedHttpClient {
         }
         if let Some(service_token) = &self.service_token {
             request = request.header("X-Service-Token", service_token);
+        }
+        if let Some(idempotency_key) = context.idempotency_key {
+            request = request.header("Idempotency-Key", idempotency_key);
         }
         if let Some(actor) = context.gateway_api_key_actor {
             if self.service_token.is_none() {
@@ -774,7 +792,16 @@ impl PhysicalDocumentProvider for HttpPhysicalDocumentProvider {
             path: format!("/{path}"),
         };
         let data: BTreeMap<String, Value> = http
-            .json_for_organization(method, &path, &[], body, &request.organization_id)
+            .json_for_organization_with_key(
+                method,
+                &path,
+                &[],
+                body,
+                &request.organization_id,
+                (request.operation == PhysicalDocumentOperation::Initialize)
+                    .then_some(request.start_idempotency_key.as_deref())
+                    .flatten(),
+            )
             .await?;
         let status = data
             .get("status")
@@ -1126,6 +1153,7 @@ mod tests {
             organization_id: "org-1".into(),
             flow_instance_id: "flow-1".into(),
             operation,
+            start_idempotency_key: None,
             data: BTreeMap::from([
                 ("application_id".into(), json!("application-1")),
                 ("passed".into(), json!(true)),

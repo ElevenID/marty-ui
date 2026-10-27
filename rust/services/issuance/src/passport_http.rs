@@ -31,7 +31,9 @@ use uuid::Uuid;
 use zeroize::Zeroizing;
 
 use crate::{
+    canvas_award_candidate::python_canonical_json,
     config::IssuanceServiceConfig,
+    initiation::normalize_idempotency_key,
     passport_artifact_kms::{KmsArtifactError, KmsPassportArtifactCipher},
     passport_beta_material::{material_digests, PassportBetaMaterialDigests},
     passport_bureau::{
@@ -536,6 +538,27 @@ fn header<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
     headers.get(name).and_then(|value| value.to_str().ok())
 }
 
+fn passport_start_header_key(headers: &HeaderMap) -> Result<Option<String>, PassportHttpError> {
+    let mut values = headers.get_all("idempotency-key").iter();
+    let first = values.next();
+    if values.next().is_some() {
+        return Err(PassportHttpError::InvalidStartIdempotencyKey);
+    }
+    let raw = first
+        .map(|value| {
+            value
+                .to_str()
+                .map_err(|_| PassportHttpError::InvalidStartIdempotencyKey)
+        })
+        .transpose()?;
+    let normalized = normalize_idempotency_key(raw)
+        .map_err(|_| PassportHttpError::InvalidStartIdempotencyKey)?;
+    if first.is_some() && normalized.is_none() {
+        return Err(PassportHttpError::InvalidStartIdempotencyKey);
+    }
+    Ok(normalized)
+}
+
 fn python_model_body(body: &[u8], headers: &HeaderMap) -> Result<Value, PassportHttpError> {
     if body.is_empty() {
         return Ok(Value::Null);
@@ -569,6 +592,10 @@ enum PassportHttpError {
     OperatorUnauthorized,
     #[error("Organization context does not match requested organization")]
     OrganizationMismatch,
+    #[error("Physical document Idempotency-Key is invalid")]
+    InvalidStartIdempotencyKey,
+    #[error("Physical document Idempotency-Key is bound to another request")]
+    StartIdempotencyConflict,
     #[error("{0}")]
     InvalidRequest(PassportRequestError),
     #[error("Physical document application not found")]
@@ -630,6 +657,7 @@ impl IntoResponse for PassportHttpError {
             | Self::OperatorUnauthorized => StatusCode::UNAUTHORIZED,
             Self::OrganizationMismatch => StatusCode::FORBIDDEN,
             Self::InvalidRequest(_)
+            | Self::InvalidStartIdempotencyKey
             | Self::MissingDataGroups
             | Self::Signer(SignerError::MissingIssuerDid) => StatusCode::UNPROCESSABLE_ENTITY,
             Self::ApplicationNotFound | Self::WebhookJobNotFound => StatusCode::NOT_FOUND,
@@ -640,6 +668,7 @@ impl IntoResponse for PassportHttpError {
             | Self::ProviderUnavailable => StatusCode::SERVICE_UNAVAILABLE,
             Self::Signer(SignerError::InvalidManagedMaterial) => StatusCode::BAD_GATEWAY,
             Self::Signer(SignerError::UntrustedDsc)
+            | Self::StartIdempotencyConflict
             | Self::QualityNotReady
             | Self::ActivationNotReady
             | Self::ConcurrentChange
@@ -702,6 +731,10 @@ pub fn router(service: PassportHttpService) -> Router {
     Router::new()
         .route("/v1/passport/capabilities", get(capabilities))
         .route("/v1/passport/applications", post(create_application))
+        .route(
+            "/internal/passport/flow-starts/{flow_instance_id}",
+            get(read_flow_start),
+        )
         .route(
             "/v1/passport/applications/{application_id}/generate-data-groups",
             post(generate_data_groups),
@@ -815,6 +848,36 @@ async fn create_application(
     request
         .validate()
         .map_err(PassportHttpError::InvalidRequest)?;
+    let start_binding = if let Some(key) = passport_start_header_key(&headers)? {
+        let key_hash = hex::encode(Sha256::digest(
+            format!("marty:passport-start-key:v1:{key}").as_bytes(),
+        ));
+        let request_hash = hex::encode(Sha256::digest(
+            format!(
+                "marty:passport-start-request:v1:{}",
+                python_canonical_json(&payload)
+            )
+            .as_bytes(),
+        ));
+        Some((key_hash, request_hash))
+    } else {
+        None
+    };
+    if let Some((key_hash, request_hash)) = &start_binding {
+        if let Some((existing, stored_hash)) = service
+            .repository
+            .get_by_start_key(&principal, key_hash)
+            .await
+            .map_err(PassportHttpError::Storage)?
+        {
+            if stored_hash != *request_hash
+                || existing.flow_execution_id != request.flow_execution_id
+            {
+                return Err(PassportHttpError::StartIdempotencyConflict);
+            }
+            return Ok((StatusCode::CREATED, Json(safe(&existing))));
+        }
+    }
     if matches!(service.signer.as_ref(), Some(PassportSigner::Managed(_)))
         && request
             .issuer_did
@@ -828,33 +891,68 @@ async fn create_application(
         .cipher()?
         .encrypt(&request.organization_id, &id, &request.sensitive_artifact())
         .await?;
-    let inserted = service
-        .repository
-        .insert(
-            &principal,
-            &PassportJobInsert {
-                id: id.clone(),
-                application_id: Uuid::new_v4().to_string(),
-                flow_execution_id: request.flow_execution_id,
-                application_template_id: request.application_template_id,
-                credential_template_id: request.credential_template_id,
-                revocation_profile_id: None,
-                delivery_destination_profile_id: request.delivery_destination_profile_id,
-                document_type: serde_json::to_value(request.document_type)
-                    .expect("document type serializes")
-                    .as_str()
-                    .expect("document type string")
-                    .to_owned(),
-                country_code: request.country_code,
-                issuer_did: request.issuer_did,
-                secure_artifact_ciphertext: ciphertext,
-                secure_artifact_reference: format!("physical-artifact://{id}"),
-            },
-            Utc::now(),
-        )
-        .await
-        .map_err(PassportHttpError::Storage)?;
+    let pending = PassportJobInsert {
+        id: id.clone(),
+        application_id: Uuid::new_v4().to_string(),
+        flow_execution_id: request.flow_execution_id,
+        application_template_id: request.application_template_id,
+        credential_template_id: request.credential_template_id,
+        revocation_profile_id: None,
+        delivery_destination_profile_id: request.delivery_destination_profile_id,
+        document_type: serde_json::to_value(request.document_type)
+            .expect("document type serializes")
+            .as_str()
+            .expect("document type string")
+            .to_owned(),
+        country_code: request.country_code,
+        issuer_did: request.issuer_did,
+        secure_artifact_ciphertext: ciphertext,
+        secure_artifact_reference: format!("physical-artifact://{id}"),
+    };
+    let inserted = if let Some((key_hash, request_hash)) = &start_binding {
+        service
+            .repository
+            .insert_idempotent(&principal, &pending, Utc::now(), key_hash, request_hash)
+            .await
+            .map_err(PassportHttpError::Storage)?
+            .ok_or(PassportHttpError::StartIdempotencyConflict)?
+            .0
+    } else {
+        service
+            .repository
+            .insert(&principal, &pending, Utc::now())
+            .await
+            .map_err(PassportHttpError::Storage)?
+    };
     Ok((StatusCode::CREATED, Json(safe(&inserted))))
+}
+
+/// Read back an owned native start after a lost Flow/provider response. This
+/// internal route never returns the encrypted artifact or request body.
+async fn read_flow_start(
+    State(service): State<PassportHttpService>,
+    Path(flow_instance_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, PassportHttpError> {
+    let principal = service.authenticate_internal_flow(&headers)?;
+    let id =
+        Uuid::parse_str(&flow_instance_id).map_err(|_| PassportHttpError::ApplicationNotFound)?;
+    if id.to_string() != flow_instance_id {
+        return Err(PassportHttpError::ApplicationNotFound);
+    }
+    let key_hash = hex::encode(Sha256::digest(
+        format!("marty:passport-start-key:v1:{flow_instance_id}").as_bytes(),
+    ));
+    let (job, _) = service
+        .repository
+        .get_by_start_key(&principal, &key_hash)
+        .await
+        .map_err(PassportHttpError::Storage)?
+        .ok_or(PassportHttpError::ApplicationNotFound)?;
+    if job.flow_execution_id != flow_instance_id {
+        return Err(PassportHttpError::ApplicationNotFound);
+    }
+    Ok(Json(safe(&job)))
 }
 
 async fn generate_data_groups(

@@ -42,6 +42,196 @@ use sqlx::postgres::PgPoolOptions;
 use tokio::sync::{oneshot, Barrier};
 use tower::ServiceExt;
 
+#[tokio::test]
+async fn keyed_physical_start_creates_one_tenant_owned_job_and_preserves_legacy_calls() {
+    let Ok(database_url) = std::env::var("MARTY_PASSPORT_POSTGRES_TEST_URL") else {
+        eprintln!(
+            "MARTY_PASSPORT_POSTGRES_TEST_URL is not configured; PostgreSQL contract skipped"
+        );
+        return;
+    };
+    let parsed = url::Url::parse(&database_url).unwrap();
+    assert!(matches!(parsed.host_str(), Some("127.0.0.1" | "localhost")));
+    assert_eq!(parsed.path(), "/marty_passport_contract_test");
+    let pool = PgPoolOptions::new()
+        .max_connections(4)
+        .connect(&database_url)
+        .await
+        .unwrap();
+    sqlx::query("DROP SCHEMA IF EXISTS issuance_service CASCADE")
+        .execute(&pool)
+        .await
+        .unwrap();
+    migration::migrate_passport(&pool).await.unwrap();
+    migration::validate_passport(&pool).await.unwrap();
+    sqlx::query("DROP INDEX issuance_service.ux_physical_document_jobs_org_start_key")
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(migration::validate_passport(&pool).await.is_err());
+    migration::migrate_passport(&pool).await.unwrap();
+    migration::validate_passport(&pool).await.unwrap();
+    let ring = PassportTenantKeyring::from_json(&format!(
+        "{{\"org-a\":\"{}\",\"org-b\":\"{}\"}}",
+        "a".repeat(32),
+        "b".repeat(32)
+    ))
+    .unwrap();
+    let org_a = ring
+        .authenticate(Some("org-a"), Some(&"a".repeat(32)))
+        .unwrap();
+    let org_b = ring
+        .authenticate(Some("org-b"), Some(&"b".repeat(32)))
+        .unwrap();
+    let repository = PostgresPassportRepository::new(pool.clone());
+    let now = Utc::now();
+    let job = |id: &str| PassportJobInsert {
+        id: id.into(),
+        application_id: format!("app-{id}"),
+        flow_execution_id: "90000000-0000-0000-0000-000000000041".into(),
+        application_template_id: "app-template".into(),
+        credential_template_id: "credential-template".into(),
+        revocation_profile_id: None,
+        delivery_destination_profile_id: "destination".into(),
+        document_type: "TD3".into(),
+        country_code: "USA".into(),
+        issuer_did: None,
+        secure_artifact_ciphertext: "synthetic-encrypted-fixture".into(),
+        secure_artifact_reference: format!("physical-artifact://{id}"),
+    };
+    let key = hex::encode(Sha256::digest(
+        b"marty:passport-start-key:v1:90000000-0000-0000-0000-000000000041",
+    ));
+    let digest = "b".repeat(64);
+    let left_job = job("left");
+    let right_job = job("right");
+    let (left, right) = tokio::join!(
+        repository.insert_idempotent(&org_a, &left_job, now, &key, &digest),
+        repository.insert_idempotent(&org_a, &right_job, now, &key, &digest),
+    );
+    let (left, right) = (left.unwrap().unwrap(), right.unwrap().unwrap());
+    assert_eq!(left.0.id, right.0.id);
+    assert_ne!(left.1, right.1);
+    assert!(repository
+        .get_by_start_key(&org_b, &key)
+        .await
+        .unwrap()
+        .is_none());
+    let service_token = "synthetic-internal-passport-token-00000001";
+    let config = IssuanceServiceConfig::from_values(vec![
+        ("PASSPORT_NATIVE_HTTP_ENABLED".into(), "true".into()),
+        (
+            "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED".into(),
+            "true".into(),
+        ),
+        ("GRPC_SERVICE_TOKEN".into(), service_token.into()),
+        ("DATABASE_URL".into(), database_url.clone()),
+    ])
+    .unwrap();
+    let app = passport_router(
+        PassportHttpService::from_config(&config, pool.clone())
+            .unwrap()
+            .unwrap(),
+    );
+    let duplicate_flow_id = "90000000-0000-0000-0000-000000000099";
+    let duplicate_body = json!({
+        "organization_id":"org-a", "flow_execution_id":duplicate_flow_id,
+        "application_template_id":"app-template", "credential_template_id":"credential-template",
+        "delivery_destination_profile_id":"destination", "country_code":"USA",
+        "applicant":{}, "mrz":{}, "data_groups":{"DG1":"YQ==", "DG2":"Yg=="}
+    });
+    for keys in [vec!["owned-1", "owned-2"], vec!["owned-1,owned-2"]] {
+        let mut request = Request::builder()
+            .method("POST")
+            .uri("/v1/passport/applications")
+            .header("content-type", "application/json")
+            .header("x-organization-id", "org-a")
+            .header("x-api-key", service_token);
+        for key in keys {
+            request = request.header("idempotency-key", key);
+        }
+        let response = app
+            .clone()
+            .oneshot(
+                request
+                    .body(Body::from(duplicate_body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let body: Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), 8192).await.unwrap()).unwrap();
+        assert_eq!(
+            body["detail"],
+            "Physical document Idempotency-Key is invalid"
+        );
+        let count: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM issuance_service.physical_document_jobs WHERE flow_execution_id = $1"
+        ).bind(duplicate_flow_id).fetch_one(&pool).await.unwrap();
+        assert_eq!(count, 0);
+    }
+    let flow_path = "/internal/passport/flow-starts/90000000-0000-0000-0000-000000000041";
+    for (organization, internal_token, expected) in [
+        ("org-a", Some(service_token), StatusCode::OK),
+        ("org-b", Some(service_token), StatusCode::NOT_FOUND),
+        ("org-a", None, StatusCode::UNAUTHORIZED),
+    ] {
+        let mut request = Request::builder()
+            .method("GET")
+            .uri(flow_path)
+            .header("x-organization-id", organization)
+            .header("x-api-key", service_token);
+        if let Some(internal_token) = internal_token {
+            request = request.header("x-service-token", internal_token);
+        }
+        let response = app
+            .clone()
+            .oneshot(request.body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected);
+        if expected == StatusCode::OK {
+            let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+            let safe: Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(safe["organization_id"], "org-a");
+            assert_eq!(
+                safe["flow_execution_id"],
+                "90000000-0000-0000-0000-000000000041"
+            );
+            assert!(safe.get("secure_artifact_ciphertext").is_none());
+        }
+    }
+    assert!(repository
+        .insert_idempotent(&org_a, &job("changed"), now, &key, &"c".repeat(64))
+        .await
+        .unwrap()
+        .is_none());
+    let mut changed_flow = job("changed-flow");
+    changed_flow.flow_execution_id = "90000000-0000-0000-0000-000000000099".into();
+    assert!(repository
+        .insert_idempotent(&org_a, &changed_flow, now, &key, &digest)
+        .await
+        .unwrap()
+        .is_none());
+    let legacy = repository
+        .insert(&org_a, &job("legacy"), now)
+        .await
+        .unwrap();
+    assert_eq!(legacy.status, "DRAFT");
+    let count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM issuance_service.physical_document_jobs")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(count, 2);
+    sqlx::query("DROP SCHEMA IF EXISTS issuance_service CASCADE")
+        .execute(&pool)
+        .await
+        .unwrap();
+    pool.close().await;
+}
+
 #[path = "support/passport_mock_artifact_kms.rs"]
 mod passport_mock_artifact_kms;
 

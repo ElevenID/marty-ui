@@ -1,0 +1,311 @@
+{
+  "cases": [
+    {
+      "name": "credential_native_long_name",
+      "stored": {
+        "id": "40000000-0000-4000-8000-000000000001",
+        "organization_id": "org-1",
+        "name": "NNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNN",
+        "description": null,
+        "status": "active",
+        "profile_type": "CUSTOM",
+        "compliance_status": "COMPLIANT",
+        "trust_purposes": null,
+        "trust_sources": [],
+        "validation_rules": {},
+        "allowed_issuers": null,
+        "denied_issuers": null,
+        "system_issuer_overrides": {},
+        "compatible_compliance_codes": [],
+        "verification_policy_set_id": null,
+        "auto_generated": false,
+        "revocation_policy": {},
+        "revocation_profile_id": null,
+        "time_policy": {},
+        "supported_formats": [
+          "MDOC"
+        ],
+        "trusted_assertion_formats": null,
+        "created_at": "2026-08-07T00:00:00Z",
+        "updated_at": "2026-08-08T00:00:00Z"
+      },
+      "expected": {
+        "id": "40000000-0000-4000-8000-000000000001",
+        "organization_id": "org-1",
+        "name": "NNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNN",
+        "status": "active",
+        "profile_type": "CUSTOM",
+        "compliance_status": "COMPLIANT",
+        "trust_sources": [],
+        "system_issuer_overrides": {},
+        "compatible_compliance_codes": [],
+        "auto_generated": false,
+        "supported_formats": [
+          "MDOC"
+        ],
+        "created_at": "2026-08-07T00:00:00Z",
+        "updated_at": "2026-08-08T00:00:00Z",
+        "allowed_algorithms": [
+          "ES256",
+          "ES384",
+          "EdDSA"
+        ],
+        "revocation_policy": {
+          "check_mode": "HARD_FAIL",
+          "cache_ttl_seconds": 3600
+        },
+        "revocation_services": {
+          "enabled_methods": [
+            "CRL",
+            "OCSP",
+            "STATUS_LIST"
+          ],
+          "auto_discover": false,
+          "merge_discovered": false
+        },
+        "time_policy": {
+          "clock_skew_seconds": 300,
+          "require_freshness": false
+        }
+      }
+    },
+    {
+      "name": "machine_without_credential_formats",
+      "stored": {
+        "id": "40000000-0000-4000-8000-000000000002",
+        "organization_id": "org-1",
+        "name": "Trust 2",
+        "description": null,
+        "status": "active",
+        "profile_type": "CUSTOM",
+        "compliance_status": "COMPLIANT",
+        "trust_purposes": [
+          "MACHINE_IDENTITY_CA"
+        ],
+        "trust_sources": [],
+        "validation_rules": {},
+        "allowed_issuers": null,
+        "denied_issuers": null,
+        "system_issuer_overrides": {},
+        "compatible_compliance_codes": [],
+        "verification_policy_set_id": null,
+        "auto_generated": false,
+        "revocation_policy": {},
+        "revocation_profile_id": null,
+        "time_policy": {},
+        "supported_formats": [],
+        "trusted_assertion_formats": [
+          "X509_CERTIFICATE"
+        ],
+        "created_at": "2026-08-07T00:00:00Z",
+        "updated_at": "2026-08-08T00:00:00Z"
+      },
+      "expected": {
+        "id": "40000000-0000-4000-8000-000000000002",
+        "organization_id": "org-1",
+        "name": "Trust 2",
+        "status": "active",
+        "profile_type": "CUSTOM",
+        "compliance_status": "COMPLIANT",
+        "trust_purposes": [
+          "MACHINE_IDENTITY_CA"
+        ],
+        "trust_sources": [],
+        "system_issuer_overrides": {},
+        "compatible_compliance_codes": [],
+        "auto_generated": false,
+        "trusted_assertion_formats": [
+          "X509_CERTIFICATE"
+        ],
+        "created_at": "2026-08-07T00:00:00Z",
+        "updated_at": "2026-08-08T00:00:00Z",
+        "allowed_algorithms": [
+          "ES256",
+          "ES384",
+          "EdDSA"
+        ],
+        "revocation_policy": {
+          "check_mode": "HARD_FAIL",
+          "cache_ttl_seconds": 3600
+        },
+        "revocation_services": {
+          "enabled_methods": [
+            "CRL",
+            "OCSP",
+            "STATUS_LIST"
+          ],
+          "auto_discover": false,
+          "merge_discovered": false
+        },
+        "time_policy": {
+          "clock_skew_seconds": 300,
+          "require_freshness": false
+        }
+      }
+    },
+    {
+      "name": "rich_public_configuration",
+      "stored": {
+        "id": "40000000-0000-4000-8000-000000000003",
+        "organization_id": "org-1",
+        "name": "Trust 3",
+        "description": "Public trust config",
+        "status": "active",
+        "profile_type": "CUSTOM",
+        "compliance_status": "COMPLIANT",
+        "trust_purposes": [
+          "CREDENTIAL_ISSUER"
+        ],
+        "trust_sources": [
+          {
+            "id": "50000000-0000-4000-8000-000000000001",
+            "name": "Native source name",
+            "source_type": "PINNED_ISSUER",
+            "url": null,
+            "certificate_pem": null,
+            "issuer_did": "did:web:issuer.example",
+            "purposes": [
+              "CREDENTIAL_ISSUER"
+            ],
+            "description": "Pinned DID",
+            "pinned_certificates": [],
+            "refresh_interval_hours": 24,
+            "enabled": true,
+            "registry_sync": null,
+            "registry_sync_token": "synthetic-native-private",
+            "registry_sequence": 7,
+            "registry_entries": {},
+            "registry_last_synced_at": null,
+            "organization_id": "org-1",
+            "verification_method_ids": [
+              "did:web:issuer.example#key-1"
+            ],
+            "did_resolution": {
+              "resolver_type": "ORGANIZATION_REGISTRY",
+              "allow_public_fallback": false,
+              "cache_ttl_seconds": 300
+            }
+          }
+        ],
+        "validation_rules": {},
+        "allowed_issuers": [
+          "did:web:issuer.example"
+        ],
+        "denied_issuers": [],
+        "system_issuer_overrides": {
+          "did:web:issuer.example": {
+            "action": "ALLOW",
+            "verification_keys": [
+              {
+                "kty": "EC",
+                "x": "public-x",
+                "y": "public-y"
+              }
+            ]
+          }
+        },
+        "compatible_compliance_codes": [
+          "CUSTOM_FRAMEWORK"
+        ],
+        "verification_policy_set_id": "policy-1",
+        "auto_generated": false,
+        "revocation_policy": {},
+        "revocation_profile_id": "revocation-1",
+        "time_policy": {
+          "credential_freshness_hours": 2
+        },
+        "supported_formats": [
+          "VDS_NC",
+          "MDOC"
+        ],
+        "trusted_assertion_formats": null,
+        "created_at": "2026-08-07T00:00:00Z",
+        "updated_at": "2026-08-08T00:00:00Z"
+      },
+      "expected": {
+        "id": "40000000-0000-4000-8000-000000000003",
+        "organization_id": "org-1",
+        "name": "Trust 3",
+        "description": "Public trust config",
+        "status": "active",
+        "profile_type": "CUSTOM",
+        "compliance_status": "COMPLIANT",
+        "trust_purposes": [
+          "CREDENTIAL_ISSUER"
+        ],
+        "trust_sources": [
+          {
+            "source_type": "PINNED_ISSUER",
+            "issuer_did": "did:web:issuer.example",
+            "purposes": [
+              "CREDENTIAL_ISSUER"
+            ],
+            "description": "Pinned DID",
+            "pinned_certificates": [],
+            "organization_id": "org-1",
+            "verification_method_ids": [
+              "did:web:issuer.example#key-1"
+            ],
+            "did_resolution": {
+              "resolver_type": "ORGANIZATION_REGISTRY",
+              "allow_public_fallback": false,
+              "cache_ttl_seconds": 300
+            }
+          }
+        ],
+        "allowed_issuers": [
+          "did:web:issuer.example"
+        ],
+        "denied_issuers": [],
+        "system_issuer_overrides": {
+          "did:web:issuer.example": {
+            "action": "ALLOW",
+            "verification_keys": [
+              {
+                "kty": "EC",
+                "x": "public-x",
+                "y": "public-y"
+              }
+            ]
+          }
+        },
+        "compatible_compliance_codes": [
+          "CUSTOM_FRAMEWORK"
+        ],
+        "verification_policy_set_id": "policy-1",
+        "auto_generated": false,
+        "revocation_profile_id": "revocation-1",
+        "supported_formats": [
+          "VDS_NC",
+          "MDOC"
+        ],
+        "created_at": "2026-08-07T00:00:00Z",
+        "updated_at": "2026-08-08T00:00:00Z",
+        "allowed_algorithms": [
+          "ES256",
+          "ES384",
+          "EdDSA"
+        ],
+        "revocation_policy": {
+          "check_mode": "HARD_FAIL",
+          "cache_ttl_seconds": 3600
+        },
+        "revocation_services": {
+          "enabled_methods": [
+            "CRL",
+            "OCSP",
+            "STATUS_LIST"
+          ],
+          "auto_discover": false,
+          "merge_discovered": false
+        },
+        "time_policy": {
+          "clock_skew_seconds": 300,
+          "require_freshness": true,
+          "max_credential_age_seconds": 7200,
+          "freshness_window_seconds": 7200
+        }
+      }
+    }
+  ]
+}

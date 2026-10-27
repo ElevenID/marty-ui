@@ -250,6 +250,13 @@ async fn complete_application_offer(
     public_base_url: &str,
     now: DateTime<Utc>,
 ) -> Result<(FlowInstanceRecord, crate::FlowArtifactRecord), ApplicationApprovalError> {
+    // Application approval creates OID4VCI artifacts only. Physical passport
+    // starts must pass through their durable intent path before native work.
+    if effective_flow_type(definition) != FlowType::Oid4vciPreAuthorized {
+        return Err(ApplicationApprovalError::Conflict(
+            "application offer requires an OID4VCI Flow",
+        ));
+    }
     if let Some(artifact) = repository
         .artifacts_for_instance(&instance.id)
         .await?

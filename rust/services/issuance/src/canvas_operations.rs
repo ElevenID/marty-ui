@@ -27,7 +27,6 @@ use crate::{
     },
     canvas_sync_worker::CanvasSyncJobStatus,
     management_security::ManagementSecurity,
-    transaction_reads::TransactionReadError,
 };
 
 #[derive(Clone)]
@@ -174,15 +173,10 @@ impl CanvasOperationsService {
     fn authorize(&self, headers: &HeaderMap) -> Result<(), OperationsError> {
         self.security
             .authorize(header(headers, "X-API-Key"))
-            .map_err(|error| match error {
-                TransactionReadError::ApiKeyNotConfigured => OperationsError::detail(
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    "ISSUANCE_API_KEY not configured on server",
-                ),
-                TransactionReadError::ApiKeyMissing => {
-                    OperationsError::detail(StatusCode::UNAUTHORIZED, "X-API-Key header is missing")
-                }
-                _ => OperationsError::detail(StatusCode::UNAUTHORIZED, "Invalid API Key"),
+            .map_err(|error| {
+                let (status, detail) = crate::management_http::authentication_error(&error)
+                    .unwrap_or((StatusCode::UNAUTHORIZED, "Invalid API Key"));
+                OperationsError::detail(status, detail)
             })
     }
 

@@ -1521,4 +1521,20 @@ mod tests {
             }
         }
     }
+    #[test]
+    fn native_trust_readbacks_survive_gateway_projection() {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/trust-profile-readback-behavior.json"
+        ))
+        .unwrap();
+        for case in fixture["cases"].as_array().unwrap() {
+            assert_eq!(
+                project_response(case["expected"].clone(), ResponseKind::TrustProfile, false)
+                    .unwrap(),
+                case["expected"],
+                "{}",
+                case["name"]
+            );
+        }
+    }
 }

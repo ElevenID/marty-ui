@@ -463,6 +463,11 @@ static SPECIAL_RULES: LazyLock<Vec<RouteRule>> = LazyLock::new(|| {
             "flow-definition",
         ),
         rule(
+            r"^/v1/flows/physical-start-intents$",
+            &[("GET", "flow-instance:view")],
+            "flow-instance",
+        ),
+        rule(
             r"^/v1/flows/instances(?:/[^/]+)?(?:/advance)?$",
             &[
                 ("GET", "flow-instance:view"),
@@ -1207,6 +1212,15 @@ mod tests {
     #[test]
     fn unsupported_method_on_special_route_does_not_fall_through() {
         assert_eq!(resolve_action("PATCH", "/v1/flows/verify"), None);
+        assert_eq!(
+            resolve_action("GET", "/v1/flows/physical-start-intents")
+                .map(|action| action.permission),
+            Some("flow-instance:view")
+        );
+        assert_eq!(
+            resolve_action("POST", "/v1/flows/physical-start-intents"),
+            None
+        );
     }
 
     #[test]

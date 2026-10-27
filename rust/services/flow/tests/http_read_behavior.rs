@@ -181,4 +181,13 @@ async fn rust_read_surface_matches_the_language_neutral_contract() {
         .await
         .expect("response");
     assert_eq!(protected.status(), 401);
+    let pending = router()
+        .oneshot(
+            Request::get("/v1/flows/physical-start-intents?organization_id=org-1")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("pending route response");
+    assert_eq!(pending.status(), 401);
 }
