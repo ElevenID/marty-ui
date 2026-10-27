@@ -85,6 +85,16 @@ def test_missing_deployment_inputs_and_synthetic_pins_block(tmp_path):
     assert result["checks"]["placeholder_external_images"] == 1
 
 
+@pytest.mark.parametrize("contents", [b"", b" \t\n"])
+def test_empty_secret_file_blocks_runtime_attempt(tmp_path, contents):
+    package = candidate()
+    model = prepared(tmp_path, package)
+    Path(model["secrets"]["example"]["file"]).write_bytes(contents)
+    result = MODULE.assess(model, package)
+    assert result["result"] == "blocked_missing_runtime_inputs"
+    assert result["checks"]["missing_secret_files"] == 1
+
+
 def test_wrong_product_image_or_console_dependency_cannot_pass(tmp_path):
     package = candidate()
     model = prepared(tmp_path, package)
