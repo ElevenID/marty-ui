@@ -27,6 +27,17 @@ const {readBoundedSecretFile}=require('./canvas-secret-files');
 const { retireOwnedCanvasFixtures, retireCanvasApplication, findCanvasInventoryRecord } = require('./canvas-owned-fixture-cleanup');
 
 const SCHEMA_VERSION = 1;
+// Match the stock producer and finalizer; this runner runs before finalization.
+const BOOTSTRAP_ALLOWED_COMMANDS = [
+  ['bin/rails', 'db:create'],
+  ['bin/rails', 'db:migrate'],
+  ['bin/rails', 'db:initial_setup'],
+  ['bin/rails', 'brand_configs:generate_and_upload_all'],
+];
+const BOOTSTRAP_FORBIDDEN_COUNTERS = [
+  'rails_runner', 'rails_console', 'post_bootstrap_database_access',
+  'custom_plugins', 'source_patches', 'custom_events',
+];
 const DEFAULT_CANVAS_ORIGIN = 'https://canvas-test.elevenidllc.com';
 const DEFAULT_MARTY_ORIGIN = 'https://beta.elevenidllc.com';
 const RUN_NAME_PREFIX = 'ElevenID OSS portability';
@@ -946,10 +957,19 @@ async function observePipelinePrerequisites(ledger, martyOrigin, canvasOrigin, m
 
   markActive('stock_lifecycle_bootstrap_only');
   const bootstrap = readJsonFile(path.join(artifactRoot, 'bootstrap-audit.json'), 'bootstrap_audit_unavailable');
-  const counters = bootstrap.forbidden_operation_counts || {};
+  const commands = bootstrap.commands;
+  const counters = bootstrap.forbidden_operation_counts;
   requireCondition(
-    bootstrap.phase === 'pre_start_only'
+    bootstrap.schema_version === SCHEMA_VERSION
+      && bootstrap.phase === 'pre_start_only'
+      && Array.isArray(commands)
+      && commands.length === BOOTSTRAP_ALLOWED_COMMANDS.length
+      && commands.every((entry, index) => entry && !Array.isArray(entry)
+        && JSON.stringify(entry.argv) === JSON.stringify(BOOTSTRAP_ALLOWED_COMMANDS[index])
+        && entry.exit_code === 0)
       && bootstrap.web_started_after_bootstrap === true
+      && counters && typeof counters === 'object' && !Array.isArray(counters)
+      && JSON.stringify(Object.keys(counters).sort()) === JSON.stringify([...BOOTSTRAP_FORBIDDEN_COUNTERS].sort())
       && Object.values(counters).every((value) => value === 0),
     'bootstrap_audit_invalid',
     'Canvas bootstrap audit did not prove a stock pre-start-only lifecycle.',

@@ -204,7 +204,19 @@ test('pipeline prerequisites read the explicit mounted artifact directory and re
     source_repository: 'https://github.com/instructure/canvas-lms.git', source_modified: false,
     source_commit: 'a'.repeat(40), image_digest: 'sha256:' + 'b'.repeat(64), scope: 'UNIT_FIXTURE_ONLY',
   }));
-  const bootstrap = { phase: 'pre_start_only', web_started_after_bootstrap: true, forbidden_operation_counts: { rails_runner: 0 } };
+  const bootstrap = {
+    schema_version: 1,
+    phase: 'pre_start_only',
+    commands: [
+      ['bin/rails', 'db:create'], ['bin/rails', 'db:migrate'],
+      ['bin/rails', 'db:initial_setup'], ['bin/rails', 'brand_configs:generate_and_upload_all'],
+    ].map(argv => ({ argv, exit_code: 0 })),
+    web_started_after_bootstrap: true,
+    forbidden_operation_counts: {
+      rails_runner: 0, rails_console: 0, post_bootstrap_database_access: 0,
+      custom_plugins: 0, source_patches: 0, custom_events: 0,
+    },
+  };
   fs.writeFileSync(path.join(directory, 'bootstrap-audit.json'), JSON.stringify(bootstrap));
   fs.writeFileSync(path.join(directory, 'runtime-context.json'), JSON.stringify({
     origin: 'https://beta.elevenidllc.com', source_id: 'c'.repeat(40),
@@ -215,11 +227,25 @@ test('pipeline prerequisites read the explicit mounted artifact directory and re
   const ledger = new ObservationLedger(NOW);
   await observePipelinePrerequisites(ledger, 'https://beta.elevenidllc.com', 'https://canvas-test.elevenidllc.com', () => {}, directory);
   assert.equal(ledger.entries.get('stock_lifecycle_bootstrap_only').status, 'passed');
-  bootstrap.forbidden_operation_counts.rails_runner = 1;
-  fs.writeFileSync(path.join(directory, 'bootstrap-audit.json'), JSON.stringify(bootstrap));
-  await assert.rejects(observePipelinePrerequisites(new ObservationLedger(NOW),
-    'https://beta.elevenidllc.com', 'https://canvas-test.elevenidllc.com', () => {}, directory),
-  error => error.code === 'bootstrap_audit_invalid');
+  const invalid = [
+    value => { delete value.forbidden_operation_counts; },
+    value => { value.forbidden_operation_counts = {}; },
+    value => { delete value.forbidden_operation_counts.custom_events; },
+    value => { value.forbidden_operation_counts.unexpected = 0; },
+    value => { value.forbidden_operation_counts.rails_runner = 1; },
+    value => { delete value.schema_version; },
+    value => { delete value.commands; },
+    value => { value.commands[0].argv = ['bin/rails', 'runner']; },
+    value => { value.commands[0].exit_code = 1; },
+  ];
+  for (const mutate of invalid) {
+    const candidate = structuredClone(bootstrap);
+    mutate(candidate);
+    fs.writeFileSync(path.join(directory, 'bootstrap-audit.json'), JSON.stringify(candidate));
+    await assert.rejects(observePipelinePrerequisites(new ObservationLedger(NOW),
+      'https://beta.elevenidllc.com', 'https://canvas-test.elevenidllc.com', () => {}, directory),
+    error => error.code === 'bootstrap_audit_invalid');
+  }
 });
 
 function readinessSnapshot(overrides = {}) {
