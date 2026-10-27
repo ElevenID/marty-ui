@@ -10,7 +10,7 @@ use uuid::Uuid;
 
 use crate::{
     EvaluatePresentationRequest, PresentationPolicy, PresentationVerificationError,
-    PresentationVerificationOrchestrator,
+    PresentationVerificationOrchestrator, VerifiedPolicyMaterial,
 };
 
 pub(crate) const MDOC_AUTHENTICATION_DIAGNOSTIC: &str = "mdoc_authentication_diagnostic";
@@ -70,6 +70,8 @@ pub struct CredentialVerificationEvidence {
     pub mdoc_authentication_diagnostic:
         Option<marty_oid4vp_contract::MdocAuthenticationDiagnosticV1>,
     pub credential_id: Option<String>,
+    /// Comes only from the signed outer `jti` of a valid VC-JWT.
+    pub authenticated_outer_jti: Option<String>,
     pub credential_status_ids: Vec<String>,
     pub claims: Map<String, Value>,
     pub issuer_id: Option<String>,
@@ -164,21 +166,21 @@ impl VerifiedFactsOrchestrator {
         })
     }
 
-    async fn verified_facts(
+    async fn verified_material(
         &self,
         policy: &PresentationPolicy,
         request: &EvaluatePresentationRequest,
-    ) -> Result<Value, PresentationVerificationError> {
+    ) -> Result<VerifiedPolicyMaterial, PresentationVerificationError> {
         let token = canonical_token(&request.vp_token)?;
         let format = detect_credential_format(&token);
         if format == DetectedCredentialFormat::Unknown {
-            return Ok(rejected_facts(
+            return Ok(VerifiedPolicyMaterial::facts_only(rejected_facts(
                 policy,
                 "unknown",
                 "Unsupported or malformed credential presentation",
                 (self.clock)(),
                 policy.trust_profile_id.is_none() && request.trust_profile_id.is_none(),
-            ));
+            )));
         }
 
         let presentation_only = is_presentation_only(policy);
@@ -225,6 +227,11 @@ impl VerifiedFactsOrchestrator {
         };
         let mut evidence = self.kernel.verify(&context).await?;
         apply_trusted_oid4vp_context(policy, request, &mut evidence);
+        let authenticated_outer_jti = if evidence.verified && !presentation_only {
+            evidence.authenticated_outer_jti.clone()
+        } else {
+            None
+        };
         if !evidence.verified {
             evidence.claims.clear();
             evidence.issuer_id = None;
@@ -361,7 +368,10 @@ impl VerifiedFactsOrchestrator {
         if let Some(diagnostic) = mdoc_authentication_diagnostic {
             facts[MDOC_AUTHENTICATION_DIAGNOSTIC] = json!(diagnostic);
         }
-        Ok(facts)
+        Ok(VerifiedPolicyMaterial {
+            policy_facts: facts,
+            authenticated_outer_jti,
+        })
     }
 }
 
@@ -525,7 +535,15 @@ impl PresentationVerificationOrchestrator for VerifiedFactsOrchestrator {
         policy: &PresentationPolicy,
         request: &EvaluatePresentationRequest,
     ) -> Result<Value, PresentationVerificationError> {
-        self.verified_facts(policy, request).await
+        Ok(self.verified_material(policy, request).await?.policy_facts)
+    }
+
+    async fn verify_material(
+        &self,
+        policy: &PresentationPolicy,
+        request: &EvaluatePresentationRequest,
+    ) -> Result<VerifiedPolicyMaterial, PresentationVerificationError> {
+        self.verified_material(policy, request).await
     }
 }
 

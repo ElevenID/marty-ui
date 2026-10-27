@@ -520,3 +520,45 @@ fn validate_timestamp(value: &str, field: &str) -> Result<(), FlowProjectionErro
 fn invalid(field: &str) -> FlowProjectionError {
     FlowProjectionError::InvalidStoredState(field.into())
 }
+
+#[cfg(test)]
+mod authenticated_id_projection_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn stored_evaluation_projects_authenticated_id_without_substituting_a_missing_id() {
+        let mut instance = InstanceProjectionInput {
+            id: "instance-1".into(),
+            flow_definition_id: "flow-1".into(),
+            organization_id: "org-1".into(),
+            status: FlowInstanceStatus::Completed,
+            context: json!({}),
+            subject_id: None,
+            subject_type: "holder".into(),
+            external_reference: None,
+            started_at: None,
+            completed_at: None,
+            expires_at: None,
+            result: Some(json!({"credential_results": [{
+                "credential_id": "urn:uuid:signed-1", "signature_valid": true
+            }]})),
+            error: None,
+            state_history: vec![],
+            created_at: "2026-10-27T00:00:00Z".into(),
+            updated_at: "2026-10-27T00:00:00Z".into(),
+        };
+        assert_eq!(
+            project_verification_result(&instance)
+                .unwrap()
+                .credential_results[0]["credential_id"],
+            "urn:uuid:signed-1"
+        );
+        instance.result = Some(json!({"credential_results": [{"signature_valid": true}]}));
+        assert!(project_verification_result(&instance)
+            .unwrap()
+            .credential_results[0]
+            .get("credential_id")
+            .is_none());
+    }
+}
