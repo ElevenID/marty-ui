@@ -13,7 +13,7 @@ use serde_json::{json, Map, Value};
 
 use crate::issuance_native;
 
-pub const EXPECTED_ROUTE_COUNT: usize = 461;
+pub const EXPECTED_ROUTE_COUNT: usize = 462;
 #[cfg(test)]
 const PHYSICAL_START_EXTENSION_ROUTE_COUNT: usize = 1;
 

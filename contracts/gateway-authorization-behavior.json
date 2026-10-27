@@ -1,6 +1,8 @@
 {
   "schema_version": 1,
   "action_cases": [
+    {"method":"POST","path":"/v1/trust-profiles/profile-1/activate","permission":"trust-profile:activate","resource":"trust-profile"},
+    {"method":"POST","path":"/v1/trust-profiles/profile-1/suspend","permission":"trust-profile:suspend","resource":"trust-profile"},
     {"method":"GET","path":"/v1/webhooks","permission":"webhook:view","resource":"webhook"},
     {"method":"POST","path":"/v1/webhooks/id/test","permission":"webhook:test","resource":"webhook"},
     {"method":"POST","path":"/v1/webhooks/id/regenerate-secret","permission":"webhook:edit","resource":"webhook"},

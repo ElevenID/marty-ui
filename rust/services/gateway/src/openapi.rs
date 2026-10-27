@@ -444,7 +444,10 @@ fn describe_trust_readback(operation: &mut Value, method: HttpMethod, path: &str
     use HttpMethod::{Delete, Get, Patch, Post};
     let collection = path == "/v1/trust-profiles";
     let member = path == "/v1/trust-profiles/{profile_id}";
-    let lifecycle = path == "/v1/trust-profiles/{profile_id}/activate";
+    let lifecycle = matches!(
+        path,
+        "/v1/trust-profiles/{profile_id}/activate" | "/v1/trust-profiles/{profile_id}/suspend"
+    );
     if !((collection && matches!(method, Get | Post))
         || (member && matches!(method, Get | Patch | Delete))
         || (lifecycle && method == Post))
@@ -1218,6 +1221,7 @@ mod tests {
             (HttpMethod::Get, "/v1/trust-profiles/{profile_id}"),
             (HttpMethod::Patch, "/v1/trust-profiles/{profile_id}"),
             (HttpMethod::Post, "/v1/trust-profiles/{profile_id}/activate"),
+            (HttpMethod::Post, "/v1/trust-profiles/{profile_id}/suspend"),
         ] {
             let mut op = json!({});
             describe_operation(&mut op, method, path, 200);

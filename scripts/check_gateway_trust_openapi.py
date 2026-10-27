@@ -14,6 +14,7 @@ OPERATIONS = (
     ("get", "/v1/trust-profiles"), ("post", "/v1/trust-profiles"),
     ("get", "/v1/trust-profiles/{profile_id}"), ("patch", "/v1/trust-profiles/{profile_id}"),
     ("post", "/v1/trust-profiles/{profile_id}/activate"),
+    ("post", "/v1/trust-profiles/{profile_id}/suspend"),
 )
 
 

@@ -92,15 +92,18 @@ extension values remain JSON values, with the same recursive private-custody
 and private-JWK exclusions as the owner and gateway. Native-only source IDs,
 registry tokens and stored synchronization state are excluded from readback.
 The pinned protocol component remains available as a reference; native response
-bindings cover list, create, detail, patch, activate and delete.
-The native service also has a suspend operation, but the public gateway does
-not publish that route yet. Public suspension remains an API lifecycle gap.
+bindings cover list, create, detail, patch, activate, suspend and delete.
+Public activate/suspend require their exact `trust-profile:activate` or
+`trust-profile:suspend` tenant permission. A tenant-bound API key requires
+`trust:write` (or `admin:full`); the native service independently checks the
+gateway service credential, actor, scope and stored profile tenant before a
+lifecycle write. A read-only key cannot perform either operation.
 Create/patch request DTO coverage remains explicitly incomplete.
 
 The trust-profile list requires `organization_id` and returns an array without
 a total count. On the current 64-bit service deployments, `limit` and `offset`
 accept unsigned 64-bit values, defaulting to 100 and 0. Zero is valid; the owner
-clamps page sizes above 500. Activate has no request body. Delete
+clamps page sizes above 500. Activate and suspend have no request body. Delete
 returns exactly `{"success": true}`. These schemas describe public configuration;
 they do not establish authorization, anchor validity or interoperability.
 
@@ -110,6 +113,14 @@ that also run through the actual native HTTP router and gateway projector:
 ```sh
 python scripts/check_gateway_trust_openapi.py --openapi marty-openapi.json
 ```
+
+The suspension addition extends the native gateway route inventory from 461 to
+462 without removing existing routes. Activation now checks its existing
+native lifecycle permission at the gateway rather than the generic create
+permission. Clients using a human grant need the matching lifecycle action;
+API-key callers use the existing tenant-bound trust writer scope. Native
+activation still rejects an unsynchronized registry before saving. Suspension
+can disable that trust without requiring a successful registry refresh.
 
 Template create and patch bodies use native-owned write components. Creation
 requires organization, name, credential type, compliance profile, public issuer
