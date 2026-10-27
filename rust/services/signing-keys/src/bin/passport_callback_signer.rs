@@ -52,6 +52,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (addr, bao_addr, token, key) = required_configuration()?;
     let provider = OpenBaoEnvelopeProvider::new(bao_addr, token)?;
     let listener = TcpListener::bind(addr).await?;
-    axum::serve(listener, isolated_signer_router(provider, key)).await?;
+    axum::serve(listener, isolated_signer_router(provider, key))
+        .with_graceful_shutdown(marty_service_runtime::shutdown_signal_best_effort())
+        .await?;
     Ok(())
 }

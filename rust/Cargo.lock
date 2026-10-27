@@ -5193,6 +5193,7 @@ dependencies = [
  "marty-openbao-http",
  "marty-passport-auth",
  "marty-signing-grant",
+ "marty-service-runtime",
  "mmf-platform",
  "p256",
  "percent-encoding",
