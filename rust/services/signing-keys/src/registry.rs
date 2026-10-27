@@ -1057,6 +1057,17 @@ impl RegistryStore {
         organization_id: &str,
         profile: &Value,
     ) -> Result<Value, RegistryError> {
+        self.bind_profile_if_revision(organization_id, profile, None)
+            .await
+            .map(|(registry, _)| registry)
+    }
+
+    pub async fn bind_profile_if_revision(
+        &self,
+        organization_id: &str,
+        profile: &Value,
+        expected_revision: Option<&str>,
+    ) -> Result<(Value, String), RegistryError> {
         let profile = profile.as_object().ok_or_else(|| {
             RegistryError::Invalid("Issuer profile must be an object.".to_string())
         })?;
@@ -1082,6 +1093,7 @@ impl RegistryStore {
             &key_reference,
             &key_purpose,
             true,
+            expected_revision,
         )
         .await
     }
@@ -1100,8 +1112,10 @@ impl RegistryStore {
             key_reference,
             key_purpose,
             false,
+            None,
         )
         .await
+        .map(|(registry, _)| registry)
     }
 
     async fn bind_reference_purpose(
@@ -1111,7 +1125,8 @@ impl RegistryStore {
         key_reference: &str,
         key_purpose: &str,
         set_defaults: bool,
-    ) -> Result<Value, RegistryError> {
+        expected_revision: Option<&str>,
+    ) -> Result<(Value, String), RegistryError> {
         if service_id.trim().is_empty() || key_reference.trim().is_empty() {
             return Err(RegistryError::Invalid(
                 "Incomplete KMS purpose binding.".into(),
@@ -1136,7 +1151,11 @@ impl RegistryStore {
         .await
         .map_err(|_| RegistryError::Conflict)??;
         let result = async {
-            let mut registry = self.load(organization_id).await?;
+            let snapshot = self.load_with_revision_snapshot(organization_id).await?;
+            if expected_revision.is_some_and(|expected| expected != snapshot.etag.as_str()) {
+                return Err(RegistryError::PreconditionFailed);
+            }
+            let mut registry = snapshot.registry.clone();
             let bindings = registry
                 .as_object_mut()
                 .expect("normalized registry object")
@@ -1179,14 +1198,22 @@ impl RegistryStore {
                     registry["default_service_id"] = Value::String(service_id.to_owned());
                 }
             }
-            self.save_with_rotation_lease(organization_id, &registry, &lease)
-                .await
+            self.save_with_rotation_lease_and_revision(
+                organization_id,
+                &registry,
+                &lease,
+                expected_revision.map(|_| &snapshot),
+            )
+            .await
         }
         .await;
         let release = lease.release().await;
-        let normalized = result?;
+        let (normalized, revision) = result?;
         release?;
-        Ok(self.with_managed_service(organization_id, normalized).await)
+        Ok((
+            self.with_managed_service(organization_id, normalized).await,
+            revision,
+        ))
     }
 
     pub fn connection(&self) -> ConnectionManager {

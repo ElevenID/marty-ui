@@ -2329,8 +2329,18 @@ fn valid_didcomm_publication(
 async fn create_public_issuer_identity(
     State(state): State<AppState>,
     Query(scope): Query<OrganizationScope>,
+    headers: HeaderMap,
     Json(input): Json<IssuerIdentityRequest>,
 ) -> Response {
+    let expected_registry_revision = match strong_config_if_match(&headers) {
+        Ok(revision) => revision,
+        Err(()) => {
+            return public_error(
+                StatusCode::BAD_REQUEST,
+                "If-Match must be one strong registry revision.",
+            )
+        }
+    };
     if let Err(error) = validate_identity_scope(&scope.organization_id, &input) {
         return error.into_response();
     }
@@ -2381,14 +2391,18 @@ async fn create_public_issuer_identity(
             .create_profile(&ProfileWriteRequest {
                 organization_id: scope.organization_id.clone(),
                 body: profile.clone(),
+                expected_registry_revision: expected_registry_revision.clone(),
             })
             .await
         {
             Ok(repaired) => repaired
                 .get("profile")
                 .map(|profile| {
-                    Json(json!({"identity": identity_projection(profile), "created": false}))
-                        .into_response()
+                    Json(
+                        json!({"identity": identity_projection(profile), "created": false,
+                        "config_revision": repaired.get("config_revision")}),
+                    )
+                    .into_response()
                 })
                 .unwrap_or_else(|| {
                     public_error(
@@ -2414,6 +2428,7 @@ async fn create_public_issuer_identity(
             &ProfileWriteRequest {
                 organization_id: scope.organization_id,
                 body,
+                expected_registry_revision,
             },
             &key_reference,
         )
@@ -2428,7 +2443,8 @@ async fn create_public_issuer_identity(
             };
             Json(json!({
                 "identity": identity_projection(profile),
-                "created": created.get("created").and_then(Value::as_bool).unwrap_or(true)
+                "created": created.get("created").and_then(Value::as_bool).unwrap_or(true),
+                "config_revision": created.get("config_revision")
             }))
             .into_response()
         }
@@ -2439,8 +2455,18 @@ async fn create_public_issuer_identity(
 async fn rebind_public_issuer_identity(
     State(state): State<AppState>,
     Query(scope): Query<OrganizationScope>,
+    headers: HeaderMap,
     Json(input): Json<IssuerIdentityRequest>,
 ) -> Response {
+    let expected_registry_revision = match strong_config_if_match(&headers) {
+        Ok(revision) => revision,
+        Err(()) => {
+            return public_error(
+                StatusCode::BAD_REQUEST,
+                "If-Match must be one strong registry revision.",
+            )
+        }
+    };
     if let Err(error) = validate_identity_scope(&scope.organization_id, &input) {
         return error.into_response();
     }
@@ -2471,7 +2497,12 @@ async fn rebind_public_issuer_identity(
     };
     let key_reference = managed_key_reference(&scope.organization_id, &input);
     match compatibility
-        .rebind_profile_to_default(&scope.organization_id, profile_id, &key_reference)
+        .rebind_profile_to_default(
+            &scope.organization_id,
+            profile_id,
+            &key_reference,
+            expected_registry_revision.as_deref(),
+        )
         .await
     {
         Ok(result) => {
@@ -2483,7 +2514,8 @@ async fn rebind_public_issuer_identity(
             };
             Json(json!({
                 "identity": identity_projection(profile),
-                "changed": result.get("changed").and_then(Value::as_bool).unwrap_or(false)
+                "changed": result.get("changed").and_then(Value::as_bool).unwrap_or(false),
+                "config_revision": result.get("config_revision")
             }))
             .into_response()
         }
@@ -6380,6 +6412,29 @@ mod public_contract_tests {
     }
 
     #[tokio::test]
+    async fn public_identity_mutations_reject_invalid_revision_before_binding() {
+        let app = router_with_dependencies("test-key".into(), None, None, None, None, None, None);
+        let body = json!({"organization_id": "org-a", "issuer_did": "did:web:issuer.example:orgs:org-a",
+            "key_purpose": "vc_jwt_issuer", "credential_format": "SD_JWT_VC", "algorithm": "ES256"});
+        for method in [axum::http::Method::POST, axum::http::Method::PATCH] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(method)
+                        .uri("/v1/signing-keys/issuer-identities?organization_id=org-a")
+                        .header("content-type", "application/json")
+                        .header(IF_MATCH, "W/\"r-not-strong\"")
+                        .body(Body::from(body.to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        }
+    }
+
+    #[tokio::test]
     #[ignore = "requires guarded disposable MARTY_TEST_REDIS_URL"]
     async fn conditional_config_restore_rejects_intervening_edit() {
         let redis_url = std::env::var("MARTY_TEST_REDIS_URL").expect("disposable Redis URL");
@@ -6412,6 +6467,34 @@ mod public_contract_tests {
             "algorithms": ["ES256"], "key_purposes": ["vc_jwt_issuer"]
         }]});
         store.save(&organization_id, &base).await.unwrap();
+        let binding_org = format!("conditional-binding-{}", uuid::Uuid::new_v4().simple());
+        store.save(&binding_org, &base).await.unwrap();
+        let binding_first = store.load_with_revision(&binding_org).await.unwrap().1;
+        let binding = json!({"signing_service_id": "service-a", "signing_key_reference": "owned-key",
+            "key_purpose": "vc_jwt_issuer"});
+        let (_, binding_second) = store
+            .bind_profile_if_revision(&binding_org, &binding, Some(&binding_first))
+            .await
+            .unwrap();
+        assert_ne!(binding_first, binding_second);
+        assert_eq!(
+            store.load(&binding_org).await.unwrap()["key_reference_purposes"]["service-a"]
+                ["owned-key"],
+            json!(["vc_jwt_issuer"])
+        );
+        let mut foreign = store.load(&binding_org).await.unwrap();
+        foreign["services"][0]["name"] = json!("Foreign edit");
+        store.save(&binding_org, &foreign).await.unwrap();
+        assert!(matches!(
+            store
+                .bind_profile_if_revision(&binding_org, &binding, Some(&binding_second))
+                .await,
+            Err(registry::RegistryError::PreconditionFailed)
+        ));
+        assert_eq!(
+            store.load(&binding_org).await.unwrap()["services"][0]["name"],
+            "Foreign edit"
+        );
         let app = router_with_dependencies(
             "test-key".into(),
             Some(store.clone()),

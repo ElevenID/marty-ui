@@ -108,11 +108,73 @@ function configSnapshot(response) {
   return { config: response.body, revision };
 }
 
+function ownedIdentityRevision(result) {
+  if (!result?.ok || typeof result.configRevision !== 'string'
+      || !STRONG_CONFIG_REVISION.test(result.configRevision)) {
+    throw new Error('Owned issuer identity mutation did not return a strong config revision');
+  }
+  return result.configRevision;
+}
+
 function unchangedOwnedRevision(snapshot, lastOwnedRevision) {
   if (snapshot.revision !== lastOwnedRevision) {
     throw new Error('Signing configuration changed outside this owned run');
   }
   return snapshot.config;
+}
+
+function createConfigMutationJournal(artifactDir, originalConfig, revision) {
+  if (!STRONG_CONFIG_REVISION.test(revision || '')) {
+    throw new Error('Cannot journal an unbound signing configuration');
+  }
+  const journalPath = path.join(artifactDir, 'signing-config-mutations.private.jsonl');
+  const descriptor = fs.openSync(journalPath, 'wx', 0o600);
+  let sequence = 0;
+  let healthy = true;
+  const append = (entry) => {
+    if (!healthy) throw new Error('Signing config mutation journal is unavailable');
+    try {
+      const line = Buffer.from(`${JSON.stringify({ sequence: ++sequence, ...entry })}\n`);
+      if (fs.writeSync(descriptor, line) !== line.length) {
+        throw new Error('Signing config mutation journal write was incomplete');
+      }
+      fs.fsyncSync(descriptor);
+    } catch (error) {
+      healthy = false;
+      throw error;
+    }
+  };
+  try {
+    const originalPublicConfig = structuredClone(writableConfig(originalConfig));
+    for (const service of originalPublicConfig.services) {
+      delete service.auth_reference;
+      delete service.auth_reference_envelope;
+    }
+    append({ stage: 'ORIGINAL', organizationId: ORG_ID, originalPublicConfig,
+      lastOwnedRevision: revision });
+  } catch (error) {
+    fs.closeSync(descriptor);
+    throw error;
+  }
+  return {
+    path: journalPath,
+    healthy: () => healthy,
+    intent: (action, expectedRevision, body) => {
+      if (!STRONG_CONFIG_REVISION.test(expectedRevision || '')) {
+        throw new Error('Cannot dispatch an unbound signing mutation');
+      }
+      append({ stage: 'INPUT_OUTCOME_UNKNOWN', action, expectedRevision,
+        requestSha256: stateHash(body) });
+    },
+    confirmed: (action, nextRevision) => {
+      if (!STRONG_CONFIG_REVISION.test(nextRevision || '')) {
+        throw new Error('Cannot confirm an unbound signing mutation');
+      }
+      append({ stage: 'CONFIRMED', action, lastOwnedRevision: nextRevision });
+    },
+    rejected: (action, status) => append({ stage: 'REJECTED_NO_BIND', action, httpStatus: status }),
+    close: () => fs.closeSync(descriptor),
+  };
 }
 
 function writableConfig(config, { extraServices = [], defaultServiceId, resetDefaults = false } = {}) {
@@ -145,6 +207,13 @@ async function saveSigningConfig(page, payload, revision) {
   return configSnapshot(response);
 }
 
+async function saveOwnedSigningConfig(page, payload, revision, journal, action) {
+  journal.intent(action, revision, payload);
+  const saved = await saveSigningConfig(page, payload, revision);
+  journal.confirmed(action, saved.revision);
+  return saved;
+}
+
 function identityRequest(issuerDid) {
   return {
     organization_id: ORG_ID,
@@ -155,13 +224,16 @@ function identityRequest(issuerDid) {
   };
 }
 
-async function createIdentity(page, issuerDid, idempotencyKey) {
+async function createIdentity(page, issuerDid, idempotencyKey, revision) {
+  if (!STRONG_CONFIG_REVISION.test(revision || '')) {
+    throw new Error('Issuer identity creation requires an owned config revision');
+  }
   const response = await browserJson(
     page,
     `/v1/signing-keys/issuer-identities?organization_id=${encodeURIComponent(ORG_ID)}`,
     {
       method: 'POST',
-      headers: { 'Idempotency-Key': idempotencyKey },
+      headers: { 'Idempotency-Key': idempotencyKey, 'If-Match': revision },
       body: JSON.stringify(identityRequest(issuerDid)),
     },
   );
@@ -170,6 +242,7 @@ async function createIdentity(page, issuerDid, idempotencyKey) {
     status: response.status,
     created: response.body?.created === true,
     identity: response.body?.identity || null,
+    configRevision: response.body?.config_revision || null,
   };
 }
 
@@ -487,7 +560,10 @@ async function reverifyIssuedCredential(issued) {
   };
 }
 
-async function rebindThroughConsole(page, issuerDid, recording = null) {
+async function rebindThroughConsole(page, issuerDid, revision, recording = null) {
+  if (!STRONG_CONFIG_REVISION.test(revision || '')) {
+    throw new Error('UI issuer rebind requires an owned config revision');
+  }
   await page.goto(`${BETA_ORIGIN}/console/org/deploy/issuer-identity`, {
     waitUntil: 'domcontentloaded',
     timeout: 60_000,
@@ -497,6 +573,26 @@ async function rebindThroughConsole(page, issuerDid, recording = null) {
   await recording?.explain(page, 'change-signing-provider', 'Synthetic scenario: move signing operations to the configured replacement provider while keeping the issuer identity.', {
     title: 'Keep the issuer identity while changing the signer',
   });
+  const identityRoute = '**/v1/signing-keys/issuer-identities**';
+  let forwarded = 0;
+  const bindOwnedRevision = async (route) => {
+    const request = route.request();
+    let payload;
+    try { payload = request.postDataJSON(); } catch { payload = null; }
+    const url = new URL(request.url());
+    if (forwarded !== 0 || url.origin !== new URL(BETA_ORIGIN).origin
+        || url.pathname !== '/v1/signing-keys/issuer-identities'
+        || url.searchParams.get('organization_id') !== ORG_ID
+        || request.method() !== 'PATCH' || payload?.organization_id !== ORG_ID
+        || payload?.issuer_did !== issuerDid) {
+      await route.abort();
+      return;
+    }
+    forwarded = 1;
+    await route.continue({ headers: { ...request.headers(), 'If-Match': revision } });
+  };
+  await page.route(identityRoute, bindOwnedRevision);
+  try {
   const responsePromise = page.waitForResponse((response) => {
     const url = new URL(response.url());
     if (url.origin !== new URL(BETA_ORIGIN).origin
@@ -516,6 +612,7 @@ async function rebindThroughConsole(page, issuerDid, recording = null) {
   if (recording) await recording.click(page, confirm, { action: 'change-signing-provider', phase: 'confirmation', durationMs: 3200 });
   else await confirm.click();
   const response = await responsePromise;
+  if (forwarded !== 1) throw new Error('UI rebind was not bound to the owned config revision');
   const body = await response.json().catch(() => null);
   recording?.mark('change-signing-provider', 'response-received', { httpStatus: response.status(), changed: body?.changed === true });
   return {
@@ -523,7 +620,11 @@ async function rebindThroughConsole(page, issuerDid, recording = null) {
     status: response.status(),
     changed: body?.changed === true,
     identity: body?.identity || null,
+    configRevision: body?.config_revision || null,
   };
+  } finally {
+    await page.unroute(identityRoute, bindOwnedRevision);
+  }
 }
 
 function requireProviderStage(report, ...names) {
@@ -533,13 +634,18 @@ function requireProviderStage(report, ...names) {
   }
 }
 
-async function directRebind(page, issuerDid) {
+async function directRebind(page, issuerDid, revision) {
+  if (!STRONG_CONFIG_REVISION.test(revision || '')) {
+    throw new Error('Direct issuer rebind requires an owned config revision');
+  }
   const response = await browserJson(
     page,
     `/v1/signing-keys/issuer-identities?organization_id=${encodeURIComponent(ORG_ID)}`,
-    { method: 'PATCH', body: JSON.stringify(identityRequest(issuerDid)) },
+    { method: 'PATCH', body: JSON.stringify(identityRequest(issuerDid)),
+      headers: { 'If-Match': revision } },
   );
-  return { ok: response.ok, status: response.status };
+  return { ok: response.ok, status: response.status,
+    configRevision: response.body?.config_revision || null };
 }
 
 async function cleanup(page, templateId, issuerDids, governance = null) {
@@ -648,6 +754,13 @@ async function main() {
     let context;
     let originalConfig;
     let lastOwnedConfigRevision;
+    let configJournal;
+    let createIdentityAttempted = false;
+    let createIdentityConfirmed = false;
+    let uiRebindAttempted = false;
+    let uiRebindConfirmed = false;
+    let negativeRebindAttempted = false;
+    let negativeRebindDenied = false;
     try {
       context = await browser.newContext({
         viewport: VIDEO_SIZE,
@@ -687,6 +800,8 @@ async function main() {
       const originalSnapshot = await loadSigningConfig(page);
       originalConfig = originalSnapshot.config;
       lastOwnedConfigRevision = originalSnapshot.revision;
+      configJournal = createConfigMutationJournal(artifactDir, originalConfig, lastOwnedConfigRevision);
+      report.configJournal = path.relative(ROOT, configJournal.path);
       if (existingProviderB) {
         boundExistingProviderB(originalConfig, existingProviderB,
           managedTransitEndpoint(originalConfig));
@@ -713,10 +828,10 @@ async function main() {
       const createdIdentityDids = [];
       const createdManagedKeys = [];
       try {
-        const managedSnapshot = await saveSigningConfig(page, writableConfig(originalConfig, {
+        const managedSnapshot = await saveOwnedSigningConfig(page, writableConfig(originalConfig, {
           defaultServiceId: MANAGED_SERVICE_ID,
           resetDefaults: true,
-        }), lastOwnedConfigRevision);
+        }), lastOwnedConfigRevision, configJournal, 'select-managed-provider');
         lastOwnedConfigRevision = managedSnapshot.revision;
         const managedConfig = managedSnapshot.config;
         report.providerAConfig = {
@@ -724,8 +839,14 @@ async function main() {
           serviceId: MANAGED_SERVICE_ID,
         };
 
-        report.identityCreation = await createIdentity(page, issuerDid, `d02-identity-${input.stamp}`);
+        configJournal.intent('create-issuer-identity', lastOwnedConfigRevision, identityRequest(issuerDid));
+        createIdentityAttempted = true;
+        report.identityCreation = await createIdentity(page, issuerDid, `d02-identity-${input.stamp}`,
+          lastOwnedConfigRevision);
         if (!report.identityCreation.ok) throw new Error(`Issuer identity creation failed (HTTP ${report.identityCreation.status})`);
+        lastOwnedConfigRevision = ownedIdentityRevision(report.identityCreation);
+        configJournal.confirmed('create-issuer-identity', lastOwnedConfigRevision);
+        createIdentityConfirmed = true;
         if (report.identityCreation.created) {
           createdIdentityDids.push(issuerDid);
           createdManagedKeys.push(await signingKeyForIdentity(page, issuerDid));
@@ -769,11 +890,11 @@ async function main() {
         const providerB = existingProviderB
           ? boundExistingProviderB(latestConfig, existingProviderB, transitEndpoint)
           : transitService(providerBId, `D-02 Provider B ${stamp}`, externalTransit.keyReference, transitEndpoint, externalTransit);
-        const providerBSnapshot = await saveSigningConfig(page, writableConfig(latestConfig, {
+        const providerBSnapshot = await saveOwnedSigningConfig(page, writableConfig(latestConfig, {
           extraServices: existingProviderB ? [] : [providerB],
           defaultServiceId: providerB.id,
           resetDefaults: true,
-        }), lastOwnedConfigRevision);
+        }), lastOwnedConfigRevision, configJournal, 'select-provider-b');
         lastOwnedConfigRevision = providerBSnapshot.revision;
         const providerBConfig = providerBSnapshot.config;
         report.providerBConfig = {
@@ -781,10 +902,15 @@ async function main() {
           serviceId: providerB.id,
         };
 
-        report.rebind = await rebindThroughConsole(page, issuerDid, recording);
+        configJournal.intent('rebind-issuer-identity-ui', lastOwnedConfigRevision, identityRequest(issuerDid));
+        uiRebindAttempted = true;
+        report.rebind = await rebindThroughConsole(page, issuerDid, lastOwnedConfigRevision, recording);
         if (!report.rebind.ok || !report.rebind.changed) {
           throw new Error(`Provider switch failed (HTTP ${report.rebind.status})`);
         }
+        lastOwnedConfigRevision = ownedIdentityRevision(report.rebind);
+        configJournal.confirmed('rebind-issuer-identity-ui', lastOwnedConfigRevision);
+        uiRebindConfirmed = true;
         await showProviderStep(page, 'Issuer identity updated', 'The service confirmed the provider change. Next, verify the new credential and the earlier credential.');
 
         const providerBResult = await issueAndVerify(page, template);
@@ -812,13 +938,20 @@ async function main() {
           transitEndpoint,
           externalTransit,
         );
-        const unavailableSnapshot = await saveSigningConfig(page, writableConfig(beforeFailureConfig, {
+        const unavailableSnapshot = await saveOwnedSigningConfig(page, writableConfig(beforeFailureConfig, {
           extraServices: [providerB, unavailable],
           defaultServiceId: providerCId,
           resetDefaults: true,
-        }), lastOwnedConfigRevision);
+        }), lastOwnedConfigRevision, configJournal, 'select-unpublished-provider');
         lastOwnedConfigRevision = unavailableSnapshot.revision;
-        const deniedRebind = await directRebind(page, issuerDid);
+        configJournal.intent('deny-unpublished-rebind', lastOwnedConfigRevision, identityRequest(issuerDid));
+        negativeRebindAttempted = true;
+        const deniedRebind = await directRebind(page, issuerDid, lastOwnedConfigRevision);
+        if (deniedRebind.status === 503) {
+          unchangedOwnedRevision(await loadSigningConfig(page), lastOwnedConfigRevision);
+          configJournal.rejected('deny-unpublished-rebind', 503);
+          negativeRebindDenied = true;
+        }
         const afterDenial = await issueAndVerify(page, template);
         report.unpublishedReplacement = {
           rebindOk: deniedRebind.ok,
@@ -834,14 +967,18 @@ async function main() {
         qualificationError = error;
         report.error = redact(error.stack || error.message || String(error));
       } finally {
+        report.partialDidPublicationPossible = (createIdentityAttempted && !createIdentityConfirmed)
+          || (uiRebindAttempted && !uiRebindConfirmed)
+          || (negativeRebindAttempted && !negativeRebindDenied);
         try {
           report.cleanup = await cleanup(page, templateId, createdIdentityDids, governance);
         } catch (error) {
           report.cleanupError = redact(error.stack || error.message || String(error));
         }
-        if (originalConfig) {
+        if (originalConfig && configJournal?.healthy()) {
           try {
-            const restoredSnapshot = await saveSigningConfig(page, writableConfig(originalConfig), lastOwnedConfigRevision);
+            const restoredSnapshot = await saveOwnedSigningConfig(page, writableConfig(originalConfig),
+              lastOwnedConfigRevision, configJournal, 'restore-original-config');
             lastOwnedConfigRevision = restoredSnapshot.revision;
             const restored = restoredSnapshot.config;
             report.configRestored = {
@@ -851,12 +988,15 @@ async function main() {
           } catch (error) {
             report.configRestoreError = redact(error.stack || error.message || String(error));
           }
+        } else if (originalConfig) {
+          report.configRestoreError = 'Signing config journal failed; restoration requires separate reconciliation';
         }
       }
 
       report.protectedStateAfter = await protectedFixtureState(page);
       report.protectedStateUnchanged = stateHash(report.protectedStateBefore) === stateHash(report.protectedStateAfter);
       const ownedCleanupComplete = Boolean(report.protectedStateUnchanged
+        && !report.partialDidPublicationPossible
         && report.cleanup?.retiredTemplate
         && report.cleanup?.revokedCredentials >= 3
         && report.cleanup?.removedGovernanceRelationships === 1
@@ -897,6 +1037,7 @@ async function main() {
       });
       if (!report.releaseReady && !report.functionalReady) process.exitCode = 1;
     } finally {
+      if (configJournal) configJournal.close();
       if (context) await context.close().catch(() => {});
       await browser.close();
     }
@@ -913,6 +1054,11 @@ if (require.main === module) {
 }
 
 module.exports = {
+  createIdentity,
+  directRebind,
+  rebindThroughConsole,
+  ownedIdentityRevision,
+  createConfigMutationJournal,
   loadSigningConfig,
   saveSigningConfig,
   unchangedOwnedRevision,

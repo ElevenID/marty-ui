@@ -3395,8 +3395,9 @@ fn ambiguous_config_precondition(
     path: &str,
     headers: &axum::http::HeaderMap,
 ) -> bool {
-    *method == axum::http::Method::PATCH
-        && path == "/v1/signing-keys/config"
+    ((*method == axum::http::Method::PATCH && path == "/v1/signing-keys/config")
+        || ((*method == axum::http::Method::POST || *method == axum::http::Method::PATCH)
+            && path == "/v1/signing-keys/issuer-identities"))
         && headers.get_all(header::IF_MATCH).iter().count() > 1
 }
 
@@ -3944,6 +3945,13 @@ mod tests {
             "/v1/signing-keys/config",
             &headers
         ));
+        for method in [axum::http::Method::POST, axum::http::Method::PATCH] {
+            assert!(ambiguous_config_precondition(
+                &method,
+                "/v1/signing-keys/issuer-identities",
+                &headers
+            ));
+        }
     }
 
     #[tokio::test]

@@ -26,28 +26,52 @@ const {
   loadSigningConfig,
   saveSigningConfig,
   unchangedOwnedRevision,
+  createIdentity,
+  directRebind,
+  rebindThroughConsole,
+  ownedIdentityRevision,
+  createConfigMutationJournal,
 } = require('./audit-beta-issuer-provider-switch');
 
 function fakeConfigTransport(initial) {
   let config = structuredClone(initial);
   let generation = 1;
   let exposeEtag = true;
+  let identityPatchFailure = null;
   const requests = [];
   const etag = () => `"r-00000000-0000-4000-8000-${String(generation).padStart(12, '0')}"`;
   const fetch = async (route, options) => {
     requests.push({ route, options });
     const method = options.method || 'GET';
+    const identity = new URL(route, 'https://beta.example.test').pathname === '/v1/signing-keys/issuer-identities';
     let status = 200;
+    let body = config;
     if (method === 'PATCH') {
       if (options.headers['If-Match'] !== etag()) status = 412;
+      else if (identity && identityPatchFailure === 'before-bind') status = 503;
       else {
-        config = JSON.parse(options.body);
+        if (identity) {
+          config = { ...config, key_reference_purposes: { ...(config.key_reference_purposes || {}),
+            'provider-b': { 'key-b': ['vc_jwt_issuer'] } } };
+        } else config = JSON.parse(options.body);
+        generation += 1;
+        if (identity && identityPatchFailure === 'after-bind') status = 503;
+      }
+    }
+    if (method === 'POST' && identity) {
+      if (options.headers['If-Match'] !== etag()) status = 412;
+      else {
+        config = { ...config, key_reference_purposes: { 'managed-openbao-transit': {
+          'owned-key': ['vc_jwt_issuer'] } } };
         generation += 1;
       }
     }
+    if (identity && status === 200) body = { created: method === 'POST', changed: method === 'PATCH',
+      identity: { issuer_did: JSON.parse(options.body).issuer_did }, config_revision: etag() };
+    else body = config;
     return {
       ok: status === 200, status,
-      json: async () => structuredClone(config),
+      json: async () => structuredClone(body),
       headers: { get: (name) => name === 'etag' && exposeEtag ? etag() : null },
     };
   };
@@ -57,6 +81,7 @@ function fakeConfigTransport(initial) {
     current: () => structuredClone(config),
     externalEdit: (next) => { config = structuredClone(next); generation += 1; },
     omitEtag: () => { exposeEtag = false; },
+    failIdentityPatch: (stage) => { identityPatchFailure = stage; },
   };
 }
 
@@ -89,6 +114,106 @@ test('D02 restore accepts only the last owned revision and missing ETag prevents
   await assert.rejects(loadSigningConfig(transport.page), /no strong opaque revision/);
   await assert.rejects(saveSigningConfig(transport.page, original.config, null), /requires a strong opaque revision/);
   assert.equal(transport.requests.filter((request) => request.options.method === 'PATCH').length, priorWrites);
+});
+
+test('D02 managed identity and external rebind revisions remain owned and reject foreign mutation', async () => {
+  const transport = fakeConfigTransport({ services: [{ id: 'provider-a' }], default_service_id: 'provider-a' });
+  const original = await loadSigningConfig(transport.page);
+  const created = await createIdentity(transport.page, 'did:web:beta.example.test:orgs:d02', 'owned-create', original.revision);
+  const managedRevision = ownedIdentityRevision(created);
+  assert.deepEqual(transport.current().key_reference_purposes['managed-openbao-transit']['owned-key'], ['vc_jwt_issuer']);
+  const providerB = await saveSigningConfig(transport.page,
+    { ...transport.current(), default_service_id: 'provider-b' }, managedRevision);
+  const rebound = await directRebind(transport.page, 'did:web:beta.example.test:orgs:d02', providerB.revision);
+  const reboundRevision = ownedIdentityRevision(rebound);
+  assert.deepEqual(transport.current().key_reference_purposes['provider-b']['key-b'], ['vc_jwt_issuer']);
+  transport.externalEdit({ ...transport.current(), default_service_id: 'admin-edit' });
+  await assert.rejects(saveSigningConfig(transport.page, original.config, reboundRevision), /HTTP 412/);
+  assert.equal(transport.current().default_service_id, 'admin-edit');
+  assert.deepEqual(transport.requests.filter((request) => ['POST', 'PATCH'].includes(request.options.method))
+    .map((request) => request.options.headers['If-Match']),
+  [original.revision, managedRevision, providerB.revision, reboundRevision]);
+});
+
+test('D02 real UI rebind is intercepted once with the owned revision and fails on a foreign revision', async () => {
+  const expected = '"r-00000000-0000-4000-8000-000000000001"';
+  const issuerDid = 'did:web:beta.elevenidllc.com:orgs:d02';
+  for (const current of [expected, '"r-00000000-0000-4000-8000-000000000002"']) {
+    let routeHandler, responseMatch, receiveResponse;
+    const forwarded = [];
+    const request = {
+      url: () => 'https://beta.elevenidllc.com/v1/signing-keys/issuer-identities?organization_id=00000000-0000-0000-0000-000000000001',
+      method: () => 'PATCH', postDataJSON: () => ({ organization_id: '00000000-0000-0000-0000-000000000001', issuer_did: issuerDid }),
+      headers: () => ({ 'content-type': 'application/json' }),
+    };
+    const page = {
+      goto: async () => {},
+      locator: () => ({ filter: () => ({ first: () => ({ waitFor: async () => {},
+        getByRole: () => ({ click: async () => {} }) }) }) }),
+      getByRole: () => ({ getByRole: () => ({ click: async () => {
+        await routeHandler({ request: () => request, abort: async () => { throw new Error('Unexpected UI request'); },
+          continue: async ({ headers }) => {
+            forwarded.push(headers['If-Match']);
+            const status = headers['If-Match'] === current ? 200 : 412;
+            const response = { url: request.url, request: () => request, status: () => status,
+              ok: () => status === 200, json: async () => ({ changed: status === 200,
+                config_revision: status === 200 ? '"r-00000000-0000-4000-8000-000000000003"' : null }) };
+            if (responseMatch(response)) receiveResponse(response);
+          } });
+      } }) }),
+      route: async (_, handler) => { routeHandler = handler; },
+      unroute: async (_, handler) => { assert.equal(handler, routeHandler); routeHandler = null; },
+      waitForResponse: (match) => { responseMatch = match; return new Promise((resolve) => { receiveResponse = resolve; }); },
+    };
+    const result = await rebindThroughConsole(page, issuerDid, expected);
+    assert.deepEqual(forwarded, [expected]);
+    assert.equal(routeHandler, null);
+    if (current === expected) assert.equal(ownedIdentityRevision(result), '"r-00000000-0000-4000-8000-000000000003"');
+    else {
+      assert.equal(result.status, 412);
+      assert.throws(() => ownedIdentityRevision(result), /did not return/);
+    }
+  }
+});
+
+test('D02 unavailable-key denial requires unchanged revision, including after a 503 response', async () => {
+  const issuerDid = 'did:web:beta.example.test:orgs:d02';
+  for (const stage of ['before-bind', 'after-bind']) {
+    const transport = fakeConfigTransport({ services: [{ id: 'provider-a' }], default_service_id: 'provider-a' });
+    const before = await loadSigningConfig(transport.page);
+    transport.failIdentityPatch(stage);
+    const denied = await directRebind(transport.page, issuerDid, before.revision);
+    assert.equal(denied.status, 503);
+    const after = await loadSigningConfig(transport.page);
+    if (stage === 'before-bind') assert.equal(unchangedOwnedRevision(after, before.revision).default_service_id, 'provider-a');
+    else assert.throws(() => unchangedOwnedRevision(after, before.revision), /changed outside/);
+  }
+});
+
+test('D02 private journal seals original public config and unknown input before dispatch', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'd02-config-journal-'));
+  const revision = '"r-00000000-0000-4000-8000-000000000001"';
+  const original = { services: [{ id: 'provider-a', auth_reference: '', auth_reference_envelope: 'must-not-copy',
+    auth_configured: true }], default_service_id: 'provider-a' };
+  try {
+    const journal = createConfigMutationJournal(directory, original, revision);
+    journal.intent('select-provider-b', revision, { default_service_id: 'provider-b' });
+    journal.confirmed('select-provider-b', '"r-00000000-0000-4000-8000-000000000002"');
+    journal.intent('restore-original-config', '"r-00000000-0000-4000-8000-000000000002"', original);
+    journal.close();
+    const raw = fs.readFileSync(path.join(directory, 'signing-config-mutations.private.jsonl'), 'utf8');
+    const entries = raw.trim().split('\n').map(JSON.parse);
+    assert.deepEqual(entries.map((entry) => entry.stage),
+      ['ORIGINAL', 'INPUT_OUTCOME_UNKNOWN', 'CONFIRMED', 'INPUT_OUTCOME_UNKNOWN']);
+    assert.equal(entries[0].originalPublicConfig.services[0].auth_reference, undefined);
+    assert.equal(entries[0].originalPublicConfig.services[0].auth_reference_envelope, undefined);
+    assert.equal(original.services[0].auth_reference_envelope, 'must-not-copy');
+    assert.equal(raw.includes('must-not-copy'), false);
+    assert.throws(() => createConfigMutationJournal(directory, original, revision), /EEXIST/);
+  } finally {
+    assert.ok(path.resolve(directory).startsWith(path.resolve(os.tmpdir()) + path.sep));
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test('preprovisioned provider B requires exact identity and a distinct supported signer', async () => {
