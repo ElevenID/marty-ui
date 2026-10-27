@@ -29,7 +29,8 @@ use x509_cert::{
     time::{Time, Validity},
 };
 
-const ECDSA_SHA256: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.10045.4.3.2");
+pub(crate) const ECDSA_SHA256: ObjectIdentifier =
+    ObjectIdentifier::new_unwrap("1.2.840.10045.4.3.2");
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum DscCertificateError {

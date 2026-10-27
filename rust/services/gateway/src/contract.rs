@@ -18,6 +18,18 @@ const MDOC_CERTIFICATE_PATHS: [&str; 2] = [
     "/v1/signing-keys/issuer-identities/mdoc-iaca-self-signed-certificate",
     "/v1/signing-keys/issuer-identities/mdoc-dsc-certificate",
 ];
+const MDOC_CRL_PATHS: [(HttpMethod, &str, bool); 2] = [
+    (
+        HttpMethod::Get,
+        "/v1/signing-keys/mdoc-crls/{organization_id}/{file}",
+        false,
+    ),
+    (
+        HttpMethod::Post,
+        "/v1/signing-keys/mdoc-crls/{certificate_id}",
+        true,
+    ),
+];
 #[cfg(test)]
 const PHYSICAL_START_EXTENSION_ROUTE_COUNT: usize = 1;
 
@@ -189,6 +201,28 @@ impl GatewayContract {
                 retries: 2,
                 auth_required: true,
                 authentication_type: AuthenticationType::Jwt,
+                priority: route_priority(path),
+                tags: BTreeSet::from(["native-extension".into(), "proxied".into()]),
+            })?;
+        }
+        for (method, path, auth_required) in MDOC_CRL_PATHS {
+            table.add(RouteConfig {
+                name: format!("signing-keys-mdoc-crl:{path}"),
+                pattern: path.into(),
+                match_type: RouteMatchType::Template,
+                upstream_service: "signing-keys".into(),
+                methods: BTreeSet::from([method]),
+                host: None,
+                required_headers: BTreeMap::new(),
+                rewrite_path: None,
+                timeout_ms: 30_000,
+                retries: 0,
+                auth_required,
+                authentication_type: if auth_required {
+                    AuthenticationType::Jwt
+                } else {
+                    AuthenticationType::None
+                },
                 priority: route_priority(path),
                 tags: BTreeSet::from(["native-extension".into(), "proxied".into()]),
             })?;
@@ -764,8 +798,17 @@ pub(crate) fn oid4vci_protocol_route(path: &str) -> bool {
         .is_some_and(|id| !id.is_empty() && !id.contains('/'))
 }
 
+pub(crate) fn public_mdoc_crl_path(path: &str) -> bool {
+    static RESOURCE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"^/v1/signing-keys/mdoc-crls/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/[A-Za-z0-9_-]{1,128}\.crl$")
+            .expect("owned MDOC CDP path")
+    });
+    RESOURCE.is_match(path)
+}
+
 fn public_route(path: &str) -> bool {
-    path == "/openapi.json"
+    public_mdoc_crl_path(path)
+        || path == "/openapi.json"
         || path == "/v1/protocol-support"
         || path == "/docs"
         || path == "/redoc"
@@ -1093,6 +1136,7 @@ mod tests {
                 + issuance_native::NATIVE_EXTENSION_ROUTE_COUNT
                 + PHYSICAL_START_EXTENSION_ROUTE_COUNT
                 + MDOC_CERTIFICATE_PATHS.len()
+                + MDOC_CRL_PATHS.len()
         );
         assert_eq!(
             route_for(&table, HttpMethod::Get, "/v1/auth/session/validate")
@@ -1316,6 +1360,7 @@ mod tests {
                 + issuance_native::NATIVE_EXTENSION_ROUTE_COUNT
                 + PHYSICAL_START_EXTENSION_ROUTE_COUNT
                 + MDOC_CERTIFICATE_PATHS.len()
+                + MDOC_CRL_PATHS.len()
         );
         assert_eq!(
             contract
@@ -1327,6 +1372,7 @@ mod tests {
                 + issuance_native::NATIVE_EXTENSION_ROUTE_COUNT
                 + PHYSICAL_START_EXTENSION_ROUTE_COUNT
                 + MDOC_CERTIFICATE_PATHS.len()
+                + MDOC_CRL_PATHS.len()
                 + 3
         );
         let proxy = contract.proxy_route_table().expect("proxy");
@@ -1336,6 +1382,7 @@ mod tests {
                 + issuance_native::NATIVE_EXTENSION_ROUTE_COUNT
                 + PHYSICAL_START_EXTENSION_ROUTE_COUNT
                 + MDOC_CERTIFICATE_PATHS.len()
+                + MDOC_CRL_PATHS.len()
                 + 16
         );
         assert_eq!(
@@ -1611,6 +1658,37 @@ mod tests {
                 assert!(route_for(&table, HttpMethod::Post, &format!("{path}/other")).is_err());
             }
         }
+    }
+
+    #[test]
+    fn governed_mdoc_crl_has_one_public_resource_and_one_authenticated_mutation() {
+        let table = GatewayContract::load().unwrap().route_table().unwrap();
+        let org = "00000000-0000-0000-0000-000000000001";
+        let get_path = format!("/v1/signing-keys/mdoc-crls/{org}/iaca_1.crl");
+        let get = route_for(&table, HttpMethod::Get, &get_path).unwrap();
+        assert_eq!(get.route.upstream_service, "signing-keys");
+        assert!(!get.route.auth_required);
+        assert!(!route_ownership(&get_path).requires_authentication);
+        assert!(crate::authorization::skips_tenant_authorization(&get_path));
+        for foreign in [
+            format!("/v1/signing-keys/mdoc-crls/{org}/iaca_1.crl/extra"),
+            "/v1/signing-keys/mdoc-crls/not-an-org/iaca_1.crl".into(),
+        ] {
+            assert!(route_ownership(&foreign).requires_authentication);
+            assert!(!crate::authorization::skips_tenant_authorization(&foreign));
+        }
+        let post_path = "/v1/signing-keys/mdoc-crls/iaca_1";
+        let post = route_for(&table, HttpMethod::Post, post_path).unwrap();
+        assert_eq!(post.route.upstream_service, "signing-keys");
+        assert!(post.route.auth_required);
+        assert_eq!(post.route.authentication_type, AuthenticationType::Jwt);
+        assert_eq!(
+            crate::authorization::resolve_action("POST", post_path)
+                .unwrap()
+                .permission,
+            "mdoc-certificate:issue-iaca"
+        );
+        assert!(!crate::authorization::skips_tenant_authorization(post_path));
     }
 
     #[test]

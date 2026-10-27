@@ -2687,6 +2687,13 @@ fn proxy_overrides(
             "/v1/signing-keys/issuer-identities/mdoc-dsc-certificate",
             Some("mdoc-certificate:issue"),
         ) => state.mdoc_dsc_issue_gateway_key.as_ref(),
+        (path, Some("mdoc-certificate:issue-iaca"))
+            if path
+                .strip_prefix("/v1/signing-keys/mdoc-crls/")
+                .is_some_and(|id| !id.is_empty() && !id.contains('/')) =>
+        {
+            state.mdoc_iaca_issue_gateway_key.as_ref()
+        }
         _ => None,
     };
     if identity.organization_id.is_some()
@@ -8604,6 +8611,12 @@ mod tests {
                 "mdoc-certificate:issue",
                 "dedicated-mdoc-dsc-credential-00000001",
                 false,
+            ),
+            (
+                "/v1/signing-keys/mdoc-crls/iaca_1",
+                "mdoc-certificate:issue-iaca",
+                "dedicated-mdoc-iaca-credential-0000001",
+                true,
             ),
         ] {
             let recorder = Arc::new(ActorRecordingUpstream::default());

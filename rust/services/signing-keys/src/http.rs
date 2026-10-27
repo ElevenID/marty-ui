@@ -1,5 +1,6 @@
 use crate::certificate_csr::{self, CsrSubject};
 mod certificate_operations;
+mod mdoc_crl_operations;
 mod identity_inspection;
 use crate::certificate_issuance::{self, VerifiedDscSubject};
 use crate::compat::{
@@ -64,6 +65,7 @@ use axum::{
 };
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use certificate_operations::*;
+use mdoc_crl_operations::*;
 use marty_signing_grant::{
     ceremony::{IssuerCsrIntent, ServiceCsrIntent},
     replay::ConsumedGrant,
@@ -333,6 +335,8 @@ pub fn router_with_all_keys_grants_and_mdoc(
         .route("/docs", get(docs))
         .route("/redoc", get(redoc))
         .route("/v1/signing-keys/service-status", get(service_status))
+        .route("/v1/signing-keys/mdoc-crls/{organization_id}/{file}", get(public_mdoc_crl))
+        .route("/v1/signing-keys/mdoc-crls/{certificate_id}", post(publish_mdoc_crl))
         .route(
             "/v1/signing-keys",
             get(list_public_signing_keys).post(create_public_signing_key),
@@ -6338,6 +6342,16 @@ async fn openapi() -> Json<serde_json::Value> {
                 "get": {"summary": "Get Public Signing Key Metadata", "responses": {"200": {"description": "Tenant signing-key inventory entry"}, "404": {"description": "Signing key not found"}}},
                 "patch": {"summary": "Update Published Signing Key Metadata", "responses": {"200": {"description": "JWKS metadata updated without altering KMS key material"}, "404": {"description": "Published key not found"}}},
                 "delete": {"summary": "Deregister Published Signing Key", "responses": {"200": {"description": "JWKS entry removed without deleting KMS key material"}, "404": {"description": "Published key not found"}}}
+            },
+            "/v1/signing-keys/mdoc-crls/{organization_id}/{file}": {
+                "get": {"summary":"Get an unexpired governed MDOC IACA CRL from this deployment's configured CDP",
+                    "responses":{"200":{"description":"Signed application/pkix-crl bytes"},
+                                 "503":{"description":"Absent, expired, or no longer governed CRL"}}}
+            },
+            "/v1/signing-keys/mdoc-crls/{certificate_id}": {
+                "post": {"summary":"Publish or renew an IACA CRL, optionally revoking one managed DSC receipt",
+                    "responses":{"200":{"description":"Signed CRL and revocation committed atomically"},
+                                 "409":{"description":"Managed issuer or certificate state changed"}}}
             },
             "/v1/signing-keys/issuer-identities": {
                 "get": {"summary": "List Public Issuer Identities", "responses": {"200": {"description": "DID-first issuer identity inventory without custody coordinates"}}},
