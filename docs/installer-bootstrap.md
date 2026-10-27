@@ -13,6 +13,20 @@ version. These selectors are mutually exclusive. `--install-dir ABSOLUTE_PATH`
 and `--yes` are forwarded to the verified operator. `--help` works without
 Docker or platform detection.
 
+For an explicitly unqualified nightly installation trial, use the exact tag:
+
+```sh
+curl -fsSL https://github.com/ElevenID/marty-ui/releases/download/vX.Y.Z-nightly.YYYYMMDD.RUN_ID/install.sh | sh -s -- --candidate-test vX.Y.Z-nightly.YYYYMMDD.RUN_ID --install-dir /absolute/disposable/path
+```
+
+`--candidate-test` authenticates the nightly inventory, operator, and payloads
+from the same release run. It records a separate candidate-test scope and never
+creates installer admission or marks the installation Ready. Current runtime
+provisioning can return a nonzero result after creating owned resources; preserve
+the printed installation path and diagnostics for review. Use only a disposable
+Linux amd64 host and disposable identities. The normal `--version` and
+`--channel` paths continue to require signed admission.
+
 ## Requirements and release availability
 
 Run as a regular Docker-enabled Linux amd64 user. Docker Engine must be locally
