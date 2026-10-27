@@ -132,6 +132,14 @@ LATEST_REGISTRATION_COUNT = 155
 LATEST_REGISTRATION_SHA256 = (
     "53424925027bc7f829d679bbfcc3d2b0ae1077939e5d0b6609e52169c08c8d5f"
 )
+ISOLATED_NATIVE_CHILDREN = (
+    "base_profile_native_composition_child",
+    "kubernetes_profile_native_composition_child",
+)
+ISOLATED_REGISTRATION_COUNT = 157
+ISOLATED_REGISTRATION_SHA256 = (
+    "f7ab3389f55f2411643bb554586882a746fee7eff706467607743671771261c3"
+)
 PRE_RENDERER_REGISTRATION_COUNT = 154
 PRE_RENDERER_REGISTRATION_SHA256 = (
     "f906fbd6b6032660a9a385b770f100ee443a6397295f3133acd25de44289e0de"
@@ -164,8 +172,15 @@ def required_registrations():
 
 def test_mandatory_full_mode_registration_roster_is_unchanged() -> None:
     names = required_registrations()
-    assert len(names) == LATEST_REGISTRATION_COUNT
+    assert len(names) == ISOLATED_REGISTRATION_COUNT
     assert len(names) == len(set(names))
+    assert hashlib.sha256("\n".join(names).encode()).hexdigest() == (
+        ISOLATED_REGISTRATION_SHA256
+    )
+    assert all(names.count(name) == 1 for name in ISOLATED_NATIVE_CHILDREN)
+    # Add the owned child entries without rewriting any historical roster pin.
+    names = [name for name in names if name not in ISOLATED_NATIVE_CHILDREN]
+    assert len(names) == LATEST_REGISTRATION_COUNT
     assert hashlib.sha256("\n".join(names).encode()).hexdigest() == (
         LATEST_REGISTRATION_SHA256
     )
@@ -1996,6 +2011,7 @@ def test_preflight_propagates_preparation_listing_and_test_failures(
         "operations_gateway_candidate_preserves_review_lifecycle",
         RENDERED_CONFIG,
         FLOW_HISTORICAL_ROSTER[0],
+        *ISOLATED_NATIVE_CHILDREN,
     ],
 )
 def test_full_mode_still_fails_on_missing_mandatory_registration(shell_case, missing):
