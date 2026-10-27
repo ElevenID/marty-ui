@@ -764,6 +764,7 @@ async function main() {
     try {
       context = await browser.newContext({
         viewport: VIDEO_SIZE,
+        serviceWorkers: 'block', // The owned If-Match route must see the real UI PATCH.
         ignoreHTTPSErrors: LOCAL_BETA_PROXY,
         ...(RECORD_VIDEO ? { recordVideo: { dir: artifactDir, size: VIDEO_SIZE } } : {}),
       });
