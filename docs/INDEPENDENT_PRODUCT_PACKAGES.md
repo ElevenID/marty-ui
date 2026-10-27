@@ -160,3 +160,25 @@ transaction and qualification gates. Source and local development tests belong
 to this work. Installer implementation and independent release-artifact
 verification belong to the other assigned workers. Candidate production and
 composition rendering alone do not establish a supported distribution.
+
+## Qualification intake boundary
+
+Promotion must accept the verification owner's report as an explicit workflow
+run/artifact input; its filename and producing workflow are not yet fixed. The
+report must bind the exact candidate archive checksum, package manifest,
+producer run and attempt, source commit, product/version, and every image role
+and digest. The promotion workflow must authenticate the producing repository,
+workflow identity, successful run, artifact provenance and report checksum
+before it trusts any verdict. A local JSON file or a caller-supplied `passed`
+flag alone is insufficient.
+
+The verifier owns payload, image provenance, SBOM and cross-host checks. The
+promotion owner consumes those verdicts without repeating their checks, and
+separately requires exact server-without-console runtime results and, for a
+console combination, a result for the selected server and console digests.
+Missing, stale, failed, mismatched or unauthenticated evidence blocks promotion.
+The candidate manifest stays immutable and unqualified; any later qualification
+record must be a separate, digest-bound object. Support windows and supported
+profile claims need the relevant product decision and qualifying runtime and
+upgrade/recovery evidence before publication. No new version tag or supported
+release is created by the candidate producer.
