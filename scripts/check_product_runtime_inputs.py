@@ -35,7 +35,17 @@ def available_file(value: object) -> tuple[bool, bool]:
     path = Path(value)
     if not path.is_absolute() or path.is_symlink():
         return False, path.is_symlink()
-    return path.is_file(), False
+    if not path.is_file():
+        return False, False
+    try:
+        with path.open("rb") as source:
+            return any(
+                byte not in b" \t\r\n\v\f"
+                for chunk in iter(lambda: source.read(65536), b"")
+                for byte in chunk
+            ), False
+    except OSError:
+        return False, False
 
 
 def available_bind(value: object) -> tuple[bool, bool]:
