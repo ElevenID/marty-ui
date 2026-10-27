@@ -1,7 +1,6 @@
-use axum::{routing::get, Json, Router};
+use axum::Router;
 use mmf_core::{BuildInfo, ComponentHealth, HealthStatus, LifecycleState, MmfError};
-use mmf_runtime::{system_router, RuntimeState};
-use serde::Serialize;
+use mmf_runtime::{system_router, NativeBackendDiagnostics, RuntimeState};
 
 use crate::PresentationPolicyServiceConfig;
 
@@ -94,19 +93,8 @@ impl PresentationPolicyRuntime {
     }
 }
 
-#[derive(Serialize)]
-struct NativeDiagnostics {
-    backend: &'static str,
-    version: &'static str,
-    capabilities: &'static [&'static str],
-}
-
 fn native_backend_router() -> Router {
-    Router::new().route("/health/native-backend", get(native_health))
-}
-
-async fn native_health() -> Json<NativeDiagnostics> {
-    Json(NativeDiagnostics {
+    mmf_runtime::native_backend_router(NativeBackendDiagnostics {
         backend: "marty-presentation-policy-rust",
         version: env!("CARGO_PKG_VERSION"),
         capabilities: &[
@@ -120,5 +108,40 @@ async fn native_health() -> Json<NativeDiagnostics> {
             "live_trust",
             "credential_status",
         ],
+        ..Default::default()
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::{
+        body::{to_bytes, Body},
+        http::{Request, StatusCode},
+    };
+    use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn shared_diagnostics_preserve_the_existing_wire_contract() {
+        let response = native_backend_router()
+            .oneshot(
+                Request::builder()
+                    .uri("/health/native-backend")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), 4096).await.unwrap();
+        let actual: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            actual,
+            serde_json::json!({
+                "backend": "marty-presentation-policy-rust",
+                "version": env!("CARGO_PKG_VERSION"),
+                "capabilities": ["policy_lifecycle", "verified_fact_evaluation", "vc_jwt", "data_integrity", "sd_jwt", "open_badges_v2", "open_badges_v3", "live_trust", "credential_status"]
+            })
+        );
+    }
 }

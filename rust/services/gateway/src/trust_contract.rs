@@ -505,6 +505,7 @@ fn validate_trust_profile_fields(
     }
     if let Some(overrides) = value.get("system_issuer_overrides") {
         if !overrides.is_null() {
+            validate_metadata(Some(overrides), false)?;
             let overrides = overrides.as_object().ok_or(TrustContractError)?;
             if overrides.values().any(|value| !value.is_object()) {
                 return Err(TrustContractError);
@@ -968,6 +969,9 @@ fn project_trust_profile(value: Value) -> Result<Value, TrustContractError> {
         validate_string_array(value.get(field), true)?;
     }
     validate_boolean(value.get("auto_generated"), true)?;
+    if let Some(overrides) = value.get("system_issuer_overrides") {
+        validate_metadata(Some(overrides), true)?;
+    }
     value
         .entry("system_issuer_overrides")
         .or_insert_with(|| json!({}));
@@ -1460,6 +1464,77 @@ mod tests {
             "issuer_entity" => ResponseKind::IssuerEntity,
             "trust_profile_issuer" => ResponseKind::TrustProfileIssuer,
             _ => panic!("unknown response kind"),
+        }
+    }
+
+    #[test]
+    fn profile_override_boundary_rejects_private_writes_and_readbacks() {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/trust-profile-override-boundary.json"
+        ))
+        .unwrap();
+        let legacy: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/gateway-trust-behavior.json"
+        ))
+        .unwrap();
+        let response = legacy["response_cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|case| case["kind"] == "trust_profile")
+            .unwrap()["input"]
+            .clone();
+        for (group, accepted) in [("supported", true), ("rejected", false)] {
+            for case in fixture[group].as_array().unwrap() {
+                for (method, path) in [
+                    ("POST", "/v1/trust-profiles"),
+                    ("PATCH", "/v1/trust-profiles/profile-1"),
+                ] {
+                    let mut request = json!({"system_issuer_overrides":case["overrides"]});
+                    if method == "POST" {
+                        request["organization_id"] = json!("org-1");
+                        request["name"] = json!("Public trust");
+                    }
+                    assert_eq!(
+                        canonicalize_request(method, path, &serde_json::to_vec(&request).unwrap())
+                            .is_ok(),
+                        accepted,
+                        "{} {method}",
+                        case["name"]
+                    );
+                }
+                let mut input = response.clone();
+                input["system_issuer_overrides"] = case["overrides"].clone();
+                for many in [false, true] {
+                    let input = if many {
+                        json!([input.clone()])
+                    } else {
+                        input.clone()
+                    };
+                    assert_eq!(
+                        project_response(input, ResponseKind::TrustProfile, many).is_ok(),
+                        accepted,
+                        "{} many={many}",
+                        case["name"]
+                    );
+                }
+            }
+        }
+    }
+    #[test]
+    fn native_trust_readbacks_survive_gateway_projection() {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/trust-profile-readback-behavior.json"
+        ))
+        .unwrap();
+        for case in fixture["cases"].as_array().unwrap() {
+            assert_eq!(
+                project_response(case["expected"].clone(), ResponseKind::TrustProfile, false)
+                    .unwrap(),
+                case["expected"],
+                "{}",
+                case["name"]
+            );
         }
     }
 }

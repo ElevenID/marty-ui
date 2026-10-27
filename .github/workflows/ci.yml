@@ -1,8 +1,8 @@
 name: CI
 
 env:
-  MARTY_API_CORE_URI: https://github.com/ElevenID/marty-cli/releases/download/v0.3.4/elevenid-marty-api-core-0.3.4.tgz
-  MARTY_API_CORE_DIGEST: sha256:d5904d0c757220430525778db50b1689b0126034c7f8b904880c1774e6c96a62
+  MARTY_API_CORE_URI: https://github.com/ElevenID/marty-cli/releases/download/v0.3.6/elevenid-marty-api-core-0.3.6.tgz
+  MARTY_API_CORE_DIGEST: sha256:e328b24e97850619204f7c7b251d85a16fd76ba1fc6d23f0ca929e23e15a3db0
   MARTY_BLOG_URI: https://github.com/ElevenID/marty-blog/releases/download/v0.1.9/elevenid-marty-blog-0.1.9.tgz
   MARTY_BLOG_DIGEST: sha256:1dda635bd284d9cb254e3c2c51fc09890cfae21b48a4c2095985621ad86cb358
   MARTY_PROTOCOL_REF: 76c37dc229b328afe002b911a26624543f814a64
@@ -2443,6 +2443,8 @@ jobs:
           "$RUNNER_TEMP/gateway-schema-check/bin/python" -m pip install --disable-pip-version-check jsonschema==4.23.0
           "$RUNNER_TEMP/gateway-schema-check/bin/python" scripts/check_gateway_organization_openapi.py \
             --openapi "$RUNNER_TEMP/gateway-openapi.json"
+          "$RUNNER_TEMP/gateway-schema-check/bin/python" scripts/check_gateway_trust_openapi.py \
+            --openapi "$RUNNER_TEMP/gateway-openapi.json"
           "$RUNNER_TEMP/gateway-schema-check/bin/python" scripts/check_gateway_template_openapi.py \
             --openapi "$RUNNER_TEMP/gateway-openapi.json"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -2850,6 +2852,12 @@ jobs:
         run: |
           docker pull nginx@sha256:582c496ccf79d8aa6f8203a79d32aaf7ffd8b13362c60a701a2f9ac64886c93d
           python scripts/probe_selfhost_api_only_edge.py
+      - name: Exercise independent console routing and verified server TLS
+        timeout-minutes: 5
+        run: |
+          docker pull nginx:1.29.1-alpine@sha256:42a516af16b852e33b7682d5ef8acbd5d13fe08fecadc7ed98605ba5e3b26ab8
+          docker pull python@sha256:fd95fa221297a88e1cf49c55ec1828edd7c5a428187e67b5d1805692d11588db
+          python scripts/probe_independent_console.py --output "$RUNNER_TEMP/independent-console-source"
       - name: Enforce pinned public OpenAPI schemas
         run: python scripts/generate_public_openapi_schemas.py --protocol-root marty-protocol --check
       - name: Test public schemas and executable examples

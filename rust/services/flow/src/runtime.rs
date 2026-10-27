@@ -1,7 +1,7 @@
-use axum::{routing::get, Json, Router};
+use axum::Router;
 use mmf_core::{BuildInfo, ComponentHealth, HealthStatus, LifecycleState, MmfError};
+use mmf_runtime::NativeBackendDiagnostics;
 use mmf_runtime::{system_router, RuntimeState};
-use serde::Serialize;
 
 use crate::FlowServiceConfig;
 
@@ -150,19 +150,8 @@ impl FlowRuntime {
     }
 }
 
-#[derive(Debug, Serialize)]
-struct NativeBackendDiagnostics {
-    backend: &'static str,
-    version: &'static str,
-    capabilities: &'static [&'static str],
-}
-
 fn native_backend_router() -> Router {
-    Router::new().route("/health/native-backend", get(native_backend_health))
-}
-
-async fn native_backend_health() -> Json<NativeBackendDiagnostics> {
-    Json(NativeBackendDiagnostics {
+    mmf_runtime::native_backend_router(NativeBackendDiagnostics {
         backend: "marty-flow-rust",
         version: env!("CARGO_PKG_VERSION"),
         capabilities: &[
@@ -177,5 +166,6 @@ async fn native_backend_health() -> Json<NativeBackendDiagnostics> {
             "grpc_service",
             "callback_delivery",
         ],
+        ..Default::default()
     })
 }

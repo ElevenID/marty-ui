@@ -275,6 +275,13 @@ pub enum CanvasOAuthPlatformPatch {
     Disconnected,
 }
 
+/// Internal token provenance; deliberately not Debug because it may hold a token.
+pub enum CanvasCatalogToken {
+    OAuth(String),
+    LocalAdminEligible,
+    OAuthUnavailable,
+}
+
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
 pub enum CanvasOAuthProviderError {
     #[error("Canvas OAuth provider request failed")]
@@ -333,6 +340,16 @@ impl From<IntegrationSecretError> for CanvasOAuthError {
 
 #[async_trait]
 pub trait CanvasOAuthRepository: Send + Sync {
+    /// Compatibility is opt-in only for a tenant-bound platform with no OAuth
+    /// history or configuration. Unsupported repositories fail closed.
+    async fn local_admin_fallback_eligible(
+        &self,
+        _organization_id: &str,
+        _platform_id: &str,
+    ) -> Result<bool, CanvasOAuthError> {
+        Ok(false)
+    }
+
     /// Return durable revocations that are due and not held by a live lease.
     ///
     /// The default keeps request-only repository implementations source
@@ -995,6 +1012,34 @@ impl CanvasOAuthService {
                 .await;
         }
         self.best_effort_revoke(canvas_base_url, access_token).await;
+    }
+
+    /// Distinguishes usable OAuth authority from explicitly eligible local-only
+    /// mode. OAuth lifecycle failures never grant compatibility authority.
+    pub async fn catalog_token(
+        &self,
+        platform_id: &str,
+        api_key: Option<&str>,
+        trusted_organization_id: Option<&str>,
+    ) -> Result<CanvasCatalogToken, CanvasOAuthError> {
+        if let Some(token) = self
+            .access_token(platform_id, api_key, trusted_organization_id)
+            .await?
+        {
+            return Ok(CanvasCatalogToken::OAuth(token));
+        }
+        // access_token has already authorized the exact tenant/platform. A
+        // missing connection alone is insufficient: disconnect deletes it.
+        let organization_id = trusted_organization(trusted_organization_id)?;
+        if self
+            .repository
+            .local_admin_fallback_eligible(organization_id, platform_id)
+            .await?
+        {
+            Ok(CanvasCatalogToken::LocalAdminEligible)
+        } else {
+            Ok(CanvasCatalogToken::OAuthUnavailable)
+        }
     }
 
     /// Resolves a usable organization-owned Canvas OAuth token, refreshing it

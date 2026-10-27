@@ -71,6 +71,46 @@ This validates the same organization readback cases exercised by the gateway
 projector and rejects private fields and invented response envelopes. CI runs
 it against the export from the actual gateway image.
 
+Trust-profile issuer overrides must contain public configuration only. The
+public gateway and native owner reject nested private custody selectors and
+private JWK parameters, including case variants and values inside arrays,
+before saving a create or patch. Public JWKs remain valid configuration.
+Readback rejects a legacy profile containing such private override data instead
+of returning it; a native collection containing that profile fails as a whole.
+The stored record is preserved for operator remediation. An authorized patch
+with `system_issuer_overrides: {}` clears that map and restores readback; it
+does not replace the profile or change its other configuration. A successful export
+or structurally valid profile does not qualify its trust anchors or issuers.
+
+
+Native trust-profile readbacks use their own components, with all 25 public
+fields and typed trust-source, DID-resolution, inline policy and override
+values. Optional fields are omitted, including credential formats on a
+machine-only profile. Credential-purpose profiles require supported credential
+formats; machine-purpose profiles require trusted assertion formats. Public
+extension values remain JSON values, with the same recursive private-custody
+and private-JWK exclusions as the owner and gateway. Native-only source IDs,
+registry tokens and stored synchronization state are excluded from readback.
+The pinned protocol component remains available as a reference; native response
+bindings cover list, create, detail, patch, activate and delete.
+The native service also has a suspend operation, but the public gateway does
+not publish that route yet. Public suspension remains an API lifecycle gap.
+Create/patch request DTO coverage remains explicitly incomplete.
+
+The trust-profile list requires `organization_id` and returns an array without
+a total count. On the current 64-bit service deployments, `limit` and `offset`
+accept unsigned 64-bit values, defaulting to 100 and 0. Zero is valid; the owner
+clamps page sizes above 500. Activate has no request body. Delete
+returns exactly `{"success": true}`. These schemas describe public configuration;
+they do not establish authorization, anchor validity or interoperability.
+
+After exporting a matching binary or image, validate the shared readback cases
+that also run through the actual native HTTP router and gateway projector:
+
+```sh
+python scripts/check_gateway_trust_openapi.py --openapi marty-openapi.json
+```
+
 Template create and patch bodies use native-owned write components. Creation
 requires organization, name, credential type, compliance profile, public issuer
 DID and a nonempty claims array. Public claim display/type/namespace aliases are

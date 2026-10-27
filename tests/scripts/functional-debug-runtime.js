@@ -9,6 +9,8 @@ const HASH=/^[a-f0-9]{64}$/,REV=/^[a-f0-9]{40}$/;
 const DEBUG_ROLES=Object.freeze({applicant:'marty-applicant',issuance:'marty-issuance-service',
  'issuance-native':'marty-issuance-service',gateway:'marty-gateway',
  'presentation-policy':'marty-presentation-policy','credential-template':'marty-credential-template'});
+const ISSUANCE_SOURCE='85a6e31265f465a6a46c0cd97ecc6be4770fe7b4',ISSUANCE_CORE='44040270000f93b7e7499cbec31b3bb3dd7e3df1';
+const ISSUANCE_ROLES=Object.freeze(['issuance','issuance-native']);
 const RETAINED_ROLES=Object.freeze({flow:'marty-flow','signing-keys':'marty-signing-keys'});
 const digest=value=>crypto.createHash('sha256').update(value).digest('hex');
 function boundJson(ref){
@@ -21,6 +23,7 @@ function boundJson(ref){
 }
 function binaryFor(role){return ({issuance:'marty-issuance-service','issuance-native':'marty-issuance-service',verification:'marty-verification-service'})[role]||'marty-'+role;}
 function expectedRuntime(profile){
+ if(profile?.schema==='marty.functional-mixed-runtime/v2')return expectedIssuanceOverlay(profile);
  assert.equal(profile.schema,'marty.functional-mixed-runtime/v1');
  assert.equal(profile.scope,'FUNCTIONAL_ONLY');assert.equal(profile.releaseQualified,false);assert.equal(profile.recordingQualified,false);
  const baseline=boundJson(profile.baselineDeployment),build=boundJson(profile.baselineBuild);
@@ -83,6 +86,84 @@ function expectedRuntime(profile){
  for(const role of [...Object.keys(DEBUG_ROLES),...Object.keys(RETAINED_ROLES)])assert(expected.some(row=>row.role===role),'Missing required overlay role');
  return expected;
 }
+function expectedIssuanceOverlay(profile){
+ assert.equal(profile.scope,'FUNCTIONAL_ONLY');assert.equal(profile.releaseQualified,false);assert.equal(profile.recordingQualified,false);
+ const base=boundJson(profile.baseProfile);assert.equal(base.schema,'marty.functional-mixed-runtime/v1');
+ const expected=expectedRuntime(base);assert.equal(expected.length,22);
+ const overlay=profile.issuanceOverlay,build=boundJson(overlay.buildReceipt),deployed=boundJson(overlay.deploymentReceipt);
+ assert.equal(build.scope,'ISSUANCE_ONLY_NATIVE_FUNCTIONAL_OVERLAY');assert.equal(build.state,'BUILD_SUCCEEDED');assert.equal(build.exitCode,0);
+ assert.equal(build.profile,'dev');assert.equal(build.sourceRevision,ISSUANCE_SOURCE);assert.equal(build.coreRevision,ISSUANCE_CORE);
+ assert.equal(build.sourceCleanBeforeAfter,true);assert.equal(build.releaseQualified,false);assert.equal(build.recordingQualified,false);assert.equal(build.imageBuilt,false);
+ assert.equal(build.cargoCommand,'cargo build --locked --offline --message-format=json -p marty-issuance-service --bin marty-issuance-service');
+ assert.equal(build.features,'issuance-package default features; KMS-only sources; no test/feature overrides; functional-only noncanonical selection');
+ assert.equal(build.cargoIncremental,0);assert.equal(build.cargoProfileDevDebug,0);assert.equal(build.rustToolchain,'1.95.0');assert.equal(build.builderPlatform,'linux/amd64');
+ assert.equal(build.binary?.name,'marty-issuance-service');assert(HASH.test(build.binary.sha256));
+ const prepared=boundJson(build.sourcePreparation),artifacts=boundJson(build.coreCompilerArtifacts);
+ assert.equal(prepared.uiRevision,ISSUANCE_SOURCE);assert.equal(prepared.coreRevision,ISSUANCE_CORE);
+ assert.equal(prepared.uiTree,'3c11b3cee95d533a650ac1f31504ccf320ec2494');assert.equal(prepared.coreTree,'6ac871ff0b6862e2f5f19374b853f6f7c52049bb');
+ const inventoryHashes={'ui-source':'33a2fe61469e27e455222042f4ce2a11f9475328052438c05433ec521b8fcc96','core-source':'ffeeacc05f3f409fff877fd75ecf8d33d251794b0245e22cb09f8b0d4407d06f'};
+ for(const key of ['ui-source','core-source']){const inventory=prepared.sourceInventories?.[key];
+  assert(Number.isInteger(inventory?.files)&&inventory.files>0);assert(Number.isInteger(inventory.bytes)&&inventory.bytes>0);assert.equal(inventory.inventorySha256,inventoryHashes[key]);}
+ assert.equal(prepared.recipeSha256,'2beef9b635f8fefeb36470722b0b87089810b0666ecbf37b0d60a6dcf4236fd1');
+ assert.equal(prepared.localizerSha256,'b1dd31880f82f91d2f9151d05cb01c29ca702ce057595ff18c2708378d2167f5');
+ assert.equal(prepared.builderImage,'sha256:6258907abe69656e41cd992e0b705cdcfabcbbe3db374f92ed2d47121282d4a1');
+ assert(Array.isArray(artifacts)&&artifacts.length>0);const compiledNames=new Set();
+ const knownCore=['marty-canonical-digest','marty-crypto','marty-didcomm','marty-emrtd-issuance','marty-iso18013','marty-oid4vci','marty-status','marty-verification','marty-x509-verification'];
+ const kmsCore=['marty-crypto','marty-didcomm','marty-oid4vci','marty-verification'];
+ for(const artifact of artifacts){
+  const name=artifact.name;assert(knownCore.includes(name),'Unknown Core compiler package');compiledNames.add(name);
+  assert.equal(artifact.manifest,'/build/core/'+name+'/Cargo.toml','Core compiler artifact source is unbound');
+  assert.equal(typeof artifact.fresh,'boolean');assert(Array.isArray(artifact.features)&&artifact.features.every(feature=>typeof feature==='string'));
+  assert(artifact.features.every(feature=>!['default','local-key-operations','test-fixtures'].includes(feature)),'Forbidden Core features');
+  if(kmsCore.includes(name))assert(artifact.features.includes('kms-only'),'Missing KMS-only feature');
+  assert(Array.isArray(artifact.filenames)&&artifact.filenames.length>0&&artifact.filenames.every(file=>typeof file==='string'&&path.posix.isAbsolute(file)));
+ }
+ for(const name of kmsCore)assert(compiledNames.has(name),'Issuer Core compiler artifact absent: '+name);
+
+ assert.equal(deployed.scope,'ISSUANCE_ONLY_NATIVE_FUNCTIONAL_OVERLAY');assert.equal(deployed.state,'APPLIED_FUNCTIONAL_ONLY');
+ assert.equal(deployed.baseProfileSha256,profile.baseProfile.sha256);assert.equal(deployed.buildReceiptSha256,overlay.buildReceipt.sha256);
+ assert.equal(deployed.sourceRevision,build.sourceRevision);assert.equal(deployed.coreRevision,build.coreRevision);assert.equal(deployed.binarySha256,build.binary.sha256);
+ assert.equal(deployed.productionTouched,false);assert.equal(deployed.imagesBuilt,false);assert.equal(deployed.releaseQualified,false);assert.equal(deployed.recordingQualified,false);
+ assert.deepEqual(Object.keys(deployed.roles).sort(),[...ISSUANCE_ROLES].sort());
+ const snapshot=boundJson(deployed.beforeRuntimeBinding);assert.equal(snapshot.baseProfileSha256,profile.baseProfile.sha256);
+ const before=snapshot.binding;assert.equal(before.schema,'marty.functional-mixed-runtime-binding/v1');assert.equal(before.scope,'FUNCTIONAL_ONLY');
+ assert.equal(before.releaseQualified,false);assert.equal(before.recordingQualified,false);assert.equal(before.mixedSourceStack,true);
+ assert.deepEqual(before.receiptDigests,receiptDigests(base));assert.equal(before.roles.length,22);
+ assert.equal(new Set(before.roles.map(row=>row.role)).size,22);assert.equal(new Set(before.roles.map(row=>row.containerId)).size,22);
+ for(const row of expected){
+  const old=before.roles.find(item=>item.role===row.role);assert(old,'Missing prior role identity');
+  for(const field of ['binary','source','sha256','kind','imageId','project'])assert.equal(old[field],row[field],'Prior role lineage mismatch');
+  assert(HASH.test(old.containerId));if(row.requiredContainerId)assert.equal(old.containerId,row.requiredContainerId);
+  assert(Number.isInteger(old.hostPid)&&old.hostPid>0);assert(Number.isFinite(Date.parse(old.startedAt)));
+  assert(Number.isInteger(old.effectiveUid)&&old.effectiveUid>=0);assert(Number.isInteger(old.configuredRuntimeUid)&&old.configuredRuntimeUid>=0);
+  assert(Array.isArray(old.binaryMounts));assert(old.binaryMounts.every(mount=>mount.writable===false));
+  assert.equal(old.processExecutableSha256,row.sha256);assert.equal(old.executablePath,row.binary?'/usr/local/bin/'+row.binary:null);
+  assert(old.health==='healthy'||(row.role==='canvas-sync-worker'&&old.health===null));
+ }
+ const ids=new Set();
+ return expected.map(row=>{
+  const old=before.roles.find(item=>item.role===row.role);
+  if(!ISSUANCE_ROLES.includes(row.role))return {...row,requiredObservation:Object.fromEntries(['containerId','imageId','health','executablePath','processExecutableSha256','binaryMounts','startedAt','hostPid','effectiveUid','configuredRuntimeUid'].map(field=>[field,old[field]]))};
+  const actual=deployed.roles[row.role],target='/usr/local/bin/marty-issuance-service';
+  assert(HASH.test(actual.containerId));assert(!before.roles.some(previous=>previous.containerId===actual.containerId),'Issuance overlay requires a fresh noncolliding container');
+  assert(!ids.has(actual.containerId));ids.add(actual.containerId);assert.equal(actual.imageId,row.imageId);
+  assert.equal(actual.processExecutablePath,target);assert.equal(actual.processExecutableSha256,build.binary.sha256);assert.equal(actual.mountedBinarySha256,build.binary.sha256);
+  assert(Number.isInteger(actual.configuredRuntimeUid)&&actual.configuredRuntimeUid>=0);assert.equal(actual.effectiveUid,actual.configuredRuntimeUid);assert.equal(actual.effectiveUid,old.effectiveUid);assert.equal(actual.configuredRuntimeUid,old.configuredRuntimeUid);
+  assert(Number.isInteger(actual.hostPid)&&actual.hostPid>0);assert(Number.isFinite(Date.parse(actual.startedAt)));
+  assert.equal(actual.binaryMount?.type,'bind');assert.equal(actual.binaryMount.destination,target);assert.equal(actual.binaryMount.writable,false);assert(path.isAbsolute(actual.binaryMount.source));
+  return {...row,source:build.sourceRevision,coreSource:build.coreRevision,sha256:build.binary.sha256,kind:'ISSUANCE_CORE_FUNCTIONAL_OVERLAY',
+   requiredContainerId:actual.containerId,requiredStartedAt:actual.startedAt,requiredHostPid:actual.hostPid,requiredEffectiveUid:actual.effectiveUid,requiredBinaryMounts:[actual.binaryMount]};
+ });
+}
+function configuredUid(value){
+ if(value===''||value==='root'||value==='root:root')return 0;
+ if(/^\d+(?::[^:]+)?$/.test(value))return Number(value.split(':')[0]);
+ return null;
+}
+function receiptDigests(profile){return profile.schema==='marty.functional-mixed-runtime/v2'?{baseProfile:profile.baseProfile.sha256,issuanceBuild:profile.issuanceOverlay.buildReceipt.sha256,issuanceDeployment:profile.issuanceOverlay.deploymentReceipt.sha256}:{baselineDeployment:profile.baselineDeployment.sha256,baselineBuild:profile.baselineBuild.sha256,
+   debugDeployment:profile.debugDeployment.sha256,debugBuild:profile.debugBuild.sha256,
+   retainedBuilds:Object.fromEntries(Object.entries(profile.retainedBuilds).map(([role,ref])=>[role,ref.sha256])),
+   ...(profile.priorNativeOverlay?{priorNativeOverlay:profile.priorNativeOverlay.sha256,priorNativeBuild:profile.priorNativeBuild.sha256,priorNativeArtifacts:profile.priorNativeArtifacts.sha256}:{})};}
 function observeDocker(expected){
  const read=args=>execFileSync('docker',args,{encoding:'utf8',timeout:30000,maxBuffer:4*1024*1024,windowsHide:true});
  const ids=read(['ps','-q','--no-trunc','--filter','label=com.docker.compose.project='+expected.project,
@@ -95,13 +176,17 @@ function observeDocker(expected){
  const processHash=expected.binary?read(['exec',row.Id,'sha256sum','/proc/1/exe']).trim().split(/\s+/)[0]:null;
  const hash=expected.binary?read(['exec',row.Id,'sha256sum',binaryPath]).trim().split(/\s+/)[0]:null;
  const binaryMounts=expected.binary?(row.Mounts||[]).filter(mount=>binaryPath===mount.Destination||binaryPath.startsWith(mount.Destination.replace(/\/$/,'')+'/')).map(mount=>({type:mount.Type,source:mount.Source,destination:mount.Destination,writable:mount.RW===true})):[];
+ const uidStatus=read(['exec',row.Id,'cat','/proc/1/status']);
+ const uidMatch=uidStatus.match(/^Uid:\s+\d+\s+(\d+)\s+/m);assert(uidMatch,'PID1 effective UID unavailable');
+ const effectiveUid=Number(uidMatch[1]),configuredRuntimeUid=configuredUid(row.Config?.User||'');
  const after=JSON.parse(read(['inspect',row.Id]))[0];
  assert.equal(after.State?.StartedAt,row.State?.StartedAt,'Role restarted during executable observation');
  assert.equal(after.State?.Pid,row.State?.Pid,'Role process changed during executable observation');
  return {role:expected.role,containerId:row.Id,imageId:row.Image,project:labels['com.docker.compose.project'],
   service:labels['com.docker.compose.service'],running:row.State?.Running===true,
   status:row.State?.Status,health:row.State?.Health?.Status||null,binarySha256:hash,
-  binaryMounts,executablePath,processExecutableSha256:processHash,startedAt:row.State?.StartedAt,hostPid:row.State?.Pid};
+  binaryMounts,executablePath,processExecutableSha256:processHash,startedAt:row.State?.StartedAt,hostPid:row.State?.Pid,
+  effectiveUid,configuredRuntimeUid};
 }
 function verifyFunctionalRuntime(profile,{qualification='FUNCTIONAL_ONLY',observe=observeDocker}={}){
  assert.equal(qualification,'FUNCTIONAL_ONLY','Mixed/debug stack cannot qualify release or recording');
@@ -115,7 +200,12 @@ function verifyFunctionalRuntime(profile,{qualification='FUNCTIONAL_ONLY',observ
   }
   assert.equal(actual.role,row.role);assert.equal(actual.project,row.project);
   assert.equal(actual.service,row.role);assert.equal(actual.imageId,row.imageId);assert(HASH.test(actual.containerId));
+  if(row.requiredObservation)for(const [field,value]of Object.entries(row.requiredObservation))assert.deepEqual(actual[field],value,'Unchanged role observation differs: '+row.role+'/'+field);
   if(row.requiredContainerId)assert.equal(actual.containerId,row.requiredContainerId,'Reviewed debug container changed');
+  if(row.requiredStartedAt!==undefined){assert.equal(actual.startedAt,row.requiredStartedAt);assert.equal(actual.hostPid,row.requiredHostPid);}
+  if(row.kind==='ISSUANCE_CORE_FUNCTIONAL_OVERLAY'){
+   assert.equal(actual.effectiveUid,row.requiredEffectiveUid);assert.equal(actual.configuredRuntimeUid,row.requiredEffectiveUid);
+   assert.deepEqual(actual.binaryMounts,row.requiredBinaryMounts,'Reviewed issuance executable mount changed');}
   assert.equal(actual.running,true);assert.equal(actual.status,'running');
   assert(actual.health==='healthy'||(row.role==='canvas-sync-worker'&&actual.health===null),'Role health not established');
   assert.equal(actual.binarySha256,row.sha256,'Actual mounted executable differs from source-bound role');
@@ -125,15 +215,13 @@ function verifyFunctionalRuntime(profile,{qualification='FUNCTIONAL_ONLY',observ
    if(row.kind==='DEBUG_PRODUCTION_BINARY'||row.kind==='RETAINED_SOURCE_BOUND_BINARY')assert(actual.binaryMounts.length>0,'Expected reviewed executable mount is absent');}
   assert(Number.isInteger(actual.hostPid)&&actual.hostPid>0);assert(typeof actual.startedAt==='string'&&Number.isFinite(Date.parse(actual.startedAt)));
   roles.push({...row,containerId:actual.containerId,health:actual.health,startedAt:actual.startedAt,hostPid:actual.hostPid,
-   executablePath:actual.executablePath,processExecutableSha256:actual.processExecutableSha256,binaryMounts:actual.binaryMounts});
+   executablePath:actual.executablePath,processExecutableSha256:actual.processExecutableSha256,binaryMounts:actual.binaryMounts,
+   ...(actual.effectiveUid!==undefined?{effectiveUid:actual.effectiveUid,configuredRuntimeUid:actual.configuredRuntimeUid}:{})});
  }
  // A changed receipt during the observation window cannot acquire a binding.
  expectedRuntime(profile);
- return {schema:'marty.functional-mixed-runtime-binding/v1',scope:'FUNCTIONAL_ONLY',
+ return {schema:profile.schema==='marty.functional-mixed-runtime/v2'?'marty.functional-mixed-runtime-binding/v2':'marty.functional-mixed-runtime-binding/v1',scope:'FUNCTIONAL_ONLY',
   releaseQualified:false,recordingQualified:false,mixedSourceStack:true,roles,
-  receiptDigests:{baselineDeployment:profile.baselineDeployment.sha256,baselineBuild:profile.baselineBuild.sha256,
-   debugDeployment:profile.debugDeployment.sha256,debugBuild:profile.debugBuild.sha256,
-   retainedBuilds:Object.fromEntries(Object.entries(profile.retainedBuilds).map(([role,ref])=>[role,ref.sha256])),
-   ...(profile.priorNativeOverlay?{priorNativeOverlay:profile.priorNativeOverlay.sha256,priorNativeBuild:profile.priorNativeBuild.sha256,priorNativeArtifacts:profile.priorNativeArtifacts.sha256}:{})}};
+  receiptDigests:receiptDigests(profile)};
 }
-module.exports={boundJson,expectedRuntime,verifyFunctionalRuntime,DEBUG_ROLES,RETAINED_ROLES};
+module.exports={boundJson,expectedRuntime,verifyFunctionalRuntime,DEBUG_ROLES,RETAINED_ROLES,ISSUANCE_SOURCE,ISSUANCE_CORE};

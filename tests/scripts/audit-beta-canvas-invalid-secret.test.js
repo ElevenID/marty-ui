@@ -84,3 +84,95 @@ test('negative token transport is isolated from browser cookies and disposed on 
   else{await assert.rejects(requestStatelessTokenDenial(factory,{code:'private-code'}));assert.deepEqual(events,mode==='cookie-injection'?['dispose']:['post','dispose']);}
  }
 });
+
+
+const {ownedOAuthReferences,retireOwnedOAuthConnection,requireFreshOAuthValue,oauthFallbackPresence,observeOAuthSelection}=require('./audit-beta-canvas-invalid-secret');
+const oauthAccess={id:'11111111-1111-4111-8111-111111111111',organization_id:'owned-org',provider:'canvas',purpose:'oauth_access_token',
+ metadata:{platform_id:'owned-platform'},enabled:true,last_used_at:null,secret_hint:'NEVER-EXPOSE',encrypted_secret_value:'NEVER-EXPOSE'};
+test('recovery plan is explicit and leaves the existing negative-only default unchanged',()=>{
+ assert.equal(planWrongSecretCase().scope,'VALID_ENABLED_CANVAS_CLIENT_WRONG_SECRET_FUNCTIONAL_ONLY');
+ const recovery=planWrongSecretCase({recoverWithValidSecret:true});assert(recovery.stockLogoutScope.includes('global logout'));assert(recovery.scope.includes('RECOVERY'));assert.equal(recovery.executionStarted,false);
+ assert.equal(recovery.releaseQualified,false);assert.equal(recovery.recordingQualified,false);assert.throws(()=>planWrongSecretCase({recoverWithValidSecret:'true'}));
+});
+test('recovery metadata binds owned tenant/platform and never returns value or hint fields',()=>{
+ const refs=ownedOAuthReferences([oauthAccess,{...oauthAccess,id:'22222222-2222-4222-8222-222222222222',metadata:{platform_id:'another-platform'}}],'owned-org','owned-platform',{requireAccess:true});
+ assert.equal(refs.length,1);assert.equal(refs[0].lastUsedAt,null);assert(!JSON.stringify(refs).includes('NEVER-EXPOSE'));
+ for(const rows of [[],[oauthAccess,oauthAccess],[{...oauthAccess,organization_id:'foreign'}],[{...oauthAccess,provider:'other'}],[{...oauthAccess,enabled:false}],[{...oauthAccess,metadata:{platform_id:'foreign'}}]])
+  assert.throws(()=>ownedOAuthReferences(rows,'owned-org','owned-platform',{requireAccess:true}));
+});
+test('native OAuth disconnect requires typed ACK then empty owned-reference readback',async()=>{
+ const calls=[],observations=[];let reads=0;
+ const result=await retireOwnedOAuthConnection(async(route,options)=>{const method=options.method||'GET';calls.push(method);
+  assert(!route.includes('expire_sessions'));if(method==='DELETE'){assert.equal(route,'/v1/integrations/canvas/platforms/owned-platform/oauth');return {status:200,payload:{platform_id:'owned-platform',status:'disconnected',scopes:[]}};}
+  return {status:200,payload:reads++===0?[oauthAccess]:[]};
+ },{},'owned-org','owned-platform',value=>observations.push(value),{requireAccess:true});
+ assert.deepEqual(calls,['GET','DELETE','GET']);assert.equal(result.typedDisconnectedAck,true);assert.equal(result.atomicMetadataAbsence,true);
+ assert.equal(result.providerRevokeAckSourceBound,true);assert.equal(result.providerStatusDirectlyObserved,false);assert.equal(result.serverHeldBearerProbed,false);assert.equal(observations[0].typedDisconnectedAck,false);
+});
+for(const mode of ['pending','wrong-platform','remaining-secret','transport'])test('recovery cleanup preserves unresolved authority on '+mode,async()=>{
+ const events=[];let reads=0,last;
+ await assert.rejects(retireOwnedOAuthConnection(async(_route,options)=>{
+  const method=options.method||'GET';events.push(method);
+  if(method==='DELETE'){
+   if(mode==='transport')throw Error('private token detail');
+   return {status:200,payload:{platform_id:mode==='wrong-platform'?'other':'owned-platform',status:mode==='pending'?'revocation_pending':'disconnected',scopes:[]}};
+  }
+  return {status:200,payload:reads++===0||mode==='remaining-secret'?[oauthAccess]:[]};
+ },{},'owned-org','owned-platform',value=>{last=value}));
+ assert.deepEqual(events,mode==='remaining-secret'?['GET','DELETE','GET']:['GET','DELETE']);
+ assert(!last?.atomicMetadataAbsence);assert(!JSON.stringify(last||{}).includes('private token detail'));
+});
+test('fresh authorization values cannot replay a prior code or state and remain out of evidence',()=>{
+ const seen=new Set();assert.equal(requireFreshOAuthValue(seen,'private-issued-code'),true);
+ assert.throws(()=>requireFreshOAuthValue(seen,'private-issued-code'),error=>!error.message.includes('private-issued-code'));
+ assert.equal(requireFreshOAuthValue(seen,'another-private-code'),true);assert.throws(()=>requireFreshOAuthValue(seen,''));
+});
+test('fallback presence returns booleans only and rejects ambiguous process configuration',()=>{
+ const observed=oauthFallbackPresence('OTHER=private\0CANVAS_ALLOW_LOCAL_ADMIN_TOKEN_FALLBACK=0\0CANVAS_ADMIN_API_TOKEN=NEVER-EXPOSE\0CANVAS_ADMIN_API_TOKEN_FILE=/private/NEVER-EXPOSE\0');
+ assert.deepEqual(observed,{fallbackEnabled:false,adminTokenScalarPresent:true,adminTokenFileReferencePresent:true});assert(!JSON.stringify(observed).includes('NEVER-EXPOSE'));
+ assert.equal(oauthFallbackPresence('CANVAS_ALLOW_LOCAL_ADMIN_TOKEN_FALLBACK=TRUE\0').fallbackEnabled,true);
+ assert.throws(()=>oauthFallbackPresence('CANVAS_ALLOW_LOCAL_ADMIN_TOKEN_FALLBACK=0\0CANVAS_ALLOW_LOCAL_ADMIN_TOKEN_FALLBACK=1\0'));
+});
+test('OAuth-only source observation requires the exact still-running bound PID and disabled fallback',()=>{
+ const roles=['issuance','issuance-native'].map((role,index)=>({role,containerId:String(index+1).repeat(64),hostPid:index+10,startedAt:'2026-10-26T00:00:00Z'}));
+ const binding={schema:'marty.functional-mixed-runtime-binding/v2',scope:'FUNCTIONAL_ONLY',releaseQualified:false,recordingQualified:false,roles:[...roles,...Array.from({length:20},(_,index)=>({role:'unvisited'+index}))]};
+ for(const mode of ['valid','enabled','changed-pid']){
+  const calls=[];let inspected=0;
+  const read=args=>{calls.push(args[0]);const row=roles.find(item=>item.containerId===args[1]);
+   if(args[0]==='exec')return 'CANVAS_ALLOW_LOCAL_ADMIN_TOKEN_FALLBACK='+(mode==='enabled'?'1':'0')+'\0CANVAS_ADMIN_API_TOKEN=PRIVATE\0';
+   inspected++;return JSON.stringify([{Id:row.containerId,State:{Running:true,Pid:mode==='changed-pid'&&inspected%2===0?999:row.hostPid,StartedAt:row.startedAt}}]);};
+  if(mode==='valid'){const result=observeOAuthSelection(binding,{read});assert.equal(result.length,2);assert(result.every(row=>row.fallbackEnabled===false));assert(!JSON.stringify(result).includes('PRIVATE'));assert.deepEqual(calls,['inspect','exec','inspect','inspect','exec','inspect']);}
+  else assert.throws(()=>observeOAuthSelection(binding,{read}));
+ }
+});
+
+test('cleanup can reconcile disabled owned references without treating them as usable OAuth authority',async()=>{
+ const disabled={...oauthAccess,enabled:false};assert.equal(ownedOAuthReferences([disabled],'owned-org','owned-platform')[0].enabled,false);
+ assert.throws(()=>ownedOAuthReferences([disabled],'owned-org','owned-platform',{requireAccess:true}));
+ const calls=[];await assert.rejects(retireOwnedOAuthConnection(async(_route,options)=>{const method=options.method||'GET';calls.push(method);
+  return method==='DELETE'?{status:200,payload:{platform_id:'owned-platform',status:'revocation_pending',scopes:[]}}:{status:200,payload:[disabled]};
+ },{},'owned-org','owned-platform'));assert.deepEqual(calls,['GET','DELETE']);
+});
+
+test('recovery uses the actual canonical client POST scope-discovery route and typed body',async()=>{
+ const {readOwnedCanvasScope}=require('./audit-beta-canvas-invalid-secret'),fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
+ const source=fs.readFileSync(path.join(__dirname,'../../ui/src/services/canvasIntegrationsApi.js'),'utf8');
+ const start=source.indexOf('export async function discoverCanvasScope('),end=source.indexOf('\n}',start)+2;assert(start>=0&&end>start);
+ let canonical;const sandbox={API_BASE:'/v1/integrations/canvas',encodeURIComponent,post:(route,body)=>{canonical={route,body:JSON.parse(JSON.stringify(body))};}};
+ vm.runInNewContext(source.slice(start,end).replace(/^export /,''),sandbox);
+ await sandbox.discoverCanvasScope('owned-platform',{includeCourses:true,includeAssignments:false,includeQuizzes:false,includeModules:false,limit:1});
+ let observed;const result=await readOwnedCanvasScope(async(route,options)=>{observed={route,method:options.method,body:options.body};
+  return {status:200,payload:{platform_id:'owned-platform',organization_id:'owned-org',canvas_base_url:'https://canvas-test.elevenidllc.com',courses:[{name:'DO-NOT-RECORD'}]}};
+ },{},'owned-org','owned-platform');
+ assert.equal(observed.method,'POST');assert.equal(observed.route,canonical.route);assert.deepEqual(observed.body,canonical.body);
+ assert(!JSON.stringify(result).includes('DO-NOT-RECORD'));assert.equal(result.courseCount,1);
+});
+test('normal successful recovery cannot claim disconnected authority when its access ref was already absent',async()=>{
+ const calls=[];await assert.rejects(retireOwnedOAuthConnection(async(_route,options)=>{calls.push(options.method||'GET');return {status:200,payload:[]};
+ },{},'owned-org','owned-platform',()=>{},{requireAccess:true}));assert.deepEqual(calls,['GET']);
+});
+test('recovery fails closed before creating browser authority without the existing all22 runtime proof',async()=>{
+ let browserTouched=false;await assert.rejects(runWrongSecretCase({result:{},save(){},recoverWithValidSecret:true,
+  canvasCredentials:{email:'governed-user',password:'private'},retainPrivateAuthority(){},adminPage:{context(){browserTouched=true;throw Error('must not create browser authority');}}}));
+ assert.equal(browserTouched,false);
+});

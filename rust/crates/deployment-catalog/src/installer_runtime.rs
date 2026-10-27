@@ -336,8 +336,23 @@ fn validate_info(output: &str, expected: &str) -> Result<DockerInfo> {
 pub struct DockerRunner {
     runner: BoundedRunner,
     expected_engine_id: String,
+    deadline: Option<Instant>,
 }
 impl DockerRunner {
+    pub(crate) fn with_deadline(mut self, deadline: Instant) -> Self {
+        self.deadline = Some(deadline);
+        self
+    }
+    fn budget(&self, limit: Duration) -> Result<Duration> {
+        match self.deadline {
+            Some(deadline) => deadline
+                .checked_duration_since(Instant::now())
+                .filter(|remaining| !remaining.is_zero())
+                .map(|remaining| remaining.min(limit))
+                .ok_or_else(|| "Docker inspection deadline exceeded".into()),
+            None => Ok(limit),
+        }
+    }
     /// Bounded application diagnostics for an already validated exact container.
     /// Callers must scrub both streams and re-observe ownership before output.
     pub(crate) fn capture_logs(&self, container: &str, tail: u16) -> Result<(String, String)> {
@@ -372,10 +387,11 @@ impl DockerRunner {
         Ok(Self {
             runner: BoundedRunner::new(docker_executable, docker_host, private_parent)?,
             expected_engine_id: expected_engine_id.into(),
+            deadline: None,
         })
     }
     fn info(&self) -> Result<DockerInfo> {
-        let output = self.runner.run(&["info", "--format", "{\"id\":{{json .ID}},\"os\":{{json .OSType}},\"architecture\":{{json .Architecture}},\"server_version\":{{json .ServerVersion}},\"security_options\":{{json .SecurityOptions}}}"], Duration::from_secs(30), 65536)?;
+        let output = self.runner.run(&["info", "--format", "{\"id\":{{json .ID}},\"os\":{{json .OSType}},\"architecture\":{{json .Architecture}},\"server_version\":{{json .ServerVersion}},\"security_options\":{{json .SecurityOptions}}}"], self.budget(Duration::from_secs(30))?, 65536)?;
         validate_info(&output, &self.expected_engine_id)
     }
     /// Read-only Docker checks, using the isolated configuration and fixed socket.
@@ -385,7 +401,7 @@ impl DockerRunner {
             .runner
             .run(
                 &["compose", "version", "--short"],
-                Duration::from_secs(30),
+                self.budget(Duration::from_secs(30))?,
                 1024,
             )?
             .trim()
@@ -446,7 +462,7 @@ impl DockerRunner {
             return Err("unapproved Docker command or endpoint override".into());
         }
         self.info()?;
-        self.runner.run(args, timeout, MAX_OUTPUT)
+        self.runner.run(args, self.budget(timeout)?, MAX_OUTPUT)
     }
 }
 
@@ -552,6 +568,23 @@ mod tests {
         }
         assert!(output.contains(&format!("HOME={}", runner.staging.path().display())));
         assert!(output.contains("DOCKER_HOST=unix:///var/run/docker.sock"));
+    }
+    #[test]
+    fn shared_validation_deadline_bounds_engine_checks_before_launch() {
+        let parent = private_temp();
+        let binary = script(parent.path(), "sleep 10");
+        let docker = DockerRunner::new(
+            &binary,
+            "unix:///var/run/docker.sock",
+            "test-engine",
+            parent.path(),
+        )
+        .unwrap()
+        .with_deadline(Instant::now() + Duration::from_millis(100));
+        let started = Instant::now();
+        assert!(docker.preflight().is_err());
+        assert!(started.elapsed() < Duration::from_secs(3));
+        assert!(docker.run_checked(&["inspect", "container"]).is_err());
     }
     #[test]
     fn stage_timeouts_are_bounded_and_keep_endpoint_checks() {

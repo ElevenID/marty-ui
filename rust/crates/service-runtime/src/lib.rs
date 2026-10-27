@@ -1,5 +1,8 @@
 //! Shared process and keyless transport mechanics. Service policy stays at callers.
 
+#[cfg(feature = "workload-identity")]
+pub mod workload;
+
 use mmf_platform::{KeylessGrpcTlsAcceptor, OpenBaoTlsIdentityFiles, PlatformError};
 use std::{io, path::PathBuf, time::Duration};
 use tokio::{

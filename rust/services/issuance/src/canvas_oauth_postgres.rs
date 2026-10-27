@@ -138,6 +138,39 @@ impl PostgresIntegrationSecretVault {
 
 #[async_trait]
 impl CanvasOAuthRepository for PostgresCanvasOAuthRepository {
+    async fn local_admin_fallback_eligible(
+        &self,
+        organization_id: &str,
+        platform_id: &str,
+    ) -> Result<bool, CanvasOAuthError> {
+        // Retained authorizations distinguish never-configured local mode from
+        // an OAuth connection removed by completed disconnect. Both subqueries
+        // bind tenant as well as platform; config markers also deny fallback.
+        sqlx::query_scalar(
+            "SELECT NOT EXISTS (
+                SELECT 1 FROM issuance_service.canvas_oauth_authorizations a
+                WHERE a.organization_id = p.organization_id AND a.platform_id = p.id
+             ) AND NOT EXISTS (
+                SELECT 1 FROM issuance_service.canvas_oauth_connections c
+                WHERE c.organization_id = p.organization_id AND c.platform_id = p.id
+             ) AND COALESCE(jsonb_typeof(p.connection_config) = 'object', false)
+             AND NOT (p.connection_config ?| ARRAY[
+                'oauth_status', 'oauth_client_id', 'oauth_pending_authorization_id',
+                'oauth_capabilities', 'granted_scopes'])
+             FROM (
+                SELECT id, organization_id, connection_config::jsonb AS connection_config
+                FROM issuance_service.canvas_platforms
+                WHERE organization_id = $1 AND id = $2 AND archived_at IS NULL
+             ) p",
+        )
+        .bind(organization_id)
+        .bind(platform_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map(|eligible| eligible.unwrap_or(false))
+        .map_err(repository_error)
+    }
+
     async fn due_revocations(
         &self,
         limit: usize,
