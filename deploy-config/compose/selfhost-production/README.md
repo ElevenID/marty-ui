@@ -9,6 +9,7 @@ generation first. Then run the ordinary database migration to completion,
 invoke the privileged KMS/DID initializer once, and start the application:
 
 ```sh
+python scripts/check-selfhost-production.py --env-file .env.selfhost.production.local --required-secrets-only
 docker compose --env-file .env.selfhost.production.local -f docker-compose.selfhost.prod.yml up -d db-migrate
 docker compose --env-file .env.selfhost.production.local -f docker-compose.selfhost.prod.yml ps --all db-migrate
 docker compose --env-file .env.selfhost.production.local -f docker-compose.selfhost.prod.yml run --rm --no-deps kms-initialize

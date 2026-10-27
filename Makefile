@@ -216,6 +216,7 @@ selfhost-prod-check: ## Validate tunnel token, OpenBao state, and main self-host
 
 selfhost-prod-up: selfhost-prod-config ## Start the self-host production stack from released images
 	@echo "$(BLUE)Starting self-host production stack...$(NC)"
+	@python scripts/check-selfhost-production.py --env-file "$(SELFHOST_ENV_FILE)" --required-secrets-only
 	@$(SELFHOST_PROD_COMPOSE) pull
 	@$(SELFHOST_PROD_COMPOSE) up -d
 	@echo "$(GREEN)✓ Self-host production stack started$(NC)"
