@@ -813,6 +813,24 @@ fn resource_owner_context(
     ResourceOwnerContext { headers: forwarded }
 }
 
+fn invalid_passport_cancellation_key(
+    method: &str,
+    path: &str,
+    headers: &axum::http::HeaderMap,
+    native_passport_enabled: bool,
+) -> bool {
+    if !native_passport_enabled
+        || method != "POST"
+        || !issuance_native::is_passport_administrative_cancel(HttpMethod::Post, path)
+    {
+        return false;
+    }
+    let mut values = headers.get_all("idempotency-key").iter();
+    let first = values.next().and_then(|value| value.to_str().ok());
+    values.next().is_some()
+        || !first.is_some_and(marty_passport_auth::valid_operation_idempotency_key)
+}
+
 fn duplicate_start_idempotency_header(
     method: &str,
     path: &str,
@@ -830,6 +848,18 @@ async fn idempotency_middleware(
     request: Request,
     next: Next,
 ) -> Response {
+    // Validate before IdempotencyBegin::Replay, not just before proxying.
+    if invalid_passport_cancellation_key(
+        request.method().as_str(),
+        request.uri().path(),
+        request.headers(),
+        state.passport_native_gateway_enabled,
+    ) {
+        return detail_response(
+            422,
+            "Administrative cancellation requires one valid Idempotency-Key",
+        );
+    }
     if duplicate_start_idempotency_header(
         request.method().as_str(),
         request.uri().path(),
@@ -1139,6 +1169,17 @@ async fn proxy_handler(
         }
     };
     let public_path = parts.uri.path().to_owned();
+    if invalid_passport_cancellation_key(
+        parts.method.as_str(),
+        &public_path,
+        &parts.headers,
+        state.passport_native_gateway_enabled,
+    ) {
+        return detail_response(
+            422,
+            "Administrative cancellation requires one valid Idempotency-Key",
+        );
+    }
     if duplicate_start_idempotency_header(
         parts.method.as_str(),
         &public_path,
@@ -1166,6 +1207,11 @@ async fn proxy_handler(
             Ok(path) => path,
             Err((status, detail)) => return detail_response(status, detail),
         };
+    // The generic proxy stores headers in a map. Reject ambiguity before it
+    // could collapse two preconditions into one at the signing service.
+    if ambiguous_config_precondition(&parts.method, &public_path, &parts.headers) {
+        return detail_response(400, "Exactly one If-Match revision is allowed");
+    }
     if public_path == "/v1/signing-keys/issuer-identities/dsc-certificate"
         && state.dsc_issue_gateway_key.is_none()
     {
@@ -3413,6 +3459,17 @@ fn request_headers(headers: &axum::http::HeaderMap) -> BTreeMap<String, String> 
         .collect()
 }
 
+fn ambiguous_config_precondition(
+    method: &axum::http::Method,
+    path: &str,
+    headers: &axum::http::HeaderMap,
+) -> bool {
+    ((*method == axum::http::Method::PATCH && path == "/v1/signing-keys/config")
+        || ((*method == axum::http::Method::POST || *method == axum::http::Method::PATCH)
+            && path == "/v1/signing-keys/issuer-identities"))
+        && headers.get_all(header::IF_MATCH).iter().count() > 1
+}
+
 fn cookies(headers: &axum::http::HeaderMap) -> BTreeMap<String, String> {
     headers
         .get_all(header::COOKIE)
@@ -3936,6 +3993,36 @@ fn map_failure(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn duplicate_config_preconditions_are_rejected_before_header_projection() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.append(header::IF_MATCH, "\"r-legacy\"".parse().unwrap());
+        assert!(!ambiguous_config_precondition(
+            &axum::http::Method::PATCH,
+            "/v1/signing-keys/config",
+            &headers
+        ));
+        headers.append(header::IF_MATCH, "\"r-other\"".parse().unwrap());
+        assert!(ambiguous_config_precondition(
+            &axum::http::Method::PATCH,
+            "/v1/signing-keys/config",
+            &headers
+        ));
+        assert!(!ambiguous_config_precondition(
+            &axum::http::Method::GET,
+            "/v1/signing-keys/config",
+            &headers
+        ));
+        for method in [axum::http::Method::POST, axum::http::Method::PATCH] {
+            assert!(ambiguous_config_precondition(
+                &method,
+                "/v1/signing-keys/issuer-identities",
+                &headers
+            ));
+        }
+    }
+
     #[tokio::test]
     async fn object_admission_keeps_body_limit_and_json_object_errors_distinct() {
         let request = |body: &'static str| Request::new(Body::from(body));
@@ -4244,9 +4331,28 @@ mod tests {
             key: &str,
         ) -> Result<Option<ApiKeyIdentity>, SecurityError> {
             Ok(match key {
+                "trust-writer" | "trust-reader" | "trust-other" => Some(ApiKeyIdentity {
+                    api_key_id: "trust-key-1".into(),
+                    organization_id: Some(
+                        if key == "trust-other" {
+                            "org-other"
+                        } else {
+                            "org-1"
+                        }
+                        .into(),
+                    ),
+                    key_prefix: None,
+                    scopes: vec![if key == "trust-reader" {
+                        "trust:read"
+                    } else {
+                        "trust:write"
+                    }
+                    .into()],
+                }),
                 "passport-gateway-key-org-1"
                 | "passport-gateway-key-org-2"
-                | "passport-gateway-read-only-org-1" => Some(ApiKeyIdentity {
+                | "passport-gateway-read-only-org-1"
+                | "passport-gateway-cancel-org-1" => Some(ApiKeyIdentity {
                     api_key_id: "gateway-test-key".into(),
                     organization_id: Some(
                         if key.ends_with("org-1") {
@@ -4259,6 +4365,8 @@ mod tests {
                     key_prefix: None,
                     scopes: if key == "passport-gateway-read-only-org-1" {
                         vec!["credentials:read".into()]
+                    } else if key == "passport-gateway-cancel-org-1" {
+                        vec!["credentials:read".into(), "credentials:revoke".into()]
                     } else {
                         vec!["credentials:read".into(), "credentials:issue".into()]
                     },
@@ -5687,6 +5795,20 @@ mod tests {
                     value.clone()
                 }
             });
+            let trust = (instance.service_name == "trust-profiles").then(|| {
+                let fixtures: Value = serde_json::from_str(include_str!(
+                    "../../../../contracts/trust-profile-readback-behavior.json"
+                ))
+                .unwrap();
+                let mut value = fixtures["cases"][0]["expected"].clone();
+                value["organization_id"] = json!("org-1");
+                value["status"] = json!(if request.path.ends_with("/suspend") {
+                    "suspended"
+                } else {
+                    "active"
+                });
+                value
+            });
             self.0
                 .lock()
                 .expect("owned request recorder")
@@ -5695,7 +5817,9 @@ mod tests {
                 status_code: 200,
                 set_cookies: Vec::new(),
                 headers: BTreeMap::from([("content-type".into(), "application/json".into())]),
-                body: Some(if let Some(notification) = notification {
+                body: Some(if let Some(trust) = trust {
+                    serde_json::to_vec(&trust).unwrap()
+                } else if let Some(notification) = notification {
                     serde_json::to_vec(&notification).unwrap()
                 } else if issued_credential {
                     serde_json::to_vec(&json!({
@@ -6235,6 +6359,94 @@ mod tests {
         let duplicate = router.oneshot(duplicate_request).await.unwrap();
         assert_eq!(duplicate.status(), StatusCode::UNPROCESSABLE_ENTITY);
         assert_eq!(recorder.0.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn administrative_passport_cancel_rejects_key_aliases_before_cached_replay() {
+        let recorder = Arc::new(ActorRecordingUpstream::default());
+        let router = gateway_router(runtime_state_with_upstream_and_passport(
+            Arc::new(NoOwner),
+            recorder.clone(),
+            true,
+        ));
+        let path = "/v1/passport/applications/00000000-0000-4000-8000-000000000001/cancel";
+        let payload = r#"{"expected_job_id":"00000000-0000-4000-8000-000000000002","reason_code":"ADMINISTRATIVE_ABANDONMENT","reason":"End owned failed attempt"}"#;
+        let request = |key: &str, authority: &str| {
+            Request::builder()
+                .method("POST")
+                .uri(path)
+                .header("content-type", "application/json")
+                .header("x-api-key", authority)
+                .header("idempotency-key", key)
+                .body(Body::from(payload))
+                .unwrap()
+        };
+        let first = router
+            .clone()
+            .oneshot(request("owned-cancel-1", "passport-gateway-cancel-org-1"))
+            .await
+            .unwrap();
+        assert_eq!(first.status(), StatusCode::OK);
+        assert_eq!(recorder.0.lock().unwrap().len(), 1);
+        let replay = router
+            .clone()
+            .oneshot(request("owned-cancel-1", "passport-gateway-cancel-org-1"))
+            .await
+            .unwrap();
+        assert_eq!(replay.status(), StatusCode::OK);
+        assert_eq!(replay.headers()["idempotency-replayed"], "true");
+        for key in [" owned-cancel-1 ", "owned-cancel-1,other", ""] {
+            let response = router
+                .clone()
+                .oneshot(request(key, "passport-gateway-cancel-org-1"))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        }
+        let mut duplicate = request("owned-cancel-1", "passport-gateway-cancel-org-1");
+        duplicate
+            .headers_mut()
+            .append("idempotency-key", "other".parse().unwrap());
+        assert_eq!(
+            router.clone().oneshot(duplicate).await.unwrap().status(),
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+        let mut missing = request("owned-cancel-1", "passport-gateway-cancel-org-1");
+        missing.headers_mut().remove("idempotency-key");
+        assert_eq!(
+            router.clone().oneshot(missing).await.unwrap().status(),
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+        // The issue-only principal must not acquire revoke authority from a
+        // response already cached under this fixture's same authenticated ID.
+        assert_eq!(
+            router
+                .clone()
+                .oneshot(request("owned-cancel-1", "passport-gateway-key-org-1"))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::FORBIDDEN
+        );
+        let mut foreign = request("owned-cancel-1", "passport-gateway-cancel-org-1");
+        foreign
+            .headers_mut()
+            .insert("x-organization-id", "org-2".parse().unwrap());
+        assert_eq!(
+            router.oneshot(foreign).await.unwrap().status(),
+            StatusCode::FORBIDDEN
+        );
+        let calls = recorder.0.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, issuance_native::NATIVE_SERVICE);
+        assert_eq!(
+            calls[0]
+                .1
+                .headers
+                .get("x-organization-id")
+                .map(String::as_str),
+            Some("org-1")
+        );
     }
 
     #[tokio::test]
@@ -9186,6 +9398,83 @@ mod tests {
         assert_eq!(body["accreditations"], json!(["ISO27001"]));
         assert!(body.get("description").is_none());
         assert!(body.get("trust_anchor_id").is_none());
+    }
+
+    #[tokio::test]
+    async fn trust_lifecycle_requires_exact_action_tenant_and_machine_write_scope() {
+        for action in ["activate", "suspend"] {
+            let exact = if action == "activate" {
+                "trust-profile:activate"
+            } else {
+                "trust-profile:suspend"
+            };
+            for (permission, owner, credential, expected) in [
+                (exact, "org-1", "", StatusCode::UNAUTHORIZED),
+                (exact, "org-1", "valid", StatusCode::OK),
+                (
+                    "trust-profile:create",
+                    "org-1",
+                    "valid",
+                    StatusCode::FORBIDDEN,
+                ),
+                (
+                    "trust-profile:edit",
+                    "org-1",
+                    "valid",
+                    StatusCode::FORBIDDEN,
+                ),
+                (exact, "org-other", "valid", StatusCode::FORBIDDEN),
+                (exact, "org-1", "trust-writer", StatusCode::OK),
+                (exact, "org-1", "trust-reader", StatusCode::FORBIDDEN),
+                (exact, "org-1", "trust-other", StatusCode::FORBIDDEN),
+            ] {
+                let recorder = Arc::new(ActorRecordingUpstream::default());
+                let mut state = runtime_state_with_upstream(Arc::new(NoOwner), recorder.clone());
+                let owned = Arc::get_mut(&mut state).unwrap();
+                owned.memberships = Arc::new(SingleGrantMembership(permission));
+                owned.owners = Arc::new(ScriptedOwner(Some(owner.into())));
+                let path = format!("/v1/trust-profiles/profile-one/{action}");
+                let mut request = Request::builder().method("POST").uri(&path);
+                if credential == "valid" {
+                    request = request.header("cookie", "sessionId=valid");
+                } else if !credential.is_empty() {
+                    request = request.header("x-api-key", credential);
+                }
+                let response = gateway_router(state)
+                    .oneshot(request.body(Body::empty()).unwrap())
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    response.status(),
+                    expected,
+                    "{action} {permission} {owner} {credential}"
+                );
+                let payload = to_bytes(response.into_body(), DEFAULT_MAXIMUM_BODY_BYTES)
+                    .await
+                    .unwrap();
+                let calls = recorder.0.lock().unwrap();
+                assert_eq!(calls.len(), usize::from(expected == StatusCode::OK));
+                if expected == StatusCode::OK {
+                    let (service, forwarded) = &calls[0];
+                    assert_eq!(service, "trust-profiles");
+                    assert_eq!(forwarded.path, path);
+                    assert_eq!(
+                        forwarded.header("x-service-token"),
+                        Some("s".repeat(32).as_str())
+                    );
+                    assert_eq!(forwarded.header("x-api-key"), None);
+                    let payload: Value = serde_json::from_slice(&payload).unwrap();
+                    assert_eq!(
+                        payload["status"],
+                        if action == "suspend" {
+                            "suspended"
+                        } else {
+                            "active"
+                        }
+                    );
+                }
+            }
+        }
     }
 
     #[tokio::test]

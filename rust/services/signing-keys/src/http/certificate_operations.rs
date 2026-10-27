@@ -38,6 +38,7 @@ pub(super) async fn store_public_issuer_certificate(
                     "cert_pem": input.cert_pem,
                     "cert_chain_pem": input.cert_chain_pem,
                 }),
+                expected_registry_revision: None,
             },
         )
         .await
@@ -766,6 +767,10 @@ pub(super) fn dsc_compat_failure(error: CompatibilityError) -> PublicSigningErro
         CompatibilityError::AmbiguousProfile | CompatibilityError::Conflict(_) => (
             StatusCode::CONFLICT,
             "Managed issuer binding conflicts with current state.",
+        ),
+        CompatibilityError::PreconditionFailed => (
+            StatusCode::PRECONDITION_FAILED,
+            "Managed issuer binding changed since the supplied revision.",
         ),
         CompatibilityError::Invalid(_) => (
             StatusCode::UNPROCESSABLE_ENTITY,

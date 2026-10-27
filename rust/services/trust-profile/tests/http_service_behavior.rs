@@ -909,3 +909,263 @@ async fn public_profile_overrides_round_trip_without_private_material() {
         );
     }
 }
+
+#[tokio::test]
+async fn shared_native_trust_readbacks_match_http_and_pagination() {
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/trust-profile-readback-behavior.json"
+    ))
+    .unwrap();
+    let repository = Arc::new(MemoryTrustProfileRepository::default());
+    for case in fixture["cases"].as_array().unwrap() {
+        let stored: TrustProfile = serde_json::from_value(case["stored"].clone()).unwrap();
+        repository.save_profile(&stored, None).await.unwrap();
+        let response = request(
+            service_with_repository(repository.clone()),
+            "GET",
+            &format!("/v1/trust-profiles/{}", stored.id),
+            None,
+        )
+        .await;
+        assert_eq!(response.status(), 200, "{}", case["name"]);
+        assert_eq!(body(response).await, case["expected"], "{}", case["name"]);
+    }
+    for (query, length) in [
+        ("limit=0", 0),
+        ("limit=1", 1),
+        ("offset=1", 2),
+        ("limit=501", 3),
+        ("offset=18446744073709551615", 0),
+    ] {
+        let response = request(
+            service_with_repository(repository.clone()),
+            "GET",
+            &format!("/v1/trust-profiles?organization_id=org-1&{query}"),
+            None,
+        )
+        .await;
+        assert_eq!(response.status(), 200, "{query}");
+        assert_eq!(
+            body(response).await.as_array().unwrap().len(),
+            length,
+            "{query}"
+        );
+    }
+    for query in [
+        "limit=-1",
+        "offset=-1",
+        "limit=18446744073709551616",
+        "offset=18446744073709551616",
+    ] {
+        let response = request(
+            service_with_repository(repository.clone()),
+            "GET",
+            &format!("/v1/trust-profiles?organization_id=org-1&{query}"),
+            None,
+        )
+        .await;
+        assert_eq!(response.status(), 400, "{query}");
+    }
+    for index in 4..=501 {
+        let mut stored: TrustProfile =
+            serde_json::from_value(fixture["cases"][0]["stored"].clone()).unwrap();
+        stored.id = Uuid::from_u128(index);
+        repository.save_profile(&stored, None).await.unwrap();
+    }
+    let response = request(
+        service_with_repository(repository),
+        "GET",
+        "/v1/trust-profiles?organization_id=org-1&limit=501",
+        None,
+    )
+    .await;
+    assert_eq!(response.status(), 200);
+    assert_eq!(body(response).await.as_array().unwrap().len(), 500);
+}
+
+#[tokio::test]
+async fn delegated_lifecycle_requires_service_identity_scope_and_profile_tenant_before_save() {
+    const ORG: &str = "20000000-0000-4000-8000-000000000001";
+    const OTHER: &str = "20000000-0000-4000-8000-000000000002";
+    const KEY: &str = "10000000-0000-4000-8000-000000000001";
+    let token = "s".repeat(32);
+    for action in ["activate", "suspend"] {
+        for configured in [true, false] {
+            for (credential, key, organization, scopes, expected) in [
+                (Some(token.as_str()), KEY, ORG, "trust:write", 200),
+                (Some(token.as_str()), KEY, ORG, "admin:full", 200),
+                (None, KEY, ORG, "trust:write", 401),
+                (Some("incorrect"), KEY, ORG, "trust:write", 401),
+                (Some(token.as_str()), "malformed", ORG, "trust:write", 401),
+                (Some(token.as_str()), KEY, "malformed", "trust:write", 401),
+                (Some(token.as_str()), KEY, OTHER, "admin:full", 403),
+                (Some(token.as_str()), KEY, ORG, "trust:read", 403),
+                (Some(token.as_str()), KEY, ORG, "templates:write", 403),
+                (Some(token.as_str()), KEY, ORG, "", 403),
+                (Some(token.as_str()), "", ORG, "trust:write", 401),
+            ] {
+                let repository = Arc::new(MemoryTrustProfileRepository::default());
+                let mut selected = profile("Lifecycle fixture");
+                selected.organization_id = ORG.into();
+                selected.status = if action == "activate" {
+                    TrustProfileStatus::Draft
+                } else {
+                    TrustProfileStatus::Active
+                };
+                repository.save_profile(&selected, None).await.unwrap();
+                let application = Arc::new(TrustProfileApplication::new(
+                    repository.clone(),
+                    Arc::new(RejectKeyMembership),
+                ));
+                let app = trust_profile_router(TrustProfileHttpState {
+                    application,
+                    repository: repository.clone(),
+                    service_authenticator: Arc::new(
+                        ServiceTokenAuthenticator::new(
+                            configured.then(|| token.clone()),
+                            configured,
+                        )
+                        .unwrap(),
+                    ),
+                    internal_api_key: None,
+                    registry_synchronizer: Arc::new(EchoSynchronizer),
+                });
+                let mut builder = Request::builder()
+                    .method("POST")
+                    .uri(format!("/v1/trust-profiles/{}/{action}", selected.id))
+                    .header("x-api-key-id", key)
+                    .header("x-organization-id", organization)
+                    .header("x-api-key-scopes", scopes)
+                    .header("x-user-id", "forged-human");
+                if let Some(credential) = credential {
+                    builder = builder.header("x-service-token", credential);
+                }
+                let response = app
+                    .oneshot(builder.body(Body::empty()).unwrap())
+                    .await
+                    .unwrap();
+                let expected = if configured { expected } else { 401 };
+                assert_eq!(
+                    response.status().as_u16(),
+                    expected,
+                    "{action} configured={configured} {organization} {scopes}"
+                );
+                let stored = repository
+                    .profile_by_id(selected.id)
+                    .await
+                    .unwrap()
+                    .unwrap();
+                if expected == 200 {
+                    let expected_status = if action == "activate" {
+                        TrustProfileStatus::Active
+                    } else {
+                        TrustProfileStatus::Suspended
+                    };
+                    assert_eq!(stored.status, expected_status);
+                    let payload = body(response).await;
+                    assert_eq!(
+                        payload["status"],
+                        if action == "activate" {
+                            "active"
+                        } else {
+                            "suspended"
+                        }
+                    );
+                    assert_eq!(payload["id"], selected.id.to_string());
+                } else {
+                    assert_eq!(stored, selected, "denied lifecycle changed storage");
+                }
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn human_lifecycle_persists_suspend_and_reactivation_without_replacing_configuration() {
+    let repository = Arc::new(MemoryTrustProfileRepository::default());
+    let selected = profile("Human lifecycle");
+    repository.save_profile(&selected, None).await.unwrap();
+    let app = service_with_repository(repository.clone());
+    for (action, status) in [
+        ("activate", TrustProfileStatus::Active),
+        ("suspend", TrustProfileStatus::Suspended),
+        ("activate", TrustProfileStatus::Active),
+    ] {
+        let response = request(
+            app.clone(),
+            "POST",
+            &format!("/v1/trust-profiles/{}/{action}", selected.id),
+            None,
+        )
+        .await;
+        assert_eq!(response.status(), 200);
+        let stored = repository
+            .profile_by_id(selected.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.status, status);
+        assert_eq!(stored.name, selected.name);
+        assert_eq!(stored.supported_formats, selected.supported_formats);
+        assert_eq!(
+            body(response).await["organization_id"],
+            selected.organization_id
+        );
+    }
+}
+
+#[tokio::test]
+async fn machine_activation_retains_registry_readiness_and_suspension_can_disable_stale_trust() {
+    const ORG: &str = "20000000-0000-4000-8000-000000000001";
+    const KEY: &str = "10000000-0000-4000-8000-000000000001";
+    let repository = Arc::new(MemoryTrustProfileRepository::default());
+    let mut selected = profile("Unsynchronized machine trust");
+    selected.organization_id = ORG.into();
+    selected.trust_sources.push(TrustSource {
+        id: Uuid::new_v4(),
+        name: "Registry".into(),
+        source_type: TrustSourceType::TrustList,
+        url: Some("https://registry.example/sync".into()),
+        certificate_pem: None,
+        issuer_did: None,
+        purposes: None,
+        description: None,
+        pinned_certificates: vec![],
+        refresh_interval_hours: 24,
+        enabled: true,
+        registry_sync: Some(json!({
+            "protocol": "MARTY_TRUST_REGISTRY_SYNC_V1",
+            "refresh_interval_hours": 24
+        })),
+        registry_sync_token: None,
+        registry_sequence: 0,
+        registry_entries: Map::new(),
+        registry_last_synced_at: None,
+        extensions: Map::new(),
+    });
+
+    repository.save_profile(&selected, None).await.unwrap();
+    let actor = marty_api_key_policy::GatewayApiKeyActor::parse(KEY, ORG, "trust:write").unwrap();
+    let app = TrustProfileApplication::new(repository.clone(), Arc::new(RejectKeyMembership));
+    assert_eq!(
+        app.activate_profile_for_gateway_api_key(&actor, selected.id, Utc::now())
+            .await
+            .unwrap_err(),
+        marty_trust_profile::TrustProfileApplicationError::Conflict("registry_never_synchronized")
+    );
+    assert_eq!(
+        repository
+            .profile_by_id(selected.id)
+            .await
+            .unwrap()
+            .unwrap(),
+        selected
+    );
+    assert_eq!(
+        app.suspend_profile_for_gateway_api_key(&actor, selected.id, Utc::now())
+            .await
+            .unwrap()
+            .status,
+        TrustProfileStatus::Suspended
+    );
+}

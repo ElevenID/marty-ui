@@ -34,7 +34,9 @@ $target$;
 
 LOCK TABLE issuance_service.physical_document_jobs,
     flow_service.flow_definitions, flow_service.flow_instances,
-    issuance_service.passport_beta_batch_intents IN ACCESS EXCLUSIVE MODE;
+    issuance_service.passport_beta_batch_intents,
+    issuance_service.passport_job_administrative_cancellations,
+    flow_service.physical_start_intents IN ACCESS EXCLUSIVE MODE;
 
 DO $owners$
 BEGIN
@@ -66,6 +68,35 @@ ALTER TABLE issuance_service.passport_beta_batch_intents
 REVOKE ALL ON issuance_service.passport_beta_batch_intents FROM PUBLIC, marty;
 GRANT SELECT, INSERT, UPDATE, DELETE
     ON issuance_service.passport_beta_batch_intents TO marty;
+
+-- Cancellation history is append-only for the runtime credential, never app-owned.
+ALTER TABLE issuance_service.passport_job_administrative_cancellations
+    OWNER TO marty_passport_fence_owner;
+ALTER FUNCTION issuance_service.guard_passport_cancellation_history()
+    OWNER TO marty_passport_fence_owner;
+ALTER FUNCTION issuance_service.guard_administratively_cancelled_passport_job()
+    OWNER TO marty_passport_fence_owner;
+ALTER FUNCTION issuance_service.passport_cancellation_acl_ready()
+    OWNER TO marty_passport_fence_owner;
+REVOKE ALL ON issuance_service.passport_job_administrative_cancellations FROM PUBLIC, marty;
+GRANT SELECT, INSERT ON issuance_service.passport_job_administrative_cancellations TO marty;
+
+-- Flow may mutate only its lease state, never the reserved identity/snapshot.
+ALTER TABLE flow_service.physical_start_intents OWNER TO marty_passport_fence_owner;
+ALTER FUNCTION flow_service.physical_start_acl_ready() OWNER TO marty_passport_fence_owner;
+REVOKE ALL ON flow_service.physical_start_intents FROM PUBLIC, marty;
+GRANT SELECT, INSERT ON flow_service.physical_start_intents TO marty;
+GRANT UPDATE (status, claim_token, claim_expires_at, updated_at)
+    ON flow_service.physical_start_intents TO marty;
+
+DO $cancellation_access$
+BEGIN
+    IF NOT issuance_service.passport_cancellation_acl_ready()
+        OR NOT flow_service.physical_start_acl_ready() THEN
+        RAISE EXCEPTION 'passport cancellation/Flow intent access violates fenced role contract';
+    END IF;
+END
+$cancellation_access$;
 
 DO $access$
 BEGIN

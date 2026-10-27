@@ -2443,6 +2443,8 @@ jobs:
           "$RUNNER_TEMP/gateway-schema-check/bin/python" -m pip install --disable-pip-version-check jsonschema==4.23.0
           "$RUNNER_TEMP/gateway-schema-check/bin/python" scripts/check_gateway_organization_openapi.py \
             --openapi "$RUNNER_TEMP/gateway-openapi.json"
+          "$RUNNER_TEMP/gateway-schema-check/bin/python" scripts/check_gateway_trust_openapi.py \
+            --openapi "$RUNNER_TEMP/gateway-openapi.json"
           "$RUNNER_TEMP/gateway-schema-check/bin/python" scripts/check_gateway_template_openapi.py \
             --openapi "$RUNNER_TEMP/gateway-openapi.json"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a

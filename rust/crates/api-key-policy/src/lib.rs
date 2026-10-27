@@ -103,6 +103,7 @@ pub fn api_key_allowed(required_permission: &str, scopes: &[String]) -> bool {
             scopes.contains("trust:read") || scopes.contains("trust:write")
         }
         "compliance-profile" if action == "suspend" => scopes.contains("compliance:write"),
+        "trust-profile" if action == "suspend" => scopes.contains("trust:write"),
         "wallet" => match action {
             "view" => scopes.contains("wallet:read") || scopes.contains("wallet:write"),
             "write" => scopes.contains("wallet:write"),
@@ -246,6 +247,31 @@ mod gateway_actor_tests {
                 "deployment-profile:view"
             )
         );
+    }
+
+    #[test]
+    fn trust_suspension_is_a_tenant_writer_action_without_expanding_other_resources() {
+        for (scope, allowed) in [
+            ("trust:write", true),
+            ("admin:full", true),
+            ("trust:read", false),
+            ("templates:write", false),
+            ("", false),
+        ] {
+            assert_eq!(
+                api_key_allowed("trust-profile:suspend", &[scope.into()]),
+                allowed
+            );
+        }
+        for permission in [
+            "credential-template:suspend",
+            "issuer-entity:suspend",
+            "revocation-profile:suspend",
+            "presentation-policy:suspend",
+            "trust-profile:unknown",
+        ] {
+            assert!(!api_key_allowed(permission, &["trust:write".into()]));
+        }
     }
 
     #[test]

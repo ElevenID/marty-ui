@@ -316,6 +316,16 @@ static SPECIAL_RULES: LazyLock<Vec<RouteRule>> = LazyLock::new(|| {
             "integration-connector",
         ),
         rule(
+            r"^/v1/trust-profiles/[^/]+/activate$",
+            &[("POST", "trust-profile:activate")],
+            "trust-profile",
+        ),
+        rule(
+            r"^/v1/trust-profiles/[^/]+/suspend$",
+            &[("POST", "trust-profile:suspend")],
+            "trust-profile",
+        ),
+        rule(
             r"^/v1/compliance-profiles/[^/]+/activate$",
             &[("POST", "compliance-profile:activate")],
             "compliance-profile",

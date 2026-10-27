@@ -31,6 +31,18 @@ function localOverlayBinding(env = process.env) {
     releaseQualified:false, betaImageMarkersRemainBaseline:true};
 }
 
+function localFunctionalRuntimeBinding(env = process.env) {
+  if (!env.DEMO_LOCAL_FUNCTIONAL_RUNTIME_RECEIPT) return null;
+  assert.equal(env.DEMO_LOCAL_FUNCTIONAL_RUNTIME_RECEIPT,'/capture-prerequisites/functional-runtime.json');
+  assert.equal(env.RECORD_VIDEO,'0','Mixed runtime cannot qualify a recording');
+  const helper=env.DEMO_EXECUTION_EVIDENCE_HELPER;assert(helper);
+  const {loadFunctionalRuntimeObservation}=require(path.join(path.dirname(helper),'canvasNativeRuntime.js'));
+  const runtime=loadFunctionalRuntimeObservation(env.DEMO_LOCAL_FUNCTIONAL_RUNTIME_RECEIPT,
+    env.DEMO_LOCAL_FUNCTIONAL_RUNTIME_SHA256,{functionalRerun:true});
+  return {profileSha256:runtime.profileSha256,receiptSha256:runtime.sha256,
+    scope:'FUNCTIONAL_ONLY',releaseQualified:false,recordingQualified:false};
+}
+
 async function main() {
   const scenario = process.argv[2];
   assert.ok(['canvas-learning-achievement', 'external-evidence-to-credential'].includes(scenario));
@@ -40,10 +52,12 @@ async function main() {
   assert.ok(!process.env.NODE_TLS_REJECT_UNAUTHORIZED || process.env.NODE_TLS_REJECT_UNAUTHORIZED === '1');
   assert.ok(!process.env.MARTY_UI_CANDIDATE_DIST && process.env.BETA_LOCAL_PROXY !== '1');
   const executionBoundary = stock.requireComposeExecutionBoundary();
-  for (const key of ['CANVAS_OSS_ADMIN_EMAIL', 'CANVAS_OSS_LEARNER_EMAIL', 'CANVAS_CAPTURE_ADMIN_EMAIL']) {
-    assert.match(stock.requireSecretFile(key), /^[a-z0-9._+-]+@(?:marty\.demo|[a-z0-9.-]+\.test)$/i,
-      'Canvas recording requires explicitly synthetic identities');
+  // Existing governed administrator IDs are file-backed; only the fresh learner
+  // namespace must be synthetic. Their identity is established by actual login/readback.
+  for (const key of ['CANVAS_OSS_ADMIN_EMAIL','CANVAS_CAPTURE_ADMIN_EMAIL']) {
+    const value=stock.requireSecretFile(key);assert(value.length>0&&value.length<=254&&!/[\x00-\x1f\x7f]/.test(value));
   }
+  assert.match(stock.requireSecretFile('CANVAS_OSS_LEARNER_EMAIL'),/^[a-z0-9._+-]+@(?:marty\.demo|[a-z0-9.-]+\.test)$/i);
   assert.ok(process.connected, 'Canvas capture requires recorder-owned live IPC');
   const helper = process.env.DEMO_EXECUTION_EVIDENCE_HELPER;
   assert.equal(createHash('sha256').update(fs.readFileSync(helper)).digest('hex'),
@@ -52,6 +66,8 @@ async function main() {
   const dir = path.resolve(process.env.DEMO_ARTIFACT_DIR);
   const recording = process.env.RECORD_VIDEO === '1';
   const overlay = localOverlayBinding();
+  const functionalRuntime = localFunctionalRuntimeBinding();
+  assert(!(overlay&&functionalRuntime),'Select one local runtime mode');
   const report = { scenario, startedAt: new Date().toISOString(), status: 'FAIL',
     executionBoundary,
     releaseReady: false, captureClassification: 'FIRST_PARTY_BROWSER_RUST_WALLET',
@@ -85,10 +101,11 @@ async function main() {
       report.localOverlayBinding = {...overlay};
       delete report.localOverlayBinding.baselineSourceIds;
     }
+    if (functionalRuntime) report.localFunctionalRuntime=functionalRuntime;
     // This exact recorder checkout is already bound by the parent and helper
     // handshake. The imported report remains a prerequisite, never an assertion.
     const localEngineering = process.env.CANVAS_LOCAL_ENGINEERING_PREREQUISITE === '1';
-    assert.equal(localEngineering, Boolean(overlay),
+    assert.equal(localEngineering, Boolean(overlay||functionalRuntime),
       'Local engineering prerequisite requires the exact native overlay binding');
     const prerequisite = localEngineering
       ? require(path.join(path.dirname(helper), 'canvasLocalEngineeringPrerequisite.js'))
@@ -152,6 +169,7 @@ async function main() {
     phase = 'admin-login';
     await login(adminPage, stock.requireSecretFile('CANVAS_CAPTURE_ADMIN_EMAIL'),
       stock.requireSecretFile('CANVAS_CAPTURE_ADMIN_PASSWORD'));
+    if (setup.custody) setup.custody.retain('betaAdminSession',JSON.stringify(await admin.cookies('https://beta.elevenidllc.com')));
     phase = 'admin-org-selection';
     const adminSelection = await selectOrg(adminPage);
     assert.equal(adminSelection.ok, true, 'Canvas admin must be a console member of the capture organization');
@@ -192,7 +210,7 @@ async function main() {
     };
     phase = 'canvas-feature-sequence';
     await runCanvasCapture({ setup, page: canvasPage, adminPage, walletPage, scenario,
-      checkpoint, report, onApplication: id => { applicationId = id; } });
+      checkpoint, report, onApplication: id => { applicationId=id;setup.applicationId=id;setup.owned.martyApplicationId=id;setup.persistOwned(); } });
     assert.ok(popups.length <= 2,
       'Canvas opened an unexpected additional capture page');
     assert.deepEqual(await deployment(), report.deployment, 'Beta deployment changed during Canvas capture');
@@ -215,6 +233,7 @@ async function main() {
     if (session) await cleanup('wallet-session', () => session.close());
     const state = setup || setupState;
     const retired = await cleanup('owned-issuance-retirement', async () => {
+      stock.requireCanvasSetupMutationReconciliation(state);
       report.issuanceRetirement = await stock.retireCanvasApplication({
         marty: state.marty, applicationId, organizationId: state.organizationId,
         credentialTemplateId: state.templates?.credential?.id, transactionId: report.transactionId,
@@ -224,19 +243,20 @@ async function main() {
     });
     report.resourceRetirementConfirmed = retired;
     let disconnected = retired;
-    if (retired && state.marty && state.platformId && state.oauthConnected) disconnected = await cleanup('oauth-disconnect', async () => {
-      const result = await state.marty.delete(`/v1/integrations/canvas/platforms/${encodeURIComponent(state.platformId)}/oauth`, [200]);
-      assert.equal(result.status, 'disconnected');
-      assert.equal(result.scopes.length, 0);
+    if (retired && state.marty && state.platformId && (state.oauthConnected||state.oauthMayExist)) disconnected = await cleanup('oauth-disconnect', async () => {
+      report.oauthRetirement=await stock.retireCanvasOAuthAuthority(state,value=>{report.oauthRetirement=value},{requireAccess:complete});
+      state.oauthConnected=false;state.oauthMayExist=false;
     });
     let referencesRemoved = disconnected;
-    if (disconnected && state.marty && state.platformId) referencesRemoved = await cleanup('platform', () =>
-      state.marty.delete(`/v1/integrations/canvas/platforms/${encodeURIComponent(state.platformId)}`, [204]));
-    if (referencesRemoved && state.marty && state.integrationSecretId) referencesRemoved = await cleanup('oauth-secret', () =>
-      state.marty.delete(`/v1/integrations/canvas/integration-secrets/${encodeURIComponent(state.integrationSecretId)}`, [204]));
+    if(disconnected&&state.marty) referencesRemoved=await cleanup('owned-platform-and-client-secret',()=>stock.retireCanvasOwnedReferences(state));
     if (referencesRemoved) await cleanup('owned-canvas-fixtures', async () => {
       report.canvasFixtureCleanup = await stock.retireCanvasSetupFixtures(state, retired, disconnected);
     });
+    if (state.custody) {
+      if (adminPage) await cleanup('beta-admin-session',async()=>{report.betaSessionRetirement=await stock.retireCanvasBetaSession(adminPage.context(),state.custody)});
+      await cleanup('stock-sessions',async()=>{report.stockSessionRetirement=await stock.retireCanvasCaptureSessions(state,value=>{report.stockSessionRetirement=value})});
+      if(cleanupComplete) await cleanup('private-authority',async()=>{report.privateAuthorityRetired=state.custody.retire()});
+    }
     for (const context of contexts) await cleanup('recording-context', () => context.close());
     for (const [file, video] of videos) await cleanup('recording-finalization', () => finalizeVideo(video, dir, file));
     if (browser) await cleanup('browser', () => browser.close());
@@ -245,8 +265,8 @@ async function main() {
     report.functionalReady = complete;
     report.operations_verified = complete;
     report.cleanup = { complete: cleanupComplete && report.resourceRetirementConfirmed === true };
-    report.releaseReady = complete && !overlay;
-    if (overlay) {
+    report.releaseReady = complete && !overlay && !functionalRuntime;
+    if (overlay||functionalRuntime) {
       report.qualification = 'LOCAL_MIXED_RUNTIME_FUNCTIONAL_OPERATIONS';
       report.signedManifestVerified = false;
       report.demo_qualified = false;
@@ -261,4 +281,4 @@ if (require.main === module) main().catch(error => {
   process.stderr.write(`Canvas capture initialization failed (${code}).\n`);
   process.exitCode = 1;
 });
-module.exports = { main, localOverlayBinding };
+module.exports = { main, localOverlayBinding, localFunctionalRuntimeBinding };

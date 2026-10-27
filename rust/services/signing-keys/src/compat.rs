@@ -235,6 +235,7 @@ pub struct IssuerDidSignRequest {
 pub struct ProfileWriteRequest {
     pub organization_id: String,
     pub body: Value,
+    pub expected_registry_revision: Option<String>,
 }
 
 #[derive(Debug, Error)]
@@ -257,6 +258,8 @@ pub enum CompatibilityError {
     Invalid(String),
     #[error("{0}")]
     Conflict(String),
+    #[error("Signing registry changed since the supplied revision.")]
+    PreconditionFailed,
 }
 
 impl IntoResponse for CompatibilityError {
@@ -268,6 +271,7 @@ impl IntoResponse for CompatibilityError {
             }
             Self::BadRequest(_) => StatusCode::BAD_REQUEST,
             Self::AmbiguousProfile | Self::Conflict(_) => StatusCode::CONFLICT,
+            Self::PreconditionFailed => StatusCode::PRECONDITION_FAILED,
             Self::Invalid(_) => StatusCode::UNPROCESSABLE_ENTITY,
             Self::Unavailable => StatusCode::SERVICE_UNAVAILABLE,
         };
@@ -735,11 +739,18 @@ impl SigningCompatibilityService {
             },
         )
         .map_err(map_profile_error)?;
-        let registry = self
+        let (registry, revision) = self
             .registry
-            .load(&request.organization_id)
+            .load_with_revision(&request.organization_id)
             .await
             .map_err(|_| CompatibilityError::Unavailable)?;
+        if request
+            .expected_registry_revision
+            .as_deref()
+            .is_some_and(|expected| expected != revision.as_str())
+        {
+            return Err(CompatibilityError::PreconditionFailed);
+        }
         let service_id = required(&profile, "signing_service_id")?.to_owned();
         let mut service =
             service_for(&registry, &service_id).ok_or(CompatibilityError::ServiceNotFound)?;
@@ -772,12 +783,20 @@ impl SigningCompatibilityService {
         // publication or profile storage later fails, the durable binding
         // prevents a lost key from being recreated under that published name.
         let managed = service_id == "managed-openbao-transit";
-        if managed {
-            self.registry
-                .bind_profile(&request.organization_id, &profile)
+        let reserved_revision = if managed {
+            let (_, revision) = self
+                .registry
+                .bind_profile_if_revision(
+                    &request.organization_id,
+                    &profile,
+                    request.expected_registry_revision.as_deref(),
+                )
                 .await
                 .map_err(map_registry_binding_error)?;
-        }
+            Some(revision)
+        } else {
+            None
+        };
         let before_publication = profile.clone();
         self.ensure_did_web_verification_method(
             &request.organization_id,
@@ -789,19 +808,28 @@ impl SigningCompatibilityService {
         if !created && profile != before_publication {
             profile["updated_at"] = Value::String(chrono::Utc::now().to_rfc3339());
         }
-        if !managed {
-            self.registry
-                .bind_profile(&request.organization_id, &profile)
+        let config_revision = if let Some(revision) = reserved_revision {
+            revision
+        } else {
+            let (_, revision) = self
+                .registry
+                .bind_profile_if_revision(
+                    &request.organization_id,
+                    &profile,
+                    request.expected_registry_revision.as_deref(),
+                )
                 .await
                 .map_err(map_registry_binding_error)?;
-        }
+            revision
+        };
         let profile_id = required(&profile, "id")?.to_owned();
         let profile = self
             .profiles
             .put(&request.organization_id, &profile_id, profile)
             .await
             .map_err(map_profile_error)?;
-        Ok(json!({"ok": true, "profile": profile, "created": created}))
+        Ok(json!({"ok": true, "profile": profile, "created": created,
+            "config_revision": config_revision}))
     }
 
     pub async fn create_provider_neutral_profile(
@@ -845,11 +873,18 @@ impl SigningCompatibilityService {
                     "Managed issuer purpose and algorithm are incompatible.".into(),
                 ));
             }
-            let registry = self
+            let (registry, revision) = self
                 .registry
-                .load(&request.organization_id)
+                .load_with_revision(&request.organization_id)
                 .await
                 .map_err(|_| CompatibilityError::Unavailable)?;
+            if request
+                .expected_registry_revision
+                .as_deref()
+                .is_some_and(|expected| expected != revision.as_str())
+            {
+                return Err(CompatibilityError::PreconditionFailed);
+            }
             let mut service = service_for(&registry, "managed-openbao-transit")
                 .ok_or(CompatibilityError::ServiceNotFound)?;
             service.insert("key_reference".into(), Value::String(reference.into()));
@@ -904,6 +939,7 @@ impl SigningCompatibilityService {
         self.create_profile(&ProfileWriteRequest {
             organization_id: request.organization_id.clone(),
             body,
+            expected_registry_revision: request.expected_registry_revision.clone(),
         })
         .await
     }
@@ -913,6 +949,7 @@ impl SigningCompatibilityService {
         organization_id: &str,
         profile_id: &str,
         managed_key_reference: &str,
+        expected_registry_revision: Option<&str>,
     ) -> Result<Value, CompatibilityError> {
         let existing = self
             .profiles
@@ -952,11 +989,14 @@ impl SigningCompatibilityService {
             },
         )
         .map_err(map_profile_error)?;
-        let registry = self
+        let (registry, revision) = self
             .registry
-            .load(organization_id)
+            .load_with_revision(organization_id)
             .await
             .map_err(|_| CompatibilityError::Unavailable)?;
+        if expected_registry_revision.is_some_and(|expected| expected != revision.as_str()) {
+            return Err(CompatibilityError::PreconditionFailed);
+        }
         let service_id = required(&profile, "signing_service_id")?.to_owned();
         let mut service =
             service_for(&registry, &service_id).ok_or(CompatibilityError::ServiceNotFound)?;
@@ -978,8 +1018,9 @@ impl SigningCompatibilityService {
             &mut profile,
         )
         .await?;
-        self.registry
-            .bind_profile(organization_id, &profile)
+        let (_, config_revision) = self
+            .registry
+            .bind_profile_if_revision(organization_id, &profile, expected_registry_revision)
             .await
             .map_err(map_registry_binding_error)?;
         let profile = self
@@ -987,7 +1028,8 @@ impl SigningCompatibilityService {
             .put(organization_id, profile_id, profile)
             .await
             .map_err(map_profile_error)?;
-        Ok(json!({"ok": true, "profile": profile, "changed": true}))
+        Ok(json!({"ok": true, "profile": profile, "changed": true,
+            "config_revision": config_revision}))
     }
 
     async fn resolve_identity_custody(
@@ -2348,6 +2390,9 @@ fn map_registry_binding_error(error: crate::registry::RegistryError) -> Compatib
     match error {
         crate::registry::RegistryError::Conflict => {
             CompatibilityError::Conflict("Signing registry update is already in progress.".into())
+        }
+        crate::registry::RegistryError::PreconditionFailed => {
+            CompatibilityError::PreconditionFailed
         }
         crate::registry::RegistryError::Invalid(detail) => CompatibilityError::Invalid(detail),
         crate::registry::RegistryError::Storage(_) | crate::registry::RegistryError::Corrupt(_) => {

@@ -817,3 +817,94 @@ test('developer key enable binds flat global account ACK beyond optimistic local
     }
   }
 });
+
+test('capture private custody fsyncs only exact owned authority and preserves failure recovery until retirement', t => {
+  const {createCanvasCaptureCustody}=require('./run-canvas-oss-standard-contract');
+  const directory=fs.mkdtempSync(path.join(os.tmpdir(),'canvas-private-custody-'));
+  t.after(()=>fs.rmSync(directory,{recursive:true,force:true}));
+  const run='11111111-1111-4111-8111-111111111111',custody=createCanvasCaptureCustody(run,directory);
+  custody.retain('canvasAdminSession','CONTROLLED_OLD_COOKIE');
+  const filename=path.join(directory,run+'-canvasAdminSession.json');
+  assert.equal(fs.readFileSync(filename,'utf8'),'CONTROLLED_OLD_COOKIE');
+  assert.throws(()=>custody.retain('globalAdminPassword','SHARED_CREDENTIAL'));
+  assert.throws(()=>createCanvasCaptureCustody(run,directory));
+  custody.retain('canvasAdminSession','CONTROLLED_RETAINED_COOKIE');
+  assert.equal(fs.readFileSync(filename,'utf8'),'CONTROLLED_RETAINED_COOKIE');
+  assert.equal(custody.retire(),true);assert.equal(fs.existsSync(filename),false);
+  const journal=JSON.parse(fs.readFileSync(path.join(directory,run+'.custody.json')));
+  assert.equal(journal.state,'RETIRED');assert(!JSON.stringify(journal).includes('COOKIE'));
+});
+
+test('capture session cleanup distinguishes deleted learner denial from real admin logout and original-cookie denial',async()=>{
+  const {retireCanvasCaptureSessions,retireCanvasBetaSession}=require('./run-canvas-oss-standard-contract');
+  const retained=[],calls=[];let adminReads=0;
+  const context=role=>({cookies:async()=>[{name:'_csrf_token',value:'CONTROLLED_CSRF'}],addCookies:async()=>{},request:{
+    get:async()=>{const status=role==='learner'?401:++adminReads===1?200:401;return {status:()=>status}},
+    delete:async()=>{calls.push(role);return {status:()=>302}}}});
+  const custody={retain:(role)=>retained.push(role)};
+  const result=await retireCanvasCaptureSessions({canvasOrigin:'https://canvas-test.elevenidllc.com',learnerContext:context('learner'),adminContext:context('admin'),custody});
+  assert.equal(result.canvasLearnerSession.alreadyDenied,true);assert.deepEqual(calls,['admin']);assert.equal(result.canvasAdminSession.probes.at(-1).status,401);
+  adminReads=0;calls.length=0;
+  await assert.rejects(retireCanvasCaptureSessions({canvasOrigin:'https://canvas-test.elevenidllc.com',learnerContext:{cookies:async()=>[]},adminContext:context('admin'),custody}),error=>error.code==='canvas_capture_sessions_incomplete');
+  assert.deepEqual(calls,['admin'],'One unknown owned session cannot block independent admin retirement');
+  adminReads=0;calls.length=0;
+  await assert.rejects(retireCanvasCaptureSessions({canvasOrigin:'https://canvas-test.elevenidllc.com',learnerContext:context('learner'),adminContext:context('admin'),custody},()=>{throw Error('CONTROLLED_OBSERVER_FAILURE')}),error=>error.code==='canvas_capture_sessions_incomplete');
+  assert.deepEqual(calls,['admin'],'Observer persistence failure cannot prevent authority retirement');
+  let originalHeader;const beta={cookies:async()=>[{name:'sessionId',value:'CONTROLLED_OWNED_SESSION'}],request:{post:async()=>({status:()=>303}),get:async(_,options)=>{originalHeader=options.headers.Cookie;return {status:()=>200,json:async()=>({authenticated:false,user:null})}}}};
+  assert.equal((await retireCanvasBetaSession(beta,custody)).oldCookieAuthenticated,false);assert.equal(originalHeader,'sessionId=CONTROLLED_OWNED_SESSION');
+});
+
+
+test('capture custody retains then retires only its tracked temporary authority after atomic publication failure',t=>{
+  const {createCanvasCaptureCustody}=require('./run-canvas-oss-standard-contract');
+  const directory=fs.mkdtempSync(path.join(os.tmpdir(),'canvas-private-publish-'));
+  t.after(()=>fs.rmSync(directory,{recursive:true,force:true}));
+  const run='22222222-2222-4222-8222-222222222222',custody=createCanvasCaptureCustody(run,directory);
+  custody.retain('canvasAdminSession','CONTROLLED_OLD');
+  const original=fs.renameSync;fs.renameSync=(from,to)=>{if(from.endsWith('-canvasAdminSession.json.next'))throw Error('CONTROLLED_PUBLICATION_FAILURE');return original(from,to)};
+  try {assert.throws(()=>custody.retain('canvasAdminSession','CONTROLLED_NEW'),/CONTROLLED_PUBLICATION_FAILURE/)} finally {fs.renameSync=original}
+  assert(fs.existsSync(path.join(directory,run+'-canvasAdminSession.json.next')));
+  fs.writeFileSync(path.join(directory,'unrelated-private-authority'),'PRESERVE');
+  custody.retire();assert(!fs.existsSync(path.join(directory,run+'-canvasAdminSession.json.next')));
+  assert(!fs.existsSync(path.join(directory,run+'-canvasAdminSession.json')));assert.equal(fs.readFileSync(path.join(directory,'unrelated-private-authority'),'utf8'),'PRESERVE');
+});
+
+
+test('capture retirement uses the shared typed OAuth authority path and rejects uncertain creation before teardown',async()=>{
+  const {retireCanvasOAuthAuthority,requireCanvasSetupMutationReconciliation}=require('./run-canvas-oss-standard-contract');
+  for(const status of ['CREATING','RESPONSE_UNVERIFIED']) assert.throws(()=>requireCanvasSetupMutationReconciliation({owned:{martySecretIntent:{state:status}}}),error=>error.code==='canvas_setup_creation_uncertain');
+  const calls=[];let removed=false;const state={organizationId:'owned-org',platformId:'owned-platform',marty:{request:async(method,path,options)=>{
+    calls.push({method,path,includeStatus:options.includeStatus});
+    if(method==='DELETE'){removed=true;return {status:200,payload:{platform_id:'owned-platform',status:'disconnected',scopes:[]}}}
+    return {status:200,payload:removed?[]:[{id:'33333333-3333-4333-8333-333333333333',organization_id:'owned-org',provider:'canvas',purpose:'oauth_access_token',enabled:true,metadata:{platform_id:'owned-platform'}}]};
+  }}};
+  const result=await retireCanvasOAuthAuthority(state,()=>{},{requireAccess:true});
+  assert.equal(result.typedDisconnectedAck,true);assert.equal(result.atomicMetadataAbsence,true);assert.equal(result.serverHeldBearerProbed,false);
+  assert.deepEqual(calls.map(row=>row.method),['GET','DELETE','GET']);assert(calls.every(row=>row.includeStatus===true));
+});
+
+
+test('engineering unresolved resources still retire independent owned sessions and retain private recovery',async()=>{
+  const {retireCanvasEngineeringSetup,prepareCanvasCaptureFixtures}=require('./run-canvas-oss-standard-contract');
+  const priorReceipt=process.env.DEMO_LOCAL_FUNCTIONAL_RUNTIME_RECEIPT,priorRecovery=process.env.DEMO_CANVAS_PRIVATE_RECOVERY_DIRECTORY;
+  try {
+    process.env.DEMO_LOCAL_FUNCTIONAL_RUNTIME_RECEIPT='/capture-prerequisites/functional-runtime.json';
+    delete process.env.DEMO_CANVAS_PRIVATE_RECOVERY_DIRECTORY;
+    await assert.rejects(prepareCanvasCaptureFixtures({browser:{},runSuffix:'CONTROLLED-RUN'}),error=>error.code==='canvas_private_custody_missing');
+  } finally {
+    if(priorReceipt===undefined)delete process.env.DEMO_LOCAL_FUNCTIONAL_RUNTIME_RECEIPT;else process.env.DEMO_LOCAL_FUNCTIONAL_RUNTIME_RECEIPT=priorReceipt;
+    if(priorRecovery===undefined)delete process.env.DEMO_CANVAS_PRIVATE_RECOVERY_DIRECTORY;else process.env.DEMO_CANVAS_PRIVATE_RECOVERY_DIRECTORY=priorRecovery;
+  }
+  const probes=[];let privateRetired=false;
+  const context=role=>({cookies:async()=>[{name:'_csrf_token',value:'CONTROLLED'}],request:{get:async()=>{probes.push(role);return {status:()=>401}}}});
+  const state={bindingActivationPossible:true,canvasOrigin:'https://canvas-test.elevenidllc.com',
+    adminContext:context('admin'),learnerContext:context('learner'),custody:{retire(){privateRetired=true;return true}}};
+  await assert.rejects(retireCanvasEngineeringSetup(state),error=>{
+    assert.equal(error.code,'owned_canvas_cleanup_incomplete');
+    assert.equal(error.canvasCleanupEvidence.complete,false);
+    assert.equal(error.canvasCleanupEvidence.sessionsRetired,true);
+    assert.equal(error.canvasCleanupEvidence.privateAuthorityRetired,false);
+    assert.equal(error.canvasCleanupEvidence.failures[0].stage,'OWNED_RESOURCES');return true;
+  });
+  assert.deepEqual(probes,['learner','admin']);assert.equal(privateRetired,false);
+});

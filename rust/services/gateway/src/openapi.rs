@@ -76,6 +76,14 @@ pub fn schemas() -> Value {
         "../../../../contracts/protocol-support-catalog-schema.json"
     ))
     .expect("protocol support catalog schema");
+    let trust: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/trust-profile-readback-schemas.json"
+    ))
+    .expect("native trust readback schemas");
+    schemas
+        .as_object_mut()
+        .expect("schemas")
+        .extend(trust.as_object().expect("trust schemas").clone());
     let compliance: Value = serde_json::from_str(include_str!(
         "../../../../contracts/compliance-profile-http-schemas.json"
     ))
@@ -387,6 +395,7 @@ pub fn describe_operation(operation: &mut Value, method: HttpMethod, path: &str,
     {
         describe_organization_collection(operation, path, status);
     }
+    describe_trust_readback(operation, method, path, status);
 }
 
 fn describe_organization_collection(operation: &mut Value, path: &str, status: u16) {
@@ -429,6 +438,51 @@ fn describe_organization_collection(operation: &mut Value, path: &str, status: u
         }
     }
     operation["parameters"] = json!(parameters);
+}
+
+fn describe_trust_readback(operation: &mut Value, method: HttpMethod, path: &str, status: u16) {
+    use HttpMethod::{Delete, Get, Patch, Post};
+    let collection = path == "/v1/trust-profiles";
+    let member = path == "/v1/trust-profiles/{profile_id}";
+    let lifecycle = matches!(
+        path,
+        "/v1/trust-profiles/{profile_id}/activate" | "/v1/trust-profiles/{profile_id}/suspend"
+    );
+    if !((collection && matches!(method, Get | Post))
+        || (member && matches!(method, Get | Patch | Delete))
+        || (lifecycle && method == Post))
+    {
+        return;
+    }
+    operation["description"] = json!("Native public trust-profile readback for an authorized organization. Optional fields are omitted, not returned as null. Public trust configuration does not prove issuer interoperability or successful verification. Private custody metadata fails closed; native authorization, trust and state validation remain authoritative.");
+    operation["x-marty-protocol-schema-ref"] = schema("trust-profile");
+    operation["x-marty-protocol-support"] = json!("partial");
+    let response = if method == Delete {
+        json!({"type":"object","additionalProperties":false,"required":["success"],"properties":{"success":{"const":true}}})
+    } else if collection && method == Get {
+        json!({"type":"array","items":{"$ref":"#/components/schemas/runtime__trust_profile_response"}})
+    } else {
+        json!({"$ref":"#/components/schemas/runtime__trust_profile_response"})
+    };
+    operation["responses"][status.to_string()]["content"] =
+        json!({"application/json":{"schema":response}});
+    operation["x-marty-response-schema-documented"] = json!(true);
+    if method != Patch && !(collection && method == Post) {
+        operation["x-marty-request-schema-documented"] = json!(true);
+    }
+    if collection && method == Get {
+        operation["parameters"] = json!([
+            query_parameter("organization_id", "Required authorized organization whose trust profiles are listed."),
+            {"name":"limit","in":"query","required":false,"schema":{"type":"integer","minimum":0,"maximum":u64::MAX,"default":100},"description":"Unsigned 64-bit deployment page size. Zero is accepted; values above 500 are clamped to 500 by the native owner. Returns an array without a total count."},
+            {"name":"offset","in":"query","required":false,"schema":{"type":"integer","minimum":0,"maximum":u64::MAX,"default":0},"description":"Number of organization profiles to skip."}
+        ]);
+    }
+    if lifecycle {
+        operation["description"] = json!(format!(
+            "{} This lifecycle operation has no request body.",
+            operation["description"].as_str().expect("description")
+        ));
+    }
 }
 
 fn describe_compliance(operation: &mut Value, method: HttpMethod, path: &str, status: u16) {
@@ -1157,5 +1211,31 @@ mod tests {
             response["properties"]["api_surface"]["items"]["additionalProperties"],
             false
         );
+    }
+    #[test]
+    fn trust_readback_operations_use_native_components() {
+        assert!(schemas()["runtime__trust_profile_response"].is_object());
+        for (method, path) in [
+            (HttpMethod::Get, "/v1/trust-profiles"),
+            (HttpMethod::Post, "/v1/trust-profiles"),
+            (HttpMethod::Get, "/v1/trust-profiles/{profile_id}"),
+            (HttpMethod::Patch, "/v1/trust-profiles/{profile_id}"),
+            (HttpMethod::Post, "/v1/trust-profiles/{profile_id}/activate"),
+            (HttpMethod::Post, "/v1/trust-profiles/{profile_id}/suspend"),
+        ] {
+            let mut op = json!({});
+            describe_operation(&mut op, method, path, 200);
+            assert_eq!(op["x-marty-response-schema-documented"], true);
+            let response = &op["responses"]["200"]["content"]["application/json"]["schema"];
+            let target = if method == HttpMethod::Get && path == "/v1/trust-profiles" {
+                &response["items"]
+            } else {
+                response
+            };
+            assert_eq!(
+                target["$ref"],
+                "#/components/schemas/runtime__trust_profile_response"
+            );
+        }
     }
 }

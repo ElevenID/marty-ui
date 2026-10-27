@@ -125,6 +125,8 @@ PROTECTED_FILES = (
     "rust/services/issuance/migrations/0007_passport_beta_batch_provenance.sql",
     "rust/services/issuance/migrations/0008_passport_beta_batch_wire_evidence.sql",
     "rust/services/issuance/migrations/0009_authenticated_mdoc_status_binding.sql",
+    "rust/services/issuance/migrations/0010_passport_start_idempotency.sql",
+    "rust/services/issuance/migrations/0011_passport_administrative_cancellation.sql",
     "rust/services/flow/migrations/0001_flow_schema.sql",
     "rust/services/flow/migrations/0002_builtin_flows.sql",
     "rust/services/flow/migrations/0003_physical_start_intents.sql",

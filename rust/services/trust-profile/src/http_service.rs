@@ -394,32 +394,19 @@ async fn get_profile(
     headers: HeaderMap,
     Path(profile_id): Path<String>,
 ) -> Result<Json<Value>, TrustProfileHttpError> {
-    let profile =
-        if headers.contains_key("x-api-key-id") || headers.contains_key("x-api-key-scopes") {
-            if !state.service_authenticator.is_configured() {
-                return Err(unauthorized(
-                    "TRUST_PROFILE.SERVICE_AUTHENTICATION_REQUIRED",
-                ));
-            }
-            internal_service(&state, &headers)?;
-            let actor = marty_api_key_policy::GatewayApiKeyActor::parse(
-                header(&headers, "x-api-key-id").unwrap_or_default(),
-                header(&headers, "x-organization-id").unwrap_or_default(),
-                header(&headers, "x-api-key-scopes").unwrap_or_default(),
-            )
-            .map_err(|_| unauthorized("TRUST_PROFILE.INVALID_GATEWAY_PRINCIPAL"))?;
-            state
-                .application
-                .profile_for_gateway_api_key(&actor, uuid(&profile_id, "profile_id")?)
-                .await
-        } else {
-            let user_id = trusted_user(&state, &headers)?;
-            state
-                .application
-                .profile(&user_id, uuid(&profile_id, "profile_id")?)
-                .await
-        }
-        .map_err(application_error)?;
+    let profile = if let Some(actor) = gateway_api_key_actor(&state, &headers)? {
+        state
+            .application
+            .profile_for_gateway_api_key(&actor, uuid(&profile_id, "profile_id")?)
+            .await
+    } else {
+        let user_id = trusted_user(&state, &headers)?;
+        state
+            .application
+            .profile(&user_id, uuid(&profile_id, "profile_id")?)
+            .await
+    }
+    .map_err(application_error)?;
     Ok(Json(profile_response(&profile)?))
 }
 
@@ -529,15 +516,27 @@ async fn activate_profile(
     headers: HeaderMap,
     Path(profile_id): Path<String>,
 ) -> Result<Json<Value>, TrustProfileHttpError> {
-    let profile = state
-        .application
-        .activate_profile(
-            &trusted_user(&state, &headers)?,
-            uuid(&profile_id, "profile_id")?,
-            Utc::now(),
-        )
-        .await
-        .map_err(application_error)?;
+    let actor = gateway_api_key_actor(&state, &headers)?;
+    let profile = if let Some(actor) = actor {
+        state
+            .application
+            .activate_profile_for_gateway_api_key(
+                &actor,
+                uuid(&profile_id, "profile_id")?,
+                Utc::now(),
+            )
+            .await
+    } else {
+        state
+            .application
+            .activate_profile(
+                &trusted_user(&state, &headers)?,
+                uuid(&profile_id, "profile_id")?,
+                Utc::now(),
+            )
+            .await
+    }
+    .map_err(application_error)?;
     Ok(Json(profile_response(&profile)?))
 }
 
@@ -546,15 +545,27 @@ async fn suspend_profile(
     headers: HeaderMap,
     Path(profile_id): Path<String>,
 ) -> Result<Json<Value>, TrustProfileHttpError> {
-    let profile = state
-        .application
-        .suspend_profile(
-            &trusted_user(&state, &headers)?,
-            uuid(&profile_id, "profile_id")?,
-            Utc::now(),
-        )
-        .await
-        .map_err(application_error)?;
+    let actor = gateway_api_key_actor(&state, &headers)?;
+    let profile = if let Some(actor) = actor {
+        state
+            .application
+            .suspend_profile_for_gateway_api_key(
+                &actor,
+                uuid(&profile_id, "profile_id")?,
+                Utc::now(),
+            )
+            .await
+    } else {
+        state
+            .application
+            .suspend_profile(
+                &trusted_user(&state, &headers)?,
+                uuid(&profile_id, "profile_id")?,
+                Utc::now(),
+            )
+            .await
+    }
+    .map_err(application_error)?;
     Ok(Json(profile_response(&profile)?))
 }
 
@@ -1666,6 +1677,28 @@ fn time_policy(input: TimePolicyInput) -> Result<TimePolicy, TrustProfileHttpErr
         require_not_before: true,
         require_expiration: true,
     })
+}
+
+fn gateway_api_key_actor(
+    state: &TrustProfileHttpState,
+    headers: &HeaderMap,
+) -> Result<Option<marty_api_key_policy::GatewayApiKeyActor>, TrustProfileHttpError> {
+    if !headers.contains_key("x-api-key-id") && !headers.contains_key("x-api-key-scopes") {
+        return Ok(None);
+    }
+    if !state.service_authenticator.is_configured() {
+        return Err(unauthorized(
+            "TRUST_PROFILE.SERVICE_AUTHENTICATION_REQUIRED",
+        ));
+    }
+    internal_service(state, headers)?;
+    let actor = marty_api_key_policy::GatewayApiKeyActor::parse(
+        header(headers, "x-api-key-id").unwrap_or_default(),
+        header(headers, "x-organization-id").unwrap_or_default(),
+        header(headers, "x-api-key-scopes").unwrap_or_default(),
+    )
+    .map_err(|_| unauthorized("TRUST_PROFILE.INVALID_GATEWAY_PRINCIPAL"))?;
+    Ok(Some(actor))
 }
 
 fn trusted_user(

@@ -11,6 +11,12 @@ use uuid::Uuid;
 use crate::passport_beta_material::PassportBetaMaterialDigests;
 use crate::passport_bureau::{BetaBatchWireCommitments, VerifiedWebhookEvent};
 
+#[path = "passport_cancellation_repository.rs"]
+mod cancellation;
+pub(crate) use cancellation::{
+    validate_schema as validate_administrative_cancellation_schema, CancellationError,
+};
+
 #[derive(Debug, thiserror::Error)]
 pub enum PassportWebhookRepositoryError {
     #[error("physical document repository failed")]
@@ -824,6 +830,7 @@ impl PostgresPassportRepository {
                  secure_artifact_ciphertext=COALESCE($4, secure_artifact_ciphertext),
                  updated_at=$2
              WHERE organization_id=$5 AND application_id=$6 AND status=$7
+               AND status NOT IN ('ACTIVE','FAILED','CANCELLED')
                AND sod_sha256 IS NOT DISTINCT FROM $8
                AND secure_artifact_ciphertext=$9
                AND id=$13
@@ -1273,7 +1280,7 @@ impl PostgresPassportRepository {
             .push_bind(principal.organization_id())
             .push(" AND application_id = ")
             .push_bind(application_id)
-            .push(" AND status = ")
+            .push(" AND status NOT IN ('ACTIVE','FAILED','CANCELLED') AND status = ")
             .push_bind(expected_status);
         if let Some(job_id) = expected_job_id {
             query.push(" AND id = ").push_bind(job_id);
@@ -1380,6 +1387,7 @@ impl PostgresPassportRepository {
                  ELSE error_message END,
                  updated_at = $6
              WHERE organization_id = $1 AND application_id = $2 AND status = $3
+                 AND status NOT IN ('ACTIVE','FAILED','CANCELLED')
                  AND ((NULLIF(BTRIM(tracking_number), '') IS NULL
                        AND NULLIF(BTRIM($4::text), '') IS NOT NULL)
                    OR (NULLIF(BTRIM(error_message), '') IS NULL

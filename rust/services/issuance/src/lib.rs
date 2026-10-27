@@ -144,6 +144,7 @@ pub mod passport_artifact_kms;
 pub mod passport_beta_material;
 pub mod passport_bureau;
 pub mod passport_callback_handoff;
+pub(crate) mod passport_cancellation;
 pub mod passport_contract;
 pub mod passport_http;
 pub mod passport_provider_ingress;

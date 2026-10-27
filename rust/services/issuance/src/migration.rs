@@ -46,6 +46,10 @@ const NATIVE_MIGRATIONS: &[(&str, &str)] = &[
         "0010_passport_start_idempotency",
         include_str!("../migrations/0010_passport_start_idempotency.sql"),
     ),
+    (
+        "0011_passport_administrative_cancellation",
+        include_str!("../migrations/0011_passport_administrative_cancellation.sql"),
+    ),
 ];
 const BASE_TABLES: &[&str] = &[
     "application_templates",
@@ -186,7 +190,7 @@ pub async fn migrate_owned_schema(pool: &PgPool) -> Result<(), sqlx::Error> {
     }
     validate_base_tables(&mut transaction).await?;
     validate_oid4vci(&mut transaction).await?;
-    validate_passport_connection(&mut transaction).await?;
+    validate_passport_connection(&mut transaction, PassportValidation::Migration).await?;
     transaction.commit().await
 }
 
@@ -224,7 +228,7 @@ pub async fn verify_owned_schema(pool: &PgPool) -> Result<(), sqlx::Error> {
     }
     validate_base_tables(&mut transaction).await?;
     validate_oid4vci(&mut transaction).await?;
-    validate_passport_connection(&mut transaction).await?;
+    validate_passport_connection(&mut transaction, PassportValidation::Application).await?;
     transaction.commit().await
 }
 
@@ -660,7 +664,12 @@ pub async fn migrate_passport(pool: &PgPool) -> Result<(), sqlx::Error> {
     ))
     .execute(&mut *transaction)
     .await?;
-    validate_passport_connection(&mut transaction).await?;
+    sqlx::raw_sql(include_str!(
+        "../migrations/0011_passport_administrative_cancellation.sql"
+    ))
+    .execute(&mut *transaction)
+    .await?;
+    validate_passport_connection(&mut transaction, PassportValidation::Migration).await?;
     transaction.commit().await
 }
 
@@ -670,12 +679,20 @@ pub async fn validate_passport(pool: &PgPool) -> Result<(), sqlx::Error> {
     sqlx::query("SET TRANSACTION READ ONLY")
         .execute(&mut *transaction)
         .await?;
-    validate_passport_connection(&mut transaction).await?;
+    validate_passport_connection(&mut transaction, PassportValidation::Application).await?;
     transaction.commit().await
+}
+
+#[derive(Clone, Copy)]
+enum PassportValidation {
+    // The existing protected ACL finalizer follows committed DDL migrations.
+    Migration,
+    Application,
 }
 
 async fn validate_passport_connection(
     connection: &mut sqlx::PgConnection,
+    mode: PassportValidation,
 ) -> Result<(), sqlx::Error> {
     let columns = sqlx::query_scalar::<_, String>(
         "SELECT column_name FROM information_schema.columns \
@@ -909,13 +926,67 @@ async fn validate_passport_connection(
             "passport bureau provider/job index is incompatible".into(),
         ));
     }
+    crate::passport_repository::validate_administrative_cancellation_schema(connection).await?;
+    if matches!(mode, PassportValidation::Application) {
+        let fenced: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname='passport_cutover')",
+        )
+        .fetch_one(&mut *connection)
+        .await?;
+        if fenced {
+            let ready: bool = sqlx::query_scalar(
+                "SELECT current_user='marty' AND issuance_service.passport_cancellation_acl_ready()",
+            ).fetch_one(&mut *connection).await?;
+            if !ready {
+                return Err(sqlx::Error::Protocol(
+                    "fenced passport application requires marty append-only cancellation access"
+                        .into(),
+                ));
+            }
+        }
+    }
     Ok(())
 }
 
-fn normalize_catalog_expression(value: &str) -> String {
-    value
-        .replace("::text", "")
-        .chars()
-        .filter(|character| !character.is_ascii_whitespace() && !matches!(character, '(' | ')'))
-        .collect()
+/// Normalize catalog rendering only outside quoted SQL values/identifiers.
+/// Spaces, parentheses, and casts inside literals remain part of the contract.
+pub(crate) fn normalize_catalog_expression(value: &str) -> String {
+    let mut output = String::new();
+    let mut remaining = value;
+    while !remaining.is_empty() {
+        let character = remaining.chars().next().expect("nonempty remainder");
+        if matches!(character, '\'' | '"') {
+            let quote = character;
+            output.push(quote);
+            remaining = &remaining[quote.len_utf8()..];
+            while let Some(next) = remaining.chars().next() {
+                output.push(next);
+                remaining = &remaining[next.len_utf8()..];
+                if next == '\\' {
+                    // Preserve escaped delimiters conservatively (including E literals).
+                    if let Some(escaped) = remaining.chars().next() {
+                        output.push(escaped);
+                        remaining = &remaining[escaped.len_utf8()..];
+                    }
+                } else if next == quote {
+                    if remaining.starts_with(quote) {
+                        output.push(quote);
+                        remaining = &remaining[quote.len_utf8()..];
+                    } else {
+                        break;
+                    }
+                }
+            }
+        } else if remaining.starts_with("::text")
+            && !remaining[6..].starts_with(|c: char| c.is_alphanumeric() || c == '_')
+        {
+            remaining = &remaining[6..];
+        } else {
+            if !character.is_ascii_whitespace() && !matches!(character, '(' | ')') {
+                output.push(character);
+            }
+            remaining = &remaining[character.len_utf8()..];
+        }
+    }
+    output
 }

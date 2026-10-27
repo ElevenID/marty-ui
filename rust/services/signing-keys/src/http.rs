@@ -54,7 +54,10 @@ use crate::vc_api_holder_proof::{
 };
 use axum::{
     extract::{Path, Query, State},
-    http::{HeaderMap, StatusCode},
+    http::{
+        header::{CACHE_CONTROL, ETAG, IF_MATCH},
+        HeaderMap, StatusCode,
+    },
     response::{Html, IntoResponse, Response},
     routing::{get, post},
     Json, Router,
@@ -1548,8 +1551,12 @@ async fn public_config(
             "Signing registry is unavailable.",
         );
     };
-    match store.load(&scope.organization_id).await {
-        Ok(registry) => Json(public_config_document(&state, registry)).into_response(),
+    match store.load_with_revision(&scope.organization_id).await {
+        Ok((registry, revision)) => (
+            [(ETAG, revision), (CACHE_CONTROL, "no-store".to_owned())],
+            Json(public_config_document(&state, registry)),
+        )
+            .into_response(),
         Err(error) => public_error(StatusCode::SERVICE_UNAVAILABLE, &error.to_string()),
     }
 }
@@ -1869,9 +1876,29 @@ async fn public_certificate_expiry_alerts(
     }
 }
 
+fn strong_config_if_match(headers: &HeaderMap) -> Result<Option<String>, ()> {
+    let mut values = headers.get_all(IF_MATCH).iter();
+    let Some(value) = values.next() else {
+        return Ok(None);
+    };
+    if values.next().is_some() {
+        return Err(());
+    }
+    let value = value.to_str().map_err(|_| ())?;
+    let token = value
+        .strip_prefix("\"r-")
+        .and_then(|value| value.strip_suffix('"'))
+        .ok_or(())?;
+    if uuid::Uuid::parse_str(token).is_err() {
+        return Err(());
+    }
+    Ok(Some(value.to_owned()))
+}
+
 async fn save_public_config(
     State(state): State<AppState>,
     Query(scope): Query<OrganizationScope>,
+    headers: HeaderMap,
     Json(mut body): Json<Value>,
 ) -> Response {
     if !body.is_object() {
@@ -1880,6 +1907,15 @@ async fn save_public_config(
             "Signing configuration must be an object.",
         );
     }
+    let expected_revision = match strong_config_if_match(&headers) {
+        Ok(revision) => revision,
+        Err(()) => {
+            return public_error(
+                StatusCode::BAD_REQUEST,
+                "If-Match must be one strong registry revision.",
+            )
+        }
+    };
     let Some(store) = state.registry_store.as_ref() else {
         return public_error(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -1897,8 +1933,17 @@ async fn save_public_config(
         Err(error) => return public_error(StatusCode::SERVICE_UNAVAILABLE, &error.to_string()),
     };
     let saved = async {
-        let existing = store.load(&scope.organization_id).await?;
-        preserve_unchanged_auth_references(&mut body, &existing);
+        let snapshot = store
+            .load_with_revision_snapshot(&scope.organization_id)
+            .await?;
+        let existing = &snapshot.registry;
+        if expected_revision
+            .as_deref()
+            .is_some_and(|expected| expected != snapshot.etag.as_str())
+        {
+            return Err(registry::RegistryError::PreconditionFailed);
+        }
+        preserve_unchanged_auth_references(&mut body, existing);
         if let Some(config) = body.as_object_mut() {
             let bindings = config
                 .entry("key_reference_purposes")
@@ -1911,17 +1956,44 @@ async fn save_public_config(
                 .cloned()
                 .unwrap_or_else(|| json!({}));
         }
-        let normalized = store
-            .save_requested_with_rotation_lease(&scope.organization_id, &body, &existing, &lease)
-            .await?;
-        Ok(store
-            .with_managed_service(&scope.organization_id, normalized)
-            .await)
+        let (normalized, new_revision) = if expected_revision.is_some() {
+            store
+                .save_requested_if_unchanged_with_rotation_lease(
+                    &scope.organization_id,
+                    &body,
+                    &snapshot,
+                    &lease,
+                )
+                .await?
+        } else {
+            store
+                .save_requested_with_rotation_lease_and_revision(
+                    &scope.organization_id,
+                    &body,
+                    existing,
+                    &lease,
+                )
+                .await?
+        };
+        Ok((
+            store
+                .with_managed_service(&scope.organization_id, normalized)
+                .await,
+            new_revision,
+        ))
     }
     .await;
     let _ = lease.release().await;
     match saved {
-        Ok(registry) => Json(public_config_document(&state, registry)).into_response(),
+        Ok((registry, revision)) => (
+            [(ETAG, revision), (CACHE_CONTROL, "no-store".to_owned())],
+            Json(public_config_document(&state, registry)),
+        )
+            .into_response(),
+        Err(registry::RegistryError::PreconditionFailed) => public_error(
+            StatusCode::PRECONDITION_FAILED,
+            "Signing registry changed since the supplied revision.",
+        ),
         Err(registry::RegistryError::Conflict) => public_error(
             StatusCode::CONFLICT,
             "Signing registry update is already in progress.",
@@ -2257,8 +2329,18 @@ fn valid_didcomm_publication(
 async fn create_public_issuer_identity(
     State(state): State<AppState>,
     Query(scope): Query<OrganizationScope>,
+    headers: HeaderMap,
     Json(input): Json<IssuerIdentityRequest>,
 ) -> Response {
+    let expected_registry_revision = match strong_config_if_match(&headers) {
+        Ok(revision) => revision,
+        Err(()) => {
+            return public_error(
+                StatusCode::BAD_REQUEST,
+                "If-Match must be one strong registry revision.",
+            )
+        }
+    };
     if let Err(error) = validate_identity_scope(&scope.organization_id, &input) {
         return error.into_response();
     }
@@ -2309,14 +2391,18 @@ async fn create_public_issuer_identity(
             .create_profile(&ProfileWriteRequest {
                 organization_id: scope.organization_id.clone(),
                 body: profile.clone(),
+                expected_registry_revision: expected_registry_revision.clone(),
             })
             .await
         {
             Ok(repaired) => repaired
                 .get("profile")
                 .map(|profile| {
-                    Json(json!({"identity": identity_projection(profile), "created": false}))
-                        .into_response()
+                    Json(
+                        json!({"identity": identity_projection(profile), "created": false,
+                        "config_revision": repaired.get("config_revision")}),
+                    )
+                    .into_response()
                 })
                 .unwrap_or_else(|| {
                     public_error(
@@ -2342,6 +2428,7 @@ async fn create_public_issuer_identity(
             &ProfileWriteRequest {
                 organization_id: scope.organization_id,
                 body,
+                expected_registry_revision,
             },
             &key_reference,
         )
@@ -2356,7 +2443,8 @@ async fn create_public_issuer_identity(
             };
             Json(json!({
                 "identity": identity_projection(profile),
-                "created": created.get("created").and_then(Value::as_bool).unwrap_or(true)
+                "created": created.get("created").and_then(Value::as_bool).unwrap_or(true),
+                "config_revision": created.get("config_revision")
             }))
             .into_response()
         }
@@ -2367,8 +2455,18 @@ async fn create_public_issuer_identity(
 async fn rebind_public_issuer_identity(
     State(state): State<AppState>,
     Query(scope): Query<OrganizationScope>,
+    headers: HeaderMap,
     Json(input): Json<IssuerIdentityRequest>,
 ) -> Response {
+    let expected_registry_revision = match strong_config_if_match(&headers) {
+        Ok(revision) => revision,
+        Err(()) => {
+            return public_error(
+                StatusCode::BAD_REQUEST,
+                "If-Match must be one strong registry revision.",
+            )
+        }
+    };
     if let Err(error) = validate_identity_scope(&scope.organization_id, &input) {
         return error.into_response();
     }
@@ -2399,7 +2497,12 @@ async fn rebind_public_issuer_identity(
     };
     let key_reference = managed_key_reference(&scope.organization_id, &input);
     match compatibility
-        .rebind_profile_to_default(&scope.organization_id, profile_id, &key_reference)
+        .rebind_profile_to_default(
+            &scope.organization_id,
+            profile_id,
+            &key_reference,
+            expected_registry_revision.as_deref(),
+        )
         .await
     {
         Ok(result) => {
@@ -2411,7 +2514,8 @@ async fn rebind_public_issuer_identity(
             };
             Json(json!({
                 "identity": identity_projection(profile),
-                "changed": result.get("changed").and_then(Value::as_bool).unwrap_or(false)
+                "changed": result.get("changed").and_then(Value::as_bool).unwrap_or(false),
+                "config_revision": result.get("config_revision")
             }))
             .into_response()
         }
@@ -5283,6 +5387,7 @@ fn registry_error(error: registry::RegistryError) -> RegistryHttpError {
         registry::RegistryError::Storage(_) => StatusCode::SERVICE_UNAVAILABLE,
         registry::RegistryError::Corrupt(_) => StatusCode::INTERNAL_SERVER_ERROR,
         registry::RegistryError::Conflict => StatusCode::CONFLICT,
+        registry::RegistryError::PreconditionFailed => StatusCode::PRECONDITION_FAILED,
     };
     (
         status,
@@ -6283,6 +6388,275 @@ mod public_contract_tests {
         middleware::{self, Next},
     };
     use tower::ServiceExt;
+
+    #[test]
+    fn config_if_match_requires_one_strong_opaque_revision() {
+        let mut headers = HeaderMap::new();
+        assert_eq!(strong_config_if_match(&headers), Ok(None));
+        for invalid in [
+            "*",
+            "W/\"r-legacy\"",
+            "\"r-not-a-uuid\"",
+            "\"r-legacy\", \"r-legacy\"",
+        ] {
+            headers.insert(IF_MATCH, invalid.parse().unwrap());
+            assert!(strong_config_if_match(&headers).is_err());
+        }
+        headers.insert(IF_MATCH, "\"r-legacy\"".parse().unwrap());
+        assert!(strong_config_if_match(&headers).is_err());
+        let revision = format!("\"r-{}\"", uuid::Uuid::new_v4());
+        headers.insert(IF_MATCH, revision.parse().unwrap());
+        assert_eq!(strong_config_if_match(&headers), Ok(Some(revision)));
+        headers.append(IF_MATCH, "\"r-legacy\"".parse().unwrap());
+        assert!(strong_config_if_match(&headers).is_err());
+    }
+
+    #[tokio::test]
+    async fn public_identity_mutations_reject_invalid_revision_before_binding() {
+        let app = router_with_dependencies("test-key".into(), None, None, None, None, None, None);
+        let body = json!({"organization_id": "org-a", "issuer_did": "did:web:issuer.example:orgs:org-a",
+            "key_purpose": "vc_jwt_issuer", "credential_format": "SD_JWT_VC", "algorithm": "ES256"});
+        for method in [axum::http::Method::POST, axum::http::Method::PATCH] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(method)
+                        .uri("/v1/signing-keys/issuer-identities?organization_id=org-a")
+                        .header("content-type", "application/json")
+                        .header(IF_MATCH, "W/\"r-not-strong\"")
+                        .body(Body::from(body.to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires guarded disposable MARTY_TEST_REDIS_URL"]
+    async fn conditional_config_restore_rejects_intervening_edit() {
+        let redis_url = std::env::var("MARTY_TEST_REDIS_URL").expect("disposable Redis URL");
+        let parsed = reqwest::Url::parse(&redis_url).unwrap();
+        assert!(matches!(
+            parsed.host_str(),
+            Some("127.0.0.1" | "localhost" | "::1")
+        ));
+        assert!(parsed
+            .path()
+            .trim_start_matches('/')
+            .parse::<u8>()
+            .is_ok_and(|db| db >= 13));
+        let nonce =
+            std::env::var("MARTY_TEST_REDIS_DISPOSABLE_NONCE").expect("disposable sentinel");
+        assert!(nonce.len() >= 16);
+        let store = RegistryStore::connect(&redis_url).await.unwrap();
+        let mut connection = store.connection();
+        let observed: Option<String> = redis::cmd("GET")
+            .arg("marty:tests:disposable-guard")
+            .query_async(&mut connection)
+            .await
+            .unwrap();
+        assert_eq!(observed.as_deref(), Some(nonce.as_str()));
+
+        let organization_id = format!("conditional-config-{}", uuid::Uuid::new_v4().simple());
+        let base = json!({"services": [{
+            "id": "service-a", "name": "Original", "service_type": "aws-kms",
+            "region": "us-east-1", "auth_mode": "iam_role",
+            "algorithms": ["ES256"], "key_purposes": ["vc_jwt_issuer"]
+        }]});
+        store.save(&organization_id, &base).await.unwrap();
+        let binding_org = format!("conditional-binding-{}", uuid::Uuid::new_v4().simple());
+        store.save(&binding_org, &base).await.unwrap();
+        let binding_first = store.load_with_revision(&binding_org).await.unwrap().1;
+        let binding = json!({"signing_service_id": "service-a", "signing_key_reference": "owned-key",
+            "key_purpose": "vc_jwt_issuer"});
+        let (_, binding_second) = store
+            .bind_profile_if_revision(&binding_org, &binding, Some(&binding_first))
+            .await
+            .unwrap();
+        assert_ne!(binding_first, binding_second);
+        assert_eq!(
+            store.load(&binding_org).await.unwrap()["key_reference_purposes"]["service-a"]
+                ["owned-key"],
+            json!(["vc_jwt_issuer"])
+        );
+        let mut foreign = store.load(&binding_org).await.unwrap();
+        foreign["services"][0]["name"] = json!("Foreign edit");
+        store.save(&binding_org, &foreign).await.unwrap();
+        assert!(matches!(
+            store
+                .bind_profile_if_revision(&binding_org, &binding, Some(&binding_second))
+                .await,
+            Err(registry::RegistryError::PreconditionFailed)
+        ));
+        assert_eq!(
+            store.load(&binding_org).await.unwrap()["services"][0]["name"],
+            "Foreign edit"
+        );
+        let app = router_with_dependencies(
+            "test-key".into(),
+            Some(store.clone()),
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+        let uri = format!("/v1/signing-keys/config?organization_id={organization_id}");
+        let first = app
+            .clone()
+            .oneshot(Request::get(uri.as_str()).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(first.status(), StatusCode::OK);
+        let first_revision = first.headers()[ETAG].to_str().unwrap().to_owned();
+        let first_body: Value = serde_json::from_slice(
+            &axum::body::to_bytes(first.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(first_body["services"][0]["auth_reference"], "");
+
+        // Actor B edits after actor A has captured the original revision.
+        let mut second_body = first_body.clone();
+        second_body["services"][0]["name"] = json!("Intervening");
+        let second = app
+            .clone()
+            .oneshot(
+                Request::patch(uri.as_str())
+                    .header("content-type", "application/json")
+                    .header(IF_MATCH, first_revision.as_str())
+                    .body(Body::from(second_body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(second.status(), StatusCode::OK);
+        let second_revision = second.headers()[ETAG].to_str().unwrap().to_owned();
+        assert_ne!(first_revision, second_revision);
+
+        // Actor A's stale full-document restoration must not erase B's edit.
+        let stale = app
+            .clone()
+            .oneshot(
+                Request::patch(uri.as_str())
+                    .header("content-type", "application/json")
+                    .header(IF_MATCH, first_revision.as_str())
+                    .body(Body::from(first_body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(stale.status(), StatusCode::PRECONDITION_FAILED);
+        assert_eq!(
+            store.load(&organization_id).await.unwrap()["services"][0]["name"],
+            "Intervening"
+        );
+        assert_eq!(
+            store.load_with_revision(&organization_id).await.unwrap().1,
+            second_revision
+        );
+
+        // A fresh revision permits the intended restoration.
+        let restored = app
+            .clone()
+            .oneshot(
+                Request::patch(uri.as_str())
+                    .header("content-type", "application/json")
+                    .header(IF_MATCH, second_revision.as_str())
+                    .body(Body::from(first_body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(restored.status(), StatusCode::OK);
+        let restored_revision = restored.headers()[ETAG].to_str().unwrap().to_owned();
+        assert_eq!(
+            store.load(&organization_id).await.unwrap()["services"][0]["name"],
+            "Original"
+        );
+        // Simulate an older writer changing the raw document without touching
+        // the revision sidecar. The next conditional write must still fail.
+        let raw: String = redis::cmd("GET")
+            .arg(registry::storage_key(&organization_id))
+            .query_async(&mut connection)
+            .await
+            .unwrap();
+        let mut legacy: Value = serde_json::from_str(&raw).unwrap();
+        legacy["services"][0]["name"] = json!("Legacy writer edit");
+        let _: () = redis::cmd("SET")
+            .arg(registry::storage_key(&organization_id))
+            .arg(legacy.to_string())
+            .query_async(&mut connection)
+            .await
+            .unwrap();
+        let stale_legacy = app
+            .clone()
+            .oneshot(
+                Request::patch(uri.as_str())
+                    .header("content-type", "application/json")
+                    .header(IF_MATCH, restored_revision.as_str())
+                    .body(Body::from(first_body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(stale_legacy.status(), StatusCode::PRECONDITION_FAILED);
+        assert_eq!(
+            store.load(&organization_id).await.unwrap()["services"][0]["name"],
+            "Legacy writer edit"
+        );
+        // Force the second race window: an old/out-of-band writer changes the
+        // raw document after the precondition read but before the fenced SET.
+        let snapshot = store
+            .load_with_revision_snapshot(&organization_id)
+            .await
+            .unwrap();
+        let lease = store
+            .acquire_rotation_lease(&organization_id)
+            .await
+            .unwrap()
+            .unwrap();
+        let raw: String = redis::cmd("GET")
+            .arg(registry::storage_key(&organization_id))
+            .query_async(&mut connection)
+            .await
+            .unwrap();
+        let mut raced: Value = serde_json::from_str(&raw).unwrap();
+        raced["services"][0]["name"] = json!("Between-read-and-save edit");
+        let _: () = redis::cmd("SET")
+            .arg(registry::storage_key(&organization_id))
+            .arg(raced.to_string())
+            .query_async(&mut connection)
+            .await
+            .unwrap();
+        let refused = store
+            .save_requested_if_unchanged_with_rotation_lease(
+                &organization_id,
+                &first_body,
+                &snapshot,
+                &lease,
+            )
+            .await;
+        assert!(matches!(
+            refused,
+            Err(registry::RegistryError::PreconditionFailed)
+        ));
+        lease.release().await.unwrap();
+        assert_eq!(
+            store.load(&organization_id).await.unwrap()["services"][0]["name"],
+            "Between-read-and-save edit"
+        );
+        let _: i32 = redis::cmd("DEL")
+            .arg(registry::storage_key(&organization_id))
+            .arg(registry::revision_key(&organization_id))
+            .query_async(&mut connection)
+            .await
+            .unwrap();
+    }
 
     #[tokio::test]
     async fn service_signing_denies_api_key_without_a_bound_grant() {
