@@ -46,7 +46,7 @@ fn certificate_role(
 }
 
 /// This authority is independent from the passport operators and shared service key.
-fn mdoc_operator<'a>(
+pub(super) fn mdoc_operator<'a>(
     state: &AppState,
     headers: &'a HeaderMap,
     authority: bool,
@@ -108,7 +108,7 @@ fn mdoc_operator<'a>(
         })
 }
 
-fn mdoc_publication(
+pub(super) fn mdoc_publication(
     state: &AppState,
     organization_id: &str,
     issuer_did: &str,

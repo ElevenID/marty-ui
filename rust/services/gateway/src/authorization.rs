@@ -261,6 +261,11 @@ static SPECIAL_RULES: LazyLock<Vec<RouteRule>> = LazyLock::new(|| {
             "mdoc-certificate",
         ),
         rule(
+            r"^/v1/signing-keys/mdoc-crls/[A-Za-z0-9_-]{1,128}$",
+            &[("POST", "mdoc-certificate:issue-iaca")],
+            "mdoc-certificate",
+        ),
+        rule(
             r"^/v1/signing-keys(?:/|$)",
             &[
                 ("GET", "signing-key:view"),
@@ -967,7 +972,8 @@ static SKIP_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
 });
 
 pub fn skips_tenant_authorization(path: &str) -> bool {
-    SKIP_PATTERNS.iter().any(|pattern| pattern.is_match(path))
+    crate::contract::public_mdoc_crl_path(path)
+        || SKIP_PATTERNS.iter().any(|pattern| pattern.is_match(path))
 }
 
 pub use marty_api_key_policy::api_key_allowed;
