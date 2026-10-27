@@ -3,6 +3,46 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { createHash } = require('node:crypto');
+const os = require('node:os');
+
+function regularSource(file) {
+  assert.equal(typeof file, 'string');
+  assert.ok(!/[\x00-\x1f\x7f]/.test(file), 'Invalid source path');
+  assert.ok(path.isAbsolute(file), 'Absolute recorder-owned source path required');
+  let current = path.parse(file).root;
+  for (const part of file.slice(current.length).split(/[\\/]/)) {
+    assert.ok(part && part !== '.' && part !== '..', 'Canonical source path required');
+    current = path.join(current, part);
+    assert.equal(fs.lstatSync(current).isSymbolicLink(), false, 'Recorder source cannot traverse symlinks');
+  }
+  assert.ok(fs.statSync(file).isFile(), 'Regular recorder-owned source file required');
+  return file;
+}
+
+function functionalBinding(client, environment) {
+  const binding = client.functionalRuntimeBinding;
+  if (!binding && environment.DEMO_LOCAL_FUNCTIONAL_RUNTIME_RECEIPT === undefined) return null;
+  assert.equal(environment.DEMO_LOCAL_NATIVE_LIVE_BINDING, undefined, 'Select one runtime evidence mode');
+  assert.ok(!client.nativeRuntimeBinding, 'Select one runtime acknowledgement');
+  assert.equal(environment.RECORD_VIDEO, '0', 'Functional evidence cannot record a release demo');
+  const receipt = regularSource(environment.DEMO_LOCAL_FUNCTIONAL_RUNTIME_RECEIPT);
+  const relative = path.relative(path.join(os.homedir(), '.codex', 'private'), receipt);
+  assert.ok(receipt === '/capture-prerequisites/functional-runtime.json'
+    || (relative && relative !== '..' && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative)),
+  'Functional runtime receipt must be in private custody or the owned capture mount');
+  const helper = regularSource(environment.DEMO_EXECUTION_EVIDENCE_HELPER);
+  assert.ok(helper, 'Recorder evidence helper required');
+  assert.equal(createHash('sha256').update(fs.readFileSync(helper)).digest('hex'),
+    environment.DEMO_EXECUTION_EVIDENCE_HELPER_SHA256, 'Recorder evidence helper hash mismatch');
+  const directory = path.dirname(helper);
+  const {validateFunctionalRuntimeContext, functionalRuntimeContext} = require(regularSource(path.join(directory, 'externalLiveEvidence.js')));
+  const {loadFunctionalRuntimeObservation} = require(regularSource(path.join(directory, 'canvasNativeRuntime.js')));
+  const acknowledged = validateFunctionalRuntimeContext(binding);
+  const runtime = loadFunctionalRuntimeObservation(receipt,
+    environment.DEMO_LOCAL_FUNCTIONAL_RUNTIME_SHA256, {functionalRerun:true});
+  assert.deepEqual(acknowledged, functionalRuntimeContext(runtime), 'Functional runtime acknowledgement differs from mounted receipt');
+  return acknowledged;
+}
 
 async function createDemoLiveEvidence() {
   assert.equal(process.env.BETA_ORIGIN || 'https://beta.elevenidllc.com', 'https://beta.elevenidllc.com');
@@ -15,6 +55,8 @@ async function createDemoLiveEvidence() {
   assert.equal(createHash('sha256').update(fs.readFileSync(helper)).digest('hex'),
     process.env.DEMO_EXECUTION_EVIDENCE_HELPER_SHA256, 'Recorder evidence helper hash mismatch');
   const client = await require(helper).createLiveEvidenceClient();
+  try { functionalBinding(client, process.env); }
+  catch (error) { client.close(); throw error; }
   if (process.env.DEMO_LOCAL_NATIVE_LIVE_BINDING !== undefined) {
     try {
       assert.equal(process.env.DEMO_LOCAL_NATIVE_LIVE_BINDING, '1');
@@ -34,6 +76,19 @@ async function createDemoLiveEvidence() {
 // Apply only recorder-observed provenance after real operations and owned
 // cleanup. This never turns a failed feature or cleanup into a successful run.
 function applyLocalNativeReadiness(report, client, {ready, cleanupComplete}, environment=process.env) {
+  const functional = functionalBinding(client, environment);
+  if (functional) {
+    report.releaseReady = false;
+    report.qualification = 'LOCAL_MIXED_RUNTIME_FUNCTIONAL_OPERATIONS';
+    report.localFunctionalRuntime = {profileSha256:functional.profileSha256, receiptSha256:functional.receiptSha256,
+      scope:functional.scope, releaseQualified:false, recordingQualified:false};
+    report.signedManifestVerified = false;
+    report.demo_qualified = false;
+    report.cleanup = {...report.cleanup, complete:cleanupComplete === true};
+    report.functionalReady = ready === true && cleanupComplete === true && !report.error;
+    report.operations_verified = report.functionalReady;
+    return report.functionalReady;
+  }
   const binding = client.nativeRuntimeBinding;
   if (!binding) {
     assert.equal(environment.DEMO_LOCAL_NATIVE_LIVE_BINDING, undefined,
