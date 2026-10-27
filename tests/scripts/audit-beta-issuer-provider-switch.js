@@ -593,35 +593,35 @@ async function rebindThroughConsole(page, issuerDid, revision, recording = null)
   };
   await page.route(identityRoute, bindOwnedRevision);
   try {
-  const responsePromise = page.waitForResponse((response) => {
-    const url = new URL(response.url());
-    if (url.origin !== new URL(BETA_ORIGIN).origin
-        || url.pathname !== '/v1/signing-keys/issuer-identities'
-        || response.request().method() !== 'PATCH') return false;
-    try {
-      const payload = response.request().postDataJSON();
-      return payload?.organization_id === ORG_ID && payload?.issuer_did === issuerDid;
-    } catch {
-      return false;
-    }
-  }, { timeout: 60_000 });
-  const move = row.getByRole('button', { name: 'Move identity to default signing service' });
-  if (recording) await recording.click(page, move, { action: 'change-signing-provider', phase: 'open' });
-  else await move.click();
-  const confirm = page.getByRole('dialog').getByRole('button', { name: 'Move identity' });
-  if (recording) await recording.click(page, confirm, { action: 'change-signing-provider', phase: 'confirmation', durationMs: 3200 });
-  else await confirm.click();
-  const response = await responsePromise;
-  if (forwarded !== 1) throw new Error('UI rebind was not bound to the owned config revision');
-  const body = await response.json().catch(() => null);
-  recording?.mark('change-signing-provider', 'response-received', { httpStatus: response.status(), changed: body?.changed === true });
-  return {
-    ok: response.ok(),
-    status: response.status(),
-    changed: body?.changed === true,
-    identity: body?.identity || null,
-    configRevision: body?.config_revision || null,
-  };
+    const responsePromise = page.waitForResponse((response) => {
+      const url = new URL(response.url());
+      if (url.origin !== new URL(BETA_ORIGIN).origin
+          || url.pathname !== '/v1/signing-keys/issuer-identities'
+          || response.request().method() !== 'PATCH') return false;
+      try {
+        const payload = response.request().postDataJSON();
+        return payload?.organization_id === ORG_ID && payload?.issuer_did === issuerDid;
+      } catch {
+        return false;
+      }
+    }, { timeout: 60_000 });
+    const move = row.getByRole('button', { name: 'Move identity to default signing service' });
+    if (recording) await recording.click(page, move, { action: 'change-signing-provider', phase: 'open' });
+    else await move.click();
+    const confirm = page.getByRole('dialog').getByRole('button', { name: 'Move identity' });
+    if (recording) await recording.click(page, confirm, { action: 'change-signing-provider', phase: 'confirmation', durationMs: 3200 });
+    else await confirm.click();
+    const response = await responsePromise;
+    if (forwarded !== 1) throw new Error('UI rebind was not bound to the owned config revision');
+    const body = await response.json().catch(() => null);
+    recording?.mark('change-signing-provider', 'response-received', { httpStatus: response.status(), changed: body?.changed === true });
+    return {
+      ok: response.ok(),
+      status: response.status(),
+      changed: body?.changed === true,
+      identity: body?.identity || null,
+      configRevision: body?.config_revision || null,
+    };
   } finally {
     await page.unroute(identityRoute, bindOwnedRevision);
   }
