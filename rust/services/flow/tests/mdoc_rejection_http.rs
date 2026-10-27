@@ -261,13 +261,31 @@ async fn retryable_mdoc_rejection_survives_http_readback_recovery_and_terminal_r
     assert_eq!(existing, 0, "owned disposable fixture must start fresh");
     let original = instance(id);
     repository.save_instance(&original).await?;
-    let (status, rejected) = send(&app, id, Some("rejected-mdoc"), None).await?;
-    assert_eq!(status, 200);
-    assert_eq!(rejected["decision"], "deny");
-    assert_eq!(rejected["verified_claims"], json!({}));
+    // OID4VP direct_post rejects this attempt at the protocol boundary even
+    // though its nonterminal snapshot is persisted for authenticated polling.
+    let (status, rejection_error) = send(&app, id, Some("rejected-mdoc"), None).await?;
+    assert_eq!(status, 400, "{rejection_error}");
+    assert_eq!(rejection_error["error"], "invalid_presentation");
+    assert_eq!(rejection_error["detail"]["error"], "invalid_presentation");
+    assert!(rejection_error.get("verified_claims").is_none());
+    let (status, rejected) = send(&app, id, None, Some("member-1")).await?;
+    assert_eq!(status, 200, "{rejected}");
     let attempt = rejected["last_presentation_attempt"].clone();
     assert!(attempt.is_object());
+    let bound_attempt: marty_oid4vp_contract::RejectedPresentationAttemptV1 =
+        serde_json::from_value(attempt.clone())?;
+    assert!(bound_attempt.matches_session(
+        id,
+        "policy-1",
+        original.context["nonce"].as_str().unwrap()
+    ));
     let stored = repository.instance(id).await?.unwrap();
+    let rejected_result = stored
+        .result
+        .as_ref()
+        .expect("retryable snapshot persisted");
+    assert!(rejected_result.get("decision").is_none());
+    assert_eq!(stored.verification_projection()?.verified_claims, json!({}));
     assert_eq!(stored.status, original.status);
     assert_eq!(stored.completed_at, None);
     assert_eq!(stored.context["nonce"], original.context["nonce"]);
@@ -277,8 +295,11 @@ async fn retryable_mdoc_rejection_survives_http_readback_recovery_and_terminal_r
     assert_eq!(status, 200);
     assert_eq!(read["last_presentation_attempt"], attempt);
     assert_eq!(send(&app, id, None, Some("foreign-member")).await?.0, 403);
-    let (status, repeated) = send(&app, id, Some("rejected-mdoc"), None).await?;
-    assert_eq!(status, 200);
+    let (status, repeated_error) = send(&app, id, Some("rejected-mdoc"), None).await?;
+    assert_eq!(status, 400, "{repeated_error}");
+    assert_eq!(repeated_error["error"], "invalid_presentation");
+    let (status, repeated) = send(&app, id, None, Some("member-1")).await?;
+    assert_eq!(status, 200, "{repeated}");
     assert_eq!(repeated["last_presentation_attempt"], attempt);
     assert_eq!(
         repository.instance(id).await?.unwrap().state_history.len(),
