@@ -1,8 +1,8 @@
 name: CI
 
 env:
-  MARTY_API_CORE_URI: https://github.com/ElevenID/marty-cli/releases/download/v0.3.4/elevenid-marty-api-core-0.3.4.tgz
-  MARTY_API_CORE_DIGEST: sha256:d5904d0c757220430525778db50b1689b0126034c7f8b904880c1774e6c96a62
+  MARTY_API_CORE_URI: https://github.com/ElevenID/marty-cli/releases/download/v0.3.6/elevenid-marty-api-core-0.3.6.tgz
+  MARTY_API_CORE_DIGEST: sha256:e328b24e97850619204f7c7b251d85a16fd76ba1fc6d23f0ca929e23e15a3db0
   MARTY_BLOG_URI: https://github.com/ElevenID/marty-blog/releases/download/v0.1.9/elevenid-marty-blog-0.1.9.tgz
   MARTY_BLOG_DIGEST: sha256:1dda635bd284d9cb254e3c2c51fc09890cfae21b48a4c2095985621ad86cb358
   MARTY_PROTOCOL_REF: 76c37dc229b328afe002b911a26624543f814a64
@@ -2437,11 +2437,13 @@ jobs:
             --expected-source "${{ github.event.pull_request.head.sha || github.sha }}" \
             --protocol-revision "$MARTY_PROTOCOL_REF" \
             --output "$RUNNER_TEMP/gateway-openapi.json"
-      - name: Validate native organization readbacks against the actual export
+      - name: Validate native setup DTOs against the actual export
         run: |
           python3 -m venv "$RUNNER_TEMP/gateway-schema-check"
           "$RUNNER_TEMP/gateway-schema-check/bin/python" -m pip install --disable-pip-version-check jsonschema==4.23.0
           "$RUNNER_TEMP/gateway-schema-check/bin/python" scripts/check_gateway_organization_openapi.py \
+            --openapi "$RUNNER_TEMP/gateway-openapi.json"
+          "$RUNNER_TEMP/gateway-schema-check/bin/python" scripts/check_gateway_template_openapi.py \
             --openapi "$RUNNER_TEMP/gateway-openapi.json"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:

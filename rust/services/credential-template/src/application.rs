@@ -598,7 +598,7 @@ pub enum CredentialTemplateApplicationError {
     Repository(#[from] CredentialTemplateRepositoryError),
 }
 
-fn validate_create_command(
+pub(crate) fn validate_create_command(
     command: &CreateTemplateCommand,
 ) -> Result<(), CredentialTemplateApplicationError> {
     if command.user_id.trim().is_empty()
