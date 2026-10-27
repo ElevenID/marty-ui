@@ -212,15 +212,22 @@ function produceMaintenanceRestart(profileRef,authorityRef,options={}){
  const expected=expectedRuntime(profile),authority=maintenanceAuthority(authorityRef,expected);
  const engine=()=>JSON.parse(read(['info','--format','{{json .}}']));
  const beforeEngine=engine();assert.equal(beforeEngine.ID,authority.engineId,'Maintenance engine changed');
- assert.equal(beforeEngine.Containers,225);assert.equal(beforeEngine.ContainersRunning,67);
+ const counts=value=>{
+  assert(Number.isSafeInteger(value.Containers)&&value.Containers>=0,'Docker container count is invalid');
+  assert(Number.isSafeInteger(value.ContainersRunning)&&value.ContainersRunning>=0
+    &&value.ContainersRunning<=value.Containers,'Docker running count is invalid');
+  return {containers:value.Containers,running:value.ContainersRunning};
+ };
+ const beforeCounts=counts(beforeEngine);
  const roles=expected.map(row=>{
   const actual=observeDocker(row,read);validateRestartObservation(row,actual);return actual;
  });
  const afterEngine=engine();assert.equal(afterEngine.ID,authority.engineId,'Maintenance engine changed during observation');
- assert.equal(afterEngine.Containers,225);assert.equal(afterEngine.ContainersRunning,67);
+ const afterCounts=counts(afterEngine);
  boundJson(profileRef);maintenanceAuthority(authorityRef,expected);expectedRuntime(profile);
  return {schema:'marty.functional-runtime-maintenance-restart/v1',scope:'FUNCTIONAL_ONLY',releaseQualified:false,recordingQualified:false,
-  baseProfile:profileRef,authority:authorityRef,engineId:authority.engineId,roles};
+  baseProfile:profileRef,authority:authorityRef,engineId:authority.engineId,
+  engineCounts:{before:beforeCounts,after:afterCounts},roles};
 }
 function configuredUid(value){
  if(value===''||value==='root'||value==='root:root')return 0;

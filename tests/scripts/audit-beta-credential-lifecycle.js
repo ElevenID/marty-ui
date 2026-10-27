@@ -25,6 +25,7 @@ const {
   DEFAULT_BETA_ORGANIZATION_ID,
   DEFAULT_LIFECYCLE_POLICY_ID,
   DEFAULT_LIFECYCLE_SOURCE_TEMPLATE_ID,
+  requireLifecycleSourceSelection,
   credentialLifecycleBehaviorAssertions,
   verificationResultEvidence,
   verificationSessionRequest,
@@ -312,6 +313,13 @@ async function ensureActiveRevocationProfile(page) {
   }
   return { ok: true, id: candidates[0].id, name: candidates[0].name, reused: true,
     ownership: 'REFERENCE_ONLY', provisioning: 'PREEXISTING_ACTIVE_PROFILE' };
+}
+
+async function acquireLifecycleWalletAfterSource(page,context,stamp,recordProfile,acquire=acquireWalletSession) {
+  const profile=await ensureActiveRevocationProfile(page);
+  recordProfile(profile);
+  if(!profile.ok)throw new Error(`Revocation Profile setup failed: ${profile.error}`);
+  return acquire(context,{origin:TEST_WALLET_ORIGIN,runId:stamp});
 }
 
 function trackOwnedMutation(ownedResources, operation, recordId) {
@@ -836,12 +844,14 @@ async function present(walletPage, requestUri) {
     && response.request().method() === 'POST'
   ), () => walletPage.getByRole('button', { name: /^present$/i }).click(), 60_000);
   const body = await response.json().catch(() => null);
-  return {
-    ok: response.ok() && body?.ok === true,
-    status: response.status(),
-    error: response.ok() ? null : body?.error || 'Presentation failed',
-    submission: body?.submission || null,
-  };
+  const ok=response.ok()&&body?.ok===true;
+  const submission=body?.submission&&typeof body.submission==='object'&&!Array.isArray(body.submission)
+    ? {submitted:typeof body.submission.submitted==='boolean'?body.submission.submitted:null,
+      verifier_http_status:Number.isInteger(body.submission.verifier_http_status)
+        &&body.submission.verifier_http_status>=100&&body.submission.verifier_http_status<=599?body.submission.verifier_http_status:null,
+      verifier_error:typeof body.submission.verifier_error==='string'&&/^[a-z][a-z0-9_]{0,79}$/.test(body.submission.verifier_error)
+        ?body.submission.verifier_error:null}:null;
+  return {ok,status:response.status(),error:ok?null:typeof body?.error==='string'?body.error:'Presentation failed',submission};
 }
 
 async function verify(page, walletPage, label, {
@@ -850,7 +860,11 @@ async function verify(page, walletPage, label, {
   issuerDid = VERIFIER_DID,
   onPhase = () => {},
   returnOnWalletFailure = false,
+  resultTimeoutMs = 60_000,
+  resultIntervalMs = 1_000,
 } = {}) {
+  assert(Number.isInteger(resultTimeoutMs)&&resultTimeoutMs>0&&resultTimeoutMs<=60_000);
+  assert(Number.isInteger(resultIntervalMs)&&resultIntervalMs>=0&&resultIntervalMs<=1_000);
   onPhase('session-request');
   const request = verificationSessionRequest({
     organizationId,
@@ -895,7 +909,10 @@ async function verify(page, walletPage, label, {
   }
 
   onPhase('wallet-presentation');
-  const wallet = await present(walletPage, session.requestUri);
+  let wallet;
+  try { wallet = await present(walletPage, session.requestUri); }
+  catch { return { session: sanitizedSession, wallet: null, result: null,
+    diagnostic: {phase:'wallet-presentation', outcome:'TRANSPORT_FAILED'} }; }
   const walletError = String(wallet.error || '');
   const walletErrorClass = ['Invalid request','SD-JWT error','Key error','JWT error',
     'Invalid URL','Signing error','Proof verification failed','Unsupported credential format']
@@ -911,10 +928,17 @@ async function verify(page, walletPage, label, {
       ? wallet.submission.verifier_error : null,
     walletErrorClass, walletErrorIndicators,
     walletErrorSha256: walletError ? createHash('sha256').update(walletError).digest('hex') : null });
-  if (returnOnWalletFailure && !wallet.ok) return { session: sanitizedSession, wallet, result: null };
+  const walletEvidence={...wallet,error:wallet.error==null?null:redact(wallet.error)
+    .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g,'[redacted-jwt]').slice(0,800),
+    errorClass:walletErrorClass,errorIndicators:walletErrorIndicators,
+    errorSha256:walletError?createHash('sha256').update(walletError).digest('hex'):null};
+  if (!wallet.ok && (returnOnWalletFailure || wallet.submission?.submitted !== true)) return {
+    session:sanitizedSession,wallet:walletEvidence,result:null,
+    diagnostic:{phase:'wallet-presentation',outcome:wallet.submission?.submitted===true?'SUBMITTED_REJECTION':'REJECTED_BEFORE_SUBMISSION'} };
   onPhase('verifier-result', { instanceId: session.instanceId,
     walletOk: wallet.ok === true, walletStatus: wallet.status });
-  const rawResult = await waitFor(() => page.evaluate(async (instanceId) => {
+  let rawResult,pollCount=0,lastObservation=null;
+  try { rawResult = await waitFor(() => page.evaluate(async (instanceId) => {
     const response = await fetch(`/v1/flows/instances/${encodeURIComponent(instanceId)}/result`, {
       credentials: 'include',
     });
@@ -925,19 +949,27 @@ async function verify(page, walletPage, label, {
     return { httpStatus: response.status, status: String(body?.status || ''),
       terminal, body: terminal ? body : null };
   }, session.instanceId).then(observed => {
+    pollCount++;lastObservation={httpStatus:observed.httpStatus,flowStatus:observed.status};
     onPhase('verifier-result-poll', { instanceId: session.instanceId,
       httpStatus: observed.httpStatus,
       flowStatus: ['PENDING','PROCESSING','COMPLETED','PASSED','VERIFIED','FAILED','EXPIRED','CANCELLED']
         .includes(String(observed.status || '').toUpperCase()) ? String(observed.status).toUpperCase() : 'OTHER' });
     return observed.terminal ? observed : null;
-  }));
+  }),resultTimeoutMs,resultIntervalMs); } catch(error) {
+    return {session:sanitizedSession,wallet:walletEvidence,result:null,diagnostic:{phase:'verifier-result',
+      outcome:String(error.message||'').startsWith('Timed out waiting for condition;')?'POLL_TIMEOUT':'POLL_FAILED',
+      pollCount,lastHttpStatus:lastObservation?.httpStatus??null,
+      lastFlowStatus:['PENDING','PROCESSING','COMPLETED','PASSED','VERIFIED','FAILED','EXPIRED','CANCELLED']
+        .includes(String(lastObservation?.flowStatus||'').toUpperCase())?String(lastObservation.flowStatus).toUpperCase():null}};
+  }
   const result = rawResult
     ? verificationResultEvidence(rawResult.body, rawResult.httpStatus)
     : null;
-  return { session: sanitizedSession, wallet, result };
+  return { session: sanitizedSession, wallet:walletEvidence, result };
 }
 
 async function main() {
+  assert.equal(requireLifecycleSourceSelection(process.env),SOURCE_TEMPLATE_ID);
   const email = process.env.TEST_VENDOR_EMAIL || process.env.TEST_ADMIN_EMAIL;
   const password = process.env.TEST_VENDOR_PASSWORD || process.env.TEST_ADMIN_PASSWORD;
   if (!email || !password) throw new Error('Missing beta operator credentials');
@@ -989,8 +1021,6 @@ async function main() {
       ignoreHTTPSErrors: LOCAL_BETA_PROXY,
       ...(RECORD_VIDEO ? { recordVideo: { dir: artifactDir, size: VIDEO_SIZE } } : {}),
     });
-    walletSession = await acquireWalletSession(context, { origin: TEST_WALLET_ORIGIN, runId: stamp });
-    report.walletSession = walletSession.evidence;
     await installUiCandidateRoute(context, uiCandidate);
     page = await context.newPage();
     const recording = createLifecycleRecording(page, {
@@ -1032,10 +1062,8 @@ async function main() {
       };
     }, ORG_ID);
 
-    report.revocationProfile = await ensureActiveRevocationProfile(page, input.stamp);
-    if (!report.revocationProfile.ok) {
-      throw new Error(`Revocation Profile setup failed: ${report.revocationProfile.error}`);
-    }
+    walletSession = await acquireLifecycleWalletAfterSource(page,context,stamp,profile=>{report.revocationProfile=profile;});
+    report.walletSession = walletSession.evidence;
     report.credentialTemplate = await ensureLifecycleTemplate(
       page,
       report.revocationProfile.id,
@@ -1306,6 +1334,7 @@ module.exports = {
   requireDismissedLifecycleNotification,
   requireLifecycleActionEvidence,
   ensureActiveRevocationProfile,
+  acquireLifecycleWalletAfterSource,
   ensureLifecycleTemplate,
   findCredentialRow,
   findIssuedCredential,

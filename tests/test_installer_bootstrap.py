@@ -36,6 +36,8 @@ def test_help_does_not_require_docker_or_downloads():
     (["--channel", "stable", "--version", "v1.2.3"], "Choose one"),
     (["--version", "../../attacker"], "Invalid version"),
     (["--version", "v1.2.3?x=y"], "Invalid version"),
+    (["--candidate-test", "v1.2.3"], "Candidate testing requires an exact nightly tag"),
+    (["--candidate-test", "v1.2.3-nightly.20261027.42", "--version", "v1.2.3"], "Choose one"),
     (["--install-dir", "/one", "--install-dir", "/two"], "Repeated"),
     (["--skip-verification"], "Unknown option"),
 ])
@@ -159,6 +161,16 @@ def test_no_ambient_verifier_or_unsigned_download_execution():
     assert source.index('"$(digest "$2")" = "$3"') < source.index('chmod 700 "$stage/jq"')
     assert source.index('verify "$stage/marty-deploy"') < source.index('"$stage/marty-deploy" --build-identity')
     assert "--skip-verification" not in source
+
+
+def test_candidate_test_authenticates_inventory_and_operator_before_dispatch():
+    source = SCRIPT.read_text()
+    first = source.index('signed_download "$base/$version/installer-inventory.json"')
+    inventory = source.index('verify "$stage/installer-inventory.json" nightly-release.yml')
+    operator = source.index('verify "$stage/marty-deploy" nightly-release.yml')
+    dispatch = source.index('set -- candidate-test --version')
+    assert first < inventory < operator < dispatch
+    assert source.index('chmod 700 -- "$stage/marty-deploy"') < dispatch
 
 
 @pytest.mark.parametrize("endpoint,security,reason", [
