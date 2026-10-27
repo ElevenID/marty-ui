@@ -833,6 +833,11 @@ impl From<FlowVerificationStartError> for FlowHttpError {
                 "verification_policy_invalid",
                 error.to_string(),
             ),
+            FlowVerificationStartError::InvalidPolicyReference => Self::new(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "verification_policy_reference_invalid",
+                error.to_string(),
+            ),
             FlowVerificationStartError::HaipDisabled => Self::new(
                 StatusCode::CONFLICT,
                 "verification_haip_disabled",
@@ -924,6 +929,19 @@ impl From<FlowSiopSubmissionError> for FlowHttpError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn unresolved_policy_reference_has_a_stable_preflight_error() {
+        let response =
+            FlowHttpError::from(FlowVerificationStartError::InvalidPolicyReference).into_response();
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let bytes = axum::body::to_bytes(response.into_body(), 1024)
+            .await
+            .unwrap();
+        let body: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["error"], "verification_policy_reference_invalid");
+        assert_eq!(body["detail"], "FLOW.VERIFICATION_POLICY_REFERENCE_INVALID");
+    }
 
     #[test]
     fn request_object_response_and_transport_profiles_are_exact() {
