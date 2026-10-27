@@ -71,6 +71,51 @@ async fn managed_mdoc_chain_has_real_remote_signatures_and_profile_bound_attachm
     metadata
         .validate()
         .expect("governed public MDOC configuration");
+    let origin = std::env::var("MARTY_TEST_MDOC_FIXTURE_ORIGIN").expect("owned fixture origin");
+    let url = reqwest::Url::parse(&origin).expect("owned fixture origin URL");
+    assert!(
+        url.scheme() == "http"
+            && url.host_str() == Some("127.0.0.1")
+            && url.port().is_some()
+            && url.path() == "/"
+            && url.query().is_none()
+            && url.fragment().is_none()
+            && url.username().is_empty()
+            && url.password().is_none()
+    );
+    assert_eq!(metadata.issuer_contact_uri, format!("{origin}/contact"));
+    assert_eq!(metadata.crl_distribution_uri, format!("{origin}/mdoc.crl"));
+    let nonce =
+        std::env::var("MARTY_TEST_MDOC_FIXTURE_NONCE").expect("owned contact fixture nonce");
+    assert!(nonce.len() >= 16);
+    let contact_client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap();
+    let contact: Value = contact_client
+        .get(&metadata.issuer_contact_uri)
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(contact["schema"], "marty.disposable-mdoc-contact/v1");
+    assert_eq!(contact["owner"], "android_wallet_demos");
+    assert_eq!(contact["nonce"], nonce);
+    assert_eq!(contact["crl_published"], false);
+    let crl = contact_client
+        .get(&metadata.crl_distribution_uri)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(crl.status(), reqwest::StatusCode::NOT_FOUND);
+    assert_eq!(crl.json::<Value>().await.unwrap()["crl_published"], false);
+
     let redis_url = disposable_backends::disposable_redis_url().await;
     let _guarded_bao = disposable_backends::disposable_openbao_envelope().await;
     let endpoint = std::env::var("MARTY_TEST_OPENBAO_URL").unwrap();
