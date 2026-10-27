@@ -99,13 +99,14 @@ struct BoundIssuerCsrIntent<'a> {
 impl IssuerCsrIntent {
     pub fn supports_certificate_purpose(&self) -> bool {
         matches!(self.key_purpose.as_str(), "csca" | "x509_doc_signer")
-            || (self.key_purpose == "mdoc_dsc"
+            || (matches!(self.key_purpose.as_str(), "mdoc_dsc" | "mdoc_iaca")
                 && self.credential_format.eq_ignore_ascii_case("MDOC"))
     }
     pub fn has_valid_certificate_identity(&self) -> bool {
         self.issuer_did.starts_with("did:")
             && self.supports_certificate_purpose()
             && matches!(self.algorithm.as_str(), "ES256" | "ES384" | "ES512")
+            && (self.key_purpose != "mdoc_iaca" || self.algorithm == "ES256")
     }
     pub fn grant_binding<'a>(
         &'a self,

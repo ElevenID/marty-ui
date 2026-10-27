@@ -9,6 +9,7 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 pub mod ceremony;
+pub mod certificate_profile;
 pub mod minter;
 pub mod replay;
 mod token_file;

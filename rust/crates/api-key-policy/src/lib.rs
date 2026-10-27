@@ -71,7 +71,10 @@ pub fn api_key_allowed(required_permission: &str, scopes: &[String]) -> bool {
     // including broad legacy scopes, must not mint document certificates.
     if matches!(
         required_permission,
-        "passport-certificate:issue" | "passport-certificate:issue-csca"
+        "passport-certificate:issue"
+            | "passport-certificate:issue-csca"
+            | "mdoc-certificate:issue"
+            | "mdoc-certificate:issue-iaca"
     ) {
         return false;
     }

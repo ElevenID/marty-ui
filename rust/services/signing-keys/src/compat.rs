@@ -59,6 +59,9 @@ pub(crate) enum SignAuthorization {
 
 impl SignAuthorization {
     fn authorizes_issuer_request(&self, request: &IssuerDidSignRequest) -> bool {
+        if request.key_purpose == "mdoc_iaca" && matches!(self, Self::Grant { .. }) {
+            return false;
+        }
         match self {
             Self::Grant {
                 issuer_did: Some(issuer_did),
@@ -117,6 +120,9 @@ impl SignAuthorization {
     }
 
     fn authorizes(self, actual: FinalSignBinding<'_>) -> bool {
+        if actual.key_purpose == "mdoc_iaca" && matches!(&self, Self::Grant { .. }) {
+            return false;
+        }
         match self {
             Self::Grant {
                 consumed,
@@ -1125,22 +1131,44 @@ impl SigningCompatibilityService {
             .and_then(Value::as_str)
             .filter(|value| !value.is_empty())
             .ok_or_else(|| CompatibilityError::BadRequest("cert_pem is required.".into()))?;
-        let stored = self
+        let certificate_request = InspectCertificateRequest {
+            cert_pem: cert_pem.into(),
+            cert_chain_pem: clean(request.body.get("cert_chain_pem").and_then(Value::as_str)),
+            expected_public_jwk: Some(current_jwk),
+        };
+        let certificates = self
             .documents
-            .store_profile_certificate(
-                &request.organization_id,
-                profile_id,
-                key_reference,
-                InspectCertificateRequest {
-                    cert_pem: cert_pem.into(),
-                    cert_chain_pem: clean(
-                        request.body.get("cert_chain_pem").and_then(Value::as_str),
-                    ),
-                    expected_public_jwk: Some(current_jwk),
-                },
-            )
+            .certificate_overrides(&request.organization_id)
             .await
             .map_err(map_document_error)?;
+        let governed = governed_mdoc_profile(&certificates, &profile)?;
+        let policy = governed
+            .map(crate::mdoc_certificate::MdocAttachmentPolicy::GovernedV1)
+            .or_else(|| {
+                is_mdoc_document_signer(&profile)
+                    .then_some(crate::mdoc_certificate::MdocAttachmentPolicy::SignedPublicImport)
+            });
+        let stored = if let Some(policy) = policy {
+            self.documents
+                .store_mdoc_profile_certificate(
+                    &request.organization_id,
+                    profile_id,
+                    key_reference,
+                    certificate_request,
+                    policy,
+                )
+                .await
+        } else {
+            self.documents
+                .store_profile_certificate(
+                    &request.organization_id,
+                    profile_id,
+                    key_reference,
+                    certificate_request,
+                )
+                .await
+        }
+        .map_err(map_document_error)?;
         if stored.x5c.is_empty() {
             return Err(CompatibilityError::Unavailable);
         }
@@ -1533,6 +1561,12 @@ pub async fn resolve_issuer_identity(
                 clear_certificate(&mut service);
             }
         }
+        validate_mdoc_identity_certificate(
+            &mut service,
+            certificates,
+            &profile,
+            &Value::Object(public_jwk.clone()),
+        )?;
         public_jwk.insert("kid".into(), Value::String(method_id.clone()));
         if effective_profile
             .get("verification_method_id")
@@ -1700,6 +1734,14 @@ fn authorize_signing_binding(
         })
         .map(|values| values.iter().filter_map(Value::as_str).collect::<Vec<_>>())
         .unwrap_or_default();
+    if reference_purposes.contains(&"mdoc_iaca")
+        && (reference_purposes != ["mdoc_iaca"] || key_purpose != Some("mdoc_iaca"))
+    {
+        return Err(CompatibilityError::Conflict(
+            "Managed mdoc IACA keys are reserved exclusively for typed certificate ceremonies."
+                .into(),
+        ));
+    }
     if reference_purposes.contains(&"lti_tool_signing") && key_purpose != Some("lti_tool_signing") {
         return Err(CompatibilityError::Conflict(format!(
             "Key reference '{}' is reserved exclusively for lti_tool_signing.",
@@ -2255,6 +2297,108 @@ fn merge_certificate(service: &mut Map<String, Value>, certificates: &Value, ser
     }
 }
 
+fn is_mdoc_document_signer(profile: &Value) -> bool {
+    profile.get("credential_format").and_then(Value::as_str) == Some("MDOC")
+        && profile.get("key_purpose").and_then(Value::as_str) == Some("mdoc_dsc")
+}
+
+/// Derive strict policy from server-owned material/receipts, never request flags.
+fn governed_mdoc_profile(
+    certificates: &Value,
+    profile: &Value,
+) -> Result<
+    Option<marty_signing_grant::certificate_profile::ManagedCertificateProfile>,
+    CompatibilityError,
+> {
+    use marty_signing_grant::certificate_profile::ManagedCertificateProfile as P;
+    let current = P::from_identity(
+        profile
+            .get("key_purpose")
+            .and_then(Value::as_str)
+            .unwrap_or_default(),
+        profile
+            .get("credential_format")
+            .and_then(Value::as_str)
+            .unwrap_or_default(),
+    );
+    let mut governed = (current == Some(P::MdocIaca)).then_some(P::MdocIaca);
+    let profile_id = profile
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if let Some(marker) = certificates
+        .get("profiles")
+        .and_then(|items| items.get(profile_id))
+        .and_then(|item| item.get("certificate_profile"))
+    {
+        let role: P =
+            serde_json::from_value(marker.clone()).map_err(|_| CompatibilityError::Unavailable)?;
+        if !matches!(role, P::MdocIaca | P::MdocDocumentSigner) {
+            return Err(CompatibilityError::Unavailable);
+        }
+        governed = Some(role);
+    }
+    if let Some(receipts) = certificates.get("mdoc_dsc_issuance") {
+        let receipts = receipts
+            .as_object()
+            .ok_or(CompatibilityError::Unavailable)?;
+        for receipt in receipts.values() {
+            let id = receipt
+                .get("dsc_profile_id")
+                .and_then(Value::as_str)
+                .ok_or(CompatibilityError::Unavailable)?;
+            if id == profile_id {
+                if governed.is_some_and(|role| role != P::MdocDocumentSigner) {
+                    return Err(CompatibilityError::Unavailable);
+                }
+                governed = Some(P::MdocDocumentSigner);
+            }
+        }
+    }
+    if governed.is_some() && governed != current {
+        return Err(CompatibilityError::Conflict(
+            "Governed mdoc certificate role cannot be relabelled.".into(),
+        ));
+    }
+    Ok(governed)
+}
+
+fn validate_mdoc_identity_certificate(
+    service: &mut Map<String, Value>,
+    certificates: &Value,
+    profile: &Value,
+    public_jwk: &Value,
+) -> Result<(), CompatibilityError> {
+    let governed = governed_mdoc_profile(certificates, profile)?;
+    if !is_mdoc_document_signer(profile) {
+        return Ok(());
+    }
+    let Some(pem) = service.get("cert_pem").and_then(Value::as_str) else {
+        return Ok(());
+    };
+    let chain = service
+        .get("cert_chain_pem")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let inspected = documents::inspect_certificate(&InspectCertificateRequest {
+        cert_pem: pem.into(),
+        cert_chain_pem: Some(chain.into()),
+        expected_public_jwk: Some(public_jwk.clone()),
+    });
+    let validated = if let Some(profile) = governed {
+        crate::mdoc_certificate::validate_attachment(pem, chain, profile)
+    } else {
+        crate::mdoc_certificate::validate_public_import(pem, chain)
+    };
+    match (inspected, validated) {
+        (Ok(inspected), Ok(x5c)) if inspected.public_key_matches == Some(true) => {
+            service.insert("x5c".into(), json!(x5c));
+        }
+        _ => clear_certificate(service),
+    }
+    Ok(())
+}
+
 fn merge_profile_certificate(
     service: &mut Map<String, Value>,
     certificates: &Value,
@@ -2262,7 +2406,8 @@ fn merge_profile_certificate(
     service_id: &str,
 ) {
     let passport = profile.get("credential_format").and_then(Value::as_str) == Some("ICAO_EMRTD");
-    if passport {
+    let mdoc = !matches!(governed_mdoc_profile(certificates, profile), Ok(None));
+    if passport || mdoc {
         clear_certificate(service);
     }
     let attachment = profile_certificate(certificates, profile);
@@ -2285,9 +2430,9 @@ fn merge_profile_certificate(
         }
         return;
     }
-    // Passport DSCs must be tied to the selected issuer identity, never a shared
-    // signing service. Other formats retain their legacy service-level override.
-    if !passport {
+    // Governed certificate roles are tied to the selected issuer identity,
+    // never a shared signing service. Other formats retain legacy overrides.
+    if !passport && !mdoc {
         merge_certificate(service, certificates, service_id);
     }
 }
@@ -2410,6 +2555,66 @@ mod tests {
     use serde::Deserialize;
 
     use super::*;
+
+    #[test]
+    fn governed_mdoc_receipt_cannot_be_downgraded_by_relabelling_profile_or_dropping_attachment_marker(
+    ) {
+        let profile =
+            json!({"id":"profile-a", "key_purpose":"mdoc_dsc", "credential_format":"MDOC"});
+        let certificates = json!({"mdoc_dsc_issuance":{"receipt":{"dsc_profile_id":"profile-a"}},"profiles":{"profile-a":{}}});
+        assert_eq!(governed_mdoc_profile(&certificates, &profile).unwrap(), Some(marty_signing_grant::certificate_profile::ManagedCertificateProfile::MdocDocumentSigner));
+        let mut changed = profile.clone();
+        changed["key_purpose"] = json!("vc_jwt_issuer");
+        assert!(governed_mdoc_profile(&certificates, &changed).is_err());
+        changed = profile.clone();
+        changed["credential_format"] = json!("SD_JWT_VC");
+        assert!(governed_mdoc_profile(&certificates, &changed).is_err());
+        assert_eq!(governed_mdoc_profile(&json!({}), &profile).unwrap(), None);
+        let marker_only =
+            json!({"profiles":{"profile-a":{"certificate_profile":"mdoc_document_signer"}}});
+        assert_eq!(governed_mdoc_profile(&marker_only, &profile).unwrap(), Some(marty_signing_grant::certificate_profile::ManagedCertificateProfile::MdocDocumentSigner));
+        assert!(governed_mdoc_profile(&marker_only, &changed).is_err());
+        assert!(governed_mdoc_profile(&json!({"mdoc_dsc_issuance": []}), &profile).is_err());
+    }
+
+    #[test]
+    fn mdoc_iaca_reference_cannot_be_relabelled_for_generic_payload_signing() {
+        let mut registry =
+            json!({"key_reference_purposes":{"provider":{"iaca-key":["mdoc_iaca"]}}});
+        let service = json!({"key_purposes":["mdoc_iaca", "vc_jwt_issuer"]});
+        let service = service.as_object().unwrap();
+        assert!(authorize_signing_binding(
+            &registry,
+            service,
+            "provider",
+            Some("iaca-key"),
+            Some("mdoc_iaca"),
+            Some("ES256")
+        )
+        .is_ok());
+        for purpose in [None, Some("vc_jwt_issuer"), Some("csca")] {
+            assert!(authorize_signing_binding(
+                &registry,
+                service,
+                "provider",
+                Some("iaca-key"),
+                purpose,
+                Some("ES256")
+            )
+            .is_err());
+        }
+        registry["key_reference_purposes"]["provider"]["iaca-key"] =
+            json!(["mdoc_iaca", "vc_jwt_issuer"]);
+        assert!(authorize_signing_binding(
+            &registry,
+            service,
+            "provider",
+            Some("iaca-key"),
+            Some("mdoc_iaca"),
+            Some("ES256")
+        )
+        .is_err());
+    }
 
     #[test]
     fn prepared_issuer_binding_rejects_rotation_or_method_change() {

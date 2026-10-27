@@ -597,11 +597,25 @@ impl CscaLifecycleDocument {
 #[derive(Clone)]
 pub struct CscaLifecycleStore {
     connection: ConnectionManager,
+    family: marty_signing_grant::certificate_profile::CertificateFamily,
 }
 
 impl CscaLifecycleStore {
     pub fn from_connection(connection: ConnectionManager) -> Self {
-        Self { connection }
+        Self {
+            connection,
+            family: marty_signing_grant::certificate_profile::CertificateFamily::Icao,
+        }
+    }
+
+    pub fn for_family(
+        &self,
+        family: marty_signing_grant::certificate_profile::CertificateFamily,
+    ) -> Self {
+        Self {
+            connection: self.connection.clone(),
+            family,
+        }
     }
 
     pub async fn load(
@@ -612,7 +626,10 @@ impl CscaLifecycleStore {
         validate_identifier("organization_id", organization_id)?;
         let mut connection = self.connection.clone();
         let payload: Option<String> = connection
-            .get(csca_lifecycle_storage_key(organization_id))
+            .get(authority_lifecycle_storage_key(
+                organization_id,
+                self.family,
+            ))
             .await
             .map_err(|error| CscaLifecycleError::Storage(error.to_string()))?;
         let document = payload
@@ -703,7 +720,10 @@ return 1
         );
         let mut connection = self.connection.clone();
         let saved: i64 = script
-            .key(csca_lifecycle_storage_key(&document.organization_id))
+            .key(authority_lifecycle_storage_key(
+                &document.organization_id,
+                self.family,
+            ))
             .key(lease.map(|(lease, _)| lease.redis_key()).unwrap_or(""))
             .key(
                 lease
@@ -721,6 +741,20 @@ return 1
             return Err(CscaLifecycleError::ConcurrentModification);
         }
         Ok(())
+    }
+}
+
+pub fn authority_lifecycle_storage_key(
+    organization_id: &str,
+    family: marty_signing_grant::certificate_profile::CertificateFamily,
+) -> String {
+    match family {
+        marty_signing_grant::certificate_profile::CertificateFamily::Icao => {
+            csca_lifecycle_storage_key(organization_id)
+        }
+        marty_signing_grant::certificate_profile::CertificateFamily::Mdoc => {
+            format!("signing:mdoc-iaca-lifecycle:{organization_id}")
+        }
     }
 }
 

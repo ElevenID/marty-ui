@@ -2,6 +2,187 @@
 //! The parent router owns transport state; distinct authority and grant paths remain here.
 use super::*;
 
+use marty_signing_grant::certificate_profile::{CertificateFamily, ManagedCertificateProfile};
+
+fn certificate_role(
+    format: &str,
+    authority: bool,
+    metadata: Option<&marty_signing_grant::certificate_profile::MdocCertificateMetadata>,
+) -> Result<ManagedCertificateProfile, PublicSigningError> {
+    let role = match (format.to_ascii_uppercase().as_str(), authority) {
+        ("ICAO_EMRTD", true) => ManagedCertificateProfile::IcaoCsca,
+        ("ICAO_EMRTD", false) => ManagedCertificateProfile::IcaoDocumentSigner,
+        ("MDOC", true) => ManagedCertificateProfile::MdocIaca,
+        ("MDOC", false) => ManagedCertificateProfile::MdocDocumentSigner,
+        _ => {
+            return Err(public_failure(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "Certificate family is unsupported.",
+            ))
+        }
+    };
+    if role.family() == CertificateFamily::Mdoc {
+        metadata
+            .ok_or_else(|| {
+                public_failure(
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "MDOC_ISSUER_CONFIGURATION_REQUIRED",
+                )
+            })?
+            .validate()
+            .map_err(|_| {
+                public_failure(
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "MDOC_ISSUER_CONFIGURATION_INVALID",
+                )
+            })?;
+    } else if metadata.is_some() {
+        return Err(public_failure(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "Certificate family configuration does not match.",
+        ));
+    }
+    Ok(role)
+}
+
+/// This authority is independent from the passport operators and shared service key.
+fn mdoc_operator<'a>(
+    state: &AppState,
+    headers: &'a HeaderMap,
+    authority: bool,
+) -> Result<&'a str, Response> {
+    let options = &state.mdoc_certificates;
+    let expected = if authority {
+        options.iaca_gateway_key.as_deref()
+    } else {
+        options.dsc_gateway_key.as_deref()
+    };
+    let Some(expected) = expected else {
+        return Err(public_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "MDOC operator authority is not configured.",
+        ));
+    };
+    let forbidden = [
+        Some(state.internal_api_key.as_ref()),
+        state.service_sign_gateway_key.as_deref(),
+        state.issuer_sign_key.as_deref(),
+        state.integration_secret_key.as_deref(),
+        state.dsc_issue_gateway_key.as_deref(),
+        state.csca_issue_gateway_key.as_deref(),
+        if authority {
+            options.dsc_gateway_key.as_deref()
+        } else {
+            options.iaca_gateway_key.as_deref()
+        },
+    ];
+    if expected.len() < 32 || forbidden.contains(&Some(expected)) {
+        return Err(public_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "MDOC operator authority must be distinct.",
+        ));
+    }
+    let supplied = headers
+        .get("x-api-key")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default();
+    if expected.len() != supplied.len()
+        || expected.as_bytes().ct_eq(supplied.as_bytes()).unwrap_u8() != 1
+    {
+        return Err(public_error(
+            StatusCode::UNAUTHORIZED,
+            "MDOC operator authority is required.",
+        ));
+    }
+    headers
+        .get("x-user-id")
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| {
+            !value.is_empty() && value.len() <= 128 && !value.chars().any(char::is_control)
+        })
+        .ok_or_else(|| {
+            public_error(
+                StatusCode::UNAUTHORIZED,
+                "Trusted operator identity is required.",
+            )
+        })
+}
+
+fn mdoc_publication(
+    state: &AppState,
+    organization_id: &str,
+    issuer_did: &str,
+) -> Result<marty_signing_grant::certificate_profile::MdocCertificateMetadata, Response> {
+    state.mdoc_certificates.metadata_for(organization_id, issuer_did).map_err(|code| {
+        (StatusCode::UNPROCESSABLE_ENTITY, Json(json!({"error": code,
+            "detail": "Governed issuer contact and CRL publication configuration is required before this ceremony."}))).into_response()
+    })
+}
+
+pub(super) async fn issue_public_mdoc_iaca_certificate(
+    State(state): State<AppState>,
+    Query(scope): Query<OrganizationScope>,
+    headers: HeaderMap,
+    Json(input): Json<MdocIacaIssueRequest>,
+) -> Response {
+    let actor = match mdoc_operator(&state, &headers, true) {
+        Ok(actor) => actor,
+        Err(error) => return error,
+    };
+    let metadata = match mdoc_publication(&state, &scope.organization_id, &input.issuer_did) {
+        Ok(metadata) => metadata,
+        Err(error) => return error,
+    };
+    let request = CscaSelfSignedIssueRequest {
+        mdoc_metadata: Some(metadata),
+        organization_id: input.organization_id,
+        issuer_did: input.issuer_did,
+        certificate_id: input.certificate_id,
+        credential_format: "MDOC".into(),
+        country: input.country,
+        organization: input.organization,
+        common_name: input.common_name,
+        validity_days: input.validity_days,
+    };
+    match issue_managed_csca_self_signed(&state, &scope.organization_id, actor, &request).await {
+        Ok(result) => Json(result).into_response(),
+        Err(error) => error.into_response(),
+    }
+}
+
+pub(super) async fn issue_public_mdoc_dsc_certificate(
+    State(state): State<AppState>,
+    Query(scope): Query<OrganizationScope>,
+    headers: HeaderMap,
+    Json(input): Json<MdocDscIssueRequest>,
+) -> Response {
+    let actor = match mdoc_operator(&state, &headers, false) {
+        Ok(actor) => actor,
+        Err(error) => return error,
+    };
+    let metadata = match mdoc_publication(&state, &scope.organization_id, &input.iaca_issuer_did) {
+        Ok(metadata) => metadata,
+        Err(error) => return error,
+    };
+    let request = DscCertificateIssueRequest {
+        mdoc_metadata: Some(metadata),
+        organization_id: input.organization_id,
+        dsc_issuer_did: input.dsc_issuer_did,
+        csca_issuer_did: input.iaca_issuer_did,
+        csca_certificate_id: input.iaca_certificate_id,
+        credential_format: "MDOC".into(),
+        country: input.country,
+        organization: input.organization,
+        common_name: input.common_name,
+        validity_days: input.validity_days,
+        idempotency_key: input.idempotency_key,
+    };
+    match issue_managed_dsc_certificate(&state, &scope.organization_id, actor, &request).await {
+        Ok(result) => Json(result).into_response(),
+        Err(error) => error.into_response(),
+    }
+}
+
 pub(super) async fn store_public_issuer_certificate(
     State(state): State<AppState>,
     Query(scope): Query<OrganizationScope>,
@@ -54,9 +235,16 @@ pub(super) fn managed_csca_import(
     resolved: &Value,
     provider_public_jwk: &Value,
 ) -> Result<ImportCscaCertificateRequest, PublicSigningError> {
-    if !same_managed_identity(profile, resolved)
-        || profile.get("key_purpose").and_then(Value::as_str) != Some("csca")
-    {
+    let purpose = profile
+        .get("key_purpose")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    // Preserve the legacy CSCA enrollment contract, including its historical
+    // format selectors. Only the new mdoc IACA takes the closed MDOC profile.
+    let authority = purpose == "csca"
+        || ManagedCertificateProfile::from_identity(purpose, &input.credential_format)
+            == Some(ManagedCertificateProfile::MdocIaca);
+    if !same_managed_identity(profile, resolved) || !authority {
         return Err(public_failure(
             StatusCode::CONFLICT,
             "Resolved CSCA identity does not match its active managed profile.",
@@ -317,6 +505,13 @@ pub(super) async fn issue_public_csca_self_signed_certificate(
     headers: HeaderMap,
     Json(input): Json<CscaSelfSignedIssueRequest>,
 ) -> Response {
+    if !input.credential_format.eq_ignore_ascii_case("ICAO_EMRTD") {
+        return public_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "Passport certificate family is required.",
+        );
+    }
+
     if !state.beta_csca_issuance_enabled || state.csca_issue_gateway_key.is_none() {
         return public_error(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -353,10 +548,12 @@ pub(super) async fn issue_managed_csca_self_signed(
     actor_id: &str,
     input: &CscaSelfSignedIssueRequest,
 ) -> Result<Value, PublicSigningError> {
+    let role = certificate_role(&input.credential_format, true, input.mdoc_metadata.as_ref())?;
+
     let identity = IssuerIdentityRequest {
         organization_id: input.organization_id.clone(),
         issuer_did: input.issuer_did.clone(),
-        key_purpose: "csca".into(),
+        key_purpose: role.key_purpose().into(),
         credential_format: input.credential_format.clone(),
         algorithm: "ES256".into(),
         key_attestation_policy: None,
@@ -364,8 +561,7 @@ pub(super) async fn issue_managed_csca_self_signed(
         cert_chain_pem: None,
     };
     validate_identity_scope(organization_id, &identity)?;
-    if !input.credential_format.eq_ignore_ascii_case("ICAO_EMRTD")
-        || !(1..=3650).contains(&input.validity_days)
+    if !(1..=3650).contains(&input.validity_days)
         || input.certificate_id.is_empty()
         || input.certificate_id.len() > 128
         || !input
@@ -378,26 +574,34 @@ pub(super) async fn issue_managed_csca_self_signed(
             "CSCA ceremony request is invalid.",
         ));
     }
-    let digest_body = json!({
+    let mut digest_body = json!({
         "organization_id": organization_id,
         "issuer_did": input.issuer_did,
         "certificate_id": input.certificate_id,
-        "credential_format": "ICAO_EMRTD",
+        "credential_format": role.credential_format(),
         "country": input.country,
         "organization": input.organization,
         "common_name": input.common_name,
         "validity_days": input.validity_days,
     });
+    if let Some(metadata) = &input.mdoc_metadata {
+        digest_body["mdoc_certificate_configuration"] =
+            json!({"profile": role, "version": 1, "publication": metadata});
+    }
     let request_digest = format!(
         "{:x}",
         Sha256::digest(serde_json::to_vec(&digest_body).expect("CSCA request serializes"))
     );
-    let lifecycle_store = state.csca_lifecycle_store.as_ref().ok_or_else(|| {
-        public_failure(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "CSCA lifecycle storage is unavailable.",
-        )
-    })?;
+    let lifecycle_store = state
+        .csca_lifecycle_store
+        .as_ref()
+        .ok_or_else(|| {
+            public_failure(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "CSCA lifecycle storage is unavailable.",
+            )
+        })?
+        .for_family(role.family());
     let registry = state.registry_store.as_ref().ok_or_else(|| {
         public_failure(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -479,8 +683,8 @@ pub(super) async fn issue_managed_csca_self_signed(
     let sign = |payload: &[u8]| IssuerDidSignRequest {
         organization_id: organization_id.into(),
         issuer_did: input.issuer_did.clone(),
-        credential_format: "ICAO_EMRTD".into(),
-        key_purpose: "csca".into(),
+        credential_format: role.credential_format().into(),
+        key_purpose: role.key_purpose().into(),
         algorithm: "ES256".into(),
         key_reference: None,
         payload_b64: Some(URL_SAFE_NO_PAD.encode(payload)),
@@ -519,12 +723,18 @@ pub(super) async fn issue_managed_csca_self_signed(
     if serial[0] == 0 {
         serial[0] = 1;
     }
-    let prepared = certificate_issuance::prepare_csca(
-        &verified,
-        &serial,
-        input.validity_days,
-        std::time::SystemTime::now(),
-    )
+    let now = std::time::SystemTime::now();
+    let prepared = if let Some(metadata) = input.mdoc_metadata.as_ref() {
+        certificate_issuance::prepare_mdoc_iaca(
+            &verified,
+            &serial,
+            input.validity_days,
+            now,
+            metadata,
+        )
+    } else {
+        certificate_issuance::prepare_csca(&verified, &serial, input.validity_days, now)
+    }
     .map_err(|_| {
         public_failure(
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -551,6 +761,10 @@ pub(super) async fn issue_managed_csca_self_signed(
             "Managed CSCA certificate signature did not verify.",
         )
     })?;
+    if role.family() == CertificateFamily::Mdoc {
+        crate::mdoc_certificate::validate_attachment(&certificate_pem, "", role)
+            .map_err(|detail| public_failure(StatusCode::BAD_GATEWAY, detail))?;
+    }
     let current_profile = one_matching_profile(state, organization_id, &identity).await?;
     if current_profile != profile {
         return Err(public_failure(
@@ -567,7 +781,7 @@ pub(super) async fn issue_managed_csca_self_signed(
             "Managed CSCA key rotated during ceremony.",
         ));
     }
-    let result = json!({
+    let mut result = json!({
         "certificate_id": input.certificate_id,
         "certificate_pem": certificate_pem,
         "chain_pem": "",
@@ -578,10 +792,13 @@ pub(super) async fn issue_managed_csca_self_signed(
         "not_after": metadata.not_after,
         "status": "issued",
     });
+    if role.family() == CertificateFamily::Mdoc {
+        result["certificate_profile"] = json!(role);
+    }
     let enrollment = CscaCertificateEnrollment {
         organization_id: input.organization_id.clone(),
         issuer_did: input.issuer_did.clone(),
-        credential_format: "ICAO_EMRTD".into(),
+        credential_format: role.credential_format().into(),
         algorithm: "ES256".into(),
         certificate_id: input.certificate_id.clone(),
         cert_pem: certificate_pem.clone(),
@@ -592,8 +809,8 @@ pub(super) async fn issue_managed_csca_self_signed(
             organization_id: organization_id.into(),
             issuer_did: input.issuer_did.clone(),
             verification_method_id: None,
-            credential_format: Some("ICAO_EMRTD".into()),
-            key_purpose: Some("csca".into()),
+            credential_format: Some(role.credential_format().into()),
+            key_purpose: Some(role.key_purpose().into()),
             algorithm: Some("ES256".into()),
         })
         .await
@@ -639,6 +856,10 @@ pub(super) async fn issue_managed_csca_self_signed(
         "issuer_did": input.issuer_did,
         "csca_ceremony": {"request_digest": request_digest, "public_result": result, "actor_id": actor_id},
     });
+    if role.family() == CertificateFamily::Mdoc {
+        imported.metadata["certificate_profile"] = json!(role);
+        imported.metadata["publication_configuration"] = json!(input.mdoc_metadata);
+    }
     document
         .import(&input.certificate_id, imported, chrono::Utc::now())
         .map_err(csca_public_failure)?;
@@ -677,6 +898,13 @@ pub(super) async fn issue_public_dsc_certificate(
     headers: HeaderMap,
     Json(input): Json<DscCertificateIssueRequest>,
 ) -> Response {
+    if !input.credential_format.eq_ignore_ascii_case("ICAO_EMRTD") {
+        return public_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "Passport certificate family is required.",
+        );
+    }
+
     // Only Gateway holds this distinct credential, which it attaches after
     // its dedicated passport-certificate:issue policy check.
     if state.dsc_issue_gateway_key.is_none() {
@@ -790,12 +1018,21 @@ pub(super) async fn issue_managed_dsc_certificate(
     actor_id: &str,
     input: &DscCertificateIssueRequest,
 ) -> Result<Value, PublicSigningError> {
-    let dsc_request_identity = dsc_identity(input, "x509_doc_signer", &input.dsc_issuer_did);
-    let csca_request_identity = dsc_identity(input, "csca", &input.csca_issuer_did);
+    let role = certificate_role(
+        &input.credential_format,
+        false,
+        input.mdoc_metadata.as_ref(),
+    )?;
+
+    let dsc_request_identity = dsc_identity(input, role.key_purpose(), &input.dsc_issuer_did);
+    let csca_request_identity = dsc_identity(
+        input,
+        role.authority().key_purpose(),
+        &input.csca_issuer_did,
+    );
     validate_identity_scope(organization_id, &dsc_request_identity)?;
     validate_identity_scope(organization_id, &csca_request_identity)?;
-    if !input.credential_format.eq_ignore_ascii_case("ICAO_EMRTD")
-        || !(1..=90).contains(&input.validity_days)
+    if !(1..=90).contains(&input.validity_days)
         || input.csca_certificate_id.is_empty()
         || input.csca_certificate_id.len() > 128
         || input.idempotency_key.is_empty()
@@ -810,23 +1047,31 @@ pub(super) async fn issue_managed_dsc_certificate(
             "DSC issuance request is invalid.",
         ));
     }
-    let store = state.dsc_issuance_store.as_ref().ok_or_else(|| {
-        public_failure(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "DSC issuance storage is unavailable.",
-        )
-    })?;
-    let digest_body = json!({
+    let store = state
+        .dsc_issuance_store
+        .as_ref()
+        .ok_or_else(|| {
+            public_failure(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "DSC issuance storage is unavailable.",
+            )
+        })?
+        .for_family(role.family());
+    let mut digest_body = json!({
         "organization_id": organization_id,
         "dsc_issuer_did": input.dsc_issuer_did,
         "csca_issuer_did": input.csca_issuer_did,
         "csca_certificate_id": input.csca_certificate_id,
-        "credential_format": "ICAO_EMRTD",
+        "credential_format": role.credential_format(),
         "country": input.country,
         "organization": input.organization,
         "common_name": input.common_name,
         "validity_days": input.validity_days,
     });
+    if let Some(metadata) = &input.mdoc_metadata {
+        digest_body["mdoc_certificate_configuration"] =
+            json!({"profile": role, "version": 1, "publication": metadata});
+    }
     let request_digest = format!(
         "{:x}",
         Sha256::digest(serde_json::to_vec(&digest_body).expect("DSC request serializes"))
@@ -846,7 +1091,8 @@ pub(super) async fn issue_managed_dsc_certificate(
         BeginDscIssuance::Claim(claim) => claim,
     };
     let result =
-        issue_claimed_dsc_certificate(state, store, &claim, organization_id, actor_id, input).await;
+        issue_claimed_dsc_certificate(state, &store, &claim, organization_id, actor_id, input)
+            .await;
     if result.is_err() {
         let _ = store.release(&claim).await;
     }
@@ -897,6 +1143,12 @@ pub(super) async fn issue_claimed_dsc_certificate(
     actor_id: &str,
     input: &DscCertificateIssueRequest,
 ) -> Result<Value, PublicSigningError> {
+    let role = certificate_role(
+        &input.credential_format,
+        false,
+        input.mdoc_metadata.as_ref(),
+    )?;
+
     let registry = state.registry_store.as_ref().ok_or_else(|| {
         public_failure(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -917,8 +1169,12 @@ pub(super) async fn issue_claimed_dsc_certificate(
         .snapshot(organization_id)
         .await
         .map_err(dsc_store_failure)?;
-    let dsc_request_identity = dsc_identity(input, "x509_doc_signer", &input.dsc_issuer_did);
-    let csca_request_identity = dsc_identity(input, "csca", &input.csca_issuer_did);
+    let dsc_request_identity = dsc_identity(input, role.key_purpose(), &input.dsc_issuer_did);
+    let csca_request_identity = dsc_identity(
+        input,
+        role.authority().key_purpose(),
+        &input.csca_issuer_did,
+    );
     let dsc_profile = one_matching_profile(state, organization_id, &dsc_request_identity).await?;
     let csca_profile = one_matching_profile(state, organization_id, &csca_request_identity).await?;
     let dsc_profile_id = dsc_profile
@@ -995,12 +1251,16 @@ pub(super) async fn issue_claimed_dsc_certificate(
         &csca_request_identity,
     )
     .await?;
-    let lifecycle_store = state.csca_lifecycle_store.as_ref().ok_or_else(|| {
-        public_failure(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "CSCA lifecycle storage is unavailable.",
-        )
-    })?;
+    let lifecycle_store = state
+        .csca_lifecycle_store
+        .as_ref()
+        .ok_or_else(|| {
+            public_failure(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "CSCA lifecycle storage is unavailable.",
+            )
+        })?
+        .for_family(role.family());
     let now_utc = chrono::Utc::now();
     let lifecycle = lifecycle_store
         .load(organization_id, now_utc)
@@ -1053,7 +1313,7 @@ pub(super) async fn issue_claimed_dsc_certificate(
         organization_id: organization_id.into(),
         issuer_did: input.dsc_issuer_did.clone(),
         credential_format: input.credential_format.clone(),
-        key_purpose: "x509_doc_signer".into(),
+        key_purpose: role.key_purpose().into(),
         algorithm: "ES256".into(),
         key_reference: None,
         payload_b64: Some(URL_SAFE_NO_PAD.encode(csr.signing_bytes())),
@@ -1146,6 +1406,12 @@ pub(super) async fn issue_signed_dsc_certificate(
     csca_record: &csca_lifecycle::CscaCertificateRecord,
     verified: &VerifiedDscSubject,
 ) -> Result<Value, PublicSigningError> {
+    let role = certificate_role(
+        &input.credential_format,
+        false,
+        input.mdoc_metadata.as_ref(),
+    )?;
+
     let compatibility = state.compatibility.as_ref().ok_or_else(|| {
         public_failure(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -1157,15 +1423,29 @@ pub(super) async fn issue_signed_dsc_certificate(
     if serial[0] == 0 {
         serial[0] = 1;
     }
-    let prepared = certificate_issuance::prepare_dsc(
-        verified,
-        &csca_record.cert_pem,
-        &csca_record.cert_chain_pem,
-        csca_jwk,
-        &serial,
-        input.validity_days,
-        std::time::SystemTime::now(),
-    )
+    let now = std::time::SystemTime::now();
+    let prepared = if let Some(metadata) = input.mdoc_metadata.as_ref() {
+        certificate_issuance::prepare_mdoc_dsc(
+            verified,
+            &csca_record.cert_pem,
+            &csca_record.cert_chain_pem,
+            csca_jwk,
+            &serial,
+            input.validity_days,
+            now,
+            metadata,
+        )
+    } else {
+        certificate_issuance::prepare_dsc(
+            verified,
+            &csca_record.cert_pem,
+            &csca_record.cert_chain_pem,
+            csca_jwk,
+            &serial,
+            input.validity_days,
+            now,
+        )
+    }
     .map_err(|error| public_failure(StatusCode::UNPROCESSABLE_ENTITY, &error.to_string()))?;
     let metadata = prepared
         .metadata()
@@ -1174,7 +1454,7 @@ pub(super) async fn issue_signed_dsc_certificate(
         organization_id: organization_id.into(),
         issuer_did: input.csca_issuer_did.clone(),
         credential_format: input.credential_format.clone(),
-        key_purpose: "csca".into(),
+        key_purpose: role.authority().key_purpose().into(),
         algorithm: "ES256".into(),
         key_reference: None,
         payload_b64: Some(URL_SAFE_NO_PAD.encode(prepared.signing_bytes())),
@@ -1224,8 +1504,12 @@ pub(super) async fn issue_signed_dsc_certificate(
     }
     // Recheck provider keys immediately before the Redis snapshot-fenced
     // commit. An external KMS rotation cannot be fenced by Redis alone.
-    let dsc_request_identity = dsc_identity(input, "x509_doc_signer", &input.dsc_issuer_did);
-    let csca_request_identity = dsc_identity(input, "csca", &input.csca_issuer_did);
+    let dsc_request_identity = dsc_identity(input, role.key_purpose(), &input.dsc_issuer_did);
+    let csca_request_identity = dsc_identity(
+        input,
+        role.authority().key_purpose(),
+        &input.csca_issuer_did,
+    );
     let current_dsc = checked_dsc_profile_key(
         compatibility,
         organization_id,
@@ -1257,6 +1541,7 @@ pub(super) async fn issue_signed_dsc_certificate(
                 "CSCA lifecycle storage is unavailable.",
             )
         })?
+        .for_family(role.family())
         .load(organization_id, chrono::Utc::now())
         .await
         .map_err(|_| {
@@ -1281,7 +1566,7 @@ pub(super) async fn issue_signed_dsc_certificate(
             "Selected CSCA certificate changed during issuance.",
         ));
     }
-    let attachment = json!({
+    let mut attachment = json!({
         "cert_pem": certificate_pem,
         "cert_chain_pem": chain_pem,
         "cert_expires_at": inspected.expires_at,
@@ -1290,7 +1575,13 @@ pub(super) async fn issue_signed_dsc_certificate(
         "public_jwk": inspected.public_jwk,
         "signing_key_reference": dsc_profile["signing_key_reference"],
     });
-    let public_result = json!({
+    if role.family() == CertificateFamily::Mdoc {
+        let x5c = crate::mdoc_certificate::validate_attachment(&certificate_pem, &chain_pem, role)
+            .map_err(|error| public_failure(StatusCode::BAD_GATEWAY, error))?;
+        attachment["x5c"] = json!(x5c);
+        attachment["certificate_profile"] = json!(role);
+    }
+    let mut public_result = json!({
         "certificate_pem": certificate_pem,
         "chain_pem": chain_pem,
         "dsc_issuer_did": input.dsc_issuer_did,
@@ -1301,6 +1592,14 @@ pub(super) async fn issue_signed_dsc_certificate(
         "not_after": metadata.not_after,
         "status": "issued",
     });
+    if role.family() == CertificateFamily::Mdoc {
+        public_result
+            .as_object_mut()
+            .expect("fixed certificate result")
+            .remove("csca_issuer_did");
+        public_result["iaca_issuer_did"] = json!(input.csca_issuer_did);
+        public_result["certificate_profile"] = json!(role);
+    }
     match store
         .commit(
             claim,

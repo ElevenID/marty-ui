@@ -117,6 +117,8 @@ pub struct GatewayConfig {
     pub issuer_sign_key: String,
     pub dsc_issue_gateway_key: Option<String>,
     pub csca_issue_gateway_key: Option<String>,
+    pub mdoc_iaca_issue_gateway_key: Option<String>,
+    pub mdoc_dsc_issue_gateway_key: Option<String>,
     pub issuance_api_key: String,
     pub passport_native_gateway_enabled: bool,
     pub passport_provider_ingress_gateway_enabled: bool,
@@ -382,9 +384,57 @@ impl GatewayConfig {
                 "CSCA issuance credential must differ from shared and DSC Signing Keys credentials",
             ));
         }
+        let mdoc_iaca_issue_gateway_key =
+            secret(values, "SIGNING_KEYS_MDOC_IACA_ISSUE_GATEWAY_KEY")?;
+        let mdoc_dsc_issue_gateway_key = secret(values, "SIGNING_KEYS_MDOC_DSC_ISSUE_GATEWAY_KEY")?;
+        for (name, key, other) in [
+            (
+                "SIGNING_KEYS_MDOC_IACA_ISSUE_GATEWAY_KEY",
+                mdoc_iaca_issue_gateway_key.as_deref(),
+                mdoc_dsc_issue_gateway_key.as_deref(),
+            ),
+            (
+                "SIGNING_KEYS_MDOC_DSC_ISSUE_GATEWAY_KEY",
+                mdoc_dsc_issue_gateway_key.as_deref(),
+                mdoc_iaca_issue_gateway_key.as_deref(),
+            ),
+        ] {
+            if let Some(key) = key {
+                validate_production_secret(name, Some(key), 32)?;
+                if [
+                    Some(signing_internal_api_key.as_str()),
+                    Some(service_sign_gateway_key.as_str()),
+                    Some(issuer_sign_key.as_str()),
+                    dsc_issue_gateway_key.as_deref(),
+                    csca_issue_gateway_key.as_deref(),
+                    grpc_service_token.as_deref(),
+                    Some(device_registration_gateway_key.as_str()),
+                    other,
+                ]
+                .contains(&Some(key))
+                    || values.iter().any(|(entry, value)| {
+                        entry != name && entry != &format!("{name}_FILE") && value.contains(key)
+                    })
+                {
+                    return Err(error(
+                        "MDOC operator credentials must be distinct from all other credentials",
+                    ));
+                }
+            }
+        }
         let issuance_api_key = secret(values, "ISSUANCE_API_KEY")?
             .or_else(|| (!production).then(|| "dev-issuance-api-key".into()))
             .ok_or_else(|| error("ISSUANCE_API_KEY is required"))?;
+        if [
+            mdoc_iaca_issue_gateway_key.as_deref(),
+            mdoc_dsc_issue_gateway_key.as_deref(),
+        ]
+        .contains(&Some(issuance_api_key.as_str()))
+        {
+            return Err(error(
+                "MDOC operator credentials must differ from Issuance authority",
+            ));
+        }
         if production {
             validate_production_secret("ISSUANCE_API_KEY", Some(&issuance_api_key), 16)?;
         }
@@ -649,6 +699,8 @@ impl GatewayConfig {
             issuer_sign_key,
             dsc_issue_gateway_key,
             csca_issue_gateway_key,
+            mdoc_iaca_issue_gateway_key,
+            mdoc_dsc_issue_gateway_key,
             issuance_api_key,
             passport_native_gateway_enabled,
             passport_provider_ingress_gateway_enabled,

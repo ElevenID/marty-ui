@@ -19,6 +19,7 @@ const ALGORITHMS: &[&str] = &["ES256", "ES384", "ES512", "RS256", "EdDSA"];
 const KEY_PURPOSES: &[&str] = &[
     "vc_jwt_issuer",
     "mdoc_dsc",
+    "mdoc_iaca",
     "x509_doc_signer",
     "holder_binding",
     "presentation_signing",
@@ -532,6 +533,11 @@ pub fn normalize_profile(
             PROTOCOL_FORMATS,
         )?;
     }
+    if key_purpose == "mdoc_iaca" && (credential_format != "MDOC" || algorithm != "ES256") {
+        return Err(ProfileError::Invalid(
+            "Managed mdoc IACA requires MDOC and ES256.".into(),
+        ));
+    }
     let issuer_mode = string_field("issuer_mode", "org_managed");
     allowed("issuer_mode", &issuer_mode, ISSUER_MODES)?;
     let policy = normalize_attestation_policy(field("key_attestation_policy"))?;
@@ -809,10 +815,16 @@ pub fn find_profiles(
 pub fn custody_format(
     request: &CustodyFormatRequest,
 ) -> Result<CustodyFormatResponse, ProfileError> {
+    if request.key_purpose == "mdoc_iaca" && !request.credential_format.eq_ignore_ascii_case("MDOC")
+    {
+        return Err(ProfileError::Invalid(
+            "Managed mdoc IACA requires the MDOC certificate family.".into(),
+        ));
+    }
     let purpose_format = match request.key_purpose.as_str() {
         "oid4vp_request_signing" => Some("oauth-authz-req+jwt"),
         "lti_tool_signing" => Some("lti_tool_jwt"),
-        "vdsnc_signing" | "csca" => Some("mso_mdoc"),
+        "vdsnc_signing" | "csca" | "mdoc_iaca" => Some("mso_mdoc"),
         _ => None,
     };
     let wire_format = purpose_format
@@ -859,7 +871,7 @@ fn profile_wire_format(profile: &Map<String, Value>) -> Option<String> {
         "oid4vp_request_signing" => Some("oauth-authz-req+jwt"),
         "lti_tool_signing" => Some("lti_tool_jwt"),
         "vdsnc_signing" => Some("mso_mdoc"),
-        "csca" => Some("mso_mdoc"),
+        "csca" | "mdoc_iaca" => Some("mso_mdoc"),
         _ => None,
     };
     purpose_format
