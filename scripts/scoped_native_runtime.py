@@ -18,6 +18,7 @@ UI_REVISION = "0aae5d6c03df0ccb2aa757d61fb022a24a962d14"
 CORE_REVISION = "4320b5fa1c6f41231ee0aa2bc57d8008549f67ac"
 ROLE_BINARIES = {"flow": "marty-flow", "gateway": "marty-gateway", "issuance-native": "marty-issuance-service"}
 MARTY_CLIENTS = frozenset("auth organization credential-template trust-profile applicant notification compliance-profile presentation-policy deployment-profile flow verification revocation-profile device-registration issuance issuance-native canvas-sync-worker passport-beta-bureau".split())
+RUNTIME_ROLES = MARTY_CLIENTS | frozenset(("gateway", "signing-keys", "passport-callback-signer", "canvas-sandbox", "ui-prod"))
 MIGRATIONS = ("flow/0003_physical_start_intents", "issuance/0010_passport_start_idempotency", "issuance/0011_passport_administrative_cancellation")
 
 def require(value, code):

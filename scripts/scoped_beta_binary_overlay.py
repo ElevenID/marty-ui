@@ -8,7 +8,7 @@ from __future__ import annotations
 from copy import deepcopy
 import re
 from scoped_native_runtime import (CORE_REVISION, UI_REVISION, ROLE_BINARIES,
-    MARTY_CLIENTS, MIGRATIONS, daemon_source, read_ref, require, selected_sources, started_later)
+    MARTY_CLIENTS, RUNTIME_ROLES, MIGRATIONS, daemon_source, read_ref, require, selected_sources, started_later)
 
 SQL_FILES = ("passport-beta-db-maintenance-start.sql", "passport-beta-batch-acl-finalize.sql",
     "passport-beta-db-enable-app-login.sql", "passport-beta-rust-owner-transition.sql", "passport-beta-rust-owner-verify.sql")
@@ -67,7 +67,7 @@ def validate_fenced_observation(observed, expected):
 def validate_runtime_after(before, after, binaries, maintenance_restart_roles):
     old = {row["role"]: row for row in before["roles"]}
     new = {row["role"]: row for row in after["roles"]}
-    require(len(before["roles"]) == len(after["roles"]) == len(old) == len(new) == 22 and set(old) == set(new), "EXACT_22_ROLE_SET_REQUIRED")
+    require(len(before["roles"]) == len(after["roles"]) == len(old) == len(new) == 22 and set(old) == set(new) == RUNTIME_ROLES, "EXACT_22_ROLE_SET_REQUIRED")
     require(len({row["containerId"] for row in new.values()}) == 22 and all(re.fullmatch(r"[a-f0-9]{64}", row["containerId"]) for row in new.values()), "UNIQUE_CONTAINER_IDENTITIES_REQUIRED")
     require(set(maintenance_restart_roles).issubset(MARTY_CLIENTS - set(ROLE_BINARIES)), "UNREVIEWED_RESTART_ROLE")
     changes = []

@@ -260,6 +260,15 @@ class OverlayTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             overlay.validate_runtime_after(before, changed, binaries, ["auth"])
 
+    def test_omitting_selected_or_baseline_role_from_both_snapshots_never_qualifies(self):
+        for omitted in ["flow", "gateway", "issuance-native", "ui-prod", "auth"]:
+            before, after, binaries = runtime_rows()
+            for snapshot in (before, after):
+                row = next(r for r in snapshot["roles"] if r["role"] == omitted)
+                row["role"] = "foreign-replacement"
+            with self.assertRaisesRegex(ValueError, "EXACT_22_ROLE_SET_REQUIRED"):
+                overlay.validate_runtime_after(before, after, binaries, [])
+
     def test_foreign_selected_image_uid_source_or_inode_never_becomes_overlay(self):
         before, after, binaries = runtime_rows()
         for field, value in [("imageId", "sha256:"+"c"*64), ("effectiveUid", 0), ("source", "wrong"),
