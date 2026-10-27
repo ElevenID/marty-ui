@@ -551,7 +551,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let listener = TcpListener::bind(listen).await?;
     info!(%listen, "starting beta-only non-physical passport bureau simulator");
     tokio::spawn(run_callbacks(state));
-    axum::serve(listener, app).await?;
+    axum::serve(listener, app)
+        .with_graceful_shutdown(marty_service_runtime::shutdown_signal_best_effort())
+        .await?;
     Ok(())
 }
 
