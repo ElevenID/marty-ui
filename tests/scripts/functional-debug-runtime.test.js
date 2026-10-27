@@ -176,3 +176,48 @@ test('readDocker transport reuses actual per-role PID1, inode, UID and mount ins
  assert.throws(()=>verifyFunctionalRuntime(f.profile,{readDocker:()=>{throw Error('CONTROLLED_PRIVATE_ERROR')}}),e=>e.code==='FUNCTIONAL_RUNTIME_OBSERVATION_FAILED'&&!e.message.includes('PRIVATE'));
  for(const qualification of ['RELEASE','RECORDING'])assert.throws(()=>verifyFunctionalRuntime(f.profile,{qualification,readDocker:()=>assert.fail('No engine reads')}),/cannot qualify/);
 });
+
+function mountEquivalenceFixture(t){
+ const f=issuanceFixture(t);
+ for(const row of f.before.roles)row.binaryMounts=row.binaryMounts.map(mount=>({...mount,source:'C:\\owned\\'+row.role+'\\'+row.binary}));
+ f.change('deploy',row=>{
+  row.beforeRuntimeBinding=f.write('before-windows-mounts.json',{baseProfileSha256:f.profile.baseProfile.sha256,binding:f.before});
+  for(const role of ['issuance','issuance-native'])row.roles[role].binaryMount.source='/run/desktop/mnt/host/d/owned/'+role+'/marty-issuance-service';
+ });
+ const observe=row=>{
+  const actual=f.observe(row);
+  actual.binaryMounts=(row.kind==='ISSUANCE_CORE_FUNCTIONAL_OVERLAY'
+   ?actual.binaryMounts.map(mount=>({...mount,source:'D:\\owned\\'+row.role+'\\marty-issuance-service'}))
+   :f.before.roles.find(old=>old.role===row.role).binaryMounts.map(mount=>({...mount,source:mount.source.replace(/^C:\\/, '/run/desktop/mnt/host/c/').replaceAll('\\','/')})));
+  return actual;
+ };
+ return {...f,observe};
+}
+
+test('v2 compares Windows and canonical desktop mounts for base20 and issuer2 without rewriting evidence',t=>{
+ const f=mountEquivalenceFixture(t),before=JSON.stringify(f.before),deployed=fs.readFileSync(f.profile.issuanceOverlay.deploymentReceipt.path);
+ const result=verifyFunctionalRuntime(f.profile,{observe:f.observe});
+ assert.equal(result.roles.length,22);assert.equal(result.roles.filter(row=>row.kind==='ISSUANCE_CORE_FUNCTIONAL_OVERLAY').length,2);
+ assert(result.roles.find(row=>row.role==='credential-template').binaryMounts[0].source.startsWith('/run/desktop/mnt/host/c/'));
+ assert(result.roles.find(row=>row.role==='issuance').binaryMounts[0].source.startsWith('D:\\'));
+ assert.equal(JSON.stringify(f.before),before);assert.deepEqual(fs.readFileSync(f.profile.issuanceOverlay.deploymentReceipt.path),deployed);
+ assert.equal(result.releaseQualified,false);assert.equal(result.recordingQualified,false);
+});
+
+for(const role of ['credential-template','issuance'])test('mount equivalence retains exact ownership and fields for '+role,t=>{
+ const f=mountEquivalenceFixture(t);
+ for(const mutation of ['drive','path','destination','writable','type','alias','foreignDrive','dot','control']){
+  assert.throws(()=>verifyFunctionalRuntime(f.profile,{observe:row=>{
+   const actual=f.observe(row);if(row.role===role){const mount=actual.binaryMounts[0];
+    if(mutation==='drive')mount.source=mount.source.replace('/host/c/','/host/d/').replace(/^D:/,'C:');
+    if(mutation==='path')mount.source+='-foreign';
+    if(mutation==='destination')mount.destination='/usr/local/bin/foreign';
+    if(mutation==='writable')mount.writable=true;if(mutation==='type')mount.type='volume';
+    if(mutation==='alias')mount.source='/mnt/host/c/owned/'+role;
+    if(mutation==='foreignDrive')mount.source='E:\\owned\\'+role;
+    if(mutation==='dot')mount.source='/run/desktop/mnt/host/c/owned/../'+role;
+    if(mutation==='control')mount.source+='\n';
+   }return actual;
+  }}),mutation);
+ }
+});

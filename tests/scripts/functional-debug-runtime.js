@@ -165,6 +165,23 @@ function receiptDigests(profile){return profile.schema==='marty.functional-mixed
    retainedBuilds:Object.fromEntries(Object.entries(profile.retainedBuilds).map(([role,ref])=>[role,ref.sha256])),
    ...(profile.priorNativeOverlay?{priorNativeOverlay:profile.priorNativeOverlay.sha256,priorNativeBuild:profile.priorNativeBuild.sha256,priorNativeArtifacts:profile.priorNativeArtifacts.sha256}:{})};}
 const defaultDockerRead=args=>execFileSync('docker',args,{encoding:'utf8',timeout:30000,maxBuffer:4*1024*1024,windowsHide:true});
+function comparableBinaryMounts(mounts){
+ assert(Array.isArray(mounts));
+ return mounts.map(mount=>{
+  const source=mount.source;assert(typeof source==='string'&&source.length>0&&!/[\x00-\x1f\x7f]/.test(source),'Invalid executable mount source');
+  const windows=source.match(/^([cd]):[\\/](.+)$/i),desktop=source.match(/^\/run\/desktop\/mnt\/host\/([cd])\/(.+)$/);
+  let normalized=source;
+  if(windows||desktop){
+   const match=windows||desktop,suffix=windows?match[2].replaceAll('\\','/'):match[2];
+   assert(!suffix.includes('\\')&&suffix.split('/').every(part=>part&&part!=='.'&&part!=='..'),'Noncanonical host mount source');
+   normalized='/run/desktop/mnt/host/'+match[1].toLowerCase()+'/'+suffix;
+  }else{
+   assert(path.posix.isAbsolute(source)&&!source.startsWith('//')&&!/^\/(?:mnt\/host|host_mnt|run\/desktop\/mnt\/host)(?:\/|$)/i.test(source),'Unsupported host mount alias');
+   assert(source.split('/').every(part=>part!=='.'&&part!=='..'),'Mount source traversal');
+  }
+  return {...mount,source:normalized};
+ });
+}
 function observeDocker(expected,read=defaultDockerRead){
  assert.equal(typeof read,'function','Docker transport must read the actual engine');
  const ids=read(['ps','-q','--no-trunc','--filter','label=com.docker.compose.project='+expected.project,
@@ -204,12 +221,12 @@ function verifyFunctionalRuntime(profile,{qualification='FUNCTIONAL_ONLY',observ
   }
   assert.equal(actual.role,row.role);assert.equal(actual.project,row.project);
   assert.equal(actual.service,row.role);assert.equal(actual.imageId,row.imageId);assert(HASH.test(actual.containerId));
-  if(row.requiredObservation)for(const [field,value]of Object.entries(row.requiredObservation))assert.deepEqual(actual[field],value,'Unchanged role observation differs: '+row.role+'/'+field);
+  if(row.requiredObservation)for(const [field,value]of Object.entries(row.requiredObservation))assert.deepEqual(field==='binaryMounts'?comparableBinaryMounts(actual[field]):actual[field],field==='binaryMounts'?comparableBinaryMounts(value):value,'Unchanged role observation differs: '+row.role+'/'+field);
   if(row.requiredContainerId)assert.equal(actual.containerId,row.requiredContainerId,'Reviewed debug container changed');
   if(row.requiredStartedAt!==undefined){assert.equal(actual.startedAt,row.requiredStartedAt);assert.equal(actual.hostPid,row.requiredHostPid);}
   if(row.kind==='ISSUANCE_CORE_FUNCTIONAL_OVERLAY'){
    assert.equal(actual.effectiveUid,row.requiredEffectiveUid);assert.equal(actual.configuredRuntimeUid,row.requiredEffectiveUid);
-   assert.deepEqual(actual.binaryMounts,row.requiredBinaryMounts,'Reviewed issuance executable mount changed');}
+   assert.deepEqual(comparableBinaryMounts(actual.binaryMounts),comparableBinaryMounts(row.requiredBinaryMounts),'Reviewed issuance executable mount changed');}
   assert.equal(actual.running,true);assert.equal(actual.status,'running');
   assert(actual.health==='healthy'||(row.role==='canvas-sync-worker'&&actual.health===null),'Role health not established');
   assert.equal(actual.binarySha256,row.sha256,'Actual mounted executable differs from source-bound role');
