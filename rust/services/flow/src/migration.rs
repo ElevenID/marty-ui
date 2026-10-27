@@ -1,7 +1,7 @@
 use sqlx::{PgPool, Row};
 use thiserror::Error;
 
-const MIGRATION_VERSION: &str = "rust_flow_0001";
+const MIGRATION_VERSION: &str = "rust_flow_0002";
 const ADVISORY_LOCK_ID: i64 = 718_431_211;
 
 #[derive(Debug, Error)]
@@ -24,6 +24,11 @@ pub async fn migrate_flow_schema(pool: &PgPool) -> Result<(), FlowMigrationError
     sqlx::raw_sql(include_str!("../migrations/0002_builtin_flows.sql"))
         .execute(&mut *transaction)
         .await?;
+    sqlx::raw_sql(include_str!(
+        "../migrations/0003_physical_start_intents.sql"
+    ))
+    .execute(&mut *transaction)
+    .await?;
     validate_connection(&mut transaction).await?;
     transaction.commit().await?;
     Ok(())
@@ -94,6 +99,11 @@ async fn validate_connection(
         ("flow_instance_artifacts", "credential_offer_uris"),
         ("flow_callback_outbox", "lease_token"),
         ("flow_application_event_receipts", "payload_sha256"),
+        ("physical_start_intents", "request_hash"),
+        ("physical_start_intents", "definition_snapshot"),
+        ("physical_start_intents", "initial_actor"),
+        ("physical_start_intents", "original_deadline_at"),
+        ("physical_start_intents", "key_source"),
     ];
     let rows = sqlx::query(
         "SELECT table_name, column_name FROM information_schema.columns \
@@ -109,8 +119,43 @@ async fn validate_connection(
             return Err(incompatible(&format!("{table}.{column} is missing")));
         }
     }
+    let acl_guard_shape: bool = sqlx::query_scalar(
+        "SELECT EXISTS (
+           SELECT 1 FROM pg_proc AS procedure
+           JOIN pg_namespace AS namespace ON namespace.oid=procedure.pronamespace
+           JOIN pg_language AS language ON language.oid=procedure.prolang
+           WHERE namespace.nspname='flow_service'
+             AND procedure.proname='physical_start_acl_ready'
+             AND procedure.pronargs=0 AND procedure.prorettype='boolean'::regtype
+             AND language.lanname='sql' AND NOT procedure.prosecdef)",
+    )
+    .fetch_one(&mut *connection)
+    .await?;
+    if !acl_guard_shape {
+        return Err(incompatible("Physical start ACL guard is missing"));
+    }
+    let fenced_app: bool = sqlx::query_scalar(
+        "SELECT current_user='marty' AND EXISTS (
+           SELECT 1 FROM pg_namespace WHERE nspname='passport_cutover')",
+    )
+    .fetch_one(&mut *connection)
+    .await?;
+    if fenced_app {
+        let acl_ready: bool = sqlx::query_scalar("SELECT flow_service.physical_start_acl_ready()")
+            .fetch_one(&mut *connection)
+            .await?;
+        if !acl_ready {
+            return Err(incompatible(
+                "Fenced physical start intent access is incomplete",
+            ));
+        }
+    }
     for (table, key) in [
         ("flow_service.flow_nonce_consumptions", "nonce_digest"),
+        (
+            "flow_service.physical_start_intents",
+            "organization_id, key_hash",
+        ),
         (
             "flow_service.flow_application_event_receipts",
             "event_id_sha256",

@@ -813,11 +813,31 @@ fn resource_owner_context(
     ResourceOwnerContext { headers: forwarded }
 }
 
+fn duplicate_start_idempotency_header(
+    method: &str,
+    path: &str,
+    headers: &axum::http::HeaderMap,
+    native_passport_enabled: bool,
+) -> bool {
+    method == "POST"
+        && (path == "/v1/flows/instances"
+            || (native_passport_enabled && path == "/v1/passport/applications"))
+        && headers.get_all("idempotency-key").iter().nth(1).is_some()
+}
+
 async fn idempotency_middleware(
     State(state): State<Arc<GatewayRuntimeState>>,
     request: Request,
     next: Next,
 ) -> Response {
+    if duplicate_start_idempotency_header(
+        request.method().as_str(),
+        request.uri().path(),
+        request.headers(),
+        state.passport_native_gateway_enabled,
+    ) {
+        return detail_response(422, "Idempotency-Key must occur once");
+    }
     let key = request
         .headers()
         .get("idempotency-key")
@@ -1119,6 +1139,14 @@ async fn proxy_handler(
         }
     };
     let public_path = parts.uri.path().to_owned();
+    if duplicate_start_idempotency_header(
+        parts.method.as_str(),
+        &public_path,
+        &parts.headers,
+        state.passport_native_gateway_enabled,
+    ) {
+        return detail_response(422, "Idempotency-Key must occur once");
+    }
     let native_passport_public = state.passport_native_gateway_enabled
         && issuance_native::is_passport_public_http(method, &public_path);
     if native_passport_public && passport_auth.is_none() {
@@ -5573,6 +5601,81 @@ mod tests {
     #[derive(Default)]
     struct ActorRecordingUpstream(std::sync::Mutex<Vec<(String, GatewayRequest)>>);
 
+    #[tokio::test]
+    async fn physical_flow_start_key_and_pending_readback_reach_only_flow_upstream() {
+        let recorder = Arc::new(ActorRecordingUpstream::default());
+        let state = runtime_state_with_upstream(Arc::new(NoOwner), recorder.clone());
+        let router = gateway_router(state);
+        let body = br#"{"organization_id":"org-1","flow_definition_id":"flow-1","initial_context":{"physical_document":{"country_code":"USA"}}}"#;
+        let _ = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/flows/instances")
+                    .header("cookie", "sessionId=valid")
+                    .header("content-type", "application/json")
+                    .header("idempotency-key", "owned-physical-1")
+                    .body(Body::from(body.as_slice()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        {
+            let calls = recorder.0.lock().unwrap();
+            assert_eq!(calls.len(), 1);
+            assert_eq!(calls[0].0, "flows");
+            assert_eq!(calls[0].1.path, "/v1/flows/instances");
+            assert_eq!(
+                calls[0]
+                    .1
+                    .headers
+                    .get("idempotency-key")
+                    .map(String::as_str),
+                Some("owned-physical-1")
+            );
+        }
+
+        let mut duplicate_request = Request::builder()
+            .method("POST")
+            .uri("/v1/flows/instances")
+            .header("cookie", "sessionId=valid")
+            .header("content-type", "application/json")
+            .header("idempotency-key", "owned-physical-1")
+            .body(Body::from(body.as_slice()))
+            .unwrap();
+        duplicate_request
+            .headers_mut()
+            .append("idempotency-key", "owned-physical-2".parse().unwrap());
+        assert_eq!(
+            duplicate_request
+                .headers()
+                .get_all("idempotency-key")
+                .iter()
+                .count(),
+            2
+        );
+        let duplicate = router.clone().oneshot(duplicate_request).await.unwrap();
+        assert_eq!(duplicate.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(recorder.0.lock().unwrap().len(), 1);
+
+        let pending = router
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/flows/physical-start-intents?organization_id=org-1")
+                    .header("cookie", "sessionId=valid")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(pending.status(), StatusCode::OK);
+        let calls = recorder.0.lock().unwrap();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[1].0, "flows");
+        assert_eq!(calls[1].1.path, "/v1/flows/physical-start-intents");
+    }
+
     #[async_trait]
     impl UpstreamClient for ActorRecordingUpstream {
         async fn send(
@@ -6105,6 +6208,67 @@ mod tests {
             );
         }
         assert_eq!(recorder.0.lock().unwrap().len(), 8);
+    }
+
+    #[tokio::test]
+    async fn native_passport_create_preserves_one_start_key_and_rejects_duplicates() {
+        let recorder = Arc::new(ActorRecordingUpstream::default());
+        let router = gateway_router(runtime_state_with_upstream_and_passport(
+            Arc::new(NoOwner),
+            recorder.clone(),
+            true,
+        ));
+        let body = r#"{"organization_id":"org-1"}"#;
+        let one = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/passport/applications")
+                    .header("content-type", "application/json")
+                    .header("x-api-key", "passport-gateway-key-org-1")
+                    .header("idempotency-key", "owned-passport-1")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(one.status(), StatusCode::OK);
+        {
+            let calls = recorder.0.lock().unwrap();
+            assert_eq!(calls.len(), 1);
+            assert_eq!(calls[0].0, issuance_native::NATIVE_SERVICE);
+            assert_eq!(
+                calls[0]
+                    .1
+                    .headers
+                    .get("idempotency-key")
+                    .map(String::as_str),
+                Some("owned-passport-1")
+            );
+        }
+        let mut duplicate_request = Request::builder()
+            .method("POST")
+            .uri("/v1/passport/applications")
+            .header("content-type", "application/json")
+            .header("x-api-key", "passport-gateway-key-org-1")
+            .header("idempotency-key", "owned-passport-1")
+            .body(Body::from(body))
+            .unwrap();
+        duplicate_request
+            .headers_mut()
+            .append("idempotency-key", "owned-passport-2".parse().unwrap());
+        assert_eq!(
+            duplicate_request
+                .headers()
+                .get_all("idempotency-key")
+                .iter()
+                .count(),
+            2
+        );
+        let duplicate = router.oneshot(duplicate_request).await.unwrap();
+        assert_eq!(duplicate.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(recorder.0.lock().unwrap().len(), 1);
     }
 
     #[tokio::test]

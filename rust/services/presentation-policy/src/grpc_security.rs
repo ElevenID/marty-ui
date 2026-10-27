@@ -1,13 +1,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use marty_crypto::certificate::get_certificate_info;
+use marty_service_runtime::workload::peer_uri_sans;
 use mmf_platform::{KeylessGrpcTlsAcceptor, OpenBaoTlsIdentityFiles};
-use mmf_security::{WorkloadAuthorizationDecision, WorkloadIdentityPolicy};
+use mmf_security::WorkloadIdentityPolicy;
 use thiserror::Error;
-use tonic::{
-    transport::server::{TcpConnectInfo, TlsConnectInfo},
-    Request, Status,
-};
+use tonic::{Request, Status};
 
 use crate::{PresentationPolicyServiceConfig, WorkloadServerTlsFiles};
 
@@ -92,32 +89,12 @@ impl PresentationGrpcSecurity {
         method: &str,
         identities: impl IntoIterator<Item = &'a str>,
     ) -> Result<(), Status> {
-        match self.workload_policy.authorize(method, identities) {
-            WorkloadAuthorizationDecision::Allow => Ok(()),
-            WorkloadAuthorizationDecision::Unauthenticated => Err(Status::unauthenticated(
-                "a mutually authenticated workload identity is required",
-            )),
-            WorkloadAuthorizationDecision::Forbidden => Err(Status::permission_denied(
-                "the authenticated workload is not authorized for this RPC",
-            )),
-        }
+        marty_service_runtime::workload::authorize_evidence(
+            &self.workload_policy,
+            method,
+            identities,
+        )
     }
-}
-
-fn peer_uri_sans<T>(request: &Request<T>) -> BTreeSet<String> {
-    let Some(certificates) = request
-        .extensions()
-        .get::<TlsConnectInfo<TcpConnectInfo>>()
-        .and_then(TlsConnectInfo::peer_certs)
-    else {
-        return BTreeSet::new();
-    };
-    certificates
-        .iter()
-        .filter_map(|certificate| get_certificate_info(certificate.as_ref()).ok())
-        .flat_map(|certificate| certificate.subject_alt_names)
-        .filter_map(|name| name.strip_prefix("URI:").map(str::to_owned))
-        .collect()
 }
 
 #[cfg(test)]

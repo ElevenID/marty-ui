@@ -99,6 +99,13 @@ COPY scripts/load-secrets-env.sh /scripts/load-secrets-env.sh
 COPY scripts/ui-selfhost-start.sh /docker-entrypoint.d/40-ui-selfhost.sh
 RUN chmod +x /scripts/load-secrets-env.sh /docker-entrypoint.d/40-ui-selfhost.sh
 
+# The independently versioned console reaches one configured public server
+# origin. It does not require backend images or a shared Docker network.
+FROM selfhost AS console
+COPY docker/nginx-console.conf.template /etc/nginx/marty-console.conf.template
+COPY scripts/console-api-start.sh /docker-entrypoint.d/45-console-api.sh
+RUN chmod +x /docker-entrypoint.d/45-console-api.sh
+
 # Keep the existing public image as the default final target. Building the
 # self-host variant requires an explicit target and variant selection.
 FROM runtime-base AS public

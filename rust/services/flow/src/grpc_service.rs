@@ -19,8 +19,8 @@ use tonic::{Request, Response, Status};
 use uuid::Uuid;
 
 use crate::{
-    advance_instance_record, apply_physical_advance_side_effect, definition_references,
-    execute_application_event_plan,
+    advance_instance_record, apply_physical_advance_side_effect, bound_definition_for_instance,
+    definition_references, effective_flow_type, execute_application_event_plan,
     flow_proto::{
         flow_service_server::FlowService, ActivateFlowDefinitionRequest,
         AdvanceFlowRequest as ProtoAdvanceFlowRequest, ApplicationApprovedEvent,
@@ -34,13 +34,15 @@ use crate::{
         ListFlowInstancesRequest, ListFlowInstancesResponse, StartFlowRequest as ProtoStartFlow,
         StartVerificationRequest, StreamFlowUpdatesRequest, VerificationRequestResponse,
     },
-    prepare_instance_start, prepare_profiled_verification_start, start_instance_record,
-    ApplicationApprovalError, ApplicationApprovedWebhook, ApprovalStrategy, ArtifactStatus,
-    DefinitionStatus, FlowApiError, FlowArtifactRecord, FlowDefinitionRecord, FlowGrpcSecurity,
-    FlowInstanceExecutionError, FlowInstanceRecord, FlowInstanceSideEffectError, FlowProviderError,
-    FlowProviderRegistry, FlowRecordError, FlowServiceConfig, Oid4vpProfile,
-    PostgresFlowRepository, RedisApplicationEventReplayStore, RepositoryError, RequestTransport,
-    RequestUriMethod, StartFlowRequest, StartVerificationFlowRequest, VerificationResponseType,
+    physical_start_snapshot_for_definition_key, prepare_instance_start,
+    prepare_profiled_verification_start, start_instance_record, start_physical_instance,
+    validated_client_key, ApplicationApprovalError, ApplicationApprovedWebhook, ApprovalStrategy,
+    ArtifactStatus, DefinitionStatus, FlowApiError, FlowArtifactRecord, FlowDefinitionRecord,
+    FlowGrpcSecurity, FlowInstanceExecutionError, FlowInstanceRecord, FlowInstanceSideEffectError,
+    FlowProviderError, FlowProviderRegistry, FlowRecordError, FlowServiceConfig, Oid4vpProfile,
+    PhysicalStartError, PhysicalStartInvocation, PostgresFlowRepository,
+    RedisApplicationEventReplayStore, RepositoryError, RequestTransport, RequestUriMethod,
+    StartFlowRequest, StartVerificationFlowRequest, VerificationResponseType,
     VerificationStartContext, VerificationStartOptions,
 };
 
@@ -306,28 +308,59 @@ impl FlowService for FlowGrpcService {
         request: Request<ProtoStartFlow>,
     ) -> Result<Response<ProtoInstance>, Status> {
         self.security.authenticate_service(&request)?;
-        let definition = self
-            .required_definition(&request.get_ref().flow_definition_id)
-            .await?;
+        let client_key = grpc_physical_start_key(request.metadata())?;
+        let prior = if let Some(key) = client_key.as_deref() {
+            physical_start_snapshot_for_definition_key(
+                &self.repository,
+                &request.get_ref().flow_definition_id,
+                key,
+            )
+            .await
+            .map_err(physical_start_status)?
+        } else {
+            None
+        };
+        let definition = if let Some(snapshot) = prior {
+            snapshot.definition
+        } else {
+            self.required_definition(&request.get_ref().flow_definition_id)
+                .await?
+        };
         let principal = self
             .authorize(&request, &definition.organization_id, "flow-instance:start")
             .await?;
         let input = request.into_inner();
         let now = Utc::now();
-        let instance = start_instance_record(
-            &definition,
-            StartFlowRequest {
-                organization_id: definition.organization_id.clone(),
-                flow_definition_id: input.flow_definition_id,
-                subject_id: nonempty(input.subject_id),
-                subject_type: nonempty(input.subject_type).unwrap_or_else(|| "person".into()),
-                external_reference: nonempty(input.external_reference),
-                initial_context: Value::Object(string_map_to_json(input.initial_context)),
-            },
-            &principal,
-            now,
-        )
-        .map_err(execution_status)?;
+        let start_request = StartFlowRequest {
+            organization_id: definition.organization_id.clone(),
+            flow_definition_id: input.flow_definition_id,
+            subject_id: nonempty(input.subject_id),
+            subject_type: nonempty(input.subject_type).unwrap_or_else(|| "person".into()),
+            external_reference: nonempty(input.external_reference),
+            initial_context: Value::Object(string_map_to_json(input.initial_context)),
+        };
+        if effective_flow_type(&definition) == crate::FlowType::PhysicalDocumentIssuance {
+            let result = start_physical_instance(
+                &self.repository,
+                &self.providers,
+                &definition,
+                PhysicalStartInvocation {
+                    request: start_request,
+                    actor: &principal,
+                    public_base_url: &self.public_base_url,
+                    now,
+                    client_key: client_key.as_deref(),
+                },
+            )
+            .await
+            .map_err(physical_start_status)?;
+            if result.created {
+                self.emit("started", &result.instance, None);
+            }
+            return Ok(Response::new(proto_instance(&result.instance)?));
+        }
+        let instance = start_instance_record(&definition, start_request, &principal, now)
+            .map_err(execution_status)?;
         let prepared = prepare_instance_start(
             &self.providers,
             &definition,
@@ -414,9 +447,10 @@ impl FlowService for FlowGrpcService {
         let principal = self
             .authorize(&request, &current.organization_id, "flow-instance:advance")
             .await?;
-        let definition = self
-            .required_definition(&current.flow_definition_id)
-            .await?;
+        let definition = bound_definition_for_instance(&self.repository, &current)
+            .await
+            .map_err(physical_start_status)?
+            .ok_or_else(|| Status::not_found("Flow Definition not found"))?;
         let input = request.into_inner();
         let outcome = parse_transition_outcome(default_success(&input.step_result))?;
         let expected_status = current.status;
@@ -1164,6 +1198,66 @@ fn default_success(value: &str) -> &str {
 
 fn repository_status(_error: RepositoryError) -> Status {
     Status::unavailable("Flow persistence is unavailable")
+}
+
+fn grpc_physical_start_key(
+    metadata: &tonic::metadata::MetadataMap,
+) -> Result<Option<String>, Status> {
+    let mut values = metadata.get_all("idempotency-key").iter();
+    let first = values.next();
+    if values.next().is_some() {
+        return Err(Status::invalid_argument("Idempotency-Key is invalid"));
+    }
+    let raw = first
+        .map(|value| {
+            value
+                .to_str()
+                .map_err(|_| Status::invalid_argument("Idempotency-Key is invalid"))
+        })
+        .transpose()?;
+    validated_client_key(raw)
+        .map(|key| key.map(str::to_owned))
+        .map_err(|_| Status::invalid_argument("Idempotency-Key is invalid"))
+}
+
+#[cfg(test)]
+mod physical_start_metadata_tests {
+    use super::*;
+
+    #[test]
+    fn physical_grpc_start_rejects_duplicate_or_ambiguous_keys() {
+        let mut metadata = tonic::metadata::MetadataMap::new();
+        assert_eq!(grpc_physical_start_key(&metadata).unwrap(), None);
+        metadata.append("idempotency-key", "owned-1".parse().unwrap());
+        assert_eq!(
+            grpc_physical_start_key(&metadata).unwrap().as_deref(),
+            Some("owned-1")
+        );
+        metadata.append("idempotency-key", "owned-2".parse().unwrap());
+        assert!(grpc_physical_start_key(&metadata).is_err());
+        metadata.remove("idempotency-key");
+        metadata.append("idempotency-key", "owned-1,owned-2".parse().unwrap());
+        assert!(grpc_physical_start_key(&metadata).is_err());
+    }
+}
+
+fn physical_start_status(error: PhysicalStartError) -> Status {
+    match error {
+        PhysicalStartError::InvalidKey => Status::invalid_argument("Idempotency-Key is invalid"),
+        PhysicalStartError::InProgress => Status::aborted("Physical Flow start is in progress"),
+        PhysicalStartError::Conflict => {
+            Status::already_exists("Physical Flow start identity changed")
+        }
+        PhysicalStartError::StoredIncomplete => {
+            Status::unavailable("Stored physical Flow start is incomplete")
+        }
+        PhysicalStartError::Expired => Status::failed_precondition(
+            "Original physical Flow deadline expired; native outcome requires reconciliation",
+        ),
+        PhysicalStartError::Execution(error) => execution_status(error),
+        PhysicalStartError::SideEffect(error) => side_effect_status(error),
+        PhysicalStartError::Repository(error) => repository_status(error),
+    }
 }
 
 fn record_status(_error: FlowRecordError) -> Status {

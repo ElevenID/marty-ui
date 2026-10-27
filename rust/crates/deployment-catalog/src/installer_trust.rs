@@ -271,6 +271,10 @@ fn certificates(
 /// store after checking its fingerprint. This command does not observe that store.
 pub fn inspect(path: &Path) -> Result<TrustInfo> {
     let state = LockedInspection::open(path)?;
+    inspect_locked(path, &state)
+}
+
+pub(crate) fn inspect_locked(path: &Path, state: &LockedInspection) -> Result<TrustInfo> {
     state.require_path_binding(path)?;
     require(
         state.cleanup_status()?.state == CleanupState::NotStarted

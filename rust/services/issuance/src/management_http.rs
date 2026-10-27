@@ -10,11 +10,10 @@ use serde_json::json;
 
 use crate::transaction_reads::TransactionReadError;
 
-pub(crate) fn security_error(
-    error: TransactionReadError,
-    unavailable_detail: &'static str,
-) -> (StatusCode, &'static str) {
-    match error {
+pub(crate) fn authentication_error(
+    error: &TransactionReadError,
+) -> Option<(StatusCode, &'static str)> {
+    Some(match error {
         TransactionReadError::ApiKeyNotConfigured => (
             StatusCode::SERVICE_UNAVAILABLE,
             "ISSUANCE_API_KEY not configured on server",
@@ -23,6 +22,18 @@ pub(crate) fn security_error(
             (StatusCode::UNAUTHORIZED, "X-API-Key header is missing")
         }
         TransactionReadError::InvalidApiKey => (StatusCode::UNAUTHORIZED, "Invalid API Key"),
+        _ => return None,
+    })
+}
+
+pub(crate) fn security_error(
+    error: TransactionReadError,
+    unavailable_detail: &'static str,
+) -> (StatusCode, &'static str) {
+    if let Some(response) = authentication_error(&error) {
+        return response;
+    }
+    match error {
         TransactionReadError::TrustedOrganizationRequired => (
             StatusCode::BAD_REQUEST,
             "X-Organization-ID is required for application management",
@@ -86,4 +97,51 @@ pub(crate) fn missing_header(name: &'static str) -> Response {
 
 pub(crate) fn header<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
     headers.get(name).and_then(|value| value.to_str().ok())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn shared_authentication_does_not_choose_tenant_or_resource_policy() {
+        for (error, status, detail) in [
+            (
+                TransactionReadError::ApiKeyMissing,
+                StatusCode::UNAUTHORIZED,
+                "X-API-Key header is missing",
+            ),
+            (
+                TransactionReadError::InvalidApiKey,
+                StatusCode::UNAUTHORIZED,
+                "Invalid API Key",
+            ),
+            (
+                TransactionReadError::ApiKeyNotConfigured,
+                StatusCode::SERVICE_UNAVAILABLE,
+                "ISSUANCE_API_KEY not configured on server",
+            ),
+        ] {
+            assert_eq!(authentication_error(&error), Some((status, detail)));
+            assert_eq!(security_error(error, "unavailable"), (status, detail));
+        }
+        for error in [
+            TransactionReadError::TrustedOrganizationRequired,
+            TransactionReadError::OrganizationMismatch,
+            TransactionReadError::ResourceNotFound,
+        ] {
+            assert_eq!(authentication_error(&error), None);
+        }
+        assert_eq!(
+            security_error(
+                TransactionReadError::TrustedOrganizationRequired,
+                "unavailable"
+            )
+            .0,
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            security_error(TransactionReadError::OrganizationMismatch, "unavailable").0,
+            StatusCode::NOT_FOUND
+        );
+    }
 }
