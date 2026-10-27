@@ -25,6 +25,7 @@ const {
   DEFAULT_BETA_ORGANIZATION_ID,
   DEFAULT_LIFECYCLE_POLICY_ID,
   DEFAULT_LIFECYCLE_SOURCE_TEMPLATE_ID,
+  requireLifecycleSourceSelection,
   credentialLifecycleBehaviorAssertions,
   verificationResultEvidence,
   verificationSessionRequest,
@@ -312,6 +313,13 @@ async function ensureActiveRevocationProfile(page) {
   }
   return { ok: true, id: candidates[0].id, name: candidates[0].name, reused: true,
     ownership: 'REFERENCE_ONLY', provisioning: 'PREEXISTING_ACTIVE_PROFILE' };
+}
+
+async function acquireLifecycleWalletAfterSource(page,context,stamp,recordProfile,acquire=acquireWalletSession) {
+  const profile=await ensureActiveRevocationProfile(page);
+  recordProfile(profile);
+  if(!profile.ok)throw new Error(`Revocation Profile setup failed: ${profile.error}`);
+  return acquire(context,{origin:TEST_WALLET_ORIGIN,runId:stamp});
 }
 
 function trackOwnedMutation(ownedResources, operation, recordId) {
@@ -938,6 +946,7 @@ async function verify(page, walletPage, label, {
 }
 
 async function main() {
+  assert.equal(requireLifecycleSourceSelection(process.env),SOURCE_TEMPLATE_ID);
   const email = process.env.TEST_VENDOR_EMAIL || process.env.TEST_ADMIN_EMAIL;
   const password = process.env.TEST_VENDOR_PASSWORD || process.env.TEST_ADMIN_PASSWORD;
   if (!email || !password) throw new Error('Missing beta operator credentials');
@@ -989,8 +998,6 @@ async function main() {
       ignoreHTTPSErrors: LOCAL_BETA_PROXY,
       ...(RECORD_VIDEO ? { recordVideo: { dir: artifactDir, size: VIDEO_SIZE } } : {}),
     });
-    walletSession = await acquireWalletSession(context, { origin: TEST_WALLET_ORIGIN, runId: stamp });
-    report.walletSession = walletSession.evidence;
     await installUiCandidateRoute(context, uiCandidate);
     page = await context.newPage();
     const recording = createLifecycleRecording(page, {
@@ -1032,10 +1039,8 @@ async function main() {
       };
     }, ORG_ID);
 
-    report.revocationProfile = await ensureActiveRevocationProfile(page, input.stamp);
-    if (!report.revocationProfile.ok) {
-      throw new Error(`Revocation Profile setup failed: ${report.revocationProfile.error}`);
-    }
+    walletSession = await acquireLifecycleWalletAfterSource(page,context,stamp,profile=>{report.revocationProfile=profile;});
+    report.walletSession = walletSession.evidence;
     report.credentialTemplate = await ensureLifecycleTemplate(
       page,
       report.revocationProfile.id,
@@ -1306,6 +1311,7 @@ module.exports = {
   requireDismissedLifecycleNotification,
   requireLifecycleActionEvidence,
   ensureActiveRevocationProfile,
+  acquireLifecycleWalletAfterSource,
   ensureLifecycleTemplate,
   findCredentialRow,
   findIssuedCredential,

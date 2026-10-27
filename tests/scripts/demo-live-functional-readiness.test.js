@@ -19,12 +19,12 @@ function fixture() {
     scope:'FUNCTIONAL_ONLY',releaseQualified:false,recordingQualified:false};
   const helper = path.join(sourceRoot,'externalLiveEvidenceHelper.js'), bytes = Buffer.from('reviewed helper');
   fs.writeFileSync(helper,bytes);
-  for(const name of ['externalLiveEvidence.js','canvasNativeRuntime.js']) fs.writeFileSync(path.join(sourceRoot,name),'source fixture');
+  for(const name of ['externalLiveEvidence.js','canvasNativeRuntime.js','ownedWalletRuntime.js']) fs.writeFileSync(path.join(sourceRoot,name),'source fixture');
   const environment = {DEMO_EXECUTION_EVIDENCE_HELPER:helper,
     DEMO_EXECUTION_EVIDENCE_HELPER_SHA256:createHash('sha256').update(bytes).digest('hex'),
     DEMO_LOCAL_FUNCTIONAL_RUNTIME_RECEIPT:receipt,
     DEMO_LOCAL_FUNCTIONAL_RUNTIME_SHA256:binding.receiptSha256,RECORD_VIDEO:'0'};
-  let closed = false, loads = 0;
+  let closed = false, loads = 0, ownedContext=null, ownedPolicy=null, ownedReceipt=null;
   const client = {functionalRuntimeBinding:binding,close(){closed=true;}};
   const module = {exports:{}};
   const source = fs.readFileSync(path.join(__dirname,'demo-live-evidence.js'),'utf8');
@@ -32,6 +32,11 @@ function fixture() {
     require(name) {
       if(name==='node:os') return {homedir:()=>root};
       if(name===helper) return {createLiveEvidenceClient:async()=>client};
+      if(path.basename(name)==='ownedWalletRuntime.js') return {
+        ownedWalletAuthority:env=>({path:env.DEMO_LOCAL_FUNCTIONAL_WALLET_AUTHORITY_INPUT,sha256:env.DEMO_LOCAL_FUNCTIONAL_WALLET_AUTHORITY_SHA256}),
+        validateOwnedWalletContext:value=>{assert.deepEqual(value,ownedContext);return value;},
+        loadOwnedWalletRuntime:(file,sha,options)=>{assert.equal(file,ownedReceipt.path);assert.equal(sha,ownedReceipt.sha256);assert.equal(options.functionalRerun,true);assert.deepEqual(options.expectedAuthority,ownedPolicy);return {context:ownedContext};},
+      };
       if(path.basename(name)==='externalLiveEvidence.js') return {
         validateFunctionalRuntimeContext(value) {
           assert.deepEqual(Object.keys(value || {}).sort(),Object.keys(binding).sort());
@@ -47,7 +52,17 @@ function fixture() {
       }};
       return require(name);
     }});
-  return {api:module.exports,client,environment,binding,root,receipt,helper,
+  const owned=()=>{
+    const file=path.join(privateRoot,'owned-wallet.json');fs.writeFileSync(file,'OWNED_WALLET_SOURCE_ONLY');
+    ownedReceipt={path:file,sha256:createHash('sha256').update(fs.readFileSync(file)).digest('hex')};
+    const policyFile=path.join(privateRoot,'policy.ref');fs.writeFileSync(policyFile,'SOURCE_ONLY_POLICY');
+    ownedPolicy={path:policyFile,sha256:createHash('sha256').update(fs.readFileSync(policyFile)).digest('hex')};
+    ownedContext={kind:'OWNED_NATIVE_WALLET_V1',receiptSha256:ownedReceipt.sha256,origin:'http://127.0.0.1:8789',instanceId:'11111111-1111-4111-8111-111111111111',runId:'22222222-2222-4222-8222-222222222222',sourceRevision:'d'.repeat(40),scope:'FUNCTIONAL_ONLY',releaseQualified:false,recordingQualified:false};
+    Object.assign(environment,{DEMO_LOCAL_FUNCTIONAL_WALLET_RECEIPT:file,DEMO_LOCAL_FUNCTIONAL_WALLET_SHA256:ownedReceipt.sha256,
+      DEMO_LOCAL_FUNCTIONAL_WALLET_AUTHORITY_INPUT:policyFile,DEMO_LOCAL_FUNCTIONAL_WALLET_AUTHORITY_SHA256:ownedPolicy.sha256,MARTY_TEST_WALLET_ORIGIN:ownedContext.origin});
+    client.ownedWalletBinding={...ownedContext};return ownedContext;
+  };
+  return {api:module.exports,client,environment,binding,root,receipt,helper,owned,
     close:()=>fs.rmSync(root,{recursive:true,force:true}),closed:()=>closed,loads:()=>loads};
 }
 test('functional acknowledgement accepts actual private host path and sibling module layout',async t=>{
@@ -106,4 +121,20 @@ test('receipt symlink or junction traversal is refused',async t=>{
   fs.symlinkSync(path.dirname(f.receipt),linked,process.platform==='win32'?'junction':'dir');
   f.environment.DEMO_LOCAL_FUNCTIONAL_RUNTIME_RECEIPT=path.join(linked,'runtime.json');
   await assert.rejects(f.api.createDemoLiveEvidence(),/symlinks/);assert.equal(f.closed(),true);
+});
+test('alternate wallet needs recorder-owned private receipt ACK and exact closed session instance',async t=>{
+  const f=fixture();t.after(f.close);const context=f.owned();await f.api.createDemoLiveEvidence();
+  const report={walletSession:{instanceId:context.instanceId,closed:true}};
+  assert.equal(f.api.applyLocalNativeReadiness(report,f.client,{ready:true,cleanupComplete:true},f.environment),true);
+  assert.deepEqual(JSON.parse(JSON.stringify(report.localFunctionalWallet)),context);assert.equal(report.releaseReady,false);
+  assert.equal(f.api.applyLocalNativeReadiness({walletSession:{instanceId:'foreign'}},f.client,{ready:true,cleanupComplete:true},f.environment),false);
+});
+test('arbitrary loopback override, foreign wallet ACK and policy/receipt substitutions are refused',async t=>{
+  const unbound=fixture();t.after(unbound.close);unbound.environment.MARTY_TEST_WALLET_ORIGIN='http://127.0.0.1:8789';
+  await assert.rejects(unbound.api.createDemoLiveEvidence());assert.equal(unbound.closed(),true);
+  for(const mutate of [f=>delete f.client.ownedWalletBinding,f=>f.client.ownedWalletBinding={...f.client.ownedWalletBinding,instanceId:'foreign'},
+    f=>f.environment.DEMO_LOCAL_FUNCTIONAL_WALLET_SHA256='f'.repeat(64),f=>f.environment.DEMO_LOCAL_FUNCTIONAL_WALLET_AUTHORITY_SHA256='f'.repeat(64),
+    f=>f.environment.MARTY_TEST_WALLET_ORIGIN='http://127.0.0.1:8790',f=>f.client.nativeRuntimeBinding={}]){
+    const f=fixture();t.after(f.close);f.owned();mutate(f);await assert.rejects(f.api.createDemoLiveEvidence());assert.equal(f.closed(),true);
+  }
 });

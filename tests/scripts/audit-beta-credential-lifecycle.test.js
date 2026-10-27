@@ -14,6 +14,7 @@ const {
   dismissLifecycleUpdatedNotification,
   ensureLifecycleTemplate,
   ensureActiveRevocationProfile,
+  acquireLifecycleWalletAfterSource,
   findCredentialRow,
   findIssuedCredential,
   findRenewedCredential,
@@ -43,6 +44,23 @@ const sourceTemplateId = process.env.BETA_AUDIT_TEMPLATE_ID || DEFAULT_LIFECYCLE
 const templateListPath = `/v1/credential-templates?organization_id=${encodeURIComponent(organizationId)}`;
 const credentialListPath = `/v1/issued-credentials?organization_id=${encodeURIComponent(organizationId)}`;
 const sourceTemplate = { id: sourceTemplateId, organization_id: organizationId, name: 'Employee', status: 'ACTIVE' };
+
+test('stale or foreign lifecycle source fails before acquiring a wallet session or mutating a fixture',async()=>{
+  for(const source of [{ok:false,status:404,body:null},{ok:true,status:200,body:{...sourceTemplate,organization_id:'foreign'}}]){
+    let acquired=0,reads=0;const page={evaluate:async()=>{reads++;return source;}};
+    let profile;await assert.rejects(acquireLifecycleWalletAfterSource(page,{},'source-only',p=>{profile=p;},async()=>{acquired++;}),/Source template authority/);
+    assert.equal(reads,1);assert.equal(acquired,0);assert.equal(profile.ok,false);
+  }
+});
+test('wallet acquisition follows both exact source and active status-profile authority reads',async()=>{
+  const order=[],profile={id:'status-profile',organization_id:organizationId,status:'ACTIVE'};
+  const page={evaluate:async()=>{order.push('READ');return order.length===1
+    ?{ok:true,status:200,body:{...sourceTemplate,revocation_profile_id:profile.id}}
+    :{ok:true,status:200,body:[profile]};}};
+  const session={evidence:{closed:false}};let observed;
+  assert.equal(await acquireLifecycleWalletAfterSource(page,{},'source-only',p=>{observed=p;},async()=>{order.push('WALLET_ACQUIRE');return session;}),session);
+  assert.deepEqual(order,['READ','READ','WALLET_ACQUIRE']);assert.equal(observed.ok,true);
+});
 const ownedTemplate = { id: 'run-template', organization_id: organizationId, name: 'Lifecycle Employee run', status: 'ACTIVE' };
 
 // Execute the real browser callbacks against a scripted local fetch. Checking

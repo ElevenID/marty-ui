@@ -44,9 +44,28 @@ function functionalBinding(client, environment) {
   return acknowledged;
 }
 
+function ownedWalletBinding(client, environment, functional) {
+  const binding=client.ownedWalletBinding;
+  const selected=['DEMO_LOCAL_FUNCTIONAL_WALLET_RECEIPT','DEMO_LOCAL_FUNCTIONAL_WALLET_SHA256',
+    'DEMO_LOCAL_FUNCTIONAL_WALLET_AUTHORITY_INPUT','DEMO_LOCAL_FUNCTIONAL_WALLET_AUTHORITY_SHA256'].some(key=>environment[key]!==undefined);
+  if(!binding&&!selected){
+    assert.equal(environment.MARTY_TEST_WALLET_ORIGIN||'http://127.0.0.1:8787','http://127.0.0.1:8787');
+    return null;
+  }
+  assert.ok(functional&&!client.nativeRuntimeBinding,'Owned wallet requires an explicit functional runtime');
+  assert.equal(environment.RECORD_VIDEO,'0');
+  const directory=path.dirname(regularSource(environment.DEMO_EXECUTION_EVIDENCE_HELPER));
+  const {loadOwnedWalletRuntime,ownedWalletAuthority,validateOwnedWalletContext}=require(regularSource(path.join(directory,'ownedWalletRuntime.js')));
+  const runtime=loadOwnedWalletRuntime(environment.DEMO_LOCAL_FUNCTIONAL_WALLET_RECEIPT,
+    environment.DEMO_LOCAL_FUNCTIONAL_WALLET_SHA256,{functionalRerun:true,expectedAuthority:ownedWalletAuthority(environment)});
+  const acknowledged=validateOwnedWalletContext(binding);
+  assert.deepEqual(acknowledged,runtime.context,'Owned wallet acknowledgement differs from bound host receipt');
+  assert.equal(environment.MARTY_TEST_WALLET_ORIGIN,acknowledged.origin);
+  return acknowledged;
+}
+
 async function createDemoLiveEvidence() {
   assert.equal(process.env.BETA_ORIGIN || 'https://beta.elevenidllc.com', 'https://beta.elevenidllc.com');
-  assert.equal(process.env.MARTY_TEST_WALLET_ORIGIN || 'http://127.0.0.1:8787', 'http://127.0.0.1:8787');
   assert.notEqual(process.env.BETA_LOCAL_PROXY, '1');
   assert.ok(!process.env.NODE_TLS_REJECT_UNAUTHORIZED || process.env.NODE_TLS_REJECT_UNAUTHORIZED === '1');
   assert.ok(!process.env.MARTY_UI_CANDIDATE_DIST);
@@ -55,7 +74,7 @@ async function createDemoLiveEvidence() {
   assert.equal(createHash('sha256').update(fs.readFileSync(helper)).digest('hex'),
     process.env.DEMO_EXECUTION_EVIDENCE_HELPER_SHA256, 'Recorder evidence helper hash mismatch');
   const client = await require(helper).createLiveEvidenceClient();
-  try { functionalBinding(client, process.env); }
+  try { const functional=functionalBinding(client, process.env);ownedWalletBinding(client,process.env,functional); }
   catch (error) { client.close(); throw error; }
   if (process.env.DEMO_LOCAL_NATIVE_LIVE_BINDING !== undefined) {
     try {
@@ -77,15 +96,18 @@ async function createDemoLiveEvidence() {
 // cleanup. This never turns a failed feature or cleanup into a successful run.
 function applyLocalNativeReadiness(report, client, {ready, cleanupComplete}, environment=process.env) {
   const functional = functionalBinding(client, environment);
+  const wallet = ownedWalletBinding(client,environment,functional);
   if (functional) {
     report.releaseReady = false;
     report.qualification = 'LOCAL_MIXED_RUNTIME_FUNCTIONAL_OPERATIONS';
     report.localFunctionalRuntime = {profileSha256:functional.profileSha256, receiptSha256:functional.receiptSha256,
       scope:functional.scope, releaseQualified:false, recordingQualified:false};
+    if(wallet)report.localFunctionalWallet={...wallet};
     report.signedManifestVerified = false;
     report.demo_qualified = false;
     report.cleanup = {...report.cleanup, complete:cleanupComplete === true};
-    report.functionalReady = ready === true && cleanupComplete === true && !report.error;
+    report.functionalReady = ready === true && cleanupComplete === true && !report.error
+      && (!wallet||report.walletSession?.instanceId===wallet.instanceId);
     report.operations_verified = report.functionalReady;
     return report.functionalReady;
   }
