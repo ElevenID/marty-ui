@@ -229,3 +229,20 @@ the trusted report checksum and originating workflow/run/attempt against the
 connected source and attestation, then require product runtime and compatibility
 results before publishing a qualification record or version tag. A passing
 verifier run alone confers no support status.
+
+The `Independent product authenticated intake` workflow implements that
+authentication boundary. Dispatch it from protected main with the product,
+producer run ID and verifier run ID. It confirms both runs completed successfully
+from the expected protected-main workflows, selects their exact unexpired
+artifacts, and downloads the signed verifier report and producer archive.
+`scripts/authenticate_product_verification.py` verifies the report, detail and
+checksum subjects against the verifier workflow's GitHub signature, main source
+commit, hosted runner, run and attempt. It binds the signed report and producer
+artifact identity to the archive and embedded package manifest through the
+structural intake. The workflow attests and uploads an
+`marty.product-authenticated-verification/v1` record with state
+`pending_runtime_qualification`. It still cannot publish a version tag or
+declare support. Server runtime with the console stopped, and selected
+server/console compatibility for a console claim, remain separate required
+evidence. The installer owner supplies the resolved deployment inputs for those
+runtime journeys.

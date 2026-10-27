@@ -1,0 +1,63 @@
+name: Independent product authenticated intake
+
+on:
+  workflow_dispatch:
+    inputs:
+      product:
+        description: Exact independent product candidate
+        required: true
+        type: choice
+        options: [marty-server, marty-console]
+      producer_run_id:
+        description: Protected-main producer workflow run ID
+        required: true
+        type: string
+      verifier_run_id:
+        description: Successful signed verifier workflow run ID
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  authenticated-intake:
+    if: github.repository == 'ElevenID/marty-ui'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: read
+      packages: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.11'
+      - name: Authenticate verifier and candidate evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PRODUCT: ${{ inputs.product }}
+          PRODUCER_RUN_ID: ${{ inputs.producer_run_id }}
+          VERIFIER_RUN_ID: ${{ inputs.verifier_run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          python scripts/authenticate_product_verification.py \
+            --product "$PRODUCT" --producer-run-id "$PRODUCER_RUN_ID" \
+            --verifier-run-id "$VERIFIER_RUN_ID" \
+            --output authenticated-intake.json
+          test "$(jq -r .state authenticated-intake.json)" = pending_runtime_qualification
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+        with:
+          subject-path: authenticated-intake.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: product-authenticated-intake-${{ inputs.product }}-${{ inputs.verifier_run_id }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: authenticated-intake.json
+          if-no-files-found: error
