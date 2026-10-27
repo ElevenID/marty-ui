@@ -18,6 +18,7 @@ pub mod kms;
 pub mod managed_holder_http;
 pub mod managed_holder_key;
 pub mod mdoc_certificate;
+mod mdoc_crl;
 pub mod passport_artifact_envelope;
 pub mod passport_callback_hmac;
 mod private_material;

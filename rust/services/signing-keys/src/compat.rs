@@ -55,6 +55,13 @@ pub(crate) enum SignAuthorization {
         algorithm: String,
         payload_sha256_b64: String,
     },
+    Crl {
+        organization_id: String,
+        issuer_did: String,
+        service_id: String,
+        key_reference: String,
+        payload_sha256_b64: String,
+    },
 }
 
 impl SignAuthorization {
@@ -73,6 +80,17 @@ impl SignAuthorization {
                 issuer_did,
                 ..
             } => organization_id == &request.organization_id && issuer_did == &request.issuer_did,
+            Self::Crl {
+                organization_id,
+                issuer_did,
+                ..
+            } => {
+                organization_id == &request.organization_id
+                    && issuer_did == &request.issuer_did
+                    && request.credential_format == "MDOC"
+                    && request.key_purpose == "mdoc_iaca"
+                    && request.algorithm == "ES256"
+            }
             Self::Grant {
                 issuer_did: None, ..
             } => false,
@@ -115,6 +133,31 @@ impl SignAuthorization {
             key_reference: key_reference.to_owned(),
             key_purpose: request.key_purpose.clone(),
             algorithm: request.algorithm.clone(),
+            payload_sha256_b64: payload_digest(&payload),
+        })
+    }
+
+    pub(crate) fn crl(
+        request: &IssuerDidSignRequest,
+        profile: &Value,
+    ) -> Result<Self, CompatibilityError> {
+        if request.credential_format != "MDOC"
+            || request.key_purpose != "mdoc_iaca"
+            || request.algorithm != "ES256"
+        {
+            return Err(CompatibilityError::BadRequest(
+                "MDOC CRL signing tuple is invalid".into(),
+            ));
+        }
+        let payload = signing_payload(
+            request.payload_b64.as_deref(),
+            request.payload_hex.as_deref(),
+        )?;
+        Ok(Self::Crl {
+            organization_id: request.organization_id.clone(),
+            issuer_did: request.issuer_did.clone(),
+            service_id: required(profile, "signing_service_id")?.to_owned(),
+            key_reference: required(profile, "signing_key_reference")?.to_owned(),
             payload_sha256_b64: payload_digest(&payload),
         })
     }
@@ -162,6 +205,22 @@ impl SignAuthorization {
                     && Some(key_reference.as_str()) == actual.key_reference
                     && key_purpose == actual.key_purpose
                     && algorithm == actual.algorithm
+                    && payload_sha256_b64 == payload_digest(actual.payload)
+            }
+            Self::Crl {
+                organization_id,
+                issuer_did,
+                service_id,
+                key_reference,
+                payload_sha256_b64,
+            } => {
+                organization_id == actual.organization_id
+                    && actual.issuer_did.is_none()
+                    && !issuer_did.is_empty()
+                    && Some(service_id.as_str()) == actual.service_id
+                    && Some(key_reference.as_str()) == actual.key_reference
+                    && actual.key_purpose == "mdoc_iaca"
+                    && actual.algorithm == "ES256"
                     && payload_sha256_b64 == payload_digest(actual.payload)
             }
         }
@@ -2717,6 +2776,64 @@ mod tests {
                 payload: b"different bytes",
                 ..actual
             }));
+    }
+
+    #[test]
+    fn crl_authorization_is_distinct_and_bound_to_exact_tbs_key_and_mdoc_tuple() {
+        let request = IssuerDidSignRequest {
+            organization_id: "tenant-1".into(),
+            issuer_did: "did:web:issuer.example".into(),
+            credential_format: "MDOC".into(),
+            key_purpose: "mdoc_iaca".into(),
+            algorithm: "ES256".into(),
+            key_reference: None,
+            payload_b64: Some(URL_SAFE_NO_PAD.encode(b"prepared CRL TBS")),
+            verification_method_id: None,
+            expected_public_jwk: None,
+            payload_hex: None,
+        };
+        let profile = json!({"signing_service_id":"managed-openbao-transit",
+            "signing_key_reference":"iaca-key"});
+        let actual = FinalSignBinding {
+            organization_id: "tenant-1",
+            route: "/v1/signing-keys/services/managed-openbao-transit/sign",
+            service_id: Some("managed-openbao-transit"),
+            issuer_did: None,
+            key_reference: Some("iaca-key"),
+            key_purpose: "mdoc_iaca",
+            algorithm: "ES256",
+            payload: b"prepared CRL TBS",
+        };
+        assert!(SignAuthorization::crl(&request, &profile)
+            .unwrap()
+            .authorizes(actual));
+        assert!(!SignAuthorization::crl(&request, &profile)
+            .unwrap()
+            .authorizes(FinalSignBinding {
+                payload: b"different TBS",
+                ..actual
+            }));
+        assert!(!SignAuthorization::crl(&request, &profile)
+            .unwrap()
+            .authorizes(FinalSignBinding {
+                key_reference: Some("foreign-key"),
+                ..actual
+            }));
+        assert!(!SignAuthorization::crl(&request, &profile)
+            .unwrap()
+            .authorizes_issuer_request(&IssuerDidSignRequest {
+                credential_format: "VC_JWT".into(),
+                ..request.clone()
+            }));
+        assert!(SignAuthorization::crl(&request, &profile).is_ok());
+        assert!(SignAuthorization::crl(
+            &IssuerDidSignRequest {
+                key_purpose: "vc_jwt_issuer".into(),
+                ..request
+            },
+            &profile
+        )
+        .is_err());
     }
 
     #[test]
