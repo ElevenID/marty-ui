@@ -344,9 +344,8 @@ impl VerifiedFactsOrchestrator {
             }])
         };
 
-        Ok(json!({
+        let mut facts = json!({
             "credentials": credentials,
-            (MDOC_AUTHENTICATION_DIAGNOSTIC): mdoc_authentication_diagnostic,
             "evaluation_time_epoch_seconds": evaluation_time,
             "presentation_verified": evidence.presentation_verified,
             "holder_binding_verified": evidence.holder_binding_verified,
@@ -358,7 +357,11 @@ impl VerifiedFactsOrchestrator {
             "proof_epoch_seconds": evidence.proof_epoch_seconds,
             "external_authorization": external_authorization,
             "presentation_count": evidence.presentation_count.or(Some(1)),
-        }))
+        });
+        if let Some(diagnostic) = mdoc_authentication_diagnostic {
+            facts[MDOC_AUTHENTICATION_DIAGNOSTIC] = json!(diagnostic);
+        }
+        Ok(facts)
     }
 }
 
