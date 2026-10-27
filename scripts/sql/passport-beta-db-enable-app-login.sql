@@ -114,5 +114,13 @@ BEGIN
 END
 $access$;
 
+DO $cancellation_access$
+BEGIN
+    IF NOT issuance_service.passport_cancellation_acl_ready()
+        OR NOT flow_service.physical_start_acl_ready() THEN
+        RAISE EXCEPTION 'passport cancellation/Flow intent access violates fenced role contract';
+    END IF;
+END
+$cancellation_access$;
 ALTER ROLE marty LOGIN;
 COMMIT;

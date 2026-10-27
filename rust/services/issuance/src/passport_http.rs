@@ -5,6 +5,9 @@
 #[path = "passport_http_reconciliation_tests.rs"]
 mod reconciliation_tests;
 
+#[path = "passport_cancellation_http.rs"]
+mod cancellation;
+
 use axum::{
     body::Bytes,
     extract::{Path, State},
@@ -471,6 +474,7 @@ impl PassportHttpService {
         &self,
         job: &PassportJob,
     ) -> Result<crate::passport_artifact::PassportSensitiveArtifact, PassportHttpError> {
+        require_mutable_passport_job(job)?;
         self.cipher()?.decrypt(job).await
     }
 
@@ -534,6 +538,13 @@ impl PassportHttpService {
     }
 }
 
+fn require_mutable_passport_job(job: &PassportJob) -> Result<(), PassportHttpError> {
+    if crate::passport_cancellation::terminal(&job.status) {
+        return Err(PassportHttpError::TerminalJob);
+    }
+    Ok(())
+}
+
 fn header<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
     headers.get(name).and_then(|value| value.to_str().ok())
 }
@@ -594,6 +605,16 @@ enum PassportHttpError {
     OrganizationMismatch,
     #[error("Physical document Idempotency-Key is invalid")]
     InvalidStartIdempotencyKey,
+    #[error("Administrative passport cancellation request is invalid")]
+    InvalidCancellationRequest,
+    #[error("Read-only passport job request must not contain query options or a body")]
+    InvalidReadRequest,
+    #[error("Physical document cannot be administratively cancelled in its current state")]
+    CancellationConflict,
+    #[error("Physical document cancellation key is bound to another request")]
+    CancellationReplayConflict,
+    #[error("Physical document job is terminal")]
+    TerminalJob,
     #[error("Physical document Idempotency-Key is bound to another request")]
     StartIdempotencyConflict,
     #[error("{0}")]
@@ -658,6 +679,8 @@ impl IntoResponse for PassportHttpError {
             Self::OrganizationMismatch => StatusCode::FORBIDDEN,
             Self::InvalidRequest(_)
             | Self::InvalidStartIdempotencyKey
+            | Self::InvalidReadRequest
+            | Self::InvalidCancellationRequest
             | Self::MissingDataGroups
             | Self::Signer(SignerError::MissingIssuerDid) => StatusCode::UNPROCESSABLE_ENTITY,
             Self::ApplicationNotFound | Self::WebhookJobNotFound => StatusCode::NOT_FOUND,
@@ -669,6 +692,9 @@ impl IntoResponse for PassportHttpError {
             Self::Signer(SignerError::InvalidManagedMaterial) => StatusCode::BAD_GATEWAY,
             Self::Signer(SignerError::UntrustedDsc)
             | Self::StartIdempotencyConflict
+            | Self::CancellationConflict
+            | Self::CancellationReplayConflict
+            | Self::TerminalJob
             | Self::QualityNotReady
             | Self::ActivationNotReady
             | Self::ConcurrentChange
@@ -727,10 +753,31 @@ fn safe(job: &PassportJob) -> Value {
     serde_json::to_value(PassportSafeResponse::from(job)).expect("safe response serializes")
 }
 
+// Observation is deliberately separate from production_status: no bureau
+// polling, artifact decryption, signing, or state transition is permitted here.
+async fn read_application(
+    State(service): State<PassportHttpService>,
+    Path(application_id): Path<String>,
+    uri: axum::http::Uri,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Json<Value>, PassportHttpError> {
+    let principal = service.authenticate(&headers)?;
+    if uri.query().is_some() || !body.is_empty() {
+        return Err(PassportHttpError::InvalidReadRequest);
+    }
+    let job = service.job(&principal, &application_id).await?;
+    Ok(Json(safe(&job)))
+}
+
 pub fn router(service: PassportHttpService) -> Router {
     Router::new()
         .route("/v1/passport/capabilities", get(capabilities))
         .route("/v1/passport/applications", post(create_application))
+        .route(
+            "/v1/passport/applications/{application_id}",
+            get(read_application),
+        )
         .route(
             "/internal/passport/flow-starts/{flow_instance_id}",
             get(read_flow_start),
@@ -774,6 +821,10 @@ pub fn router(service: PassportHttpService) -> Router {
         .route(
             "/v1/passport/applications/{application_id}/activate",
             post(activate),
+        )
+        .route(
+            "/v1/passport/applications/{application_id}/cancel",
+            post(cancellation::cancel_administratively),
         )
         .route(
             "/v1/passport/webhooks/personalization",
@@ -1067,6 +1118,7 @@ async fn prepared_personalization_job(
     require_cached: bool,
     historical_provenance: Option<&SubmissionSigningProvenance>,
 ) -> Result<(PersonalizationJob, String, Option<String>, SignedMaterial), PassportHttpError> {
+    require_mutable_passport_job(job)?;
     let mut artifact = service.decrypt(job).await?;
     let mut newly_signed = false;
     let signed = if let Some(signed) = artifact.signed_material.clone() {
@@ -1150,6 +1202,7 @@ async fn submit_personalization(
     if job.bureau_job_id.is_some() {
         return Ok(Json(safe(&job)));
     }
+    require_mutable_passport_job(&job)?;
     if job.submission_batch_id.is_some() {
         return Err(PassportHttpError::ConcurrentChange);
     }
