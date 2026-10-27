@@ -264,6 +264,18 @@ test('maintenance actual-reader producer rebinds only newer generations and pres
  for(const qualification of ['RELEASE','RECORDING'])assert.throws(()=>verifyFunctionalRuntime(profile,{qualification,readDocker:()=>assert.fail('No reads')}),/cannot qualify/);
 });
 
+test('maintenance producer records unrelated container churn while still rejecting missing or replaced managed roles',t=>{
+ const f=maintenanceFixture(t);let engineReads=0;
+ f.mutateEngine(value=>{engineReads++;value.Containers=149+engineReads;value.ContainersRunning=67+engineReads;});
+ const receipt=f.produce();
+ assert.deepEqual(receipt.engineCounts,{before:{containers:150,running:68},after:{containers:151,running:69}});
+ assert.equal(receipt.roles.length,22);assert.equal(verifyFunctionalRuntime(f.bind(receipt),{readDocker:f.readDocker}).roles.length,22);
+ f.mutateActual((actual,row)=>{if(row.role==='gateway')actual.containerId='';});
+ assert.throws(f.produce,'Missing managed gateway must fail despite healthy engine counts');
+ f.mutateActual((actual,row)=>{if(row.role==='gateway')actual.containerId=H('0');});
+ assert.throws(f.produce,'Replaced managed gateway must fail despite healthy engine counts');
+});
+
 for(const field of ['container','image','mounted','process','uid','mount','writable','health','staleGeneration'])test('maintenance producer refuses changed '+field,t=>{
  const f=maintenanceFixture(t);f.mutateActual((actual,row)=>{if(row.role!=='gateway')return;
   if(field==='container')actual.containerId=H('0');if(field==='image')actual.imageId='sha256:'+H('0');

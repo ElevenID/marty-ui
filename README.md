@@ -22,6 +22,9 @@ Initially supports Linux amd64 with an accessible Docker Engine and Compose.
 A published, signed admission for the selected release is required; unavailable
 or unqualified releases are refused. Use `--version TAG` instead of `--channel
 nightly` to select an exact admitted version.
+An external tester can select an unqualified, exact nightly with
+`--candidate-test TAG` on a disposable Linux amd64 host; this path preserves
+diagnostics and never grants installer admission or Ready status.
 
 See [bootstrap usage and platform support](docs/installer-bootstrap.md) for
 requirements and the boundary between the bootstrap and deployment operations.

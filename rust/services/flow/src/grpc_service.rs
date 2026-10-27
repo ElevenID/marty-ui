@@ -1313,6 +1313,9 @@ fn verification_start_status(error: crate::FlowVerificationStartError) -> Status
         crate::FlowVerificationStartError::InvalidPolicy => {
             Status::not_found("Presentation policy not found")
         }
+        crate::FlowVerificationStartError::InvalidPolicyReference => {
+            Status::failed_precondition("Presentation policy reference is invalid")
+        }
         crate::FlowVerificationStartError::CallbackRejected => {
             Status::permission_denied("Callback destination is not registered")
         }

@@ -402,6 +402,15 @@ fn run() -> Result<(), String> {
         #[cfg(not(target_os = "linux"))]
         return Err("installer currently requires Linux amd64".into());
     }
+    if args.first().is_some_and(|arg| arg == "candidate-test") {
+        #[cfg(target_os = "linux")]
+        return marty_deployment_catalog::installer_command::candidate_test(
+            &args[1..],
+            env!("MARTY_DEPLOY_BUILD_IDENTITY"),
+        );
+        #[cfg(not(target_os = "linux"))]
+        return Err("candidate testing requires Linux amd64".into());
+    }
     if args == ["--build-identity"] {
         println!("{}", env!("MARTY_DEPLOY_BUILD_IDENTITY"));
         return Ok(());
