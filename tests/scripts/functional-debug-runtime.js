@@ -164,8 +164,9 @@ function receiptDigests(profile){return profile.schema==='marty.functional-mixed
    debugDeployment:profile.debugDeployment.sha256,debugBuild:profile.debugBuild.sha256,
    retainedBuilds:Object.fromEntries(Object.entries(profile.retainedBuilds).map(([role,ref])=>[role,ref.sha256])),
    ...(profile.priorNativeOverlay?{priorNativeOverlay:profile.priorNativeOverlay.sha256,priorNativeBuild:profile.priorNativeBuild.sha256,priorNativeArtifacts:profile.priorNativeArtifacts.sha256}:{})};}
-function observeDocker(expected){
- const read=args=>execFileSync('docker',args,{encoding:'utf8',timeout:30000,maxBuffer:4*1024*1024,windowsHide:true});
+const defaultDockerRead=args=>execFileSync('docker',args,{encoding:'utf8',timeout:30000,maxBuffer:4*1024*1024,windowsHide:true});
+function observeDocker(expected,read=defaultDockerRead){
+ assert.equal(typeof read,'function','Docker transport must read the actual engine');
  const ids=read(['ps','-q','--no-trunc','--filter','label=com.docker.compose.project='+expected.project,
   '--filter','label=com.docker.compose.service='+expected.role]).trim().split(/\s+/).filter(Boolean);
  assert.equal(ids.length,1,'Missing or ambiguous role');
@@ -188,7 +189,10 @@ function observeDocker(expected){
   binaryMounts,executablePath,processExecutableSha256:processHash,startedAt:row.State?.StartedAt,hostPid:row.State?.Pid,
   effectiveUid,configuredRuntimeUid};
 }
-function verifyFunctionalRuntime(profile,{qualification='FUNCTIONAL_ONLY',observe=observeDocker}={}){
+function verifyFunctionalRuntime(profile,{qualification='FUNCTIONAL_ONLY',observe,readDocker}={}){
+ assert(!(observe&&readDocker),'Select one observation transport');
+ if(readDocker)assert.equal(typeof readDocker,'function');
+ observe=observe||(readDocker?(expected=>observeDocker(expected,readDocker)):observeDocker);
  assert.equal(qualification,'FUNCTIONAL_ONLY','Mixed/debug stack cannot qualify release or recording');
  const expected=expectedRuntime(profile),roles=[];
  for(const row of expected){
@@ -224,4 +228,4 @@ function verifyFunctionalRuntime(profile,{qualification='FUNCTIONAL_ONLY',observ
   releaseQualified:false,recordingQualified:false,mixedSourceStack:true,roles,
   receiptDigests:receiptDigests(profile)};
 }
-module.exports={boundJson,expectedRuntime,verifyFunctionalRuntime,DEBUG_ROLES,RETAINED_ROLES,ISSUANCE_SOURCE,ISSUANCE_CORE};
+module.exports={DOCKER_READ_TRANSPORT_SCHEMA:'marty.functional-runtime-docker-read/v1',boundJson,expectedRuntime,verifyFunctionalRuntime,DEBUG_ROLES,RETAINED_ROLES,ISSUANCE_SOURCE,ISSUANCE_CORE};
