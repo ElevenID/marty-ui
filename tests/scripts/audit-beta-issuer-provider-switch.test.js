@@ -5,18 +5,280 @@ const test = require('node:test');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const vm = require('node:vm');
 
 const {
   cleanup,
   prepareProviderInputs,
   managedTransitEndpoint,
   externalTransitPrerequisites,
+  existingProviderBInput,
+  boundExistingProviderB,
+  managedBindingHash,
+  matchesManagedBinding,
+  verifySelectedIssuerBinding,
+  observedRemoteSigner,
   restoredConfigurationEvidence,
   governedIssuerRequest,
   identityRequest,
   transitService,
   writableConfig,
+  loadSigningConfig,
+  saveSigningConfig,
+  unchangedOwnedRevision,
+  createIdentity,
+  directRebind,
+  rebindThroughConsole,
+  ownedIdentityRevision,
+  createConfigMutationJournal,
 } = require('./audit-beta-issuer-provider-switch');
+
+function fakeConfigTransport(initial) {
+  let config = structuredClone(initial);
+  let generation = 1;
+  let exposeEtag = true;
+  let identityPatchFailure = null;
+  const requests = [];
+  const etag = () => `"r-00000000-0000-4000-8000-${String(generation).padStart(12, '0')}"`;
+  const fetch = async (route, options) => {
+    requests.push({ route, options });
+    const method = options.method || 'GET';
+    const identity = new URL(route, 'https://beta.example.test').pathname === '/v1/signing-keys/issuer-identities';
+    let status = 200;
+    let body = config;
+    if (method === 'PATCH') {
+      if (options.headers['If-Match'] !== etag()) status = 412;
+      else if (identity && identityPatchFailure === 'before-bind') status = 503;
+      else {
+        if (identity) {
+          config = { ...config, key_reference_purposes: { ...(config.key_reference_purposes || {}),
+            'provider-b': { 'key-b': ['vc_jwt_issuer'] } } };
+        } else config = JSON.parse(options.body);
+        generation += 1;
+        if (identity && identityPatchFailure === 'after-bind') status = 503;
+      }
+    }
+    if (method === 'POST' && identity) {
+      if (options.headers['If-Match'] !== etag()) status = 412;
+      else {
+        config = { ...config, key_reference_purposes: { 'managed-openbao-transit': {
+          'owned-key': ['vc_jwt_issuer'] } } };
+        generation += 1;
+      }
+    }
+    if (identity && status === 200) body = { created: method === 'POST', changed: method === 'PATCH',
+      identity: { issuer_did: JSON.parse(options.body).issuer_did }, config_revision: etag() };
+    else body = config;
+    return {
+      ok: status === 200, status,
+      json: async () => structuredClone(body),
+      headers: { get: (name) => name === 'etag' && exposeEtag ? etag() : null },
+    };
+  };
+  return {
+    page: { evaluate: (fn, args) => vm.runInNewContext(`(${fn.toString()})`, { fetch })(args) },
+    requests,
+    current: () => structuredClone(config),
+    externalEdit: (next) => { config = structuredClone(next); generation += 1; },
+    omitEtag: () => { exposeEtag = false; },
+    failIdentityPatch: (stage) => { identityPatchFailure = stage; },
+  };
+}
+
+test('D02 config writes advance owned revisions and stale final restoration preserves another edit', async () => {
+  const transport = fakeConfigTransport({ services: [{ id: 'provider-a' }], default_service_id: 'provider-a' });
+  const original = await loadSigningConfig(transport.page);
+  const providerB = await saveSigningConfig(transport.page,
+    { ...original.config, default_service_id: 'provider-b' }, original.revision);
+  const beforeNegative = unchangedOwnedRevision(await loadSigningConfig(transport.page), providerB.revision);
+  const providerC = await saveSigningConfig(transport.page,
+    { ...beforeNegative, default_service_id: 'provider-c' }, providerB.revision);
+  assert.deepEqual(transport.requests.filter((request) => request.options.method === 'PATCH')
+    .map((request) => request.options.headers['If-Match']), [original.revision, providerB.revision]);
+  transport.externalEdit({ ...transport.current(), default_service_id: 'admin-edit' });
+  await assert.rejects(saveSigningConfig(transport.page, original.config, providerC.revision), /HTTP 412/);
+  assert.equal(transport.current().default_service_id, 'admin-edit');
+  assert.throws(() => unchangedOwnedRevision({ revision: providerC.revision }, providerB.revision), /changed outside/);
+});
+
+test('D02 restore accepts only the last owned revision and missing ETag prevents mutation', async () => {
+  const transport = fakeConfigTransport({ services: [{ id: 'provider-a' }], default_service_id: 'provider-a' });
+  const original = await loadSigningConfig(transport.page);
+  const changed = await saveSigningConfig(transport.page,
+    { ...original.config, default_service_id: 'provider-b' }, original.revision);
+  const restored = await saveSigningConfig(transport.page, original.config, changed.revision);
+  assert.equal(restored.config.default_service_id, 'provider-a');
+  assert.equal(transport.current().default_service_id, 'provider-a');
+  const priorWrites = transport.requests.filter((request) => request.options.method === 'PATCH').length;
+  transport.omitEtag();
+  await assert.rejects(loadSigningConfig(transport.page), /no strong opaque revision/);
+  await assert.rejects(saveSigningConfig(transport.page, original.config, null), /requires a strong opaque revision/);
+  assert.equal(transport.requests.filter((request) => request.options.method === 'PATCH').length, priorWrites);
+});
+
+test('D02 managed identity and external rebind revisions remain owned and reject foreign mutation', async () => {
+  const transport = fakeConfigTransport({ services: [{ id: 'provider-a' }], default_service_id: 'provider-a' });
+  const original = await loadSigningConfig(transport.page);
+  const created = await createIdentity(transport.page, 'did:web:beta.example.test:orgs:d02', 'owned-create', original.revision);
+  const managedRevision = ownedIdentityRevision(created);
+  assert.deepEqual(transport.current().key_reference_purposes['managed-openbao-transit']['owned-key'], ['vc_jwt_issuer']);
+  const providerB = await saveSigningConfig(transport.page,
+    { ...transport.current(), default_service_id: 'provider-b' }, managedRevision);
+  const rebound = await directRebind(transport.page, 'did:web:beta.example.test:orgs:d02', providerB.revision);
+  const reboundRevision = ownedIdentityRevision(rebound);
+  assert.deepEqual(transport.current().key_reference_purposes['provider-b']['key-b'], ['vc_jwt_issuer']);
+  transport.externalEdit({ ...transport.current(), default_service_id: 'admin-edit' });
+  await assert.rejects(saveSigningConfig(transport.page, original.config, reboundRevision), /HTTP 412/);
+  assert.equal(transport.current().default_service_id, 'admin-edit');
+  assert.deepEqual(transport.requests.filter((request) => ['POST', 'PATCH'].includes(request.options.method))
+    .map((request) => request.options.headers['If-Match']),
+  [original.revision, managedRevision, providerB.revision, reboundRevision]);
+});
+
+test('D02 real UI rebind is intercepted once with the owned revision and fails on a foreign revision', async () => {
+  const expected = '"r-00000000-0000-4000-8000-000000000001"';
+  const issuerDid = 'did:web:beta.elevenidllc.com:orgs:d02';
+  for (const current of [expected, '"r-00000000-0000-4000-8000-000000000002"']) {
+    let routeHandler, responseMatch, receiveResponse;
+    const forwarded = [];
+    const request = {
+      url: () => 'https://beta.elevenidllc.com/v1/signing-keys/issuer-identities?organization_id=00000000-0000-0000-0000-000000000001',
+      method: () => 'PATCH', postDataJSON: () => ({ organization_id: '00000000-0000-0000-0000-000000000001', issuer_did: issuerDid }),
+      headers: () => ({ 'content-type': 'application/json' }),
+      allHeaders: async () => ({ 'content-type': 'application/json', cookie: 'owned-session=present' }),
+    };
+    const page = {
+      goto: async () => {},
+      locator: () => ({ filter: () => ({ first: () => ({ waitFor: async () => {},
+        getByRole: () => ({ click: async () => {} }) }) }) }),
+      getByRole: () => ({ getByRole: () => ({ click: async () => {
+        await routeHandler({ request: () => request, abort: async () => { throw new Error('Unexpected UI request'); },
+          continue: async ({ headers }) => {
+            assert.equal(headers.cookie, 'owned-session=present');
+            forwarded.push(headers['If-Match']);
+            const status = headers['If-Match'] === current ? 200 : 412;
+            const response = { url: request.url, request: () => request, status: () => status,
+              ok: () => status === 200, json: async () => ({ changed: status === 200,
+                config_revision: status === 200 ? '"r-00000000-0000-4000-8000-000000000003"' : null }) };
+            if (responseMatch(response)) receiveResponse(response);
+          } });
+      } }) }),
+      route: async (_, handler) => { routeHandler = handler; },
+      unroute: async (_, handler) => { assert.equal(handler, routeHandler); routeHandler = null; },
+      waitForResponse: (match) => { responseMatch = match; return new Promise((resolve) => { receiveResponse = resolve; }); },
+    };
+    const result = await rebindThroughConsole(page, issuerDid, expected);
+    assert.deepEqual(forwarded, [expected]);
+    assert.equal(routeHandler, null);
+    if (current === expected) assert.equal(ownedIdentityRevision(result), '"r-00000000-0000-4000-8000-000000000003"');
+    else {
+      assert.equal(result.status, 412);
+      assert.throws(() => ownedIdentityRevision(result), /did not return/);
+    }
+  }
+});
+
+test('D02 unavailable-key denial requires unchanged revision, including after a 503 response', async () => {
+  const issuerDid = 'did:web:beta.example.test:orgs:d02';
+  for (const stage of ['before-bind', 'after-bind']) {
+    const transport = fakeConfigTransport({ services: [{ id: 'provider-a' }], default_service_id: 'provider-a' });
+    const before = await loadSigningConfig(transport.page);
+    transport.failIdentityPatch(stage);
+    const denied = await directRebind(transport.page, issuerDid, before.revision);
+    assert.equal(denied.status, 503);
+    const after = await loadSigningConfig(transport.page);
+    if (stage === 'before-bind') assert.equal(unchangedOwnedRevision(after, before.revision).default_service_id, 'provider-a');
+    else assert.throws(() => unchangedOwnedRevision(after, before.revision), /changed outside/);
+  }
+});
+
+test('D02 private journal seals original public config and unknown input before dispatch', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'd02-config-journal-'));
+  const revision = '"r-00000000-0000-4000-8000-000000000001"';
+  const original = { services: [{ id: 'provider-a', auth_reference: '', auth_reference_envelope: 'must-not-copy',
+    auth_configured: true }], default_service_id: 'provider-a' };
+  try {
+    const journal = createConfigMutationJournal(directory, original, revision);
+    journal.intent('select-provider-b', revision, { default_service_id: 'provider-b' });
+    journal.confirmed('select-provider-b', '"r-00000000-0000-4000-8000-000000000002"');
+    journal.intent('restore-original-config', '"r-00000000-0000-4000-8000-000000000002"', original);
+    journal.intent('restore-original-config', '"r-00000000-0000-4000-8000-000000000002"',
+      { ...original, services: [{ ...original.services[0], auth_reference_envelope: 'another-secret' }] });
+    journal.close();
+    const raw = fs.readFileSync(path.join(directory, 'signing-config-mutations.private.jsonl'), 'utf8');
+    const entries = raw.trim().split('\n').map(JSON.parse);
+    assert.deepEqual(entries.map((entry) => entry.stage),
+      ['ORIGINAL', 'INPUT_OUTCOME_UNKNOWN', 'CONFIRMED', 'INPUT_OUTCOME_UNKNOWN', 'INPUT_OUTCOME_UNKNOWN']);
+    assert.equal(entries[3].requestPublicSha256, entries[4].requestPublicSha256);
+    assert.equal(entries[0].originalPublicConfig.services[0].auth_reference, undefined);
+    assert.equal(entries[0].originalPublicConfig.services[0].auth_reference_envelope, undefined);
+    assert.equal(original.services[0].auth_reference_envelope, 'must-not-copy');
+    assert.equal(raw.includes('must-not-copy'), false);
+    assert.equal(raw.includes('another-secret'), false);
+    assert.throws(() => createConfigMutationJournal(directory, original, revision), /EEXIST/);
+  } finally {
+    assert.ok(path.resolve(directory).startsWith(path.resolve(os.tmpdir()) + path.sep));
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('preprovisioned provider B requires exact identity and a distinct supported signer', async () => {
+  assert.equal(existingProviderBInput({}), null);
+  assert.throws(() => existingProviderBInput({ D02_EXISTING_PROVIDER_B_SERVICE_ID: 'b' }), /exact nonsecret/);
+  const expected = existingProviderBInput({
+    D02_EXISTING_PROVIDER_B_SERVICE_ID: 'existing-vault',
+    D02_EXISTING_PROVIDER_B_SERVICE_TYPE: 'hashicorp-vault-transit',
+    D02_EXISTING_PROVIDER_B_PROVIDER: 'hashicorp-vault',
+    D02_EXISTING_PROVIDER_B_KEY_REFERENCE: 'issuer-b',
+  });
+  assert.equal(existingProviderBInput({
+    D02_EXISTING_PROVIDER_B_SERVICE_ID: 'aws-b',
+    D02_EXISTING_PROVIDER_B_SERVICE_TYPE: 'aws-kms',
+    D02_EXISTING_PROVIDER_B_PROVIDER: 'aws',
+    D02_EXISTING_PROVIDER_B_KEY_REFERENCE: 'arn:aws:kms:us-east-1:123456789012:key/1234',
+  }).keyReference, 'arn:aws:kms:us-east-1:123456789012:key/1234');
+  const service = {
+    id: expected.serviceId, service_type: expected.serviceType, provider: expected.provider,
+    key_reference: expected.keyReference, endpoint: 'https://vault.example.test:8200',
+    status: 'configured', algorithms: ['ES256'], key_purposes: ['vc_jwt_issuer'],
+  };
+  const baseline = 'https://openbao:8200';
+  assert.equal(boundExistingProviderB({ services: [service] }, expected, baseline), service);
+  const selected = writableConfig({ services: [service], default_service_id: 'managed-openbao-transit' }, {
+    defaultServiceId: service.id, resetDefaults: true,
+  });
+  assert.equal(selected.services[0], service);
+  assert.equal(selected.default_service_id, service.id);
+  assert.throws(() => boundExistingProviderB({ services: [] }, expected, baseline), /missing or ambiguous/);
+  assert.throws(() => boundExistingProviderB({ services: [service, service] }, expected, baseline), /missing or ambiguous/);
+  assert.throws(() => boundExistingProviderB({ services: [{ ...service, provider: 'openbao' }] }, expected, baseline), /does not match/);
+  assert.throws(() => boundExistingProviderB({ services: [service] }, { ...expected, provider: 'openbao' }, baseline), /supported distinct/);
+  assert.throws(() => boundExistingProviderB({ services: [{ ...service, endpoint: baseline }] }, expected, baseline), /does not match/);
+  assert.throws(() => boundExistingProviderB({ services: [{ ...service, key_reference: 'wrong' }] }, expected, baseline), /does not match/);
+  assert.throws(() => boundExistingProviderB({ services: [{ ...service, status: 'disabled' }] }, expected, baseline), /does not match/);
+  const bound = { selectedServiceBound: true, issuedSignatureMatchesBoundKey: true };
+  const resolved = {
+    identity: { issuer_did: 'did:example:issuer' }, public_jwk: { kty: 'EC' },
+    managed_key_binding_sha256: managedBindingHash(
+      process.env.BETA_AUDIT_ORG_ID || '00000000-0000-0000-0000-000000000001',
+      service.id, service.key_reference,
+    ),
+  };
+  assert.equal(matchesManagedBinding(resolved, 'did:example:issuer', service.id, service.key_reference), true);
+  assert.equal(matchesManagedBinding(resolved, 'did:example:issuer', 'old-service', service.key_reference), false);
+  assert.equal(matchesManagedBinding(resolved, 'did:example:issuer', service.id, 'old-key'), false);
+  await assert.rejects(
+    verifySelectedIssuerBinding(
+      fakePage([{ ok: true, status: 200, body: resolved }]),
+      'did:example:issuer', { ...service, id: 'old-service' }, { credential: 'unused' },
+    ),
+    /does not match selected signing service and key/,
+  );
+  assert.equal(observedRemoteSigner(null, { ok: true }, { verified: true }, service.id, service.id, bound), false);
+  assert.equal(observedRemoteSigner(expected, { ok: true }, { verified: true }, service.id, service.id, null), false);
+  assert.equal(observedRemoteSigner(expected, { ok: true }, { verified: true }, 'old-service', service.id, bound), false);
+  assert.equal(observedRemoteSigner(expected, { ok: true }, { verified: true }, service.id, service.id, bound), true);
+});
 const {
   validateElevenIdLoginTheme,
 } = require('./audit-beta-credential-lifecycle');
