@@ -13,6 +13,17 @@ const headFingerprint = event => hash(event.headRevisions.map(({ requirementId, 
 const same = (actual, expected, label) => assert.equal(String(actual || ''), String(expected), label);
 const enc = encodeURIComponent;
 
+function requireCaptureWindow(page, phase, { canvasPage, walletPage, popups }) {
+  const observation = { popupCount: popups.length, initialPage: page === canvasPage,
+    observedPopup: popups.includes(page), walletPage: page === walletPage };
+  const expectedPage = phase === 'wallet-receipt-and-verification'
+    ? Boolean(walletPage) && page === walletPage
+    : Boolean(canvasPage) && (page === canvasPage || popups.includes(page));
+  assert.ok(page && popups.length <= 2 && expectedPage,
+    'Uncaptured or unexpected Canvas launch window');
+  return observation;
+}
+
 function requireJobBinding(sync, scope, seen, after) {
   const job = sync?.job;
   same(job?.id, sync?.body?.sync?.job_id, 'Enqueued and completed jobs must match');
@@ -65,6 +76,7 @@ async function runCanvasCapture({ setup, page, adminPage, walletPage, scenario,
   assert.ok(['canvas-learning-achievement', 'external-evidence-to-credential'].includes(scenario));
   const { marty, adminCanvas, learnerCanvas, fixtures, externalAssignment,
     organizationId, binding, platformId, pinnedBinding, templates, martyOrigin } = setup;
+  report.currentOperation = 'learner-resource-launch';
   const launch = await operations.launchLearnerResource(page, learnerCanvas, fixtures, externalAssignment, martyOrigin);
   page = launch.page;
   const applicationId = String(launch.bootstrap?.application_id || '');
@@ -75,6 +87,20 @@ async function runCanvasCapture({ setup, page, adminPage, walletPage, scenario,
     same(launch.bootstrap[field], expected, `Foreign bootstrap ${field}`);
   }
   onApplication(applicationId);
+  report.currentOperation = 'background-roster-activation';
+  const activationAt = new Date().toISOString();
+  await operations.validateAndActivateBinding(marty, binding.id);
+  report.currentOperation = 'background-roster-job';
+  const rosterJob = await operations.waitForLatestRosterJob(marty, organizationId, binding.id, activationAt);
+  report.currentOperation = 'unsigned-pending-candidate';
+  const candidate = await operations.waitForCandidate(marty, organizationId, binding.id, 'pending_claim');
+  assert.ok(Number(rosterJob?.result?.pending_claim || 0) >= 1 || candidate,
+    'Background roster did not produce an unsigned pending claim');
+  report.currentOperation = 'learner-repeat-launch';
+  const repeat = await operations.launchLearnerResource(page, learnerCanvas, fixtures, externalAssignment, martyOrigin);
+  assert.equal(String(repeat.bootstrap?.application_id), applicationId,
+    'Repeat learner launch created a different application');
+  page = repeat.page;
   const scope = { application_id: applicationId, organization_id: organizationId,
     binding_id: binding.id, platform_id: platformId, credential_template_id: templates.credential.id };
   report.scope = scope;
@@ -95,23 +121,37 @@ async function runCanvasCapture({ setup, page, adminPage, walletPage, scenario,
       'Credential signed before wallet claim');
     return state;
   };
+  report.currentOperation = 'pending-claim-ui';
   await page.getByTestId('canvas-pending-claim').waitFor({ state: 'visible' });
+  report.currentOperation = 'pending-claim-unsigned';
   const pending = await unsigned();
   assert.equal(pending.claim.status, 'pending_claim');
   assert.equal(pending.claim.available, false);
   report.unsignedPendingObserved = true;
 
-  async function sync(phase, permitted) {
+  async function sync(phase, permitted, { allowPolicyRetry = false } = {}) {
     const started = now();
+    report.currentOperation = `${phase}-sync-request`;
     const observed = await operations.triggerLearnerSync(page, marty);
+    report.currentOperation = `${phase}-job-binding`;
     const job = requireJobBinding(observed, scope, seen, started);
-    assert.equal(job.result?.policy_allowed, permitted);
+    assert.equal(typeof job.result?.policy_allowed, 'boolean', 'Canvas job omitted its policy decision');
     assert.equal(Number(job.result?.requirements_checked), pinnedBinding.evidence_requirements.length);
-    const facts = await marty.get(`/v1/organizations/${enc(organizationId)}/applicants/${enc(applicationId)}/evidence-facts`);
+    const facts = await marty.get(`/v1/organizations/${enc(organizationId)}/applicants/${enc(applicationId)}/evidence-facts?current_only=true`);
     const heads = operations.validateAuthoritativeEvidenceHeads(facts, pinnedBinding.evidence_requirements);
-    await page.getByTestId(permitted ? 'canvas-evidence-policy-permitted' : 'canvas-evidence-policy-not-permitted')
+    report.currentOperation = `${phase}-policy-ui`;
+    await page.getByTestId(job.result.policy_allowed ? 'canvas-evidence-policy-permitted' : 'canvas-evidence-policy-not-permitted')
       .waitFor({ state: 'visible' });
-    const event = { phase, applicationId, jobId: job.id, policyAllowed: permitted,
+    if (job.result.policy_allowed !== permitted) {
+      if (allowPolicyRetry) {
+        report.recoveryRetries ||= [];
+        report.recoveryRetries.push({ phase, jobId: job.id, policyAllowed: false,
+          requirementsChecked: Number(job.result.requirements_checked) });
+        return null;
+      }
+      assert.equal(job.result.policy_allowed, permitted, 'Fresh Canvas job had the wrong policy decision');
+    }
+    const event = { phase, applicationId, jobId: job.id, policyAllowed: job.result.policy_allowed,
       headRevisions: heads.map(f => ({ id: f.id, requirementId: f.requirement_id,
         sourceRevision: f.source_revision, payloadHash: f.payload_hash })) };
     report.operations.push(event);
@@ -123,35 +163,69 @@ async function runCanvasCapture({ setup, page, adminPage, walletPage, scenario,
 
   const gradePath = `/api/v1/courses/${fixtures.course.id}/assignments/${fixtures.assignment.id}/submissions/${fixtures.learner.id}`;
   async function grade(value) {
+    report.currentOperation = 'grade-write';
     const changed = await adminCanvas.putForm(gradePath, { 'submission[posted_grade]': value }, [200]);
+    report.currentOperation = 'grade-user-binding';
     same(changed.user_id, fixtures.learner.id, 'Grade changed a different learner');
+    report.currentOperation = 'grade-assignment-binding';
     same(changed.assignment_id, fixtures.assignment.id, 'Grade changed a different assignment');
+    report.currentOperation = 'grade-score-binding';
     assert.equal(Number(changed.score), value);
+  }
+  async function withRestoredGrade(operation) {
+    let primaryFailure;
+    try { return await operation(); }
+    catch (error) {
+      primaryFailure = error;
+      report.operationFailures ||= [];
+      report.operationFailures.push(stock.contractFailureLocation(error, report.currentOperation));
+      throw error;
+    } finally {
+      try { await grade(95); }
+      catch (error) {
+        report.operationFailures ||= [];
+        report.operationFailures.push(stock.contractFailureLocation(error, report.currentOperation));
+        if (primaryFailure) throw new AggregateError([primaryFailure, error],
+          'Canvas operation and grade restoration both failed');
+        throw error;
+      }
+    }
   }
   async function correction(prefix) {
     let denied;
-    try {
+    await withRestoredGrade(async () => {
       await grade(40);
       denied = await sync(`${prefix}-deny`, false);
       assert.notEqual(headFingerprint(denied), headFingerprint(initial), 'Correction reused initial evidence');
-      // A displayed deny is insufficient: exercise the real management boundary
-      // while denied, then prove it neither reserved an offer nor signed a credential.
+      // Exercise the management boundary while denied, then prove that it
+      // neither reserved an offer nor exposed a wallet claim or credential.
       report.pendingOperations.push('scoped-approval');
+      report.currentOperation = `${prefix}-denied-approval-inventory-before`;
       assert.equal((await transactions()).length, 0, 'Unexpected issuance reservation before denied approval');
+      report.currentOperation = `${prefix}-denied-approval-request`;
       const rejection = await marty.post(approvalPath, { review_notes: `Denied Canvas capture ${scenario}` }, [409]);
-      assert.equal(rejection?.detail, 'Canvas application is not ready for approval');
+      report.currentOperation = `${prefix}-denied-approval-detail`;
+      const detail = rejection?.detail ?? (rejection?.error === 'service_error'
+        ? rejection.error_description : undefined);
+      assert.equal(detail, 'Canvas application is not ready for approval');
+      report.currentOperation = `${prefix}-denied-approval-inventory-after`;
       assert.equal((await transactions()).length, 0, 'Denied approval reserved an issuance transaction');
+      report.currentOperation = `${prefix}-denied-claim-state`;
       const state = await unsigned();
       assert.equal(state.claim.available, false, 'Denied approval enabled the wallet claim');
+      assert.equal(await page.getByTestId('canvas-claim-action').count(), 0,
+        'Denied learner view exposes a claim action');
       report.deniedApproval = { applicationId, jobId: denied.jobId, httpStatus: 409,
         transactionCount: 0, credentialCount: 0, claimAvailable: false };
       report.pendingOperations = report.pendingOperations.filter(operation => operation !== 'scoped-approval');
       await checkpoint(page, 'approval-denied-on-current-evidence', report.deniedApproval);
-    } finally {
-      // Always restore the exact synthetic grade, including when denial/readback fails.
-      await grade(95);
+    });
+    let recovered = null;
+    for (let attempt = 0; attempt < 4 && !recovered; attempt++) {
+      await operations.waitForCanvasCourseCompletion(adminCanvas, fixtures);
+      recovered = await sync(`${prefix}-recovery`, true, { allowPolicyRetry: true });
     }
-    const recovered = await sync(`${prefix}-recovery`, true);
+    assert.ok(recovered, 'Fresh Canvas recovery jobs did not restore current policy permit');
     assert.notEqual(headFingerprint(recovered), headFingerprint(denied), 'Recovery reused denied evidence');
     return { denied, recovered };
   }
@@ -201,21 +275,40 @@ async function runCanvasCapture({ setup, page, adminPage, walletPage, scenario,
   report.credentialId = credentialId;
   report.issuerDid = issued.issuer_did;
   report.pendingOperations = report.pendingOperations.filter(operation => operation !== 'wallet-claim');
+  report.currentOperation = 'claim-dialog-dismiss';
   await page.getByTestId('credential-claim-dialog').getByRole('button', { name: /close|done/i }).first().click();
+  report.currentOperation = 'claim-complete-ui';
   await operations.reloadLearnerExperience(page);
   await page.getByTestId('canvas-claim-complete').waitFor({ state: 'visible' });
+  report.currentOperation = 'wallet-verification';
   const verification = await wallet.verify(adminPage, walletPage, `Canvas ${applicationId}`, {
     organizationId, presentationPolicyId: templates.policy.id, issuerDid: issued.issuer_did,
+    returnOnWalletFailure: true,
+    onPhase: (phase, detail) => {
+      report.currentOperation = `wallet-verification-${phase}`;
+      if (detail) report.verificationProgress = detail;
+    },
   });
+  report.verificationAttempt = { sessionOk: verification?.session?.ok === true,
+    sessionStatus: verification?.session?.status || null,
+    requestUriPresent: Boolean(verification?.session?.requestUri),
+    walletOk: verification?.wallet?.ok === true,
+    walletStatus: verification?.wallet?.status || null,
+    verifierStatus: verification?.result?.status || null,
+    verifierEvaluation: verification?.result?.evaluation || null,
+    verifierDecision: verification?.result?.decision || null,
+    verifierHttpStatus: verification?.result?.httpStatus || null };
+  report.currentOperation = 'wallet-verification-decision';
   requireVerificationDecision(verification, 'allow');
   report.verification = verification;
+  report.currentOperation = 'verifier-checkpoint';
   await checkpoint(walletPage, 'wallet-receipt-and-verification', { applicationId, credentialId, transactionId });
 
   if (scenario === 'external-evidence-to-credential') {
     const reviewsPath = `/v1/integrations/canvas/evidence-policy-reviews?organization_id=${enc(organizationId)}&binding_id=${enc(binding.id)}&limit=100`;
     assert.equal((await marty.get(reviewsPath)).filter(r => r.application_id === applicationId && r.status === 'open').length, 0);
     let review, postDenied;
-    try {
+    await withRestoredGrade(async () => {
       await grade(40);
       postDenied = await sync('post-issuance-deny', false);
       assert.notEqual(headFingerprint(postDenied), headFingerprint(report.preIssuanceCorrection.recovered),
@@ -231,7 +324,7 @@ async function runCanvasCapture({ setup, page, adminPage, walletPage, scenario,
       assert.equal(String(current.status).toUpperCase(), 'ACTIVE');
       report.correctionReview = { id: review.id, applicationId, credentialId, status: 'open', credentialStatus: 'ACTIVE' };
       await checkpoint(page, 'correction-review-open', report.correctionReview);
-    } finally { await grade(95); }
+    });
     const postRecovered = await sync('post-issuance-recovery', true);
     assert.notEqual(headFingerprint(postRecovered), headFingerprint(postDenied),
       'Post-issuance recovery reused denied evidence');
@@ -247,9 +340,10 @@ async function runCanvasCapture({ setup, page, adminPage, walletPage, scenario,
     assert.equal(String(current.status).toUpperCase(), 'ACTIVE');
     await checkpoint(page, 'correction-review-resolved', report.correctionReview);
   }
+  report.currentOperation = 'retired-ingest-before-snapshot';
   const authoritativeSnapshot = async () => ({
     evidence: headFingerprint({ headRevisions: operations.validateAuthoritativeEvidenceHeads(
-      await marty.get(`/v1/organizations/${enc(organizationId)}/applicants/${enc(applicationId)}/evidence-facts`),
+      await marty.get(`/v1/organizations/${enc(organizationId)}/applicants/${enc(applicationId)}/evidence-facts?current_only=true`),
       pinnedBinding.evidence_requirements).map(f => ({ requirementId: f.requirement_id,
       sourceRevision: f.source_revision, payloadHash: f.payload_hash })) }),
     transactions: hash(await transactions()),
@@ -259,6 +353,7 @@ async function runCanvasCapture({ setup, page, adminPage, walletPage, scenario,
   report.untrustedIngest = { applicationId, httpStatus: null, before: beforeLegacy,
     after: null, authoritativeStateUnchanged: false };
   report.pendingOperations.push('legacy-evidence-ingest');
+  report.currentOperation = 'retired-ingest-rejection';
   const legacy = await marty.post('/v1/integrations/canvas/evidence-events', {
     canvas_event_id: `untrusted-capture-${applicationId}`, organization_id: organizationId,
     credential_template_id: templates.credential.id, application_id: applicationId,
@@ -284,4 +379,5 @@ async function runCanvasCapture({ setup, page, adminPage, walletPage, scenario,
   return { page, applicationId, transactionId, credentialId };
 }
 
-module.exports = { requireJobBinding, requireIssuedBinding, requireCaptureMutationReconciliation, runCanvasCapture, readLearnerStatus };
+module.exports = { requireJobBinding, requireIssuedBinding, requireCaptureMutationReconciliation,
+  requireCaptureWindow, runCanvasCapture, readLearnerStatus };

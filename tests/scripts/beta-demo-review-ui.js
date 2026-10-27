@@ -28,11 +28,23 @@ function requireVerificationDecision(verification, expectedDecision) {
   return verification.result;
 }
 
-async function clickForMutation(page, recording, locator, endpoint, action) {
-  const [response] = await Promise.all([
-    page.waitForResponse((candidate) => matchesMutation(candidate, page.url(), endpoint), { timeout: 30000 }),
-    recording.click(page, locator, { action, phase: 'confirmation', durationMs: 3200 }),
+async function responseForAction(page, predicate, action, timeout = 30000) {
+  // Observe both failures immediately, and let the click settle before callers
+  // start cleanup. A detached response timeout can otherwise terminate Node
+  // while Playwright is still explaining why the real control cannot be used.
+  const [response, dispatch] = await Promise.allSettled([
+    page.waitForResponse(predicate, { timeout }),
+    Promise.resolve().then(action),
   ]);
+  if (dispatch.status === 'rejected') throw dispatch.reason;
+  if (response.status === 'rejected') throw response.reason;
+  return response.value;
+}
+
+async function clickForMutation(page, recording, locator, endpoint, action) {
+  const response = await responseForAction(page,
+    (candidate) => matchesMutation(candidate, page.url(), endpoint),
+    () => recording.click(page, locator, { action, phase: 'confirmation', durationMs: 3200 }));
   const body = await response.json().catch(() => null);
   if (!response.ok() || !body) throw new Error(`${action} did not return a successful product response (HTTP ${response.status()})`);
   recording.mark(action, 'response-received', { httpStatus: response.status() });
@@ -76,4 +88,4 @@ async function issueThroughConsole(page, recording, endpoint) {
   return issued;
 }
 
-module.exports = { approveThroughConsole, clickForMutation, issueThroughConsole, matchesMutation, requireVerificationDecision };
+module.exports = { approveThroughConsole, clickForMutation, issueThroughConsole, matchesMutation, requireVerificationDecision, responseForAction };

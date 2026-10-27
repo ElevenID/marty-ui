@@ -20,6 +20,7 @@ const {
   selectProductionBadgeTemplates,
   contractFailureLocation,
   canvasTokenExpiration,
+  selectCanvasTokenExpirationTime,
   freshCanvasLearnerEmail,
   martyRequestSummary,
   createHolderProof,
@@ -30,6 +31,8 @@ const {
   resolveOid4vciEndpoints,
   resolveProofNonce,
   responseJson,
+  fetchWithTimeout,
+  CanvasSessionClient,
   sanitizeEvidence,
   validateAuthoritativeEvidenceHeads,
   validateReadinessSnapshot,
@@ -37,6 +40,74 @@ const {
 } = require('./run-canvas-oss-standard-contract');
 
 const NOW = '2026-07-15T06:00:00.000Z';
+
+test('HTTPS transport failure retains bounded network causes without secret-bearing diagnostics', async (t) => {
+  const secret = 'private-token-in-message-url-and-stack';
+  const causes = ['ETIMEDOUT', 'EHOSTUNREACH'].map(code => Object.assign(new Error(secret), { code }));
+  const failure = new TypeError(secret, { cause: new AggregateError(causes, secret) });
+  failure.cause.errors.push(failure); // A cyclic cause must remain bounded.
+  t.mock.method(globalThis, 'fetch', async () => { throw failure; });
+  await assert.rejects(fetchWithTimeout(`https://issuer.invalid/?code=${secret}`, {
+    headers: { Authorization: `Bearer ${secret}` },
+  }), error => {
+    assert.equal(error.code, 'http_transport_failed');
+    assert.equal(error.message, 'A required HTTPS request failed (ETIMEDOUT, EHOSTUNREACH).');
+    assert.ok(!error.stack.includes(secret));
+    return true;
+  });
+});
+
+test('HTTPS transport unknown failures do not publish arbitrary error codes or text', async (t) => {
+  t.mock.method(globalThis, 'fetch', async () => {
+    throw Object.assign(new Error('secret'), { code: 'SECRET_TOKEN_VALUE' });
+  });
+  await assert.rejects(fetchWithTimeout('https://issuer.invalid'), {
+    code: 'http_transport_failed',
+    message: 'A required HTTPS request failed (UNKNOWN_TRANSPORT_ERROR).',
+  });
+});
+
+test('HTTPS transport timeout aborts once and preserves manual redirect behavior', async (t) => {
+  let calls = 0;
+  t.mock.method(globalThis, 'fetch', async (_url, options) => {
+    calls++;
+    assert.equal(options.redirect, 'manual');
+    return new Promise((_resolve, reject) => options.signal.addEventListener('abort', () => {
+      reject(new DOMException('private request details', 'AbortError'));
+    }, { once: true }));
+  });
+  await assert.rejects(fetchWithTimeout('https://issuer.invalid', {}, 1), {
+    code: 'http_transport_failed',
+    message: 'A required HTTPS request failed (REQUEST_TIMEOUT, REQUEST_ABORTED).',
+  });
+  assert.equal(calls, 1);
+});
+
+test('Canvas token retirement uses its existing password session and decoded CSRF cookie', async () => {
+  const calls = [];
+  const client = new CanvasSessionClient('https://canvas-test.elevenidllc.com', {
+    async cookies(origin) { assert.equal(origin, 'https://canvas-test.elevenidllc.com'); return [{ name: '_csrf_token', value: 'synthetic%2Bcsrf%3D' }]; },
+    request: { async fetch(url, options) {
+      calls.push({ url, options });
+      return { status: () => 200, json: async () => ({}), text: async () => '{}', headers: () => ({}) };
+    } },
+  });
+  const result = await client.request('DELETE', '/api/v1/users/1/tokens/2', { includeStatus: true });
+  assert.equal(result.status, 200);
+  assert.equal(calls[0].options.headers['X-CSRF-Token'], 'synthetic+csrf=');
+  assert.equal(calls[0].options.headers.Authorization, undefined);
+  assert.equal(calls[0].options.maxRedirects, 0);
+});
+
+test('Canvas session mutations without CSRF or outside the API origin never reach transport', async () => {
+  let calls = 0;
+  const client = new CanvasSessionClient('https://canvas-test.elevenidllc.com', {
+    async cookies() { return []; }, request: { async fetch() { calls++; } },
+  });
+  await assert.rejects(client.request('DELETE', '/api/v1/users/1/tokens/2'));
+  await assert.rejects(client.request('GET', 'https://foreign.example/api/v1/users/1'));
+  assert.equal(calls, 0);
+});
 
 test('unexpected driver diagnostics retain source location without secret-bearing error text', () => {
   const error = new Error('secret-token request https://issuer.example?code=private-value');
@@ -133,7 +204,19 @@ test('pipeline prerequisites read the explicit mounted artifact directory and re
     source_repository: 'https://github.com/instructure/canvas-lms.git', source_modified: false,
     source_commit: 'a'.repeat(40), image_digest: 'sha256:' + 'b'.repeat(64), scope: 'UNIT_FIXTURE_ONLY',
   }));
-  const bootstrap = { phase: 'pre_start_only', web_started_after_bootstrap: true, forbidden_operation_counts: { rails_runner: 0 } };
+  const bootstrap = {
+    schema_version: 1,
+    phase: 'pre_start_only',
+    commands: [
+      ['bin/rails', 'db:create'], ['bin/rails', 'db:migrate'],
+      ['bin/rails', 'db:initial_setup'], ['bin/rails', 'brand_configs:generate_and_upload_all'],
+    ].map(argv => ({ argv, exit_code: 0 })),
+    web_started_after_bootstrap: true,
+    forbidden_operation_counts: {
+      rails_runner: 0, rails_console: 0, post_bootstrap_database_access: 0,
+      custom_plugins: 0, source_patches: 0, custom_events: 0,
+    },
+  };
   fs.writeFileSync(path.join(directory, 'bootstrap-audit.json'), JSON.stringify(bootstrap));
   fs.writeFileSync(path.join(directory, 'runtime-context.json'), JSON.stringify({
     origin: 'https://beta.elevenidllc.com', source_id: 'c'.repeat(40),
@@ -144,11 +227,25 @@ test('pipeline prerequisites read the explicit mounted artifact directory and re
   const ledger = new ObservationLedger(NOW);
   await observePipelinePrerequisites(ledger, 'https://beta.elevenidllc.com', 'https://canvas-test.elevenidllc.com', () => {}, directory);
   assert.equal(ledger.entries.get('stock_lifecycle_bootstrap_only').status, 'passed');
-  bootstrap.forbidden_operation_counts.rails_runner = 1;
-  fs.writeFileSync(path.join(directory, 'bootstrap-audit.json'), JSON.stringify(bootstrap));
-  await assert.rejects(observePipelinePrerequisites(new ObservationLedger(NOW),
-    'https://beta.elevenidllc.com', 'https://canvas-test.elevenidllc.com', () => {}, directory),
-  error => error.code === 'bootstrap_audit_invalid');
+  const invalid = [
+    value => { delete value.forbidden_operation_counts; },
+    value => { value.forbidden_operation_counts = {}; },
+    value => { delete value.forbidden_operation_counts.custom_events; },
+    value => { value.forbidden_operation_counts.unexpected = 0; },
+    value => { value.forbidden_operation_counts.rails_runner = 1; },
+    value => { delete value.schema_version; },
+    value => { delete value.commands; },
+    value => { value.commands[0].argv = ['bin/rails', 'runner']; },
+    value => { value.commands[0].exit_code = 1; },
+  ];
+  for (const mutate of invalid) {
+    const candidate = structuredClone(bootstrap);
+    mutate(candidate);
+    fs.writeFileSync(path.join(directory, 'bootstrap-audit.json'), JSON.stringify(candidate));
+    await assert.rejects(observePipelinePrerequisites(new ObservationLedger(NOW),
+      'https://beta.elevenidllc.com', 'https://canvas-test.elevenidllc.com', () => {}, directory),
+    error => error.code === 'bootstrap_audit_invalid');
+  }
 });
 
 function readinessSnapshot(overrides = {}) {
@@ -635,4 +732,248 @@ test('course recovery waits for current nonempty counts despite retained complet
   const canvas = { get: async path => { paths.push(path); return paths.length === 1 ? stale : recovered; } };
   assert.equal(await waitForCanvasCourseCompletion(canvas, { course: { id: 'course-1' }, learner: { id: 'learner-1' } }), recovered);
   assert.deepEqual(paths, ['/api/v1/courses/course-1/users/learner-1/progress', '/api/v1/courses/course-1/users/learner-1/progress']);
+});
+
+function stockTimeWidget({ value = '12:00 AM', expanded = false, committedValue } = {}) {
+  const calls = [];
+  const time = {
+    async fill(next) { calls.push(['fill', next]); if (next !== value) expanded = true; value = next; },
+    async getAttribute(name) { assert.equal(name, 'aria-expanded'); return String(expanded); },
+    async press(key) { assert.equal(key, 'ArrowDown'); calls.push(['press', key]); expanded = true; },
+    async inputValue() { return value; },
+  };
+  const page = { getByRole(role, options) {
+    assert.equal(role, 'option'); assert.equal(options.exact, true);
+    return { async click() {
+      assert.equal(expanded, true, 'stock options only exist while the combobox is open');
+      calls.push(['click', options.name]); value = committedValue ?? options.name; expanded = false;
+    } };
+  } };
+  return { page, time, calls };
+}
+
+test('Canvas token time explicitly opens a closed same-value midnight combobox', async () => {
+  const widget = stockTimeWidget();
+  await selectCanvasTokenExpirationTime(widget.page, widget.time, '12:00 AM');
+  assert.deepEqual(widget.calls, [['fill', '12:00 AM'], ['press', 'ArrowDown'], ['click', '12:00 AM']]);
+});
+
+test('Canvas token time selects the exact option without moving an already-open selection', async () => {
+  const widget = stockTimeWidget({ expanded: true });
+  await selectCanvasTokenExpirationTime(widget.page, widget.time, '1:30 AM');
+  assert.deepEqual(widget.calls, [['fill', '1:30 AM'], ['click', '1:30 AM']]);
+});
+
+test('Canvas token time rejects a stale committed option before token submission', async () => {
+  const widget = stockTimeWidget({ committedValue: '12:00 AM' });
+  await assert.rejects(selectCanvasTokenExpirationTime(widget.page, widget.time, '1:30 AM'),
+    error => error.code === 'canvas_personal_token_time_uncommitted');
+});
+
+
+test('engineering CLI permits explicit media-free mode while recorded mode requires a video path', () => {
+  const {parseArgs} = require('./run-canvas-oss-standard-contract');
+  const functional = parseArgs(['node','driver','--observations','observations.json','--functional-rerun']);
+  assert.equal(functional.functionalRerun,true);
+  assert.equal(functional.video,null);
+  assert.throws(() => parseArgs(['node','driver','--observations','observations.json']), /video/);
+  assert.throws(() => parseArgs(['node','driver','--observations','observations.json','--functional-rerun','--functional-rerun']), /Unsupported argument/);
+  const recorded = parseArgs(['node','driver','--observations','observations.json','--video','contract.webm']);
+  assert.equal(recorded.functionalRerun,false);
+  assert.match(recorded.video,/contract\.webm$/);
+});
+
+test('shared stock login emits only static stages and preserves original navigation failure',async()=>{
+ const {loginCanvas}=require('./run-canvas-oss-standard-contract');const stages=[];
+ const locator={first(){return this},fill:async()=>{},click:async()=>{},isVisible:async()=>false};
+ const page={goto:async()=>{},locator:()=>locator,getByRole:()=>locator,waitForURL:async()=>{throw Object.assign(Error('private redirect'),{name:'TimeoutError'})}};
+ await assert.rejects(loginCanvas(page,'https://canvas-test.elevenidllc.com','private-login','private-password',{observe:value=>stages.push(value)}),/private redirect/);
+ assert.deepEqual(stages,['NAVIGATE_LOGIN','FILL_LOGIN','SUBMIT_LOGIN']);
+ page.waitForURL=async()=>{};stages.length=0;await loginCanvas(page,'https://canvas-test.elevenidllc.com','private-login','private-password',{observe:value=>stages.push(value)});
+ assert.deepEqual(stages,['NAVIGATE_LOGIN','FILL_LOGIN','SUBMIT_LOGIN','POST_LOGIN_ACCEPT','LOGIN_COMPLETE']);
+ await loginCanvas(page,'https://canvas-test.elevenidllc.com','private-login','private-password');
+});
+
+test('Compose secret boundary still rejects raw environment values and non-Compose file paths before IO',()=>{
+ const {requireSecretFile}=require('./run-canvas-oss-standard-contract');const name='CANVAS_SECRET_BOUNDARY_TEST';
+ const original=process.env[name],originalFile=process.env[name+'_FILE'];
+ try{process.env[name]='raw-secret';assert.throws(()=>requireSecretFile(name));delete process.env[name];process.env[name+'_FILE']='C:/private/secret';assert.throws(()=>requireSecretFile(name));process.env[name+'_FILE']='/run/secrets/../outside';assert.throws(()=>requireSecretFile(name));}
+ finally{if(original===undefined)delete process.env[name];else process.env[name]=original;if(originalFile===undefined)delete process.env[name+'_FILE'];else process.env[name+'_FILE']=originalFile;}
+});
+
+test('Developer Key ID is journaled before a later modal failure, once and only for exact trusted name',async()=>{
+ const {saveDeveloperKey}=require('./run-canvas-oss-standard-contract');const events=[];
+ const response={url:()=> 'https://canvas-test.elevenidllc.com/api/v1/accounts/1/developer_keys',request:()=>({method:()=> 'POST'}),status:()=>201,json:async()=>({developer_key:{id:42,name:'Owned run',api_key:'private'}})};
+ const page={url:()=> 'https://canvas-test.elevenidllc.com/accounts/1/developer_keys',waitForResponse:async predicate=>{assert.equal(predicate(response),true);assert.equal(predicate({...response,url:()=> 'https://foreign.test/api/v1/accounts/1/developer_keys'}),false);return response}};
+ const modal={getByRole:()=>({click:async()=>events.push('submit')}),waitFor:async()=>{events.push('hidden-wait');throw Error('late modal failure')}};
+ await assert.rejects(saveDeveloperKey(page,modal,'Owned run',id=>events.push('owned:'+id)),/late modal failure/);assert.deepEqual(events,['submit','owned:42','hidden-wait']);
+ events.length=0;response.json=async()=>({developer_key:{id:42,name:'Foreign run',api_key:'private'}});await assert.rejects(saveDeveloperKey(page,modal,'Owned run',id=>events.push('owned:'+id)),error=>error.code==='canvas_developer_key_identity_mismatch');assert.deepEqual(events,['submit']);
+ events.length=0;response.json=async()=>({developer_key:{id:42,name:'Owned run'}});
+ await assert.rejects(saveDeveloperKey(page,modal,'Owned run',id=>events.push('owned:'+id),{observe:phase=>{if(phase==='JOURNAL'){events.push('journal');throw Error('observer failed')}}}),/observer failed/);
+ assert.deepEqual(events,['submit','owned:42','journal']);
+});
+
+test('Developer Key creation waits for the exact pinned API versus LTI account route',async()=>{
+ const {saveDeveloperKey}=require('./run-canvas-oss-standard-contract');
+ for(const kind of ['api','lti']){
+  const expected=kind==='api'?'/api/v1/accounts/1/developer_keys':'/api/lti/accounts/1/developer_keys/tool_configuration';
+  const response={url:()=> 'https://canvas-test.elevenidllc.com'+expected,request:()=>({method:()=> 'POST'}),status:()=>201,json:async()=>({developer_key:{id:42,name:'Owned run'}})};
+  const page={url:()=> 'https://canvas-test.elevenidllc.com/accounts/1/developer_keys',waitForResponse:async predicate=>{assert(predicate(response));for(const wrong of ['/api/v1/developer_keys','/api/v1/accounts/2/developer_keys','/api/v1/accounts/1/developer_keys/tool_configuration',kind==='api'?'/api/lti/accounts/1/developer_keys/tool_configuration':'/api/v1/accounts/1/developer_keys'])assert(!predicate({...response,url:()=> 'https://canvas-test.elevenidllc.com'+wrong}));return response;}};
+  let calls=0;await saveDeveloperKey(page,{getByRole:()=>({click:async()=>{}}),waitFor:async()=>{}},'Owned run',()=>{calls++},{kind});assert.equal(calls,1);
+ }
+});
+
+test('Developer Key setup declares English before shared API and LTI phases',async()=>{
+ const {createOauthDeveloperKey,createLtiDeveloperKey}=require('./run-canvas-oss-standard-contract');
+ for(const create of [createOauthDeveloperKey,createLtiDeveloperKey]){
+  const stages=[],navigations=[],locator={or(){return this},first(){return this},waitFor:async()=>{},click:async()=>{}};
+  const modal={waitFor:async()=>{},getByRole:()=>locator,getByTestId:name=>({fill:async()=>{if(name==='owner-email-input')throw Error('private field value')}})};
+  const page={goto:async url=>navigations.push(url),locator:()=>locator,getByRole:role=>role==='dialog'?modal:locator};
+  await assert.rejects(create(page,{canvasOrigin:'https://canvas-test.elevenidllc.com',accountId:'1',name:'Owned run',ownerEmail:'private@owned.test',observe:value=>stages.push(value)}),/private field value/);
+  assert.deepEqual(navigations,['https://canvas-test.elevenidllc.com/accounts/1/developer_keys?session_locale=en']);
+  assert.deepEqual(stages,['NAVIGATE','TRIGGER','MENU','MODAL','FILL']);assert(!JSON.stringify(stages).includes('private'));
+ }
+});
+
+test('real local redirect chains hold provider codes and observe native callbacks without routing redirected URLs',async()=>{
+ const http=require('node:http');const {chromium}=require('@playwright/test');const {authorizeCanvasOAuth}=require('./run-canvas-oss-standard-contract');
+ const servers=[];let browser,canvasOrigin,martyOrigin,current;
+ const listen=async handler=>{const server=http.createServer(handler);servers.push(server);await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));return 'http://127.0.0.1:'+server.address().port};
+ try{
+  martyOrigin=await listen((req,res)=>{const url=new URL(req.url,martyOrigin);if(url.pathname==='/v1/integrations/canvas/oauth/callback'){current.callbackHits++;res.writeHead(302,{Location:'/result?outcome=error'});res.end();}else{res.writeHead(200,{'Content-Type':'text/html'});res.end('<p>Owned local callback result</p>');}});
+  canvasOrigin=await listen(async(req,res)=>{
+   const url=new URL(req.url,canvasOrigin);const redirect=()=>{const target=new URL('/v1/integrations/canvas/oauth/callback',current.wrongOrigin?canvasOrigin:martyOrigin);target.searchParams.set('state',current.wrongState?'different-private-state':current.state);target.searchParams.set('code',current.code);res.writeHead(302,{Location:target.href});res.end();};
+   if(req.method==='GET'&&url.pathname==='/login/oauth2/auth'){current.authHits++;if(current.immediate)return redirect();res.writeHead(302,{Location:'/login/oauth2/confirm','Set-Cookie':'owned_control=unchanged; Path=/; HttpOnly'});res.end();}
+   else if(req.method==='GET'&&url.pathname==='/login/oauth2/confirm'){res.writeHead(200,{'Content-Type':'text/html'});res.end('<form id="oauth2_accept_form" method="post" action="/login/oauth2/accept"><input type="hidden" name="custom_csrf_token" value="owned-control"><button>Authorize</button></form>');}
+   else if(req.method==='POST'&&url.pathname==='/login/oauth2/accept'){const chunks=[];for await(const chunk of req)chunks.push(chunk);current.acceptBody=Buffer.concat(chunks).toString();current.acceptCookie=req.headers.cookie;current.acceptHits++;redirect();}
+   else{res.writeHead(404);res.end();}
+  });
+  browser=await chromium.launch();
+  for(const scenario of [{name:'consent-held',capture:true},{name:'immediate-held',capture:true,immediate:true},{name:'native',capture:false},{name:'wrong-state',capture:true,immediate:true,wrongState:true},{name:'wrong-origin',capture:true,immediate:true,wrongOrigin:true}]){
+   current={...scenario,state:'private-state-'+scenario.name,code:'private-code-'+scenario.name,callbackHits:0,authHits:0,acceptHits:0};
+   const observations=[],blocked=[],context=await browser.newContext({serviceWorkers:'block'});
+   // Install local-only network confinement before creating a page.
+   await context.route('**/*',async route=>{const origin=new URL(route.request().url()).origin;if([canvasOrigin,martyOrigin].includes(origin))await route.fallback();else{blocked.push('NONLOCAL_REQUEST');await route.abort();}});
+   try{const page=await context.newPage();const url=new URL('/login/oauth2/auth',canvasOrigin);url.searchParams.set('client_id','owned-client');url.searchParams.set('state',current.state);url.searchParams.set('redirect_uri',martyOrigin+'/v1/integrations/canvas/oauth/callback');
+    const operation=authorizeCanvasOAuth(page,url,{canvasOrigin,martyOrigin,captureAtProvider:scenario.capture,observe:row=>observations.push(row),timeout:5000});
+    if(scenario.wrongState||scenario.wrongOrigin){await assert.rejects(operation,error=>error.code==='canvas_oauth_redirect_binding_failed');assert.equal(current.callbackHits,0);}
+    else{const issued=await operation;assert.equal(issued.code,current.code);assert.equal(issued.state,current.state);assert.equal(current.callbackHits,scenario.capture?0:1);if(!scenario.immediate){assert.equal(current.acceptHits,1);assert.equal(current.acceptBody,'custom_csrf_token=owned-control');assert.match(current.acceptCookie,/owned_control=unchanged/);}if(!scenario.capture)assert(observations.some(row=>row.phase==='NATIVE_CALLBACK_REQUEST'));}
+    assert.equal(current.authHits,1);assert.deepEqual(blocked,[]);assert(!JSON.stringify(observations).includes('private-state'));assert(!JSON.stringify(observations).includes('private-code'));
+   }finally{await context.close();}
+  }
+ }finally{if(browser)await browser.close();await Promise.all(servers.map(server=>new Promise(resolve=>{server.closeAllConnections();server.close(resolve)})));}
+});
+
+
+test('developer key enable binds flat global account ACK beyond optimistic local-route checkbox', async () => {
+  const {enableDeveloperKey}=require('./run-canvas-oss-standard-contract');
+  for(const variant of [{status:200},{status:201},{status:200,developer_key_id:43},{status:200,account_id:1},{status:200,workflow_state:'off'},{status:200,account_owns_binding:false},{status:200,nested:true}]) {
+    const {status}=variant;let checked=false,acknowledged=false,resolveResponse;const diagnostics=[];
+    const responsePromise=new Promise(resolve=>{resolveResponse=resolve});
+    const toggle={isChecked:async()=>checked,getAttribute:async()=> 'owned-toggle'};
+    const row={waitFor:async()=>{},getByRole:()=>({first:()=>toggle}),locator:()=>({click:async()=>{checked=true}})};
+    const page={url:()=> 'https://canvas.example/accounts/1/developer_keys',getByRole:(_,options)=>options?.name?{first:()=>({isVisible:async()=>false})}:{filter:()=>({first:()=>row})},
+      waitForResponse:(predicate)=>{assert.equal(predicate({url:()=> 'https://canvas.example/api/v1/accounts/1/developer_keys/42/developer_key_account_bindings',request:()=>({method:()=> 'POST'})}),true);assert.equal(predicate({url:()=> 'https://canvas.example/api/v1/accounts/1/developer_keys/43/developer_key_account_bindings',request:()=>({method:()=> 'POST'})}),false);return responsePromise;}};
+    const record={id:42,developer_key_account_binding:{developer_key_id:42,account_id:10000000000001,account_owns_binding:true}};
+    let completed=false;const pending=enableDeveloperKey(page,'Owned',record,{observeBinding:value=>diagnostics.push(value)}).then(()=>{completed=true});
+    await new Promise(resolve=>setImmediate(resolve));assert.equal(checked,true);assert.equal(completed,false);
+    resolveResponse({status:()=>status,json:async()=>{acknowledged=true;const binding={developer_key_id:variant.developer_key_id??42,account_id:variant.account_id??10000000000001,account_owns_binding:variant.account_owns_binding??true,workflow_state:variant.workflow_state??'on'};return variant.nested?{developer_key_account_binding:binding}:binding}});
+    if(Object.keys(variant).length===1){await pending;assert.equal(completed,true)}
+    else {await assert.rejects(pending,error=>error.code==='canvas_key_binding_identity_mismatch');assert.equal(completed,false)}
+    assert.equal(acknowledged,true);assert.equal(diagnostics.length,1);assert(Object.values(diagnostics[0]).every(value=>typeof value==='boolean'));
+    for(const invalid of [{...record,developer_key_account_binding:{...record.developer_key_account_binding,account_owns_binding:false}},{...record,developer_key_account_binding:{...record.developer_key_account_binding,developer_key_id:43}}]){
+      checked=false;await assert.rejects(enableDeveloperKey(page,'Owned',invalid),error=>error.code==='canvas_key_binding_reference_invalid');
+    }
+  }
+});
+
+test('capture private custody fsyncs only exact owned authority and preserves failure recovery until retirement', t => {
+  const {createCanvasCaptureCustody}=require('./run-canvas-oss-standard-contract');
+  const directory=fs.mkdtempSync(path.join(os.tmpdir(),'canvas-private-custody-'));
+  t.after(()=>fs.rmSync(directory,{recursive:true,force:true}));
+  const run='11111111-1111-4111-8111-111111111111',custody=createCanvasCaptureCustody(run,directory);
+  custody.retain('canvasAdminSession','CONTROLLED_OLD_COOKIE');
+  const filename=path.join(directory,run+'-canvasAdminSession.json');
+  assert.equal(fs.readFileSync(filename,'utf8'),'CONTROLLED_OLD_COOKIE');
+  assert.throws(()=>custody.retain('globalAdminPassword','SHARED_CREDENTIAL'));
+  assert.throws(()=>createCanvasCaptureCustody(run,directory));
+  custody.retain('canvasAdminSession','CONTROLLED_RETAINED_COOKIE');
+  assert.equal(fs.readFileSync(filename,'utf8'),'CONTROLLED_RETAINED_COOKIE');
+  assert.equal(custody.retire(),true);assert.equal(fs.existsSync(filename),false);
+  const journal=JSON.parse(fs.readFileSync(path.join(directory,run+'.custody.json')));
+  assert.equal(journal.state,'RETIRED');assert(!JSON.stringify(journal).includes('COOKIE'));
+});
+
+test('capture session cleanup distinguishes deleted learner denial from real admin logout and original-cookie denial',async()=>{
+  const {retireCanvasCaptureSessions,retireCanvasBetaSession}=require('./run-canvas-oss-standard-contract');
+  const retained=[],calls=[];let adminReads=0;
+  const context=role=>({cookies:async()=>[{name:'_csrf_token',value:'CONTROLLED_CSRF'}],addCookies:async()=>{},request:{
+    get:async()=>{const status=role==='learner'?401:++adminReads===1?200:401;return {status:()=>status}},
+    delete:async()=>{calls.push(role);return {status:()=>302}}}});
+  const custody={retain:(role)=>retained.push(role)};
+  const result=await retireCanvasCaptureSessions({canvasOrigin:'https://canvas-test.elevenidllc.com',learnerContext:context('learner'),adminContext:context('admin'),custody});
+  assert.equal(result.canvasLearnerSession.alreadyDenied,true);assert.deepEqual(calls,['admin']);assert.equal(result.canvasAdminSession.probes.at(-1).status,401);
+  adminReads=0;calls.length=0;
+  await assert.rejects(retireCanvasCaptureSessions({canvasOrigin:'https://canvas-test.elevenidllc.com',learnerContext:{cookies:async()=>[]},adminContext:context('admin'),custody}),error=>error.code==='canvas_capture_sessions_incomplete');
+  assert.deepEqual(calls,['admin'],'One unknown owned session cannot block independent admin retirement');
+  adminReads=0;calls.length=0;
+  await assert.rejects(retireCanvasCaptureSessions({canvasOrigin:'https://canvas-test.elevenidllc.com',learnerContext:context('learner'),adminContext:context('admin'),custody},()=>{throw Error('CONTROLLED_OBSERVER_FAILURE')}),error=>error.code==='canvas_capture_sessions_incomplete');
+  assert.deepEqual(calls,['admin'],'Observer persistence failure cannot prevent authority retirement');
+  let originalHeader;const beta={cookies:async()=>[{name:'sessionId',value:'CONTROLLED_OWNED_SESSION'}],request:{post:async()=>({status:()=>303}),get:async(_,options)=>{originalHeader=options.headers.Cookie;return {status:()=>200,json:async()=>({authenticated:false,user:null})}}}};
+  assert.equal((await retireCanvasBetaSession(beta,custody)).oldCookieAuthenticated,false);assert.equal(originalHeader,'sessionId=CONTROLLED_OWNED_SESSION');
+});
+
+
+test('capture custody retains then retires only its tracked temporary authority after atomic publication failure',t=>{
+  const {createCanvasCaptureCustody}=require('./run-canvas-oss-standard-contract');
+  const directory=fs.mkdtempSync(path.join(os.tmpdir(),'canvas-private-publish-'));
+  t.after(()=>fs.rmSync(directory,{recursive:true,force:true}));
+  const run='22222222-2222-4222-8222-222222222222',custody=createCanvasCaptureCustody(run,directory);
+  custody.retain('canvasAdminSession','CONTROLLED_OLD');
+  const original=fs.renameSync;fs.renameSync=(from,to)=>{if(from.endsWith('-canvasAdminSession.json.next'))throw Error('CONTROLLED_PUBLICATION_FAILURE');return original(from,to)};
+  try {assert.throws(()=>custody.retain('canvasAdminSession','CONTROLLED_NEW'),/CONTROLLED_PUBLICATION_FAILURE/)} finally {fs.renameSync=original}
+  assert(fs.existsSync(path.join(directory,run+'-canvasAdminSession.json.next')));
+  fs.writeFileSync(path.join(directory,'unrelated-private-authority'),'PRESERVE');
+  custody.retire();assert(!fs.existsSync(path.join(directory,run+'-canvasAdminSession.json.next')));
+  assert(!fs.existsSync(path.join(directory,run+'-canvasAdminSession.json')));assert.equal(fs.readFileSync(path.join(directory,'unrelated-private-authority'),'utf8'),'PRESERVE');
+});
+
+
+test('capture retirement uses the shared typed OAuth authority path and rejects uncertain creation before teardown',async()=>{
+  const {retireCanvasOAuthAuthority,requireCanvasSetupMutationReconciliation}=require('./run-canvas-oss-standard-contract');
+  for(const status of ['CREATING','RESPONSE_UNVERIFIED']) assert.throws(()=>requireCanvasSetupMutationReconciliation({owned:{martySecretIntent:{state:status}}}),error=>error.code==='canvas_setup_creation_uncertain');
+  const calls=[];let removed=false;const state={organizationId:'owned-org',platformId:'owned-platform',marty:{request:async(method,path,options)=>{
+    calls.push({method,path,includeStatus:options.includeStatus});
+    if(method==='DELETE'){removed=true;return {status:200,payload:{platform_id:'owned-platform',status:'disconnected',scopes:[]}}}
+    return {status:200,payload:removed?[]:[{id:'33333333-3333-4333-8333-333333333333',organization_id:'owned-org',provider:'canvas',purpose:'oauth_access_token',enabled:true,metadata:{platform_id:'owned-platform'}}]};
+  }}};
+  const result=await retireCanvasOAuthAuthority(state,()=>{},{requireAccess:true});
+  assert.equal(result.typedDisconnectedAck,true);assert.equal(result.atomicMetadataAbsence,true);assert.equal(result.serverHeldBearerProbed,false);
+  assert.deepEqual(calls.map(row=>row.method),['GET','DELETE','GET']);assert(calls.every(row=>row.includeStatus===true));
+});
+
+
+test('engineering unresolved resources still retire independent owned sessions and retain private recovery',async()=>{
+  const {retireCanvasEngineeringSetup,prepareCanvasCaptureFixtures}=require('./run-canvas-oss-standard-contract');
+  const priorReceipt=process.env.DEMO_LOCAL_FUNCTIONAL_RUNTIME_RECEIPT,priorRecovery=process.env.DEMO_CANVAS_PRIVATE_RECOVERY_DIRECTORY;
+  try {
+    process.env.DEMO_LOCAL_FUNCTIONAL_RUNTIME_RECEIPT='/capture-prerequisites/functional-runtime.json';
+    delete process.env.DEMO_CANVAS_PRIVATE_RECOVERY_DIRECTORY;
+    await assert.rejects(prepareCanvasCaptureFixtures({browser:{},runSuffix:'CONTROLLED-RUN'}),error=>error.code==='canvas_private_custody_missing');
+  } finally {
+    if(priorReceipt===undefined)delete process.env.DEMO_LOCAL_FUNCTIONAL_RUNTIME_RECEIPT;else process.env.DEMO_LOCAL_FUNCTIONAL_RUNTIME_RECEIPT=priorReceipt;
+    if(priorRecovery===undefined)delete process.env.DEMO_CANVAS_PRIVATE_RECOVERY_DIRECTORY;else process.env.DEMO_CANVAS_PRIVATE_RECOVERY_DIRECTORY=priorRecovery;
+  }
+  const probes=[];let privateRetired=false;
+  const context=role=>({cookies:async()=>[{name:'_csrf_token',value:'CONTROLLED'}],request:{get:async()=>{probes.push(role);return {status:()=>401}}}});
+  const state={bindingActivationPossible:true,canvasOrigin:'https://canvas-test.elevenidllc.com',
+    adminContext:context('admin'),learnerContext:context('learner'),custody:{retire(){privateRetired=true;return true}}};
+  await assert.rejects(retireCanvasEngineeringSetup(state),error=>{
+    assert.equal(error.code,'owned_canvas_cleanup_incomplete');
+    assert.equal(error.canvasCleanupEvidence.complete,false);
+    assert.equal(error.canvasCleanupEvidence.sessionsRetired,true);
+    assert.equal(error.canvasCleanupEvidence.privateAuthorityRetired,false);
+    assert.equal(error.canvasCleanupEvidence.failures[0].stage,'OWNED_RESOURCES');return true;
+  });
+  assert.deepEqual(probes,['learner','admin']);assert.equal(privateRetired,false);
 });

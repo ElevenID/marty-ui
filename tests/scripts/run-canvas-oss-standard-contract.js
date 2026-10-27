@@ -13,9 +13,9 @@
  *   - ElevenID's public/management APIs and OID4VCI credential endpoint.
  *
  * It must never use Rails runner/console, direct database access, patched
- * Canvas source, a Canvas plugin, custom event ingestion, or persisted browser
- * state. Runtime credentials remain in memory and are never written to the
- * observation or video artifacts.
+ * Canvas source, a Canvas plugin, custom event ingestion, or shared persisted browser
+ * state. Exact run-owned recovery authority may enter the protected private
+ * mount; credentials are never written to observation or video artifacts.
  */
 
 const assert = require('node:assert/strict');
@@ -23,8 +23,21 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { chromium } = require('@playwright/test');
+const {readBoundedSecretFile}=require('./canvas-secret-files');
+const { retireOwnedCanvasFixtures, retireCanvasApplication, findCanvasInventoryRecord } = require('./canvas-owned-fixture-cleanup');
 
 const SCHEMA_VERSION = 1;
+// Match the stock producer and finalizer; this runner runs before finalization.
+const BOOTSTRAP_ALLOWED_COMMANDS = [
+  ['bin/rails', 'db:create'],
+  ['bin/rails', 'db:migrate'],
+  ['bin/rails', 'db:initial_setup'],
+  ['bin/rails', 'brand_configs:generate_and_upload_all'],
+];
+const BOOTSTRAP_FORBIDDEN_COUNTERS = [
+  'rails_runner', 'rails_console', 'post_bootstrap_database_access',
+  'custom_plugins', 'source_patches', 'custom_events',
+];
 const DEFAULT_CANVAS_ORIGIN = 'https://canvas-test.elevenidllc.com';
 const DEFAULT_MARTY_ORIGIN = 'https://beta.elevenidllc.com';
 const RUN_NAME_PREFIX = 'ElevenID OSS portability';
@@ -199,18 +212,20 @@ class ObservationLedger {
 }
 
 function parseArgs(argv) {
-  const result = { observations: '', video: '' };
+  const result = { observations: '', video: '', functionalRerun:false };
   for (let index = 2; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === '--observations') result.observations = argv[++index] || '';
     else if (arg === '--video') result.video = argv[++index] || '';
+    else if (arg === '--functional-rerun' && !result.functionalRerun) result.functionalRerun = true;
     else fail('invalid_argument', `Unsupported argument: ${arg}`);
   }
   requireCondition(result.observations, 'observations_path_missing', '--observations is required.');
-  requireCondition(result.video, 'video_path_missing', '--video is required.');
+  requireCondition(result.functionalRerun || result.video, 'video_path_missing', '--video is required for recorded runs.');
   return {
     observations: path.resolve(result.observations),
-    video: path.resolve(result.video),
+    video: result.video ? path.resolve(result.video) : null,
+    functionalRerun:result.functionalRerun,
   };
 }
 
@@ -230,8 +245,7 @@ function requireSecretFile(name) {
   );
   let value = '';
   try {
-    requireCondition(fs.lstatSync(filePath).isFile(), 'secret_file_invalid', `${name} secret path is not a file.`);
-    value = fs.readFileSync(filePath, 'utf8').replace(/\r?\n$/, '');
+    value = readBoundedSecretFile(filePath,{root:'/run/secrets',maxBytes:1024*1024}).value;
   } catch (error) {
     if (error instanceof ContractFailure) throw error;
     fail('secret_file_unreadable', `${name} Compose secret is unreadable.`);
@@ -319,13 +333,36 @@ function readJsonFile(filePath, code) {
   }
 }
 
+function transportFailureSummary(error, timedOut) {
+  // Only closed diagnostic codes may cross into public evidence. Error messages,
+  // stacks, URLs and request headers can contain credential material.
+  const allowed = ['ETIMEDOUT', 'UND_ERR_CONNECT_TIMEOUT', 'ENETUNREACH', 'EHOSTUNREACH',
+    'ENOTFOUND', 'EAI_AGAIN', 'ECONNREFUSED', 'ECONNRESET', 'CERT_HAS_EXPIRED',
+    'DEPTH_ZERO_SELF_SIGNED_CERT', 'SELF_SIGNED_CERT_IN_CHAIN',
+    'UNABLE_TO_VERIFY_LEAF_SIGNATURE', 'ERR_TLS_CERT_ALTNAME_INVALID'];
+  const codes = new Set(timedOut ? ['REQUEST_TIMEOUT'] : []);
+  const pending = [error];
+  const seen = new Set();
+  for (let count = 0; pending.length && count < 16; count++) {
+    const item = pending.shift();
+    if (!item || typeof item !== 'object' || seen.has(item)) continue;
+    seen.add(item);
+    if (allowed.includes(item.code)) codes.add(item.code);
+    if (item.name === 'AbortError') codes.add('REQUEST_ABORTED');
+    if (item.cause) pending.push(item.cause);
+    if (Array.isArray(item.errors)) pending.push(...item.errors.slice(0, 16));
+  }
+  const ordered = ['REQUEST_TIMEOUT', 'REQUEST_ABORTED', ...allowed].filter(code => codes.has(code));
+  return `A required HTTPS request failed (${ordered.join(', ') || 'UNKNOWN_TRANSPORT_ERROR'}).`;
+}
+
 async function fetchWithTimeout(url, options = {}, timeoutMs = DEFAULT_TIMEOUT_MS) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     return await fetch(url, { ...options, signal: controller.signal, redirect: options.redirect || 'manual' });
-  } catch {
-    fail('http_transport_failed', 'A required HTTPS request failed.');
+  } catch (error) {
+    fail('http_transport_failed', transportFailureSummary(error, controller.signal.aborted));
   } finally {
     clearTimeout(timer);
   }
@@ -357,7 +394,7 @@ class MartyClient {
     this.apiKey = apiKey;
   }
 
-  async request(method, requestPath, { json = undefined, expected = [200] } = {}) {
+  async request(method, requestPath, { json = undefined, expected = [200], includeStatus = false } = {}) {
     requireCondition(requestPath.startsWith('/v1/'), 'marty_path_rejected', 'Marty request path is outside the reviewed API surface.');
     const url = new URL(requestPath, this.origin);
     requireCondition(url.origin === this.origin, 'marty_origin_rejected', 'Marty request escaped the pinned origin.');
@@ -371,7 +408,8 @@ class MartyClient {
       body = JSON.stringify(json);
     }
     const response = await fetchWithTimeout(url, { method, headers, body, redirect: 'manual' });
-    return responseJson(response, 'marty_request_failed', martyRequestSummary(method, requestPath), expected);
+    const payload = await responseJson(response, 'marty_request_failed', martyRequestSummary(method, requestPath), expected);
+    return includeStatus ? {status:response.status,payload} : payload;
   }
 
   get(requestPath, expected = [200]) {
@@ -391,16 +429,41 @@ class MartyClient {
   }
 }
 
+function canvasRequestUrl(origin, requestPath) {
+  requireCondition(requestPath.startsWith('/api/v1/'), 'canvas_api_path_rejected', 'Canvas request path is outside the documented REST API surface.');
+  const url = new URL(requestPath, origin);
+  requireCondition(url.origin === origin, 'canvas_api_origin_rejected', 'Canvas API request escaped the pinned origin.');
+  return url;
+}
+
+class CanvasSessionClient {
+  constructor(origin, context) { this.origin = origin; this.context = context; }
+
+  async request(method, requestPath, { expected = [200], includeStatus = false, form } = {}) {
+    const url = canvasRequestUrl(this.origin, requestPath);
+    const headers = { Accept: 'application/json' };
+    if (!['GET', 'HEAD'].includes(method)) {
+      const csrf = (await this.context.cookies(this.origin)).find(cookie => cookie.name === '_csrf_token');
+      requireCondition(csrf?.value, 'canvas_csrf_missing', 'Canvas password session lacks its CSRF token.');
+      headers['X-CSRF-Token'] = decodeURIComponent(csrf.value);
+    }
+    const response = await this.context.request.fetch(url.href, {
+      method, headers, ...(form ? { form } : {}),
+      timeout: DEFAULT_TIMEOUT_MS, maxRedirects: 0, failOnStatusCode: false,
+    });
+    const value = await responseJson(response, 'canvas_session_request_failed', 'Canvas authenticated session request failed', expected);
+    return includeStatus ? { status: response.status(), body: value, link: response.headers()['link'] } : value;
+  }
+}
+
 class CanvasClient {
   constructor(origin, bearer) {
     this.origin = origin;
     this.bearer = bearer;
   }
 
-  async request(method, requestPath, { form = undefined, json = undefined, expected = [200] } = {}) {
-    requireCondition(requestPath.startsWith('/api/v1/'), 'canvas_api_path_rejected', 'Canvas request path is outside the documented REST API surface.');
-    const url = new URL(requestPath, this.origin);
-    requireCondition(url.origin === this.origin, 'canvas_api_origin_rejected', 'Canvas API request escaped the pinned origin.');
+  async request(method, requestPath, { form = undefined, json = undefined, expected = [200], includeStatus = false } = {}) {
+    const url = canvasRequestUrl(this.origin, requestPath);
     const headers = {
       Accept: 'application/json',
       Authorization: `Bearer ${this.bearer}`,
@@ -414,7 +477,8 @@ class CanvasClient {
       body = JSON.stringify(json);
     }
     const response = await fetchWithTimeout(url, { method, headers, body, redirect: 'manual' });
-    return responseJson(response, 'canvas_api_request_failed', 'Canvas documented REST request failed', expected);
+    const value = await responseJson(response, 'canvas_api_request_failed', 'Canvas documented REST request failed', expected);
+    return includeStatus ? { status: response.status, body: value, link: response.headers.get('link') } : value;
   }
 
   get(requestPath, expected = [200]) {
@@ -454,18 +518,23 @@ function extractDeveloperKeyRecord(payload, expectedName) {
     || null;
 }
 
-async function loginCanvas(page, origin, email, password) {
+async function loginCanvas(page, origin, email, password, { observe = () => {} } = {}) {
+  observe('NAVIGATE_LOGIN');
   await page.goto(`${origin}/login/canvas`, { waitUntil: 'domcontentloaded', timeout: DEFAULT_TIMEOUT_MS });
   const identifier = page.locator('#pseudonym_session_unique_id, input[name="pseudonym_session[unique_id]"]').first();
   const passwordInput = page.locator('#pseudonym_session_password, input[name="pseudonym_session[password]"]').first();
+  observe('FILL_LOGIN');
   await identifier.fill(email);
   await passwordInput.fill(password);
+  observe('SUBMIT_LOGIN');
   await Promise.all([
     page.waitForURL((url) => url.origin === origin && !url.pathname.startsWith('/login'), { timeout: DEFAULT_TIMEOUT_MS }),
     page.locator('button[type="submit"], input[type="submit"]').first().click(),
   ]);
+  observe('POST_LOGIN_ACCEPT');
   const accepted = page.getByRole('button', { name: /accept|agree|continue/i }).first();
   if (await accepted.isVisible().catch(() => false)) await accepted.click();
+  observe('LOGIN_COMPLETE');
 }
 
 function canvasTokenExpiration(now, timeZone, deadlineEpoch = process.env.CANVAS_OSS_CONTRACT_DEADLINE_EPOCH || '') {
@@ -488,6 +557,17 @@ function freshCanvasLearnerEmail(base, runSuffix) {
   return `${match[1].split('+')[0].slice(0, 40)}+${nonce}@${match[2]}`;
 }
 
+async function selectCanvasTokenExpirationTime(page, time, value) {
+  await time.fill(value);
+  // Filling the existing default (notably midnight) emits no change and leaves
+  // the stock InstUI combobox closed. Explicitly open it before selecting.
+  if (await time.getAttribute('aria-expanded') !== 'true') await time.press('ArrowDown');
+  // Select the exact option rather than accepting a stale highlighted value.
+  await page.getByRole('option', { name: value, exact: true }).click();
+  requireCondition(await time.inputValue() === value,
+    'canvas_personal_token_time_uncommitted', 'Canvas must commit the exact bounded expiration time before submission.');
+}
+
 async function createPersonalAccessToken(page, origin, purpose, onOwned = () => {}) {
   // Canvas resets the session at login; select the stock session locale after authentication.
   // Accessible dialog/button names below are deliberately the English contract.
@@ -508,12 +588,7 @@ async function createPersonalAccessToken(page, origin, purpose, onOwned = () => 
   // DateTimeInput asynchronously initializes an empty time when its date is
   // committed. Let that stock UI update finish before choosing a time.
   await page.waitForTimeout(400);
-  await time.fill(expiration.time);
-  // InstUI commits a combobox choice asynchronously. Tab can accept its stale
-  // highlighted option (midnight) before filtering the newly typed time.
-  await page.getByRole('option', { name: expiration.time, exact: true }).click();
-  requireCondition(await time.inputValue() === expiration.time,
-    'canvas_personal_token_time_uncommitted', 'Canvas must commit the exact bounded expiration time before submission.');
+  await selectCanvasTokenExpirationTime(page, time, expiration.time);
   const valid = await dialog.locator('input[required]').evaluateAll(inputs =>
     inputs.every(input => input.checkValidity() && input.getAttribute('aria-invalid') !== 'true'));
   requireCondition(valid, 'canvas_personal_token_form_invalid', 'Canvas token purpose and bounded expiration must be valid before submission.');
@@ -537,47 +612,184 @@ async function createPersonalAccessToken(page, origin, purpose, onOwned = () => 
   return visible;
 }
 
-async function openDeveloperKeyModal(page, origin, accountId, kind) {
-  await page.goto(`${origin}/accounts/${encodeURIComponent(accountId)}/developer_keys`, {
+function canvasOAuthRedirectChecks(target, authorizationUrl, martyOrigin) {
+  return {originExpected:target.origin===martyOrigin,pathExpected:target.pathname==='/v1/integrations/canvas/oauth/callback',stateMatches:target.searchParams.get('state')===authorizationUrl.searchParams.get('state'),codePresent:Boolean(target.searchParams.get('code')),providerErrorPresent:target.searchParams.has('error')};
+}
+
+async function authorizeCanvasOAuth(page, authorizationUrl, {canvasOrigin, martyOrigin, captureAtProvider = false, observe = () => {}, timeout = DEFAULT_TIMEOUT_MS} = {}) {
+  requireCondition(authorizationUrl.origin===canvasOrigin && authorizationUrl.pathname==='/login/oauth2/auth'
+    && authorizationUrl.searchParams.get('state') && authorizationUrl.searchParams.get('client_id')
+    && authorizationUrl.searchParams.get('redirect_uri')===martyOrigin+'/v1/integrations/canvas/oauth/callback',
+  'canvas_oauth_authorization_unbound', 'OAuth authorization must bind the expected provider, client and callback.');
+  let captured = null, observationFailure = null, nativeRequestObserved = false, timer;
+  let completed;
+  const captureReady = new Promise(resolve => {completed = resolve;});
+  const pending = new Set();
+  const inspectCallback = (target, phase, status) => {
+    const checks = canvasOAuthRedirectChecks(target, authorizationUrl, martyOrigin);
+    observe({phase,...(status===undefined?{}:{status}),...checks});
+    requireCondition(checks.originExpected && checks.pathExpected && checks.stateMatches && checks.codePresent && !checks.providerErrorPresent,
+      'canvas_oauth_redirect_binding_failed', 'Provider redirect did not bind the expected callback, nonce and issued code.');
+    const value = {code:target.searchParams.get('code'),state:target.searchParams.get('state')};
+    requireCondition(!captured || (captured.code===value.code && captured.state===value.state),
+      'canvas_oauth_redirect_inconsistent', 'Observed OAuth redirects disagree.');
+    captured = value;completed();
+  };
+  const providerRequest = request => {
+    const url = new URL(request.url());
+    return url.origin===canvasOrigin && ((request.method()==='GET' && url.pathname==='/login/oauth2/auth')
+      || (request.method()==='POST' && url.pathname==='/login/oauth2/accept'));
+  };
+  const providerUrl = url => url.origin===canvasOrigin && ['/login/oauth2/auth','/login/oauth2/accept'].includes(url.pathname);
+  const routeHandler = async route => {
+    if (!providerRequest(route.request())) {await route.continue();return;}
+    try {
+      // Forward this real browser request unchanged; never follow its code-bearing redirect.
+      const response = await route.fetch({maxRedirects:0,maxRetries:0,timeout});
+      const location = response.headers().location;
+      observe({phase:'PROVIDER_RESPONSE',status:response.status(),locationPresent:Boolean(location)});
+      if (location && [302,303].includes(response.status())) {
+        const target = new URL(location, canvasOrigin);
+        if (target.origin!==canvasOrigin || target.pathname==='/v1/integrations/canvas/oauth/callback') {
+          inspectCallback(target,'PROVIDER_CODE_HELD',response.status());
+          await route.fulfill({status:200,contentType:'text/plain',body:'Diagnostic: a real provider-issued code was held before its native callback. No provider result was fabricated.'});
+          return;
+        }
+      }
+      await route.fulfill({response});
+    } catch (error) {observationFailure=error;completed();await route.abort().catch(()=>{});}
+  };
+  const requestObserver = request => {
+    const target = new URL(request.url());
+    if (target.origin!==martyOrigin || target.pathname!=='/v1/integrations/canvas/oauth/callback') return;
+    try {inspectCallback(target,'NATIVE_CALLBACK_REQUEST');nativeRequestObserved=true;}
+    catch(error) {observationFailure=error;completed();}
+  };
+  const responseObserver = response => {
+    if (!providerRequest(response.request()) || ![302,303].includes(response.status())) return;
+    const task = (async()=>{
+      const headers=await response.allHeaders(),location=headers.location;
+      observe({phase:'NATIVE_PROVIDER_RESPONSE',status:response.status(),locationPresent:Boolean(location)});
+      if (location) {const target=new URL(location,canvasOrigin);if(target.origin!==canvasOrigin || target.pathname==='/v1/integrations/canvas/oauth/callback')inspectCallback(target,'NATIVE_PROVIDER_REDIRECT',response.status());}
+    })().catch(error=>{observationFailure=error;completed();});
+    pending.add(task);task.finally(()=>pending.delete(task));
+  };
+  if (captureAtProvider) await page.route(providerUrl,routeHandler);
+  else {page.on('request',requestObserver);page.on('response',responseObserver);}
+  try {
+    await page.goto(authorizationUrl.href,{waitUntil:'domcontentloaded',timeout});
+    if (observationFailure) throw observationFailure;
+    if (!captured) await page.locator('#oauth2_accept_form').getByRole('button',{name:/^authorize$/i}).click();
+    if (captureAtProvider) {
+      await Promise.race([captureReady,new Promise((_,reject)=>{timer=setTimeout(()=>reject(new ContractFailure('canvas_oauth_code_not_observed','The real provider-issued redirect was not observed.')),timeout);})]);
+    } else {
+      await page.waitForURL(url=>url.origin===martyOrigin && url.searchParams.has('outcome'),{timeout});
+      await Promise.all([...pending]);
+      requireCondition(nativeRequestObserved,'canvas_oauth_native_callback_not_observed','The real native callback request was not observed.');
+    }
+    if (observationFailure) throw observationFailure;
+    requireCondition(captured,'canvas_oauth_code_not_observed','The real provider-issued redirect was not observed.');
+    return captured;
+  } catch(error) {throw observationFailure||error;}
+  finally {
+    clearTimeout(timer);
+    if(captureAtProvider)await page.unroute(providerUrl,routeHandler);
+    else{page.off('request',requestObserver);page.off('response',responseObserver);await Promise.all([...pending]);}
+  }
+}
+
+function canvasDeveloperKeysUrl(origin, accountId) {
+  const url = new URL(`/accounts/${encodeURIComponent(accountId)}/developer_keys`, origin);
+  url.searchParams.set('session_locale', 'en');
+  return url.href;
+}
+
+async function openDeveloperKeyModal(page, origin, accountId, kind, {observe = () => {}} = {}) {
+  observe('NAVIGATE');
+  await page.goto(canvasDeveloperKeysUrl(origin, accountId), {
     waitUntil: 'domcontentloaded',
     timeout: DEFAULT_TIMEOUT_MS,
   });
+  observe('TRIGGER');
   const trigger = page.locator('#add-developer-key-button').or(page.getByRole('button', { name: /create.*developer key|developer key/i })).first();
   await trigger.waitFor({ state: 'visible', timeout: DEFAULT_TIMEOUT_MS });
   await trigger.click();
+  observe('MENU');
   const menuName = kind === 'lti' ? /LTI Key$/i : /API Key$/i;
   await page.getByRole('menuitem', { name: menuName }).click();
   // Canvas labels the dialog "Create Developer Key"; "Key Settings" is its
   // visible heading, not the dialog's accessible name.
+  observe('MODAL');
   const modal = page.getByRole('dialog', { name: /create developer key/i });
   await modal.waitFor({ state: 'visible', timeout: DEFAULT_TIMEOUT_MS });
   await modal.getByRole('heading', { name: /^key settings$/i }).waitFor({ state: 'visible', timeout: DEFAULT_TIMEOUT_MS });
   return modal;
 }
 
-async function saveDeveloperKey(page, modal, expectedName) {
+async function saveDeveloperKey(page, modal, expectedName, onOwned, {kind = 'api', observe = () => {}} = {}) {
+  const expectedOrigin = new URL(page.url()).origin;
+  const account = /^\/accounts\/([1-9][0-9]*)\/developer_keys$/.exec(new URL(page.url()).pathname);
+  requireCondition(account, 'canvas_developer_key_account_missing', 'Developer Key creation requires its exact stock account page.');
+  requireCondition(['api', 'lti'].includes(kind), 'canvas_developer_key_kind_invalid', 'Developer Key creation kind must be explicit.');
+  const expectedPath = kind === 'lti'
+    ? `/api/lti/accounts/${account[1]}/developer_keys/tool_configuration`
+    : `/api/v1/accounts/${account[1]}/developer_keys`;
   const responsePromise = page.waitForResponse((response) => {
     const parsed = new URL(response.url());
-    return response.request().method() === 'POST' && parsed.pathname.includes('developer_keys');
+    return response.request().method() === 'POST' && parsed.origin === expectedOrigin
+      && parsed.pathname === expectedPath;
   }, { timeout: DEFAULT_TIMEOUT_MS });
+  observe('SUBMIT');
   await modal.getByRole('button', { name: /^save$/i }).click();
+  observe('RESPONSE');
   const response = await responsePromise;
   const payload = await responseJson(response, 'canvas_developer_key_save_failed', 'Canvas Developer Key save failed', [200, 201]);
-  await modal.waitFor({ state: 'hidden', timeout: DEFAULT_TIMEOUT_MS });
   const record = extractDeveloperKeyRecord(payload, expectedName);
-  requireCondition(record?.id, 'canvas_developer_key_id_missing', 'Canvas Developer Key response omitted its client ID.');
+  requireCondition(record?.name === expectedName && /^[1-9][0-9]*$/.test(String(record.id))
+    && (typeof record.id !== 'number' || Number.isSafeInteger(record.id)),
+    'canvas_developer_key_identity_mismatch', 'Canvas Developer Key response must identify the exact run-owned name and client ID.');
+  onOwned?.(record.id);
+  observe('JOURNAL');
+  observe('HIDE');
+  await modal.waitFor({ state: 'hidden', timeout: DEFAULT_TIMEOUT_MS });
   return record;
 }
 
-async function enableDeveloperKey(page, keyName) {
+async function enableDeveloperKey(page, keyName, record, {observeBinding = () => {}} = {}) {
+  const clientId = record.id;
+  const expectedBinding = record.developer_key_account_binding;
   const row = page.getByRole('row').filter({ hasText: keyName }).first();
   await row.waitFor({ state: 'visible', timeout: DEFAULT_TIMEOUT_MS });
   const toggle = row.getByRole('checkbox', { name: new RegExp(`(?:off|on).*${escapeRegExp(keyName)}`, 'i') }).first();
   const checked = await toggle.isChecked().catch(() => false);
   if (!checked) {
+    const origin = new URL(page.url()).origin;
+    const account = /^\/accounts\/([1-9][0-9]*)\/developer_keys$/.exec(new URL(page.url()).pathname);
+    requireCondition(account && /^[1-9][0-9]*$/.test(String(clientId)), 'canvas_key_binding_identity_missing', 'Enabling a key requires its exact account and owned ID.');
+    requireCondition(expectedBinding?.account_owns_binding === true && String(expectedBinding.developer_key_id) === String(clientId)
+      && /^[1-9][0-9]*$/.test(String(expectedBinding.account_id))
+      && (typeof expectedBinding.account_id !== 'number' || Number.isSafeInteger(expectedBinding.account_id)),
+      'canvas_key_binding_reference_invalid', 'Creation must bind the exact owned key to its canonical global account.');
+    const expectedPath = `/api/v1/accounts/${account[1]}/developer_keys/${clientId}/developer_key_account_bindings`;
+    const responsePromise = page.waitForResponse(response => {
+      const url = new URL(response.url());
+      return response.request().method() === 'POST' && url.origin === origin && url.pathname === expectedPath;
+    }, {timeout: DEFAULT_TIMEOUT_MS});
     await clickCanvasCheckboxLabel(row, toggle);
     const confirm = page.getByRole('button', { name: /switch to on|turn on|enable/i }).first();
     if (await confirm.isVisible().catch(() => false)) await confirm.click();
+    const response = await responsePromise;
+    const binding = await responseJson(response, 'canvas_key_binding_save_failed', 'Canvas key binding update failed', [200, 201]);
+    const checks = {
+      flatObject: binding !== null && typeof binding === 'object' && !Array.isArray(binding),
+      keyMatches: String(binding?.developer_key_id) === String(clientId),
+      accountMatches: String(binding?.account_id) === String(expectedBinding.account_id),
+      accountOwnsBinding: binding?.account_owns_binding === true,
+      on: binding?.workflow_state === 'on',
+    };
+    observeBinding(checks);
+    requireCondition(Object.values(checks).every(value => value === true),
+      'canvas_key_binding_identity_mismatch', 'Canvas must acknowledge the exact owned enabled key binding.');
   }
   await waitFor(async () => toggle.isChecked().catch(() => false), DEFAULT_TIMEOUT_MS, 500, 'canvas_developer_key_enable_timeout');
 }
@@ -587,16 +799,18 @@ function escapeRegExp(value) {
 }
 
 async function createLtiDeveloperKey(page, config) {
-  const modal = await openDeveloperKeyModal(page, config.canvasOrigin, config.accountId, 'lti');
+  const observe = config.observe || (() => {});
+  const modal = await openDeveloperKeyModal(page, config.canvasOrigin, config.accountId, 'lti', {observe});
+  observe('FILL');
   await modal.getByTestId('key-name-input').fill(config.name);
   await modal.getByTestId('owner-email-input').fill(config.ownerEmail);
   const method = modal.getByLabel(/^method$/i);
   await method.click();
   await page.getByRole('option', { name: /^enter url$/i }).click();
   await modal.getByLabel(/^json url\b/i).fill(config.registrationConfigUrl);
-  const record = await saveDeveloperKey(page, modal, config.name);
-  config.onOwned?.(record.id);
-  await enableDeveloperKey(page, config.name);
+  const record = await saveDeveloperKey(page, modal, config.name, config.onOwned, {kind:'lti', observe});
+  observe('ENABLE');
+  await enableDeveloperKey(page, config.name, record, {observeBinding:config.observeBinding});
   return { clientId: String(record.id) };
 }
 
@@ -644,18 +858,21 @@ function assertCanvasOauthCompletion(url, martyOrigin, platformId) {
 }
 
 async function createOauthDeveloperKey(page, config) {
-  const modal = await openDeveloperKeyModal(page, config.canvasOrigin, config.accountId, 'api');
+  const observe = config.observe || (() => {});
+  const modal = await openDeveloperKeyModal(page, config.canvasOrigin, config.accountId, 'api', {observe});
+  observe('FILL');
   await modal.getByTestId('key-name-input').fill(config.name);
   await modal.getByTestId('owner-email-input').fill(config.ownerEmail);
   await modal.getByTestId('redirect-uris-input').fill(config.redirectUri);
+  observe('SCOPES');
   await selectCanvasOauthScopes(modal, CANVAS_OAUTH_SCOPES);
-  const record = await saveDeveloperKey(page, modal, config.name);
-  config.onOwned?.(record.id);
+  const record = await saveDeveloperKey(page, modal, config.name, config.onOwned, {observe});
   requireCondition(record.require_scopes === true && Array.isArray(record.scopes)
     && record.scopes.length === CANVAS_OAUTH_SCOPES.length
     && CANVAS_OAUTH_SCOPES.every(scope => record.scopes.includes(scope)),
     'canvas_oauth_scope_grant_mismatch', 'Canvas must persist exactly the required enforced OAuth scope allowlist.');
-  await enableDeveloperKey(page, config.name);
+  observe('ENABLE');
+  await enableDeveloperKey(page, config.name, record, {observeBinding:config.observeBinding});
   const secret = String(record.api_key || record.client_secret || '').trim();
   requireCondition(secret.length >= 20, 'canvas_oauth_secret_missing', 'Canvas did not return the OAuth client secret from the stock Developer Key flow.');
   return { clientId: String(record.id), clientSecret: secret };
@@ -740,10 +957,19 @@ async function observePipelinePrerequisites(ledger, martyOrigin, canvasOrigin, m
 
   markActive('stock_lifecycle_bootstrap_only');
   const bootstrap = readJsonFile(path.join(artifactRoot, 'bootstrap-audit.json'), 'bootstrap_audit_unavailable');
-  const counters = bootstrap.forbidden_operation_counts || {};
+  const commands = bootstrap.commands;
+  const counters = bootstrap.forbidden_operation_counts;
   requireCondition(
-    bootstrap.phase === 'pre_start_only'
+    bootstrap.schema_version === SCHEMA_VERSION
+      && bootstrap.phase === 'pre_start_only'
+      && Array.isArray(commands)
+      && commands.length === BOOTSTRAP_ALLOWED_COMMANDS.length
+      && commands.every((entry, index) => entry && !Array.isArray(entry)
+        && JSON.stringify(entry.argv) === JSON.stringify(BOOTSTRAP_ALLOWED_COMMANDS[index])
+        && entry.exit_code === 0)
       && bootstrap.web_started_after_bootstrap === true
+      && counters && typeof counters === 'object' && !Array.isArray(counters)
+      && JSON.stringify(Object.keys(counters).sort()) === JSON.stringify([...BOOTSTRAP_FORBIDDEN_COUNTERS].sort())
       && Object.values(counters).every((value) => value === 0),
     'bootstrap_audit_invalid',
     'Canvas bootstrap audit did not prove a stock pre-start-only lifecycle.',
@@ -1671,10 +1897,10 @@ function escapeHtml(value) {
 function contractFailureLocation(error, activeCase) {
   // Retain actionable driver location without request bodies, URLs, credentials
   // or Playwright action arguments from the original exception message.
-  const frame = String(error?.stack || '').match(/run-canvas-oss-standard-contract\.js:(\d+):(\d+)/);
+  const frame = String(error?.stack || '').match(/\b(run-canvas-oss-standard-contract|canvas-capture-sequence|audit-beta-canvas-capture)\.js:(\d+):(\d+)/);
   const name = /^[A-Za-z][A-Za-z0-9]{0,50}$/.test(String(error?.name || '')) ? error.name : 'Error';
   const result = { activeCase, errorType: name,
-    sourceLocation: frame ? { file: 'run-canvas-oss-standard-contract.js', line: Number(frame[1]), column: Number(frame[2]) } : null };
+    sourceLocation: frame ? { file: frame[1]+'.js', line: Number(frame[2]), column: Number(frame[3]) } : null };
   if (error?.canvasResourceDiagnostic) result.canvasResource = error.canvasResourceDiagnostic;
   return result;
 }
@@ -1692,6 +1918,10 @@ async function prepareCanvasCaptureFixtures({ browser, ledger, markActive = () =
   pass = () => {}, runSuffix, state = {}, prerequisiteDirectory = '/artifacts', ownershipDirectory }) {
   requireCondition(browser && /^[A-Za-z0-9-]{8,100}$/.test(runSuffix || ''),
     'canvas_run_identity_invalid', 'A fresh Canvas capture run identity is required.');
+  if(process.env.DEMO_LOCAL_FUNCTIONAL_RUNTIME_RECEIPT) requireCondition(
+    process.env.DEMO_CANVAS_PRIVATE_RECOVERY_DIRECTORY==='/capture-private',
+    'canvas_private_custody_missing','Functional runtime capture requires its protected recovery mount.');
+  if (process.env.DEMO_CANVAS_PRIVATE_RECOVERY_DIRECTORY) state.custody ||= createCanvasCaptureCustody(runSuffix);
   let marty, adminContext, learnerContext, platformId, integrationSecretId;
     const canvasOrigin = normalizePinnedOrigin(
       process.env.CANVAS_OSS_ORIGIN || DEFAULT_CANVAS_ORIGIN,
@@ -1712,11 +1942,13 @@ async function prepareCanvasCaptureFixtures({ browser, ledger, markActive = () =
     const martyApiKey = requireSecretFile('CANVAS_OSS_MARTY_API_KEY');
     state.marty = marty = new MartyClient(martyOrigin, martyApiKey);
     const owned = { scope: 'OWNED_CANVAS_SETUP_RESOURCES', runSuffix, learnerEmail, resources: {} };
+    Object.assign(state, { owned, runSuffix, canvasOrigin, martyOrigin });
     requireCondition(typeof ownershipDirectory === 'string' && path.isAbsolute(ownershipDirectory)
       && fs.statSync(ownershipDirectory).isDirectory(), 'canvas_ownership_directory_invalid', 'A writable per-run ownership evidence directory is required.');
     const ownershipPath = path.join(ownershipDirectory, 'owned-canvas-resources.json');
     fs.writeFileSync(ownershipPath, JSON.stringify(owned, null, 2) + '\n', { flag: 'wx' });
     const persistOwned = () => fs.writeFileSync(ownershipPath, JSON.stringify(owned, null, 2) + '\n');
+    state.persistOwned = persistOwned;
     const remember = (kind, id) => {
       requireCondition(/^[0-9]+$/.test(String(id || '')), 'canvas_owned_resource_id_missing', 'Canvas must acknowledge an owned resource ID.');
       owned.resources[kind] = String(id); persistOwned();
@@ -1729,25 +1961,39 @@ async function prepareCanvasCaptureFixtures({ browser, ledger, markActive = () =
     markActive('standard_lti_13_install');
 
     state.adminContext = adminContext = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+    // Stock TokensController requires a password session even for its API.
+    state.adminTokenCanvas = new CanvasSessionClient(canvasOrigin, adminContext);
     const adminPage = await adminContext.newPage();
+    state.adminPage = adminPage;
     await loginCanvas(adminPage, canvasOrigin, adminEmail, adminPassword);
+    state.custody?.retain('canvasAdminSession',JSON.stringify(await adminContext.cookies(canvasOrigin)));
     const adminBearer = await createPersonalAccessToken(adminPage, canvasOrigin, `OSS contract admin ${runSuffix}`, id => remember('adminAccessToken', id));
     const adminCanvas = new CanvasClient(canvasOrigin, adminBearer);
+    state.adminCanvas = adminCanvas;
     const accounts = safeList(await adminCanvas.get('/api/v1/accounts?per_page=100'));
     const rootAccount = accounts.find((account) => !account.parent_account_id) || accounts[0];
     requireCondition(rootAccount?.id, 'canvas_root_account_missing', 'Canvas Accounts API did not return a root account.');
     const adminProfile = await adminCanvas.get('/api/v1/users/self/profile');
+    require('./audit-beta-canvas-invalid-secret').assertCanvasLoginIdentity(adminProfile,adminEmail);
     requireCondition(adminProfile?.id, 'canvas_admin_profile_missing', 'Canvas Users API did not return the root administrator profile.');
+    Object.assign(state, { accountId: String(rootAccount.id), adminId: String(adminProfile.id) });
+    Object.assign(owned, { canvasOrigin, accountId: state.accountId, adminId: state.adminId }); persistOwned();
 
     const templates = await selectProductionBadgeTemplates(marty, organizationId);
     state.templates = templates;
 
     markActive('standard_lti_13_install');
+    owned.martyPlatformIntent={name:`${RUN_NAME_PREFIX} ${runSuffix}`,state:'CREATING'};persistOwned();
     const platform = await marty.post('/v1/integrations/canvas/platforms', {
       display_name: `${RUN_NAME_PREFIX} ${runSuffix}`,
       canvas_base_url: canvasOrigin,
       enabled: true,
     }, [200]);
+    owned.martyPlatformIntent.returnedId=platform?.id;owned.martyPlatformIntent.state='RESPONSE_UNVERIFIED';persistOwned();
+    requireCondition(typeof platform?.id==='string'&&/^[a-f0-9-]{36}$/i.test(platform.id)
+      &&platform.display_name===owned.martyPlatformIntent.name&&String(platform.organization_id)===organizationId,
+      'marty_canvas_platform_identity_mismatch','Created Canvas platform must match its exact owned name and tenant.');
+    owned.martyPlatformIntent.state='CREATED';
     state.platformId = platformId = String(platform?.id || '');
     requireCondition(platformId, 'marty_canvas_platform_missing', 'Marty did not create the organization-owned Canvas draft.');
     owned.martyPlatformId = platformId; persistOwned();
@@ -1789,10 +2035,13 @@ async function prepareCanvasCaptureFixtures({ browser, ledger, markActive = () =
     );
 
     state.learnerContext = learnerContext = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+    state.learnerTokenCanvas = new CanvasSessionClient(canvasOrigin, learnerContext);
     const learnerSetupPage = await learnerContext.newPage();
     await loginCanvas(learnerSetupPage, canvasOrigin, learnerEmail, learnerPassword);
+    state.custody?.retain('canvasLearnerSession',JSON.stringify(await learnerContext.cookies(canvasOrigin)));
     const learnerBearer = await createPersonalAccessToken(learnerSetupPage, canvasOrigin, `OSS contract learner ${runSuffix}`, id => remember('learnerAccessToken', id));
     const learnerCanvas = new CanvasClient(canvasOrigin, learnerBearer);
+    state.learnerCanvas = learnerCanvas;
     const activityResults = await completeLearnerCanvasWork(learnerCanvas, adminCanvas, fixtures, markActive);
     pass('existing_assignment_submission', 'A learner submission and 95% score are authoritative through the documented Assignment Submissions API.');
     pass('classic_quiz_submission', 'A stock Classic Quiz was answered and its autograded score is authoritative through Assignment Submissions.');
@@ -1806,7 +2055,9 @@ async function prepareCanvasCaptureFixtures({ browser, ledger, markActive = () =
       onOwned: id => remember('oauthDeveloperKey', id),
       redirectUri: `${martyOrigin}/v1/integrations/canvas/oauth/callback`,
     });
-    state.integrationSecretId = integrationSecretId = String((await marty.post('/v1/integrations/canvas/integration-secrets', {
+    state.custody?.retain('canvasOwnedClientSecret',oauthKey.clientSecret);
+    owned.martySecretIntent={name:`Canvas OAuth ${runSuffix}`,state:'CREATING'};persistOwned();
+    const integrationSecret = await marty.post('/v1/integrations/canvas/integration-secrets', {
       organization_id: organizationId,
       name: `Canvas OAuth ${runSuffix}`,
       provider: 'canvas',
@@ -1814,8 +2065,17 @@ async function prepareCanvasCaptureFixtures({ browser, ledger, markActive = () =
       secret_value: oauthKey.clientSecret,
       metadata: { contract: 'canvas_oss_portability' },
       enabled: true,
-    }, [200, 201]))?.id || '');
+    }, [200, 201]);
+    owned.martySecretIntent.returnedId=integrationSecret?.id;owned.martySecretIntent.state='RESPONSE_UNVERIFIED';persistOwned();
+    requireCondition(typeof integrationSecret?.id==='string'&&/^[a-f0-9-]{36}$/i.test(integrationSecret.id)
+      &&integrationSecret.organization_id===organizationId&&integrationSecret.name===owned.martySecretIntent.name
+      &&integrationSecret.provider==='canvas'&&integrationSecret.purpose==='oauth_client_secret',
+      'marty_oauth_secret_identity_mismatch','Created OAuth reference must match its exact owned identity.');
+    owned.martySecretIntent.state='CREATED';
+    state.integrationSecretId = integrationSecretId = String(integrationSecret?.id || '');
+    owned.martyIntegrationSecretId=integrationSecretId;persistOwned();
     requireCondition(integrationSecretId, 'marty_oauth_secret_reference_missing', 'Marty did not store the encrypted Canvas OAuth secret reference.');
+    state.oauthMayExist=true;owned.martyOAuthMayExist=true;persistOwned();
     const oauthStart = await marty.post(`/v1/integrations/canvas/platforms/${encodeURIComponent(platformId)}/oauth/authorizations`, {
       client_id: oauthKey.clientId,
       client_secret_secret_id: integrationSecretId,
@@ -1823,12 +2083,7 @@ async function prepareCanvasCaptureFixtures({ browser, ledger, markActive = () =
     }, [200]);
     const oauthUrl = new URL(String(oauthStart?.authorization_url || ''));
     requireCondition(oauthUrl.origin === canvasOrigin, 'canvas_oauth_url_unpinned', 'Marty returned an OAuth authorization URL outside Canvas.');
-    await adminPage.goto(oauthUrl.href, { waitUntil: 'domcontentloaded', timeout: DEFAULT_TIMEOUT_MS });
-    // Stock Canvas can render Cancel as an earlier submit button. Bind the
-    // action to the actual acceptance form and its explicit Authorize control.
-    const authorize = adminPage.locator('#oauth2_accept_form').getByRole('button', { name: /^authorize$/i });
-    await authorize.click();
-    await adminPage.waitForURL((url) => url.origin === martyOrigin && url.searchParams.has('outcome'), { timeout: DEFAULT_TIMEOUT_MS });
+    await authorizeCanvasOAuth(adminPage,oauthUrl,{canvasOrigin,martyOrigin});
     assertCanvasOauthCompletion(new URL(adminPage.url()), martyOrigin, platformId);
     const connectedPlatform = await marty.get(`/v1/integrations/canvas/platforms/${encodeURIComponent(platformId)}`);
     requireCondition(connectedPlatform?.connection_config?.oauth_status === 'connected', 'canvas_oauth_not_connected', 'Canvas OAuth callback did not publish a connected organization-scoped connection.');
@@ -1837,6 +2092,7 @@ async function prepareCanvasCaptureFixtures({ browser, ledger, markActive = () =
 
     const binding = await createProgramBinding(marty, platformId, templates, fixtures, runSuffix);
     requireCondition(binding?.id, 'canvas_binding_create_failed', 'Marty did not create the typed Canvas program binding.');
+    state.binding=binding;owned.martyBindingId=String(binding.id);persistOwned();
 
     markActive('instructor_deep_linking');
     const externalAssignment = await performInstructorDeepLinking(adminPage, adminCanvas, fixtures, String(tool.id), martyOrigin);
@@ -1854,6 +2110,7 @@ async function prepareCanvasCaptureFixtures({ browser, ledger, markActive = () =
 
     markActive('standard_lti_13_install');
     const activationStartedAt = new Date().toISOString();
+    state.bindingActivationPossible=true;owned.martyBindingActivationPossible=true;persistOwned();
     await validateAndActivateBinding(marty, binding.id);
     pass('standard_lti_13_install', `Stock Canvas installed LTI 1.3 and all ${BLOCKING_READINESS_CHECK_CODES.length} production blocking readiness checks passed.`);
 
@@ -1874,6 +2131,226 @@ async function prepareCanvasCaptureFixtures({ browser, ledger, markActive = () =
   return Object.assign(state, { canvasOrigin, martyOrigin, organizationId, marty, martyApiKey,
     adminContext, learnerContext, adminCanvas, learnerCanvas, fixtures, templates,
     platformId, integrationSecretId, binding, pinnedBinding, externalAssignment, activityResults });
+}
+
+async function findCanvasDeveloperKey({ adminCanvas, canvasOrigin, accountId }, { id, name }) {
+  const found = await findCanvasInventoryRecord(adminCanvas, canvasOrigin,
+    `/api/v1/accounts/${accountId}/developer_keys`, key => String(key.id) === id);
+  if (found) assert.equal(found.name, name, 'Canvas key belongs to another run');
+  return found;
+}
+
+async function retireCanvasSetupFixtures(state, retirementConfirmed, oauthDisconnected, { planOnly = false } = {}) {
+  if (!state.owned || Object.keys(state.owned.resources).length === 0) {
+    return { scope: 'OWNED_CANVAS_FIXTURE_RETIREMENT', complete: true, resources: [] };
+  }
+  const { adminPage, canvasOrigin, accountId } = state;
+  const findKey = key => findCanvasDeveloperKey(state, key);
+  const selectKey = async key => {
+    // Recovery sessions have not created the token that normally selects English.
+    // Pin only this browser session before using English accessible action names.
+    await adminPage.goto(canvasDeveloperKeysUrl(canvasOrigin, accountId), {
+      waitUntil: 'domcontentloaded', timeout: DEFAULT_TIMEOUT_MS,
+    });
+    const row = adminPage.getByRole('row').filter({ has: adminPage.getByText(key.name, { exact: true }) });
+    await row.waitFor({ state: 'visible', timeout: DEFAULT_TIMEOUT_MS });
+    assert.equal(await row.count(), 1);
+    assert.ok((await row.innerText()).includes(key.id), 'Canvas key row does not show the owned client ID');
+    assert.equal(await row.getByRole('button', { name: /delete/i }).count(), 1);
+    return row;
+  };
+  return retireOwnedCanvasFixtures({ ...state, retirementConfirmed, oauthDisconnected, planOnly, developerKeys: {
+    async identity(key) {
+      const current = await findKey(key);
+      assert.ok(current, 'Canvas external tool key is not in its account inventory');
+      return { id: current.id, binding: current.developer_key_account_binding };
+    },
+    async check(key) {
+      if (!(await findKey(key))) return false;
+      await selectKey(key);
+      return true;
+    },
+    async remove(key) {
+      assert.ok(await findKey(key), 'Canvas key disappeared before its UI operation');
+      const row = await selectKey(key);
+      const deleted = adminPage.waitForResponse(response => {
+        const url = new URL(response.url());
+        return response.request().method() === 'DELETE' && url.origin === canvasOrigin
+          && /\/(?:developer_keys|lti_registrations)\//.test(url.pathname);
+      }, { timeout: DEFAULT_TIMEOUT_MS }).then(response => ({ response }), () => ({ timeout: true }));
+      const onDialog = dialog => {
+        void (/delete|remove/i.test(dialog.message()) ? dialog.accept() : dialog.dismiss()).catch(() => {});
+      };
+      adminPage.on('dialog', onDialog);
+      try {
+        await row.getByRole('button', { name: /delete/i }).click();
+        const dialog = adminPage.getByRole('dialog', { name: /delete|remove/i });
+        if (await dialog.waitFor({ state: 'visible', timeout: 1_000 }).then(() => true, () => false)) {
+          await dialog.getByRole('button', { name: /^delete(?: key| developer key| registration)?$/i }).click();
+        }
+        const result = await deleted;
+        assert.ok(result.response && [200, 204].includes(result.response.status()));
+      } finally {
+        adminPage.off('dialog', onDialog);
+      }
+      assert.equal(await findKey(key), null, 'Canvas key remains after the UI deletion');
+    },
+  } });
+}
+
+function createCanvasCaptureCustody(runSuffix, directory = process.env.DEMO_CANVAS_PRIVATE_RECOVERY_DIRECTORY) {
+  requireCondition(path.isAbsolute(directory || '') && fs.lstatSync(directory).isDirectory()
+    && !fs.lstatSync(directory).isSymbolicLink(), 'canvas_private_custody_missing', 'Capture requires its protected owned recovery mount.');
+  requireCondition(/^[A-Za-z0-9-]{8,100}$/.test(runSuffix), 'canvas_run_identity_invalid', 'Private custody needs the exact fresh run.');
+  const files = new Set(), secretFiles = new Map(), journal = path.join(directory,runSuffix+'.custody.json');
+  const write = (filename,value,exclusive,secret=false) => {
+    const fd=fs.openSync(filename,exclusive?'wx':'w',0o600);
+    try {
+      if(secret) {const stat=fs.fstatSync(fd);secretFiles.set(filename,{dev:stat.dev,ino:stat.ino});}
+      fs.writeFileSync(fd,value);fs.fsyncSync(fd);
+    } finally {fs.closeSync(fd);}
+  };
+  write(journal,JSON.stringify({runSuffix,state:'OPEN',roles:[]}),true);
+  const checkpoint = state => {
+    const stat=fs.lstatSync(journal);assert(stat.isFile()&&!stat.isSymbolicLink());
+    const next=journal+'.next';write(next,JSON.stringify({runSuffix,state,roles:[...files]}),true);fs.renameSync(next,journal);
+  };
+  return {
+    retain(role,value) {
+      requireCondition(['canvasAdminSession','canvasLearnerSession','canvasOwnedClientSecret','betaAdminSession'].includes(role)
+        && typeof value==='string' && value.length>0 && Buffer.byteLength(value)<=131072,
+      'canvas_private_custody_invalid','Only bounded owned authority can enter capture recovery.');
+      const filename=path.join(directory,runSuffix+'-'+role+'.json');
+      if(files.has(role)) {
+        const expected=secretFiles.get(filename),actual=fs.lstatSync(filename);
+        requireCondition(expected&&actual.dev===expected.dev&&actual.ino===expected.ino,
+          'canvas_private_custody_changed','Private recovery file ownership changed.');
+        requireCondition(fs.lstatSync(filename).isFile()&&!fs.lstatSync(filename).isSymbolicLink(),
+          'canvas_private_custody_changed','Owned recovery file changed.');
+        const next=filename+'.next';write(next,value,true,true);fs.renameSync(next,filename);
+        secretFiles.set(filename,secretFiles.get(next));secretFiles.delete(next);
+      } else {files.add(role);checkpoint('OPEN');write(filename,value,true,true);}
+      checkpoint('OPEN');
+    },
+    retire() {
+      for(const [filename,expected] of secretFiles) {
+        const actual=fs.lstatSync(filename);
+        requireCondition(actual.dev===expected.dev&&actual.ino===expected.ino,
+          'canvas_private_custody_changed','Private recovery file ownership changed.');
+        requireCondition(fs.lstatSync(filename).isFile()&&!fs.lstatSync(filename).isSymbolicLink(),
+          'canvas_private_custody_changed','Owned recovery file changed.');
+        fs.unlinkSync(filename);
+      }
+      checkpoint('RETIRED'); return true;
+    },
+  };
+}
+
+function requireCanvasSetupMutationReconciliation(state) {
+  requireCondition(!state.bindingActivationPossible||Boolean(state.applicationId),
+    'canvas_background_application_uncertain','An activated owned binding without its returned application tuple requires reconciliation.');
+  for(const field of ['martyPlatformIntent','martySecretIntent']) {
+    const intent=state.owned?.[field];
+    requireCondition(!intent||intent.state==='CREATED','canvas_setup_creation_uncertain','Owned Canvas setup creation requires exact reconciliation.');
+  }
+}
+
+async function retireCanvasOAuthAuthority(state, observe = () => {}, {requireAccess = false} = {}) {
+  const {retireOwnedOAuthConnection}=require('./audit-beta-canvas-invalid-secret');
+  const gateway=(requestPath,{method='GET',body}={})=>state.marty.request(method,requestPath,
+    {json:body,expected:[200],includeStatus:true});
+  return retireOwnedOAuthConnection(gateway,{},state.organizationId,state.platformId,observe,{requireAccess});
+}
+
+async function retireCanvasOwnedReferences(state) {
+  requireCanvasSetupMutationReconciliation(state);
+  if(state.platformId) {
+    const target=`/v1/integrations/canvas/platforms/${encodeURIComponent(state.platformId)}`;
+    await state.marty.delete(target,[204]);await state.marty.request('GET',target,{expected:[404]});
+  }
+  if(state.integrationSecretId) {
+    await state.marty.delete(`/v1/integrations/canvas/integration-secrets/${encodeURIComponent(state.integrationSecretId)}`,[204]);
+    const remaining=await state.marty.get('/v1/integrations/canvas/integration-secrets?organization_id='+encodeURIComponent(state.organizationId)+'&provider=canvas');
+    assert(Array.isArray(remaining));assert(!remaining.some(row=>row.id===state.integrationSecretId));
+  }
+}
+
+async function retireCanvasCaptureSessions(state, observe = () => {}) {
+  const {retireCanvasSession}=require('./audit-beta-canvas-invalid-secret');
+  const evidence={},failures=[];
+  const emit=()=>{try {observe(JSON.parse(JSON.stringify(evidence)));} catch(error) {failures.push(error);}};
+  for(const [role,context] of [['canvasLearnerSession',state.learnerContext],['canvasAdminSession',state.adminContext]]) {
+    if(!context) continue;
+    try {
+    const cookies=await context.cookies(state.canvasOrigin);
+    requireCondition(cookies.length>0,'canvas_session_custody_missing','Owned Canvas session acquisition requires reconciliation.');
+    const response=await context.request.get(state.canvasOrigin+'/api/v1/users/self/profile',
+      {maxRedirects:0,timeout:15000,headers:{Accept:'application/json'}});
+    if([401,403].includes(response.status())) evidence[role]={alreadyDenied:true,status:response.status()};
+    else {
+      assert.equal(response.status(),200);
+      await context.addCookies(cookies.map(cookie=>({...cookie})));
+      await retireCanvasSession(context,(_,value)=>state.custody.retain(role,value),
+        {observe:value=>{evidence[role]=value;emit()}});
+    }
+    emit();
+    } catch(error) {failures.push(error);evidence[role]={retired:false,failureType:'OWNED_SESSION_RETIREMENT_FAILED'};emit();}
+  }
+  requireCondition(failures.length===0,'canvas_capture_sessions_incomplete','Owned Canvas sessions require reconciliation.');
+  return evidence;
+}
+
+async function retireCanvasBetaSession(context, custody) {
+  const origin=DEFAULT_MARTY_ORIGIN,cookies=await context.cookies(origin);
+  requireCondition(cookies.length>0,'capture_beta_session_missing','Owned beta session custody is missing.');
+  let custodyFailure;try {custody.retain('betaAdminSession',JSON.stringify(cookies));} catch(error) {custodyFailure=error;}
+  const original=cookies.map(cookie=>cookie.name+'='+cookie.value).join('; ');
+  let response,logoutFailure;
+  try {response=await context.request.post(origin+'/v1/auth/logout',{maxRedirects:0,timeout:15000});} catch(error) {logoutFailure=error;}
+  const old=await context.request.get(origin+'/v1/auth/me',{headers:{Cookie:original},maxRedirects:0,timeout:15000});
+  const body=await old.json();
+  requireCondition(!logoutFailure&&[302,303,307].includes(response?.status()),'capture_beta_logout_failed','Owned beta logout did not complete.');
+  requireCondition(old.status()===200&&body.authenticated===false&&body.user==null,
+    'capture_beta_session_authorized','Original beta session is not retired.');
+  if(custodyFailure) throw custodyFailure;
+  return {logoutStatus:response.status(),oldCookieAuthenticated:false};
+}
+
+async function retireCanvasEngineeringSetup(state, observeSessions = () => {}) {
+  let retired={scope:'OWNED_CANVAS_FIXTURE_RETIREMENT',complete:false,resources:[]};
+  const failures=[];
+  try {
+      requireCanvasSetupMutationReconciliation(state);
+      const issuanceRetirement = await retireCanvasApplication({ marty:state.marty, organizationId: state.organizationId,
+        applicationId: state.applicationId, credentialTemplateId: state.templates?.credential?.id,
+        bindingId: state.binding?.id,
+        transactionId: state.transactionId, reconcile() {
+          assert.ok(!state.approvalInFlight, 'Unknown Canvas approval requires reconciliation');
+        } });
+      if (state.marty && state.platformId && (state.oauthConnected||state.oauthMayExist)) {
+        await retireCanvasOAuthAuthority(state, value => {state.oauthRetirement=value}, {requireAccess:false});
+        state.oauthConnected = false;state.oauthMayExist=false;
+      }
+      if (state.marty) await retireCanvasOwnedReferences(state);
+      retired = await retireCanvasSetupFixtures(state, true, !state.oauthConnected);
+      retired.issuanceRetirement = issuanceRetirement;
+  } catch(error) {failures.push({stage:'OWNED_RESOURCES',location:contractFailureLocation(error,'owned_fixture_cleanup')});}
+  if (state.custody) {
+    try {
+      retired.sessionRetirement=await retireCanvasCaptureSessions(state,value=>{retired.sessionRetirement=value;observeSessions(value)});
+      retired.sessionsRetired=true;
+    } catch(error) {failures.push({stage:'OWNED_SESSIONS',location:contractFailureLocation(error,'owned_session_cleanup')});}
+    if(failures.length===0) {
+      try {retired.privateAuthorityRetired=state.custody.retire();}
+      catch(error) {failures.push({stage:'PRIVATE_AUTHORITY',location:contractFailureLocation(error,'private_authority_cleanup')});}
+    }
+  }
+  if(failures.length) {
+    retired.complete=false;retired.privateAuthorityRetired=false;retired.failures=failures;
+    const error=new ContractFailure('owned_canvas_cleanup_incomplete','Run-owned Canvas authority requires recovery; custody is retained.');
+    error.canvasCleanupEvidence=retired;throw error;
+  }
+  return retired;
 }
 
 async function main() {
@@ -1921,7 +2398,7 @@ async function main() {
       fixtures, templates, binding, pinnedBinding, externalAssignment, activityResults } = setup;
     recordedContext = await browser.newContext({
       viewport: { width: 1440, height: 900 },
-      recordVideo: { dir: path.dirname(args.video), size: { width: 1440, height: 900 } },
+      ...(!args.functionalRerun ? {recordVideo:{dir:path.dirname(args.video),size:{width:1440,height:900}}} : {}),
     });
     await copyCookies(learnerContext, recordedContext);
     recordedPage = await recordedContext.newPage();
@@ -1932,6 +2409,8 @@ async function main() {
     const firstLaunch = await launchLearnerResource(recordedPage, learnerCanvas, fixtures, externalAssignment, martyOrigin);
     recordedPage = firstLaunch.page;
     const firstBootstrap = firstLaunch.bootstrap;
+    preparationState.applicationId = firstBootstrap.application_id;
+    preparationState.owned.martyApplicationId=firstBootstrap.application_id;preparationState.persistOwned();
     pass('learner_resource_launch', 'The enrolled learner launched the Deep Linked resource through standard LTI 1.3 and reached ElevenID.');
     await showVideoStep(recordedPage, 'Portable learner launch verified', 'Canvas supplied the signed learner, course, and resource context; no email identity match was used.');
 
@@ -1999,6 +2478,7 @@ async function main() {
     const approvalBody = {
       review_notes: 'Approved by the Canvas OSS portability contract after authoritative policy permit.',
     };
+    preparationState.approvalInFlight = true;
     const concurrentApprovals = await Promise.all([
       marty.post(approvalPath, approvalBody, [200, 409]),
       marty.post(approvalPath, approvalBody, [200, 409]),
@@ -2008,6 +2488,8 @@ async function main() {
       .filter(Boolean);
     requireCondition(reservedTransactionIds.length >= 1, 'canvas_approval_reservation_missing', 'Concurrent Canvas approvals did not reserve a claim transaction.');
     requireCondition(new Set(reservedTransactionIds).size === 1, 'duplicate_canvas_claim_transaction', 'Concurrent Canvas approvals reserved different claim transactions.');
+    preparationState.transactionId = reservedTransactionIds[0];
+    preparationState.approvalInFlight = false;
     await reloadLearnerExperience(recordedPage);
     await recordedPage.getByTestId('canvas-ready-to-claim').waitFor({ state: 'visible', timeout: DEFAULT_TIMEOUT_MS });
 
@@ -2087,12 +2569,13 @@ async function main() {
     pass('legacy_event_ingest_unavailable', 'Legacy custom Canvas event ingestion returned HTTP 410; the portable flow used standard reads only.');
 
     markActive('canvas_oauth_authorization');
-    const disconnected = await marty.delete(`/v1/integrations/canvas/platforms/${encodeURIComponent(platformId)}/oauth`, [200]);
-    requireCondition(disconnected?.status === 'disconnected' && safeList(disconnected?.scopes).length === 0, 'canvas_oauth_revoke_failed', 'Canvas OAuth did not complete remote token revocation before local disconnect.');
+    await retireCanvasOAuthAuthority(preparationState, value => {preparationState.oauthRetirement=value}, {requireAccess:true});
+    preparationState.oauthConnected = false;preparationState.oauthMayExist=false;
     pass('canvas_oauth_authorization', 'A stock scoped Canvas API key connected through capability-derived OAuth and its token was remotely revoked on disconnect.');
 
     await showVideoStep(recordedPage, 'Portable Canvas contract complete', 'Unmodified Canvas, standard LTI Advantage, documented REST APIs, durable evidence, and external KMS issuance all passed.');
-    await finishRecordedVideo(recordedContext, recordedPage, args.video);
+    if (args.functionalRerun) await recordedContext.close();
+    else await finishRecordedVideo(recordedContext, recordedPage, args.video);
     recordedContext = null;
     recordedPage = null;
     videoWritten = true;
@@ -2114,7 +2597,8 @@ async function main() {
 
     if (recordedContext) {
       try {
-        await finishRecordedVideo(recordedContext, recordedPage, args.video);
+        if (args.functionalRerun) await recordedContext.close();
+        else await finishRecordedVideo(recordedContext, recordedPage, args.video);
         videoWritten = true;
       } catch {
         videoWritten = false;
@@ -2127,16 +2611,27 @@ async function main() {
     integrationSecretId ||= preparationState.integrationSecretId;
     adminContext ||= preparationState.adminContext;
     learnerContext ||= preparationState.learnerContext;
-    if (marty && platformId) {
-      await marty.delete(`/v1/integrations/canvas/platforms/${encodeURIComponent(platformId)}`, [204]).catch(() => {});
+    try {
+      const retired=await retireCanvasEngineeringSetup(preparationState,value=>fs.writeFileSync(
+        path.join(path.dirname(args.observations),'owned-canvas-session-retirement.json'),JSON.stringify(value,null,2)+'\n'));
+      fs.writeFileSync(path.join(path.dirname(args.observations), 'owned-canvas-cleanup.json'),
+        JSON.stringify(retired, null, 2) + '\n', { flag: 'wx' });
+    } catch (error) {
+      failure ||= new ContractFailure('owned_canvas_cleanup_incomplete', 'Run-owned Canvas resources require recovery; custody is retained.');
+      if(error.canvasCleanupEvidence) fs.writeFileSync(path.join(path.dirname(args.observations),'owned-canvas-cleanup.json'),
+        JSON.stringify(error.canvasCleanupEvidence,null,2)+'\n',{flag:'wx'});
+      const cleanupFailure = contractFailureLocation(error, 'owned_fixture_cleanup');
+      ledger.driverFailure ||= cleanupFailure;
+      fs.writeFileSync(path.join(path.dirname(args.observations), 'owned-canvas-cleanup-failure.json'),
+        JSON.stringify(cleanupFailure, null, 2) + '\n', { flag: 'wx' });
     }
-    if (marty && integrationSecretId) {
-      await marty.delete(`/v1/integrations/canvas/integration-secrets/${encodeURIComponent(integrationSecretId)}`, [204]).catch(() => {});
-    }
+    ledger.write(args.observations);
+    if (ledger.driverFailure) fs.writeFileSync(path.join(path.dirname(args.observations), 'driver-failure-location.json'),
+      JSON.stringify(ledger.driverFailure, null, 2) + '\n');
     if (learnerContext) await learnerContext.close().catch(() => {});
     if (adminContext) await adminContext.close().catch(() => {});
 
-    if (!videoWritten && browser) {
+    if (!args.functionalRerun && !videoWritten && browser) {
       await createFallbackVideo(browser, args.video, failure ? `${failure.code}: ${failure.message}` : 'Video finalization failed.').catch(() => {});
     }
     if (browser) await browser.close().catch(() => {});
@@ -2151,6 +2646,27 @@ async function main() {
 }
 
 module.exports = {
+  authorizeCanvasOAuth,
+  canvasOAuthRedirectChecks,
+  saveDeveloperKey,
+  enableDeveloperKey,
+  requireSecretFile,
+  parseArgs,
+  loginCanvas,
+  createOauthDeveloperKey,
+  createCanvasCaptureCustody,
+  requireCanvasSetupMutationReconciliation,
+  retireCanvasOAuthAuthority,
+  retireCanvasOwnedReferences,
+  retireCanvasCaptureSessions,
+  retireCanvasBetaSession,
+  retireCanvasEngineeringSetup,
+  createLtiDeveloperKey,
+  retireCanvasApplication,
+  retireCanvasSetupFixtures,
+  CanvasClient,
+  CanvasSessionClient,
+  findCanvasDeveloperKey,
   waitForCanvasCourseCompletion,
   canvasLaunchErrorSummary,
   canvasOwnedToolIndex,
@@ -2158,12 +2674,16 @@ module.exports = {
   publishCanvasCourse,
   contractFailureLocation,
   canvasTokenExpiration,
+  selectCanvasTokenExpirationTime,
   freshCanvasLearnerEmail,
   martyRequestSummary,
   selectProductionBadgeTemplates,
   selectCanvasOauthScopes,
   observePipelinePrerequisites,
   prepareCanvasCaptureFixtures,
+  validateAndActivateBinding,
+  waitForLatestRosterJob,
+  waitForCandidate,
   launchLearnerResource,
   triggerLearnerSync,
   reloadLearnerExperience,
@@ -2184,6 +2704,7 @@ module.exports = {
   requireComposeExecutionBoundary,
   requireSecretFile,
   responseJson,
+  fetchWithTimeout,
   sanitizeEvidence,
   validateAuthoritativeEvidenceHeads,
   validateReadinessSnapshot,

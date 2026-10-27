@@ -2,6 +2,15 @@
 
 const DEFAULT_CREDENTIAL_RANKING_STRATEGY = 'FRESHEST_FIRST';
 
+function approvedApplicationFlowPayload({ organizationId, name, description, credentialTemplateId }) {
+  return {
+    organization_id: organizationId, name, description,
+    flow_type: 'oid4vci_pre_authorized', approval_strategy: 'AUTO',
+    credential_template_id: credentialTemplateId,
+    trigger: { trigger_type: 'WEBHOOK', config: { event_type: 'APPLICATION_APPROVED' } },
+  };
+}
+
 function requestedClaim(claimName, {
   displayName = '',
   description = null,
@@ -178,12 +187,42 @@ async function selectOrganization(page, { organizationId, consoleOrigin }) {
 
 async function listResources(page, pathName, organizationId) {
   const separator = pathName.includes('?') ? '&' : '?';
-  const body = await requireJson(
-    page,
-    `${pathName}${separator}organization_id=${encodeURIComponent(organizationId)}`,
-  );
-  if (!Array.isArray(body)) throw new Error(`${pathName} returned a malformed collection`);
-  return body;
+  // Credential Template's native API defaults to100 rows. Other collections
+  // have their own contracts, including unpaged lists that ignore offsets.
+  if (new URL(pathName, 'https://fixture.invalid').pathname !== '/v1/credential-templates') {
+    const body = await requireJson(page,
+      `${pathName}${separator}organization_id=${encodeURIComponent(organizationId)}`);
+    if (!Array.isArray(body)) throw new Error(`${pathName} returned a malformed collection`);
+    return body;
+  }
+  const resources = [], ids = new Set(), limit = 100;
+  for (let offset = 0; offset < 100000; offset += limit) {
+    const body = await requireJson(page,
+      `${pathName}${separator}organization_id=${encodeURIComponent(organizationId)}&limit=${limit}&offset=${offset}`);
+    if (!Array.isArray(body) || body.length > limit) throw new Error(`${pathName} returned a malformed collection`);
+    for (const resource of body) {
+      if (typeof resource?.id !== 'string' || !resource.id || ids.has(resource.id)) {
+        throw new Error(`${pathName} returned unstable or duplicate resource identities`);
+      }
+      ids.add(resource.id); resources.push(resource);
+    }
+    if (body.length < limit) return resources;
+  }
+  throw new Error(`${pathName} exceeds the bounded demo resource inventory`);
+}
+
+async function requireActiveComplianceProfile(page, {profileId, organizationId}) {
+  requireIdentifier(profileId, 'Compliance Profile ID');
+  const profile = await requireJson(page, `/v1/compliance-profiles/${encodeURIComponent(profileId)}`,
+    {}, 'Load source Compliance Profile');
+  if (profile.id !== profileId || !(profile.organization_id === organizationId
+      || (profile.is_system === true && profile.organization_id == null))) {
+    throw new Error('Source Compliance Profile belongs to another organization');
+  }
+  if (profile.status !== 'ACTIVE' || profile.discoverable !== true) {
+    throw new Error('Source Compliance Profile must be ACTIVE and discoverable before demo configuration is created');
+  }
+  return profile;
 }
 
 async function resolveActiveIssuerDid(page, {
@@ -826,6 +865,7 @@ async function requireNoConflictingApplications(applicantPage, {
 }
 
 module.exports = {
+  approvedApplicationFlowPayload,
   DEFAULT_CREDENTIAL_RANKING_STRATEGY,
   browserJson,
   cancelOwnedIssuanceTransaction,
@@ -843,6 +883,7 @@ module.exports = {
   readApplicationTransaction,
   requestedClaim,
   requireJson,
+  requireActiveComplianceProfile,
   requireNoConflictingApplications,
   requireOwnedApplication,
   requireOwnedTransaction,

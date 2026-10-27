@@ -14,6 +14,8 @@ const ORIGIN = 'http://localhost:9876';
 const INSTANCE_ID = '15a13e8d-5839-419c-98a9-0f6591c08c15';
 const SESSION_ID = '2ed65542-25cb-4e14-84ab-302a539cd3de';
 const STOP = 'Synthetic stop before product configuration';
+const NATIVE_EVIDENCE = Buffer.from('{"scope":"native source fixture only"}');
+const NATIVE_DIGEST = require('node:crypto').createHash('sha256').update(NATIVE_EVIDENCE).digest('hex');
 
 function loadWalletDriver(filename, { loseAcquisition = false, failClose = false } = {}) {
   const operations = [];
@@ -87,7 +89,7 @@ function loadWalletDriver(filename, { loseAcquisition = false, failClose = false
     TEST_APPLICANT_EMAIL: 'applicant@example.test', TEST_APPLICANT_PASSWORD: 'synthetic-applicant-password',
     BETA_AUDIT_VERIFIER_DID: 'did:web:demo.example.test:verifier',
     BETA_ORIGIN: 'https://demo.example.test', MARTY_TEST_WALLET_ORIGIN: ORIGIN,
-    D01_PASSPORT_EVIDENCE_SHA256: 'a'.repeat(64), RECORD_VIDEO: '0',
+    D01_PASSPORT_EVIDENCE_SHA256: NATIVE_DIGEST, RECORD_VIDEO: '0',
   }, exitCode: 0 };
   const module = { exports: {} };
   const requireDouble = (name) => {
@@ -97,8 +99,10 @@ function loadWalletDriver(filename, { loseAcquisition = false, failClose = false
     if (name === '@playwright/test') return { chromium: { launch: async () => browser } };
     if (name === './demo-live-evidence') return {
       createDemoLiveEvidence: async () => ({ bindPage() {}, close() {},
+        async readFixture(file) { assert.equal(file, 'passport-validation-evidence.json'); return NATIVE_EVIDENCE; },
         complete: async () => assert.fail('Stopped wallet fixture cannot complete business evidence') }),
       acknowledgeDemoInputs: async (_directory, _file, expected) => expected,
+      applyLocalNativeReadiness: require(name).applyLocalNativeReadiness,
     };
     if (name === './verify-beta-waltid-acceptance') return {
       ...require(name), loadEnvFile() {},

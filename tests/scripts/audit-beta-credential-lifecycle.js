@@ -5,13 +5,13 @@ const fs = require('fs');
 const { acquireWalletSession, openIsolatedWallet, resetIsolatedWallet } = require('./demo-wallet-session');
 const path = require('path');
 const assert = require('node:assert/strict');
-const { randomUUID } = require('node:crypto');
-const { createDemoLiveEvidence, acknowledgeDemoInputs } = require('./demo-live-evidence');
+const { randomUUID, createHash } = require('node:crypto');
+const { createDemoLiveEvidence, acknowledgeDemoInputs, applyLocalNativeReadiness } = require('./demo-live-evidence');
 const { spawnSync } = require('child_process');
 const { chromium } = require('@playwright/test');
 const { loadEnvFile, redact } = require('./verify-beta-waltid-acceptance');
 const { browserJson, cancelOwnedIssuanceTransaction, selectOrganization } = require('./beta-demo-resource-helpers');
-const { requireVerificationDecision } = require('./beta-demo-review-ui');
+const { requireVerificationDecision, responseForAction } = require('./beta-demo-review-ui');
 const {
   VIDEO_SIZE,
   createActionRecording,
@@ -25,6 +25,7 @@ const {
   DEFAULT_BETA_ORGANIZATION_ID,
   DEFAULT_LIFECYCLE_POLICY_ID,
   DEFAULT_LIFECYCLE_SOURCE_TEMPLATE_ID,
+  requireLifecycleSourceSelection,
   credentialLifecycleBehaviorAssertions,
   verificationResultEvidence,
   verificationSessionRequest,
@@ -314,6 +315,13 @@ async function ensureActiveRevocationProfile(page) {
     ownership: 'REFERENCE_ONLY', provisioning: 'PREEXISTING_ACTIVE_PROFILE' };
 }
 
+async function acquireLifecycleWalletAfterSource(page,context,stamp,recordProfile,acquire=acquireWalletSession) {
+  const profile=await ensureActiveRevocationProfile(page);
+  recordProfile(profile);
+  if(!profile.ok)throw new Error(`Revocation Profile setup failed: ${profile.error}`);
+  return acquire(context,{origin:TEST_WALLET_ORIGIN,runId:stamp});
+}
+
 function trackOwnedMutation(ownedResources, operation, recordId) {
   if (!ownedResources) return () => {};
   // A lost or malformed response does not prove the server created nothing.
@@ -461,12 +469,10 @@ async function receiveCredential(walletPage, offerUri, expectedVct) {
   await walletPage.reload({ waitUntil: 'domcontentloaded' });
   await maskProtocolField(walletPage, 'Credential offer URI', RECORD_VIDEO);
   await walletPage.getByLabel('Credential offer URI').fill(offerUri);
-  const responsePromise = walletPage.waitForResponse((response) => (
+  const response = await responseForAction(walletPage, (response) => (
     response.url() === `${TEST_WALLET_ORIGIN}/api/receive`
     && response.request().method() === 'POST'
-  ), { timeout: 60_000 });
-  await walletPage.getByRole('button', { name: /^receive$/i }).click();
-  const response = await responsePromise;
+  ), () => walletPage.getByRole('button', { name: /^receive$/i }).click(), 60_000);
   const body = await response.json().catch(() => null);
   await walletPage.getByRole('status').filter({ hasText: 'Credential received' }).waitFor({
     timeout: 60_000,
@@ -719,11 +725,6 @@ async function performLifecycleAction(page, row, action, reason, recording = nul
   await recording?.explain(action, reason);
   const actionButton = row.getByRole('button', { name: new RegExp(`^${action} credential`, 'i') });
   await recording?.hold(action, 'button', actionButton);
-  const responsePromise = page.waitForResponse((response) => (
-    response.url().includes(`/v1/issued-credentials/`)
-    && response.url().endsWith(`/${action}`)
-    && response.request().method() === 'POST'
-  ), { timeout: 30_000 });
   recording?.mark(action, 'button-click');
   await actionButton.click();
   const dialog = page.getByRole('dialog', { name: new RegExp(`${action} credential`, 'i') });
@@ -731,8 +732,11 @@ async function performLifecycleAction(page, row, action, reason, recording = nul
   await dialog.getByRole('textbox', { name: /reason/i }).fill(reason);
   await recording?.hold(action, 'reason', dialog, 3200);
   recording?.mark(action, 'confirm-click', { reason });
-  await dialog.getByRole('button', { name: new RegExp(`^${action}$`, 'i') }).click();
-  const response = await responsePromise;
+  const response = await responseForAction(page, (candidate) => (
+    candidate.url().includes('/v1/issued-credentials/')
+    && candidate.url().endsWith(`/${action}`)
+    && candidate.request().method() === 'POST'
+  ), () => dialog.getByRole('button', { name: new RegExp(`^${action}$`, 'i') }).click());
   const body = await response.json().catch(() => null);
   if (response.ok()) {
     await dialog.waitFor({ state: 'hidden', timeout: 30_000 });
@@ -802,17 +806,15 @@ async function renewCredential(page, row, ownedResources, recording = null) {
   await recording?.explain('renew');
   const button = row.getByRole('button', { name: /^renew credential/i });
   await recording?.hold('renew', 'button', button, 3200);
-  const responsePromise = page.waitForResponse((response) => (
-    response.url().includes('/v1/issued-credentials/')
-    && response.url().endsWith('/renew')
-    && response.request().method() === 'POST'
-  ), { timeout: 30_000 });
   const recordRenewal = trackOwnedMutation(ownedResources, 'renewal', (id) => {
     (ownedResources.transactionIds ||= []).push(id);
   });
   recording?.mark('renew', 'button-click', { confirmationDialog: false, reasonField: false });
-  await button.click();
-  const response = await responsePromise;
+  const response = await responseForAction(page, (candidate) => (
+    candidate.url().includes('/v1/issued-credentials/')
+    && candidate.url().endsWith('/renew')
+    && candidate.request().method() === 'POST'
+  ), () => button.click());
   const body = await response.json().catch(() => null);
   recordRenewal(body?.transaction_id);
   return {
@@ -837,26 +839,33 @@ async function getCredentialStatus(page, credentialId) {
 async function present(walletPage, requestUri) {
   await maskProtocolField(walletPage, 'Presentation request URI', RECORD_VIDEO);
   await walletPage.getByLabel('Presentation request URI').fill(requestUri);
-  const responsePromise = walletPage.waitForResponse((response) => (
+  const response = await responseForAction(walletPage, (response) => (
     response.url() === `${TEST_WALLET_ORIGIN}/api/present`
     && response.request().method() === 'POST'
-  ), { timeout: 60_000 });
-  await walletPage.getByRole('button', { name: /^present$/i }).click();
-  const response = await responsePromise;
+  ), () => walletPage.getByRole('button', { name: /^present$/i }).click(), 60_000);
   const body = await response.json().catch(() => null);
-  return {
-    ok: response.ok() && body?.ok === true,
-    status: response.status(),
-    error: response.ok() ? null : body?.error || 'Presentation failed',
-    submission: body?.submission || null,
-  };
+  const ok=response.ok()&&body?.ok===true;
+  const submission=body?.submission&&typeof body.submission==='object'&&!Array.isArray(body.submission)
+    ? {submitted:typeof body.submission.submitted==='boolean'?body.submission.submitted:null,
+      verifier_http_status:Number.isInteger(body.submission.verifier_http_status)
+        &&body.submission.verifier_http_status>=100&&body.submission.verifier_http_status<=599?body.submission.verifier_http_status:null,
+      verifier_error:typeof body.submission.verifier_error==='string'&&/^[a-z][a-z0-9_]{0,79}$/.test(body.submission.verifier_error)
+        ?body.submission.verifier_error:null}:null;
+  return {ok,status:response.status(),error:ok?null:typeof body?.error==='string'?body.error:'Presentation failed',submission};
 }
 
 async function verify(page, walletPage, label, {
   organizationId = ORG_ID,
   presentationPolicyId = POLICY_ID,
   issuerDid = VERIFIER_DID,
+  onPhase = () => {},
+  returnOnWalletFailure = false,
+  resultTimeoutMs = 60_000,
+  resultIntervalMs = 1_000,
 } = {}) {
+  assert(Number.isInteger(resultTimeoutMs)&&resultTimeoutMs>0&&resultTimeoutMs<=60_000);
+  assert(Number.isInteger(resultIntervalMs)&&resultIntervalMs>=0&&resultIntervalMs<=1_000);
+  onPhase('session-request');
   const request = verificationSessionRequest({
     organizationId,
     presentationPolicyId,
@@ -899,24 +908,68 @@ async function verify(page, walletPage, label, {
     return { session: sanitizedSession };
   }
 
-  const wallet = await present(walletPage, session.requestUri);
-  const rawResult = await waitFor(() => page.evaluate(async (instanceId) => {
+  onPhase('wallet-presentation');
+  let wallet;
+  try { wallet = await present(walletPage, session.requestUri); }
+  catch { return { session: sanitizedSession, wallet: null, result: null,
+    diagnostic: {phase:'wallet-presentation', outcome:'TRANSPORT_FAILED'} }; }
+  const walletError = String(wallet.error || '');
+  const walletErrorClass = ['Invalid request','SD-JWT error','Key error','JWT error',
+    'Invalid URL','Signing error','Proof verification failed','Unsupported credential format']
+    .find(prefix => walletError.startsWith(`${prefix}:`)) || (walletError ? 'OTHER' : null);
+  const walletErrorIndicators = ['issuer verification failed','holder public key','request object',
+    'presentation request URI','No stored credential','nonce','HTTP 400','HTTP 403','HTTP 404',
+    'HTTP 409','fetch','signature'].filter(marker => walletError.toLowerCase().includes(marker.toLowerCase()));
+  onPhase('wallet-presentation-result', { instanceId: session.instanceId,
+    walletOk: wallet.ok === true, walletStatus: wallet.status,
+    submitted: wallet.submission?.submitted === true,
+    verifierHttpStatus: wallet.submission?.verifier_http_status || null,
+    verifierErrorCode: /^[a-z][a-z0-9_]{0,79}$/.test(wallet.submission?.verifier_error || '')
+      ? wallet.submission.verifier_error : null,
+    walletErrorClass, walletErrorIndicators,
+    walletErrorSha256: walletError ? createHash('sha256').update(walletError).digest('hex') : null });
+  const walletEvidence={...wallet,error:wallet.error==null?null:redact(wallet.error)
+    .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g,'[redacted-jwt]').slice(0,800),
+    errorClass:walletErrorClass,errorIndicators:walletErrorIndicators,
+    errorSha256:walletError?createHash('sha256').update(walletError).digest('hex'):null};
+  if (!wallet.ok && (returnOnWalletFailure || wallet.submission?.submitted !== true)) return {
+    session:sanitizedSession,wallet:walletEvidence,result:null,
+    diagnostic:{phase:'wallet-presentation',outcome:wallet.submission?.submitted===true?'SUBMITTED_REJECTION':'REJECTED_BEFORE_SUBMISSION'} };
+  onPhase('verifier-result', { instanceId: session.instanceId,
+    walletOk: wallet.ok === true, walletStatus: wallet.status });
+  let rawResult,pollCount=0,lastObservation=null;
+  try { rawResult = await waitFor(() => page.evaluate(async (instanceId) => {
     const response = await fetch(`/v1/flows/instances/${encodeURIComponent(instanceId)}/result`, {
       credentials: 'include',
     });
     const body = await response.json().catch(() => null);
-    if (!response.ok) return null;
+    if (!response.ok) return { httpStatus: response.status, status: null, terminal: false };
     const terminal = ['COMPLETED', 'PASSED', 'VERIFIED', 'FAILED', 'EXPIRED', 'CANCELLED']
       .includes(String(body?.status || '').toUpperCase());
-    return terminal ? { httpStatus: response.status, body } : null;
-  }, session.instanceId));
+    return { httpStatus: response.status, status: String(body?.status || ''),
+      terminal, body: terminal ? body : null };
+  }, session.instanceId).then(observed => {
+    pollCount++;lastObservation={httpStatus:observed.httpStatus,flowStatus:observed.status};
+    onPhase('verifier-result-poll', { instanceId: session.instanceId,
+      httpStatus: observed.httpStatus,
+      flowStatus: ['PENDING','PROCESSING','COMPLETED','PASSED','VERIFIED','FAILED','EXPIRED','CANCELLED']
+        .includes(String(observed.status || '').toUpperCase()) ? String(observed.status).toUpperCase() : 'OTHER' });
+    return observed.terminal ? observed : null;
+  }),resultTimeoutMs,resultIntervalMs); } catch(error) {
+    return {session:sanitizedSession,wallet:walletEvidence,result:null,diagnostic:{phase:'verifier-result',
+      outcome:String(error.message||'').startsWith('Timed out waiting for condition;')?'POLL_TIMEOUT':'POLL_FAILED',
+      pollCount,lastHttpStatus:lastObservation?.httpStatus??null,
+      lastFlowStatus:['PENDING','PROCESSING','COMPLETED','PASSED','VERIFIED','FAILED','EXPIRED','CANCELLED']
+        .includes(String(lastObservation?.flowStatus||'').toUpperCase())?String(lastObservation.flowStatus).toUpperCase():null}};
+  }
   const result = rawResult
     ? verificationResultEvidence(rawResult.body, rawResult.httpStatus)
     : null;
-  return { session: sanitizedSession, wallet, result };
+  return { session: sanitizedSession, wallet:walletEvidence, result };
 }
 
 async function main() {
+  assert.equal(requireLifecycleSourceSelection(process.env),SOURCE_TEMPLATE_ID);
   const email = process.env.TEST_VENDOR_EMAIL || process.env.TEST_ADMIN_EMAIL;
   const password = process.env.TEST_VENDOR_PASSWORD || process.env.TEST_ADMIN_PASSWORD;
   if (!email || !password) throw new Error('Missing beta operator credentials');
@@ -968,8 +1021,6 @@ async function main() {
       ignoreHTTPSErrors: LOCAL_BETA_PROXY,
       ...(RECORD_VIDEO ? { recordVideo: { dir: artifactDir, size: VIDEO_SIZE } } : {}),
     });
-    walletSession = await acquireWalletSession(context, { origin: TEST_WALLET_ORIGIN, runId: stamp });
-    report.walletSession = walletSession.evidence;
     await installUiCandidateRoute(context, uiCandidate);
     page = await context.newPage();
     const recording = createLifecycleRecording(page, {
@@ -1011,10 +1062,8 @@ async function main() {
       };
     }, ORG_ID);
 
-    report.revocationProfile = await ensureActiveRevocationProfile(page, input.stamp);
-    if (!report.revocationProfile.ok) {
-      throw new Error(`Revocation Profile setup failed: ${report.revocationProfile.error}`);
-    }
+    walletSession = await acquireLifecycleWalletAfterSource(page,context,stamp,profile=>{report.revocationProfile=profile;});
+    report.walletSession = walletSession.evidence;
     report.credentialTemplate = await ensureLifecycleTemplate(
       page,
       report.revocationProfile.id,
@@ -1256,12 +1305,14 @@ async function main() {
         }
       },
       writeReport: () => {
+        const ready = applyLocalNativeReadiness(report, evidence,
+          {ready:report.engineeringReady, cleanupComplete:report.cleanup?.ok === true});
         report.finishedAt = new Date().toISOString();
         fs.writeFileSync(path.join(artifactDir, 'report.json'), JSON.stringify(report, null, 2));
         console.log(JSON.stringify(report, null, 2));
-        if (uiCandidate ? !report.engineeringReady : !report.releaseReady) process.exitCode = 1;
+        if (uiCandidate ? !report.engineeringReady : !ready) process.exitCode = 1;
       },
-      successful: () => report.releaseReady === true,
+      successful: () => report.releaseReady === true || report.functionalReady === true,
       complete: () => evidence.complete(),
       closeEvidence: () => evidence.close(),
     });
@@ -1283,6 +1334,7 @@ module.exports = {
   requireDismissedLifecycleNotification,
   requireLifecycleActionEvidence,
   ensureActiveRevocationProfile,
+  acquireLifecycleWalletAfterSource,
   ensureLifecycleTemplate,
   findCredentialRow,
   findIssuedCredential,
