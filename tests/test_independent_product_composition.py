@@ -6,6 +6,7 @@ import json
 import os
 import subprocess
 import sys
+import tarfile
 from pathlib import Path
 
 import pytest
@@ -327,8 +328,25 @@ def test_shipped_renderer_needs_no_repository_frontend_or_nonstdlib_install(sour
                     client.pop("secret", None)
                 assert sanitized == original
             else:
-                assert payload == (ROOT / relative).read_bytes()
+                original = (ROOT / relative).read_bytes()
+                assert payload == (original.replace(b"\r\n", b"\n") if relative.endswith(".sh") else original)
 
+    archive = tmp_path / "product-package.tar.gz"
+    MODULE.PLAN["write_archive"](bundle, archive)
+    repeated = tmp_path / "same-payload.tar.gz"
+    MODULE.PLAN["write_archive"](bundle, repeated)
+    assert archive.read_bytes() == repeated.read_bytes()
+    extracted = tmp_path / "extracted-canonical-package"
+    with tarfile.open(archive, "r:gz") as payload:
+        for member in payload.getmembers():
+            assert not member.name.startswith("/") and ".." not in Path(member.name).parts
+            assert member.mode == (0o755 if member.isdir() or member.name.endswith(".sh") else 0o644)
+        payload.extractall(extracted, filter="data")
+    bundle = extracted
+    if product == "marty-server" and os.name != "nt":
+        script = bundle / "runtime/scripts/load-secrets-env.sh"
+        assert os.access(script, os.X_OK)
+        subprocess.run([str(script)], env={"PATH": os.environ["PATH"]}, check=True)
     base = tmp_path / "base.json"
     base.write_text(json.dumps(pinned_base(source_model)))
     output = tmp_path / "selected-compose.json"
@@ -370,3 +388,15 @@ def test_packaged_runtime_replaces_only_known_static_mounts(tmp_path, source_mod
     (runtime / "scripts/load-secrets-env.sh").unlink()
     with pytest.raises(ValueError, match="source path escapes or is missing"):
         MODULE.server_composition(base, package("marty-server"), runtime)
+
+
+def test_archive_never_overwrites_outputs_or_archives_itself(tmp_path):
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+    (bundle / "file.txt").write_text("source fixture")
+    output = tmp_path / "package.tar.gz"
+    MODULE.PLAN["write_archive"](bundle, output)
+    with pytest.raises(ValueError, match="outputs must be new"):
+        MODULE.PLAN["write_archive"](bundle, output)
+    with pytest.raises(ValueError, match="outside the bundle"):
+        MODULE.PLAN["write_archive"](bundle, bundle / "self.tar.gz")

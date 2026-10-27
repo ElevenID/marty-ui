@@ -4,9 +4,12 @@
 from __future__ import annotations
 
 import argparse
+import gzip
 import hashlib
+import io
 import json
 import re
+import tarfile
 from pathlib import Path
 
 PRODUCTS = {
@@ -76,6 +79,8 @@ def digest(path: Path) -> str:
 
 def runtime_payload(root: Path, relative: str) -> bytes:
     payload = source_file(root, relative).read_bytes()
+    if relative.endswith(".sh"):
+        payload = payload.replace(b"\r\n", b"\n")
     if relative == "config/keycloak/11id-realm.json":
         realm = json.loads(payload)
         # Production deployment supplies operator identities and client secrets.
@@ -222,6 +227,7 @@ def write_bundle(root: Path, plan: dict, package: dict, output: Path) -> None:
         f"# {package['product']} {package['version']} candidate\n\n"
         "This producer candidate is experimental and unqualified. Independent release verification is separate.\n\n"
         f"Source revision: https://github.com/{plan['repository']}/tree/{plan['source_sha']}\n\n"
+        "Extract the canonical product-package.tar.gz before using runtime files; its Unix shell modes survive workflow artifact ZIP transport. The adjacent .sha256 file covers the archive, and SHA256SUMS inside covers its files.\n\n"
         "The optional renderer requires Python 3.11+ with only its standard library; no repository checkout, UI build or npm installation is needed. "
         "It writes Compose JSON without installing software, starting containers or preparing secrets. The deployment owner supplies the normalized server runtime layout, state/secrets and external image pins. Server container configuration and entrypoint assets are included under runtime/; --runtime-dir explicitly binds those packaged assets instead of checkout paths.\n\n"
         f"```sh\npython scripts/compose_product_packages.py --package product-package.json {arguments}\n```\n\n"
@@ -234,8 +240,37 @@ def write_bundle(root: Path, plan: dict, package: dict, output: Path) -> None:
         path = output / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(payload)
+        path.chmod(0o755 if path.suffix == ".sh" else 0o644)
     inventory = "".join(hashlib.sha256(payload).hexdigest() + "  " + name + "\n" for name, payload in sorted(files.items()))
     (output / "SHA256SUMS").write_text(inventory, encoding="utf-8", newline="\n")
+
+
+def write_archive(bundle: Path, output: Path) -> None:
+    """Preserve Unix runtime modes through workflow artifact ZIP transport."""
+    checksum = output.with_name(output.name + ".sha256")
+    require(not output.resolve().is_relative_to(bundle.resolve()), "archive must be outside the bundle")
+    require(all(not p.exists() and not p.is_symlink() for p in (output, checksum)), "archive outputs must be new")
+    paths = sorted(bundle.rglob("*"))
+    require(all(not p.is_symlink() and p.resolve().is_relative_to(bundle.resolve())
+                and (p.is_file() or p.is_dir()) for p in paths), "bundle contains an unsupported path")
+    with (
+        output.open("xb") as raw,
+        gzip.GzipFile(filename="", fileobj=raw, mode="wb", mtime=0) as zipped,
+        tarfile.open(fileobj=zipped, mode="w", format=tarfile.PAX_FORMAT) as archive,
+    ):
+        for path in paths:
+            info = tarfile.TarInfo(path.relative_to(bundle).as_posix())
+            if path.is_dir():
+                info.type = tarfile.DIRTYPE
+                info.mode = 0o755
+                archive.addfile(info)
+            else:
+                payload = path.read_bytes()
+                info.size = len(payload)
+                info.mode = 0o755 if path.suffix == ".sh" else 0o644
+                archive.addfile(info, io.BytesIO(payload))
+    with checksum.open("x", encoding="utf-8", newline="\n") as inventory:
+        inventory.write(hashlib.sha256(output.read_bytes()).hexdigest() + "  " + output.name + "\n")
 
 
 def main() -> None:
@@ -249,7 +284,9 @@ def main() -> None:
     parser.add_argument("--build-run-id")
     parser.add_argument("--build-run-attempt")
     parser.add_argument("--bundle-dir", type=Path)
+    parser.add_argument("--archive-output", type=Path)
     args = parser.parse_args()
+    require(args.archive_output is None or args.bundle_dir is not None, "archive requires a package bundle")
     plan = build_plan(args.root, args.product, args.source_sha)
     assembly = (args.input_plan, args.images_dir, args.build_run_id, args.build_run_attempt)
     if any(value is not None for value in assembly):
@@ -261,6 +298,8 @@ def main() -> None:
         require(all(value is not None for value in assembly), "bundle requires complete producer assembly inputs")
         require(args.output.resolve() == (args.bundle_dir / "product-package.json").resolve(), "bundle output must name its product-package.json")
         write_bundle(args.root, frozen, plan, args.bundle_dir)
+        if args.archive_output is not None:
+            write_archive(args.bundle_dir, args.archive_output)
         return
     args.output.write_text(json.dumps(plan, sort_keys=True, indent=2) + "\n", encoding="utf-8")
 

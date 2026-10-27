@@ -195,6 +195,14 @@ def test_producer_workflow_consumes_the_selected_plan_and_keeps_qualification_se
     assert "push-by-digest=true" in image["outputs"]
     assert "unqualified" in image["labels"]
     assert workflow["jobs"]["package"]["needs"] == ["plan", "build"]
+    steps = workflow["jobs"]["package"]["steps"]
+    archive_paths = {"product-package.tar.gz", "product-package.tar.gz.sha256"}
+    attestation = next(step["with"] for step in steps if "attest-build-provenance" in step.get("uses", ""))
+    upload = next(step["with"] for step in steps if "upload-artifact" in step.get("uses", ""))
+    assert set(attestation["subject-path"].splitlines()) == archive_paths
+    assert set(upload["path"].splitlines()) == archive_paths
+    assert any("--archive-output product-package.tar.gz" in step.get("run", "") for step in steps)
+
     for job in workflow["jobs"].values():
         for step in job["steps"]:
             if "uses" in step:

@@ -61,6 +61,28 @@ the build plan and checksum inventory as an attested workflow artifact.
 consumer interface. Its state remains experimental/unqualified; a producer
 receipt is not independent verification of an image or compatibility result.
 
+## Canonical candidate archive
+
+The workflow artifact contains `product-package.tar.gz` and its adjacent
+`.sha256` checksum. Extract that tarball into a new directory before using its
+runtime files. The surrounding workflow artifact ZIP is only transport: raw
+artifact files do not preserve Unix execution modes.
+
+The tar payload records directories and shell entrypoints as `0755`, other
+files as `0644`, with fixed timestamps and owner metadata. Linux runtime shell
+files use LF line endings; their original and emitted hashes remain in the
+frozen build plan. `SHA256SUMS` inside covers the emitted files, while the outer
+checksum covers the tarball. Both archive and checksum are attested/uploaded
+with the candidate. These producer checks do not replace independent release
+verification.
+
+```sh
+mkdir extracted-product
+# Use the verified candidate tarball supplied by the release verification owner.
+tar -xzf product-package.tar.gz -C extracted-product
+cd extracted-product
+```
+
 ## Runtime composition
 
 `scripts/compose_product_packages.py` renders Compose JSON from the selected
