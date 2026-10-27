@@ -151,3 +151,28 @@ for(const mutation of ['missingCrypto','unknownPackage','inventory','recipe','lo
  });
  assert.throws(()=>verifyFunctionalRuntime(f.profile,{observe:()=>assert.fail('Reject before runtime observation')}));
 });
+
+
+test('readDocker transport reuses actual per-role PID1, inode, UID and mount inspection',t=>{
+ assert.equal(require('./functional-debug-runtime').DOCKER_READ_TRANSPORT_SCHEMA,'marty.functional-runtime-docker-read/v1');
+ const f=fixture(t),expected=expectedRuntime(f.profile);let selected;const calls=[];
+ const readDocker=args=>{
+  calls.push(args);
+  if(args[0]==='ps'){const service=args.find(v=>v.startsWith('label=com.docker.compose.service=')).split('=').at(-1);selected=expected.find(r=>r.role===service);return f.observe(selected).containerId;}
+  const actual=f.observe(selected);
+  if(args[0]==='inspect')return JSON.stringify([{Id:actual.containerId,Image:selected.imageId,Config:{Labels:{'com.docker.compose.project':selected.project,'com.docker.compose.service':selected.role},User:'1000'},State:{Running:true,Status:'running',Health:actual.health?{Status:actual.health}:undefined,Pid:actual.hostPid,StartedAt:actual.startedAt},Mounts:actual.binaryMounts.map(m=>({Type:m.type,Source:m.source,Destination:m.destination,RW:m.writable}))}]);
+  if(args[2]==='readlink')return actual.executablePath;
+  if(args[2]==='sha256sum')return selected.sha256+'  '+args[3];
+  if(args[2]==='cat')return 'Uid:\t1000\t1000\t1000\t1000\n';
+  assert.fail('Unexpected engine read');
+ };
+ const result=verifyFunctionalRuntime(f.profile,{readDocker});
+ assert.equal(result.roles.length,22);assert.equal(result.releaseQualified,false);assert.equal(result.recordingQualified,false);
+ assert.equal(calls.filter(a=>a[0]==='ps').length,22);
+ assert.equal(calls.filter(a=>a[2]==='readlink'&&a[3]==='/proc/1/exe').length,21);
+ assert.equal(calls.filter(a=>a[2]==='sha256sum'&&a[3]==='/proc/1/exe').length,21);
+ assert.equal(result.roles.find(r=>r.role==='gateway').effectiveUid,1000);
+ assert.throws(()=>verifyFunctionalRuntime(f.profile,{observe:f.observe,readDocker}),/one observation transport/);
+ assert.throws(()=>verifyFunctionalRuntime(f.profile,{readDocker:()=>{throw Error('CONTROLLED_PRIVATE_ERROR')}}),e=>e.code==='FUNCTIONAL_RUNTIME_OBSERVATION_FAILED'&&!e.message.includes('PRIVATE'));
+ for(const qualification of ['RELEASE','RECORDING'])assert.throws(()=>verifyFunctionalRuntime(f.profile,{qualification,readDocker:()=>assert.fail('No engine reads')}),/cannot qualify/);
+});
