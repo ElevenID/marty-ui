@@ -147,7 +147,9 @@ function harness({ scenario = 'external-evidence-to-credential', fail = '' } = {
       state.mutations.push(state.grade);
       if (state.issued && state.grade === 40) state.review = true;
       return { assignment_id: 2, user_id: 3,
-        score: fail === 'denial-and-grade-restoration' && state.grade === 95 ? 40 : state.grade };
+        score: ((fail === 'denial-and-grade-restoration' && state.grade === 95)
+          || (fail === 'post-denial-and-grade-restoration' && state.issued && state.grade === 95))
+          ? 40 : state.grade };
     } },
   };
   const operations = { ...stock,
@@ -164,7 +166,8 @@ function harness({ scenario = 'external-evidence-to-credential', fail = '' } = {
       const job = { ...scope, id: `job-${state.jobs}`, status: 'succeeded', created_at: new Date(10000).toISOString(),
         result: { policy_allowed: state.grade === 95 && !(fail === 'recovery-transient-course' && state.jobs === 3),
           requirements_checked: 1 } };
-      if (fail === 'denial-sync' && state.grade === 40) throw Error('Worker failed');
+      if ((fail === 'denial-sync' && state.grade === 40)
+        || (fail === 'post-denial-and-grade-restoration' && state.issued && state.grade === 40)) throw Error('Worker failed');
       if (fail === 'stale-job' && state.jobs === 2) job.created_at = new Date(0).toISOString();
       return { body: { sync: { job_id: job.id } }, job };
     },
@@ -234,6 +237,17 @@ test('a failing grade restoration preserves the original negative-operation fail
   assert(!JSON.stringify(h.report.operationFailures).includes('Unrelated conflict'));
   assert.deepEqual(h.report.behaviorAssertions,{});
   assert(h.report.pendingOperations.includes('scoped-approval'));
+});
+
+test('D08 preserves both post-issuance failure and grade restoration failure', async () => {
+  const h = harness({ fail: 'post-denial-and-grade-restoration' });
+  await assert.rejects(h.run(), error => error instanceof AggregateError && error.errors.length === 2);
+  assert.equal(h.report.operationFailures.length, 2);
+  assert.equal(h.report.operationFailures[0].activeCase, 'post-issuance-deny-sync-request');
+  assert.equal(h.report.operationFailures[1].activeCase, 'grade-score-binding');
+  assert(h.report.operationFailures.every(x => x.sourceLocation?.file === 'canvas-capture-sequence.js'));
+  assert(!JSON.stringify(h.report.operationFailures).includes('Worker failed'));
+  assert.deepEqual(h.report.behaviorAssertions, {});
 });
 
 test('recovery requires a new permitting job after transient course recalculation', async () => {
