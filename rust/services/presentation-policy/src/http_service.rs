@@ -1526,8 +1526,9 @@ mod error_code_projection_tests {
         };
         let policy=build_policy(serde_json::from_value(json!({"organization_id":Uuid::from_u128(1).to_string(),"name":"Certificate trust",
             "credential_requirements":[{"credential_template_id":Uuid::from_u128(2).to_string(),"credential_payload_format":"mdoc","requested_claims":[{"claim_name":"age_over_21"}]}]})).unwrap(),Utc::now()).unwrap();
+        let nonce = Uuid::new_v4().to_string();
         let request: EvaluatePresentationRequest =
-            serde_json::from_value(json!({"vp_token":"raw-mdoc","nonce":"server-owned-nonce"}))
+            serde_json::from_value(json!({"vp_token":"raw-mdoc","nonce":nonce.as_str()}))
                 .unwrap();
         let diagnostic = MdocAuthenticationDiagnosticV1 {
             format: MdocDiagnosticFormat::MsoMdoc,
@@ -1551,7 +1552,7 @@ mod error_code_projection_tests {
         )
         .unwrap();
         bound
-            .validate_request(&policy.id.to_string(), "server-owned-nonce", "raw-mdoc")
+            .validate_request(&policy.id.to_string(), &nonce, "raw-mdoc")
             .unwrap();
         assert!(bound.authentication.issuer_signature_valid);
         assert!(!bound.authentication.certificate_trust_passed);

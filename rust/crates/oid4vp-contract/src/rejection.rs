@@ -221,6 +221,16 @@ impl RejectedPresentationAttemptV1 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn nonce_pair() -> (String, String) {
+        let nonce = uuid::Uuid::new_v4().to_string();
+        loop {
+            let candidate = uuid::Uuid::new_v4().to_string();
+            if candidate != nonce {
+                return (nonce, candidate);
+            }
+        }
+    }
     fn authentication() -> MdocAuthenticationDiagnosticV1 {
         MdocAuthenticationDiagnosticV1 {
             format: MdocDiagnosticFormat::MsoMdoc,
@@ -236,9 +246,10 @@ mod tests {
 
     #[test]
     fn rejection_transport_refuses_nonce_policy_token_and_document_swaps() {
+        let (nonce, wrong_nonce) = nonce_pair();
         let bound = BoundAuthenticationDiagnosticV1::bind(
             "policy-1",
-            "nonce-1",
+            nonce.as_str(),
             "token-1",
             1,
             authentication(),
@@ -247,15 +258,18 @@ mod tests {
         let json = serde_json::to_string(&bound).unwrap();
         assert_eq!(
             BoundAuthenticationDiagnosticV1::from_optional_json(
-                &json, "policy-1", "nonce-1", "token-1"
+                &json,
+                "policy-1",
+                nonce.as_str(),
+                "token-1"
             )
             .unwrap(),
             Some(bound.clone())
         );
         for (policy, nonce, token) in [
-            ("policy-2", "nonce-1", "token-1"),
-            ("policy-1", "nonce-2", "token-1"),
-            ("policy-1", "nonce-1", "token-2"),
+            ("policy-2", nonce.as_str(), "token-1"),
+            ("policy-1", wrong_nonce.as_str(), "token-1"),
+            ("policy-1", nonce.as_str(), "token-2"),
         ] {
             assert!(BoundAuthenticationDiagnosticV1::from_optional_json(
                 &json, policy, nonce, token
@@ -265,7 +279,10 @@ mod tests {
         for value in ["", "null"] {
             assert_eq!(
                 BoundAuthenticationDiagnosticV1::from_optional_json(
-                    value, "policy-1", "nonce-1", "token-1"
+                    value,
+                    "policy-1",
+                    nonce.as_str(),
+                    "token-1"
                 )
                 .unwrap(),
                 None
@@ -274,17 +291,18 @@ mod tests {
         let mut changed = bound.clone();
         changed.native_credential_count = 2;
         assert!(changed
-            .validate_request("policy-1", "nonce-1", "token-1")
+            .validate_request("policy-1", nonce.as_str(), "token-1")
             .is_err());
         let mut changed = bound;
         changed.authentication.document_count = 2;
         assert!(changed
-            .validate_request("policy-1", "nonce-1", "token-1")
+            .validate_request("policy-1", nonce.as_str(), "token-1")
             .is_err());
     }
 
     #[test]
     fn rejection_diagnostic_never_promotes_bad_signatures_or_raw_claims() {
+        let (nonce, wrong_nonce) = nonce_pair();
         let mut value = authentication();
         value.issuer_signature_valid = false;
         assert!(value.validate().is_err());
@@ -299,7 +317,7 @@ mod tests {
         assert!(serde_json::from_value::<MdocAuthenticationDiagnosticV1>(json).is_err());
         let bound = BoundAuthenticationDiagnosticV1::bind(
             "policy-1",
-            "nonce-1",
+            nonce.as_str(),
             "token-1",
             1,
             authentication(),
@@ -312,12 +330,12 @@ mod tests {
             bound,
         )
         .unwrap();
-        assert!(attempt.matches_session("instance-1", "policy-1", "nonce-1"));
-        assert!(!attempt.matches_session("instance-2", "policy-1", "nonce-1"));
-        assert!(!attempt.matches_session("instance-1", "policy-2", "nonce-1"));
-        assert!(!attempt.matches_session("instance-1", "policy-1", "nonce-2"));
+        assert!(attempt.matches_session("instance-1", "policy-1", nonce.as_str()));
+        assert!(!attempt.matches_session("instance-2", "policy-1", nonce.as_str()));
+        assert!(!attempt.matches_session("instance-1", "policy-2", nonce.as_str()));
+        assert!(!attempt.matches_session("instance-1", "policy-1", wrong_nonce.as_str()));
         let encoded = serde_json::to_string(&attempt).unwrap();
         assert!(!encoded.contains("token-1"));
-        assert!(!encoded.contains("nonce-1"));
+        assert!(!encoded.contains(nonce.as_str()));
     }
 }
