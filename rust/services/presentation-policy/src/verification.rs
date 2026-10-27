@@ -13,6 +13,8 @@ use crate::{
     PresentationVerificationOrchestrator,
 };
 
+pub(crate) const MDOC_AUTHENTICATION_DIAGNOSTIC: &str = "mdoc_authentication_diagnostic";
+
 /// Verifier-owned trust profile supplied to native credential kernels.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -65,6 +67,8 @@ pub struct CredentialVerificationContext {
 pub struct CredentialVerificationEvidence {
     pub verified: bool,
     pub failure_reason: Option<String>,
+    pub mdoc_authentication_diagnostic:
+        Option<marty_oid4vp_contract::MdocAuthenticationDiagnosticV1>,
     pub credential_id: Option<String>,
     pub credential_status_ids: Vec<String>,
     pub claims: Map<String, Value>,
@@ -284,6 +288,12 @@ impl VerifiedFactsOrchestrator {
                 evaluation_time,
             )
         };
+        let mdoc_authentication_diagnostic =
+            if !presentation_only && format == DetectedCredentialFormat::Mdoc {
+                evidence.mdoc_authentication_diagnostic.clone()
+            } else {
+                None
+            };
         let mut warnings = evidence.warnings;
         warnings.extend(evidence.status.warnings.clone());
         if !evidence.verified {
@@ -336,6 +346,7 @@ impl VerifiedFactsOrchestrator {
 
         Ok(json!({
             "credentials": credentials,
+            (MDOC_AUTHENTICATION_DIAGNOSTIC): mdoc_authentication_diagnostic,
             "evaluation_time_epoch_seconds": evaluation_time,
             "presentation_verified": evidence.presentation_verified,
             "holder_binding_verified": evidence.holder_binding_verified,

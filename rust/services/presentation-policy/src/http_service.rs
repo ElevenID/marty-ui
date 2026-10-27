@@ -509,11 +509,20 @@ pub fn evaluate_verified_facts_for_policy(
     let object = verified
         .as_object_mut()
         .ok_or_else(|| service_unavailable("PRESENTATION_POLICY.INVALID_VERIFICATION_EVIDENCE"))?;
+    // Diagnostic evidence is NOT a native policy fact or authorization input.
+    // Core's strict facts schema remains unchanged and rejects unknown fields.
+    let authentication_diagnostic =
+        object.remove(crate::verification::MDOC_AUTHENTICATION_DIAGNOSTIC);
     object.insert("policy".into(), service_policy(policy));
     let output = evaluate_verified_facts_json(&verified.to_string()).map_err(domain_error)?;
     let native: Value = serde_json::from_str(&output)
         .map_err(|_| service_unavailable("PRESENTATION_POLICY.INVALID_NATIVE_RESULT"))?;
-    Ok(project_evaluation(native, request, &verified))
+    Ok(project_evaluation(
+        native,
+        request,
+        &verified,
+        authentication_diagnostic.as_ref(),
+    ))
 }
 
 fn build_policy(
@@ -1028,10 +1037,38 @@ fn authenticated_mdoc_disclosures(verified: &Value, result: &Value) -> Option<Va
     Some(json!({"format": "mso_mdoc", "documents": projected}))
 }
 
+fn bound_authentication_diagnostic(
+    native: &Value,
+    request: &EvaluatePresentationRequest,
+    verified: &Value,
+    diagnostic: Option<&Value>,
+) -> Option<marty_oid4vp_contract::BoundAuthenticationDiagnosticV1> {
+    use marty_oid4vp_contract::{BoundAuthenticationDiagnosticV1, MdocAuthenticationDiagnosticV1};
+    let credentials = verified["credentials"].as_array()?;
+    if credentials.len() != 1
+        || credentials
+            .iter()
+            .any(|credential| credential["signature_verified"] != false)
+    {
+        return None;
+    }
+    let authentication: MdocAuthenticationDiagnosticV1 =
+        serde_json::from_value(diagnostic?.clone()).ok()?;
+    BoundAuthenticationDiagnosticV1::bind(
+        native["policy_id"].as_str()?,
+        request.nonce.as_deref()?,
+        request.vp_token.as_str()?,
+        u32::try_from(credentials.len()).ok()?,
+        authentication,
+    )
+    .ok()
+}
+
 fn project_evaluation(
     native: Value,
     request: &EvaluatePresentationRequest,
     verified: &Value,
+    diagnostic: Option<&Value>,
 ) -> Value {
     let errors = native["errors"].as_array().cloned().unwrap_or_default();
     let error_codes = errors
@@ -1086,6 +1123,7 @@ fn project_evaluation(
         "policy_id": native["policy_id"],
         "policy_name": native["policy_name"],
         "credential_results": credential_results,
+        (marty_oid4vp_contract::AUTHENTICATION_DIAGNOSTIC): bound_authentication_diagnostic(&native, request, verified, diagnostic),
         "total_requirements": native["total_requirements"],
         "satisfied_requirements": native["satisfied_requirements"],
         "required_satisfied": native["required_satisfied"],
@@ -1424,6 +1462,7 @@ mod error_code_projection_tests {
                 native.clone(),
                 &request,
                 &json!({"credentials": [evidence]}),
+                None,
             );
             let result = &projected["credential_results"][0];
             assert_eq!(result["revocation_checked"], !timestamp.is_null());
@@ -1443,6 +1482,7 @@ mod error_code_projection_tests {
                 native.clone(),
                 &request,
                 &json!({"credentials": credentials}),
+                None,
             );
             let result = &projected["credential_results"][0];
             for key in [
@@ -1478,5 +1518,49 @@ mod error_code_projection_tests {
             assert!(has_any_code(&[Value::String(native.into())], &[legacy]));
             assert!(has_any_code(&[Value::String(legacy.into())], &[native]));
         }
+    }
+    #[test]
+    fn rejection_diagnostic_is_separate_from_policy_facts_and_issuer_template_matching() {
+        use marty_oid4vp_contract::{
+            CertificateTrustFailure, MdocAuthenticationDiagnosticV1, MdocDiagnosticFormat,
+        };
+        let policy=build_policy(serde_json::from_value(json!({"organization_id":Uuid::from_u128(1).to_string(),"name":"Certificate trust",
+            "credential_requirements":[{"credential_template_id":Uuid::from_u128(2).to_string(),"credential_payload_format":"mdoc","requested_claims":[]}]})).unwrap(),Utc::now()).unwrap();
+        let request: EvaluatePresentationRequest =
+            serde_json::from_value(json!({"vp_token":"raw-mdoc","nonce":"server-owned-nonce"}))
+                .unwrap();
+        let diagnostic = MdocAuthenticationDiagnosticV1 {
+            format: MdocDiagnosticFormat::MsoMdoc,
+            document_count: 1,
+            document_type: "org.iso.18013.5.1.mDL".into(),
+            issuer_signature_valid: true,
+            certificate_trust_passed: false,
+            device_authentication_valid: true,
+            certificate_trust_failures: vec![CertificateTrustFailure::CertificateChainRejected],
+            issuer_certificate_sha256: "1".repeat(64),
+        };
+        let mut facts = json!({"credentials":[{"credential_id":"rejected","credential_template_ids":[],"credential_format":"mdoc","claims":{},"issuer_id":"unknown","signature_verified":false,"signature_failure_reason":"Authentication rejected","trust_profile_verified":false,"trust_failure_reason":null,"trust_level":null,"compliance_statuses":[],"accreditations":[],"issued_at_epoch_seconds":null,"revocation_checked_at_epoch_seconds":null,"not_revoked":null,"credential_status":null,"warnings":[]}],
+            "evaluation_time_epoch_seconds":1787240300_u64,"presentation_verified":false,"holder_binding_verified":false,"holder_binding_method":"DEVICE_KEY","proof_profile":"OID4VP_VERIFIABLE_PRESENTATION","challenge_verified":false,"audience_verified":false,"replay_check_verified":false,"proof_epoch_seconds":null,"external_authorization":null,"presentation_count":1});
+        facts[crate::verification::MDOC_AUTHENTICATION_DIAGNOSTIC] =
+            serde_json::to_value(diagnostic).unwrap();
+        let result = evaluate_verified_facts_for_policy(facts.clone(), &policy, &request).unwrap();
+        assert_eq!(result["decision"], "deny");
+        assert_eq!(result["verified_claims"], json!({}));
+        let bound: marty_oid4vp_contract::BoundAuthenticationDiagnosticV1 = serde_json::from_value(
+            result[marty_oid4vp_contract::AUTHENTICATION_DIAGNOSTIC].clone(),
+        )
+        .unwrap();
+        bound
+            .validate_request(&policy.id.to_string(), "server-owned-nonce", "raw-mdoc")
+            .unwrap();
+        assert!(bound.authentication.issuer_signature_valid);
+        assert!(!bound.authentication.certificate_trust_passed);
+        facts[crate::verification::MDOC_AUTHENTICATION_DIAGNOSTIC] =
+            json!({"claims":{"forged":true}});
+        let result = evaluate_verified_facts_for_policy(facts, &policy, &request).unwrap();
+        assert_eq!(result["decision"], "deny");
+        assert!(result
+            .get(marty_oid4vp_contract::AUTHENTICATION_DIAGNOSTIC)
+            .is_none());
     }
 }

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, render, screen, waitFor } from '@test/utils';
 import userEvent from '@testing-library/user-event';
 
@@ -8,6 +8,7 @@ const {
   mockListFlowExecutions,
   mockStartVerificationFlow,
   mockGetVerificationFlowResult,
+  mockGetVerificationFlowInstance,
   mockListPublicIssuerIdentities,
   mockListPresentationPolicies,
   mockListFlows,
@@ -15,6 +16,7 @@ const {
   mockListFlowExecutions: vi.fn(),
   mockStartVerificationFlow: vi.fn(),
   mockGetVerificationFlowResult: vi.fn(),
+  mockGetVerificationFlowInstance: vi.fn(),
   mockListPublicIssuerIdentities: vi.fn(),
   mockListPresentationPolicies: vi.fn(),
   mockListFlows: vi.fn(),
@@ -34,6 +36,8 @@ vi.mock('../../../services/flowsApi', () => ({
 vi.mock('../../../services/zkVerificationApi', () => ({
   startVerificationFlow: (...args: unknown[]) => mockStartVerificationFlow(...args),
   getVerificationFlowResult: (...args: unknown[]) => mockGetVerificationFlowResult(...args),
+  getVerificationResult: (...args: unknown[]) => mockGetVerificationFlowResult(...args),
+  getVerificationFlowInstance: (...args: unknown[]) => mockGetVerificationFlowInstance(...args),
 }));
 
 vi.mock('../../../services/issuerIdentitiesApi', () => ({
@@ -45,6 +49,7 @@ vi.mock('../../../services/presentationPolicyApi', () => ({
 }));
 
 describe('VerificationSessionManager', () => {
+  afterEach(() => vi.useRealTimers());
   beforeEach(() => {
     vi.clearAllMocks();
     mockListFlowExecutions.mockResolvedValue([]);
@@ -59,6 +64,34 @@ describe('VerificationSessionManager', () => {
     mockListPresentationPolicies.mockResolvedValue([]);
     mockListFlows.mockResolvedValue([]);
     mockGetVerificationFlowResult.mockReset();
+    mockGetVerificationFlowInstance.mockReset();
+  });
+
+  it('pending details reuse polling for rejection and recovery without creating another session', async () => {
+    mockListFlowExecutions.mockResolvedValue([{ id: 'pending-detail', flow_type: 'oid4vp_presentation', status: 'AWAITING_WALLET',
+      context_data: { presentation_policy_id: 'policy-1', request_uri: 'openid4vp://authorize' } }]);
+    mockGetVerificationFlowInstance.mockResolvedValueOnce({ id: 'pending-detail', status: 'AWAITING_WALLET',
+      last_presentation_attempt: { schema_version: 1, instance_id: 'pending-detail', policy_id: 'policy-1', native_credential_count: 1,
+        nonce_sha256: 'a'.repeat(64), submission_digest: 'b'.repeat(64), vp_token_sha256: 'c'.repeat(64),
+        outcome: 'rejected', retryable: true, observed_at: '2026-10-26T12:00:00Z',
+        authentication: { format: 'mso_mdoc', document_count: 1, document_type: 'org.iso.18013.5.1.mDL', issuer_signature_valid: true,
+          certificate_trust_passed: false, device_authentication_valid: true, certificate_trust_failures: ['CERTIFICATE_CHAIN_REJECTED'],
+          issuer_certificate_sha256: 'd'.repeat(64) } } })
+      .mockResolvedValueOnce({ id: 'pending-detail', status: 'COMPLETED' });
+    mockGetVerificationFlowResult.mockResolvedValue({ instance_id: 'pending-detail', status: 'COMPLETED', result: 'passed', decision: 'allow', verified_claims: {}, credential_results: [] });
+    render(<VerificationSessionManager organizationId="org-1" />);
+    const open = await screen.findByRole('button', { name: 'Show QR code' });
+    vi.useFakeTimers();
+    await act(async () => { open.click(); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+    expect(screen.getByTestId('presentation-attempt-rejected')).toHaveTextContent('issuer certificate was not accepted');
+    expect(screen.getByTestId('verification-session-status')).toHaveAttribute('data-status', 'pending');
+    expect(screen.queryByTestId('verification-result-summary')).not.toBeInTheDocument();
+    expect(mockStartVerificationFlow).not.toHaveBeenCalled();
+    await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+    expect(screen.queryByTestId('presentation-attempt-rejected')).not.toBeInTheDocument();
+    expect(screen.getByTestId('verification-result-summary')).toHaveAttribute('data-verification-decision', 'allow');
+    expect(mockStartVerificationFlow).not.toHaveBeenCalled();
   });
 
   it('lists OID4VP sessions from MIP flow instances', async () => {

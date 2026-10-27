@@ -24,17 +24,18 @@ import {
 } from '../../../../services/digitalCredentialsApi';
 import { createPresentationTransport } from '../../../../services/walletTransportService';
 import { openDeepLink } from '../../../../utils/deviceDetection';
-import VerificationResultSummary from '../VerificationResultSummary';
+import VerificationResultSummary, { extractPresentationRejection, PresentationAttemptFeedback, verificationSessionId } from '../VerificationResultSummary';
 import Oid4vpQrCode from '../Oid4vpQrCode';
 
 const POLL_INTERVAL_MS = 3000;
-const TERMINAL_STATUSES = ['completed', 'failed', 'expired'];
+const TERMINAL_STATUSES = ['completed', 'failed', 'expired', 'cancelled'];
 
 const STATUS_CONFIG = {
   pending: { label: 'Waiting for wallet', color: 'warning', icon: <HourglassTopIcon fontSize="small" /> },
   completed: { label: 'Verified', color: 'success', icon: <CheckCircleIcon fontSize="small" /> },
   failed: { label: 'Failed', color: 'error', icon: <ErrorIcon fontSize="small" /> },
   expired: { label: 'Expired', color: 'default', icon: <ErrorIcon fontSize="small" /> },
+  cancelled: { label: 'Cancelled', color: 'default', icon: <ErrorIcon fontSize="small" /> },
 };
 
 function normalizeSessionStatus(status) {
@@ -42,6 +43,7 @@ function normalizeSessionStatus(status) {
   if (['passed', 'completed', 'verified'].includes(value)) return 'completed';
   if (['failed', 'denied'].includes(value)) return 'failed';
   if (value === 'expired') return 'expired';
+  if (['cancelled', 'canceled'].includes(value)) return 'cancelled';
   return 'pending';
 }
 
@@ -54,47 +56,75 @@ export function isApprovedVerificationResult(result) {
 function QRDisplayStep({ session, onComplete }) {
   const [status, setStatus] = useState(normalizeSessionStatus(session?.status));
   const [result, setResult] = useState(null);
+  const [attempt, setAttempt] = useState(() => extractPresentationRejection(session));
   const [error, setError] = useState(null);
   const [walletBusy, setWalletBusy] = useState(false);
   const [dcApiAvailable, setDcApiAvailable] = useState(false);
   const pollRef = useRef(null);
-  const instanceId = session?.instance_id || session?.flow_instance_id || session?.id || null;
+  const generation = useRef(0);
+  const instanceId = verificationSessionId(session) || null;
+  const activeInstance = useRef(instanceId);
+  activeInstance.current = instanceId;
 
-  const loadTerminalResult = async () => {
+  const loadTerminalResult = async (isCurrent) => {
     const verified = await getVerificationResult(instanceId);
+    if (!isCurrent() || activeInstance.current !== instanceId) return;
     if (verified?.instance_id !== instanceId) {
       throw new Error('Verification result did not match this session.');
     }
     setResult(verified);
+    setAttempt(null);
     setStatus(isApprovedVerificationResult(verified) ? 'completed' : 'failed');
     if (onComplete) onComplete(verified);
   };
 
   useEffect(() => {
+    setStatus(normalizeSessionStatus(session?.status));
+    setResult(null);
+    setAttempt(extractPresentationRejection(session));
+    setError(null);
+    setWalletBusy(false);
+  }, [instanceId]);
+
+  useEffect(() => {
+    const current = ++generation.current;
+    const isCurrent = () => generation.current === current;
     if (!instanceId) return;
     if (TERMINAL_STATUSES.includes(status)) return;
 
+    let polling = false;
     pollRef.current = setInterval(async () => {
+      if (polling) return;
+      polling = true;
       try {
         const updated = await getVerificationFlowInstance(instanceId);
+        if (!isCurrent()) return;
+        if (verificationSessionId(updated) !== instanceId) return;
         const updatedStatus = normalizeSessionStatus(updated.status || updated.state);
-        if (updatedStatus === 'expired') {
-          setStatus('expired');
+        if (['expired', 'cancelled'].includes(updatedStatus)) {
+          setStatus(updatedStatus);
+          setAttempt(null);
           clearInterval(pollRef.current);
         } else if (TERMINAL_STATUSES.includes(updatedStatus)) {
           clearInterval(pollRef.current);
-          await loadTerminalResult();
+          setAttempt(null);
+          await loadTerminalResult(isCurrent);
         } else {
           setStatus(updatedStatus);
+          setAttempt(extractPresentationRejection(updated, session));
         }
       } catch (err) {
+        if (!isCurrent()) return;
+        setAttempt(null);
         setStatus('failed');
         setError(err.message || 'Could not load the verified result.');
         clearInterval(pollRef.current);
+      } finally {
+        polling = false;
       }
     }, POLL_INTERVAL_MS);
 
-    return () => clearInterval(pollRef.current);
+    return () => { generation.current += 1; clearInterval(pollRef.current); };
   }, [instanceId, status, onComplete]);
 
   useEffect(() => {
@@ -113,6 +143,8 @@ function QRDisplayStep({ session, onComplete }) {
   const dcApiSubmitUrl = session?.dc_api_submit_url || (instanceId ? `/v1/flows/instances/${encodeURIComponent(instanceId)}/submit/dc-api` : '');
 
   const handleOpenWallet = async () => {
+    const current = generation.current;
+    const isCurrent = () => generation.current === current && activeInstance.current === instanceId;
     setWalletBusy(true);
     setError(null);
     try {
@@ -121,20 +153,22 @@ function QRDisplayStep({ session, onComplete }) {
           requestUrl: dcApiRequestUrl,
           submitUrl: dcApiSubmitUrl,
         });
+        if (!isCurrent()) return;
         if (TERMINAL_STATUSES.includes(normalizeSessionStatus(completed.status || completed.result))) {
-          await loadTerminalResult();
+          await loadTerminalResult(isCurrent);
         }
         return;
       }
 
       const opened = await openDeepLink(transport.openUri);
+      if (!isCurrent()) return;
       if (!opened) {
         setError('Wallet did not open. Use the QR code or copy the link instead.');
       }
     } catch (err) {
-      setError(formatDigitalCredentialError(err));
+      if (isCurrent()) setError(formatDigitalCredentialError(err));
     } finally {
-      setWalletBusy(false);
+      if (isCurrent()) setWalletBusy(false);
     }
   };
 
@@ -158,6 +192,7 @@ function QRDisplayStep({ session, onComplete }) {
 
       {status === 'pending' && (
         <>
+          <PresentationAttemptFeedback attempt={attempt} />
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
             Open the wallet on this device, or ask the wallet holder to scan the
             QR code with their identity wallet app to share the required credentials.
@@ -229,11 +264,12 @@ function QRDisplayStep({ session, onComplete }) {
         </Stack>
       )}
 
-      {(status === 'failed' || status === 'expired') && (
+      {['failed', 'expired', 'cancelled'].includes(status) && (
         <Alert severity="error">
           {error || result?.decision_reason || (status === 'expired'
             ? 'The verification session expired before the wallet responded.'
-            : 'Verification failed. The wallet did not satisfy the policy requirements.')}
+            : status === 'cancelled' ? 'The verification session was cancelled.'
+              : 'Verification failed. The wallet did not satisfy the policy requirements.')}
         </Alert>
       )}
     </Box>

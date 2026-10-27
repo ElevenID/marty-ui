@@ -192,6 +192,7 @@ message PolicyEvaluationResponse {
   string verified_claims_json = 11; // JSON-encoded dict
   string evaluation_timestamp = 12;
   string nonce = 13;
+  string authentication_diagnostic_json = 14; // Optional server-owned request-bound diagnostic; never credential authority
 }
 
 message HealthCheckRequest {}

@@ -176,6 +176,8 @@ pub struct FlowInstanceResponse {
     pub error_code: Option<String>,
     pub metadata: Value,
     pub state_history: Vec<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_presentation_attempt: Option<marty_oid4vp_contract::RejectedPresentationAttemptV1>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -243,6 +245,7 @@ pub fn project_instance(
         expires_at: input.expires_at.clone(),
         metadata: public_context(&Value::Object(metadata)),
         state_history: input.state_history.iter().map(public_context).collect(),
+        last_presentation_attempt: last_presentation_attempt(input),
         created_at: input.created_at.clone(),
         updated_at: input.updated_at.clone(),
     })
@@ -261,10 +264,33 @@ pub struct VerificationResultResponse {
     pub decision_reason: Option<String>,
     pub verified_claims: Value,
     pub credential_results: Vec<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_presentation_attempt: Option<marty_oid4vp_contract::RejectedPresentationAttemptV1>,
     pub error_codes: Vec<String>,
     pub warnings: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub evaluation_timestamp: Option<String>,
+}
+
+fn last_presentation_attempt(
+    input: &InstanceProjectionInput,
+) -> Option<marty_oid4vp_contract::RejectedPresentationAttemptV1> {
+    use marty_oid4vp_contract::{RejectedPresentationAttemptV1, LAST_PRESENTATION_ATTEMPT};
+    if !matches!(
+        input.status,
+        FlowInstanceStatus::AwaitingWallet | FlowInstanceStatus::InProgress
+    ) {
+        return None;
+    }
+    let value = input.result.as_ref()?.get(LAST_PRESENTATION_ATTEMPT)?;
+    let attempt: RejectedPresentationAttemptV1 = serde_json::from_value(value.clone()).ok()?;
+    attempt
+        .matches_session(
+            &input.id,
+            input.context.get("presentation_policy_id")?.as_str()?,
+            input.context.get("nonce")?.as_str()?,
+        )
+        .then_some(attempt)
 }
 
 pub fn project_verification_result(
@@ -285,6 +311,7 @@ pub fn project_verification_result(
             .or_else(|| input.error.clone()),
         verified_claims,
         credential_results: public_object_array(result, "credential_results"),
+        last_presentation_attempt: last_presentation_attempt(input),
         error_codes: public_string_array(result, "error_codes"),
         warnings: public_string_array(result, "warnings"),
         evaluation_timestamp: input.completed_at.clone(),

@@ -40,7 +40,6 @@ import PolicySelectStep from './steps/PolicySelectStep';
 import SessionConfigStep from './steps/SessionConfigStep';
 import QRDisplayStep from './steps/QRDisplayStep';
 import VerificationResultSummary from './VerificationResultSummary';
-import Oid4vpQrCode from './Oid4vpQrCode';
 import { formatOfficialReference } from '../../../utils/officialReferences';
 
 const WIZARD_STEPS = ['Select Policy', 'Configure Session', 'Scan & Verify'];
@@ -573,14 +572,11 @@ function VerificationSessionManager({ organizationId }) {
               </Box>
 
               {normalizeSessionStatus(detailSession.status) === 'pending' && (detailSession.qr_code_data || detailSession.request_uri) && (
-                <Box sx={{ display: 'flex', justifyContent: 'center' }}>
-                  <Paper variant="outlined" sx={{ p: 2, background: '#fff', display: 'inline-block' }}>
-                    <Oid4vpQrCode
-                      value={detailSession.qr_code_data || detailSession.request_uri}
-                      size={200}
-                    />
-                  </Paper>
-                </Box>
+                <QRDisplayStep session={detailSession} onComplete={(completed) => {
+                  if (completed.instance_id !== detailSession.session_id) return;
+                  setDetailSession({ ...normalizeFlowSession(completed), result: completed });
+                  fetchSessions();
+                }} />
               )}
 
               {detailLoading && <CircularProgress size={24} aria-label="Loading verification result" />}

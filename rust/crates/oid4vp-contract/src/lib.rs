@@ -8,9 +8,12 @@
 
 mod digest;
 pub mod haip_key;
+mod rejection;
 mod types;
 mod validation;
 
 pub use digest::*;
 pub use types::*;
 pub use validation::Oid4vpContractError;
+
+pub use rejection::*;

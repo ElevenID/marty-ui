@@ -1,9 +1,33 @@
 import { describe, expect, it } from 'vitest';
 import { render, screen } from '@test/utils';
 
-import VerificationResultSummary from './VerificationResultSummary';
+import VerificationResultSummary, { extractPresentationRejection, PresentationAttemptFeedback } from './VerificationResultSummary';
 
 describe('VerificationResultSummary', () => {
+  it('validates current-attempt correlation and renders only retry feedback and collapsed fingerprints', () => {
+    const session = { id: 'retry-session', status: 'awaiting_wallet', context_data: { presentation_policy_id: 'policy-1' },
+      last_presentation_attempt: { schema_version: 1, instance_id: 'retry-session', policy_id: 'policy-1', native_credential_count: 1,
+        nonce_sha256: 'a'.repeat(64), submission_digest: 'b'.repeat(64), vp_token_sha256: 'c'.repeat(64),
+        outcome: 'rejected', retryable: true, observed_at: '2026-10-26T12:00:00Z',
+        authentication: { format: 'mso_mdoc', document_count: 1, document_type: 'org.iso.18013.5.1.mDL',
+          issuer_signature_valid: true, certificate_trust_passed: false, device_authentication_valid: true,
+          certificate_trust_failures: ['CERTIFICATE_CHAIN_REJECTED'], issuer_certificate_sha256: 'd'.repeat(64) },
+        claims: { name: 'UNTRUSTED_PERSON' }, issuer_did: 'UNTRUSTED_ISSUER' } };
+    const attempt = extractPresentationRejection(session);
+    expect(extractPresentationRejection(session, { id: session.id })).toBeNull();
+    render(<PresentationAttemptFeedback attempt={attempt} />);
+    expect(screen.getByTestId('presentation-attempt-rejected')).toHaveTextContent('issuer certificate was not accepted');
+    expect(screen.getByText('Verification details').parentElement).not.toHaveAttribute('open');
+    expect(screen.queryByText('UNTRUSTED_PERSON')).not.toBeInTheDocument();
+    expect(screen.queryByText('UNTRUSTED_ISSUER')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('verification-result-summary')).not.toBeInTheDocument();
+    for (const changed of [{ ...session, id: 'wrong' }, { ...session, status: 'completed' },
+      { ...session, context_data: { presentation_policy_id: 'foreign-policy' } },
+      { ...session, last_presentation_attempt: { ...session.last_presentation_attempt, native_credential_count: 2 } },
+      { ...session, last_presentation_attempt: { ...session.last_presentation_attempt, authentication: { ...session.last_presentation_attempt.authentication, document_count: 2 } } },
+      { ...session, last_presentation_attempt: { ...session.last_presentation_attempt, nonce_sha256: 'raw value' } },
+      { ...session, last_presentation_attempt: null }]) expect(extractPresentationRejection(changed)).toBeNull();
+  });
   const mdocSession = (names: string[] = ['age_over_21']) => ({
     instance_id: 'flow-age-1',
     status: 'COMPLETED',
