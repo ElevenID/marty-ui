@@ -63,6 +63,8 @@ pub enum FlowVerificationStartError {
     CallbackRejected,
     #[error("FLOW.VERIFICATION_INVALID_POLICY")]
     InvalidPolicy,
+    #[error("FLOW.VERIFICATION_POLICY_REFERENCE_INVALID")]
+    InvalidPolicyReference,
     #[error("FLOW.VERIFICATION_INVALID_CLOCK")]
     InvalidClock,
     #[error("FLOW.VERIFICATION_HAIP_DISABLED")]
@@ -71,6 +73,22 @@ pub enum FlowVerificationStartError {
     PrincipalRequired,
     #[error("FLOW.VERIFICATION_SERIALIZATION")]
     Serialization,
+}
+
+fn start_presentation_error(error: FlowPresentationRequestError) -> FlowVerificationStartError {
+    match error {
+        FlowPresentationRequestError::Provider(FlowProviderError::NotFound { .. })
+        | FlowPresentationRequestError::InvalidPolicy(_)
+        | FlowPresentationRequestError::PolicyNotVisible
+        | FlowPresentationRequestError::PolicyInactive
+        | FlowPresentationRequestError::InvalidTemplate(_)
+        | FlowPresentationRequestError::TemplateNotVisible
+        | FlowPresentationRequestError::TemplateInactive => {
+            FlowVerificationStartError::InvalidPolicyReference
+        }
+        FlowPresentationRequestError::Provider(provider) => provider.into(),
+        other => other.into(),
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -158,27 +176,22 @@ pub async fn prepare_profiled_verification_start(
     )?;
 
     let is_siop = request.response_type == VerificationResponseType::IdToken;
-    if !is_siop {
+    let presentation = if is_siop {
+        None
+    } else {
         let policy_id = request
             .presentation_policy_id
             .as_deref()
             .ok_or(FlowVerificationStartError::InvalidPolicy)?;
-        let provider =
-            providers
-                .presentation_policy
-                .as_ref()
-                .ok_or(FlowProviderError::Unavailable {
-                    provider: "presentation_policy",
-                })?;
-        let policy = provider.get_policy(policy_id).await?;
-        if policy.id != policy_id
-            || policy.organization_id != request.organization_id
-            || !policy.status.eq_ignore_ascii_case("active")
-            || policy.credential_requirements.is_empty()
-        {
-            return Err(FlowVerificationStartError::InvalidPolicy);
-        }
-    }
+        // Resolve the same policy, template and wallet-format graph that the
+        // wallet request endpoint will use. A request_uri must never advertise
+        // a Flow whose referenced credential template cannot be resolved.
+        Some(
+            build_flow_presentation_request(providers, policy_id, &request.organization_id)
+                .await
+                .map_err(start_presentation_error)?,
+        )
+    };
 
     let nonce = URL_SAFE_NO_PAD.encode(random::<[u8; 32]>());
     let instance_id = Uuid::new_v4().to_string();
@@ -293,10 +306,6 @@ pub async fn prepare_profiled_verification_start(
             &[("request_uri", request_uri.as_str())],
         )
     } else {
-        let policy_id = request
-            .presentation_policy_id
-            .as_deref()
-            .ok_or(FlowVerificationStartError::InvalidPolicy)?;
         match request.request_transport {
             RequestTransport::RequestUri => {
                 let (client_id, _, _) = resolve_oid4vp_client_identity(
@@ -315,13 +324,10 @@ pub async fn prepare_profiled_verification_start(
                 authorization_uri("openid4vp://authorize", &parameters)
             }
             RequestTransport::RequestObject => {
-                let artifacts =
-                    build_flow_presentation_request(providers, policy_id, &request.organization_id)
-                        .await?;
                 let built = build_profiled_request_object(
                     providers,
                     instance,
-                    Some(&artifacts),
+                    presentation.as_ref(),
                     base,
                     &options.request_object,
                     now,
@@ -343,12 +349,11 @@ pub async fn prepare_profiled_verification_start(
                 uri
             }
             RequestTransport::UrlQuery => {
-                let artifacts =
-                    build_flow_presentation_request(providers, policy_id, &request.organization_id)
-                        .await?;
                 let built = build_unsigned_url_query(
                     instance,
-                    &artifacts,
+                    presentation
+                        .as_ref()
+                        .expect("non-SIOP presentation was resolved"),
                     base,
                     &options.request_object,
                     options.url_query_maximum_length,

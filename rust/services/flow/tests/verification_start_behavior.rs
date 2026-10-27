@@ -6,11 +6,12 @@ use chrono::{TimeZone, Utc};
 use marty_flow::{
     prepare_profiled_verification_start, prepare_verification_start, CredentialClaimReference,
     CredentialTemplateProvider, CredentialTemplateReference, FlowKeyEnvelopeProvider,
-    FlowProviderError, FlowProviderRegistry, Oid4vpClientIdScheme, Oid4vpProfile,
-    PresentationEvaluationRequest, PresentationEvaluationResult, PresentationPolicyProvider,
-    PresentationPolicyReference, RequestTransport, RequestUriMethod, SigningIdentity,
-    SigningIdentityProvider, SigningRequest, SigningResult, StartVerificationFlowRequest,
-    VerificationResponseType, VerificationStartContext, VerificationStartOptions,
+    FlowProviderError, FlowProviderRegistry, FlowVerificationStartError, Oid4vpClientIdScheme,
+    Oid4vpProfile, PresentationEvaluationRequest, PresentationEvaluationResult,
+    PresentationPolicyProvider, PresentationPolicyReference, RequestTransport, RequestUriMethod,
+    SigningIdentity, SigningIdentityProvider, SigningRequest, SigningResult,
+    StartVerificationFlowRequest, VerificationResponseType, VerificationStartContext,
+    VerificationStartOptions,
 };
 #[path = "support/haip_remote_fixture.rs"]
 mod haip_remote_fixture;
@@ -103,6 +104,42 @@ impl CredentialTemplateProvider for Templates {
     ) -> Result<Vec<String>, FlowProviderError> {
         assert_eq!(organization_id, "org-1");
         Ok(vec!["dc+sd-jwt".into()])
+    }
+}
+
+#[derive(Clone, Copy)]
+enum BrokenTemplate {
+    Missing,
+    WrongOrganization,
+    Inactive,
+}
+
+#[async_trait]
+impl CredentialTemplateProvider for BrokenTemplate {
+    async fn get_template(
+        &self,
+        template_id: &str,
+    ) -> Result<CredentialTemplateReference, FlowProviderError> {
+        if matches!(self, Self::Missing) {
+            return Err(FlowProviderError::NotFound {
+                provider: "credential_template",
+                resource: template_id.into(),
+            });
+        }
+        let mut template = Templates.get_template(template_id).await?;
+        match self {
+            Self::WrongOrganization => template.organization_id = "other-org".into(),
+            Self::Inactive => template.status = "inactive".into(),
+            Self::Missing => unreachable!(),
+        }
+        Ok(template)
+    }
+
+    async fn wallet_formats(
+        &self,
+        organization_id: &str,
+    ) -> Result<Vec<String>, FlowProviderError> {
+        Templates.wallet_formats(organization_id).await
     }
 }
 
@@ -350,7 +387,40 @@ async fn rejected_callback_or_cross_tenant_policy_produces_no_prepared_instance(
     )
     .await
     .unwrap_err();
-    assert!(policy_error.to_string().contains("INVALID_POLICY"));
+    assert!(matches!(
+        policy_error,
+        FlowVerificationStartError::InvalidPolicyReference
+    ));
+}
+
+#[tokio::test]
+async fn stale_or_foreign_policy_template_fails_before_request_uri_is_advertised() {
+    for broken in [
+        BrokenTemplate::Missing,
+        BrokenTemplate::WrongOrganization,
+        BrokenTemplate::Inactive,
+    ] {
+        let mut registry = providers("org-1");
+        registry.credential_template = Some(Arc::new(broken));
+        let error = prepare_verification_start(
+            &registry,
+            &callbacks(),
+            request(RequestTransport::RequestUri),
+            "https://verifier.example",
+            false,
+            16_384,
+            16_384,
+            None,
+            "user-1",
+            now(),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            FlowVerificationStartError::InvalidPolicyReference
+        ));
+    }
 }
 
 #[tokio::test]
