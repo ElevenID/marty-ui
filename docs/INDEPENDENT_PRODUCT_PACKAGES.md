@@ -154,17 +154,17 @@ retains the same API, failure and TLS assertions. The probe owns and removes
 only its labelled fixture containers/network and records its cleanup result.
 
 The remaining packaging implementation is qualified publication/promotion that
-consumes the verification owner's exact candidate evidence and the applicable
-runtime/compatibility results. Existing combined releases retain their current
-transaction and qualification gates. Source and local development tests belong
-to this work. Installer implementation and independent release-artifact
-verification belong to the other assigned workers. Candidate production and
-composition rendering alone do not establish a supported distribution.
+consumes exact candidate evidence and the applicable runtime/compatibility
+results. Existing combined releases retain their current transaction and
+qualification gates. Installer implementation remains separately owned.
+Candidate production and composition rendering alone do not establish a
+supported distribution.
 
 ## Qualification intake boundary
 
-Promotion must accept the verification owner's report as an explicit workflow
-run/artifact input; its filename and producing workflow are not yet fixed. The
+Promotion must accept the verifier report from
+`.github/workflows/product-verification.yml` as an explicit workflow
+run/artifact input. The
 report must bind the exact candidate archive checksum, package manifest,
 producer run and attempt, source commit, product/version, and every image role
 and digest. The promotion workflow must authenticate the producing repository,
@@ -182,6 +182,32 @@ record must be a separate, digest-bound object. Support windows and supported
 profile claims need the relevant product decision and qualifying runtime and
 upgrade/recovery evidence before publication. No new version tag or supported
 release is created by the candidate producer.
+
+`scripts/verify_product_candidate.py` validates the original archive and its
+checksum on both Linux and Windows, including safe tar paths/modes, complete
+file checksum coverage, the exact producer identity and source-bound image
+roles. The two hosts must emit byte-identical payload reports.
+`scripts/verify_product_registry.py` checks each selected OCI digest for the
+declared Linux platform, product labels, a digest-linked SPDX SBOM and BuildKit
+provenance with the exact producer run and source. The workflow also uses
+`gh attestation verify` for the archive, checksum and every image with an exact
+signer workflow, protected source ref/commit and GitHub-hosted runner identity.
+`scripts/verify_product_attestations.py` binds the verified subjects and
+certificate identities to the same candidate. The workflow publishes and
+attests `verification.json`, `verification-detail.json` and the report checksum
+only after all these gates pass. Its successful run and signed report are still
+evidence inputs, not a release authorization.
+
+Dispatch verification from protected main with `product` and the successful
+producer `producer_run_id`. The workflow authenticates the producer run and
+selects its exact, unexpired candidate artifact. On a local development host,
+the payload verifier accepts the downloaded `product-package.tar.gz` and
+adjacent `.sha256`; local JSON output alone has no authenticated verdict.
+The separate candidate-console probe starts the selected digest on an isolated
+Docker network against a fixture, checks static assets, API/identity proxying,
+failure propagation and invalid-origin rejection, and removes only its owned
+containers/network. That fixture result does not prove a Marty server journey
+or compatibility with a selected server digest.
 
 `scripts/product_evidence_intake.py` defines the structural report boundary.
 It accepts the extracted candidate `product-package.json`, its original tarball,
@@ -201,6 +227,5 @@ and identity equality. Its caller-provided expected checksum and run fields do
 not authenticate the report. A promotion workflow must independently confirm
 the trusted report checksum and originating workflow/run/attempt against the
 connected source and attestation, then require product runtime and compatibility
-results before publishing a qualification record or version tag. Until that
-workflow and real verifier evidence exist, the intake is an unpublished
-development boundary and confers no support status.
+results before publishing a qualification record or version tag. A passing
+verifier run alone confers no support status.
