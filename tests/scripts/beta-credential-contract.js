@@ -7,6 +7,18 @@ const DEFAULT_LOGIN_BADGE_CONFIGURATION_ID = 'open_badge';
 const DEFAULT_LIFECYCLE_POLICY_ID = '50000000-0000-0000-0000-000000000002';
 const DEFAULT_LIFECYCLE_SOURCE_TEMPLATE_ID = '50000000-0000-0000-0000-000000000010';
 
+function requireLifecycleSourceSelection(environment=process.env) {
+  const explicit=environment.BETA_AUDIT_TEMPLATE_ID;
+  const functional=environment.RECORD_VIDEO==='0'||['DEMO_LOCAL_FUNCTIONAL_RUNTIME_RECEIPT','DEMO_LOCAL_FUNCTIONAL_RUNTIME_SHA256',
+    'DEMO_LOCAL_FUNCTIONAL_WALLET_RECEIPT','DEMO_LOCAL_FUNCTIONAL_WALLET_SHA256',
+    'DEMO_LOCAL_FUNCTIONAL_WALLET_AUTHORITY_INPUT','DEMO_LOCAL_FUNCTIONAL_WALLET_AUTHORITY_SHA256'].some(name=>environment[name]!==undefined);
+  if(functional&&!(typeof explicit==='string'&&explicit.trim()===explicit&&explicit.length>0
+    &&explicit.length<=255&&!/[\x00-\x1f\x7f]/.test(explicit))) {
+    throw new Error('Functional lifecycle runs require an explicit governed BETA_AUDIT_TEMPLATE_ID');
+  }
+  return explicit||DEFAULT_LIFECYCLE_SOURCE_TEMPLATE_ID;
+}
+
 function credentialInventoryEvidence(inventory, { vct = null, configurationId = null } = {}) {
   const text = typeof inventory === 'string' ? inventory : '';
   const storedExactVct = Boolean(vct) && text.includes(vct);
@@ -121,6 +133,7 @@ module.exports = {
   DEFAULT_BETA_ORGANIZATION_ID,
   DEFAULT_LIFECYCLE_POLICY_ID,
   DEFAULT_LIFECYCLE_SOURCE_TEMPLATE_ID,
+  requireLifecycleSourceSelection,
   DEFAULT_LOGIN_BADGE_CONFIGURATION_ID,
   DEFAULT_LOGIN_BADGE_TEMPLATE_ID,
   credentialConfigurationIdForWaltid,
