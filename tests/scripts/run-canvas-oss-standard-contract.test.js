@@ -31,6 +31,7 @@ const {
   resolveOid4vciEndpoints,
   resolveProofNonce,
   responseJson,
+  fetchWithTimeout,
   CanvasSessionClient,
   sanitizeEvidence,
   validateAuthoritativeEvidenceHeads,
@@ -39,6 +40,48 @@ const {
 } = require('./run-canvas-oss-standard-contract');
 
 const NOW = '2026-07-15T06:00:00.000Z';
+
+test('HTTPS transport failure retains bounded network causes without secret-bearing diagnostics', async (t) => {
+  const secret = 'private-token-in-message-url-and-stack';
+  const causes = ['ETIMEDOUT', 'EHOSTUNREACH'].map(code => Object.assign(new Error(secret), { code }));
+  const failure = new TypeError(secret, { cause: new AggregateError(causes, secret) });
+  failure.cause.errors.push(failure); // A cyclic cause must remain bounded.
+  t.mock.method(globalThis, 'fetch', async () => { throw failure; });
+  await assert.rejects(fetchWithTimeout(`https://issuer.invalid/?code=${secret}`, {
+    headers: { Authorization: `Bearer ${secret}` },
+  }), error => {
+    assert.equal(error.code, 'http_transport_failed');
+    assert.equal(error.message, 'A required HTTPS request failed (ETIMEDOUT, EHOSTUNREACH).');
+    assert.ok(!error.stack.includes(secret));
+    return true;
+  });
+});
+
+test('HTTPS transport unknown failures do not publish arbitrary error codes or text', async (t) => {
+  t.mock.method(globalThis, 'fetch', async () => {
+    throw Object.assign(new Error('secret'), { code: 'SECRET_TOKEN_VALUE' });
+  });
+  await assert.rejects(fetchWithTimeout('https://issuer.invalid'), {
+    code: 'http_transport_failed',
+    message: 'A required HTTPS request failed (UNKNOWN_TRANSPORT_ERROR).',
+  });
+});
+
+test('HTTPS transport timeout aborts once and preserves manual redirect behavior', async (t) => {
+  let calls = 0;
+  t.mock.method(globalThis, 'fetch', async (_url, options) => {
+    calls++;
+    assert.equal(options.redirect, 'manual');
+    return new Promise((_resolve, reject) => options.signal.addEventListener('abort', () => {
+      reject(new DOMException('private request details', 'AbortError'));
+    }, { once: true }));
+  });
+  await assert.rejects(fetchWithTimeout('https://issuer.invalid', {}, 1), {
+    code: 'http_transport_failed',
+    message: 'A required HTTPS request failed (REQUEST_TIMEOUT, REQUEST_ABORTED).',
+  });
+  assert.equal(calls, 1);
+});
 
 test('Canvas token retirement uses its existing password session and decoded CSRF cookie', async () => {
   const calls = [];

@@ -249,7 +249,8 @@ def test_native_launch_has_no_post_render_smoke_overrides():
 
 
 RUNTIME_GATES = {
-    "base_profile_native_renewal_uses_actual_rendered_configuration": "renewal_fresh_main::run_rendered",
+    "base_profile_native_renewal_uses_actual_rendered_configuration": "base_runtime_container::run_native",
+    "base_profile_native_composition_child": "renewal_fresh_main::run_rendered",
     "base_profile_gateway_composition_isolated": "base_runtime_container::run",
     "base_profile_gateway_composition_child": "renewal_fresh_main::run_gateway",
 }

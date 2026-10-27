@@ -26,6 +26,12 @@ const SENTINEL: &str = "MARTY_BASE_COMPOSITION_COMPLETE_V1";
 const CHILD: &str = "base_profile_gateway_composition_child";
 const ENVOY_CHILD: &str = "base_profile_envoy_composition_child";
 const KUBERNETES_CHILD: &str = "kubernetes_profile_gateway_composition_child";
+const NATIVE_CHILD: &str = "base_profile_native_composition_child";
+const KUBERNETES_NATIVE_CHILD: &str = "kubernetes_profile_native_composition_child";
+
+fn kubernetes_child(child: &str) -> bool {
+    matches!(child, KUBERNETES_CHILD | KUBERNETES_NATIVE_CHILD)
+}
 const COMPOSE_SHA256: &str = "837fd1d35bf6a494f41b5b5988269a7be79de337cf1a1a6ff0e45ab51bb4e9be";
 const COMPAT_TEST_EXECUTABLE: &str = "MARTY_BASE_RUNTIME_COMPAT_TEST_EXECUTABLE";
 const ASSETS: &[&str] = &[
@@ -391,7 +397,7 @@ impl OwnedContainer {
             )?;
         }
         require(
-            (self.child == KUBERNETES_CHILD) == self.prepared.is_some(),
+            kubernetes_child(self.child) == self.prepared.is_some(),
             "Kubernetes prepared model/profile differs",
         )?;
         Ok(())
@@ -468,6 +474,26 @@ pub(super) async fn run_kubernetes(
     redis: &OwnedRedis,
 ) -> Result<(), String> {
     run_child(owned, redis, &kubernetes_source_assets()?, KUBERNETES_CHILD).await
+}
+
+pub(super) async fn run_native(
+    owned: &PublishedDatabase,
+    redis: &OwnedRedis,
+) -> Result<(), String> {
+    run_child(owned, redis, &source_assets()?, NATIVE_CHILD).await
+}
+
+pub(super) async fn run_kubernetes_native(
+    owned: &PublishedDatabase,
+    redis: &OwnedRedis,
+) -> Result<(), String> {
+    run_child(
+        owned,
+        redis,
+        &kubernetes_source_assets()?,
+        KUBERNETES_NATIVE_CHILD,
+    )
+    .await
 }
 
 pub(super) use super::owned_cleanup::retain_failure;
@@ -611,7 +637,10 @@ async fn run_child(
     child: &'static str,
 ) -> Result<(), String> {
     require(
-        matches!(child, CHILD | ENVOY_CHILD | KUBERNETES_CHILD),
+        matches!(
+            child,
+            CHILD | ENVOY_CHILD | KUBERNETES_CHILD | NATIVE_CHILD | KUBERNETES_NATIVE_CHILD
+        ),
         "Unrecognized owned base child",
     )?;
     require(
@@ -643,12 +672,12 @@ async fn run_child(
         digest(&renderer)? == COMPOSE_SHA256,
         "Pinned Compose renderer identity differs",
     )?;
-    let mut paths = if child == KUBERNETES_CHILD {
+    let mut paths = if kubernetes_child(child) {
         checked_asset_set(kubernetes_source_assets()?.into_iter().collect(), assets)?
     } else {
         checked_assets(&root, assets)?
     };
-    let mut prepared = if child == KUBERNETES_CHILD {
+    let mut prepared = if kubernetes_child(child) {
         Some(
             super::resolved_kubernetes_runtime::PreparedArtifact::create()
                 .map_err(str::to_owned)?,
@@ -987,6 +1016,12 @@ mod tests {
                       {"Type":"bind","Source":"/synthetic/issuance","Destination":"/synthetic/issuance","RW":false}]
         });
         container.checked(&info, &id).unwrap();
+        container.child = NATIVE_CHILD;
+        let mut native = info.clone();
+        native["Config"]["Cmd"][0] = json!(NATIVE_CHILD);
+        container.checked(&native, &id).unwrap();
+        assert!(container.checked(&info, &id).is_err());
+        container.child = CHILD;
         for (pointer, value) in [
             ("/Id", json!("d".repeat(64))),
             (
@@ -1092,6 +1127,11 @@ mod tests {
             }
             assert!(container.checked(&changed, &id).is_err(), "{fault}");
         }
+        container.child = KUBERNETES_NATIVE_CHILD;
+        kubernetes["Config"]["Cmd"][0] = json!(KUBERNETES_NATIVE_CHILD);
+        container.checked(&kubernetes, &id).unwrap();
+        container.prepared = None;
+        assert!(container.checked(&kubernetes, &id).is_err());
         // Never exercise Drop against synthetic identities from a pure test.
         container.creation_attempted = false;
     }

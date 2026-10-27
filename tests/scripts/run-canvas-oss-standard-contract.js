@@ -322,13 +322,36 @@ function readJsonFile(filePath, code) {
   }
 }
 
+function transportFailureSummary(error, timedOut) {
+  // Only closed diagnostic codes may cross into public evidence. Error messages,
+  // stacks, URLs and request headers can contain credential material.
+  const allowed = ['ETIMEDOUT', 'UND_ERR_CONNECT_TIMEOUT', 'ENETUNREACH', 'EHOSTUNREACH',
+    'ENOTFOUND', 'EAI_AGAIN', 'ECONNREFUSED', 'ECONNRESET', 'CERT_HAS_EXPIRED',
+    'DEPTH_ZERO_SELF_SIGNED_CERT', 'SELF_SIGNED_CERT_IN_CHAIN',
+    'UNABLE_TO_VERIFY_LEAF_SIGNATURE', 'ERR_TLS_CERT_ALTNAME_INVALID'];
+  const codes = new Set(timedOut ? ['REQUEST_TIMEOUT'] : []);
+  const pending = [error];
+  const seen = new Set();
+  for (let count = 0; pending.length && count < 16; count++) {
+    const item = pending.shift();
+    if (!item || typeof item !== 'object' || seen.has(item)) continue;
+    seen.add(item);
+    if (allowed.includes(item.code)) codes.add(item.code);
+    if (item.name === 'AbortError') codes.add('REQUEST_ABORTED');
+    if (item.cause) pending.push(item.cause);
+    if (Array.isArray(item.errors)) pending.push(...item.errors.slice(0, 16));
+  }
+  const ordered = ['REQUEST_TIMEOUT', 'REQUEST_ABORTED', ...allowed].filter(code => codes.has(code));
+  return `A required HTTPS request failed (${ordered.join(', ') || 'UNKNOWN_TRANSPORT_ERROR'}).`;
+}
+
 async function fetchWithTimeout(url, options = {}, timeoutMs = DEFAULT_TIMEOUT_MS) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     return await fetch(url, { ...options, signal: controller.signal, redirect: options.redirect || 'manual' });
-  } catch {
-    fail('http_transport_failed', 'A required HTTPS request failed.');
+  } catch (error) {
+    fail('http_transport_failed', transportFailureSummary(error, controller.signal.aborted));
   } finally {
     clearTimeout(timer);
   }
@@ -2661,6 +2684,7 @@ module.exports = {
   requireComposeExecutionBoundary,
   requireSecretFile,
   responseJson,
+  fetchWithTimeout,
   sanitizeEvidence,
   validateAuthoritativeEvidenceHeads,
   validateReadinessSnapshot,
