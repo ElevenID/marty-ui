@@ -21,6 +21,7 @@ chrono.workspace = true
 ed25519-dalek.workspace = true
 marty-holder-key-reference = { path = "../../crates/holder-key-reference" }
 marty-key-material-policy = { path = "../../crates/key-material-policy" }
+marty-service-runtime = { path = "../../crates/service-runtime" }
 mmf-platform.workspace = true
 prost.workspace = true
 rand.workspace = true

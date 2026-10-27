@@ -16,6 +16,7 @@ use marty_device_registration::{
     wallet_issuer_trust::WalletIssuerTrustClient,
     DeviceRepository, DeviceService,
 };
+use marty_service_runtime::shutdown_signal_best_effort as shutdown;
 use sqlx::postgres::PgPoolOptions;
 use std::{
     env, fs,
@@ -232,8 +233,4 @@ fn optional_secret(name: &str) -> Result<Option<String>, Box<dyn std::error::Err
         return Ok((!value.is_empty()).then_some(value));
     }
     Ok(direct)
-}
-
-async fn shutdown() {
-    let _ = tokio::signal::ctrl_c().await;
 }

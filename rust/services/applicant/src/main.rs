@@ -6,6 +6,7 @@ use marty_applicant::{
     reject_unused_workload_tls, select_issuance_service_url,
     service::{ApplicantService, FilePersistence, MmfApprovalAuthorizer},
 };
+use marty_service_runtime::shutdown_signal_best_effort as shutdown;
 use mmf_security::ApplicationEventAuthenticator;
 use reqwest::Client;
 use std::{
@@ -186,8 +187,4 @@ fn migration_map() -> Result<BTreeMap<String, String>, Box<dyn std::error::Error
         .into_iter()
         .filter(|(_, value)| !value.trim().is_empty())
         .collect())
-}
-
-async fn shutdown() {
-    let _ = tokio::signal::ctrl_c().await;
 }
