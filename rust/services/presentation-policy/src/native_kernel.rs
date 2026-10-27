@@ -1142,6 +1142,7 @@ async fn verify_open_badge_document(
         .collect();
     if let Some((jwt, _)) = authenticated_jwt {
         evidence.credential_id = jwt.credential_id;
+        evidence.authenticated_outer_jti = jwt.authenticated_outer_jti;
         evidence.issuer_id = jwt.issuer_id;
         evidence.issued_at_epoch_seconds = jwt.issued_at_epoch_seconds;
         evidence.algorithm = jwt.algorithm;
@@ -1251,6 +1252,14 @@ fn bind_authenticated_jwt_credential_id(
         return;
     };
     evidence.credential_id = Some(credential_id.to_owned());
+    // Keep the established status-lookup identifier behavior. Projection has
+    // stricter public identity bounds and requires the signed bytes unchanged.
+    evidence.authenticated_outer_jti = claims
+        .get("jti")
+        .and_then(Value::as_str)
+        .filter(|raw| *raw == credential_id && raw.len() <= 2048)
+        .filter(|raw| !raw.chars().any(char::is_control))
+        .map(str::to_owned);
     evidence
         .credential_status_ids
         .retain(|candidate| candidate != credential_id);
@@ -1766,6 +1775,10 @@ mod tests {
             Some("urn:uuid:credential-1")
         );
         assert_eq!(
+            evidence.authenticated_outer_jti.as_deref(),
+            Some("urn:uuid:credential-1")
+        );
+        assert_eq!(
             evidence.credential_status_ids,
             ["urn:uuid:credential-1", status_id]
         );
@@ -1773,6 +1786,14 @@ mod tests {
             contract["status_resolution"]["canonical_credential_identifier"],
             "authenticated_outer_jwt_jti_precedes_embedded_status_entry_ids"
         );
+        let mut without_jti = credential_evidence(
+            credential.as_object().unwrap(),
+            Some("did:web:issuer.example"),
+            false,
+            1,
+        );
+        bind_authenticated_jwt_credential_id(&mut without_jti, json!({}).as_object().unwrap());
+        assert!(without_jti.authenticated_outer_jti.is_none());
     }
 
     #[test]

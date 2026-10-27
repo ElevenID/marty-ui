@@ -32,7 +32,7 @@ pub use grpc_service::PresentationPolicyGrpcService;
 pub use http_service::{
     evaluate_verified_facts_for_policy, presentation_policy_router, EvaluatePresentationRequest,
     PresentationPolicyHttpState, PresentationVerificationError,
-    PresentationVerificationOrchestrator,
+    PresentationVerificationOrchestrator, VerifiedPolicyMaterial,
 };
 pub use native_kernel::{ResolvingCredentialKernel, RustCredentialKernel};
 pub use persistence::{PolicyRecord, PolicyRecordError, PRESENTATION_POLICY_MIGRATION};

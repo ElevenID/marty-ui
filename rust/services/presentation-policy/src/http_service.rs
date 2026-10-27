@@ -59,6 +59,40 @@ pub trait PresentationVerificationOrchestrator: Send + Sync {
         policy: &PresentationPolicy,
         request: &EvaluatePresentationRequest,
     ) -> Result<Value, PresentationVerificationError>;
+
+    async fn verify_material(
+        &self,
+        policy: &PresentationPolicy,
+        request: &EvaluatePresentationRequest,
+    ) -> Result<VerifiedPolicyMaterial, PresentationVerificationError> {
+        Ok(VerifiedPolicyMaterial::facts_only(
+            self.verify(policy, request).await?,
+        ))
+    }
+}
+
+/// Policy facts have Core's strict schema; authenticated identity provenance
+/// stays outside those facts until the result is bound to unique evidence.
+pub struct VerifiedPolicyMaterial {
+    pub(crate) policy_facts: Value,
+    pub(crate) authenticated_outer_jti: Option<String>,
+}
+
+impl VerifiedPolicyMaterial {
+    pub fn facts_only(policy_facts: Value) -> Self {
+        Self {
+            policy_facts,
+            authenticated_outer_jti: None,
+        }
+    }
+
+    pub fn policy_facts(&self) -> &Value {
+        &self.policy_facts
+    }
+
+    pub fn authenticated_outer_jti(&self) -> Option<&str> {
+        self.authenticated_outer_jti.as_deref()
+    }
 }
 
 #[derive(Clone)]
@@ -494,19 +528,35 @@ pub(crate) async fn evaluate_policy(
         )));
     }
     validate_evaluation_request(request)?;
-    let verified = verification
-        .verify(policy, request)
+    let material = verification
+        .verify_material(policy, request)
         .await
         .map_err(verification_error)?;
-    evaluate_verified_facts_for_policy(verified, policy, request)
+    evaluate_verified_material_for_policy(material, policy, request)
 }
 
 pub fn evaluate_verified_facts_for_policy(
-    mut verified: Value,
+    verified: Value,
     policy: &PresentationPolicy,
     request: &EvaluatePresentationRequest,
 ) -> Result<Value, PresentationPolicyHttpError> {
-    let object = verified
+    evaluate_verified_material_for_policy(
+        VerifiedPolicyMaterial::facts_only(verified),
+        policy,
+        request,
+    )
+}
+
+fn evaluate_verified_material_for_policy(
+    material: VerifiedPolicyMaterial,
+    policy: &PresentationPolicy,
+    request: &EvaluatePresentationRequest,
+) -> Result<Value, PresentationPolicyHttpError> {
+    let VerifiedPolicyMaterial {
+        mut policy_facts,
+        authenticated_outer_jti,
+    } = material;
+    let object = policy_facts
         .as_object_mut()
         .ok_or_else(|| service_unavailable("PRESENTATION_POLICY.INVALID_VERIFICATION_EVIDENCE"))?;
     // Diagnostic evidence is NOT a native policy fact or authorization input.
@@ -514,14 +564,15 @@ pub fn evaluate_verified_facts_for_policy(
     let authentication_diagnostic =
         object.remove(crate::verification::MDOC_AUTHENTICATION_DIAGNOSTIC);
     object.insert("policy".into(), service_policy(policy));
-    let output = evaluate_verified_facts_json(&verified.to_string()).map_err(domain_error)?;
+    let output = evaluate_verified_facts_json(&policy_facts.to_string()).map_err(domain_error)?;
     let native: Value = serde_json::from_str(&output)
         .map_err(|_| service_unavailable("PRESENTATION_POLICY.INVALID_NATIVE_RESULT"))?;
     Ok(project_evaluation(
         native,
         request,
-        &verified,
+        &policy_facts,
         authentication_diagnostic.as_ref(),
+        authenticated_outer_jti.as_deref(),
     ))
 }
 
@@ -1069,6 +1120,7 @@ fn project_evaluation(
     request: &EvaluatePresentationRequest,
     verified: &Value,
     diagnostic: Option<&Value>,
+    authenticated_outer_jti: Option<&str>,
 ) -> Value {
     let errors = native["errors"].as_array().cloned().unwrap_or_default();
     let error_codes = errors
@@ -1090,6 +1142,16 @@ fn project_evaluation(
                 .filter_map(|error| error.get("message").cloned())
                 .collect::<Vec<_>>();
             let evidence = credential_evidence(verified, result);
+            let signature_valid = evidence
+                .and_then(|credential| credential["signature_verified"].as_bool())
+                .map(|verified| verified && !has_any_code(&codes, &["SignatureInvalid"]));
+            // The identifier comes only from the verified JWT envelope. The exact
+            // issuer/template match must identify one credential, never a fallback
+            // label or a caller-supplied policy fact.
+            let authenticated_credential_id = authenticated_outer_jti
+                .filter(|id| !id.is_empty() && id.len() <= 2048 && !id.chars().any(char::is_control))
+                .filter(|id| signature_valid == Some(true)
+                    && evidence.and_then(|credential| credential["credential_id"].as_str()) == Some(*id));
             let status_checked = evidence.map(|credential| {
                 credential["revocation_checked_at_epoch_seconds"].as_u64().is_some()
             });
@@ -1103,7 +1165,8 @@ fn project_evaluation(
                 "authenticated_disclosures": authenticated_mdoc_disclosures(verified, result),
                 "trust_check_passed": evidence.and_then(|credential| credential["trust_profile_verified"].as_bool()).map(|verified| verified && !has_any_code(&codes, &["TrustProfileNotVerified", "IssuerNotAllowed", "IssuerTrustLevelInsufficient", "IssuerComplianceStatusMissing", "IssuerAccreditationMissing"])),
                 "freshness_check_passed": !has_any_code(&codes, &["CredentialTimestampMissing", "CredentialTimestampFuture", "CredentialStale", "RevocationEvidenceStale"]),
-                "signature_valid": evidence.and_then(|credential| credential["signature_verified"].as_bool()).map(|verified| verified && !has_any_code(&codes, &["SignatureInvalid"])),
+                "signature_valid": signature_valid,
+                "credential_id": authenticated_credential_id,
                 "revocation_checked": status_checked,
                 "not_revoked": status_evidence.and_then(|credential| credential["not_revoked"].as_bool()),
                 "revocation_status": status_evidence.and_then(|credential| credential["credential_status"].as_str()),
@@ -1463,6 +1526,7 @@ mod error_code_projection_tests {
                 &request,
                 &json!({"credentials": [evidence]}),
                 None,
+                None,
             );
             let result = &projected["credential_results"][0];
             assert_eq!(result["revocation_checked"], !timestamp.is_null());
@@ -1483,6 +1547,7 @@ mod error_code_projection_tests {
                 &request,
                 &json!({"credentials": credentials}),
                 None,
+                None,
             );
             let result = &projected["credential_results"][0];
             for key in [
@@ -1497,6 +1562,63 @@ mod error_code_projection_tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn credential_id_requires_authenticated_outer_jti_and_unique_matching_evidence() {
+        let request: EvaluatePresentationRequest =
+            serde_json::from_value(json!({"vp_token": {}, "context": {"credential_id": "forged"}}))
+                .unwrap();
+        let native = json!({"decision": "allow", "credential_results": [{
+            "credential_template_id": "template-1", "issuer_id": "issuer-1",
+            "satisfied": true, "errors": []
+        }]});
+        let evidence = json!({
+            "credential_id": "urn:uuid:signed-1", "credential_template_ids": ["template-1"],
+            "issuer_id": "issuer-1", "signature_verified": true
+        });
+        let projection = |credentials: Value, authenticated: Option<&str>| {
+            project_evaluation(
+                native.clone(),
+                &request,
+                &json!({"credentials": credentials}),
+                None,
+                authenticated,
+            )
+        };
+        assert_eq!(
+            projection(json!([evidence]), Some("urn:uuid:signed-1"))["credential_results"][0]
+                ["credential_id"],
+            "urn:uuid:signed-1"
+        );
+        assert!(projection(json!([evidence]), None)["credential_results"][0]
+            .get("credential_id")
+            .is_none());
+        assert!(
+            projection(json!([evidence]), Some("urn:uuid:foreign"))["credential_results"][0]
+                .get("credential_id")
+                .is_none()
+        );
+        assert!(
+            projection(json!([evidence, evidence]), Some("urn:uuid:signed-1"))
+                ["credential_results"][0]
+                .get("credential_id")
+                .is_none()
+        );
+        let mut denied = evidence.clone();
+        denied["signature_verified"] = json!(false);
+        assert!(
+            projection(json!([denied]), Some("urn:uuid:signed-1"))["credential_results"][0]
+                .get("credential_id")
+                .is_none()
+        );
+        let mut foreign = evidence.clone();
+        foreign["issuer_id"] = json!("issuer-2");
+        assert!(
+            projection(json!([foreign]), Some("urn:uuid:signed-1"))["credential_results"][0]
+                .get("credential_id")
+                .is_none()
+        );
     }
 
     #[test]

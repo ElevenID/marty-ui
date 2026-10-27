@@ -417,6 +417,34 @@ fn evaluation_message(value: &Value) -> Result<PolicyEvaluationResponse, Status>
     })
 }
 
+#[cfg(test)]
+mod authenticated_id_transport_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn grpc_evaluation_preserves_bound_credential_id_without_inventing_one() {
+        let mut value = json!({
+            "result": "success", "policy_id": "policy-1", "policy_name": "Policy",
+            "credential_results": [{"credential_id": "urn:uuid:signed-1", "signature_valid": true}],
+            "total_requirements": 1, "satisfied_requirements": 1,
+            "required_satisfied": 1, "required_total": 1,
+            "decision": "allow", "decision_reason": "satisfied",
+            "verified_claims": {}, "evaluation_timestamp": "2026-10-27T00:00:00Z"
+        });
+        let message = evaluation_message(&value).unwrap();
+        let carried: Value = serde_json::from_str(&message.credential_results_json).unwrap();
+        assert_eq!(carried[0]["credential_id"], "urn:uuid:signed-1");
+        value["credential_results"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("credential_id");
+        let message = evaluation_message(&value).unwrap();
+        let carried: Value = serde_json::from_str(&message.credential_results_json).unwrap();
+        assert!(carried[0].get("credential_id").is_none());
+    }
+}
+
 fn insert_text(object: &mut Map<String, Value>, name: &str, value: String) {
     if let Some(value) = optional_text(value) {
         object.insert(name.into(), Value::String(value));

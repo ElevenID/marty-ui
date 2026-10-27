@@ -222,7 +222,15 @@ async fn hosted_ob2_cannot_turn_parsed_claims_into_policy_trust() {
         oid4vp_transport: None,
         trusted_internal_context: false,
     };
-    let facts = orchestrator.verify(&policy(), &request).await.unwrap();
+    request
+        .context
+        .insert("authenticated_outer_jti".into(), json!("urn:uuid:forged"));
+    let material = orchestrator
+        .verify_material(&policy(), &request)
+        .await
+        .unwrap();
+    assert!(material.authenticated_outer_jti().is_none());
+    let facts = material.policy_facts();
     assert_eq!(facts["credentials"][0]["signature_verified"], false);
     assert_eq!(facts["credentials"][0]["trust_profile_verified"], false);
     assert_eq!(facts["credentials"][0]["claims"], json!({}));
@@ -278,22 +286,38 @@ async fn native_evidence_projects_to_the_language_neutral_verified_facts_contrac
         trusted_internal_context: false,
     };
 
-    let actual = orchestrator.verify(&policy(), &request).await.unwrap();
-    assert_eq!(actual, vector["expected"]);
+    let material = orchestrator
+        .verify_material(&policy(), &request)
+        .await
+        .unwrap();
+    assert_eq!(material.policy_facts(), &vector["expected"]);
+    assert!(material.authenticated_outer_jti().is_none());
 
-    let calls = kernel.calls.lock().unwrap();
-    assert_eq!(calls.len(), 1);
-    assert_eq!(calls[0].nonce.as_deref(), Some("nonce-1"));
-    assert_eq!(calls[0].audience.as_deref(), Some("verifier-1"));
-    assert_eq!(
-        calls[0].trust_profile.as_ref().unwrap().id,
-        REQUEST_PROFILE_ID
-    );
+    {
+        let calls = kernel.calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].nonce.as_deref(), Some("nonce-1"));
+        assert_eq!(calls[0].audience.as_deref(), Some("verifier-1"));
+        assert_eq!(
+            calls[0].trust_profile.as_ref().unwrap().id,
+            REQUEST_PROFILE_ID
+        );
+    }
     assert_eq!(
         trust.loads.lock().unwrap().as_slice(),
         &[(REQUEST_PROFILE_ID, ORGANIZATION_ID)]
     );
     assert_eq!(status.calls.lock().unwrap().len(), 1);
+    kernel.evidence.lock().unwrap().credential_id = None;
+    let without_id = orchestrator
+        .verify_material(&policy(), &request)
+        .await
+        .unwrap();
+    assert_eq!(
+        without_id.policy_facts()["credentials"][0]["credential_id"],
+        "presented-credential"
+    );
+    assert!(without_id.authenticated_outer_jti().is_none());
 }
 
 #[tokio::test]
@@ -327,7 +351,12 @@ async fn malformed_presentations_are_denied_without_invoking_any_format_kernel()
         trusted_internal_context: false,
     };
 
-    let result = orchestrator.verify(&policy(), &request).await.unwrap();
+    let material = orchestrator
+        .verify_material(&policy(), &request)
+        .await
+        .unwrap();
+    assert!(material.authenticated_outer_jti().is_none());
+    let result = material.policy_facts();
     assert_eq!(result["credentials"][0]["signature_verified"], false);
     assert_eq!(result["credentials"][0]["claims"], json!({}));
     assert!(kernel.calls.lock().unwrap().is_empty());
@@ -787,7 +816,7 @@ async fn resolved_foreign_signature_does_not_establish_policy_trust() {
         .unwrap();
         let mut policy = policy();
         policy.credential_requirements[0].credential_payload_format = "openbadge-v3".into();
-        let request = marty_presentation_policy::EvaluatePresentationRequest {
+        let mut request = marty_presentation_policy::EvaluatePresentationRequest {
             vp_token: fixture["token"].clone(),
             trust_profile_id: None,
             nonce: None,
@@ -796,7 +825,23 @@ async fn resolved_foreign_signature_does_not_establish_policy_trust() {
             oid4vp_transport: None,
             trusted_internal_context: false,
         };
-        let facts = orchestrator.verify(&policy, &request).await.unwrap();
+        request.context.insert(
+            "authenticated_outer_jti".into(),
+            json!("urn:uuid:forged-by-caller"),
+        );
+        let material = orchestrator
+            .verify_material(&policy, &request)
+            .await
+            .unwrap();
+        assert_eq!(
+            material.authenticated_outer_jti(),
+            Some("urn:uuid:ob3-credential-1")
+        );
+        let facts = material.policy_facts();
+        assert!(facts.get("authenticated_outer_jti").is_none());
+        assert!(facts["credentials"][0]
+            .get("authenticated_outer_jti")
+            .is_none());
         assert_eq!(
             facts["credentials"][0]["signature_verified"], true,
             "{facts}"
