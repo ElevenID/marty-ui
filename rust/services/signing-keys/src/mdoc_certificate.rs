@@ -316,11 +316,14 @@ fn public_certificates(pem: &str) -> Result<Vec<x509_cert::Certificate>, &'stati
 }
 
 fn single_certificate(pem: &str) -> Result<x509_cert::Certificate, &'static str> {
-    let mut certificates = public_certificates(pem)?;
-    if certificates.len() != 1 {
+    let mut certificates = public_certificates(pem)?.into_iter();
+    let certificate = certificates
+        .next()
+        .ok_or("Exactly one public MDOC certificate is required")?;
+    if certificates.next().is_some() {
         return Err("Exactly one public MDOC certificate is required");
     }
-    Ok(certificates.remove(0))
+    Ok(certificate)
 }
 
 /// Common cryptographic chain boundary, independent of the ES256 producer.

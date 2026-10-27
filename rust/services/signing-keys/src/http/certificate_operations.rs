@@ -50,7 +50,7 @@ fn mdoc_operator<'a>(
     state: &AppState,
     headers: &'a HeaderMap,
     authority: bool,
-) -> Result<&'a str, Response> {
+) -> Result<&'a str, PublicSigningError> {
     let options = &state.mdoc_certificates;
     let expected = if authority {
         options.iaca_gateway_key.as_deref()
@@ -58,7 +58,7 @@ fn mdoc_operator<'a>(
         options.dsc_gateway_key.as_deref()
     };
     let Some(expected) = expected else {
-        return Err(public_error(
+        return Err(public_failure(
             StatusCode::SERVICE_UNAVAILABLE,
             "MDOC operator authority is not configured.",
         ));
@@ -77,7 +77,7 @@ fn mdoc_operator<'a>(
         },
     ];
     if expected.len() < 32 || forbidden.contains(&Some(expected)) {
-        return Err(public_error(
+        return Err(public_failure(
             StatusCode::SERVICE_UNAVAILABLE,
             "MDOC operator authority must be distinct.",
         ));
@@ -89,7 +89,7 @@ fn mdoc_operator<'a>(
     if expected.len() != supplied.len()
         || expected.as_bytes().ct_eq(supplied.as_bytes()).unwrap_u8() != 1
     {
-        return Err(public_error(
+        return Err(public_failure(
             StatusCode::UNAUTHORIZED,
             "MDOC operator authority is required.",
         ));
@@ -101,7 +101,7 @@ fn mdoc_operator<'a>(
             !value.is_empty() && value.len() <= 128 && !value.chars().any(char::is_control)
         })
         .ok_or_else(|| {
-            public_error(
+            public_failure(
                 StatusCode::UNAUTHORIZED,
                 "Trusted operator identity is required.",
             )
@@ -112,10 +112,13 @@ fn mdoc_publication(
     state: &AppState,
     organization_id: &str,
     issuer_did: &str,
-) -> Result<marty_signing_grant::certificate_profile::MdocCertificateMetadata, Response> {
+) -> Result<
+    marty_signing_grant::certificate_profile::MdocCertificateMetadata,
+    (StatusCode, Json<Value>),
+> {
     state.mdoc_certificates.metadata_for(organization_id, issuer_did).map_err(|code| {
         (StatusCode::UNPROCESSABLE_ENTITY, Json(json!({"error": code,
-            "detail": "Governed issuer contact and CRL publication configuration is required before this ceremony."}))).into_response()
+            "detail": "Governed issuer contact and CRL publication configuration is required before this ceremony."})))
     })
 }
 
@@ -127,11 +130,11 @@ pub(super) async fn issue_public_mdoc_iaca_certificate(
 ) -> Response {
     let actor = match mdoc_operator(&state, &headers, true) {
         Ok(actor) => actor,
-        Err(error) => return error,
+        Err(error) => return error.into_response(),
     };
     let metadata = match mdoc_publication(&state, &scope.organization_id, &input.issuer_did) {
         Ok(metadata) => metadata,
-        Err(error) => return error,
+        Err(error) => return error.into_response(),
     };
     let request = CscaSelfSignedIssueRequest {
         mdoc_metadata: Some(metadata),
@@ -158,11 +161,11 @@ pub(super) async fn issue_public_mdoc_dsc_certificate(
 ) -> Response {
     let actor = match mdoc_operator(&state, &headers, false) {
         Ok(actor) => actor,
-        Err(error) => return error,
+        Err(error) => return error.into_response(),
     };
     let metadata = match mdoc_publication(&state, &scope.organization_id, &input.iaca_issuer_did) {
         Ok(metadata) => metadata,
-        Err(error) => return error,
+        Err(error) => return error.into_response(),
     };
     let request = DscCertificateIssueRequest {
         mdoc_metadata: Some(metadata),
