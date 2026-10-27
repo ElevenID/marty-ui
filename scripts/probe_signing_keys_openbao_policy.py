@@ -19,6 +19,9 @@ import time
 import urllib.error
 import urllib.request
 import uuid
+from contextlib import contextmanager
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from threading import Thread
 from pathlib import Path
 
 if __package__:
@@ -110,8 +113,136 @@ def assert_holder_runtime_custody(postgres_name: str) -> tuple[int, int, int]:
     return counts
 
 
-def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False) -> None:
-    ensure(not (rust_adapter and grant_verifier), "select one Rust adapter mode")
+MDOC_TEST_CASE = "managed_mdoc_chain_has_real_remote_signatures_and_profile_bound_attachment"
+MDOC_FIXTURE_OWNER = "android_wallet_demos"
+
+
+def mdoc_contact_response(path: str, nonce: str) -> tuple[int, dict]:
+    if path == "/contact":
+        return 200, {"schema": "marty.disposable-mdoc-contact/v1", "owner": MDOC_FIXTURE_OWNER,
+                     "nonce": nonce, "purpose": "isolated certificate-producer fixture", "crl_published": False}
+    return 404, {"scope": "isolated certificate-producer fixture", "crl_published": False}
+
+
+@contextmanager
+def mdoc_contact_origin(nonce: str):
+    """Owned loopback metadata only; deliberately no fake or qualified CRL."""
+    class ContactHandler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            status, value = mdoc_contact_response(self.path, nonce)
+            body = json.dumps(value).encode()
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *_args):
+            pass
+
+    with ThreadingHTTPServer(("127.0.0.1", 0), ContactHandler) as server:
+        ensure(server.server_address[0] == "127.0.0.1", "fixture contact must be loopback")
+        worker = Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+        try:
+            yield f"http://127.0.0.1:{server.server_port}"
+        finally:
+            server.shutdown()
+            worker.join(timeout=5)
+            ensure(not worker.is_alive(), "fixture contact listener must stop")
+
+
+def mdoc_test_command(*, discovery: bool = False) -> list[str]:
+    return ["cargo", "+1.95.0", "test", "--offline", "--locked", "-j1", "-p", "marty-signing-keys",
+            "--test", "mdoc_managed_certificate_live_kms", MDOC_TEST_CASE, "--", "--ignored", "--exact",
+            "--list" if discovery else "--nocapture"]
+
+
+def mdoc_test_discovered(result: subprocess.CompletedProcess[str]) -> bool:
+    selected = [line.strip() for line in result.stdout.splitlines() if line.strip().endswith(": test")]
+    return result.returncode == 0 and selected == [f"{MDOC_TEST_CASE}: test"] and "1 test, 0 benchmarks" in result.stdout
+
+
+def mdoc_test_succeeded(result: subprocess.CompletedProcess[str]) -> bool:
+    return result.returncode == 0 and bool(re.search(
+        r"^test result: ok\. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in [0-9.]+s$",
+        result.stdout, re.MULTILINE))
+
+
+def remove_owned_mdoc_backend(name: str, container_id: str) -> None:
+    if not require_docker("ps", "-aq", "--filter", f"id={container_id}"):
+        return
+    observed = json.loads(require_docker("inspect", container_id))
+    ensure(len(observed) == 1, "owned MDOC backend inspection")
+    actual = observed[0]
+    labels = actual.get("Config", {}).get("Labels", {}) or {}
+    ensure(actual.get("Id") == container_id and actual.get("Name") == f"/{name}"
+           and labels.get("codex.owner") == MDOC_FIXTURE_OWNER
+           and labels.get("codex.purpose") == "mdoc-certificate-fixture",
+           "refuse cleanup of an unowned/rebound MDOC backend")
+    require_docker("rm", "-f", "-v", container_id, timeout=30)
+    ensure(not require_docker("ps", "-aq", "--filter", f"id={container_id}"),
+           "owned MDOC backend must be absent after cleanup")
+
+
+def run_managed_mdoc_case(*, endpoint: str, ca_file: Path, root_token: str,
+                          managed: str, call, redis_name: str, runner=subprocess.run) -> dict:
+    """Selected test only. The outer controller retains cleanup ownership.
+
+    A bounded Windows operator can inject the existing bounded Cargo runner;
+    keep this controller outside the killed-on-close compiler Job Object.
+    """
+    redis_id = require_docker("run", "--rm", "-d", "--name", redis_name,
+        "--label", "marty.disposable=kms-signing-policy",
+        "--label", f"codex.owner={MDOC_FIXTURE_OWNER}",
+        "--label", "codex.purpose=mdoc-certificate-fixture",
+        "--memory", "128m", "--memory-swap", "128m", "--tmpfs", "/data:rw,mode=700",
+        "-p", "127.0.0.1::6379", REDIS_IMAGE)
+    try:
+        redis_port = int(require_docker("port", redis_name, "6379/tcp").splitlines()[0].rsplit(":", 1)[1])
+        for _ in range(40):
+            ready = docker("exec", redis_name, "redis-cli", "ping")
+            if ready.returncode == 0 and ready.stdout.strip() == "PONG":
+                break
+            time.sleep(0.25)
+        else:
+            raise RuntimeError("Disposable MDOC Redis did not become healthy")
+        redis_nonce, bao_nonce, contact_nonce = (uuid.uuid4().hex for _ in range(3))
+        require_docker("exec", redis_name, "redis-cli", "-n", "13", "SET", "marty:tests:disposable-guard", redis_nonce)
+        status, _ = call("POST", "secret/data/marty-test-disposable-guard", root_token, {"data": {"nonce": bao_nonce}})
+        ensure(status in (200, 204), "write owned MDOC OpenBao sentinel")
+        with mdoc_contact_origin(contact_nonce) as origin:
+            environment = dict(os.environ, CARGO_BUILD_JOBS="1", CARGO_NET_OFFLINE="true",
+                MARTY_TEST_OPENBAO_URL=endpoint.removesuffix("/v1"), BAO_ADDR=endpoint.removesuffix("/v1"),
+                BAO_CACERT=str(ca_file), MARTY_TEST_OPENBAO_ROOT_TOKEN=root_token,
+                MARTY_TEST_OPENBAO_DISPOSABLE_NONCE=bao_nonce, MARTY_TEST_OPENBAO_TOKEN=managed,
+                BAO_TOKEN=managed, MARTY_TEST_REDIS_URL=f"redis://127.0.0.1:{redis_port}/13",
+                MARTY_TEST_REDIS_DISPOSABLE_NONCE=redis_nonce,
+                MARTY_TEST_MDOC_FIXTURE_ORIGIN=origin, MARTY_TEST_MDOC_FIXTURE_NONCE=contact_nonce,
+                MARTY_TEST_MDOC_ISSUER_CONTACT_URI=f"{origin}/contact",
+                MARTY_TEST_MDOC_CRL_DISTRIBUTION_URI=f"{origin}/mdoc.crl")
+            command = mdoc_test_command()
+            result = runner(command, cwd=ROOT / "rust", env=environment,
+                capture_output=True, text=True, timeout=600, check=False)
+            if not mdoc_test_succeeded(result):
+                detail = (result.stdout + result.stderr).replace(root_token, "[root]").replace(managed, "[scoped]")
+                raise RuntimeError(f"Selected managed MDOC chain failed (no qualification):\n{detail[-2000:]}")
+        return {"scope": "REAL_REMOTE_KMS_CERTIFICATE_CHAIN_ONLY", "test": MDOC_TEST_CASE,
+                "passed": 1, "ignored": 0, "redisContainerId": redis_id,
+                "crlFixtureStatus": 404, "crlPublicationQualified": False,
+                "walletQualified": False, "isoQualified": False}
+    finally:
+        remove_owned_mdoc_backend(redis_name, redis_id)
+
+
+def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False,
+            managed_mdoc: bool = False, mdoc_runner=subprocess.run) -> dict | None:
+    ensure(sum((rust_adapter, grant_verifier, managed_mdoc)) <= 1, "select one Rust adapter mode")
+    if managed_mdoc:
+        discovery = mdoc_runner(mdoc_test_command(discovery=True), cwd=ROOT / "rust",
+            env=dict(os.environ, CARGO_BUILD_JOBS="1", CARGO_NET_OFFLINE="true"),
+            capture_output=True, text=True, timeout=600, check=False)
+        ensure(mdoc_test_discovered(discovery), "exact ignored MDOC test discovery before backend creation")
     pull_pinned_openbao()
     version = require_docker("run", "--rm", IMAGE, "version")
     ensure(
@@ -128,15 +259,18 @@ def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False) -> None
     ca_file = Path(ca_directory.name) / "openbao-public-ca.pem"
     init_script = ROOT / "docker/openbao-init.sh"
     started = False
+    primary_id = None
     redis_started = False
     postgres_started = False
     try:
-        require_docker(
+        primary_id = require_docker(
             "run",
             "--rm",
             "-d",
             "--name",
             name,
+            *(["--label", f"codex.owner={MDOC_FIXTURE_OWNER}", "--label", "codex.purpose=mdoc-certificate-fixture",
+               "--memory", "512m", "--memory-swap", "512m"] if managed_mdoc else []),
             "--label",
             "marty.disposable=kms-signing-policy",
             "--tmpfs",
@@ -229,7 +363,7 @@ def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False) -> None
             return response["auth"]["client_token"]
 
         managed = issue(["credential-service", "signing-keys-managed"])
-        plain = issue(["credential-service"])
+        plain = "" if managed_mdoc else issue(["credential-service"])
         status, lookup = call(
             "POST", "auth/token/lookup", root_token, {"token": managed}
         )
@@ -239,6 +373,13 @@ def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False) -> None
             == {"credential-service", "signing-keys-managed"},
             "managed token policy isolation",
         )
+
+        if managed_mdoc:
+            # Early selection reuses TLS/bootstrap/policies/finally, without the
+            # unrelated policy, holder/Postgres or signing-grant test matrices.
+            return run_managed_mdoc_case(endpoint=endpoint, ca_file=ca_file,
+                root_token=root_token, managed=managed, call=call,
+                redis_name=redis_name, runner=mdoc_runner)
 
         cases = (
             ("cred-issuer-probe", "ecdsa-p256"),
@@ -1152,7 +1293,10 @@ def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False) -> None
         if redis_started:
             docker("rm", "-f", redis_name, timeout=30)
         if started:
-            docker("rm", "-f", name, timeout=30)
+            if managed_mdoc:
+                remove_owned_mdoc_backend(name, primary_id)
+            else:
+                docker("rm", "-f", name, timeout=30)
         ca_directory.cleanup()
 
 
@@ -1160,5 +1304,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--rust-adapter", action="store_true")
     parser.add_argument("--grant-verifier", action="store_true")
+    parser.add_argument("--managed-mdoc", action="store_true", help="Run only the isolated real managed MDOC certificate-chain case; no CRL/wallet qualification")
     args = parser.parse_args()
-    qualify(rust_adapter=args.rust_adapter, grant_verifier=args.grant_verifier)
+    result = qualify(rust_adapter=args.rust_adapter, grant_verifier=args.grant_verifier, managed_mdoc=args.managed_mdoc)
+    if result is not None:
+        print(json.dumps(result, sort_keys=True))
