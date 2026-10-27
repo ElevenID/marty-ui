@@ -448,6 +448,25 @@ fn run() -> Result<(), String> {
         #[cfg(not(target_os = "linux"))]
         return Err("installer status currently requires Linux".into());
     }
+    if args.first().is_some_and(|arg| arg == "validate")
+        && args.iter().any(|arg| {
+            arg == "--install-dir" || arg.starts_with("--install-dir=") || arg == "--docker-bin"
+        })
+    {
+        if !matches!(args.len(), 3 | 5)
+            || args[1] != "--install-dir"
+            || (args.len() == 5 && args[3] != "--docker-bin")
+        {
+            return Err("usage: marty-deploy validate --install-dir ABSOLUTE_PATH [--docker-bin ABSOLUTE_PATH]".into());
+        }
+        #[cfg(target_os = "linux")]
+        return marty_deployment_catalog::installer_validation::run(
+            std::path::Path::new(&args[2]),
+            std::path::Path::new(args.get(4).map(String::as_str).unwrap_or("/usr/bin/docker")),
+        );
+        #[cfg(not(target_os = "linux"))]
+        return Err("deployment validation currently requires Linux".into());
+    }
     if args.first().is_some_and(|arg| arg == "doctor") {
         if !matches!(args.len(), 3 | 5)
             || args[1] != "--install-dir"

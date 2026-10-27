@@ -789,3 +789,123 @@ async fn every_declared_http_method_is_registered_on_the_native_router() {
         );
     }
 }
+
+#[tokio::test]
+async fn private_profile_overrides_fail_before_write_and_legacy_readback_is_closed() {
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/trust-profile-override-boundary.json"
+    ))
+    .unwrap();
+    for case in fixture["rejected"].as_array().unwrap() {
+        let repository = Arc::new(MemoryTrustProfileRepository::default());
+        let original = profile("Public trust");
+        repository.save_profile(&original, None).await.unwrap();
+        let response = request(service_with_repository(repository.clone()), "POST", "/v1/trust-profiles", Some(json!({
+            "organization_id":"org-1", "name":"Rejected trust", "system_issuer_overrides":case["overrides"]
+        }))).await;
+        assert_eq!(response.status(), 422, "{} create", case["name"]);
+        assert!(!body(response)
+            .await
+            .to_string()
+            .contains("synthetic-private"));
+        assert_eq!(
+            repository
+                .profiles_by_organization("org-1")
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        let response = request(
+            service_with_repository(repository.clone()),
+            "PATCH",
+            &format!("/v1/trust-profiles/{}", original.id),
+            Some(json!({
+                "name":"Uncommitted name", "system_issuer_overrides":case["overrides"]
+            })),
+        )
+        .await;
+        assert_eq!(response.status(), 422, "{} patch", case["name"]);
+        assert_eq!(
+            repository
+                .profile_by_id(original.id)
+                .await
+                .unwrap()
+                .unwrap(),
+            original
+        );
+        let mut legacy = original.clone();
+        legacy.system_issuer_overrides = case["overrides"].as_object().unwrap().clone();
+        repository.save_profile(&legacy, None).await.unwrap();
+        for uri in [
+            format!("/v1/trust-profiles/{}", original.id),
+            "/v1/trust-profiles?organization_id=org-1".into(),
+        ] {
+            let response = request(
+                service_with_repository(repository.clone()),
+                "GET",
+                &uri,
+                None,
+            )
+            .await;
+            assert_eq!(response.status(), 503, "{} read", case["name"]);
+            assert_eq!(
+                body(response).await,
+                json!({"detail":"Trust Profile contains private custody metadata"})
+            );
+        }
+        assert_eq!(
+            repository
+                .profile_by_id(original.id)
+                .await
+                .unwrap()
+                .unwrap(),
+            legacy
+        );
+        let response = request(
+            service_with_repository(repository.clone()),
+            "PATCH",
+            &format!("/v1/trust-profiles/{}", original.id),
+            Some(json!({"system_issuer_overrides":{}})),
+        )
+        .await;
+        assert_eq!(response.status(), 200, "{} remediation", case["name"]);
+        assert_eq!(body(response).await["system_issuer_overrides"], json!({}));
+        let repaired = repository
+            .profile_by_id(original.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(repaired.name, original.name);
+        assert!(repaired.system_issuer_overrides.is_empty());
+    }
+}
+
+#[tokio::test]
+async fn public_profile_overrides_round_trip_without_private_material() {
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/trust-profile-override-boundary.json"
+    ))
+    .unwrap();
+    for case in fixture["supported"].as_array().unwrap() {
+        let repository = Arc::new(MemoryTrustProfileRepository::default());
+        let response = request(service_with_repository(repository.clone()), "POST", "/v1/trust-profiles", Some(json!({
+            "organization_id":"org-1", "name":"Public trust", "system_issuer_overrides":case["overrides"]
+        }))).await;
+        assert_eq!(response.status(), 200, "{}", case["name"]);
+        let created = body(response).await;
+        assert_eq!(created["system_issuer_overrides"], case["overrides"]);
+        let response = request(
+            service_with_repository(repository),
+            "GET",
+            &format!("/v1/trust-profiles/{}", created["id"].as_str().unwrap()),
+            None,
+        )
+        .await;
+        assert_eq!(response.status(), 200);
+        assert_eq!(
+            body(response).await["system_issuer_overrides"],
+            case["overrides"]
+        );
+    }
+}

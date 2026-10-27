@@ -14,6 +14,8 @@ use serde_json::{json, Map, Value};
 use crate::issuance_native;
 
 pub const EXPECTED_ROUTE_COUNT: usize = 461;
+#[cfg(test)]
+const PHYSICAL_START_EXTENSION_ROUTE_COUNT: usize = 1;
 
 #[derive(Debug, Deserialize)]
 pub struct GatewayContract {
@@ -169,6 +171,22 @@ impl GatewayContract {
             })?;
         }
         issuance_native::add_public_native_extensions(&mut table)?;
+        table.add(RouteConfig {
+            name: "flow-native:physical-start-intents".into(),
+            pattern: "/v1/flows/physical-start-intents".into(),
+            match_type: RouteMatchType::Exact,
+            upstream_service: "flows".into(),
+            methods: BTreeSet::from([HttpMethod::Get]),
+            host: None,
+            required_headers: BTreeMap::new(),
+            rewrite_path: None,
+            timeout_ms: 10_000,
+            retries: 1,
+            auth_required: true,
+            authentication_type: AuthenticationType::Jwt,
+            priority: route_priority("/v1/flows/physical-start-intents"),
+            tags: BTreeSet::from(["native-extension".into(), "proxied".into()]),
+        })?;
         Ok(table)
     }
 
@@ -1025,7 +1043,9 @@ mod tests {
         let table = contract.route_table().expect("route table");
         assert_eq!(
             table.routes().len(),
-            EXPECTED_ROUTE_COUNT + issuance_native::NATIVE_EXTENSION_ROUTE_COUNT
+            EXPECTED_ROUTE_COUNT
+                + issuance_native::NATIVE_EXTENSION_ROUTE_COUNT
+                + PHYSICAL_START_EXTENSION_ROUTE_COUNT
         );
         assert_eq!(
             route_for(&table, HttpMethod::Get, "/v1/auth/session/validate")
@@ -1226,9 +1246,28 @@ mod tests {
     #[test]
     fn internal_proxy_routes_do_not_mutate_public_contract() {
         let contract = GatewayContract::load().expect("gateway contract");
+        let public = contract.route_table().expect("public routes");
+        let pending = route_for(&public, HttpMethod::Get, "/v1/flows/physical-start-intents")
+            .expect("physical start recovery route");
+        assert_eq!(pending.route.upstream_service, "flows");
+        assert!(pending.route.auth_required);
+        assert!(route_for(
+            &public,
+            HttpMethod::Post,
+            "/v1/flows/physical-start-intents"
+        )
+        .is_err());
+        assert!(route_for(
+            &public,
+            HttpMethod::Get,
+            "/internal/passport/flow-starts/owned-id"
+        )
+        .is_err());
         assert_eq!(
-            contract.route_table().expect("public").routes().len(),
-            EXPECTED_ROUTE_COUNT + issuance_native::NATIVE_EXTENSION_ROUTE_COUNT
+            public.routes().len(),
+            EXPECTED_ROUTE_COUNT
+                + issuance_native::NATIVE_EXTENSION_ROUTE_COUNT
+                + PHYSICAL_START_EXTENSION_ROUTE_COUNT
         );
         assert_eq!(
             contract
@@ -1236,12 +1275,18 @@ mod tests {
                 .expect("runtime")
                 .routes()
                 .len(),
-            EXPECTED_ROUTE_COUNT + issuance_native::NATIVE_EXTENSION_ROUTE_COUNT + 3
+            EXPECTED_ROUTE_COUNT
+                + issuance_native::NATIVE_EXTENSION_ROUTE_COUNT
+                + PHYSICAL_START_EXTENSION_ROUTE_COUNT
+                + 3
         );
         let proxy = contract.proxy_route_table().expect("proxy");
         assert_eq!(
             proxy.routes().len(),
-            EXPECTED_ROUTE_COUNT + issuance_native::NATIVE_EXTENSION_ROUTE_COUNT + 16
+            EXPECTED_ROUTE_COUNT
+                + issuance_native::NATIVE_EXTENSION_ROUTE_COUNT
+                + PHYSICAL_START_EXTENSION_ROUTE_COUNT
+                + 16
         );
         assert_eq!(
             route_for(

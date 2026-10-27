@@ -720,15 +720,41 @@ async function saveDeveloperKey(page, modal, expectedName, onOwned, {kind = 'api
   return record;
 }
 
-async function enableDeveloperKey(page, keyName) {
+async function enableDeveloperKey(page, keyName, record, {observeBinding = () => {}} = {}) {
+  const clientId = record.id;
+  const expectedBinding = record.developer_key_account_binding;
   const row = page.getByRole('row').filter({ hasText: keyName }).first();
   await row.waitFor({ state: 'visible', timeout: DEFAULT_TIMEOUT_MS });
   const toggle = row.getByRole('checkbox', { name: new RegExp(`(?:off|on).*${escapeRegExp(keyName)}`, 'i') }).first();
   const checked = await toggle.isChecked().catch(() => false);
   if (!checked) {
+    const origin = new URL(page.url()).origin;
+    const account = /^\/accounts\/([1-9][0-9]*)\/developer_keys$/.exec(new URL(page.url()).pathname);
+    requireCondition(account && /^[1-9][0-9]*$/.test(String(clientId)), 'canvas_key_binding_identity_missing', 'Enabling a key requires its exact account and owned ID.');
+    requireCondition(expectedBinding?.account_owns_binding === true && String(expectedBinding.developer_key_id) === String(clientId)
+      && /^[1-9][0-9]*$/.test(String(expectedBinding.account_id))
+      && (typeof expectedBinding.account_id !== 'number' || Number.isSafeInteger(expectedBinding.account_id)),
+      'canvas_key_binding_reference_invalid', 'Creation must bind the exact owned key to its canonical global account.');
+    const expectedPath = `/api/v1/accounts/${account[1]}/developer_keys/${clientId}/developer_key_account_bindings`;
+    const responsePromise = page.waitForResponse(response => {
+      const url = new URL(response.url());
+      return response.request().method() === 'POST' && url.origin === origin && url.pathname === expectedPath;
+    }, {timeout: DEFAULT_TIMEOUT_MS});
     await clickCanvasCheckboxLabel(row, toggle);
     const confirm = page.getByRole('button', { name: /switch to on|turn on|enable/i }).first();
     if (await confirm.isVisible().catch(() => false)) await confirm.click();
+    const response = await responsePromise;
+    const binding = await responseJson(response, 'canvas_key_binding_save_failed', 'Canvas key binding update failed', [200, 201]);
+    const checks = {
+      flatObject: binding !== null && typeof binding === 'object' && !Array.isArray(binding),
+      keyMatches: String(binding?.developer_key_id) === String(clientId),
+      accountMatches: String(binding?.account_id) === String(expectedBinding.account_id),
+      accountOwnsBinding: binding?.account_owns_binding === true,
+      on: binding?.workflow_state === 'on',
+    };
+    observeBinding(checks);
+    requireCondition(Object.values(checks).every(value => value === true),
+      'canvas_key_binding_identity_mismatch', 'Canvas must acknowledge the exact owned enabled key binding.');
   }
   await waitFor(async () => toggle.isChecked().catch(() => false), DEFAULT_TIMEOUT_MS, 500, 'canvas_developer_key_enable_timeout');
 }
@@ -749,7 +775,7 @@ async function createLtiDeveloperKey(page, config) {
   await modal.getByLabel(/^json url\b/i).fill(config.registrationConfigUrl);
   const record = await saveDeveloperKey(page, modal, config.name, config.onOwned, {kind:'lti', observe});
   observe('ENABLE');
-  await enableDeveloperKey(page, config.name);
+  await enableDeveloperKey(page, config.name, record, {observeBinding:config.observeBinding});
   return { clientId: String(record.id) };
 }
 
@@ -811,7 +837,7 @@ async function createOauthDeveloperKey(page, config) {
     && CANVAS_OAUTH_SCOPES.every(scope => record.scopes.includes(scope)),
     'canvas_oauth_scope_grant_mismatch', 'Canvas must persist exactly the required enforced OAuth scope allowlist.');
   observe('ENABLE');
-  await enableDeveloperKey(page, config.name);
+  await enableDeveloperKey(page, config.name, record, {observeBinding:config.observeBinding});
   const secret = String(record.api_key || record.client_secret || '').trim();
   requireCondition(secret.length >= 20, 'canvas_oauth_secret_missing', 'Canvas did not return the OAuth client secret from the stock Developer Key flow.');
   return { clientId: String(record.id), clientSecret: secret };
@@ -2410,6 +2436,7 @@ module.exports = {
   authorizeCanvasOAuth,
   canvasOAuthRedirectChecks,
   saveDeveloperKey,
+  enableDeveloperKey,
   requireSecretFile,
   parseArgs,
   loginCanvas,

@@ -40,10 +40,14 @@ pub struct PlannedApplicationFlow {
 pub enum RepositoryError {
     #[error("FLOW.REPOSITORY_FAILURE: {0}")]
     Storage(String),
+    #[error("FLOW.PHYSICAL_START_KEY_CONFLICT")]
+    PhysicalStartKeyConflict,
     #[error("FLOW.APPLICATION_OFFER_CONFLICT: {0}")]
     ApplicationOfferConflict(String),
     #[error("FLOW.INVALID_REPLAY_DIGEST")]
     InvalidReplayDigest,
+    #[error("FLOW.INVALID_PHYSICAL_START_SNAPSHOT")]
+    InvalidPhysicalStartSnapshot,
     #[error("FLOW.ARTIFACT_CONFLICT: {0}")]
     ArtifactConflict(String),
     #[error(transparent)]

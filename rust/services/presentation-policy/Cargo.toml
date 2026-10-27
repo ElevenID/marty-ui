@@ -10,7 +10,7 @@ publish = false
 
 [dependencies]
 marty-mdoc-status-binding = { path = "../../crates/mdoc-status-binding" }
-marty-service-runtime = { path = "../../crates/service-runtime" }
+marty-service-runtime = { path = "../../crates/service-runtime", features = ["workload-identity"] }
 marty-api-key-policy = { path = "../../crates/api-key-policy" }
 marty-issuer-key-resolution = { path = "../../crates/issuer-key-resolution" }
 async-trait.workspace = true

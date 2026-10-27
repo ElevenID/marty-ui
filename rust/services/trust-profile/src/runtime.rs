@@ -1,7 +1,7 @@
-use axum::{routing::get, Json, Router};
+use axum::Router;
 use mmf_core::{BuildInfo, ComponentHealth, HealthStatus, LifecycleState, MmfError};
+use mmf_runtime::NativeBackendDiagnostics;
 use mmf_runtime::{system_router, RuntimeState};
-use serde::Serialize;
 
 use crate::TrustProfileServiceConfig;
 
@@ -102,25 +102,12 @@ impl TrustProfileRuntime {
     }
 }
 
-#[derive(Debug, Serialize)]
-struct NativeBackendDiagnostics {
-    backend: &'static str,
-    version: &'static str,
-    authoritative: bool,
-    python_fallback: bool,
-    capabilities: &'static [&'static str],
-}
-
 fn native_backend_router() -> Router {
-    Router::new().route("/health/native-backend", get(native_backend_health))
-}
-
-async fn native_backend_health() -> Json<NativeBackendDiagnostics> {
-    Json(NativeBackendDiagnostics {
+    mmf_runtime::native_backend_router(NativeBackendDiagnostics {
         backend: "marty-trust-profile-rust",
         version: env!("CARGO_PKG_VERSION"),
-        authoritative: true,
-        python_fallback: false,
+        authoritative: Some(true),
+        python_fallback: Some(false),
         capabilities: &[
             "trust_profile_lifecycle",
             "organization_trust_profiles",
@@ -132,6 +119,7 @@ async fn native_backend_health() -> Json<NativeBackendDiagnostics> {
             "trust_framework_catalog",
             "postgres_migrations",
         ],
+        ..Default::default()
     })
 }
 

@@ -1,19 +1,32 @@
-use std::sync::{Arc, Mutex};
+use std::{
+    collections::BTreeSet,
+    env,
+    str::FromStr,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
+};
 
 use async_trait::async_trait;
 use chrono::{TimeZone, Utc};
 use marty_flow::{
-    apply_physical_advance_side_effect, create_definition_record, parse_request,
-    prepare_instance_start, prepare_oid4vci_retry, start_instance_record,
-    CreateFlowDefinitionRequest, CredentialTemplateProvider, CredentialTemplateReference,
-    DefinitionStatus, FlowProviderError, FlowProviderRegistry, IssuanceInitiationRequest,
-    IssuanceInitiationResult, IssuanceProvider, PhysicalDocumentOperation,
-    PhysicalDocumentProvider, PhysicalDocumentRequest, PhysicalDocumentResult,
-    PhysicalDocumentRoute, StartFlowRequest, WalletConfiguration,
+    apply_physical_advance_side_effect, bound_definition_for_instance, create_definition_record,
+    migrate_flow_schema, parse_request, prepare_instance_start, prepare_oid4vci_retry,
+    start_instance_record, start_physical_instance, CreateFlowDefinitionRequest,
+    CredentialTemplateProvider, CredentialTemplateReference, DefinitionStatus, FlowProviderError,
+    FlowProviderRegistry, IssuanceInitiationRequest, IssuanceInitiationResult, IssuanceProvider,
+    PhysicalDocumentOperation, PhysicalDocumentProvider, PhysicalDocumentRequest,
+    PhysicalDocumentResult, PhysicalDocumentRoute, PhysicalStartError, PhysicalStartInvocation,
+    PostgresFlowRepository, StartFlowRequest, WalletConfiguration,
 };
 use marty_verification::flow::TransitionOutcome;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use sqlx::{postgres::PgConnectOptions, PgPool};
+
+#[path = "support/flow_schema.rs"]
+mod flow_schema;
 
 #[derive(Deserialize)]
 struct Contract {
@@ -41,6 +54,28 @@ struct Contract {
 struct Templates {
     organization_id: &'static str,
     physical: bool,
+}
+
+#[derive(Clone)]
+struct MutablePhysicalTemplate {
+    issuer_did: Arc<Mutex<String>>,
+}
+
+#[async_trait]
+impl CredentialTemplateProvider for MutablePhysicalTemplate {
+    async fn get_template(
+        &self,
+        template_id: &str,
+    ) -> Result<CredentialTemplateReference, FlowProviderError> {
+        let mut template = Templates {
+            organization_id: "org-1",
+            physical: true,
+        }
+        .get_template(template_id)
+        .await?;
+        template.issuer_did = self.issuer_did.lock().unwrap().clone();
+        Ok(template)
+    }
 }
 
 #[async_trait]
@@ -176,6 +211,350 @@ impl PhysicalDocumentProvider for Physical {
             }),
         })
     }
+}
+
+#[derive(Clone, Default)]
+struct LostNativeResponse {
+    inner: Physical,
+    first_response_lost: Arc<AtomicBool>,
+    owned_keys: Arc<Mutex<BTreeSet<String>>>,
+}
+
+#[async_trait]
+impl PhysicalDocumentProvider for LostNativeResponse {
+    async fn execute(
+        &self,
+        request: &PhysicalDocumentRequest,
+    ) -> Result<PhysicalDocumentResult, FlowProviderError> {
+        let key = request
+            .start_idempotency_key
+            .as_deref()
+            .expect("physical Flow start must bind a native key");
+        self.owned_keys.lock().unwrap().insert(key.to_owned());
+        let response = self.inner.execute(request).await?;
+        if !self.first_response_lost.swap(true, Ordering::SeqCst) {
+            return Err(FlowProviderError::Unavailable {
+                provider: "physical_document",
+            });
+        }
+        Ok(response)
+    }
+}
+
+#[tokio::test]
+async fn physical_service_start_recovers_lost_provider_and_flow_finalize_responses() {
+    let Ok(database_url) = env::var("FLOW_POSTGRES_TEST_URL") else {
+        eprintln!("FLOW_POSTGRES_TEST_URL is not configured; PostgreSQL contract skipped");
+        return;
+    };
+    let options =
+        PgConnectOptions::from_str(&database_url.replace("postgresql+asyncpg://", "postgresql://"))
+            .unwrap();
+    assert!(matches!(options.get_host(), "127.0.0.1" | "localhost"));
+    assert_eq!(options.get_database(), Some("marty_atomic_test"));
+    let _schema_lock = flow_schema::lock_shared_test_schemas(&options)
+        .await
+        .unwrap();
+    let pool = PgPool::connect_with(options).await.unwrap();
+    sqlx::raw_sql(
+        "DROP SCHEMA IF EXISTS flow_service CASCADE;
+        DROP SCHEMA IF EXISTS deployment_profile_service CASCADE;
+        CREATE SCHEMA deployment_profile_service;
+        CREATE TABLE deployment_profile_service.deployment_profiles(
+            id text PRIMARY KEY, enabled_flow_ids jsonb NOT NULL DEFAULT '[]'::jsonb);
+        INSERT INTO deployment_profile_service.deployment_profiles(id)
+            VALUES ('70000000-0000-0000-0000-000000000001');",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    migrate_flow_schema(&pool).await.unwrap();
+    let repo = PostgresFlowRepository::new(pool.clone());
+    let definition = definition("physical_document_issuance");
+    let request: StartFlowRequest = parse_request(json!({
+        "organization_id":"org-1", "flow_definition_id":definition.id,
+        "subject_id":"subject-1", "initial_context":{"physical_document":{
+            "country_code":"USA", "applicant":{"name":"Synthetic"},
+            "mrz":{"line1":"P<TEST"}, "data_groups":{"DG1":"MQ=="}
+        }}
+    }))
+    .unwrap();
+    let native = LostNativeResponse::default();
+    let issuer_did = Arc::new(Mutex::new("did:web:issuer.example".to_owned()));
+    let providers = FlowProviderRegistry {
+        credential_template: Some(Arc::new(MutablePhysicalTemplate {
+            issuer_did: issuer_did.clone(),
+        })),
+        physical_document: Some(Arc::new(native.clone())),
+        ..Default::default()
+    };
+    let key = "stable-client-key";
+    let started = start_physical_instance(
+        &repo,
+        &providers,
+        &definition,
+        PhysicalStartInvocation {
+            request: request.clone(),
+            actor: "actor-1",
+            public_base_url: "https://issuer.example",
+            now: now(),
+            client_key: Some(key),
+        },
+    )
+    .await;
+    assert!(started.is_err());
+    let pending = repo.pending_physical_starts("org-1", 10, 0).await.unwrap();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].key_source, "client");
+    let stored_snapshot = repo
+        .physical_start_snapshot_by_instance("org-1", &pending[0].instance_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored_snapshot["issuer_did"], "did:web:issuer.example");
+    assert_eq!(stored_snapshot["definition"]["id"], definition.id);
+    let stored_bytes = stored_snapshot.to_string();
+    assert!(!stored_bytes.contains("P<TEST"));
+    assert!(!stored_bytes.contains("Synthetic"));
+    assert!(!stored_bytes.contains("initial_context"));
+    assert!(repo
+        .instance(&pending[0].instance_id)
+        .await
+        .unwrap()
+        .is_none());
+
+    // A lost native response must retain the original graph and public issuer identity.
+    let mut changed_definition = definition.clone();
+    changed_definition.status = DefinitionStatus::Draft;
+    changed_definition.credential_template_id = Some("template-new".into());
+    changed_definition.application_template_id = Some("application-new".into());
+    changed_definition.delivery_destination_profile_id = Some("delivery-new".into());
+    changed_definition.steps.clear();
+    changed_definition.transitions.clear();
+    *issuer_did.lock().unwrap() = "did:web:other.example".into();
+
+    sqlx::raw_sql(
+        "CREATE FUNCTION flow_service.reject_test_start() RETURNS trigger
+        LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'isolated test failure'; END $$;
+        CREATE TRIGGER reject_test_start BEFORE INSERT ON flow_service.flow_instances
+        FOR EACH ROW EXECUTE FUNCTION flow_service.reject_test_start();",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let second = start_physical_instance(
+        &repo,
+        &providers,
+        &changed_definition,
+        PhysicalStartInvocation {
+            request: request.clone(),
+            actor: "actor-2",
+            public_base_url: "https://issuer.example",
+            now: now() + chrono::Duration::seconds(61),
+            client_key: Some(key),
+        },
+    )
+    .await;
+    assert!(second.is_err());
+    assert!(repo
+        .instance(&pending[0].instance_id)
+        .await
+        .unwrap()
+        .is_none());
+    assert_eq!(
+        repo.pending_physical_starts("org-1", 10, 0)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    sqlx::raw_sql(
+        "DROP TRIGGER reject_test_start ON flow_service.flow_instances;
+        DROP FUNCTION flow_service.reject_test_start();",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let third = start_physical_instance(
+        &repo,
+        &providers,
+        &changed_definition,
+        PhysicalStartInvocation {
+            request: request.clone(),
+            actor: "actor-3",
+            public_base_url: "https://issuer.example",
+            now: now() + chrono::Duration::seconds(122),
+            client_key: Some(key),
+        },
+    )
+    .await
+    .unwrap();
+    assert!(third.created);
+    assert_eq!(third.instance.id, pending[0].instance_id);
+    assert_eq!(third.instance.started_at, Some(now()));
+    assert_eq!(third.instance.created_at, now());
+    assert_eq!(third.instance.updated_at, now());
+    assert_eq!(
+        third.instance.expires_at,
+        Some(now() + chrono::Duration::seconds(i64::from(definition.default_timeout_seconds)))
+    );
+    assert_eq!(third.instance.state_history[0]["actor"], "actor-1");
+    assert!(third.instance.context.get("physical_document").is_none());
+    assert!(repo
+        .pending_physical_starts("org-1", 10, 0)
+        .await
+        .unwrap()
+        .is_empty());
+    assert_eq!(native.owned_keys.lock().unwrap().len(), 1);
+    let original = bound_definition_for_instance(&repo, &third.instance)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(original, definition);
+    let first_native = native.inner.requests.lock().unwrap()[0].clone();
+    assert_eq!(first_native.data["issuer_did"], "did:web:issuer.example");
+    assert_eq!(first_native.data["credential_template_id"], "template-1");
+    assert_eq!(
+        first_native.data["application_template_id"],
+        "application-template-1"
+    );
+    assert_eq!(
+        first_native.data["delivery_destination_profile_id"],
+        "delivery-1"
+    );
+    let mut next = third.instance.clone();
+    next.current_step_id = original.steps.iter().find_map(|step| {
+        (step["config"]["protocol_step"] == "generate_data_groups")
+            .then(|| step["id"].as_str().unwrap().to_owned())
+    });
+    assert!(next.current_step_id.is_some());
+    let advance_providers = FlowProviderRegistry {
+        physical_document: Some(Arc::new(native.inner.clone())),
+        ..Default::default()
+    };
+    let advanced = apply_physical_advance_side_effect(
+        &advance_providers,
+        &original,
+        next,
+        TransitionOutcome::Success,
+        &json!({}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        advanced.context["physical_document_job"]["application_id"],
+        "application-1"
+    );
+    assert_eq!(
+        native
+            .inner
+            .requests
+            .lock()
+            .unwrap()
+            .last()
+            .unwrap()
+            .operation,
+        PhysicalDocumentOperation::GenerateDataGroups
+    );
+    let native_calls = native.inner.requests.lock().unwrap().len();
+    let replay = start_physical_instance(
+        &repo,
+        &providers,
+        &changed_definition,
+        PhysicalStartInvocation {
+            request: request.clone(),
+            actor: "actor-1",
+            public_base_url: "https://issuer.example",
+            now: now() + chrono::Duration::seconds(123),
+            client_key: Some(key),
+        },
+    )
+    .await
+    .unwrap();
+    assert!(!replay.created);
+    assert_eq!(replay.instance.id, third.instance.id);
+    assert_eq!(native.inner.requests.lock().unwrap().len(), native_calls);
+    let mut changed = request.clone();
+    changed.initial_context["physical_document"]["applicant"]["name"] = json!("Changed");
+    assert!(start_physical_instance(
+        &repo,
+        &providers,
+        &changed_definition,
+        PhysicalStartInvocation {
+            request: changed,
+            actor: "actor-1",
+            public_base_url: "https://issuer.example",
+            now: now() + chrono::Duration::seconds(124),
+            client_key: Some(key),
+        }
+    )
+    .await
+    .is_err());
+    assert_eq!(native.inner.requests.lock().unwrap().len(), native_calls);
+
+    let expired_native = LostNativeResponse::default();
+    let expired_providers = FlowProviderRegistry {
+        credential_template: Some(Arc::new(MutablePhysicalTemplate {
+            issuer_did: issuer_did.clone(),
+        })),
+        physical_document: Some(Arc::new(expired_native.clone())),
+        ..Default::default()
+    };
+    let expired_key = "expired-client-key";
+    let initial_at = now() + chrono::Duration::seconds(200);
+    let expired_request = request;
+    assert!(start_physical_instance(
+        &repo,
+        &expired_providers,
+        &definition,
+        PhysicalStartInvocation {
+            request: expired_request.clone(),
+            actor: "actor-first",
+            public_base_url: "https://issuer.example",
+            now: initial_at,
+            client_key: Some(expired_key),
+        },
+    )
+    .await
+    .is_err());
+    let native_before_expiry = expired_native.inner.requests.lock().unwrap().len();
+    assert!(matches!(
+        start_physical_instance(
+            &repo,
+            &expired_providers,
+            &changed_definition,
+            PhysicalStartInvocation {
+                request: expired_request,
+                actor: "actor-later",
+                public_base_url: "https://issuer.example",
+                now: initial_at
+                    + chrono::Duration::seconds(i64::from(definition.default_timeout_seconds) + 1),
+                client_key: Some(expired_key),
+            },
+        )
+        .await,
+        Err(PhysicalStartError::Expired)
+    ));
+    assert_eq!(
+        expired_native.inner.requests.lock().unwrap().len(),
+        native_before_expiry
+    );
+    assert_eq!(
+        repo.pending_physical_starts("org-1", 10, 0)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    sqlx::raw_sql(
+        "DROP SCHEMA IF EXISTS flow_service CASCADE;
+        DROP SCHEMA IF EXISTS deployment_profile_service CASCADE;",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    pool.close().await;
 }
 
 fn now() -> chrono::DateTime<Utc> {
