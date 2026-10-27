@@ -1,7 +1,7 @@
 use crate::certificate_csr::{self, CsrSubject};
 mod certificate_operations;
-mod mdoc_crl_operations;
 mod identity_inspection;
+mod mdoc_crl_operations;
 use crate::certificate_issuance::{self, VerifiedDscSubject};
 use crate::compat::{
     CompatibilityError, IssuerContextRequest, IssuerDidSignRequest, ProfileIdentityRequest,
@@ -65,13 +65,13 @@ use axum::{
 };
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use certificate_operations::*;
-use mdoc_crl_operations::*;
 use marty_signing_grant::{
     ceremony::{IssuerCsrIntent, ServiceCsrIntent},
     replay::ConsumedGrant,
     verifier::{GrantAuthorizationError, GrantVerifier},
     GrantBinding, GrantEnvelope, SigningOrigin, HEADER_NAME,
 };
+use mdoc_crl_operations::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -335,8 +335,14 @@ pub fn router_with_all_keys_grants_and_mdoc(
         .route("/docs", get(docs))
         .route("/redoc", get(redoc))
         .route("/v1/signing-keys/service-status", get(service_status))
-        .route("/v1/signing-keys/mdoc-crls/{organization_id}/{file}", get(public_mdoc_crl))
-        .route("/v1/signing-keys/mdoc-crls/{certificate_id}", post(publish_mdoc_crl))
+        .route(
+            "/v1/signing-keys/mdoc-crls/{organization_id}/{file}",
+            get(public_mdoc_crl),
+        )
+        .route(
+            "/v1/signing-keys/mdoc-crls/{certificate_id}",
+            post(publish_mdoc_crl),
+        )
         .route(
             "/v1/signing-keys",
             get(list_public_signing_keys).post(create_public_signing_key),
