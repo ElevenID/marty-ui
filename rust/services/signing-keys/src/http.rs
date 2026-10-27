@@ -1943,7 +1943,7 @@ async fn save_public_config(
         {
             return Err(registry::RegistryError::PreconditionFailed);
         }
-        preserve_unchanged_auth_references(&mut body, &existing);
+        preserve_unchanged_auth_references(&mut body, existing);
         if let Some(config) = body.as_object_mut() {
             let bindings = config
                 .entry("key_reference_purposes")
