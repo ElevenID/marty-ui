@@ -73,7 +73,7 @@
     {
       "profile": "kubernetes-direct",
       "outer": "kubernetes_resolved_native_profile_delivers_both_encryption_modes",
-      "child": null,
+      "child": "kubernetes_profile_native_composition_child",
       "entrypoint": "run_kubernetes",
       "gateway": false,
       "cases": ["anoncrypt:private-allowed", "authcrypt:private-allowed"],
@@ -82,7 +82,7 @@
     {
       "profile": "rendered-direct",
       "outer": "base_profile_native_renewal_uses_actual_rendered_configuration",
-      "child": null,
+      "child": "base_profile_native_composition_child",
       "entrypoint": "run_rendered",
       "cases": ["anoncrypt:private-allowed", "authcrypt:private-allowed"],
       "retained": "Rendered native configuration, owned PostgreSQL and Redis, packaged process, wallet capture, durable rows, and cleanup."

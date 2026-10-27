@@ -375,6 +375,7 @@ all_test_names=$(printf '%s\n%s\n%s\n%s\n' "$composition_tests" "$flow_tests" "$
 pull_images
 printf '%s\n' "$all_test_names" | grep -Fx 'heartbeat_readiness_matches_published_python: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'base_profile_native_renewal_uses_actual_rendered_configuration: test'
+printf '%s\n' "$all_test_names" | grep -Fx 'base_profile_native_composition_child: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'base_profile_gateway_composition_isolated: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'base_profile_gateway_composition_child: test'
 if (( selfhost_delegated == 0 )); then
@@ -384,6 +385,7 @@ fi
 printf '%s\n' "$all_test_names" | grep -Fx 'kubernetes_resolved_native_profile_delivers_both_encryption_modes: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'kubernetes_profile_gateway_composition_isolated: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'kubernetes_profile_gateway_composition_child: test'
+printf '%s\n' "$all_test_names" | grep -Fx 'kubernetes_profile_native_composition_child: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'resolved_kubernetes_runtime::prepared_cleanup_retains_modified_bytes_until_exact_owned_content_is_restored: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'base_profile_envoy_composition_isolated: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'base_profile_envoy_composition_child: test'

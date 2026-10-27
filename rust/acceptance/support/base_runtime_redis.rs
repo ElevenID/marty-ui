@@ -158,6 +158,10 @@ pub(super) struct OwnedRedis {
 }
 
 impl OwnedRedis {
+    #[allow(
+        dead_code,
+        reason = "Flow retains the shared loopback API; Canvas uses the owned database namespace"
+    )]
     pub(super) async fn start() -> Result<Self, String> {
         Self::start_owned(Network::Loopback, Uuid::new_v4(), Readiness::Actual).await
     }
@@ -325,6 +329,10 @@ impl OwnedRedis {
         Ok(())
     }
 
+    #[allow(
+        dead_code,
+        reason = "Flow retains the shared loopback API; Canvas uses the owned database namespace"
+    )]
     pub(super) fn url(&self) -> &str {
         &self.url
     }

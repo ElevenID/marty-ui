@@ -76,7 +76,7 @@ EXPECTED = (
     (
         "kubernetes-direct",
         "kubernetes_resolved_native_profile_delivers_both_encryption_modes",
-        None,
+        "kubernetes_profile_native_composition_child",
         "run_kubernetes",
         False,
         ALLOW,
@@ -84,7 +84,7 @@ EXPECTED = (
     (
         "rendered-direct",
         "base_profile_native_renewal_uses_actual_rendered_configuration",
-        None,
+        "base_profile_native_composition_child",
         "run_rendered",
         None,
         ALLOW,
@@ -102,6 +102,15 @@ CONTAINER_CALLS = {
     "gateway": "base_runtime_container::run(",
     "envoy": "base_runtime_container::run_envoy(",
     "kubernetes-gateway": "base_runtime_container::run_kubernetes(",
+    "kubernetes-direct": "base_runtime_container::run_kubernetes_native(",
+    "rendered-direct": "base_runtime_container::run_native(",
+}
+CHILD_CONSTANTS = {
+    "gateway": "CHILD",
+    "envoy": "ENVOY_CHILD",
+    "kubernetes-gateway": "KUBERNETES_CHILD",
+    "kubernetes-direct": "KUBERNETES_NATIVE_CHILD",
+    "rendered-direct": "NATIVE_CHILD",
 }
 
 
@@ -116,12 +125,15 @@ def _body(source: str, name: str, *, test: bool) -> str:
         "kubernetes_profile_gateway_composition_child",
         "kubernetes_resolved_native_profile_delivers_both_encryption_modes",
         "base_profile_native_renewal_uses_actual_rendered_configuration",
+        "base_profile_native_composition_child",
+        "kubernetes_profile_native_composition_child",
     }
     attribute = (r'#\[tokio::test\(flavor = "multi_thread"\)\]'
                  if name in multi_thread else r"#\[tokio::test\]")
     prefix = rf"{attribute}\s*async fn " if test else r"pub\(super\) async fn "
+    result = "" if test else r"(?:->\s*Result<\(\),\s*String>)?\s*"
     matches = re.findall(
-        rf"(?m)^{prefix}{re.escape(name)}\([^)]*\)\s*\{{(.*?)^\}}",
+        rf"(?m)^{prefix}{re.escape(name)}\([^)]*\)\s*{result}\{{(.*?)^\}}",
         source,
         re.DOTALL,
     )
@@ -242,10 +254,12 @@ def _validate(manifest: dict, inputs: dict[str, str]) -> None:
             )
             assert "MARTY_BASE_COMPOSITION_COMPLETE_V1" in child_body
             assert runner.count(f"'{child}: test'") == 1
-            assert (
-                f'const {"KUBERNETES_" if profile == "kubernetes-gateway" else "ENVOY_" if profile == "envoy" else ""}CHILD: &str = "{child}";'
-                in container
-            )
+            constant = CHILD_CONSTANTS[profile]
+            assert f'const {constant}: &str = "{child}";' in container
+            wrapper = CONTAINER_CALLS[profile].split("::", 1)[1].removesuffix("(")
+            wrapper_body = _body(container, wrapper, test=False)
+            assert "run_child(" in wrapper_body
+            assert re.search(rf"\b{constant}\b", wrapper_body)
             call_owner = child_body
         else:
             call_owner = outer_body
