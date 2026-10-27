@@ -221,3 +221,71 @@ for(const role of ['credential-template','issuance'])test('mount equivalence ret
   }}),mutation);
  }
 });
+
+
+function maintenanceFixture(t){
+ const f=issuanceFixture(t),api=require('./functional-debug-runtime'),engineId='11111111-2222-3333-4444-555555555555';
+ const expected=expectedRuntime(f.profile),base=f.write('restart-base.json',f.profile);
+ const operator=f.write('synthetic-maintenance-source.json',{sourceControlOnly:true}),restoreSource=f.write('synthetic-restore-source.json',{sourceControlOnly:true});
+ const ids=expected.map(row=>row.requiredContainerId||row.requiredObservation.containerId);
+ while(ids.length<67)ids.push(crypto.createHash('sha256').update('maintenance-extra:'+ids.length).digest('hex'));
+ const journal={sourceSha256:operator.sha256,phase:'RESTORED_225_CONFIG_67_RUNNING',state:'RESTORED_PENDING_ROOT_ENDPOINT_AND_RUNTIME_REBIND',appStopIntent:true,appStartIntent:true,freshBackupComplete:true,freshBackupFileCount:2,originalRunning:ids,stopIntents:[...ids]};
+ const restore={sourceSha256:operator.sha256,scope:'RESTORE_ONLY_NO_DESKTOP_COMMAND',normalization:{Dns:'None to []',DnsSearch:'None to []',DnsOptions:'None to []'},expectedContainerCount:225,observedRunningBeforeRestore:4};
+ const authority={schema:'marty.functional-runtime-maintenance-authority/v1',scope:'FUNCTIONAL_ONLY',releaseQualified:false,recordingQualified:false,engineId,restoredCounts:{containers:225,running:67},operator,restoreSource,journal:f.write('maintenance-journal.json',journal),restoreIntent:f.write('maintenance-restore-intent.json',restore),freshBackupIntegrity:f.write('maintenance-backups.json',{dump:{bytes:1,sha256:H('a')}})};
+ let selected,mutateActual=null,mutateEngine=null;
+ const readDocker=args=>{
+  if(args[0]==='info'){const value={ID:engineId,Containers:225,ContainersRunning:67};mutateEngine?.(value);return JSON.stringify(value);}
+  if(args[0]==='ps')selected=expected.find(row=>args.includes('label=com.docker.compose.service='+row.role));
+  assert(selected);const actual=structuredClone(f.observe(selected));actual.startedAt='2026-10-27T16:00:00Z';actual.hostPid+=10000;mutateActual?.(actual,selected);
+  if(args[0]==='ps')return actual.containerId;
+  if(args[0]==='inspect')return JSON.stringify([{Id:actual.containerId,Image:actual.imageId,Config:{User:String(actual.configuredRuntimeUid),Labels:{'com.docker.compose.project':actual.project,'com.docker.compose.service':actual.role}},State:{Running:actual.running,Status:actual.status,Health:actual.health?{Status:actual.health}:undefined,Pid:actual.hostPid,StartedAt:actual.startedAt},Mounts:actual.binaryMounts.map(m=>({Type:m.type,Source:m.source,Destination:m.destination,RW:m.writable}))}]);
+  if(args[2]==='readlink')return actual.executablePath;
+  if(args[2]==='sha256sum')return (args[3]==='/proc/1/exe'?actual.processExecutableSha256:actual.binarySha256)+'  '+args[3];
+  if(args[2]==='cat')return 'Uid:\t'+actual.effectiveUid+'\t'+actual.effectiveUid+'\t0\t0\n';
+  assert.fail('Unexpected Docker read');
+ };
+ const authorityRef=()=>f.write('maintenance-authority.json',authority);
+ const produce=()=>api.produceMaintenanceRestart(base,authorityRef(),{readDocker});
+ const bind=receipt=>({...f.profile,maintenanceRestart:f.write('maintenance-restart.json',receipt)});
+ return {...f,api,base,authority,journal,restore,readDocker,produce,bind,authorityRef,
+  mutateActual:fn=>{mutateActual=fn;},mutateEngine:fn=>{mutateEngine=fn;},
+  changeJournal:()=>{authority.journal=f.write('maintenance-journal.json',journal);},changeRestore:()=>{authority.restoreIntent=f.write('maintenance-restore-intent.json',restore);}};
+}
+
+test('maintenance actual-reader producer rebinds only newer generations and preserves prior receipts',t=>{
+ const f=maintenanceFixture(t),prior=fs.readFileSync(f.base.path);
+ assert.throws(()=>verifyFunctionalRuntime(f.profile,{readDocker:f.readDocker}),/startedAt/);
+ const receipt=f.produce(),profile=f.bind(receipt),result=verifyFunctionalRuntime(profile,{readDocker:f.readDocker});
+ assert.equal(receipt.roles.length,22);assert.equal(result.roles.length,22);assert.equal(result.receiptDigests.maintenanceRestart,profile.maintenanceRestart.sha256);
+ assert(result.roles.every(row=>row.startedAt==='2026-10-27T16:00:00Z'));assert.equal(result.releaseQualified,false);assert.equal(result.recordingQualified,false);
+ assert.deepEqual(fs.readFileSync(f.base.path),prior);
+ assert.throws(()=>verifyFunctionalRuntime(profile,{observe:()=>assert.fail('No supplied rows')}),/actual Docker transport/);
+ assert.throws(()=>f.api.produceMaintenanceRestart(f.base,f.authorityRef(),{observe:()=>{}}),/actual Docker reads/);
+ for(const qualification of ['RELEASE','RECORDING'])assert.throws(()=>verifyFunctionalRuntime(profile,{qualification,readDocker:()=>assert.fail('No reads')}),/cannot qualify/);
+});
+
+for(const field of ['container','image','mounted','process','uid','mount','writable','health','staleGeneration'])test('maintenance producer refuses changed '+field,t=>{
+ const f=maintenanceFixture(t);f.mutateActual((actual,row)=>{if(row.role!=='gateway')return;
+  if(field==='container')actual.containerId=H('0');if(field==='image')actual.imageId='sha256:'+H('0');
+  if(field==='mounted')actual.binarySha256=H('0');if(field==='process')actual.processExecutableSha256=H('0');
+  if(field==='uid')actual.effectiveUid=99;if(field==='mount')actual.binaryMounts[0].source+='/foreign';
+  if(field==='writable')actual.binaryMounts[0].writable=true;if(field==='health')actual.health='unhealthy';
+  if(field==='staleGeneration')actual.startedAt='2026-10-26T00:00:00Z';
+ });assert.throws(f.produce);
+});
+
+for(const field of ['release','recording','stopAck','startAck','restoreCount','backupCount','missingStoppedRole','engine'])test('maintenance refuses invalid authority '+field,t=>{
+ const f=maintenanceFixture(t);
+ if(field==='release')f.authority.releaseQualified=true;if(field==='recording')f.authority.recordingQualified=true;
+ if(field==='stopAck')f.journal.appStopIntent=false;if(field==='startAck')f.journal.appStartIntent=false;
+ if(field==='restoreCount')f.restore.observedRunningBeforeRestore=5;if(field==='backupCount')f.journal.freshBackupFileCount=3;
+ if(field==='missingStoppedRole')f.journal.stopIntents.pop();if(field==='engine')f.mutateEngine(value=>{value.ID='00000000-0000-0000-0000-000000000000';});
+ f.changeJournal();f.changeRestore();assert.throws(f.produce);
+});
+
+test('maintenance receipt rejects missing role, foreign profile and later process drift',t=>{
+ const f=maintenanceFixture(t),receipt=f.produce();
+ const missing=structuredClone(receipt);missing.roles.pop();assert.throws(()=>expectedRuntime(f.bind(missing)));
+ const wrong=structuredClone(receipt);wrong.baseProfile=f.write('foreign-prior.json',{...f.profile,scope:'RELEASE'});assert.throws(()=>expectedRuntime(f.bind(wrong)));
+ const profile=f.bind(receipt);f.mutateActual(actual=>{actual.hostPid++;});assert.throws(()=>verifyFunctionalRuntime(profile,{readDocker:f.readDocker}));
+});

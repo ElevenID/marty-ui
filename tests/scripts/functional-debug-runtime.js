@@ -13,17 +13,23 @@ const ISSUANCE_SOURCE='85a6e31265f465a6a46c0cd97ecc6be4770fe7b4',ISSUANCE_CORE='
 const ISSUANCE_ROLES=Object.freeze(['issuance','issuance-native']);
 const RETAINED_ROLES=Object.freeze({flow:'marty-flow','signing-keys':'marty-signing-keys'});
 const digest=value=>crypto.createHash('sha256').update(value).digest('hex');
-function boundJson(ref){
+function boundBytes(ref){
  assert(ref&&path.isAbsolute(ref.path)&&HASH.test(ref.sha256),'Explicit hash-bound receipt required');
  assert(fs.lstatSync(ref.path).isFile()&&!fs.lstatSync(ref.path).isSymbolicLink(),'Receipt must be regular');
  const bytes=fs.readFileSync(ref.path);assert(bytes.length>0&&bytes.length<=16*1024*1024,'Receipt size invalid');
  assert.equal(digest(bytes),ref.sha256,'Reviewed receipt changed');
- const text=bytes[0]===255&&bytes[1]===254?bytes.subarray(2).toString('utf16le'):bytes.toString('utf8').replace(/^\uFEFF/,'');
+ return bytes;
+}
+function boundJson(ref){
+ const bytes=boundBytes(ref),text=bytes[0]===255&&bytes[1]===254?bytes.subarray(2).toString('utf16le'):bytes.toString('utf8').replace(/^\uFEFF/,'');
  return JSON.parse(text);
 }
 function binaryFor(role){return ({issuance:'marty-issuance-service','issuance-native':'marty-issuance-service',verification:'marty-verification-service'})[role]||'marty-'+role;}
 function expectedRuntime(profile){
- if(profile?.schema==='marty.functional-mixed-runtime/v2')return expectedIssuanceOverlay(profile);
+ if(profile?.schema==='marty.functional-mixed-runtime/v2'){
+  const expected=expectedIssuanceOverlay(profile);
+  return profile.maintenanceRestart?expectedMaintenanceRestart(profile,expected):expected;
+ }
  assert.equal(profile.schema,'marty.functional-mixed-runtime/v1');
  assert.equal(profile.scope,'FUNCTIONAL_ONLY');assert.equal(profile.releaseQualified,false);assert.equal(profile.recordingQualified,false);
  const baseline=boundJson(profile.baselineDeployment),build=boundJson(profile.baselineBuild);
@@ -155,12 +161,73 @@ function expectedIssuanceOverlay(profile){
    requiredContainerId:actual.containerId,requiredStartedAt:actual.startedAt,requiredHostPid:actual.hostPid,requiredEffectiveUid:actual.effectiveUid,requiredBinaryMounts:[actual.binaryMount]};
  });
 }
+function maintenanceAuthority(ref,expected){
+ const authority=boundJson(ref);
+ assert.equal(authority.schema,'marty.functional-runtime-maintenance-authority/v1');
+ assert.equal(authority.scope,'FUNCTIONAL_ONLY');assert.equal(authority.releaseQualified,false);assert.equal(authority.recordingQualified,false);
+ assert.match(authority.engineId,/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/);
+ boundBytes(authority.operator);boundBytes(authority.restoreSource);
+ const journal=boundJson(authority.journal),restore=boundJson(authority.restoreIntent);
+ assert.equal(journal.sourceSha256,authority.operator.sha256);
+ assert.equal(journal.phase,'RESTORED_225_CONFIG_67_RUNNING');assert.equal(journal.state,'RESTORED_PENDING_ROOT_ENDPOINT_AND_RUNTIME_REBIND');
+ assert.equal(journal.appStopIntent,true);assert.equal(journal.appStartIntent,true);assert.equal(journal.freshBackupComplete,true);
+ assert.equal(restore.sourceSha256,authority.operator.sha256);assert.equal(restore.scope,'RESTORE_ONLY_NO_DESKTOP_COMMAND');
+ assert.deepEqual(restore.normalization,{Dns:'None to []',DnsSearch:'None to []',DnsOptions:'None to []'});
+ assert.equal(restore.expectedContainerCount,225);
+ assert.equal(restore.observedRunningBeforeRestore,4);
+ assert.deepEqual(authority.restoredCounts,{containers:225,running:67});
+ if(journal.freshBackupFileCount!==undefined){
+  assert(Number.isInteger(journal.freshBackupFileCount)&&journal.freshBackupFileCount>0);
+  const backup=boundJson(authority.freshBackupIntegrity);
+  assert.equal(Object.keys(backup).length+1,journal.freshBackupFileCount,'Fresh backup count differs');
+ }
+ assert(Array.isArray(journal.originalRunning)&&journal.originalRunning.length===67);
+ assert.equal(new Set(journal.originalRunning).size,67);assert(journal.originalRunning.every(id=>HASH.test(id)));
+ assert.deepEqual([...journal.stopIntents].sort(),[...journal.originalRunning].sort(),'Maintenance did not stop every original runtime');
+ for(const row of expected){const id=row.requiredContainerId||row.requiredObservation?.containerId;
+  assert(HASH.test(id||'')&&journal.originalRunning.includes(id),'Role is outside the reviewed maintenance runtime');}
+ return authority;
+}
+function expectedMaintenanceRestart(profile,expected){
+ const receipt=boundJson(profile.maintenanceRestart);
+ assert.equal(receipt.schema,'marty.functional-runtime-maintenance-restart/v1');
+ assert.equal(receipt.scope,'FUNCTIONAL_ONLY');assert.equal(receipt.releaseQualified,false);assert.equal(receipt.recordingQualified,false);
+ const base=boundJson(receipt.baseProfile);assert(!base.maintenanceRestart,'Maintenance restart cannot hide another restart layer');
+ const original={...profile};delete original.maintenanceRestart;
+ assert.deepEqual(original,base,'Maintenance restart must retain the exact prior profile');
+ const authority=maintenanceAuthority(receipt.authority,expected);assert.equal(receipt.engineId,authority.engineId);
+ assert(Array.isArray(receipt.roles)&&receipt.roles.length===22);assert.equal(new Set(receipt.roles.map(row=>row.role)).size,22);
+ assert.equal(new Set(receipt.roles.map(row=>row.containerId)).size,22);
+ return expected.map(row=>{
+  const actual=receipt.roles.find(item=>item.role===row.role);assert(actual,'Restart role missing');
+  validateRestartObservation(row,actual);
+  return {...row,...(row.requiredObservation?{requiredObservation:{...row.requiredObservation,startedAt:actual.startedAt,hostPid:actual.hostPid}}:{}),
+   ...(row.requiredStartedAt!==undefined?{requiredStartedAt:actual.startedAt,requiredHostPid:actual.hostPid}:{})};
+ });
+}
+function produceMaintenanceRestart(profileRef,authorityRef,options={}){
+ assert(Object.keys(options).every(key=>key==='readDocker'),'Restart producer requires actual Docker reads, not supplied observations');
+ const read=options.readDocker||defaultDockerRead;assert.equal(typeof read,'function');
+ const profile=boundJson(profileRef);assert.equal(profile.schema,'marty.functional-mixed-runtime/v2');assert(!profile.maintenanceRestart);
+ const expected=expectedRuntime(profile),authority=maintenanceAuthority(authorityRef,expected);
+ const engine=()=>JSON.parse(read(['info','--format','{{json .}}']));
+ const beforeEngine=engine();assert.equal(beforeEngine.ID,authority.engineId,'Maintenance engine changed');
+ assert.equal(beforeEngine.Containers,225);assert.equal(beforeEngine.ContainersRunning,67);
+ const roles=expected.map(row=>{
+  const actual=observeDocker(row,read);validateRestartObservation(row,actual);return actual;
+ });
+ const afterEngine=engine();assert.equal(afterEngine.ID,authority.engineId,'Maintenance engine changed during observation');
+ assert.equal(afterEngine.Containers,225);assert.equal(afterEngine.ContainersRunning,67);
+ boundJson(profileRef);maintenanceAuthority(authorityRef,expected);expectedRuntime(profile);
+ return {schema:'marty.functional-runtime-maintenance-restart/v1',scope:'FUNCTIONAL_ONLY',releaseQualified:false,recordingQualified:false,
+  baseProfile:profileRef,authority:authorityRef,engineId:authority.engineId,roles};
+}
 function configuredUid(value){
  if(value===''||value==='root'||value==='root:root')return 0;
  if(/^\d+(?::[^:]+)?$/.test(value))return Number(value.split(':')[0]);
  return null;
 }
-function receiptDigests(profile){return profile.schema==='marty.functional-mixed-runtime/v2'?{baseProfile:profile.baseProfile.sha256,issuanceBuild:profile.issuanceOverlay.buildReceipt.sha256,issuanceDeployment:profile.issuanceOverlay.deploymentReceipt.sha256}:{baselineDeployment:profile.baselineDeployment.sha256,baselineBuild:profile.baselineBuild.sha256,
+function receiptDigests(profile){return profile.schema==='marty.functional-mixed-runtime/v2'?{baseProfile:profile.baseProfile.sha256,issuanceBuild:profile.issuanceOverlay.buildReceipt.sha256,issuanceDeployment:profile.issuanceOverlay.deploymentReceipt.sha256,...(profile.maintenanceRestart?{maintenanceRestart:profile.maintenanceRestart.sha256}:{})}:{baselineDeployment:profile.baselineDeployment.sha256,baselineBuild:profile.baselineBuild.sha256,
    debugDeployment:profile.debugDeployment.sha256,debugBuild:profile.debugBuild.sha256,
    retainedBuilds:Object.fromEntries(Object.entries(profile.retainedBuilds).map(([role,ref])=>[role,ref.sha256])),
    ...(profile.priorNativeOverlay?{priorNativeOverlay:profile.priorNativeOverlay.sha256,priorNativeBuild:profile.priorNativeBuild.sha256,priorNativeArtifacts:profile.priorNativeArtifacts.sha256}:{})};}
@@ -206,12 +273,41 @@ function observeDocker(expected,read=defaultDockerRead){
   binaryMounts,executablePath,processExecutableSha256:processHash,startedAt:row.State?.StartedAt,hostPid:row.State?.Pid,
   effectiveUid,configuredRuntimeUid};
 }
+function validateRuntimeObservation(row,actual,ignoreGeneration=false){
+ assert.equal(actual.role,row.role);assert.equal(actual.project,row.project);
+ assert.equal(actual.service,row.role);assert.equal(actual.imageId,row.imageId);assert(HASH.test(actual.containerId));
+ if(row.requiredObservation)for(const [field,value]of Object.entries(row.requiredObservation)){if(ignoreGeneration&&['startedAt','hostPid'].includes(field))continue;assert.deepEqual(field==='binaryMounts'?comparableBinaryMounts(actual[field]):actual[field],field==='binaryMounts'?comparableBinaryMounts(value):value,'Unchanged role observation differs: '+row.role+'/'+field);}
+ if(row.requiredContainerId)assert.equal(actual.containerId,row.requiredContainerId,'Reviewed debug container changed');
+ if(!ignoreGeneration&&row.requiredStartedAt!==undefined){assert.equal(actual.startedAt,row.requiredStartedAt);assert.equal(actual.hostPid,row.requiredHostPid);}
+ if(row.kind==='ISSUANCE_CORE_FUNCTIONAL_OVERLAY'){
+  assert.equal(actual.effectiveUid,row.requiredEffectiveUid);assert.equal(actual.configuredRuntimeUid,row.requiredEffectiveUid);
+  assert.deepEqual(comparableBinaryMounts(actual.binaryMounts),comparableBinaryMounts(row.requiredBinaryMounts),'Reviewed issuance executable mount changed');}
+ assert.equal(actual.running,true);assert.equal(actual.status,'running');
+ assert(actual.health==='healthy'||(row.role==='canvas-sync-worker'&&actual.health===null),'Role health not established');
+ assert.equal(actual.binarySha256,row.sha256,'Actual mounted executable differs from source-bound role');
+ if(row.binary){assert.equal(actual.executablePath,'/usr/local/bin/'+row.binary,'PID1 is not the exact expected service');
+  assert.equal(actual.processExecutableSha256,row.sha256,'Running inode differs from source-bound executable');
+  assert(Array.isArray(actual.binaryMounts));assert(actual.binaryMounts.every(mount=>mount.writable===false),'Executable mount must be read-only');
+  if(row.kind==='DEBUG_PRODUCTION_BINARY'||row.kind==='RETAINED_SOURCE_BOUND_BINARY')assert(actual.binaryMounts.length>0,'Expected reviewed executable mount is absent');}
+ assert(Number.isInteger(actual.hostPid)&&actual.hostPid>0);assert(typeof actual.startedAt==='string'&&Number.isFinite(Date.parse(actual.startedAt)));
+ return {...row,containerId:actual.containerId,health:actual.health,startedAt:actual.startedAt,hostPid:actual.hostPid,
+  executablePath:actual.executablePath,processExecutableSha256:actual.processExecutableSha256,binaryMounts:actual.binaryMounts,
+  ...(actual.effectiveUid!==undefined?{effectiveUid:actual.effectiveUid,configuredRuntimeUid:actual.configuredRuntimeUid}:{})};
+}
+function validateRestartObservation(row,actual){
+ validateRuntimeObservation(row,actual,true);
+ const previous=row.requiredStartedAt??row.requiredObservation?.startedAt;
+ assert(Number.isFinite(Date.parse(previous))&&Date.parse(actual.startedAt)>Date.parse(previous),'Maintenance generation must be newer');
+}
 function verifyFunctionalRuntime(profile,{qualification='FUNCTIONAL_ONLY',observe,readDocker}={}){
+ if(profile.maintenanceRestart){assert(!observe,'Maintenance verification requires actual Docker transport');readDocker=readDocker||defaultDockerRead;}
  assert(!(observe&&readDocker),'Select one observation transport');
  if(readDocker)assert.equal(typeof readDocker,'function');
  observe=observe||(readDocker?(expected=>observeDocker(expected,readDocker)):observeDocker);
  assert.equal(qualification,'FUNCTIONAL_ONLY','Mixed/debug stack cannot qualify release or recording');
  const expected=expectedRuntime(profile),roles=[];
+ const maintenance=profile.maintenanceRestart?boundJson(profile.maintenanceRestart):null;
+ if(maintenance)assert.equal(JSON.parse(readDocker(['info','--format','{{json .}}'])).ID,maintenance.engineId);
  for(const row of expected){
   let actual;
   try{actual=observe(row);}catch{
@@ -219,30 +315,13 @@ function verifyFunctionalRuntime(profile,{qualification='FUNCTIONAL_ONLY',observ
    const error=new Error('Functional runtime observation failed for role '+row.role);
    error.code='FUNCTIONAL_RUNTIME_OBSERVATION_FAILED';error.role=row.role;throw error;
   }
-  assert.equal(actual.role,row.role);assert.equal(actual.project,row.project);
-  assert.equal(actual.service,row.role);assert.equal(actual.imageId,row.imageId);assert(HASH.test(actual.containerId));
-  if(row.requiredObservation)for(const [field,value]of Object.entries(row.requiredObservation))assert.deepEqual(field==='binaryMounts'?comparableBinaryMounts(actual[field]):actual[field],field==='binaryMounts'?comparableBinaryMounts(value):value,'Unchanged role observation differs: '+row.role+'/'+field);
-  if(row.requiredContainerId)assert.equal(actual.containerId,row.requiredContainerId,'Reviewed debug container changed');
-  if(row.requiredStartedAt!==undefined){assert.equal(actual.startedAt,row.requiredStartedAt);assert.equal(actual.hostPid,row.requiredHostPid);}
-  if(row.kind==='ISSUANCE_CORE_FUNCTIONAL_OVERLAY'){
-   assert.equal(actual.effectiveUid,row.requiredEffectiveUid);assert.equal(actual.configuredRuntimeUid,row.requiredEffectiveUid);
-   assert.deepEqual(comparableBinaryMounts(actual.binaryMounts),comparableBinaryMounts(row.requiredBinaryMounts),'Reviewed issuance executable mount changed');}
-  assert.equal(actual.running,true);assert.equal(actual.status,'running');
-  assert(actual.health==='healthy'||(row.role==='canvas-sync-worker'&&actual.health===null),'Role health not established');
-  assert.equal(actual.binarySha256,row.sha256,'Actual mounted executable differs from source-bound role');
-  if(row.binary){assert.equal(actual.executablePath,'/usr/local/bin/'+row.binary,'PID1 is not the exact expected service');
-   assert.equal(actual.processExecutableSha256,row.sha256,'Running inode differs from source-bound executable');
-   assert(Array.isArray(actual.binaryMounts));assert(actual.binaryMounts.every(mount=>mount.writable===false),'Executable mount must be read-only');
-   if(row.kind==='DEBUG_PRODUCTION_BINARY'||row.kind==='RETAINED_SOURCE_BOUND_BINARY')assert(actual.binaryMounts.length>0,'Expected reviewed executable mount is absent');}
-  assert(Number.isInteger(actual.hostPid)&&actual.hostPid>0);assert(typeof actual.startedAt==='string'&&Number.isFinite(Date.parse(actual.startedAt)));
-  roles.push({...row,containerId:actual.containerId,health:actual.health,startedAt:actual.startedAt,hostPid:actual.hostPid,
-   executablePath:actual.executablePath,processExecutableSha256:actual.processExecutableSha256,binaryMounts:actual.binaryMounts,
-   ...(actual.effectiveUid!==undefined?{effectiveUid:actual.effectiveUid,configuredRuntimeUid:actual.configuredRuntimeUid}:{})});
+  roles.push(validateRuntimeObservation(row,actual));
  }
  // A changed receipt during the observation window cannot acquire a binding.
  expectedRuntime(profile);
+ if(maintenance)assert.equal(JSON.parse(readDocker(['info','--format','{{json .}}'])).ID,maintenance.engineId);
  return {schema:profile.schema==='marty.functional-mixed-runtime/v2'?'marty.functional-mixed-runtime-binding/v2':'marty.functional-mixed-runtime-binding/v1',scope:'FUNCTIONAL_ONLY',
   releaseQualified:false,recordingQualified:false,mixedSourceStack:true,roles,
   receiptDigests:receiptDigests(profile)};
 }
-module.exports={DOCKER_READ_TRANSPORT_SCHEMA:'marty.functional-runtime-docker-read/v1',boundJson,expectedRuntime,verifyFunctionalRuntime,DEBUG_ROLES,RETAINED_ROLES,ISSUANCE_SOURCE,ISSUANCE_CORE};
+module.exports={DOCKER_READ_TRANSPORT_SCHEMA:'marty.functional-runtime-docker-read/v1',boundJson,expectedRuntime,verifyFunctionalRuntime,produceMaintenanceRestart,DEBUG_ROLES,RETAINED_ROLES,ISSUANCE_SOURCE,ISSUANCE_CORE};
