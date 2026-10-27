@@ -136,6 +136,8 @@ pub struct PresentationEvaluationResult {
     pub verified_claims: BTreeMap<String, Value>,
     #[serde(default)]
     pub credential_results: Vec<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authentication_diagnostic: Option<marty_oid4vp_contract::BoundAuthenticationDiagnosticV1>,
     #[serde(default)]
     pub error_codes: Vec<String>,
     #[serde(default)]

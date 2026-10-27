@@ -46,9 +46,18 @@ pub struct PreparedVerificationFinalization {
 }
 
 #[derive(Clone, Debug)]
+pub struct PreparedRetryableSnapshot {
+    pub instance: FlowInstanceRecord,
+    pub expected_status: FlowInstanceStatus,
+    pub expected_updated_at: DateTime<Utc>,
+    pub response: VerificationResultResponse,
+}
+
+#[derive(Clone, Debug)]
 pub enum PreparedVerificationSubmission {
     Final(Box<PreparedVerificationFinalization>),
     Retryable(VerificationResultResponse),
+    RetryableSnapshot(Box<PreparedRetryableSnapshot>),
     Expired(FlowInstanceRecord),
     SameTerminal(VerificationResultResponse),
     ReplayConflict,
@@ -316,14 +325,15 @@ pub async fn prepare_verification_submission(
             diagnostic = %diagnostic,
             "OID4VP presentation authentication rejected"
         );
-        return Ok(retryable_result(
-            &instance,
-            evaluation
-                .decision_reason
-                .as_deref()
-                .unwrap_or("Presentation authentication failed"),
+        return prepare_retryable_authentication_rejection(
+            instance,
+            &evaluation,
+            &policy_id,
+            &nonce,
+            &vp_token,
+            &submission_digest,
             now,
-        ));
+        );
     }
     let final_allowed = evaluation.result == "passed" && evaluation.decision == "allow";
     let verified_claims = if final_allowed {
@@ -628,12 +638,114 @@ fn find_token(value: &Value) -> Option<&str> {
     }
 }
 
+fn prepare_retryable_authentication_rejection(
+    mut instance: FlowInstanceRecord,
+    evaluation: &PresentationEvaluationResult,
+    policy_id: &str,
+    nonce: &str,
+    vp_token: &str,
+    submission_digest: &str,
+    now: DateTime<Utc>,
+) -> Result<PreparedVerificationSubmission, FlowVerificationSubmissionError> {
+    use marty_oid4vp_contract::{RejectedPresentationAttemptV1, LAST_PRESENTATION_ATTEMPT};
+    let reason = evaluation
+        .decision_reason
+        .as_deref()
+        .unwrap_or("Presentation authentication failed");
+    let mut response = retryable_response(&instance, reason, now);
+    let diagnostic = evaluation
+        .authentication_diagnostic
+        .as_ref()
+        .filter(|d| d.validate_request(policy_id, nonce, vp_token).is_ok());
+    let prior = instance
+        .result
+        .as_ref()
+        .and_then(|r| r.get(LAST_PRESENTATION_ATTEMPT))
+        .cloned();
+    let mut attempt = diagnostic
+        .map(|diagnostic| {
+            RejectedPresentationAttemptV1::new(
+                &instance.id,
+                submission_digest,
+                &now.to_rfc3339(),
+                diagnostic.clone(),
+            )
+        })
+        .transpose()
+        .map_err(|_| FlowVerificationSubmissionError::Serialization)?;
+    // Preserve the original observation/time and avoid duplicate history, but
+    // still CAS the current active snapshot so a concurrent terminal winner
+    // cannot be overwritten by this retry.
+    let mut repeated = false;
+    if let (Some(prior), Some(current_attempt)) = (&prior, &attempt) {
+        if let Ok(previous) = serde_json::from_value::<RejectedPresentationAttemptV1>(prior.clone())
+        {
+            if previous.matches_session(&instance.id, policy_id, nonce)
+                && previous.submission_digest == submission_digest
+                && previous.vp_token_sha256 == current_attempt.vp_token_sha256
+                && previous.authentication == current_attempt.authentication
+            {
+                attempt = Some(previous);
+                repeated = true;
+            }
+        }
+    }
+    // Generic unauthenticated input cannot inherit a prior certificate diagnostic.
+    if attempt.is_none() && prior.is_none() {
+        return Ok(PreparedVerificationSubmission::Retryable(response));
+    }
+    let expected_status = instance.status;
+    let expected_updated_at = instance.updated_at;
+    let result = instance
+        .result
+        .get_or_insert_with(|| json!({}))
+        .as_object_mut()
+        .ok_or(FlowVerificationSubmissionError::Serialization)?;
+    if let Some(attempt) = &attempt {
+        result.insert(
+            LAST_PRESENTATION_ATTEMPT.into(),
+            serde_json::to_value(attempt)
+                .map_err(|_| FlowVerificationSubmissionError::Serialization)?,
+        );
+        if !repeated {
+            instance.state_history.push(json!({
+                "prior_state": instance.status, "new_state": instance.status,
+                "timestamp": now, "actor": "wallet_submission", "event": "verification_submission_rejected",
+                // Public history retains the rejection event, not the prior
+                // request binding or certificate diagnostic after recovery.
+                "retryable": true,
+            }));
+        }
+    } else {
+        result.remove(LAST_PRESENTATION_ATTEMPT);
+    }
+    instance.updated_at = now.max(expected_updated_at + Duration::microseconds(1));
+    instance.kernel()?;
+    response.last_presentation_attempt = attempt;
+    Ok(PreparedVerificationSubmission::RetryableSnapshot(Box::new(
+        PreparedRetryableSnapshot {
+            instance,
+            expected_status,
+            expected_updated_at,
+            response,
+        },
+    )))
+}
+
 fn retryable_result(
     instance: &FlowInstanceRecord,
     reason: &str,
     now: DateTime<Utc>,
 ) -> PreparedVerificationSubmission {
-    PreparedVerificationSubmission::Retryable(VerificationResultResponse {
+    PreparedVerificationSubmission::Retryable(retryable_response(instance, reason, now))
+}
+
+fn retryable_response(
+    instance: &FlowInstanceRecord,
+    reason: &str,
+    now: DateTime<Utc>,
+) -> VerificationResultResponse {
+    VerificationResultResponse {
         instance_id: instance.id.clone(),
         status: public_status(instance.status).into(),
         result: Some("failed".into()),
@@ -641,10 +753,11 @@ fn retryable_result(
         decision_reason: Some(reason.into()),
         verified_claims: json!({}),
         credential_results: Vec::new(),
+        last_presentation_attempt: None,
         error_codes: Vec::new(),
         warnings: Vec::new(),
         evaluation_timestamp: Some(now.to_rfc3339()),
-    })
+    }
 }
 
 pub(crate) fn transition(
@@ -884,6 +997,7 @@ mod tests {
     #[test]
     fn authentication_failure_diagnostic_excludes_claims_tokens_and_warning_text() {
         let evaluation = PresentationEvaluationResult {
+            authentication_diagnostic: None,
             result: "failed".into(),
             decision: "deny".into(),
             decision_reason: Some("Signature invalid\nretry".into()),

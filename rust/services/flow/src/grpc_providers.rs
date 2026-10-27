@@ -597,6 +597,19 @@ impl PresentationPolicyProvider for GrpcPresentationPolicyProvider {
                 &response.credential_results_json,
                 "presentation_policy",
             )?,
+            authentication_diagnostic:
+                marty_oid4vp_contract::BoundAuthenticationDiagnosticV1::from_optional_json(
+                    &response.authentication_diagnostic_json,
+                    &request.policy_id,
+                    &request.nonce,
+                    &request.presentation,
+                )
+                .map_err(|_| {
+                    invalid_response(
+                        "presentation_policy",
+                        "authentication diagnostic binding mismatch",
+                    )
+                })?,
             error_codes: Vec::new(),
             warnings: Vec::new(),
         })

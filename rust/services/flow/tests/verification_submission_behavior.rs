@@ -124,6 +124,7 @@ fn with_emitted_query(
 
 fn allowed() -> PresentationEvaluationResult {
     PresentationEvaluationResult {
+        authentication_diagnostic: None,
         result: "passed".into(),
         decision: "allow".into(),
         decision_reason: Some("requirements satisfied".into()),
@@ -681,4 +682,201 @@ async fn remote_haip_response_uses_scoped_version_without_private_key_unwrap() {
         .await,
         Err(FlowVerificationSubmissionError::InvalidEncryptedResponse)
     ));
+}
+
+fn rejected_mdoc_evaluation(token: &str) -> PresentationEvaluationResult {
+    use marty_oid4vp_contract::{
+        BoundAuthenticationDiagnosticV1, CertificateTrustFailure, MdocAuthenticationDiagnosticV1,
+        MdocDiagnosticFormat,
+    };
+    let mut value = allowed();
+    value.result = "failed".into();
+    value.decision = "deny".into();
+    value.decision_reason = Some("Certificate trust was rejected".into());
+    value.verified_claims.clear();
+    value.credential_results =
+        vec![json!({"signature_valid":false,"error_codes":["SignatureInvalid"]})];
+    let session = instance(false);
+    value.authentication_diagnostic = Some(
+        BoundAuthenticationDiagnosticV1::bind(
+            "policy-1",
+            session.context["nonce"].as_str().unwrap(),
+            token,
+            1,
+            MdocAuthenticationDiagnosticV1 {
+                format: MdocDiagnosticFormat::MsoMdoc,
+                document_count: 1,
+                document_type: "org.iso.18013.5.1.mDL".into(),
+                issuer_signature_valid: true,
+                certificate_trust_passed: false,
+                device_authentication_valid: true,
+                certificate_trust_failures: vec![CertificateTrustFailure::CertificateChainRejected],
+                issuer_certificate_sha256: "1".repeat(64),
+            },
+        )
+        .unwrap(),
+    );
+    value
+}
+
+#[tokio::test]
+async fn rejected_mdoc_attempt_remains_retryable_and_idempotent_then_clears_on_recovery() {
+    let token = "wallet-mdoc";
+    let original = instance(false);
+    let (policies, _) = providers(Ok(rejected_mdoc_evaluation(token)));
+    let PreparedVerificationSubmission::RetryableSnapshot(snapshot) =
+        prepare_verification_submission(
+            &policies,
+            original.clone(),
+            input(token),
+            &options(None),
+            now(),
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("durable retryable rejection expected")
+    };
+    assert_eq!(snapshot.instance.status, original.status);
+    assert_eq!(snapshot.instance.completed_at, original.completed_at);
+    assert_eq!(
+        snapshot.instance.context["nonce"],
+        original.context["nonce"]
+    );
+    assert_eq!(snapshot.response.decision.as_deref(), Some("deny"));
+    assert_eq!(snapshot.response.verified_claims, json!({}));
+    let attempt = snapshot.response.last_presentation_attempt.clone().unwrap();
+    assert_eq!(
+        snapshot
+            .instance
+            .projection()
+            .unwrap()
+            .last_presentation_attempt,
+        Some(attempt.clone())
+    );
+    // Only the server-owned result bound to the current session is projected.
+    for mutation in 0..3 {
+        let mut changed = snapshot.instance.clone();
+        match mutation {
+            0 => changed.context["nonce"] = json!("different-request-nonce"),
+            1 => changed.context["presentation_policy_id"] = json!("other-policy"),
+            _ => changed.id = "other-instance".into(),
+        }
+        assert!(changed
+            .projection()
+            .unwrap()
+            .last_presentation_attempt
+            .is_none());
+    }
+    let mut forged = original.clone();
+    forged.context["last_presentation_attempt"] = serde_json::to_value(&attempt).unwrap();
+    assert!(forged
+        .projection()
+        .unwrap()
+        .last_presentation_attempt
+        .is_none());
+    let history = snapshot.instance.state_history.len();
+    let PreparedVerificationSubmission::RetryableSnapshot(repeated) =
+        prepare_verification_submission(
+            &policies,
+            snapshot.instance.clone(),
+            input(token),
+            &options(None),
+            now() + Duration::seconds(1),
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("duplicate rejection still needs active-snapshot CAS")
+    };
+    assert_eq!(repeated.response.last_presentation_attempt, Some(attempt));
+    assert_eq!(repeated.instance.state_history.len(), history);
+    let (recovery, _) = providers(Ok(allowed()));
+    let PreparedVerificationSubmission::Final(recovered) = prepare_verification_submission(
+        &recovery,
+        snapshot.instance.clone(),
+        input("new-wallet-token"),
+        &options(None),
+        now() + Duration::seconds(2),
+    )
+    .await
+    .unwrap() else {
+        panic!("normal authenticated recovery must complete")
+    };
+    assert_eq!(recovered.instance.status, FlowInstanceStatus::Completed);
+    assert!(recovered
+        .instance
+        .projection()
+        .unwrap()
+        .last_presentation_attempt
+        .is_none());
+    assert!(recovered
+        .instance
+        .verification_projection()
+        .unwrap()
+        .last_presentation_attempt
+        .is_none());
+    assert!(recovered.instance.state_history.len() > history);
+    assert_eq!(
+        recovered.instance.state_history[history - 1],
+        snapshot.instance.state_history[history - 1]
+    );
+}
+
+#[tokio::test]
+async fn rejected_mdoc_wrong_binding_and_generic_auth_failure_cannot_inherit_fingerprint() {
+    let token = "wallet-mdoc";
+    let mut bad = rejected_mdoc_evaluation(token);
+    bad.authentication_diagnostic.as_mut().unwrap().nonce_sha256 = "f".repeat(64);
+    let (policies, _) = providers(Ok(bad));
+    let PreparedVerificationSubmission::Retryable(response) = prepare_verification_submission(
+        &policies,
+        instance(false),
+        input(token),
+        &options(None),
+        now(),
+    )
+    .await
+    .unwrap() else {
+        panic!("wrong-bound diagnostic must not be persisted")
+    };
+    assert!(response.last_presentation_attempt.is_none());
+    let (policies, _) = providers(Ok(rejected_mdoc_evaluation(token)));
+    let PreparedVerificationSubmission::RetryableSnapshot(snapshot) =
+        prepare_verification_submission(
+            &policies,
+            instance(false),
+            input(token),
+            &options(None),
+            now(),
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("rejected snapshot expected")
+    };
+    let mut generic = allowed();
+    generic.credential_results = Vec::new();
+    let (policies, _) = providers(Ok(generic));
+    let PreparedVerificationSubmission::RetryableSnapshot(cleared) =
+        prepare_verification_submission(
+            &policies,
+            snapshot.instance,
+            input("bad-signature-token"),
+            &options(None),
+            now() + Duration::seconds(1),
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("new generic rejection must clear stale fingerprint")
+    };
+    assert!(cleared.response.last_presentation_attempt.is_none());
+    assert!(cleared
+        .instance
+        .projection()
+        .unwrap()
+        .last_presentation_attempt
+        .is_none());
+    assert_eq!(cleared.instance.status, FlowInstanceStatus::AwaitingWallet);
 }

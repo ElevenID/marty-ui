@@ -402,6 +402,9 @@ fn evaluation_message(value: &Value) -> Result<PolicyEvaluationResponse, Status>
         policy_id: text(value, "policy_id")?,
         policy_name: text(value, "policy_name")?,
         credential_results_json: serialize(&value["credential_results"])?,
+        authentication_diagnostic_json: serialize(
+            &value[marty_oid4vp_contract::AUTHENTICATION_DIAGNOSTIC],
+        )?,
         total_requirements: integer(value, "total_requirements")?,
         satisfied_requirements: integer(value, "satisfied_requirements")?,
         required_satisfied: integer(value, "required_satisfied")?,

@@ -1650,7 +1650,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for database in marty_verification_contract marty_db_contracts_test marty_issuance_executable_smoke_test marty_retention_contract_test marty_passport_contract_test marty_passport_reconciliation_test marty_passport_bureau_test marty_passport_gateway_test; do
+          for database in marty_verification_contract marty_db_contracts_test marty_issuance_executable_smoke_test marty_retention_contract_test marty_passport_contract_test marty_passport_reconciliation_test marty_passport_bureau_test marty_passport_gateway_test marty_mdoc_rejection_test; do
             docker exec "$MARTY_RUST_CI_POSTGRES_ID" createdb -U postgres "$database"
           done
           # Use the real upstream Rust schema owners. The former hand-made
@@ -1673,6 +1673,22 @@ jobs:
           python3 scripts/verify_fresh_kms_issuance_schema.py \
             --container "$MARTY_RUST_CI_POSTGRES_ID" \
             --database marty_issuance_executable_smoke_test
+      - name: Test retryable presentation rejection over isolated PostgreSQL
+        if: matrix.lane == 'contracts'
+        working-directory: rust
+        shell: bash
+        env:
+          FLOW_MDOC_REJECTION_TEST_URL: postgresql://postgres:postgres@127.0.0.1:5432/marty_mdoc_rejection_test
+        run: |
+          set -euo pipefail
+          source ../scripts/ci/rust_contract_execution.sh
+          test_name='retryable_mdoc_rejection_survives_http_readback_recovery_and_terminal_race'
+          executable="$(resolve_recorded_contract_executable marty-flow mdoc_rejection_http)"
+          "$executable" "$test_name" --ignored --exact --list | grep -Fx "$test_name: test"
+          run_timed mdoc_rejection_http "$executable" "$test_name" \
+            --ignored --exact --nocapture \
+            | tee "$RUNNER_TEMP/mdoc-rejection-http.log"
+          grep -Eq '^test result: ok\. 1 passed; 0 failed; 0 ignored;' "$RUNNER_TEMP/mdoc-rejection-http.log"
       # This source-owned acceptance case has its own disposable database and
       # needs no prior contract group. Report a regression after compilation
       # rather than after the unrelated Redis/OpenBao and database suites.

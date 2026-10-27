@@ -14,6 +14,60 @@ import HelpOutlineIcon from '@mui/icons-material/HelpOutlined';
 import LinkIcon from '@mui/icons-material/Link';
 import WorkspacePremiumIcon from '@mui/icons-material/WorkspacePremium';
 
+// Current-attempt diagnostics are not credential identity or verified claims.
+export const verificationSessionId = (value) => value?.instance_id || value?.flow_instance_id || value?.id || value?.session_id;
+
+export function extractPresentationRejection(observation = {}, expectedSession = observation) {
+  const policy = (value) => value?.presentation_policy_id || value?.context_data?.presentation_policy_id || value?.context?.presentation_policy_id;
+  const instanceId = verificationSessionId(expectedSession);
+  const policyId = policy(expectedSession);
+  if (!instanceId || verificationSessionId(observation) !== instanceId || !policyId
+    || (policy(observation) && policy(observation) !== policyId)
+    || !['pending', 'awaiting_wallet', 'in_progress'].includes(String(observation.status || '').toLowerCase())) return null;
+  const attempt = observation.last_presentation_attempt;
+  const auth = attempt?.authentication;
+  const hash = (value) => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
+  const failures = ['CERTIFICATE_CHAIN_REJECTED', 'INVALID_TRUST_CONFIGURATION', 'MISSING_TRUST_ANCHORS'];
+  if (attempt?.schema_version !== 1 || attempt.instance_id !== instanceId || attempt.policy_id !== policyId
+    || attempt.outcome !== 'rejected' || attempt.retryable !== true || attempt.native_credential_count !== 1
+    || !['nonce_sha256', 'submission_digest', 'vp_token_sha256'].every((key) => hash(attempt[key]))
+    || typeof attempt.observed_at !== 'string' || attempt.observed_at.length > 64 || !Number.isFinite(Date.parse(attempt.observed_at))
+    || auth?.format !== 'mso_mdoc' || auth.document_count !== 1
+    || typeof auth.document_type !== 'string' || !auth.document_type || auth.document_type.length > 256 || /[\x00-\x1f\x7f]/.test(auth.document_type)
+    || !['issuer_signature_valid', 'certificate_trust_passed', 'device_authentication_valid'].every((key) => typeof auth[key] === 'boolean')
+    || !Array.isArray(auth.certificate_trust_failures) || auth.certificate_trust_failures.length > 3
+    || new Set(auth.certificate_trust_failures).size !== auth.certificate_trust_failures.length
+    || !auth.certificate_trust_failures.every((value) => failures.includes(value))
+    || (auth.issuer_certificate_sha256 != null && !hash(auth.issuer_certificate_sha256))) return null;
+  let reason = 'The presentation was not accepted.';
+  if (auth.issuer_signature_valid && auth.device_authentication_valid && !auth.certificate_trust_passed
+    && auth.certificate_trust_failures.includes('CERTIFICATE_CHAIN_REJECTED')) {
+    reason = 'The issuer certificate was not accepted by this verifier.';
+  } else if (!auth.issuer_signature_valid) reason = 'The credential signature could not be verified.';
+  else if (!auth.device_authentication_valid) reason = 'The wallet proof could not be verified.';
+  else if (!auth.certificate_trust_passed) reason = 'Issuer trust could not be established.';
+  return {reason, submissionDigest: attempt.submission_digest,
+    issuerCertificateSha256: auth.issuer_signature_valid ? auth.issuer_certificate_sha256 : null};
+}
+
+export function PresentationAttemptFeedback({ attempt }) {
+  if (!attempt) return null;
+  return (
+    <Alert severity="warning" data-testid="presentation-attempt-rejected" sx={{ mb: 2 }}>
+      <Typography variant="body2">{attempt.reason} You can try another credential.</Typography>
+      <Box component="details" sx={{ mt: 1 }}>
+        <Box component="summary" sx={{ cursor: 'pointer' }}>Verification details</Box>
+        <Typography variant="caption" component="p" sx={{ overflowWrap: 'anywhere' }}>
+          Submission fingerprint: {attempt.submissionDigest}
+        </Typography>
+        {attempt.issuerCertificateSha256 && <Typography variant="caption" component="p" sx={{ overflowWrap: 'anywhere' }}>
+          Issuer certificate fingerprint: {attempt.issuerCertificateSha256}
+        </Typography>}
+      </Box>
+    </Alert>
+  );
+}
+
 function firstPresent(...values) {
   return values.find((value) => {
     if (value === undefined || value === null) return false;

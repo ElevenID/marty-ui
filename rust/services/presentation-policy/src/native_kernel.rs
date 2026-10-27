@@ -433,25 +433,29 @@ fn project_mdoc_result(
     result: MdocPresentationVerificationResult,
     context: &CredentialVerificationContext,
 ) -> Result<CredentialVerificationEvidence, PresentationVerificationError> {
+    let diagnostic = rejected_mdoc_diagnostic(&result);
     let authentication_valid = result.issuer_signature_valid
         && result.issuer_trusted
         && result.device_authentication_valid;
     let Some(document) = authenticated_mdoc_document(&result) else {
-        return Ok(rejected_mdoc(result.error.as_deref().unwrap_or(
-            if authentication_valid {
+        let mut rejected =
+            rejected_mdoc(result.error.as_deref().unwrap_or(if authentication_valid {
                 "Authenticated mdoc evidence is incomplete"
             } else {
                 "mDoc authentication failed"
-            },
-        )));
+            }));
+        rejected.mdoc_authentication_diagnostic = diagnostic;
+        return Ok(rejected);
     };
     if !authentication_valid {
-        return Ok(rejected_mdoc(
+        let mut rejected = rejected_mdoc(
             result
                 .error
                 .as_deref()
                 .unwrap_or("mDoc authentication failed"),
-        ));
+        );
+        rejected.mdoc_authentication_diagnostic = diagnostic;
+        return Ok(rejected);
     }
     let claims = disclosed_claims(mdoc_bytes)
         .map_err(|_| invalid_native("mDoc claim extraction rejected authenticated CBOR"))?
@@ -470,6 +474,47 @@ fn project_mdoc_result(
     let mut evidence = project_authenticated_mdoc(document, claims, context);
     evidence.credential_status_ids.push(reference.to_string());
     Ok(evidence)
+}
+
+fn rejected_mdoc_diagnostic(
+    result: &MdocPresentationVerificationResult,
+) -> Option<marty_oid4vp_contract::MdocAuthenticationDiagnosticV1> {
+    use marty_oid4vp_contract::{
+        CertificateTrustFailure, MdocAuthenticationDiagnosticV1, MdocDiagnosticFormat,
+    };
+    use marty_verification::mdoc::MdocCertificateTrustFailure as CoreFailure;
+    // Count ALL documents, including those that failed authentication. One valid
+    // MSO alongside a second invalid document must not inherit its fingerprint.
+    if !result.issuer_signature_valid
+        || (result.issuer_trusted && result.device_authentication_valid)
+    {
+        return None;
+    }
+    let document = authenticated_mdoc_document(result)?;
+    let diagnostic = MdocAuthenticationDiagnosticV1 {
+        format: MdocDiagnosticFormat::MsoMdoc,
+        document_count: u32::try_from(result.document_types.len()).ok()?,
+        document_type: document.document_type.clone(),
+        issuer_signature_valid: result.issuer_signature_valid,
+        certificate_trust_passed: result.issuer_trusted,
+        device_authentication_valid: result.device_authentication_valid,
+        certificate_trust_failures: result
+            .certificate_trust_failures
+            .iter()
+            .map(|failure| match failure {
+                CoreFailure::MissingTrustAnchors => CertificateTrustFailure::MissingTrustAnchors,
+                CoreFailure::InvalidTrustConfiguration => {
+                    CertificateTrustFailure::InvalidTrustConfiguration
+                }
+                CoreFailure::CertificateChainRejected => {
+                    CertificateTrustFailure::CertificateChainRejected
+                }
+            })
+            .collect(),
+        issuer_certificate_sha256: document.issuer_certificate_sha256.clone(),
+    };
+    diagnostic.validate().ok()?;
+    Some(diagnostic)
 }
 
 fn project_authenticated_mdoc(
@@ -1845,6 +1890,52 @@ mod tests {
             assert!(evidence.verified);
             assert_eq!(evidence.credential_status_ids, [expected.to_string()]);
         }
+        let foreign: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/presentation-mdoc-lifecycle-behavior.json"
+        ))
+        .unwrap();
+        let result = verify_mdoc_presentation(
+            &selective_bytes,
+            &transcript,
+            &[],
+            &[foreign["certificate_pem"].as_str().unwrap().to_owned()],
+        );
+        assert!(result.issuer_signature_valid && result.device_authentication_valid);
+        assert!(!result.issuer_trusted);
+        let mut ambiguous = result.clone();
+        ambiguous
+            .document_types
+            .push("second.invalid.document".into());
+        assert_eq!(ambiguous.document_evidence.len(), 1);
+        assert!(rejected_mdoc_diagnostic(&ambiguous).is_none());
+        let denied = project_mdoc_result(&selective_bytes, result, &verification_context).unwrap();
+        assert!(!denied.verified);
+        assert!(
+            denied.claims.is_empty()
+                && denied.issuer_id.is_none()
+                && denied.credential_status_ids.is_empty()
+        );
+        let diagnostic = denied.mdoc_authentication_diagnostic.unwrap();
+        assert!(diagnostic.issuer_signature_valid && diagnostic.device_authentication_valid);
+        assert!(!diagnostic.certificate_trust_passed);
+        assert_eq!(
+            diagnostic.certificate_trust_failures,
+            [marty_oid4vp_contract::CertificateTrustFailure::CertificateChainRejected]
+        );
+        let mut corrupt: isomdl::definitions::device_response::DeviceResponse =
+            isomdl::cbor::from_slice(&selective_bytes).unwrap();
+        let mut documents = corrupt.documents.take().unwrap().into_inner();
+        documents[0].issuer_signed.issuer_auth.signature[0] ^= 1;
+        corrupt.documents = Some(documents.try_into().unwrap());
+        let corrupted = isomdl::cbor::to_vec(&corrupt).unwrap();
+        let result = verify_mdoc_presentation(
+            &corrupted,
+            &transcript,
+            &[],
+            std::slice::from_ref(&certificate),
+        );
+        assert!(!result.issuer_signature_valid);
+        assert!(rejected_mdoc_diagnostic(&result).is_none());
         let selective_claims = disclosed_claims(&selective_bytes).unwrap();
         assert_eq!(selective_claims["given_name"], "Ada");
         assert!(selective_claims.get("family_name").is_none());
@@ -1854,6 +1945,9 @@ mod tests {
             verify_mdoc_presentation(&selective_bytes, &wrong_transcript, &[], &[certificate]);
         assert!(result.issuer_signature_valid);
         assert!(!result.device_authentication_valid);
+        let diagnostic = rejected_mdoc_diagnostic(&result).unwrap();
+        assert!(diagnostic.issuer_signature_valid && diagnostic.certificate_trust_passed);
+        assert!(!diagnostic.device_authentication_valid);
         let denied = project_mdoc_result(&selective_bytes, result, &verification_context).unwrap();
         assert!(!denied.verified);
         assert!(denied.credential_status_ids.is_empty());

@@ -584,6 +584,16 @@ async fn evaluate_submission(
             commit_verification(state, &finalization, permit_terminal_replay).await
         }
         PreparedVerificationSubmission::Retryable(response) => Ok(response),
+        PreparedVerificationSubmission::RetryableSnapshot(snapshot) => {
+            commit_request_snapshot(
+                state,
+                &snapshot.instance,
+                snapshot.expected_status,
+                snapshot.expected_updated_at,
+            )
+            .await?;
+            Ok(snapshot.response)
+        }
         PreparedVerificationSubmission::Expired(expired) => {
             persist_expired(state, &expired, expected_status, expected_updated_at).await?;
             Err(FlowHttpError::new(
