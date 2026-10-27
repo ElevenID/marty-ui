@@ -97,6 +97,7 @@ cd ..
 11. Start the stack:
 
 ```bash
+python scripts/check-selfhost-production.py --env-file .env.selfhost.production.local --required-secrets-only
 docker compose --env-file .env.selfhost.production.local -f docker-compose.selfhost.prod.yml up -d --build
 ```
 

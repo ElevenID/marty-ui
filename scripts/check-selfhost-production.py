@@ -172,7 +172,7 @@ def get_compose_services(env_file: Path, compose_file: Path) -> list[dict[str, A
     return parse_compose_ps_output(result.stdout)
 
 
-def catalog_lines(*args: str) -> list[str]:
+def catalog_lines(*args: str, offline: bool = False) -> list[str]:
     try:
         command = operator_command(REPO_ROOT, *args)
     except RuntimeError as error:
@@ -180,16 +180,17 @@ def catalog_lines(*args: str) -> list[str]:
     result = subprocess.run(
         command,
         check=False, capture_output=True, text=True, cwd=REPO_ROOT,
+        env={**os.environ, "CARGO_NET_OFFLINE": "true"} if offline else None,
     )
     if result.returncode != 0:
         raise CheckError(result.stderr.strip() or "Deployment catalog command failed.")
     return result.stdout.splitlines()
 
 
-def validate_required_secret_files(secret_dir: Path, stack_name: str) -> str:
+def validate_required_secret_files(secret_dir: Path, stack_name: str, *, offline: bool = False) -> str:
     checked: list[str] = []
-    ids = catalog_lines("secrets", stack_name)
-    file_names = catalog_lines("secrets", stack_name, "--field", "compose_secret")
+    ids = catalog_lines("secrets", stack_name, offline=offline)
+    file_names = catalog_lines("secrets", stack_name, "--field", "compose_secret", offline=offline)
     for secret_id, compose_secret in zip(ids, file_names, strict=True):
         file_name = compose_secret or secret_id
         read_required_secret(secret_dir / file_name, secret_id)
@@ -1306,6 +1307,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--env-file", default=str(REPO_ROOT / ".env.selfhost.production.local"))
     parser.add_argument("--prod-compose-file", default=str(REPO_ROOT / "docker-compose.selfhost.prod.yml"))
     parser.add_argument("--openbao-compose-file", default=str(REPO_ROOT / "docker-compose.selfhost.openbao.yml"))
+    parser.add_argument("--required-secrets-only", action="store_true",
+                        help="Check required self-host secret files before Docker Compose creates mounts.")
     return parser
 
 
@@ -1325,6 +1328,14 @@ def main() -> int:
     if not secret_dir_value:
         raise SystemExit("SELFHOST_SECRET_DIR is missing from the self-host env file.")
     secret_dir = Path(secret_dir_value).expanduser().resolve()
+    if args.required_secrets_only:
+        try:
+            detail = validate_required_secret_files(secret_dir, "selfhost-production", offline=True)
+        except CheckError as exc:
+            print(f"[FAIL] selfhost-required-secrets: {exc}")
+            return 1
+        print(f"[OK] selfhost-required-secrets: {detail}")
+        return 0
     catalog_lines("validate")
 
     compose_config_results = [
