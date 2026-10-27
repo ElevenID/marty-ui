@@ -153,6 +153,11 @@ pub fn key_purposes() -> Vec<KeyPurpose> {
             credential_formats: &["jwt_vc_json", "dc+sd-jwt", "ldp_vc"],
         },
         KeyPurpose {
+            id: "mdoc_iaca",
+            allowed_algorithms: &["ES256"],
+            credential_formats: &["mso_mdoc"],
+        },
+        KeyPurpose {
             id: "mdoc_dsc",
             allowed_algorithms: EC_AND_EDDSA,
             credential_formats: &["mso_mdoc", "zk_mdoc"],
@@ -205,7 +210,9 @@ pub use marty_managed_key_reference::MANAGED_KEY_PREFIXES;
 pub fn managed_key_prefix_for_purpose(purpose: &str) -> Option<&'static str> {
     match purpose {
         "vc_jwt_issuer" | "jwks_signing" => Some("cred-issuer-"),
-        "mdoc_dsc" | "x509_doc_signer" | "vdsnc_signing" | "csca" => Some("cred-dsc-"),
+        "mdoc_iaca" | "mdoc_dsc" | "x509_doc_signer" | "vdsnc_signing" | "csca" => {
+            Some("cred-dsc-")
+        }
         "lti_tool_signing" => Some("lti-tool-"),
         "oid4vp_request_signing" => Some("oid4vp-verifier-"),
         "holder_binding" => Some("cred-holder-"),
@@ -224,7 +231,13 @@ pub fn managed_key_purposes(reference: &str) -> &'static [&'static str] {
     } else if reference.starts_with("lti-tool-") {
         &["lti_tool_signing"]
     } else if reference.starts_with("cred-dsc-") {
-        &["mdoc_dsc", "x509_doc_signer", "vdsnc_signing", "csca"]
+        &[
+            "mdoc_iaca",
+            "mdoc_dsc",
+            "x509_doc_signer",
+            "vdsnc_signing",
+            "csca",
+        ]
     } else if reference.starts_with("cred-issuer-") {
         &["vc_jwt_issuer", "jwks_signing"]
     } else {

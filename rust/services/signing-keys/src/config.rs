@@ -31,6 +31,7 @@ pub struct Config {
     pub dsc_issue_gateway_key: Option<String>,
     pub csca_issue_gateway_key: Option<String>,
     pub beta_csca_issuance_enabled: bool,
+    pub mdoc_certificates: crate::mdoc_certificate::MdocCertificateOptions,
     pub registry_redis_url: String,
     pub bao_addr: Option<String>,
     pub bao_token: Option<String>,
@@ -309,6 +310,57 @@ impl Config {
         if sign_grant_verify_token_file.is_some() && bao_addr.is_none() {
             return Err("SIGNING_KEYS_GRANT_VERIFY_TOKEN_FILE requires BAO_ADDR".into());
         }
+        let mdoc_iaca_key = secret_value(values, "SIGNING_KEYS_MDOC_IACA_ISSUE_GATEWAY_KEY")?;
+        let mdoc_dsc_key = secret_value(values, "SIGNING_KEYS_MDOC_DSC_ISSUE_GATEWAY_KEY")?;
+        for (name, key) in [
+            (
+                "SIGNING_KEYS_MDOC_IACA_ISSUE_GATEWAY_KEY",
+                mdoc_iaca_key.as_deref(),
+            ),
+            (
+                "SIGNING_KEYS_MDOC_DSC_ISSUE_GATEWAY_KEY",
+                mdoc_dsc_key.as_deref(),
+            ),
+        ] {
+            if value(values, name).is_some() && value(values, &format!("{name}_FILE")).is_some() {
+                return Err(format!("{name} requires exactly one secret source"));
+            }
+            if let Some(key) = key {
+                if key.len() < 32
+                    || [
+                        Some(internal_api_key.as_str()),
+                        Some(service_sign_gateway_key.as_str()),
+                        Some(issuer_sign_key.as_str()),
+                        dsc_issue_gateway_key.as_deref(),
+                        csca_issue_gateway_key.as_deref(),
+                        integration_secret_key.as_deref(),
+                        holder_device_key.as_deref(),
+                        bao_token.as_deref(),
+                    ]
+                    .contains(&Some(key))
+                    || values.iter().any(|(other, value)| {
+                        other != name && other != &format!("{name}_FILE") && value.contains(key)
+                    })
+                {
+                    return Err(format!(
+                        "{name} must be distinct and at least 32 characters"
+                    ));
+                }
+            }
+        }
+        if mdoc_iaca_key.is_some() && mdoc_iaca_key == mdoc_dsc_key {
+            return Err(
+                "MDOC authority and document-signer operator credentials must differ".into(),
+            );
+        }
+        let mdoc_authorities = crate::mdoc_certificate::MdocCertificateOptions::parse_authorities(
+            value(values, "SIGNING_KEYS_MDOC_CERTIFICATE_AUTHORITIES_JSON").as_deref(),
+        )?;
+        let mdoc_certificates = crate::mdoc_certificate::MdocCertificateOptions {
+            iaca_gateway_key: mdoc_iaca_key,
+            dsc_gateway_key: mdoc_dsc_key,
+            authorities: mdoc_authorities,
+        };
         Ok(Self {
             http_addr: SocketAddr::from(([0, 0, 0, 0], port)),
             integration_secret_tls,
@@ -322,6 +374,7 @@ impl Config {
             dsc_issue_gateway_key,
             csca_issue_gateway_key,
             beta_csca_issuance_enabled,
+            mdoc_certificates,
             registry_redis_url: value(values, "SIGNING_KEYS_REDIS_URL")
                 .unwrap_or_else(|| "redis://localhost:6379/2".into()),
             bao_addr,

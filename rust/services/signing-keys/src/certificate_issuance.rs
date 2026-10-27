@@ -118,7 +118,7 @@ pub fn certificate_country(certificate_pem: &str) -> Option<String> {
     country_from_name(&certificate.tbs_certificate.subject)
 }
 
-fn country_from_name(name: &Name) -> Option<String> {
+pub(crate) fn country_from_name(name: &Name) -> Option<String> {
     let mut country = None;
     for rdn in &name.0 {
         for attribute in rdn.0.iter() {
@@ -518,6 +518,70 @@ pub fn prepare_dsc(
     })
 }
 
+/// Governed MDOC authority assembly reuses the existing bounded managed-key CA
+/// constructor. Its profile and public publication metadata are server-owned.
+pub fn prepare_mdoc_iaca(
+    subject: &VerifiedDscSubject,
+    serial_bytes: &[u8],
+    validity_days: u16,
+    now: SystemTime,
+    metadata: &marty_signing_grant::certificate_profile::MdocCertificateMetadata,
+) -> Result<PreparedCscaCertificate, CscaCertificateError> {
+    let mut prepared = prepare_csca(subject, serial_bytes, validity_days, now)?;
+    crate::mdoc_certificate::apply_profile(
+        &mut prepared.tbs,
+        marty_signing_grant::certificate_profile::ManagedCertificateProfile::MdocIaca,
+        metadata,
+    )
+    .map_err(|_| CscaCertificateError::Encoding)?;
+    prepared.tbs_der = prepared
+        .tbs
+        .to_der()
+        .map_err(|_| CscaCertificateError::Encoding)?;
+    Ok(prepared)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_mdoc_dsc(
+    subject: &VerifiedDscSubject,
+    issuer_certificate_pem: &str,
+    issuer_chain_pem: &str,
+    current_issuer_public_jwk: &Value,
+    serial_bytes: &[u8],
+    validity_days: u8,
+    now: SystemTime,
+    metadata: &marty_signing_grant::certificate_profile::MdocCertificateMetadata,
+) -> Result<PreparedDscCertificate, DscCertificateError> {
+    let issuer = Certificate::from_pem(issuer_certificate_pem)
+        .map_err(|_| DscCertificateError::InvalidIssuer)?;
+    crate::mdoc_certificate::validate_profile(
+        &issuer.tbs_certificate,
+        marty_signing_grant::certificate_profile::ManagedCertificateProfile::MdocIaca,
+        Some(metadata),
+    )
+    .map_err(|_| DscCertificateError::InvalidIssuer)?;
+    let mut prepared = prepare_dsc(
+        subject,
+        issuer_certificate_pem,
+        issuer_chain_pem,
+        current_issuer_public_jwk,
+        serial_bytes,
+        validity_days,
+        now,
+    )?;
+    crate::mdoc_certificate::apply_profile(
+        &mut prepared.tbs,
+        marty_signing_grant::certificate_profile::ManagedCertificateProfile::MdocDocumentSigner,
+        metadata,
+    )
+    .map_err(|_| DscCertificateError::Encoding)?;
+    prepared.tbs_der = prepared
+        .tbs
+        .to_der()
+        .map_err(|_| DscCertificateError::Encoding)?;
+    Ok(prepared)
+}
+
 fn verify_issuer_chain(
     leaf: &Certificate,
     leaf_der: &[u8],
@@ -604,6 +668,7 @@ fn ca_key_usage_allows_signing(tbs: &TbsCertificate) -> Result<bool, DscCertific
 #[cfg(test)]
 mod tests {
     use super::*;
+    use const_oid::AssociatedOid;
     use der::EncodePem;
     use std::str::FromStr;
 
@@ -617,6 +682,125 @@ mod tests {
 
     fn jwk_for_spki(spki: &SubjectPublicKeyInfoOwned) -> Value {
         serde_json::to_value(public_key_der_to_jwk(&spki.to_der().unwrap()).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn mdoc_profiles_encode_explicit_purposes_without_changing_passport_der() {
+        use marty_signing_grant::certificate_profile::{
+            ManagedCertificateProfile as P, MdocCertificateMetadata,
+        };
+        use x509_cert::ext::pkix::ExtendedKeyUsage;
+        let metadata = MdocCertificateMetadata {
+            issuer_contact_uri: "https://authority.example/contact".into(),
+            crl_distribution_uri: "https://authority.example/mdoc.crl".into(),
+        };
+        let (subject, issuer_jwk, issuer_pem) = fixture();
+        let now = SystemTime::now();
+        let legacy = prepare_csca(&subject, &[1], 365, now).unwrap();
+        let authority = prepare_mdoc_iaca(&subject, &[1], 365, now, &metadata).unwrap();
+        assert!(legacy.tbs.get::<ExtendedKeyUsage>().unwrap().is_none());
+        assert!(!legacy.tbs.get::<KeyUsage>().unwrap().unwrap().1.crl_sign());
+        assert!(authority
+            .tbs
+            .get::<KeyUsage>()
+            .unwrap()
+            .unwrap()
+            .1
+            .crl_sign());
+        crate::mdoc_certificate::validate_profile(&authority.tbs, P::MdocIaca, Some(&metadata))
+            .unwrap();
+        assert!(crate::mdoc_certificate::validate_profile(
+            &authority.tbs,
+            P::MdocDocumentSigner,
+            Some(&metadata)
+        )
+        .is_err());
+        // Reuse existing public PKI vectors for TBS/profile checks. This does not
+        // pretend that their ICAO signature authenticates a changed mdoc TBS.
+        let mut signer = prepare_dsc(&subject, &issuer_pem, "", &issuer_jwk, &[2], 1, now).unwrap();
+        crate::mdoc_certificate::apply_profile(&mut signer.tbs, P::MdocDocumentSigner, &metadata)
+            .unwrap();
+        let (critical, eku) = signer.tbs.get::<ExtendedKeyUsage>().unwrap().unwrap();
+        assert!(critical);
+        assert_eq!(eku.0, vec![crate::mdoc_certificate::MDL_DOCUMENT_SIGNER]);
+        for oid in [KeyUsage::OID, ExtendedKeyUsage::OID] {
+            let mut wrong = signer.tbs.clone();
+            wrong
+                .extensions
+                .as_mut()
+                .unwrap()
+                .iter_mut()
+                .find(|e| e.extn_id == oid)
+                .unwrap()
+                .critical = false;
+            assert!(crate::mdoc_certificate::validate_profile(
+                &wrong,
+                P::MdocDocumentSigner,
+                Some(&metadata)
+            )
+            .is_err());
+        }
+        let mut duplicate = signer.tbs.clone();
+        duplicate.extensions.as_mut().unwrap().push(
+            signer
+                .tbs
+                .extensions
+                .as_ref()
+                .unwrap()
+                .iter()
+                .find(|e| e.extn_id == ExtendedKeyUsage::OID)
+                .unwrap()
+                .clone(),
+        );
+        assert!(crate::mdoc_certificate::validate_profile(
+            &duplicate,
+            P::MdocDocumentSigner,
+            Some(&metadata)
+        )
+        .is_err());
+        let mut changed = metadata.clone();
+        changed.crl_distribution_uri = "https://other.example/mdoc.crl".into();
+        assert!(crate::mdoc_certificate::validate_profile(
+            &signer.tbs,
+            P::MdocDocumentSigner,
+            Some(&changed)
+        )
+        .is_err());
+        assert!(prepare_mdoc_dsc(
+            &subject,
+            &issuer_pem,
+            "",
+            &issuer_jwk,
+            &[2],
+            1,
+            now,
+            &metadata
+        )
+        .is_err());
+        let mut changed_certificate = Certificate::from_pem(&issuer_pem).unwrap();
+        changed_certificate.tbs_certificate = authority.tbs.clone();
+        let changed_certificate = changed_certificate
+            .to_pem(der::pem::LineEnding::LF)
+            .unwrap();
+        assert!(crate::mdoc_certificate::validate_attachment(
+            &changed_certificate,
+            "",
+            P::MdocIaca
+        )
+        .is_err());
+        assert!(crate::mdoc_certificate::validate_attachment(
+            &issuer_pem,
+            "",
+            P::MdocDocumentSigner
+        )
+        .is_err());
+        assert!(crate::mdoc_certificate::validate_attachment(
+            &issuer_pem,
+            "PRIVATE KEY",
+            P::MdocIaca
+        )
+        .is_err());
+        assert!(authority.finish(&[0; 64]).is_err());
     }
 
     #[test]

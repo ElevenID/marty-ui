@@ -326,15 +326,74 @@ impl DocumentStore {
         key_reference: &str,
         request: InspectCertificateRequest,
     ) -> Result<StoredCertificate, DocumentError> {
-        let attachment = checked_certificate(request)?;
+        self.store_profile_certificate_inner(
+            organization_id,
+            profile_id,
+            key_reference,
+            request,
+            None,
+        )
+        .await
+    }
+
+    pub async fn store_mdoc_profile_certificate(
+        &self,
+        organization_id: &str,
+        profile_id: &str,
+        key_reference: &str,
+        request: InspectCertificateRequest,
+        policy: crate::mdoc_certificate::MdocAttachmentPolicy,
+    ) -> Result<StoredCertificate, DocumentError> {
+        self.store_profile_certificate_inner(
+            organization_id,
+            profile_id,
+            key_reference,
+            request,
+            Some(policy),
+        )
+        .await
+    }
+
+    async fn store_profile_certificate_inner(
+        &self,
+        organization_id: &str,
+        profile_id: &str,
+        key_reference: &str,
+        request: InspectCertificateRequest,
+        policy: Option<crate::mdoc_certificate::MdocAttachmentPolicy>,
+    ) -> Result<StoredCertificate, DocumentError> {
+        let mut attachment = checked_certificate(request)?;
+        if let Some(policy) = policy {
+            attachment.x5c = match policy {
+                crate::mdoc_certificate::MdocAttachmentPolicy::GovernedV1(profile) => {
+                    crate::mdoc_certificate::validate_attachment(
+                        &attachment.cert_pem,
+                        &attachment.cert_chain_pem,
+                        profile,
+                    )
+                }
+                crate::mdoc_certificate::MdocAttachmentPolicy::SignedPublicImport => {
+                    crate::mdoc_certificate::validate_public_import(
+                        &attachment.cert_pem,
+                        &attachment.cert_chain_pem,
+                    )
+                }
+            }
+            .map_err(|error| DocumentError::Invalid(error.into()))?;
+        }
         self.mutate_certificates(organization_id, |mut document| {
-            let issued = document
-                .get("passport_dsc_issuance")
-                .and_then(Value::as_object)
-                .is_some_and(|receipts| {
-                    receipts.values().any(|receipt| {
-                        receipt.get("dsc_profile_id").and_then(Value::as_str) == Some(profile_id)
-                    })
+            let issued = ["passport_dsc_issuance", "mdoc_dsc_issuance"]
+                .iter()
+                .any(|kind| {
+                    document
+                        .get(*kind)
+                        .and_then(Value::as_object)
+                        .is_some_and(|receipts| {
+                            receipts.values().any(|receipt| {
+                                receipt.get("dsc_profile_id").and_then(Value::as_str)
+                                    == Some(profile_id)
+                            })
+                        })
                 });
             if issued {
                 let prior = document
@@ -361,20 +420,26 @@ impl DocumentStore {
                 }
                 return Ok((document, attachment.clone()));
             }
-            insert_certificate(
-                &mut document,
-                "profiles",
-                profile_id,
-                json!({
-                    "cert_pem": attachment.cert_pem,
-                    "cert_chain_pem": attachment.cert_chain_pem,
-                    "cert_expires_at": attachment.cert_expires_at,
-                    "updated_at": attachment.updated_at,
-                    "x5c": attachment.x5c,
-                    "public_jwk": attachment.public_jwk,
-                    "signing_key_reference": key_reference,
-                }),
-            )?;
+            let mut stored = json!({
+                "cert_pem": attachment.cert_pem,
+                "cert_chain_pem": attachment.cert_chain_pem,
+                "cert_expires_at": attachment.cert_expires_at,
+                "updated_at": attachment.updated_at,
+                "x5c": attachment.x5c,
+                "public_jwk": attachment.public_jwk,
+                "signing_key_reference": key_reference,
+            });
+            if let Some(policy) = policy {
+                match policy {
+                    crate::mdoc_certificate::MdocAttachmentPolicy::GovernedV1(profile) => {
+                        stored["certificate_profile"] = json!(profile);
+                    }
+                    crate::mdoc_certificate::MdocAttachmentPolicy::SignedPublicImport => {
+                        stored["mdoc_import_policy"] = json!("signed_public_chain");
+                    }
+                }
+            }
+            insert_certificate(&mut document, "profiles", profile_id, stored)?;
             Ok((document, attachment.clone()))
         })
         .await

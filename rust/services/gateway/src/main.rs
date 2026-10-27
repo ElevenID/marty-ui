@@ -181,6 +181,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .with_issuer_sign_key(config.issuer_sign_key.clone())?
         .with_dsc_issue_gateway_key(config.dsc_issue_gateway_key.clone())?
         .with_csca_issue_gateway_key(config.csca_issue_gateway_key.clone())?
+        .with_mdoc_certificate_keys(
+            config.mdoc_iaca_issue_gateway_key.clone(),
+            config.mdoc_dsc_issue_gateway_key.clone(),
+        )?
         .with_passport_native_gateway(
             config.passport_native_gateway_enabled,
             config.passport_tenant_keys.clone(),

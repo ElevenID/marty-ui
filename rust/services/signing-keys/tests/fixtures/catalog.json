@@ -2,6 +2,7 @@
   "purposes": {
     "purposes": [
       {"id":"vc_jwt_issuer","allowed_algorithms":["ES256","ES384","EdDSA","RS256"],"credential_formats":["jwt_vc_json","dc+sd-jwt","ldp_vc"]},
+      {"id":"mdoc_iaca","allowed_algorithms":["ES256"],"credential_formats":["mso_mdoc"]},
       {"id":"mdoc_dsc","allowed_algorithms":["ES256","ES384","EdDSA"],"credential_formats":["mso_mdoc","zk_mdoc"]},
       {"id":"x509_doc_signer","allowed_algorithms":["ES256","ES384","EdDSA","RS256"],"credential_formats":["mso_mdoc","zk_mdoc","icao_emrtd"]},
       {"id":"holder_binding","allowed_algorithms":["ES256","EdDSA"],"credential_formats":["mso_mdoc","zk_mdoc","dc+sd-jwt"]},

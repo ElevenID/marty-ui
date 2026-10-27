@@ -17,8 +17,8 @@
       "plan": "free",
       "is_discoverable": true,
       "owner_status": "active",
-      "permission_count": 107,
-      "required_permission_keys": ["audit:ingest"]
+      "permission_count": 109,
+      "required_permission_keys": ["audit:ingest", "mdoc-certificate:issue-iaca", "mdoc-certificate:issue"]
     }
   },
   "update": {

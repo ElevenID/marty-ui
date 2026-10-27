@@ -3,6 +3,7 @@
 //! the existing managed profile and registry documents.
 
 use chrono::Utc;
+use marty_signing_grant::certificate_profile::CertificateFamily;
 use redis::{aio::ConnectionManager, AsyncCommands};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -33,9 +34,11 @@ pub enum DscIssuanceStoreError {
 #[derive(Clone)]
 pub struct DscIssuanceStore {
     connection: ConnectionManager,
+    family: marty_signing_grant::certificate_profile::CertificateFamily,
 }
 
 pub struct DscClaim {
+    family: marty_signing_grant::certificate_profile::CertificateFamily,
     organization_id: String,
     receipt_id: String,
     pending_key: String,
@@ -72,7 +75,36 @@ pub struct DscIssuanceSnapshot {
 
 impl DscIssuanceStore {
     pub fn from_connection(connection: ConnectionManager) -> Self {
-        Self { connection }
+        Self {
+            connection,
+            family: marty_signing_grant::certificate_profile::CertificateFamily::Icao,
+        }
+    }
+
+    pub fn for_family(
+        &self,
+        family: marty_signing_grant::certificate_profile::CertificateFamily,
+    ) -> Self {
+        Self {
+            connection: self.connection.clone(),
+            family,
+        }
+    }
+
+    fn receipts(&self) -> &'static str {
+        match self.family {
+            marty_signing_grant::certificate_profile::CertificateFamily::Icao => RECEIPTS,
+            marty_signing_grant::certificate_profile::CertificateFamily::Mdoc => {
+                "mdoc_dsc_issuance"
+            }
+        }
+    }
+
+    fn serials(&self) -> &'static str {
+        match self.family {
+            marty_signing_grant::certificate_profile::CertificateFamily::Icao => SERIALS,
+            marty_signing_grant::certificate_profile::CertificateFamily::Mdoc => "mdoc_dsc_serials",
+        }
     }
 
     pub async fn begin(
@@ -96,8 +128,12 @@ impl DscIssuanceStore {
                     .expect("idempotency tuple serializes")
             )
         );
+        let pending_prefix = match self.family {
+            marty_signing_grant::certificate_profile::CertificateFamily::Icao => "passport-dsc",
+            marty_signing_grant::certificate_profile::CertificateFamily::Mdoc => "mdoc-dsc",
+        };
         let pending_key = format!(
-            "signing:passport-dsc-pending:{}:{}:{receipt_id}",
+            "signing:{pending_prefix}-pending:{}:{}:{receipt_id}",
             organization_id.len(),
             organization_id
         );
@@ -136,6 +172,7 @@ impl DscIssuanceStore {
             return Ok(BeginDscIssuance::Pending);
         }
         let claim = DscClaim {
+            family: self.family,
             organization_id: organization_id.into(),
             receipt_id,
             pending_key,
@@ -170,7 +207,7 @@ impl DscIssuanceStore {
         let document: Value = serde_json::from_str(&payload)
             .map_err(|_| DscIssuanceStoreError::Corrupt("certificate document"))?;
         if !document.is_object()
-            || [RECEIPTS, SERIALS]
+            || [self.receipts(), self.serials()]
                 .iter()
                 .any(|field| document.get(*field).is_some_and(|value| !value.is_object()))
         {
@@ -178,7 +215,7 @@ impl DscIssuanceStore {
                 "certificate issuance ledger",
             ));
         }
-        let Some(receipt) = document.pointer(&format!("/{RECEIPTS}/{receipt_id}")) else {
+        let Some(receipt) = document.pointer(&format!("/{}/{receipt_id}", self.receipts())) else {
             return Ok(None);
         };
         if receipt.get("request_digest").and_then(Value::as_str) != Some(digest) {
@@ -202,7 +239,7 @@ impl DscIssuanceStore {
         let keys = [
             profiles::storage_key(organization_id),
             registry::storage_key(organization_id),
-            csca_lifecycle::csca_lifecycle_storage_key(organization_id),
+            csca_lifecycle::authority_lifecycle_storage_key(organization_id, self.family),
             documents::certificate_storage_key(organization_id),
         ];
         let raw: Vec<Option<String>> = redis::cmd("MGET")
@@ -250,7 +287,7 @@ impl DscIssuanceStore {
         attachment: Value,
         public_result: Value,
     ) -> Result<CommitDscIssuance, DscIssuanceStoreError> {
-        if !lease.covers_organization(&claim.organization_id) {
+        if self.family != claim.family || !lease.covers_organization(&claim.organization_id) {
             return Err(DscIssuanceStoreError::Conflict(
                 "tenant signing lease is unavailable",
             ));
@@ -284,9 +321,10 @@ impl DscIssuanceStore {
                 "public certificate result contains signing coordinates",
             ));
         }
-        if let Some(receipt) = snapshot
-            .certificates
-            .pointer(&format!("/{RECEIPTS}/{}", claim.receipt_id))
+        if let Some(receipt) =
+            snapshot
+                .certificates
+                .pointer(&format!("/{}/{}", self.receipts(), claim.receipt_id))
         {
             if receipt.get("request_digest").and_then(Value::as_str) != Some(&claim.request_digest)
             {
@@ -310,7 +348,7 @@ impl DscIssuanceStore {
             snapshot.certificates.clone()
         };
         if document
-            .get(SERIALS)
+            .get(self.serials())
             .and_then(Value::as_object)
             .is_some_and(|serials| serials.contains_key(&serial_id))
         {
@@ -350,19 +388,19 @@ impl DscIssuanceStore {
             "csca_profile_id": csca_profile_id,
             "csca_certificate_id": csca_certificate_id,
             "actor_id": actor_id,
-            "authorized_permission": "passport-certificate:issue",
+            "authorized_permission": match self.family { CertificateFamily::Icao => "passport-certificate:issue", CertificateFamily::Mdoc => "mdoc-certificate:issue" },
             "issued_at": Utc::now().to_rfc3339(),
             "serial": serial_hex,
             "result": public_result,
         });
         object
-            .entry(RECEIPTS)
+            .entry(self.receipts())
             .or_insert_with(|| json!({}))
             .as_object_mut()
             .ok_or(DscIssuanceStoreError::Corrupt("issuance receipts"))?
             .insert(claim.receipt_id.clone(), receipt);
         object
-            .entry(SERIALS)
+            .entry(self.serials())
             .or_insert_with(|| json!({}))
             .as_object_mut()
             .ok_or(DscIssuanceStoreError::Corrupt("issuance serials"))?
@@ -391,8 +429,9 @@ impl DscIssuanceStore {
         invocation
             .key(profiles::storage_key(&claim.organization_id))
             .key(registry::storage_key(&claim.organization_id))
-            .key(csca_lifecycle::csca_lifecycle_storage_key(
+            .key(csca_lifecycle::authority_lifecycle_storage_key(
                 &claim.organization_id,
+                self.family,
             ))
             .key(documents::certificate_storage_key(&claim.organization_id))
             .key(lease.redis_key())
@@ -439,6 +478,11 @@ impl DscIssuanceStore {
     }
 
     pub async fn release(&self, claim: &DscClaim) -> Result<(), DscIssuanceStoreError> {
+        if self.family != claim.family {
+            return Err(DscIssuanceStoreError::Conflict(
+                "certificate family mismatch",
+            ));
+        }
         let mut connection = self.connection.clone();
         let pending =
             json!({"owner": claim.owner, "request_digest": claim.request_digest}).to_string();
@@ -795,6 +839,140 @@ mod tests {
             )
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    #[ignore = "requires disposable MARTY_TEST_REDIS_URL on loopback DB >= 13"]
+    async fn mdoc_family_cannot_replay_or_commit_passport_certificate_authority() {
+        let registry = RegistryStore::connect(&disposable_redis_url())
+            .await
+            .unwrap();
+        let mut connection = registry.connection();
+        let passport = DscIssuanceStore::from_connection(connection.clone());
+        let mdoc = passport.for_family(CertificateFamily::Mdoc);
+        let tenant = format!("test-mdoc-family-{}", Uuid::new_v4().simple());
+        let profiles = ProfileStore::from_connection(connection.clone());
+        for id in ["mdoc-dsc", "mdoc-iaca"] {
+            profiles
+                .put(&tenant, id, json!({"id":id,"organization_id":tenant}))
+                .await
+                .unwrap();
+        }
+        connection
+            .set::<_, _, ()>(
+                registry::storage_key(&tenant),
+                json!({"services":[]}).to_string(),
+            )
+            .await
+            .unwrap();
+        connection
+            .set::<_, _, ()>(
+                csca_lifecycle::authority_lifecycle_storage_key(&tenant, CertificateFamily::Mdoc),
+                json!({"revision":1}).to_string(),
+            )
+            .await
+            .unwrap();
+        let claim = match mdoc
+            .begin(&tenant, "same-key", "mdoc-digest")
+            .await
+            .unwrap()
+        {
+            BeginDscIssuance::Claim(claim) => claim,
+            _ => panic!("must own mdoc claim"),
+        };
+        let passport_claim = match passport
+            .begin(&tenant, "same-key", "passport-digest")
+            .await
+            .unwrap()
+        {
+            BeginDscIssuance::Claim(claim) => claim,
+            _ => panic!("families must not collide"),
+        };
+        assert!(passport.release(&claim).await.is_err());
+        let lease = registry
+            .acquire_rotation_lease(&tenant)
+            .await
+            .unwrap()
+            .unwrap();
+        let snapshot = mdoc.snapshot(&tenant).await.unwrap();
+        assert_eq!(snapshot.lifecycle, json!({"revision":1}));
+        assert!(passport
+            .commit(
+                &claim,
+                &snapshot,
+                &lease,
+                "mdoc-dsc",
+                "mdoc-iaca",
+                "iaca-1",
+                "operator",
+                "01",
+                json!({}),
+                json!({})
+            )
+            .await
+            .is_err());
+        let foreign = registry
+            .acquire_rotation_lease(&format!("foreign-{}", Uuid::new_v4().simple()))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(mdoc
+            .commit(
+                &claim,
+                &snapshot,
+                &foreign,
+                "mdoc-dsc",
+                "mdoc-iaca",
+                "iaca-1",
+                "operator",
+                "01",
+                json!({}),
+                json!({})
+            )
+            .await
+            .is_err());
+        foreign.release().await.unwrap();
+        // These values exercise the ledger only, not a certificate/signature claim.
+        let result = json!({"status":"issued", "certificate_profile":"mdoc_document_signer", "certificate_pem":"ledger-fixture-only"});
+        mdoc.commit(
+            &claim,
+            &snapshot,
+            &lease,
+            "mdoc-dsc",
+            "mdoc-iaca",
+            "iaca-1",
+            "operator",
+            "01",
+            json!({"cert_pem":"ledger-fixture-only"}),
+            result.clone(),
+        )
+        .await
+        .unwrap();
+        assert!(
+            matches!(mdoc.begin(&tenant, "same-key", "mdoc-digest").await.unwrap(), BeginDscIssuance::Completed(value) if value == result)
+        );
+        assert!(mdoc
+            .begin(&tenant, "same-key", "changed-digest")
+            .await
+            .is_err());
+        assert!(passport
+            .completed(&tenant, &passport_claim.receipt_id, "passport-digest")
+            .await
+            .unwrap()
+            .is_none());
+        let stored: String = connection
+            .get(documents::certificate_storage_key(&tenant))
+            .await
+            .unwrap();
+        let stored: Value = serde_json::from_str(&stored).unwrap();
+        assert!(stored.get("passport_dsc_issuance").is_none());
+        assert_eq!(
+            stored["mdoc_dsc_issuance"][&claim.receipt_id]["authorized_permission"],
+            "mdoc-certificate:issue"
+        );
+        passport.release(&passport_claim).await.unwrap();
+        mdoc.release(&claim).await.unwrap();
+        lease.release().await.unwrap();
     }
 
     #[tokio::test]

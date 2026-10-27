@@ -251,6 +251,16 @@ static SPECIAL_RULES: LazyLock<Vec<RouteRule>> = LazyLock::new(|| {
             "passport-certificate",
         ),
         rule(
+            r"^/v1/signing-keys/issuer-identities/mdoc-iaca-self-signed-certificate$",
+            &[("POST", "mdoc-certificate:issue-iaca")],
+            "mdoc-certificate",
+        ),
+        rule(
+            r"^/v1/signing-keys/issuer-identities/mdoc-dsc-certificate$",
+            &[("POST", "mdoc-certificate:issue")],
+            "mdoc-certificate",
+        ),
+        rule(
             r"^/v1/signing-keys(?:/|$)",
             &[
                 ("GET", "signing-key:view"),

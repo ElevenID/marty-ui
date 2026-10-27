@@ -122,6 +122,8 @@ pub struct GatewayRuntimeState {
     pub issuer_sign_key: Option<String>,
     pub dsc_issue_gateway_key: Option<String>,
     pub csca_issue_gateway_key: Option<String>,
+    pub mdoc_iaca_issue_gateway_key: Option<String>,
+    pub mdoc_dsc_issue_gateway_key: Option<String>,
     pub issuance_service_api_key: String,
     pub passport_native_gateway_enabled: bool,
     pub passport_tenant_keys: Option<PassportTenantCredentialSource>,
@@ -238,6 +240,8 @@ impl GatewayRuntimeState {
             issuer_sign_key: None,
             dsc_issue_gateway_key: None,
             csca_issue_gateway_key: None,
+            mdoc_iaca_issue_gateway_key: None,
+            mdoc_dsc_issue_gateway_key: None,
             issuance_service_api_key,
             passport_native_gateway_enabled: false,
             passport_tenant_keys: None,
@@ -359,6 +363,38 @@ impl GatewayRuntimeState {
             }
         }
         self.csca_issue_gateway_key = key;
+        Ok(self)
+    }
+
+    pub fn with_mdoc_certificate_keys(
+        mut self,
+        iaca: Option<String>,
+        dsc: Option<String>,
+    ) -> Result<Self, mmf_platform::PlatformError> {
+        for (key, other) in [(iaca.as_ref(), dsc.as_ref()), (dsc.as_ref(), iaca.as_ref())] {
+            if let Some(key) = key {
+                if key.len() < 32
+                    || [
+                        Some(&self.signing_service_api_key),
+                        Some(&self.issuance_service_api_key),
+                        self.service_sign_gateway_key.as_ref(),
+                        self.issuer_sign_key.as_ref(),
+                        self.service_token.as_ref(),
+                        self.device_registration_gateway_key.as_ref(),
+                        self.dsc_issue_gateway_key.as_ref(),
+                        self.csca_issue_gateway_key.as_ref(),
+                        other,
+                    ]
+                    .contains(&Some(key))
+                {
+                    return Err(mmf_platform::PlatformError::InvalidConfiguration(
+                        "MDOC operator credentials must be distinct and at least 32 bytes".into(),
+                    ));
+                }
+            }
+        }
+        self.mdoc_iaca_issue_gateway_key = iaca;
+        self.mdoc_dsc_issue_gateway_key = dsc;
         Ok(self)
     }
 
@@ -1221,6 +1257,13 @@ async fn proxy_handler(
         && (!state.passport_native_gateway_enabled || state.csca_issue_gateway_key.is_none())
     {
         return detail_response(503, "Beta CSCA issuance authority is unavailable");
+    }
+    if (public_path == "/v1/signing-keys/issuer-identities/mdoc-iaca-self-signed-certificate"
+        && state.mdoc_iaca_issue_gateway_key.is_none())
+        || (public_path == "/v1/signing-keys/issuer-identities/mdoc-dsc-certificate"
+            && state.mdoc_dsc_issue_gateway_key.is_none())
+    {
+        return detail_response(503, "MDOC certificate authority is unavailable");
     }
     let mut gateway_request = GatewayRequest::new(method, &upstream_path, now_ms());
     gateway_request.query = query_pairs(parts.uri.query());
@@ -2635,6 +2678,25 @@ fn proxy_overrides(
             overrides.headers.insert("x-api-key".into(), key.clone());
         }
     }
+    let mdoc_authority = match (path, identity.required_permission.as_deref()) {
+        (
+            "/v1/signing-keys/issuer-identities/mdoc-iaca-self-signed-certificate",
+            Some("mdoc-certificate:issue-iaca"),
+        ) => state.mdoc_iaca_issue_gateway_key.as_ref(),
+        (
+            "/v1/signing-keys/issuer-identities/mdoc-dsc-certificate",
+            Some("mdoc-certificate:issue"),
+        ) => state.mdoc_dsc_issue_gateway_key.as_ref(),
+        _ => None,
+    };
+    if identity.organization_id.is_some()
+        && identity.user_id.is_some()
+        && identity.api_key_id.is_none()
+    {
+        if let Some(key) = mdoc_authority {
+            overrides.headers.insert("x-api-key".into(), key.clone());
+        }
+    }
     let owner = route_ownership(path);
     if requires_gateway_service_token(owner.service) {
         if let Some(service_token) = &state.service_token {
@@ -3806,7 +3868,10 @@ pub async fn authorize_tenant_request(
     let Some(organization_id) = organization_id.and_then(normalize_id) else {
         return if matches!(
             required.permission,
-            "passport-certificate:issue" | "passport-certificate:issue-csca"
+            "passport-certificate:issue"
+                | "passport-certificate:issue-csca"
+                | "mdoc-certificate:issue"
+                | "mdoc-certificate:issue-iaca"
         ) {
             TenantAuthorizationOutcome::Denied(TenantAuthorizationError {
                 status: 403,
@@ -3818,7 +3883,10 @@ pub async fn authorize_tenant_request(
     };
     if matches!(
         required.permission,
-        "passport-certificate:issue" | "passport-certificate:issue-csca"
+        "passport-certificate:issue"
+            | "passport-certificate:issue-csca"
+            | "mdoc-certificate:issue"
+            | "mdoc-certificate:issue-iaca"
     ) && identity
         .filter(|identity| identity.source == AuthenticationSource::Session)
         .and_then(|identity| identity.session_organization_id.as_deref())
@@ -8498,6 +8566,113 @@ mod tests {
             StatusCode::FORBIDDEN
         );
         assert_eq!(recorder.0.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn mdoc_certificates_require_separate_session_authority_and_tenant_binding() {
+        struct MdocOperator;
+        #[async_trait]
+        impl OrganizationMembershipProvider for MdocOperator {
+            async fn get_membership(
+                &self,
+                user_id: &str,
+                organization_id: &str,
+            ) -> Result<Option<OrganizationMembership>, SecurityError> {
+                let mut membership = RuntimeProvider
+                    .get_membership(user_id, organization_id)
+                    .await?;
+                if let Some(membership) = membership.as_mut() {
+                    membership
+                        .permissions
+                        .insert("mdoc-certificate:issue".into());
+                    membership
+                        .permissions
+                        .insert("mdoc-certificate:issue-iaca".into());
+                }
+                Ok(membership)
+            }
+        }
+        for (path, permission, key, iaca) in [
+            (
+                "/v1/signing-keys/issuer-identities/mdoc-iaca-self-signed-certificate",
+                "mdoc-certificate:issue-iaca",
+                "dedicated-mdoc-iaca-credential-0000001",
+                true,
+            ),
+            (
+                "/v1/signing-keys/issuer-identities/mdoc-dsc-certificate",
+                "mdoc-certificate:issue",
+                "dedicated-mdoc-dsc-credential-00000001",
+                false,
+            ),
+        ] {
+            let recorder = Arc::new(ActorRecordingUpstream::default());
+            let body = json!({"organization_id":"org-1"});
+            let request = |org: &str| {
+                Request::post(format!("{path}?organization_id={org}"))
+                    .header("cookie", "sessionId=valid")
+                    .header("content-type", "application/json")
+                    .header("x-required-permission", "passport-certificate:issue")
+                    .header("x-user-id", "forged-user")
+                    .body(Body::from(body.to_string()))
+                    .unwrap()
+            };
+            let mut disabled = runtime_state_with_upstream(Arc::new(NoOwner), recorder.clone());
+            Arc::get_mut(&mut disabled).unwrap().memberships = Arc::new(MdocOperator);
+            assert_eq!(
+                gateway_router(disabled)
+                    .oneshot(request("org-1"))
+                    .await
+                    .unwrap()
+                    .status(),
+                StatusCode::SERVICE_UNAVAILABLE
+            );
+            let mut state = runtime_state_with_upstream(Arc::new(NoOwner), recorder.clone());
+            let mutable = Arc::get_mut(&mut state).unwrap();
+            mutable.memberships = Arc::new(MdocOperator);
+            if iaca {
+                mutable.mdoc_iaca_issue_gateway_key = Some(key.into());
+            } else {
+                mutable.mdoc_dsc_issue_gateway_key = Some(key.into());
+            }
+            let gateway = gateway_router(state);
+            assert_eq!(
+                gateway
+                    .clone()
+                    .oneshot(request("org-1"))
+                    .await
+                    .unwrap()
+                    .status(),
+                StatusCode::OK
+            );
+            assert_eq!(
+                gateway
+                    .clone()
+                    .oneshot(request("org-other"))
+                    .await
+                    .unwrap()
+                    .status(),
+                StatusCode::FORBIDDEN
+            );
+            let api_key = Request::post(path)
+                .header("x-api-key", "passport-gateway-key-org-1")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap();
+            assert_eq!(
+                gateway.oneshot(api_key).await.unwrap().status(),
+                StatusCode::FORBIDDEN
+            );
+            let calls = recorder.0.lock().unwrap();
+            assert_eq!(calls.len(), 1);
+            assert_eq!(calls[0].1.header("x-api-key"), Some(key));
+            assert_eq!(calls[0].1.header("x-user-id"), Some("user-1"));
+            assert_eq!(calls[0].1.header("x-required-permission"), Some(permission));
+            assert!(!marty_api_key_policy::api_key_allowed(
+                permission,
+                &["admin:full".into(), permission.into()]
+            ));
+        }
     }
 
     #[tokio::test]

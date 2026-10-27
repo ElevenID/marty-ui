@@ -14,6 +14,10 @@ use serde_json::{json, Map, Value};
 use crate::issuance_native;
 
 pub const EXPECTED_ROUTE_COUNT: usize = 462;
+const MDOC_CERTIFICATE_PATHS: [&str; 2] = [
+    "/v1/signing-keys/issuer-identities/mdoc-iaca-self-signed-certificate",
+    "/v1/signing-keys/issuer-identities/mdoc-dsc-certificate",
+];
 #[cfg(test)]
 const PHYSICAL_START_EXTENSION_ROUTE_COUNT: usize = 1;
 
@@ -171,6 +175,25 @@ impl GatewayContract {
             })?;
         }
         issuance_native::add_public_native_extensions(&mut table, passport_native)?;
+        for path in MDOC_CERTIFICATE_PATHS {
+            table.add(RouteConfig {
+                name: format!("signing-keys-native:{path}"),
+                pattern: path.into(),
+                match_type: RouteMatchType::Exact,
+                upstream_service: "signing-keys".into(),
+                methods: BTreeSet::from([HttpMethod::Post]),
+                host: None,
+                required_headers: BTreeMap::new(),
+                rewrite_path: None,
+                timeout_ms: 30_000,
+                retries: 2,
+                auth_required: true,
+                authentication_type: AuthenticationType::Jwt,
+                priority: route_priority(path),
+                tags: BTreeSet::from(["native-extension".into(), "proxied".into()]),
+            })?;
+        }
+
         table.add(RouteConfig {
             name: "flow-native:physical-start-intents".into(),
             pattern: "/v1/flows/physical-start-intents".into(),
@@ -1069,6 +1092,7 @@ mod tests {
             EXPECTED_ROUTE_COUNT
                 + issuance_native::NATIVE_EXTENSION_ROUTE_COUNT
                 + PHYSICAL_START_EXTENSION_ROUTE_COUNT
+                + MDOC_CERTIFICATE_PATHS.len()
         );
         assert_eq!(
             route_for(&table, HttpMethod::Get, "/v1/auth/session/validate")
@@ -1291,6 +1315,7 @@ mod tests {
             EXPECTED_ROUTE_COUNT
                 + issuance_native::NATIVE_EXTENSION_ROUTE_COUNT
                 + PHYSICAL_START_EXTENSION_ROUTE_COUNT
+                + MDOC_CERTIFICATE_PATHS.len()
         );
         assert_eq!(
             contract
@@ -1301,6 +1326,7 @@ mod tests {
             EXPECTED_ROUTE_COUNT
                 + issuance_native::NATIVE_EXTENSION_ROUTE_COUNT
                 + PHYSICAL_START_EXTENSION_ROUTE_COUNT
+                + MDOC_CERTIFICATE_PATHS.len()
                 + 3
         );
         let proxy = contract.proxy_route_table().expect("proxy");
@@ -1309,6 +1335,7 @@ mod tests {
             EXPECTED_ROUTE_COUNT
                 + issuance_native::NATIVE_EXTENSION_ROUTE_COUNT
                 + PHYSICAL_START_EXTENSION_ROUTE_COUNT
+                + MDOC_CERTIFICATE_PATHS.len()
                 + 16
         );
         assert_eq!(
@@ -1562,6 +1589,27 @@ mod tests {
         ] {
             assert!(route_ownership(foreign).requires_authentication);
             assert!(!crate::authorization::skips_tenant_authorization(foreign));
+        }
+    }
+
+    #[test]
+    fn managed_mdoc_certificate_routes_are_exact_authenticated_signing_keys_routes() {
+        let contract = GatewayContract::load().unwrap();
+        assert_eq!(contract.routes.len(), EXPECTED_ROUTE_COUNT);
+        for table in [
+            contract.route_table().unwrap(),
+            contract.proxy_route_table().unwrap(),
+        ] {
+            for path in MDOC_CERTIFICATE_PATHS {
+                let matched = route_for(&table, HttpMethod::Post, path).unwrap();
+                assert_eq!(matched.route.pattern, path);
+                assert_eq!(matched.route.upstream_service, "signing-keys");
+                assert!(matched.route.auth_required);
+                assert_eq!(matched.route.authentication_type, AuthenticationType::Jwt);
+                assert!(matched.route.rewrite_path.is_none());
+                assert!(route_for(&table, HttpMethod::Get, path).is_err());
+                assert!(route_for(&table, HttpMethod::Post, &format!("{path}/other")).is_err());
+            }
         }
     }
 

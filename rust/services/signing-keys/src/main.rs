@@ -103,7 +103,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         build_revision = %config.build_revision,
         "starting Rust signing-keys service"
     );
-    let app = http::router_with_all_keys_and_grants(
+    let app = http::router_with_all_keys_grants_and_mdoc(
         config.internal_api_key,
         Some(config.service_sign_gateway_key),
         Some(config.issuer_sign_key),
@@ -118,6 +118,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         flow_envelopes,
         config.public_domain,
         Some(grant_verifier),
+        config.mdoc_certificates,
     );
     let app = match holder_api {
         Some((device_key, provider)) => {

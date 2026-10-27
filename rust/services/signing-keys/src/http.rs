@@ -101,6 +101,7 @@ struct AppState {
     dsc_issue_gateway_key: Option<Arc<str>>,
     csca_issue_gateway_key: Option<Arc<str>>,
     beta_csca_issuance_enabled: bool,
+    mdoc_certificates: Arc<crate::mdoc_certificate::MdocCertificateOptions>,
     registry_store: Option<RegistryStore>,
     document_store: Option<DocumentStore>,
     csca_lifecycle_store: Option<CscaLifecycleStore>,
@@ -275,6 +276,43 @@ pub fn router_with_all_keys_and_grants(
     public_domain: Option<String>,
     grant_verifier: Option<GrantVerifier>,
 ) -> Router {
+    router_with_all_keys_grants_and_mdoc(
+        internal_api_key,
+        service_sign_gateway_key,
+        issuer_sign_key,
+        integration_secret_key,
+        dsc_issue_gateway_key,
+        csca_issue_gateway_key,
+        beta_csca_issuance_enabled,
+        registry_store,
+        document_store,
+        csca_lifecycle_store,
+        profile_store,
+        flow_envelopes,
+        public_domain,
+        grant_verifier,
+        Default::default(),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn router_with_all_keys_grants_and_mdoc(
+    internal_api_key: String,
+    service_sign_gateway_key: Option<String>,
+    issuer_sign_key: Option<String>,
+    integration_secret_key: Option<String>,
+    dsc_issue_gateway_key: Option<String>,
+    csca_issue_gateway_key: Option<String>,
+    beta_csca_issuance_enabled: bool,
+    registry_store: Option<RegistryStore>,
+    document_store: Option<DocumentStore>,
+    csca_lifecycle_store: Option<CscaLifecycleStore>,
+    profile_store: Option<ProfileStore>,
+    flow_envelopes: Option<OpenBaoEnvelopeProvider>,
+    public_domain: Option<String>,
+    grant_verifier: Option<GrantVerifier>,
+    mdoc_certificates: crate::mdoc_certificate::MdocCertificateOptions,
+) -> Router {
     let dsc_issuance_store = profile_store.as_ref().map(ProfileStore::dsc_issuance_store);
     let compatibility = match (&registry_store, &document_store, &profile_store) {
         (Some(registry), Some(documents), Some(profiles)) => {
@@ -370,6 +408,14 @@ pub fn router_with_all_keys_and_grants(
         .route(
             "/v1/signing-keys/issuer-identities/csca-self-signed-certificate",
             post(issue_public_csca_self_signed_certificate),
+        )
+        .route(
+            "/v1/signing-keys/issuer-identities/mdoc-iaca-self-signed-certificate",
+            post(issue_public_mdoc_iaca_certificate),
+        )
+        .route(
+            "/v1/signing-keys/issuer-identities/mdoc-dsc-certificate",
+            post(issue_public_mdoc_dsc_certificate),
         )
         .route(
             "/v1/signing-keys/services/{service_id}/certificate",
@@ -605,6 +651,7 @@ pub fn router_with_all_keys_and_grants(
             dsc_issue_gateway_key: dsc_issue_gateway_key.map(Arc::from),
             csca_issue_gateway_key: csca_issue_gateway_key.map(Arc::from),
             beta_csca_issuance_enabled,
+            mdoc_certificates: Arc::new(mdoc_certificates),
             registry_store,
             document_store,
             csca_lifecycle_store,
@@ -732,6 +779,8 @@ struct CscaCertificateEnrollment {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct DscCertificateIssueRequest {
+    #[serde(skip)]
+    mdoc_metadata: Option<marty_signing_grant::certificate_profile::MdocCertificateMetadata>,
     #[serde(default)]
     organization_id: Option<String>,
     dsc_issuer_did: String,
@@ -748,6 +797,8 @@ struct DscCertificateIssueRequest {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct CscaSelfSignedIssueRequest {
+    #[serde(skip)]
+    mdoc_metadata: Option<marty_signing_grant::certificate_profile::MdocCertificateMetadata>,
     #[serde(default)]
     organization_id: Option<String>,
     issuer_did: String,
@@ -757,6 +808,35 @@ struct CscaSelfSignedIssueRequest {
     organization: String,
     common_name: String,
     validity_days: u16,
+}
+
+/// Public mdoc ceremonies select their family server-side. No caller TBS or publication metadata.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MdocIacaIssueRequest {
+    #[serde(default)]
+    organization_id: Option<String>,
+    issuer_did: String,
+    certificate_id: String,
+    country: String,
+    organization: String,
+    common_name: String,
+    validity_days: u16,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MdocDscIssueRequest {
+    #[serde(default)]
+    organization_id: Option<String>,
+    dsc_issuer_did: String,
+    iaca_issuer_did: String,
+    iaca_certificate_id: String,
+    country: String,
+    organization: String,
+    common_name: String,
+    validity_days: u8,
+    idempotency_key: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -4139,6 +4219,9 @@ fn nonempty(value: &Option<String>) -> Option<String> {
 }
 
 fn needs_mdoc_hints(format: Option<&str>, purpose: Option<&str>) -> bool {
+    if purpose == Some("mdoc_iaca") {
+        return false;
+    }
     matches!(format, Some("mso_mdoc" | "zk_mdoc"))
         || matches!(purpose, Some("mdoc_dsc" | "vdsnc_signing" | "csca"))
 }
@@ -7399,6 +7482,7 @@ mod public_contract_tests {
             integration_secret_key: None,
             dsc_issue_gateway_key: None,
             csca_issue_gateway_key: None,
+            mdoc_certificates: Arc::new(Default::default()),
             beta_csca_issuance_enabled: false,
             registry_store: Some(store.clone()),
             document_store: None,
@@ -8460,6 +8544,7 @@ mod public_contract_tests {
             integration_secret_key: None,
             dsc_issue_gateway_key: None,
             csca_issue_gateway_key: None,
+            mdoc_certificates: Arc::new(Default::default()),
             beta_csca_issuance_enabled: false,
             registry_store: None,
             document_store: None,
@@ -8505,6 +8590,7 @@ mod public_contract_tests {
             integration_secret_key: None,
             dsc_issue_gateway_key: None,
             csca_issue_gateway_key: None,
+            mdoc_certificates: Arc::new(Default::default()),
             beta_csca_issuance_enabled: false,
             registry_store: None,
             document_store: None,
