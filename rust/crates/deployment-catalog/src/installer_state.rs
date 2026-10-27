@@ -290,6 +290,7 @@ fn parent(path: &Path) -> Result<(File, CString)> {
 struct LockedDirectory {
     file: File,
     owner_pid: libc::pid_t,
+    unlock_on_drop: bool,
 }
 impl std::ops::Deref for LockedDirectory {
     type Target = File;
@@ -300,7 +301,7 @@ impl std::ops::Deref for LockedDirectory {
 impl Drop for LockedDirectory {
     fn drop(&mut self) {
         // A forked child's destructor must not release its parent's live lock.
-        if unsafe { libc::getpid() } != self.owner_pid {
+        if !self.unlock_on_drop || unsafe { libc::getpid() } != self.owner_pid {
             return;
         }
         loop {
@@ -319,6 +320,7 @@ fn lock(directory: File) -> Result<LockedDirectory> {
     Ok(LockedDirectory {
         file: directory,
         owner_pid: unsafe { libc::getpid() },
+        unlock_on_drop: true,
     })
 }
 fn read(directory: &File) -> Result<Journal> {
@@ -585,6 +587,72 @@ fn cleanup_summary(
     })
 }
 impl LockedInspection {
+    /// Append one bounded private diagnostic report; never replace lifecycle evidence.
+    pub(crate) fn save_validation_report(&self, bytes: &[u8]) -> Result<String> {
+        self.require_unchanged()?;
+        if bytes.is_empty() || bytes.len() > 65536 {
+            return Err("invalid validation report size".into());
+        }
+        let evidence = open_at(
+            &self.directory,
+            &name("evidence"),
+            libc::O_RDONLY | libc::O_DIRECTORY,
+            0,
+        )?;
+        private(&evidence, true)?;
+        let entry = format!("validation-{}.json", uuid::Uuid::new_v4());
+        let mut output = open_at(
+            &evidence,
+            &name(&entry),
+            libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL,
+            0o600,
+        )?;
+        private(&output, false)?;
+        output
+            .write_all(bytes)
+            .and_then(|_| output.sync_all())
+            .and_then(|_| evidence.sync_all())
+            .map_err(|_| "cannot persist validation report")?;
+        self.require_validation_report_binding(&evidence, &entry, &output, bytes)?;
+        self.require_unchanged()?;
+        Ok(entry)
+    }
+    fn require_validation_report_binding(
+        &self,
+        held: &File,
+        entry: &str,
+        output: &File,
+        bytes: &[u8],
+    ) -> Result<()> {
+        let current = open_at(
+            &self.directory,
+            &name("evidence"),
+            libc::O_RDONLY | libc::O_DIRECTORY,
+            0,
+        )?;
+        private(&current, true)?;
+        let same = |a: &File, b: &File| -> Result<bool> {
+            let a = a.metadata().map_err(|_| "validation record unavailable")?;
+            let b = b.metadata().map_err(|_| "validation record unavailable")?;
+            Ok(a.dev() == b.dev() && a.ino() == b.ino())
+        };
+        if !same(held, &current)? {
+            return Err("validation evidence directory changed".into());
+        }
+        let file = open_at(&current, &name(entry), libc::O_RDONLY | libc::O_NONBLOCK, 0)?;
+        private(&file, false)?;
+        if !same(output, &file)? {
+            return Err("validation report replaced".into());
+        }
+        let mut observed = Vec::new();
+        file.take(65537)
+            .read_to_end(&mut observed)
+            .map_err(|_| "validation report unreadable")?;
+        if observed != bytes {
+            return Err("validation report changed".into());
+        }
+        Ok(())
+    }
     /// Bind path-based read-only helpers to the installation held by this lock.
     pub(crate) fn require_path_binding(&self, path: &Path) -> Result<()> {
         self.require_unchanged()?;
@@ -894,6 +962,31 @@ pub struct InstallerState {
     poisoned: bool,
 }
 impl InstallerState {
+    /// Borrow the writer's lock for diagnostics without reacquiring or unlocking it.
+    /// The temporary duplicate is CLOEXEC and never owns explicit LOCK_UN.
+    pub(crate) fn with_inspection<T>(
+        &self,
+        operation: impl FnOnce(&LockedInspection) -> Result<T>,
+    ) -> Result<T> {
+        if self.poisoned || read(&self.directory)? != self.journal {
+            return Err("uncertain installation cannot be inspected".into());
+        }
+        let view = LockedInspection {
+            directory: LockedDirectory {
+                file: self
+                    .directory
+                    .file
+                    .try_clone()
+                    .map_err(|_| "cannot borrow installation lock")?,
+                owner_pid: self.directory.owner_pid,
+                unlock_on_drop: false,
+            },
+            journal: self.journal.clone(),
+        };
+        let result = operation(&view);
+        view.require_unchanged()?;
+        result
+    }
     /// Preserve the caller's authenticated release operator for recovery after
     /// bootstrap cleanup. The caller supplies current_exe and the signed digest.
     /// Partial copies remain non-executable and are never silently overwritten.
@@ -1451,6 +1544,86 @@ impl InstallerState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn diagnostic_view_never_unlocks_writer_on_success_error_or_panic() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let path = root.path().join("installation");
+        let state = InstallerState::create(&path, identity()).unwrap();
+        state
+            .with_inspection(|view| {
+                view.require_path_binding(&path)?;
+                Ok(())
+            })
+            .unwrap();
+        assert!(LockedInspection::open(&path).is_err());
+        let result: Result<()> = state.with_inspection(|_| Err("failed diagnostic".into()));
+        assert!(result.is_err() && LockedInspection::open(&path).is_err());
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _: Result<()> = state.with_inspection(|_| panic!("diagnostic panic"));
+        }));
+        assert!(panic.is_err() && LockedInspection::open(&path).is_err());
+        drop(state);
+        assert!(LockedInspection::open(&path).is_ok());
+    }
+    #[test]
+    fn validation_reports_are_private_append_only_and_reject_replaced_paths() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let path = root.path().join("installation");
+        let mut writer = InstallerState::create(&path, identity()).unwrap();
+        writer.create_private_directory("evidence").unwrap();
+        drop(writer);
+        let state = LockedInspection::open(&path).unwrap();
+        let first = state.save_validation_report(b"first").unwrap();
+        let second = state.save_validation_report(b"second").unwrap();
+        assert_ne!(first, second);
+        assert_eq!(
+            std::fs::read(path.join("evidence").join(&first)).unwrap(),
+            b"first"
+        );
+        assert_eq!(
+            std::fs::metadata(path.join("evidence").join(&first))
+                .unwrap()
+                .mode()
+                & 0o777,
+            0o600
+        );
+        let held = open_at(
+            &state.directory,
+            &name("evidence"),
+            libc::O_RDONLY | libc::O_DIRECTORY,
+            0,
+        )
+        .unwrap();
+        let output = File::open(path.join("evidence").join(&first)).unwrap();
+        let target = path.join("evidence").join(&first);
+        std::fs::write(&target, b"changed").unwrap();
+        assert!(state
+            .require_validation_report_binding(&held, &first, &output, b"first")
+            .is_err());
+        std::fs::write(&target, b"first").unwrap();
+        let hardlink = path.join("linked-report");
+        std::fs::hard_link(&target, &hardlink).unwrap();
+        assert!(state
+            .require_validation_report_binding(&held, &first, &output, b"first")
+            .is_err());
+        std::fs::remove_file(hardlink).unwrap();
+        std::fs::rename(path.join("evidence"), path.join("old-evidence")).unwrap();
+        std::fs::create_dir(path.join("evidence")).unwrap();
+        std::fs::set_permissions(
+            path.join("evidence"),
+            std::fs::Permissions::from_mode(0o700),
+        )
+        .unwrap();
+        assert!(state
+            .require_validation_report_binding(&held, &first, &output, b"first")
+            .is_err());
+        std::fs::remove_dir(path.join("evidence")).unwrap();
+        symlink(path.join("old-evidence"), path.join("evidence")).unwrap();
+        assert!(state.save_validation_report(b"blocked").is_err());
+    }
+
     fn acceptance_scope() -> AcceptanceScope {
         AcceptanceScope {
             authorization_sha256: "a".repeat(64),

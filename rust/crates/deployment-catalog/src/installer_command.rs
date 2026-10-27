@@ -416,6 +416,9 @@ pub(crate) fn provision_runtime(
         &infrastructure,
         application,
     )?;
+    state.with_inspection(|inspection| {
+        crate::installer_validation::run_locked(installation, docker, inspection, false)
+    })?;
     Err("Owned application startup observations recorded. Explicit local CA trust onboarding and installed journey qualification remain incomplete; preserve the reported state for recovery. Installation is not ready.".into())
 }
 

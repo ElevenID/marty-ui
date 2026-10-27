@@ -244,7 +244,7 @@ fn doctor_observes_bound_engine_without_source_or_inherited_context() {
     use std::os::unix::fs::PermissionsExt;
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("installation");
-    let state = InstallerState::create_with_runtime(
+    let mut state = InstallerState::create_with_runtime(
         &path,
         Identity {
             source_sha: "a".repeat(40),
@@ -258,6 +258,7 @@ fn doctor_observes_bound_engine_without_source_or_inherited_context() {
         },
     )
     .unwrap();
+    state.create_private_directory("evidence").unwrap();
     let binary = path.join("docker-stub");
     let script = r#"#!/bin/sh
 [ "$DOCKER_HOST" = 'unix:///var/run/docker.sock' ] || exit 4
@@ -309,10 +310,67 @@ esac
     );
     assert_eq!(report["installation_ready"], false);
     assert_eq!(report["cleanup"]["state"], "not_started");
+    let journal_before = std::fs::read(path.join("installation.json")).unwrap();
+    let mut saved = Vec::new();
+    for _ in 0..2 {
+        let output = Command::new(env!("CARGO_BIN_EXE_marty-deploy"))
+            .current_dir(root.path())
+            .args(["validate", "--install-dir"])
+            .arg(&path)
+            .arg("--docker-bin")
+            .arg(&binary)
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(report["status"], "failed");
+        assert_eq!(report["installation_ready"], false);
+        assert!(String::from_utf8_lossy(&output.stderr).contains("FAIL  Containers and migrations"));
+        assert!(report["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v["name"] == "Credential journey" && v["status"] == "skip"));
+        saved.push(report["validation_id"].clone());
+    }
+    assert_ne!(saved[0], saved[1]);
+    assert_eq!(
+        std::fs::read(path.join("installation.json")).unwrap(),
+        journal_before
+    );
+    assert_eq!(
+        std::fs::read_dir(path.join("evidence"))
+            .unwrap()
+            .filter(|e| e
+                .as_ref()
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with("validation-"))
+            .count(),
+        2
+    );
     std::fs::write(&binary, script.replace("test-engine", "replacement-engine")).unwrap();
     let output = invoke();
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
+    std::fs::write(
+        &binary,
+        "#!/bin/sh\nprintf 'private-backend-diagnostic' >&2\nexit 19\n",
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_marty-deploy"))
+        .args(["validate", "--install-dir"])
+        .arg(&path)
+        .arg("--docker-bin")
+        .arg(&binary)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["status"], "failed");
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("private-backend-diagnostic"));
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("private-backend-diagnostic"));
     assert!(!std::fs::read_dir(&path).unwrap().any(|entry| entry
         .unwrap()
         .file_name()
@@ -377,4 +435,31 @@ fn status_reports_uncertain_journal_without_checkout_or_secret_values() {
     assert!(String::from_utf8(doctor.stderr)
         .unwrap()
         .contains("no recorded Docker binding"));
+}
+
+#[test]
+fn deployment_validation_preserves_catalog_validate_and_refuses_mutating_options() {
+    let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    let output = Command::new(env!("CARGO_BIN_EXE_marty-deploy"))
+        .arg("validate")
+        .arg("--repo-root")
+        .arg(&repo)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{:?}", output.stderr);
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("Deployment catalog validation passed")
+    );
+    let output = Command::new(env!("CARGO_BIN_EXE_marty-deploy"))
+        .args([
+            "validate",
+            "--install-dir",
+            "/missing",
+            "--repair",
+            "private-test-value",
+        ])
+        .output()
+        .unwrap();
+    assert!(!output.status.success() && output.stdout.is_empty());
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("private-test-value"));
 }
