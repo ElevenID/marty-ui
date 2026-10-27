@@ -1,0 +1,10 @@
+name: marty-console
+
+services:
+  console:
+    image: ${MARTY_CONSOLE_IMAGE:?Set the digest-pinned console image from its product package}
+    environment:
+      MARTY_SERVER_ORIGIN: ${MARTY_SERVER_ORIGIN:?Set the independently deployed public server origin}
+    ports:
+      - "127.0.0.1:${MARTY_CONSOLE_PORT:-3002}:80"
+    restart: unless-stopped

@@ -2850,6 +2850,12 @@ jobs:
         run: |
           docker pull nginx@sha256:582c496ccf79d8aa6f8203a79d32aaf7ffd8b13362c60a701a2f9ac64886c93d
           python scripts/probe_selfhost_api_only_edge.py
+      - name: Exercise independent console routing and verified server TLS
+        timeout-minutes: 5
+        run: |
+          docker pull nginx:1.29.1-alpine@sha256:42a516af16b852e33b7682d5ef8acbd5d13fe08fecadc7ed98605ba5e3b26ab8
+          docker pull python@sha256:fd95fa221297a88e1cf49c55ec1828edd7c5a428187e67b5d1805692d11588db
+          python scripts/probe_independent_console.py --output "$RUNNER_TEMP/independent-console-source"
       - name: Enforce pinned public OpenAPI schemas
         run: python scripts/generate_public_openapi_schemas.py --protocol-root marty-protocol --check
       - name: Test public schemas and executable examples
