@@ -227,13 +227,9 @@ fn revocation_failure(error: &InitiationDependencyError) -> InitiationHttpFailur
 }
 
 fn security_failure(error: &TransactionReadError) -> InitiationHttpFailure {
-    match error {
-        TransactionReadError::ApiKeyNotConfigured => {
-            failure(503, "ISSUANCE_API_KEY not configured on server")
-        }
-        TransactionReadError::ApiKeyMissing => failure(401, "X-API-Key header is missing"),
-        TransactionReadError::InvalidApiKey => failure(401, "Invalid API Key"),
-        _ => failure(503, "Management authentication is unavailable"),
+    match crate::management_http::authentication_error(error) {
+        Some((status, detail)) => failure(status.as_u16(), detail),
+        None => failure(503, "Management authentication is unavailable"),
     }
 }
 

@@ -3745,18 +3745,13 @@ impl IntoResponse for CredentialIssuanceHttpError {
 
 impl IntoResponse for CredentialManagementHttpError {
     fn into_response(self) -> Response {
+        if let Self::Security(error) = &self {
+            if let Some((status, detail)) = crate::management_http::authentication_error(error) {
+                return (status, Json(json!({"detail": detail}))).into_response();
+            }
+        }
         let (status, detail) = match self {
             Self::Security(error) => match error {
-                TransactionReadError::ApiKeyNotConfigured => (
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    "ISSUANCE_API_KEY not configured on server",
-                ),
-                TransactionReadError::ApiKeyMissing => {
-                    (StatusCode::UNAUTHORIZED, "X-API-Key header is missing")
-                }
-                TransactionReadError::InvalidApiKey => {
-                    (StatusCode::UNAUTHORIZED, "Invalid API Key")
-                }
                 TransactionReadError::TrustedOrganizationRequired => (
                     StatusCode::FORBIDDEN,
                     "Trusted organization context is required",
@@ -4002,6 +3997,9 @@ impl From<TransactionReadError> for TransactionReadHttpError {
 
 impl IntoResponse for TransactionReadHttpError {
     fn into_response(self) -> Response {
+        if let Some((status, detail)) = crate::management_http::authentication_error(&self.0) {
+            return (status, Json(json!({"detail": detail}))).into_response();
+        }
         if self.0 == TransactionReadError::OrganizationIdRequired {
             return (
                 StatusCode::UNPROCESSABLE_ENTITY,
@@ -4023,14 +4021,9 @@ impl IntoResponse for TransactionReadHttpError {
                 (StatusCode::NOT_FOUND, "Transaction not found")
             }
             TransactionReadError::ResourceNotFound => (StatusCode::NOT_FOUND, "Resource not found"),
-            TransactionReadError::ApiKeyNotConfigured => (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "ISSUANCE_API_KEY not configured on server",
-            ),
-            TransactionReadError::ApiKeyMissing => {
-                (StatusCode::UNAUTHORIZED, "X-API-Key header is missing")
-            }
-            TransactionReadError::InvalidApiKey => (StatusCode::UNAUTHORIZED, "Invalid API Key"),
+            TransactionReadError::ApiKeyNotConfigured
+            | TransactionReadError::ApiKeyMissing
+            | TransactionReadError::InvalidApiKey => unreachable!("authentication handled above"),
             TransactionReadError::TrustedOrganizationRequired => (
                 StatusCode::FORBIDDEN,
                 "Trusted organization context is required",
@@ -4047,5 +4040,64 @@ impl IntoResponse for TransactionReadHttpError {
             ),
         };
         (status, Json(json!({"detail": detail}))).into_response()
+    }
+}
+
+#[cfg(test)]
+mod authentication_projection_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn lifecycle_and_transaction_reads_keep_auth_and_tenant_denial_contracts() {
+        for (error, status, detail) in [
+            (
+                TransactionReadError::ApiKeyNotConfigured,
+                StatusCode::SERVICE_UNAVAILABLE,
+                "ISSUANCE_API_KEY not configured on server",
+            ),
+            (
+                TransactionReadError::ApiKeyMissing,
+                StatusCode::UNAUTHORIZED,
+                "X-API-Key header is missing",
+            ),
+            (
+                TransactionReadError::InvalidApiKey,
+                StatusCode::UNAUTHORIZED,
+                "Invalid API Key",
+            ),
+            (
+                TransactionReadError::OrganizationMismatch,
+                StatusCode::FORBIDDEN,
+                "Organization context does not match requested organization",
+            ),
+            (
+                TransactionReadError::TrustedOrganizationRequired,
+                StatusCode::FORBIDDEN,
+                "Trusted organization context is required",
+            ),
+        ] {
+            for response in [
+                CredentialManagementHttpError::Security(error.clone()).into_response(),
+                TransactionReadHttpError(error).into_response(),
+            ] {
+                assert_eq!(response.status(), status);
+                let body = axum::body::to_bytes(response.into_body(), 4096)
+                    .await
+                    .unwrap();
+                let actual: Value = serde_json::from_slice(&body).unwrap();
+                assert_eq!(actual, json!({"detail": detail}));
+            }
+        }
+        let response =
+            TransactionReadHttpError(TransactionReadError::OrganizationIdRequired).into_response();
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        let actual: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            actual["detail"][0]["loc"],
+            json!(["query", "organization_id"])
+        );
     }
 }

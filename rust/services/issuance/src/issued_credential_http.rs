@@ -196,15 +196,10 @@ fn adapter_error(error: IssuedCredentialAdapterError) -> Response {
 }
 
 fn security_error(error: TransactionReadError) -> (StatusCode, &'static str) {
+    if let Some(response) = crate::management_http::authentication_error(&error) {
+        return response;
+    }
     match error {
-        TransactionReadError::ApiKeyNotConfigured => (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "ISSUANCE_API_KEY not configured on server",
-        ),
-        TransactionReadError::ApiKeyMissing => {
-            (StatusCode::UNAUTHORIZED, "X-API-Key header is missing")
-        }
-        TransactionReadError::InvalidApiKey => (StatusCode::UNAUTHORIZED, "Invalid API Key"),
         TransactionReadError::TrustedOrganizationRequired => (
             StatusCode::FORBIDDEN,
             "Trusted organization context is required",

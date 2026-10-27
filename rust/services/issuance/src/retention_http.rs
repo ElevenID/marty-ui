@@ -171,28 +171,21 @@ fn authorize_organization(
 }
 
 fn security_error(error: TransactionReadError) -> Response {
-    let (status, detail) = match error {
-        TransactionReadError::ApiKeyMissing => {
-            (StatusCode::UNAUTHORIZED, "X-API-Key header is missing")
-        }
-        TransactionReadError::InvalidApiKey => (StatusCode::UNAUTHORIZED, "Invalid API Key"),
-        TransactionReadError::TrustedOrganizationRequired => (
-            StatusCode::FORBIDDEN,
-            "Trusted organization context is required",
-        ),
-        TransactionReadError::OrganizationMismatch => (
-            StatusCode::FORBIDDEN,
-            "Organization context does not match requested organization",
-        ),
-        TransactionReadError::ApiKeyNotConfigured => (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "ISSUANCE_API_KEY not configured on server",
-        ),
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Retention authorization failed",
-        ),
-    };
+    let (status, detail) =
+        crate::management_http::authentication_error(&error).unwrap_or(match error {
+            TransactionReadError::TrustedOrganizationRequired => (
+                StatusCode::FORBIDDEN,
+                "Trusted organization context is required",
+            ),
+            TransactionReadError::OrganizationMismatch => (
+                StatusCode::FORBIDDEN,
+                "Organization context does not match requested organization",
+            ),
+            _ => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Retention authorization failed",
+            ),
+        });
     (status, Json(json!({"detail": detail}))).into_response()
 }
 
