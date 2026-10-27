@@ -23,6 +23,7 @@ import {
   supportsDigitalCredentials,
 } from '../../../../services/digitalCredentialsApi';
 import { createPresentationTransport } from '../../../../services/walletTransportService';
+import { isOid4vpUri } from '../../../../services/credentialLinkUtils';
 import { openDeepLink } from '../../../../utils/deviceDetection';
 import VerificationResultSummary, { extractPresentationRejection, PresentationAttemptFeedback, verificationSessionId } from '../VerificationResultSummary';
 import Oid4vpQrCode from '../Oid4vpQrCode';
@@ -62,6 +63,9 @@ function QRDisplayStep({ session, onComplete }) {
   const [dcApiAvailable, setDcApiAvailable] = useState(false);
   const pollRef = useRef(null);
   const generation = useRef(0);
+  const walletGeneration = useRef(0);
+  const activeStatus = useRef(status);
+  activeStatus.current = status;
   const instanceId = verificationSessionId(session) || null;
   const activeInstance = useRef(instanceId);
   activeInstance.current = instanceId;
@@ -79,12 +83,21 @@ function QRDisplayStep({ session, onComplete }) {
   };
 
   useEffect(() => {
+    walletGeneration.current += 1;
     setStatus(normalizeSessionStatus(session?.status));
     setResult(null);
     setAttempt(extractPresentationRejection(session));
     setError(null);
     setWalletBusy(false);
+    return () => { walletGeneration.current += 1; };
   }, [instanceId]);
+
+  useEffect(() => {
+    if (TERMINAL_STATUSES.includes(status)) {
+      walletGeneration.current += 1;
+      setWalletBusy(false);
+    }
+  }, [status]);
 
   useEffect(() => {
     const current = ++generation.current;
@@ -136,15 +149,16 @@ function QRDisplayStep({ session, onComplete }) {
   }, []);
 
   const statusCfg = STATUS_CONFIG[status] || STATUS_CONFIG.pending;
-  const requestUri = session?.request_uri;
-  const qrValue = session?.qr_code_data || requestUri;
-  const transport = createPresentationTransport({ requestUri });
+  const requestUri = typeof session?.request_uri === 'string' ? session.request_uri.trim() : '';
+  const qrValue = isOid4vpUri(session?.qr_code_data) ? session.qr_code_data.trim() : requestUri;
+  const transport = createPresentationTransport({ requestUri: qrValue });
   const dcApiRequestUrl = session?.dc_api_request_url || (instanceId ? `/v1/flows/instances/${encodeURIComponent(instanceId)}/request?transport=dc_api` : '');
   const dcApiSubmitUrl = session?.dc_api_submit_url || (instanceId ? `/v1/flows/instances/${encodeURIComponent(instanceId)}/submit/dc-api` : '');
 
   const handleOpenWallet = async () => {
-    const current = generation.current;
-    const isCurrent = () => generation.current === current && activeInstance.current === instanceId;
+    const current = walletGeneration.current;
+    const isCurrent = () => walletGeneration.current === current
+      && activeInstance.current === instanceId && !TERMINAL_STATUSES.includes(activeStatus.current);
     setWalletBusy(true);
     setError(null);
     try {
@@ -198,7 +212,7 @@ function QRDisplayStep({ session, onComplete }) {
             QR code with their identity wallet app to share the required credentials.
           </Typography>
 
-          {requestUri && (
+          {qrValue && (
             <Stack direction="row" spacing={1} sx={{ mb: 2 }}>
               <Button
                 variant="contained"
@@ -231,7 +245,7 @@ function QRDisplayStep({ session, onComplete }) {
             </Alert>
           )}
 
-          {requestUri && (
+          {qrValue && (
             <>
               <Divider sx={{ my: 1 }} />
               <Typography variant="caption" color="text.secondary">

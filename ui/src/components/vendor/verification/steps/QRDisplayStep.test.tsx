@@ -111,6 +111,12 @@ describe('QRDisplayStep', () => {
     );
   });
 
+  it.each([{}, 'javascript:alert(1)'])('ignores a malformed canonical QR payload when the request URI is valid', (qr_code_data) => {
+    const requestUri = 'openid4vp://authorize?request_uri=https%3A%2F%2Fexample.test%2Frequest';
+    render(<QRDisplayStep session={{ instance_id: 'valid-fallback', status: 'AWAITING_WALLET', request_uri: requestUri, qr_code_data }} />);
+    expect(screen.getByRole('img', { name: 'OID4VP QR Code' })).toHaveAttribute('data-qr-value', requestUri);
+  });
+
   it('shows a recoverable contract error when no wallet request is returned', () => {
     render(
       <QRDisplayStep session={{ instance_id: 'instance-3', status: 'AWAITING_WALLET' }} />,
@@ -162,6 +168,43 @@ describe('QRDisplayStep', () => {
     view.rerender(<QRDisplayStep session={{ ...session, instance_id: 'new-session' }} />);
     expect(screen.queryByTestId('presentation-attempt-rejected')).not.toBeInTheDocument();
     expect(screen.getByTestId('verification-session-status')).toHaveAttribute('data-status', 'pending');
+  });
+
+  it('finishes an in-flight wallet operation after the same session receives a new callback', async () => {
+    vi.mocked(supportsDigitalCredentials).mockResolvedValue(true);
+    let finish: (value: unknown) => void = () => {};
+    vi.mocked(runOpenId4VpDigitalCredentialFlow)
+      .mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }))
+      .mockResolvedValueOnce({ status: 'AWAITING_WALLET' });
+    const session = { session_id: 'same-session', status: 'AWAITING_WALLET', request_uri: 'openid4vp://authorize' };
+    const view = render(<QRDisplayStep session={session} onComplete={vi.fn()} />);
+    await act(async () => { await Promise.resolve(); });
+    await act(async () => { screen.getByRole('button', { name: 'Open Wallet Chooser' }).click(); });
+    expect(screen.getByRole('button', { name: 'Open Wallet Chooser' })).toBeDisabled();
+    view.rerender(<QRDisplayStep session={session} onComplete={vi.fn()} />);
+    await act(async () => { finish({ status: 'AWAITING_WALLET' }); });
+    expect(screen.getByRole('button', { name: 'Open Wallet Chooser' })).toBeEnabled();
+    await act(async () => { screen.getByRole('button', { name: 'Open Wallet Chooser' }).click(); });
+    expect(runOpenId4VpDigitalCredentialFlow).toHaveBeenCalledTimes(2);
+    vi.mocked(supportsDigitalCredentials).mockResolvedValue(false);
+  });
+
+  it('ignores a deferred wallet result after polling cancels the same mounted session', async () => {
+    vi.useFakeTimers();
+    vi.mocked(supportsDigitalCredentials).mockResolvedValue(true);
+    let finish: (value: unknown) => void = () => {};
+    vi.mocked(runOpenId4VpDigitalCredentialFlow).mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }));
+    vi.mocked(getVerificationFlowInstance).mockResolvedValue({ id: 'cancel-wallet', status: 'CANCELLED' });
+    const onComplete = vi.fn();
+    render(<QRDisplayStep session={{ instance_id: 'cancel-wallet', status: 'AWAITING_WALLET', request_uri: 'openid4vp://authorize' }} onComplete={onComplete} />);
+    await act(async () => { await Promise.resolve(); });
+    await act(async () => { screen.getByRole('button', { name: 'Open Wallet Chooser' }).click(); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+    await act(async () => { finish({ status: 'COMPLETED' }); });
+    expect(screen.getByTestId('verification-session-status')).toHaveAttribute('data-status', 'cancelled');
+    expect(onComplete).not.toHaveBeenCalled();
+    expect(getVerificationResult).not.toHaveBeenCalled();
+    vi.mocked(supportsDigitalCredentials).mockResolvedValue(false);
   });
 
   it('correlates legacy session_id and ignores deferred wallet completion after session replacement or unmount', async () => {

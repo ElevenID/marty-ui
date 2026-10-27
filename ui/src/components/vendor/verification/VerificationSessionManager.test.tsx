@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, render, screen, waitFor } from '@test/utils';
 import userEvent from '@testing-library/user-event';
+import { openDeepLink } from '../../../utils/deviceDetection';
 
 import VerificationSessionManager from './VerificationSessionManager';
 
@@ -20,6 +21,11 @@ const {
   mockListPublicIssuerIdentities: vi.fn(),
   mockListPresentationPolicies: vi.fn(),
   mockListFlows: vi.fn(),
+}));
+
+vi.mock('../../../utils/deviceDetection', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../../utils/deviceDetection')>(),
+  openDeepLink: vi.fn().mockResolvedValue(true),
 }));
 
 vi.mock('../../../hooks/useNotifications', () => ({
@@ -189,6 +195,24 @@ describe('VerificationSessionManager', () => {
     await user.click(await screen.findByRole('button', { name: 'View session details' }));
     expect(await screen.findByText('Result unavailable')).toBeInTheDocument();
     expect(screen.queryByTestId('verification-result-summary')).not.toBeInTheDocument();
+  });
+
+  it('reopens a pending POST request with its canonical authorization URI intact', async () => {
+    const user = userEvent.setup();
+    const requestUri = 'https://verifier.example/v1/flows/instances/post-resume/request';
+    const authorizationUri = `openid4vp://authorize?client_id=did%3Aweb%3Averifier.example&request_uri=${encodeURIComponent(requestUri)}&request_uri_method=post`;
+    mockListFlowExecutions.mockResolvedValue([{ id: 'post-resume', flow_type: 'oid4vp_presentation', status: 'AWAITING_WALLET',
+      context_data: { presentation_policy_id: 'policy-1', request_uri: requestUri, qr_code_data: authorizationUri } }]);
+    render(<VerificationSessionManager organizationId="org-1" />);
+    await user.click(await screen.findByRole('button', { name: 'Show QR code' }));
+    expect(screen.getByRole('img', { name: 'OID4VP QR Code' })).toHaveAttribute('data-qr-value', authorizationUri);
+    await user.click(await screen.findByRole('button', { name: 'Open Wallet' }));
+    expect(openDeepLink).toHaveBeenCalledWith(authorizationUri);
+    const opened = new URL(vi.mocked(openDeepLink).mock.calls.at(-1)![0]);
+    expect(opened.searchParams.get('request_uri')).toBe(requestUri);
+    expect(opened.searchParams.get('request_uri_method')).toBe('post');
+    expect(opened.searchParams.get('client_id')).toBe('did:web:verifier.example');
+    expect(mockStartVerificationFlow).not.toHaveBeenCalled();
   });
 
   it('generates the details QR code when the flow exposes only request_uri', async () => {
