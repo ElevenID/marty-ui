@@ -5,6 +5,7 @@ const test = require('node:test');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const vm = require('node:vm');
 
 const {
   cleanup,
@@ -22,7 +23,73 @@ const {
   identityRequest,
   transitService,
   writableConfig,
+  loadSigningConfig,
+  saveSigningConfig,
+  unchangedOwnedRevision,
 } = require('./audit-beta-issuer-provider-switch');
+
+function fakeConfigTransport(initial) {
+  let config = structuredClone(initial);
+  let generation = 1;
+  let exposeEtag = true;
+  const requests = [];
+  const etag = () => `"r-00000000-0000-4000-8000-${String(generation).padStart(12, '0')}"`;
+  const fetch = async (route, options) => {
+    requests.push({ route, options });
+    const method = options.method || 'GET';
+    let status = 200;
+    if (method === 'PATCH') {
+      if (options.headers['If-Match'] !== etag()) status = 412;
+      else {
+        config = JSON.parse(options.body);
+        generation += 1;
+      }
+    }
+    return {
+      ok: status === 200, status,
+      json: async () => structuredClone(config),
+      headers: { get: (name) => name === 'etag' && exposeEtag ? etag() : null },
+    };
+  };
+  return {
+    page: { evaluate: (fn, args) => vm.runInNewContext(`(${fn.toString()})`, { fetch })(args) },
+    requests,
+    current: () => structuredClone(config),
+    externalEdit: (next) => { config = structuredClone(next); generation += 1; },
+    omitEtag: () => { exposeEtag = false; },
+  };
+}
+
+test('D02 config writes advance owned revisions and stale final restoration preserves another edit', async () => {
+  const transport = fakeConfigTransport({ services: [{ id: 'provider-a' }], default_service_id: 'provider-a' });
+  const original = await loadSigningConfig(transport.page);
+  const providerB = await saveSigningConfig(transport.page,
+    { ...original.config, default_service_id: 'provider-b' }, original.revision);
+  const beforeNegative = unchangedOwnedRevision(await loadSigningConfig(transport.page), providerB.revision);
+  const providerC = await saveSigningConfig(transport.page,
+    { ...beforeNegative, default_service_id: 'provider-c' }, providerB.revision);
+  assert.deepEqual(transport.requests.filter((request) => request.options.method === 'PATCH')
+    .map((request) => request.options.headers['If-Match']), [original.revision, providerB.revision]);
+  transport.externalEdit({ ...transport.current(), default_service_id: 'admin-edit' });
+  await assert.rejects(saveSigningConfig(transport.page, original.config, providerC.revision), /HTTP 412/);
+  assert.equal(transport.current().default_service_id, 'admin-edit');
+  assert.throws(() => unchangedOwnedRevision({ revision: providerC.revision }, providerB.revision), /changed outside/);
+});
+
+test('D02 restore accepts only the last owned revision and missing ETag prevents mutation', async () => {
+  const transport = fakeConfigTransport({ services: [{ id: 'provider-a' }], default_service_id: 'provider-a' });
+  const original = await loadSigningConfig(transport.page);
+  const changed = await saveSigningConfig(transport.page,
+    { ...original.config, default_service_id: 'provider-b' }, original.revision);
+  const restored = await saveSigningConfig(transport.page, original.config, changed.revision);
+  assert.equal(restored.config.default_service_id, 'provider-a');
+  assert.equal(transport.current().default_service_id, 'provider-a');
+  const priorWrites = transport.requests.filter((request) => request.options.method === 'PATCH').length;
+  transport.omitEtag();
+  await assert.rejects(loadSigningConfig(transport.page), /no strong opaque revision/);
+  await assert.rejects(saveSigningConfig(transport.page, original.config, null), /requires a strong opaque revision/);
+  assert.equal(transport.requests.filter((request) => request.options.method === 'PATCH').length, priorWrites);
+});
 
 test('preprovisioned provider B requires exact identity and a distinct supported signer', async () => {
   assert.equal(existingProviderBInput({}), null);

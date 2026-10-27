@@ -53,6 +53,7 @@ const HEADLESS = process.env.HEADED !== '1';
 const RECORD_VIDEO = process.env.RECORD_VIDEO === '1';
 const LOCAL_BETA_PROXY = process.env.BETA_LOCAL_PROXY === '1';
 const MANAGED_SERVICE_ID = 'managed-openbao-transit';
+const STRONG_CONFIG_REVISION = /^"r-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"$/i;
 
 async function prepareProviderInputs(artifactDir, stamp, client) {
   return acknowledgeDemoInputs(artifactDir, 'provider-switch-fixture-input.json', {
@@ -84,7 +85,7 @@ async function browserJson(page, pathName, options = {}) {
       },
     });
     const body = await response.json().catch(() => null);
-    return { ok: response.ok, status: response.status, body };
+    return { ok: response.ok, status: response.status, body, etag: response.headers.get('etag') };
   }, { requestPath: pathName, requestOptions: options });
 }
 
@@ -96,7 +97,22 @@ async function loadSigningConfig(page) {
   if (!response.ok || !response.body || !Array.isArray(response.body.services)) {
     throw new Error(`Signing configuration is unavailable (HTTP ${response.status})`);
   }
-  return response.body;
+  return configSnapshot(response);
+}
+
+function configSnapshot(response) {
+  const revision = response.etag;
+  if (typeof revision !== 'string' || !STRONG_CONFIG_REVISION.test(revision)) {
+    throw new Error('Signing configuration has no strong opaque revision');
+  }
+  return { config: response.body, revision };
+}
+
+function unchangedOwnedRevision(snapshot, lastOwnedRevision) {
+  if (snapshot.revision !== lastOwnedRevision) {
+    throw new Error('Signing configuration changed outside this owned run');
+  }
+  return snapshot.config;
 }
 
 function writableConfig(config, { extraServices = [], defaultServiceId, resetDefaults = false } = {}) {
@@ -114,16 +130,19 @@ function writableConfig(config, { extraServices = [], defaultServiceId, resetDef
   };
 }
 
-async function saveSigningConfig(page, payload) {
+async function saveSigningConfig(page, payload, revision) {
+  if (typeof revision !== 'string' || !STRONG_CONFIG_REVISION.test(revision)) {
+    throw new Error('Signing configuration update requires a strong opaque revision');
+  }
   const response = await browserJson(
     page,
     `/v1/signing-keys/config?organization_id=${encodeURIComponent(ORG_ID)}`,
-    { method: 'PATCH', body: JSON.stringify(payload) },
+    { method: 'PATCH', body: JSON.stringify(payload), headers: { 'If-Match': revision } },
   );
   if (!response.ok) {
     throw new Error(`Signing configuration update failed (HTTP ${response.status})`);
   }
-  return response.body;
+  return configSnapshot(response);
 }
 
 function identityRequest(issuerDid) {
@@ -628,6 +647,7 @@ async function main() {
     });
     let context;
     let originalConfig;
+    let lastOwnedConfigRevision;
     try {
       context = await browser.newContext({
         viewport: VIDEO_SIZE,
@@ -664,7 +684,9 @@ async function main() {
       report.loginTheme = await login(page, email, password);
       report.orgSelection = await selectOrg(page);
       if (!report.orgSelection.ok) throw new Error(`Cannot select organization ${ORG_ID}`);
-      originalConfig = await loadSigningConfig(page);
+      const originalSnapshot = await loadSigningConfig(page);
+      originalConfig = originalSnapshot.config;
+      lastOwnedConfigRevision = originalSnapshot.revision;
       if (existingProviderB) {
         boundExistingProviderB(originalConfig, existingProviderB,
           managedTransitEndpoint(originalConfig));
@@ -691,10 +713,12 @@ async function main() {
       const createdIdentityDids = [];
       const createdManagedKeys = [];
       try {
-        const managedConfig = await saveSigningConfig(page, writableConfig(originalConfig, {
+        const managedSnapshot = await saveSigningConfig(page, writableConfig(originalConfig, {
           defaultServiceId: MANAGED_SERVICE_ID,
           resetDefaults: true,
-        }));
+        }), lastOwnedConfigRevision);
+        lastOwnedConfigRevision = managedSnapshot.revision;
+        const managedConfig = managedSnapshot.config;
         report.providerAConfig = {
           defaultServiceId: managedConfig.default_service_id,
           serviceId: MANAGED_SERVICE_ID,
@@ -741,15 +765,17 @@ async function main() {
         requireProviderStage(report, 'issue_with_provider_a');
         await showProviderStep(page, 'Credential signed by provider A', 'The first credential verifies against the DID method published by managed custody.');
 
-        const latestConfig = await loadSigningConfig(page);
+        const latestConfig = unchangedOwnedRevision(await loadSigningConfig(page), lastOwnedConfigRevision);
         const providerB = existingProviderB
           ? boundExistingProviderB(latestConfig, existingProviderB, transitEndpoint)
           : transitService(providerBId, `D-02 Provider B ${stamp}`, externalTransit.keyReference, transitEndpoint, externalTransit);
-        const providerBConfig = await saveSigningConfig(page, writableConfig(latestConfig, {
+        const providerBSnapshot = await saveSigningConfig(page, writableConfig(latestConfig, {
           extraServices: existingProviderB ? [] : [providerB],
           defaultServiceId: providerB.id,
           resetDefaults: true,
-        }));
+        }), lastOwnedConfigRevision);
+        lastOwnedConfigRevision = providerBSnapshot.revision;
+        const providerBConfig = providerBSnapshot.config;
         report.providerBConfig = {
           defaultServiceId: providerBConfig.default_service_id,
           serviceId: providerB.id,
@@ -778,7 +804,7 @@ async function main() {
         );
         await showProviderStep(page, 'One DID, both credentials valid', 'New issuance uses provider B while the provider-A credential remains verifiable through the retained DID method.');
 
-        const beforeFailureConfig = await loadSigningConfig(page);
+        const beforeFailureConfig = unchangedOwnedRevision(await loadSigningConfig(page), lastOwnedConfigRevision);
         const unavailable = transitService(
           providerCId,
           `D-02 Unpublished Provider ${stamp}`,
@@ -786,11 +812,12 @@ async function main() {
           transitEndpoint,
           externalTransit,
         );
-        await saveSigningConfig(page, writableConfig(beforeFailureConfig, {
+        const unavailableSnapshot = await saveSigningConfig(page, writableConfig(beforeFailureConfig, {
           extraServices: [providerB, unavailable],
           defaultServiceId: providerCId,
           resetDefaults: true,
-        }));
+        }), lastOwnedConfigRevision);
+        lastOwnedConfigRevision = unavailableSnapshot.revision;
         const deniedRebind = await directRebind(page, issuerDid);
         const afterDenial = await issueAndVerify(page, template);
         report.unpublishedReplacement = {
@@ -814,7 +841,9 @@ async function main() {
         }
         if (originalConfig) {
           try {
-            const restored = await saveSigningConfig(page, writableConfig(originalConfig));
+            const restoredSnapshot = await saveSigningConfig(page, writableConfig(originalConfig), lastOwnedConfigRevision);
+            lastOwnedConfigRevision = restoredSnapshot.revision;
+            const restored = restoredSnapshot.config;
             report.configRestored = {
               ...restoredConfigurationEvidence(originalConfig, restored, createdManagedKeys),
               defaultServiceId: restored.default_service_id,
@@ -884,6 +913,9 @@ if (require.main === module) {
 }
 
 module.exports = {
+  loadSigningConfig,
+  saveSigningConfig,
+  unchangedOwnedRevision,
   prepareProviderInputs,
   cleanup,
   externalTransitPrerequisites,
