@@ -56,3 +56,42 @@ Explicit updates, diagnostics and supported repairs belong to the deployment
 tool. Future bootstrap options should expose those operations only after the
 verified operator supports them. Re-running the bootstrap must not be documented
 as a supported update or repair procedure without that deployment contract.
+
+## Deployment validation
+
+After application startup, the deployment operator automatically runs read-only
+validation and prints a `PASS`, `FAIL` or `SKIP` summary. It checks the recorded
+containers and migration initializers, the bound local HTTPS certificate, gateway
+health, the gateway's configured required services, credential issuer metadata
+and authorization metadata. Public readiness uses the existing `/health/ready`
+ingress route. Validation has a 90-second operation budget; HTTP requests have
+shorter timeouts and bounded response bodies.
+
+To repeat these checks with the operator retained by an installation:
+
+```sh
+/absolute/install-dir/marty-deploy validate --install-dir /absolute/install-dir
+```
+
+This command writes JSON to stdout and a readable summary to stderr. Each run
+saves a separate private `evidence/validation-<uuid>.json` report beneath the
+installation directory, including failed runs. A required check that fails,
+cannot be observed, or changes during inspection returns a nonzero exit status.
+An unsafe installation or report destination is refused. Prior reports are never
+overwritten. The existing repository command `marty-deploy validate --repo-root
+PATH` continues to validate the deployment catalog.
+
+Validation uses only the installation's recorded Docker Engine, owned resources,
+local HTTPS origin and verified certificate material. It does not restart or
+repair services, alter host CA trust, create test credentials, or remove data.
+The credential journey is explicitly reported as `SKIP`: login and actual
+issue/present/verify/revoke/deny tests require isolated test fixtures and remain
+in the separate disposable qualification runner. Authorization metadata checks
+do not establish that user login or credential issuance works.
+
+A passing report means the listed read-only deployment checks passed at that
+time; it is not an atomic snapshot or a release qualification. The current
+operator still reports `installation_ready: false` and retains its existing
+trust-onboarding and installed-journey completion gate, including when these
+checks pass. Automatic validation does not turn an incomplete installation into
+a successful installation. The bootstrap propagates the operator's exit status.
