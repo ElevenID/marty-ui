@@ -11,6 +11,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 INTAKE = runpy.run_path(str(ROOT / "scripts/product_evidence_intake.py"))
+PLAN = runpy.run_path(str(ROOT / "scripts/product_package_plan.py"))
 ROLES = {
     "marty-server": ("services", "migrations", "openbao-didcomm", "keycloak"),
     "marty-console": ("ui",),
@@ -89,6 +90,58 @@ def test_report_binds_exact_candidate_but_makes_no_release_claim(tmp_path, produ
     assert record["candidate"]["product"] == product
     assert record["verification_report_sha256"] == sha(report.read_bytes())
     assert "qualification" not in record and "support_state" not in record
+
+
+@pytest.mark.parametrize("product", list(ROLES))
+def test_intake_accepts_the_real_product_builder_manifest_and_archive(tmp_path, product):
+    plan = PLAN["build_plan"](ROOT, product, "a" * 40)
+    receipts = tmp_path / "receipts"
+    receipts.mkdir()
+    for image in plan["images"]:
+        receipt = {
+            "product": product,
+            "version": plan["version"],
+            "source_sha": plan["source_sha"],
+            "role": image["role"],
+            "image": image["image"],
+            "digest": "sha256:" + "e" * 64,
+            "run_id": "123",
+            "run_attempt": "2",
+        }
+        (receipts / (image["role"] + ".json")).write_text(json.dumps(receipt), encoding="utf-8")
+    package = PLAN["assemble_package"](ROOT, plan, receipts, "123", "2")
+    bundle = tmp_path / "bundle"
+    PLAN["write_bundle"](ROOT, plan, package, bundle)
+    archive = tmp_path / "product-package.tar.gz"
+    PLAN["write_archive"](bundle, archive)
+    package_path = bundle / "product-package.json"
+    report = {
+        "schema": "marty.product-artifact-verification/v1",
+        "candidate": {
+            "archive_sha256": sha(archive.read_bytes()),
+            "package_sha256": sha(package_path.read_bytes()),
+            "product": package["product"],
+            "version": package["version"],
+            "tag": package["tag"],
+            "source": package["source"],
+            "producer": package["producer"],
+            "images": sorted(package["images"], key=lambda image: image["role"]),
+        },
+        "verification": {
+            "repository": "ElevenID/marty-ui",
+            "workflow": ".github/workflows/product-verification.yml",
+            "run_id": "456",
+            "run_attempt": "1",
+            "conclusion": "success",
+        },
+        "checks": {name: "pass" for name in ("payload", "provenance", "sbom", "cross_host")},
+        "result": "pass",
+    }
+    report_path = tmp_path / "verification.json"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    record = INTAKE["bind_report"](package_path, archive, report_path, sha(report_path.read_bytes()))
+    assert record["candidate"]["images"] == report["candidate"]["images"]
+    assert record["state"] == "pending_authenticated_promotion"
 
 
 def test_cli_writes_pending_record_without_overwriting_it(tmp_path):
