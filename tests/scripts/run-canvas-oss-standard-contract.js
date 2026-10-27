@@ -13,9 +13,9 @@
  *   - ElevenID's public/management APIs and OID4VCI credential endpoint.
  *
  * It must never use Rails runner/console, direct database access, patched
- * Canvas source, a Canvas plugin, custom event ingestion, or persisted browser
- * state. Runtime credentials remain in memory and are never written to the
- * observation or video artifacts.
+ * Canvas source, a Canvas plugin, custom event ingestion, or shared persisted browser
+ * state. Exact run-owned recovery authority may enter the protected private
+ * mount; credentials are never written to observation or video artifacts.
  */
 
 const assert = require('node:assert/strict');
@@ -360,7 +360,7 @@ class MartyClient {
     this.apiKey = apiKey;
   }
 
-  async request(method, requestPath, { json = undefined, expected = [200] } = {}) {
+  async request(method, requestPath, { json = undefined, expected = [200], includeStatus = false } = {}) {
     requireCondition(requestPath.startsWith('/v1/'), 'marty_path_rejected', 'Marty request path is outside the reviewed API surface.');
     const url = new URL(requestPath, this.origin);
     requireCondition(url.origin === this.origin, 'marty_origin_rejected', 'Marty request escaped the pinned origin.');
@@ -374,7 +374,8 @@ class MartyClient {
       body = JSON.stringify(json);
     }
     const response = await fetchWithTimeout(url, { method, headers, body, redirect: 'manual' });
-    return responseJson(response, 'marty_request_failed', martyRequestSummary(method, requestPath), expected);
+    const payload = await responseJson(response, 'marty_request_failed', martyRequestSummary(method, requestPath), expected);
+    return includeStatus ? {status:response.status,payload} : payload;
   }
 
   get(requestPath, expected = [200]) {
@@ -1874,6 +1875,10 @@ async function prepareCanvasCaptureFixtures({ browser, ledger, markActive = () =
   pass = () => {}, runSuffix, state = {}, prerequisiteDirectory = '/artifacts', ownershipDirectory }) {
   requireCondition(browser && /^[A-Za-z0-9-]{8,100}$/.test(runSuffix || ''),
     'canvas_run_identity_invalid', 'A fresh Canvas capture run identity is required.');
+  if(process.env.DEMO_LOCAL_FUNCTIONAL_RUNTIME_RECEIPT) requireCondition(
+    process.env.DEMO_CANVAS_PRIVATE_RECOVERY_DIRECTORY==='/capture-private',
+    'canvas_private_custody_missing','Functional runtime capture requires its protected recovery mount.');
+  if (process.env.DEMO_CANVAS_PRIVATE_RECOVERY_DIRECTORY) state.custody ||= createCanvasCaptureCustody(runSuffix);
   let marty, adminContext, learnerContext, platformId, integrationSecretId;
     const canvasOrigin = normalizePinnedOrigin(
       process.env.CANVAS_OSS_ORIGIN || DEFAULT_CANVAS_ORIGIN,
@@ -1918,6 +1923,7 @@ async function prepareCanvasCaptureFixtures({ browser, ledger, markActive = () =
     const adminPage = await adminContext.newPage();
     state.adminPage = adminPage;
     await loginCanvas(adminPage, canvasOrigin, adminEmail, adminPassword);
+    state.custody?.retain('canvasAdminSession',JSON.stringify(await adminContext.cookies(canvasOrigin)));
     const adminBearer = await createPersonalAccessToken(adminPage, canvasOrigin, `OSS contract admin ${runSuffix}`, id => remember('adminAccessToken', id));
     const adminCanvas = new CanvasClient(canvasOrigin, adminBearer);
     state.adminCanvas = adminCanvas;
@@ -1925,6 +1931,7 @@ async function prepareCanvasCaptureFixtures({ browser, ledger, markActive = () =
     const rootAccount = accounts.find((account) => !account.parent_account_id) || accounts[0];
     requireCondition(rootAccount?.id, 'canvas_root_account_missing', 'Canvas Accounts API did not return a root account.');
     const adminProfile = await adminCanvas.get('/api/v1/users/self/profile');
+    require('./audit-beta-canvas-invalid-secret').assertCanvasLoginIdentity(adminProfile,adminEmail);
     requireCondition(adminProfile?.id, 'canvas_admin_profile_missing', 'Canvas Users API did not return the root administrator profile.');
     Object.assign(state, { accountId: String(rootAccount.id), adminId: String(adminProfile.id) });
     Object.assign(owned, { canvasOrigin, accountId: state.accountId, adminId: state.adminId }); persistOwned();
@@ -1933,11 +1940,17 @@ async function prepareCanvasCaptureFixtures({ browser, ledger, markActive = () =
     state.templates = templates;
 
     markActive('standard_lti_13_install');
+    owned.martyPlatformIntent={name:`${RUN_NAME_PREFIX} ${runSuffix}`,state:'CREATING'};persistOwned();
     const platform = await marty.post('/v1/integrations/canvas/platforms', {
       display_name: `${RUN_NAME_PREFIX} ${runSuffix}`,
       canvas_base_url: canvasOrigin,
       enabled: true,
     }, [200]);
+    owned.martyPlatformIntent.returnedId=platform?.id;owned.martyPlatformIntent.state='RESPONSE_UNVERIFIED';persistOwned();
+    requireCondition(typeof platform?.id==='string'&&/^[a-f0-9-]{36}$/i.test(platform.id)
+      &&platform.display_name===owned.martyPlatformIntent.name&&String(platform.organization_id)===organizationId,
+      'marty_canvas_platform_identity_mismatch','Created Canvas platform must match its exact owned name and tenant.');
+    owned.martyPlatformIntent.state='CREATED';
     state.platformId = platformId = String(platform?.id || '');
     requireCondition(platformId, 'marty_canvas_platform_missing', 'Marty did not create the organization-owned Canvas draft.');
     owned.martyPlatformId = platformId; persistOwned();
@@ -1982,6 +1995,7 @@ async function prepareCanvasCaptureFixtures({ browser, ledger, markActive = () =
     state.learnerTokenCanvas = new CanvasSessionClient(canvasOrigin, learnerContext);
     const learnerSetupPage = await learnerContext.newPage();
     await loginCanvas(learnerSetupPage, canvasOrigin, learnerEmail, learnerPassword);
+    state.custody?.retain('canvasLearnerSession',JSON.stringify(await learnerContext.cookies(canvasOrigin)));
     const learnerBearer = await createPersonalAccessToken(learnerSetupPage, canvasOrigin, `OSS contract learner ${runSuffix}`, id => remember('learnerAccessToken', id));
     const learnerCanvas = new CanvasClient(canvasOrigin, learnerBearer);
     state.learnerCanvas = learnerCanvas;
@@ -1998,7 +2012,9 @@ async function prepareCanvasCaptureFixtures({ browser, ledger, markActive = () =
       onOwned: id => remember('oauthDeveloperKey', id),
       redirectUri: `${martyOrigin}/v1/integrations/canvas/oauth/callback`,
     });
-    state.integrationSecretId = integrationSecretId = String((await marty.post('/v1/integrations/canvas/integration-secrets', {
+    state.custody?.retain('canvasOwnedClientSecret',oauthKey.clientSecret);
+    owned.martySecretIntent={name:`Canvas OAuth ${runSuffix}`,state:'CREATING'};persistOwned();
+    const integrationSecret = await marty.post('/v1/integrations/canvas/integration-secrets', {
       organization_id: organizationId,
       name: `Canvas OAuth ${runSuffix}`,
       provider: 'canvas',
@@ -2006,8 +2022,17 @@ async function prepareCanvasCaptureFixtures({ browser, ledger, markActive = () =
       secret_value: oauthKey.clientSecret,
       metadata: { contract: 'canvas_oss_portability' },
       enabled: true,
-    }, [200, 201]))?.id || '');
+    }, [200, 201]);
+    owned.martySecretIntent.returnedId=integrationSecret?.id;owned.martySecretIntent.state='RESPONSE_UNVERIFIED';persistOwned();
+    requireCondition(typeof integrationSecret?.id==='string'&&/^[a-f0-9-]{36}$/i.test(integrationSecret.id)
+      &&integrationSecret.organization_id===organizationId&&integrationSecret.name===owned.martySecretIntent.name
+      &&integrationSecret.provider==='canvas'&&integrationSecret.purpose==='oauth_client_secret',
+      'marty_oauth_secret_identity_mismatch','Created OAuth reference must match its exact owned identity.');
+    owned.martySecretIntent.state='CREATED';
+    state.integrationSecretId = integrationSecretId = String(integrationSecret?.id || '');
+    owned.martyIntegrationSecretId=integrationSecretId;persistOwned();
     requireCondition(integrationSecretId, 'marty_oauth_secret_reference_missing', 'Marty did not store the encrypted Canvas OAuth secret reference.');
+    state.oauthMayExist=true;owned.martyOAuthMayExist=true;persistOwned();
     const oauthStart = await marty.post(`/v1/integrations/canvas/platforms/${encodeURIComponent(platformId)}/oauth/authorizations`, {
       client_id: oauthKey.clientId,
       client_secret_secret_id: integrationSecretId,
@@ -2024,6 +2049,7 @@ async function prepareCanvasCaptureFixtures({ browser, ledger, markActive = () =
 
     const binding = await createProgramBinding(marty, platformId, templates, fixtures, runSuffix);
     requireCondition(binding?.id, 'canvas_binding_create_failed', 'Marty did not create the typed Canvas program binding.');
+    state.binding=binding;owned.martyBindingId=String(binding.id);persistOwned();
 
     markActive('instructor_deep_linking');
     const externalAssignment = await performInstructorDeepLinking(adminPage, adminCanvas, fixtures, String(tool.id), martyOrigin);
@@ -2041,6 +2067,7 @@ async function prepareCanvasCaptureFixtures({ browser, ledger, markActive = () =
 
     markActive('standard_lti_13_install');
     const activationStartedAt = new Date().toISOString();
+    state.bindingActivationPossible=true;owned.martyBindingActivationPossible=true;persistOwned();
     await validateAndActivateBinding(marty, binding.id);
     pass('standard_lti_13_install', `Stock Canvas installed LTI 1.3 and all ${BLOCKING_READINESS_CHECK_CODES.length} production blocking readiness checks passed.`);
 
@@ -2128,6 +2155,161 @@ async function retireCanvasSetupFixtures(state, retirementConfirmed, oauthDiscon
   } });
 }
 
+function createCanvasCaptureCustody(runSuffix, directory = process.env.DEMO_CANVAS_PRIVATE_RECOVERY_DIRECTORY) {
+  requireCondition(path.isAbsolute(directory || '') && fs.lstatSync(directory).isDirectory()
+    && !fs.lstatSync(directory).isSymbolicLink(), 'canvas_private_custody_missing', 'Capture requires its protected owned recovery mount.');
+  requireCondition(/^[A-Za-z0-9-]{8,100}$/.test(runSuffix), 'canvas_run_identity_invalid', 'Private custody needs the exact fresh run.');
+  const files = new Set(), secretFiles = new Map(), journal = path.join(directory,runSuffix+'.custody.json');
+  const write = (filename,value,exclusive,secret=false) => {
+    const fd=fs.openSync(filename,exclusive?'wx':'w',0o600);
+    try {
+      if(secret) {const stat=fs.fstatSync(fd);secretFiles.set(filename,{dev:stat.dev,ino:stat.ino});}
+      fs.writeFileSync(fd,value);fs.fsyncSync(fd);
+    } finally {fs.closeSync(fd);}
+  };
+  write(journal,JSON.stringify({runSuffix,state:'OPEN',roles:[]}),true);
+  const checkpoint = state => {
+    const stat=fs.lstatSync(journal);assert(stat.isFile()&&!stat.isSymbolicLink());
+    const next=journal+'.next';write(next,JSON.stringify({runSuffix,state,roles:[...files]}),true);fs.renameSync(next,journal);
+  };
+  return {
+    retain(role,value) {
+      requireCondition(['canvasAdminSession','canvasLearnerSession','canvasOwnedClientSecret','betaAdminSession'].includes(role)
+        && typeof value==='string' && value.length>0 && Buffer.byteLength(value)<=131072,
+      'canvas_private_custody_invalid','Only bounded owned authority can enter capture recovery.');
+      const filename=path.join(directory,runSuffix+'-'+role+'.json');
+      if(files.has(role)) {
+        const expected=secretFiles.get(filename),actual=fs.lstatSync(filename);
+        requireCondition(expected&&actual.dev===expected.dev&&actual.ino===expected.ino,
+          'canvas_private_custody_changed','Private recovery file ownership changed.');
+        requireCondition(fs.lstatSync(filename).isFile()&&!fs.lstatSync(filename).isSymbolicLink(),
+          'canvas_private_custody_changed','Owned recovery file changed.');
+        const next=filename+'.next';write(next,value,true,true);fs.renameSync(next,filename);
+        secretFiles.set(filename,secretFiles.get(next));secretFiles.delete(next);
+      } else {files.add(role);checkpoint('OPEN');write(filename,value,true,true);}
+      checkpoint('OPEN');
+    },
+    retire() {
+      for(const [filename,expected] of secretFiles) {
+        const actual=fs.lstatSync(filename);
+        requireCondition(actual.dev===expected.dev&&actual.ino===expected.ino,
+          'canvas_private_custody_changed','Private recovery file ownership changed.');
+        requireCondition(fs.lstatSync(filename).isFile()&&!fs.lstatSync(filename).isSymbolicLink(),
+          'canvas_private_custody_changed','Owned recovery file changed.');
+        fs.unlinkSync(filename);
+      }
+      checkpoint('RETIRED'); return true;
+    },
+  };
+}
+
+function requireCanvasSetupMutationReconciliation(state) {
+  requireCondition(!state.bindingActivationPossible||Boolean(state.applicationId),
+    'canvas_background_application_uncertain','An activated owned binding without its returned application tuple requires reconciliation.');
+  for(const field of ['martyPlatformIntent','martySecretIntent']) {
+    const intent=state.owned?.[field];
+    requireCondition(!intent||intent.state==='CREATED','canvas_setup_creation_uncertain','Owned Canvas setup creation requires exact reconciliation.');
+  }
+}
+
+async function retireCanvasOAuthAuthority(state, observe = () => {}, {requireAccess = false} = {}) {
+  const {retireOwnedOAuthConnection}=require('./audit-beta-canvas-invalid-secret');
+  const gateway=(requestPath,{method='GET',body}={})=>state.marty.request(method,requestPath,
+    {json:body,expected:[200],includeStatus:true});
+  return retireOwnedOAuthConnection(gateway,{},state.organizationId,state.platformId,observe,{requireAccess});
+}
+
+async function retireCanvasOwnedReferences(state) {
+  requireCanvasSetupMutationReconciliation(state);
+  if(state.platformId) {
+    const target=`/v1/integrations/canvas/platforms/${encodeURIComponent(state.platformId)}`;
+    await state.marty.delete(target,[204]);await state.marty.request('GET',target,{expected:[404]});
+  }
+  if(state.integrationSecretId) {
+    await state.marty.delete(`/v1/integrations/canvas/integration-secrets/${encodeURIComponent(state.integrationSecretId)}`,[204]);
+    const remaining=await state.marty.get('/v1/integrations/canvas/integration-secrets?organization_id='+encodeURIComponent(state.organizationId)+'&provider=canvas');
+    assert(Array.isArray(remaining));assert(!remaining.some(row=>row.id===state.integrationSecretId));
+  }
+}
+
+async function retireCanvasCaptureSessions(state, observe = () => {}) {
+  const {retireCanvasSession}=require('./audit-beta-canvas-invalid-secret');
+  const evidence={},failures=[];
+  const emit=()=>{try {observe(JSON.parse(JSON.stringify(evidence)));} catch(error) {failures.push(error);}};
+  for(const [role,context] of [['canvasLearnerSession',state.learnerContext],['canvasAdminSession',state.adminContext]]) {
+    if(!context) continue;
+    try {
+    const cookies=await context.cookies(state.canvasOrigin);
+    requireCondition(cookies.length>0,'canvas_session_custody_missing','Owned Canvas session acquisition requires reconciliation.');
+    const response=await context.request.get(state.canvasOrigin+'/api/v1/users/self/profile',
+      {maxRedirects:0,timeout:15000,headers:{Accept:'application/json'}});
+    if([401,403].includes(response.status())) evidence[role]={alreadyDenied:true,status:response.status()};
+    else {
+      assert.equal(response.status(),200);
+      await context.addCookies(cookies.map(cookie=>({...cookie})));
+      await retireCanvasSession(context,(_,value)=>state.custody.retain(role,value),
+        {observe:value=>{evidence[role]=value;emit()}});
+    }
+    emit();
+    } catch(error) {failures.push(error);evidence[role]={retired:false,failureType:'OWNED_SESSION_RETIREMENT_FAILED'};emit();}
+  }
+  requireCondition(failures.length===0,'canvas_capture_sessions_incomplete','Owned Canvas sessions require reconciliation.');
+  return evidence;
+}
+
+async function retireCanvasBetaSession(context, custody) {
+  const origin=DEFAULT_MARTY_ORIGIN,cookies=await context.cookies(origin);
+  requireCondition(cookies.length>0,'capture_beta_session_missing','Owned beta session custody is missing.');
+  let custodyFailure;try {custody.retain('betaAdminSession',JSON.stringify(cookies));} catch(error) {custodyFailure=error;}
+  const original=cookies.map(cookie=>cookie.name+'='+cookie.value).join('; ');
+  let response,logoutFailure;
+  try {response=await context.request.post(origin+'/v1/auth/logout',{maxRedirects:0,timeout:15000});} catch(error) {logoutFailure=error;}
+  const old=await context.request.get(origin+'/v1/auth/me',{headers:{Cookie:original},maxRedirects:0,timeout:15000});
+  const body=await old.json();
+  requireCondition(!logoutFailure&&[302,303,307].includes(response?.status()),'capture_beta_logout_failed','Owned beta logout did not complete.');
+  requireCondition(old.status()===200&&body.authenticated===false&&body.user==null,
+    'capture_beta_session_authorized','Original beta session is not retired.');
+  if(custodyFailure) throw custodyFailure;
+  return {logoutStatus:response.status(),oldCookieAuthenticated:false};
+}
+
+async function retireCanvasEngineeringSetup(state, observeSessions = () => {}) {
+  let retired={scope:'OWNED_CANVAS_FIXTURE_RETIREMENT',complete:false,resources:[]};
+  const failures=[];
+  try {
+      requireCanvasSetupMutationReconciliation(state);
+      const issuanceRetirement = await retireCanvasApplication({ marty:state.marty, organizationId: state.organizationId,
+        applicationId: state.applicationId, credentialTemplateId: state.templates?.credential?.id,
+        bindingId: state.binding?.id,
+        transactionId: state.transactionId, reconcile() {
+          assert.ok(!state.approvalInFlight, 'Unknown Canvas approval requires reconciliation');
+        } });
+      if (state.marty && state.platformId && (state.oauthConnected||state.oauthMayExist)) {
+        await retireCanvasOAuthAuthority(state, value => {state.oauthRetirement=value}, {requireAccess:false});
+        state.oauthConnected = false;state.oauthMayExist=false;
+      }
+      if (state.marty) await retireCanvasOwnedReferences(state);
+      retired = await retireCanvasSetupFixtures(state, true, !state.oauthConnected);
+      retired.issuanceRetirement = issuanceRetirement;
+  } catch(error) {failures.push({stage:'OWNED_RESOURCES',location:contractFailureLocation(error,'owned_fixture_cleanup')});}
+  if (state.custody) {
+    try {
+      retired.sessionRetirement=await retireCanvasCaptureSessions(state,value=>{retired.sessionRetirement=value;observeSessions(value)});
+      retired.sessionsRetired=true;
+    } catch(error) {failures.push({stage:'OWNED_SESSIONS',location:contractFailureLocation(error,'owned_session_cleanup')});}
+    if(failures.length===0) {
+      try {retired.privateAuthorityRetired=state.custody.retire();}
+      catch(error) {failures.push({stage:'PRIVATE_AUTHORITY',location:contractFailureLocation(error,'private_authority_cleanup')});}
+    }
+  }
+  if(failures.length) {
+    retired.complete=false;retired.privateAuthorityRetired=false;retired.failures=failures;
+    const error=new ContractFailure('owned_canvas_cleanup_incomplete','Run-owned Canvas authority requires recovery; custody is retained.');
+    error.canvasCleanupEvidence=retired;throw error;
+  }
+  return retired;
+}
+
 async function main() {
   let args;
   try {
@@ -2185,6 +2367,7 @@ async function main() {
     recordedPage = firstLaunch.page;
     const firstBootstrap = firstLaunch.bootstrap;
     preparationState.applicationId = firstBootstrap.application_id;
+    preparationState.owned.martyApplicationId=firstBootstrap.application_id;preparationState.persistOwned();
     pass('learner_resource_launch', 'The enrolled learner launched the Deep Linked resource through standard LTI 1.3 and reached ElevenID.');
     await showVideoStep(recordedPage, 'Portable learner launch verified', 'Canvas supplied the signed learner, course, and resource context; no email identity match was used.');
 
@@ -2343,9 +2526,8 @@ async function main() {
     pass('legacy_event_ingest_unavailable', 'Legacy custom Canvas event ingestion returned HTTP 410; the portable flow used standard reads only.');
 
     markActive('canvas_oauth_authorization');
-    const disconnected = await marty.delete(`/v1/integrations/canvas/platforms/${encodeURIComponent(platformId)}/oauth`, [200]);
-    requireCondition(disconnected?.status === 'disconnected' && safeList(disconnected?.scopes).length === 0, 'canvas_oauth_revoke_failed', 'Canvas OAuth did not complete remote token revocation before local disconnect.');
-    preparationState.oauthConnected = false;
+    await retireCanvasOAuthAuthority(preparationState, value => {preparationState.oauthRetirement=value}, {requireAccess:true});
+    preparationState.oauthConnected = false;preparationState.oauthMayExist=false;
     pass('canvas_oauth_authorization', 'A stock scoped Canvas API key connected through capability-derived OAuth and its token was remotely revoked on disconnect.');
 
     await showVideoStep(recordedPage, 'Portable Canvas contract complete', 'Unmodified Canvas, standard LTI Advantage, documented REST APIs, durable evidence, and external KMS issuance all passed.');
@@ -2387,26 +2569,14 @@ async function main() {
     adminContext ||= preparationState.adminContext;
     learnerContext ||= preparationState.learnerContext;
     try {
-      const issuanceRetirement = await retireCanvasApplication({ marty, organizationId: preparationState.organizationId,
-        applicationId: preparationState.applicationId, credentialTemplateId: preparationState.templates?.credential?.id,
-        bindingId: preparationState.binding?.id,
-        transactionId: preparationState.transactionId, reconcile() {
-          assert.ok(!preparationState.approvalInFlight, 'Unknown Canvas approval requires reconciliation');
-        } });
-      if (marty && platformId && preparationState.oauthConnected) {
-        const disconnected = await marty.delete(`/v1/integrations/canvas/platforms/${encodeURIComponent(platformId)}/oauth`, [200]);
-        assert.equal(disconnected.status, 'disconnected');
-        assert.equal(disconnected.scopes.length, 0);
-        preparationState.oauthConnected = false;
-      }
-      if (marty && platformId) await marty.delete(`/v1/integrations/canvas/platforms/${encodeURIComponent(platformId)}`, [204]);
-      if (marty && integrationSecretId) await marty.delete(`/v1/integrations/canvas/integration-secrets/${encodeURIComponent(integrationSecretId)}`, [204]);
-      const retired = await retireCanvasSetupFixtures(preparationState, true, !preparationState.oauthConnected);
-      retired.issuanceRetirement = issuanceRetirement;
+      const retired=await retireCanvasEngineeringSetup(preparationState,value=>fs.writeFileSync(
+        path.join(path.dirname(args.observations),'owned-canvas-session-retirement.json'),JSON.stringify(value,null,2)+'\n'));
       fs.writeFileSync(path.join(path.dirname(args.observations), 'owned-canvas-cleanup.json'),
         JSON.stringify(retired, null, 2) + '\n', { flag: 'wx' });
     } catch (error) {
       failure ||= new ContractFailure('owned_canvas_cleanup_incomplete', 'Run-owned Canvas resources require recovery; custody is retained.');
+      if(error.canvasCleanupEvidence) fs.writeFileSync(path.join(path.dirname(args.observations),'owned-canvas-cleanup.json'),
+        JSON.stringify(error.canvasCleanupEvidence,null,2)+'\n',{flag:'wx'});
       const cleanupFailure = contractFailureLocation(error, 'owned_fixture_cleanup');
       ledger.driverFailure ||= cleanupFailure;
       fs.writeFileSync(path.join(path.dirname(args.observations), 'owned-canvas-cleanup-failure.json'),
@@ -2441,6 +2611,13 @@ module.exports = {
   parseArgs,
   loginCanvas,
   createOauthDeveloperKey,
+  createCanvasCaptureCustody,
+  requireCanvasSetupMutationReconciliation,
+  retireCanvasOAuthAuthority,
+  retireCanvasOwnedReferences,
+  retireCanvasCaptureSessions,
+  retireCanvasBetaSession,
+  retireCanvasEngineeringSetup,
   createLtiDeveloperKey,
   retireCanvasApplication,
   retireCanvasSetupFixtures,
