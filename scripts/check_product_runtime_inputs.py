@@ -27,6 +27,10 @@ OWNED_ROLES = {
 }
 PINNED = COMPOSE["PINNED_IMAGE"]
 HEX_DIGEST = re.compile(r"sha256:([0-9a-f]{64})\Z")
+SECRET_WHITESPACE = b" \t\r\n\v\f"
+SECRET_PLACEHOLDER_PREFIXES = (
+    b"change-me", b"change_me", b"changeme", b"replace-me", b"replace_me"
+)
 
 
 def available_file(value: object) -> tuple[bool, bool]:
@@ -38,12 +42,29 @@ def available_file(value: object) -> tuple[bool, bool]:
     if not path.is_file():
         return False, False
     try:
+        prefix = bytearray()
+        last_nonspace = -1
+        position = 0
+        started = False
         with path.open("rb") as source:
-            return any(
-                byte not in b" \t\r\n\v\f"
-                for chunk in iter(lambda: source.read(65536), b"")
-                for byte in chunk
-            ), False
+            for chunk in iter(lambda: source.read(65536), b""):
+                for byte in chunk:
+                    if not started and byte in SECRET_WHITESPACE:
+                        continue
+                    started = True
+                    if len(prefix) < len(b"placeholder") + 1:
+                        prefix.append(byte)
+                    if byte not in SECRET_WHITESPACE:
+                        last_nonspace = position
+                    position += 1
+        normalized_prefix = bytes(prefix).lower()
+        placeholder = any(
+            normalized_prefix.startswith(value) for value in SECRET_PLACEHOLDER_PREFIXES
+        ) or (
+            last_nonspace == len(b"placeholder") - 1
+            and normalized_prefix.startswith(b"placeholder")
+        )
+        return last_nonspace >= 0 and not placeholder, False
     except OSError:
         return False, False
 

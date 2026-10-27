@@ -95,6 +95,30 @@ def test_empty_secret_file_blocks_runtime_attempt(tmp_path, contents):
     assert result["checks"]["missing_secret_files"] == 1
 
 
+@pytest.mark.parametrize("contents", [
+    b"change-me", b" Change_Me-longer\n", b"CHANGEME", b"replace-me-value",
+    b"replace_me", b"placeholder", b" \tPLACEHOLDER \r\n",
+    b" " * 65536 + b"change-me", b"placeholder" + b" " * 65536,
+], ids=[
+    "change-me", "spaced-change-me", "uppercase-changeme", "replace-me",
+    "replace_me", "placeholder", "spaced-placeholder", "chunked-prefix", "chunked-suffix",
+])
+def test_placeholder_secret_file_blocks_runtime_attempt(tmp_path, contents):
+    package = candidate()
+    model = prepared(tmp_path, package)
+    Path(model["secrets"]["example"]["file"]).write_bytes(contents)
+    result = MODULE.assess(model, package)
+    assert result["result"] == "blocked_missing_runtime_inputs"
+    assert result["checks"]["missing_secret_files"] == 1
+
+
+def test_real_secret_is_not_confused_with_placeholder(tmp_path):
+    package = candidate()
+    model = prepared(tmp_path, package)
+    Path(model["secrets"]["example"]["file"]).write_bytes(b"my-placeholder-token")
+    assert MODULE.assess(model, package)["result"] == "ready_for_runtime_attempt"
+
+
 def test_wrong_product_image_or_console_dependency_cannot_pass(tmp_path):
     package = candidate()
     model = prepared(tmp_path, package)
