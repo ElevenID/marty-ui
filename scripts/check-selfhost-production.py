@@ -187,13 +187,46 @@ def catalog_lines(*args: str, offline: bool = False) -> list[str]:
     return result.stdout.splitlines()
 
 
-def validate_required_secret_files(secret_dir: Path, stack_name: str, *, offline: bool = False) -> str:
+def rendered_secret_files(env_file: Path, compose_file: Path) -> dict[str, Path]:
+    result = run_compose_command(env_file, compose_file, "config", "--format", "json")
+    if result.returncode:
+        # A rendered model can contain expanded credentials; never echo Compose output.
+        raise CheckError("Could not inspect rendered self-host secret paths.")
+    try:
+        secrets = json.loads(result.stdout)["secrets"]
+        if not isinstance(secrets, dict):
+            raise ValueError("invalid secrets model")
+        paths = {
+            name: Path(item["file"])
+            for name, item in secrets.items()
+            if isinstance(name, str) and isinstance(item, dict)
+            and not item.get("external") and isinstance(item.get("file"), str)
+        }
+    except (ValueError, KeyError, TypeError) as exc:
+        raise CheckError("Rendered self-host secret paths are missing or invalid.") from exc
+    if any(not path.is_absolute() for path in paths.values()):
+        raise CheckError("Rendered self-host secret paths must be absolute.")
+    return paths
+
+
+def validate_required_secret_files(
+    secret_dir: Path | None, stack_name: str, *, offline: bool = False,
+    rendered_files: dict[str, Path] | None = None,
+) -> str:
     checked: list[str] = []
     ids = catalog_lines("secrets", stack_name, offline=offline)
     file_names = catalog_lines("secrets", stack_name, "--field", "compose_secret", offline=offline)
     for secret_id, compose_secret in zip(ids, file_names, strict=True):
         file_name = compose_secret or secret_id
-        read_required_secret(secret_dir / file_name, secret_id)
+        if rendered_files is None:
+            if secret_dir is None:
+                raise CheckError("Self-host secret directory is missing.")
+            path = secret_dir / file_name
+        else:
+            path = rendered_files.get(file_name)
+            if path is None:
+                raise CheckError(f"Required Compose secret {secret_id} has no file source.")
+        read_required_secret(path, secret_id)
         checked.append(secret_id)
 
     return "files=" + ",".join(checked)
@@ -1324,18 +1357,21 @@ def main() -> int:
         raise SystemExit(f"Self-host env file does not exist: {env_file}")
 
     env_values = load_env_file(env_file)
-    secret_dir_value = env_values.get("SELFHOST_SECRET_DIR", "").strip()
-    if not secret_dir_value:
-        raise SystemExit("SELFHOST_SECRET_DIR is missing from the self-host env file.")
-    secret_dir = Path(secret_dir_value).expanduser().resolve()
     if args.required_secrets_only:
         try:
-            detail = validate_required_secret_files(secret_dir, "selfhost-production", offline=True)
+            paths = rendered_secret_files(env_file, prod_compose_file)
+            detail = validate_required_secret_files(
+                None, "selfhost-production", offline=True, rendered_files=paths,
+            )
         except CheckError as exc:
             print(f"[FAIL] selfhost-required-secrets: {exc}")
             return 1
         print(f"[OK] selfhost-required-secrets: {detail}")
         return 0
+    secret_dir_value = env_values.get("SELFHOST_SECRET_DIR", "").strip()
+    if not secret_dir_value:
+        raise SystemExit("SELFHOST_SECRET_DIR is missing from the self-host env file.")
+    secret_dir = Path(secret_dir_value).expanduser().resolve()
     catalog_lines("validate")
 
     compose_config_results = [

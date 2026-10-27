@@ -1,6 +1,8 @@
 """Production deployment must use a fully governed runtime definition."""
 
 from pathlib import Path
+import json
+import shutil
 import runpy
 import sys
 from types import SimpleNamespace
@@ -25,6 +27,37 @@ def test_selfhost_secret_catalog_runs_offline(monkeypatch: pytest.MonkeyPatch) -
     assert len(calls) == 1
     assert calls[0]["command"] == ["owned-catalog", "secrets"]
     assert calls[0]["env"]["CARGO_NET_OFFLINE"] == "true"
+
+
+@pytest.mark.parametrize("path_value", ['"{path}"', '"${{FIXTURE_SECRET_ROOT}}"'])
+def test_selfhost_secret_preflight_uses_compose_resolved_path(
+    path_value: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    if not shutil.which("docker"):
+        pytest.skip("Docker Compose local renderer is unavailable")
+    scope = runpy.run_path(str(ROOT / "scripts/check-selfhost-production.py"))
+    secrets = tmp_path / "secret files"
+    secrets.mkdir()
+    source = secrets / "notification_webhook_secret"
+    source.write_text("local-only-renderer-sentinel", encoding="utf-8")
+    env_file = tmp_path / "fixture.env"
+    env_file.write_text(
+        f'FIXTURE_SECRET_ROOT="{secrets.as_posix()}"\n'
+        f"SELFHOST_SECRET_DIR={path_value.format(path=secrets.as_posix())}\n",
+        encoding="utf-8",
+    )
+    compose_file = tmp_path / "compose.yml"
+    compose_file.write_text(
+        "services:\n  probe:\n    image: busybox:latest\n"
+        "    secrets:\n      - notification_webhook_secret\n"
+        "secrets:\n  notification_webhook_secret:\n"
+        "    file: ${SELFHOST_SECRET_DIR}/notification_webhook_secret\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("DOCKER_HOST", "tcp://127.0.0.1:9")
+    monkeypatch.delenv("DOCKER_CONTEXT", raising=False)
+    paths = scope["rendered_secret_files"](env_file, compose_file)
+    assert paths["notification_webhook_secret"].resolve() == source.resolve()
 
 
 @pytest.mark.parametrize("bad_file", ["missing", "directory", "empty", "placeholder"])
@@ -55,7 +88,14 @@ def test_selfhost_secret_preflight_stops_before_compose(
         raise AssertionError(f"Unexpected catalog operation: {args}")
 
     monkeypatch.setitem(main.__globals__, "catalog_lines", only_catalog)
-    monkeypatch.setitem(main.__globals__, "run_compose_command", lambda *_: pytest.fail("Docker Compose was called"))
+    def only_render(*args: object) -> SimpleNamespace:
+        assert args[2:] == ("config", "--format", "json")
+        return SimpleNamespace(returncode=0, stdout=json.dumps({"secrets": {
+            name: {"file": str(secrets / name)}
+            for name in ("notification_webhook_secret", "notification_applicant_event_token")
+        }}))
+
+    monkeypatch.setitem(main.__globals__, "run_compose_command", only_render)
     monkeypatch.setattr(sys, "argv", ["check-selfhost-production.py", "--env-file", str(env_file), "--required-secrets-only"])
     assert main() == 1
     output = capsys.readouterr().out
@@ -85,7 +125,14 @@ def test_selfhost_secret_preflight_accepts_regular_files_without_compose(
         raise AssertionError(f"Unexpected catalog operation: {args}")
 
     monkeypatch.setitem(main.__globals__, "catalog_lines", only_catalog)
-    monkeypatch.setitem(main.__globals__, "run_compose_command", lambda *_: pytest.fail("Docker Compose was called"))
+    def only_render(*args: object) -> SimpleNamespace:
+        assert args[2:] == ("config", "--format", "json")
+        return SimpleNamespace(returncode=0, stdout=json.dumps({"secrets": {
+            name: {"file": str(secrets / name)}
+            for name in ("notification_webhook_secret", "notification_applicant_event_token")
+        }}))
+
+    monkeypatch.setitem(main.__globals__, "run_compose_command", only_render)
     monkeypatch.setattr(sys, "argv", ["check-selfhost-production.py", "--env-file", str(env_file), "--required-secrets-only"])
     assert main() == 0
     output = capsys.readouterr().out
@@ -94,6 +141,40 @@ def test_selfhost_secret_preflight_accepts_regular_files_without_compose(
 
     recipe = (ROOT / "Makefile").read_text(encoding="utf-8").split("selfhost-prod-up: selfhost-prod-config", 1)[1]
     assert recipe.index("--required-secrets-only") < recipe.index("$(SELFHOST_PROD_COMPOSE) pull")
+
+
+def test_selfhost_secret_preflight_rejects_external_required_secret(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    scope = runpy.run_path(str(ROOT / "scripts/check-selfhost-production.py"))
+    main = scope["main"]
+    env_file = tmp_path / "fixture.env"
+    env_file.write_text("SELFHOST_SECRET_DIR=/unused\n", encoding="utf-8")
+    monkeypatch.setitem(main.__globals__, "catalog_lines", lambda *_, **__: ["notification_webhook_secret"])
+    monkeypatch.setitem(main.__globals__, "run_compose_command", lambda *_: SimpleNamespace(
+        returncode=0,
+        stdout=json.dumps({"secrets": {"notification_webhook_secret": {"external": True}}}),
+    ))
+    monkeypatch.setattr(sys, "argv", ["check-selfhost-production.py", "--env-file", str(env_file), "--required-secrets-only"])
+    assert main() == 1
+    assert "has no file source" in capsys.readouterr().out
+
+
+def test_selfhost_secret_preflight_redacts_renderer_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    scope = runpy.run_path(str(ROOT / "scripts/check-selfhost-production.py"))
+    main = scope["main"]
+    env_file = tmp_path / "fixture.env"
+    env_file.write_text("SELFHOST_SECRET_DIR=/unused\n", encoding="utf-8")
+    monkeypatch.setitem(main.__globals__, "run_compose_command", lambda *_: SimpleNamespace(
+        returncode=1, stdout="private-sentinel", stderr="private-sentinel",
+    ))
+    monkeypatch.setattr(sys, "argv", ["check-selfhost-production.py", "--env-file", str(env_file), "--required-secrets-only"])
+    assert main() == 1
+    output = capsys.readouterr().out
+    assert "Could not inspect rendered self-host secret paths" in output
+    assert "private-sentinel" not in output
 
 
 def test_unsafe_layered_production_profile_remains_retired() -> None:
