@@ -401,7 +401,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             coverage.native_extension_http.len(),
-            NATIVE_EXTENSION_ROUTE_COUNT
+            NATIVE_EXTENSION_ROUTE_COUNT + PASSPORT_NATIVE_EXTENSION_ROUTE_COUNT
         );
         assert_eq!(
             coverage
