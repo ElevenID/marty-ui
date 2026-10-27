@@ -252,6 +252,7 @@ mod physical_provider_tests {
             organization_id: "org-a".into(),
             flow_instance_id: "flow-a".into(),
             operation: PhysicalDocumentOperation::Initialize,
+            start_idempotency_key: None,
             data: BTreeMap::new(),
         };
         let native = FlowServiceConfig::from_values(values.clone()).unwrap();

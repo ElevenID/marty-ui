@@ -45,13 +45,41 @@ pub enum FlowInstanceSideEffectError {
 pub async fn prepare_instance_start(
     providers: &FlowProviderRegistry,
     definition: &FlowDefinitionRecord,
-    mut instance: FlowInstanceRecord,
+    instance: FlowInstanceRecord,
     public_base_url: &str,
     now: DateTime<Utc>,
 ) -> Result<PreparedInstanceStart, FlowInstanceSideEffectError> {
+    prepare_instance_start_with_key(
+        providers,
+        definition,
+        instance,
+        public_base_url,
+        now,
+        None,
+        None,
+    )
+    .await
+}
+
+pub async fn prepare_instance_start_with_key(
+    providers: &FlowProviderRegistry,
+    definition: &FlowDefinitionRecord,
+    mut instance: FlowInstanceRecord,
+    public_base_url: &str,
+    now: DateTime<Utc>,
+    start_idempotency_key: Option<&str>,
+    physical_issuer_did: Option<&str>,
+) -> Result<PreparedInstanceStart, FlowInstanceSideEffectError> {
     match effective_flow_type(definition) {
         FlowType::PhysicalDocumentIssuance => {
-            initialize_physical_document(providers, definition, &mut instance).await?;
+            initialize_physical_document(
+                providers,
+                definition,
+                &mut instance,
+                start_idempotency_key,
+                physical_issuer_did,
+            )
+            .await?;
             Ok(PreparedInstanceStart {
                 instance,
                 artifact: None,
@@ -171,6 +199,7 @@ pub async fn apply_physical_advance_side_effect(
             organization_id: instance.organization_id.clone(),
             flow_instance_id: instance.id.clone(),
             operation,
+            start_idempotency_key: None,
             data: request_data,
         })
         .await?;
@@ -241,6 +270,8 @@ async fn initialize_physical_document(
     providers: &FlowProviderRegistry,
     definition: &FlowDefinitionRecord,
     instance: &mut FlowInstanceRecord,
+    start_idempotency_key: Option<&str>,
+    physical_issuer_did: Option<&str>,
 ) -> Result<(), FlowInstanceSideEffectError> {
     let physical = context_mut(instance)?
         .remove("physical_document")
@@ -264,23 +295,28 @@ async fn initialize_physical_document(
             ))
     };
     let template_id = required_reference(&definition.credential_template_id)?;
-    let template_provider =
-        providers
-            .credential_template
-            .as_ref()
-            .ok_or(FlowProviderError::Unavailable {
-                provider: "credential_template",
-            })?;
-    let template = template_provider.get_template(&template_id).await?;
-    validate_template(&template, &template_id, &instance.organization_id)?;
-    crate::validate_physical_document_template(&template)?;
+    let issuer_did = if let Some(issuer_did) = physical_issuer_did {
+        issuer_did.to_owned()
+    } else {
+        let template_provider =
+            providers
+                .credential_template
+                .as_ref()
+                .ok_or(FlowProviderError::Unavailable {
+                    provider: "credential_template",
+                })?;
+        let template = template_provider.get_template(&template_id).await?;
+        validate_template(&template, &template_id, &instance.organization_id)?;
+        crate::validate_physical_document_template(&template)?;
+        template.issuer_did
+    };
     let data = BTreeMap::from([
         (
             "application_template_id".into(),
             json!(required_reference(&definition.application_template_id)?),
         ),
         ("credential_template_id".into(), json!(template_id)),
-        ("issuer_did".into(), json!(template.issuer_did)),
+        ("issuer_did".into(), json!(issuer_did)),
         (
             "delivery_destination_profile_id".into(),
             json!(required_reference(
@@ -310,6 +346,7 @@ async fn initialize_physical_document(
             organization_id: instance.organization_id.clone(),
             flow_instance_id: instance.id.clone(),
             operation: PhysicalDocumentOperation::Initialize,
+            start_idempotency_key: start_idempotency_key.map(str::to_owned),
             data,
         })
         .await?;
@@ -548,7 +585,7 @@ fn build_wallet_offers(
     (uris, labels)
 }
 
-fn validate_template(
+pub(crate) fn validate_template(
     template: &CredentialTemplateReference,
     expected_id: &str,
     organization_id: &str,
