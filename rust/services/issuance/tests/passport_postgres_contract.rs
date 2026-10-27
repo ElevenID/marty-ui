@@ -2509,6 +2509,8 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
          GRANT USAGE ON SCHEMA issuance_service TO passport_batch_acl_test;
          GRANT SELECT ON issuance_service.physical_document_jobs,
                          issuance_service.passport_beta_batch_intents
+             TO passport_batch_acl_test;
+         GRANT SELECT, INSERT ON issuance_service.passport_job_administrative_cancellations
              TO passport_batch_acl_test;",
     )
     .execute(&pool)
