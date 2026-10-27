@@ -4371,6 +4371,12 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
 
     // Upgrade a populated released Python table rather than only testing a
     // fresh Rust table. The existing row and its original column type survive.
+    // This disposable fixture replaces the parent table; retire its newer
+    // cancellation-audit child first so the released Python DDL remains exact.
+    sqlx::query("DROP TABLE issuance_service.passport_job_administrative_cancellations")
+        .execute(&restarted_pool)
+        .await
+        .unwrap();
     sqlx::raw_sql(include_str!(
         "fixtures/physical_document_jobs_python_base.sql"
     ))
