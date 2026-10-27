@@ -16,7 +16,7 @@ Docker or platform detection.
 For an explicitly unqualified nightly installation trial, use the exact tag:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/ElevenID/marty-ui/main/install.sh | sh -s -- --candidate-test vX.Y.Z-nightly.YYYYMMDD.RUN_ID --install-dir /absolute/disposable/path
+curl -fsSL https://github.com/ElevenID/marty-ui/releases/download/vX.Y.Z-nightly.YYYYMMDD.RUN_ID/install.sh | sh -s -- --candidate-test vX.Y.Z-nightly.YYYYMMDD.RUN_ID --install-dir /absolute/disposable/path
 ```
 
 `--candidate-test` authenticates the nightly inventory, operator, and payloads
