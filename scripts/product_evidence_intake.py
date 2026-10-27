@@ -34,10 +34,26 @@ def file_digest(path: Path) -> str:
     return "sha256:" + digest.hexdigest()
 
 
+def unique_object(pairs: list[tuple[str, object]]) -> dict:
+    value = {}
+    for key, item in pairs:
+        require(key not in value, f"duplicate JSON key: {key}")
+        value[key] = item
+    return value
+
+
+def reject_constant(value: str) -> None:
+    raise ValueError(f"nonstandard JSON constant: {value}")
+
+
 def read_json(path: Path) -> dict:
     require(path.is_file() and not path.is_symlink(), "evidence input must be a regular file")
     require(path.stat().st_size <= 1024 * 1024, "evidence JSON is too large")
-    value = json.loads(path.read_text(encoding="utf-8"))
+    value = json.loads(
+        path.read_text(encoding="utf-8"),
+        object_pairs_hook=unique_object,
+        parse_constant=reject_constant,
+    )
     require(isinstance(value, dict), "evidence input must be an object")
     return value
 

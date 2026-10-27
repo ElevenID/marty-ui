@@ -107,6 +107,19 @@ def test_cli_writes_pending_record_without_overwriting_it(tmp_path):
     assert repeated.returncode != 0
 
 
+@pytest.mark.parametrize("malformed", ["duplicate", "nan"])
+def test_ambiguous_or_nonstandard_json_never_reaches_verdict_checks(tmp_path, malformed):
+    package, archive, report_path, _ = fixture(tmp_path, "marty-server")
+    source = report_path.read_text(encoding="utf-8")
+    if malformed == "duplicate":
+        source = source.replace('"result": "pass"', '"result": "fail", "result": "pass"')
+    else:
+        source = source.replace('"run_attempt": "1"', '"run_attempt": NaN')
+    report_path.write_text(source, encoding="utf-8")
+    with pytest.raises(ValueError, match="duplicate JSON key|nonstandard JSON constant"):
+        INTAKE["bind_report"](package, archive, report_path, sha(report_path.read_bytes()))
+
+
 @pytest.mark.parametrize("mutation", [
     "archive", "package", "report_digest", "image", "source", "producer_attempt",
     "verifier_run", "verifier_repository", "failed_check", "missing_check",
