@@ -145,6 +145,7 @@ test('D02 real UI rebind is intercepted once with the owned revision and fails o
       url: () => 'https://beta.elevenidllc.com/v1/signing-keys/issuer-identities?organization_id=00000000-0000-0000-0000-000000000001',
       method: () => 'PATCH', postDataJSON: () => ({ organization_id: '00000000-0000-0000-0000-000000000001', issuer_did: issuerDid }),
       headers: () => ({ 'content-type': 'application/json' }),
+      allHeaders: async () => ({ 'content-type': 'application/json', cookie: 'owned-session=present' }),
     };
     const page = {
       goto: async () => {},
@@ -153,6 +154,7 @@ test('D02 real UI rebind is intercepted once with the owned revision and fails o
       getByRole: () => ({ getByRole: () => ({ click: async () => {
         await routeHandler({ request: () => request, abort: async () => { throw new Error('Unexpected UI request'); },
           continue: async ({ headers }) => {
+            assert.equal(headers.cookie, 'owned-session=present');
             forwarded.push(headers['If-Match']);
             const status = headers['If-Match'] === current ? 200 : 412;
             const response = { url: request.url, request: () => request, status: () => status,

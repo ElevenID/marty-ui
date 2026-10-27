@@ -594,7 +594,7 @@ async function rebindThroughConsole(page, issuerDid, revision, recording = null)
       return;
     }
     forwarded = 1;
-    await route.continue({ headers: { ...request.headers(), 'If-Match': revision } });
+    await route.continue({ headers: { ...(await request.allHeaders()), 'If-Match': revision } });
   };
   await page.route(identityRoute, bindOwnedRevision);
   try {
