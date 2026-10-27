@@ -153,10 +153,35 @@ async fn kubernetes_resolved_native_profile_delivers_both_encryption_modes() {
     let owned = canvas_published_database::PublishedDatabase::start()
         .await
         .unwrap();
-    let redis = base_runtime_redis::OwnedRedis::start().await.unwrap();
-    renewal_fresh_main::run_kubernetes(&owned.url, redis.url(), false).await;
-    let result = redis.close_verified();
+    let redis = base_runtime_redis::OwnedRedis::start_in_published_namespace(&owned)
+        .await
+        .unwrap();
+    let result = base_runtime_container::run_kubernetes_native(&owned, &redis).await;
+    let result = base_runtime_container::retain_failure(result, redis.close_verified());
     base_runtime_container::retain_failure(result, owned.close_verified()).unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn kubernetes_profile_native_composition_child() {
+    if std::env::var("MARTY_KUBERNETES_RUNTIME_CHILD").as_deref() != Ok("1") {
+        return;
+    }
+    assert_eq!(std::env::consts::OS, "linux");
+    assert_eq!(
+        std::env::var("MARTY_BASE_RUNTIME_CHILD").as_deref(),
+        Ok("1")
+    );
+    assert_eq!(
+        std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref(),
+        Ok("1")
+    );
+    renewal_fresh_main::run_kubernetes(
+        "postgresql://oracle:synthetic-local-only@127.0.0.1:5432/canvas_published_schema_test",
+        "redis://127.0.0.1:6379",
+        false,
+    )
+    .await;
+    println!("\nMARTY_BASE_COMPOSITION_COMPLETE_V1");
 }
 
 #[tokio::test]
@@ -289,22 +314,37 @@ async fn base_profile_native_renewal_uses_actual_rendered_configuration() {
         eprintln!("Rendered base native process requires the exact-owned published schema gate");
         return;
     }
-    let _ = rendered_base_process::require_explicit_python();
     let owned = canvas_published_database::PublishedDatabase::start()
         .await
         .unwrap();
     base_runtime_redis::OwnedRedis::assert_constructor_timeout_cleanup(&owned)
         .await
         .unwrap();
-    let namespace_redis = base_runtime_redis::OwnedRedis::start_in_published_namespace(&owned)
+    let redis = base_runtime_redis::OwnedRedis::start_in_published_namespace(&owned)
         .await
         .unwrap();
-    namespace_redis.verify_published_namespace(&owned).unwrap();
-    namespace_redis.close_verified().unwrap();
-    let redis = base_runtime_redis::OwnedRedis::start().await.unwrap();
-    renewal_fresh_main::run_rendered(&owned.url, redis.url()).await;
-    redis.close_verified().unwrap();
-    owned.close_verified().unwrap();
+    let result = base_runtime_container::run_native(&owned, &redis).await;
+    let result = base_runtime_container::retain_failure(result, redis.close_verified());
+    base_runtime_container::retain_failure(result, owned.close_verified()).unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn base_profile_native_composition_child() {
+    if std::env::var("MARTY_BASE_RUNTIME_CHILD").as_deref() != Ok("1") {
+        return;
+    }
+    assert_eq!(std::env::consts::OS, "linux");
+    assert_eq!(
+        std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref(),
+        Ok("1")
+    );
+    let _ = rendered_base_process::require_explicit_python();
+    renewal_fresh_main::run_rendered(
+        "postgresql://oracle:synthetic-local-only@127.0.0.1:5432/canvas_published_schema_test",
+        "redis://127.0.0.1:6379",
+    )
+    .await;
+    println!("\nMARTY_BASE_COMPOSITION_COMPLETE_V1");
 }
 
 #[tokio::test]
