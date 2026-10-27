@@ -38,6 +38,101 @@ async fn sidecars(
     Ok(())
 }
 
+async fn fetch_verified_payloads(
+    fetcher: &GitHubReleaseFetcher,
+    tools: &VerificationTools,
+    download_dir: &Path,
+    inventory: &Inventory,
+    workflow: &str,
+    source: &str,
+) -> Result<PathBuf, String> {
+    for name in [
+        "install.sh",
+        "prepared-selfhost-images.json",
+        "prepared-selfhost-bundle.zip",
+    ] {
+        let artifact = inventory.artifact(name)?;
+        let path = download_dir.join(name);
+        fetcher
+            .fetch_verified(
+                &inventory.release_tag,
+                name,
+                &path,
+                artifact.size,
+                &artifact.sha256,
+            )
+            .await?;
+        sidecars(fetcher, &inventory.release_tag, name, download_dir).await?;
+        let hash = tools.verify(
+            &path,
+            workflow,
+            source,
+            inventory.build_run_id,
+            inventory.build_run_attempt,
+        )?;
+        if hash != artifact.sha256 {
+            return Err("verified artifact differs from signed inventory".into());
+        }
+    }
+    installer_artifacts::extract_bundle(
+        &download_dir.join("prepared-selfhost-bundle.zip"),
+        &download_dir.join("extracted"),
+        &inventory.artifact("prepared-selfhost-bundle.zip")?.sha256,
+    )
+}
+
+/// Test-only nightly acquisition. The signed inventory proves producer and
+/// payload identities; it grants neither consumer admission nor Ready status.
+pub async fn prepare_candidate_test(
+    inventory_path: &Path,
+    tools: &VerificationTools,
+    download_dir: &Path,
+    expected_source: &str,
+    expected_version: &str,
+    operator_sha: &str,
+) -> Result<PreparedRelease, String> {
+    if !expected_version.contains("-nightly.") {
+        return Err("candidate testing requires a nightly release".into());
+    }
+    let inventory_bytes = read_private_record(inventory_path)?;
+    let inventory = release::parse_inventory(&inventory_bytes)?;
+    if inventory.source_sha != expected_source
+        || inventory.release_tag != expected_version
+        || inventory.artifact("marty-deploy-linux-amd64")?.sha256 != operator_sha
+    {
+        return Err("candidate inventory differs from running operator".into());
+    }
+    let workflow = release::build_workflow(expected_version)?;
+    let digest = tools.verify(
+        inventory_path,
+        workflow,
+        expected_source,
+        inventory.build_run_id,
+        inventory.build_run_attempt,
+    )?;
+    if digest != release::sha256(&inventory_bytes) {
+        return Err("candidate inventory changed during verification".into());
+    }
+    let fetcher = GitHubReleaseFetcher::new()?;
+    let bundle = fetch_verified_payloads(
+        &fetcher,
+        tools,
+        download_dir,
+        &inventory,
+        workflow,
+        expected_source,
+    )
+    .await?;
+    Ok(PreparedRelease {
+        inventory,
+        channel: None,
+        admission_bytes: Vec::new(),
+        inventory_bytes,
+        channel_bytes: None,
+        bundle,
+    })
+}
+
 /// expected_source/version MUST come from the running binary's embedded build
 /// identity; operator_sha MUST be the hash of that executable, not CLI input.
 /// download_dir is a new private staging directory, never an existing install.
@@ -122,39 +217,15 @@ pub async fn prepare_release(
         expected_source,
         expected_version,
     )?;
-    for name in [
-        "install.sh",
-        "prepared-selfhost-images.json",
-        "prepared-selfhost-bundle.zip",
-    ] {
-        let artifact = inventory.artifact(name)?;
-        let path = download_dir.join(name);
-        fetcher
-            .fetch_verified(
-                expected_version,
-                name,
-                &path,
-                artifact.size,
-                &artifact.sha256,
-            )
-            .await?;
-        sidecars(&fetcher, expected_version, name, download_dir).await?;
-        let hash = tools.verify(
-            &path,
-            workflow,
-            expected_source,
-            admission.build_run_id,
-            admission.build_run_attempt,
-        )?;
-        if hash != artifact.sha256 {
-            return Err("verified artifact differs from admitted inventory".into());
-        }
-    }
-    let bundle = installer_artifacts::extract_bundle(
-        &download_dir.join("prepared-selfhost-bundle.zip"),
-        &download_dir.join("extracted"),
-        &inventory.artifact("prepared-selfhost-bundle.zip")?.sha256,
-    )?;
+    let bundle = fetch_verified_payloads(
+        &fetcher,
+        tools,
+        download_dir,
+        &inventory,
+        workflow,
+        expected_source,
+    )
+    .await?;
     // The runtime must validate packaged marker semantics/Compose image roles
     // before starting services. The result here proves authenticated extraction.
     Ok(PreparedRelease {

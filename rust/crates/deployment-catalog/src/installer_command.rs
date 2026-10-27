@@ -4,7 +4,7 @@
 
 use crate::{
     installer_release as release,
-    installer_state::{Identity, InstallerState, Phase, RuntimeBinding},
+    installer_state::{CandidateTestScope, Identity, InstallerState, Phase, RuntimeBinding},
     installer_verify::{self, VerificationTools},
 };
 use std::{
@@ -25,6 +25,11 @@ struct Options {
     directory: Option<PathBuf>,
     channel: Option<(String, PathBuf)>,
     yes: bool,
+}
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum InstallMode {
+    Admitted,
+    CandidateTest,
 }
 fn options(args: &[String]) -> Result<Options> {
     let mut values = BTreeMap::new();
@@ -116,6 +121,30 @@ fn options(args: &[String]) -> Result<Options> {
         yes,
     })
 }
+fn candidate_test_options(args: &[String]) -> Result<Options> {
+    if args
+        .iter()
+        .filter(|arg| arg.as_str() == "--verified-inventory")
+        .count()
+        != 1
+        || args.iter().any(|arg| {
+            ["--verified-admission", "--channel", "--verified-channel"].contains(&arg.as_str())
+        })
+    {
+        return Err("candidate testing requires only a signed nightly inventory".into());
+    }
+    let mut rewritten = args.to_vec();
+    let position = rewritten
+        .iter()
+        .position(|arg| arg == "--verified-inventory")
+        .ok_or("candidate inventory missing")?;
+    rewritten[position] = "--verified-admission".into();
+    let selected = options(&rewritten)?;
+    if !selected.version.contains("-nightly.") || selected.channel.is_some() {
+        return Err("candidate testing requires an exact nightly version".into());
+    }
+    Ok(selected)
+}
 fn confirm(directory: &Path) -> Result<()> {
     let mut tty=std::fs::OpenOptions::new().read(true).write(true).open("/dev/tty")
         .map_err(|_| "installation confirmation requires a terminal; use --yes to accept the documented defaults")?;
@@ -155,7 +184,16 @@ fn persist_signed(
 }
 
 pub fn install(args: &[String], build_identity: &str) -> Result<()> {
-    let o = options(args)?;
+    install_inner(args, build_identity, InstallMode::Admitted)
+}
+pub fn candidate_test(args: &[String], build_identity: &str) -> Result<()> {
+    install_inner(args, build_identity, InstallMode::CandidateTest)
+}
+fn install_inner(args: &[String], build_identity: &str, mode: InstallMode) -> Result<()> {
+    let o = match mode {
+        InstallMode::Admitted => options(args)?,
+        InstallMode::CandidateTest => candidate_test_options(args)?,
+    };
     if unsafe { libc::geteuid() } == 0 || !cfg!(target_arch = "x86_64") {
         return Err("installer requires a regular Docker-enabled Linux amd64 user".into());
     }
@@ -172,24 +210,46 @@ pub fn install(args: &[String], build_identity: &str) -> Result<()> {
     }
     let tools = VerificationTools::new(&o.tools, &o.gh)?;
     let operator_sha = installer_verify::current_operator_digest()?;
-    let admission_bytes = installer_verify::read_private_record(&o.admission)?;
-    let admission = release::parse_admission(&admission_bytes)?;
-    if admission.source_sha != source
-        || admission.release_tag != version
-        || admission.operator_sha256 != operator_sha
-    {
-        return Err("admission does not match running installer".into());
-    }
-    if tools.verify(
-        &o.admission,
-        release::PROMOTION_WORKFLOW,
-        &admission.promotion_source_sha,
-        admission.promotion_run_id,
-        admission.promotion_run_attempt,
-    )? != release::sha256(&admission_bytes)
-    {
-        return Err("admission changed".into());
-    }
+    let admitted = if mode == InstallMode::Admitted {
+        let bytes = installer_verify::read_private_record(&o.admission)?;
+        let record = release::parse_admission(&bytes)?;
+        if record.source_sha != source
+            || record.release_tag != version
+            || record.operator_sha256 != operator_sha
+            || tools.verify(
+                &o.admission,
+                release::PROMOTION_WORKFLOW,
+                &record.promotion_source_sha,
+                record.promotion_run_id,
+                record.promotion_run_attempt,
+            )? != release::sha256(&bytes)
+        {
+            return Err("admission does not match running installer".into());
+        }
+        Some((bytes, record))
+    } else {
+        None
+    };
+    let testing = if mode == InstallMode::CandidateTest {
+        let bytes = installer_verify::read_private_record(&o.admission)?;
+        let record = release::parse_inventory(&bytes)?;
+        if record.source_sha != source
+            || record.release_tag != version
+            || record.artifact("marty-deploy-linux-amd64")?.sha256 != operator_sha
+            || tools.verify(
+                &o.admission,
+                release::build_workflow(version)?,
+                source,
+                record.build_run_id,
+                record.build_run_attempt,
+            )? != release::sha256(&bytes)
+        {
+            return Err("candidate inventory does not match running installer".into());
+        }
+        Some((bytes, record))
+    } else {
+        None
+    };
     let directory = o.directory.unwrap_or_else(|| {
         PathBuf::from(std::env::var_os("HOME").unwrap_or_default())
             .join(format!(".marty-install-{}", uuid::Uuid::new_v4().simple()))
@@ -220,24 +280,43 @@ pub fn install(args: &[String], build_identity: &str) -> Result<()> {
         &o.tools,
     )?
     .preflight()?;
-    let mut state = InstallerState::create_with_runtime(
-        &directory,
-        Identity {
-            source_sha: source.into(),
-            release_tag: version.into(),
-            inventory_sha256: format!("sha256:{}", admission.inventory_sha256),
-        },
-        runtime,
-    )?;
+    let inventory_sha = if let Some((_, record)) = &admitted {
+        record.inventory_sha256.clone()
+    } else {
+        release::sha256(&testing.as_ref().ok_or("candidate inventory missing")?.0)
+    };
+    let identity = Identity {
+        source_sha: source.into(),
+        release_tag: version.into(),
+        inventory_sha256: format!("sha256:{inventory_sha}"),
+    };
+    let mut state = if let Some((_, record)) = &testing {
+        InstallerState::create_test_with_runtime(
+            &directory,
+            identity,
+            runtime,
+            CandidateTestScope {
+                inventory_sha256: inventory_sha.clone(),
+                build_run_id: record.build_run_id,
+                build_run_attempt: record.build_run_attempt,
+            },
+        )?
+    } else {
+        InstallerState::create_with_runtime(&directory, identity, runtime)?
+    };
     eprintln!("Marty installation state: {}", directory.display());
     state.create_private_directory("evidence")?;
     state.create_private_directory("downloads")?;
-    persist_signed(
-        &mut state,
-        &o.admission,
-        "installer-admission.json",
-        &admission_bytes,
-    )?;
+    if let Some((bytes, _)) = &admitted {
+        persist_signed(&mut state, &o.admission, "installer-admission.json", bytes)?;
+    } else if let Some((bytes, _)) = &testing {
+        persist_signed(
+            &mut state,
+            &o.admission,
+            "candidate-test-inventory.json",
+            bytes,
+        )?;
+    }
     state.persist_operator(
         &std::env::current_exe().map_err(|_| "cannot locate running installer")?,
         &operator_sha,
@@ -252,21 +331,45 @@ pub fn install(args: &[String], build_identity: &str) -> Result<()> {
     )?;
     let downloads = directory.join("downloads");
     let executor = tokio::runtime::Runtime::new().map_err(|_| "cannot start installer runtime")?;
-    let prepared = executor.block_on(crate::installer_prepare::prepare_release(
-        &o.admission,
-        o.channel.as_ref().map(|(n, p)| (n.as_str(), p.as_path())),
-        &tools,
-        &downloads,
-        source,
-        version,
-        &operator_sha,
-    ))?;
-    if prepared.admission_bytes != admission_bytes {
-        return Err("admission changed during preparation".into());
+    let prepared = if mode == InstallMode::Admitted {
+        executor.block_on(crate::installer_prepare::prepare_release(
+            &o.admission,
+            o.channel.as_ref().map(|(n, p)| (n.as_str(), p.as_path())),
+            &tools,
+            &downloads,
+            source,
+            version,
+            &operator_sha,
+        ))?
+    } else {
+        executor.block_on(crate::installer_prepare::prepare_candidate_test(
+            &o.admission,
+            &tools,
+            &downloads,
+            source,
+            version,
+            &operator_sha,
+        ))?
+    };
+    if let Some((bytes, _)) = &admitted {
+        if prepared.admission_bytes != *bytes {
+            return Err("admission changed during preparation".into());
+        }
+    } else if let Some((bytes, _)) = &testing {
+        if prepared.inventory_bytes != *bytes
+            || installer_verify::read_private_record(&o.admission)? != *bytes
+        {
+            return Err("candidate inventory changed during preparation".into());
+        }
     }
+    let inventory_evidence_path = if mode == InstallMode::Admitted {
+        downloads.join("installer-inventory.json")
+    } else {
+        o.admission.clone()
+    };
     persist_signed(
         &mut state,
-        &downloads.join("installer-inventory.json"),
+        &inventory_evidence_path,
         "installer-inventory.json",
         &prepared.inventory_bytes,
     )?;
@@ -474,5 +577,33 @@ mod tests {
         ] {
             assert!(options(&args.iter().map(|s| s.to_string()).collect::<Vec<_>>()).is_err());
         }
+    }
+
+    #[test]
+    fn candidate_testing_is_exact_nightly_and_cannot_take_admission_or_channel() {
+        let mut args = [
+            ("--version", "v1.1.263-nightly.20261027.42"),
+            ("--verified-inventory", "/private/inventory.json"),
+            ("--verification-tools", "/private/tools"),
+            ("--gh-bin", "/private/tools/gh"),
+            ("--docker-host", "unix:///var/run/docker.sock"),
+            ("--docker-engine-id", "exact-engine"),
+            ("--docker-bin", "/usr/bin/docker"),
+        ]
+        .into_iter()
+        .flat_map(|(key, value)| [key.to_owned(), value.to_owned()])
+        .collect::<Vec<_>>();
+        assert!(candidate_test_options(&args).is_ok());
+        assert!(options(&args).is_err());
+        args[1] = "v1.1.263".into();
+        assert!(candidate_test_options(&args).is_err());
+        args[1] = "v1.1.263-nightly.20261027.42".into();
+        args.push("--verified-admission".into());
+        args.push("/private/admission.json".into());
+        assert!(candidate_test_options(&args).is_err());
+        args.truncate(args.len() - 2);
+        args.push("--channel".into());
+        args.push("nightly".into());
+        assert!(candidate_test_options(&args).is_err());
     }
 }

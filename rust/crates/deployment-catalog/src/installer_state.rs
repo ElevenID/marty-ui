@@ -122,6 +122,28 @@ pub struct AcceptanceScope {
     pub context_sha256: String,
     pub consumption_id: String,
 }
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CandidateTestScope {
+    pub inventory_sha256: String,
+    pub build_run_id: u64,
+    pub build_run_attempt: u64,
+}
+impl CandidateTestScope {
+    fn validate(&self) -> Result<()> {
+        if self.inventory_sha256.len() != 64
+            || !self
+                .inventory_sha256
+                .bytes()
+                .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+            || self.build_run_id == 0
+            || self.build_run_attempt == 0
+        {
+            return Err("invalid candidate test scope".into());
+        }
+        Ok(())
+    }
+}
 impl AcceptanceScope {
     fn validate(&self) -> Result<()> {
         for value in [
@@ -149,6 +171,7 @@ pub enum ExecutionScope {
     #[default]
     Unclassified,
     AcceptanceOnly(AcceptanceScope),
+    CandidateTest(CandidateTestScope),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -188,11 +211,13 @@ impl Journal {
     }
     fn validate(&self) -> Result<()> {
         self.identity.validate()?;
-        if let ExecutionScope::AcceptanceOnly(scope) = &self.scope {
-            scope.validate()?;
-            if self.phase == Phase::Ready {
-                return Err("acceptance-only journal cannot claim installation Ready".into());
-            }
+        match &self.scope {
+            ExecutionScope::AcceptanceOnly(scope) => scope.validate()?,
+            ExecutionScope::CandidateTest(scope) => scope.validate()?,
+            ExecutionScope::Unclassified => {}
+        }
+        if !matches!(self.scope, ExecutionScope::Unclassified) && self.phase == Phase::Ready {
+            return Err("test execution cannot claim installation Ready".into());
         }
         if let Some(runtime) = &self.runtime {
             runtime.validate()?;
@@ -1416,6 +1441,24 @@ impl InstallerState {
             installation_id,
         )
     }
+    /// An explicitly selected public nightly test has no consumer admission.
+    /// The caller verifies the signed inventory and operator before creating it.
+    pub fn create_test_with_runtime(
+        path: &Path,
+        identity: Identity,
+        runtime: RuntimeBinding,
+        scope: CandidateTestScope,
+    ) -> Result<Self> {
+        runtime.validate()?;
+        scope.validate()?;
+        Self::create_internal(
+            path,
+            identity,
+            Some(runtime),
+            ExecutionScope::CandidateTest(scope),
+            uuid::Uuid::new_v4(),
+        )
+    }
     fn create_internal(
         path: &Path,
         identity: Identity,
@@ -1461,8 +1504,8 @@ impl InstallerState {
         if &journal.identity != identity {
             return Err("installation candidate differs".into());
         }
-        if matches!(journal.scope, ExecutionScope::AcceptanceOnly(_)) {
-            return Err("acceptance-only execution cannot use ordinary provisioning resume".into());
+        if !matches!(journal.scope, ExecutionScope::Unclassified) {
+            return Err("test execution cannot use ordinary provisioning resume".into());
         }
         // Cleanup and provisioning are separate lifecycles. Even a historical
         // Ready journal must never authorize recreation after cleanup begins.
@@ -1489,8 +1532,8 @@ impl InstallerState {
         if read(&self.directory)? != self.journal {
             return Err("installation journal changed unexpectedly".into());
         }
-        if next == Phase::Ready && matches!(self.journal.scope, ExecutionScope::AcceptanceOnly(_)) {
-            return Err("acceptance-only execution requires external runtime qualification; installation Ready is not granted".into());
+        if next == Phase::Ready && !matches!(self.journal.scope, ExecutionScope::Unclassified) {
+            return Err("test execution requires external runtime qualification; installation Ready is not granted".into());
         }
         if !matches!(
             (self.journal.phase, next),
@@ -1672,6 +1715,38 @@ mod tests {
         assert_eq!(
             InstallerState::inspect(&path).unwrap().execution_scope(),
             &expected
+        );
+    }
+    #[test]
+    fn public_candidate_test_scope_cannot_resume_or_claim_ready() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let path = root.path().join("nightly-test");
+        let scope = CandidateTestScope {
+            inventory_sha256: "a".repeat(64),
+            build_run_id: 42,
+            build_run_attempt: 1,
+        };
+        let mut state = InstallerState::create_test_with_runtime(
+            &path,
+            identity(),
+            acceptance_runtime(),
+            scope.clone(),
+        )
+        .unwrap();
+        assert_eq!(
+            state.journal().execution_scope(),
+            &ExecutionScope::CandidateTest(scope.clone())
+        );
+        for phase in [Phase::Verified, Phase::Provisioning, Phase::Provisioned] {
+            state.advance(phase).unwrap();
+        }
+        assert!(state.advance(Phase::Ready).is_err());
+        drop(state);
+        assert!(InstallerState::resume(&path, &identity()).is_err());
+        assert_eq!(
+            InstallerState::inspect(&path).unwrap().execution_scope(),
+            &ExecutionScope::CandidateTest(scope)
         );
     }
     #[test]

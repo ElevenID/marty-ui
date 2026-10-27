@@ -6,7 +6,7 @@ main() (
     umask 077
     fail() { printf 'Marty installer: %s\n' "$*" >&2; exit 1; }
     usage() {
-        printf '%s\n' 'Usage: install.sh [--channel nightly|stable | --version TAG] [--install-dir PATH] [--yes]'
+        printf '%s\n' 'Usage: install.sh [--channel nightly|stable | --version TAG | --candidate-test NIGHTLY_TAG] [--install-dir PATH] [--yes]'
     }
     # Host-specific behavior stays behind the selected platform adapter.
     linux_preflight() {
@@ -70,17 +70,19 @@ main() (
     destination=
     yes=false
     complete=false
+    candidate_test=false
     while [ "$#" -gt 0 ]; do
         case "$1" in
             --bootstrap-complete) [ "$#" -eq 1 ] || fail 'Invalid bootstrap terminator'; complete=true; shift ;;
             --help|-h) usage; exit 0 ;;
             --yes) yes=true; shift ;;
-            --channel|--version|--install-dir)
+            --channel|--version|--candidate-test|--install-dir)
                 [ "$#" -ge 2 ] && [ -n "$2" ] || fail "Missing value for $1"
                 case "$2" in --*) fail "Missing value for $1" ;; esac
                 case "$1" in
                     --channel) [ -z "$selection" ] || fail 'Choose one release selector'; channel=$2; selection=channel ;;
                     --version) [ -z "$selection" ] || fail 'Choose one release selector'; version=$2; selection=version ;;
+                    --candidate-test) [ -z "$selection" ] || fail 'Choose one release selector'; version=$2; selection=candidate; candidate_test=true ;;
                     --install-dir) [ -z "$destination" ] || fail 'Repeated installation directory'; destination=$2 ;;
                 esac
                 shift 2 ;;
@@ -92,6 +94,9 @@ main() (
     select_platform
     if [ -n "$version" ]; then
         printf '%s\n' "$version" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-nightly\.20[0-9]{6}\.[1-9][0-9]*)?$' || fail 'Invalid version'
+    fi
+    if [ "$candidate_test" = true ]; then
+        case "$version" in *-nightly.*) ;; *) fail 'Candidate testing requires an exact nightly tag' ;; esac
     fi
     "$preflight"
     stage=$(mktemp -d /tmp/marty-installer.XXXXXXXX) || fail 'Cannot create private download directory'
@@ -157,6 +162,32 @@ main() (
         fetch "$1.sigstore.json" "$2.sigstore.json" 1048576
         fetch "$1.provenance.jsonl" "$2.provenance.jsonl" 1048576
     }
+    if [ "$candidate_test" = true ]; then
+        printf '%s\n' 'Marty candidate test: unqualified nightly; installation Ready is not granted.' >&2
+        signed_download "$base/$version/installer-inventory.json" "$stage/installer-inventory.json" 65536
+        source=$("$jq" -er '.source_sha | select(test("^[0-9a-f]{40}$"))' "$stage/installer-inventory.json")
+        build_run=$(run_field "$stage/installer-inventory.json" build_run_id)
+        build_attempt=$(run_field "$stage/installer-inventory.json" build_run_attempt)
+        "$jq" -e --arg tag "$version" --arg asset "$operator_asset" '
+            .schema == "elevenid.installer-inventory/v1" and .repository == "ElevenID/marty-ui"
+            and .platform == "linux/amd64" and .release_tag == $tag
+            and ([.artifacts[] | select(.name == $asset)] | length == 1)
+        ' "$stage/installer-inventory.json" >/dev/null || fail 'Candidate inventory identity differs'
+        verify "$stage/installer-inventory.json" nightly-release.yml "$source" "$build_run" "$build_attempt"
+        operator_sha=$("$jq" -er --arg asset "$operator_asset" '.artifacts[] | select(.name == $asset) | .sha256 | select(test("^[0-9a-f]{64}$"))' "$stage/installer-inventory.json")
+        signed_download "$base/$version/$operator_asset" "$stage/marty-deploy" 536870912
+        [ "$(digest "$stage/marty-deploy")" = "$operator_sha" ] || fail 'Candidate operator digest differs'
+        verify "$stage/marty-deploy" nightly-release.yml "$source" "$build_run" "$build_attempt"
+        chmod 700 -- "$stage/marty-deploy"
+        [ "$("$stage/marty-deploy" --build-identity)" = "$source:$version" ] || fail 'Candidate operator build identity differs'
+        set -- candidate-test --version "$version" --verified-inventory "$stage/installer-inventory.json" \
+            --verification-tools "$stage" --gh-bin "$gh" \
+            --docker-host "$docker_endpoint" --docker-engine-id "$docker_engine_id" --docker-bin "$(command -v docker)"
+        [ -z "$destination" ] || set -- "$@" --install-dir "$destination"
+        [ "$yes" = false ] || set -- "$@" --yes
+        "$stage/marty-deploy" "$@"
+        return
+    fi
     # The unsigned pointer locates immutable metadata; it grants no authority.
     # Publishers compare-and-swap one branch commit, never replace release assets.
     select_channel() {
