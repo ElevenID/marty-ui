@@ -3,6 +3,7 @@ from copy import deepcopy
 import json
 import hashlib
 import importlib.util
+import inspect
 import os
 from pathlib import Path
 import subprocess
@@ -12,6 +13,45 @@ from types import SimpleNamespace
 import pytest
 
 from scripts import beta_passport_functional_audit as audit
+
+
+def test_owned_flow_lookup_is_only_array_permitted_by_browser_transport():
+    ports = object.__new__(audit.ObservedPassportRequests)
+    ports.capture = SimpleNamespace(failed=False, completed=False)
+    observed = []
+    def evaluate(source, arguments):
+        observed.append(arguments["allowOwnedFlowList"])
+        return {"status": 200, "value": [] if arguments["allowOwnedFlowList"] else {}}
+    ports.pages = {"flow": SimpleNamespace(evaluate=evaluate)}
+    path = ("/v1/flows/instances?organization_id=org-1"
+            "&flow_definition_id=owned-definition&limit=100&offset=0")
+    assert ports._fetch("flow", "GET", path, None) == (200, [])
+    assert ports._fetch("flow", "GET", "/v1/flows/instances?organization_id=org-1", None) == (200, {})
+    assert ports._fetch("flow", "GET", "/v1/flows/definitions/owned-definition", None) == (200, {})
+    assert observed == [True, False, False]
+
+
+def test_browser_response_shape_guard_executes_for_exact_flow_lookup():
+    source = inspect.getsource(audit.ObservedPassportRequests._fetch)
+    expression = source.split('evaluate("""', 1)[1].split('"""', 1)[0]
+    javascript = """
+      global.location = {origin: 'https://beta.elevenidllc.com'};
+      const action = eval('(' + EXPRESSION + ')');
+      async function run(value, allowOwnedFlowList) {
+        global.fetch = async () => ({status: 200, arrayBuffer: async () =>
+          new TextEncoder().encode(JSON.stringify(value)).buffer});
+        try {
+          const result = await action({method:'GET', path:'/v1/flows/instances',
+            body:null, headers:{}, credentialed:true, allowOwnedFlowList});
+          return Array.isArray(result.value) ? 'ARRAY' : 'OBJECT';
+        } catch (_) { return 'REJECTED'; }
+      }
+      (async () => process.stdout.write(JSON.stringify([
+        await run([], true), await run([], false), await run({}, false)])))();
+    """.replace("EXPRESSION", json.dumps(expression))
+    result = subprocess.run(["node", "-e", javascript], capture_output=True,
+                            text=True, timeout=10, check=True)
+    assert json.loads(result.stdout) == ["ARRAY", "REJECTED", "OBJECT"]
 
 
 def test_native_binding_requires_actual_parent_context_and_unchanged_receipt(tmp_path, monkeypatch):

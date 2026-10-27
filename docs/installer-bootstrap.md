@@ -1,0 +1,58 @@
+# Installer bootstrap
+
+The GitHub-hosted bootstrap selects a release, authenticates its deployment
+operator and launches that operator. Linux amd64 is the initial supported
+platform. macOS, Windows and other architectures are not supported yet.
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/ElevenID/marty-ui/main/install.sh | sh -s -- --channel nightly
+```
+
+Use `--channel stable` for stable releases, or `--version TAG` for an exact
+version. These selectors are mutually exclusive. `--install-dir ABSOLUTE_PATH`
+and `--yes` are forwarded to the verified operator. `--help` works without
+Docker or platform detection.
+
+## Requirements and release availability
+
+Run as a regular Docker-enabled Linux amd64 user. Docker Engine must be locally
+accessible through a Unix socket, with its Compose plugin available. Rootless
+Docker, user namespace remapping and remote Docker contexts are currently
+unsupported. The bootstrap checks its standard command-line prerequisites and
+downloads pinned verification tools itself; it does not require a repository
+checkout or a build toolchain.
+
+The selected version must have published signed admission metadata and an
+authenticated operator artifact. Nightly and stable channel selection also
+requires valid signed channel metadata. Missing, expired, mismatched or invalid
+metadata causes refusal before the operator executes. A completed artifact build
+alone does not establish channel availability. Artifact production and deployment
+readiness are owned by their respective release and deployment workflows.
+
+## Platform adapters
+
+`install.sh` keeps release selection and authentication shared. Its closed
+platform selector maps Linux `x86_64` and `amd64` host names to `linux/amd64`.
+Every other OS/architecture pair stops before prerequisite checks, Docker calls,
+temporary staging or downloads.
+
+Each adapter selects its host preflight, checksum implementation, operator asset,
+admission platform, verification-tool URLs, literal SHA-256 pins, size limits and
+archive member together. Host strings and environment variables cannot supply
+download URLs or trust anchors. Adding another platform requires its matching
+operator and release metadata, reviewed tool pins, host adapter and executable
+bootstrap tests. A future native Windows entry point would need a PowerShell
+adapter; this POSIX shell script does not claim Windows support.
+
+## Deployment operations
+
+The bootstrap's boundary is verified operator dispatch. The operator owns
+existing-installation detection, configuration, deployment changes and exit
+status. The bootstrap does not attempt to repair deployments or implement
+upgrade migrations. Selecting `--version` chooses an operator release; it is not
+an automatic upgrade of an existing installation.
+
+Explicit updates, diagnostics and supported repairs belong to the deployment
+tool. Future bootstrap options should expose those operations only after the
+verified operator supports them. Re-running the bootstrap must not be documented
+as a supported update or repair procedure without that deployment contract.

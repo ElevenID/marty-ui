@@ -40,9 +40,103 @@ def test_help_does_not_require_docker_or_downloads():
     (["--skip-verification"], "Unknown option"),
 ])
 def test_invalid_arguments_refused_before_host_mutation(args, reason):
-    result = run(args)
+    # Keep argument-policy checks independent of the test runner's actual OS.
+    host = 'uname() { case "$1" in -s) echo Linux;; -m) echo x86_64;; esac; }\n'
+    result = run(args, source=host + SCRIPT.read_text())
     assert result.returncode != 0
     assert reason in result.stderr
+
+
+@pytest.mark.parametrize("system,machine", [
+    ("Darwin", "arm64"), ("Darwin", "x86_64"), ("Linux", "aarch64"),
+    ("Linux", "unknown"), ("MINGW64_NT", "x86_64"), ("FreeBSD", "amd64"),
+])
+def test_unsupported_platform_stops_before_dependencies_or_download(system, machine):
+    setup = f'''uname() {{ case "$1" in -s) echo {shlex.quote(system)};; -m) echo {shlex.quote(machine)};; esac; }}
+id() {{ echo UNEXPECTED_ID >&2; return 91; }}
+grep() {{ echo UNEXPECTED_DEPENDENCY >&2; return 91; }}
+docker() {{ echo UNEXPECTED_DOCKER >&2; return 91; }}
+mktemp() {{ echo UNEXPECTED_STAGING >&2; return 91; }}
+curl() {{ echo UNEXPECTED_DOWNLOAD >&2; return 91; }}
+'''
+    result = run(["--version", "v1.2.3"], source=setup + SCRIPT.read_text())
+    assert result.returncode != 0
+    assert f"Unsupported platform: {system}/{machine}" in result.stderr
+    assert "UNEXPECTED" not in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("failed_option,reason", [
+    ("-s", "Cannot detect host operating system"),
+    ("-m", "Cannot detect host architecture"),
+])
+def test_failed_platform_detection_stops_before_host_actions(failed_option, reason):
+    setup = f'''uname() {{
+    [ "$1" != {shlex.quote(failed_option)} ] || return 1
+    case "$1" in -s) echo Linux;; -m) echo x86_64;; esac
+}}
+id() {{ echo UNEXPECTED_ID >&2; return 91; }}
+curl() {{ echo UNEXPECTED_DOWNLOAD >&2; return 91; }}
+'''
+    result = run(source=setup + SCRIPT.read_text())
+    assert result.returncode != 0 and reason in result.stderr
+    assert "UNEXPECTED" not in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("machine", ["x86_64", "amd64"])
+def test_linux_adapter_selects_coherent_pinned_tools_and_payload(machine, monkeypatch):
+    for key in ("platform", "operator_asset", "jq_url", "jq_sha", "gh_member"):
+        monkeypatch.setenv(key, "untrusted-environment-value")
+    setup = f'''uname() {{ case "$1" in -s) echo Linux;; -m) echo {machine};; esac; }}
+id() {{
+    printf 'PROFILE:%s\\n' "$platform" "$operator_asset" "$preflight" "$digest_adapter" \\
+        "$jq_url" "$jq_sha" "$jq_size" "$cosign_url" "$cosign_sha" "$cosign_size" \\
+        "$gh_url" "$gh_sha" "$gh_size" "$gh_member" >&2
+    echo 0
+}}
+docker() {{ echo UNEXPECTED_DOCKER >&2; return 91; }}
+curl() {{ echo UNEXPECTED_DOWNLOAD >&2; return 91; }}
+'''
+    result = run(source=setup + SCRIPT.read_text())
+    # Stop at the actual regular-user check after observing the selected adapter.
+    assert result.returncode != 0 and "regular Docker-enabled user" in result.stderr
+    selected = [line.removeprefix("PROFILE:") for line in result.stderr.splitlines()
+                if line.startswith("PROFILE:")]
+    assert selected == [
+        "linux/amd64", "marty-deploy-linux-amd64", "linux_preflight", "linux_digest",
+        "https://github.com/jqlang/jq/releases/download/jq-1.8.1/jq-linux-amd64",
+        "020468de7539ce70ef1bceaf7cde2e8c4f2ca6c3afb84642aabc5c97d9fc2a0d", "2255816",
+        "https://github.com/sigstore/cosign/releases/download/v3.1.4/cosign-linux-amd64",
+        "424e2c97d0b45fd7a6b608a87f090f35633f4c23ece5f092d48bba11aaf4bbfa", "145688404",
+        "https://github.com/cli/cli/releases/download/v2.103.2/gh_2.103.2_linux_amd64.tar.gz",
+        "62ccf747115ddc61237efffdde66a3c8f70ba249433dc64f70801089b59c59c8", "15031001",
+        "gh_2.103.2_linux_amd64/bin/gh",
+    ]
+    assert "UNEXPECTED" not in result.stdout + result.stderr
+
+
+def test_help_does_not_probe_platform():
+    setup = 'uname() { echo UNEXPECTED_HOST_PROBE >&2; return 91; }\n'
+    result = run(["--help"], source=setup + SCRIPT.read_text())
+    assert result.returncode == 0
+    assert "UNEXPECTED" not in result.stdout + result.stderr
+
+
+@pytest.mark.skipif(shutil.which("jq") is None, reason="actual bootstrap admission JSON policy")
+@pytest.mark.parametrize("platform", ["darwin/arm64", "linux/arm64", "windows/amd64"])
+def test_admission_must_match_selected_platform(platform):
+    source = SCRIPT.read_text()
+    match = re.search(r'--arg tag "\$version" --arg platform "\$platform" \'([^\']*)\' "\$stage/admission.json"', source, re.S)
+    assert match
+    record = dict(schema="elevenid.installer-admission/v1", repository="ElevenID/marty-ui",
+                  release_tag="v1.2.3", platform="linux/amd64", status="accepted",
+                  operator_sha256="a" * 64, inventory_sha256="b" * 64)
+    command = ["jq", "-e", "--arg", "tag", "v1.2.3", "--arg", "platform", "linux/amd64", match[1]]
+    def check():
+        return subprocess.run(command, input=json.dumps(record), text=True,
+                              capture_output=True, timeout=10).returncode
+    assert check() == 0
+    record["platform"] = platform
+    assert check() != 0
 
 
 def test_truncated_script_cannot_enter_main():
@@ -231,5 +325,14 @@ signed_download() { printf '%s\\n' "$1"; }
 '''+line)
     assert result.returncode==0
     assert result.stdout.strip()=="https://github.com/ElevenID/marty-ui/releases/download/installer-admission-v1.2.3/installer-admission.json"
-    assert 'signed_download "$base/$version/marty-deploy-linux-amd64"' in source
+    payload_line=next(line for line in source.splitlines()
+                      if 'signed_download "$base/$version/$operator_asset"' in line)
+    result=run(source='''base=https://github.com/ElevenID/marty-ui/releases/download
+version=v1.2.3
+stage=/private/stage
+operator_asset=marty-deploy-linux-amd64
+signed_download() { printf '%s\\n' "$1"; }
+'''+payload_line)
+    assert result.returncode==0
+    assert result.stdout.strip()=="https://github.com/ElevenID/marty-ui/releases/download/v1.2.3/marty-deploy-linux-amd64"
     assert source.index('        recheck_channel_pointer\n') < source.index('    chmod 700 "$stage/marty-deploy"')
