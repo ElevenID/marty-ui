@@ -1525,7 +1525,7 @@ mod error_code_projection_tests {
             CertificateTrustFailure, MdocAuthenticationDiagnosticV1, MdocDiagnosticFormat,
         };
         let policy=build_policy(serde_json::from_value(json!({"organization_id":Uuid::from_u128(1).to_string(),"name":"Certificate trust",
-            "credential_requirements":[{"credential_template_id":Uuid::from_u128(2).to_string(),"credential_payload_format":"mdoc","requested_claims":[]}]})).unwrap(),Utc::now()).unwrap();
+            "credential_requirements":[{"credential_template_id":Uuid::from_u128(2).to_string(),"credential_payload_format":"mdoc","requested_claims":[{"claim_name":"age_over_21"}]}]})).unwrap(),Utc::now()).unwrap();
         let request: EvaluatePresentationRequest =
             serde_json::from_value(json!({"vp_token":"raw-mdoc","nonce":"server-owned-nonce"}))
                 .unwrap();
