@@ -806,6 +806,11 @@ pub(crate) fn public_mdoc_crl_path(path: &str) -> bool {
     RESOURCE.is_match(path)
 }
 
+pub(crate) fn mdoc_crl_operator_path(path: &str) -> bool {
+    path.strip_prefix("/v1/signing-keys/mdoc-crls/")
+        .is_some_and(|id| !id.is_empty() && !id.contains('/'))
+}
+
 fn public_route(path: &str) -> bool {
     public_mdoc_crl_path(path)
         || path == "/openapi.json"

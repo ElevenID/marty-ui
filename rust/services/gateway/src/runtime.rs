@@ -70,8 +70,8 @@ use crate::{
         OrganizationMembershipProvider, RequiredPermission, TenantAuthorizationFailure,
     },
     contract::{
-        requires_issuance_service_auth, retired_canvas_state_route, route_ownership,
-        GatewayContract,
+        mdoc_crl_operator_path, requires_issuance_service_auth, retired_canvas_state_route,
+        route_ownership, GatewayContract,
     },
     credential_metadata, credential_template_contract, deployment_contract, did_web,
     didcomm_contract,
@@ -1260,6 +1260,7 @@ async fn proxy_handler(
     }
     if (public_path == "/v1/signing-keys/issuer-identities/mdoc-iaca-self-signed-certificate"
         && state.mdoc_iaca_issue_gateway_key.is_none())
+        || (mdoc_crl_operator_path(&public_path) && state.mdoc_iaca_issue_gateway_key.is_none())
         || (public_path == "/v1/signing-keys/issuer-identities/mdoc-dsc-certificate"
             && state.mdoc_dsc_issue_gateway_key.is_none())
     {
@@ -2687,11 +2688,7 @@ fn proxy_overrides(
             "/v1/signing-keys/issuer-identities/mdoc-dsc-certificate",
             Some("mdoc-certificate:issue"),
         ) => state.mdoc_dsc_issue_gateway_key.as_ref(),
-        (path, Some("mdoc-certificate:issue-iaca"))
-            if path
-                .strip_prefix("/v1/signing-keys/mdoc-crls/")
-                .is_some_and(|id| !id.is_empty() && !id.contains('/')) =>
-        {
+        (path, Some("mdoc-certificate:issue-iaca")) if mdoc_crl_operator_path(path) => {
             state.mdoc_iaca_issue_gateway_key.as_ref()
         }
         _ => None,
