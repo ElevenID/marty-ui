@@ -3,6 +3,7 @@
 //! non-idempotent operation; a crashed provisioning attempt requires reconciliation.
 #![cfg(target_os = "linux")]
 
+use crate::installer_creation_identity::{NewInstallation, RECEIPT as CREATION_RECEIPT};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
@@ -1085,6 +1086,9 @@ pub struct InstallerState {
     directory: LockedDirectory,
     journal: Journal,
     poisoned: bool,
+    /// In-memory capture exists only for a newly created normal installation.
+    /// Resumed and legacy installations can never reconstruct creation proof.
+    creation: Option<NewInstallation>,
 }
 impl InstallerState {
     /// Borrow the writer's lock for diagnostics without reacquiring or unlocking it.
@@ -1254,7 +1258,94 @@ impl InstallerState {
             .sync_all()
             .and_then(|_| self.directory.sync_all())
             .map_err(|_| "persist installer subdirectory")?;
+        if matches!(entry, "evidence" | "downloads") {
+            if let Some(creation) = &mut self.creation {
+                creation.capture(entry, &child)?;
+            }
+        }
         self.poisoned = false;
+        Ok(())
+    }
+    /// Persist creation-time identities for only the fresh root and the two
+    /// fixed directories created immediately after it. This receipt is local
+    /// historical evidence, never cryptographic authorization or purge scope.
+    /// An interrupted write poisons this writer; a resumed installation lacks
+    /// the in-memory capture and cannot mint the receipt retroactively.
+    pub(crate) fn persist_initial_creation_receipt(&mut self, installation: &Path) -> Result<()> {
+        self.require_live_phase(Phase::Initialized)?;
+        let creation = self
+            .creation
+            .as_ref()
+            .ok_or("creation-time identity is unavailable")?
+            .clone();
+        let prepared = (|| {
+            self.with_inspection(|view| view.require_path_binding(installation))?;
+            let evidence = open_at(
+                &self.directory,
+                &name("evidence"),
+                libc::O_RDONLY | libc::O_DIRECTORY,
+                0,
+            )?;
+            let downloads = open_at(
+                &self.directory,
+                &name("downloads"),
+                libc::O_RDONLY | libc::O_DIRECTORY,
+                0,
+            )?;
+            private(&evidence, true)?;
+            private(&downloads, true)?;
+            creation.receipt_bytes(
+                self.journal.installation_id(),
+                &self.journal.identity().source_sha,
+                &self.directory,
+                &evidence,
+                &downloads,
+            )
+        })();
+        let bytes = match prepared {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                self.poisoned = true;
+                return Err(error);
+            }
+        };
+        self.write_evidence(CREATION_RECEIPT, &bytes)?;
+        let confirmed = (|| {
+            let evidence = open_at(
+                &self.directory,
+                &name("evidence"),
+                libc::O_RDONLY | libc::O_DIRECTORY,
+                0,
+            )?;
+            let downloads = open_at(
+                &self.directory,
+                &name("downloads"),
+                libc::O_RDONLY | libc::O_DIRECTORY,
+                0,
+            )?;
+            if creation.receipt_bytes(
+                self.journal.installation_id(),
+                &self.journal.identity().source_sha,
+                &self.directory,
+                &evidence,
+                &downloads,
+            )? != bytes
+            {
+                return Err("creation identity changed after receipt write".into());
+            }
+            self.with_inspection(|view| {
+                view.require_path_binding(installation)?;
+                if view.read_evidence(CREATION_RECEIPT)? != bytes {
+                    return Err("creation identity receipt changed".into());
+                }
+                Ok(())
+            })
+        })();
+        if confirmed.is_err() {
+            self.poisoned = true;
+            return Err("creation identity receipt cannot be confirmed".into());
+        }
+        self.creation = None;
         Ok(())
     }
     /// Preserve exact authenticated records/receipts before remote side effects.
@@ -1575,6 +1666,11 @@ impl InstallerState {
         private(&directory, true)?;
         let directory = lock(directory)?;
         parent.sync_all().map_err(|e| e.to_string())?;
+        let creation = if runtime.is_some() && matches!(&scope, ExecutionScope::Unclassified) {
+            Some(NewInstallation::new(&directory)?)
+        } else {
+            None
+        };
         let journal = Journal {
             schema: SCHEMA.into(),
             installation_id,
@@ -1588,6 +1684,7 @@ impl InstallerState {
             directory,
             journal: journal.clone(),
             poisoned: false,
+            creation,
         };
         state.persist(&journal)?;
         Ok(state)
@@ -1620,6 +1717,7 @@ impl InstallerState {
             directory,
             journal,
             poisoned: false,
+            creation: None,
         })
     }
     pub fn journal(&self) -> &Journal {
