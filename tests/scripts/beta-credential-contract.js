@@ -115,7 +115,8 @@ function requireCompletedLoginNonce(status) {
 }
 
 function loginNonceCompletionEvidence(body) {
-  const status = typeof body?.status === 'string' ? body.status : null;
+  const status = ['pending', 'completed', 'failed', 'expired', 'pending-timeout'].includes(body?.status)
+    ? body.status : 'invalid-response';
   const evidence = { status, observedNonceStatus: status };
   if (status === 'failed') {
     const code = body?.reason_code;
@@ -129,6 +130,17 @@ function loginNonceCompletionEvidence(body) {
       ? code : 'unclassified';
   }
   return evidence;
+}
+
+function isExactLoginNonceStatusUrl(value, betaOrigin, nonce) {
+  try {
+    const url = new URL(value);
+    const params = Array.from(url.searchParams.keys());
+    return url.origin === new URL(betaOrigin).origin
+      && url.pathname === '/v1/auth/credential-login/status'
+      && params.length === 1 && params[0] === 'nonce'
+      && url.searchParams.get('nonce') === nonce && !url.hash;
+  } catch { return false; }
 }
 
 function isTerminalLoginNonceStatus(body) {
@@ -170,6 +182,7 @@ module.exports = {
   membershipLoginBehaviorAssertions,
   requireCompletedLoginNonce,
   loginNonceCompletionEvidence,
+  isExactLoginNonceStatusUrl,
   isTerminalLoginNonceStatus,
   verificationResultEvidence,
   verificationSessionRequest,

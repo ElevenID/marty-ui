@@ -32,6 +32,7 @@ const {
   membershipLoginBehaviorAssertions,
   requireCompletedLoginNonce,
   loginNonceCompletionEvidence,
+  isExactLoginNonceStatusUrl,
   isTerminalLoginNonceStatus,
 } = require('./beta-credential-contract');
 const {
@@ -353,10 +354,25 @@ async function runCredentialLogin({ retainedFirstParty = false, evidence = null 
     };
     // The login page polls and can finalize (consume) a completed nonce before
     // a second status request sees it. Capture that page's terminal response.
-    const statusUrl = `${BETA_ORIGIN}/v1/auth/credential-login/status?nonce=${encodeURIComponent(loginRequest.nonce)}`;
+    const nonceStatusObservation = { requestCount: 0, responseCount: 0,
+      pendingCount: 0, parseFailureCount: 0,
+      lastHttpStatus: null, lastStatus: null, lastReasonCode: null };
+    const isExactStatus = (url) => isExactLoginNonceStatusUrl(url, BETA_ORIGIN, loginRequest.nonce);
+    loginPage.on('request', (request) => {
+      if (request.method() === 'GET' && isExactStatus(request.url())) nonceStatusObservation.requestCount += 1;
+    });
     const terminalStatusResponse = loginPage.waitForResponse(async (response) => {
-      if (response.url() !== statusUrl || response.request().method() !== 'GET' || response.status() !== 200) return false;
-      return isTerminalLoginNonceStatus(await response.json().catch(() => null));
+      if (!isExactStatus(response.url()) || response.request().method() !== 'GET') return false;
+      nonceStatusObservation.responseCount += 1;
+      nonceStatusObservation.lastHttpStatus = response.status();
+      if (response.status() !== 200) return false;
+      const body = await response.json().catch(() => null);
+      const safe = loginNonceCompletionEvidence(body);
+      if (safe.status === 'pending') nonceStatusObservation.pendingCount += 1;
+      if (safe.status === 'invalid-response') nonceStatusObservation.parseFailureCount += 1;
+      nonceStatusObservation.lastStatus = safe.status;
+      nonceStatusObservation.lastReasonCode = safe.reasonCode || null;
+      return isTerminalLoginNonceStatus(body);
     }, { timeout: 60_000 }).catch(() => null);
     report.presentation = await presentBadge(walletPage, loginRequest.href);
     if (!report.presentation.accepted || (retainedFirstParty && report.presentation.status !== 200)) {
@@ -372,7 +388,26 @@ async function runCredentialLogin({ retainedFirstParty = false, evidence = null 
     const completion = terminal ? await terminal.json().catch(() => ({ status: 'invalid-response' }))
       : { status: 'pending-timeout' };
     const nonceEvidence = loginNonceCompletionEvidence(completion);
-    report.completion = { ...nonceEvidence, authenticated: false };
+    report.completion = { ...nonceEvidence, authenticated: false,
+      statusObservation: nonceStatusObservation };
+    if (!terminal) {
+      const diagnostic = await loginPage.evaluate(async (nonce) => {
+        const status = await fetch(`/v1/auth/credential-login/status?nonce=${encodeURIComponent(nonce)}`,
+          { credentials: 'same-origin' }).catch(() => null);
+        const body = status ? await status.json().catch(() => null) : null;
+        const auth = await fetch('/v1/auth/me', { credentials: 'same-origin' }).catch(() => null);
+        const authBody = auth ? await auth.json().catch(() => null) : null;
+        return { statusHttp: status?.status || null,
+          statusBody: { status: body?.status, reason_code: body?.reason_code },
+          authHttp: auth?.status || null, authenticated: authBody?.authenticated === true };
+      }, loginRequest.nonce).catch(() => null);
+      report.completion.timeoutDiagnostic = {
+        statusHttp: diagnostic?.statusHttp || null,
+        ...loginNonceCompletionEvidence(diagnostic?.statusBody),
+        authHttp: diagnostic?.authHttp || null,
+        authenticated: diagnostic?.authenticated === true,
+      };
+    }
     requireCompletedLoginNonce(completion?.status);
     if (completion?.redirect_to) {
       await loginPage.goto(new URL(completion.redirect_to, BETA_ORIGIN).href, {
@@ -394,6 +429,7 @@ async function runCredentialLogin({ retainedFirstParty = false, evidence = null 
 
     report.completion = {
       ...nonceEvidence,
+      statusObservation: nonceStatusObservation,
       authenticated: auth.body?.authenticated === true,
       authStatus: auth.status,
       authenticatedEmail: auth.body?.authenticated ? auth.body?.user?.email : null,
