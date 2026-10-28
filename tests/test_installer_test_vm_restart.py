@@ -20,6 +20,43 @@ NONCE = "23157141-54e9-4744-8c80-a2321e850dec"
 
 
 class Records(unittest.TestCase):
+    def test_installer_only_memory_changes_only_qemu_m_and_preserves_first_launch(self):
+        runtime = Path("/runtime") / VM
+        original = restart.launcher._arguments(runtime, VM, 22024)
+        selected = restart._restart_args(runtime, VM, 22024, original, 2048)
+        index = original.index("-m") + 1
+        self.assertEqual(restart.launcher.MEMORY_MIB, 4096)
+        self.assertEqual(original[index], "4096")
+        self.assertEqual(selected[index], "2048")
+        self.assertEqual([i for i, (old, new) in enumerate(zip(original, selected))
+                          if old != new], [index])
+        self.assertEqual(restart.launcher._arguments(runtime, VM, 22024), original)
+        self.assertEqual(restart._restart_args(runtime, VM, 22024, original, 4096),
+                         original)
+        for unsupported in (True, 1024, 8192, "2048"):
+            with self.assertRaisesRegex(ValueError, "memory profile unsupported"):
+                restart._restart_args(runtime, VM, 22024, original, unsupported)
+        with self.assertRaisesRegex(ValueError, "historical memory policy"):
+            restart._restart_args(runtime, VM, 22024, [*original, "-m", "1024"], 2048)
+
+    def test_installer_only_headroom_thresholds_and_guest_memtotal(self):
+        def record(kib):
+            return f"MemAvailable: {kib} kB\n".encode()
+        self.assertEqual(restart._headroom_from_meminfo(record(4194304), 2048),
+                         4194304)
+        with self.assertRaisesRegex(ValueError, "installer-only host memory"):
+            restart._headroom_from_meminfo(record(4194303), 2048)
+        self.assertEqual(restart._headroom_from_meminfo(record(6291456), 4096),
+                         6291456)
+        with self.assertRaisesRegex(ValueError, "installer-only host memory"):
+            restart._headroom_from_meminfo(record(6291455), 4096)
+        with self.assertRaisesRegex(ValueError, "memory profile unsupported"):
+            restart._headroom_from_meminfo(record(4194304), False)
+        self.assertEqual(restart._guest_mem_total("MemTotal: 2010000 kB", 2048),
+                         2010000)
+        with self.assertRaisesRegex(ValueError, "guest memory differs"):
+            restart._guest_mem_total("MemTotal: 1000000 kB", 2048)
+
     def test_poweroff_binds_original_pid_and_result(self):
         launch = {"pid": 862, "start_ticks": "73433773", "observed_at": 100}
         intent = {"acceptance": False, "disk_retained": True, "pid": 862,
@@ -346,16 +383,21 @@ class Records(unittest.TestCase):
                      mock.patch.object(restart, "_no_live_owner"), \
                      mock.patch.object(restart, "_mutable_image_info"), \
                      mock.patch.object(restart.launcher, "_seed_media"), \
-                     mock.patch.object(restart.launcher, "_host_headroom"), \
+                     mock.patch.object(restart, "_installer_headroom", return_value=5 * 1024**2), \
                      mock.patch.object(restart.launcher, "_trusted_tool", return_value="a" * 64), \
                      mock.patch.object(restart.launcher, "_kvm_group", return_value=993), \
                      mock.patch.object(restart.launcher, "_boot_id", return_value=str(uuid.uuid4())), \
                      mock.patch.object(restart, "_read_record", side_effect=read), \
                      mock.patch.object(restart, "_write", side_effect=write):
                     intent, _ = restart._prepare_restart(Path("/source"), registry,
-                                                          runtime_parent, VM, NONCE, Lease())
+                                                          runtime_parent, VM, NONCE, 2048, Lease())
                     self.assertEqual(intent["mutable_disk_sha256"],
                                      restart.hashlib.sha256(b"booted-overlay").hexdigest())
+                    memory_index = intent["args"].index("-m") + 1
+                    self.assertEqual(intent["args"][memory_index], "2048")
+                    self.assertEqual(intent["guest_memory_mib"], 2048)
+                    self.assertEqual(intent["controller_reserve_mib"], 2048)
+                    self.assertEqual(intent["purpose"], "installer_only_trial")
                     self.assertEqual(len(wrote), 0)
                     wrote.clear()
                     disk.write_bytes(b"changed-overlay")
@@ -363,29 +405,34 @@ class Records(unittest.TestCase):
                                            side_effect=ValueError("disk changed")):
                         with self.assertRaisesRegex(ValueError, "disk changed"):
                             restart._prepare_restart(Path("/source"), registry,
-                                                      runtime_parent, VM, NONCE, Lease())
+                                                      runtime_parent, VM, NONCE, 2048, Lease())
                     self.assertEqual(wrote, [])
                     runtime["runtime_dir_inode"] += 1
                     with self.assertRaisesRegex(ValueError, "runtime directory differs"):
                         restart._prepare_restart(Path("/source"), registry,
-                                                  runtime_parent, VM, NONCE, Lease())
+                                                  runtime_parent, VM, NONCE, 2048, Lease())
                     self.assertEqual(wrote, [])
                     runtime["runtime_dir_inode"] -= 1
                     with mock.patch.object(restart, "_no_live_owner",
                                            side_effect=ValueError("active VM")):
                         with self.assertRaisesRegex(ValueError, "active VM"):
                             restart._prepare_restart(Path("/source"), registry,
-                                                      runtime_parent, VM, NONCE, Lease())
+                                                      runtime_parent, VM, NONCE, 2048, Lease())
                     with mock.patch.object(restart, "_poweroff",
                                            side_effect=ValueError("poweroff missing")):
                         with self.assertRaisesRegex(ValueError, "poweroff missing"):
                             restart._prepare_restart(Path("/source"), registry,
-                                                      runtime_parent, VM, NONCE, Lease())
+                                                      runtime_parent, VM, NONCE, 2048, Lease())
                     with mock.patch.object(restart, "_record_set",
                                            side_effect=ValueError("historical chain changed")):
                         with self.assertRaisesRegex(ValueError, "historical chain changed"):
                             restart._prepare_restart(Path("/source"), registry,
-                                                      runtime_parent, VM, NONCE, Lease())
+                                                      runtime_parent, VM, NONCE, 2048, Lease())
+                    with mock.patch.object(restart, "_installer_headroom",
+                                           side_effect=ValueError("memory headroom insufficient")):
+                        with self.assertRaisesRegex(ValueError, "memory headroom"):
+                            restart._prepare_restart(Path("/source"), registry,
+                                                      runtime_parent, VM, NONCE, 2048, Lease())
                     self.assertEqual(wrote, [])
             finally:
                 os.close(Lease.parent)
@@ -433,6 +480,30 @@ class Records(unittest.TestCase):
             write.assert_not_called()
             spawn.assert_not_called()
 
+    def test_headroom_refusal_precedes_restart_intent_and_spawn(self):
+        class Lease:
+            parent = 5
+            def __init__(self, registry):
+                self.registry = registry
+            def __enter__(self):
+                return self
+            def __exit__(self, *_args):
+                return None
+        with mock.patch.object(restart.os, "geteuid", return_value=0), \
+             mock.patch.object(restart, "ControllerLease", Lease), \
+             mock.patch.object(restart.launcher, "_trusted_tool", return_value="a" * 64), \
+             mock.patch.object(restart.launcher, "_kvm_group", return_value=993), \
+             mock.patch.object(restart, "_prepare_restart", return_value=({}, {})), \
+             mock.patch.object(restart, "_installer_headroom",
+                               side_effect=ValueError("VM installer-only host memory headroom insufficient")), \
+             mock.patch.object(restart, "_write") as write, \
+             mock.patch.object(restart.subprocess, "Popen") as spawn:
+            with self.assertRaisesRegex(ValueError, "memory headroom"):
+                restart.restart(Path("/source"), Path("/registry"), Path("/runtime"),
+                                vm_id=VM, attempt_nonce=NONCE, guest_memory_mib=2048)
+            write.assert_not_called()
+            spawn.assert_not_called()
+
     def test_restart_writes_exact_attempt_chain_with_mock_process(self):
         class Lease:
             parent = 5
@@ -469,6 +540,7 @@ class Records(unittest.TestCase):
              mock.patch.object(restart.launcher, "_trusted_tool", return_value="a" * 64), \
              mock.patch.object(restart.launcher, "_kvm_group", return_value=993), \
              mock.patch.object(restart, "_prepare_restart", return_value=(intent, context)), \
+             mock.patch.object(restart, "_installer_headroom", return_value=5 * 1024**2), \
              mock.patch.object(restart, "_recheck_before_spawn", return_value=b"intent"), \
              mock.patch.object(restart, "_same_path"), \
              mock.patch.object(restart, "_no_live_owner"), \
