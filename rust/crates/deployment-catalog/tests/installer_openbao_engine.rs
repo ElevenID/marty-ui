@@ -5,7 +5,9 @@
 use marty_deployment_catalog::{
     installer_openbao::start_openbao,
     installer_runtime::DockerRunner,
-    installer_state::{Identity, InstallerState, Phase, RuntimeBinding, PASSWORD_POLICY},
+    installer_state::{
+        CandidateTestScope, Identity, InstallerState, Phase, RuntimeBinding, PASSWORD_POLICY,
+    },
 };
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -597,7 +599,7 @@ fn run_fixture(renewal: bool, generation: bool, application: bool) -> Result<()>
     let installation = root.join("installation");
     // This isolated test journal is explicitly synthetic; no signed release
     // admission or installed-journey evidence is manufactured by this fixture.
-    let mut state = InstallerState::create_with_runtime(
+    let mut state = InstallerState::create_test_with_runtime(
         &installation,
         Identity {
             source_sha: "a".repeat(40),
@@ -608,6 +610,11 @@ fn run_fixture(renewal: bool, generation: bool, application: bool) -> Result<()>
             docker_host: "unix:///var/run/docker.sock".into(),
             engine_id: engine.clone(),
             openbao_port: port,
+        },
+        CandidateTestScope {
+            inventory_sha256: "b".repeat(64),
+            build_run_id: 1,
+            build_run_attempt: 1,
         },
     )?;
     state.create_private_directory("evidence")?;
@@ -696,7 +703,7 @@ fn run_fixture(renewal: bool, generation: bool, application: bool) -> Result<()>
     drop(listener);
     // Deliberately retain the mandatory production pull, including anonymous
     // registry authorization and digest checks. No cached/local image bypass.
-    let receipt = start_openbao(&executable, &installation, &bundle, &state, &image)?;
+    let receipt = start_openbao(&executable, &installation, &bundle, &mut state, &image)?;
     state.write_evidence(
         "openbao-observation.json",
         &serde_json::to_vec(&receipt).map_err(|_| "cannot encode OpenBao receipt")?,

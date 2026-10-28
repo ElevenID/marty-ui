@@ -4,8 +4,8 @@
 #![cfg(target_os = "linux")]
 
 use crate::installer_creation_identity::{
-    ApplicationHandles, NewApplicationStorage, NewCredentials, NewInstallation,
-    APPLICATION_RECEIPT, CREDENTIAL_RECEIPT, RECEIPT as CREATION_RECEIPT,
+    ApplicationHandles, NewApplicationStorage, NewCredentials, NewInstallation, NewOpenBaoState,
+    APPLICATION_RECEIPT, CREDENTIAL_RECEIPT, OPENBAO_STATE_RECEIPT, RECEIPT as CREATION_RECEIPT,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -1096,6 +1096,8 @@ pub struct InstallerState {
     credential_creation: Option<NewCredentials>,
     /// Four application roots can be recorded only by their original writer.
     application_creation: Option<NewApplicationStorage>,
+    /// The OpenBao state root must be captured at its exclusive creation.
+    openbao_creation: Option<NewOpenBaoState>,
 }
 impl InstallerState {
     /// Borrow the writer's lock for diagnostics without reacquiring or unlocking it.
@@ -1277,6 +1279,14 @@ impl InstallerState {
             if let Some(creation) = &mut self.application_creation {
                 creation.capture_evidence(&child)?;
             }
+            if let Some(creation) = &mut self.openbao_creation {
+                creation.capture_evidence(&child)?;
+            }
+        }
+        if entry == "openbao-state" {
+            if let Some(creation) = &mut self.openbao_creation {
+                creation.capture_state(&child)?;
+            }
         }
         self.poisoned = false;
         Ok(())
@@ -1362,6 +1372,12 @@ impl InstallerState {
         }
         if let Some(application_creation) = &mut self.application_creation {
             if let Err(error) = application_creation.remember_initial_receipt(&bytes) {
+                self.poisoned = true;
+                return Err(error);
+            }
+        }
+        if let Some(openbao_creation) = &mut self.openbao_creation {
+            if let Err(error) = openbao_creation.remember_initial_receipt(&bytes) {
                 self.poisoned = true;
                 return Err(error);
             }
@@ -1603,6 +1619,12 @@ impl InstallerState {
                 return Err(error);
             }
         }
+        if let Some(openbao_creation) = &mut self.openbao_creation {
+            if let Err(error) = openbao_creation.remember_credential_receipt(&bytes) {
+                self.poisoned = true;
+                return Err(error);
+            }
+        }
         self.credential_creation = None;
         Ok(())
     }
@@ -1755,6 +1777,80 @@ impl InstallerState {
             return Err("application root identity receipt cannot be confirmed".into());
         }
         self.application_creation = None;
+        Ok(())
+    }
+
+    /// Commit the freshly created OpenBao state root before its first writer.
+    /// This local historical receipt is never a deletion grant.
+    pub(crate) fn persist_openbao_state_creation_receipt(
+        &mut self,
+        installation: &Path,
+    ) -> Result<()> {
+        self.require_live_phase(Phase::Provisioning)?;
+        let creation = match self.openbao_creation.as_ref() {
+            Some(creation) => creation.clone(),
+            None if !matches!(self.journal.execution_scope(), ExecutionScope::Unclassified) => {
+                return Ok(());
+            }
+            None => return Err("OpenBao state creation identity is unavailable".into()),
+        };
+        let prepared = (|| {
+            let (initial, credentials) = creation.prior_receipts()?;
+            self.with_inspection(|view| {
+                view.require_path_binding(installation)?;
+                if view.read_evidence(CREATION_RECEIPT)? != initial
+                    || view.read_evidence(CREDENTIAL_RECEIPT)? != credentials
+                {
+                    return Err("prior creation identity receipt changed".into());
+                }
+                Ok(())
+            })?;
+            let evidence = open_at(&self.directory, &name("evidence"), libc::O_PATH, 0)?;
+            let state = open_at(&self.directory, &name("openbao-state"), libc::O_PATH, 0)?;
+            private(&evidence, true)?;
+            private(&state, true)?;
+            creation.receipt_bytes(
+                self.journal.installation_id(),
+                &self.journal.identity().source_sha,
+                &self.directory,
+                &evidence,
+                &state,
+            )
+        })();
+        let bytes = match prepared {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                self.poisoned = true;
+                return Err(error);
+            }
+        };
+        self.write_evidence(OPENBAO_STATE_RECEIPT, &bytes)?;
+        let confirmed = (|| {
+            let evidence = open_at(&self.directory, &name("evidence"), libc::O_PATH, 0)?;
+            let state = open_at(&self.directory, &name("openbao-state"), libc::O_PATH, 0)?;
+            if creation.receipt_bytes(
+                self.journal.installation_id(),
+                &self.journal.identity().source_sha,
+                &self.directory,
+                &evidence,
+                &state,
+            )? != bytes
+            {
+                return Err("OpenBao state identity changed after receipt write".into());
+            }
+            self.with_inspection(|view| {
+                view.require_path_binding(installation)?;
+                if view.read_evidence(OPENBAO_STATE_RECEIPT)? != bytes {
+                    return Err("OpenBao state receipt changed".into());
+                }
+                Ok(())
+            })
+        })();
+        if confirmed.is_err() {
+            self.poisoned = true;
+            return Err("OpenBao state identity receipt cannot be confirmed".into());
+        }
+        self.openbao_creation = None;
         Ok(())
     }
 
@@ -1919,6 +2015,11 @@ impl InstallerState {
         } else {
             None
         };
+        let openbao_creation = if creation.is_some() {
+            Some(NewOpenBaoState::new(&directory)?)
+        } else {
+            None
+        };
         let journal = Journal {
             schema: SCHEMA.into(),
             installation_id,
@@ -1935,6 +2036,7 @@ impl InstallerState {
             creation,
             credential_creation,
             application_creation,
+            openbao_creation,
         };
         state.persist(&journal)?;
         Ok(state)
@@ -1970,6 +2072,7 @@ impl InstallerState {
             creation: None,
             credential_creation: None,
             application_creation: None,
+            openbao_creation: None,
         })
     }
     pub fn journal(&self) -> &Journal {

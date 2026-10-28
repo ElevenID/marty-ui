@@ -19,6 +19,7 @@ const REFUSED: &str = "installer creation identity could not be recorded";
 pub(crate) const RECEIPT: &str = "installation-created-identity.json";
 pub(crate) const CREDENTIAL_RECEIPT: &str = "credential-created-identity.json";
 pub(crate) const APPLICATION_RECEIPT: &str = "application-storage-created-identity.json";
+pub(crate) const OPENBAO_STATE_RECEIPT: &str = "openbao-state-created-identity.json";
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub(crate) struct ObservedDirectory {
@@ -388,6 +389,126 @@ impl NewApplicationStorage {
     }
 }
 
+/// The OpenBao state root is created separately, before its environment file
+/// or any Compose operation. Never reconstruct this chain on resume.
+#[derive(Clone)]
+pub(crate) struct NewOpenBaoState {
+    root: ObservedDirectory,
+    evidence: Option<ObservedDirectory>,
+    initial_receipt: Option<Vec<u8>>,
+    credential_receipt: Option<Vec<u8>>,
+    state: Option<ObservedDirectory>,
+}
+
+impl NewOpenBaoState {
+    pub fn new(root: &File) -> Result<Self, String> {
+        Ok(Self {
+            root: observe(root)?,
+            evidence: None,
+            initial_receipt: None,
+            credential_receipt: None,
+            state: None,
+        })
+    }
+
+    pub fn capture_evidence(&mut self, evidence: &File) -> Result<(), String> {
+        if self.evidence.is_some() {
+            return Err(REFUSED.into());
+        }
+        let observed = observe(evidence)?;
+        if observed.mount_id != self.root.mount_id
+            || observed.identity.dev != self.root.identity.dev
+            || observed.identity.ino == self.root.identity.ino
+        {
+            return Err(REFUSED.into());
+        }
+        self.evidence = Some(observed);
+        Ok(())
+    }
+
+    pub fn remember_initial_receipt(&mut self, bytes: &[u8]) -> Result<(), String> {
+        if self.evidence.is_none() || self.initial_receipt.is_some() || bytes.is_empty() {
+            return Err(REFUSED.into());
+        }
+        self.initial_receipt = Some(bytes.to_vec());
+        Ok(())
+    }
+
+    pub fn remember_credential_receipt(&mut self, bytes: &[u8]) -> Result<(), String> {
+        if self.initial_receipt.is_none() || self.credential_receipt.is_some() || bytes.is_empty() {
+            return Err(REFUSED.into());
+        }
+        self.credential_receipt = Some(bytes.to_vec());
+        Ok(())
+    }
+
+    pub fn prior_receipts(&self) -> Result<(&[u8], &[u8]), String> {
+        Ok((
+            self.initial_receipt.as_deref().ok_or(REFUSED)?,
+            self.credential_receipt.as_deref().ok_or(REFUSED)?,
+        ))
+    }
+
+    pub fn capture_state(&mut self, state: &File) -> Result<(), String> {
+        if self.state.is_some() {
+            return Err(REFUSED.into());
+        }
+        self.prior_receipts()?;
+        let observed = observe(state)?;
+        let evidence = self.evidence.as_ref().ok_or(REFUSED)?;
+        if observed.mount_id != self.root.mount_id
+            || observed.identity.dev != self.root.identity.dev
+            || observed.identity.ino == self.root.identity.ino
+            || observed.identity.ino == evidence.identity.ino
+        {
+            return Err(REFUSED.into());
+        }
+        self.state = Some(observed);
+        Ok(())
+    }
+
+    pub fn receipt_bytes(
+        &self,
+        installation_id: uuid::Uuid,
+        source_sha: &str,
+        root: &File,
+        evidence: &File,
+        state: &File,
+    ) -> Result<Vec<u8>, String> {
+        self.prior_receipts()?;
+        let recorded_evidence = self.evidence.as_ref().ok_or(REFUSED)?;
+        let recorded_state = self.state.as_ref().ok_or(REFUSED)?;
+        if observe(root)? != self.root
+            || observe(evidence)? != *recorded_evidence
+            || observe(state)? != *recorded_state
+            || source_sha.len() != 40
+            || !source_sha
+                .bytes()
+                .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+        {
+            return Err(REFUSED.into());
+        }
+        #[derive(Serialize)]
+        struct Receipt<'a> {
+            schema: &'static str,
+            installation_id: uuid::Uuid,
+            source_sha: &'a str,
+            openbao_state: &'a ObservedDirectory,
+            local_historical_evidence: bool,
+            deletion_authorized: bool,
+        }
+        serde_json::to_vec(&Receipt {
+            schema: "elevenid.installer-created-openbao-state/v1",
+            installation_id,
+            source_sha,
+            openbao_state: recorded_state,
+            local_historical_evidence: true,
+            deletion_authorized: false,
+        })
+        .map_err(|_| REFUSED.into())
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct NewInstallation {
     pub root: ObservedDirectory,
@@ -523,6 +644,132 @@ mod tests {
         (parent, installation, state)
     }
 
+    fn openbao_setup() -> (tempfile::TempDir, PathBuf, InstallerState) {
+        let (parent, installation, mut state) = credential_setup();
+        state
+            .persist_credential_creation_receipt(&installation)
+            .unwrap();
+        state.create_private_directory("openbao-state").unwrap();
+        (parent, installation, state)
+    }
+
+    #[test]
+    fn fresh_openbao_state_receipt_precedes_bao_writers() {
+        let (_parent, installation, mut state) = openbao_setup();
+        assert!(!installation.join("openbao.env").exists());
+        state
+            .persist_openbao_state_creation_receipt(&installation)
+            .unwrap();
+        let path = installation.join("evidence").join(OPENBAO_STATE_RECEIPT);
+        let receipt: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(
+            receipt["schema"],
+            "elevenid.installer-created-openbao-state/v1"
+        );
+        assert_eq!(receipt["deletion_authorized"], false);
+        assert_eq!(receipt["local_historical_evidence"], true);
+        assert_eq!(
+            receipt["installation_id"],
+            state.journal().installation_id().to_string()
+        );
+        let observed = observe(&File::open(installation.join("openbao-state")).unwrap()).unwrap();
+        assert_eq!(
+            receipt["openbao_state"]["identity"]["ino"],
+            observed.identity.ino
+        );
+        assert_eq!(receipt["openbao_state"]["mount_id"], observed.mount_id);
+        assert_eq!(fs::metadata(&path).unwrap().mode() & 0o7777, 0o600);
+        assert!(state
+            .persist_openbao_state_creation_receipt(&installation)
+            .is_err());
+    }
+
+    #[test]
+    fn foreign_openbao_state_receipt_is_preserved_and_poisons_writer() {
+        let (_parent, installation, mut state) = openbao_setup();
+        let path = installation.join("evidence").join(OPENBAO_STATE_RECEIPT);
+        fs::write(&path, b"partial foreign data").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(state
+            .persist_openbao_state_creation_receipt(&installation)
+            .is_err());
+        assert_eq!(fs::read(path).unwrap(), b"partial foreign data");
+        assert!(state.with_inspection(|_| Ok(())).is_err());
+    }
+
+    #[test]
+    fn replaced_openbao_state_is_refused_before_receipt() {
+        let (_parent, installation, mut state) = openbao_setup();
+        fs::rename(
+            installation.join("openbao-state"),
+            installation.join("saved-openbao-state"),
+        )
+        .unwrap();
+        fs::create_dir(installation.join("openbao-state")).unwrap();
+        fs::set_permissions(
+            installation.join("openbao-state"),
+            fs::Permissions::from_mode(0o700),
+        )
+        .unwrap();
+        assert!(state
+            .persist_openbao_state_creation_receipt(&installation)
+            .is_err());
+        assert!(!installation
+            .join("evidence")
+            .join(OPENBAO_STATE_RECEIPT)
+            .exists());
+        assert!(state.with_inspection(|_| Ok(())).is_err());
+    }
+
+    #[test]
+    fn existing_openbao_state_cannot_be_adopted() {
+        let (parent, installation, mut state) = credential_setup();
+        state
+            .persist_credential_creation_receipt(&installation)
+            .unwrap();
+        fs::create_dir(installation.join("openbao-state")).unwrap();
+        fs::set_permissions(
+            installation.join("openbao-state"),
+            fs::Permissions::from_mode(0o700),
+        )
+        .unwrap();
+        assert!(state.create_private_directory("openbao-state").is_err());
+        assert!(!installation
+            .join("evidence")
+            .join(OPENBAO_STATE_RECEIPT)
+            .exists());
+        drop(parent);
+    }
+
+    #[test]
+    fn changed_prior_receipt_blocks_openbao_state_receipt() {
+        let (_parent, installation, mut state) = openbao_setup();
+        fs::write(
+            installation.join("evidence").join(CREDENTIAL_RECEIPT),
+            b"{} ",
+        )
+        .unwrap();
+        assert!(state
+            .persist_openbao_state_creation_receipt(&installation)
+            .is_err());
+        assert!(!installation
+            .join("evidence")
+            .join(OPENBAO_STATE_RECEIPT)
+            .exists());
+        assert!(state.with_inspection(|_| Ok(())).is_err());
+    }
+
+    #[test]
+    fn interrupted_openbao_state_creation_cannot_mint_receipt_on_resume() {
+        let (_parent, installation, state) = openbao_setup();
+        drop(state);
+        assert!(InstallerState::resume(&installation, &identity()).is_err());
+        assert!(!installation
+            .join("evidence")
+            .join(OPENBAO_STATE_RECEIPT)
+            .exists());
+    }
+
     #[test]
     fn fresh_application_root_receipt_precedes_application_writers() {
         let (_parent, installation, mut state) = application_setup();
@@ -632,7 +879,7 @@ mod tests {
     }
 
     #[test]
-    fn candidate_test_scope_does_not_mint_application_receipt() {
+    fn candidate_test_scope_does_not_mint_storage_receipts() {
         use crate::installer_state::CandidateTestScope;
         let parent = tempfile::tempdir().unwrap();
         fs::set_permissions(parent.path(), fs::Permissions::from_mode(0o700)).unwrap();
@@ -662,6 +909,10 @@ mod tests {
         state
             .persist_credential_creation_receipt(&installation)
             .unwrap();
+        state.create_private_directory("openbao-state").unwrap();
+        state
+            .persist_openbao_state_creation_receipt(&installation)
+            .unwrap();
         state.prepare_application_storage().unwrap();
         state
             .persist_application_storage_creation_receipt(&installation)
@@ -670,6 +921,10 @@ mod tests {
         assert!(!installation
             .join("evidence")
             .join(CREDENTIAL_RECEIPT)
+            .exists());
+        assert!(!installation
+            .join("evidence")
+            .join(OPENBAO_STATE_RECEIPT)
             .exists());
         assert!(!installation
             .join("evidence")

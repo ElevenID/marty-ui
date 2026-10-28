@@ -17,7 +17,7 @@ use std::{
     fs::{self, File, OpenOptions},
     io::Write,
     net::TcpListener,
-    os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt},
+    os::unix::fs::{MetadataExt, OpenOptionsExt},
     path::{Path, PathBuf},
     time::{Duration, Instant},
 };
@@ -676,14 +676,13 @@ pub fn start_openbao(
     docker_executable: &Path,
     installation: &Path,
     bundle: &Path,
-    state: &InstallerState,
+    state: &mut InstallerState,
     plugin_image: &str,
 ) -> Result<OpenBaoInventory> {
     state.require_live_phase(Phase::Provisioning)?;
-    let journal = state.journal();
+    let journal = state.journal().clone();
     require(
-        journal.phase() == Phase::Provisioning
-            && InstallerState::inspect(installation)? == *journal,
+        journal.phase() == Phase::Provisioning && InstallerState::inspect(installation)? == journal,
         "OpenBao requires durable owned provisioning intent",
     )?;
     let binding = journal.runtime().ok_or("OpenBao runtime binding absent")?;
@@ -745,10 +744,8 @@ pub fn start_openbao(
     let pending = installation.join("openbao-pending.json");
     let env = environment(plugin_image, &state_root, &secrets, binding.openbao_port)?;
     state.require_live_phase(Phase::Provisioning)?;
-    fs::DirBuilder::new()
-        .mode(0o700)
-        .create(&state_root)
-        .map_err(|_| "OpenBao state exists or cannot be created")?;
+    state.create_private_directory("openbao-state")?;
+    state.persist_openbao_state_creation_receipt(installation)?;
     private(&state_root)?;
     exclusive(&env_file, env.as_bytes())?;
     let compose_file = bundle.join("docker-compose.selfhost.openbao.yml");
