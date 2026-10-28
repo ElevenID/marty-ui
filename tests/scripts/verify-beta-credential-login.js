@@ -391,16 +391,23 @@ async function runCredentialLogin({ retainedFirstParty = false, evidence = null 
     report.completion = { ...nonceEvidence, authenticated: false,
       statusObservation: nonceStatusObservation };
     if (!terminal) {
-      const diagnostic = await loginPage.evaluate(async (nonce) => {
-        const status = await fetch(`/v1/auth/credential-login/status?nonce=${encodeURIComponent(nonce)}`,
-          { credentials: 'same-origin' }).catch(() => null);
-        const body = status ? await status.json().catch(() => null) : null;
-        const auth = await fetch('/v1/auth/me', { credentials: 'same-origin' }).catch(() => null);
-        const authBody = auth ? await auth.json().catch(() => null) : null;
-        return { statusHttp: status?.status || null,
-          statusBody: { status: body?.status, reason_code: body?.reason_code },
-          authHttp: auth?.status || null, authenticated: authBody?.authenticated === true };
-      }, loginRequest.nonce).catch(() => null);
+      let diagnosticTimer;
+      const diagnostic = await Promise.race([
+        loginPage.evaluate(async (nonce) => {
+          const [status, auth] = await Promise.all([
+            fetch(`/v1/auth/credential-login/status?nonce=${encodeURIComponent(nonce)}`,
+              { credentials: 'same-origin', signal: AbortSignal.timeout(8_000) }).catch(() => null),
+            fetch('/v1/auth/me',
+              { credentials: 'same-origin', signal: AbortSignal.timeout(8_000) }).catch(() => null),
+          ]);
+          const body = status ? await status.json().catch(() => null) : null;
+          const authBody = auth ? await auth.json().catch(() => null) : null;
+          return { statusHttp: status?.status || null,
+            statusBody: { status: body?.status, reason_code: body?.reason_code },
+            authHttp: auth?.status || null, authenticated: authBody?.authenticated === true };
+        }, loginRequest.nonce).catch(() => null),
+        new Promise(resolve => { diagnosticTimer = setTimeout(() => resolve(null), 10_000); }),
+      ]).finally(() => clearTimeout(diagnosticTimer));
       report.completion.timeoutDiagnostic = {
         statusHttp: diagnostic?.statusHttp || null,
         ...loginNonceCompletionEvidence(diagnostic?.statusBody),
