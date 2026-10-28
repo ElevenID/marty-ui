@@ -47,7 +47,7 @@ test('one parsed terminal snapshot and exact browser finalize survive navigation
   assert.equal(page.listenerCount('request'), 0);
 });
 
-test('terminal denial remains failed and cannot be promoted by a later redirect', async () => {
+test('first terminal denial remains failed without browser finalize proof', async () => {
   const page = new Page();
   const observed = observeCredentialLoginBrowser(page, origin, nonce, 20);
   page.send(`${origin}/v1/auth/credential-login/status?nonce=${nonce}`,
@@ -57,4 +57,18 @@ test('terminal denial remains failed and cannot be promoted by a later redirect'
   assert.equal(result.nonceEvidence.reasonCode, 'issuer_not_trusted');
   assert.equal(result.browserFinalize, null);
   assert.equal(page.listenerCount('request'), 0);
+});
+
+test('verified browser finalize remains complete when a later consumed-nonce status expires', async () => {
+  const page = new Page();
+  const observed = observeCredentialLoginBrowser(page, origin, nonce, 200);
+  page.send(`${origin}/v1/auth/credential-login/finalize?nonce=${nonce}`, null, {status: 302,
+    headers: {location: `${origin}/console/applicant/catalog?auth_method=credential`,
+      'set-cookie': 'sessionId=fresh; Path=/; HttpOnly; Secure'}});
+  await new Promise(resolve => setImmediate(resolve));
+  page.send(`${origin}/v1/auth/credential-login/status?nonce=${nonce}`, {status: 'expired'});
+  const result = await observed.completion();
+  assert.equal(result.browserFinalize.verified, true);
+  assert.equal(result.nonceEvidence.status, 'completed');
+  assert.equal(result.nonceEvidence.observedNonceStatus, 'not-observed');
 });

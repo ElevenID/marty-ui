@@ -49,7 +49,6 @@ function observeCredentialLoginBrowser(page, origin, nonce, timeoutMs = 60_000) 
       : terminal?.status === 'failed' || terminal?.status === 'expired'
         ? null : await browserFinalizeResponse;
     if (!terminal && !browserFinalize) terminal = await terminalStatusResponse;
-    terminal ||= terminalStatusSnapshot;
     active = false;
     page.off('request', onRequest);
     const nonceEvidence = terminal?.status === 'failed' || terminal?.status === 'expired'
