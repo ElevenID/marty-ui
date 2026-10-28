@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import os
+import json
+import shutil
 from pathlib import Path
 import shlex
 import subprocess
@@ -93,6 +95,17 @@ class Probe(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     probe._guest_stamp(binding, probe._guest_dir(PROBE))
 
+    def test_guest_home_stamp_binds_owner_mode_and_inode(self):
+        with mock.patch.object(probe, "_ssh", return_value=b"10:11:1000:700:directory:4\n"):
+            self.assertEqual(probe._guest_home_stamp({"guest_uid": 1000}),
+                             (10, 11, 1000, 700, "directory", 4))
+        for raw in (b"10:11:0:700:directory:4\n",
+                    b"10:11:1000:755:directory:4\n",
+                    b"10:11:1000:700:symbolic link:4\n"):
+            with mock.patch.object(probe, "_ssh", return_value=raw):
+                with self.assertRaises(ValueError):
+                    probe._guest_home_stamp({"guest_uid": 1000})
+
     def test_transport_uses_exact_directory_and_digest_before_probe_commands(self):
         directory = probe._guest_dir(PROBE)
         target = directory + "/marty-deploy"
@@ -102,10 +115,12 @@ class Probe(unittest.TestCase):
                    b"10:20:1000:700:directory:2\n"]
         with mock.patch.object(probe, "_ssh", side_effect=replies) as ssh, \
              mock.patch.object(probe, "_pinned", return_value=["-F", "/dev/null"]), \
+             mock.patch.object(probe, "_guest_home_stamp", return_value=(10, 11, 1000, 700, "directory", 2)), \
              mock.patch.object(probe, "_guest_operator",
                                return_value=(10, 21, 1000, 700, 1, 42)), \
              mock.patch.object(probe, "command", return_value=b"") as scp:
-            result = probe._transport({"guest_uid": 1000, "port": 22024},
+            result = probe._transport({"guest_uid": 1000, "port": 22024,
+                                       "home_stamp": (10, 11, 1000, 700, "directory", 2)},
                                       Path("/private/operator"), expected, PROBE)
         self.assertEqual(result["directory_stamp"],
                          (10, 20, 1000, 700, "directory", 2))
@@ -118,11 +133,13 @@ class Probe(unittest.TestCase):
 
         with mock.patch.object(probe, "_ssh", side_effect=replies), \
              mock.patch.object(probe, "_pinned", return_value=[]), \
+             mock.patch.object(probe, "_guest_home_stamp", return_value=(10, 11, 1000, 700, "directory", 2)), \
              mock.patch.object(probe, "_guest_operator",
                                side_effect=ValueError("operator digest differs")), \
              mock.patch.object(probe, "command", return_value=b""):
             with self.assertRaisesRegex(ValueError, "operator digest differs"):
-                probe._transport({"guest_uid": 1000, "port": 22024},
+                probe._transport({"guest_uid": 1000, "port": 22024,
+                                  "home_stamp": (10, 11, 1000, 700, "directory", 2)},
                                  Path("/private/operator"), expected, PROBE)
 
     def test_held_guest_operator_digest_and_inode_are_required(self):
@@ -160,6 +177,102 @@ class Probe(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "guest operator differs"):
                     probe._guest_operator({"guest_uid": os.getuid()},
                                           str(target), expected)
+
+    def test_sealed_guest_exec_keeps_verified_bytes_and_clean_fixed_argv(self):
+        if shutil.which("cc") is None:
+            self.skipTest("C compiler unavailable for synthetic executable")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "operator.c"
+            source.write_text(
+                '#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n'
+                'int main(int n,char**v){'
+                'if(n!=2||getenv("LEAK_ME")||strcmp(getenv("HOME"),"/nonexistent"))return 3;'
+                'if(!strcmp(v[1],"--build-identity")){puts("' + SOURCE + ':' + TAG + '");return 0;}'
+                'if(!strcmp(v[1],"--help")){puts("usage: marty-deploy.py synthetic");return 0;}'
+                'return 4;}\n', encoding="ascii")
+            original = root / "operator"
+            subprocess.run([shutil.which("cc"), "-o", str(original), str(source)],
+                           check=True, capture_output=True, timeout=15)
+            original.chmod(0o700)
+            digest = probe.hashlib.sha256(original.read_bytes()).hexdigest()
+            identity = SOURCE + ":" + TAG
+            def run(code, path=original, flag="--build-identity", size=None):
+                selected_size = path.stat().st_size if size is None else size
+                return subprocess.run([sys.executable, "-E", "-I", "-B", "-c", code,
+                                       str(path), digest, str(selected_size), str(os.getuid()),
+                                       flag, identity], cwd="/", capture_output=True,
+                                      env={"HOME": "/", "PATH": "/usr/bin:/bin", "LANG": "C",
+                                           "LEAK_ME": "must-not-reach-child"}, timeout=10)
+            clean = run(probe.GUEST_SEALED_EXEC)
+            self.assertEqual(clean.returncode, 0, clean.stderr)
+            self.assertEqual(json.loads(clean.stdout)["flag"], "--build-identity")
+            help_result = run(probe.GUEST_SEALED_EXEC, flag="--help")
+            self.assertEqual(help_result.returncode, 0, help_result.stderr)
+            forbidden = run(probe.GUEST_SEALED_EXEC, flag="install")
+            self.assertNotEqual(forbidden.returncode, 0)
+            self.assertNotIn(b"marty-deploy.py synthetic", forbidden.stdout)
+
+            # Inject a competing path swap at the exact seal/exec boundary in
+            # a test-only copy of the constant program. The executed bytes
+            # still come from the sealed FD, not the later named path.
+            replacement = root / "replacement"
+            replacement.write_bytes(b"untrusted replacement")
+            replacement.chmod(0o700)
+            marker = "    child=subprocess.Popen("
+            swapped_code = probe.GUEST_SEALED_EXEC.replace(
+                marker, "    os.replace(" + repr(str(replacement)) + ",path)\n" + marker)
+            self.assertNotEqual(swapped_code, probe.GUEST_SEALED_EXEC)
+            swapped = run(swapped_code)
+            self.assertEqual(swapped.returncode, 0, swapped.stderr)
+            self.assertEqual(json.loads(swapped.stdout)["operator_sha256"], digest)
+            self.assertNotEqual(probe.hashlib.sha256(original.read_bytes()).hexdigest(), digest)
+
+            # Restore the compiled trusted ELF from a separately retained
+            # immutable fixture for the in-place mutation case.
+            original.unlink()
+            subprocess.run([shutil.which("cc"), "-o", str(original), str(source)],
+                           check=True, capture_output=True, timeout=15)
+            original.chmod(0o700)
+            changed_code = probe.GUEST_SEALED_EXEC.replace(
+                marker, "    os.truncate(path,0)\n" + marker)
+            changed = run(changed_code)
+            self.assertEqual(changed.returncode, 0, changed.stderr)
+            self.assertEqual(original.stat().st_size, 0)
+            oversized = root / "oversized"
+            with oversized.open("wb") as stream:
+                stream.truncate(67108865)
+            oversized.chmod(0o700)
+            refused = run(probe.GUEST_SEALED_EXEC, path=oversized,
+                          size=67108865)
+            self.assertNotEqual(refused.returncode, 0)
+            self.assertEqual(refused.stdout, b"")
+
+    def test_controller_accepts_only_fixed_sealed_execution_receipt(self):
+        target = probe._guest_dir(PROBE) + "/marty-deploy"
+        expected = {"binary_sha256": "a" * 64, "binary_bytes": 42,
+                    "source_sha": SOURCE, "release_tag": TAG,
+                    "build_run_id": 40392909103, "build_run_attempt": 1}
+        result = {"flag": "--help", "operator_sha256": "a" * 64,
+                  "operator_device": 10, "operator_inode": 21,
+                  "output_sha256": "b" * 64, "output_bytes": 100,
+                  "matched": True}
+        with mock.patch.object(probe, "_ssh", return_value=probe.release.encode(result)) as ssh:
+            accepted = probe._execute_sealed({"guest_uid": 1000}, target,
+                                             expected, (10, 21, 1000, 700, 1, 42), "--help")
+            self.assertEqual(accepted, result)
+            script = ssh.call_args.args[1]
+            self.assertIn("/usr/bin/env -i", script)
+            self.assertIn("/usr/bin/python3 -E -I -B -c", script)
+            self.assertNotIn(target + " --help", script)
+            result["operator_inode"] = 22
+            ssh.return_value = probe.release.encode(result)
+            with self.assertRaisesRegex(ValueError, "sealed execution differs"):
+                probe._execute_sealed({"guest_uid": 1000}, target,
+                                      expected, (10, 21, 1000, 700, 1, 42), "--help")
+        with self.assertRaisesRegex(ValueError, "command unsupported"):
+            probe._execute_sealed({"guest_uid": 1000}, target,
+                                  expected, (10, 21, 1000, 700, 1, 42), "install")
 
     def test_durable_intent_precedes_guest_action_and_is_one_shot(self):
         expected = {"binary": Path("/fixture/marty-deploy-linux-amd64"),

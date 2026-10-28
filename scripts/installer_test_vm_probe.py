@@ -12,6 +12,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import stat
 import sys
 import time
@@ -37,6 +38,92 @@ WORKFLOW = ".github/workflows/nightly-release.yml"
 SCP = Path("/usr/bin/scp")
 OPERATOR = "marty-deploy-linux-amd64"
 MAX_HELP = 32768
+MAX_PROBE_OPERATOR_BYTES = 64 * 1024 * 1024
+
+# Sent as a fixed SSH argument. The named guest file is never executed. The
+# verified bytes are copied to an executable sealed memfd, then that FD is the
+# sole exec target. No guest Python source file or ambient environment is used.
+GUEST_SEALED_EXEC = r"""
+import fcntl,hashlib,json,os,selectors,signal,stat,subprocess,sys,time
+try:
+    assert len(sys.argv)==7
+    path,expected_sha,size_text,uid_text,flag,identity=sys.argv[1:]
+    assert flag in ("--build-identity","--help")
+    assert len(expected_sha)==64 and all(c in "0123456789abcdef" for c in expected_sha)
+    size=int(size_text);uid=int(uid_text)
+    assert 0<size<=67108864 and uid>0
+    source=os.open(path,os.O_PATH|os.O_NOFOLLOW|os.O_CLOEXEC)
+    before=os.fstat(source)
+    assert stat.S_ISREG(before.st_mode) and before.st_uid==uid
+    assert stat.S_IMODE(before.st_mode)==0o700 and before.st_nlink==1
+    assert before.st_size==size
+    readable=os.open("/proc/self/fd/%d"%source,os.O_RDONLY|os.O_CLOEXEC)
+    def stamp(value):
+        return (value.st_dev,value.st_ino,value.st_uid,value.st_gid,value.st_mode,
+                value.st_nlink,value.st_size,value.st_mtime_ns,value.st_ctime_ns)
+    assert stamp(before)==stamp(os.fstat(readable))
+    sealed=os.memfd_create("marty-installer-only-probe",
+                           os.MFD_CLOEXEC|os.MFD_ALLOW_SEALING)
+    os.fchmod(sealed,0o700)
+    digest=hashlib.sha256();remaining=size
+    while remaining:
+        block=os.read(readable,min(65536,remaining))
+        assert block
+        digest.update(block)
+        view=memoryview(block)
+        while view:
+            view=view[os.write(sealed,view):]
+        remaining-=len(block)
+    assert os.read(readable,1)==b"" and digest.hexdigest()==expected_sha
+    assert stamp(before)==stamp(os.fstat(readable))==stamp(os.stat(path,follow_symlinks=False))
+    mask=fcntl.F_SEAL_WRITE|fcntl.F_SEAL_GROW|fcntl.F_SEAL_SHRINK|fcntl.F_SEAL_SEAL
+    fcntl.fcntl(sealed,fcntl.F_ADD_SEALS,mask)
+    assert fcntl.fcntl(sealed,fcntl.F_GET_SEALS)&mask==mask
+    assert os.fstat(sealed).st_size==size
+    os.close(readable);os.close(source)
+    child=subprocess.Popen(["/proc/self/fd/%d"%sealed,flag],pass_fds=(sealed,),
+        stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE,
+        cwd="/",env={"HOME":"/nonexistent","PATH":"/usr/bin:/bin","LANG":"C"},
+        start_new_session=True,close_fds=True)
+    limit=32768 if flag=="--help" else 256
+    streams={child.stdout:bytearray(),child.stderr:bytearray()}
+    deadline=time.monotonic()+20
+    try:
+        with selectors.DefaultSelector() as selector:
+            for stream in streams:
+                os.set_blocking(stream.fileno(),False)
+                selector.register(stream,selectors.EVENT_READ)
+            while selector.get_map():
+                assert time.monotonic()<deadline
+                for key,_ in selector.select(0.1):
+                    block=os.read(key.fileobj.fileno(),8192)
+                    if not block:selector.unregister(key.fileobj)
+                    else:
+                        streams[key.fileobj].extend(block)
+                        assert sum(map(len,streams.values()))<=limit
+            while os.waitid(os.P_PID,child.pid,
+                            os.WEXITED|os.WNOHANG|os.WNOWAIT) is None:
+                assert time.monotonic()<deadline
+                time.sleep(0.01)
+    finally:
+        try:os.killpg(child.pid,signal.SIGKILL)
+        except ProcessLookupError:pass
+        child.wait()
+    assert child.returncode==0
+    output=bytes(streams[child.stdout])
+    if flag=="--build-identity":
+        assert output==(identity+"\n").encode("ascii")
+    else:
+        assert output.startswith(b"usage: marty-deploy.py ") and output
+    print(json.dumps({"flag":flag,"operator_sha256":expected_sha,
+                      "operator_device":before.st_dev,"operator_inode":before.st_ino,
+                      "output_sha256":hashlib.sha256(output).hexdigest(),
+                      "output_bytes":len(output),"matched":True},
+                     sort_keys=True,separators=(",",":")))
+except Exception:
+    print("installer-only probe refused",file=sys.stderr)
+    sys.exit(1)
+"""
 
 
 def _uuid(value: str) -> None:
@@ -107,6 +194,8 @@ def _verified_assets(assets: Path, gh: Path, cosign: Path, client) -> dict:
         digest, size = dispatch.private_file(binary, release.ARTIFACT_MAX_BYTES[OPERATOR])
         release.require((digest, size) == (entry["sha256"], entry["size"]),
                         "VM operator digest differs")
+        release.require(0 < size <= MAX_PROBE_OPERATOR_BYTES,
+                        "VM probe operator exceeds bounded profile")
         bootstrap.same_directory(held, assets)
         release.require(_canonical(base / (assets.name + ".intent.json"), 65536)[0]
                         == intent_raw
@@ -246,12 +335,14 @@ def _bound_vm(source: Path, registry: Path, runtime_parent: Path,
                     and guest["docker_engine_id"] == intent["historical_docker_engine_id"]
                     and guest["guest_uid"] == intent["historical_guest_uid"],
                     "VM probe current guest differs")
-    return {"readiness_sha256": release.digest(ready_raw), "pid": pid["pid"],
+    binding = {"readiness_sha256": release.digest(ready_raw), "pid": pid["pid"],
             "start_ticks": pid["start_ticks"], "boot_id": intent["controller_boot_id"],
             "disk_device": intent["disk_device"], "disk_inode": intent["disk_inode"],
             "engine_id": guest["docker_engine_id"], "guest_uid": guest["guest_uid"],
             "port": seed["ssh_port"], "key_sha256": seed["controller_private_sha256"],
             "known_hosts_sha256": seed["known_hosts_sha256"], "control_dir": control_dir}
+    binding["home_stamp"] = _guest_home_stamp(binding)
+    return binding
 
 
 def _pinned(binding: dict) -> list[str]:
@@ -302,27 +393,47 @@ def _guest_stamp(binding: dict, directory: str) -> tuple[int, int, int, int, str
     return stamp
 
 
+def _guest_home_stamp(binding: dict) -> tuple[int, int, int, int, str, int]:
+    raw = _ssh(binding, "/usr/bin/stat -c '%d:%i:%u:%a:%F:%h' -- /home/installer")
+    parts = raw.decode("ascii").strip().split(":")
+    release.require(len(parts) == 6 and all(item.isdecimal() for item in
+                    (parts[0], parts[1], parts[2], parts[3], parts[5]))
+                    and parts[4] == "directory", "VM probe guest home invalid")
+    stamp = (int(parts[0]), int(parts[1]), int(parts[2]), int(parts[3]),
+             parts[4], int(parts[5]))
+    release.require(stamp[2] == binding["guest_uid"] and stamp[3] == 700
+                    and stamp[5] >= 2, "VM probe guest home custody differs")
+    return stamp
+
+
 def _guest_operator(binding: dict, target: str, expected: dict) -> tuple[int, int, int, int, int, int]:
     """Classify O_PATH, reopen that inode, hash it, and rebind the named path."""
     code = (
         "import hashlib,os,stat,sys;"
-        "p=sys.argv[1];"
+        "p=sys.argv[1];size=int(sys.argv[2]);"
         "f=os.open(p,os.O_PATH|os.O_NOFOLLOW|os.O_CLOEXEC);"
         "a=os.fstat(f);"
-        "assert stat.S_ISREG(a.st_mode) and a.st_nlink==1;"
+        "assert stat.S_ISREG(a.st_mode) and a.st_nlink==1 and "
+        "a.st_size==size and 0<size<=67108864;"
         "r=os.open(\"/proc/self/fd/%d\"%f,os.O_RDONLY|os.O_CLOEXEC);"
         "b=os.fstat(r);"
-        "assert (a.st_dev,a.st_ino,a.st_uid,a.st_gid,a.st_mode,a.st_nlink,a.st_size)"
-        "==(b.st_dev,b.st_ino,b.st_uid,b.st_gid,b.st_mode,b.st_nlink,b.st_size);"
+        "assert (a.st_dev,a.st_ino,a.st_uid,a.st_gid,a.st_mode,a.st_nlink,a.st_size,"
+        "a.st_mtime_ns,a.st_ctime_ns)"
+        "==(b.st_dev,b.st_ino,b.st_uid,b.st_gid,b.st_mode,b.st_nlink,b.st_size,"
+        "b.st_mtime_ns,b.st_ctime_ns);"
         "h=hashlib.file_digest(os.fdopen(r,\"rb\",closefd=False),\"sha256\").hexdigest();"
         "c=os.fstat(r);n=os.stat(p,follow_symlinks=False);"
-        "assert (a.st_dev,a.st_ino,a.st_uid,a.st_gid,a.st_mode,a.st_nlink,a.st_size)"
-        "==(c.st_dev,c.st_ino,c.st_uid,c.st_gid,c.st_mode,c.st_nlink,c.st_size)"
-        "==(n.st_dev,n.st_ino,n.st_uid,n.st_gid,n.st_mode,n.st_nlink,n.st_size);"
+        "assert (a.st_dev,a.st_ino,a.st_uid,a.st_gid,a.st_mode,a.st_nlink,a.st_size,"
+        "a.st_mtime_ns,a.st_ctime_ns)"
+        "==(c.st_dev,c.st_ino,c.st_uid,c.st_gid,c.st_mode,c.st_nlink,c.st_size,"
+        "c.st_mtime_ns,c.st_ctime_ns)"
+        "==(n.st_dev,n.st_ino,n.st_uid,n.st_gid,n.st_mode,n.st_nlink,n.st_size,"
+        "n.st_mtime_ns,n.st_ctime_ns);"
         "print(\"%d:%d:%d:%o:%d:%d:%s\"%(a.st_dev,a.st_ino,a.st_uid,"
         "stat.S_IMODE(a.st_mode),a.st_nlink,a.st_size,h))"
     )
-    raw = _ssh(binding, "/usr/bin/python3 -I -B -c '" + code + "' " + target,
+    raw = _ssh(binding, "/usr/bin/python3 -I -B -c '" + code + "' "
+               + target + " " + str(expected["binary_bytes"]),
                limit=256, timeout=30)
     parts = raw.decode("ascii").strip().split(":")
     release.require(len(parts) == 7 and all(part.isdecimal() for part in parts[:6])
@@ -336,10 +447,44 @@ def _guest_operator(binding: dict, target: str, expected: dict) -> tuple[int, in
     return stamp
 
 
+def _execute_sealed(binding: dict, target: str, expected: dict,
+                    stamp: tuple[int, int, int, int, int, int], flag: str) -> dict:
+    release.require(flag in ("--build-identity", "--help"),
+                    "VM probe command unsupported")
+    identity = expected["source_sha"] + ":" + expected["release_tag"]
+    release.identity(expected["source_sha"], expected["release_tag"],
+                     expected["build_run_id"], expected["build_run_attempt"])
+    args = [target, expected["binary_sha256"], str(expected["binary_bytes"]),
+            str(binding["guest_uid"]), flag, identity]
+    release.require(re.fullmatch(r"/home/installer/\.marty-installer-only-probe-"
+                                 r"[0-9a-f-]{36}/marty-deploy", target) is not None,
+                    "VM probe target invalid")
+    script = ("/usr/bin/env -i HOME=/ PATH=/usr/bin:/bin LANG=C "
+              "/usr/bin/python3 -E -I -B -c " + shlex.quote(GUEST_SEALED_EXEC)
+              + " " + " ".join(shlex.quote(value) for value in args))
+    raw = _ssh(binding, script, limit=1024, timeout=35)
+    result = release.decode(raw)
+    release.exact(result, {"flag", "operator_sha256", "operator_device",
+                           "operator_inode", "output_sha256", "output_bytes",
+                           "matched"}, "VM probe sealed execution")
+    release.require(result["flag"] == flag
+                    and result["operator_sha256"] == expected["binary_sha256"]
+                    and result["operator_device"] == stamp[0]
+                    and result["operator_inode"] == stamp[1]
+                    and type(result["output_bytes"]) is int
+                    and 0 < result["output_bytes"] <= (MAX_HELP if flag == "--help" else 256)
+                    and re.fullmatch(r"[0-9a-f]{64}", result["output_sha256"]) is not None
+                    and result["matched"] is True,
+                    "VM probe sealed execution differs")
+    return result
+
+
 def _transport(binding: dict, binary: Path, expected: dict, probe_id: str) -> dict:
     directory = _guest_dir(probe_id)
     target = directory + "/marty-deploy"
     # The only variable in the remote shell commands is a canonical UUID.
+    release.require(_guest_home_stamp(binding) == binding["home_stamp"],
+                    "VM probe guest home changed")
     release.require(_ssh(binding, "umask 077; /usr/bin/mkdir -m 700 -- " + directory)
                     == b"", "VM probe guest directory creation differed")
     created = _guest_stamp(binding, directory)
@@ -348,6 +493,8 @@ def _transport(binding: dict, binary: Path, expected: dict, probe_id: str) -> di
              "installer@127.0.0.1:" + target],
             timeout=300, limit=4096, env=restart.launcher.ENV)
     _pinned(binding)
+    release.require(_guest_home_stamp(binding) == binding["home_stamp"],
+                    "VM probe guest home changed")
     release.require(_guest_stamp(binding, directory) == created,
                     "VM probe guest directory changed")
     release.require(_ssh(binding, "/usr/bin/chmod 700 -- " + target) == b"",
@@ -361,6 +508,9 @@ def _transport(binding: dict, binary: Path, expected: dict, probe_id: str) -> di
 def probe(*, source: Path, registry: Path, runtime_parent: Path, vm_id: str,
           probe_id: str, assets: Path, gh: Path, cosign: Path, client) -> dict:
     release.require(os.geteuid() == 0, "root VM controller required")
+    release.require(all(path.is_absolute() for path in
+                        (source, registry, runtime_parent, assets, gh, cosign)),
+                    "VM probe path must be absolute")
     _uuid(vm_id)
     _uuid(probe_id)
     with ControllerLease(registry) as lease:
@@ -412,19 +562,20 @@ def probe(*, source: Path, registry: Path, runtime_parent: Path, vm_id: str,
         release.require(_guest_operator(binding, target, expected)
                         == transferred["operator_stamp"],
                         "VM probe guest operator changed before build identity")
-        identity = _ssh(binding, target + " --build-identity", limit=256)
-        release.require(identity == (expected["source_sha"] + ":"
-                        + expected["release_tag"] + "\n").encode(),
-                        "VM probe operator build identity differs")
+        release.require(_guest_home_stamp(binding) == binding["home_stamp"],
+                        "VM probe guest home changed")
+        identity = _execute_sealed(binding, target, expected,
+                                   transferred["operator_stamp"], "--build-identity")
         release.require(_guest_operator(binding, target, expected)
                         == transferred["operator_stamp"],
                         "VM probe guest operator changed before help")
-        help_raw = _ssh(binding, target + " --help", limit=MAX_HELP)
-        release.require(0 < len(help_raw) <= MAX_HELP
-                        and help_raw.startswith(b"usage: marty-deploy.py "),
-                        "VM probe operator help differs")
+        release.require(_guest_home_stamp(binding) == binding["home_stamp"],
+                        "VM probe guest home changed")
+        help_result = _execute_sealed(binding, target, expected,
+                                      transferred["operator_stamp"], "--help")
         release.require(_guest_stamp(binding, intent["guest_directory"])
                         == transferred["directory_stamp"]
+                        and _guest_home_stamp(binding) == binding["home_stamp"]
                         and _guest_operator(binding, target, expected)
                         == transferred["operator_stamp"]
                         and _bound_vm(source, registry, runtime_parent, vm_id, lease)
@@ -434,9 +585,9 @@ def probe(*, source: Path, registry: Path, runtime_parent: Path, vm_id: str,
         result = {"schema": RESULT_SCHEMA, "phase": "observed", "vm_id": vm_id,
                   "probe_id": probe_id, "intent_sha256": release.digest(intent_raw),
                   "operator_sha256": expected["binary_sha256"],
-                  "build_identity_matched": True,
-                  "help_sha256": hashlib.sha256(help_raw).hexdigest(),
-                  "help_bytes": len(help_raw), "guest_directory_device":
+                  "build_identity_matched": identity["matched"],
+                  "help_sha256": help_result["output_sha256"],
+                  "help_bytes": help_result["output_bytes"], "guest_directory_device":
                   transferred["directory_stamp"][0], "guest_directory_inode":
                   transferred["directory_stamp"][1],
                   "guest_operator_inode": transferred["operator_stamp"][1],
