@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -31,6 +32,7 @@ DIDCOMM_AUTHCRYPT_FILE = "docker-compose.profile.issuance-native-authcrypt.yml"
 NATIVE_FILE = "docker-compose.profile.conformance-native.yml"
 NATIVE_IMAGES_FILE = "docker-compose.profile.issuance-native-images.yml"
 NATIVE_CA_FILE = "docker-compose.profile.didcomm-native-conformance.yml"
+LOCAL_SOURCE_MIGRATION_FILE = "docker-compose.profile.conformance-source-migration.yml"
 ISOLATION_FILE = "docker-compose.profile.conformance.yml"
 PUBLIC_PORT_SERVICES = {"oidf-tls-proxy"}
 ONE_SHOT_SERVICES = {
@@ -90,6 +92,25 @@ def compose_command(
         files.append(NATIVE_FILE)
         if use_ghcr:
             files.append(NATIVE_IMAGES_FILE)
+    migration_binary = os.environ.get("MARTY_CONFORMANCE_SOURCE_MIGRATION_BINARY", "").strip()
+    if migration_binary:
+        expected = os.environ.get("MARTY_CONFORMANCE_SOURCE_MIGRATION_SHA256", "").strip()
+        volume_root = os.environ.get("MARTY_CONFORMANCE_SOURCE_VOLUME_ROOT", "").strip()
+        if not use_ghcr or issuance_owner != "native" or not re.fullmatch(r"[0-9a-f]{64}", expected):
+            raise ValueError("local source migration requires native immutable-image mode and exact digest")
+        if not volume_root or not Path(volume_root).is_absolute() or not Path(migration_binary).is_absolute():
+            raise ValueError("local source migration requires absolute owned-volume paths")
+        root = Path(volume_root).resolve(strict=True)
+        raw_binary = Path(migration_binary)
+        binary = raw_binary.resolve(strict=True)
+        if (raw_binary.is_symlink() or not binary.is_file()
+                or binary.name != "marty-issuance-service" or not binary.is_relative_to(root)):
+            raise ValueError("local source migrator is outside the owned native binary volume")
+        with binary.open("rb") as source:
+            actual = hashlib.file_digest(source, "sha256").hexdigest()
+        if actual != expected:
+            raise ValueError("local source migrator digest changed")
+        files.append(LOCAL_SOURCE_MIGRATION_FILE)
     if include_didcomm_authcrypt:
         if issuance_owner != "native":
             raise ValueError("DIDComm authcrypt requires the native issuance owner")
@@ -260,6 +281,75 @@ def wait_for_one_shots(
             )
             raise ValueError(f"timed out waiting for one-shot services: {pending}")
         time.sleep(poll_seconds)
+
+
+def attest_local_source_migration(
+    project: str, config: dict[str, Any], *, resume: bool = False
+) -> None:
+    """Record the normal source-built issuance migrator's terminal owned run."""
+    binary_value = os.environ.get("MARTY_CONFORMANCE_SOURCE_MIGRATION_BINARY", "").strip()
+    if not binary_value:
+        return
+    source_revision = os.environ.get("MARTY_CONFORMANCE_SOURCE_REVISION", "").strip()
+    receipt_value = os.environ.get("MARTY_CONFORMANCE_SOURCE_MIGRATION_RECEIPT", "").strip()
+    volume_value = os.environ.get("MARTY_CONFORMANCE_SOURCE_VOLUME_ROOT", "").strip()
+    if not re.fullmatch(r"[0-9a-f]{40}", source_revision) or not receipt_value:
+        raise ValueError("local source migrator lacks revision or private receipt binding")
+    if subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip() != source_revision:
+        raise ValueError("local source migrator does not match the running product source")
+    volume = Path(volume_value).resolve(strict=True)
+    receipt = Path(receipt_value)
+    if (not receipt.is_absolute() or receipt.is_symlink()
+            or not receipt.resolve().is_relative_to(volume)):
+        raise ValueError("local migration receipt must be in the owned volume")
+    ids = project_container_ids(project)
+    rows = json.loads(subprocess.check_output(["docker", "inspect", *ids])) if ids else []
+    selected = [row for row in rows if row["Config"]["Labels"].get(
+        "com.docker.compose.project") == project and row["Config"]["Labels"].get(
+        "com.docker.compose.service") == "issuance-migrations"]
+    if len(selected) != 1:
+        raise ValueError("exact owned issuance migration container was not found")
+    row = selected[0]
+    intended = config["services"]["issuance-migrations"]
+    entrypoint = ["/usr/local/bin/marty-issuance-service"]
+    arguments = ["migrate"]
+    mounts = [mount for mount in row["Mounts"] if mount["Destination"] ==
+              "/usr/local/bin/marty-issuance-service"]
+    binary = str(Path(binary_value).resolve(strict=True))
+    with Path(binary).open("rb") as source:
+        terminal_digest = hashlib.file_digest(source, "sha256").hexdigest()
+    if (intended.get("entrypoint") != entrypoint or intended.get("command") != arguments
+            or row["Config"].get("Entrypoint") != entrypoint
+            or row["Config"].get("Cmd") != arguments
+            or row.get("Path") != entrypoint[0] or row.get("Args") != arguments
+            or row["State"]["Status"] != "exited" or row["State"]["ExitCode"] != 0
+            or row["State"].get("OOMKilled") is not False
+            or terminal_digest != os.environ["MARTY_CONFORMANCE_SOURCE_MIGRATION_SHA256"]
+            or row["Config"]["Image"] != intended["image"]
+            or len(mounts) != 1 or mounts[0]["RW"]
+            or mounts[0]["Source"] != binary):
+        raise ValueError("source-built issuance migrator did not complete in the owned project")
+    migrations = ROOT / "rust/services/issuance/migrations"
+    inputs = {path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+              for path in sorted(migrations.glob("*.sql"))}
+    if not inputs:
+        raise ValueError("current source has no issuance migration inputs")
+    proof = {"schema": "marty.local-source-issuance-migration/v1",
+             "project": project, "sourceRevision": source_revision,
+             "binarySha256": os.environ["MARTY_CONFORMANCE_SOURCE_MIGRATION_SHA256"],
+             "containerId": row["Id"], "image": row["Config"]["Image"],
+             "exitCode": 0, "migrations": inputs, "releaseQualified": False}
+    if receipt.exists():
+        if not resume or json.loads(receipt.read_text(encoding="utf-8")) != proof:
+            raise ValueError("local migration receipt changed or belongs to another operation")
+        return
+    if resume:
+        raise ValueError("resumed local stack lacks its original migration receipt")
+    receipt.parent.mkdir(parents=True, exist_ok=True)
+    with receipt.open("x", encoding="utf-8") as output:
+        json.dump(proof, output, sort_keys=True)
+        output.write("\n")
+    receipt.chmod(0o600)
 
 
 def project_container_ids(project: str) -> list[str]:
@@ -678,6 +768,7 @@ def main() -> int:
             if up_result.returncode:
                 return up_result.returncode
             wait_for_one_shots(command, config)
+            attest_local_source_migration(project, config, resume=args.resume)
             return 0
         # Keycloak configuration and database migration are successful
         # one-shot services. Compose --wait reports those intentional exits
@@ -702,6 +793,7 @@ def main() -> int:
         if up_result.returncode:
             return up_result.returncode
         wait_for_one_shots(command, config)
+        attest_local_source_migration(project, config, resume=args.resume)
         return 0
     if args.command == "bootstrap-reviewer":
         if not project_container_ids(project):

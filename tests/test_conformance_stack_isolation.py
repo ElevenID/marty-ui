@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
 import re
 from pathlib import Path
@@ -329,6 +330,82 @@ def test_haip_overlay_is_explicit_and_isolation_is_last() -> None:
     assert any(
         path.endswith("docker-compose.profile.conformance-images.yml") for path in files
     )
+
+
+def test_local_source_issuance_migration_uses_exact_binary_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    binary = tmp_path / "marty-issuance-service"
+    binary.write_bytes(b"current-source-native-migrator")
+    digest = hashlib.sha256(binary.read_bytes()).hexdigest()
+    monkeypatch.setenv("MARTY_CONFORMANCE_SOURCE_VOLUME_ROOT", str(tmp_path))
+    monkeypatch.setenv("MARTY_CONFORMANCE_SOURCE_MIGRATION_BINARY", str(binary))
+    monkeypatch.setenv("MARTY_CONFORMANCE_SOURCE_MIGRATION_SHA256", digest)
+
+    command = stack.compose_command("marty-conformance-test1")
+    files = [command[index + 1] for index, value in enumerate(command) if value == "--file"]
+    assert Path(files[-3]).name == stack.LOCAL_SOURCE_MIGRATION_FILE
+    assert Path(files[-1]).name == stack.ISOLATION_FILE
+    overlay = yaml.safe_load((ROOT / stack.LOCAL_SOURCE_MIGRATION_FILE).read_text())
+    assert set(overlay["services"]) == {"issuance-migrations"}
+    assert overlay["services"]["issuance-migrations"]["volumes"][0]["read_only"] is True
+
+    binary.write_bytes(b"changed-native-migrator")
+    with pytest.raises(ValueError, match="digest changed"):
+        stack.compose_command("marty-conformance-test1")
+    with pytest.raises(ValueError, match="native immutable-image mode"):
+        stack.compose_command("marty-conformance-test1", use_ghcr=False)
+
+
+def test_local_source_migration_receipt_requires_exact_owned_terminal_container(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    product = tmp_path / "product"
+    migrations = product / "rust/services/issuance/migrations"
+    migrations.mkdir(parents=True)
+    (migrations / "0009.sql").write_text("SELECT 1;", encoding="utf-8")
+    binary = tmp_path / "marty-issuance-service"
+    binary.write_bytes(b"native")
+    receipt = tmp_path / "migration.json"
+    revision = "a" * 40
+    project = "marty-conformance-test1"
+    monkeypatch.setattr(stack, "ROOT", product)
+    monkeypatch.setattr(stack, "project_container_ids", lambda _project: ["owned123"])
+    monkeypatch.setenv("MARTY_CONFORMANCE_SOURCE_VOLUME_ROOT", str(tmp_path))
+    monkeypatch.setenv("MARTY_CONFORMANCE_SOURCE_MIGRATION_BINARY", str(binary))
+    monkeypatch.setenv("MARTY_CONFORMANCE_SOURCE_MIGRATION_SHA256", hashlib.sha256(binary.read_bytes()).hexdigest())
+    monkeypatch.setenv("MARTY_CONFORMANCE_SOURCE_REVISION", revision)
+    monkeypatch.setenv("MARTY_CONFORMANCE_SOURCE_MIGRATION_RECEIPT", str(receipt))
+    row = {
+        "Id": "owned123",
+        "Path": "/usr/local/bin/marty-issuance-service", "Args": ["migrate"],
+        "State": {"Status": "exited", "ExitCode": 0, "OOMKilled": False},
+        "Config": {"Image": "sha256:baseline", "Entrypoint": ["/usr/local/bin/marty-issuance-service"],
+                   "Cmd": ["migrate"], "Labels": {
+            "com.docker.compose.project": project,
+            "com.docker.compose.service": "issuance-migrations",
+        }},
+        "Mounts": [{"Source": str(binary), "Destination": "/usr/local/bin/marty-issuance-service", "RW": False}],
+    }
+
+    def output(command, **_kwargs):
+        return revision if command[0] == "git" else json.dumps([row])
+
+    monkeypatch.setattr(stack.subprocess, "check_output", output)
+    config = {"services": {"issuance-migrations": {
+        "image": "sha256:baseline", "entrypoint": ["/usr/local/bin/marty-issuance-service"],
+        "command": ["migrate"],
+    }}}
+    stack.attest_local_source_migration(project, config)
+    assert json.loads(receipt.read_text())["containerId"] == "owned123"
+    stack.attest_local_source_migration(project, config, resume=True)
+    row["Mounts"][0]["RW"] = True
+    with pytest.raises(ValueError, match="did not complete"):
+        stack.attest_local_source_migration(project, config, resume=True)
+    row["Mounts"][0]["RW"] = False
+    binary.write_bytes(b"changed-after-migration")
+    with pytest.raises(ValueError, match="did not complete"):
+        stack.attest_local_source_migration(project, config, resume=True)
 
 
 def test_didcomm_authcrypt_overlay_is_explicit_and_isolation_is_last() -> None:
