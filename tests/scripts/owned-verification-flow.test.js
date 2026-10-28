@@ -5,10 +5,10 @@ const {ownedVerificationFlow}=require('./owned-verification-flow');
 const org='11111111-1111-4111-8111-111111111111';
 const runId='22222222-2222-4222-8222-222222222222';
 const id='33333333-3333-4333-8333-333333333333';
-function fixture(t,{foreign=false,missing=false}={}){
+function fixture(t,{foreign=false,missing=false,initialStatus='PENDING'}={}){
   const privateDirectory=fs.mkdtempSync(path.join(os.tmpdir(),'canvas-owned-flow-'));
   t.after(()=>fs.rmSync(privateDirectory,{recursive:true,force:true}));
-  let flow,postCount=0,status='PENDING';
+  let flow,postCount=0,status=initialStatus;
   const api=async(method,route)=>{
     if(method==='GET'&&route.startsWith('/v1/flows/instances?'))return {ok:true,status:200,
       body:missing?[]:[{id,organization_id:org,metadata:{external_reference:flow.reference}}]};
@@ -68,4 +68,12 @@ test('foreign instance tuple refuses cancellation and retains the custody journa
     await flow.acknowledge({ok:true,instanceId:id});
   }),error=>error.code==='OWNED_FLOW_CLEANUP_UNCONFIRMED');
   assert.equal(f.postCount,0);assert.equal(f.journal().state,'CUSTODY_UNRESOLVED');
+});
+test('unknown public Flow status cannot trigger cancellation or cleanup success',async t=>{
+  const f=fixture(t,{initialStatus:'VERIFIED'});
+  await assert.rejects(f.flow.run(async flow=>{
+    flow.beforeCreate({organization_id:org,external_reference:flow.reference});
+    await flow.acknowledge({ok:true,instanceId:id});
+  }),error=>error.code==='OWNED_FLOW_CLEANUP_UNCONFIRMED');
+  assert.equal(f.postCount,0);assert.equal(f.journal().retirementConfirmed,false);
 });

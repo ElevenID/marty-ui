@@ -2658,7 +2658,7 @@ async function main(options = {}) {
       const verified=await flow.run(()=>require('./audit-beta-credential-lifecycle').verify(
         betaAdminPage,ownedWalletPage,flow.reference,{organizationId,presentationPolicyId:policyId,
           issuerDid:issuedRecords.issuer_did,returnOnWalletFailure:true,flowCustody:flow}));
-      requireCondition(['COMPLETED','PASSED','VERIFIED'].includes(flow.terminalStatus),
+      requireCondition(flow.terminalStatus==='COMPLETED',
         'engineering_wallet_flow_not_verified','Run-owned verification Flow was not a terminal success.');
       try {require('./beta-demo-review-ui').requireVerificationDecision(verified,'allow');}
       catch {fail('engineering_wallet_verification_failed','Real Rust wallet presentation did not verify.');}
