@@ -50,10 +50,10 @@ const NOW = '2026-07-15T06:00:00.000Z';
 test('roster activation selects a new exact job despite host and server clock skew', async () => {
   const organization_id = 'org-1', binding_id = 'binding-1';
   const oldJob = { id: 'old-job', organization_id, binding_id, target_type: 'background_roster' };
-  const activatedAt='2026-07-15T05:59:59.500123+00:00';
+  const activatedAt='2026-07-15T05:59:59.500120+00:00';
   const freshJob = { id: 'new-job', organization_id, binding_id,
-    target_type: 'background_roster', created_at: activatedAt };
-  const periodicJob={...freshJob,id:'periodic-job',created_at:'2026-07-15T05:59:59.500124+00:00'};
+    target_type: 'background_roster', created_at: '2026-07-15T05:59:59.50012Z' };
+  const periodicJob={...freshJob,id:'periodic-job',created_at:'2026-07-15T05:59:59.500121+00:00'};
   let activated = false;
   const marty = { async get(path) {
     if (path.endsWith('/new-job')) return { ...freshJob, status: 'succeeded' };

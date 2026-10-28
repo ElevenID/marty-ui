@@ -1554,12 +1554,31 @@ async function completeOrganizationJobInventory(marty,organizationId) {
   return jobs;
 }
 
+function canvasInstantMicros(value) {
+  if (typeof value !== 'string') return null;
+  const match=/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,6}))?(Z|[+-]\d{2}:\d{2})$/.exec(value);
+  if (!match) return null;
+  const [,yearText,monthText,dayText,hourText,minuteText,secondText,fraction='',zone]=match;
+  const [year,month,day,hour,minute,second]=[yearText,monthText,dayText,hourText,minuteText,secondText].map(Number);
+  const date=new Date(Date.UTC(year,month-1,day));
+  if (date.getUTCFullYear()!==year || date.getUTCMonth()+1!==month || date.getUTCDate()!==day
+    || hour>23 || minute>59 || second>59) return null;
+  let offsetMinutes=0;
+  if (zone!=='Z') {
+    const offsetHour=Number(zone.slice(1,3)),offsetMinute=Number(zone.slice(4,6));
+    if (offsetHour>23 || offsetMinute>59) return null;
+    offsetMinutes=(zone[0]==='+'?1:-1)*(offsetHour*60+offsetMinute);
+  }
+  const milliseconds=Date.UTC(year,month-1,day,hour,minute,second)-offsetMinutes*60_000;
+  return BigInt(milliseconds)*1_000n+BigInt(fraction.padEnd(6,'0'));
+}
+
 async function activatedRosterJobTimestamp(marty, organizationId, platformId, bindingId, configVersion) {
   const binding=await marty.get(`/v1/integrations/canvas/program-bindings/${encodeURIComponent(bindingId)}`);
   requireCondition(binding.id===bindingId && binding.organization_id===organizationId
     && binding.platform_id===platformId && binding.enabled===true
     && binding.config_version===configVersion && typeof binding.activated_at==='string'
-    && Number.isFinite(Date.parse(binding.activated_at)),
+    && canvasInstantMicros(binding.activated_at)!==null,
   'canvas_roster_activation_binding_invalid','Activated Canvas binding has no exact server-side activation identity.');
   return binding.activated_at;
 }
@@ -1567,7 +1586,8 @@ async function activatedRosterJobTimestamp(marty, organizationId, platformId, bi
 async function waitForLatestRosterJob(marty, organizationId, bindingId, beforeJobIds, activatedAt) {
   requireCondition(beforeJobIds instanceof Set, 'canvas_roster_job_baseline_missing',
     'A fresh activation requires its exact preactivation job inventory.');
-  requireCondition(typeof activatedAt==='string' && Number.isFinite(Date.parse(activatedAt)),
+  const activatedMicros=canvasInstantMicros(activatedAt);
+  requireCondition(activatedMicros!==null,
     'canvas_roster_activation_timestamp_missing','Roster job must bind the exact server activation instant.');
   return waitFor(async () => {
     const jobs = safeList(await marty.get(
@@ -1579,16 +1599,16 @@ async function waitForLatestRosterJob(marty, organizationId, bindingId, beforeJo
       item.target_type === 'background_roster'
         && item.organization_id === organizationId && item.binding_id === bindingId
         // Rust enqueues this job with the same server DateTime as binding.activated_at.
-        // Compare the serialized value exactly: Date.parse loses microseconds and
-        // could admit an unrelated periodic job in the same millisecond.
-        && item.created_at === activatedAt
+        // Binding and PostgreSQL JSON can serialize the same microsecond instant
+        // with different trailing zeroes. Date.parse loses microseconds entirely.
+        && canvasInstantMicros(item.created_at)===activatedMicros
         && !beforeJobIds.has(item.id)
     ));
     if (!job) return null;
     const completed=await waitForJob(marty, job.id);
     requireCondition(completed.id===job.id && completed.organization_id===organizationId
       && completed.binding_id===bindingId && completed.target_type==='background_roster'
-      && completed.created_at===activatedAt,
+      && canvasInstantMicros(completed.created_at)===activatedMicros,
     'canvas_roster_job_identity_mismatch','Completed roster job differs from the activated binding job.');
     return completed;
   }, JOB_TIMEOUT_MS, 1_500, 'canvas_roster_job_timeout');
