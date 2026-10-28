@@ -41,6 +41,7 @@ const {
   waitForLatestRosterJob,
   reconcileCanvasPrelaunchApplicationAbsence,
   requireCanvasSetupMutationReconciliation,
+  retireCanvasOwnedReferences,
 } = require('./run-canvas-oss-standard-contract');
 
 const NOW = '2026-07-15T06:00:00.000Z';
@@ -103,6 +104,27 @@ test('prelaunch cleanup accepts only terminal owned roster with no application o
     await assert.rejects(reconcileCanvasPrelaunchApplicationAbsence(state),
       error=>error.code==='canvas_background_application_uncertain');
   }
+});
+
+test('Canvas secret retirement requires authorized collection metadata, never detail GET 404', async () => {
+  const secret='secret-1', org='org-1', platform='platform-1';
+  const events=[];
+  let row={id:secret,organization_id:org,name:'foreign',provider:'canvas',purpose:'oauth_client_secret'};
+  const state={prelaunchAbsenceConfirmed:true,bindingActivationPossible:true,
+    organizationId:org,platformId:platform,integrationSecretId:secret,
+    owned:{martySecretIntent:{name:'owned',state:'CREATED'}},
+    marty:{
+      async get(path){events.push('GET '+path);return row?[row]:[]},
+      async delete(path){events.push('DELETE '+path);if(path.includes('integration-secrets'))row=null},
+      async request(method,path){events.push(method+' '+path);return null},
+    }};
+  await assert.rejects(retireCanvasOwnedReferences(state),
+    error=>error.code==='canvas_owned_secret_identity_mismatch');
+  assert.equal(events.some(event=>event.startsWith('DELETE ')),false);
+  row={...row,name:'owned'};
+  await retireCanvasOwnedReferences(state);
+  assert.equal(events.filter(event=>event.startsWith('DELETE ')).length,2);
+  assert.equal(events.some(event=>event.includes('GET /v1/integrations/canvas/integration-secrets/secret-1')),false);
 });
 
 test('HTTPS transport failure retains bounded network causes without secret-bearing diagnostics', async (t) => {
