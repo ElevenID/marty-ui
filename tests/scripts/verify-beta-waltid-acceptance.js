@@ -486,6 +486,7 @@ if (require.main === module) {
 module.exports = {
   acceptOfferInLocalWallet,
   collectBetaOffer,
+  loginToBetaApplicant,
   loadEnvFile,
   offerPart,
   redact,
