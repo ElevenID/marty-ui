@@ -13,6 +13,10 @@ function createOwnedMembership(operator, inputs) {
   const owned = { organizationId: inputs.organizationId, credentialTemplateId: null,
     runId: inputs.runId, applicationId: null, transactionId: null, credentialId: null,
     applicationTemplateId: null, applicantId: null, uncertainMutations: [] };
+  const protectedFields = ['id', 'organization_id', 'status', 'credential_type', 'vct',
+    'credential_payload_format', 'issuer_did', 'trust_profile_id', 'claims', 'supported_formats'];
+  const protectedContract = template => Object.fromEntries(protectedFields.map(key => [key, template[key] ?? null]));
+  let sourceContract = null;
   const controller = {
     owned,
     async configure() {
@@ -21,6 +25,7 @@ function createOwnedMembership(operator, inputs) {
       assert.equal(credential.status, 'ACTIVE');
       assert.equal(credential.credential_type, inputs.configurationId);
       assert.equal(credential.vct, inputs.vct);
+      sourceContract = JSON.parse(JSON.stringify(protectedContract(credential)));
       assert.match(inputs.sourceApplicationTemplateId || '', /^[a-f0-9-]{36}$/i);
       const applicationSource = await requireJson(operator,
         `/v1/application-templates/${encodeURIComponent(inputs.sourceApplicationTemplateId)}`);
@@ -33,30 +38,9 @@ function createOwnedMembership(operator, inputs) {
       for (const name of ['name', 'description']) assert(applicationSource.claim_collection_rules.some(rule =>
         rule.claim_name === `achievement_${name}` && rule.source === 'SYSTEM'
           && rule.source_config?.system_field === `template.${name}`), 'Preserve governed badge metadata rules');
-      const payload = Object.fromEntries(['organization_id', 'description', 'credential_type', 'vct', 'doctype',
-        'privacy_posture', 'selective_disclosure_fields', 'zk_predicate_claims', 'derived_attributes',
-        'display_style', 'validity_rules', 'supported_formats', 'trust_profile_id', 'revocation_profile_id',
-        'compliance_profile_id', 'issuer_did', 'credential_payload_format', 'issuance_protocol']
-        .filter(key => credential[key] !== undefined).map(key => [key, credential[key]]));
-      payload.claims = credential.claims.map(claim => ({
-        name: claim.name, display_name: claim.display?.label || claim.name, description: claim.description || null,
-        claim_type: claim.type, required: claim.required, selectively_disclosable: claim.selectively_disclosable,
-        derivable: claim.derivable || false, derived_from: claim.derived_from || null,
-        pattern: claim.pattern || null, enum_values: claim.enum_values || null,
-        min_value: claim.min_value ?? null, max_value: claim.max_value ?? null,
-        mdoc_namespace: claim.mdoc_namespace || null, mdoc_element_identifier: claim.mdoc_element_identifier || null,
-        display_icon: claim.display_icon || null,
-      }));
-      payload.application_template_id = null;
-      payload.supported_formats = [credential.credential_payload_format];
-      // This is a new program, not a copy of the legacy seed's configuration
-      // identifier into the public credential-type field.
-      payload.credential_type = inputs.receiptConfigurationId;
-      const ownCredential = await createOwnedActiveConfiguration(operator, owned, {
-        collectionPath: '/v1/credential-templates', name: 'First-party membership credential', payload,
-      });
-      owned.credentialTemplateId = ownCredential.id;
-      assert.equal(ownCredential.credential_type, inputs.receiptConfigurationId);
+      // Credential login's governed policy requires this exact source template.
+      // Own the application and credential, never clone or retire shared policy authority.
+      owned.credentialTemplateId = credential.id;
       const application = await createOwnedActiveConfiguration(operator, owned, {
         collectionPath: '/v1/application-templates', name: 'First-party membership control',
         // Preserve the production Rust-generated collection contract. System
@@ -77,7 +61,7 @@ function createOwnedMembership(operator, inputs) {
           credentialTemplateId: owned.credentialTemplateId }),
       });
       assert.equal(flow.credential_template_id, owned.credentialTemplateId);
-      return { credential, ownCredential, application, flow };
+      return { credential, application, flow };
     },
     async prepare(applicantPage) {
       await controller.configure();
@@ -101,8 +85,17 @@ function createOwnedMembership(operator, inputs) {
       const application = await cleanupApplicationCredential(operator, owned,
         'Retire run-owned first-party wallet credential', { cancelPendingOffer: true });
       const configuration = await retireOwnedConfiguration(operator, owned);
+      let sharedTemplateReadback = null;
+      if (sourceContract) {
+        const current = await requireJson(operator,
+          `/v1/credential-templates/${encodeURIComponent(inputs.credentialTemplateId)}`);
+        assert.deepEqual(protectedContract(current), sourceContract,
+          'Governed shared credential template changed during the owned run');
+        assert.equal(current.status, 'ACTIVE');
+        sharedTemplateReadback = { id: current.id, status: current.status, unchanged: true };
+      }
       return { complete: application.ok === true && configuration.ok === true,
-        application, configuration, sharedCredentialTemplateModified: false };
+        application, configuration, sharedCredentialTemplateModified: false, sharedTemplateReadback };
     },
   };
   return controller;

@@ -178,7 +178,6 @@ async function runCredentialLogin({ retainedFirstParty = false, evidence = null 
     credentialTemplateId: process.env.LOGIN_BADGE_TEMPLATE_ID || DEFAULT_LOGIN_BADGE_TEMPLATE_ID,
     sourceApplicationTemplateId: process.env.LOGIN_BADGE_APPLICATION_TEMPLATE_ID || DEFAULT_LOGIN_BADGE_APPLICATION_TEMPLATE_ID,
     configurationId: MEMBERSHIP_BADGE_CONFIGURATION_ID, vct: MEMBERSHIP_BADGE_VCT,
-    receiptConfigurationId: 'OpenBadgeCredential',
     email: process.env.TEST_APPLICANT_EMAIL, givenName: 'Jamie', familyName: 'Lee',
     identityBoundary: 'AUTHORIZED_EXISTING_BETA_TEST_ACCOUNT_WITH_SYNTHETIC_FORM_VALUES',
   }, evidence) : null;
@@ -286,7 +285,7 @@ async function runCredentialLogin({ retainedFirstParty = false, evidence = null 
       ...(control ? { governedApplicationId: control.owned.applicationId } : {}),
       loggedOut: offer.loggedOut === true,
       ...await receiveBadge(walletPage, offer.offerUri, { retainSummary: retainedFirstParty,
-        ...(inputs ? { configurationId: inputs.receiptConfigurationId } : {}) }),
+        ...(inputs ? { configurationId: inputs.configurationId } : {}) }),
     };
     if (retainedFirstParty && !controlCredentialReceived(report.badge)) {
       throw new Error('The control wallet did not receive and store the exact expected credential');
