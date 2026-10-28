@@ -190,6 +190,15 @@ def _rebind_stage(stage: Path, identity: tuple[int, int]) -> None:
                     "package admission stage identity changed")
 
 
+def _status_identity(path: Path) -> tuple[int, int, int, int, int, int, int, int]:
+    info = path.lstat()
+    release.require(stat.S_ISREG(info.st_mode) and info.st_uid == 65534
+                    and stat.S_IMODE(info.st_mode) == 0o600 and info.st_nlink == 1,
+                    "package admission status custody invalid")
+    return (info.st_dev, info.st_ino, info.st_uid, info.st_gid, info.st_mode,
+            info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+
+
 def observe(*, source: Path, registry: Path, runtime_parent: Path,
             stage_parent: Path, vm_id: str, observation_id: str,
             admitted_module_sha256: str) -> dict:
@@ -233,12 +242,19 @@ def observe(*, source: Path, registry: Path, runtime_parent: Path,
         stage_info = stage.lstat()
         stage_identity = (stage_info.st_dev, stage_info.st_ino)
         _rebind_stage(stage, stage_identity)
+        bundle_info = bundle.lstat()
+        bundle_identity = (bundle_info.st_dev, bundle_info.st_ino)
+        _rebind_stage(bundle, bundle_identity)
+        status_identity = _status_identity(status_path)
         child = _child(module_bytes, bundle, status_path)
         release.require(child["status_sha256"] == intent["dpkg_status_sha256"]
                         and child["installed_docker_io_version"] ==
                             admission._installed_status(first)["docker.io"],
                         "package admission child status differs")
         _rebind_stage(stage, stage_identity)
+        _rebind_stage(bundle, bundle_identity)
+        release.require(_status_identity(status_path) == status_identity,
+                        "package admission status identity changed")
         release.require(admission.private_file(status_path, admission.MAX_STATUS) == first,
                         "VM dpkg snapshot changed")
         release.require(probe._bound_vm(source, registry, runtime_parent, vm_id, lease)
