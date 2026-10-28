@@ -211,8 +211,8 @@ impl CanvasOperationsService {
             sqlx::query_scalar(kind.list_sql())
                 .bind(organization)
                 .bind(status)
-                .bind(query.platform.as_deref())
-                .bind(query.binding.as_deref())
+                .bind(query.platform.as_deref().filter(|value| !value.is_empty()))
+                .bind(query.binding.as_deref().filter(|value| !value.is_empty()))
                 .bind(window)
                 .fetch_all(&self.pool)
                 .await
