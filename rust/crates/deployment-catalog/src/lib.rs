@@ -25,6 +25,8 @@ pub mod installer_fetch;
 pub mod installer_generation;
 pub mod installer_generation_binding;
 pub mod installer_generation_host;
+#[cfg(target_os = "linux")]
+pub(crate) mod installer_host_snapshot;
 pub mod installer_host_storage_inventory;
 pub mod installer_ingress;
 pub mod installer_ingress_config;
@@ -36,6 +38,7 @@ pub mod installer_keycloak_bridge;
 pub mod installer_logs;
 pub mod installer_openbao;
 pub mod installer_prepare;
+pub(crate) mod installer_purge_host;
 #[allow(dead_code)] // Dormant until the reviewed purge coordinator supplies durable intent.
 pub(crate) mod installer_purge_volume;
 pub mod installer_release;

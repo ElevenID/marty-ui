@@ -6,24 +6,13 @@
  */
 import { get, post, patch, del, getErrorMessage } from './api';
 import { postWithIdempotency } from './idempotency';
-import { buildDefinedQueryString, withQuery } from './queryUtils';
+import { buildDefinedQueryString, withQuery, requireOrganizationId as requireScopedOrganizationId } from './queryUtils';
 
 const ORGANIZATION_BASE_PATH = '/v1/organizations';
 const API_KEYS_BASE_PATH = '/v1/api-keys';
 
 function requireOrganizationId(organizationId) {
-  const normalized = String(organizationId ?? '').trim();
-  if (
-    normalized === ''
-    || normalized.toLowerCase() === 'null'
-    || normalized.toLowerCase() === 'undefined'
-  ) {
-    const error = new Error('An active organization is required before managing API keys.');
-    error.code = 'ORG_REQUIRED';
-    error.status = 400;
-    throw error;
-  }
-  return normalized;
+  return requireScopedOrganizationId(organizationId, undefined, 'An active organization is required before managing API keys.');
 }
 
 /**

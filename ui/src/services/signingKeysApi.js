@@ -7,7 +7,7 @@
 
 import { get, post, put, patch, del } from './api';
 import { postWithIdempotency } from './idempotency';
-import { buildDefinedQueryString, buildTruthyQueryString, withQuery } from './queryUtils';
+import { buildDefinedQueryString, buildTruthyQueryString, withQuery, requireOrganizationId as requireScopedOrganizationId } from './queryUtils';
 import { createIssuerIdentity, listPublicIssuerIdentities, getOrgJwks, getOrgDidDocument, rebindIssuerIdentity, storeIssuerIdentityCertificate, enrollCscaCertificate, issueCscaSelfSignedCertificate, issueDscCertificate, generateIssuerIdentityCsr, deleteIssuerIdentity } from './issuerIdentitiesApi';
 
 // Compatibility exports; public DID workflows use issuerIdentitiesApi directly.
@@ -23,19 +23,7 @@ function resolveOrganizationId(params = {}) {
 }
 
 function requireOrganizationId(params = {}, action = 'using signing keys') {
-  const organizationId = resolveOrganizationId(params);
-  if (
-    organizationId == null
-    || String(organizationId).trim() === ''
-    || String(organizationId).trim().toLowerCase() === 'null'
-    || String(organizationId).trim().toLowerCase() === 'undefined'
-  ) {
-    const error = new Error(`An active organization is required before ${action}.`);
-    error.code = 'ORG_REQUIRED';
-    error.status = 400;
-    throw error;
-  }
-  return String(organizationId).trim();
+  return requireScopedOrganizationId(resolveOrganizationId(params), undefined, `An active organization is required before ${action}.`);
 }
 
 function withOrganizationQuery(path, params = {}, extra = {}, action) {

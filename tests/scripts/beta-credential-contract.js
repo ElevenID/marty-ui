@@ -105,7 +105,8 @@ function membershipLoginBehaviorAssertions(report) {
       && report?.badge?.storedExpectedCredential === true,
     same_device_passwordless_login: report?.presentation?.accepted === true
       && report?.completion?.status === 'completed'
-      && report?.completion?.observedNonceStatus === 'completed'
+      && report?.completion?.browserFinalizeVerified === true
+      && report?.completion?.uiDestinationVerified === true
       && report?.completion?.authenticated === true,
   };
 }
@@ -115,7 +116,8 @@ function requireCompletedLoginNonce(status) {
 }
 
 function loginNonceCompletionEvidence(body) {
-  const status = typeof body?.status === 'string' ? body.status : null;
+  const status = ['pending', 'completed', 'failed', 'expired', 'pending-timeout'].includes(body?.status)
+    ? body.status : 'invalid-response';
   const evidence = { status, observedNonceStatus: status };
   if (status === 'failed') {
     const code = body?.reason_code;
@@ -129,6 +131,48 @@ function loginNonceCompletionEvidence(body) {
       ? code : 'unclassified';
   }
   return evidence;
+}
+
+async function readLoginNonceStatusSnapshot(response) {
+  const body = await response.json().catch(() => null);
+  return loginNonceCompletionEvidence(body);
+}
+
+function isExactLoginNonceStatusUrl(value, betaOrigin, nonce) {
+  return isExactLoginNonceEndpointUrl(value, betaOrigin, nonce, '/v1/auth/credential-login/status');
+}
+
+function isExactLoginNonceFinalizeUrl(value, betaOrigin, nonce) {
+  return isExactLoginNonceEndpointUrl(value, betaOrigin, nonce, '/v1/auth/credential-login/finalize');
+}
+
+function isExactLoginNonceEndpointUrl(value, betaOrigin, nonce, pathname) {
+  try {
+    const url = new URL(value);
+    const params = Array.from(url.searchParams.keys());
+    return url.origin === new URL(betaOrigin).origin
+      && url.pathname === pathname
+      && params.length === 1 && params[0] === 'nonce'
+      && url.searchParams.get('nonce') === nonce && !url.hash;
+  } catch { return false; }
+}
+
+function loginFinalizeRedirectEvidence(response, betaOrigin, nonce) {
+  const exactNonce = isExactLoginNonceFinalizeUrl(response?.url, betaOrigin, nonce);
+  let expectedUi = false;
+  try {
+    const location = new URL(response?.headers?.location || '', betaOrigin);
+    expectedUi = location.origin === new URL(betaOrigin).origin
+      && location.pathname === '/console/applicant/catalog'
+      && location.searchParams.size === 1
+      && location.searchParams.get('auth_method') === 'credential'
+      && !location.hash;
+  } catch { /* A missing or invalid Location is not an observed finalize. */ }
+  const cookie = response?.headers?.['set-cookie'] || '';
+  const sessionCookieSet = /(?:^|[,\n]\s*)sessionId=[^;,\s]+(?:;|$)/i.test(cookie);
+  return {exactNonce, redirectStatus: response?.status || null,
+    expectedUi, sessionCookieSet,
+    verified: exactNonce && response?.status === 302 && expectedUi && sessionCookieSet};
 }
 
 function isTerminalLoginNonceStatus(body) {
@@ -170,6 +214,10 @@ module.exports = {
   membershipLoginBehaviorAssertions,
   requireCompletedLoginNonce,
   loginNonceCompletionEvidence,
+  readLoginNonceStatusSnapshot,
+  isExactLoginNonceStatusUrl,
+  isExactLoginNonceFinalizeUrl,
+  loginFinalizeRedirectEvidence,
   isTerminalLoginNonceStatus,
   verificationResultEvidence,
   verificationSessionRequest,

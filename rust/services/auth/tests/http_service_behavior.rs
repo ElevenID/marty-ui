@@ -331,6 +331,7 @@ async fn credential_routes_preserve_assets_poll_finalize_and_callback_behavior()
         .to_str()
         .unwrap()
         .starts_with("text/html"));
+    assert_eq!(page.headers()[header::CACHE_CONTROL], "no-store, max-age=0");
 
     let poll = request(
         &router,
@@ -340,6 +341,7 @@ async fn credential_routes_preserve_assets_poll_finalize_and_callback_behavior()
         "",
     )
     .await;
+    assert_eq!(poll.headers()[header::CACHE_CONTROL], "no-store, max-age=0");
     let poll: Value =
         serde_json::from_slice(&to_bytes(poll.into_body(), usize::MAX).await.unwrap()).unwrap();
     assert_eq!(poll["status"], "completed");
@@ -354,6 +356,10 @@ async fn credential_routes_preserve_assets_poll_finalize_and_callback_behavior()
     )
     .await;
     assert_eq!(finalized.status(), StatusCode::FOUND);
+    assert_eq!(
+        finalized.headers()[header::CACHE_CONTROL],
+        "no-store, max-age=0"
+    );
     assert_eq!(
         finalized.headers()[header::LOCATION],
         "https://elevenidllc.com/console/applicant/catalog?auth_method=credential"
@@ -372,8 +378,41 @@ async fn credential_routes_preserve_assets_poll_finalize_and_callback_behavior()
     )
     .await;
     let location = failed.headers()[header::LOCATION].to_str().unwrap();
+    assert_eq!(
+        failed.headers()[header::CACHE_CONTROL],
+        "no-store, max-age=0"
+    );
     assert!(location.contains("auth_error=Issuer+is+not+trusted"));
     assert!(location.contains("auth_error_code=issuer_not_trusted"));
+
+    for path in [
+        "/v1/auth/credential-login/status",
+        "/v1/auth/credential-login/finalize",
+    ] {
+        let rejected = request(&router, Method::GET, path, &[], "").await;
+        assert_eq!(rejected.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            rejected.headers()[header::CACHE_CONTROL],
+            "no-store, max-age=0"
+        );
+    }
+    let expired = request(
+        &router,
+        Method::GET,
+        "/v1/auth/credential-login/finalize?nonce=expired",
+        &[],
+        "",
+    )
+    .await;
+    assert_eq!(expired.status(), StatusCode::FOUND);
+    assert_eq!(
+        expired.headers()[header::CACHE_CONTROL],
+        "no-store, max-age=0"
+    );
+    assert!(expired.headers()[header::LOCATION]
+        .to_str()
+        .unwrap()
+        .contains("Login+session+expired"));
 
     let payload = serde_json::json!({
         "flow_instance_id": "flow-1",

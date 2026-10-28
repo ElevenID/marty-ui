@@ -7,6 +7,7 @@
 
 import { get, getWithRetryConfig, post, patch, del } from './api';
 import { isNetworkAbortLikeError, postWithIdempotency } from './idempotency';
+import { requireOrganizationId as requireScopedOrganizationId } from './queryUtils';
 
 // Each resource type has its own service
 const PRESENTATION_POLICY_BASE = '/v1/presentation-policies';
@@ -58,34 +59,8 @@ const HOLDER_BINDING_PAYLOADS = {
   },
 };
 
-function resolveOrganizationId(params = {}) {
-  if (typeof params === 'string') {
-    return params;
-  }
-
-  if (params?.organization_id) {
-    return params.organization_id;
-  }
-
-  return null;
-}
-
-function isMissingOrganizationId(organizationId) {
-  return organizationId == null
-    || String(organizationId).trim() === ''
-    || String(organizationId).trim().toLowerCase() === 'null'
-    || String(organizationId).trim().toLowerCase() === 'undefined';
-}
-
 export function requireOrganizationId(params = {}) {
-  const organizationId = resolveOrganizationId(params);
-  if (isMissingOrganizationId(organizationId)) {
-    const error = new Error('An active organization is required before loading org-scoped credential setup artifacts.');
-    error.code = 'ORG_REQUIRED';
-    error.status = 400;
-    throw error;
-  }
-  return String(organizationId).trim();
+  return requireScopedOrganizationId(typeof params === 'string' ? params : params?.organization_id || null, undefined, 'An active organization is required before loading org-scoped credential setup artifacts.');
 }
 
 function requireDirectArray(value, resourceName) {

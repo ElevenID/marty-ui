@@ -75,9 +75,16 @@ including its state, credentials, backups and evidence, and any Redis socket
 volume as retained. Images are also retained. The preview writes no cleanup
 receipt or installation file and issues no Docker mutation. It is a point-in-time
 inspection; a later uninstall repeats ownership and scope checks and may refuse
-if resources changed. Unsupported partial provisioning is refused. Purge is not
-yet supported, and neither ordinary uninstall nor this preview claims secure
-erasure or media sanitization.
+if resources changed. It also summarizes the known host storage roots by
+category, file and directory count, and observed bytes without printing child
+filenames or file contents. This inventory is not an atomic snapshot, omits
+unknown top-level artifacts and external backup locations, and cannot authorize
+deletion. If a known root cannot be fully inspected because it is inaccessible
+or contains an unsafe entry, the preview marks the host summary unavailable;
+it still reports the independently verified Docker actions. Unsupported partial
+provisioning is refused. Purge is not yet supported,
+and neither ordinary uninstall nor this preview claims secure erasure or media
+sanitization.
 
 The bootstrap's boundary is verified operator dispatch. The operator owns
 existing-installation detection, configuration, deployment changes and exit

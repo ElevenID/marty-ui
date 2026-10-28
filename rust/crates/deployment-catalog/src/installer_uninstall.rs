@@ -9,6 +9,7 @@ use crate::{
     installer_application_observation::{
         validate_container_for_logs, validate_openbao_container_for_cleanup, validate_volume,
     },
+    installer_host_storage_inventory::{self, Category, EntryType},
     installer_runtime::DockerRunner,
     installer_state::{LockedMaintenance, Phase},
 };
@@ -155,6 +156,44 @@ struct Loaded {
     bao_image_id: String,
     sources: BTreeMap<String, Vec<u8>>,
     helper_ids: BTreeSet<String>,
+}
+#[derive(Serialize)]
+struct RetainedHostRoot {
+    root: &'static str,
+    category: Category,
+    files: usize,
+    directories: usize,
+    size_bytes: u64,
+    action: &'static str,
+}
+fn retained_host_roots(
+    inventory: &installer_host_storage_inventory::HostStorageInventory,
+) -> Result<Vec<RetainedHostRoot>> {
+    let mut roots = BTreeMap::<&'static str, RetainedHostRoot>::new();
+    for entry in &inventory.entries {
+        let root = roots.entry(entry.root).or_insert(RetainedHostRoot {
+            root: entry.root,
+            category: entry.category,
+            files: 0,
+            directories: 0,
+            size_bytes: 0,
+            action: "retain",
+        });
+        require(root.category == entry.category)?;
+        match entry.entry_type {
+            EntryType::File => {
+                root.files = root.files.checked_add(1).ok_or(REFUSED)?;
+                root.size_bytes = root
+                    .size_bytes
+                    .checked_add(entry.size_bytes)
+                    .ok_or(REFUSED)?;
+            }
+            EntryType::Directory => {
+                root.directories = root.directories.checked_add(1).ok_or(REFUSED)?
+            }
+        }
+    }
+    Ok(roots.into_values().collect())
 }
 // Legacy installations may lack renewal only when no stage data exists.
 // read_record deliberately refuses directories, links and unreadable entries:
@@ -793,6 +832,26 @@ fn plan_inner(args: &[String]) -> Result<String> {
     let args = arguments(args)?;
     let state = LockedMaintenance::open(&args.installation)?;
     let loaded = load(&state, &args.installation)?;
+    // Host data is retained by ordinary uninstall. A container-owned private
+    // subtree may be unreadable to the invoking user; that must not hide the
+    // separately verified Docker removal plan or pretend the data was scanned.
+    state
+        .inspection()
+        .require_path_binding(&args.installation)?;
+    let host_inventory =
+        installer_host_storage_inventory::inspect_maintenance(&state, &args.installation).ok();
+    state
+        .inspection()
+        .require_path_binding(&args.installation)?;
+    state.require_unchanged()?;
+    if let Some(inventory) = &host_inventory {
+        require(inventory.installation_id == loaded.plan.installation_id)?;
+    }
+    let host_roots = host_inventory
+        .as_ref()
+        .map(retained_host_roots)
+        .transpose()?
+        .unwrap_or_default();
     let binding = state.journal().runtime().ok_or(REFUSED)?;
     // Keep Docker's isolated configuration outside the installation being
     // inspected. The temporary directory is private and removed on return.
@@ -850,6 +909,11 @@ fn plan_inner(args: &[String]) -> Result<String> {
         "retained": {
             "installation_directory": args.installation,
             "host_data_credentials_backups_and_evidence": true,
+            "host_storage_roots": host_roots,
+            "host_storage_status": if host_inventory.is_some() { "observed" } else { "unavailable" },
+            "host_storage_coverage": host_inventory.as_ref().map_or("unavailable", |v| v.coverage),
+            "host_storage_not_atomic_snapshot": true,
+            "host_storage_deletion_eligible": false,
             "redis_volume": loaded.plan.retained_redis_volume,
             "images": true
         },
@@ -1745,6 +1809,16 @@ else: sys.exit(98)
                 installation.to_str().unwrap()
             );
             assert_eq!(preview["purge_supported"], false);
+            assert_eq!(preview["retained"]["host_storage_status"], "observed");
+            assert_eq!(
+                preview["retained"]["host_storage_coverage"],
+                "known_host_storage_roots_only"
+            );
+            assert_eq!(
+                preview["retained"]["host_storage_not_atomic_snapshot"],
+                true
+            );
+            assert_eq!(preview["retained"]["host_storage_deletion_eligible"], false);
             assert!(preview["containers"]
                 .as_array()
                 .unwrap()
@@ -1758,6 +1832,41 @@ else: sys.exit(98)
             assert!(ledger(&root)["mutations"].as_array().unwrap().is_empty());
             assert_eq!(ledger(&root)["installation_staging_seen"], false);
         }
+    }
+    #[test]
+    fn preview_summarizes_retained_backups_without_exposing_names_and_marks_links_unavailable() {
+        let (root, args) = mock("normal");
+        let installation = root.path().join("install");
+        let backups = installation.join("backups");
+        fs::create_dir_all(&backups).unwrap();
+        fs::write(backups.join("customer-private-canary.backup"), b"synthetic").unwrap();
+        let output = plan(&args).unwrap();
+        assert!(!output.contains("customer-private-canary"));
+        let preview: Value = serde_json::from_str(&output).unwrap();
+        assert!(preview["retained"]["host_storage_roots"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|root| root["root"] == "backups"
+                && root["category"] == "backup"
+                && root["files"] == 1
+                && root["action"] == "retain"));
+        std::os::unix::fs::symlink(
+            root.path().join("ledger.json"),
+            backups.join("foreign-link"),
+        )
+        .unwrap();
+        let unavailable: Value = serde_json::from_str(&plan(&args).unwrap()).unwrap();
+        assert_eq!(
+            unavailable["retained"]["host_storage_status"],
+            "unavailable"
+        );
+        assert_eq!(
+            unavailable["retained"]["host_storage_coverage"],
+            "unavailable"
+        );
+        assert_eq!(unavailable["retained"]["host_storage_roots"], json!([]));
+        assert!(ledger(&root)["mutations"].as_array().unwrap().is_empty());
     }
     #[test]
     fn preview_refuses_foreign_project_resources_without_mutation() {

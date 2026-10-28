@@ -29,6 +29,7 @@ path = "src/bin/marty_migration_bootstrap.rs"
 test = false
 
 [dependencies]
+mmf-runtime.workspace = true
 marty-managed-key-reference = { path = "../../crates/managed-key-reference" }
 axum.workspace = true
 axum-server.workspace = true

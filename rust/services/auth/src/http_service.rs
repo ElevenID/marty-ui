@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use axum::{
     extract::{Query, State},
     http::{header, HeaderMap, HeaderValue, StatusCode},
+    middleware,
     response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
@@ -183,6 +184,17 @@ impl AuthHttpState {
 
 pub fn auth_core_router(state: AuthHttpState) -> Result<Router, PortError> {
     state.validate()?;
+    let credential_login_routes = Router::new()
+        .route("/v1/auth/credential-login", get(credential_login))
+        .route(
+            "/v1/auth/credential-login/status",
+            get(credential_login_status),
+        )
+        .route(
+            "/v1/auth/credential-login/finalize",
+            get(credential_login_finalize),
+        )
+        .route_layer(middleware::map_response(credential_login_no_store));
     Ok(Router::new()
         .route("/v1/auth/login", get(login))
         .route("/v1/auth/register", get(register))
@@ -201,20 +213,17 @@ pub fn auth_core_router(state: AuthHttpState) -> Result<Router, PortError> {
             "/v1/auth/credential-login/assets/app.js",
             get(credential_login_script),
         )
-        .route("/v1/auth/credential-login", get(credential_login))
-        .route(
-            "/v1/auth/credential-login/status",
-            get(credential_login_status),
-        )
-        .route(
-            "/v1/auth/credential-login/finalize",
-            get(credential_login_finalize),
-        )
+        .merge(credential_login_routes)
         .route(
             "/internal/v1/auth/credential-verified",
             post(credential_verified),
         )
         .with_state(state))
+}
+
+async fn credential_login_no_store(mut response: Response) -> Response {
+    no_store(&mut response);
+    response
 }
 
 #[derive(Deserialize)]
