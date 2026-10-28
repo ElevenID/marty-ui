@@ -6,6 +6,7 @@ test('D05 real driver imports the application approval Flow payload from its bou
  const payload=helper.approvedApplicationFlowPayload({organizationId:'org',name:'flow',description:'desc',credentialTemplateId:'template'});
  assert.equal(payload.organization_id,'org');assert.equal(payload.credential_template_id,'template');
  assert.equal(payload.trigger.config.event_type,'APPLICATION_APPROVED');
+ assert.equal(typeof require('./verify-beta-waltid-acceptance').loginToBetaApplicant,'function');
 });
 test('D05 keeps the policy-bound source credential template and owns only new application/Flow configuration',async()=>{
  const org='00000000-0000-0000-0000-000000000001',template='50000000-0000-0000-0000-000000000040',sourceApplication='0ab66d45-0d84-5fbd-837f-25788d32279e';
