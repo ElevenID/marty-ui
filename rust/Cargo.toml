@@ -49,15 +49,15 @@ marty-oid4vci = { version = "=0.2.2", git = "https://github.com/ElevenID/marty-c
 marty-verification = { version = "=0.2.2", git = "https://github.com/ElevenID/marty-core", rev = "4320b5fa1c6f41231ee0aa2bc57d8008549f67ac", default-features = false, features = ["kms-only"] }
 marty-canonical-digest = { version = "=0.2.2", git = "https://github.com/ElevenID/marty-core", rev = "4320b5fa1c6f41231ee0aa2bc57d8008549f67ac" }
 marty-status = { version = "=0.2.2", git = "https://github.com/ElevenID/marty-core", rev = "4320b5fa1c6f41231ee0aa2bc57d8008549f67ac" }
-mmf-config = { git = "https://github.com/ElevenID/marty-microservices-framework", rev = "0b11cf65ced8885c9698e4332b5322d5564d0d69" }
-mmf-platform = { git = "https://github.com/ElevenID/marty-microservices-framework", rev = "0b11cf65ced8885c9698e4332b5322d5564d0d69" }
-mmf-core = { git = "https://github.com/ElevenID/marty-microservices-framework", rev = "0b11cf65ced8885c9698e4332b5322d5564d0d69" }
-mmf-data = { git = "https://github.com/ElevenID/marty-microservices-framework", rev = "0b11cf65ced8885c9698e4332b5322d5564d0d69" }
-mmf-runtime = { git = "https://github.com/ElevenID/marty-microservices-framework", rev = "0b11cf65ced8885c9698e4332b5322d5564d0d69" }
-mmf-security = { git = "https://github.com/ElevenID/marty-microservices-framework", rev = "0b11cf65ced8885c9698e4332b5322d5564d0d69", default-features = false, features = ["cedar", "redis"] }
-mmf-messaging = { git = "https://github.com/ElevenID/marty-microservices-framework", rev = "0b11cf65ced8885c9698e4332b5322d5564d0d69", features = ["postgres"] }
-mmf-push = { git = "https://github.com/ElevenID/marty-microservices-framework", rev = "0b11cf65ced8885c9698e4332b5322d5564d0d69" }
-mmf-workflow = { git = "https://github.com/ElevenID/marty-microservices-framework", rev = "0b11cf65ced8885c9698e4332b5322d5564d0d69" }
+mmf-config = { git = "https://github.com/ElevenID/marty-microservices-framework", rev = "c2b33130da0b597d712e29008dd5a6adf313bb0f" }
+mmf-platform = { git = "https://github.com/ElevenID/marty-microservices-framework", rev = "c2b33130da0b597d712e29008dd5a6adf313bb0f" }
+mmf-core = { git = "https://github.com/ElevenID/marty-microservices-framework", rev = "c2b33130da0b597d712e29008dd5a6adf313bb0f" }
+mmf-data = { git = "https://github.com/ElevenID/marty-microservices-framework", rev = "c2b33130da0b597d712e29008dd5a6adf313bb0f" }
+mmf-runtime = { git = "https://github.com/ElevenID/marty-microservices-framework", rev = "c2b33130da0b597d712e29008dd5a6adf313bb0f" }
+mmf-security = { git = "https://github.com/ElevenID/marty-microservices-framework", rev = "c2b33130da0b597d712e29008dd5a6adf313bb0f", default-features = false, features = ["cedar", "redis"] }
+mmf-messaging = { git = "https://github.com/ElevenID/marty-microservices-framework", rev = "c2b33130da0b597d712e29008dd5a6adf313bb0f", features = ["postgres"] }
+mmf-push = { git = "https://github.com/ElevenID/marty-microservices-framework", rev = "c2b33130da0b597d712e29008dd5a6adf313bb0f" }
+mmf-workflow = { git = "https://github.com/ElevenID/marty-microservices-framework", rev = "c2b33130da0b597d712e29008dd5a6adf313bb0f" }
 prost = "0.14"
 protoc-bin-vendored = "3"
 rand = "0.9"
