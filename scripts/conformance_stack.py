@@ -374,6 +374,7 @@ def project_container_ids(project: str) -> list[str]:
             "docker",
             "ps",
             "--all",
+            "--no-trunc",
             "--quiet",
             "--filter",
             f"label=com.docker.compose.project={project}",

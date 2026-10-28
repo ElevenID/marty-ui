@@ -7,6 +7,7 @@ import hashlib
 import json
 import re
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import yaml
@@ -369,15 +370,16 @@ def test_local_source_migration_receipt_requires_exact_owned_terminal_container(
     receipt = tmp_path / "migration.json"
     revision = "a" * 40
     project = "marty-conformance-test1"
+    other_id, owned_id = "b" * 64, "a" * 64
     monkeypatch.setattr(stack, "ROOT", product)
-    monkeypatch.setattr(stack, "project_container_ids", lambda _project: ["other123", "owned123"])
+    monkeypatch.setattr(stack, "project_container_ids", lambda _project: [other_id, owned_id])
     monkeypatch.setenv("MARTY_CONFORMANCE_SOURCE_VOLUME_ROOT", str(tmp_path))
     monkeypatch.setenv("MARTY_CONFORMANCE_SOURCE_MIGRATION_BINARY", str(binary))
     monkeypatch.setenv("MARTY_CONFORMANCE_SOURCE_MIGRATION_SHA256", hashlib.sha256(binary.read_bytes()).hexdigest())
     monkeypatch.setenv("MARTY_CONFORMANCE_SOURCE_REVISION", revision)
     monkeypatch.setenv("MARTY_CONFORMANCE_SOURCE_MIGRATION_RECEIPT", str(receipt))
     row = {
-        "Id": "owned123",
+        "Id": owned_id,
         "Path": "/usr/local/bin/marty-issuance-service", "Args": ["migrate"],
         "State": {"Status": "exited", "ExitCode": 0, "OOMKilled": False},
         "Config": {"Image": "sha256:baseline", "Entrypoint": ["/usr/local/bin/marty-issuance-service"],
@@ -387,7 +389,7 @@ def test_local_source_migration_receipt_requires_exact_owned_terminal_container(
         }},
         "Mounts": [{"Source": str(binary), "Destination": "/usr/local/bin/marty-issuance-service", "RW": False}],
     }
-    other = {"Id": "other123", "Config": {"Labels": {
+    other = {"Id": other_id, "Config": {"Labels": {
         "com.docker.compose.project": project, "com.docker.compose.service": "postgres",
     }}}
 
@@ -401,26 +403,26 @@ def test_local_source_migration_receipt_requires_exact_owned_terminal_container(
     }}}
     with pytest.raises(ValueError, match="prior local migrator lacks"):
         stack.attest_local_source_migration(
-            project, config, resume=True, preexisting_container_id="owned123",
+            project, config, resume=True, preexisting_container_id=owned_id,
         )
     assert not receipt.exists()
     # A canonical --resume can mean only OpenBao was prebootstrapped. This is
     # the first full-stack up, so its freshly completed migrator gets a receipt.
     stack.attest_local_source_migration(project, config, resume=True)
-    assert json.loads(receipt.read_text())["containerId"] == "owned123"
+    assert json.loads(receipt.read_text())["containerId"] == owned_id
     stack.attest_local_source_migration(
-        project, config, resume=True, preexisting_container_id="owned123",
+        project, config, resume=True, preexisting_container_id=owned_id,
     )
     row["Mounts"][0]["RW"] = True
     with pytest.raises(ValueError, match="did not complete"):
         stack.attest_local_source_migration(
-            project, config, resume=True, preexisting_container_id="owned123",
+            project, config, resume=True, preexisting_container_id=owned_id,
         )
     row["Mounts"][0]["RW"] = False
     binary.write_bytes(b"changed-after-migration")
     with pytest.raises(ValueError, match="did not complete"):
         stack.attest_local_source_migration(
-            project, config, resume=True, preexisting_container_id="owned123",
+            project, config, resume=True, preexisting_container_id=owned_id,
         )
 
 
@@ -444,6 +446,20 @@ def test_source_migration_prior_container_probe_distinguishes_kms_only_resume(
     output = "a" * 64 + "\n" + "b" * 64 + "\n"
     with pytest.raises(ValueError, match="ambiguous"):
         stack.source_migration_container_before_up(project)
+
+
+def test_project_inventory_uses_full_ids_for_migration_readback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed = []
+
+    def inventory(command, **_kwargs):
+        observed.append(command)
+        return SimpleNamespace(stdout="a" * 64 + "\n" + "b" * 64 + "\n")
+
+    monkeypatch.setattr(stack.subprocess, "run", inventory)
+    assert stack.project_container_ids("marty-conformance-local-test1") == ["a" * 64, "b" * 64]
+    assert "--no-trunc" in observed[0]
 
 
 def test_didcomm_authcrypt_overlay_is_explicit_and_isolation_is_last() -> None:

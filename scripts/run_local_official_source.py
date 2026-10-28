@@ -56,13 +56,8 @@ def exact_file(path: Path, expected: str) -> None:
         fail(f"pinned file changed: {path}")
 
 
-def check(plan: dict) -> dict:
-    """Validate source and ownership before even checking the runtime handle."""
-    lane, run_id, tag = (plan[name] for name in ("lane", "runId", "tag"))
-    if lane not in LANES or not re.fullmatch(r"local-[a-z0-9][a-z0-9-]{1,40}[a-z0-9]", run_id):
-        fail("invalid official lane or run ID")
-    if not re.fullmatch(r"[a-z0-9][a-z0-9-]{1,60}[a-z0-9]", tag):
-        fail("invalid unique evidence tag")
+def source_proof(plan: dict, *, require_tip: bool) -> dict:
+    """Freeze a clean protected tip, or prove the frozen tip remains accepted."""
     if plan.get("imagesBuilt") is not False or plan.get("releaseQualified") is not False:
         fail("this runner accepts local-only, no-image-build inputs")
     product = Path(plan["productCheckout"]).resolve(strict=True)
@@ -70,19 +65,33 @@ def check(plan: dict) -> dict:
     product_sha, harness_sha = plan["productRevision"], plan["harnessRevision"]
     if not SHA.fullmatch(product_sha) or not SHA.fullmatch(harness_sha):
         fail("source revisions must be full Git commits")
-    if (git(product, "rev-parse", "HEAD") != product_sha
-            or git(product, "status", "--porcelain", "--untracked-files=all")):
-        fail("product checkout must be clean at the exact selected revision")
-    if git(product, "rev-parse", "HEAD^{tree}") != plan["productTree"]:
+    for repo, revision, name in ((product, product_sha, "marty-ui"),
+                                  (harness, harness_sha, "marty-integration-tests")):
+        remote = git(repo, "remote", "get-url", "origin")
+        if not re.fullmatch(rf"(?:https://github\.com/|git@github\.com:)ElevenID/{name}(?:\.git)?", remote):
+            fail(f"{name} origin is not the canonical repository")
+        if repo == product:
+            if (git(repo, "rev-parse", "HEAD") != revision
+                    or git(repo, "status", "--porcelain", "--untracked-files=all")):
+                fail("product checkout must be clean at the exact frozen revision")
+        elif git(repo, "cat-file", "-t", revision) != "commit":
+            fail("exact harness commit object is unavailable")
+        tracked_tip = git(repo, "rev-parse", "origin/main")
+        live_tip = git(repo, "ls-remote", "origin", "refs/heads/main").split()[0]
+        if tracked_tip != live_tip:
+            fail(f"{name} protected main must be freshly fetched")
+        if require_tip:
+            if revision != live_tip:
+                fail(f"{name} source must be the live protected tip at freeze")
+        elif subprocess.run(["git", "-C", str(repo), "merge-base", "--is-ancestor",
+                             revision, tracked_tip], check=False).returncode:
+            fail(f"{name} frozen source is no longer accepted in protected main")
+    product_tree = git(product, "rev-parse", "HEAD^{tree}")
+    # Host harness reads use Git objects only. The actual official checkout in
+    # the owned tooling volume is separately required to have a clean frozen HEAD.
+    harness_tree = git(harness, "rev-parse", f"{harness_sha}^{{tree}}")
+    if product_tree != plan["productTree"]:
         fail("product tree changed from the selected source packet")
-    if (git(product, "rev-parse", "origin/main") != product_sha
-            or git(product, "ls-remote", "origin", "refs/heads/main").split()[0] != product_sha):
-        fail("selected product source is not the fetched protected main")
-    if git(harness, "cat-file", "-t", harness_sha) != "commit":
-        fail("selected harness commit is unavailable")
-    if (git(harness, "rev-parse", "origin/main") != harness_sha
-            or git(harness, "ls-remote", "origin", "refs/heads/main").split()[0] != harness_sha):
-        fail("selected harness source is not the fetched protected main")
 
     cargo = tomllib.loads((product / "rust/Cargo.toml").read_text(encoding="utf-8"))
     deps = cargo["workspace"]["dependencies"]
@@ -113,6 +122,47 @@ def check(plan: dict) -> dict:
     if (eudi.get("components", {}).get("verifier_endpoint", {}).get("commit")
             != plan["eudiVerifierRevision"]):
         fail("EUDI verifier source is not the harness's pinned source")
+
+    return {"schema": "marty.local-official-source-freeze/v1",
+            "productRevision": product_sha, "productTree": product_tree,
+            "harnessRevision": harness_sha, "harnessTree": harness_tree,
+            "coreRevision": core, "officialRunnerRevision": official["commit"],
+            "officialRunnerRelease": official["release"],
+            "w3cSuiteRevision": w3c_source["commit"],
+            "eudiVerifierRevision": plan["eudiVerifierRevision"],
+            "imagesBuilt": False, "releaseQualified": False}
+
+
+def freeze(plan: dict) -> dict:
+    proof = source_proof(plan, require_tip=True)
+    destination = Path(plan["sourceFreezeReceipt"])
+    if not destination.is_absolute() or destination.is_symlink() or not destination.parent.is_dir():
+        fail("source freeze receipt needs an existing owned absolute directory")
+    with destination.open("x", encoding="utf-8") as output:
+        json.dump(proof, output, sort_keys=True)
+        output.write("\n")
+    destination.chmod(0o600)
+    return proof
+
+
+def check(plan: dict) -> dict:
+    """Validate frozen source and all build receipts before runtime handles."""
+    lane, run_id, tag = (plan[name] for name in ("lane", "runId", "tag"))
+    if lane not in LANES or not re.fullmatch(r"local-[a-z0-9][a-z0-9-]{1,40}[a-z0-9]", run_id):
+        fail("invalid official lane or run ID")
+    if not re.fullmatch(r"[a-z0-9][a-z0-9-]{1,60}[a-z0-9]", tag):
+        fail("invalid unique evidence tag")
+    frozen = source_proof(plan, require_tip=False)
+    freeze_path = Path(plan["sourceFreezeReceipt"]).resolve(strict=True)
+    exact_file(freeze_path, plan["sourceFreezeReceiptSha256"])
+    if load(freeze_path) != frozen:
+        fail("source freeze receipt differs from the exact accepted source")
+    product = Path(plan["productCheckout"]).resolve(strict=True)
+    product_sha, harness_sha = plan["productRevision"], plan["harnessRevision"]
+    core = plan["coreRevision"]
+    official = {"commit": frozen["officialRunnerRevision"],
+                "release": frozen["officialRunnerRelease"]}
+    w3c_source = {"commit": frozen["w3cSuiteRevision"]}
 
     plugin_path = Path(plan["kmsPluginReceipt"]).resolve(strict=True)
     native_path = Path(plan["nativeServicesReceipt"]).resolve(strict=True)
@@ -320,9 +370,15 @@ def dispatch(plan: dict) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--plan", type=Path, required=True)
+    parser.add_argument("--freeze", action="store_true", help="record current protected source before builds")
     parser.add_argument("--run", action="store_true", help="dispatch one local-only lane after source review")
     args = parser.parse_args(argv)
+    if args.freeze and args.run:
+        fail("source freeze cannot dispatch a lane")
     plan = load(args.plan.resolve(strict=True))
+    if args.freeze:
+        print(json.dumps({"state": "SOURCE_FROZEN", **freeze(plan)}, sort_keys=True))
+        return 0
     result = check(plan)
     print(json.dumps({"state": "SOURCE_BOUND", **result}, sort_keys=True))
     return dispatch(plan) if args.run else 0
