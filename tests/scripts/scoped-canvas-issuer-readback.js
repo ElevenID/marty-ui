@@ -8,6 +8,22 @@ function bytes(ref,limit=1024*1024){
  const raw=fs.readFileSync(ref.path);assert(createHash('sha256').update(raw).digest('hex')===ref.sha256,'BOUND_INPUT_CHANGED');return raw;
 }
 const json=ref=>JSON.parse(bytes(ref));
+function uniqueDestinationMountMap(mounts){
+ assert(Array.isArray(mounts),'TRANSITION_MOUNTS_INVALID');
+ const result=Object.create(null);
+ for(const mount of mounts){
+  assert(mount&&typeof mount.Destination==='string'&&mount.Destination.length>0,'TRANSITION_MOUNTS_INVALID');
+  assert(!Object.hasOwn(result,mount.Destination),'TRANSITION_MOUNT_DESTINATION_DUPLICATE');
+  result[mount.Destination]=mount;
+ }
+ return result;
+}
+function validateTransitionConfig(actual,saved){
+ const {isDeepStrictEqual}=require('node:util');
+ for(const key of ['Name','Config','HostConfig'])assert(isDeepStrictEqual(actual[key],saved[key]),'TRANSITION_CONFIG_CHANGED');
+ assert(isDeepStrictEqual(uniqueDestinationMountMap(actual.Mounts),uniqueDestinationMountMap(saved.Mounts)),'TRANSITION_CONFIG_CHANGED');
+}
+
 function projectInventory(rows,organizationId,bindingId){
  assert(Array.isArray(rows)&&rows.length<500,'SCOPED_INVENTORY_INCOMPLETE');
  assert(new Set(rows.map(row=>row.id)).size===rows.length,'DUPLICATE_JOB_ID');
@@ -45,7 +61,7 @@ async function execute(input,mode,payload={}){
     &&actual.Config.Labels['com.docker.compose.service']==='issuance-native','TRANSITION_ROLE_CHANGED');
    assert(['created','exited','running'].includes(actual.State.Status),'TRANSITION_STATE_UNKNOWN');
    if(!actual.State.Running)assert(actual.State.Pid===0&&!actual.State.OOMKilled,'TRANSITION_PROCESS_UNKNOWN');
-   for(const key of ['Name','Config','HostConfig','Mounts'])assert(JSON.stringify(actual[key])===JSON.stringify(saved[key]),'TRANSITION_CONFIG_CHANGED');
+   validateTransitionConfig(actual,saved);
    if(proof.originalConfig)assert(!actual.State.Running&&actual.State.Status==='exited','ORIGINAL_TRANSITION_NOT_STOPPED');
    transition=true;
   }
@@ -96,4 +112,4 @@ async function main(){
 }
 if(require.main===module)main().catch(error=>{process.stderr.write(JSON.stringify({state:'READBACK_FAILED',errorType:error.name,
  code:/^[A-Z][A-Z0-9_]{2,79}$/.test(error.message)?error.message:'SOURCE_BOUND_READBACK_FAILED'})+'\n');process.exitCode=1;});
-module.exports={projectInventory};
+module.exports={projectInventory,validateTransitionConfig};
