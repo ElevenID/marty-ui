@@ -133,6 +133,11 @@ function loginNonceCompletionEvidence(body) {
   return evidence;
 }
 
+async function readLoginNonceStatusSnapshot(response) {
+  const body = await response.json().catch(() => null);
+  return loginNonceCompletionEvidence(body);
+}
+
 function isExactLoginNonceStatusUrl(value, betaOrigin, nonce) {
   return isExactLoginNonceEndpointUrl(value, betaOrigin, nonce, '/v1/auth/credential-login/status');
 }
@@ -209,6 +214,7 @@ module.exports = {
   membershipLoginBehaviorAssertions,
   requireCompletedLoginNonce,
   loginNonceCompletionEvidence,
+  readLoginNonceStatusSnapshot,
   isExactLoginNonceStatusUrl,
   isExactLoginNonceFinalizeUrl,
   loginFinalizeRedirectEvidence,
