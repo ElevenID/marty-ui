@@ -12,6 +12,7 @@ use crate::{
     installer_state::{InstallerState, Phase},
     installer_verify,
 };
+use chrono::DateTime;
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::{
@@ -20,6 +21,7 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
+use uuid::{Variant, Version};
 type Result<T> = std::result::Result<T, String>;
 const REFUSED: &str =
     "Application startup refused; preserve owned resources and installation evidence for recovery";
@@ -74,6 +76,61 @@ fn object_output(output: &str) -> Result<Value> {
     let array = v.as_array().ok_or(REFUSED)?;
     require(array.len() == 1 && array[0].is_object())?;
     Ok(array[0].clone())
+}
+/// Capture creation-time identity evidence available for a Docker volume.
+/// Docker does not expose an immutable volume ID, so later removal must also
+/// recheck the exact engine, name, timestamp and complete label map.
+fn volume_creation_evidence(
+    observed: &Value,
+    installation_id: &str,
+    engine_id: &str,
+    name: &str,
+) -> Result<Value> {
+    let owner = uuid::Uuid::parse_str(installation_id).map_err(|_| REFUSED)?;
+    let project = format!("marty-install-{}", owner.simple());
+    require(
+        owner.get_version() == Some(Version::Random)
+            && owner.get_variant() == Variant::RFC4122
+            && name == format!("{project}_redis-socket")
+            && !engine_id.is_empty()
+            && engine_id.len() <= 128
+            && engine_id
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b":._-".contains(&b)),
+    )?;
+    let created_at = text(&observed["CreatedAt"])?;
+    let labels = observed["Labels"].as_object().ok_or(REFUSED)?;
+    require(
+        observed["Name"] == name
+            && observed["Driver"] == "local"
+            && observed["Scope"] == "local"
+            && (observed["Options"].is_null() || observed["Options"] == json!({}))
+            && created_at.len() <= 64
+            && DateTime::parse_from_rfc3339(created_at).is_ok()
+            && (2..=8).contains(&labels.len())
+            && labels.get("com.docker.compose.project") == Some(&json!(project))
+            && labels.get("com.docker.compose.volume") == Some(&json!("redis-socket"))
+            && labels.iter().all(|(key, value)| {
+                !key.is_empty()
+                    && key.len() <= 128
+                    && key
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
+                    && value
+                        .as_str()
+                        .is_some_and(|v| v.len() <= 256 && !v.chars().any(char::is_control))
+            }),
+    )?;
+    Ok(json!({
+        "schema": "elevenid.installer-created-volume/v1",
+        "installation_id": installation_id,
+        "engine_id": engine_id,
+        "name": name,
+        "created_at": created_at,
+        "labels": labels,
+        "driver": "local",
+        "scope": "local"
+    }))
 }
 fn inspect(docker: &DockerRunner, container: &str) -> Result<Value> {
     require(id(container))?;
@@ -354,6 +411,13 @@ pub fn start(
     )?;
     let volume_observed = object_output(&docker.run_checked(&["volume", "inspect", &volume])?)?;
     observation::validate_volume(&volume_observed, &plan)?;
+    let volume_identity = volume_creation_evidence(
+        &volume_observed,
+        &installation_id,
+        &binding.engine_id,
+        &volume,
+    )?;
+    persist(state, "application-created-volume.json", &volume_identity)?;
     for c in &observed {
         let role = text(&c["Config"]["Labels"]["com.docker.compose.service"])?;
         observation::validate_container(
@@ -436,9 +500,11 @@ pub fn start(
     }
     installer_openbao::verify_observation(&docker, installation, bundle, state, bao)?;
     require(project_ids(&docker, &project)? == discovered)?;
-    observation::validate_volume(
-        &object_output(&docker.run_checked(&["volume", "inspect", &volume])?)?,
-        &plan,
+    let final_volume = object_output(&docker.run_checked(&["volume", "inspect", &volume])?)?;
+    observation::validate_volume(&final_volume, &plan)?;
+    require(
+        volume_creation_evidence(&final_volume, &installation_id, &binding.engine_id, &volume)?
+            == volume_identity,
     )?;
     let receipt = ApplicationStartReceipt {
         schema: "elevenid.installer-application-start/v1",
@@ -548,5 +614,52 @@ mod tests {
         assert!(object_output("[{},{}]").is_err());
         assert!(object_output("[null]").is_err());
         assert!(object_output("[{}]").is_ok());
+    }
+    #[test]
+    fn volume_creation_evidence_binds_full_identity_without_host_mountpoint() {
+        let installation_id = "12345678-1234-4234-8234-123456789abc";
+        let project = "marty-install-12345678123442348234123456789abc";
+        let name = format!("{project}_redis-socket");
+        let observed = json!({
+            "Name": &name,
+            "Driver": "local",
+            "Scope": "local",
+            "CreatedAt": "2026-10-27T12:30:00Z",
+            "Options": null,
+            "Mountpoint": "/var/lib/docker/volumes/private-data/_data",
+            "Labels": {
+                "com.docker.compose.project": project,
+                "com.docker.compose.volume": "redis-socket",
+                "com.docker.compose.version": "2.39.0"
+            }
+        });
+        let receipt =
+            volume_creation_evidence(&observed, installation_id, "engine", &name).unwrap();
+        assert_eq!(receipt["created_at"], observed["CreatedAt"]);
+        assert_eq!(receipt["labels"], observed["Labels"]);
+        assert_eq!(receipt["engine_id"], "engine");
+        assert!(!receipt.to_string().contains("/var/lib/docker"));
+        for (field, value) in [
+            ("Name", json!("foreign")),
+            ("Driver", json!("remote")),
+            ("Scope", json!("global")),
+            ("CreatedAt", json!("not-a-timestamp")),
+            ("Options", json!({"device": "/foreign"})),
+        ] {
+            let mut changed = observed.clone();
+            changed[field] = value;
+            assert!(
+                volume_creation_evidence(&changed, installation_id, "engine", &name).is_err(),
+                "{field}"
+            );
+        }
+        let mut changed = observed.clone();
+        changed["Labels"]["com.docker.compose.version"] = json!("unsafe\nlabel");
+        assert!(volume_creation_evidence(&changed, installation_id, "engine", &name).is_err());
+        let mut changed = observed.clone();
+        changed["Labels"]["com.docker.compose.project"] = json!("foreign");
+        assert!(volume_creation_evidence(&changed, installation_id, "engine", &name).is_err());
+        assert!(volume_creation_evidence(&observed, "not-a-uuid", "engine", &name).is_err());
+        assert!(volume_creation_evidence(&observed, installation_id, "bad engine", &name).is_err());
     }
 }
