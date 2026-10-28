@@ -300,7 +300,11 @@ function requireOwnedNativeExecutionBoundary(evidence) {
     'execution_boundary_invalid','Recorder-owned runtime and wallet IPC bindings are required.');
   const secretRoot=ownedHostSecretRoot();
   const privateRecoveryDirectory=ownedHostRecoveryDirectory(secretRoot);
-  ownedNativeBoundary=Object.freeze({secretRoot});
+  const helper=process.env.DEMO_EXECUTION_EVIDENCE_HELPER;
+  if(evidence.canvasJobInventoryProof!=null)requireCondition(typeof helper==='string'&&path.isAbsolute(helper),'execution_boundary_invalid','Bound recorder helper is required.');
+  const jobInventoryScope=evidence.canvasJobInventoryProof==null?null:require(path.join(path.dirname(helper),'canvasJobInventoryScope.js'))
+    .readCanvasJobInventoryScope(evidence.canvasJobInventoryProof,evidence.ownedWalletContext);
+  ownedNativeBoundary=Object.freeze({secretRoot,jobInventoryScope});
   return Object.freeze({boundary:'local_owned_windows_functional',containerized:false,host_browser_processes:true,
     secret_transport:'owned_host_private_files',release_qualified:false,recording_qualified:false,
     source_sha:process.env.CANVAS_OSS_DRIVER_SOURCE_SHA,privateRecoveryDirectory});
