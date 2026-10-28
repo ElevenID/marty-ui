@@ -14,6 +14,7 @@ import sys
 
 import scoped_native_build as build
 import scoped_native_profiles as profiles
+import seed_local_official_native_target as seed
 from scoped_native_runtime import ref, require, sha
 
 HELPER = Path("C:/Users/maree/OneDrive/Glthub/marty-workspace/audits/beta-release-20261018/core440-issuer-build.py")
@@ -69,6 +70,11 @@ def helper_module():
     return module
 
 
+def require_build_identifiers(run_id: str, engine_id: str) -> None:
+    require(re.fullmatch(r"[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}", run_id)
+            and engine_id == seed.ENGINE, "OWNED_BUILD_IDENTIFIERS_REQUIRED")
+
+
 def prepare(packet_path: Path, packet_sha: str, seed_path: Path, seed_sha: str,
             journal_path: Path, run_id: str, engine_id: str) -> None:
     packet = source_export(packet_path, packet_sha)
@@ -78,8 +84,7 @@ def prepare(packet_path: Path, packet_sha: str, seed_path: Path, seed_sha: str,
     source_script = Path(packet["sources"]["ui"]["directory"]) / "scripts/build-rust-service-binaries.sh"
     build.verify_official_inputs(freeze, seed, source_script.read_text(), scope,
                                  Path(packet["buildTool"]["path"]).read_text())
-    require(re.fullmatch(r"[a-f0-9-]{36}", run_id)
-            and re.fullmatch(r"[a-f0-9]{64}", engine_id), "OWNED_BUILD_IDENTIFIERS_REQUIRED")
+    require_build_identifiers(run_id, engine_id)
     journal = json.loads(journal_path.read_text(encoding="utf-8"))
     require(journal.get("backend") == "UBUNTU_PRIVATE_JOURNAL_V1",
             "DURABLE_LINUX_JOURNAL_REQUIRED")

@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 build = importlib.import_module("scoped_native_build")
 profiles = importlib.import_module("scoped_native_profiles")
 prepare = importlib.import_module("prepare_local_official_native_build")
+launcher = importlib.import_module("run_local_official_native_build")
 
 
 class OfficialNativeBuildTests(unittest.TestCase):
@@ -74,6 +75,15 @@ class OfficialNativeBuildTests(unittest.TestCase):
             with build.selected_resource_volumes(helper, self.profile.volumes):
                 raise RuntimeError("probe failed")
         self.assertEqual(helper.VOLUMES, build.VOLUMES)
+
+    def test_pinned_engine_uuid_and_debug_artifact_directory(self):
+        launcher.require_build_identifiers("11111111-1111-4111-8111-111111111111",
+                                           "3dbbbe66-1c98-4e0c-b0a6-f927c05e7341")
+        with self.assertRaisesRegex(ValueError, "OWNED_BUILD_IDENTIFIERS_REQUIRED"):
+            launcher.require_build_identifiers("11111111-1111-4111-8111-111111111111", "f" * 64)
+        self.assertEqual(build.artifact_directory(), "debug")
+        self.assertEqual(build.artifact_directory("d02-signing-cas"), "debug")
+        self.assertEqual(build.artifact_directory(self.profile.name), "release")
 
     def test_compiler_mounts_only_distinct_target_and_read_only_source(self):
         run_id = "11111111-1111-4111-8111-111111111111"

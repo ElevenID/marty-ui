@@ -38,6 +38,11 @@ def cargo_arguments(profile=None):
         item for package in build_scope(profile)["packages"] for item in ("-p", package, "--bin", package)]
 
 
+def artifact_directory(profile=None):
+    cargo_profile = build_scope(profile)["cargoProfile"]
+    return "debug" if cargo_profile == "dev" else cargo_profile
+
+
 def verify_export(repository, revision, directory, inventory_ref, git):
     """Compare every exported byte to actual selected Git blobs, not its own list."""
     inventory = json.loads(read_ref(inventory_ref).read_bytes())
@@ -461,7 +466,7 @@ def finish(prepared_ref, helper, git, profile=None):
             header = file.open("rb").read(20)
             require(header[:6] == b"\x7fELF\x02\x01" and header[18:20] == b"\x3e\x00", "AMD64_ELF_REQUIRED")
             require((output / (binary + ".sha256")).read_text().split()[0] == sha(file), "ELF_COPY_HASH_CHANGED")
-            target_profile = scope["cargoProfile"]
+            target_profile = artifact_directory(profile)
             matches = [m for m in messages if m.get("reason") == "compiler-artifact"
                        and m.get("executable") == "/target/" + target_profile + "/" + binary]
             require(len(matches) == 1, "EXACT_COMPILER_OUTPUT_REQUIRED")
