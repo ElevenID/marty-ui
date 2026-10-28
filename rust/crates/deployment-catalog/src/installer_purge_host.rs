@@ -377,6 +377,18 @@ fn sync_directories(parent: &File, expected: &HostIdentity, quarantine: &File) -
     Ok(())
 }
 
+fn lock_quarantine(
+    quarantine: &File,
+    expected: &HostIdentity,
+) -> Result<crate::installer_state::LockedDirectory> {
+    // Use a fresh open description so another invocation cannot share this
+    // lock. Explicit owner-PID unlock also releases it if a concurrent fork
+    // retains a duplicate until exec, including on an interrupted move.
+    let held = openat2(quarantine, ".", libc::O_RDONLY | libc::O_DIRECTORY)?.ok_or(REFUSED)?;
+    verify(&held, expected)?;
+    crate::installer_state::lock(held).map_err(|_| REFUSED.into())
+}
+
 fn apply_inner<F, H, C>(
     root: &File,
     quarantine: &File,
@@ -398,12 +410,7 @@ where
     {
         return Err(REFUSED.into());
     }
-    let held_quarantine =
-        openat2(quarantine, ".", libc::O_RDONLY | libc::O_DIRECTORY)?.ok_or(REFUSED)?;
-    verify(&held_quarantine, &manifest.quarantine)?;
-    if unsafe { libc::flock(held_quarantine.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
-        return Err(REFUSED.into());
-    }
+    let held_quarantine = lock_quarantine(quarantine, &manifest.quarantine)?;
     let expected_names: BTreeSet<_> = manifest
         .entries
         .iter()
@@ -539,6 +546,7 @@ mod tests {
             fs::{symlink, PermissionsExt},
         },
         path::PathBuf,
+        process::Command,
     };
 
     struct Fixture {
@@ -604,6 +612,85 @@ mod tests {
             intent_sha256: digest.into(),
             acknowledge_absent: state == ObservedState::Absent,
         })
+    }
+
+    // The parent invokes this exact ignored test in a separate process. It
+    // checks the actual kernel lock while the parent retains its own guard or
+    // a duplicate of the old open description.
+    #[test]
+    #[ignore = "subprocess probe invoked by quarantine lock regression"]
+    fn quarantine_lock_child_probe() {
+        let Some(path) = std::env::var_os("MARTY_PURGE_TEST_LOCK_DIR") else {
+            return;
+        };
+        let parent_pid: u32 = std::env::var("MARTY_PURGE_TEST_PARENT_PID")
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert_ne!(std::process::id(), parent_pid);
+        let directory = File::open(path).unwrap();
+        let expected = identity(&directory.metadata().unwrap()).unwrap();
+        let acquired = lock_quarantine(&directory, &expected);
+        match std::env::var("MARTY_PURGE_TEST_EXPECT").unwrap().as_str() {
+            "acquire" => assert!(acquired.is_ok()),
+            "refuse" => assert!(acquired.is_err()),
+            _ => panic!("unexpected synthetic probe expectation"),
+        }
+        println!("MARTY_PURGE_LOCK_CHILD_PROBE_OK");
+    }
+
+    fn assert_child_lock(f: &Fixture, expected: &str) {
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--ignored",
+                "--exact",
+                "--nocapture",
+                "installer_purge_host::tests::quarantine_lock_child_probe",
+            ])
+            .env("MARTY_PURGE_TEST_LOCK_DIR", &f.quarantine_path)
+            .env(
+                "MARTY_PURGE_TEST_PARENT_PID",
+                std::process::id().to_string(),
+            )
+            .env("MARTY_PURGE_TEST_EXPECT", expected)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "synthetic lock child failed");
+        let stdout = std::str::from_utf8(&output.stdout).unwrap();
+        assert!(stdout.contains("MARTY_PURGE_LOCK_CHILD_PROBE_OK"));
+        assert!(stdout.contains("1 passed; 0 failed"));
+    }
+
+    #[test]
+    fn quarantine_lock_releases_retained_description_on_success_and_error() {
+        for interrupted in [false, true] {
+            let f = fixture();
+            let mut inherited = None;
+            let result: Result<()> = (|| {
+                let guard = lock_quarantine(&f.quarantine, &f.manifest.quarantine)?;
+                // A clone shares the open description, just as fork does.
+                inherited = Some(guard.try_clone().unwrap());
+                assert!(lock_quarantine(&f.quarantine, &f.manifest.quarantine).is_err());
+                assert_child_lock(&f, "refuse");
+                if interrupted {
+                    return Err("synthetic interruption".into());
+                }
+                Ok(())
+            })();
+            assert_eq!(result.is_err(), interrupted);
+            assert_child_lock(&f, "acquire");
+            let successor = lock_quarantine(&f.quarantine, &f.manifest.quarantine).unwrap();
+            // The old inherited description must not retain or release the
+            // successor's lock when closed.
+            drop(inherited.take().unwrap());
+            assert!(lock_quarantine(&f.quarantine, &f.manifest.quarantine).is_err());
+            assert_child_lock(&f, "refuse");
+            drop(successor);
+            assert!(lock_quarantine(&f.quarantine, &f.manifest.quarantine).is_ok());
+            assert_child_lock(&f, "acquire");
+            assert_eq!(fs::read(f.root_path.join("payload")).unwrap(), b"synthetic");
+            assert_eq!(fs::read_dir(&f.quarantine_path).unwrap().count(), 0);
+        }
     }
 
     #[test]

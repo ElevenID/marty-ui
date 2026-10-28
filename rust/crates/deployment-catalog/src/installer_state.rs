@@ -356,7 +356,7 @@ fn parent(path: &Path) -> Result<(File, CString)> {
 /// flock belongs to the open file description, which a concurrent fork can
 /// inherit until exec despite CLOEXEC. Explicit unlock ends this owner's
 /// critical section even while an inherited descriptor remains open.
-struct LockedDirectory {
+pub(crate) struct LockedDirectory {
     file: File,
     owner_pid: libc::pid_t,
     unlock_on_drop: bool,
@@ -382,7 +382,7 @@ impl Drop for LockedDirectory {
         }
     }
 }
-fn lock(directory: File) -> Result<LockedDirectory> {
+pub(crate) fn lock(directory: File) -> Result<LockedDirectory> {
     if unsafe { libc::flock(directory.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
         return Err(error("installation is locked"));
     }
