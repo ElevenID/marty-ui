@@ -12,6 +12,8 @@ import fcntl
 import json
 import os
 from pathlib import Path
+import select
+import signal
 import socket
 import stat
 import subprocess
@@ -27,7 +29,6 @@ from installer_candidate_vm_launch_evidence import bind_provisioned_launch
 from installer_candidate_vm_runtime import _identity, _named_disk, _same_path
 from installer_candidate_vm_seed import _cloud_config, _private_key, _public_key
 from installer_candidate_vm_policy import GUEST_USER
-from installer_host_probe import command
 import installer_candidate_vm_launch as launcher
 import installer_release as release
 
@@ -103,12 +104,46 @@ def _no_prior_attempt(parent: int, vm_id: str) -> None:
         raise ValueError("VM restart attempt already recorded")
 
 
-def _no_live_owner(uid: int, old_pid: int, runtime_dir: Path, port: int) -> None:
+def _status_uids(raw: bytes) -> tuple[int, int, int, int]:
+    release.require(0 < len(raw) <= 65536, "VM process status inventory invalid")
+    lines = [line.split(b":", 1)[1].split() for line in raw.splitlines()
+             if line.startswith(b"Uid:")]
+    release.require(len(lines) == 1 and len(lines[0]) == 4
+                    and all(item.isascii() and item.isdigit() for item in lines[0]),
+                    "VM process UID inventory invalid")
+    return tuple(int(item) for item in lines[0])
+
+
+def _process_start(proc: Path) -> str:
+    raw = (proc / "stat").read_bytes()
+    release.require(0 < len(raw) <= 65536 and b") " in raw,
+                    "VM process start inventory invalid")
+    fields = raw.rsplit(b") ", 1)[1].split()
+    release.require(len(fields) >= 20 and fields[19].isdigit(),
+                    "VM process start inventory invalid")
+    return fields[19].decode("ascii")
+
+
+def _actor_is_uid(proc: Path, uid: int) -> bool:
+    return uid in _status_uids((proc / "status").read_bytes())
+
+
+def _original_still_live(old_pid: int, old_start: str, old_boot: str) -> bool:
+    old = Path("/proc") / str(old_pid)
+    if old.exists() and launcher._boot_id() == old_boot:
+        try:
+            return _process_start(old) == old_start
+        except FileNotFoundError:
+            release.require(not old.exists(), "VM original PID changed during inventory")
+    return False
+
+
+def _no_live_owner(uid: int, old_pid: int, old_start: str, old_boot: str,
+                   runtime_dir: Path, port: int) -> None:
     # PID absence alone does not prove shutdown. Refuse any actor under the
     # dedicated account, a disk holder, a QMP endpoint, or a bound SSH port.
-    release.require(not (Path("/proc") / str(old_pid)).exists(),
-                    "VM original PID still exists")
-    launcher._idle_uid(uid)
+    release.require(not _original_still_live(old_pid, old_start, old_boot),
+                    "VM original process still exists")
     try:
         (runtime_dir / "qmp.sock").lstat()
     except FileNotFoundError:
@@ -120,6 +155,9 @@ def _no_live_owner(uid: int, old_pid: int, runtime_dir: Path, port: int) -> None
         if not proc.name.isdecimal():
             continue
         try:
+            start = _process_start(proc)
+            release.require(not _actor_is_uid(proc, uid),
+                            "VM runtime identity has an existing process")
             for descriptor in (proc / "fd").iterdir():
                 try:
                     held = descriptor.stat()
@@ -130,8 +168,13 @@ def _no_live_owner(uid: int, old_pid: int, runtime_dir: Path, port: int) -> None
                             & os.O_ACCMODE == os.O_RDONLY,
                             "VM disk has a live process holder")
                 except FileNotFoundError:
-                    continue
+                    release.require(not proc.exists(),
+                                    "VM descriptor inventory changed")
+                    break
+            release.require(_process_start(proc) == start,
+                            "VM process changed during inventory")
         except FileNotFoundError:
+            release.require(not proc.exists(), "VM process changed during inventory")
             continue
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as reserved:
         reserved.bind(("127.0.0.1", port))
@@ -192,10 +235,90 @@ def _disk_fd(runtime_fd: int, uid: int, gid: int,
         os.close(path_fd)
 
 
-def _mutable_image_info(disk: Path, expected_base: str) -> None:
+def _header_backing(fd: int, expected_base: str, expected_virtual_bytes: int) -> None:
+    """Reject unsafe qcow2 names/features before any image parser opens them."""
+    header = os.pread(fd, 112, 0)
+    u32 = lambda offset: int.from_bytes(header[offset:offset + 4], "big")
+    u64 = lambda offset: int.from_bytes(header[offset:offset + 8], "big")
+    release.require(len(header) == 112 and header[:4] == b"QFI\xfb"
+                    and u32(4) == 3 and 9 <= u32(20) <= 21
+                    and u64(24) == expected_virtual_bytes
+                    and u32(32) == 0 and u64(72) == 0
+                    and not u64(88) & 2,
+                    "VM qcow2 header differs")
+    cluster = 1 << u32(20)
+    backing_offset, backing_size = u64(8), u32(16)
+    header_length = u32(100)
+    release.require(104 <= header_length <= backing_offset
+                    and header_length % 8 == 0
+                    and 0 < backing_size <= 1023
+                    and backing_offset + backing_size <= cluster,
+                    "VM qcow2 backing bounds differ")
+    first_cluster = os.pread(fd, cluster, 0)
+    release.require(len(first_cluster) == cluster
+                    and first_cluster[backing_offset:backing_offset + backing_size]
+                    == expected_base.encode("ascii"),
+                    "VM qcow2 backing name differs")
+    at = header_length
+    ended = False
+    backing_format = None
+    while at + 8 <= backing_offset:
+        kind = int.from_bytes(first_cluster[at:at + 4], "big")
+        size = int.from_bytes(first_cluster[at + 4:at + 8], "big")
+        if kind == 0:
+            release.require(size == 0, "VM qcow2 extension terminator invalid")
+            ended = True
+            break
+        next_at = at + 8 + ((size + 7) & ~7)
+        release.require(next_at <= backing_offset, "VM qcow2 extension bounds differ")
+        value = first_cluster[at + 8:at + 8 + size]
+        release.require(kind != 0x44415441, "VM qcow2 external data file refused")
+        if kind == 0xe2792aca:
+            release.require(backing_format is None and value == b"qcow2",
+                            "VM qcow2 backing format differs")
+            backing_format = value
+        at = next_at
+    release.require(ended, "VM qcow2 extension terminator missing")
+
+
+def _qemu_info_unprivileged(disk: Path, uid: int, gid: int) -> bytes:
+    launcher._trusted_tool(launcher.SETPRIV)
     launcher._trusted_tool(QEMU_IMG)
-    raw = command([str(QEMU_IMG), "info", "--output=json", str(disk)],
-                  env=launcher.ENV, timeout=30, limit=65536)
+    argv = [str(launcher.SETPRIV), "--reuid", str(uid), "--regid", str(gid),
+            "--clear-groups", "--bounding-set=-all", "--inh-caps=-all",
+            "--ambient-caps=-all", "--no-new-privs", "--", str(QEMU_IMG),
+            "info", "-f", "qcow2", "--output=json", str(disk)]
+    process = subprocess.Popen(argv, cwd="/", env=launcher.ENV, close_fds=True,
+                               start_new_session=True, stdin=subprocess.DEVNULL,
+                               stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    result = bytearray()
+    deadline = time.monotonic() + 30
+    try:
+        while True:
+            remaining = deadline - time.monotonic()
+            release.require(remaining > 0, "VM image inspection timed out")
+            readable, _, _ = select.select([process.stdout], [], [], min(remaining, 0.5))
+            if not readable:
+                continue
+            block = os.read(process.stdout.fileno(), 8192)
+            if not block:
+                break
+            result.extend(block)
+            release.require(len(result) <= 65536, "VM image inspection oversized")
+        release.require(process.wait(timeout=max(0.1, deadline - time.monotonic())) == 0,
+                        "VM image inspection failed")
+        return bytes(result)
+    finally:
+        if process.poll() is None:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.wait()
+        process.stdout.close()
+
+
+def _mutable_image_info(disk: Path, fd: int, uid: int, gid: int,
+                        expected_base: str, expected_virtual_bytes: int) -> None:
+    _header_backing(fd, expected_base, expected_virtual_bytes)
+    raw = _qemu_info_unprivileged(disk, uid, gid)
     info = json.loads(raw)
     def data_file(value: object) -> bool:
         if type(value) is dict:
@@ -208,6 +331,8 @@ def _mutable_image_info(disk: Path, expected_base: str) -> None:
                     and info.get("filename") == str(disk)
                     and info.get("backing-filename") == expected_base
                     and info.get("full-backing-filename", expected_base) == expected_base
+                    and info.get("backing-filename-format") in (None, "qcow2")
+                    and info.get("virtual-size") == expected_virtual_bytes
                     and not data_file(info),
                     "VM mutable image backing differs")
 
@@ -335,8 +460,11 @@ def _recheck_before_spawn(source: Path, registry: Path, runtime_parent: Path, vm
                             == (intent["mutable_disk_bytes"], intent["mutable_disk_sha256"],
                                 intent["mutable_disk_mtime_ns"], intent["mutable_disk_ctime_ns"]),
                             "VM mutable disk changed before spawn")
-            _mutable_image_info(runtime_dir / "disk.qcow2",
-                                context["records"]["creation_intent"]["image"]["image_path"])
+            _mutable_image_info(
+                runtime_dir / "disk.qcow2", disk_fd, runtime["runtime_uid"],
+                runtime["runtime_gid"],
+                context["records"]["creation_intent"]["image"]["image_path"],
+                context["records"]["creation_receipt"]["virtual_gib"] * 1024**3)
             release.require(_mutable_digest(disk_fd)
                             == (intent["mutable_disk_bytes"], intent["mutable_disk_sha256"],
                                 intent["mutable_disk_mtime_ns"], intent["mutable_disk_ctime_ns"]),
@@ -393,9 +521,9 @@ def _source_and_control(source: Path, registry: Path, records: dict[str, dict],
     )
 
 
-def _check_and_intent(source: Path, registry: Path, runtime_parent: Path,
-                      vm_id: str, nonce: str, lease: ControllerLease) -> tuple[dict, dict]:
-    """Perform every static refusal before publishing a durable one-shot intent."""
+def _prepare_restart(source: Path, registry: Path, runtime_parent: Path,
+                     vm_id: str, nonce: str, lease: ControllerLease) -> tuple[dict, dict]:
+    """Read-only exact preflight; callers must repeat it before any intent."""
     parent = lease.parent
     release.require(parent is not None and lease.owner_pid == os.getpid(),
                     "VM controller lease not held")
@@ -420,6 +548,8 @@ def _check_and_intent(source: Path, registry: Path, runtime_parent: Path,
                     and launch["kvm_gid"] == launcher._kvm_group(),
                     "VM restart launch policy differs")
     _no_live_owner(runtime["runtime_uid"], records["launch_pid"]["pid"],
+                   records["launch_pid"]["start_ticks"],
+                   records["launch_pid"]["controller_boot_id"],
                    runtime_dir, seed["ssh_port"])
     runtime_fd = observer.open_vm_dir(runtime_dir, runtime["runtime_uid"])
     try:
@@ -440,13 +570,18 @@ def _check_and_intent(source: Path, registry: Path, runtime_parent: Path,
                 release.require((disk_info.st_dev, disk_info.st_ino)
                                 == (runtime["disk_device"], runtime["disk_inode"]),
                                 "VM disk identity differs")
-                _mutable_image_info(runtime_dir / "disk.qcow2",
-                                    records["creation_intent"]["image"]["image_path"])
+                _mutable_image_info(
+                    runtime_dir / "disk.qcow2", disk_fd, runtime["runtime_uid"],
+                    runtime["runtime_gid"],
+                    records["creation_intent"]["image"]["image_path"],
+                    records["creation_receipt"]["virtual_gib"] * 1024**3)
                 first = _mutable_digest(disk_fd)
                 _named_disk(runtime_fd, disk_fd, runtime["runtime_uid"],
                             runtime["runtime_gid"])
                 launcher._host_headroom()
                 _no_live_owner(runtime["runtime_uid"], records["launch_pid"]["pid"],
+                               records["launch_pid"]["start_ticks"],
+                               records["launch_pid"]["controller_boot_id"],
                                runtime_dir, seed["ssh_port"])
                 _same_path(runtime_dir, runtime_fd,
                            lambda path: observer.open_vm_dir(path, runtime["runtime_uid"]))
@@ -491,8 +626,6 @@ def _check_and_intent(source: Path, registry: Path, runtime_parent: Path,
                     "application_deployment_authorized": False,
                     "started_at": int(time.time()),
                 }
-                # Exclusive record publication is the irreversible attempt boundary.
-                _write(parent, vm_id + ".restart-intent.json", intent)
                 return intent, {"records": records, "raw": raw,
                                 "runtime_dir": runtime_dir, "control_dir": control_dir}
             finally:
@@ -513,12 +646,18 @@ def restart(source: Path, registry: Path, runtime_parent: Path, *, vm_id: str,
     launcher._trusted_tool(launcher.SETPRIV)
     kvm_gid = launcher._kvm_group()
     with ControllerLease(registry) as lease:
-        intent, context = _check_and_intent(source, registry, runtime_parent,
-                                            vm_id, attempt_nonce, lease)
+        intent, context = _prepare_restart(source, registry, runtime_parent,
+                                           vm_id, attempt_nonce, lease)
+        # Exclusive record publication is the irreversible attempt boundary.
+        intent_raw = _write(lease.parent, vm_id + ".restart-intent.json", intent)
+        release.require(_read_record(lease.parent, vm_id + ".restart-intent.json")[0]
+                        == intent_raw, "VM restart intent changed after publication")
         runtime_dir = context["runtime_dir"]
         runtime = context["records"]["runtime_receipt"]
         _same_path(registry, lease.parent, _directory)
-        _no_live_owner(runtime["runtime_uid"], context["records"]["launch_pid"]["pid"],
+        previous = context["records"]["launch_pid"]
+        _no_live_owner(runtime["runtime_uid"], previous["pid"],
+                       previous["start_ticks"], previous["controller_boot_id"],
                        runtime_dir, intent["ssh_port"])
         release.require(qemu_sha == intent["qemu_sha256"],
                         "VM QEMU changed before restart")
@@ -568,6 +707,19 @@ def restart(source: Path, registry: Path, runtime_parent: Path, *, vm_id: str,
                    "disk_fd": live["disk_fd"], "observed_at": int(time.time())}
         _write(lease.parent, vm_id + ".restart-receipt.json", receipt)
         return receipt
+
+
+def inspect(source: Path, registry: Path, runtime_parent: Path, *, vm_id: str,
+            attempt_nonce: str) -> dict:
+    """Rehearse exact static checks without consuming an attempt or authorizing use."""
+    release.require(os.geteuid() == 0, "root VM controller required")
+    _uuid4(vm_id)
+    _uuid4(attempt_nonce)
+    with ControllerLease(registry) as lease:
+        _prepare_restart(source, registry, runtime_parent, vm_id, attempt_nonce, lease)
+    return {"vm_id": vm_id, "attempt_nonce": attempt_nonce, "phase": "preflight",
+            "read_only": True, "qualified": False, "dispatch_authorized": False,
+            "application_deployment_authorized": False}
 
 
 def current_readiness(source: Path, registry: Path, runtime_parent: Path, *, vm_id: str) -> dict:
@@ -709,18 +861,24 @@ def current_readiness(source: Path, registry: Path, runtime_parent: Path, *, vm_
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--source", required=True, type=Path)
+    parser.add_argument("--source", required=True, type=Path,
+                        help="root-custodied signed Ubuntu cloud-image directory")
     parser.add_argument("--registry", required=True, type=Path)
     parser.add_argument("--runtime-parent", required=True, type=Path)
     parser.add_argument("--vm-id", required=True)
     action = parser.add_mutually_exclusive_group(required=True)
     action.add_argument("--restart-attempt-nonce")
+    action.add_argument("--inspect-attempt-nonce")
     action.add_argument("--current-readiness", action="store_true")
     args = parser.parse_args()
     try:
         if args.current_readiness:
             result = current_readiness(args.source, args.registry, args.runtime_parent,
                                        vm_id=args.vm_id)
+        elif args.inspect_attempt_nonce is not None:
+            result = inspect(args.source, args.registry, args.runtime_parent,
+                             vm_id=args.vm_id,
+                             attempt_nonce=args.inspect_attempt_nonce)
         else:
             result = restart(args.source, args.registry, args.runtime_parent,
                              vm_id=args.vm_id,
