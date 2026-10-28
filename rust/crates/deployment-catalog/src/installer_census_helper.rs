@@ -159,7 +159,7 @@ fn same_binding(path: &str, held: &File) -> Result<()> {
             && mount_id(&current).map_err(|_| REFUSED)? == mount_id(held).map_err(|_| REFUSED)?,
     )
 }
-fn identity_map(path: &str, needed: u32) -> Result<()> {
+fn identity_map(path: &str) -> Result<()> {
     let mut bytes = Vec::new();
     procfs(path)?
         .take(257)
@@ -167,9 +167,9 @@ fn identity_map(path: &str, needed: u32) -> Result<()> {
         .map_err(|_| REFUSED)?;
     require(bytes.len() <= 256)?;
     let text = std::str::from_utf8(&bytes).map_err(|_| REFUSED)?;
-    parse_identity_map(text, needed)
+    parse_identity_map(text)
 }
-fn parse_identity_map(text: &str, needed: u32) -> Result<()> {
+fn parse_identity_map(text: &str) -> Result<()> {
     let mut lines = text.lines();
     let line = lines.next().ok_or(REFUSED)?;
     require(lines.next().is_none())?;
@@ -178,7 +178,9 @@ fn parse_identity_map(text: &str, needed: u32) -> Result<()> {
     let inside = parts[0].parse::<u64>().map_err(|_| REFUSED)?;
     let outside = parts[1].parse::<u64>().map_err(|_| REFUSED)?;
     let count = parts[2].parse::<u64>().map_err(|_| REFUSED)?;
-    require(inside == 0 && outside == 0 && count > u64::from(needed))
+    // A partial map may present an unmapped descendant UID/GID as overflow
+    // 65534, which cannot be distinguished from a genuine owner by stat.
+    require(inside == 0 && outside == 0 && count == u64::from(u32::MAX))
 }
 
 #[derive(Serialize)]
@@ -235,6 +237,16 @@ fn observe_bytes(root: &File, request: &Request) -> Result<Vec<u8>> {
             && !second.deletion_eligible
             && first.not_atomic_snapshot
             && second.not_atomic_snapshot,
+    )?;
+    // A separate writable file bind can alias an inode under the read-only
+    // installation bind. Never write the output if it is part of this census.
+    let output = &request.expected_output;
+    require(
+        !(expected_root.dev == output.dev && expected_root.ino == output.ino)
+            && first.entries.iter().all(|entry| {
+                !(entry.target.dev == output.dev && entry.target.ino == output.ino
+                    || entry.parent.dev == output.dev && entry.parent.ino == output.ino)
+            }),
     )?;
     let response = PrivateResponse {
         schema: "elevenid.installer-private-root-census/v1",
@@ -293,14 +305,8 @@ pub fn run() -> Result<()> {
     let output = open_path(OUTPUT_PATH)?;
     let (root_identity, output_identity) = validate_bindings(&input, &root, &output)?;
     let input_identity = identity(&input).map_err(|_| REFUSED)?;
-    identity_map("/proc/self/uid_map", root_identity.uid)?;
-    identity_map(
-        "/proc/self/gid_map",
-        root_identity
-            .gid
-            .max(input_identity.gid)
-            .max(output_identity.gid),
-    )?;
+    identity_map("/proc/self/uid_map")?;
+    identity_map("/proc/self/gid_map")?;
     let readable_input = reopen(&input, libc::O_RDONLY)?;
     let readable_root = reopen(&root, libc::O_RDONLY | libc::O_DIRECTORY)?;
     let mut writable_output = reopen(&output, libc::O_WRONLY)?;
@@ -333,6 +339,12 @@ pub fn run() -> Result<()> {
     same_binding(REQUEST_PATH, &input)?;
     same_binding(ROOT_PATH, &root)?;
     same_binding(OUTPUT_PATH, &output)?;
+    require(
+        identity(&input).map_err(|_| REFUSED)? == input_identity
+            && identity(&root).map_err(|_| REFUSED)? == root_identity
+            && identity(&output).map_err(|_| REFUSED)? == output_identity
+            && output.metadata().map_err(|_| REFUSED)?.nlink() == 1,
+    )?;
     require(output.metadata().map_err(|_| REFUSED)?.len() == 0)?;
     writable_output
         .write_all(&bytes)
@@ -341,6 +353,11 @@ pub fn run() -> Result<()> {
     require(writable_output.metadata().map_err(|_| REFUSED)?.len() == bytes.len() as u64)?;
     same_binding(OUTPUT_PATH, &output)?;
     same_binding(ROOT_PATH, &root)?;
+    require(
+        identity(&output).map_err(|_| REFUSED)? == output_identity
+            && output.metadata().map_err(|_| REFUSED)?.nlink() == 1
+            && identity(&root).map_err(|_| REFUSED)? == root_identity,
+    )?;
     println!(
         "{{\"status\":\"observed\",\"bytes\":{},\"sha256\":\"{}\",\"nonce\":\"{}\"}}",
         bytes.len(),
@@ -463,10 +480,22 @@ mod tests {
 
     #[test]
     fn identity_mapping_refuses_shift_or_extra_range() {
-        assert!(parse_identity_map("0 0 4294967295\n", 1000).is_ok());
-        assert!(parse_identity_map("0 100000 65536\n", 1000).is_err());
-        assert!(parse_identity_map("0 0 1000\n", 1000).is_err());
-        assert!(parse_identity_map("0 0 65536\n100000 100000 65536\n", 1000).is_err());
+        assert!(parse_identity_map("0 0 4294967295\n").is_ok());
+        assert!(parse_identity_map("0 100000 65536\n").is_err());
+        assert!(parse_identity_map("0 0 1000\n").is_err());
+        assert!(parse_identity_map("0 0 65536\n").is_err());
+        assert!(parse_identity_map("0 0 65536\n100000 100000 65536\n").is_err());
+    }
+    #[test]
+    fn partial_uid_or_gid_map_refuses_before_observation() {
+        let full = "0 0 4294967295\n";
+        let partial = "0 0 65536\n";
+        assert!(parse_identity_map(partial)
+            .and_then(|_| parse_identity_map(full))
+            .is_err());
+        assert!(parse_identity_map(full)
+            .and_then(|_| parse_identity_map(partial))
+            .is_err());
     }
 
     #[test]
@@ -504,5 +533,28 @@ mod tests {
         assert_eq!(response["coverage"], "expected_normal_profile_current_tree");
         fs::write(temp.path().join("unknown-canary"), b"unexpected").unwrap();
         assert!(observe_bytes(&root, &request).is_err());
+    }
+    #[test]
+    fn writable_output_alias_inside_installation_is_refused() {
+        let temp = tempfile::tempdir().unwrap();
+        fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        for name in TopLevelName::REQUIRED {
+            let path = temp.path().join(name.name());
+            if name.expected_kind() == Kind::Directory {
+                fs::create_dir(&path).unwrap();
+            } else {
+                fs::write(&path, b"synthetic").unwrap();
+            }
+        }
+        let aliased_output = temp.path().join("backups/census-output");
+        fs::write(&aliased_output, b"").unwrap();
+        fs::set_permissions(&aliased_output, fs::Permissions::from_mode(0o600)).unwrap();
+        let root = File::open(temp.path()).unwrap();
+        let request = request(
+            identity(&root).unwrap(),
+            identity(&File::open(&aliased_output).unwrap()).unwrap(),
+        );
+        assert!(observe_bytes(&root, &request).is_err());
+        assert_eq!(fs::read(&aliased_output).unwrap(), b"");
     }
 }
