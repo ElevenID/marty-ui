@@ -311,6 +311,49 @@ class DeltaControls(unittest.TestCase):
         with self.assertRaises(ValueError):
             subject.checked_container(old, actual, "gateway", bindings, additions, None)
 
+    def test_explicit_rollback_seam_refuses_retained_operator_authority(self):
+        old = {
+            "Config": {"Env": ["EXISTING=fixed"]},
+            "Mounts": [],
+            "HostConfig": {"Binds": None, "Mounts": []},
+            "Image": "same",
+        }
+        checked = []
+
+        def strict(a, b, role):
+            checked.append(role)
+            self.assertEqual(a, b)
+
+        subject.checked_rollback_container(old, copy.deepcopy(old), "gateway", strict)
+        self.assertEqual(checked, ["gateway"])
+        old["HostConfig"]["Binds"] = ["C:/private/native:/usr/local/bin/gateway:ro"]
+        equivalent = copy.deepcopy(old)
+        equivalent["HostConfig"]["Binds"] = [
+            "/run/desktop/mnt/host/c/private/native:/usr/local/bin/gateway:ro"
+        ]
+        subject.checked_rollback_container(old, equivalent, "gateway", strict)
+        for field in ("env", "mount", "host_bind", "host_mount", "image"):
+            actual = copy.deepcopy(old)
+            if field == "env":
+                actual["Config"]["Env"].append(
+                    subject.variable(subject.NAMES[0]) + "_FILE=/run/secrets/new"
+                )
+            elif field == "mount":
+                actual["Mounts"].append(
+                    {"Destination": "/run/secrets/" + subject.NAMES[0]}
+                )
+            elif field == "host_bind":
+                actual["HostConfig"]["Binds"] = ["/secret:/run/secrets/new:ro"]
+            elif field == "host_mount":
+                actual["HostConfig"]["Mounts"] = [{"Type": "bind"}]
+            else:
+                actual["Image"] = "different"
+            with (
+                self.subTest(field=field),
+                self.assertRaises((ValueError, AssertionError)),
+            ):
+                subject.checked_rollback_container(old, actual, "gateway", strict)
+
 
 if __name__ == "__main__":
     unittest.main()

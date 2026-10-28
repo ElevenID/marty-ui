@@ -251,6 +251,19 @@ def peel_inspect_environment(before, actual, role, additions):
     return list(before)
 
 
+def bind_map(rows):
+    parsed = {}
+    for bind in rows:
+        require(isinstance(bind, str), "HOST_BIND_STRING_REQUIRED")
+        parts = bind.rsplit(":", 2)
+        require(
+            len(parts) == 3 and parts[1] not in parsed,
+            "CLOSED_UNIQUE_HOST_BINDS_REQUIRED",
+        )
+        parsed[parts[1]] = (daemon_source(parts[0]), parts[2])
+    return parsed
+
+
 def peel_validated_inspect(before, actual, role, bindings, additions):
     """Remove validated additions for an independent existing strict checker.
 
@@ -317,18 +330,6 @@ def peel_validated_inspect(before, actual, role, bindings, additions):
         observed.add(target)
     require(observed == set(targets), "TWO_OPERATOR_HOST_BINDS_REQUIRED")
 
-    def bind_map(rows):
-        parsed = {}
-        for bind in rows:
-            require(isinstance(bind, str), "HOST_BIND_STRING_REQUIRED")
-            parts = bind.rsplit(":", 2)
-            require(
-                len(parts) == 3 and parts[1] not in parsed,
-                "CLOSED_UNIQUE_HOST_BINDS_REQUIRED",
-            )
-            parsed[parts[1]] = (daemon_source(parts[0]), parts[2])
-        return parsed
-
     require(bind_map(retained) == bind_map(old_binds), "EXISTING_HOST_BINDS_CHANGED")
     # The existing production checker omits HostConfig Binds/Mounts after its
     # daemon mount check. Independently close both here; do not rely on it to
@@ -354,6 +355,58 @@ def checked_container(before, actual, role, bindings, additions, strict_checker)
     return {
         "role": role,
         "operatorMountsValidated": 2,
+        "strictContainerCheckerCalled": True,
+        "releaseQualified": False,
+        "recordingQualified": False,
+    }
+
+
+def checked_rollback_container(before, actual, role, strict_checker):
+    """Inverse seam for the existing explicitly requested rollback operation.
+
+    The private wrapper must first pass the existing journal phase/known-outcome
+    and ownership gates. This function grants no rollback authority and never
+    performs rollback. It prevents the apply-time additions being silently kept
+    when the original strict checker validates the restored container.
+    """
+    require(
+        role in ROLES and callable(strict_checker),
+        "EXISTING_STRICT_ROLLBACK_CHECKER_REQUIRED",
+    )
+    forbidden = {variable(n) for n in NAMES} | {variable(n) + "_FILE" for n in NAMES}
+    targets = {"/run/secrets/" + n for n in NAMES}
+    for row in (before, actual):
+        entries = row["Config"]["Env"]
+        require(
+            isinstance(entries, list)
+            and all(isinstance(s, str) and "=" in s for s in entries),
+            "INSPECT_ENVIRONMENT_ARRAY_REQUIRED",
+        )
+        keys = [s.split("=", 1)[0] for s in entries]
+        require(
+            len(set(keys)) == len(keys) and not set(keys) & forbidden,
+            "ROLLBACK_OPERATOR_ENVIRONMENT_RETAINED",
+        )
+        require(
+            not {m["Destination"] for m in row["Mounts"]} & targets,
+            "ROLLBACK_OPERATOR_MOUNT_RETAINED",
+        )
+    # Keep only the already proven Windows/Desktop source equivalence.
+    require(
+        bind_map(before["HostConfig"].get("Binds") or [])
+        == bind_map(actual["HostConfig"].get("Binds") or []),
+        "ROLLBACK_HOST_MOUNT_CONFIGURATION_CHANGED",
+    )
+    require(
+        before["HostConfig"].get("Mounts") == actual["HostConfig"].get("Mounts"),
+        "ROLLBACK_HOST_MOUNT_CONFIGURATION_CHANGED",
+    )
+    checked = deepcopy(actual)
+    checked["HostConfig"]["Binds"] = before["HostConfig"].get("Binds")
+    strict_checker(before, checked, role)
+    return {
+        "role": role,
+        "operatorAdditionsAbsent": True,
         "strictContainerCheckerCalled": True,
         "releaseQualified": False,
         "recordingQualified": False,
