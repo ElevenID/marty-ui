@@ -4,10 +4,34 @@
 const assert = require('node:assert/strict');
 const {
   cleanupApplicationCredential, createOwnedApplication, ensureApplicantProfile,
-  issueOwnedApplication, requireJson, requireOwnedApplication, submitOwnedApplication,
+  readApplicationTransaction, requireJson, requireOwnedApplication, submitOwnedApplication,
   approvedApplicationFlowPayload,
 } = require('./beta-demo-resource-helpers');
 const { createOwnedActiveConfiguration, retireOwnedConfiguration } = require('./demo-owned-configuration');
+
+async function bindApprovedApplicationTransaction(operator, owned, {
+  read = readApplicationTransaction, delay = ms => new Promise(resolve => setTimeout(resolve, ms)),
+  attempts = 60,
+} = {}) {
+  assert.equal(owned.transactionId || null, null, 'An owned issuance transaction is already bound');
+  for (let i = 0; i < attempts; i += 1) {
+    // The governed APPLICATION_APPROVED Flow issues the offer. The shared
+    // selector rejects multiple same-application transactions instead of
+    // choosing by creation time or response order.
+    const transaction = await read(operator, owned, { detail: true });
+    if (transaction) {
+      assert.equal(transaction.application_id, owned.applicationId);
+      assert.equal(transaction.organization_id, owned.organizationId);
+      assert.equal(transaction.credential_template_id, owned.credentialTemplateId);
+      assert.ok(['pending', 'authorized'].includes(String(transaction.status).toLowerCase()));
+      assert.equal(transaction.issued_at || null, null);
+      owned.transactionId = transaction.id;
+      return transaction;
+    }
+    if (i + 1 < attempts) await delay(500);
+  }
+  throw new Error('Approved application Flow did not produce one owned issuance transaction');
+}
 
 function createOwnedMembership(operator, inputs) {
   const owned = { organizationId: inputs.organizationId, credentialTemplateId: null,
@@ -78,7 +102,7 @@ function createOwnedMembership(operator, inputs) {
         method: 'POST', body: JSON.stringify({ notes: 'Authorized synthetic first-party wallet control' }),
       }), owned);
       assert.equal(approved.status, 'APPROVED');
-      await issueOwnedApplication(operator, owned, 'Prepare owned membership offer for real UI claim');
+      await bindApprovedApplicationTransaction(operator, owned);
       return { applicationId: owned.applicationId, organizationId: owned.organizationId };
     },
     async cleanup() {
@@ -101,4 +125,4 @@ function createOwnedMembership(operator, inputs) {
   return controller;
 }
 
-module.exports = { createOwnedMembership };
+module.exports = { createOwnedMembership, bindApprovedApplicationTransaction };

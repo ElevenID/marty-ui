@@ -8,6 +8,16 @@ test('D05 real driver imports the application approval Flow payload from its bou
  assert.equal(payload.trigger.config.event_type,'APPLICATION_APPROVED');
  assert.equal(typeof require('./verify-beta-waltid-acceptance').loginToBetaApplicant,'function');
 });
+test('D05 binds exactly one Flow-issued transaction and never dispatches an explicit issue',async()=>{
+ const {bindApprovedApplicationTransaction}=require('./demo-owned-membership');
+ const owned={applicationId:'app',organizationId:'org',credentialTemplateId:'template',transactionId:null};
+ const tx={id:'offer',application_id:'app',organization_id:'org',credential_template_id:'template',status:'pending',issued_at:null};
+ let reads=0;const result=await bindApprovedApplicationTransaction({},owned,{read:async()=>++reads===1?null:tx,delay:async()=>{},attempts:2});
+ assert.equal(reads,2);assert.equal(result.id,'offer');assert.equal(owned.transactionId,'offer');
+ await assert.rejects(bindApprovedApplicationTransaction({}, {...owned,transactionId:null},{read:async()=>{throw Error('Application has multiple issuance transactions');},attempts:1}),/multiple issuance transactions/);
+ await assert.rejects(bindApprovedApplicationTransaction({}, {...owned,transactionId:null},{read:async()=>null,attempts:1}),/did not produce one/);
+ await assert.rejects(bindApprovedApplicationTransaction({},owned,{read:async()=>{throw Error('must not read');},attempts:1}),/already bound/);
+});
 test('D05 keeps the policy-bound source credential template and owns only new application/Flow configuration',async()=>{
  const org='00000000-0000-0000-0000-000000000001',template='50000000-0000-0000-0000-000000000040',sourceApplication='0ab66d45-0d84-5fbd-837f-25788d32279e';
  const created=[],source=fs.readFileSync(path.join(__dirname,'demo-owned-membership.js'),'utf8'),module={exports:{}};
