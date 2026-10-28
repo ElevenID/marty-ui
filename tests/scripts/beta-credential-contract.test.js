@@ -19,6 +19,7 @@ const {
   isExactLoginNonceStatusUrl,
   isExactLoginNonceFinalizeUrl,
   loginFinalizeRedirectEvidence,
+  isCredentialLoginDestinationUrl,
   isTerminalLoginNonceStatus,
   verificationResultEvidence,
   verificationSessionRequest,
@@ -197,6 +198,12 @@ test('membership recording exposes the three exact happy-path behavior assertion
     'https://beta.elevenidllc.com', nonce), {
     exactNonce: true, redirectStatus: 302, expectedUi: true, sessionCookieSet: true, verified: true,
   });
+  assert.equal(isCredentialLoginDestinationUrl(finalHeaders.location, 'https://beta.elevenidllc.com'), true);
+  assert.equal(isCredentialLoginDestinationUrl('/console/applicant/catalog?auth_method=credential',
+    'https://beta.elevenidllc.com'), true);
+  for (const location of [undefined, 'https://foreign.example/console/applicant/catalog?auth_method=credential',
+    'https://beta.elevenidllc.com/console/applicant/catalog?auth_method=credential&extra=1'])
+    assert.equal(isCredentialLoginDestinationUrl(location, 'https://beta.elevenidllc.com'), false);
   for (const response of [
     { url: finalize.replace(`nonce=${nonce}`, 'nonce=other'), status: 302, headers: finalHeaders },
     { url: finalize.replace('beta.', 'foreign.'), status: 302, headers: finalHeaders },

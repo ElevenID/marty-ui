@@ -37,6 +37,10 @@ GENERATED = frozenset({
     "signing_keys_service_sign_gateway_key",
     "token_hmac_key",
 })
+MDOC_OPERATORS = frozenset({
+    "mdoc_iaca_issue_gateway_key",
+    "mdoc_dsc_issue_gateway_key",
+})
 HEX_32_BYTES = re.compile(r"[0-9a-f]{64}\Z")
 REPO = Path(__file__).resolve().parents[1]
 OPERATOR_PASSWORD_POLICY = "length(8) and upperCase(1) and lowerCase(1) and digits(1) and specialChars(1)"
@@ -102,12 +106,14 @@ def require_private_root(root: Path) -> None:
         raise ValueError("disposable secret root must be owner-private")
 
 
-def generate(root: Path, random_hex: Callable[[int], str] = secrets.token_hex) -> None:
+def generate(root: Path, random_hex: Callable[[int], str] = secrets.token_hex,
+             *, mdoc_operators_only: bool = False) -> None:
+    names = MDOC_OPERATORS if mdoc_operators_only else GENERATED
     require_private_root(root)
-    if any((root / name).exists() or (root / name).is_symlink() for name in GENERATED):
+    if any((root / name).exists() or (root / name).is_symlink() for name in names):
         raise ValueError("disposable credential output would overwrite a file")
-    values = {name: random_hex(32) for name in sorted(GENERATED)}
-    if (set(values) != GENERATED or len(set(values.values())) != len(GENERATED)
+    values = {name: random_hex(32) for name in sorted(names)}
+    if (set(values) != names or len(set(values.values())) != len(names)
             or any(not isinstance(value, str) or not HEX_32_BYTES.fullmatch(value)
                    for value in values.values())):
         raise ValueError("disposable credential generator returned invalid or reused material")
@@ -142,17 +148,21 @@ def main() -> int:
     target.add_argument("--secret-root", type=Path)
     target.add_argument("--operator-password-file", type=Path,
                         help="fresh operator-only file in an existing private directory")
+    parser.add_argument("--mdoc-operators-only", action="store_true",
+                        help="with --secret-root, generate only the two distinct MDOC operator credentials")
     args = parser.parse_args()
+    if args.mdoc_operators_only and args.secret_root is None:
+        parser.error("--mdoc-operators-only requires --secret-root")
     try:
         if args.operator_password_file is not None:
             write_operator_password(args.operator_password_file)
         else:
-            generate(args.secret_root)
+            generate(args.secret_root, mdoc_operators_only=args.mdoc_operators_only)
     except (OSError, ValueError) as error:
         print(f"disposable credential setup failed: {error}", file=sys.stderr)
         return 2
     print("Created disposable operator password file" if args.operator_password_file is not None
-          else f"Created {len(GENERATED)} disposable credential files")
+          else f"Created {len(MDOC_OPERATORS if args.mdoc_operators_only else GENERATED)} disposable credential files")
     return 0
 
 
