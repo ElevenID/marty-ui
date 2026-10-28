@@ -14,6 +14,7 @@ const {
   credentialInventoryEvidence,
   membershipLoginBehaviorAssertions,
   requireCompletedLoginNonce,
+  loginNonceCompletionEvidence,
   isTerminalLoginNonceStatus,
   verificationResultEvidence,
   verificationSessionRequest,
@@ -157,6 +158,20 @@ test('verification session request fails closed without exact public identifiers
 });
 
 test('membership recording exposes the three exact happy-path behavior assertions', () => {
+  assert.deepEqual(loginNonceCompletionEvidence({ status: 'completed', reason_code: 'ignored' }), {
+    status: 'completed', observedNonceStatus: 'completed',
+  });
+  assert.deepEqual(loginNonceCompletionEvidence({ status: 'failed', reason_code: 'issuer_not_trusted' }), {
+    status: 'failed', observedNonceStatus: 'failed', reasonCode: 'issuer_not_trusted',
+  });
+  assert.deepEqual(loginNonceCompletionEvidence({ status: 'failed', reason_code: 'secret=do-not-log' }), {
+    status: 'failed', observedNonceStatus: 'failed', reasonCode: 'unclassified',
+  });
+  assert.equal(loginNonceCompletionEvidence({ status: 'failed', reason_code: 'unknown_private_value' }).reasonCode,
+    'unclassified');
+  assert.deepEqual(loginNonceCompletionEvidence({ status: 'pending-timeout' }), {
+    status: 'pending-timeout', observedNonceStatus: 'pending-timeout',
+  });
   for (const status of ['completed', 'failed', 'expired']) {
     assert.equal(isTerminalLoginNonceStatus({ status }), true);
   }

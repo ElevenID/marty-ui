@@ -114,6 +114,23 @@ function requireCompletedLoginNonce(status) {
   if (status !== 'completed') throw new Error('Credential login nonce did not complete');
 }
 
+function loginNonceCompletionEvidence(body) {
+  const status = typeof body?.status === 'string' ? body.status : null;
+  const evidence = { status, observedNonceStatus: status };
+  if (status === 'failed') {
+    const code = body?.reason_code;
+    const safeCodes = new Set([
+      'issuer_not_trusted', 'missing_email_claim', 'revocation_not_checked',
+      'credential_revoked', 'verification_service_unavailable', 'credential_payload_invalid',
+      'keycloak_user_not_found', 'keycloak_user_not_eligible', 'keycloak_admin_unavailable',
+      'verification_failed',
+    ]);
+    evidence.reasonCode = safeCodes.has(code)
+      ? code : 'unclassified';
+  }
+  return evidence;
+}
+
 function isTerminalLoginNonceStatus(body) {
   return ['completed', 'failed', 'expired'].includes(body?.status);
 }
@@ -152,6 +169,7 @@ module.exports = {
   credentialInventoryEvidence,
   membershipLoginBehaviorAssertions,
   requireCompletedLoginNonce,
+  loginNonceCompletionEvidence,
   isTerminalLoginNonceStatus,
   verificationResultEvidence,
   verificationSessionRequest,
