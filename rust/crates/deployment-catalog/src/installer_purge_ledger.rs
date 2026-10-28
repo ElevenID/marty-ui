@@ -208,6 +208,7 @@ fn entries(directory: &File) -> Result<Vec<String>> {
         let item = item.map_err(|_| REFUSED)?;
         let name = item.file_name().into_string().map_err(|_| REFUSED)?;
         let allowed = name == "manifest.json"
+            || name == "custody.json"
             || name == "quarantine"
             || name
                 .strip_prefix("intent-")
@@ -235,23 +236,42 @@ pub(crate) struct PurgeLedger {
     installation_id: uuid::Uuid,
     plan_sha256: String,
 }
+#[derive(PartialEq, Eq, Serialize)]
+struct DirectoryStamp {
+    dev: u64,
+    ino: u64,
+    uid: u32,
+    gid: u32,
+    mode: u32,
+    mount_id: u64,
+}
+fn directory_stamp(file: &File) -> Result<DirectoryStamp> {
+    let m = file.metadata().map_err(|_| REFUSED)?;
+    require(m.is_dir())?;
+    Ok(DirectoryStamp {
+        dev: m.dev(),
+        ino: m.ino(),
+        uid: m.uid(),
+        gid: m.gid(),
+        mode: m.mode() & 0o7777,
+        mount_id: mount_id(file)?,
+    })
+}
 impl PurgeLedger {
-    fn open_directory(parent: &File, id: uuid::Uuid, create: bool) -> Result<File> {
+    fn open_directory(parent: &File, id: uuid::Uuid, create: bool) -> Result<(File, bool)> {
         require(valid_id(id) && parent.metadata().map_err(|_| REFUSED)?.is_dir())?;
         let entry = directory_name(id);
-        if create {
-            mkdir_at(parent, &entry)?;
-        }
+        let created = create && mkdir_at(parent, &entry)?;
         let directory =
             open_at(parent, &entry, libc::O_RDONLY | libc::O_DIRECTORY, 0)?.ok_or(REFUSED)?;
         private(&directory, true)?;
         require(mount_id(parent)? == mount_id(&directory)?)?;
         lock(&directory)?;
-        Ok(directory)
+        Ok((directory, created))
     }
     fn open_quarantine(directory: &File, create: bool) -> Result<File> {
         if create {
-            mkdir_at(directory, "quarantine")?;
+            require(mkdir_at(directory, "quarantine")?)?;
         }
         let quarantine = open_at(
             directory,
@@ -263,6 +283,43 @@ impl PurgeLedger {
         private(&quarantine, true)?;
         require(mount_id(directory)? == mount_id(&quarantine)?)?;
         Ok(quarantine)
+    }
+    fn custody_bytes(&self) -> Result<Vec<u8>> {
+        #[derive(Serialize)]
+        struct Custody {
+            schema: &'static str,
+            installation_id: uuid::Uuid,
+            plan_sha256: String,
+            parent: DirectoryStamp,
+            ledger: DirectoryStamp,
+            quarantine: DirectoryStamp,
+        }
+        serde_json::to_vec(&Custody {
+            schema: "elevenid.installer-purge-custody/v1",
+            installation_id: self.installation_id,
+            plan_sha256: self.plan_sha256.clone(),
+            parent: directory_stamp(&self.parent)?,
+            ledger: directory_stamp(&self.directory)?,
+            quarantine: directory_stamp(&self.quarantine)?,
+        })
+        .map_err(|_| REFUSED.into())
+    }
+    fn verify_custody(&self) -> Result<()> {
+        private(&self.directory, true)?;
+        private(&self.quarantine, true)?;
+        let current = open_at(
+            &self.directory,
+            "quarantine",
+            libc::O_PATH | libc::O_DIRECTORY,
+            0,
+        )?
+        .ok_or(REFUSED)?;
+        private(&current, true)?;
+        require(directory_stamp(&current)? == directory_stamp(&self.quarantine)?)?;
+        require(
+            read_record(&self.directory, "custody.json", MAX_RECORD)?.as_deref()
+                == Some(self.custody_bytes()?.as_slice()),
+        )
     }
     fn verify_manifest(&self) -> Result<Vec<u8>> {
         let current = open_at(
@@ -278,6 +335,7 @@ impl PurgeLedger {
         require(held.dev() == observed.dev() && held.ino() == observed.ino())?;
         require(mount_id(&self.parent)? == mount_id(&self.directory)?)?;
         require(mount_id(&self.directory)? == mount_id(&current)?)?;
+        self.verify_custody()?;
         let bytes = read_record(&self.directory, "manifest.json", MAX_MANIFEST)?.ok_or(REFUSED)?;
         require(digest(&bytes) == self.plan_sha256)?;
         Ok(bytes)
@@ -291,18 +349,18 @@ impl PurgeLedger {
         confirmed_sha256: &str,
     ) -> Result<Self> {
         require(hex_digest(confirmed_sha256) && digest(plan_bytes) == confirmed_sha256)?;
-        let directory = Self::open_directory(parent, installation_id, true)?;
-        let quarantine = Self::open_quarantine(&directory, true)?;
+        let (directory, created) = Self::open_directory(parent, installation_id, true)?;
+        // Existing ledgers must retain their original quarantine. Recreating
+        // an empty replacement could hide data moved there before a crash.
+        let quarantine = Self::open_quarantine(&directory, created)?;
         let names = entries(&directory)?;
         if !names.iter().any(|name| name == "manifest.json") {
             require(
-                names
-                    .iter()
-                    .all(|name| name == "quarantine" || name.starts_with(".tmp-"))
-                    && entries(&quarantine)?.is_empty(),
+                names.iter().all(|name| {
+                    name == "quarantine" || name == "custody.json" || name.starts_with(".tmp-")
+                }) && entries(&quarantine)?.is_empty(),
             )?;
         }
-        write_or_verify(&directory, "manifest.json", plan_bytes, MAX_MANIFEST)?;
         let ledger = Self {
             parent: parent.try_clone().map_err(|_| REFUSED)?,
             directory,
@@ -310,6 +368,16 @@ impl PurgeLedger {
             installation_id,
             plan_sha256: confirmed_sha256.into(),
         };
+        if created {
+            write_exact(
+                &ledger.directory,
+                "custody.json",
+                &ledger.custody_bytes()?,
+                MAX_RECORD,
+            )?;
+        }
+        ledger.verify_custody()?;
+        write_or_verify(&ledger.directory, "manifest.json", plan_bytes, MAX_MANIFEST)?;
         ledger.verify_manifest()?;
         Ok(ledger)
     }
@@ -321,7 +389,7 @@ impl PurgeLedger {
         confirmed_sha256: &str,
     ) -> Result<(Self, Vec<u8>)> {
         require(hex_digest(confirmed_sha256))?;
-        let directory = Self::open_directory(parent, installation_id, false)?;
+        let (directory, _) = Self::open_directory(parent, installation_id, false)?;
         let quarantine = Self::open_quarantine(&directory, false)?;
         entries(&directory)?;
         let ledger = Self {
@@ -708,5 +776,73 @@ mod tests {
         fs::create_dir(path.join("quarantine")).unwrap();
         fs::set_permissions(path.join("quarantine"), fs::Permissions::from_mode(0o700)).unwrap();
         assert!(ledger.quarantine().is_err());
+    }
+    #[test]
+    fn resumed_ledger_refuses_replaced_quarantine_and_preserves_pending_data() {
+        let (root, parent, id, plan, hash) = fixture();
+        let ledger = PurgeLedger::create_or_resume(&parent, id, &plan, &hash).unwrap();
+        ledger
+            .record_intent(ResourceKind::HostEntry, &digest(b"owned-file"))
+            .unwrap();
+        let path = root.path().join(directory_name(id));
+        let pending = path.join("quarantine/pending-owned-data");
+        fs::write(&pending, b"retained-pending-canary").unwrap();
+        let old = root.path().join("saved-quarantine");
+        fs::rename(path.join("quarantine"), &old).unwrap();
+        fs::create_dir(path.join("quarantine")).unwrap();
+        fs::set_permissions(path.join("quarantine"), fs::Permissions::from_mode(0o700)).unwrap();
+        drop(ledger);
+        assert!(PurgeLedger::open_existing(&parent, id, &hash).is_err());
+        assert!(PurgeLedger::create_or_resume(&parent, id, &plan, &hash).is_err());
+        assert_eq!(
+            fs::read(old.join("pending-owned-data")).unwrap(),
+            b"retained-pending-canary"
+        );
+        assert_eq!(fs::read_dir(path.join("quarantine")).unwrap().count(), 0);
+    }
+    #[test]
+    fn missing_quarantine_is_not_recreated_on_resume() {
+        let (root, parent, id, plan, hash) = fixture();
+        let ledger = PurgeLedger::create_or_resume(&parent, id, &plan, &hash).unwrap();
+        let path = root.path().join(directory_name(id));
+        drop(ledger);
+        fs::remove_dir(path.join("quarantine")).unwrap();
+        assert!(PurgeLedger::create_or_resume(&parent, id, &plan, &hash).is_err());
+        assert!(PurgeLedger::open_existing(&parent, id, &hash).is_err());
+        assert!(!path.join("quarantine").exists());
+    }
+    #[test]
+    fn missing_or_changed_custody_record_is_never_adopted() {
+        for missing in [true, false] {
+            let (root, parent, id, plan, hash) = fixture();
+            let ledger = PurgeLedger::create_or_resume(&parent, id, &plan, &hash).unwrap();
+            let record = root.path().join(directory_name(id)).join("custody.json");
+            drop(ledger);
+            if missing {
+                fs::remove_file(&record).unwrap();
+            } else {
+                fs::write(&record, b"foreign-custody-canary").unwrap();
+            }
+            assert!(PurgeLedger::open_existing(&parent, id, &hash).is_err());
+            assert!(PurgeLedger::create_or_resume(&parent, id, &plan, &hash).is_err());
+            if missing {
+                assert!(!record.exists());
+            } else {
+                assert_eq!(fs::read(&record).unwrap(), b"foreign-custody-canary");
+            }
+        }
+    }
+    #[test]
+    fn durable_custody_allows_retry_before_manifest_publication() {
+        let (root, parent, id, plan, hash) = fixture();
+        let ledger = PurgeLedger::create_or_resume(&parent, id, &plan, &hash).unwrap();
+        let directory = root.path().join(directory_name(id));
+        let custody = fs::read(directory.join("custody.json")).unwrap();
+        drop(ledger);
+        fs::remove_file(directory.join("manifest.json")).unwrap();
+        let resumed = PurgeLedger::create_or_resume(&parent, id, &plan, &hash).unwrap();
+        assert!(resumed.quarantine().is_ok());
+        assert_eq!(fs::read(directory.join("manifest.json")).unwrap(), plan);
+        assert_eq!(fs::read(directory.join("custody.json")).unwrap(), custody);
     }
 }
