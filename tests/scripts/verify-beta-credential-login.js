@@ -29,6 +29,8 @@ const {
   DEFAULT_BETA_ORGANIZATION_ID,
   credentialInventoryEvidence,
   membershipLoginBehaviorAssertions,
+  requireCompletedLoginNonce,
+  isTerminalLoginNonceStatus,
 } = require('./beta-credential-contract');
 const {
   installUiCandidateRoute,
@@ -347,6 +349,13 @@ async function runCredentialLogin({ retainedFirstParty = false, evidence = null 
       hasNonce: true,
       walletOptions: loginRequest.walletOptions,
     };
+    // The login page polls and can finalize (consume) a completed nonce before
+    // a second status request sees it. Capture that page's terminal response.
+    const statusUrl = `${BETA_ORIGIN}/v1/auth/credential-login/status?nonce=${encodeURIComponent(loginRequest.nonce)}`;
+    const terminalStatusResponse = loginPage.waitForResponse(async (response) => {
+      if (response.url() !== statusUrl || response.request().method() !== 'GET' || response.status() !== 200) return false;
+      return isTerminalLoginNonceStatus(await response.json().catch(() => null));
+    }, { timeout: 60_000 }).catch(() => null);
     report.presentation = await presentBadge(walletPage, loginRequest.href);
     if (!report.presentation.accepted || (retainedFirstParty && report.presentation.status !== 200)) {
       throw new Error(`Browser wallet presentation failed: ${report.presentation.error || 'unknown error'}`);
@@ -357,13 +366,12 @@ async function runCredentialLogin({ retainedFirstParty = false, evidence = null 
       'The browser wallet submitted the selected badge to the signed credential-login callback.',
     );
 
-    const completion = await waitFor(() => loginPage.evaluate(async (nonce) => {
-      const response = await fetch(`/v1/auth/credential-login/status?nonce=${encodeURIComponent(nonce)}`, {
-        credentials: 'include',
-      });
-      const body = await response.json().catch(() => null);
-      return body?.status && body.status !== 'pending' ? body : null;
-    }, loginRequest.nonce), 60_000, 1_000).catch(() => ({ status: 'pending-timeout' }));
+    const terminal = await terminalStatusResponse;
+    const completion = terminal ? await terminal.json().catch(() => ({ status: 'invalid-response' }))
+      : { status: 'pending-timeout' };
+    report.completion = { status: completion?.status || null,
+      observedNonceStatus: completion?.status || null, authenticated: false };
+    requireCompletedLoginNonce(completion?.status);
     if (completion?.redirect_to) {
       await loginPage.goto(new URL(completion.redirect_to, BETA_ORIGIN).href, {
         waitUntil: 'domcontentloaded', timeout: 60_000,
@@ -382,11 +390,8 @@ async function runCredentialLogin({ retainedFirstParty = false, evidence = null 
     });
     await loginPage.screenshot({ path: path.join(artifactDir, '02-login-complete.png'), fullPage: true });
 
-    const effectiveCompletionStatus = auth.body?.authenticated === true
-      ? 'completed'
-      : completion?.status || null;
     report.completion = {
-      status: effectiveCompletionStatus,
+      status: completion.status,
       observedNonceStatus: completion?.status || null,
       authenticated: auth.body?.authenticated === true,
       authStatus: auth.status,
