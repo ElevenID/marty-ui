@@ -25,6 +25,7 @@ pub mod installer_fetch;
 pub mod installer_generation;
 pub mod installer_generation_binding;
 pub mod installer_generation_host;
+pub mod installer_host_storage_inventory;
 pub mod installer_ingress;
 pub mod installer_ingress_config;
 pub mod installer_ingress_model;
