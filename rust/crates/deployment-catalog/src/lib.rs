@@ -47,6 +47,8 @@ pub(crate) mod installer_openbao_owner_transition;
 pub mod installer_prepare;
 pub(crate) mod installer_purge_host;
 #[cfg(target_os = "linux")]
+pub(crate) mod installer_purge_plan;
+#[cfg(target_os = "linux")]
 pub(crate) mod installer_top_level_census;
 #[allow(dead_code)] // Dormant until the reviewed purge coordinator supplies durable intent.
 pub(crate) mod installer_purge_volume;
