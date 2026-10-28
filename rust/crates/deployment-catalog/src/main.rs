@@ -504,6 +504,10 @@ fn run() -> Result<(), String> {
                 directory,
                 &runner,
             )?;
+            let creation_evidence = marty_deployment_catalog::installer_doctor::creation_evidence(
+                &inspection,
+                directory,
+            );
             inspection.require_unchanged()?;
             println!(
                 "{}",
@@ -513,6 +517,7 @@ fn run() -> Result<(), String> {
                     "services_observed": services["services_observed"], "installation_ready": false,
                     "service_inspection": services,
                     "cleanup": cleanup,
+                    "local_creation_evidence": creation_evidence,
                 })
             );
             return Ok(());
