@@ -763,6 +763,10 @@ impl LockedInspection {
     pub fn journal(&self) -> &Journal {
         &self.journal
     }
+    /// The held descriptor keeps read-only inventory walks inside this installation.
+    pub(crate) fn installation_directory(&self) -> &File {
+        &self.directory
+    }
     pub fn cleanup_status(&self) -> Result<CleanupStatus> {
         self.require_unchanged()?;
         let (plan, result) = cleanup_records(&self.directory)?;
