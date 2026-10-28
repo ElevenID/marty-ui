@@ -3,7 +3,9 @@
 //! non-idempotent operation; a crashed provisioning attempt requires reconciliation.
 #![cfg(target_os = "linux")]
 
-use crate::installer_creation_identity::{NewInstallation, RECEIPT as CREATION_RECEIPT};
+use crate::installer_creation_identity::{
+    NewCredentials, NewInstallation, CREDENTIAL_RECEIPT, RECEIPT as CREATION_RECEIPT,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
@@ -1049,6 +1051,8 @@ pub struct InstallerState {
     /// In-memory capture exists only for a newly created normal installation.
     /// Resumed and legacy installations can never reconstruct creation proof.
     creation: Option<NewInstallation>,
+    /// Captured only while this fresh normal installer owns the creation chain.
+    credential_creation: Option<NewCredentials>,
 }
 impl InstallerState {
     /// Borrow the writer's lock for diagnostics without reacquiring or unlocking it.
@@ -1222,6 +1226,11 @@ impl InstallerState {
                 creation.capture(entry, &child)?;
             }
         }
+        if entry == "evidence" {
+            if let Some(creation) = &mut self.credential_creation {
+                creation.capture_evidence(&child)?;
+            }
+        }
         self.poisoned = false;
         Ok(())
     }
@@ -1384,6 +1393,7 @@ impl InstallerState {
             .map_err(|_| "sync secret directory")?;
         let mut random = File::open("/dev/urandom").map_err(|_| "OS randomness unavailable")?;
         let mut seen = std::collections::BTreeSet::new();
+        let mut operator_output = None;
         for entry in SCALAR_SECRETS.into_iter().chain(["operator-password"]) {
             let mut entropy = [0u8; 32];
             random
@@ -1416,12 +1426,127 @@ impl InstallerState {
                 return Err(error("set container-readable credential mode"));
             }
             output.sync_all().map_err(|_| "sync credential")?;
+            if operator {
+                operator_output = Some(output);
+            }
         }
         secrets.sync_all().map_err(|_| "sync credentials")?;
         self.directory
             .sync_all()
             .map_err(|_| "sync operator credential")?;
+        if let Some(creation) = &mut self.credential_creation {
+            creation.capture(
+                &secrets,
+                operator_output
+                    .as_ref()
+                    .ok_or("operator creation descriptor unavailable")?,
+            )?;
+        }
         self.poisoned = false;
+        Ok(())
+    }
+
+    /// Record only secrets-directory and operator-file creation identity.
+    /// This requires fresh in-memory capture; resume cannot mint provenance.
+    pub(crate) fn persist_credential_creation_receipt(
+        &mut self,
+        installation: &Path,
+    ) -> Result<()> {
+        self.require_live_phase(Phase::Provisioning)?;
+        let creation = match self.credential_creation.as_ref() {
+            Some(creation) => creation.clone(),
+            None if !matches!(self.journal.execution_scope(), ExecutionScope::Unclassified) => {
+                return Ok(());
+            }
+            None => return Err("credential creation identity is unavailable".into()),
+        };
+        let prepared = (|| {
+            self.with_inspection(|view| {
+                view.require_path_binding(installation)?;
+                view.read_evidence(CREATION_RECEIPT)?;
+                Ok(())
+            })?;
+            let evidence = open_at(
+                &self.directory,
+                &name("evidence"),
+                libc::O_RDONLY | libc::O_DIRECTORY,
+                0,
+            )?;
+            let secrets = open_at(
+                &self.directory,
+                &name("secrets"),
+                libc::O_RDONLY | libc::O_DIRECTORY,
+                0,
+            )?;
+            let operator = open_at(
+                &self.directory,
+                &name("operator-password"),
+                libc::O_RDONLY | libc::O_NONBLOCK,
+                0,
+            )?;
+            private(&evidence, true)?;
+            private(&secrets, true)?;
+            private(&operator, false)?;
+            creation.receipt_bytes(
+                self.journal.installation_id(),
+                &self.journal.identity().source_sha,
+                &self.directory,
+                &evidence,
+                &secrets,
+                &operator,
+            )
+        })();
+        let bytes = match prepared {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                self.poisoned = true;
+                return Err(error);
+            }
+        };
+        self.write_evidence(CREDENTIAL_RECEIPT, &bytes)?;
+        let confirmed = (|| {
+            let evidence = open_at(
+                &self.directory,
+                &name("evidence"),
+                libc::O_RDONLY | libc::O_DIRECTORY,
+                0,
+            )?;
+            let secrets = open_at(
+                &self.directory,
+                &name("secrets"),
+                libc::O_RDONLY | libc::O_DIRECTORY,
+                0,
+            )?;
+            let operator = open_at(
+                &self.directory,
+                &name("operator-password"),
+                libc::O_RDONLY | libc::O_NONBLOCK,
+                0,
+            )?;
+            if creation.receipt_bytes(
+                self.journal.installation_id(),
+                &self.journal.identity().source_sha,
+                &self.directory,
+                &evidence,
+                &secrets,
+                &operator,
+            )? != bytes
+            {
+                return Err("credential identity changed after receipt write".into());
+            }
+            self.with_inspection(|view| {
+                view.require_path_binding(installation)?;
+                if view.read_evidence(CREDENTIAL_RECEIPT)? != bytes {
+                    return Err("credential identity receipt changed".into());
+                }
+                Ok(())
+            })
+        })();
+        if confirmed.is_err() {
+            self.poisoned = true;
+            return Err("credential identity receipt cannot be confirmed".into());
+        }
+        self.credential_creation = None;
         Ok(())
     }
 
@@ -1634,6 +1759,11 @@ impl InstallerState {
         } else {
             None
         };
+        let credential_creation = if creation.is_some() {
+            Some(NewCredentials::new(&directory)?)
+        } else {
+            None
+        };
         let journal = Journal {
             schema: SCHEMA.into(),
             installation_id,
@@ -1648,6 +1778,7 @@ impl InstallerState {
             journal: journal.clone(),
             poisoned: false,
             creation,
+            credential_creation,
         };
         state.persist(&journal)?;
         Ok(state)
@@ -1681,6 +1812,7 @@ impl InstallerState {
             journal,
             poisoned: false,
             creation: None,
+            credential_creation: None,
         })
     }
     pub fn journal(&self) -> &Journal {
