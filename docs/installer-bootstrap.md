@@ -60,6 +60,25 @@ adapter; this POSIX shell script does not claim Windows support.
 
 ## Deployment operations
 
+### Inspecting removal
+
+For an installation with a fully recorded runtime, or the specifically proven
+pre-application cleanup boundary, inspect the scoped ordinary-uninstall actions:
+
+```sh
+/absolute/install-dir/marty-deploy uninstall plan --install-dir /absolute/install-dir
+```
+
+The JSON preview lists each verified container ID and the network ID that
+ordinary uninstall would remove. It identifies the installation directory,
+including its state, credentials, backups and evidence, and any Redis socket
+volume as retained. Images are also retained. The preview writes no cleanup
+receipt or installation file and issues no Docker mutation. It is a point-in-time
+inspection; a later uninstall repeats ownership and scope checks and may refuse
+if resources changed. Unsupported partial provisioning is refused. Purge is not
+yet supported, and neither ordinary uninstall nor this preview claims secure
+erasure or media sanitization.
+
 The bootstrap's boundary is verified operator dispatch. The operator owns
 existing-installation detection, configuration, deployment changes and exit
 status. The bootstrap does not attempt to repair deployments or implement
