@@ -12,6 +12,7 @@ import fcntl
 import json
 import os
 from pathlib import Path
+import re
 import select
 import signal
 import socket
@@ -41,6 +42,60 @@ HISTORICAL = (
 )
 MAX_MUTABLE_DISK_BYTES = 4 * 1024 * 1024 * 1024
 QEMU_IMG = Path("/usr/bin/qemu-img")
+INSTALLER_ONLY_MEMORY_MIB = (2048, 4096)
+INSTALLER_ONLY_RESERVE_MIB = 2048
+INSTALLER_ONLY_PURPOSE = "installer_only_trial"
+
+
+def _memory_profile(guest_memory_mib: int) -> None:
+    release.require(type(guest_memory_mib) is int
+                    and guest_memory_mib in INSTALLER_ONLY_MEMORY_MIB,
+                    "VM installer-only memory profile unsupported")
+
+
+def _restart_args(runtime_dir: Path, vm_id: str, port: int,
+                  historical_args: list[str], guest_memory_mib: int) -> list[str]:
+    _memory_profile(guest_memory_mib)
+    original = launcher._arguments(runtime_dir, vm_id, port)
+    release.require(historical_args == original and original.count("-m") == 1,
+                    "VM historical memory policy differs")
+    memory_index = original.index("-m") + 1
+    release.require(original[memory_index] == str(launcher.MEMORY_MIB)
+                    and launcher.MEMORY_MIB == 4096,
+                    "VM first-launch memory policy differs")
+    selected = list(original)
+    selected[memory_index] = str(guest_memory_mib)
+    return selected
+
+
+def _headroom_from_meminfo(raw: bytes, guest_memory_mib: int) -> int:
+    _memory_profile(guest_memory_mib)
+    release.require(0 < len(raw) <= 65536, "VM host memory inventory oversized")
+    rows = [line.split() for line in raw.splitlines()
+            if line.startswith(b"MemAvailable:")]
+    release.require(len(rows) == 1 and len(rows[0]) == 3
+                    and rows[0][1].isdigit() and rows[0][2] == b"kB",
+                    "VM host memory unavailable")
+    available_kib = int(rows[0][1])
+    release.require(available_kib >= (guest_memory_mib + INSTALLER_ONLY_RESERVE_MIB)
+                    * 1024, "VM installer-only host memory headroom insufficient")
+    return available_kib
+
+
+def _installer_headroom(guest_memory_mib: int) -> int:
+    return _headroom_from_meminfo(Path("/proc/meminfo").read_bytes(),
+                                  guest_memory_mib)
+
+
+def _guest_mem_total(raw: str, guest_memory_mib: int) -> int:
+    _memory_profile(guest_memory_mib)
+    match = re.fullmatch(r"MemTotal:[ \t]+([1-9][0-9]*)[ \t]+kB", raw)
+    release.require(match is not None, "VM retained guest memory invalid")
+    total = int(match.group(1))
+    release.require((guest_memory_mib - 512) * 1024 <= total
+                    <= guest_memory_mib * 1024,
+                    "VM retained guest memory differs")
+    return total
 
 
 def _uuid4(value: str) -> None:
@@ -370,7 +425,8 @@ def _historical_guest(parent: int, vm_id: str,
     return raw, record["guest"]["docker_engine_id"], record["guest"]["guest_uid"]
 
 
-def _retained_guest(control_dir: Path, *, port: int, seed: dict) -> dict:
+def _retained_guest(control_dir: Path, *, port: int, seed: dict,
+                    guest_memory_mib: int) -> dict:
     """Read current pinned guest identity without demanding an empty Docker state."""
     release.require(seed["guest_user"] == GUEST_USER and 1024 <= port <= 65535,
                     "VM retained guest selection invalid")
@@ -419,8 +475,11 @@ def _retained_guest(control_dir: Path, *, port: int, seed: dict) -> dict:
                                      "/usr/bin/docker --host unix:///var/run/docker.sock "
                                      "info --format '{{json .ID}}'")) == engine,
                     "VM retained guest Engine changed")
+    mem_total_kib = _guest_mem_total(
+        guest("/usr/bin/grep '^MemTotal:' /proc/meminfo"), guest_memory_mib)
     return {"guest_uid": int(account[0]), "guest_user": GUEST_USER,
-            "guest_architecture": "x86_64", "docker_engine_id": engine}
+            "guest_architecture": "x86_64", "docker_engine_id": engine,
+            "guest_mem_total_kib": mem_total_kib}
 
 
 def _recheck_before_spawn(source: Path, registry: Path, runtime_parent: Path, vm_id: str,
@@ -535,11 +594,13 @@ def _source_and_control(source: Path, registry: Path, records: dict[str, dict],
 
 
 def _prepare_restart(source: Path, registry: Path, runtime_parent: Path,
-                     vm_id: str, nonce: str, lease: ControllerLease) -> tuple[dict, dict]:
+                     vm_id: str, nonce: str, guest_memory_mib: int,
+                     lease: ControllerLease) -> tuple[dict, dict]:
     """Read-only exact preflight; callers must repeat it before any intent."""
     parent = lease.parent
     release.require(parent is not None and lease.owner_pid == os.getpid(),
                     "VM controller lease not held")
+    _memory_profile(guest_memory_mib)
     _same_path(registry, parent, _directory)
     _no_prior_attempt(parent, vm_id)
     raw, records = _record_set(parent, vm_id)
@@ -560,6 +621,8 @@ def _prepare_restart(source: Path, registry: Path, runtime_parent: Path,
                     and launch["qemu_sha256"] == launcher._trusted_tool(launcher.QEMU)
                     and launch["kvm_gid"] == launcher._kvm_group(),
                     "VM restart launch policy differs")
+    selected_args = _restart_args(runtime_dir, vm_id, seed["ssh_port"],
+                                  launch["args"], guest_memory_mib)
     _no_live_owner(runtime["runtime_uid"], records["launch_pid"]["pid"],
                    records["launch_pid"]["start_ticks"],
                    records["launch_pid"]["controller_boot_id"],
@@ -591,7 +654,7 @@ def _prepare_restart(source: Path, registry: Path, runtime_parent: Path,
                 first = _mutable_digest(disk_fd)
                 _named_disk(runtime_fd, disk_fd, runtime["runtime_uid"],
                             runtime["runtime_gid"])
-                launcher._host_headroom()
+                available_kib = _installer_headroom(guest_memory_mib)
                 _no_live_owner(runtime["runtime_uid"], records["launch_pid"]["pid"],
                                records["launch_pid"]["start_ticks"],
                                records["launch_pid"]["controller_boot_id"],
@@ -633,7 +696,11 @@ def _prepare_restart(source: Path, registry: Path, runtime_parent: Path,
                     "mutable_disk_mtime_ns": first[2], "mutable_disk_ctime_ns": first[3],
                     "runtime_uid": runtime["runtime_uid"],
                     "runtime_gid": runtime["runtime_gid"],
-                    "ssh_port": seed["ssh_port"], "args": launch["args"],
+                    "ssh_port": seed["ssh_port"], "args": selected_args,
+                    "guest_memory_mib": guest_memory_mib,
+                    "controller_reserve_mib": INSTALLER_ONLY_RESERVE_MIB,
+                    "purpose": INSTALLER_ONLY_PURPOSE,
+                    "host_mem_available_kib_at_intent": available_kib,
                     "qemu_sha256": launch["qemu_sha256"],
                     "qualified": False, "dispatch_authorized": False,
                     "application_deployment_authorized": False,
@@ -650,17 +717,19 @@ def _prepare_restart(source: Path, registry: Path, runtime_parent: Path,
 
 
 def restart(source: Path, registry: Path, runtime_parent: Path, *, vm_id: str,
-            attempt_nonce: str) -> dict:
+            attempt_nonce: str, guest_memory_mib: int = 2048) -> dict:
     """Spawn one isolated QEMU process and persist its exact live observation."""
     release.require(os.geteuid() == 0, "root VM controller required")
     _uuid4(vm_id)
     _uuid4(attempt_nonce)
+    _memory_profile(guest_memory_mib)
     qemu_sha = launcher._trusted_tool(launcher.QEMU)
     launcher._trusted_tool(launcher.SETPRIV)
     kvm_gid = launcher._kvm_group()
     with ControllerLease(registry) as lease:
         intent, context = _prepare_restart(source, registry, runtime_parent,
-                                           vm_id, attempt_nonce, lease)
+                                           vm_id, attempt_nonce, guest_memory_mib, lease)
+        _installer_headroom(guest_memory_mib)
         # Exclusive record publication is the irreversible attempt boundary.
         intent_raw = _write(lease.parent, vm_id + ".restart-intent.json", intent)
         release.require(_read_record(lease.parent, vm_id + ".restart-intent.json")[0]
@@ -676,6 +745,7 @@ def restart(source: Path, registry: Path, runtime_parent: Path, *, vm_id: str,
                         "VM QEMU changed before restart")
         intent_raw = _recheck_before_spawn(source, registry, runtime_parent, vm_id,
                                           lease, intent, context)
+        _installer_headroom(guest_memory_mib)
         process = subprocess.Popen(
             [str(launcher.SETPRIV), "--reuid", str(runtime["runtime_uid"]),
              "--regid", str(runtime["runtime_gid"]), "--groups", str(kvm_gid),
@@ -723,14 +793,19 @@ def restart(source: Path, registry: Path, runtime_parent: Path, *, vm_id: str,
 
 
 def inspect(source: Path, registry: Path, runtime_parent: Path, *, vm_id: str,
-            attempt_nonce: str) -> dict:
+            attempt_nonce: str, guest_memory_mib: int = 2048) -> dict:
     """Rehearse exact static checks without consuming an attempt or authorizing use."""
     release.require(os.geteuid() == 0, "root VM controller required")
     _uuid4(vm_id)
     _uuid4(attempt_nonce)
+    _memory_profile(guest_memory_mib)
     with ControllerLease(registry) as lease:
-        _prepare_restart(source, registry, runtime_parent, vm_id, attempt_nonce, lease)
+        _prepare_restart(source, registry, runtime_parent, vm_id, attempt_nonce,
+                         guest_memory_mib, lease)
     return {"vm_id": vm_id, "attempt_nonce": attempt_nonce, "phase": "preflight",
+            "guest_memory_mib": guest_memory_mib,
+            "controller_reserve_mib": INSTALLER_ONLY_RESERVE_MIB,
+            "purpose": INSTALLER_ONLY_PURPOSE,
             "read_only": True, "qualified": False, "dispatch_authorized": False,
             "application_deployment_authorized": False}
 
@@ -753,6 +828,8 @@ def current_readiness(source: Path, registry: Path, runtime_parent: Path, *, vm_
             "control_dir_inode", "disk_device", "disk_inode", "mutable_disk_bytes",
             "mutable_disk_sha256", "mutable_disk_mtime_ns", "mutable_disk_ctime_ns",
             "runtime_uid", "runtime_gid", "ssh_port", "args", "qemu_sha256",
+            "guest_memory_mib", "controller_reserve_mib", "purpose",
+            "host_mem_available_kib_at_intent",
             "qualified", "dispatch_authorized", "application_deployment_authorized",
             "started_at",
         }, "VM restart intent")
@@ -798,9 +875,16 @@ def current_readiness(source: Path, registry: Path, runtime_parent: Path, *, vm_
         seed = records["seed_receipt"]
         runtime_dir = runtime_parent / vm_id
         _uuid4(intent["attempt_nonce"])
+        _memory_profile(intent["guest_memory_mib"])
         release.require(str(runtime_dir) == records["launch_intent"]["runtime_dir"]
-                        and intent["args"] == launcher._arguments(
-                            runtime_dir, vm_id, seed["ssh_port"])
+                        and intent["args"] == _restart_args(
+                            runtime_dir, vm_id, seed["ssh_port"],
+                            records["launch_intent"]["args"], intent["guest_memory_mib"])
+                        and intent["controller_reserve_mib"] == INSTALLER_ONLY_RESERVE_MIB
+                        and intent["purpose"] == INSTALLER_ONLY_PURPOSE
+                        and type(intent["host_mem_available_kib_at_intent"]) is int
+                        and intent["host_mem_available_kib_at_intent"]
+                        >= (intent["guest_memory_mib"] + INSTALLER_ONLY_RESERVE_MIB) * 1024
                         and intent["qemu_sha256"] == launcher._trusted_tool(launcher.QEMU)
                         and intent["runtime_uid"] == runtime["runtime_uid"]
                         and intent["runtime_gid"] == runtime["runtime_gid"]
@@ -841,7 +925,8 @@ def current_readiness(source: Path, registry: Path, runtime_parent: Path, *, vm_
                                   "start_ticks": spawned["start_ticks"],
                                   "disk_fd": receipt["disk_fd"]},
                         "VM restarted process differs")
-        guest = _retained_guest(control_dir, port=seed["ssh_port"], seed=seed)
+        guest = _retained_guest(control_dir, port=seed["ssh_port"], seed=seed,
+                                guest_memory_mib=intent["guest_memory_mib"])
         release.require(guest["docker_engine_id"] == intent["historical_docker_engine_id"],
                         "VM retained Docker Engine changed")
         release.require(guest["guest_uid"] == intent["historical_guest_uid"],
@@ -866,6 +951,9 @@ def current_readiness(source: Path, registry: Path, runtime_parent: Path, *, vm_
                     "disk_device": runtime["disk_device"],
                     "disk_inode": runtime["disk_inode"],
                     "guest": guest, "observed_at": int(time.time()),
+                    "guest_memory_mib": intent["guest_memory_mib"],
+                    "controller_reserve_mib": INSTALLER_ONLY_RESERVE_MIB,
+                    "purpose": INSTALLER_ONLY_PURPOSE,
                     "qualified": False, "dispatch_authorized": False,
                     "application_deployment_authorized": False}
         _write(lease.parent, vm_id + ".restart-readiness.json", observed)
@@ -879,25 +967,36 @@ def main() -> int:
     parser.add_argument("--registry", required=True, type=Path)
     parser.add_argument("--runtime-parent", required=True, type=Path)
     parser.add_argument("--vm-id", required=True)
+    parser.add_argument("--guest-memory-mib", type=int,
+                        choices=INSTALLER_ONLY_MEMORY_MIB, default=None,
+                        help="installer-only guest RAM; defaults to 2048 MiB")
     action = parser.add_mutually_exclusive_group(required=True)
     action.add_argument("--restart-attempt-nonce")
     action.add_argument("--inspect-attempt-nonce")
     action.add_argument("--current-readiness", action="store_true")
     args = parser.parse_args()
     try:
+        guest_memory_mib = 2048 if args.guest_memory_mib is None else args.guest_memory_mib
         if args.current_readiness:
+            release.require(args.guest_memory_mib is None,
+                            "VM readiness memory comes from restart intent")
             result = current_readiness(args.source, args.registry, args.runtime_parent,
                                        vm_id=args.vm_id)
         elif args.inspect_attempt_nonce is not None:
             result = inspect(args.source, args.registry, args.runtime_parent,
                              vm_id=args.vm_id,
-                             attempt_nonce=args.inspect_attempt_nonce)
+                             attempt_nonce=args.inspect_attempt_nonce,
+                             guest_memory_mib=guest_memory_mib)
         else:
             result = restart(args.source, args.registry, args.runtime_parent,
                              vm_id=args.vm_id,
-                             attempt_nonce=args.restart_attempt_nonce)
+                             attempt_nonce=args.restart_attempt_nonce,
+                             guest_memory_mib=guest_memory_mib)
         print(json.dumps({"vm_id": result["vm_id"], "phase": result["phase"],
                           "attempt_nonce": result["attempt_nonce"],
+                          "guest_memory_mib": result["guest_memory_mib"],
+                          "controller_reserve_mib": result["controller_reserve_mib"],
+                          "purpose": result["purpose"],
                           "qualified": False, "dispatch_authorized": False,
                           "application_deployment_authorized": False},
                          sort_keys=True))
