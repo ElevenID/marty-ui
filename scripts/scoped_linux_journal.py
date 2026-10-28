@@ -3,14 +3,14 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import subprocess
 import sys
 import types
 import uuid
 
-HOME = Path("/home/canvasrunner")
+HOME = PurePosixPath("/home/canvasrunner")
 UUID = re.compile(r"[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}")
 MAXIMUM = 256 * 1024
 FILES = {"build-apply-intent.json", "build-state.json", "build-receipt.json"}
@@ -60,7 +60,7 @@ def validate_request(request):
 
 def actual_root(proof, run_id):
     validate_root(proof, run_id)
-    root = root_path(run_id)
+    root = Path(root_path(run_id))
     info = root.lstat()
     require(root.is_dir() and not root.is_symlink() and root.resolve() == root, "JOURNAL_ROOT_LINK")
     require((info.st_dev, info.st_ino, info.st_uid, info.st_mode & 0o777) ==
@@ -86,7 +86,7 @@ def worker(request_file, expected_sha):
     shared.__file__ = str(shared_file)
     exec(compile(shared_bytes, str(shared_file), "exec"), shared.__dict__)
     if request["operation"] == "initialize":
-        root = root_path(request["runId"])
+        root = Path(root_path(request["runId"]))
         parent = root.parent
         require(parent.resolve() == parent and parent.is_dir() and parent.stat().st_uid == 1000 and
                 parent.stat().st_mode & 0o777 == 0o700, "JOURNAL_PRIVATE_PARENT")

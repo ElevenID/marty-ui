@@ -37,6 +37,10 @@ def source_store(private):
 
 
 class LinuxJournalTests(unittest.TestCase):
+    def test_linux_root_stays_posix_on_the_windows_controller(self):
+        self.assertEqual(str(journal.root_path(RUN)),
+                         "/home/canvasrunner/.codex/private/d02-build-journal-" + RUN)
+
     def test_closed_operations_filenames_and_payload_shape(self):
         journal.validate_request(request())
         for edit in [lambda r: r.update(operation="run"), lambda r: r.update(name="../../authority"),
