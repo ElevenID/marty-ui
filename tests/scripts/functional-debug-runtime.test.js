@@ -323,6 +323,32 @@ test('shared native overlay changes exactly signing/gateway and preserves actual
  }
  assert.deepEqual(result.filter(row=>['issuance','issuance-native'].includes(row.role)).map(row=>row.coreSource),[require('./functional-debug-runtime').ISSUANCE_CORE,require('./functional-debug-runtime').ISSUANCE_CORE]);
 });
+
+test('a planned Canvas successor without its actual evidence chain cannot qualify',()=>{
+ assert.throws(()=>expectedRuntime({schema:'marty.functional-mixed-runtime/v2',scope:'FUNCTIONAL_ONLY',
+  releaseQualified:false,recordingQualified:false,baseProfile:{path:'/not-read',sha256:H('0')},
+  nativeOverlay:{profile:'canvas-issuer-scoped-jobs'}}));
+});
+
+test('issuer-only row transition preserves separate issuance proxy and all21 other observations',t=>{
+ const {applyNativeOverlayRows}=require('./functional-debug-runtime'),x=scopedRowsFixture(t);
+ const old=x.before.roles.find(row=>row.role==='issuance-native'),binary='marty-issuance-service',hash=H('9');
+ const replacement={containerId:crypto.createHash('sha256').update('canvas-issuer-successor').digest('hex'),imageId:old.imageId,startedAt:'2026-10-28T12:00:00Z',hostPid:9876,
+  configuredRuntimeUid:old.configuredRuntimeUid,effectiveUid:old.effectiveUid,
+  binaryMount:{type:'bind',source:path.join(path.dirname(x.f.profile.baseProfile.path),'candidate-issuer'),destination:'/usr/local/bin/'+binary,writable:false},
+  processExecutablePath:'/usr/local/bin/'+binary,processExecutableSha256:hash,mountedBinarySha256:hash};
+ const selection={roles:['issuance-native'],source:'fce109daf47a7712c1ff5779b0e33def57bbce20',
+  coreSource:'44040270000f93b7e7499cbec31b3bb3dd7e3df1',kind:'SCOPED_NATIVE_FUNCTIONAL_OVERLAY',hashes:{[binary]:hash}};
+ const deployed={roles:{'issuance-native':replacement}};
+ const result=applyNativeOverlayRows(x.expected,x.before,deployed,selection);
+ assert.equal(result.filter(row=>row.source===selection.source).length,1);
+ for(const row of result.filter(row=>row.role!=='issuance-native')){
+  const prior=x.before.roles.find(item=>item.role===row.role);
+  assert.equal(row.source,prior.source);assert.equal(row.sha256,prior.sha256);
+  for(const [field,value]of Object.entries(row.requiredObservation))assert.deepEqual(value,prior[field]);
+ }
+ assert.throws(()=>applyNativeOverlayRows(x.expected,x.before,{roles:{issuance:replacement}},selection));
+});
 for(const fault of ['wrongRole','extraRole','source','elf','mountedElf','generation','untouchedPid','coreSource'])test('shared native overlay rejects '+fault,t=>{
  const {applyNativeOverlayRows}=require('./functional-debug-runtime'),x=scopedRowsFixture(t);
  if(fault==='wrongRole'){x.deployed.roles.flow=x.deployed.roles.gateway;delete x.deployed.roles.gateway;}

@@ -213,6 +213,17 @@ const D02_HEADER=Object.freeze({source:'9b1efd21163dadeff7cf1ced5fe47c5e046d2121
  compatibility:'9612c78b915063f1e5306adc19333c7b6956628326a537ea2143d585e3e3c374',compatibilityPlan:'23d2a605e21cbde167f33986a9fcc4329e4a66211394e90bb029b60cfac450cd',
  before:'5e692c8355ed89c380646553febf2bb69c8c5388a29a2f9046d0bc27b0acc482',observed:'75c3628415065733602b399e0d185d20e6e38be4dde09a01632c22297d837495',
  failedAuthority:'c18570fd8f89585200df021904b1e0f7bf639efdb83adc5a90c6f724349d0686',roles:Object.freeze({'signing-keys':'marty-signing-keys'})});
+const CANVAS_ISSUER=Object.freeze({source:'fce109daf47a7712c1ff5779b0e33def57bbce20',
+ core:'44040270000f93b7e7499cbec31b3bb3dd7e3df1',profile:'canvas-issuer-scoped-jobs',
+ base:'c9dd795c346e315927e0d213458f2c8da79a722351fbf0f70763d9e2f7ef72e2',
+ nativeBefore:'75a9e465fbbf139a528739f36a71121a63860f17e9aca45c612d5f49532b7f60',
+ proxyBefore:'fa3eeb5612515340cd0100d8b7e0cd7fff7c97f30f0e9ce31f1498896712fd89',roles:Object.freeze({'issuance-native':'marty-issuance-service'})});
+const CANVAS_ISSUER_EVIDENCE=Object.freeze({
+ build:'f7547b94e2fc921af0bffc576720e25db02a148662eec7720996d309960775e3',
+ prepared:'37b88b3292d8654ad54ca4f8417d7fbfec8a7ec687f256991bb8488e37e10f40',
+ artifacts:'9b10a869668b9ac5e8423e35c4628c0b8eae96e267a21a9cdffd66eecba33db9',
+ compatibility:'41dac1cfb8c71785de9a85001c28d363526aecdb6b1894ac8faae326d37c2b7b',
+ compatibilityPlan:'418202b47e1fd6329b1710c711a3cf5b01999e901aeb22a7a4f58edcac63dcb8'});
 function nativeBuildEvidence(overlay,pins){
  for(const [key,pin]of [['buildReceipt','build'],['preparedSource','prepared'],['compatibilityResult','compatibility'],['compatibilityPlan','compatibilityPlan']])assert.equal(overlay[key].sha256,pins[pin],'Unreviewed native-overlay evidence');
  const build=boundJson(overlay.buildReceipt),prepared=boundJson(overlay.preparedSource),compatibility=boundJson(overlay.compatibilityResult),compatibilityPlan=boundJson(overlay.compatibilityPlan);
@@ -220,7 +231,7 @@ function nativeBuildEvidence(overlay,pins){
  assert.equal(build.uiRevision,pins.source);assert.equal(build.coreRevision,pins.core);assert.deepEqual(build.roleBinaries,pins.roles);
  assert.equal(build.preparationSha256,overlay.preparedSource.sha256);assert.equal(prepared.uiRevision,build.uiRevision);assert.equal(prepared.coreRevision,build.coreRevision);assert.deepEqual(prepared.roleBinaries,pins.roles);
  assert.equal(build.releaseQualified,false);assert.equal(build.recordingQualified,false);assert.equal(build.coreCompilerArtifacts.sha256,pins.artifacts);boundJson(build.coreCompilerArtifacts);
- if(pins.profile==='d02-signing-cas-no-transform'){assert.equal(compatibility.schema,1);assert.equal(compatibility.state,'ELF_LOADER_UID_COMPATIBILITY_PASS');}
+ if(['d02-signing-cas-no-transform','canvas-issuer-scoped-jobs'].includes(pins.profile)){assert.equal(compatibility.schema,1);assert.equal(compatibility.state,'ELF_LOADER_UID_COMPATIBILITY_PASS');}
  else{assert.equal(compatibility.scope,'ELF_LOADER_UID_COMPATIBILITY_ONLY');assert.equal(compatibility.status,'PASSED');}
  assert.equal(compatibilityPlan.scope,'ELF_LOADER_UID_COMPATIBILITY_ONLY');assert.equal(compatibility.planSha256,overlay.compatibilityPlan.sha256);
  assert.equal(compatibilityPlan.buildReceiptAuthoritativeSha256,overlay.buildReceipt.sha256);assert.equal(compatibility.candidateServiceEntrypointExecuted,false);assert.equal(compatibility.signingOrApi,false);assert.equal(compatibility.runtimeDeployed,false);
@@ -235,6 +246,7 @@ function nativeBuildEvidence(overlay,pins){
 function expectedScopedNativeOverlay(profile){
  assert.equal(profile.scope,'FUNCTIONAL_ONLY');assert.equal(profile.releaseQualified,false);assert.equal(profile.recordingQualified,false);
  assert.deepEqual(Object.keys(profile).sort(),['baseProfile','nativeOverlay','recordingQualified','releaseQualified','schema','scope']);
+ if(profile.nativeOverlay.profile===CANVAS_ISSUER.profile)return expectedCanvasIssuerSuccessor(profile);
  assert.equal(profile.baseProfile.sha256,D02_NATIVE.base,'Foreign native-overlay base');
  const base=boundJson(profile.baseProfile);assert.equal(base.schema,'marty.functional-mixed-runtime/v2');assert(!base.nativeOverlay);assert(base.maintenanceRestart);
  const expected=expectedRuntime(base),overlay=profile.nativeOverlay;
@@ -250,6 +262,47 @@ function expectedScopedNativeOverlay(profile){
  const snapshot=boundJson(deployed.beforeRuntimeBinding);assert.equal(snapshot.baseProfileSha256,profile.baseProfile.sha256);assert.deepEqual(snapshot.binding.receiptDigests,receiptDigests(base));
  return applyNativeOverlayRows(expected,snapshot.binding,deployed,{roles:Object.keys(D02_NATIVE.roles),source:build.uiRevision,coreSource:build.coreRevision,
   kind:'SCOPED_NATIVE_FUNCTIONAL_OVERLAY',hashes:Object.fromEntries(Object.entries(build.binaries).map(([binary,row])=>[binary,row.sha256]))});
+}
+
+function canvasIssuerSourceChain(baseProfile,evidence){
+ assert.equal(baseProfile.sha256,CANVAS_ISSUER.base,'Foreign Canvas issuer predecessor');
+ assert.deepEqual(Object.keys(evidence).sort(),['buildReceipt','compatibilityPlan','compatibilityResult','preparedSource','profile']);
+ assert.equal(evidence.profile,CANVAS_ISSUER.profile);
+ const base=boundJson(baseProfile);
+ assert.equal(base.schema,'marty.functional-mixed-runtime/v2');
+ assert.equal(base.nativeOverlay.profile,D02_HEADER.profile,'Canvas successor must preserve the qualified signer predecessor');
+ const expected=expectedRuntime(base);
+ const {build}=nativeBuildEvidence(evidence,{...CANVAS_ISSUER,...CANVAS_ISSUER_EVIDENCE});
+ return {expected,build,base};
+}
+// Expectations for an explicit preflight only. This never returns a runtime
+// binding or accepts a planned deployment receipt as APPLIED evidence.
+function expectedCanvasIssuerPreimage(baseProfile,evidence){
+ return canvasIssuerSourceChain(baseProfile,evidence).expected;
+}
+function expectedCanvasIssuerSuccessor(profile){
+ const overlay=profile.nativeOverlay;
+ assert.deepEqual(Object.keys(overlay).sort(),['buildReceipt','compatibilityPlan','compatibilityResult','deploymentReceipt','preparedSource','profile']);
+ const {deploymentReceipt,...evidence}=overlay;
+ const {expected,build,base}=canvasIssuerSourceChain(profile.baseProfile,evidence);
+ const deployed=boundJson(deploymentReceipt);
+ assert.equal(deployed.schema,'marty.scoped-native-overlay-deployment/v1');assert.equal(deployed.profile,CANVAS_ISSUER.profile);
+ assert.equal(deployed.state,'APPLIED_FUNCTIONAL_ONLY');assert.equal(deployed.actualReadbackVerified,true);
+ assert.equal(deployed.baseProfileSha256,profile.baseProfile.sha256);
+ assert.equal(deployed.buildReceiptSha256,overlay.buildReceipt.sha256);
+ assert.equal(deployed.compatibilityResultSha256,overlay.compatibilityResult.sha256);
+ assert.equal(deployed.sourceRevision,CANVAS_ISSUER.source);assert.equal(deployed.coreRevision,CANVAS_ISSUER.core);
+ assert.equal(deployed.engineId,'3dbbbe66-1c98-4e0c-b0a6-f927c05e7341');
+ for(const field of ['productionTouched','imagesBuilt','releaseQualified','recordingQualified'])assert.equal(deployed[field],false);
+ const snapshot=boundJson(deployed.beforeRuntimeBinding);
+ assert.equal(snapshot.baseProfileSha256,profile.baseProfile.sha256);
+ assert.deepEqual(snapshot.binding.receiptDigests,receiptDigests(base));
+ assert.equal(snapshot.binding.roles.find(row=>row.role==='issuance-native')?.containerId,CANVAS_ISSUER.nativeBefore);
+ const proxy=snapshot.binding.roles.find(row=>row.role==='issuance');
+ assert.equal(proxy?.containerId,CANVAS_ISSUER.proxyBefore);
+ return applyNativeOverlayRows(expected,snapshot.binding,deployed,{roles:['issuance-native'],
+  source:build.uiRevision,coreSource:build.coreRevision,kind:'SCOPED_NATIVE_FUNCTIONAL_OVERLAY',
+  hashes:Object.fromEntries(Object.entries(build.binaries).map(([binary,row])=>[binary,row.sha256]))});
 }
 
 function headerSuccessorPreimage(profile,base,expected){
@@ -514,4 +567,4 @@ function verifyFunctionalRuntime(profile,{qualification='FUNCTIONAL_ONLY',observ
   releaseQualified:false,recordingQualified:false,mixedSourceStack:true,roles,
   receiptDigests:receiptDigests(profile)};
 }
-module.exports={expectedHeaderSuccessorPreimage,applyNativeOverlayObservedRows:applyNativeOverlayObservations,validateSigningDomainTransition,validateHeaderSuccessorGate,expectedUnqualifiedNativePreimage,applyNativeOverlayRows,validateRuntimeObservation,observeDocker,DOCKER_READ_TRANSPORT_SCHEMA:'marty.functional-runtime-docker-read/v1',boundJson,expectedRuntime,verifyFunctionalRuntime,produceMaintenanceRestart,DEBUG_ROLES,RETAINED_ROLES,ISSUANCE_SOURCE,ISSUANCE_CORE};
+module.exports={expectedCanvasIssuerPreimage,expectedHeaderSuccessorPreimage,applyNativeOverlayObservedRows:applyNativeOverlayObservations,validateSigningDomainTransition,validateHeaderSuccessorGate,expectedUnqualifiedNativePreimage,applyNativeOverlayRows,validateRuntimeObservation,observeDocker,DOCKER_READ_TRANSPORT_SCHEMA:'marty.functional-runtime-docker-read/v1',boundJson,expectedRuntime,verifyFunctionalRuntime,produceMaintenanceRestart,DEBUG_ROLES,RETAINED_ROLES,ISSUANCE_SOURCE,ISSUANCE_CORE};
