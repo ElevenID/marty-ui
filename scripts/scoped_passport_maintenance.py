@@ -36,14 +36,31 @@ def _stop_contract(role, row, bound):
     return policy
 
 
-def _restore_order(compose):
-    services = compose["services"]
-    require(RUNTIME_ROLES.issubset(services), "MISSING_MAINTENANCE_SERVICE")
-    dependencies = {}
+PROJECTS = frozenset(("elevenid-beta", "elevenid-beta-ui"))
+ROLE_PROJECTS = {role: "elevenid-beta-ui" if role == "ui-prod" else "elevenid-beta" for role in RUNTIME_ROLES}
+
+
+def _restore_order(models, rows, reviewed_cross_edges):
+    require(set(models) == PROJECTS, "EXACT_TWO_COMPOSE_PROJECTS_REQUIRED")
+    dependencies = {role: set() for role in RUNTIME_ROLES}
+    for project, model in models.items():
+        require(model.get("name") == project, "COMPOSE_PROJECT_NAME_CHANGED")
+        for role in set(model["services"]) & RUNTIME_ROLES:
+            require(rows[role].get("project") == ROLE_PROJECTS[role] == project, "COMPOSE_ROLE_PROJECT_MISASSOCIATED")
     for role in RUNTIME_ROLES:
-        dep = services[role].get("depends_on", {})
+        project = rows[role].get("project")
+        require(project == ROLE_PROJECTS[role] and role in models[project]["services"], "BASELINE_ROLE_PROJECT_MISSING")
+        dep = models[project]["services"][role].get("depends_on", {})
         require(isinstance(dep, (dict, list)), "UNKNOWN_COMPOSE_DEPENDENCY_SHAPE")
-        dependencies[role] = set(dep) & RUNTIME_ROLES
+        for name in dep:
+            if name not in models[project]["services"]:
+                require(name in RUNTIME_ROLES and (role, name) in reviewed_cross_edges, "UNREVIEWED_CROSS_PROJECT_DEPENDENCY")
+            if name in RUNTIME_ROLES:
+                if ROLE_PROJECTS[name] != project:
+                    require((role, name) in reviewed_cross_edges, "UNREVIEWED_CROSS_PROJECT_DEPENDENCY")
+                dependencies[role].add(name)
+    for role, dependency in reviewed_cross_edges:
+        dependencies[role].add(dependency)
     order = []
     while len(order) != 22:
         ready = sorted(role for role in RUNTIME_ROLES - set(order) if dependencies[role].issubset(order))
@@ -52,26 +69,46 @@ def _restore_order(compose):
     return order
 
 
-def preview(plan, before, compose):
+def _reviewed_cross_edges(plan):
+    import json
+    edges = set()
+    for edge in plan.get("reviewedCrossProjectDependencies", []):
+        role, dependency = edge["fromRole"], edge["toRole"]
+        require(role in RUNTIME_ROLES and dependency in RUNTIME_ROLES and ROLE_PROJECTS[role] != ROLE_PROJECTS[dependency],
+                "CROSS_PROJECT_EDGE_SCOPE_CHANGED")
+        expected = {"schema": "marty.reviewed-cross-project-dependency/v1", "fromRole": role, "toRole": dependency,
+                    "fromProject": ROLE_PROJECTS[role], "toProject": ROLE_PROJECTS[dependency]}
+        require(json.loads(read_ref(edge["proof"], 65536).read_bytes()) == expected, "CROSS_PROJECT_PROOF_CHANGED")
+        require((role, dependency) not in edges, "DUPLICATE_CROSS_PROJECT_EDGE")
+        edges.add((role, dependency))
+    return edges
+
+
+def preview(plan, before, compose_models):
     selected_sources(plan)
     rows = exact_roles(before)
     require(set(plan["stopContracts"]) == RUNTIME_ROLES, "ALL_22_STOP_CONTRACTS_REQUIRED")
     for row in rows.values():
         require(row.get("running") is True and row.get("paused") is False and type(row.get("hostPid")) is int
                 and row["hostPid"] > 0, "RUNNING_UNPAUSED_BASELINE_REQUIRED")
-    restore = _restore_order(compose)
+    import json
+    require(set(plan["composeModels"]) == PROJECTS and set(compose_models) == PROJECTS, "EXACT_TWO_COMPOSE_PROJECTS_REQUIRED")
+    for project, bound in plan["composeModels"].items():
+        frozen = json.loads(read_ref(bound).read_bytes())
+        require(frozen == compose_models[project], "FROZEN_COMPOSE_MODEL_CHANGED:" + project)
+    restore = _restore_order(compose_models, rows, _reviewed_cross_edges(plan))
     # Fence public ingress first, then reverse dependency order. All22 must be
     # terminal before any privileged SQL, not merely the three replaced roles.
     order = ["gateway", *[role for role in reversed(restore) if role != "gateway"]]
     stops = []
     for role in order:
         policy = _stop_contract(role, rows[role], plan["stopContracts"][role])
-        stops.append({"role": role, "containerId": rows[role]["containerId"], "signal": policy["signal"],
+        stops.append({"role": role, "project": rows[role]["project"], "containerId": rows[role]["containerId"], "signal": policy["signal"],
             "argv": ["docker", "--context", "desktop-linux", "stop", "--signal", policy["signal"], "--timeout", "-1", rows[role]["containerId"]],
             "timeoutOutcome": "UNKNOWN_RECONCILE_NO_RETRY_OR_AUTOMATIC_START", "requireExitCode": 0,
             "noOom": True, "requirePidZero": True})
     return {"schema": "marty.passport-maintenance-preview/v1", "state": "PREVIEW_ONLY_NOT_QUIESCED",
-        "allStopRoles": order, "stopSteps": stops, "restoreOrder": restore,
+        "allStopRoles": order, "composeProjects": sorted(PROJECTS), "stopSteps": stops, "restoreOrder": restore,
         "additionalUnselectedRestartRoles": sorted(RUNTIME_ROLES - set(ROLE_BINARIES)),
         "existingLocksRequired": ["beta_operation_lock", "canonical_recording_lock_without_nested_acquire"],
         "durableOneShotIntentRequiredBeforeFirstStop": True,

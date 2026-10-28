@@ -16,9 +16,9 @@ overlay = importlib.import_module("scoped_beta_binary_overlay")
 def fixture(directory):
     before = {"roles": []}
     contracts = {}
-    compose = {"services": {}}
+    compose = {project: {"name": project, "services": {}} for project in maintenance.PROJECTS}
     for index, role in enumerate(sorted(shared.RUNTIME_ROLES)):
-        row = {"role": role, "containerId": f"{index+1:064x}", "imageId": "sha256:"+"a"*64, "source": "1"*40,
+        row = {"role": role, "project": maintenance.ROLE_PROJECTS[role], "containerId": f"{index+1:064x}", "imageId": "sha256:"+"a"*64, "source": "1"*40,
                "sha256": "b"*64, "binaryMounts": [], "hostPid": index+100, "startedAt": "2026-10-27T15:00:00Z",
                "running": True, "paused": False, "state": "running", "containerExitCode": 0, "oomKilled": False}
         before["roles"].append(row)
@@ -30,16 +30,24 @@ def fixture(directory):
             "containerId": row["containerId"], "sourceRevision": row["source"], "elfSha256": row["sha256"],
             "signal": "SIGINT", "allowedExitCodes": [0], "noAutomaticSigkill": True, "sourceProof": shared.ref(proof)}))
         contracts[role] = shared.ref(policy)
-        compose["services"][role] = {"depends_on": {}}
-    compose["services"]["gateway"]["depends_on"] = {"flow": {}, "issuance-native": {}}
+        compose[maintenance.ROLE_PROJECTS[role]]["services"][role] = {"depends_on": {}}
+    compose["elevenid-beta"]["services"]["gateway"]["depends_on"] = {"flow": {}, "issuance-native": {}}
     plan = {"uiRevision": shared.UI_REVISION, "coreRevision": shared.CORE_REVISION,
             "roleBinaries": dict(shared.ROLE_BINARIES), "releaseQualified": False, "recordingQualified": False,
-            "stopContracts": contracts}
+            "stopContracts": contracts, "composeModels": {}}
+    freeze_models(plan, compose, directory)
     stopped = copy.deepcopy(before)
     for row in stopped["roles"]:
         row.update(running=False, hostPid=0, state="exited")
     outcomes = {role: {"terminal": True, "exitCode": 0, "stopAcknowledged": True} for role in shared.RUNTIME_ROLES}
     return plan, before, stopped, outcomes, compose
+
+
+def freeze_models(plan, models, directory):
+    for project, model in models.items():
+        file = directory / (project + "-model.json")
+        file.write_text(json.dumps(model))
+        plan["composeModels"][project] = shared.ref(file)
 
 
 class MaintenanceControls(unittest.TestCase):
@@ -120,7 +128,8 @@ class MaintenanceControls(unittest.TestCase):
     def test_dependency_cycle_is_not_guessed(self):
         with tempfile.TemporaryDirectory() as temp:
             plan, before, _, _, compose = fixture(Path(temp))
-            compose["services"]["flow"]["depends_on"] = {"gateway": {}}
+            compose["elevenid-beta"]["services"]["flow"]["depends_on"] = {"gateway": {}}
+            freeze_models(plan, compose, Path(temp))
             with self.assertRaisesRegex(ValueError, "DEPENDENCY_CYCLE"):
                 maintenance.preview(plan, before, compose)
 
@@ -137,6 +146,41 @@ class MaintenanceControls(unittest.TestCase):
         self.assertEqual(set(result["maintenanceRestartRoles"]), roles)
         self.assertFalse(result["acceptedByExistingFunctionalRuntimeV2"])
 
+
+    def test_real_two_project_topology_rejects_missing_extra_and_misassociated_models(self):
+        with tempfile.TemporaryDirectory() as temp:
+            directory = Path(temp)
+            plan, before, _, _, models = fixture(directory)
+            value = maintenance.preview(plan, before, models)
+            self.assertEqual(value["composeProjects"], ["elevenid-beta", "elevenid-beta-ui"])
+            ui = next(step for step in value["stopSteps"] if step["role"] == "ui-prod")
+            self.assertEqual(ui["project"], "elevenid-beta-ui")
+            for change in [lambda m: m.pop("elevenid-beta-ui"), lambda m: m.update(production={"services": {}}),
+                           lambda m: m["elevenid-beta-ui"]["services"].update(foreign={}),
+                           lambda m: m["elevenid-beta"]["services"].pop("flow")]:
+                changed = copy.deepcopy(models)
+                change(changed)
+                with self.assertRaises(ValueError):
+                    maintenance.preview(plan, before, changed)
+            wrong = copy.deepcopy(before)
+            next(row for row in wrong["roles"] if row["role"] == "ui-prod")["project"] = "elevenid-beta"
+            with self.assertRaises(ValueError):
+                maintenance.preview(plan, wrong, models)
+
+    def test_cross_project_dependency_requires_exact_hash_bound_review(self):
+        with tempfile.TemporaryDirectory() as temp:
+            directory = Path(temp)
+            plan, before, _, _, models = fixture(directory)
+            models["elevenid-beta-ui"]["services"]["ui-prod"]["depends_on"] = {"gateway": {}}
+            freeze_models(plan, models, directory)
+            with self.assertRaisesRegex(ValueError, "UNREVIEWED_CROSS_PROJECT"):
+                maintenance.preview(plan, before, models)
+            proof = directory / "cross-project.json"
+            proof.write_text(json.dumps({"schema": "marty.reviewed-cross-project-dependency/v1", "fromRole": "ui-prod",
+                "toRole": "gateway", "fromProject": "elevenid-beta-ui", "toProject": "elevenid-beta"}))
+            plan["reviewedCrossProjectDependencies"] = [{"fromRole": "ui-prod", "toRole": "gateway", "proof": shared.ref(proof)}]
+            value = maintenance.preview(plan, before, models)
+            self.assertLess(value["restoreOrder"].index("gateway"), value["restoreOrder"].index("ui-prod"))
 
     def test_state_projection_does_not_copy_env_arguments_or_legacy_expectations(self):
         with tempfile.TemporaryDirectory() as temp:
