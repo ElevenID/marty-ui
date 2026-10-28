@@ -102,8 +102,9 @@ class SigningCasBuildTests(unittest.TestCase):
 
             plan["builderImage"] = "SOURCE_ONLY"
             prepared.write_text(json.dumps(plan))
+            resources = mock.Mock(return_value={"sourceOnly": True})
             helper = SimpleNamespace(__file__="SOURCE_ONLY_HELPER", VOLUMES=build.VOLUMES,
-                                     run=run, resources=lambda *args: {"sourceOnly": True})
+                                     run=run, resources=resources)
             original_sha = build.sha
             with mock.patch.object(build, "verify", return_value=(root, output)), \
                     mock.patch.object(build, "sha", side_effect=lambda p: build.REVIEWED_BUILD_HELPER_SHA256 if str(p) == helper.__file__ else original_sha(p)), \
@@ -112,8 +113,89 @@ class SigningCasBuildTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "DURABLE_INTENT_AND_JOURNAL_REQUIRED"):
                     build.start(shared.ref(prepared), helper, lambda args: b"", profiles.SIGNING_CAS.name)
             self.assertFalse(any("run" in args for args in calls))
+            resources.assert_not_called()
             journal = json.loads((root / "build-state.json").read_bytes())
             self.assertEqual(journal["state"], "BUILD_DURABILITY_BLOCKED_NO_DOCKER_DISPATCH")
+
+    def test_resource_probe_unknown_is_durably_consumed_without_compiler_or_retry(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            output = root / "output"
+            output.mkdir()
+            plan = selected()
+            plan.update(runId="11111111-1111-4111-8111-111111111111", engineId="SOURCE_ONLY",
+                        builderImage="SOURCE_ONLY", executionOperatorSha256=build.sha(Path(build.__file__)))
+            prepared = root / "prepared.json"
+            prepared.write_text(json.dumps(plan))
+            resource_calls = []
+
+            def resources(*args):
+                intent = json.loads((root / "build-apply-intent.json").read_bytes())
+                journal = json.loads((root / "build-state.json").read_bytes())
+                self.assertEqual(intent["state"], "RESOURCE_CHECK_INTENT")
+                self.assertEqual(journal["resourceProbe"]["outcome"], "INTENT_DISPATCH_MAY_FOLLOW")
+                self.assertTrue(shared.durable_barrier(journal["intentDurability"]))
+                resource_calls.append(args)
+                raise TimeoutError("SOURCE_ONLY_RESOURCE_OUTCOME_UNKNOWN")
+
+            def run(*args):
+                self.assertNotIn("run", args)
+                return SimpleNamespace(stdout=json.dumps([{"Id": "SOURCE_ONLY", "Os": "linux", "Architecture": "amd64"}]) if "inspect" in args else "SOURCE_ONLY")
+
+            helper = SimpleNamespace(__file__="SOURCE_ONLY_HELPER", VOLUMES=build.VOLUMES, run=run, resources=resources)
+            original_sha = build.sha
+            with mock.patch.object(build, "verify", return_value=(root, output)), \
+                    mock.patch.object(build, "sha", side_effect=lambda p: build.REVIEWED_BUILD_HELPER_SHA256 if str(p) == helper.__file__ else original_sha(p)), \
+                    mock.patch.object(shared, "sync_parent", return_value={"supported": True, "synced": True}), \
+                    mock.patch.dict(os.environ, {"DOCKER_CONTEXT": "desktop-linux"}):
+                with self.assertRaises(TimeoutError):
+                    build.start(shared.ref(prepared), helper, lambda args: b"", profiles.SIGNING_CAS.name)
+                self.assertEqual(json.loads((root / "build-state.json").read_bytes())["state"],
+                                 "RESOURCE_CHECK_FAILED_OR_UNKNOWN_NO_AUTOMATIC_RETRY")
+                with self.assertRaises(FileExistsError):
+                    build.start(shared.ref(prepared), helper, lambda args: b"", profiles.SIGNING_CAS.name)
+            self.assertEqual(len(resource_calls), 1)
+            self.assertIsNone(json.loads((root / "build-state.json").read_bytes())["resourceProbe"]["containerId"])
+
+    def test_ready_resource_result_precedes_one_durable_compiler_dispatch(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            output = root / "output"
+            output.mkdir()
+            plan = selected()
+            run_id = "11111111-1111-4111-8111-111111111111"
+            plan.update(runId=run_id, engineId="SOURCE_ONLY", builderImage="SOURCE_ONLY",
+                        containerName=profiles.SIGNING_CAS.container_prefix + run_id,
+                        sources={"ui": {"directory": "/owned/ui"}, "core": {"directory": "/owned/core"}},
+                        outputDirectory=str(output), recipe={"path": "/owned/build.sh"},
+                        executionOperatorSha256=build.sha(Path(build.__file__)))
+            prepared = root / "prepared.json"
+            prepared.write_text(json.dumps(plan))
+            dispatches = []
+
+            def run(*args):
+                if "inspect" in args:
+                    return SimpleNamespace(stdout=json.dumps([{"Id": "SOURCE_ONLY", "Os": "linux", "Architecture": "amd64"}]))
+                if "run" in args:
+                    journal = json.loads((root / "build-state.json").read_bytes())
+                    self.assertEqual(journal["state"], "BUILD_CREATE_INTENT")
+                    self.assertEqual(journal["resourceProbe"]["outcome"], "HELPER_RETURNED_READY_CID_NOT_EXPOSED")
+                    self.assertTrue(shared.durable_barrier(journal["intentDurability"]))
+                    dispatches.append(args)
+                    return SimpleNamespace(stdout="a" * 64)
+                return SimpleNamespace(stdout="SOURCE_ONLY")
+
+            helper = SimpleNamespace(__file__="SOURCE_ONLY_HELPER", VOLUMES=build.VOLUMES, run=run,
+                                     resources=lambda *args: {"sourceOnly": True})
+            original_sha = build.sha
+            with mock.patch.object(build, "verify", return_value=(root, output)), \
+                    mock.patch.object(build, "sha", side_effect=lambda p: build.REVIEWED_BUILD_HELPER_SHA256 if str(p) == helper.__file__ else original_sha(p)), \
+                    mock.patch.object(shared, "sync_parent", return_value={"supported": True, "synced": True}), \
+                    mock.patch.dict(os.environ, {"DOCKER_CONTEXT": "desktop-linux"}):
+                result = build.start(shared.ref(prepared), helper, lambda args: b"", profiles.SIGNING_CAS.name)
+            self.assertEqual(result["state"], "BUILD_RUNNING")
+            self.assertEqual(result["buildProfile"], profiles.SIGNING_CAS.name)
+            self.assertEqual(len(dispatches), 1)
 
 
 if __name__ == "__main__":

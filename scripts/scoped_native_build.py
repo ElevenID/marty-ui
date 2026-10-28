@@ -163,17 +163,51 @@ def start(prepared_ref, helper, git, profile=None):
     require(not list(output.iterdir()), "PRESERVE_PREVIOUS_BUILD_OUTPUTS")
     require(helper.VOLUMES == VOLUMES, "SHARED_RESOURCE_SCOPE_CHANGED")
     require(helper.run("docker", "--context", "desktop-linux", "info", "--format", "{{.ID}}").stdout.strip() == plan["engineId"], "ENGINE_CHANGED")
-    resource = helper.resources(private, plan["builderImage"])
+    resource_state = None
+    if profile is not None:
+        # The existing resource helper itself creates one 64 MiB read-only probe.
+        # Consume this D02 attempt before that effect, not only before compilation.
+        image = json.loads(helper.run("docker", "image", "inspect", plan["builderImage"]).stdout)[0]
+        require(image["Id"] == plan["builderImage"] and image["Os"] == "linux" and image["Architecture"] == "amd64", "BUILDER_IDENTITY_CHANGED")
+        resource_state = {"state": "RESOURCE_CHECK_INTENT", "runId": plan["runId"],
+                          "preparationSha256": preparation_sha, "buildProfile": profile,
+                          "resourceProbe": {"effect": "EXISTING_64M_READONLY_NETWORK_NONE_DOCKER_PROBE",
+                                            "image": plan["builderImage"], "volumes": list(VOLUMES),
+                                            "containerId": None, "outcome": "INTENT_DISPATCH_MAY_FOLLOW"},
+                          "releaseQualified": False, "recordingQualified": False}
+        resource_state["intentDurability"] = save_exclusive(private / "build-apply-intent.json", resource_state)
+        barrier = save_state(private / "build-state.json", resource_state)
+        if not (durable_barrier(resource_state["intentDurability"]) and durable_barrier(barrier)):
+            resource_state["state"] = "BUILD_DURABILITY_BLOCKED_NO_DOCKER_DISPATCH"
+            resource_state["resourceProbe"]["outcome"] = "NOT_DISPATCHED"
+            save_state(private / "build-state.json", resource_state)
+            raise ValueError("DURABLE_INTENT_AND_JOURNAL_REQUIRED")
+        try:
+            resource = helper.resources(private, plan["builderImage"])
+            resource_state.update(state="RESOURCE_CHECK_READY", resourcesBefore=resource)
+            resource_state["resourceProbe"]["outcome"] = "HELPER_RETURNED_READY_CID_NOT_EXPOSED"
+            require(durable_barrier(save_state(private / "build-state.json", resource_state)),
+                    "DURABLE_RESOURCE_RESULT_REQUIRED")
+        except BaseException:
+            resource_state["state"] = "RESOURCE_CHECK_FAILED_OR_UNKNOWN_NO_AUTOMATIC_RETRY"
+            save_state(private / "build-state.json", resource_state)
+            raise
+    else:
+        resource = helper.resources(private, plan["builderImage"])
     image = json.loads(helper.run("docker", "image", "inspect", plan["builderImage"]).stdout)[0]
     require(image["Id"] == plan["builderImage"] and image["Os"] == "linux" and image["Architecture"] == "amd64", "BUILDER_IDENTITY_CHANGED")
     require(helper.run("docker", "--context", "desktop-linux", "info", "--format", "{{.ID}}").stdout.strip() == plan["engineId"], "ENGINE_CHANGED_AFTER_RESOURCE_CHECK")
     state = {"state": "BUILD_CREATE_INTENT", "runId": plan["runId"], "preparationSha256": preparation_sha, "resourcesBefore": resource, "releaseQualified": False, "recordingQualified": False}
     intent = private / "build-apply-intent.json"
-    state["intentDurability"] = save_exclusive(intent, state)
+    if resource_state is None:
+        state["intentDurability"] = save_exclusive(intent, state)
+    else:
+        state.update(intentDurability=resource_state["intentDurability"],
+                     buildProfile=profile, resourceProbe=resource_state["resourceProbe"])
     journal = private / "build-state.json"
     journal_barrier = save_state(journal, state)
     if not (durable_barrier(state["intentDurability"]) and durable_barrier(journal_barrier)):
-        state["state"] = "BUILD_DURABILITY_BLOCKED_NO_DOCKER_DISPATCH"
+        state["state"] = "BUILD_DURABILITY_BLOCKED_NO_DOCKER_DISPATCH" if resource_state is None else "BUILD_DURABILITY_BLOCKED_NO_COMPILER_DISPATCH"
         save_state(journal, state)
         raise ValueError("DURABLE_INTENT_AND_JOURNAL_REQUIRED")
     try:
