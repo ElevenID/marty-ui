@@ -305,7 +305,7 @@ function requireOwnedNativeExecutionBoundary(evidence) {
     secret_transport:'owned_host_private_files',release_qualified:false,recording_qualified:false,
     source_sha:process.env.CANVAS_OSS_DRIVER_SOURCE_SHA,privateRecoveryDirectory});
 }
-async function requireOwnedNativeEngineeringBoundary({ownedWalletContext,recorderRepository,signal,privateRecoveryDirectory}){
+async function requireOwnedNativeEngineeringBoundary({ownedWalletContext,recorderRepository,signal,privateRecoveryDirectory,jobInventoryProof}){
   requireCondition(!ownedNativeBoundary&&process.platform==='win32'&&!fs.existsSync('/.dockerenv'),
     'execution_boundary_invalid','Engineering host boundary requires reviewed Windows source.');
   requireCondition(process.env.RECORD_VIDEO==='0'
@@ -320,7 +320,9 @@ async function requireOwnedNativeEngineeringBoundary({ownedWalletContext,recorde
   requireCondition(signing.verified===true,'holder_signing_invalid','Owned Rust holder signing probe failed.');
   const secretRoot=ownedHostSecretRoot();
   ownedHostRecoveryDirectory(secretRoot,privateRecoveryDirectory);
-  ownedNativeBoundary=Object.freeze({secretRoot});
+  const jobInventoryScope=jobInventoryProof==null?null:require(path.join(recorderRepository,'src','canvasJobInventoryScope.js'))
+    .readCanvasJobInventoryScope(jobInventoryProof,ownedWalletContext);
+  ownedNativeBoundary=Object.freeze({secretRoot,jobInventoryScope});
   return Object.freeze({boundary:'local_owned_windows_engineering',containerized:false,host_browser_processes:true,
     secret_transport:'owned_host_private_files',release_qualified:false,recording_qualified:false,
     source_sha:process.env.CANVAS_OSS_DRIVER_SOURCE_SHA,holder_signing_verified:true});
@@ -460,10 +462,12 @@ function martyRequestSummary(method, requestPath) {
   return `Marty ${['GET', 'POST', 'PUT', 'DELETE'].includes(method) ? method : 'REQUEST'} ${route} failed`;
 }
 
+const scopedJobInventoryClients=new WeakSet();
 class MartyClient {
   constructor(origin, apiKey) {
     this.origin = origin;
     this.apiKey = apiKey;
+    if(ownedNativeBoundary?.jobInventoryScope)scopedJobInventoryClients.add(this);
   }
 
   async request(method, requestPath, { json = undefined, expected = [200], includeStatus = false } = {}) {
@@ -1534,13 +1538,26 @@ async function waitForJob(marty, jobId) {
 }
 
 async function rosterJobBaseline(marty, organizationId, bindingId) {
-  const jobs=(await completeOrganizationJobInventory(marty,organizationId))
-    .filter(job=>job.binding_id===bindingId);
+  const jobs=await completeBindingJobInventory(marty,organizationId,bindingId);
   for (const job of jobs) {
     requireCondition(job.organization_id === organizationId && job.binding_id === bindingId && job.id,
       'canvas_roster_job_inventory_scope_invalid', 'Canvas job inventory escaped the owned binding.');
   }
   return new Set(jobs.map(job => job.id));
+}
+
+async function readCompleteScopedJobInventory(marty,organizationId,bindingId) {
+  const jobs=await marty.get(`/v1/integrations/canvas/canvas-sync-jobs?organization_id=${encodeURIComponent(organizationId)}&binding_id=${encodeURIComponent(bindingId)}&limit=500`);
+  requireCondition(Array.isArray(jobs)&&jobs.length<500
+    &&new Set(jobs.map(job=>job.id)).size===jobs.length
+    &&jobs.every(job=>job.id&&job.organization_id===organizationId&&job.binding_id===bindingId),
+  'canvas_roster_job_inventory_incomplete','Canvas binding job inventory is incomplete.');
+  return jobs;
+}
+
+async function completeBindingJobInventory(marty,organizationId,bindingId) {
+  if(scopedJobInventoryClients.has(marty))return readCompleteScopedJobInventory(marty,organizationId,bindingId);
+  return (await completeOrganizationJobInventory(marty,organizationId)).filter(job=>job.binding_id===bindingId);
 }
 
 async function completeOrganizationJobInventory(marty,organizationId) {
@@ -2431,8 +2448,7 @@ async function reconcileCanvasPrelaunchApplicationAbsence(state) {
     && disabledBinding.enabled===false && disabledBinding.activated_at==null,
   'canvas_background_application_uncertain','Owned Canvas binding remains active after deactivation.');
   const prefix=`?organization_id=${encodeURIComponent(organizationId)}&binding_id=${encodeURIComponent(bindingId)}&limit=100`;
-  const jobs=(await completeOrganizationJobInventory(state.marty,organizationId))
-    .filter(job=>job.binding_id===bindingId);
+  const jobs=await completeBindingJobInventory(state.marty,organizationId,bindingId);
   const candidates=await state.marty.get(`/v1/integrations/canvas/canvas-award-candidates${prefix}`);
   requireCondition(jobs.length>0 && Array.isArray(candidates) && candidates.length<100,
     'canvas_background_application_uncertain','Owned Canvas background inventory is incomplete.');
@@ -2966,6 +2982,7 @@ module.exports = {
   validateAndActivateBinding,
   waitForLatestRosterJob,
   rosterJobBaseline,
+  readCompleteScopedJobInventory,
   activatedRosterJobTimestamp,
   waitForCandidate,
   launchLearnerResource,
