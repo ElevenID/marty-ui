@@ -13,6 +13,10 @@ function createOwnedMembership(operator, inputs) {
   const owned = { organizationId: inputs.organizationId, credentialTemplateId: null,
     runId: inputs.runId, applicationId: null, transactionId: null, credentialId: null,
     applicationTemplateId: null, applicantId: null, uncertainMutations: [] };
+  const protectedFields = ['id', 'organization_id', 'status', 'credential_type', 'vct',
+    'credential_payload_format', 'issuer_did', 'trust_profile_id', 'claims', 'supported_formats'];
+  const protectedContract = template => Object.fromEntries(protectedFields.map(key => [key, template[key] ?? null]));
+  let sourceContract = null;
   const controller = {
     owned,
     async configure() {
@@ -21,6 +25,7 @@ function createOwnedMembership(operator, inputs) {
       assert.equal(credential.status, 'ACTIVE');
       assert.equal(credential.credential_type, inputs.configurationId);
       assert.equal(credential.vct, inputs.vct);
+      sourceContract = JSON.parse(JSON.stringify(protectedContract(credential)));
       assert.match(inputs.sourceApplicationTemplateId || '', /^[a-f0-9-]{36}$/i);
       const applicationSource = await requireJson(operator,
         `/v1/application-templates/${encodeURIComponent(inputs.sourceApplicationTemplateId)}`);
@@ -80,8 +85,17 @@ function createOwnedMembership(operator, inputs) {
       const application = await cleanupApplicationCredential(operator, owned,
         'Retire run-owned first-party wallet credential', { cancelPendingOffer: true });
       const configuration = await retireOwnedConfiguration(operator, owned);
+      let sharedTemplateReadback = null;
+      if (sourceContract) {
+        const current = await requireJson(operator,
+          `/v1/credential-templates/${encodeURIComponent(inputs.credentialTemplateId)}`);
+        assert.deepEqual(protectedContract(current), sourceContract,
+          'Governed shared credential template changed during the owned run');
+        assert.equal(current.status, 'ACTIVE');
+        sharedTemplateReadback = { id: current.id, status: current.status, unchanged: true };
+      }
       return { complete: application.ok === true && configuration.ok === true,
-        application, configuration, sharedCredentialTemplateModified: false };
+        application, configuration, sharedCredentialTemplateModified: false, sharedTemplateReadback };
     },
   };
   return controller;
