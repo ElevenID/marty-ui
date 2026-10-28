@@ -771,12 +771,24 @@ mod tests {
         (parent, path, state)
     }
     fn normal_fixture() -> (tempfile::TempDir, PathBuf, InstallerState) {
-        normal_fixture_with_chown(false)
+        normal_fixture_with_chown(false, |_| {})
+    }
+    struct RestoreRootOnUnwind(bool);
+    impl Drop for RestoreRootOnUnwind {
+        fn drop(&mut self) {
+            if self.0 && std::thread::panicking() {
+                assert_eq!(unsafe { libc::seteuid(0) }, 0);
+            }
+        }
     }
     fn normal_fixture_with_chown(
         change_owner: bool,
+        after_chown: impl FnOnce(&Path),
     ) -> (tempfile::TempDir, PathBuf, InstallerState) {
         let (parent, path, mut state) = application_fixture();
+        // Declared after TempDir, so it regains root before the foreign-owned
+        // fixture is dropped if a qualification assertion fails inside here.
+        let _restore_before_cleanup = RestoreRootOnUnwind(change_owner);
         state.create_private_directory("openbao-state").unwrap();
         state.persist_openbao_state_creation_receipt(&path).unwrap();
         let ids: BTreeMap<_, _> = [
@@ -820,6 +832,7 @@ mod tests {
             assert_eq!(unsafe { libc::fchown(held.as_raw_fd(), 100, 65534) }, 0);
             assert_eq!(unsafe { libc::seteuid(65534) }, 0);
         }
+        after_chown(&path);
         state
             .persist_openbao_owner_transition_receipt(
                 &path,
@@ -858,7 +871,8 @@ mod tests {
         let restore = RestoreIdentity(original_gid);
         assert_eq!(unsafe { libc::setegid(65534) }, 0);
         assert_eq!(unsafe { libc::seteuid(65534) }, 0);
-        let (parent, path, state) = normal_fixture_with_chown(true);
+        let (parent, path, state) = normal_fixture_with_chown(true, |_| {});
+        let _restore_before_cleanup = RestoreRootOnUnwind(true);
         assert!(File::open(path.join("openbao-state")).is_err());
         assert!(fs::read_dir(path.join("openbao-state")).is_err());
         let NormalInspectionOutcome::MatchedLocalReceipt(observed) =
@@ -876,6 +890,30 @@ mod tests {
         drop(restore); // Regain the test process identity before fixture cleanup.
         parent.close().unwrap();
         assert!(!path.exists());
+        // Verify cleanup on both sides of the fixture return boundary, while
+        // the failing process is still the ordinary fixture UID.
+        for inside_fixture in [true, false] {
+            let restore = RestoreIdentity(unsafe { libc::getegid() });
+            assert_eq!(unsafe { libc::setegid(65534) }, 0);
+            assert_eq!(unsafe { libc::seteuid(65534) }, 0);
+            let mut failed_path = None;
+            let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                if inside_fixture {
+                    normal_fixture_with_chown(true, |path| {
+                        failed_path = Some(path.to_path_buf());
+                        panic!("synthetic failure inside qualified fixture");
+                    });
+                } else {
+                    let (_parent, path, _state) = normal_fixture_with_chown(true, |_| {});
+                    let _restore_before_cleanup = RestoreRootOnUnwind(true);
+                    failed_path = Some(path);
+                    panic!("synthetic failure after qualified fixture");
+                }
+            }));
+            assert!(failure.is_err());
+            drop(restore);
+            assert!(!failed_path.unwrap().exists());
+        }
     }
     fn inspect_normal_state(state: &InstallerState, path: &Path) -> NormalInspectionOutcome {
         state
