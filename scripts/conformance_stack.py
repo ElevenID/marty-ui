@@ -283,8 +283,22 @@ def wait_for_one_shots(
         time.sleep(poll_seconds)
 
 
+def source_migration_container_before_up(project: str) -> str | None:
+    """Distinguish a KMS-only resume from a previously run migrator."""
+    selected = subprocess.check_output(
+        ["docker", "ps", "--all", "--no-trunc", "--quiet", "--filter",
+         f"label=com.docker.compose.project={project}", "--filter",
+         "label=com.docker.compose.service=issuance-migrations"],
+        text=True,
+    ).split()
+    if len(selected) > 1 or any(not re.fullmatch(r"[0-9a-f]{64}", item) for item in selected):
+        raise ValueError("prior issuance migration ownership is ambiguous")
+    return selected[0] if selected else None
+
+
 def attest_local_source_migration(
-    project: str, config: dict[str, Any], *, resume: bool = False
+    project: str, config: dict[str, Any], *, resume: bool = False,
+    preexisting_container_id: str | None = None,
 ) -> None:
     """Record the normal source-built issuance migrator's terminal owned run."""
     binary_value = os.environ.get("MARTY_CONFORMANCE_SOURCE_MIGRATION_BINARY", "").strip()
@@ -318,7 +332,8 @@ def attest_local_source_migration(
     binary = str(Path(binary_value).resolve(strict=True))
     with Path(binary).open("rb") as source:
         terminal_digest = hashlib.file_digest(source, "sha256").hexdigest()
-    if (intended.get("entrypoint") != entrypoint or intended.get("command") != arguments
+    if (row["Id"] != ids[0]
+            or intended.get("entrypoint") != entrypoint or intended.get("command") != arguments
             or row["Config"].get("Entrypoint") != entrypoint
             or row["Config"].get("Cmd") != arguments
             or row.get("Path") != entrypoint[0] or row.get("Args") != arguments
@@ -340,11 +355,12 @@ def attest_local_source_migration(
              "containerId": row["Id"], "image": row["Config"]["Image"],
              "exitCode": 0, "migrations": inputs, "releaseQualified": False}
     if receipt.exists():
-        if not resume or json.loads(receipt.read_text(encoding="utf-8")) != proof:
+        if (not resume or preexisting_container_id != row["Id"]
+                or json.loads(receipt.read_text(encoding="utf-8")) != proof):
             raise ValueError("local migration receipt changed or belongs to another operation")
         return
-    if resume:
-        raise ValueError("resumed local stack lacks its original migration receipt")
+    if preexisting_container_id is not None:
+        raise ValueError("prior local migrator lacks its original migration receipt")
     receipt.parent.mkdir(parents=True, exist_ok=True)
     with receipt.open("x", encoding="utf-8") as output:
         json.dump(proof, output, sort_keys=True)
@@ -721,6 +737,9 @@ def main() -> int:
         return 0
     if args.command == "up":
         assert_ports_available(ports, project, resume=args.resume)
+        prior_migrator = (source_migration_container_before_up(project)
+                          if os.environ.get("MARTY_CONFORMANCE_SOURCE_MIGRATION_BINARY", "").strip()
+                          else None)
         native_plan = None
         native_image = (
             config["services"]["issuance-native"]["image"] if native else None
@@ -768,7 +787,9 @@ def main() -> int:
             if up_result.returncode:
                 return up_result.returncode
             wait_for_one_shots(command, config)
-            attest_local_source_migration(project, config, resume=args.resume)
+            attest_local_source_migration(
+                project, config, resume=args.resume, preexisting_container_id=prior_migrator,
+            )
             return 0
         # Keycloak configuration and database migration are successful
         # one-shot services. Compose --wait reports those intentional exits
@@ -793,7 +814,9 @@ def main() -> int:
         if up_result.returncode:
             return up_result.returncode
         wait_for_one_shots(command, config)
-        attest_local_source_migration(project, config, resume=args.resume)
+        attest_local_source_migration(
+            project, config, resume=args.resume, preexisting_container_id=prior_migrator,
+        )
         return 0
     if args.command == "bootstrap-reviewer":
         if not project_container_ids(project):

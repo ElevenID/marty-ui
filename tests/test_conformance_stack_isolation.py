@@ -396,16 +396,51 @@ def test_local_source_migration_receipt_requires_exact_owned_terminal_container(
         "image": "sha256:baseline", "entrypoint": ["/usr/local/bin/marty-issuance-service"],
         "command": ["migrate"],
     }}}
-    stack.attest_local_source_migration(project, config)
-    assert json.loads(receipt.read_text())["containerId"] == "owned123"
+    with pytest.raises(ValueError, match="prior local migrator lacks"):
+        stack.attest_local_source_migration(
+            project, config, resume=True, preexisting_container_id="owned123",
+        )
+    assert not receipt.exists()
+    # A canonical --resume can mean only OpenBao was prebootstrapped. This is
+    # the first full-stack up, so its freshly completed migrator gets a receipt.
     stack.attest_local_source_migration(project, config, resume=True)
+    assert json.loads(receipt.read_text())["containerId"] == "owned123"
+    stack.attest_local_source_migration(
+        project, config, resume=True, preexisting_container_id="owned123",
+    )
     row["Mounts"][0]["RW"] = True
     with pytest.raises(ValueError, match="did not complete"):
-        stack.attest_local_source_migration(project, config, resume=True)
+        stack.attest_local_source_migration(
+            project, config, resume=True, preexisting_container_id="owned123",
+        )
     row["Mounts"][0]["RW"] = False
     binary.write_bytes(b"changed-after-migration")
     with pytest.raises(ValueError, match="did not complete"):
-        stack.attest_local_source_migration(project, config, resume=True)
+        stack.attest_local_source_migration(
+            project, config, resume=True, preexisting_container_id="owned123",
+        )
+
+
+def test_source_migration_prior_container_probe_distinguishes_kms_only_resume(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: list[list[str]] = []
+    output = ""
+
+    def inspect(command, **_kwargs):
+        observed.append(command)
+        return output
+
+    monkeypatch.setattr(stack.subprocess, "check_output", inspect)
+    project = "marty-conformance-local-test1"
+    assert stack.source_migration_container_before_up(project) is None
+    assert f"label=com.docker.compose.project={project}" in observed[0]
+    assert "label=com.docker.compose.service=issuance-migrations" in observed[0]
+    output = "a" * 64 + "\n"
+    assert stack.source_migration_container_before_up(project) == "a" * 64
+    output = "a" * 64 + "\n" + "b" * 64 + "\n"
+    with pytest.raises(ValueError, match="ambiguous"):
+        stack.source_migration_container_before_up(project)
 
 
 def test_didcomm_authcrypt_overlay_is_explicit_and_isolation_is_last() -> None:
