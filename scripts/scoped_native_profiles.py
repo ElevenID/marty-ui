@@ -21,8 +21,18 @@ SIGNING_CAS = BuildProfile(
     "d02-signing-cas-native",
 )
 
+SIGNING_CAS_NO_TRANSFORM = BuildProfile(
+    "d02-signing-cas-no-transform",
+    "9b1efd21163dadeff7cf1ced5fe47c5e046d2121",
+    (("signing-keys", "marty-signing-keys"),),
+    ("marty-signing-keys",),
+    "marty-d02-signing-cas-header-",
+    "d02-signing-cas-header-native",
+)
+
 
 def reviewed_profile(name):
-    if name != SIGNING_CAS.name:
-        raise ValueError("UNKNOWN_REVIEWED_BUILD_PROFILE")
-    return SIGNING_CAS
+    for profile in (SIGNING_CAS, SIGNING_CAS_NO_TRANSFORM):
+        if name == profile.name:
+            return profile
+    raise ValueError("UNKNOWN_REVIEWED_BUILD_PROFILE")

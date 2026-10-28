@@ -170,7 +170,7 @@ class LocalBuildJournal:
 def build_journal(plan, private, profile=None):
     if "journalBackend" not in plan:
         return LocalBuildJournal(private)
-    require(profile == "d02-signing-cas", "LINUX_JOURNAL_IS_D02_ONLY")
+    require(profile in ("d02-signing-cas", "d02-signing-cas-no-transform"), "LINUX_JOURNAL_IS_D02_ONLY")
     from scoped_linux_journal import LinuxBuildJournal
     return LinuxBuildJournal(private, plan["runId"], plan["journalBackend"])
 
