@@ -274,6 +274,16 @@ function ownedHostSecretRoot(){
     'contract_source_invalid','Owned host driver source SHA is invalid.');
   return secretRoot;
 }
+function ownedHostRecoveryDirectory(secretRoot,expected){
+  const raw=process.env.DEMO_CANVAS_PRIVATE_RECOVERY_DIRECTORY||'';
+  const recovery=path.resolve(raw),relative=path.relative(secretRoot,recovery);
+  requireCondition(path.isAbsolute(raw)&&(!expected||expected===recovery)
+    &&relative&&!relative.startsWith('..')&&!path.isAbsolute(relative)
+    &&fs.existsSync(recovery)&&fs.realpathSync(recovery)===recovery
+    &&fs.lstatSync(recovery).isDirectory()&&!fs.lstatSync(recovery).isSymbolicLink(),
+    'canvas_private_custody_missing','Owned host requires its exact run-owned private recovery directory.');
+  return recovery;
+}
 function requireOwnedNativeExecutionBoundary(evidence) {
   requireCondition(!ownedNativeBoundary,'execution_boundary_invalid','Owned host boundary may be selected once.');
   requireCondition(process.platform==='win32'&&!fs.existsSync('/.dockerenv')&&process.connected,
@@ -289,10 +299,11 @@ function requireOwnedNativeExecutionBoundary(evidence) {
     &&evidence.ownedWalletBinding.origin===process.env.MARTY_TEST_WALLET_ORIGIN,
     'execution_boundary_invalid','Recorder-owned runtime and wallet IPC bindings are required.');
   const secretRoot=ownedHostSecretRoot();
+  const privateRecoveryDirectory=ownedHostRecoveryDirectory(secretRoot);
   ownedNativeBoundary=Object.freeze({secretRoot});
   return Object.freeze({boundary:'local_owned_windows_functional',containerized:false,host_browser_processes:true,
     secret_transport:'owned_host_private_files',release_qualified:false,recording_qualified:false,
-    source_sha:process.env.CANVAS_OSS_DRIVER_SOURCE_SHA});
+    source_sha:process.env.CANVAS_OSS_DRIVER_SOURCE_SHA,privateRecoveryDirectory});
 }
 async function requireOwnedNativeEngineeringBoundary({ownedWalletContext,recorderRepository,signal,privateRecoveryDirectory}){
   requireCondition(!ownedNativeBoundary&&process.platform==='win32'&&!fs.existsSync('/.dockerenv'),
@@ -308,14 +319,7 @@ async function requireOwnedNativeEngineeringBoundary({ownedWalletContext,recorde
   const signing=await owned.requireOwnedCanvasHolderSigning(ownedWalletContext,signal);
   requireCondition(signing.verified===true,'holder_signing_invalid','Owned Rust holder signing probe failed.');
   const secretRoot=ownedHostSecretRoot();
-  const recovery=path.resolve(process.env.DEMO_CANVAS_PRIVATE_RECOVERY_DIRECTORY||'');
-  const relative=path.relative(secretRoot,recovery);
-  requireCondition(path.isAbsolute(process.env.DEMO_CANVAS_PRIVATE_RECOVERY_DIRECTORY||'')
-    &&privateRecoveryDirectory===recovery
-    &&relative&&!relative.startsWith('..')&&!path.isAbsolute(relative)
-    &&fs.realpathSync(recovery)===recovery&&fs.lstatSync(recovery).isDirectory()
-    &&!fs.lstatSync(recovery).isSymbolicLink(),
-  'canvas_private_custody_missing','Engineering requires its exact run-owned private recovery directory.');
+  ownedHostRecoveryDirectory(secretRoot,privateRecoveryDirectory);
   ownedNativeBoundary=Object.freeze({secretRoot});
   return Object.freeze({boundary:'local_owned_windows_engineering',containerized:false,host_browser_processes:true,
     secret_transport:'owned_host_private_files',release_qualified:false,recording_qualified:false,

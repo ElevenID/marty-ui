@@ -10,8 +10,13 @@ if(process.env.CANVAS_OWNED_BOUNDARY_CHILD==='1'){
   const evidence={functionalRuntimeBinding:{scope:'FUNCTIONAL_ONLY'},ownedWalletBinding:{
    kind:'OWNED_NATIVE_WALLET_V1',scope:'FUNCTIONAL_ONLY',releaseQualified:false,
    recordingQualified:false,origin:process.env.MARTY_TEST_WALLET_ORIGIN}};
+  const recovery=process.env.DEMO_CANVAS_PRIVATE_RECOVERY_DIRECTORY;
+  process.env.DEMO_CANVAS_PRIVATE_RECOVERY_DIRECTORY=path.join(os.tmpdir(),'outside-owned-root');
+  assert.throws(()=>stock.requireOwnedNativeExecutionBoundary(evidence),error=>error.code==='canvas_private_custody_missing');
+  process.env.DEMO_CANVAS_PRIVATE_RECOVERY_DIRECTORY=recovery;
   const boundary=stock.requireOwnedNativeExecutionBoundary(evidence);
   assert.equal(boundary.release_qualified,false);assert.equal(boundary.recording_qualified,false);
+  assert.equal(boundary.privateRecoveryDirectory,recovery);
   assert.equal(stock.requireSecretFile(name),'SOURCE_ONLY_VALUE');
   process.env[name+'_SHA256']='0'.repeat(64);assert.throws(()=>stock.requireSecretFile(name));
   process.env[name+'_SHA256']=process.env.CANVAS_OWNED_BOUNDARY_GOOD_HASH;
@@ -26,11 +31,13 @@ if(process.env.CANVAS_OWNED_BOUNDARY_CHILD==='1'){
   const privateRoot=path.join(os.homedir(),'.codex','private');
   const root=fs.mkdtempSync(path.join(privateRoot,'canvas-owned-boundary-source-'));
   t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  const recovery=path.join(root,'recovery');fs.mkdirSync(recovery);
   const secretFile=path.join(root,'bounded.txt');fs.writeFileSync(secretFile,'SOURCE_ONLY_VALUE\n');
   const env={...process.env,CANVAS_OWNED_BOUNDARY_CHILD:'1',CANVAS_OSS_EXECUTION_BOUNDARY:'local_owned_windows_functional',
    CANVAS_OSS_SECRET_TRANSPORT:'owned_host_private_files',CANVAS_OSS_OWNED_SECRET_ROOT:root,
    CANVAS_OSS_DRIVER_SOURCE_SHA:'a'.repeat(40),MARTY_TEST_WALLET_ORIGIN:'http://127.0.0.1:8791',
-   RECORD_VIDEO:'0',[name+'_FILE']:secretFile,[name+'_SHA256']:createHash('sha256').update(fs.readFileSync(secretFile)).digest('hex')};
+   RECORD_VIDEO:'0',DEMO_CANVAS_PRIVATE_RECOVERY_DIRECTORY:recovery,
+   [name+'_FILE']:secretFile,[name+'_SHA256']:createHash('sha256').update(fs.readFileSync(secretFile)).digest('hex')};
   env.CANVAS_OWNED_BOUNDARY_GOOD_HASH=env[name+'_SHA256'];
   const child=fork(__filename,[],{env,stdio:['ignore','ignore','pipe','ipc'],windowsHide:true});
   let stderr='';child.stderr.on('data',chunk=>{stderr+=chunk.toString().slice(0,1000)});
