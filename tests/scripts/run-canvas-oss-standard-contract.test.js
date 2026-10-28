@@ -70,11 +70,11 @@ test('roster activation selects a new exact job despite host and server clock sk
   assert.equal(observed.id, 'new-job');
 });
 
-test('roster baseline rejects a foreign binding and an incomplete inventory', async () => {
-  const foreign = { id: 'job', organization_id: 'org-1', binding_id: 'foreign' };
+test('roster baseline rejects a foreign organization and an incomplete inventory', async () => {
+  const foreign = { id: 'job', organization_id: 'foreign', binding_id: 'binding-1' };
   await assert.rejects(rosterJobBaseline({ get: async () => [foreign] }, 'org-1', 'binding-1'),
-    error => error.code === 'canvas_roster_job_inventory_scope_invalid');
-  const full = Array.from({ length: 100 }, (_, id) => ({ id: String(id), organization_id: 'org-1', binding_id: 'binding-1' }));
+    error => error.code === 'canvas_roster_job_inventory_incomplete');
+  const full = Array.from({ length: 500 }, (_, id) => ({ id: String(id), organization_id: 'org-1', binding_id: 'foreign' }));
   await assert.rejects(rosterJobBaseline({ get: async () => full }, 'org-1', 'binding-1'),
     error => error.code === 'canvas_roster_job_inventory_incomplete');
 });
@@ -112,6 +112,12 @@ test('prelaunch cleanup accepts only terminal owned roster with no application o
     await assert.rejects(reconcileCanvasPrelaunchApplicationAbsence(state),
       error=>error.code==='canvas_background_application_uncertain');
   }
+  state.owned.martyLearnerLaunchIntent=false;candidates[0].status='identity_link_required';
+  jobs.splice(0,jobs.length,...Array.from({length:500},(_,id)=>({id:String(id),
+    organization_id:org,binding_id:'foreign',platform_id:platform,
+    target_type:'background_roster',application_id:null,status:'succeeded'})));
+  await assert.rejects(reconcileCanvasPrelaunchApplicationAbsence(state),
+    error=>error.code==='canvas_roster_job_inventory_incomplete');
 });
 
 test('Canvas secret retirement requires authorized collection metadata, never detail GET 404', async () => {

@@ -1534,16 +1534,24 @@ async function waitForJob(marty, jobId) {
 }
 
 async function rosterJobBaseline(marty, organizationId, bindingId) {
-  const jobs = safeList(await marty.get(
-    `/v1/integrations/canvas/canvas-sync-jobs?organization_id=${encodeURIComponent(organizationId)}&binding_id=${encodeURIComponent(bindingId)}&limit=100`,
-  ));
-  requireCondition(jobs.length < 100, 'canvas_roster_job_inventory_incomplete',
-    'The bounded Canvas job inventory cannot establish a fresh activation job.');
+  const jobs=(await completeOrganizationJobInventory(marty,organizationId))
+    .filter(job=>job.binding_id===bindingId);
   for (const job of jobs) {
     requireCondition(job.organization_id === organizationId && job.binding_id === bindingId && job.id,
       'canvas_roster_job_inventory_scope_invalid', 'Canvas job inventory escaped the owned binding.');
   }
   return new Set(jobs.map(job => job.id));
+}
+
+async function completeOrganizationJobInventory(marty,organizationId) {
+  // The deployed operations API applies binding_id after a 500-row organization
+  // window. A short scoped result cannot prove absence. The unfiltered window
+  // is complete only when it contains fewer than 500 rows.
+  const jobs=await marty.get(`/v1/integrations/canvas/canvas-sync-jobs?organization_id=${encodeURIComponent(organizationId)}&limit=500`);
+  requireCondition(Array.isArray(jobs)&&jobs.length<500
+    && jobs.every(job=>job.organization_id===organizationId && job.id),
+  'canvas_roster_job_inventory_incomplete','Canvas organization job inventory is incomplete.');
+  return jobs;
 }
 
 async function activatedRosterJobTimestamp(marty, organizationId, platformId, bindingId, configVersion) {
@@ -2403,9 +2411,10 @@ async function reconcileCanvasPrelaunchApplicationAbsence(state) {
     && disabledBinding.enabled===false && disabledBinding.activated_at==null,
   'canvas_background_application_uncertain','Owned Canvas binding remains active after deactivation.');
   const prefix=`?organization_id=${encodeURIComponent(organizationId)}&binding_id=${encodeURIComponent(bindingId)}&limit=100`;
-  const jobs=safeList(await state.marty.get(`/v1/integrations/canvas/canvas-sync-jobs${prefix}`));
-  const candidates=safeList(await state.marty.get(`/v1/integrations/canvas/canvas-award-candidates${prefix}`));
-  requireCondition(jobs.length>0 && jobs.length<100 && candidates.length<100,
+  const jobs=(await completeOrganizationJobInventory(state.marty,organizationId))
+    .filter(job=>job.binding_id===bindingId);
+  const candidates=await state.marty.get(`/v1/integrations/canvas/canvas-award-candidates${prefix}`);
+  requireCondition(jobs.length>0 && Array.isArray(candidates) && candidates.length<100,
     'canvas_background_application_uncertain','Owned Canvas background inventory is incomplete.');
   requireCondition(jobs.every(job=>job.organization_id===organizationId&&job.binding_id===bindingId
     && job.platform_id===state.platformId&&job.target_type==='background_roster'
