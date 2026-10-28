@@ -278,7 +278,7 @@ function requireOwnedNativeExecutionBoundary(evidence) {
   const privateRoot=path.join(require('node:os').homedir(),'.codex','private');
   const privateRelative=path.relative(privateRoot,secretRoot);
   requireCondition(path.isAbsolute(process.env.CANVAS_OSS_OWNED_SECRET_ROOT||'')
-    &&privateRelative&&!privateRelative.startsWith('..')&&!path.isAbsolute(privateRelative)
+    &&!privateRelative.startsWith('..')&&!path.isAbsolute(privateRelative)
     &&fs.realpathSync(secretRoot)===secretRoot&&!fs.lstatSync(secretRoot).isSymbolicLink(),
     'secret_transport_invalid','Owned host secret root must be a private directory.');
   requireCondition(/^[a-f0-9]{40}$/.test(process.env.CANVAS_OSS_DRIVER_SOURCE_SHA||''),
