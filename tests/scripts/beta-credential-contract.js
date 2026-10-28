@@ -3,6 +3,7 @@
 const DEFAULT_BETA_ORGANIZATION_ID = '00000000-0000-0000-0000-000000000001';
 const DEFAULT_LOGIN_BADGE_TEMPLATE_ID = '50000000-0000-0000-0000-000000000040';
 const DEFAULT_LOGIN_BADGE_APPLICATION_TEMPLATE_ID = '0ab66d45-0d84-5fbd-837f-25788d32279e';
+const DEFAULT_LOGIN_BADGE_FLOW_ID = '72000000-0000-0000-0000-000000000040';
 const DEFAULT_LOGIN_BADGE_CONFIGURATION_ID = 'open_badge';
 const DEFAULT_LIFECYCLE_POLICY_ID = '50000000-0000-0000-0000-000000000002';
 const DEFAULT_LIFECYCLE_SOURCE_TEMPLATE_ID = '50000000-0000-0000-0000-000000000010';
@@ -113,6 +114,23 @@ function requireCompletedLoginNonce(status) {
   if (status !== 'completed') throw new Error('Credential login nonce did not complete');
 }
 
+function loginNonceCompletionEvidence(body) {
+  const status = typeof body?.status === 'string' ? body.status : null;
+  const evidence = { status, observedNonceStatus: status };
+  if (status === 'failed') {
+    const code = body?.reason_code;
+    const safeCodes = new Set([
+      'issuer_not_trusted', 'missing_email_claim', 'revocation_not_checked',
+      'credential_revoked', 'verification_service_unavailable', 'credential_payload_invalid',
+      'keycloak_user_not_found', 'keycloak_user_not_eligible', 'keycloak_admin_unavailable',
+      'verification_failed',
+    ]);
+    evidence.reasonCode = safeCodes.has(code)
+      ? code : 'unclassified';
+  }
+  return evidence;
+}
+
 function isTerminalLoginNonceStatus(body) {
   return ['completed', 'failed', 'expired'].includes(body?.status);
 }
@@ -139,6 +157,7 @@ function credentialLifecycleBehaviorAssertions(report) {
 
 module.exports = {
   DEFAULT_LOGIN_BADGE_APPLICATION_TEMPLATE_ID,
+  DEFAULT_LOGIN_BADGE_FLOW_ID,
   DEFAULT_BETA_ORGANIZATION_ID,
   DEFAULT_LIFECYCLE_POLICY_ID,
   DEFAULT_LIFECYCLE_SOURCE_TEMPLATE_ID,
@@ -150,6 +169,7 @@ module.exports = {
   credentialInventoryEvidence,
   membershipLoginBehaviorAssertions,
   requireCompletedLoginNonce,
+  loginNonceCompletionEvidence,
   isTerminalLoginNonceStatus,
   verificationResultEvidence,
   verificationSessionRequest,
