@@ -76,13 +76,21 @@ test('prelaunch cleanup accepts only terminal owned roster with no application o
     target_type:'background_roster',application_id:null,status:'succeeded'}];
   const candidates=[{id:'candidate-1',organization_id:org,binding_id:binding,
     application_id:null,status:'identity_link_required'}];
+  let deactivated=false;
   const state={bindingActivationPossible:true,binding:{id:binding},organizationId:org,
-    platformId:platform,owned:{martyBindingId:binding},marty:{async get(path){
-      return path.includes('canvas-sync-jobs')?jobs:candidates;
-    }}};
+    platformId:platform,runSuffix:'owned-run-1',owned:{martyBindingId:binding},marty:{
+      async get(path){
+        if(path.includes('/program-bindings/'))return {id:binding,organization_id:org,
+          platform_id:platform,display_name:'Portable Canvas badge owned-run-1',
+          enabled:!deactivated,activated_at:deactivated?null:NOW};
+        return path.includes('canvas-sync-jobs')?jobs:candidates;
+      },
+      async post(path){assert.match(path,/\/deactivate$/);deactivated=true;return {active:false}},
+    }};
   assert.throws(()=>requireCanvasSetupMutationReconciliation(state),
     error=>error.code==='canvas_background_application_uncertain');
   await reconcileCanvasPrelaunchApplicationAbsence(state);
+  assert.equal(deactivated,true);
   requireCanvasSetupMutationReconciliation(state);
   for(const change of [
     () => {state.owned.martyLearnerLaunchIntent=true},
