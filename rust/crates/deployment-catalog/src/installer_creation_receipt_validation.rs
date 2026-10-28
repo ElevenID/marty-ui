@@ -1,13 +1,14 @@
-//! Read-only verification of the initial local creation receipt against held
-//! directories. Local historical evidence is not cryptographic authentication
-//! or deletion authorization. Later installer resources remain outside scope.
+//! Read-only local creation evidence for the seven storage boundaries, including
+//! the OpenBao initializer's recorded owner transition. Historical evidence is
+//! not cryptographic authentication or deletion authorization. Current children,
+//! full installation coverage and lifecycle readiness remain outside this module.
 #![cfg(target_os = "linux")]
 #![allow(dead_code)] // No purge coordinator exists yet.
 
 use crate::{
     installer_creation_identity::{
         observe, observe_operator, ObservedDirectory, ObservedFile, APPLICATION_RECEIPT,
-        CREDENTIAL_RECEIPT, RECEIPT,
+        CREDENTIAL_RECEIPT, OPENBAO_OWNER_TRANSITION_RECEIPT, OPENBAO_STATE_RECEIPT, RECEIPT,
     },
     installer_purge_host::{HostIdentity, Kind},
     installer_state::LockedInspection,
@@ -391,6 +392,7 @@ struct ApplicationReceipt {
 }
 /// Four fixed root identities only; their current descendants are left to the
 /// complete tree observer after writers have been stopped.
+#[derive(PartialEq, Eq)]
 pub(crate) struct ObservedApplicationCreation {
     pub credentials: ObservedCredentialCreation,
     pub roots: BTreeMap<&'static str, ObservedDirectory>,
@@ -483,6 +485,259 @@ pub(crate) fn inspect_application(
     }
 }
 
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OpenBaoStateReceipt {
+    schema: String,
+    installation_id: uuid::Uuid,
+    source_sha: String,
+    openbao_state: RawDirectory,
+    local_historical_evidence: bool,
+    deletion_authorized: bool,
+}
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OwnerTransitionReceipt {
+    schema: String,
+    installation_id: uuid::Uuid,
+    source_sha: String,
+    engine_id: String,
+    image: String,
+    image_id: String,
+    tls_init_container_id: String,
+    initial_receipt_sha256: String,
+    state_creation_receipt_sha256: String,
+    tls_init_completion_sha256: String,
+    root: ObservedDirectory,
+    evidence: ObservedDirectory,
+    openbao_state_before: ObservedDirectory,
+    openbao_state_after: ObservedDirectory,
+    local_historical_evidence: bool,
+    deletion_authorized: bool,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OpenBaoCreated {
+    schema: String,
+    installation_id: String,
+    engine_id: String,
+    project: String,
+    image: String,
+    image_id: String,
+    network_id: String,
+    container_ids: BTreeMap<String, String>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TlsCompletion {
+    role: String,
+    container_id: String,
+    exit_code: i32,
+}
+/// Local identity evidence for all seven storage boundaries (six directories
+/// and the operator-password file). No descendants are read or authorized for
+/// deletion. Foreign-owned OpenBao data may remain inaccessible to the caller.
+pub(crate) struct ObservedNormalCreation {
+    pub application: ObservedApplicationCreation,
+    pub openbao_state: ObservedDirectory,
+    pub state_receipt_sha256: String,
+    pub transition_receipt_sha256: String,
+    pub created_record_sha256: String,
+    pub completion_sha256: String,
+}
+pub(crate) enum NormalInspectionOutcome {
+    Missing,
+    Unusable,
+    MatchedLocalReceipt(Box<ObservedNormalCreation>),
+}
+fn digest(bytes: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(bytes))
+}
+fn hex64(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+fn read_record(parent: &File, name: &str) -> Result<Option<(File, Vec<u8>)>> {
+    child(parent, name, libc::O_PATH)?
+        .map(|held| Ok((held.try_clone().map_err(|_| ())?, read_regular(&held)?)))
+        .transpose()
+}
+fn unchanged_record(parent: &File, name: &str, held: &File, bytes: &[u8]) -> Result<()> {
+    let current = child(parent, name, libc::O_PATH)?.ok_or(())?;
+    let before = held.metadata().map_err(|_| ())?;
+    let after = current.metadata().map_err(|_| ())?;
+    if before.dev() != after.dev()
+        || before.ino() != after.ino()
+        || read_regular(&current)? != bytes
+    {
+        return Err(());
+    }
+    Ok(())
+}
+fn verify_normal(
+    locked: &LockedInspection,
+    installation: &Path,
+) -> Result<Option<ObservedNormalCreation>> {
+    let Some(application) = verify_application(locked, installation)? else {
+        return Ok(None);
+    };
+    let root = locked.installation_directory();
+    let evidence = child(root, "evidence", libc::O_RDONLY | libc::O_DIRECTORY)?.ok_or(())?;
+    let Some((state_record, state_bytes)) = read_record(&evidence, OPENBAO_STATE_RECEIPT)? else {
+        return Ok(None);
+    };
+    let Some((transition_record, transition_bytes)) =
+        read_record(&evidence, OPENBAO_OWNER_TRANSITION_RECEIPT)?
+    else {
+        return Ok(None);
+    };
+    let Some((created_record, created_bytes)) = read_record(root, "openbao-created.json")? else {
+        return Ok(None);
+    };
+    let Some((completion_record, completion_bytes)) =
+        read_record(root, "openbao-completed-openbao-tls-init.json")?
+    else {
+        return Ok(None);
+    };
+    let initial = &application.credentials.initial;
+    let state: OpenBaoStateReceipt = serde_json::from_slice(&state_bytes).map_err(|_| ())?;
+    let transition: OwnerTransitionReceipt =
+        serde_json::from_slice(&transition_bytes).map_err(|_| ())?;
+    let created: OpenBaoCreated = serde_json::from_slice(&created_bytes).map_err(|_| ())?;
+    let completion: TlsCompletion = serde_json::from_slice(&completion_bytes).map_err(|_| ())?;
+    let binding = locked.journal().runtime().ok_or(())?;
+    let uuid = locked.journal().installation_id();
+    let source = &locked.journal().identity().source_sha;
+    let roles = [
+        "openbao-tls-init",
+        "openbao",
+        "openbao-unseal",
+        "openbao-bootstrap",
+    ];
+    let after = &transition.openbao_state_after;
+    let before = &transition.openbao_state_before;
+    if serde_json::to_vec(&state).map_err(|_| ())? != state_bytes
+        || serde_json::to_vec(&transition).map_err(|_| ())? != transition_bytes
+        || state.schema != "elevenid.installer-created-openbao-state/v1"
+        || transition.schema != "elevenid.installer-openbao-state-owner-transition/v1"
+        || state.installation_id != uuid
+        || transition.installation_id != uuid
+        || state.source_sha != *source
+        || transition.source_sha != *source
+        || !state.local_historical_evidence
+        || !transition.local_historical_evidence
+        || state.deletion_authorized
+        || transition.deletion_authorized
+        || !state.openbao_state.matches(before)
+        || before.mount_id != initial.root.mount_id
+        || after.mount_id != before.mount_id
+        || before.identity.dev != after.identity.dev
+        || before.identity.ino != after.identity.ino
+        || before.identity.kind != after.identity.kind
+        || before.identity.mode != after.identity.mode
+        || transition.root != initial.root
+        || transition.evidence != initial.evidence
+        || transition.initial_receipt_sha256 != initial.receipt_sha256
+        || transition.state_creation_receipt_sha256 != digest(&state_bytes)
+        || transition.tls_init_completion_sha256 != digest(&completion_bytes)
+        || transition.engine_id != binding.engine_id
+        || created.schema != "elevenid.installer-openbao-created/v1"
+        || created.installation_id != uuid.to_string()
+        || created.engine_id != binding.engine_id
+        || created.project != format!("{}-bao", locked.journal().compose_project())
+        || !hex64(&created.network_id)
+        || created.image != transition.image
+        || created.image_id != transition.image_id
+        || !created
+            .image
+            .strip_prefix("ghcr.io/elevenid/marty-ui-oss/openbao-didcomm@sha256:")
+            .is_some_and(hex64)
+        || !created.image_id.strip_prefix("sha256:").is_some_and(hex64)
+        || created.container_ids.len() != roles.len()
+        || !roles
+            .iter()
+            .all(|role| created.container_ids.get(*role).is_some_and(|id| hex64(id)))
+        || created
+            .container_ids
+            .values()
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+            != roles.len()
+        || created.container_ids.get("openbao-tls-init") != Some(&transition.tls_init_container_id)
+        || completion.role != "openbao-tls-init"
+        || completion.exit_code != 0
+        || completion.container_id != transition.tls_init_container_id
+    {
+        return Err(());
+    }
+    // O_PATH works for metadata even after TLS init changes the owner of a
+    // mode-0700 directory. Never open or enumerate its secret-bearing children.
+    let held = child(root, "openbao-state", libc::O_PATH)?.ok_or(())?;
+    let observed = observe(&held).map_err(|_| ())?;
+    if observed != *after || observe(&evidence).map_err(|_| ())? != initial.evidence {
+        return Err(());
+    }
+    for (parent, name, file, bytes) in [
+        (
+            &evidence,
+            OPENBAO_STATE_RECEIPT,
+            &state_record,
+            &state_bytes,
+        ),
+        (
+            &evidence,
+            OPENBAO_OWNER_TRANSITION_RECEIPT,
+            &transition_record,
+            &transition_bytes,
+        ),
+        (
+            root,
+            "openbao-created.json",
+            &created_record,
+            &created_bytes,
+        ),
+        (
+            root,
+            "openbao-completed-openbao-tls-init.json",
+            &completion_record,
+            &completion_bytes,
+        ),
+    ] {
+        unchanged_record(parent, name, file, bytes)?;
+    }
+    let latest = child(root, "openbao-state", libc::O_PATH)?.ok_or(())?;
+    if observe(&held).map_err(|_| ())? != observed
+        || observe(&latest).map_err(|_| ())? != observed
+        || verify_application(locked, installation)?.ok_or(())? != application
+    {
+        return Err(());
+    }
+    Ok(Some(ObservedNormalCreation {
+        application,
+        openbao_state: observed,
+        state_receipt_sha256: digest(&state_bytes),
+        transition_receipt_sha256: digest(&transition_bytes),
+        created_record_sha256: digest(&created_bytes),
+        completion_sha256: digest(&completion_bytes),
+    }))
+}
+pub(crate) fn inspect_normal(
+    locked: &LockedInspection,
+    installation: &Path,
+) -> NormalInspectionOutcome {
+    let result = verify_normal(locked, installation);
+    if locked.require_path_binding(installation).is_err() || locked.require_unchanged().is_err() {
+        return NormalInspectionOutcome::Unusable;
+    }
+    match result {
+        Ok(Some(observed)) => NormalInspectionOutcome::MatchedLocalReceipt(Box::new(observed)),
+        Ok(None) => NormalInspectionOutcome::Missing,
+        Err(()) => NormalInspectionOutcome::Unusable,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -514,6 +769,207 @@ mod tests {
         state.create_private_directory("downloads").unwrap();
         state.persist_initial_creation_receipt(&path).unwrap();
         (parent, path, state)
+    }
+    fn normal_fixture() -> (tempfile::TempDir, PathBuf, InstallerState) {
+        let (parent, path, mut state) = application_fixture();
+        state.create_private_directory("openbao-state").unwrap();
+        state.persist_openbao_state_creation_receipt(&path).unwrap();
+        let ids: BTreeMap<_, _> = [
+            "openbao-tls-init",
+            "openbao",
+            "openbao-unseal",
+            "openbao-bootstrap",
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(i, role)| (role, format!("{:064x}", i + 1)))
+        .collect();
+        let image = format!(
+            "ghcr.io/elevenid/marty-ui-oss/openbao-didcomm@sha256:{}",
+            "b".repeat(64)
+        );
+        let image_id = format!("sha256:{}", "d".repeat(64));
+        let completion = serde_json::to_vec(&serde_json::json!({"role":"openbao-tls-init", "container_id":ids["openbao-tls-init"], "exit_code":0})).unwrap();
+        let created = serde_json::to_vec(&serde_json::json!({
+            "schema":"elevenid.installer-openbao-created/v1", "installation_id":state.journal().installation_id().to_string(),
+            "engine_id":"synthetic-engine", "project":format!("{}-bao", state.journal().compose_project()),
+            "image":image,"image_id":image_id,"network_id":"e".repeat(64),"container_ids":ids
+        })).unwrap();
+        for (name, bytes) in [
+            ("openbao-created.json", created),
+            (
+                "openbao-completed-openbao-tls-init.json",
+                completion.clone(),
+            ),
+        ] {
+            fs::write(path.join(name), bytes).unwrap();
+            fs::set_permissions(path.join(name), fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        state
+            .persist_openbao_owner_transition_receipt(
+                &path,
+                "synthetic-engine",
+                &image,
+                &image_id,
+                &ids["openbao-tls-init"],
+                &completion,
+            )
+            .unwrap();
+        (parent, path, state)
+    }
+    fn inspect_normal_state(state: &InstallerState, path: &Path) -> NormalInspectionOutcome {
+        state
+            .with_inspection(|locked| Ok(inspect_normal(locked, path)))
+            .unwrap()
+    }
+    #[test]
+    fn normal_boundary_evidence_matches_without_opening_openbao_children() {
+        let (_parent, path, state) = normal_fixture();
+        let fifo = CString::new(
+            path.join("openbao-state/private-child")
+                .as_os_str()
+                .as_encoded_bytes(),
+        )
+        .unwrap();
+        assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+        let password = fs::read(path.join("operator-password")).unwrap();
+        let receipt =
+            fs::read(path.join("evidence").join(OPENBAO_OWNER_TRANSITION_RECEIPT)).unwrap();
+        let NormalInspectionOutcome::MatchedLocalReceipt(observed) =
+            inspect_normal_state(&state, &path)
+        else {
+            panic!("normal evidence expected");
+        };
+        assert_eq!(observed.application.roots.len(), 4);
+        assert_eq!(observed.transition_receipt_sha256, digest(&receipt));
+        assert_eq!(
+            observed.openbao_state,
+            observe(&File::open(path.join("openbao-state")).unwrap()).unwrap()
+        );
+        assert_eq!(fs::read(path.join("operator-password")).unwrap(), password);
+        assert_eq!(
+            fs::read(path.join("evidence").join(OPENBAO_OWNER_TRANSITION_RECEIPT)).unwrap(),
+            receipt
+        );
+    }
+    #[test]
+    fn changed_transition_binding_is_unusable_and_preserved() {
+        for field in [
+            "engine",
+            "inode",
+            "owner",
+            "mode",
+            "source",
+            "initial",
+            "completion",
+            "authorization",
+        ] {
+            let (_parent, path, state) = normal_fixture();
+            let file = path.join("evidence").join(OPENBAO_OWNER_TRANSITION_RECEIPT);
+            let mut receipt: OwnerTransitionReceipt =
+                serde_json::from_slice(&fs::read(&file).unwrap()).unwrap();
+            match field {
+                "engine" => receipt.engine_id = "foreign-engine".into(),
+                "inode" => receipt.openbao_state_after.identity.ino += 1,
+                "owner" => {
+                    receipt.openbao_state_after.identity.uid =
+                        receipt.openbao_state_after.identity.uid.wrapping_add(1)
+                }
+                "mode" => receipt.openbao_state_after.identity.mode = 0o755,
+                "source" => receipt.source_sha = "f".repeat(40),
+                "initial" => receipt.initial_receipt_sha256 = "f".repeat(64),
+                "completion" => receipt.tls_init_completion_sha256 = "f".repeat(64),
+                "authorization" => receipt.deletion_authorized = true,
+                _ => unreachable!(),
+            }
+            let bytes = serde_json::to_vec(&receipt).unwrap();
+            fs::write(&file, &bytes).unwrap();
+            assert!(
+                matches!(
+                    inspect_normal_state(&state, &path),
+                    NormalInspectionOutcome::Unusable
+                ),
+                "{field}"
+            );
+            assert_eq!(fs::read(file).unwrap(), bytes);
+        }
+    }
+    #[test]
+    fn changed_openbao_runtime_records_or_root_are_unusable() {
+        for record in [
+            "openbao-created.json",
+            "openbao-completed-openbao-tls-init.json",
+            "root",
+        ] {
+            let (_parent, path, state) = normal_fixture();
+            if record == "root" {
+                fs::rename(path.join("openbao-state"), path.join("saved-openbao-state")).unwrap();
+                fs::create_dir(path.join("openbao-state")).unwrap();
+                fs::set_permissions(
+                    path.join("openbao-state"),
+                    fs::Permissions::from_mode(0o700),
+                )
+                .unwrap();
+            } else {
+                let file = path.join(record);
+                let mut value: serde_json::Value =
+                    serde_json::from_slice(&fs::read(&file).unwrap()).unwrap();
+                if record == "openbao-created.json" {
+                    value["image_id"] = format!("sha256:{}", "f".repeat(64)).into();
+                } else {
+                    value["exit_code"] = 1.into();
+                }
+                fs::write(file, serde_json::to_vec(&value).unwrap()).unwrap();
+            }
+            assert!(
+                matches!(
+                    inspect_normal_state(&state, &path),
+                    NormalInspectionOutcome::Unusable
+                ),
+                "{record}"
+            );
+        }
+    }
+    #[test]
+    fn missing_and_unsafe_transition_records_never_adopt_paths() {
+        for kind in ["missing", "fifo", "symlink", "hardlink", "duplicate"] {
+            let (_parent, path, state) = normal_fixture();
+            let file = path.join("evidence").join(OPENBAO_OWNER_TRANSITION_RECEIPT);
+            let original = fs::read(&file).unwrap();
+            fs::remove_file(&file).unwrap();
+            let outside = path.join("outside-canary");
+            fs::write(&outside, b"private-canary").unwrap();
+            match kind {
+                "missing" => {}
+                "fifo" => {
+                    let c = CString::new(file.as_os_str().as_encoded_bytes()).unwrap();
+                    assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+                }
+                "symlink" => symlink(&outside, &file).unwrap(),
+                "hardlink" => fs::hard_link(&outside, &file).unwrap(),
+                "duplicate" => {
+                    let text = String::from_utf8(original).unwrap().replacen(
+                        '{',
+                        "{\"deletion_authorized\":false,",
+                        1,
+                    );
+                    fs::write(&file, text).unwrap();
+                    fs::set_permissions(&file, fs::Permissions::from_mode(0o600)).unwrap();
+                }
+                _ => unreachable!(),
+            }
+            let result = inspect_normal_state(&state, &path);
+            if kind == "missing" {
+                assert!(matches!(result, NormalInspectionOutcome::Missing));
+                assert!(!file.exists());
+            } else {
+                assert!(
+                    matches!(result, NormalInspectionOutcome::Unusable),
+                    "{kind}"
+                );
+            }
+            assert_eq!(fs::read(outside).unwrap(), b"private-canary");
+        }
     }
     fn inspect_state(state: &InstallerState, path: &Path) -> InspectionOutcome {
         state
