@@ -1533,14 +1533,32 @@ async function waitForJob(marty, jobId) {
   }, JOB_TIMEOUT_MS, 1_500, 'canvas_sync_job_timeout');
 }
 
-async function waitForLatestRosterJob(marty, organizationId, bindingId, afterIso) {
+async function rosterJobBaseline(marty, organizationId, bindingId) {
+  const jobs = safeList(await marty.get(
+    `/v1/integrations/canvas/canvas-sync-jobs?organization_id=${encodeURIComponent(organizationId)}&binding_id=${encodeURIComponent(bindingId)}&limit=100`,
+  ));
+  requireCondition(jobs.length < 100, 'canvas_roster_job_inventory_incomplete',
+    'The bounded Canvas job inventory cannot establish a fresh activation job.');
+  for (const job of jobs) {
+    requireCondition(job.organization_id === organizationId && job.binding_id === bindingId && job.id,
+      'canvas_roster_job_inventory_scope_invalid', 'Canvas job inventory escaped the owned binding.');
+  }
+  return new Set(jobs.map(job => job.id));
+}
+
+async function waitForLatestRosterJob(marty, organizationId, bindingId, beforeJobIds) {
+  requireCondition(beforeJobIds instanceof Set, 'canvas_roster_job_baseline_missing',
+    'A fresh activation requires its exact preactivation job inventory.');
   return waitFor(async () => {
     const jobs = safeList(await marty.get(
       `/v1/integrations/canvas/canvas-sync-jobs?organization_id=${encodeURIComponent(organizationId)}&binding_id=${encodeURIComponent(bindingId)}&limit=100`,
     ));
+    requireCondition(jobs.length < 100, 'canvas_roster_job_inventory_incomplete',
+      'The bounded Canvas job inventory cannot establish a fresh activation job.');
     const job = jobs.find((item) => (
       item.target_type === 'background_roster'
-        && Date.parse(item.created_at || 0) >= Date.parse(afterIso || 0)
+        && item.organization_id === organizationId && item.binding_id === bindingId
+        && !beforeJobIds.has(item.id)
     ));
     if (!job) return null;
     return waitForJob(marty, job.id);
@@ -2194,13 +2212,13 @@ async function prepareCanvasCaptureFixtures({ browser, ledger, markActive = () =
     }, [200]);
 
     markActive('standard_lti_13_install');
-    const activationStartedAt = new Date().toISOString();
+    const activationJobBaseline = await rosterJobBaseline(marty, organizationId, binding.id);
     state.bindingActivationPossible=true;owned.martyBindingActivationPossible=true;persistOwned();
     await validateAndActivateBinding(marty, binding.id);
     pass('standard_lti_13_install', `Stock Canvas installed LTI 1.3 and all ${BLOCKING_READINESS_CHECK_CODES.length} production blocking readiness checks passed.`);
 
     markActive('nrps_roster');
-    await waitForLatestRosterJob(marty, organizationId, binding.id, activationStartedAt);
+    await waitForLatestRosterJob(marty, organizationId, binding.id, activationJobBaseline);
 
     markActive('module_completion');
     await waitFor(async () => {
@@ -2332,12 +2350,35 @@ function createCanvasCaptureCustody(runSuffix, directory = process.env.DEMO_CANV
 }
 
 function requireCanvasSetupMutationReconciliation(state) {
-  requireCondition(!state.bindingActivationPossible||Boolean(state.applicationId),
+  requireCondition(!state.bindingActivationPossible||Boolean(state.applicationId)
+    || state.prelaunchAbsenceConfirmed===true,
     'canvas_background_application_uncertain','An activated owned binding without its returned application tuple requires reconciliation.');
   for(const field of ['martyPlatformIntent','martySecretIntent']) {
     const intent=state.owned?.[field];
     requireCondition(!intent||intent.state==='CREATED','canvas_setup_creation_uncertain','Owned Canvas setup creation requires exact reconciliation.');
   }
+}
+
+async function reconcileCanvasPrelaunchApplicationAbsence(state) {
+  if (!state.bindingActivationPossible || state.applicationId) return;
+  const bindingId=state.binding?.id, organizationId=state.organizationId;
+  requireCondition(state.owned?.martyBindingId===bindingId && !state.owned?.martyLearnerLaunchIntent
+    && !state.owned?.martyApplicationId && state.marty,
+  'canvas_background_application_uncertain','An owned learner launch may have created an application.');
+  const prefix=`?organization_id=${encodeURIComponent(organizationId)}&binding_id=${encodeURIComponent(bindingId)}&limit=100`;
+  const jobs=safeList(await state.marty.get(`/v1/integrations/canvas/canvas-sync-jobs${prefix}`));
+  const candidates=safeList(await state.marty.get(`/v1/integrations/canvas/canvas-award-candidates${prefix}`));
+  requireCondition(jobs.length>0 && jobs.length<100 && candidates.length<100,
+    'canvas_background_application_uncertain','Owned Canvas background inventory is incomplete.');
+  requireCondition(jobs.every(job=>job.organization_id===organizationId&&job.binding_id===bindingId
+    && job.platform_id===state.platformId&&job.target_type==='background_roster'
+    && job.application_id==null&&job.status==='succeeded'),
+  'canvas_background_application_uncertain','Owned Canvas jobs are pending or reference an application.');
+  requireCondition(candidates.every(candidate=>candidate.organization_id===organizationId
+    && candidate.binding_id===bindingId&&candidate.application_id==null
+    && candidate.status==='identity_link_required'),
+  'canvas_background_application_uncertain','Owned Canvas candidates reference an application or claim.');
+  state.prelaunchAbsenceConfirmed=true;
 }
 
 async function retireCanvasOAuthAuthority(state, observe = () => {}, {requireAccess = false} = {}) {
@@ -2405,6 +2446,7 @@ async function retireCanvasEngineeringSetup(state, observeSessions = () => {}) {
   let retired={scope:'OWNED_CANVAS_FIXTURE_RETIREMENT',complete:false,resources:[]};
   const failures=[];
   try {
+      await reconcileCanvasPrelaunchApplicationAbsence(state);
       requireCanvasSetupMutationReconciliation(state);
       const issuanceRetirement = await retireCanvasApplication({ marty:state.marty, organizationId: state.organizationId,
         applicationId: state.applicationId, credentialTemplateId: state.templates?.credential?.id,
@@ -2524,6 +2566,7 @@ async function main(options = {}) {
     await showVideoStep(recordedPage, 'Canvas evidence is complete', 'The learner completed a native assignment, a Classic Quiz, and the module in stock Canvas.');
 
     markActive('learner_resource_launch');
+    preparationState.owned.martyLearnerLaunchIntent=true;preparationState.persistOwned();
     const firstLaunch = await launchLearnerResource(recordedPage, learnerCanvas, fixtures, externalAssignment, martyOrigin);
     recordedPage = firstLaunch.page;
     const firstBootstrap = firstLaunch.bootstrap;
@@ -2532,10 +2575,10 @@ async function main(options = {}) {
     pass('learner_resource_launch', 'The enrolled learner launched the Deep Linked resource through standard LTI 1.3 and reached ElevenID.');
     await showVideoStep(recordedPage, 'Portable learner launch verified', 'Canvas supplied the signed learner, course, and resource context; no email identity match was used.');
 
-    const secondActivationAt = new Date().toISOString();
+    const secondActivationJobBaseline = await rosterJobBaseline(marty, organizationId, binding.id);
     markActive('nrps_roster');
     await validateAndActivateBinding(marty, binding.id);
-    const rosterJob = await waitForLatestRosterJob(marty, organizationId, binding.id, secondActivationAt);
+    const rosterJob = await waitForLatestRosterJob(marty, organizationId, binding.id, secondActivationJobBaseline);
     markActive('background_pending_claim_unsigned');
     const pendingCandidate = await waitForCandidate(marty, organizationId, binding.id, 'pending_claim');
     requireCondition(Number(rosterJob?.result?.pending_claim || 0) >= 1 || pendingCandidate, 'background_candidate_not_pending', 'Background roster synchronization did not produce an unsigned pending claim.');
@@ -2812,6 +2855,7 @@ module.exports = {
   createOauthDeveloperKey,
   createCanvasCaptureCustody,
   requireCanvasSetupMutationReconciliation,
+  reconcileCanvasPrelaunchApplicationAbsence,
   retireCanvasOAuthAuthority,
   retireCanvasOwnedReferences,
   retireCanvasCaptureSessions,
@@ -2839,6 +2883,7 @@ module.exports = {
   prepareCanvasCaptureFixtures,
   validateAndActivateBinding,
   waitForLatestRosterJob,
+  rosterJobBaseline,
   waitForCandidate,
   launchLearnerResource,
   triggerLearnerSync,
