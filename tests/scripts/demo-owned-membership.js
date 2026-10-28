@@ -4,10 +4,42 @@
 const assert = require('node:assert/strict');
 const {
   cleanupApplicationCredential, createOwnedApplication, ensureApplicantProfile,
-  issueOwnedApplication, requireJson, requireOwnedApplication, submitOwnedApplication,
-  approvedApplicationFlowPayload,
+  issueOwnedApplication, readApplicationTransaction, requireJson, requireOwnedApplication,
+  submitOwnedApplication,
 } = require('./beta-demo-resource-helpers');
 const { createOwnedActiveConfiguration, retireOwnedConfiguration } = require('./demo-owned-configuration');
+
+async function requireGovernedMembershipFlow(operator, owned, flowId, read = requireJson) {
+  assert.match(flowId || '', /^[a-f0-9-]{36}$/i);
+  const flow = await read(operator, `/v1/flows/definitions/${encodeURIComponent(flowId)}`);
+  assert.equal(flow.id, flowId);
+  assert.equal(flow.organization_id, owned.organizationId);
+  assert.equal(flow.credential_template_id, owned.credentialTemplateId);
+  assert.equal(flow.status, 'ACTIVE');
+  assert.equal(flow.flow_type, 'oid4vci_pre_authorized');
+  assert.equal(flow.trigger?.trigger_type, 'WEBHOOK');
+  assert.equal(flow.trigger?.config?.event_type, 'APPLICATION_APPROVED');
+  const definitions = [];
+  for (let offset = 0; offset <= 10_000; offset += 500) {
+    const page = await read(operator,
+      `/v1/flows/definitions?organization_id=${encodeURIComponent(owned.organizationId)}&limit=500&offset=${offset}`);
+    assert.ok(Array.isArray(page), 'Flow definition inventory must be an array');
+    assert.ok(page.length <= 500, 'Flow definition inventory page exceeded its limit');
+    definitions.push(...page);
+    if (page.length < 500) break;
+    assert.ok(offset < 10_000, 'Flow definition inventory exceeded the bounded scan');
+  }
+  assert.equal(new Set(definitions.map(item => item.id)).size, definitions.length,
+    'Flow definition inventory repeated a definition');
+  const matching = definitions.filter(item => item.organization_id === owned.organizationId
+    && item.credential_template_id === owned.credentialTemplateId && item.status === 'ACTIVE'
+    && item.trigger?.trigger_type === 'WEBHOOK'
+    && item.trigger?.config?.event_type === 'APPLICATION_APPROVED');
+  assert.equal(matching.length, 1,
+    'One governed membership issuance Flow must be active before issuing');
+  assert.equal(matching[0]?.id, flowId);
+  return flow;
+}
 
 function createOwnedMembership(operator, inputs) {
   const owned = { organizationId: inputs.organizationId, credentialTemplateId: null,
@@ -16,7 +48,7 @@ function createOwnedMembership(operator, inputs) {
   const protectedFields = ['id', 'organization_id', 'status', 'credential_type', 'vct',
     'credential_payload_format', 'issuer_did', 'trust_profile_id', 'claims', 'supported_formats'];
   const protectedContract = template => Object.fromEntries(protectedFields.map(key => [key, template[key] ?? null]));
-  let sourceContract = null;
+  let sourceContract = null, sourceFlowContract = null;
   const controller = {
     owned,
     async configure() {
@@ -41,6 +73,9 @@ function createOwnedMembership(operator, inputs) {
       // Credential login's governed policy requires this exact source template.
       // Own the application and credential, never clone or retire shared policy authority.
       owned.credentialTemplateId = credential.id;
+      const flow = await requireGovernedMembershipFlow(operator, owned, inputs.sourceFlowDefinitionId);
+      sourceFlowContract = { id: flow.id, organization_id: flow.organization_id,
+        credential_template_id: flow.credential_template_id, status: flow.status, trigger: flow.trigger };
       const application = await createOwnedActiveConfiguration(operator, owned, {
         collectionPath: '/v1/application-templates', name: 'First-party membership control',
         // Preserve the production Rust-generated collection contract. System
@@ -54,13 +89,6 @@ function createOwnedMembership(operator, inputs) {
         },
       });
       owned.applicationTemplateId = application.id;
-      const flow = await createOwnedActiveConfiguration(operator, owned, {
-        collectionPath: '/v1/flows/definitions', name: 'First-party membership issuance',
-        payload: approvedApplicationFlowPayload({ organizationId: owned.organizationId,
-          name: 'First-party membership issuance', description: 'Issue this owned approved membership application.',
-          credentialTemplateId: owned.credentialTemplateId }),
-      });
-      assert.equal(flow.credential_template_id, owned.credentialTemplateId);
       return { credential, application, flow };
     },
     async prepare(applicantPage) {
@@ -78,27 +106,56 @@ function createOwnedMembership(operator, inputs) {
         method: 'POST', body: JSON.stringify({ notes: 'Authorized synthetic first-party wallet control' }),
       }), owned);
       assert.equal(approved.status, 'APPROVED');
+      // Applicant approval publishes to Notification/Event Stream. The signed
+      // Flow webhook is dispatched by HttpFlowProvider::issue, not approval.
+      // Refuse any unexpected prior offer before invoking that path once.
+      assert.equal(await readApplicationTransaction(operator, owned), null,
+        'Approval unexpectedly created an issuance transaction before the explicit issue');
+      await requireGovernedMembershipFlow(operator, owned, inputs.sourceFlowDefinitionId);
       await issueOwnedApplication(operator, owned, 'Prepare owned membership offer for real UI claim');
+      const issuedTransaction = await readApplicationTransaction(operator, owned);
+      assert.equal(issuedTransaction?.id, owned.transactionId,
+        'Explicit issue did not leave exactly one bound application transaction');
       return { applicationId: owned.applicationId, organizationId: owned.organizationId };
     },
     async cleanup() {
-      const application = await cleanupApplicationCredential(operator, owned,
-        'Retire run-owned first-party wallet credential', { cancelPendingOffer: true });
-      const configuration = await retireOwnedConfiguration(operator, owned);
-      let sharedTemplateReadback = null;
-      if (sourceContract) {
-        const current = await requireJson(operator,
-          `/v1/credential-templates/${encodeURIComponent(inputs.credentialTemplateId)}`);
-        assert.deepEqual(protectedContract(current), sourceContract,
-          'Governed shared credential template changed during the owned run');
-        assert.equal(current.status, 'ACTIVE');
-        sharedTemplateReadback = { id: current.id, status: current.status, unchanged: true };
-      }
-      return { complete: application.ok === true && configuration.ok === true,
-        application, configuration, sharedCredentialTemplateModified: false, sharedTemplateReadback };
+      let application, configuration, sharedTemplateReadback = null, sharedFlowReadback = null;
+      const failures = [];
+      try { application = await cleanupApplicationCredential(operator, owned,
+        'Retire run-owned first-party wallet credential', { cancelPendingOffer: true }); }
+      catch (error) { application = { ok: false }; failures.push({ operation: 'application',
+        code: error.code || error.name, detail: String(error.stack || error.message || error) }); }
+      // Configuration has an independent exact ownership ledger. A failed or
+      // ambiguous application cleanup cannot leave run-owned configuration active.
+      try { configuration = await retireOwnedConfiguration(operator, owned); }
+      catch (error) { configuration = { ok: false }; failures.push({ operation: 'configuration',
+        code: error.code || error.name, detail: String(error.stack || error.message || error) }); }
+      try {
+        if (sourceContract) {
+          const current = await requireJson(operator,
+            `/v1/credential-templates/${encodeURIComponent(inputs.credentialTemplateId)}`);
+          assert.deepEqual(protectedContract(current), sourceContract,
+            'Governed shared credential template changed during the owned run');
+          assert.equal(current.status, 'ACTIVE');
+          sharedTemplateReadback = { id: current.id, status: current.status, unchanged: true };
+        }
+        if (sourceFlowContract) {
+          const current = await requireJson(operator,
+            `/v1/flows/definitions/${encodeURIComponent(inputs.sourceFlowDefinitionId)}`);
+          assert.deepEqual({ id: current.id, organization_id: current.organization_id,
+            credential_template_id: current.credential_template_id, status: current.status,
+            trigger: current.trigger }, sourceFlowContract,
+          'Governed shared issuance Flow changed during the owned run');
+          sharedFlowReadback = { id: current.id, status: current.status, unchanged: true };
+        }
+      } catch (error) { failures.push({ operation: 'shared_authority_readback',
+        code: error.code || error.name, detail: String(error.stack || error.message || error) }); }
+      return { complete: application?.ok === true && configuration?.ok === true && failures.length === 0,
+        application, configuration, failures, sharedCredentialTemplateModified: false,
+        sharedTemplateReadback, sharedFlowReadback };
     },
   };
   return controller;
 }
 
-module.exports = { createOwnedMembership };
+module.exports = { createOwnedMembership, requireGovernedMembershipFlow };
