@@ -3,7 +3,7 @@ module github.com/ElevenID/marty-ui/openbao/didcomm-authcrypt
 go 1.26.0
 
 require (
-	github.com/go-jose/go-jose/v4 v4.1.4
+	github.com/go-jose/go-jose/v4 v4.1.6
 	github.com/hashicorp/go-hclog v1.6.3
 	github.com/openbao/openbao/api/v2 v2.5.1
 	github.com/openbao/openbao/sdk/v2 v2.5.1
