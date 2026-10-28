@@ -20,11 +20,11 @@ VOLUMES = ("ui-canvas-cargo", "d05-rust-target-20261026")
 
 def build_scope(profile=None):
     if profile is None:
-        return {"uiRevision": UI_REVISION, "roles": ROLE_BINARIES, "packages": PACKAGES,
+        return {"uiRevision": UI_REVISION, "coreRevision": CORE_REVISION, "roles": ROLE_BINARIES, "packages": PACKAGES,
                 "prefix": "marty-d12-", "owner": "d12-scoped-native"}
     from scoped_native_profiles import reviewed_profile
     selected = reviewed_profile(profile)
-    return {"uiRevision": selected.ui_revision, "roles": dict(selected.roles),
+    return {"uiRevision": selected.ui_revision, "coreRevision": selected.core_revision, "roles": dict(selected.roles),
             "packages": selected.packages, "prefix": selected.container_prefix, "owner": selected.owner}
 
 
@@ -62,7 +62,7 @@ def verify(plan, git, profile=None):
     scope = build_scope(profile)
     private = Path(plan["privateDirectory"]).resolve()
     require(private.is_relative_to(Path.home() / ".codex/private"), "OWNED_PRIVATE_BUILD_ROOT_REQUIRED")
-    for name, revision in (("ui", scope["uiRevision"]), ("core", CORE_REVISION)):
+    for name, revision in (("ui", scope["uiRevision"]), ("core", scope["coreRevision"])):
         source = plan["sources"][name]
         require(source["revision"] == revision, "SOURCE_REVISION_CHANGED")
         directory = Path(source["directory"]).resolve()
@@ -170,7 +170,7 @@ class LocalBuildJournal:
 def build_journal(plan, private, profile=None):
     if "journalBackend" not in plan:
         return LocalBuildJournal(private)
-    require(profile in ("d02-signing-cas", "d02-signing-cas-no-transform"), "LINUX_JOURNAL_IS_D02_ONLY")
+    require(profile in ("d02-signing-cas", "d02-signing-cas-no-transform", "canvas-issuer-scoped-jobs"), "LINUX_JOURNAL_REVIEWED_PROFILE_REQUIRED")
     from scoped_linux_journal import LinuxBuildJournal
     return LinuxBuildJournal(private, plan["runId"], plan["journalBackend"])
 
@@ -259,7 +259,7 @@ def finish(prepared_ref, helper, git, profile=None):
     require(row["Id"] == state["containerId"] and row["Image"] == plan["builderImage"] and row["Config"]["Labels"]["elevenid.run"] == plan["runId"]
         and row["Config"]["Labels"]["elevenid.owner"] == scope["owner"], "BUILD_OWNER_CHANGED")
     require(row["State"]["Status"] == "exited", "BUILD_STILL_ACTIVE")
-    result = {**state, "state": "BUILD_FAILED_RETAINED", "exitCode": row["State"]["ExitCode"], "oomKilled": row["State"].get("OOMKilled", False), "uiRevision": scope["uiRevision"], "coreRevision": CORE_REVISION, "roleBinaries": scope["roles"]}
+    result = {**state, "state": "BUILD_FAILED_RETAINED", "exitCode": row["State"]["ExitCode"], "oomKilled": row["State"].get("OOMKilled", False), "uiRevision": scope["uiRevision"], "coreRevision": scope["coreRevision"], "roleBinaries": scope["roles"]}
     if result["exitCode"] == 0 and not result["oomKilled"]:
         output = Path(plan["outputDirectory"])
         require((output / "exit-code").read_text().strip() == "0", "BUILD_RECIPE_OUTCOME_MISSING")

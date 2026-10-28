@@ -10,6 +10,7 @@ class BuildProfile:
     packages: tuple[str, ...]
     container_prefix: str
     owner: str
+    core_revision: str = "4320b5fa1c6f41231ee0aa2bc57d8008549f67ac"
 
 
 SIGNING_CAS = BuildProfile(
@@ -30,9 +31,19 @@ SIGNING_CAS_NO_TRANSFORM = BuildProfile(
     "d02-signing-cas-header-native",
 )
 
+CANVAS_SCOPED_JOBS = BuildProfile(
+    "canvas-issuer-scoped-jobs",
+    "fce109daf47a7712c1ff5779b0e33def57bbce20",
+    (("issuance-native", "marty-issuance-service"),),
+    ("marty-issuance-service",),
+    "marty-canvas-scoped-jobs-",
+    "canvas-scoped-jobs-native",
+    "44040270000f93b7e7499cbec31b3bb3dd7e3df1",
+)
+
 
 def reviewed_profile(name):
-    for profile in (SIGNING_CAS, SIGNING_CAS_NO_TRANSFORM):
+    for profile in (SIGNING_CAS, SIGNING_CAS_NO_TRANSFORM, CANVAS_SCOPED_JOBS):
         if name == profile.name:
             return profile
     raise ValueError("UNKNOWN_REVIEWED_BUILD_PROFILE")
