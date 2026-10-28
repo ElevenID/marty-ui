@@ -783,6 +783,24 @@ test('engineering CLI permits explicit media-free mode while recorded mode requi
   assert.match(recorded.video,/contract\.webm$/);
 });
 
+test('host engineering refuses a recovery directory other than its run-owned directory before setup',async()=>{
+  const {prepareCanvasCaptureFixtures}=require('./run-canvas-oss-standard-contract');
+  const beforeReceipt=process.env.DEMO_LOCAL_FUNCTIONAL_RUNTIME_RECEIPT;
+  const beforeRecovery=process.env.DEMO_CANVAS_PRIVATE_RECOVERY_DIRECTORY;
+  try{
+    process.env.DEMO_LOCAL_FUNCTIONAL_RUNTIME_RECEIPT='source-only';
+    process.env.DEMO_CANVAS_PRIVATE_RECOVERY_DIRECTORY='C:\\different-private-run';
+    await assert.rejects(prepareCanvasCaptureFixtures({browser:{},ledger:{},
+      runSuffix:'owned-run-1234',ownedPrivateRecoveryDirectory:'C:\\expected-private-run'}),
+    error=>error.code==='canvas_private_custody_missing');
+  }finally{
+    if(beforeReceipt===undefined)delete process.env.DEMO_LOCAL_FUNCTIONAL_RUNTIME_RECEIPT;
+    else process.env.DEMO_LOCAL_FUNCTIONAL_RUNTIME_RECEIPT=beforeReceipt;
+    if(beforeRecovery===undefined)delete process.env.DEMO_CANVAS_PRIVATE_RECOVERY_DIRECTORY;
+    else process.env.DEMO_CANVAS_PRIVATE_RECOVERY_DIRECTORY=beforeRecovery;
+  }
+});
+
 test('shared stock login emits only static stages and preserves original navigation failure',async()=>{
  const {loginCanvas}=require('./run-canvas-oss-standard-contract');const stages=[];
  const locator={first(){return this},fill:async()=>{},click:async()=>{},isVisible:async()=>false};
