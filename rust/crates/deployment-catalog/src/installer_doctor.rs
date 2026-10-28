@@ -177,7 +177,7 @@ fn security_posture(c: &Value) -> Result<Value> {
         "cap_drop_all":dropped.iter().any(|v| v.as_str().is_some_and(|s| s.eq_ignore_ascii_case("all"))),
         "cap_add_count":added.len(),
         "device_count":host["Devices"].as_array().map_or(0, Vec::len),
-        "writable_mount_count":writable_mounts,
+        "writable_inspected_mount_count":writable_mounts,
         "published_port_count":published_ports,
     }))
 }
@@ -504,7 +504,7 @@ mod tests {
         let postgres_security = &result["services"]["postgres"]["security_posture"];
         assert_eq!(postgres_security["source"], "docker_inspect");
         assert_eq!(postgres_security["privileged"], false);
-        assert!(postgres_security["writable_mount_count"].is_number());
+        assert!(postgres_security["writable_inspected_mount_count"].is_number());
         assert!(postgres_security["published_port_count"].is_number());
         assert!(!result.to_string().contains("private-health-output"));
         let path = root.path().join("ledger.json");
@@ -545,8 +545,15 @@ mod tests {
         assert_eq!(summary["user_class"], "numeric_non_root");
         assert_eq!(summary["no_new_privileges"], true);
         assert_eq!(summary["cap_drop_all"], true);
-        assert_eq!(summary["writable_mount_count"], 0);
+        assert_eq!(summary["writable_inspected_mount_count"], 0);
         assert!(!summary.to_string().contains("private-secret"));
+        container["HostConfig"]["SecurityOpt"] = Value::Null;
+        container["HostConfig"]["CapDrop"] = Value::Null;
+        container["HostConfig"]["Devices"] = Value::Null;
+        let defaults = security_posture(&container).unwrap();
+        assert_eq!(defaults["no_new_privileges"], false);
+        assert_eq!(defaults["cap_drop_all"], false);
+        assert_eq!(defaults["device_count"], 0);
         container["Mounts"][0]["RW"] = json!("unknown");
         assert!(security_posture(&container).is_err());
     }

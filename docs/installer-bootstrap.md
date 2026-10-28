@@ -103,7 +103,9 @@ includes `container_security_posture` for each observed service. This redacted
 summary comes from Docker inspect after the installer verifies the container's
 recorded identity and configuration. It records configured user class, privileged
 mode, read-only root filesystem, `no-new-privileges`, capability changes, and
-counts of devices, writable mounts and published ports. A `null` service entry
+counts of devices, writable entries in Docker inspect `Mounts`, and published
+ports. The writable count excludes tmpfs and other writable paths absent from
+`Mounts`. A `null` service entry
 means that service was missing; a `null` top-level value means the inspection
 could not be held stable. It does not inspect kernel-effective UID or capabilities
 inside a running process and is not a container-hardening qualification.
