@@ -38,6 +38,7 @@ pub mod installer_openbao;
 pub mod installer_prepare;
 #[allow(dead_code)] // Dormant until the reviewed purge coordinator supplies durable intent.
 pub(crate) mod installer_purge_volume;
+pub(crate) mod installer_purge_host;
 pub mod installer_release;
 pub mod installer_renewal;
 pub mod installer_renewal_bootstrap;
