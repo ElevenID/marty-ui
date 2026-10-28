@@ -32,6 +32,7 @@ const {
   membershipLoginBehaviorAssertions,
   requireCompletedLoginNonce,
   loginNonceCompletionEvidence,
+  isCredentialLoginDestinationUrl,
 } = require('./beta-credential-contract');
 const {observeCredentialLoginBrowser} = require('./credential-login-browser-observation');
 const {
@@ -396,9 +397,7 @@ async function runCredentialLogin({ retainedFirstParty = false, evidence = null 
     }
     requireCompletedLoginNonce(nonceEvidence.status);
     if (!browserFinalize?.verified) throw new Error('Credential login browser finalize not verified');
-    await loginPage.waitForURL((url) => url.origin === new URL(BETA_ORIGIN).origin
-      && url.pathname === '/console/applicant/catalog'
-      && url.searchParams.size === 1 && url.searchParams.get('auth_method') === 'credential',
+    await loginPage.waitForURL((url) => isCredentialLoginDestinationUrl(url.href, BETA_ORIGIN),
     { timeout: 60_000 });
     report.completion.uiDestinationVerified = true;
     await waitFor(() => loginPage.evaluate(async () => {

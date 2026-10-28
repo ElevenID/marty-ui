@@ -159,20 +159,24 @@ function isExactLoginNonceEndpointUrl(value, betaOrigin, nonce, pathname) {
 
 function loginFinalizeRedirectEvidence(response, betaOrigin, nonce) {
   const exactNonce = isExactLoginNonceFinalizeUrl(response?.url, betaOrigin, nonce);
-  let expectedUi = false;
-  try {
-    const location = new URL(response?.headers?.location || '', betaOrigin);
-    expectedUi = location.origin === new URL(betaOrigin).origin
-      && location.pathname === '/console/applicant/catalog'
-      && location.searchParams.size === 1
-      && location.searchParams.get('auth_method') === 'credential'
-      && !location.hash;
-  } catch { /* A missing or invalid Location is not an observed finalize. */ }
+  const expectedUi = isCredentialLoginDestinationUrl(response?.headers?.location, betaOrigin);
   const cookie = response?.headers?.['set-cookie'] || '';
   const sessionCookieSet = /(?:^|[,\n]\s*)sessionId=[^;,\s]+(?:;|$)/i.test(cookie);
   return {exactNonce, redirectStatus: response?.status || null,
     expectedUi, sessionCookieSet,
     verified: exactNonce && response?.status === 302 && expectedUi && sessionCookieSet};
+}
+
+function isCredentialLoginDestinationUrl(value, betaOrigin) {
+  if (!value) return false;
+  try {
+    const url = new URL(value, betaOrigin);
+    return url.origin === new URL(betaOrigin).origin
+      && url.pathname === '/console/applicant/catalog'
+      && url.searchParams.size === 1
+      && url.searchParams.get('auth_method') === 'credential'
+      && !url.hash;
+  } catch { return false; }
 }
 
 function isTerminalLoginNonceStatus(body) {
@@ -218,6 +222,7 @@ module.exports = {
   isExactLoginNonceStatusUrl,
   isExactLoginNonceFinalizeUrl,
   loginFinalizeRedirectEvidence,
+  isCredentialLoginDestinationUrl,
   isTerminalLoginNonceStatus,
   verificationResultEvidence,
   verificationSessionRequest,

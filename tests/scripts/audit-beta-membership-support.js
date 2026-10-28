@@ -21,7 +21,7 @@ const {
   GRANT, assertions, awaitNaturalExpiry, credentialContract, expiryWindow, hash,
   loginInstanceBinding, nativeLoginResult, validateFixture, validateIssuerSetup, validateLoginSetup,
 } = require('./beta-membership-support-contract');
-const {requireCompletedLoginNonce} = require('./beta-credential-contract');
+const {isCredentialLoginDestinationUrl, requireCompletedLoginNonce} = require('./beta-credential-contract');
 const {observeCredentialLoginBrowser} = require('./credential-login-browser-observation');
 
 const ROOT = path.resolve(__dirname, '../..');
@@ -357,7 +357,7 @@ async function present({ authPage, walletPage, authContext, operator, fixture, o
     assert.equal(observed.browserFinalize?.verified, true,
       'Trusted recovery requires the browser-owned exact-nonce finalize redirect and fresh session cookie');
     await waitFor(async () => (await authMe(authContext, origin)).authenticated === true, 60_000, 500);
-    await authPage.waitForURL((url) => url.origin === origin && !url.pathname.includes('credential-login'), { timeout: 60_000 });
+    await authPage.waitForURL((url) => isCredentialLoginDestinationUrl(url.href, origin), { timeout: 60_000 });
     const user = await authMe(authContext, origin);
     assert.equal(user.authenticated, true);
     assert.equal(user.user?.email || user.email, fixture.applicant.email, 'Recovered login must be the existing synthetic account');
