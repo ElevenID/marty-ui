@@ -375,7 +375,7 @@ async function runCredentialLogin({ retainedFirstParty = false, evidence = null 
       if (safe.status === 'invalid-response') nonceStatusObservation.parseFailureCount += 1;
       nonceStatusObservation.lastStatus = safe.status;
       nonceStatusObservation.lastReasonCode = safe.reasonCode || null;
-      if (isTerminalLoginNonceStatus(safe)) terminalStatusSnapshot = safe;
+      if (isTerminalLoginNonceStatus(safe) && !terminalStatusSnapshot) terminalStatusSnapshot = safe;
       return isTerminalLoginNonceStatus(safe);
     }, { timeout: 60_000 }).catch(() => null);
     const browserFinalizeResponse = loginPage.waitForResponse((response) =>
