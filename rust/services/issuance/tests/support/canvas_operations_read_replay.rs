@@ -99,17 +99,31 @@ async fn filtering_window(pool: &PgPool, router: &axum::Router) {
         '2026-01-01T00:00:00Z'::timestamptz+i*interval '1 second',now()
         FROM generate_series(1,501) i")
         .execute(pool).await.unwrap();
-    let (status, _, body) = request_case(router, &json!({
-        "path":"/v1/integrations/canvas/canvas-sync-jobs?binding_id=binding-review&limit=1"
-    })).await;
+    let (status, _, body) = request_case(
+        router,
+        &json!({
+            "path":"/v1/integrations/canvas/canvas-sync-jobs?binding_id=binding-review&limit=1"
+        }),
+    )
+    .await;
     assert_eq!(status, 200);
     assert_eq!(body.as_array().unwrap().len(), 1);
-    assert_eq!(body[0]["id"], "job-dead", "owned job survives 501 newer foreign jobs");
-    let (status, _, body) = request_case(router, &json!({
-        "path":"/v1/integrations/canvas/canvas-sync-jobs?platform_id=&binding_id=&limit=1"
-    })).await;
+    assert_eq!(
+        body[0]["id"], "job-dead",
+        "owned job survives 501 newer foreign jobs"
+    );
+    let (status, _, body) = request_case(
+        router,
+        &json!({
+            "path":"/v1/integrations/canvas/canvas-sync-jobs?platform_id=&binding_id=&limit=1"
+        }),
+    )
+    .await;
     assert_eq!(status, 200);
-    assert_eq!(body[0]["id"], "job-window-501", "empty optional filters remain unfiltered");
+    assert_eq!(
+        body[0]["id"], "job-window-501",
+        "empty optional filters remain unfiltered"
+    );
 }
 
 pub async fn replay_inputs(pool: &PgPool) {
