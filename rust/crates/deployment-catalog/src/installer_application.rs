@@ -120,6 +120,7 @@ fn prepare_inner(
         "optional_empty_secrets":env.optional_empty_secrets, "installation_ready":false,
     })).map_err(|_| "cannot serialize application intent")?)?;
     state.prepare_application_storage()?;
+    state.persist_application_storage_creation_receipt(installation)?;
     state.stage_operator_password()?;
     let source_env = if select_generation {
         "application-source.env"
