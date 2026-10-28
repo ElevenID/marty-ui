@@ -44,6 +44,14 @@ function localFunctionalRuntimeBinding(env = process.env) {
   return {profileSha256:runtime.profileSha256,receiptSha256:runtime.sha256,
     scope:'FUNCTIONAL_ONLY',releaseQualified:false,recordingQualified:false};
 }
+function requireCurrentEngineeringRuntime(summary, runtime) {
+  if(!runtime)return;
+  assert.equal(summary.kind,'canvas_local_engineering');
+  assert.equal(summary.functional_runtime_profile_sha256,runtime.profileSha256,
+    'Stock Canvas engineering profile differs from the functional run');
+  assert.equal(summary.functional_runtime_observation_sha256,runtime.receiptSha256,
+    'Stock Canvas engineering observation differs from the functional run');
+}
 
 async function main() {
   const scenario = process.argv[2];
@@ -122,6 +130,7 @@ async function main() {
         .loadCanvasLocalEngineeringPrerequisite(process.env.CANVAS_PORTABILITY_ATTESTATION_PATH)
       : require(path.join(path.dirname(helper), 'canvasPortabilityAttestation.js'))
         .loadCanvasPortabilityAttestation(process.env.CANVAS_PORTABILITY_ATTESTATION_PATH);
+    requireCurrentEngineeringRuntime(prerequisite.summary,functionalRuntime);
     assert.equal(prerequisite.summary.marty_release_version, report.deployment.marker);
     assert.equal(prerequisite.summary.marty_source_id, report.deployment.source);
     report.prerequisite = prerequisite.summary;
@@ -292,4 +301,4 @@ if (require.main === module) main().catch(error => {
   process.stderr.write(`Canvas capture initialization failed (${code}).\n`);
   process.exitCode = 1;
 });
-module.exports = { main, localOverlayBinding, localFunctionalRuntimeBinding };
+module.exports = { main, localOverlayBinding, localFunctionalRuntimeBinding, requireCurrentEngineeringRuntime };
