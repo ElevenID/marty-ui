@@ -388,12 +388,9 @@ impl PurgeLedger {
         )?;
         Ok(PersistedIntent { key, created })
     }
-    pub(crate) fn record_result(&self, intent: &PersistedIntent, outcome: Outcome) -> Result<()> {
+    fn verify_intent(&self, intent: &PersistedIntent) -> Result<()> {
         self.verify_manifest()?;
         require(hex_digest(&intent.key))?;
-        if outcome == Outcome::AlreadyAbsentAfterRetry {
-            require(intent.is_retry())?;
-        }
         let original = read_record(
             &self.directory,
             &format!("intent-{}.json", intent.key),
@@ -406,10 +403,43 @@ impl PurgeLedger {
             record.schema == "elevenid.installer-purge-intent/v1"
                 && record.installation_id == self.installation_id
                 && record.plan_sha256 == self.plan_sha256
-                && record.action == "remove",
+                && record.action == "remove"
+                && hex_digest(&record.identity_sha256)
+                && serde_json::to_vec(&record).map_err(|_| REFUSED)? == original,
         )?;
+        Ok(())
+    }
+    /// Inspect an exact durable result before reconciling a retry. The caller
+    /// must still observe resource absence; this receipt alone never authorizes
+    /// skipping a live resource or removing a replacement.
+    pub(crate) fn recorded_result(&self, intent: &PersistedIntent) -> Result<Option<Outcome>> {
+        self.verify_intent(intent)?;
+        let entry = format!("result-{}.json", intent.key);
+        let Some(bytes) = read_record(&self.directory, &entry, MAX_RECORD)? else {
+            self.verify_manifest()?;
+            return Ok(None);
+        };
+        let record: ResultRecord = serde_json::from_slice(&bytes).map_err(|_| REFUSED)?;
+        require(
+            record.schema == "elevenid.installer-purge-result/v1"
+                && record.installation_id == self.installation_id
+                && record.plan_sha256 == self.plan_sha256
+                && record.intent_sha256 == intent.key
+                && serde_json::to_vec(&record).map_err(|_| REFUSED)? == bytes,
+        )?;
+        self.verify_manifest()?;
+        require(
+            read_record(&self.directory, &entry, MAX_RECORD)?.as_deref() == Some(bytes.as_slice()),
+        )?;
+        Ok(Some(record.outcome))
+    }
+    pub(crate) fn record_result(&self, intent: &PersistedIntent, outcome: Outcome) -> Result<()> {
+        self.verify_intent(intent)?;
+        if outcome == Outcome::AlreadyAbsentAfterRetry {
+            require(intent.is_retry())?;
+        }
         let result = ResultRecord {
-            schema: "elevenid.installer-purge-result/v1",
+            schema: "elevenid.installer-purge-result/v1".into(),
             installation_id: self.installation_id,
             plan_sha256: self.plan_sha256.clone(),
             intent_sha256: intent.key.clone(),
@@ -459,9 +489,10 @@ struct IntentRecord {
     identity_sha256: String,
     action: String,
 }
-#[derive(Serialize)]
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 struct ResultRecord {
-    schema: &'static str,
+    schema: String,
     installation_id: uuid::Uuid,
     plan_sha256: String,
     intent_sha256: String,
@@ -507,25 +538,109 @@ mod tests {
             .record_intent(ResourceKind::DockerVolume, &resource)
             .unwrap();
         assert!(!first.is_retry());
+        assert_eq!(ledger.recorded_result(&first).unwrap(), None);
         assert!(hex_digest(first.sha256()));
         assert!(ledger
             .record_result(&first, Outcome::AlreadyAbsentAfterRetry)
             .is_err());
         ledger.record_result(&first, Outcome::Removed).unwrap();
+        assert_eq!(
+            ledger.recorded_result(&first).unwrap(),
+            Some(Outcome::Removed)
+        );
         ledger.record_result(&first, Outcome::Removed).unwrap();
         let retry = ledger
             .record_intent(ResourceKind::DockerVolume, &resource)
             .unwrap();
         assert!(retry.is_retry());
+        assert_eq!(
+            ledger.recorded_result(&retry).unwrap(),
+            Some(Outcome::Removed)
+        );
+        assert!(ledger
+            .record_result(&retry, Outcome::AlreadyAbsentAfterRetry)
+            .is_err());
         drop(ledger);
         let (resumed, stored) = PurgeLedger::open_existing(&parent, id, &hash).unwrap();
         assert_eq!(stored, plan);
+        let retry = resumed
+            .record_intent(ResourceKind::DockerVolume, &resource)
+            .unwrap();
+        assert_eq!(
+            resumed.recorded_result(&retry).unwrap(),
+            Some(Outcome::Removed)
+        );
         assert!(resumed
             .record_intent(ResourceKind::DockerVolume, &resource)
             .unwrap()
             .is_retry());
         assert!(PurgeLedger::open_existing(&parent, id, &digest(b"wrong")).is_err());
         assert!(PurgeLedger::create_or_resume(&parent, id, b"different", &hash).is_err());
+    }
+    #[test]
+    fn recorded_result_rejects_mismatched_and_ambiguous_records() {
+        for field in [
+            "schema",
+            "installation",
+            "plan",
+            "intent",
+            "unknown",
+            "duplicate",
+        ] {
+            let (root, parent, id, plan, hash) = fixture();
+            let ledger = PurgeLedger::create_or_resume(&parent, id, &plan, &hash).unwrap();
+            let intent = ledger
+                .record_intent(ResourceKind::HostEntry, &digest(b"owned-file"))
+                .unwrap();
+            ledger.record_result(&intent, Outcome::Removed).unwrap();
+            let path = root
+                .path()
+                .join(directory_name(id))
+                .join(format!("result-{}.json", intent.sha256()));
+            let original = fs::read(&path).unwrap();
+            let mut record: serde_json::Value = serde_json::from_slice(&original).unwrap();
+            match field {
+                "schema" => record["schema"] = "foreign".into(),
+                "installation" => {
+                    record["installation_id"] = uuid::Uuid::new_v4().to_string().into()
+                }
+                "plan" => record["plan_sha256"] = digest(b"other-plan").into(),
+                "intent" => record["intent_sha256"] = digest(b"other-intent").into(),
+                "unknown" => record["extra"] = true.into(),
+                "duplicate" => {}
+                _ => unreachable!(),
+            }
+            let bytes = if field == "duplicate" {
+                String::from_utf8(original)
+                    .unwrap()
+                    .replacen('{', "{\"outcome\":\"removed\",", 1)
+                    .into_bytes()
+            } else {
+                serde_json::to_vec(&record).unwrap()
+            };
+            fs::write(&path, &bytes).unwrap();
+            assert!(ledger.recorded_result(&intent).is_err(), "{field}");
+            assert_eq!(fs::read(&path).unwrap(), bytes);
+        }
+    }
+    #[test]
+    fn orphaned_or_special_result_never_grants_a_durable_outcome() {
+        let (root, parent, id, plan, hash) = fixture();
+        let ledger = PurgeLedger::create_or_resume(&parent, id, &plan, &hash).unwrap();
+        let intent = ledger
+            .record_intent(ResourceKind::HostEntry, &digest(b"owned-file"))
+            .unwrap();
+        ledger.record_result(&intent, Outcome::Removed).unwrap();
+        let directory = root.path().join(directory_name(id));
+        let result = directory.join(format!("result-{}.json", intent.sha256()));
+        fs::remove_file(&result).unwrap();
+        let name = CString::new(result.as_os_str().as_encoded_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+        assert!(ledger.recorded_result(&intent).is_err());
+        fs::remove_file(&result).unwrap();
+        ledger.record_result(&intent, Outcome::Removed).unwrap();
+        fs::remove_file(directory.join(format!("intent-{}.json", intent.sha256()))).unwrap();
+        assert!(ledger.recorded_result(&intent).is_err());
     }
     #[test]
     fn foreign_ledger_entry_and_replaced_manifest_refuse() {
