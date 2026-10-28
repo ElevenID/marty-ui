@@ -3,6 +3,7 @@ from copy import deepcopy
 import importlib
 from pathlib import Path
 import sys
+import tempfile
 from types import SimpleNamespace
 import unittest
 
@@ -12,6 +13,16 @@ shared = importlib.import_module("scoped_native_runtime")
 
 
 class SuccessorControls(unittest.TestCase):
+    def test_actual_candidate_bytes_are_rechecked_not_just_receipt_metadata(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            candidate = Path(temporary) / "marty-signing-keys"
+            candidate.write_bytes(b"synthetic-elf")
+            reference = shared.ref(candidate)
+            self.assertEqual(adapter.verify_candidate_output(reference), candidate)
+            candidate.write_bytes(b"foreign-bytes")
+            with self.assertRaisesRegex(ValueError, "BOUND_FILE_CHANGED"):
+                adapter.verify_candidate_output(reference)
+
     def test_live_render_has_original_project_directory_without_changing_freeze_argv(self):
         arguments = ["docker", "compose", "--project-name", "elevenid-beta", "-f", "frozen/base.yml"]
         original = arguments.copy()

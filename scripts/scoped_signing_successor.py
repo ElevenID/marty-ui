@@ -20,6 +20,13 @@ SOURCE = "9b1efd21163dadeff7cf1ced5fe47c5e046d2121"
 CORE_SOURCE = "4320b5fa1c6f41231ee0aa2bc57d8008549f67ac"
 
 
+def verify_candidate_output(reference):
+    candidate = read_ref(reference, 512 * 1024 * 1024)
+    require(type(reference.get("bytes")) is int and reference["bytes"] > 0
+            and candidate.stat().st_size == reference["bytes"], "EXACT_ELF_SIZE_REQUIRED")
+    return candidate
+
+
 def environment(values):
     require(isinstance(values, list) and all(isinstance(v, str) and "=" in v for v in values), "ENV_SCHEMA")
     pairs = [value.split("=", 1) for value in values]
