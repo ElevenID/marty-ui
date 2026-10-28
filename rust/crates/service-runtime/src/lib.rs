@@ -5,10 +5,7 @@ pub mod workload;
 
 use mmf_platform::{KeylessGrpcTlsAcceptor, OpenBaoTlsIdentityFiles, PlatformError};
 use std::{io, path::PathBuf, time::Duration};
-use tokio::{
-    net::{TcpListener, TcpStream},
-    sync::watch,
-};
+use tokio::net::{TcpListener, TcpStream};
 use tokio_rustls::server::TlsStream;
 use tokio_stream::{wrappers::TcpListenerStream, Stream, StreamExt};
 
@@ -57,50 +54,13 @@ pub fn keyless_incoming(
     })
 }
 
-/// A closed sender also ends graceful shutdown, matching existing service loops.
-pub async fn wait_for_shutdown(shutdown: &mut watch::Receiver<bool>) {
-    while !*shutdown.borrow() && shutdown.changed().await.is_ok() {}
-}
-
-/// Match services that fail startup if installing a signal handler fails.
-pub async fn shutdown_signal() {
-    signal(false).await;
-}
-
-/// Match services whose existing policy returns on signal installation errors.
-pub async fn shutdown_signal_best_effort() {
-    signal(true).await;
-}
-
-async fn signal(best_effort: bool) {
-    let ctrl_c = async {
-        let result = tokio::signal::ctrl_c().await;
-        if !best_effort {
-            result.expect("failed to install Ctrl+C handler");
-        }
-    };
-    #[cfg(unix)]
-    let terminate = async {
-        let result = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate());
-        if best_effort {
-            if let Ok(mut signal) = result {
-                signal.recv().await;
-            }
-        } else {
-            result
-                .expect("failed to install SIGTERM handler")
-                .recv()
-                .await;
-        }
-    };
-    #[cfg(not(unix))]
-    let terminate = std::future::pending::<()>();
-    tokio::select! { () = ctrl_c => {}, () = terminate => {} }
-}
+// Keep the existing service-facing API while MMF owns the common mechanics.
+pub use mmf_runtime::{shutdown_signal, shutdown_signal_best_effort, wait_for_shutdown};
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::sync::watch;
 
     #[tokio::test]
     async fn shutdown_waits_through_false_then_exits_on_true() {
