@@ -307,6 +307,9 @@ fn install_inner(args: &[String], build_identity: &str, mode: InstallMode) -> Re
     eprintln!("Marty installation state: {}", directory.display());
     state.create_private_directory("evidence")?;
     state.create_private_directory("downloads")?;
+    if testing.is_none() {
+        state.persist_initial_creation_receipt(&directory)?;
+    }
     if let Some((bytes, _)) = &admitted {
         persist_signed(&mut state, &o.admission, "installer-admission.json", bytes)?;
     } else if let Some((bytes, _)) = &testing {
