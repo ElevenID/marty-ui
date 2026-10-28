@@ -49,6 +49,15 @@ def attach_context(context, inputs):
     last = {}
 
     def node(mode, payload):
+        # The scoped API client imports the real driver and its sibling modules.
+        # Bind that checkout as well as the standalone reader before launching it.
+        git = inputs["executables"]["git"]["path"]
+        source = subprocess.run([git, "-C", inputs["driverRepository"], "rev-parse", "HEAD"],
+                                env=context["env"], capture_output=True, timeout=20)
+        require(source.returncode == 0 and source.stdout.decode().strip() == inputs["driverRevision"], "DRIVER_SOURCE_REVISION_CHANGED")
+        clean = subprocess.run([git, "-C", inputs["driverRepository"], "status", "--porcelain"],
+                               env=context["env"], capture_output=True, timeout=20)
+        require(clean.returncode == 0 and not clean.stdout.strip(), "DRIVER_SOURCE_DIRTY")
         arguments = [context["nodeExecutable"], inputs["nodeReader"]["path"], "--inputs", context["inputRef"]["path"],
                      "--inputs-sha256", context["inputRef"]["sha256"], "--mode", mode]
         nonce = str(uuid.uuid4())
