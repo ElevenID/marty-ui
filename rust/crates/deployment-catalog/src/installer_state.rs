@@ -414,7 +414,9 @@ struct CleanupPlanRecord {
     project: String,
     network_id: String,
     network_name: String,
-    retained_redis_volume: String,
+    retained_redis_volume: Option<String>,
+    #[serde(default)]
+    absent_redis_volume: Option<String>,
     resources: Vec<CleanupResource>,
     source_hashes: BTreeMap<String, String>,
 }
@@ -429,7 +431,9 @@ struct CleanupResultRecord {
     host_data_retained: bool,
     credentials_retained: bool,
     images_retained: bool,
-    redis_volume_retained: String,
+    redis_volume_retained: Option<String>,
+    #[serde(default)]
+    redis_volume_absent: Option<String>,
     installation_ready: bool,
 }
 fn cleanup_open_optional(
@@ -500,6 +504,8 @@ fn cleanup_summary(
         });
     };
     let plan: CleanupPlanRecord = serde_json::from_slice(plan).map_err(|_| INVALID)?;
+    let pre_application = plan.schema == "elevenid.installer-uninstall-pre-application-plan/v1";
+    let count = if pre_application { 4 } else { 34 };
     let binding = journal.runtime().ok_or(INVALID)?;
     let project = journal.compose_project();
     let roles: BTreeSet<_> = plan.resources.iter().map(|r| r.role.as_str()).collect();
@@ -550,16 +556,55 @@ fn cleanup_summary(
         expected_sources.insert("evidence/application-generation-pending.json");
         expected_sources.insert("evidence/application-generation-selection.json");
     }
-    if plan.schema != "elevenid.installer-uninstall-plan/v1"
+    if pre_application {
+        expected_sources.remove("evidence/application-created-resources.json");
+        expected_sources.insert("evidence/application-start-intent.json");
+        for (removed, completed) in [
+            (
+                "evidence/keycloak-container-removed.json",
+                "evidence/keycloak-result.json",
+            ),
+            (
+                "evidence/tls-container-removed.json",
+                "evidence/tls-result.json",
+            ),
+            (
+                "evidence/ingress-container-removed.json",
+                "evidence/ingress-result.json",
+            ),
+            (
+                "evidence/renewal-container-removed.json",
+                "evidence/renewal-result.json",
+            ),
+            (
+                "evidence/generation-container-removed.json",
+                "evidence/generation-result.json",
+            ),
+        ] {
+            if expected_sources.contains(removed) {
+                expected_sources.insert(completed);
+            }
+        }
+    }
+    let redis = format!("{project}_redis-socket");
+    let volume_valid = if pre_application {
+        plan.retained_redis_volume.is_none()
+            && plan.absent_redis_volume.as_deref() == Some(redis.as_str())
+    } else {
+        plan.retained_redis_volume.as_deref() == Some(redis.as_str())
+            && plan.absent_redis_volume.is_none()
+    };
+    if (!pre_application && plan.schema != "elevenid.installer-uninstall-plan/v1")
+        || (pre_application && journal.phase() != Phase::Provisioning)
         || plan.installation_id != journal.installation_id().to_string()
         || plan.engine_id != binding.engine_id
         || plan.project != project
         || !cleanup_hex(&plan.network_id)
         || plan.network_name != format!("{project}-bao_default")
-        || plan.retained_redis_volume != format!("{project}_redis-socket")
-        || plan.resources.len() != 34
-        || roles.len() != 34
-        || identifiers.len() != 34
+        || !volume_valid
+        || plan.resources.len() != count
+        || roles.len() != count
+        || identifiers.len() != count
         || !identifiers.iter().all(|s| cleanup_hex(s))
         || bao
             != BTreeSet::from([
@@ -588,7 +633,12 @@ fn cleanup_summary(
     }
     let state = if let Some(bytes) = result {
         let result: CleanupResultRecord = serde_json::from_slice(bytes).map_err(|_| INVALID)?;
-        if result.schema != "elevenid.installer-uninstall-result/v1"
+        if result.schema
+            != if pre_application {
+                "elevenid.installer-uninstall-pre-application-result/v1"
+            } else {
+                "elevenid.installer-uninstall-result/v1"
+            }
             || result.installation_id != plan.installation_id
             || result.engine_id != plan.engine_id
             || result.containers_removed as usize != plan.resources.len()
@@ -597,6 +647,7 @@ fn cleanup_summary(
             || !result.credentials_retained
             || !result.images_retained
             || result.redis_volume_retained != plan.retained_redis_volume
+            || result.redis_volume_absent != plan.absent_redis_volume
             || result.installation_ready
         {
             return Err(INVALID.into());

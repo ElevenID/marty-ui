@@ -1,14 +1,16 @@
 //! Scoped runtime removal. Host data, credentials, image cache and the Redis
-//! volume are deliberately retained. Earlier incomplete provisioning and live
-//! privileged helpers require separate recovery: this command refuses them.
+//! volume are deliberately retained. A separate pre-application mode removes
+//! only recorded Bao resources after proving all application resources absent.
+//! Other incomplete provisioning and live helpers still require separate recovery.
 #![cfg(target_os = "linux")]
 use crate::{
+    installer_application_graph as graph,
     installer_application_model::ApplicationModelPlan,
     installer_application_observation::{
         validate_container_for_logs, validate_openbao_container_for_cleanup, validate_volume,
     },
     installer_runtime::DockerRunner,
-    installer_state::LockedMaintenance,
+    installer_state::{LockedMaintenance, Phase},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -94,6 +96,18 @@ struct Created {
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct StartIntent {
+    schema: String,
+    installation_id: String,
+    project: String,
+    engine_id: String,
+    network_id: String,
+    roles: Vec<String>,
+    redis_volume: String,
+    installation_ready: bool,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct BaoCreated {
     schema: String,
     installation_id: String,
@@ -120,9 +134,16 @@ struct CleanupPlan {
     project: String,
     network_id: String,
     network_name: String,
-    retained_redis_volume: String,
+    retained_redis_volume: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    absent_redis_volume: Option<String>,
     resources: Vec<Resource>,
     source_hashes: BTreeMap<String, String>,
+}
+impl CleanupPlan {
+    fn pre_application(&self) -> bool {
+        self.schema == "elevenid.installer-uninstall-pre-application-plan/v1"
+    }
 }
 struct Loaded {
     installation: PathBuf,
@@ -274,18 +295,44 @@ fn load(state: &LockedMaintenance, installation: &Path) -> Result<Loaded> {
         &application.model,
         &application.selected_services,
     )?;
-    let created: Created = parse(&source(
-        state,
-        false,
-        "application-created-resources.json",
-        &mut sources,
-    )?)?;
-    require(
-        created.network_id == application.expected_network_id
-            && created.redis_volume == format!("{project}_redis-socket")
-            && created.containers.keys().cloned().collect::<BTreeSet<_>>()
-                == order.iter().cloned().collect(),
-    )?;
+    let pre_application = state
+        .read_evidence("application-created-resources.json")?
+        .is_none();
+    let (containers, redis_volume, network_id) = if pre_application {
+        require(journal.phase() == Phase::Provisioning)?;
+        pre_application_records_absent(state, &order)?;
+        let intent: StartIntent = parse(&source(
+            state,
+            false,
+            "application-start-intent.json",
+            &mut sources,
+        )?)?;
+        require(
+            intent.schema == "elevenid.installer-application-start-intent/v1"
+                && intent.installation_id == installation_id
+                && intent.project == project
+                && intent.engine_id == binding.engine_id
+                && intent.network_id == application.expected_network_id
+                && intent.roles == order
+                && intent.redis_volume == format!("{project}_redis-socket")
+                && !intent.installation_ready,
+        )?;
+        (BTreeMap::new(), intent.redis_volume, intent.network_id)
+    } else {
+        let created: Created = parse(&source(
+            state,
+            false,
+            "application-created-resources.json",
+            &mut sources,
+        )?)?;
+        require(
+            created.network_id == application.expected_network_id
+                && created.redis_volume == format!("{project}_redis-socket")
+                && created.containers.keys().cloned().collect::<BTreeSet<_>>()
+                    == order.iter().cloned().collect(),
+        )?;
+        (created.containers, created.redis_volume, created.network_id)
+    };
     require(
         source(state, false, "application-compose.json", &mut sources)?
             == crate::installer_application::compose_document(&application.model)?,
@@ -297,7 +344,7 @@ fn load(state: &LockedMaintenance, installation: &Path) -> Result<Loaded> {
             && bao_created.installation_id == installation_id
             && bao_created.engine_id == binding.engine_id
             && bao_created.project == format!("{project}-bao")
-            && bao_created.network_id == created.network_id
+            && bao_created.network_id == network_id
             && bao_created.image_id.strip_prefix("sha256:").is_some_and(id)
             && bao_created
                 .container_ids
@@ -332,7 +379,7 @@ fn load(state: &LockedMaintenance, installation: &Path) -> Result<Loaded> {
     let bao = ApplicationModelPlan {
         model,
         selected_services: BAO.iter().map(|s| s.to_string()).collect(),
-        expected_network_id: created.network_id.clone(),
+        expected_network_id: network_id.clone(),
         installation_ready: false,
     };
     let mut helper_ids = BTreeSet::new();
@@ -359,17 +406,28 @@ fn load(state: &LockedMaintenance, installation: &Path) -> Result<Loaded> {
             record["schema"] == schema
                 && record["installation_id"] == installation_id
                 && record["engine_id"] == binding.engine_id
-                && record["network_id"] == created.network_id
+                && record["network_id"] == network_id
                 && record["container_removed"] == true
                 && id(container)
                 && helper_ids.insert(container.to_owned()),
         )?;
+        if pre_application {
+            let mut result: Value = parse(&source(
+                state,
+                false,
+                &format!("{stage}-result.json"),
+                &mut sources,
+            )?)?;
+            require(result["container_removed"] == false && result["installation_ready"] == false)?;
+            result["container_removed"] = json!(true);
+            require(result == record)?;
+        }
     }
     order.reverse();
     let mut resources = Vec::new();
-    for role in order {
+    for role in order.into_iter().filter(|_| !pre_application) {
         resources.push(Resource {
-            container_id: created.containers[&role].clone(),
+            container_id: containers[&role].clone(),
             role,
             bao: false,
         });
@@ -383,8 +441,8 @@ fn load(state: &LockedMaintenance, installation: &Path) -> Result<Loaded> {
     }
     let unique: BTreeSet<_> = resources.iter().map(|r| r.container_id.as_str()).collect();
     require(
-        resources.len() == 34
-            && unique.len() == 34
+        resources.len() == if pre_application { 4 } else { 34 }
+            && unique.len() == resources.len()
             && unique.iter().all(|s| id(s))
             && helper_ids.iter().all(|s| !unique.contains(s.as_str())),
     )?;
@@ -396,13 +454,19 @@ fn load(state: &LockedMaintenance, installation: &Path) -> Result<Loaded> {
         installation: installation.into(),
         generation,
         plan: CleanupPlan {
-            schema: "elevenid.installer-uninstall-plan/v1".into(),
+            schema: if pre_application {
+                "elevenid.installer-uninstall-pre-application-plan/v1"
+            } else {
+                "elevenid.installer-uninstall-plan/v1"
+            }
+            .into(),
             installation_id,
             engine_id: binding.engine_id.clone(),
             project,
-            network_id: created.network_id,
+            network_id,
             network_name,
-            retained_redis_volume: created.redis_volume,
+            retained_redis_volume: (!pre_application).then(|| redis_volume.clone()),
+            absent_redis_volume: pre_application.then_some(redis_volume),
             resources,
             source_hashes: hashes,
         },
@@ -413,8 +477,38 @@ fn load(state: &LockedMaintenance, installation: &Path) -> Result<Loaded> {
         helper_ids,
     })
 }
+fn pre_application_records_absent(state: &LockedMaintenance, roles: &[String]) -> Result<()> {
+    for name in [
+        "application-created-resources.json",
+        "application-discovered-resources.json",
+        "application-prestart-admission.json",
+        "application-start-result.json",
+    ] {
+        require(state.read_evidence(name)?.is_none())?;
+    }
+    for role in roles {
+        for prefix in ["application-start", "application-observed"] {
+            require(
+                state
+                    .read_evidence(&format!("{prefix}-{role}.json"))?
+                    .is_none(),
+            )?;
+        }
+    }
+    Ok(())
+}
 fn unchanged(state: &LockedMaintenance, loaded: &Loaded) -> Result<()> {
     state.require_unchanged()?;
+    if loaded.plan.pre_application() {
+        require(state.journal().phase() == Phase::Provisioning)?;
+        pre_application_records_absent(
+            state,
+            &graph::startup_order(
+                &loaded.application.model,
+                &loaded.application.selected_services,
+            )?,
+        )?;
+    }
     let generation = crate::installer_generation_binding::load_verified(
         &loaded.installation,
         &loaded.plan.installation_id,
@@ -608,7 +702,7 @@ fn scope(
     for (project, expected) in [
         (
             &p.project,
-            BTreeSet::from([p.retained_redis_volume.clone()]),
+            p.retained_redis_volume.iter().cloned().collect(),
         ),
         (&format!("{}-bao", p.project), BTreeSet::new()),
     ] {
@@ -622,8 +716,29 @@ fn scope(
         let found: BTreeSet<_> = output.lines().map(String::from).collect();
         require(found == expected)?;
     }
-    let volume = object(&docker.run_checked(&["volume", "inspect", &p.retained_redis_volume])?)?;
-    validate_volume(&volume, &loaded.application)?;
+    if let Some(name) = &p.retained_redis_volume {
+        let volume = object(&docker.run_checked(&["volume", "inspect", name])?)?;
+        validate_volume(&volume, &loaded.application)?;
+    } else {
+        require(p.pre_application() && p.absent_redis_volume.is_some())?;
+        // Successful global enumeration also detects an unlabelled volume with
+        // the intended name. An inspect error is never absence evidence.
+        let output = docker.run_checked(&["volume", "ls", "-q"])?;
+        let names: BTreeSet<_> = output.lines().collect();
+        require(names.len() == output.lines().count())?;
+        for name in names {
+            require(
+                !name.is_empty()
+                    && name.len() <= 255
+                    && name
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b"_.-".contains(&b)),
+            )?;
+            require(
+                !name.starts_with(&p.project) && Some(name) != p.absent_redis_volume.as_deref(),
+            )?;
+        }
+    }
     Ok(live)
 }
 fn observe(docker: &DockerRunner, loaded: &Loaded, r: &Resource) -> Result<Value> {
@@ -649,7 +764,25 @@ fn observe(docker: &DockerRunner, loaded: &Loaded, r: &Resource) -> Result<Value
     }
     Ok(container)
 }
-/// Remove only the complete recorded runtime, preserving all installation data.
+fn pre_application_mutation_guard(
+    docker: &DockerRunner,
+    state: &LockedMaintenance,
+    loaded: &Loaded,
+) -> Result<()> {
+    if loaded.plan.pre_application() {
+        unchanged(state, loaded)?;
+        let live = scope(docker, state, loaded)?;
+        for resource in &loaded.plan.resources {
+            if live.contains(&resource.container_id) {
+                observe(docker, loaded, resource)?;
+            }
+        }
+        require(scope(docker, state, loaded)? == live)?;
+        unchanged(state, loaded)?;
+    }
+    Ok(())
+}
+/// Remove a complete runtime or the proven pre-application boundary, retaining data.
 /// A retry resumes this cleanup transaction; it never resumes provisioning.
 pub fn uninstall(args: &[String]) -> Result<String> {
     uninstall_inner(args).map_err(|_| REFUSED.to_owned())
@@ -697,6 +830,7 @@ fn uninstall_inner(args: &[String]) -> Result<String> {
                     &operation(&loaded.plan, "stop-container", &r.container_id),
                 )?;
                 unchanged(&state, &loaded)?;
+                pre_application_mutation_guard(&docker, &state, &loaded)?;
                 docker.run_checked(&["stop", "--time", "30", &r.container_id])?;
             }
             let stopped = observe(&docker, &loaded, r)?;
@@ -717,6 +851,7 @@ fn uninstall_inner(args: &[String]) -> Result<String> {
                 &operation(&loaded.plan, "remove-container", &r.container_id),
             )?;
             unchanged(&state, &loaded)?;
+            pre_application_mutation_guard(&docker, &state, &loaded)?;
             docker.run_checked(&["rm", &r.container_id])?;
             require(!present(&docker, &r.container_id)?)?;
         } else {
@@ -744,6 +879,7 @@ fn uninstall_inner(args: &[String]) -> Result<String> {
                 .is_some_and(|c| c.is_empty()),
         )?;
         unchanged(&state, &loaded)?;
+        pre_application_mutation_guard(&docker, &state, &loaded)?;
         docker.run_checked(&["network", "rm", &loaded.plan.network_id])?;
     }
     require(!network_present(&docker, &loaded.plan)?)?;
@@ -758,7 +894,10 @@ fn uninstall_inner(args: &[String]) -> Result<String> {
     )?;
     require(scope(&docker, &state, &loaded)?.is_empty())?;
     unchanged(&state, &loaded)?;
-    let result = json!({"schema":"elevenid.installer-uninstall-result/v1","installation_id":loaded.plan.installation_id,"engine_id":loaded.plan.engine_id,"containers_removed":34,"network_removed":true,"host_data_retained":true,"credentials_retained":true,"images_retained":true,"redis_volume_retained":loaded.plan.retained_redis_volume,"installation_ready":false});
+    let mut result = json!({"schema":if loaded.plan.pre_application() {"elevenid.installer-uninstall-pre-application-result/v1"} else {"elevenid.installer-uninstall-result/v1"},"installation_id":loaded.plan.installation_id,"engine_id":loaded.plan.engine_id,"containers_removed":loaded.plan.resources.len(),"network_removed":true,"host_data_retained":true,"credentials_retained":true,"images_retained":true,"redis_volume_retained":loaded.plan.retained_redis_volume,"installation_ready":false});
+    if let Some(name) = &loaded.plan.absent_redis_volume {
+        result["redis_volume_absent"] = json!(name);
+    }
     record(&mut state, "uninstall-result.json", &result)?;
     serde_json::to_string(&result).map_err(|_| REFUSED.into())
 }
@@ -972,7 +1111,8 @@ elif a[:2]==['network','inspect']:
  if s['mode']=='foreign-attachment': attached['f'*64]={}
  out([{'Id':s['network_id'],'Name':s['network_name'],'Driver':'bridge','Labels':{'com.docker.compose.project':s['project']+'-bao','com.docker.compose.network':'default'},'Containers':attached}])
 elif a[:2]==['volume','ls']:
- if filt()=='label=com.docker.compose.project='+s['project']: print(s['volume']['Name'])
+ if s['mode']=='volume-command-failure': sys.exit(22)
+ if s['volume'] and (filt() is None or filt()=='label=com.docker.compose.project='+s['volume'].get('Labels',{}).get('com.docker.compose.project','')): print(s['volume']['Name'])
 elif a[:2]==['volume','inspect']: out([s['volume']])
 elif a[:2]==['image','inspect']: out([s['image']])
 elif a[:3]==['inspect','--type','container']:
@@ -981,6 +1121,9 @@ elif a[:3]==['inspect','--type','container']:
 elif a[0]=='stop':
  assert a[1:3]==['--time','30'] and len(a)==4
  c=s['containers'][a[3]];c['State'].update(Status='exited',Running=False,ExitCode=137)
+ if s['mode']=='volume-drift': s['volume']={'Name':s['project']+'_redis-socket','Labels':{}}
+ if s['mode']=='record-drift': (p.parent/'install/evidence/application-discovered-resources.json').write_text('{}')
+ if s['mode']=='stop-interruption' and not s['interrupted']: s['interrupted']=True;s['fail_ps']=True
  s['mutations'].append(a);persist();print(a[3])
 elif a[0]=='rm':
  assert len(a)==2 and not s['containers'][a[1]]['State']['Running']
@@ -1013,6 +1156,554 @@ else: sys.exit(98)
     }
     fn ledger(root: &tempfile::TempDir) -> Value {
         parse(&fs::read(root.path().join("ledger.json")).unwrap()).unwrap()
+    }
+    fn pre_application_mock(mode: &str) -> (tempfile::TempDir, Vec<String>) {
+        let (root, args) = mock(mode);
+        let installation = root.path().join("install");
+        let evidence = installation.join("evidence");
+        let identity = InstallerState::inspect(&installation)
+            .unwrap()
+            .identity()
+            .clone();
+        let mut initializing = InstallerState::resume(&installation, &identity).unwrap();
+        initializing.advance(Phase::Verified).unwrap();
+        initializing.advance(Phase::Provisioning).unwrap();
+        drop(initializing);
+        let state = LockedMaintenance::open(&installation).unwrap();
+        let loaded = load(&state, &installation).unwrap();
+        let order = graph::startup_order(
+            &loaded.application.model,
+            &loaded.application.selected_services,
+        )
+        .unwrap();
+        let intent = json!({"schema":"elevenid.installer-application-start-intent/v1","installation_id":loaded.plan.installation_id,"project":loaded.plan.project,"engine_id":loaded.plan.engine_id,"network_id":loaded.plan.network_id,"roles":order,"redis_volume":loaded.plan.retained_redis_volume,"installation_ready":false});
+        drop(state);
+        fs::remove_file(evidence.join("application-created-resources.json")).unwrap();
+        save(evidence.join("application-start-intent.json"), &intent);
+        fs::set_permissions(
+            evidence.join("application-start-intent.json"),
+            fs::Permissions::from_mode(0o600),
+        )
+        .unwrap();
+        for stage in ["keycloak", "tls", "ingress"] {
+            let removed = evidence.join(format!("{stage}-container-removed.json"));
+            let mut record: Value = parse(&fs::read(&removed).unwrap()).unwrap();
+            record["installation_ready"] = json!(false);
+            save(&removed, &record);
+            record["container_removed"] = json!(false);
+            let result = evidence.join(format!("{stage}-result.json"));
+            save(&result, &record);
+            fs::set_permissions(result, fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        let mut saved = ledger(&root);
+        saved["containers"].as_object_mut().unwrap().retain(|_, c| {
+            c["Config"]["Labels"]["com.docker.compose.project"]
+                .as_str()
+                .unwrap()
+                .ends_with("-bao")
+        });
+        saved["volume"] = Value::Null;
+        save(root.path().join("ledger.json"), &saved);
+        (root, args)
+    }
+    #[test]
+    fn pre_application_cleanup_and_interrupted_retry_keep_data_and_status() {
+        use crate::installer_state::{CleanupState, LockedInspection};
+        for mode in ["success", "interruption"] {
+            let (root, args) = pre_application_mock(mode);
+            let installation = root.path().join("install");
+            let before = fs::read(installation.join("installation.json")).unwrap();
+            let identity = InstallerState::inspect(&installation)
+                .unwrap()
+                .identity()
+                .clone();
+            if mode == "interruption" {
+                assert!(uninstall_inner(&args).is_err());
+                assert_eq!(ledger(&root)["containers"].as_object().unwrap().len(), 3);
+                let inspection = LockedInspection::open(&installation).unwrap();
+                assert_eq!(
+                    inspection.cleanup_status().unwrap().state,
+                    CleanupState::InProgress
+                );
+                drop(inspection);
+            }
+            let result: Value = parse(uninstall_inner(&args).unwrap().as_bytes()).unwrap();
+            assert_eq!(result["containers_removed"], 4);
+            assert!(result["redis_volume_retained"].is_null());
+            assert!(result["redis_volume_absent"]
+                .as_str()
+                .unwrap()
+                .ends_with("_redis-socket"));
+            assert_eq!(result["installation_ready"], false);
+            let saved = ledger(&root);
+            assert!(saved["containers"].as_object().unwrap().is_empty());
+            assert_eq!(saved["network_exists"], false);
+            assert!(saved["volume"].is_null());
+            assert_eq!(saved["mutations"].as_array().unwrap().len(), 9);
+            assert_eq!(
+                fs::read(installation.join("installation.json")).unwrap(),
+                before
+            );
+            assert_eq!(
+                fs::read(installation.join("retained-data")).unwrap(),
+                b"private data stays"
+            );
+            let inspection = LockedInspection::open(&installation).unwrap();
+            assert_eq!(
+                inspection.cleanup_status().unwrap().state,
+                CleanupState::Completed
+            );
+            drop(inspection);
+            assert!(InstallerState::resume(&installation, &identity).is_err());
+            assert!(uninstall_inner(&args).is_ok());
+            assert_eq!(ledger(&root)["mutations"], saved["mutations"]);
+        }
+    }
+    #[test]
+    fn pre_application_absence_is_proven_not_inferred() {
+        for mode in [
+            "foreign-attachment",
+            "command-failure",
+            "volume-command-failure",
+            "unlabelled-volume",
+            "unlabelled-container",
+            "foreign-image",
+        ] {
+            let (root, args) = pre_application_mock(mode);
+            let mut saved = ledger(&root);
+            if mode == "unlabelled-volume" {
+                saved["volume"] = json!({"Name":format!("{}_redis-socket",saved["project"].as_str().unwrap()),"Labels":{}});
+            } else if mode == "unlabelled-container" {
+                let mut c = saved["containers"]
+                    .as_object()
+                    .unwrap()
+                    .values()
+                    .next()
+                    .unwrap()
+                    .clone();
+                c["Id"] = json!("e".repeat(64));
+                c["Name"] = json!(format!("/{}-gateway-1", saved["project"].as_str().unwrap()));
+                c["Config"]["Labels"] = json!({});
+                saved["containers"]["e".repeat(64)] = c;
+            } else if mode == "foreign-image" {
+                saved["image"]["Id"] = json!(format!("sha256:{}", "e".repeat(64)));
+            }
+            save(root.path().join("ledger.json"), &saved);
+            assert!(uninstall_inner(&args).is_err(), "{mode}");
+            assert!(
+                ledger(&root)["mutations"].as_array().unwrap().is_empty(),
+                "{mode}"
+            );
+            assert!(!root
+                .path()
+                .join("install/evidence/uninstall-plan.json")
+                .exists());
+        }
+    }
+    #[test]
+    fn pre_application_retry_after_stop_never_restarts_or_repeats_stop() {
+        let (root, args) = pre_application_mock("stop-interruption");
+        assert!(uninstall_inner(&args).is_err());
+        let before = ledger(&root);
+        assert_eq!(before["containers"].as_object().unwrap().len(), 4);
+        assert_eq!(before["mutations"].as_array().unwrap().len(), 1);
+        let stopped_id = before["mutations"][0][3].as_str().unwrap();
+        assert_eq!(
+            before["containers"][stopped_id]["State"]["Status"],
+            "exited"
+        );
+        assert!(uninstall_inner(&args).is_ok());
+        let after = ledger(&root);
+        assert_eq!(after["mutations"].as_array().unwrap().len(), 9);
+        assert_eq!(
+            after["mutations"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|args| args[0] == "stop" && args[3] == stopped_id)
+                .count(),
+            1
+        );
+    }
+    // Synthetic credentials and proof records exercise the production binding
+    // decoder, not live cryptographic validation or a real installed runtime.
+    fn selected_pre_application_mock() -> (tempfile::TempDir, Vec<String>) {
+        use crate::installer_generation_binding::{
+            GenerationBinding, GenerationFile, GenerationSource,
+        };
+        let (root, args) = pre_application_mock("success");
+        let installation = root.path().join("install");
+        let state = LockedMaintenance::open(&installation).unwrap();
+        let loaded = load(&state, &installation).unwrap();
+        drop(state);
+        let owner = &loaded.plan.installation_id;
+        let project = &loaded.plan.project;
+        let network = &loaded.plan.network_id;
+        let image = format!(
+            "ghcr.io/elevenid/marty-ui-oss/services@sha256:{}",
+            "a".repeat(64)
+        );
+        let put = |path: PathBuf, bytes: &[u8], mode| {
+            fs::write(&path, bytes).unwrap();
+            fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
+        };
+        let record = |name: &str, value: &Value| {
+            put(
+                installation.join("evidence").join(name),
+                &serde_json::to_vec(value).unwrap(),
+                0o600,
+            );
+        };
+        for name in [
+            "secrets",
+            "generation-inputs",
+            "generation-identity",
+            "generation-transfer",
+            "generation-transfer/delivered",
+            "application-generation",
+        ] {
+            let path = installation.join(name);
+            if !path.exists() {
+                fs::create_dir(&path).unwrap();
+            }
+            fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let hashes = |values: &BTreeMap<String, Vec<u8>>| -> BTreeMap<String, String> {
+            values
+                .iter()
+                .map(|(name, bytes)| (name.clone(), format!("{:x}", Sha256::digest(bytes))))
+                .collect()
+        };
+        let current: BTreeMap<String, Vec<u8>> =
+            crate::installer_renewal_bootstrap::current_inputs()
+                .into_iter()
+                .map(|name| {
+                    let bytes = if name.ends_with("_token") {
+                        format!("old-synthetic-credential-{name}")
+                    } else {
+                        format!(
+                            "-----BEGIN CERTIFICATE-----\nold-{name}\n-----END CERTIFICATE-----"
+                        )
+                    };
+                    (name, bytes.into_bytes())
+                })
+                .collect();
+        let outputs: BTreeMap<String, Vec<u8>> = current
+            .iter()
+            .map(|(name, bytes)| {
+                (
+                    name.clone(),
+                    if name == "workload_identity_ca_cert" {
+                        bytes.clone()
+                    } else {
+                        String::from_utf8(bytes.clone())
+                            .unwrap()
+                            .replace("old-", "new-")
+                            .into_bytes()
+                    },
+                )
+            })
+            .collect();
+        let identity: BTreeMap<String, Vec<u8>> = [
+            "renewal-role-id",
+            "renewal-secret-id",
+            "renewal-leaf-policies.json",
+        ]
+        .into_iter()
+        .map(|name| (name.into(), format!("identity-{name}").into_bytes()))
+        .collect();
+        for (name, bytes) in &current {
+            put(installation.join("secrets").join(name), bytes, 0o444);
+            put(
+                installation.join("generation-inputs").join(name),
+                bytes,
+                0o444,
+            );
+            put(
+                installation
+                    .join("generation-transfer/delivered")
+                    .join(name),
+                &outputs[name],
+                0o444,
+            );
+            put(
+                installation.join("application-generation").join(name),
+                &outputs[name],
+                0o444,
+            );
+        }
+        for (name, bytes) in &identity {
+            put(
+                installation.join("generation-identity").join(name),
+                bytes,
+                0o600,
+            );
+        }
+        let keycloak = json!({"schema":"elevenid.installer-keycloak/v1","installation_id":owner,"engine_id":"test-engine","container_id":format!("{:064x}",100),"container_name":format!("{project}-keycloak-inputs"),"network_id":network,"image":format!("ghcr.io/elevenid/marty-ui-oss/openbao-didcomm@sha256:{}","c".repeat(64)),"nonce":"0123456789ab","outputs":crate::installer_keycloak_bridge::OUTPUTS,"container_removed":true,"installation_ready":false});
+        let keycloak_bytes = serde_json::to_vec(&keycloak).unwrap();
+        record("keycloak-observation.json", &keycloak);
+        record("keycloak-container-removed.json", &keycloak);
+        let mut keycloak_result = keycloak.clone();
+        keycloak_result["container_removed"] = json!(false);
+        record("keycloak-result.json", &keycloak_result);
+        for (name, value) in [
+            (
+                "pending.json",
+                json!({"schema":"elevenid.installer-generation-intent/v1","installation_id":owner,"nonce":"0123456789ab","input_sha256":hashes(&current),"identity_sha256":hashes(&identity),"keycloak_receipt_sha256":format!("{:x}",Sha256::digest(&keycloak_bytes)),"root_retired":false,"activated":false}),
+            ),
+            (
+                "validated.json",
+                json!({"schema":"elevenid.installer-generation-validation/v1","installation_id":owner,"output_sha256":hashes(&outputs),"orphan_tokens":21,"remote_key_version":1,"ca_changed":false}),
+            ),
+            (
+                "completed.json",
+                json!({"schema":"elevenid.installer-generation-result/v1","installation_id":owner,"files":40,"changed_files":39,"orphan_tokens":21,"transient_revoked":true,"activated":false,"root_retired":false,"ingress_renewal":false,"installation_ready":false}),
+            ),
+        ] {
+            put(
+                installation
+                    .join("generation-transfer/delivered")
+                    .join(name),
+                &serde_json::to_vec(&value).unwrap(),
+                0o600,
+            );
+        }
+        let renewal = serde_json::to_value(crate::installer_renewal::RenewalReceipt {
+            schema: "elevenid.installer-renewal-host/v1",
+            installation_id: owner.clone(),
+            engine_id: "test-engine".into(),
+            container_id: "e".repeat(64),
+            container_name: format!("{project}-renewal-inputs"),
+            network_id: network.clone(),
+            image: image.clone(),
+            root_retired: false,
+            ingress_renewal: false,
+            private_identity_validated: true,
+            outputs: identity.keys().cloned().collect(),
+            container_removed: true,
+            installation_ready: false,
+        })
+        .unwrap();
+        let generation =
+            serde_json::to_value(crate::installer_generation_host::GenerationReceipt {
+                schema: "elevenid.installer-generation-host/v1",
+                installation_id: owner.clone(),
+                engine_id: "test-engine".into(),
+                container_id: "f".repeat(64),
+                container_name: format!("{project}-generation-inputs"),
+                network_id: network.clone(),
+                image,
+                candidate_validated: true,
+                outputs: outputs.keys().cloned().collect(),
+                candidate_sha256: hashes(&outputs),
+                activated: false,
+                root_retired: false,
+                ingress_renewal: false,
+                container_removed: true,
+                installation_ready: false,
+            })
+            .unwrap();
+        for (stage, removed) in [("renewal", &renewal), ("generation", &generation)] {
+            record(&format!("{stage}-container-removed.json"), removed);
+            let mut completed = removed.clone();
+            completed["container_removed"] = json!(false);
+            record(&format!("{stage}-result.json"), &completed);
+        }
+        let mut files: BTreeMap<String, GenerationFile> = outputs
+            .iter()
+            .map(|(name, bytes)| {
+                (
+                    name.clone(),
+                    GenerationFile {
+                        source: GenerationSource::Candidate,
+                        sha256: format!("{:x}", Sha256::digest(bytes)),
+                        size: bytes.len() as u64,
+                        source_mode: 0o444,
+                        mode: 0o444,
+                    },
+                )
+            })
+            .collect();
+        let scalar = b"unchanged-synthetic-scalar";
+        for dir in ["secrets", "application-generation"] {
+            put(
+                installation.join(dir).join("postgres_password"),
+                scalar,
+                0o444,
+            );
+        }
+        files.insert(
+            "postgres_password".into(),
+            GenerationFile {
+                source: GenerationSource::Original,
+                sha256: format!("{:x}", Sha256::digest(scalar)),
+                size: scalar.len() as u64,
+                source_mode: 0o444,
+                mode: 0o444,
+            },
+        );
+        let binding = GenerationBinding {
+            schema: "elevenid.installer-application-generation/v1".into(),
+            installation_id: owner.clone(),
+            engine_id: "test-engine".into(),
+            network_id: network.clone(),
+            generation_receipt_sha256: format!(
+                "{:x}",
+                Sha256::digest(serde_json::to_vec(&generation).unwrap())
+            ),
+            files,
+            activated: false,
+            root_retired: false,
+            installation_ready: false,
+        };
+        let mut plan = loaded.application;
+        plan.model["secrets"] = json!({});
+        let mut references = Vec::new();
+        for name in binding.files.keys() {
+            plan.model["secrets"][name] =
+                json!({"file":installation.join("secrets").join(name).to_str().unwrap()});
+            references.push(json!({"source":name}));
+        }
+        plan.model["services"]["gateway"]["secrets"] = json!(references);
+        crate::installer_generation_binding::apply_model(&installation, &binding, &mut plan)
+            .unwrap();
+        record(
+            "application-plan.json",
+            &serde_json::to_value(&plan).unwrap(),
+        );
+        put(
+            installation.join("evidence/application-compose.json"),
+            &crate::installer_application::compose_document(&plan.model).unwrap(),
+            0o600,
+        );
+        let source_env = format!(
+            "SELFHOST_SECRET_DIR='{}'\n",
+            installation.join("secrets").display()
+        )
+        .into_bytes();
+        let env = crate::installer_application_env::select_generation(&source_env, &installation)
+            .unwrap();
+        put(
+            installation.join("evidence/application-source.env"),
+            &source_env,
+            0o600,
+        );
+        put(installation.join("evidence/application.env"), &env, 0o600);
+        let binding_value = serde_json::to_value(&binding).unwrap();
+        record("application-generation.json", &binding_value);
+        record("application-generation-pending.json", &binding_value);
+        let hash_file = |name: &str| {
+            format!(
+                "{:x}",
+                Sha256::digest(fs::read(installation.join("evidence").join(name)).unwrap())
+            )
+        };
+        record(
+            "application-generation-selection.json",
+            &json!({"schema":"elevenid.installer-application-generation-selection/v1","installation_id":owner,"engine_id":"test-engine","binding_sha256":hash_file("application-generation.json"),"plan_sha256":hash_file("application-plan.json"),"compose_sha256":hash_file("application-compose.json"),"env_sha256":hash_file("application.env"),"activated":false,"installation_ready":false}),
+        );
+        (root, args)
+    }
+    #[test]
+    fn pre_application_selected_generation_and_five_helpers_are_bound() {
+        use crate::installer_state::{CleanupState, LockedInspection};
+        let (root, args) = selected_pre_application_mock();
+        let installation = root.path().join("install");
+        let state = LockedMaintenance::open(&installation).unwrap();
+        let loaded = load(&state, &installation).unwrap();
+        assert_eq!(loaded.helper_ids.len(), 5);
+        assert_eq!(loaded.generation.as_ref().unwrap().files.len(), 41);
+        unchanged(&state, &loaded).unwrap();
+        drop(state);
+        for stage in ["renewal", "generation"] {
+            let path = installation
+                .join("evidence")
+                .join(format!("{stage}-result.json"));
+            let original = fs::read(&path).unwrap();
+            fs::remove_file(&path).unwrap();
+            assert!(uninstall_inner(&args).is_err());
+            fs::write(&path, &original).unwrap();
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+            let mut bad: Value = parse(&original).unwrap();
+            bad["network_id"] = json!("d".repeat(64));
+            save(&path, &bad);
+            assert!(uninstall_inner(&args).is_err());
+            fs::write(&path, &original).unwrap();
+            assert!(ledger(&root)["mutations"].as_array().unwrap().is_empty());
+        }
+        assert!(uninstall_inner(&args).is_ok());
+        let inspection = LockedInspection::open(&installation).unwrap();
+        assert_eq!(
+            inspection.cleanup_status().unwrap().state,
+            CleanupState::Completed
+        );
+        assert_eq!(
+            fs::read(installation.join("application-generation/postgres_password")).unwrap(),
+            b"unchanged-synthetic-scalar"
+        );
+        assert_eq!(ledger(&root)["mutations"].as_array().unwrap().len(), 9);
+    }
+    #[test]
+    fn pre_application_records_and_mid_cleanup_drift_refuse() {
+        for name in [
+            "application-discovered-resources.json",
+            "application-prestart-admission.json",
+            "application-start-gateway.json",
+            "application-observed-gateway.json",
+            "application-start-result.json",
+        ] {
+            let (root, args) = pre_application_mock("success");
+            save(root.path().join("install/evidence").join(name), &json!({}));
+            assert!(uninstall_inner(&args).is_err());
+            assert!(ledger(&root)["mutations"].as_array().unwrap().is_empty());
+        }
+        for name in [
+            "application-start-intent.json",
+            "tls-result.json",
+            "ingress-container-removed.json",
+        ] {
+            let (root, args) = pre_application_mock("success");
+            fs::remove_file(root.path().join("install/evidence").join(name)).unwrap();
+            assert!(uninstall_inner(&args).is_err());
+            assert!(ledger(&root)["mutations"].as_array().unwrap().is_empty());
+        }
+        for (field, value) in [
+            ("schema", json!("unknown")),
+            ("installation_id", json!(uuid::Uuid::new_v4().to_string())),
+            ("engine_id", json!("other-engine")),
+            ("network_id", json!("d".repeat(64))),
+            ("project", json!("other-project")),
+            ("roles", json!([])),
+            ("redis_volume", json!("other-volume")),
+            ("installation_ready", json!(true)),
+        ] {
+            let (root, args) = pre_application_mock("success");
+            let path = root
+                .path()
+                .join("install/evidence/application-start-intent.json");
+            let mut intent: Value = parse(&fs::read(&path).unwrap()).unwrap();
+            intent[field] = value;
+            save(&path, &intent);
+            assert!(uninstall_inner(&args).is_err(), "{field}");
+            assert!(ledger(&root)["mutations"].as_array().unwrap().is_empty());
+        }
+        for mode in ["volume-drift", "record-drift"] {
+            let (root, args) = pre_application_mock(mode);
+            assert!(uninstall_inner(&args).is_err());
+            let saved = ledger(&root);
+            assert_eq!(saved["mutations"].as_array().unwrap().len(), 1);
+            assert_eq!(saved["containers"].as_object().unwrap().len(), 4);
+            assert!(root
+                .path()
+                .join("install/evidence/uninstall-plan.json")
+                .exists());
+            assert!(!root
+                .path()
+                .join("install/evidence/uninstall-result.json")
+                .exists());
+            assert!(uninstall_inner(&args).is_err());
+            assert_eq!(ledger(&root)["mutations"], saved["mutations"]);
+        }
     }
     #[test]
     fn application_generation_partial_selection_refuses_without_mutation() {
@@ -1431,7 +2122,8 @@ else: sys.exit(98)
             project: "project".into(),
             network_id: "a".repeat(64),
             network_name: "network".into(),
-            retained_redis_volume: "redis".into(),
+            retained_redis_volume: Some("redis".into()),
+            absent_redis_volume: None,
             resources: vec![Resource {
                 role: "gateway".into(),
                 container_id: "b".repeat(64),
