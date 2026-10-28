@@ -771,6 +771,11 @@ mod tests {
         (parent, path, state)
     }
     fn normal_fixture() -> (tempfile::TempDir, PathBuf, InstallerState) {
+        normal_fixture_with_chown(false)
+    }
+    fn normal_fixture_with_chown(
+        change_owner: bool,
+    ) -> (tempfile::TempDir, PathBuf, InstallerState) {
         let (parent, path, mut state) = application_fixture();
         state.create_private_directory("openbao-state").unwrap();
         state.persist_openbao_state_creation_receipt(&path).unwrap();
@@ -805,6 +810,16 @@ mod tests {
             fs::write(path.join(name), bytes).unwrap();
             fs::set_permissions(path.join(name), fs::Permissions::from_mode(0o600)).unwrap();
         }
+        if change_owner {
+            // Used only by the isolated, opt-in root qualification below.
+            // Hold the fixture inode before changing its owner; no Docker or
+            // installation outside this synthetic temp directory is touched.
+            assert_eq!(unsafe { libc::getuid() }, 0);
+            let held = File::open(path.join("openbao-state")).unwrap();
+            assert_eq!(unsafe { libc::seteuid(0) }, 0);
+            assert_eq!(unsafe { libc::fchown(held.as_raw_fd(), 100, 65534) }, 0);
+            assert_eq!(unsafe { libc::seteuid(65534) }, 0);
+        }
         state
             .persist_openbao_owner_transition_receipt(
                 &path,
@@ -816,6 +831,44 @@ mod tests {
             )
             .unwrap();
         (parent, path, state)
+    }
+    #[test]
+    #[ignore = "requires isolated root runner with --exact --ignored --test-threads=1"]
+    fn foreign_owned_private_openbao_metadata_qualification() {
+        assert_eq!(
+            unsafe { libc::geteuid() },
+            0,
+            "run only in an isolated root test process"
+        );
+        struct RestoreIdentity(libc::gid_t);
+        impl Drop for RestoreIdentity {
+            fn drop(&mut self) {
+                assert_eq!(unsafe { libc::seteuid(0) }, 0);
+                assert_eq!(unsafe { libc::setegid(self.0) }, 0);
+            }
+        }
+        let original_gid = unsafe { libc::getegid() };
+        let restore = RestoreIdentity(original_gid);
+        assert_eq!(unsafe { libc::setegid(65534) }, 0);
+        assert_eq!(unsafe { libc::seteuid(65534) }, 0);
+        let (parent, path, state) = normal_fixture_with_chown(true);
+        assert!(File::open(path.join("openbao-state")).is_err());
+        assert!(fs::read_dir(path.join("openbao-state")).is_err());
+        let NormalInspectionOutcome::MatchedLocalReceipt(observed) =
+            inspect_normal_state(&state, &path)
+        else {
+            panic!("O_PATH metadata evidence must match despite denied directory access");
+        };
+        assert_eq!(observed.openbao_state.identity.uid, 100);
+        assert_eq!(observed.openbao_state.identity.mode, 0o700);
+        assert_eq!(
+            observed.application.credentials.initial.root.identity.uid,
+            65534
+        );
+        drop(state);
+        drop(restore); // Regain the test process identity before fixture cleanup.
+        parent.close().unwrap();
+        assert!(!path.exists());
     }
     fn inspect_normal_state(state: &InstallerState, path: &Path) -> NormalInspectionOutcome {
         state
