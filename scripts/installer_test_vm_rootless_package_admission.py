@@ -311,7 +311,7 @@ def _release_fields(payload: bytes) -> tuple[dict[str, str], dict[str, tuple[int
             continue
         if line.startswith(" "):
             if in_hashes:
-                match = re.fullmatch(r" ([0-9a-f]{64}) +([0-9]{1,12}) +([^ ]+)", line)
+                match = re.fullmatch(r" +([0-9a-f]{64}) +([0-9]{1,12}) +([^ ]+)", line)
                 require(match is not None, "archive SHA256 row invalid")
                 digest, size, path = match.groups()
                 require(path not in hashes and _safe_relative(path),

@@ -221,7 +221,7 @@ def test_real_gpgv_signature_wrong_key_and_stale_release(tmp_path, monkeypatch):
     date = now.strftime("%a, %d %b %Y %H:%M:%S UTC")
     release = (f"Origin: Ubuntu\nLabel: Ubuntu\nSuite: noble-updates\nCodename: noble\n"
                f"Date: {date}\nArchitectures: amd64 arm64\nComponents: main universe\n"
-               f"SHA256:\n {'0'*64} 4 universe/binary-amd64/Packages.xz\n")
+               f"SHA256:\n  {'0'*64} 4 universe/binary-amd64/Packages.xz\n")
     unsigned = tmp_path / "Release"
     unsigned.write_text(release)
     signed = tmp_path / "InRelease"
@@ -285,9 +285,9 @@ def test_real_private_apt_solver_accepts_only_new_packages(tmp_path, monkeypatch
     release = (f"Origin: Ubuntu\nLabel: Ubuntu\nSuite: noble-updates\nCodename: noble\n"
                f"Date: {now.strftime('%a, %d %b %Y %H:%M:%S UTC')}\n"
                f"Architectures: amd64\nComponents: main universe\nSHA256:\n"
-               f" {hashlib.sha256(plain).hexdigest()} {len(plain)} "
+               f"  {hashlib.sha256(plain).hexdigest()} {len(plain)} "
                "main/binary-amd64/Packages\n"
-               f" {hashlib.sha256(compressed).hexdigest()} {len(compressed)} "
+               f"  {hashlib.sha256(compressed).hexdigest()} {len(compressed)} "
                "main/binary-amd64/Packages.xz\n")
     unsigned = tmp_path / "Release"
     unsigned.write_text(release)
