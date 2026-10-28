@@ -153,11 +153,34 @@ def build_arguments(plan, profile=None):
         args += ["--mount", "type=volume,src=" + volume + ",dst=" + target]
     return args + ["--entrypoint", "/bin/sh", plan["builderImage"], "/build.sh"]
 
+class LocalBuildJournal:
+    def __init__(self, private):
+        self.private = private
+
+    def exclusive(self, name, value):
+        return save_exclusive(self.private / name, value)
+
+    def state(self, value):
+        return save_state(self.private / "build-state.json", value)
+
+    def read(self, name):
+        return json.loads((self.private / name).read_bytes())
+
+
+def build_journal(plan, private, profile=None):
+    if "journalBackend" not in plan:
+        return LocalBuildJournal(private)
+    require(profile == "d02-signing-cas", "LINUX_JOURNAL_IS_D02_ONLY")
+    from scoped_linux_journal import LinuxBuildJournal
+    return LinuxBuildJournal(private, plan["runId"], plan["journalBackend"])
+
+
 def start(prepared_ref, helper, git, profile=None):
     plan = json.loads(read_ref(prepared_ref).read_bytes())
     preparation_sha = prepared_ref["sha256"]
     require(plan.get("executionOperatorSha256") == sha(Path(__file__)), "BUILD_OPERATOR_CHANGED")
     private, output = verify(plan, git, profile)
+    store = build_journal(plan, private, profile)
     require(sha(helper.__file__) == REVIEWED_BUILD_HELPER_SHA256, "REVIEWED_SHARED_BUILD_HELPER_CHANGED")
     require(os.environ.get("DOCKER_CONTEXT") == "desktop-linux", "EXPLICIT_DESKTOP_CONTEXT_REQUIRED")
     require(not list(output.iterdir()), "PRESERVE_PREVIOUS_BUILD_OUTPUTS")
@@ -175,22 +198,22 @@ def start(prepared_ref, helper, git, profile=None):
                                             "image": plan["builderImage"], "volumes": list(VOLUMES),
                                             "containerId": None, "outcome": "INTENT_DISPATCH_MAY_FOLLOW"},
                           "releaseQualified": False, "recordingQualified": False}
-        resource_state["intentDurability"] = save_exclusive(private / "build-apply-intent.json", resource_state)
-        barrier = save_state(private / "build-state.json", resource_state)
+        resource_state["intentDurability"] = store.exclusive("build-apply-intent.json", resource_state)
+        barrier = store.state(resource_state)
         if not (durable_barrier(resource_state["intentDurability"]) and durable_barrier(barrier)):
             resource_state["state"] = "BUILD_DURABILITY_BLOCKED_NO_DOCKER_DISPATCH"
             resource_state["resourceProbe"]["outcome"] = "NOT_DISPATCHED"
-            save_state(private / "build-state.json", resource_state)
+            store.state(resource_state)
             raise ValueError("DURABLE_INTENT_AND_JOURNAL_REQUIRED")
         try:
             resource = helper.resources(private, plan["builderImage"])
             resource_state.update(state="RESOURCE_CHECK_READY", resourcesBefore=resource)
             resource_state["resourceProbe"]["outcome"] = "HELPER_RETURNED_READY_CID_NOT_EXPOSED"
-            require(durable_barrier(save_state(private / "build-state.json", resource_state)),
+            require(durable_barrier(store.state(resource_state)),
                     "DURABLE_RESOURCE_RESULT_REQUIRED")
         except BaseException:
             resource_state["state"] = "RESOURCE_CHECK_FAILED_OR_UNKNOWN_NO_AUTOMATIC_RETRY"
-            save_state(private / "build-state.json", resource_state)
+            store.state(resource_state)
             raise
     else:
         resource = helper.resources(private, plan["builderImage"])
@@ -198,17 +221,15 @@ def start(prepared_ref, helper, git, profile=None):
     require(image["Id"] == plan["builderImage"] and image["Os"] == "linux" and image["Architecture"] == "amd64", "BUILDER_IDENTITY_CHANGED")
     require(helper.run("docker", "--context", "desktop-linux", "info", "--format", "{{.ID}}").stdout.strip() == plan["engineId"], "ENGINE_CHANGED_AFTER_RESOURCE_CHECK")
     state = {"state": "BUILD_CREATE_INTENT", "runId": plan["runId"], "preparationSha256": preparation_sha, "resourcesBefore": resource, "releaseQualified": False, "recordingQualified": False}
-    intent = private / "build-apply-intent.json"
     if resource_state is None:
-        state["intentDurability"] = save_exclusive(intent, state)
+        state["intentDurability"] = store.exclusive("build-apply-intent.json", state)
     else:
         state.update(intentDurability=resource_state["intentDurability"],
                      buildProfile=profile, resourceProbe=resource_state["resourceProbe"])
-    journal = private / "build-state.json"
-    journal_barrier = save_state(journal, state)
+    journal_barrier = store.state(state)
     if not (durable_barrier(state["intentDurability"]) and durable_barrier(journal_barrier)):
         state["state"] = "BUILD_DURABILITY_BLOCKED_NO_DOCKER_DISPATCH" if resource_state is None else "BUILD_DURABILITY_BLOCKED_NO_COMPILER_DISPATCH"
-        save_state(journal, state)
+        store.state(state)
         raise ValueError("DURABLE_INTENT_AND_JOURNAL_REQUIRED")
     try:
         result = helper.run(*build_arguments(plan, profile))
@@ -217,9 +238,9 @@ def start(prepared_ref, helper, git, profile=None):
         state.update(state="BUILD_RUNNING", containerId=cid)
     except BaseException:
         state["state"] = "BUILD_DISPATCH_UNKNOWN_RECONCILE_EXACT_LABELS"
-        save_state(journal, state)
+        store.state(state)
         raise
-    save_state(journal, state)
+    store.state(state)
     return state
 
 def finish(prepared_ref, helper, git, profile=None):
@@ -227,11 +248,12 @@ def finish(prepared_ref, helper, git, profile=None):
     preparation_sha = prepared_ref["sha256"]
     require(plan.get("executionOperatorSha256") == sha(Path(__file__)), "BUILD_OPERATOR_CHANGED")
     private, _ = verify(plan, git, profile)
+    store = build_journal(plan, private, profile)
     scope = build_scope(profile)
     require(sha(helper.__file__) == REVIEWED_BUILD_HELPER_SHA256, "REVIEWED_SHARED_BUILD_HELPER_CHANGED")
     require(os.environ.get("DOCKER_CONTEXT") == "desktop-linux", "EXPLICIT_DESKTOP_CONTEXT_REQUIRED")
     require(helper.run("docker", "--context", "desktop-linux", "info", "--format", "{{.ID}}").stdout.strip() == plan["engineId"], "ENGINE_CHANGED")
-    state = json.loads((private / "build-state.json").read_bytes())
+    state = store.read("build-state.json")
     require(state["state"] == "BUILD_RUNNING" and state["preparationSha256"] == preparation_sha, "BUILD_OWNERSHIP_UNRESOLVED")
     row = json.loads(helper.run("docker", "inspect", state["containerId"]).stdout)[0]
     require(row["Id"] == state["containerId"] and row["Image"] == plan["builderImage"] and row["Config"]["Labels"]["elevenid.run"] == plan["runId"]
@@ -254,5 +276,5 @@ def finish(prepared_ref, helper, git, profile=None):
             require(len(matches) == 1, "EXACT_COMPILER_OUTPUT_REQUIRED")
             artifacts[binary] = ref(file)
         result.update(state="BUILD_SUCCEEDED", binaries=artifacts, runtimeUidLibrariesValidated=False, coreCompilerArtifacts=ref(output / "core-compiler-artifacts.json"))
-    save_exclusive(private / "build-receipt.json", result)
+    store.exclusive("build-receipt.json", result)
     return result
