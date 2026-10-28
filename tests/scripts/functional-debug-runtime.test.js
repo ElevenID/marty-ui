@@ -194,12 +194,19 @@ function mountEquivalenceFixture(t){
  return {...f,observe};
 }
 
-test('v2 compares Windows and canonical desktop mounts for base20 and issuer2 without rewriting evidence',t=>{
+test('v2 emits transport-independent canonical mounts without rewriting input evidence',t=>{
  const f=mountEquivalenceFixture(t),before=JSON.stringify(f.before),deployed=fs.readFileSync(f.profile.issuanceOverlay.deploymentReceipt.path);
  const result=verifyFunctionalRuntime(f.profile,{observe:f.observe});
  assert.equal(result.roles.length,22);assert.equal(result.roles.filter(row=>row.kind==='ISSUANCE_CORE_FUNCTIONAL_OVERLAY').length,2);
  assert(result.roles.find(row=>row.role==='credential-template').binaryMounts[0].source.startsWith('/run/desktop/mnt/host/c/'));
- assert(result.roles.find(row=>row.role==='issuance').binaryMounts[0].source.startsWith('D:\\'));
+ assert(result.roles.find(row=>row.role==='issuance').binaryMounts[0].source.startsWith('/run/desktop/mnt/host/d/'));
+ const alternate=verifyFunctionalRuntime(f.profile,{observe:row=>{
+  const actual=f.observe(row);
+  actual.binaryMounts=actual.binaryMounts.map(mount=>({...mount,source:mount.source.replace(
+    /^\/run\/desktop\/mnt\/host\/([cd])\//,(all,drive)=>drive.toUpperCase()+':\\').replaceAll('/','\\')}));
+  return actual;
+ }});
+ assert.deepEqual(alternate,result,'Docker CLI and native transport must produce the same bound receipt');
  assert.equal(JSON.stringify(f.before),before);assert.deepEqual(fs.readFileSync(f.profile.issuanceOverlay.deploymentReceipt.path),deployed);
  assert.equal(result.releaseQualified,false);assert.equal(result.recordingQualified,false);
 });
