@@ -700,7 +700,7 @@ def _prepare_restart(source: Path, registry: Path, runtime_parent: Path,
                     "guest_memory_mib": guest_memory_mib,
                     "controller_reserve_mib": INSTALLER_ONLY_RESERVE_MIB,
                     "purpose": INSTALLER_ONLY_PURPOSE,
-                    "host_mem_available_kib_at_intent": available_kib,
+                    "host_mem_available_kib_at_preflight": available_kib,
                     "qemu_sha256": launch["qemu_sha256"],
                     "qualified": False, "dispatch_authorized": False,
                     "application_deployment_authorized": False,
@@ -829,7 +829,7 @@ def current_readiness(source: Path, registry: Path, runtime_parent: Path, *, vm_
             "mutable_disk_sha256", "mutable_disk_mtime_ns", "mutable_disk_ctime_ns",
             "runtime_uid", "runtime_gid", "ssh_port", "args", "qemu_sha256",
             "guest_memory_mib", "controller_reserve_mib", "purpose",
-            "host_mem_available_kib_at_intent",
+            "host_mem_available_kib_at_preflight",
             "qualified", "dispatch_authorized", "application_deployment_authorized",
             "started_at",
         }, "VM restart intent")
@@ -882,8 +882,8 @@ def current_readiness(source: Path, registry: Path, runtime_parent: Path, *, vm_
                             records["launch_intent"]["args"], intent["guest_memory_mib"])
                         and intent["controller_reserve_mib"] == INSTALLER_ONLY_RESERVE_MIB
                         and intent["purpose"] == INSTALLER_ONLY_PURPOSE
-                        and type(intent["host_mem_available_kib_at_intent"]) is int
-                        and intent["host_mem_available_kib_at_intent"]
+                        and type(intent["host_mem_available_kib_at_preflight"]) is int
+                        and intent["host_mem_available_kib_at_preflight"]
                         >= (intent["guest_memory_mib"] + INSTALLER_ONLY_RESERVE_MIB) * 1024
                         and intent["qemu_sha256"] == launcher._trusted_tool(launcher.QEMU)
                         and intent["runtime_uid"] == runtime["runtime_uid"]

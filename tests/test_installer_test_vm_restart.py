@@ -398,6 +398,8 @@ class Records(unittest.TestCase):
                     self.assertEqual(intent["guest_memory_mib"], 2048)
                     self.assertEqual(intent["controller_reserve_mib"], 2048)
                     self.assertEqual(intent["purpose"], "installer_only_trial")
+                    self.assertEqual(intent["host_mem_available_kib_at_preflight"],
+                                     5 * 1024**2)
                     self.assertEqual(len(wrote), 0)
                     wrote.clear()
                     disk.write_bytes(b"changed-overlay")
