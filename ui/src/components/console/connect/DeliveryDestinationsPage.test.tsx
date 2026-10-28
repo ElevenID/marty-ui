@@ -83,4 +83,29 @@ describe('DeliveryDestinationsPage', () => {
     expect(screen.queryByText('Destination org-1')).not.toBeInTheDocument();
     expect(screen.getByText('Destination org-2')).toBeInTheDocument();
   });
+
+  it('retries a failed inventory fetch and clears its error', async () => {
+    let attempts = 0;
+    server.use(http.get('http://localhost:8000/v1/delivery-destinations', () => ++attempts === 1
+      ? HttpResponse.json({ detail: 'Destination service unavailable' }, { status: 403 })
+      : HttpResponse.json([{ id: 'system-wallet', name: 'Recovered destination', is_system: true }])));
+    const { user } = renderWithRouter(<DeliveryDestinationsPage />);
+    await screen.findByText('Destination service unavailable');
+    await user.click(screen.getByRole('button', { name: 'Reload destinations' }));
+    expect(await screen.findByText('Recovered destination')).toBeInTheDocument();
+    expect(screen.queryByText('Destination service unavailable')).not.toBeInTheDocument();
+  });
+
+  it('retains a failed creation form and offers the existing error recovery', async () => {
+    server.use(http.post('http://localhost:8000/v1/delivery-destinations', () => HttpResponse.json({ detail: 'Bureau not approved' }, { status: 403 })));
+    const { user } = renderWithRouter(<DeliveryDestinationsPage />);
+    await screen.findByText('Configured wallet destination');
+    await user.click(screen.getByRole('button', { name: 'Add Production Destination' }));
+    await user.type(screen.getByRole('textbox', { name: 'Destination name' }), 'Campus Bureau');
+    await user.click(screen.getByRole('button', { name: 'Add Destination' }));
+    expect(await screen.findByText('Bureau not approved')).toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: 'Destination name' })).toHaveValue('Campus Bureau');
+    expect(reads).toHaveLength(1);
+  });
+
 });

@@ -1631,6 +1631,27 @@ async fn create_public_signing_key(
     .into_response()
 }
 
+// These strong revision tags are CAS tokens. Intermediary compression must not
+// turn them into weak validators that cannot be used with If-Match.
+fn public_config_revision_headers(revision: String) -> [(axum::http::HeaderName, String); 2] {
+    [
+        (ETAG, revision),
+        (CACHE_CONTROL, "no-store, no-transform".to_owned()),
+    ]
+}
+
+fn public_config_revision_response(
+    state: &AppState,
+    registry: Value,
+    revision: String,
+) -> Response {
+    (
+        public_config_revision_headers(revision),
+        Json(public_config_document(state, registry)),
+    )
+        .into_response()
+}
+
 async fn public_config(
     State(state): State<AppState>,
     Query(scope): Query<OrganizationScope>,
@@ -1642,11 +1663,7 @@ async fn public_config(
         );
     };
     match store.load_with_revision(&scope.organization_id).await {
-        Ok((registry, revision)) => (
-            [(ETAG, revision), (CACHE_CONTROL, "no-store".to_owned())],
-            Json(public_config_document(&state, registry)),
-        )
-            .into_response(),
+        Ok((registry, revision)) => public_config_revision_response(&state, registry, revision),
         Err(error) => public_error(StatusCode::SERVICE_UNAVAILABLE, &error.to_string()),
     }
 }
@@ -2075,11 +2092,7 @@ async fn save_public_config(
     .await;
     let _ = lease.release().await;
     match saved {
-        Ok((registry, revision)) => (
-            [(ETAG, revision), (CACHE_CONTROL, "no-store".to_owned())],
-            Json(public_config_document(&state, registry)),
-        )
-            .into_response(),
+        Ok((registry, revision)) => public_config_revision_response(&state, registry, revision),
         Err(registry::RegistryError::PreconditionFailed) => public_error(
             StatusCode::PRECONDITION_FAILED,
             "Signing registry changed since the supplied revision.",
@@ -6491,6 +6504,23 @@ mod public_contract_tests {
         middleware::{self, Next},
     };
     use tower::ServiceExt;
+
+    #[test]
+    fn config_cas_response_protects_strong_etag_from_intermediary_transforms() {
+        let revision = format!("\"r-{}\"", uuid::Uuid::new_v4());
+        let response = (
+            public_config_revision_headers(revision.clone()),
+            Json(json!({"services": []})),
+        )
+            .into_response();
+        assert_eq!(response.headers()[ETAG], revision.as_str());
+        assert_eq!(response.headers()[CACHE_CONTROL], "no-store, no-transform");
+        let mut headers = HeaderMap::new();
+        headers.insert(IF_MATCH, response.headers()[ETAG].clone());
+        assert_eq!(strong_config_if_match(&headers), Ok(Some(revision.clone())));
+        headers.insert(IF_MATCH, format!("W/{revision}").parse().unwrap());
+        assert!(strong_config_if_match(&headers).is_err());
+    }
 
     #[test]
     fn config_if_match_requires_one_strong_opaque_revision() {
