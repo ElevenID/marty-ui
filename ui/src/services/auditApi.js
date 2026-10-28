@@ -7,25 +7,13 @@
  */
 
 import { get } from './api';
-import { buildDefinedQueryString, withQuery } from './queryUtils';
+import { buildDefinedQueryString, withQuery, requireOrganizationId as requireScopedOrganizationId } from './queryUtils';
 
 const SAVED_VIEWS_STORAGE_PREFIX = 'marty.audit.savedViews';
 const fallbackSavedViewsStore = new Map();
 
 function requireOrganizationId(organizationId) {
-  const normalized = String(organizationId ?? '').trim();
-  if (
-    normalized === ''
-    || normalized.toLowerCase() === 'null'
-    || normalized.toLowerCase() === 'undefined'
-  ) {
-    const error = new Error('Organization ID is required for audit operations');
-    error.code = 'ORG_REQUIRED';
-    error.status = 400;
-    throw error;
-  }
-
-  return normalized;
+  return requireScopedOrganizationId(organizationId, undefined, 'Organization ID is required for audit operations');
 }
 
 function getBasePath(organizationId) {

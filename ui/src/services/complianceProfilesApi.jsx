@@ -5,27 +5,14 @@
  * behind compliance-focused configurations (ICAO_DTC, AAMVA_MDL, EUDI_PID, etc.).
  */
 
-import { apiClient, handleApiError } from './api';
+import { del, get, patch, post, withApiErrorHandling } from './api';
 import { postWithIdempotency } from './idempotency';
+import { requireOrganizationId as requireScopedOrganizationId } from './queryUtils';
 
 const BASE_PATH = '/v1/compliance-profiles';
 
-function isMissingOrganizationId(organizationId) {
-  return organizationId == null
-    || String(organizationId).trim() === ''
-    || String(organizationId).trim().toLowerCase() === 'null'
-    || String(organizationId).trim().toLowerCase() === 'undefined';
-}
-
 export function requireOrganizationId(params = {}) {
-  const organizationId = typeof params === 'string' ? params : params?.organization_id;
-  if (isMissingOrganizationId(organizationId)) {
-    const error = new Error('An active organization is required before loading compliance profiles.');
-    error.code = 'ORG_REQUIRED';
-    error.status = 400;
-    throw error;
-  }
-  return String(organizationId).trim();
+  return requireScopedOrganizationId(typeof params === 'string' ? params : params?.organization_id, undefined, 'An active organization is required before loading compliance profiles.');
 }
 
 /** Create an organization-owned profile using the native compliance contract. */
@@ -46,7 +33,7 @@ export const createComplianceProfile = async (profileData) => {
  */
 export const listComplianceProfiles = async (filters = {}) => {
   const organizationId = requireOrganizationId(filters);
-  try {
+  return withApiErrorHandling(async () => {
     const params = new URLSearchParams();
     params.append('organization_id', organizationId);
     if (filters.system_profiles_only !== undefined) {
@@ -55,11 +42,8 @@ export const listComplianceProfiles = async (filters = {}) => {
     if (filters.limit) params.append('limit', filters.limit);
     if (filters.offset) params.append('offset', filters.offset);
     
-    const response = await apiClient.get(`${BASE_PATH}?${params.toString()}`);
-    return response.data;
-  } catch (error) {
-    throw handleApiError(error);
-  }
+    return get(`${BASE_PATH}?${params.toString()}`);
+  });
 };
 
 /**
@@ -68,12 +52,7 @@ export const listComplianceProfiles = async (filters = {}) => {
  * @returns {Promise<Object>} Compliance profile details
  */
 export const getComplianceProfile = async (profileId) => {
-  try {
-    const response = await apiClient.get(`${BASE_PATH}/${encodeURIComponent(profileId)}`);
-    return response.data;
-  } catch (error) {
-    throw handleApiError(error);
-  }
+  return withApiErrorHandling(() => get(`${BASE_PATH}/${encodeURIComponent(profileId)}`));
 };
 
 /**
@@ -83,12 +62,7 @@ export const getComplianceProfile = async (profileId) => {
  * @returns {Promise<Object>} Updated compliance profile
  */
 export const updateComplianceProfile = async (profileId, updates) => {
-  try {
-    const response = await apiClient.patch(`${BASE_PATH}/${encodeURIComponent(profileId)}`, updates);
-    return response.data;
-  } catch (error) {
-    throw handleApiError(error);
-  }
+  return withApiErrorHandling(() => patch(`${BASE_PATH}/${encodeURIComponent(profileId)}`, updates));
 };
 
 /**
@@ -97,33 +71,29 @@ export const updateComplianceProfile = async (profileId, updates) => {
  * @returns {Promise<void>}
  */
 export const deleteComplianceProfile = async (profileId) => {
-  try {
-    await apiClient.delete(`${BASE_PATH}/${encodeURIComponent(profileId)}`);
-  } catch (error) {
-    throw handleApiError(error);
-  }
+  return withApiErrorHandling(async () => {
+    await del(`${BASE_PATH}/${encodeURIComponent(profileId)}`);
+  });
 };
 
 /** Active discoverable migration-owned presets; never infer presets from org rows. */
 export const getSystemPresets = async (filters = {}) => {
   const organizationId = requireOrganizationId(filters);
-  try {
-    const response = await apiClient.get(`${BASE_PATH}/system/discoverable?${new URLSearchParams({ organization_id: organizationId })}`);
-    if (!Array.isArray(response.data) || !response.data.every((profile) => profile?.is_system === true
+  return withApiErrorHandling(async () => {
+    const response = await get(`${BASE_PATH}/system/discoverable?${new URLSearchParams({ organization_id: organizationId })}`);
+    if (!Array.isArray(response) || !response.every((profile) => profile?.is_system === true
       && profile.organization_id == null && profile.status === 'ACTIVE' && profile.discoverable === true)) {
       throw new Error('Compliance catalog returned invalid system profile data.');
     }
-    return response.data;
-  } catch (error) { throw handleApiError(error); }
+    return response;
+  });
 };
 
 export const activateComplianceProfile = async (profileId) => {
-  try { return (await apiClient.post(`${BASE_PATH}/${encodeURIComponent(profileId)}/activate`, {})).data; }
-  catch (error) { throw handleApiError(error); }
+  return withApiErrorHandling(() => post(`${BASE_PATH}/${encodeURIComponent(profileId)}/activate`, {}));
 };
 export const suspendComplianceProfile = async (profileId) => {
-  try { return (await apiClient.post(`${BASE_PATH}/${encodeURIComponent(profileId)}/suspend`, {})).data; }
-  catch (error) { throw handleApiError(error); }
+  return withApiErrorHandling(() => post(`${BASE_PATH}/${encodeURIComponent(profileId)}/suspend`, {}));
 };
 
 export const listSystemPresets = getSystemPresets;

@@ -5,7 +5,7 @@
  * Integrates with digital identity backend for credential lifecycle management.
  */
 
-import { apiClient, handleApiError } from './api';
+import { get, patch, post, withApiErrorHandling } from './api';
 
 const BASE_PATH = '/v1/credentials';
 
@@ -19,18 +19,15 @@ const BASE_PATH = '/v1/credentials';
  * @returns {Promise<Object>} VC-API response with verifiableCredential
  */
 export const issueCredential = async (request) => {
-  try {
+  return withApiErrorHandling(async () => {
     const { organization_id, credential_template_id, issuer_did, credential } = request;
     if (![organization_id, credential_template_id, issuer_did].every(value => typeof value === 'string' && value.trim()) ||
         !issuer_did.startsWith('did:') || !credential || typeof credential !== 'object' || Array.isArray(credential)) {
       throw new Error('organization_id, credential_template_id, issuer_did, and credential are required');
     }
     const query = new URLSearchParams({ organization_id, credential_template_id, issuer_did });
-    const response = await apiClient.post(`/v1/vc-api/credentials/issue?${query}`, { credential });
-    return response.data;
-  } catch (error) {
-    throw handleApiError(error);
-  }
+    return post(`/v1/vc-api/credentials/issue?${query}`, { credential });
+  });
 };
 
 /**
@@ -43,21 +40,18 @@ export const issueCredential = async (request) => {
  * @returns {Promise<Object>} VC-API result with verified and results
  */
 export const verifyCredential = async (request) => {
-  try {
+  return withApiErrorHandling(async () => {
     const { organization_id, presentation_policy_id, verifiableCredential, options } = request;
     if (![organization_id, presentation_policy_id].every(value => typeof value === 'string' && value.trim()) ||
         !verifiableCredential || (options !== undefined && (typeof options !== 'object' || Array.isArray(options)))) {
       throw new Error('organization_id, presentation_policy_id, and verifiableCredential are required');
     }
     const query = new URLSearchParams({ organization_id, presentation_policy_id });
-    const response = await apiClient.post(`/v1/vc-api/credentials/verify?${query}`, {
+    return post(`/v1/vc-api/credentials/verify?${query}`, {
       verifiableCredential,
       ...(options ? { options } : {}),
     });
-    return response.data;
-  } catch (error) {
-    throw handleApiError(error);
-  }
+  });
 };
 
 /**
@@ -66,12 +60,7 @@ export const verifyCredential = async (request) => {
  * @returns {Promise<Object>} Credential metadata (no actual credential data)
  */
 export const getCredentialMetadata = async (credentialId) => {
-  try {
-    const response = await apiClient.get(`${BASE_PATH}/${credentialId}`);
-    return response.data;
-  } catch (error) {
-    throw handleApiError(error);
-  }
+  return withApiErrorHandling(() => get(`${BASE_PATH}/${credentialId}`));
 };
 
 /**
@@ -83,16 +72,13 @@ export const getCredentialMetadata = async (credentialId) => {
  * @returns {Promise<Object>} Revocation result
  */
 export const revokeCredential = async (credentialId, options = {}) => {
-  try {
+  return withApiErrorHandling(async () => {
     const request = {
       revocation_reason: options.revocation_reason,
       revocation_strategy: options.revocation_strategy || 'scheduled',
     };
-    const response = await apiClient.patch(`${BASE_PATH}/${credentialId}/revoke`, request);
-    return response.data;
-  } catch (error) {
-    throw handleApiError(error);
-  }
+    return patch(`${BASE_PATH}/${credentialId}/revoke`, request);
+  });
 };
 
 /**
@@ -104,17 +90,14 @@ export const revokeCredential = async (credentialId, options = {}) => {
  * @returns {Promise<Object>} Batch revocation result with batch_id
  */
 export const batchRevokeCredentials = async (credentialIds, options = {}) => {
-  try {
+  return withApiErrorHandling(async () => {
     const request = {
       credential_ids: credentialIds,
       revocation_reason: options.revocation_reason,
       revocation_strategy: options.revocation_strategy || 'scheduled',
     };
-    const response = await apiClient.post(`${BASE_PATH}/revoke/batch`, request);
-    return response.data;
-  } catch (error) {
-    throw handleApiError(error);
-  }
+    return post(`${BASE_PATH}/revoke/batch`, request);
+  });
 };
 
 /**
@@ -128,7 +111,7 @@ export const batchRevokeCredentials = async (credentialIds, options = {}) => {
  * @returns {Promise<Array>} List of credential metadata
  */
 export const listCredentials = async (filters = {}) => {
-  try {
+  return withApiErrorHandling(async () => {
     const params = new URLSearchParams();
     if (filters.organization_id) params.append('organization_id', filters.organization_id);
     if (filters.flow_id) params.append('flow_id', filters.flow_id);
@@ -137,11 +120,8 @@ export const listCredentials = async (filters = {}) => {
     if (filters.limit) params.append('limit', filters.limit);
     if (filters.offset) params.append('offset', filters.offset);
     
-    const response = await apiClient.get(`${BASE_PATH}?${params.toString()}`);
-    return response.data;
-  } catch (error) {
-    throw handleApiError(error);
-  }
+    return get(`${BASE_PATH}?${params.toString()}`);
+  });
 };
 
 /**
@@ -151,16 +131,13 @@ export const listCredentials = async (filters = {}) => {
  * @returns {Promise<Array>} List of revocation batch statuses
  */
 export const listRevocationBatches = async (filters = {}) => {
-  try {
+  return withApiErrorHandling(async () => {
     const params = new URLSearchParams();
     if (filters.organization_id) params.append('organization_id', filters.organization_id);
     if (filters.status) params.append('status', filters.status);
     
-    const response = await apiClient.get(`${BASE_PATH}/revocation-batches?${params.toString()}`);
-    return response.data;
-  } catch (error) {
-    throw handleApiError(error);
-  }
+    return get(`${BASE_PATH}/revocation-batches?${params.toString()}`);
+  });
 };
 
 /**
@@ -173,7 +150,7 @@ export const listRevocationBatches = async (filters = {}) => {
  * @returns {Promise<Object>} Generated credential offer with QR code
  */
 export const createCredentialOffer = async (request) => {
-  try {
+  return withApiErrorHandling(async () => {
     const payload = {
       credential_config_id: request.templateId,
       applicant_id: request.applicantId,
@@ -182,11 +159,8 @@ export const createCredentialOffer = async (request) => {
       deferred: false,
     };
     
-    const response = await apiClient.post('/v1/issuance/offers', payload);
-    return response.data;
-  } catch (error) {
-    throw handleApiError(error);
-  }
+    return post('/v1/issuance/offers', payload);
+  });
 };
 
 /**
@@ -195,12 +169,7 @@ export const createCredentialOffer = async (request) => {
  * @returns {Promise<Object>} Credential offer details
  */
 export const getCredentialOffer = async (offerId) => {
-  try {
-    const response = await apiClient.get(`/v1/issuance/offers/${offerId}`);
-    return response.data;
-  } catch (error) {
-    throw handleApiError(error);
-  }
+  return withApiErrorHandling(() => get(`/v1/issuance/offers/${offerId}`));
 };
 
 /**
@@ -210,15 +179,10 @@ export const getCredentialOffer = async (offerId) => {
  * @returns {Promise<Blob>} QR code image blob
  */
 export const getOfferQRCode = async (offerId, format = 'png') => {
-  try {
-    const response = await apiClient.get(
+  return withApiErrorHandling(() => get(
       `/v1/issuance/offers/${offerId}/qr?format=${format}`,
       { responseType: 'blob' }
-    );
-    return response.data;
-  } catch (error) {
-    throw handleApiError(error);
-  }
+    ));
 };
 
 /**
@@ -227,12 +191,7 @@ export const getOfferQRCode = async (offerId, format = 'png') => {
  * @returns {Promise<Object>} Issuance session status
  */
 export const getIssuanceSessionStatus = async (transactionId) => {
-  try {
-    const response = await apiClient.get(`/v1/issuance/transactions/${transactionId}`);
-    return response.data;
-  } catch (error) {
-    throw handleApiError(error);
-  }
+  return withApiErrorHandling(() => get(`/v1/issuance/transactions/${transactionId}`));
 };
 
 /** Preserve the same invite fields for claim responses and read-only application refreshes. */
@@ -253,12 +212,10 @@ export const normalizeApplicationOffer = (data) => ({
  * @returns {Promise<{offer_url: string, expires_at: string|null, status: string}>}
  */
 export const generateIssuanceOffer = async (applicationId, options = {}) => {
-  try {
-    const response = await apiClient.post(`/v1/me/applications/${applicationId}/claim`, options || {});
-    return normalizeApplicationOffer(response.data);
-  } catch (error) {
-    throw handleApiError(error);
-  }
+  return withApiErrorHandling(async () => {
+    const response = await post(`/v1/me/applications/${applicationId}/claim`, options || {});
+    return normalizeApplicationOffer(response);
+  });
 };
 
 export default {

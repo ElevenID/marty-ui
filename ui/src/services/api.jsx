@@ -35,6 +35,15 @@ export const {
   apiClient,
 } = client;
 
+/** Normalize legacy service errors without changing the shared transport policy. */
+export async function withApiErrorHandling(operation) {
+  try {
+    return await operation();
+  } catch (error) {
+    throw handleApiError(error);
+  }
+}
+
 export async function getWithRetryConfig(endpoint, options = {}, retryConfig = {}) {
   let url = endpoint.startsWith('http') ? endpoint : `${import.meta.env.VITE_API_URL || ''}${endpoint}`;
   if (options.params) {
@@ -64,6 +73,7 @@ export async function getWithRetryConfig(endpoint, options = {}, retryConfig = {
 export { getErrorMessage, getErrorCode, isAuthError, isRetryableError, handleApiError };
 
 export default {
+  withApiErrorHandling,
   fetchWithRetry,
   apiRequest,
   get,
