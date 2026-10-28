@@ -1313,6 +1313,12 @@ impl InstallerState {
             self.poisoned = true;
             return Err("creation identity receipt cannot be confirmed".into());
         }
+        if let Some(credential_creation) = &mut self.credential_creation {
+            if let Err(error) = credential_creation.remember_initial_receipt(bytes) {
+                self.poisoned = true;
+                return Err(error);
+            }
+        }
         self.creation = None;
         Ok(())
     }
@@ -1463,7 +1469,9 @@ impl InstallerState {
         let prepared = (|| {
             self.with_inspection(|view| {
                 view.require_path_binding(installation)?;
-                view.read_evidence(CREATION_RECEIPT)?;
+                if view.read_evidence(CREATION_RECEIPT)? != creation.initial_receipt()? {
+                    return Err("initial creation identity receipt changed".into());
+                }
                 Ok(())
             })?;
             let evidence = open_at(
@@ -1478,12 +1486,7 @@ impl InstallerState {
                 libc::O_RDONLY | libc::O_DIRECTORY,
                 0,
             )?;
-            let operator = open_at(
-                &self.directory,
-                &name("operator-password"),
-                libc::O_RDONLY | libc::O_NONBLOCK,
-                0,
-            )?;
+            let operator = open_at(&self.directory, &name("operator-password"), libc::O_PATH, 0)?;
             private(&evidence, true)?;
             private(&secrets, true)?;
             private(&operator, false)?;
@@ -1517,12 +1520,7 @@ impl InstallerState {
                 libc::O_RDONLY | libc::O_DIRECTORY,
                 0,
             )?;
-            let operator = open_at(
-                &self.directory,
-                &name("operator-password"),
-                libc::O_RDONLY | libc::O_NONBLOCK,
-                0,
-            )?;
+            let operator = open_at(&self.directory, &name("operator-password"), libc::O_PATH, 0)?;
             if creation.receipt_bytes(
                 self.journal.installation_id(),
                 &self.journal.identity().source_sha,
