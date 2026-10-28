@@ -59,7 +59,7 @@ def exact_file(path: Path, expected: str) -> None:
 def check(plan: dict) -> dict:
     """Validate source and ownership before even checking the runtime handle."""
     lane, run_id, tag = (plan[name] for name in ("lane", "runId", "tag"))
-    if lane not in LANES or not re.fullmatch(r"[a-z0-9][a-z0-9-]{1,46}[a-z0-9]", run_id):
+    if lane not in LANES or not re.fullmatch(r"local-[a-z0-9][a-z0-9-]{1,40}[a-z0-9]", run_id):
         fail("invalid official lane or run ID")
     if not re.fullmatch(r"[a-z0-9][a-z0-9-]{1,60}[a-z0-9]", tag):
         fail("invalid unique evidence tag")
