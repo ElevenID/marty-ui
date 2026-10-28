@@ -9,7 +9,6 @@ import { Box, Typography, Button, Card, CardContent, CardHeader, Grid, Chip, Div
 import { SEOHead } from './seo';
 import { softwareApplicationSchema, breadcrumbListSchema } from './seo/structuredData';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
-import CloudIcon from '@mui/icons-material/Cloud';
 import StorageIcon from '@mui/icons-material/Storage';
 import PhoneAndroidIcon from '@mui/icons-material/PhoneAndroid';
 import ComputerIcon from '@mui/icons-material/Computer';
@@ -26,10 +25,10 @@ import { PRODUCTS } from '../data/marketingContent';
 import { useBranding } from '../hooks/useBranding';
 
 const DEPLOYMENT_ICONS = {
-  'SaaS': <CloudIcon />,
-  'Self-hosted': <StorageIcon />,
+  'Customer-operated': <StorageIcon />,
+  'Profile evaluation': <ComputerIcon />,
   'On-site application': <ComputerIcon />,
-  'Mobile (iOS, Android)': <PhoneAndroidIcon />,
+  'Build-specific platforms': <PhoneAndroidIcon />,
   'Desktop': <ComputerIcon />,
 };
 
@@ -42,13 +41,13 @@ function ProductPage() {
       {/* SEO Meta Tags */}
       <SEOHead
         title="Verifiable Credential APIs"
-        description="Enterprise verifiable credential infrastructure: Verification API, Issuance API, Kiosk, and Authenticator. EUDI, Open Badges, ISO 18013-5, SD-JWT support."
+        description="Marty: one customer-operated product for portable credentials, applicant and document verification, and Travel Trust. Review components, scope, and operating responsibilities."
         canonicalPath="/product"
         keywords={['verifiable credential API', 'EUDI Wallet API', 'Open Badges API', 'ISO 18013-5', 'credential issuance', 'credential verification']}
         structuredData={[
           softwareApplicationSchema({
-            name: 'ElevenID LLC Verifiable Credential Platform',
-            description: 'Enterprise verifiable credential infrastructure for issuing, verifying, and governing digital credentials.',
+            name: 'Marty by ElevenID',
+            description: 'Customer-operated identity workflows with defined release, integration, and commercial scope.',
           }),
           breadcrumbListSchema([
             { name: 'Home', url: 'https://elevenidllc.com' },
@@ -68,17 +67,17 @@ function ProductPage() {
         }}
       >
         <Typography variant="h3" component="h1" gutterBottom fontWeight="bold">
-          Verifiable Credential Products & APIs
+          Marty: Workflows, Components, and APIs
         </Typography>
         <Typography variant="h6" sx={{ maxWidth: 800, mx: 'auto', opacity: 0.95 }}>
-          Choose the building blocks you need—start with verification, then expand into issuance and governance.
+          Choose a useful workflow, evaluate the relevant release, and agree the scope your organization needs.
         </Typography>
       </Box>
       {/* Product Overview */}
       <Box sx={{ mb: 4 }}>
         <Typography variant="body1" color="text.secondary" paragraph sx={{ maxWidth: 900, mx: 'auto', textAlign: 'center' }}>
-          {branding.branding.appName} is a complete identity infrastructure platform for issuing, verifying, 
-          and governing digital credentials—built on open standards for interoperability and trust.
+          Marty by {branding.branding.appName} connects credentials, document checks, trust policies, and workflow decisions.
+          Start with synthetic data and validate the selected release in your operating environment.
         </Typography>
       </Box>
       {/* Start Here Router */}
@@ -87,7 +86,7 @@ function ProductPage() {
           What are you doing first?
         </Typography>
         <Typography variant="body2" color="text.secondary" textAlign="center" sx={{ mb: 3 }}>
-          Most teams start with Verification API.
+          Start with the component your selected workflow needs.
         </Typography>
         <Grid container spacing={2} justifyContent="center">
           <Grid item xs={6} sm={3}>
@@ -180,127 +179,41 @@ function ProductPage() {
           </Grid>
         </Grid>
       </Paper>
-      {/* Recommended Packages */}
+      {/* One product, independent use cases */}
       <Box sx={{ mb: 6 }}>
         <Typography variant="h5" fontWeight="bold" gutterBottom>
-          Recommended Packages
+          One Marty Product, Three Use Cases
         </Typography>
         <Grid container spacing={3}>
-          <Grid item xs={12} md={4}>
-            <Card elevation={2} sx={{ height: '100%' }}>
-              <CardContent>
-                <Typography variant="h6" fontWeight="bold" color="primary" gutterBottom>
-                  Verifier Starter
-                </Typography>
-                <List dense>
-                  <ListItem sx={{ py: 0 }}>
-                    <ListItemIcon sx={{ minWidth: 28 }}>
-                      <CheckCircleIcon fontSize="small" color="success" />
-                    </ListItemIcon>
-                    <ListItemText primary="Verification API (SaaS)" slotProps={{
-                      primary: { variant: 'body2' }
-                    }} />
-                  </ListItem>
-                  <ListItem sx={{ py: 0 }}>
-                    <ListItemIcon sx={{ minWidth: 28 }}>
-                      <CheckCircleIcon fontSize="small" color="success" />
-                    </ListItemIcon>
-                    <ListItemText primary="Trust registry integration" slotProps={{
-                      primary: { variant: 'body2' }
-                    }} />
-                  </ListItem>
-                </List>
-                <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-                  Best for: Relying parties, acceptance scenarios
-                </Typography>
-                <Typography variant="body2" fontWeight="medium" color="success.dark" sx={{ mt: 1 }}>
-                  Outcome: Accept wallets and credentials without repeated KYC.
-                </Typography>
-              </CardContent>
-            </Card>
-          </Grid>
-          <Grid item xs={12} md={4}>
-            <Card elevation={2} sx={{ height: '100%' }}>
-              <CardContent>
-                <Typography variant="h6" fontWeight="bold" color="secondary" gutterBottom>
-                  Issuer Starter
-                </Typography>
-                <List dense>
-                  <ListItem sx={{ py: 0 }}>
-                    <ListItemIcon sx={{ minWidth: 28 }}>
-                      <CheckCircleIcon fontSize="small" color="success" />
-                    </ListItemIcon>
-                    <ListItemText primary="Issuance API (self-hosted)" slotProps={{
-                      primary: { variant: 'body2' }
-                    }} />
-                  </ListItem>
-                  <ListItem sx={{ py: 0 }}>
-                    <ListItemIcon sx={{ minWidth: 28 }}>
-                      <CheckCircleIcon fontSize="small" color="success" />
-                    </ListItemIcon>
-                    <ListItemText primary="Verification API for testing" slotProps={{
-                      primary: { variant: 'body2' }
-                    }} />
-                  </ListItem>
-                </List>
-                <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-                  Best for: Credential issuers, program operators
-                </Typography>
-                <Typography variant="body2" fontWeight="medium" color="success.dark" sx={{ mt: 1 }}>
-                  Outcome: Issue compliant credentials with full control of keys and lifecycle.
-                </Typography>
-              </CardContent>
-            </Card>
-          </Grid>
-          <Grid item xs={12} md={4}>
-            <Card elevation={2} sx={{ height: '100%', border: 2, borderColor: 'primary.main' }}>
-              <CardContent>
-                <Typography variant="h6" fontWeight="bold" color="primary" gutterBottom>
-                  Ecosystem Builder
-                </Typography>
-                <List dense>
-                  <ListItem sx={{ py: 0 }}>
-                    <ListItemIcon sx={{ minWidth: 28 }}>
-                      <CheckCircleIcon fontSize="small" color="success" />
-                    </ListItemIcon>
-                    <ListItemText primary="Issuance + Verification + Trust" slotProps={{
-                      primary: { variant: 'body2' }
-                    }} />
-                  </ListItem>
-                  <ListItem sx={{ py: 0 }}>
-                    <ListItemIcon sx={{ minWidth: 28 }}>
-                      <CheckCircleIcon fontSize="small" color="success" />
-                    </ListItemIcon>
-                    <ListItemText primary="Optional: Authenticator, Kiosk" slotProps={{
-                      primary: { variant: 'body2' }
-                    }} />
-                  </ListItem>
-                </List>
-                <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-                  Best for: Government programs, trust networks
-                </Typography>
-                <Typography variant="body2" fontWeight="medium" color="success.dark" sx={{ mt: 1 }}>
-                  Outcome: Operate a governed, multi-party identity ecosystem.
-                </Typography>
-              </CardContent>
-            </Card>
-          </Grid>
+          {[
+            { title: 'Portable Credentials', description: 'Evaluate issuance, holding, presentation, and verification for a defined credential and trust network.' },
+            { title: 'Applicant and Document Verification', description: 'Connect document inputs, review rules, and recorded decisions to your application workflow.' },
+            { title: 'Travel Trust', description: 'Evaluate travel-document trust, journey rules, and verification decisions for a defined travel scenario.' },
+          ].map((track) => (
+            <Grid item xs={12} md={4} key={track.title}>
+              <Card elevation={2} sx={{ height: '100%' }}>
+                <CardContent>
+                  <Typography variant="h6" fontWeight="bold" color="primary" gutterBottom>{track.title}</Typography>
+                  <Typography variant="body2" color="text.secondary">{track.description}</Typography>
+                </CardContent>
+              </Card>
+            </Grid>
+          ))}
         </Grid>
-        {SHOW_PUBLIC_PRICING_BUTTONS && (
-          <Box sx={{ textAlign: 'center', mt: 2 }}>
-            <FutureFeatureButton
-              size="small"
-              disabled={DISABLE_PUBLIC_PRICING_BUTTONS}
-              onClick={() => navigate('/pricing')}
-              endIcon={<ArrowForwardIcon fontSize="small" />}
-              disabledSx={{
-                color: 'rgba(25, 118, 210, 0.52)',
-              }}
-            >
-              Compare packages
-            </FutureFeatureButton>
-          </Box>
-        )}
+        <Typography variant="body1" sx={{ mt: 3 }}>
+          Each use case can be evaluated independently. An agreed license may cover named workflows from one or more use cases.
+          Direct customers and partner/OEM teams use the same product foundation.
+        </Typography>
+        <Typography variant="body1" sx={{ mt: 2 }}>
+          The default commercial direction is a bounded annual software license, with founding access discussed on request.
+          Price, included workflows, distribution rights, and delivery terms require an agreed offer.
+          Integration or other custom work is separately scoped.
+        </Typography>
+        <Typography variant="body2" color="text.secondary" sx={{ mt: 2 }}>
+          Your organization or your selected partner runs production. The software offer does not include managed production,
+          installation or support hours, guaranteed response or resolution times, an uptime SLA, or 24/7 service.
+          Use the repository&apos;s documented issue and vulnerability reporting channels.
+        </Typography>
       </Box>
       {/* Who This Is For */}
       <Paper elevation={2} sx={{ p: 4, mb: 6, bgcolor: 'grey.50', borderRadius: 2 }}>
@@ -313,7 +226,7 @@ function ProductPage() {
               Developers
             </Typography>
             <Typography variant="body2" color="text.secondary" paragraph>
-              Start with Verification API (read-only checks), then add Issuance when you&apos;re ready to issue.
+              Review the documented interfaces and test inputs, results, and failure cases in your configured environment.
             </Typography>
             <Button size="small" onClick={() => navigate('/docs')} endIcon={<ArrowForwardIcon fontSize="small" />}>
               Read Docs
@@ -324,7 +237,7 @@ function ProductPage() {
               Security & Compliance
             </Typography>
             <Typography variant="body2" color="text.secondary" paragraph>
-              Use Kiosk for offline checkpoints and Verification API for policy-based checks with auditability.
+              Review trust sources, data handling, and evidence for the specific release and deployment profile.
             </Typography>
             <Button size="small" onClick={() => navigate('/standards')} endIcon={<ArrowForwardIcon fontSize="small" />}>
               Security model
@@ -335,7 +248,7 @@ function ProductPage() {
               Product Managers
             </Typography>
             <Typography variant="body2" color="text.secondary" paragraph>
-              Launch quickly with SaaS verification, expand to self-hosted issuance and wallets as needed.
+              Define the use case and operator, then evaluate Marty directly or with your chosen delivery partner.
             </Typography>
             {SHOW_PUBLIC_PRICING_BUTTONS && (
               <FutureFeatureButton
@@ -347,7 +260,7 @@ function ProductPage() {
                   color: 'rgba(25, 118, 210, 0.52)',
                 }}
               >
-                View Packages
+                Review Commercial Scope
               </FutureFeatureButton>
             )}
           </Grid>
@@ -356,7 +269,7 @@ function ProductPage() {
       <Divider sx={{ my: 6 }} />
       {/* Products Grid */}
       <Typography variant="h4" gutterBottom fontWeight="bold" sx={{ mb: 4 }}>
-        Our Products
+        Marty Components
       </Typography>
       <Grid container spacing={4}>
         {PRODUCTS.map((product) => (
@@ -403,13 +316,13 @@ function ProductPage() {
                   }}
                 >
                   <Typography variant="subtitle2" fontWeight="bold" gutterBottom>
-                    What You Get:
+                    What to Evaluate:
                   </Typography>
                   <Typography variant="body2">
-                    {product.id === 'verification-api' && 'Verify credentials in real-time with a REST API. Uses the trust registry (governed list of authorized issuers) to validate issuer trust. No PKI setup—just send credentials, get validation results.'}
-                    {product.id === 'issuance-api' && 'Issue standards-based credentials in minutes. Control your signing keys and trust anchors. Works with standards-compliant wallets.'}
-                    {product.id === 'kiosk' && 'Deploy offline verification at checkpoints. Offline mode validates signatures and cached trust anchors; revocation checks resume on reconnect.'}
-                    {product.id === 'authenticator' && 'Give end users a standards-based wallet. Works with ISO 18013-5 and W3C VC issuers/verifiers that support supported OID4VP profiles.'}
+                    {product.id === 'verification-api' && 'Configure issuer trust and a presentation policy, then test the documented verification endpoint with authorized synthetic credentials.'}
+                    {product.id === 'issuance-api' && 'Test the chosen credential template, issuer, signing keys, and recipient wallet together.'}
+                    {product.id === 'kiosk' && 'Validate the selected device, transport, trust freshness limits, and behavior when connectivity is unavailable.'}
+                    {product.id === 'authenticator' && 'Evaluate the exact wallet build and platform against the selected issuance and presentation profiles.'}
                   </Typography>
                 </Paper>
 
@@ -435,7 +348,7 @@ function ProductPage() {
                   {/* Capabilities */}
                   <Grid item xs={12} md={6}>
                     <Typography variant="subtitle2" fontWeight="bold" gutterBottom>
-                      Core Capabilities
+                      Component Scope
                     </Typography>
                     <List dense>
                       {product.capabilities.map((capability) => (
@@ -453,7 +366,7 @@ function ProductPage() {
                   <Grid item xs={12} md={6}>
                     <Box sx={{ mb: 3 }}>
                       <Typography variant="subtitle2" fontWeight="bold" gutterBottom>
-                        Supported Standards
+                        Scope References
                       </Typography>
                       <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
                         {product.standards.map((standard) => (
@@ -469,7 +382,7 @@ function ProductPage() {
 
                     <Box sx={{ mb: 2 }}>
                       <Typography variant="subtitle2" fontWeight="bold" gutterBottom>
-                        Pricing Model
+                        Commercial Scope
                       </Typography>
                       <Typography variant="body2" color="text.secondary">
                         {product.pricing}
@@ -504,13 +417,13 @@ function ProductPage() {
           borderColor: 'grey.200',
         }}
       >
-        <Chip label="Open Standard" color="primary" size="small" sx={{ fontWeight: 700, mb: 2 }} />
+        <Chip label="Open Draft Protocol" color="primary" size="small" sx={{ fontWeight: 700, mb: 2 }} />
         <Typography variant="h5" fontWeight={700} gutterBottom>
           Built on an Open Protocol
         </Typography>
         <Typography variant="body1" color="text.secondary" sx={{ mb: 3, maxWidth: 700, mx: 'auto' }}>
-          Every product is built on the Marty Identity Protocol (MIP)—an open, vendor-neutral specification.
-          No vendor lock-in. No proprietary formats. Your identity infrastructure stays portable.
+          Marty uses the Marty Identity Protocol (MIP), an open draft specification.
+          Review the versioned mappings and test each integration; a protocol reference does not certify a deployment.
         </Typography>
         <Box sx={{ display: 'flex', gap: 2, justifyContent: 'center', flexWrap: 'wrap' }}>
           <Button
@@ -525,7 +438,7 @@ function ProductPage() {
             variant="outlined"
             size="large"
             startIcon={<GitHubIcon />}
-            href="https://github.com/mip-protocol/marty-protocol"
+            href="https://github.com/Marty-Protocol/Marty-Protocol"
             target="_blank"
             rel="noopener noreferrer"
           >
@@ -548,10 +461,10 @@ function ProductPage() {
         </Typography>
         <Typography variant="body1" color="text.secondary" sx={{ mb: 3, maxWidth: 600, mx: 'auto' }}>
           {DISABLE_PUBLIC_PRICING_BUTTONS
-            ? 'Pricing and onboarding are coming soon for production deployments. Explore the documentation and protocol details in the meantime.'
+            ? 'Explore the documentation and discuss the workflow, release, and operating responsibilities your organization needs.'
             : SHOW_PUBLIC_PRICING_BUTTONS
-            ? 'Start free, or compare plans for enterprise deployment.'
-            : 'Explore the documentation and protocol details while pricing and onboarding flows are still being developed.'}
+            ? 'Discuss the defined annual license scope and terms for your organization.'
+            : 'Explore the documentation and discuss a defined evaluation.'}
         </Typography>
         <Box sx={{ display: 'flex', gap: 2, justifyContent: 'center', flexWrap: 'wrap' }}>
           {SHOW_PUBLIC_PRICING_BUTTONS && (
@@ -565,7 +478,7 @@ function ProductPage() {
                 color: 'rgba(25, 118, 210, 0.52)',
               }}
             >
-              Compare Plans
+              Review Commercial Scope
             </FutureFeatureButton>
           )}
           <Button

@@ -30,14 +30,8 @@ function VerifiableCredentialApiPage() {
 
   const structuredData = softwareApplicationSchema({
     name: 'Verifiable Credential Verification API',
-    description: 'Enterprise API for verifying W3C Verifiable Credentials, EUDI Wallet credentials, ISO 18013-5 mDocs, SD-JWTs, and Open Badges 3.0 with governed trust registries.',
+    description: 'The Marty verification component connects defined credential and document inputs to trust policies. Review exact release and profile support.',
     applicationCategory: 'SecurityApplication',
-    operatingSystem: 'Cross-platform',
-    offers: {
-      pricingModel: 'PER_USE',
-      price: '0',
-      priceCurrency: 'USD',
-    },
   });
 
   return (
@@ -45,7 +39,7 @@ function VerifiableCredentialApiPage() {
       {/* SEO Meta Tags */}
       <SEOHead
         title="Verifiable Credential Verification API"
-        description="Verify W3C Verifiable Credentials, EUDI Wallet credentials, ISO 18013-5 mDocs, SD-JWTs, and Open Badges with cryptographic validation and governed trust registries."
+        description="Explore the Marty verification API for a defined credential or document workflow. Review release-specific formats, trust configuration, and customer-operated deployment."
         canonicalPath="/verifiable-credential-api"
         structuredData={structuredData}
         keywords={[
@@ -75,7 +69,7 @@ function VerifiableCredentialApiPage() {
           Verifiable Credential Verification API
         </Typography>
         <Typography variant="h5" sx={{ mb: 4, opacity: 0.95 }}>
-          Cryptographically verify W3C Verifiable Credentials at scale
+          Evaluate defined credential and document checks in your environment
         </Typography>
         <Box sx={{ display: 'flex', gap: 2, justifyContent: 'center', flexWrap: 'wrap' }}>
           {SHOW_PUBLIC_GET_STARTED_BUTTONS && (
@@ -91,7 +85,7 @@ function VerifiableCredentialApiPage() {
                 border: '1px solid rgba(255, 255, 255, 0.18)',
               }}
             >
-              Start Free
+              Review Commercial Scope
             </FutureFeatureButton>
           )}
           <Button
@@ -111,9 +105,9 @@ function VerifiableCredentialApiPage() {
           Replace Repeated IDV with Reusable Trust
         </Typography>
         <Typography variant="body1" sx={{ mb: 4, textAlign: 'center', maxWidth: '800px', mx: 'auto', fontSize: '1.1rem' }}>
-          The Verifiable Credential Verification API validates cryptographically signed credentials from EUDI Wallets, 
-          mobile driver's licenses (ISO 18013-5), Open Badges, and other W3C VC formats. Verification decisions are 
-          governed centrally via trust registries — no per-verifier configuration required.
+          The Marty verification component connects a selected credential or document input to explicit trust and policy rules.
+          Confirm the exact format, endpoint, issuer configuration, and release before integrating.
+          Begin with synthetic data and retain both successful and rejected results.
         </Typography>
 
         <Grid container spacing={3}>
@@ -151,7 +145,7 @@ function VerifiableCredentialApiPage() {
                   Offline & Online
                 </Typography>
                 <Typography variant="body2" color="text.secondary">
-                  Verify credentials with or without network connectivity. Cryptographic proofs work anywhere.
+                  Review the selected profile’s connectivity requirements, trust freshness limits, and failure behavior. Offline capability requires separate evidence.
                 </Typography>
               </CardContent>
             </Card>
@@ -162,7 +156,11 @@ function VerifiableCredentialApiPage() {
       {/* Supported Formats */}
       <Box sx={{ mb: 8 }}>
         <Typography variant="h3" component="h2" gutterBottom fontWeight="bold" sx={{ mb: 4 }}>
-          Verify Multiple Credential Formats
+          Define the Credential Profile
+        </Typography>
+        <Typography variant="body1" sx={{ mb: 3 }}>
+          These are profile areas to discuss, not a claim that every format is supported by every release.
+          Verify the exact format version, proof mechanism, wallet, and acceptance rules you need.
         </Typography>
         <Grid container spacing={2}>
           {[
@@ -171,7 +169,7 @@ function VerifiableCredentialApiPage() {
             { name: 'W3C VC JSON-LD', desc: 'Linked data verifiable credentials' },
             { name: 'Open Badges 3.0', desc: 'Education and workforce credentials' },
             { name: 'EUDI Wallet PID', desc: 'Person Identification Data (EU)' },
-            { name: 'Custom Formats', desc: 'Extend with your own credential types' },
+            { name: 'Custom Formats', desc: 'Review feasibility and separately scoped integration work' },
           ].map((format, idx) => (
             <Grid item xs={12} sm={6} md={4} key={idx}>
               <Paper sx={{ p: 3, height: '100%' }}>
@@ -187,21 +185,21 @@ function VerifiableCredentialApiPage() {
         </Grid>
       </Box>
 
-      {/* API Features */}
+      {/* API Integration Review */}
       <Box sx={{ mb: 8 }}>
         <Typography variant="h3" component="h2" gutterBottom fontWeight="bold" sx={{ mb: 4 }}>
-          API Features
+          API Integration Review
         </Typography>
         <Grid container spacing={4}>
           <Grid item xs={12} md={6}>
             <List>
               <ListItem>
                 <ListItemIcon><CheckCircleIcon color="primary" /></ListItemIcon>
-                <ListItemText primary="Signature verification (ECDSA, EdDSA, RSA)" />
+                <ListItemText primary="Supported signature algorithms for the selected format" />
               </ListItem>
               <ListItem>
                 <ListItemIcon><CheckCircleIcon color="primary" /></ListItemIcon>
-                <ListItemText primary="Revocation and status list checking" />
+                <ListItemText primary="Configured revocation and status handling" />
               </ListItem>
               <ListItem>
                 <ListItemIcon><CheckCircleIcon color="primary" /></ListItemIcon>
@@ -213,7 +211,7 @@ function VerifiableCredentialApiPage() {
               </ListItem>
               <ListItem>
                 <ListItemIcon><CheckCircleIcon color="primary" /></ListItemIcon>
-                <ListItemText primary="Selective disclosure validation (SD-JWT)" />
+                <ListItemText primary="Disclosure validation for the selected profile" />
               </ListItem>
             </List>
           </Grid>
@@ -221,11 +219,11 @@ function VerifiableCredentialApiPage() {
             <List>
               <ListItem>
                 <ListItemIcon><CheckCircleIcon color="primary" /></ListItemIcon>
-                <ListItemText primary="OpenID4VP protocol support" />
+                <ListItemText primary="Exact OpenID4VP profile and wallet compatibility" />
               </ListItem>
               <ListItem>
                 <ListItemIcon><CheckCircleIcon color="primary" /></ListItemIcon>
-                <ListItemText primary="Compliance profile validation" />
+                <ListItemText primary="Profile requirements and test results" />
               </ListItem>
               <ListItem>
                 <ListItemIcon><CheckCircleIcon color="primary" /></ListItemIcon>
@@ -233,11 +231,11 @@ function VerifiableCredentialApiPage() {
               </ListItem>
               <ListItem>
                 <ListItemIcon><CheckCircleIcon color="primary" /></ListItemIcon>
-                <ListItemText primary="REST and GraphQL interfaces" />
+                <ListItemText primary="Documented REST endpoints" />
               </ListItem>
               <ListItem>
                 <ListItemIcon><CheckCircleIcon color="primary" /></ListItemIcon>
-                <ListItemText primary="Webhook notifications" />
+                <ListItemText primary="Documented events and integration boundaries" />
               </ListItem>
             </List>
           </Grid>
@@ -255,10 +253,10 @@ function VerifiableCredentialApiPage() {
               <CardContent sx={{ textAlign: 'center' }}>
                 <CloudIcon sx={{ fontSize: 48, color: 'primary.main', mb: 2 }} />
                 <Typography variant="h6" gutterBottom>
-                  SaaS
+                  Customer Operated
                 </Typography>
                 <Typography variant="body2" color="text.secondary">
-                  Hosted multi-tenant verification endpoint. Start in minutes.
+                  Run the agreed verification scope with your own operations team.
                 </Typography>
               </CardContent>
             </Card>
@@ -268,10 +266,10 @@ function VerifiableCredentialApiPage() {
               <CardContent sx={{ textAlign: 'center' }}>
                 <StorageIcon sx={{ fontSize: 48, color: 'primary.main', mb: 2 }} />
                 <Typography variant="h6" gutterBottom>
-                  Self-Hosted
+                  Partner Operated
                 </Typography>
                 <Typography variant="body2" color="text.secondary">
-                  Deploy in your own cloud or data center. Full control.
+                  Select a delivery partner and agree who owns hosting, keys, access, and maintenance.
                 </Typography>
               </CardContent>
             </Card>
@@ -281,10 +279,10 @@ function VerifiableCredentialApiPage() {
               <CardContent sx={{ textAlign: 'center' }}>
                 <SecurityIcon sx={{ fontSize: 48, color: 'primary.main', mb: 2 }} />
                 <Typography variant="h6" gutterBottom>
-                  On-Premise
+                  Profile Evaluation
                 </Typography>
                 <Typography variant="body2" color="text.secondary">
-                  Air-gapped environments for government and high-security use cases.
+                  Validate offline, air-gap, and headless requirements against the exact build; availability is not implied.
                 </Typography>
               </CardContent>
             </Card>
@@ -327,8 +325,8 @@ function VerifiableCredentialApiPage() {
           Built on Open Standards
         </Typography>
         <Typography variant="body1" sx={{ mb: 3 }}>
-          The Verifiable Credential API is built on W3C Verifiable Credentials, OpenID4VP, and ISO 18013-5 standards.
-          This ensures long-term interoperability and vendor independence.
+          Review the required specification version and profile against current implementation documentation and executed tests.
+          Naming a standard does not establish compatibility, certification, or regulatory approval.
         </Typography>
         <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
           {['W3C VC 1.1', 'W3C VC 2.0', 'ISO 18013-5', 'OpenID4VP', 'SD-JWT', 'Open Badges 3.0', 'EUDI ARF'].map(std => (
@@ -347,10 +345,10 @@ function VerifiableCredentialApiPage() {
         </Typography>
         <Typography variant="body1" sx={{ mb: 4, opacity: 0.9 }}>
           {DISABLE_PUBLIC_PRICING_BUTTONS
-            ? 'Pricing and onboarding are coming soon for production deployments. Explore the API and documentation in the meantime.'
+            ? 'Explore the documentation and define a synthetic evaluation for your workflow.'
             : SHOW_PUBLIC_PRICING_BUTTONS
-            ? 'Free tier available. No credit card required.'
-            : 'Explore the API and documentation while pricing access is being finalized.'}
+            ? 'Discuss a bounded annual software license, with agreed scope, rights, and terms.'
+            : 'Explore the API and documentation, then discuss the commercial scope your organization needs.'}
         </Typography>
         <Box sx={{ display: 'flex', gap: 2, justifyContent: 'center', flexWrap: 'wrap' }}>
           {SHOW_PUBLIC_PRICING_BUTTONS && (

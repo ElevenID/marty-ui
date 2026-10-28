@@ -41,7 +41,7 @@ import VerifiedUserIcon from '@mui/icons-material/VerifiedUser';
 import SecurityIcon from '@mui/icons-material/Security';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
-import CancelIcon from '@mui/icons-material/Cancel';
+import PolicyIcon from '@mui/icons-material/Policy';
 import BusinessIcon from '@mui/icons-material/Business';
 import AccountBalanceIcon from '@mui/icons-material/AccountBalance';
 import CodeIcon from '@mui/icons-material/Code';
@@ -225,7 +225,7 @@ function DeveloperQuickstartSection({ t }) {
                 href="/product"
                 sx={{ borderColor: 'rgba(255,255,255,0.3)', color: 'common.white' }}
               >
-                View products
+                Explore Marty
               </Button>
             </Box>
           </Grid>
@@ -322,7 +322,7 @@ function StandardsArchitectureSection({ t, expandedLayer, onToggleLayer }) {
           mx: 'auto',
         }}
       >
-        {t('landingPage.standards.subtitle', 'Standards are not integrations. They are the product.')}
+        {t('landingPage.standards.subtitle', 'Standards guide the design. Tests establish compatibility.')}
       </Typography>
 
       <Box sx={{ maxWidth: 800, mx: 'auto', mb: 4 }}>
@@ -452,7 +452,7 @@ function LandingPage() {
       <>
         <SEOHead
           title="Verifiable Identity Infrastructure"
-          description="Build verifiable identity infrastructure for EUDI Wallets, Open Badges, and W3C Verifiable Credentials. Issuance, verification, and trust governance APIs."
+          description="Marty is customer-operated software for portable credentials, applicant and document verification, and Travel Trust. Explore defined workflows and release-specific evidence."
           canonicalPath="/"
           structuredData={organizationSchema()}
           keywords={[
@@ -536,63 +536,63 @@ function LandingPage() {
   ];
 
   const idvTraditionalItems = [
-    t('idvComparison.traditional.oneTimeChecks', 'One-time document checks'),
-    t('idvComparison.traditional.vendorControlled', 'Vendor-controlled identity data'),
-    t('idvComparison.traditional.biometric', 'Biometric decision outputs'),
-    t('idvComparison.traditional.closedAPIs', 'Closed, proprietary APIs'),
-    t('idvComparison.traditional.manualTrust', 'Manual trust configuration'),
-    t('idvComparison.traditional.reVerification', 'Re-verification everywhere'),
+    t('idvComparison.traditional.oneTimeChecks', "Which claim must be checked?"),
+    t('idvComparison.traditional.vendorControlled', "Who operates the data and keys?"),
+    t('idvComparison.traditional.biometric', "How is the presenter bound to the credential?"),
+    t('idvComparison.traditional.closedAPIs', "Which interfaces and profiles are required?"),
+    t('idvComparison.traditional.manualTrust', "Which issuers and rules are trusted?"),
+    t('idvComparison.traditional.reVerification', "When can a credential be reused?"),
   ];
 
   const idvElevenIdItems = [
-    { text: t('idvComparison.elevenid.reusable', 'Reusable verifiable credentials'), bold: 'Reusable credentials' },
-    { text: t('idvComparison.elevenid.holderControlled', 'Holder-controlled digital wallets'), bold: null },
-    { text: t('idvComparison.elevenid.cryptographic', 'Cryptographic proofs'), bold: 'Cryptographic proofs' },
-    { text: t('idvComparison.elevenid.openStandards', 'Open standards (W3C VC, OID4VC, ISO)'), bold: null },
-    { text: t('idvComparison.elevenid.governedTrust', 'Governed trust registries'), bold: null },
-    { text: t('idvComparison.elevenid.reuseAcross', 'Identity reuse across ecosystems'), bold: null },
+    { text: t('idvComparison.elevenid.reusable', "Defined credential and document inputs"), bold: null },
+    { text: t('idvComparison.elevenid.holderControlled', "Customer or selected-partner operations"), bold: null },
+    { text: t('idvComparison.elevenid.cryptographic', "Profile-specific holder-binding tests"), bold: null },
+    { text: t('idvComparison.elevenid.openStandards', "Documented interfaces and tested combinations"), bold: null },
+    { text: t('idvComparison.elevenid.governedTrust', "Explicit issuer trust and policy configuration"), bold: null },
+    { text: t('idvComparison.elevenid.reuseAcross', "Reuse evaluated within an agreed workflow"), bold: null },
   ];
 
   const proofClaims = [
     {
-      category: t('proofStrip.interoperability', 'Interoperability'),
-      label: t('landingPage.proofStrip.claims.w3c', PROOF_STRIP.claims?.[0]?.label || 'W3C VC / SD-JWT / OID4VP'),
+      category: t('proofStrip.interoperability', 'Scope'),
+      label: t('landingPage.proofStrip.claims.w3c', PROOF_STRIP.claims?.[0]?.label || 'One Marty product, three use cases'),
     },
     {
-      category: t('proofStrip.offlineVerification', 'Offline Verification'),
-      label: t('landingPage.proofStrip.claims.offlineCache', PROOF_STRIP.claims?.[1]?.label || '72-hour offline cache'),
+      category: t('proofStrip.offlineVerification', 'Evaluation'),
+      label: t('landingPage.proofStrip.claims.offlineCache', PROOF_STRIP.claims?.[1]?.label || 'Synthetic evaluation first'),
     },
     {
-      category: t('proofStrip.deployment', 'Deployment'),
-      label: t('landingPage.proofStrip.claims.deployment', PROOF_STRIP.claims?.[2]?.label || 'SaaS + Self-hosted'),
+      category: t('proofStrip.deployment', 'Operations'),
+      label: t('landingPage.proofStrip.claims.deployment', PROOF_STRIP.claims?.[2]?.label || 'Customer or partner operated'),
     },
     {
       category: t('proofStrip.keySecurity', 'Key Security'),
-      label: t('landingPage.proofStrip.claims.keySecurity', PROOF_STRIP.claims?.[3]?.label || 'HSM / Vault integration'),
+      label: t('landingPage.proofStrip.claims.keySecurity', PROOF_STRIP.claims?.[3]?.label || 'Explicit trust and key configuration'),
     },
     {
-      category: t('proofStrip.compliance', 'Compliance'),
-      label: t('landingPage.proofStrip.claims.auditLogs', PROOF_STRIP.claims?.[4]?.label || 'Immutable audit logs'),
+      category: t('proofStrip.compliance', 'Evidence'),
+      label: t('landingPage.proofStrip.claims.auditLogs', PROOF_STRIP.claims?.[4]?.label || 'Release-specific evidence'),
     },
   ];
 
   const trustSignals = {
     security: [
-      t('landingPage.trustSignals.security.item1', TRUST_SIGNALS.security?.[0] || 'Enterprise-grade cryptographic validation'),
-      t('landingPage.trustSignals.security.item2', TRUST_SIGNALS.security?.[1] || 'PKI and revocation management'),
-      t('landingPage.trustSignals.security.item3', TRUST_SIGNALS.security?.[2] || 'HSM and key vault integration'),
+      t('landingPage.trustSignals.security.item1', TRUST_SIGNALS.security?.[0] || 'Configure trusted issuers and keys explicitly'),
+      t('landingPage.trustSignals.security.item2', TRUST_SIGNALS.security?.[1] || 'Test signature, expiry, and failure handling'),
+      t('landingPage.trustSignals.security.item3', TRUST_SIGNALS.security?.[2] || 'Review key storage for the selected deployment'),
     ],
     infrastructure: [
-      t('landingPage.trustSignals.infrastructure.item1', TRUST_SIGNALS.infrastructure?.[0] || 'Offline-first capability (72h cache)'),
-      t('landingPage.trustSignals.infrastructure.item2', TRUST_SIGNALS.infrastructure?.[1] || 'High-availability SaaS deployment'),
-      t('landingPage.trustSignals.infrastructure.item3', TRUST_SIGNALS.infrastructure?.[2] || 'Self-hosted options for sovereignty'),
-      t('landingPage.trustSignals.infrastructure.item4', TRUST_SIGNALS.infrastructure?.[3] || 'Horizontal scaling and load balancing'),
+      t('landingPage.trustSignals.infrastructure.item1', TRUST_SIGNALS.infrastructure?.[0] || 'Customer or selected-partner operations'),
+      t('landingPage.trustSignals.infrastructure.item2', TRUST_SIGNALS.infrastructure?.[1] || 'Release-specific installation requirements'),
+      t('landingPage.trustSignals.infrastructure.item3', TRUST_SIGNALS.infrastructure?.[2] || 'Offline and headless profiles need validation'),
+      t('landingPage.trustSignals.infrastructure.item4', TRUST_SIGNALS.infrastructure?.[3] || 'No included managed production or uptime SLA'),
     ],
     compliance: [
-      t('landingPage.trustSignals.compliance.item1', TRUST_SIGNALS.compliance?.[0] || 'Implements ICAO 9303'),
-      t('landingPage.trustSignals.compliance.item2', TRUST_SIGNALS.compliance?.[1] || 'Implements ISO 18013-5 (mDoc)'),
-      t('landingPage.trustSignals.compliance.item3', TRUST_SIGNALS.compliance?.[2] || 'GDPR and privacy by design'),
-      t('landingPage.trustSignals.compliance.item4', TRUST_SIGNALS.compliance?.[3] || 'Selective disclosure and data minimization'),
+      t('landingPage.trustSignals.compliance.item1', TRUST_SIGNALS.compliance?.[0] || 'Define the required standard and profile'),
+      t('landingPage.trustSignals.compliance.item2', TRUST_SIGNALS.compliance?.[1] || 'Review evidence for the exact release'),
+      t('landingPage.trustSignals.compliance.item3', TRUST_SIGNALS.compliance?.[2] || 'Approve real-data handling separately'),
+      t('landingPage.trustSignals.compliance.item4', TRUST_SIGNALS.compliance?.[3] || 'Confirm acceptance requirements with the responsible organization'),
     ],
   };
 
@@ -692,7 +692,7 @@ function LandingPage() {
       {/* SEO Meta Tags */}
       <SEOHead
         title="Verifiable Identity Infrastructure"
-        description="Build verifiable identity infrastructure for EUDI Wallets, Open Badges, and W3C Verifiable Credentials. Issuance, verification, and trust governance APIs."
+        description="Marty is customer-operated software for portable credentials, applicant and document verification, and Travel Trust. Explore defined workflows and release-specific evidence."
         canonicalPath="/"
         structuredData={organizationSchema()}
         keywords={[
@@ -752,7 +752,7 @@ function LandingPage() {
               }}
             >
               <Chip
-                label={t('landingPage.hero.eyebrow', 'Reusable trust for every checkpoint')}
+                label={t('landingPage.hero.eyebrow', 'Marty by ElevenID')}
                 sx={{
                   alignSelf: { xs: 'center', lg: 'flex-start' },
                   mb: 2,
@@ -1091,13 +1091,13 @@ function LandingPage() {
           textAlign="center"
           sx={{ mb: 3 }}
         >
-          So what breaks in today&apos;s systems?
+          Define what trust means in your workflow.
         </Typography>
         <SectionHeading
-          subtitle={t('idvComparison.takeaway', 'ElevenID LLC replaces repeated verification with reusable trust.')}
+          subtitle={t('idvComparison.takeaway', "Start with the questions your workflow must answer, then evaluate the selected implementation.")}
           divider
         >
-          {t('idvComparison.title', 'From IDV to Verifiable Identity')}
+          {t('idvComparison.title', "Plan the Trust Exchange")}
         </SectionHeading>
 
         <Grid container spacing={3} sx={{ maxWidth: 900, mx: 'auto' }}>
@@ -1115,13 +1115,13 @@ function LandingPage() {
               }}
             >
               <Typography variant="h6" fontWeight={700} gutterBottom color="text.secondary" sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                <CancelIcon color="error" /> {t('idvComparison.traditional.title', 'Traditional IDV')}
+                <PolicyIcon color="primary" /> {t('idvComparison.traditional.title', "Questions to Resolve")}
               </Typography>
               <List disablePadding>
                 {idvTraditionalItems.map((item, index) => (
                   <ListItem key={index} sx={{ py: 0.75, px: 0 }}>
                     <ListItemIcon sx={{ minWidth: 28 }}>
-                      <CancelIcon fontSize="small" sx={{ color: 'error.light' }} />
+                      <PolicyIcon fontSize="small" color="primary" />
                     </ListItemIcon>
                     <ListItemText
                       primary={item}
@@ -1148,7 +1148,7 @@ function LandingPage() {
               }}
             >
               <Typography variant="h6" fontWeight={700} gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                <CheckCircleIcon sx={{ color: 'success.light' }} /> {branding.appName}
+                <CheckCircleIcon sx={{ color: 'success.light' }} /> {t('idvComparison.elevenid.title', 'Marty Evaluation')}
               </Typography>
               <List disablePadding>
                 {idvElevenIdItems.map((item, index) => (
@@ -1675,7 +1675,7 @@ function LandingPage() {
           subtitle={t('protocol.heroSubtitle', PROTOCOL.tagline)}
           divider
         >
-          {t('protocol.heroTitle', 'Built on an Open Standard')}
+          {t('protocol.heroTitle', 'Built around an Open Draft Protocol')}
         </SectionHeading>
 
         <Paper
@@ -1691,7 +1691,7 @@ function LandingPage() {
           }}
         >
           <Box sx={{ display: 'flex', justifyContent: 'center', gap: 1, mb: 2 }}>
-            <Chip label="Open Standard" color="primary" size="small" sx={{ fontWeight: 700 }} />
+            <Chip label={`Open Protocol · ${PROTOCOL.status}`} color="primary" size="small" sx={{ fontWeight: 700 }} />
             <Chip label={`v${PROTOCOL.version}`} variant="outlined" size="small" />
             <Chip label={PROTOCOL.license} variant="outlined" size="small" />
           </Box>
@@ -1701,7 +1701,7 @@ function LandingPage() {
           <Typography variant="body2" color="text.secondary" sx={{ maxWidth: 700, mx: 'auto' }}>
             The Marty Identity Protocol (MIP) defines five primitives—Trust Profiles, Credential Templates,
             Presentation Policies, Deployment Profiles, and Flows—that make digital identity management
-            fully automatable and vendor-neutral.
+            explicit in the draft protocol model.
           </Typography>
         </Paper>
 
@@ -1888,8 +1888,8 @@ function LandingPage() {
         </Typography>
         <Typography variant="body1" sx={{ mb: 4, maxWidth: 680, mx: 'auto', opacity: 0.9 }}>
           {SHOW_PUBLIC_PRICING_BUTTONS && !DISABLE_PUBLIC_PRICING_BUTTONS
-            ? t('landingPage.footer.description', 'Start with the verification surface, then compare plans when you are ready to deploy.')
-            : t('landingPage.footer.descriptionComingSoon', 'Start with the verification surface today. Pricing and onboarding stay gated on production deployments, but the docs, product paths, and API flows are live.')}
+            ? t('landingPage.footer.description', 'Discuss a defined annual software license. Founding access is available for discussion; scope, rights, and terms require agreement.')
+            : t('landingPage.footer.descriptionComingSoon', 'Explore the documentation and a synthetic demonstration, then discuss the workflow and deployment your organization needs.')}
         </Typography>
         <Box sx={{ display: 'flex', gap: 2, justifyContent: 'center', flexWrap: 'wrap' }}>
           {SHOW_PUBLIC_CTA && <Button

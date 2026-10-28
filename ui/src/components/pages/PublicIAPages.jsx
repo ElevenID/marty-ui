@@ -101,8 +101,8 @@ const defaultActions = [
 const architectureLayers = [
   {
     title: 'Credential layer',
-    description: 'Issue and verify W3C Verifiable Credentials, SD-JWT payloads, Open Badges, and ISO mDoc credentials from one platform surface.',
-    bullets: ['W3C VC and SD-JWT support', 'ISO 18013-5 mDoc readiness', 'Credential lifecycle controls'],
+    description: 'Define the credential format, proof mechanism, and lifecycle for the selected workflow; confirm release-specific implementation and interoperability evidence.',
+    bullets: ['Exact format and profile', 'Tested issuer and wallet combinations', 'Defined lifecycle rules'],
   },
   {
     title: 'Trust layer',
@@ -116,8 +116,8 @@ const architectureLayers = [
   },
   {
     title: 'Runtime layer',
-    description: 'The same governed model runs through API endpoints, wallet presentations, self-hosted deployments, and offline checkpoint flows.',
-    bullets: ['API and QR channels', 'Self-hosted or SaaS', 'Offline-ready runtime profiles'],
+    description: 'Define the customer-operated runtime and interfaces for the selected workflow. Validate installation and journey behavior before production.',
+    bullets: ['Documented interfaces', 'Customer or partner operations', 'Profile-specific connectivity tests'],
   },
 ];
 
@@ -164,7 +164,7 @@ export function SolutionsPage() {
   return (
     <PageFrame
       title="Verification solutions for real operating environments"
-      description="Start from the verification moment, then pick the deployment path that matches retail, enterprise access, travel lanes, or portable membership ecosystems."
+      description="Explore portable credentials, applicant and document verification, and Travel Trust with one customer-operated Marty product."
       canonicalPath="/solutions"
       keywords={['verification solutions', 'enterprise access', 'travel verification', 'age assurance', 'portable credentials']}
       eyebrow="Solutions"
@@ -172,7 +172,7 @@ export function SolutionsPage() {
     >
       <Section
         title="Deployment playbooks"
-        subtitle="Each route below already exists in the site as a deeper guide. Use the playbook view when you need the operational story, not just the standards list."
+        subtitle="These design guides help define requirements. Confirm current release support and evidence before using a scenario in production."
       >
         <Grid container spacing={3}>
           {DEPLOYMENT_PLAYBOOKS.items.map((item) => (
@@ -382,8 +382,8 @@ export function ArchitecturePage() {
       </Section>
 
       <Section
-        title="Proof claims the product has to back up"
-        subtitle="Keep the architecture discussion tied to claims the platform already makes publicly, rather than inventing a separate slide deck language."
+        title="A defined scope for evaluation"
+        subtitle="Review product scope, operating responsibilities, and evidence for the exact release you plan to evaluate."
       >
         <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
           {PROOF_STRIP.claims.map((claim) => (
@@ -410,7 +410,7 @@ export function SecurityPage() {
   return (
     <PageFrame
       title="Security and governance stay in the product"
-      description="Production verification depends on trusted issuers, bounded disclosure, secure key management, offline-safe runtime behavior, and a compliance model that does not require hand-waving."
+      description="Review issuer trust, disclosure, key management, connectivity, and data handling for the selected Marty release and deployment."
       canonicalPath="/security"
       keywords={['identity security', 'trust governance', 'hsm integration', 'offline verification security', 'privacy by design']}
       eyebrow="Security"
@@ -421,7 +421,7 @@ export function SecurityPage() {
     >
       <Section
         title="Trust signals"
-        subtitle="These are the public controls the site already claims. The security page makes them easier to review in one place."
+        subtitle="Use these review topics to assess your selected release and environment. They are not certifications or guaranteed service levels."
       >
         <Grid container spacing={3}>
           <Grid item xs={12} md={4}>
@@ -455,7 +455,7 @@ export function SecurityPage() {
           <Grid item xs={12} md={4}>
             <Paper sx={{ p: 3, height: '100%', border: '1px solid', borderColor: 'divider', borderRadius: 2 }}>
               <Typography variant="h6" fontWeight={800} gutterBottom>
-                Compliance
+                Acceptance requirements
               </Typography>
               <Box sx={{ display: 'grid', gap: 1.25 }}>
                 {TRUST_SIGNALS.compliance.map((item) => (
@@ -498,7 +498,7 @@ export function ResourcesPage() {
     >
       <Section
         title="Start with the page that matches the question"
-        subtitle="The public IA is flatter now. This hub keeps the supporting surfaces visible without forcing them into the top-level navigation."
+        subtitle="Find the documentation, architecture, or evaluation guide that answers your next question."
       >
         <Grid container spacing={3}>
           {resourceLinks.map((resource) => (
@@ -521,7 +521,7 @@ export function ResourcesPage() {
 
       <Section
         title="Popular deployment guides"
-        subtitle="These route directly to the existing guide content in the blog package, which keeps the new Resources surface grounded in pages that already ship."
+        subtitle="Treat these guides as design examples and check their assumptions against the release you are evaluating."
       >
         <Grid container spacing={3}>
           {DEPLOYMENT_PLAYBOOKS.items.map((item) => (

@@ -12,7 +12,7 @@ export const organizationSchema = () => ({
   name: 'ElevenID LLC',
   url: 'https://elevenidllc.com',
   logo: 'https://elevenidllc.com/logo512.png',
-  description: 'Verifiable identity infrastructure for EUDI Wallets, Open Badges, and W3C Verifiable Credentials',
+  description: 'Marty: customer-operated software for portable credentials, applicant and document verification, and Travel Trust',
   foundingDate: '2023',
   sameAs: [
     // Add social media profiles when available
@@ -32,7 +32,7 @@ export const softwareApplicationSchema = ({
   name,
   description,
   applicationCategory = 'SecurityApplication',
-  operatingSystem = 'Cross-platform',
+  operatingSystem = 'Release-specific; see deployment requirements',
   offers = null,
 }) => {
   const schema = {
@@ -123,7 +123,7 @@ export const protocolSchema = () => ({
   '@context': 'https://schema.org',
   '@type': 'TechArticle',
   name: 'Marty Identity Protocol (MIP)',
-  headline: 'An open standard for cryptographically verifiable digital identity management',
+  headline: 'An open draft protocol for cryptographically verifiable digital identity management',
   description: 'MIP defines the minimum automatable set of primitives required for issuing, holding, presenting, and verifying digital credentials under explicit rules of trust and disclosure.',
   url: 'https://elevenidllc.com/protocol',
   datePublished: '2026-03-11',
