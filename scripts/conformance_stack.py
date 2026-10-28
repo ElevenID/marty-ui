@@ -332,7 +332,7 @@ def attest_local_source_migration(
     binary = str(Path(binary_value).resolve(strict=True))
     with Path(binary).open("rb") as source:
         terminal_digest = hashlib.file_digest(source, "sha256").hexdigest()
-    if (row["Id"] != ids[0]
+    if (row["Id"] not in ids
             or intended.get("entrypoint") != entrypoint or intended.get("command") != arguments
             or row["Config"].get("Entrypoint") != entrypoint
             or row["Config"].get("Cmd") != arguments

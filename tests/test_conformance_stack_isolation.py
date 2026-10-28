@@ -370,7 +370,7 @@ def test_local_source_migration_receipt_requires_exact_owned_terminal_container(
     revision = "a" * 40
     project = "marty-conformance-test1"
     monkeypatch.setattr(stack, "ROOT", product)
-    monkeypatch.setattr(stack, "project_container_ids", lambda _project: ["owned123"])
+    monkeypatch.setattr(stack, "project_container_ids", lambda _project: ["other123", "owned123"])
     monkeypatch.setenv("MARTY_CONFORMANCE_SOURCE_VOLUME_ROOT", str(tmp_path))
     monkeypatch.setenv("MARTY_CONFORMANCE_SOURCE_MIGRATION_BINARY", str(binary))
     monkeypatch.setenv("MARTY_CONFORMANCE_SOURCE_MIGRATION_SHA256", hashlib.sha256(binary.read_bytes()).hexdigest())
@@ -387,9 +387,12 @@ def test_local_source_migration_receipt_requires_exact_owned_terminal_container(
         }},
         "Mounts": [{"Source": str(binary), "Destination": "/usr/local/bin/marty-issuance-service", "RW": False}],
     }
+    other = {"Id": "other123", "Config": {"Labels": {
+        "com.docker.compose.project": project, "com.docker.compose.service": "postgres",
+    }}}
 
     def output(command, **_kwargs):
-        return revision if command[0] == "git" else json.dumps([row])
+        return revision if command[0] == "git" else json.dumps([other, row])
 
     monkeypatch.setattr(stack.subprocess, "check_output", output)
     config = {"services": {"issuance-migrations": {
