@@ -238,6 +238,13 @@ function requireEnv(name) {
 function requireSecretFile(name) {
   requireCondition(!process.env[name], 'secret_transport_invalid', `${name} must not be supplied through the process environment.`);
   const filePath = String(process.env[`${name}_FILE`] || '').trim();
+  if (ownedNativeBoundary) {
+    requireCondition(path.isAbsolute(filePath), 'secret_file_missing', `${name} owned host secret file is missing.`);
+    const sha256=String(process.env[`${name}_SHA256`]||'');
+    requireCondition(/^[a-f0-9]{64}$/.test(sha256),'secret_transport_invalid',`${name} owned host secret hash is missing.`);
+    try { return readBoundedSecretFile(filePath,{root:ownedNativeBoundary.secretRoot,maxBytes:1024*1024,sha256}).value; }
+    catch { fail('secret_file_unreadable', `${name} owned host secret is unreadable.`); }
+  }
   requireCondition(
     filePath.startsWith('/run/secrets/') && !filePath.includes('/../'),
     'secret_file_missing',
@@ -252,6 +259,71 @@ function requireSecretFile(name) {
   }
   requireCondition(value.length > 0, 'secret_file_empty', `${name} Compose secret is empty.`);
   return value;
+}
+
+let ownedNativeBoundary = null;
+function ownedHostSecretRoot(){
+  const secretRoot=path.resolve(process.env.CANVAS_OSS_OWNED_SECRET_ROOT||'');
+  const privateRoot=path.join(require('node:os').homedir(),'.codex','private');
+  const privateRelative=path.relative(privateRoot,secretRoot);
+  requireCondition(path.isAbsolute(process.env.CANVAS_OSS_OWNED_SECRET_ROOT||'')
+    &&!privateRelative.startsWith('..')&&!path.isAbsolute(privateRelative)
+    &&fs.realpathSync(secretRoot)===secretRoot&&!fs.lstatSync(secretRoot).isSymbolicLink(),
+    'secret_transport_invalid','Owned host secret root must be a private directory.');
+  requireCondition(/^[a-f0-9]{40}$/.test(process.env.CANVAS_OSS_DRIVER_SOURCE_SHA||''),
+    'contract_source_invalid','Owned host driver source SHA is invalid.');
+  return secretRoot;
+}
+function ownedHostRecoveryDirectory(secretRoot,expected){
+  const raw=process.env.DEMO_CANVAS_PRIVATE_RECOVERY_DIRECTORY||'';
+  const recovery=path.resolve(raw),relative=path.relative(secretRoot,recovery);
+  requireCondition(path.isAbsolute(raw)&&(!expected||expected===recovery)
+    &&relative&&!relative.startsWith('..')&&!path.isAbsolute(relative)
+    &&fs.existsSync(recovery)&&fs.realpathSync(recovery)===recovery
+    &&fs.lstatSync(recovery).isDirectory()&&!fs.lstatSync(recovery).isSymbolicLink(),
+    'canvas_private_custody_missing','Owned host requires its exact run-owned private recovery directory.');
+  return recovery;
+}
+function requireOwnedNativeExecutionBoundary(evidence) {
+  requireCondition(!ownedNativeBoundary,'execution_boundary_invalid','Owned host boundary may be selected once.');
+  requireCondition(process.platform==='win32'&&!fs.existsSync('/.dockerenv')&&process.connected,
+    'execution_boundary_invalid','Owned host functional run requires Windows and recorder IPC.');
+  requireCondition(process.env.RECORD_VIDEO==='0'&&process.env.CANVAS_OSS_EXECUTION_BOUNDARY==='local_owned_windows_functional'
+    &&process.env.CANVAS_OSS_SECRET_TRANSPORT==='owned_host_private_files',
+    'execution_boundary_invalid','Owned host functional boundary is incomplete.');
+  requireCondition(evidence?.functionalRuntimeBinding?.scope==='FUNCTIONAL_ONLY'
+    &&evidence?.ownedWalletBinding?.kind==='OWNED_NATIVE_WALLET_V1'
+    &&evidence.ownedWalletBinding.scope==='FUNCTIONAL_ONLY'
+    &&evidence.ownedWalletBinding.releaseQualified===false
+    &&evidence.ownedWalletBinding.recordingQualified===false
+    &&evidence.ownedWalletBinding.origin===process.env.MARTY_TEST_WALLET_ORIGIN,
+    'execution_boundary_invalid','Recorder-owned runtime and wallet IPC bindings are required.');
+  const secretRoot=ownedHostSecretRoot();
+  const privateRecoveryDirectory=ownedHostRecoveryDirectory(secretRoot);
+  ownedNativeBoundary=Object.freeze({secretRoot});
+  return Object.freeze({boundary:'local_owned_windows_functional',containerized:false,host_browser_processes:true,
+    secret_transport:'owned_host_private_files',release_qualified:false,recording_qualified:false,
+    source_sha:process.env.CANVAS_OSS_DRIVER_SOURCE_SHA,privateRecoveryDirectory});
+}
+async function requireOwnedNativeEngineeringBoundary({ownedWalletContext,recorderRepository,signal,privateRecoveryDirectory}){
+  requireCondition(!ownedNativeBoundary&&process.platform==='win32'&&!fs.existsSync('/.dockerenv'),
+    'execution_boundary_invalid','Engineering host boundary requires reviewed Windows source.');
+  requireCondition(process.env.RECORD_VIDEO==='0'
+    &&process.env.CANVAS_OSS_EXECUTION_BOUNDARY==='local_owned_windows_engineering'
+    &&process.env.CANVAS_OSS_SECRET_TRANSPORT==='owned_host_private_files',
+    'execution_boundary_invalid','Engineering host boundary is incomplete.');
+  requireCondition(path.isAbsolute(recorderRepository||'')&&signal===ownedWalletContext?.signal,
+    'execution_boundary_invalid','Engineering requires the active recorder wallet capability.');
+  const owned=require(path.join(recorderRepository,'src','ownedWalletRuntime.js'));
+  owned.requireOwnedWalletContext(ownedWalletContext);
+  const signing=await owned.requireOwnedCanvasHolderSigning(ownedWalletContext,signal);
+  requireCondition(signing.verified===true,'holder_signing_invalid','Owned Rust holder signing probe failed.');
+  const secretRoot=ownedHostSecretRoot();
+  ownedHostRecoveryDirectory(secretRoot,privateRecoveryDirectory);
+  ownedNativeBoundary=Object.freeze({secretRoot});
+  return Object.freeze({boundary:'local_owned_windows_engineering',containerized:false,host_browser_processes:true,
+    secret_transport:'owned_host_private_files',release_qualified:false,recording_qualified:false,
+    source_sha:process.env.CANVAS_OSS_DRIVER_SOURCE_SHA,holder_signing_verified:true});
 }
 
 function requireComposeExecutionBoundary() {
@@ -1461,17 +1533,84 @@ async function waitForJob(marty, jobId) {
   }, JOB_TIMEOUT_MS, 1_500, 'canvas_sync_job_timeout');
 }
 
-async function waitForLatestRosterJob(marty, organizationId, bindingId, afterIso) {
+async function rosterJobBaseline(marty, organizationId, bindingId) {
+  const jobs=(await completeOrganizationJobInventory(marty,organizationId))
+    .filter(job=>job.binding_id===bindingId);
+  for (const job of jobs) {
+    requireCondition(job.organization_id === organizationId && job.binding_id === bindingId && job.id,
+      'canvas_roster_job_inventory_scope_invalid', 'Canvas job inventory escaped the owned binding.');
+  }
+  return new Set(jobs.map(job => job.id));
+}
+
+async function completeOrganizationJobInventory(marty,organizationId) {
+  // The deployed operations API applies binding_id after a 500-row organization
+  // window. A short scoped result cannot prove absence. The unfiltered window
+  // is complete only when it contains fewer than 500 rows.
+  const jobs=await marty.get(`/v1/integrations/canvas/canvas-sync-jobs?organization_id=${encodeURIComponent(organizationId)}&limit=500`);
+  requireCondition(Array.isArray(jobs)&&jobs.length<500
+    && jobs.every(job=>job.organization_id===organizationId && job.id),
+  'canvas_roster_job_inventory_incomplete','Canvas organization job inventory is incomplete.');
+  return jobs;
+}
+
+function canvasInstantMicros(value) {
+  if (typeof value !== 'string') return null;
+  const match=/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,6}))?(Z|[+-]\d{2}:\d{2})$/.exec(value);
+  if (!match) return null;
+  const [,yearText,monthText,dayText,hourText,minuteText,secondText,fraction='',zone]=match;
+  const [year,month,day,hour,minute,second]=[yearText,monthText,dayText,hourText,minuteText,secondText].map(Number);
+  const date=new Date(Date.UTC(year,month-1,day));
+  if (date.getUTCFullYear()!==year || date.getUTCMonth()+1!==month || date.getUTCDate()!==day
+    || hour>23 || minute>59 || second>59) return null;
+  let offsetMinutes=0;
+  if (zone!=='Z') {
+    const offsetHour=Number(zone.slice(1,3)),offsetMinute=Number(zone.slice(4,6));
+    if (offsetHour>23 || offsetMinute>59) return null;
+    offsetMinutes=(zone[0]==='+'?1:-1)*(offsetHour*60+offsetMinute);
+  }
+  const milliseconds=Date.UTC(year,month-1,day,hour,minute,second)-offsetMinutes*60_000;
+  return BigInt(milliseconds)*1_000n+BigInt(fraction.padEnd(6,'0'));
+}
+
+async function activatedRosterJobTimestamp(marty, organizationId, platformId, bindingId, configVersion) {
+  const binding=await marty.get(`/v1/integrations/canvas/program-bindings/${encodeURIComponent(bindingId)}`);
+  requireCondition(binding.id===bindingId && binding.organization_id===organizationId
+    && binding.platform_id===platformId && binding.enabled===true
+    && binding.config_version===configVersion && typeof binding.activated_at==='string'
+    && canvasInstantMicros(binding.activated_at)!==null,
+  'canvas_roster_activation_binding_invalid','Activated Canvas binding has no exact server-side activation identity.');
+  return binding.activated_at;
+}
+
+async function waitForLatestRosterJob(marty, organizationId, bindingId, beforeJobIds, activatedAt) {
+  requireCondition(beforeJobIds instanceof Set, 'canvas_roster_job_baseline_missing',
+    'A fresh activation requires its exact preactivation job inventory.');
+  const activatedMicros=canvasInstantMicros(activatedAt);
+  requireCondition(activatedMicros!==null,
+    'canvas_roster_activation_timestamp_missing','Roster job must bind the exact server activation instant.');
   return waitFor(async () => {
     const jobs = safeList(await marty.get(
       `/v1/integrations/canvas/canvas-sync-jobs?organization_id=${encodeURIComponent(organizationId)}&binding_id=${encodeURIComponent(bindingId)}&limit=100`,
     ));
+    requireCondition(jobs.length < 100, 'canvas_roster_job_inventory_incomplete',
+      'The bounded Canvas job inventory cannot establish a fresh activation job.');
     const job = jobs.find((item) => (
       item.target_type === 'background_roster'
-        && Date.parse(item.created_at || 0) >= Date.parse(afterIso || 0)
+        && item.organization_id === organizationId && item.binding_id === bindingId
+        // Rust enqueues this job with the same server DateTime as binding.activated_at.
+        // Binding and PostgreSQL JSON can serialize the same microsecond instant
+        // with different trailing zeroes. Date.parse loses microseconds entirely.
+        && canvasInstantMicros(item.created_at)===activatedMicros
+        && !beforeJobIds.has(item.id)
     ));
     if (!job) return null;
-    return waitForJob(marty, job.id);
+    const completed=await waitForJob(marty, job.id);
+    requireCondition(completed.id===job.id && completed.organization_id===organizationId
+      && completed.binding_id===bindingId && completed.target_type==='background_roster'
+      && canvasInstantMicros(completed.created_at)===activatedMicros,
+    'canvas_roster_job_identity_mismatch','Completed roster job differs from the activated binding job.');
+    return completed;
   }, JOB_TIMEOUT_MS, 1_500, 'canvas_roster_job_timeout');
 }
 
@@ -1793,12 +1932,22 @@ function verifyCompactJws(compact, publicJwk) {
   return { header, payload };
 }
 
-async function receiveAndVerifyCredential(offerUri, expectedTemplate, expectedIssuerOrigin = DEFAULT_MARTY_ORIGIN) {
+async function receiveAndVerifyCredential(offerUri, expectedTemplate, expectedIssuerOrigin = DEFAULT_MARTY_ORIGIN, ownedEngineering = null) {
   requireCondition(
     typeof expectedTemplate?.vct === 'string' && expectedTemplate.vct.trim().length > 0,
     'credential_template_vct_missing',
     'Credential verification requires the selected template\'s exact VCT before claiming its offer.',
   );
+  if(ownedEngineering){
+    const {ownedWalletContext,recorderRepository,signal,walletPage}=ownedEngineering;
+    const owned=require(path.join(recorderRepository,'src','ownedWalletRuntime.js'));
+    owned.requireOwnedWalletContext(ownedWalletContext);
+    await owned.requireOwnedCanvasHolderSigning(ownedWalletContext,signal);
+    const received=await require('./audit-beta-credential-lifecycle').receiveCredential(walletPage,offerUri,expectedTemplate.vct);
+    requireCondition(received.ok===true&&received.receipt?.vct===expectedTemplate.vct,
+      'owned_wallet_receipt_failed','The real Rust wallet did not store the expected credential.');
+    return {ownedReceipt:received.receipt,payload:null};
+  }
   const offer = parseCredentialOfferUri(offerUri);
   const issuerUrl = pinnedHttpsUrl(
     offer.issuer,
@@ -1915,12 +2064,15 @@ async function finishRecordedVideo(context, page, destination) {
 }
 
 async function prepareCanvasCaptureFixtures({ browser, ledger, markActive = () => {},
-  pass = () => {}, runSuffix, state = {}, prerequisiteDirectory = '/artifacts', ownershipDirectory }) {
+  pass = () => {}, runSuffix, state = {}, prerequisiteDirectory = '/artifacts', ownershipDirectory,
+  ownedPrivateRecoveryDirectory = null }) {
   requireCondition(browser && /^[A-Za-z0-9-]{8,100}$/.test(runSuffix || ''),
     'canvas_run_identity_invalid', 'A fresh Canvas capture run identity is required.');
   if(process.env.DEMO_LOCAL_FUNCTIONAL_RUNTIME_RECEIPT) requireCondition(
-    process.env.DEMO_CANVAS_PRIVATE_RECOVERY_DIRECTORY==='/capture-private',
-    'canvas_private_custody_missing','Functional runtime capture requires its protected recovery mount.');
+    ownedPrivateRecoveryDirectory
+      ? process.env.DEMO_CANVAS_PRIVATE_RECOVERY_DIRECTORY===ownedPrivateRecoveryDirectory
+      : process.env.DEMO_CANVAS_PRIVATE_RECOVERY_DIRECTORY==='/capture-private',
+    'canvas_private_custody_missing','Functional runtime capture requires its protected recovery directory.');
   if (process.env.DEMO_CANVAS_PRIVATE_RECOVERY_DIRECTORY) state.custody ||= createCanvasCaptureCustody(runSuffix);
   let marty, adminContext, learnerContext, platformId, integrationSecretId;
     const canvasOrigin = normalizePinnedOrigin(
@@ -2109,13 +2261,15 @@ async function prepareCanvasCaptureFixtures({ browser, ledger, markActive = () =
     }, [200]);
 
     markActive('standard_lti_13_install');
-    const activationStartedAt = new Date().toISOString();
+    const activationJobBaseline = await rosterJobBaseline(marty, organizationId, binding.id);
     state.bindingActivationPossible=true;owned.martyBindingActivationPossible=true;persistOwned();
-    await validateAndActivateBinding(marty, binding.id);
+    const {activation}=await validateAndActivateBinding(marty, binding.id);
+    const activationAt=await activatedRosterJobTimestamp(marty, organizationId, platformId,
+      binding.id, activation.config_version);
     pass('standard_lti_13_install', `Stock Canvas installed LTI 1.3 and all ${BLOCKING_READINESS_CHECK_CODES.length} production blocking readiness checks passed.`);
 
     markActive('nrps_roster');
-    await waitForLatestRosterJob(marty, organizationId, binding.id, activationStartedAt);
+    await waitForLatestRosterJob(marty, organizationId, binding.id, activationJobBaseline, activationAt);
 
     markActive('module_completion');
     await waitFor(async () => {
@@ -2247,12 +2401,50 @@ function createCanvasCaptureCustody(runSuffix, directory = process.env.DEMO_CANV
 }
 
 function requireCanvasSetupMutationReconciliation(state) {
-  requireCondition(!state.bindingActivationPossible||Boolean(state.applicationId),
+  requireCondition(!state.bindingActivationPossible||Boolean(state.applicationId)
+    || state.prelaunchAbsenceConfirmed===true,
     'canvas_background_application_uncertain','An activated owned binding without its returned application tuple requires reconciliation.');
   for(const field of ['martyPlatformIntent','martySecretIntent']) {
     const intent=state.owned?.[field];
     requireCondition(!intent||intent.state==='CREATED','canvas_setup_creation_uncertain','Owned Canvas setup creation requires exact reconciliation.');
   }
+}
+
+async function reconcileCanvasPrelaunchApplicationAbsence(state) {
+  if (!state.bindingActivationPossible || state.applicationId) return;
+  const bindingId=state.binding?.id, organizationId=state.organizationId;
+  requireCondition(state.owned?.martyBindingId===bindingId && !state.owned?.martyLearnerLaunchIntent
+    && !state.owned?.martyApplicationId && state.marty,
+  'canvas_background_application_uncertain','An owned learner launch may have created an application.');
+  const bindingPath=`/v1/integrations/canvas/program-bindings/${encodeURIComponent(bindingId)}`;
+  const ownedBinding=await state.marty.get(bindingPath);
+  requireCondition(ownedBinding.id===bindingId && ownedBinding.organization_id===organizationId
+    && ownedBinding.platform_id===state.platformId
+    && ownedBinding.display_name===`Portable Canvas badge ${state.runSuffix}`,
+  'canvas_background_application_uncertain','Canvas binding ownership changed before retirement.');
+  if (ownedBinding.enabled || ownedBinding.activated_at) {
+    await state.marty.post(`${bindingPath}/deactivate`, {}, [200]);
+  }
+  const disabledBinding=await state.marty.get(bindingPath);
+  requireCondition(disabledBinding.id===bindingId && disabledBinding.organization_id===organizationId
+    && disabledBinding.platform_id===state.platformId
+    && disabledBinding.enabled===false && disabledBinding.activated_at==null,
+  'canvas_background_application_uncertain','Owned Canvas binding remains active after deactivation.');
+  const prefix=`?organization_id=${encodeURIComponent(organizationId)}&binding_id=${encodeURIComponent(bindingId)}&limit=100`;
+  const jobs=(await completeOrganizationJobInventory(state.marty,organizationId))
+    .filter(job=>job.binding_id===bindingId);
+  const candidates=await state.marty.get(`/v1/integrations/canvas/canvas-award-candidates${prefix}`);
+  requireCondition(jobs.length>0 && Array.isArray(candidates) && candidates.length<100,
+    'canvas_background_application_uncertain','Owned Canvas background inventory is incomplete.');
+  requireCondition(jobs.every(job=>job.organization_id===organizationId&&job.binding_id===bindingId
+    && job.platform_id===state.platformId&&job.target_type==='background_roster'
+    && job.application_id==null&&job.status==='succeeded'),
+  'canvas_background_application_uncertain','Owned Canvas jobs are pending or reference an application.');
+  requireCondition(candidates.every(candidate=>candidate.organization_id===organizationId
+    && candidate.binding_id===bindingId&&candidate.application_id==null
+    && candidate.status==='identity_link_required'),
+  'canvas_background_application_uncertain','Owned Canvas candidates reference an application or claim.');
+  state.prelaunchAbsenceConfirmed=true;
 }
 
 async function retireCanvasOAuthAuthority(state, observe = () => {}, {requireAccess = false} = {}) {
@@ -2264,13 +2456,25 @@ async function retireCanvasOAuthAuthority(state, observe = () => {}, {requireAcc
 
 async function retireCanvasOwnedReferences(state) {
   requireCanvasSetupMutationReconciliation(state);
+  const secretsPath='/v1/integrations/canvas/integration-secrets?organization_id='
+    +encodeURIComponent(state.organizationId)+'&provider=canvas';
+  if(state.integrationSecretId) {
+    const rows=await state.marty.get(secretsPath);
+    requireCondition(Array.isArray(rows),'canvas_owned_secret_inventory_invalid',
+      'Authorized Canvas secret collection is unavailable.');
+    const exactRows=rows.filter(row=>row.id===state.integrationSecretId);
+    requireCondition(exactRows.length===1 && exactRows[0].organization_id===state.organizationId
+      && exactRows[0].name===state.owned?.martySecretIntent?.name
+      && exactRows[0].provider==='canvas' && exactRows[0].purpose==='oauth_client_secret',
+    'canvas_owned_secret_identity_mismatch','Owned Canvas secret metadata changed before retirement.');
+  }
   if(state.platformId) {
     const target=`/v1/integrations/canvas/platforms/${encodeURIComponent(state.platformId)}`;
     await state.marty.delete(target,[204]);await state.marty.request('GET',target,{expected:[404]});
   }
   if(state.integrationSecretId) {
     await state.marty.delete(`/v1/integrations/canvas/integration-secrets/${encodeURIComponent(state.integrationSecretId)}`,[204]);
-    const remaining=await state.marty.get('/v1/integrations/canvas/integration-secrets?organization_id='+encodeURIComponent(state.organizationId)+'&provider=canvas');
+    const remaining=await state.marty.get(secretsPath);
     assert(Array.isArray(remaining));assert(!remaining.some(row=>row.id===state.integrationSecretId));
   }
 }
@@ -2320,6 +2524,7 @@ async function retireCanvasEngineeringSetup(state, observeSessions = () => {}) {
   let retired={scope:'OWNED_CANVAS_FIXTURE_RETIREMENT',complete:false,resources:[]};
   const failures=[];
   try {
+      await reconcileCanvasPrelaunchApplicationAbsence(state);
       requireCanvasSetupMutationReconciliation(state);
       const issuanceRetirement = await retireCanvasApplication({ marty:state.marty, organizationId: state.organizationId,
         applicationId: state.applicationId, credentialTemplateId: state.templates?.credential?.id,
@@ -2335,11 +2540,18 @@ async function retireCanvasEngineeringSetup(state, observeSessions = () => {}) {
       retired = await retireCanvasSetupFixtures(state, true, !state.oauthConnected);
       retired.issuanceRetirement = issuanceRetirement;
   } catch(error) {failures.push({stage:'OWNED_RESOURCES',location:contractFailureLocation(error,'owned_fixture_cleanup')});}
+  if(state.ownedVerificationFlow){
+    retired.verificationFlowRetired=state.ownedVerificationFlow.retirementConfirmed===true;
+    if(!retired.verificationFlowRetired)failures.push({stage:'VERIFICATION_FLOW',
+      location:{code:'owned_verification_flow_cleanup_incomplete'}});
+  }
   if (state.custody) {
     try {
       retired.sessionRetirement=await retireCanvasCaptureSessions(state,value=>{retired.sessionRetirement=value;observeSessions(value)});
       retired.sessionsRetired=true;
     } catch(error) {failures.push({stage:'OWNED_SESSIONS',location:contractFailureLocation(error,'owned_session_cleanup')});}
+    if(state.externalSessionFailure)failures.push({stage:'HOST_SESSIONS',location:{code:'owned_host_session_cleanup_incomplete'}});
+    if(state.hostSessionsRetired===true)retired.hostSessionsRetired=true;
     if(failures.length===0) {
       try {retired.privateAuthorityRetired=state.custody.retire();}
       catch(error) {failures.push({stage:'PRIVATE_AUTHORITY',location:contractFailureLocation(error,'private_authority_cleanup')});}
@@ -2353,10 +2565,10 @@ async function retireCanvasEngineeringSetup(state, observeSessions = () => {}) {
   return retired;
 }
 
-async function main() {
+async function main(options = {}) {
   let args;
   try {
-    args = parseArgs(process.argv);
+    args = parseArgs(options.argv || process.argv);
   } catch (error) {
     process.stderr.write(`Canvas OSS contract arguments failed: ${sanitizeEvidence(error.code || error.message)}\n`);
     return 2;
@@ -2364,7 +2576,8 @@ async function main() {
 
   let execution;
   try {
-    execution = requireComposeExecutionBoundary();
+    execution = options.ownedWalletContext
+      ? await requireOwnedNativeEngineeringBoundary(options) : requireComposeExecutionBoundary();
   } catch (error) {
     process.stderr.write(`Canvas OSS contract boundary failed: ${sanitizeEvidence(error.code || error.message)}\n`);
     return 2;
@@ -2377,6 +2590,11 @@ async function main() {
   let learnerContext = null;
   let recordedContext = null;
   let recordedPage = null;
+  let ownedWalletBrowserContext = null;
+  let ownedWalletPage = null;
+  let ownedWalletSession = null;
+  let betaAdminContext = null;
+  let betaAdminPage = null;
   let marty = null;
   let platformId = null;
   let integrationSecretId = null;
@@ -2392,10 +2610,30 @@ async function main() {
       browser: browser = await chromium.launch({ headless: true }), ledger, markActive, pass, state: preparationState,
       runSuffix: `${Date.now().toString(36)}-${crypto.randomBytes(3).toString('hex')}`,
       prerequisiteDirectory: path.dirname(args.observations), ownershipDirectory: path.dirname(args.observations),
+      ownedPrivateRecoveryDirectory:options.ownedWalletContext?options.privateRecoveryDirectory:null,
     });
     ({ marty, adminContext, learnerContext, platformId, integrationSecretId } = setup);
     const { canvasOrigin, martyOrigin, organizationId, martyApiKey, learnerCanvas, adminCanvas,
       fixtures, templates, binding, pinnedBinding, externalAssignment, activityResults } = setup;
+    if(options.ownedWalletContext){
+      const {acquireWalletSession}=require('./demo-wallet-session');
+      const {login,selectOrg}=require('./audit-beta-credential-lifecycle');
+      ownedWalletBrowserContext=await browser.newContext({viewport:{width:1440,height:900}});
+      ownedWalletSession=await acquireWalletSession(ownedWalletBrowserContext,
+        {origin:options.ownedWalletContext.baseUrl,runId:crypto.randomUUID()});
+      requireCondition(ownedWalletSession.evidence.instanceId===options.ownedWalletContext.instanceId,
+        'owned_wallet_instance_changed','Owned Rust wallet instance changed before engineering claim.');
+      ownedWalletPage=await ownedWalletBrowserContext.newPage();
+      betaAdminContext=await browser.newContext({viewport:{width:1440,height:900}});
+      betaAdminPage=await betaAdminContext.newPage();
+      await login(betaAdminPage,requireSecretFile('CANVAS_CAPTURE_ADMIN_EMAIL'),
+        requireSecretFile('CANVAS_CAPTURE_ADMIN_PASSWORD'));
+      const selection=await selectOrg(betaAdminPage);
+      requireCondition(selection.ok===true&&selection.activeOrgId===organizationId,
+        'engineering_verifier_org_changed','Engineering verifier selected a different organization.');
+      if(preparationState.custody)preparationState.custody.retain('betaAdminSession',
+        JSON.stringify(await betaAdminContext.cookies(martyOrigin)));
+    }
     recordedContext = await browser.newContext({
       viewport: { width: 1440, height: 900 },
       ...(!args.functionalRerun ? {recordVideo:{dir:path.dirname(args.video),size:{width:1440,height:900}}} : {}),
@@ -2406,6 +2644,7 @@ async function main() {
     await showVideoStep(recordedPage, 'Canvas evidence is complete', 'The learner completed a native assignment, a Classic Quiz, and the module in stock Canvas.');
 
     markActive('learner_resource_launch');
+    preparationState.owned.martyLearnerLaunchIntent=true;preparationState.persistOwned();
     const firstLaunch = await launchLearnerResource(recordedPage, learnerCanvas, fixtures, externalAssignment, martyOrigin);
     recordedPage = firstLaunch.page;
     const firstBootstrap = firstLaunch.bootstrap;
@@ -2414,10 +2653,13 @@ async function main() {
     pass('learner_resource_launch', 'The enrolled learner launched the Deep Linked resource through standard LTI 1.3 and reached ElevenID.');
     await showVideoStep(recordedPage, 'Portable learner launch verified', 'Canvas supplied the signed learner, course, and resource context; no email identity match was used.');
 
-    const secondActivationAt = new Date().toISOString();
+    const secondActivationJobBaseline = await rosterJobBaseline(marty, organizationId, binding.id);
     markActive('nrps_roster');
-    await validateAndActivateBinding(marty, binding.id);
-    const rosterJob = await waitForLatestRosterJob(marty, organizationId, binding.id, secondActivationAt);
+    const {activation:secondActivation}=await validateAndActivateBinding(marty, binding.id);
+    const secondActivationAt=await activatedRosterJobTimestamp(marty, organizationId, platformId,
+      binding.id, secondActivation.config_version);
+    const rosterJob = await waitForLatestRosterJob(marty, organizationId, binding.id,
+      secondActivationJobBaseline, secondActivationAt);
     markActive('background_pending_claim_unsigned');
     const pendingCandidate = await waitForCandidate(marty, organizationId, binding.id, 'pending_claim');
     requireCondition(Number(rosterJob?.result?.pending_claim || 0) >= 1 || pendingCandidate, 'background_candidate_not_pending', 'Background roster synchronization did not produce an unsigned pending claim.');
@@ -2510,7 +2752,10 @@ async function main() {
     'canvas_claim_binding_mismatch', 'Learner claim did not reuse the exact approved application transaction.');
     await recordedPage.getByTestId('credential-claim-dialog').waitFor({ state: 'visible', timeout: DEFAULT_TIMEOUT_MS });
     await showVideoStep(recordedPage, 'Wallet claim starts signing', 'The learner initiated a standards-based wallet claim; the credential offer is intentionally not displayed in this artifact.');
-    const wallet = await receiveAndVerifyCredential(claim?.credential_offer_uri || claim?.offer_url, templates.credential, martyOrigin);
+    const wallet = await receiveAndVerifyCredential(claim?.credential_offer_uri || claim?.offer_url,
+      templates.credential,martyOrigin,options.ownedWalletContext?{
+        ownedWalletContext:options.ownedWalletContext,recorderRepository:options.recorderRepository,
+        signal:options.signal,walletPage:ownedWalletPage}:null);
     await recordedPage.getByTestId('credential-claim-dialog').getByRole('button', { name: /close|done/i }).first().click().catch(() => {});
     await reloadLearnerExperience(recordedPage);
     await recordedPage.getByTestId('canvas-claim-complete').waitFor({ state: 'visible', timeout: DEFAULT_TIMEOUT_MS });
@@ -2524,7 +2769,28 @@ async function main() {
       requireCondition(matching.length <= 1, 'duplicate_canvas_issuance', 'The Canvas learner claim created duplicate credentials.');
       return matching[0] || null;
     }, DEFAULT_TIMEOUT_MS, 1_000, 'issued_credential_record_timeout');
-    requireCondition(String(issuedRecords.status).toUpperCase() === 'ACTIVE' && issuedRecords.issuer_did === wallet.payload.iss, 'issued_credential_record_invalid', 'The canonical issued-credential record does not match the verified KMS-signed badge.');
+    requireCondition(String(issuedRecords.status).toUpperCase() === 'ACTIVE'
+      &&(options.ownedWalletContext?Boolean(issuedRecords.issuer_did):issuedRecords.issuer_did===wallet.payload.iss),
+    'issued_credential_record_invalid','The canonical issued-credential record does not match the verified KMS-signed badge.');
+    if(options.ownedWalletContext){
+      const policyId=process.env.CANVAS_CAPTURE_PRESENTATION_POLICY_ID;
+      requireCondition(/^[a-f0-9-]{36}$/i.test(policyId||''),'engineering_policy_missing','Exact engineering verification policy is required.');
+      const policy=await marty.get(`/v1/presentation-policies/${encodeURIComponent(policyId)}`);
+      requireCondition(policy.organization_id===organizationId&&String(policy.status).toUpperCase()==='ACTIVE'
+        &&policy.credential_requirements?.some(row=>row.credential_template_id===templates.credential.id),
+      'engineering_policy_unbound','Engineering verification policy differs from the issued badge.');
+      const {ownedVerificationFlow,browserFlowApi}=require('./owned-verification-flow');
+      const flow=ownedVerificationFlow({organizationId,runId:options.runId,
+        privateDirectory:options.privateRecoveryDirectory,api:browserFlowApi(betaAdminPage)});
+      preparationState.ownedVerificationFlow=flow;
+      const verified=await flow.run(()=>require('./audit-beta-credential-lifecycle').verify(
+        betaAdminPage,ownedWalletPage,flow.reference,{organizationId,presentationPolicyId:policyId,
+          issuerDid:issuedRecords.issuer_did,returnOnWalletFailure:true,flowCustody:flow}));
+      requireCondition(flow.terminalStatus==='COMPLETED',
+        'engineering_wallet_flow_not_verified','Run-owned verification Flow was not a terminal success.');
+      try {require('./beta-demo-review-ui').requireVerificationDecision(verified,'allow');}
+      catch {fail('engineering_wallet_verification_failed','Real Rust wallet presentation did not verify.');}
+    }
     pass('kms_open_badge_claim_and_verify', 'Concurrent approval reserved one claim transaction; wallet proof binding triggered remote KMS signing and the Open Badge JWS verified against the published DID assertion key.');
     await showVideoStep(recordedPage, 'KMS-signed badge claimed', 'The wallet received a holder-bound Open Badge whose issuer signature verifies against the published DID document.');
 
@@ -2611,6 +2877,17 @@ async function main() {
     integrationSecretId ||= preparationState.integrationSecretId;
     adminContext ||= preparationState.adminContext;
     learnerContext ||= preparationState.learnerContext;
+    if(options.ownedWalletContext){
+      let hostSessionsRetired=true;
+      if(ownedWalletSession){try {await ownedWalletSession.close();}catch{hostSessionsRetired=false;}}
+      if(betaAdminContext&&preparationState.custody){
+        try {await retireCanvasBetaSession(betaAdminContext,preparationState.custody);}
+        catch{hostSessionsRetired=false;}
+      }
+      if(!hostSessionsRetired){preparationState.externalSessionFailure=true;
+        failure ||= new ContractFailure('owned_host_session_cleanup_incomplete','Owned host sessions require recovery.');}
+      preparationState.hostSessionsRetired=hostSessionsRetired;
+    }
     try {
       const retired=await retireCanvasEngineeringSetup(preparationState,value=>fs.writeFileSync(
         path.join(path.dirname(args.observations),'owned-canvas-session-retirement.json'),JSON.stringify(value,null,2)+'\n'));
@@ -2630,6 +2907,8 @@ async function main() {
       JSON.stringify(ledger.driverFailure, null, 2) + '\n');
     if (learnerContext) await learnerContext.close().catch(() => {});
     if (adminContext) await adminContext.close().catch(() => {});
+    if (ownedWalletBrowserContext) await ownedWalletBrowserContext.close().catch(() => {});
+    if (betaAdminContext) await betaAdminContext.close().catch(() => {});
 
     if (!args.functionalRerun && !videoWritten && browser) {
       await createFallbackVideo(browser, args.video, failure ? `${failure.code}: ${failure.message}` : 'Video finalization failed.').catch(() => {});
@@ -2646,6 +2925,7 @@ async function main() {
 }
 
 module.exports = {
+  main,
   authorizeCanvasOAuth,
   canvasOAuthRedirectChecks,
   saveDeveloperKey,
@@ -2656,6 +2936,7 @@ module.exports = {
   createOauthDeveloperKey,
   createCanvasCaptureCustody,
   requireCanvasSetupMutationReconciliation,
+  reconcileCanvasPrelaunchApplicationAbsence,
   retireCanvasOAuthAuthority,
   retireCanvasOwnedReferences,
   retireCanvasCaptureSessions,
@@ -2666,6 +2947,7 @@ module.exports = {
   retireCanvasSetupFixtures,
   CanvasClient,
   CanvasSessionClient,
+  MartyClient,
   findCanvasDeveloperKey,
   waitForCanvasCourseCompletion,
   canvasLaunchErrorSummary,
@@ -2683,6 +2965,8 @@ module.exports = {
   prepareCanvasCaptureFixtures,
   validateAndActivateBinding,
   waitForLatestRosterJob,
+  rosterJobBaseline,
+  activatedRosterJobTimestamp,
   waitForCandidate,
   launchLearnerResource,
   triggerLearnerSync,
@@ -2702,6 +2986,8 @@ module.exports = {
   resolveOid4vciEndpoints,
   resolveProofNonce,
   requireComposeExecutionBoundary,
+  requireOwnedNativeExecutionBoundary,
+  requireOwnedNativeEngineeringBoundary,
   requireSecretFile,
   responseJson,
   fetchWithTimeout,

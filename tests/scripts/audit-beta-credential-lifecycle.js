@@ -866,9 +866,11 @@ async function verify(page, walletPage, label, {
   resultIntervalMs = 1_000,
   ownedFlows = null,
   runId = null,
+  flowCustody = null,
 } = {}) {
   assert(Number.isInteger(resultTimeoutMs)&&resultTimeoutMs>0&&resultTimeoutMs<=60_000);
   assert(Number.isInteger(resultIntervalMs)&&resultIntervalMs>=0&&resultIntervalMs<=1_000);
+  assert(!(ownedFlows&&flowCustody),'Select one verification Flow custody mode');
   onPhase('session-request');
   const request = verificationSessionRequest({
     organizationId,
@@ -878,10 +880,13 @@ async function verify(page, walletPage, label, {
   });
   const ownedFlow=ownedFlows?{id:null,organizationId,presentationPolicyId,externalReference:request.external_reference}:null;
   if(ownedFlow){assert(typeof runId==='string'&&runId,'Fresh run identity is required');ownedFlows.push(ownedFlow);}
-  const session = await page.evaluate(async (payload) => {
+  flowCustody?.beforeCreate(request);
+  let session;
+  try {session=await page.evaluate(async ({payload,bounded}) => {
     const response = await fetch('/v1/flows/verify', {
       method: 'POST',
       credentials: 'include',
+      ...(bounded ? {signal:AbortSignal.timeout(15000)} : {}),
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
@@ -901,8 +906,9 @@ async function verify(page, walletPage, label, {
           || JSON.stringify(body)
           || 'Session creation failed',
     };
-  }, request);
+  }, {payload:request,bounded:Boolean(flowCustody)});}catch(error){flowCustody?.noteLostResponse();throw error;}
   if(ownedFlow)ownedFlow.id=session.instanceId;
+  await flowCustody?.acknowledge(session);
   const sanitizedSession = {
     ...session,
     requestUri: session.requestUri ? '[present]' : null,

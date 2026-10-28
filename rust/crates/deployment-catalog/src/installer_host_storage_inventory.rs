@@ -2,7 +2,7 @@
 //! This is not an ownership proof for Docker resources or a deletion manifest.
 #![cfg(target_os = "linux")]
 
-use crate::installer_state::LockedInspection;
+use crate::installer_state::{LockedInspection, LockedMaintenance};
 use serde::Serialize;
 use std::{
     ffi::{CString, OsStr},
@@ -198,8 +198,7 @@ fn scan(installation: &File) -> Result<Vec<HostEntry>> {
 /// not treat this as proof that Docker volumes or every host artifact is known.
 /// UID/mode are observations, not verified ownership; a same-device bind mount
 /// can still appear under a known root. This output cannot authorize purge.
-pub fn inspect(installation: &Path) -> Result<HostStorageInventory> {
-    let locked = LockedInspection::open(installation)?;
+fn inspect_held(locked: &LockedInspection, installation: &Path) -> Result<HostStorageInventory> {
     locked.require_path_binding(installation)?;
     let entries = scan(locked.installation_directory())?;
     locked.require_path_binding(installation)?;
@@ -212,6 +211,22 @@ pub fn inspect(installation: &Path) -> Result<HostStorageInventory> {
         deletion_eligible: false,
         entries,
     })
+}
+
+pub fn inspect(installation: &Path) -> Result<HostStorageInventory> {
+    let locked = LockedInspection::open(installation)?;
+    inspect_held(&locked, installation)
+}
+
+/// Reuse the uninstall transaction's exclusive lock for its read-only preview.
+pub(crate) fn inspect_maintenance(
+    maintenance: &LockedMaintenance,
+    installation: &Path,
+) -> Result<HostStorageInventory> {
+    maintenance.require_unchanged()?;
+    let inventory = inspect_held(maintenance.inspection(), installation)?;
+    maintenance.require_unchanged()?;
+    Ok(inventory)
 }
 
 #[cfg(test)]

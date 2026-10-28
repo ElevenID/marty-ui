@@ -6,9 +6,9 @@
  * and Deployment Profiles for end-to-end credential lifecycle management.
  */
 
-import { apiClient, handleApiError } from './api';
+import { del, get, patch, post, withApiErrorHandling, handleApiError } from './api';
 import { postWithIdempotency } from './idempotency';
-import { buildDefinedQueryString, withQuery } from './queryUtils';
+import { buildDefinedQueryString, withQuery, requireOrganizationId as requireScopedOrganizationId } from './queryUtils';
 
 const FLOW_DEFINITIONS_PATH = '/v1/flows/definitions';
 const FLOW_INSTANCES_PATH = '/v1/flows/instances';
@@ -20,24 +20,8 @@ function createUnsupportedFlowActionError(message) {
   return error;
 }
 
-function resolveOrganizationId(organizationId) {
-  return organizationId || null;
-}
-
 function requireOrganizationId(organizationId) {
-  const resolved = resolveOrganizationId(organizationId);
-  const normalized = String(resolved ?? '').trim();
-  if (
-    normalized === ''
-    || normalized.toLowerCase() === 'null'
-    || normalized.toLowerCase() === 'undefined'
-  ) {
-    const error = new Error('An active organization is required before loading flows.');
-    error.code = 'ORG_REQUIRED';
-    error.status = 400;
-    throw error;
-  }
-  return normalized;
+  return requireScopedOrganizationId(organizationId || null, undefined, 'An active organization is required before loading flows.');
 }
 
 /**
@@ -108,7 +92,7 @@ export const createFlow = async (flowData) => {
  * @returns {Promise<Array>} List of flows
  */
 export const listFlows = async (filters = {}) => {
-  try {
+  return withApiErrorHandling(async () => {
     const queryString = buildDefinedQueryString({
       organization_id: requireOrganizationId(filters.organization_id),
       flow_type: filters.flow_type,
@@ -116,11 +100,9 @@ export const listFlows = async (filters = {}) => {
       offset: filters.offset,
     });
 
-    const response = await apiClient.get(withQuery(FLOW_DEFINITIONS_PATH, queryString));
-    return requireDirectArray(response.data, 'Flow Definition');
-  } catch (error) {
-    throw handleApiError(error);
-  }
+    const response = await get(withQuery(FLOW_DEFINITIONS_PATH, queryString));
+    return requireDirectArray(response, 'Flow Definition');
+  });
 };
 
 /**
@@ -129,39 +111,19 @@ export const listFlows = async (filters = {}) => {
  * @returns {Promise<Object>} Flow details
  */
 export const getFlow = async (flowId) => {
-  try {
-    const response = await apiClient.get(`${FLOW_DEFINITIONS_PATH}/${flowId}`);
-    return response.data;
-  } catch (error) {
-    throw handleApiError(error);
-  }
+  return withApiErrorHandling(() => get(`${FLOW_DEFINITIONS_PATH}/${flowId}`));
 };
 
 export const getFlowCapabilities = async () => {
-  try {
-    const response = await apiClient.get(FLOW_CAPABILITIES_PATH);
-    return response.data;
-  } catch (error) {
-    throw handleApiError(error);
-  }
+  return withApiErrorHandling(() => get(FLOW_CAPABILITIES_PATH));
 };
 
 export const validateFlow = async (flowId) => {
-  try {
-    const response = await apiClient.post(`${FLOW_DEFINITIONS_PATH}/${flowId}/validate`);
-    return response.data;
-  } catch (error) {
-    throw handleApiError(error);
-  }
+  return withApiErrorHandling(() => post(`${FLOW_DEFINITIONS_PATH}/${flowId}/validate`));
 };
 
 export const testFlow = async (flowId) => {
-  try {
-    const response = await apiClient.post(`${FLOW_DEFINITIONS_PATH}/${flowId}/test`);
-    return response.data;
-  } catch (error) {
-    throw handleApiError(error);
-  }
+  return withApiErrorHandling(() => post(`${FLOW_DEFINITIONS_PATH}/${flowId}/test`));
 };
 
 /**
@@ -171,16 +133,13 @@ export const testFlow = async (flowId) => {
  * @returns {Promise<Object>} Updated flow
  */
 export const updateFlow = async (flowId, updates) => {
-  try {
+  return withApiErrorHandling(async () => {
     const payload = {
       ...updates,
       organization_id: requireOrganizationId(updates?.organization_id),
     };
-    const response = await apiClient.patch(`${FLOW_DEFINITIONS_PATH}/${flowId}`, payload);
-    return response.data;
-  } catch (error) {
-    throw handleApiError(error);
-  }
+    return patch(`${FLOW_DEFINITIONS_PATH}/${flowId}`, payload);
+  });
 };
 
 /**
@@ -189,11 +148,9 @@ export const updateFlow = async (flowId, updates) => {
  * @returns {Promise<void>}
  */
 export const deleteFlow = async (flowId) => {
-  try {
-    await apiClient.delete(`${FLOW_DEFINITIONS_PATH}/${flowId}`);
-  } catch (error) {
-    throw handleApiError(error);
-  }
+  return withApiErrorHandling(async () => {
+    await del(`${FLOW_DEFINITIONS_PATH}/${flowId}`);
+  });
 };
 
 /**
@@ -204,16 +161,11 @@ export const deleteFlow = async (flowId) => {
  * @returns {Promise<Object>} Flow execution
  */
 export const startFlowExecution = async (flowId, organizationId, context = {}) => {
-  try {
-    const response = await apiClient.post(FLOW_INSTANCES_PATH, {
+  return withApiErrorHandling(() => post(FLOW_INSTANCES_PATH, {
       organization_id: requireOrganizationId(organizationId),
       flow_definition_id: flowId,
       initial_context: context,
-    });
-    return response.data;
-  } catch (error) {
-    throw handleApiError(error);
-  }
+    }));
 };
 
 /**
@@ -231,7 +183,7 @@ export const listFlowExecutions = async (flowId, filters = {}) => {
 
 /** List runtime instances across an organization, optionally filtered by flow. */
 export const listFlowInstances = async (filters = {}) => {
-  try {
+  return withApiErrorHandling(async () => {
     const queryString = buildDefinedQueryString({
       organization_id: requireOrganizationId(filters.organization_id),
       flow_definition_id: filters.flow_definition_id,
@@ -240,11 +192,9 @@ export const listFlowInstances = async (filters = {}) => {
       offset: filters.offset,
     });
 
-    const response = await apiClient.get(withQuery(FLOW_INSTANCES_PATH, queryString));
-    return requireDirectArray(response.data, 'Flow Instance');
-  } catch (error) {
-    throw handleApiError(error);
-  }
+    const response = await get(withQuery(FLOW_INSTANCES_PATH, queryString));
+    return requireDirectArray(response, 'Flow Instance');
+  });
 };
 
 /**
@@ -259,26 +209,20 @@ export const getFlowExecution = async (flowId, executionId) => {
 
 /** Get one runtime instance by its stable instance identifier. */
 export const getFlowInstance = async (instanceId, { organizationId } = {}) => {
-  try {
+  return withApiErrorHandling(async () => {
     const query = organizationId === undefined ? '' : buildDefinedQueryString({ organization_id: requireOrganizationId(organizationId) });
-    const response = await apiClient.get(withQuery(`${FLOW_INSTANCES_PATH}/${encodeURIComponent(instanceId)}`, query));
-    return response.data;
-  } catch (error) {
-    throw handleApiError(error);
-  }
+    return get(withQuery(`${FLOW_INSTANCES_PATH}/${encodeURIComponent(instanceId)}`, query));
+  });
 };
 
 /** Record an authorized outcome for the execution's current step. */
 export const advanceFlowInstance = async (instanceId, stepResult) => {
-  try {
+  return withApiErrorHandling(async () => {
     if (!['success', 'failure'].includes(stepResult)) throw new Error('Choose a successful or failed step outcome.');
-    const response = await apiClient.post(`${FLOW_INSTANCES_PATH}/${encodeURIComponent(instanceId)}/advance`, {
+    return post(`${FLOW_INSTANCES_PATH}/${encodeURIComponent(instanceId)}/advance`, {
       step_result: stepResult, data: {},
     });
-    return response.data;
-  } catch (error) {
-    throw handleApiError(error);
-  }
+  });
 };
 
 /**
@@ -291,19 +235,14 @@ export const advanceFlowInstance = async (instanceId, stepResult) => {
  * @returns {Promise<Object>} Updated execution
  */
 export const approveFlowExecution = async (flowId, executionId, approvalData = {}) => {
-  try {
-    const response = await apiClient.post(`${FLOW_INSTANCES_PATH}/${executionId}/advance`, {
+  return withApiErrorHandling(() => post(`${FLOW_INSTANCES_PATH}/${executionId}/advance`, {
       step_result: 'success',
       data: {
         flow_definition_id: flowId,
         approver_id: approvalData.approver_id,
         approval_notes: approvalData.notes,
       },
-    });
-    return response.data;
-  } catch (error) {
-    throw handleApiError(error);
-  }
+    }));
 };
 
 /**
@@ -316,19 +255,14 @@ export const approveFlowExecution = async (flowId, executionId, approvalData = {
  * @returns {Promise<Object>} Updated execution
  */
 export const rejectFlowExecution = async (flowId, executionId, rejectionData) => {
-  try {
-    const response = await apiClient.post(`${FLOW_INSTANCES_PATH}/${executionId}/advance`, {
+  return withApiErrorHandling(() => post(`${FLOW_INSTANCES_PATH}/${executionId}/advance`, {
       step_result: 'failure',
       data: {
         flow_definition_id: flowId,
         rejection_reason: rejectionData?.reason,
         rejection_notes: rejectionData?.notes,
       },
-    });
-    return response.data;
-  } catch (error) {
-    throw handleApiError(error);
-  }
+    }));
 };
 
 /**
@@ -339,12 +273,7 @@ export const rejectFlowExecution = async (flowId, executionId, rejectionData) =>
  * @returns {Promise<Object>} Updated execution
  */
 export const cancelFlowExecution = async (flowId, executionId, reason) => {
-  try {
-    const response = await apiClient.post(`${FLOW_INSTANCES_PATH}/${executionId}/cancel`, { reason });
-    return response.data;
-  } catch (error) {
-    throw handleApiError(error);
-  }
+  return withApiErrorHandling(() => post(`${FLOW_INSTANCES_PATH}/${executionId}/cancel`, { reason }));
 };
 
 /**
@@ -355,12 +284,7 @@ export const cancelFlowExecution = async (flowId, executionId, reason) => {
  * @returns {Promise<Object>} Published flow with public URL
  */
 export const publishFlow = async (flowId, publishData = {}) => {
-  try {
-    const response = await apiClient.post(`${FLOW_DEFINITIONS_PATH}/${flowId}/activate`, publishData);
-    return response.data;
-  } catch (error) {
-    throw handleApiError(error);
-  }
+  return withApiErrorHandling(() => post(`${FLOW_DEFINITIONS_PATH}/${flowId}/activate`, publishData));
 };
 
 /**

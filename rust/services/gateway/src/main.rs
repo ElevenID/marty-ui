@@ -251,22 +251,6 @@ fn grpc_channel(
 }
 
 async fn shutdown_signal() {
-    let ctrl_c = async {
-        tokio::signal::ctrl_c()
-            .await
-            .expect("failed to install Ctrl+C handler");
-    };
-    #[cfg(unix)]
-    let terminate = async {
-        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-            .expect("failed to install termination handler")
-            .recv()
-            .await;
-    };
-    #[cfg(not(unix))]
-    let terminate = std::future::pending::<()>();
-    tokio::select! {
-        () = ctrl_c => {},
-        () = terminate => {},
-    }
+    mmf_runtime::shutdown_signal_with_termination_context("failed to install termination handler")
+        .await;
 }

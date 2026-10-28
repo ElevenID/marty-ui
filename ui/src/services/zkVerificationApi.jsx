@@ -5,7 +5,7 @@
  * Connects to the Flow and Presentation Policy services for credential verification.
  */
 
-import { apiClient, handleApiError } from "./api";
+import { get, post, withApiErrorHandling } from './api';
 
 // Flow service handles async verification flows (QR, wallet)
 const FLOW_PATH = "/v1/flows";
@@ -22,12 +22,7 @@ const POLICY_PATH = "/v1/presentation-policies";
  * @returns {Promise<Object>} Flow instance with request_uri and qr_code_data
  */
 export const startVerificationFlow = async (request) => {
-  try {
-    const response = await apiClient.post(`${FLOW_PATH}/verify`, request);
-    return response.data;
-  } catch (error) {
-    throw handleApiError(error);
-  }
+  return withApiErrorHandling(() => post(`${FLOW_PATH}/verify`, request));
 };
 
 /**
@@ -37,12 +32,7 @@ export const startVerificationFlow = async (request) => {
  * @returns {Promise<Object>} OID4VP request object
  */
 export const getVerificationRequest = async (instanceId) => {
-  try {
-    const response = await apiClient.get(`${FLOW_PATH}/instances/${instanceId}/request`);
-    return response.data;
-  } catch (error) {
-    throw handleApiError(error);
-  }
+  return withApiErrorHandling(() => get(`${FLOW_PATH}/instances/${instanceId}/request`));
 };
 
 /**
@@ -52,25 +42,18 @@ export const getVerificationRequest = async (instanceId) => {
  * @returns {Promise<Object>} Flow instance status/context
  */
 export const getVerificationFlowInstance = async (instanceId) => {
-  try {
-    const response = await apiClient.get(`${FLOW_PATH}/instances/${instanceId}`);
-    return response.data;
-  } catch (error) {
-    throw handleApiError(error);
-  }
+  return withApiErrorHandling(() => get(`${FLOW_PATH}/instances/${instanceId}`));
 };
 
 /** Get the measured terminal result; the instance list carries status only. */
 export const getVerificationFlowResult = async (instanceId) => {
-  try {
-    const response = await apiClient.get(`${FLOW_PATH}/instances/${encodeURIComponent(instanceId)}/result`);
-    if (response.data?.instance_id !== instanceId) {
+  return withApiErrorHandling(async () => {
+    const response = await get(`${FLOW_PATH}/instances/${encodeURIComponent(instanceId)}/result`);
+    if (response?.instance_id !== instanceId) {
       throw new Error('Verification result belongs to a different session');
     }
-    return response.data;
-  } catch (error) {
-    throw handleApiError(error);
-  }
+    return response;
+  });
 };
 
 // The QR polling and history views share the same correlated result reader.
@@ -85,12 +68,7 @@ export const getVerificationResult = getVerificationFlowResult;
  * @returns {Promise<Object>} Verification result
  */
 export const submitVerification = async (instanceId, submission) => {
-  try {
-    const response = await apiClient.post(`${FLOW_PATH}/instances/${instanceId}/submit`, submission);
-    return response.data;
-  } catch (error) {
-    throw handleApiError(error);
-  }
+  return withApiErrorHandling(() => post(`${FLOW_PATH}/instances/${instanceId}/submit`, submission));
 };
 
 /**
@@ -102,12 +80,7 @@ export const submitVerification = async (instanceId, submission) => {
  * @returns {Promise<Object>} Evaluation result with decision and verified claims
  */
 export const evaluatePresentation = async (policyId, request) => {
-  try {
-    const response = await apiClient.post(`${POLICY_PATH}/${policyId}/evaluate`, request);
-    return response.data;
-  } catch (error) {
-    throw handleApiError(error);
-  }
+  return withApiErrorHandling(() => post(`${POLICY_PATH}/${policyId}/evaluate`, request));
 };
 
 /**
@@ -119,12 +92,7 @@ export const evaluatePresentation = async (policyId, request) => {
  * @returns {Promise<Object>} Evaluation result with decision and verified claims
  */
 export const evaluateInline = async (request) => {
-  try {
-    const response = await apiClient.post(`${POLICY_PATH}/evaluate`, request);
-    return response.data;
-  } catch (error) {
-    throw handleApiError(error);
-  }
+  return withApiErrorHandling(() => post(`${POLICY_PATH}/evaluate`, request));
 };
 
 // Legacy aliases for backward compatibility during transition
