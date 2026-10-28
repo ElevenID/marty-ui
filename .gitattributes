@@ -22,3 +22,5 @@ tests/scripts/audit-beta-independent-wallet-interoperability.js text eol=lf
 tests/scripts/audit-beta-direct-vc-api.js text eol=lf
 docs/demo-audit/2026-10-20-canvas-adapter/focused-source-tests.log -text
 docs/demo-audit/2026-10-20-vc-api-auth/*.json -text
+
+tests/scripts/audit-beta-issuer-provider-switch.js text eol=lf

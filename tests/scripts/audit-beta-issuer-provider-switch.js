@@ -15,6 +15,8 @@ const {
 } = require('./audit-beta-credential-lifecycle');
 const { createDemoLiveEvidence, acknowledgeDemoInputs, applyLocalNativeReadiness } = require('./demo-live-evidence');
 const {
+  createCanvasCaptureCustody,
+  retireCanvasBetaSession,
   didWebResolutionUrl,
   receiveAndVerifyCredential,
   verificationMethodFromDidDocument,
@@ -723,6 +725,30 @@ async function cleanup(page, templateId, issuerDids, governance = null) {
   return results;
 }
 
+async function retireProviderAdminSession(context, custody) {
+  const cookies = await context.cookies('https://beta.elevenidllc.com');
+  if (cookies.length === 0) {
+    if (custody.retire() !== true) throw new Error('D02 private session retirement unconfirmed');
+    return {authenticatedSessionCreated:false,oldCookieAuthenticated:null,privateCookieRetired:true};
+  }
+  const proof = await retireCanvasBetaSession(context, custody);
+  if (proof.oldCookieAuthenticated !== false || custody.retire() !== true) {
+    throw new Error('D02 admin session retirement unconfirmed');
+  }
+  return {...proof,authenticatedSessionCreated:true,privateCookieRetired:true};
+}
+
+async function closeProviderBrowser(context, custody, report) {
+  let failure;
+  try {if (custody) report.adminSessionRetirement = await retireProviderAdminSession(context, custody);}
+  catch (error) {failure = error;}
+  try {
+    await context.close();
+    if (report.adminSessionRetirement) report.adminSessionRetirement.contextClosed = true;
+  } catch (error) {failure ||= error;}
+  if (failure) throw failure;
+}
+
 async function main() {
   const email = process.env.TEST_VENDOR_EMAIL || process.env.TEST_ADMIN_EMAIL;
   const password = process.env.TEST_VENDOR_PASSWORD || process.env.TEST_ADMIN_PASSWORD;
@@ -733,6 +759,7 @@ async function main() {
   const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\..+/, '').toLowerCase();
   const artifactDir = createArtifactDir(ROOT, `beta-issuer-provider-switch-${stamp}`);
   const evidence = await createDemoLiveEvidence();
+  const functionalSessionRetirement = Boolean(evidence.functionalRuntimeBinding);
   try {
     const input = await prepareProviderInputs(artifactDir, stamp, evidence);
     const { issuerDid, providerBId, providerCId } = input;
@@ -757,6 +784,7 @@ async function main() {
         : [],
     });
     let context;
+    let betaSessionCustody;
     let originalConfig;
     let lastOwnedConfigRevision;
     let configJournal;
@@ -773,6 +801,10 @@ async function main() {
         ignoreHTTPSErrors: LOCAL_BETA_PROXY,
         ...(RECORD_VIDEO ? { recordVideo: { dir: artifactDir, size: VIDEO_SIZE } } : {}),
       });
+      if (functionalSessionRetirement) {
+        if (!/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(process.env.DEMO_CAPTURE_LAUNCH_ID || '')) throw new Error('D02 owned session identity required');
+        betaSessionCustody = createCanvasCaptureCustody('d02-'+process.env.DEMO_CAPTURE_LAUNCH_ID);
+      }
       const page = await context.newPage();
       evidence.bindPage(page);
       const video = page.video();
@@ -1022,8 +1054,8 @@ async function main() {
       await finalizeLiveRun({
         cleanup: async () => {}, // Owned feature cleanup and restoration completed above.
         closeBrowser: async () => {
-          await context.close();
-          context = null;
+          try {await closeProviderBrowser(context, betaSessionCustody, report);}
+          finally {context = null;}
           if (RECORD_VIDEO) {
             report.recording = path.relative(
               ROOT,
@@ -1033,7 +1065,11 @@ async function main() {
         },
         writeReport: async () => {
           applyLocalNativeReadiness(report, evidence, {ready:report.releaseReady,
-            cleanupComplete:ownedCleanupComplete});
+            cleanupComplete:ownedCleanupComplete && (!functionalSessionRetirement
+              || (report.adminSessionRetirement?.authenticatedSessionCreated === true
+                && report.adminSessionRetirement.oldCookieAuthenticated === false
+                && report.adminSessionRetirement.privateCookieRetired === true
+                && report.adminSessionRetirement.contextClosed === true))});
           fs.writeFileSync(path.join(artifactDir, 'report.json'), JSON.stringify(report, null, 2));
           console.log(JSON.stringify(report, null, 2));
         },
@@ -1043,9 +1079,11 @@ async function main() {
       });
       if (!report.releaseReady && !report.functionalReady) process.exitCode = 1;
     } finally {
-      if (configJournal) configJournal.close();
-      if (context) await context.close().catch(() => {});
-      await browser.close();
+      try {if (configJournal) configJournal.close();}
+      finally {
+        try {if (context) await closeProviderBrowser(context, betaSessionCustody, report);}
+        finally {await browser.close();}
+      }
     }
   } finally {
     await evidence.close();
@@ -1060,6 +1098,8 @@ if (require.main === module) {
 }
 
 module.exports = {
+  closeProviderBrowser,
+  retireProviderAdminSession,
   createIdentity,
   directRebind,
   rebindThroughConsole,

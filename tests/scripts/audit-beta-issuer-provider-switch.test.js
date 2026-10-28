@@ -504,3 +504,29 @@ test('restoration permits only the exact newly-created non-exportable key record
  assert.equal(restoredConfigurationEvidence(original,after,[]).ok,false);
  for(const mutate of [c=>c.default_service_id='other',c=>c.services.push({id:'leaked-provider'}),c=>c.key_reference_purposes['managed-openbao-transit'].existing=['other'],c=>c.key_reference_purposes['managed-openbao-transit'].unexpected=['vc_jwt_issuer']]) {const changed=structuredClone(after);mutate(changed);assert.equal(restoredConfigurationEvidence(original,changed,['created']).ok,false);}
 });
+
+
+test('D02 admin retirement reuses actual server denial and private custody before reporting closure',async t=>{
+ const {retireProviderAdminSession}=require('./audit-beta-issuer-provider-switch');
+ const {createCanvasCaptureCustody}=require('./run-canvas-oss-standard-contract');
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),'d02-session-source-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+ const cookies=[{name:'session',value:'SOURCE_ONLY_COOKIE'}];let logout=false;
+ const context={cookies:async()=>cookies,request:{post:async(url,opts)=>{assert.equal(url,'https://beta.elevenidllc.com/v1/auth/logout');assert.equal(opts.maxRedirects,0);logout=true;return {status:()=>302};},get:async(url,opts)=>{assert(logout);assert.equal(opts.headers.Cookie,'session=SOURCE_ONLY_COOKIE');return {status:()=>200,json:async()=>({authenticated:false,user:null})};}}};
+ const proof=await retireProviderAdminSession(context,createCanvasCaptureCustody('d02-source-11111111',root));
+ assert.equal(proof.authenticatedSessionCreated,true);assert.equal(proof.oldCookieAuthenticated,false);assert.equal(proof.privateCookieRetired,true);assert.equal(JSON.parse(fs.readFileSync(path.join(root,'d02-source-11111111.custody.json'))).state,'RETIRED');assert(!fs.existsSync(path.join(root,'d02-source-11111111-betaAdminSession.json')));
+});
+test('D02 context close or unsuccessful old-cookie denial cannot fabricate session retirement',async t=>{
+ const {retireProviderAdminSession}=require('./audit-beta-issuer-provider-switch');
+ const {createCanvasCaptureCustody}=require('./run-canvas-oss-standard-contract');
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),'d02-session-denied-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+ const context={cookies:async()=>[{name:'session',value:'SOURCE_ONLY_COOKIE'}],request:{post:async()=>({status:()=>302}),get:async()=>({status:()=>200,json:async()=>({authenticated:true,user:{id:'SOURCE_ONLY'}})})}};
+ await assert.rejects(retireProviderAdminSession(context,createCanvasCaptureCustody('d02-source-22222222',root)));assert(fs.existsSync(path.join(root,'d02-source-22222222-betaAdminSession.json')));assert.equal(JSON.parse(fs.readFileSync(path.join(root,'d02-source-22222222.custody.json'))).state,'OPEN');
+ const absent=await retireProviderAdminSession({cookies:async()=>[]},{retire:()=>true});assert.equal(absent.authenticatedSessionCreated,false);assert.equal(absent.oldCookieAuthenticated,null);
+});
+
+test('D02 setup-failure browser cleanup still retires the server session and always attempts context close',async()=>{
+ const {closeProviderBrowser}=require('./audit-beta-issuer-provider-switch');let closed=0,retained=0;
+ const context={cookies:async()=>[{name:'session',value:'SOURCE_ONLY_COOKIE'}],close:async()=>{closed++;},request:{post:async()=>({status:()=>302}),get:async()=>({status:()=>200,json:async()=>({authenticated:false,user:null})})}};
+ const report={};await closeProviderBrowser(context,{retain(){retained++;},retire:()=>true},report);assert.equal(retained,1);assert.equal(closed,1);assert.equal(report.adminSessionRetirement.oldCookieAuthenticated,false);assert.equal(report.adminSessionRetirement.contextClosed,true);
+ const failed={};context.request.get=async()=>({status:()=>200,json:async()=>({authenticated:true,user:{}})});await assert.rejects(closeProviderBrowser(context,{retain(){},retire:()=>true},failed));assert.equal(closed,2);assert.equal(failed.adminSessionRetirement,undefined);
+});
