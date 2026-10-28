@@ -40,6 +40,40 @@ fn digest(bytes: &[u8]) -> String {
 fn name(value: &str) -> Result<CString> {
     CString::new(value).map_err(|_| REFUSED.into())
 }
+fn procfs(path: &str) -> Result<File> {
+    let directory = File::open(path).map_err(|_| REFUSED)?;
+    let mut info: libc::statfs = unsafe { std::mem::zeroed() };
+    require(
+        unsafe { libc::fstatfs(directory.as_raw_fd(), &mut info) } == 0
+            && info.f_type as i64 == 0x9fa0,
+    )?;
+    Ok(directory)
+}
+fn mount_id(file: &File) -> Result<u64> {
+    let proc = procfs("/proc/self/fdinfo")?;
+    let entry = name(&file.as_raw_fd().to_string())?;
+    let fd = unsafe {
+        libc::openat(
+            proc.as_raw_fd(),
+            entry.as_ptr(),
+            libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+        )
+    };
+    require(fd >= 0)?;
+    let mut bytes = Vec::new();
+    unsafe { File::from_raw_fd(fd) }
+        .take(4097)
+        .read_to_end(&mut bytes)
+        .map_err(|_| REFUSED)?;
+    require(bytes.len() <= 4096)?;
+    let text = std::str::from_utf8(&bytes).map_err(|_| REFUSED)?;
+    let mut ids = text.lines().filter_map(|line| line.strip_prefix("mnt_id:"));
+    let raw = ids.next().ok_or(REFUSED)?.trim_ascii();
+    require(ids.next().is_none() && !raw.is_empty() && raw.bytes().all(|b| b.is_ascii_digit()))?;
+    let id = raw.parse::<u64>().map_err(|_| REFUSED)?;
+    require(id != 0)?;
+    Ok(id)
+}
 fn open_at(parent: &File, entry: &str, flags: i32, mode: u32) -> Result<Option<File>> {
     let entry = name(entry)?;
     let fd = unsafe {
@@ -83,10 +117,29 @@ fn mkdir_at(parent: &File, entry: &str) -> Result<bool> {
     }
 }
 fn read_record(parent: &File, entry: &str, limit: usize) -> Result<Option<Vec<u8>>> {
-    let Some(file) = open_at(parent, entry, libc::O_RDONLY, 0)? else {
+    let Some(held) = open_at(parent, entry, libc::O_PATH, 0)? else {
         return Ok(None);
     };
+    private(&held, false)?;
+    require(mount_id(parent)? == mount_id(&held)?)?;
+    // Reopen the verified inode through its descriptor. Opening the directory
+    // entry for reading first could itself operate on a substituted device.
+    let proc = procfs("/proc/self/fd")?;
+    let proc_path = name(&held.as_raw_fd().to_string())?;
+    let fd = unsafe {
+        libc::openat(
+            proc.as_raw_fd(),
+            proc_path.as_ptr(),
+            libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NONBLOCK,
+        )
+    };
+    require(fd >= 0)?;
+    let file = unsafe { File::from_raw_fd(fd) };
     private(&file, false)?;
+    let before = held.metadata().map_err(|_| REFUSED)?;
+    let after = file.metadata().map_err(|_| REFUSED)?;
+    require(before.dev() == after.dev() && before.ino() == after.ino())?;
+    require(mount_id(&held)? == mount_id(&file)?)?;
     let mut bytes = Vec::new();
     file.take((limit + 1) as u64)
         .read_to_end(&mut bytes)
@@ -192,6 +245,7 @@ impl PurgeLedger {
         let directory =
             open_at(parent, &entry, libc::O_RDONLY | libc::O_DIRECTORY, 0)?.ok_or(REFUSED)?;
         private(&directory, true)?;
+        require(mount_id(parent)? == mount_id(&directory)?)?;
         lock(&directory)?;
         Ok(directory)
     }
@@ -207,6 +261,7 @@ impl PurgeLedger {
         )?
         .ok_or(REFUSED)?;
         private(&quarantine, true)?;
+        require(mount_id(directory)? == mount_id(&quarantine)?)?;
         Ok(quarantine)
     }
     fn verify_manifest(&self) -> Result<Vec<u8>> {
@@ -221,6 +276,8 @@ impl PurgeLedger {
         let held = self.directory.metadata().map_err(|_| REFUSED)?;
         let observed = current.metadata().map_err(|_| REFUSED)?;
         require(held.dev() == observed.dev() && held.ino() == observed.ino())?;
+        require(mount_id(&self.parent)? == mount_id(&self.directory)?)?;
+        require(mount_id(&self.directory)? == mount_id(&current)?)?;
         let bytes = read_record(&self.directory, "manifest.json", MAX_MANIFEST)?.ok_or(REFUSED)?;
         require(digest(&bytes) == self.plan_sha256)?;
         Ok(bytes)
@@ -291,6 +348,8 @@ impl PurgeLedger {
         let held = self.quarantine.metadata().map_err(|_| REFUSED)?;
         let observed = current.metadata().map_err(|_| REFUSED)?;
         require(held.dev() == observed.dev() && held.ino() == observed.ino())?;
+        require(mount_id(&self.directory)? == mount_id(&self.quarantine)?)?;
+        require(mount_id(&self.quarantine)? == mount_id(&current)?)?;
         Ok(&self.quarantine)
     }
     pub(crate) fn installation_id(&self) -> uuid::Uuid {
@@ -483,6 +542,17 @@ mod tests {
         symlink(&outside, path.join("manifest.json")).unwrap();
         assert!(PurgeLedger::open_existing(&parent, id, &hash).is_err());
         assert_eq!(fs::read(&outside).unwrap(), b"outside-canary");
+    }
+    #[test]
+    fn fifo_manifest_is_refused_before_opening_for_read() {
+        let (root, parent, id, plan, hash) = fixture();
+        let ledger = PurgeLedger::create_or_resume(&parent, id, &plan, &hash).unwrap();
+        drop(ledger);
+        let path = root.path().join(directory_name(id)).join("manifest.json");
+        fs::remove_file(&path).unwrap();
+        let name = CString::new(path.as_os_str().as_encoded_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+        assert!(PurgeLedger::open_existing(&parent, id, &hash).is_err());
     }
     #[test]
     fn orphaned_temp_file_cannot_make_first_intent_a_retry() {
