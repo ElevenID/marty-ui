@@ -13,7 +13,6 @@ import os
 from pathlib import Path, PurePosixPath
 import shutil
 import subprocess
-import tarfile
 
 import scoped_native_build as build
 from scoped_native_runtime import ref, require
@@ -53,39 +52,43 @@ def export(repo: Path, revision: str, destination: Path) -> dict:
         expected[name] = (oid.decode(), int(mode, 8))
     require(expected and not destination.exists(), "SOURCE_EXPORT_TARGET_EXISTS_OR_EMPTY")
     destination.mkdir()
-    process = subprocess.Popen(["git", "-C", str(repo), "archive", "--format=tar", revision],
-                               stdout=subprocess.PIPE)
-    seen = set()
-    assert process.stdout is not None
-    try:
-        with tarfile.open(fileobj=process.stdout, mode="r|") as archive:
-            for member in archive:
-                relative = safe_member(member.name, member.type)
-                path = destination / relative
-                if member.isdir():
-                    path.mkdir(parents=True, exist_ok=True)
-                    continue
-                require(member.name in expected and member.name not in seen,
-                        "SOURCE_ARCHIVE_UNEXPECTED_OR_DUPLICATE_FILE")
-                seen.add(member.name)
-                path.parent.mkdir(parents=True, exist_ok=True)
-                content = archive.extractfile(member)
-                require(content is not None, "SOURCE_ARCHIVE_FILE_UNREADABLE")
-                with path.open("xb") as output:
-                    for block in iter(lambda: content.read(4 * 1024 * 1024), b""):
-                        output.write(block)
-                os.chmod(path, 0o755 if expected[member.name][1] == 0o100755 else 0o644)
-    finally:
-        process.stdout.close()
-    require(process.wait() == 0 and seen == set(expected), "SOURCE_ARCHIVE_INCOMPLETE")
+    # Git for Windows applies checkout CRLF filters to `git archive`, so an
+    # archive is not necessarily byte-identical to its tracked Git blobs.
+    # Stream exact objects through one cat-file process without a checkout.
+    process = subprocess.Popen(["git", "-C", str(repo), "cat-file", "--batch"],
+                               stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+    assert process.stdin is not None and process.stdout is not None
     rows = []
-    for name, (oid, _) in sorted(expected.items()):
-        path = destination / Path(*PurePosixPath(name).parts)
-        raw = path.read_bytes()
-        actual_oid = hashlib.sha1(b"blob " + str(len(raw)).encode() + b"\0" + raw).hexdigest()
-        require(actual_oid == oid and not path.is_symlink(), "SOURCE_EXPORT_BLOB_CHANGED")
-        rows.append({"path": name, "bytes": len(raw),
-                     "sha256": hashlib.sha256(raw).hexdigest()})
+    try:
+        for name, (oid, mode) in sorted(expected.items()):
+            relative = safe_member(name, b"0")
+            process.stdin.write((oid + "\n").encode())
+            process.stdin.flush()
+            header = process.stdout.readline().split()
+            require(len(header) == 3 and header[0].decode() == oid
+                    and header[1] == b"blob" and header[2].isdigit(),
+                    "SOURCE_OBJECT_HEADER_CHANGED")
+            remaining = int(header[2])
+            digest = hashlib.sha1(b"blob " + str(remaining).encode() + b"\0")
+            sha256 = hashlib.sha256()
+            path = destination / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("xb") as output:
+                while remaining:
+                    block = process.stdout.read(min(remaining, 4 * 1024 * 1024))
+                    require(block, "SOURCE_OBJECT_TRUNCATED")
+                    output.write(block)
+                    digest.update(block)
+                    sha256.update(block)
+                    remaining -= len(block)
+            require(process.stdout.read(1) == b"\n" and digest.hexdigest() == oid,
+                    "SOURCE_EXPORT_BLOB_CHANGED")
+            os.chmod(path, 0o755 if mode == 0o100755 else 0o644)
+            rows.append({"path": name, "bytes": int(header[2]), "sha256": sha256.hexdigest()})
+    finally:
+        process.stdin.close()
+        process.stdout.close()
+    require(process.wait() == 0 and len(rows) == len(expected), "SOURCE_OBJECT_STREAM_INCOMPLETE")
     inventory = destination.parent / (destination.name + "-inventory.json")
     with inventory.open("x", encoding="utf-8") as output:
         json.dump(rows, output, separators=(",", ":"))

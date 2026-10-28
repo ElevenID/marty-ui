@@ -1,5 +1,7 @@
 """Source-only controls for the frozen all-service KMS build profile."""
 import importlib
+import subprocess
+import tempfile
 from pathlib import Path
 import sys
 from types import SimpleNamespace
@@ -112,6 +114,24 @@ class OfficialNativeBuildTests(unittest.TestCase):
                 prepare.safe_member(path, kind)
         self.assertEqual(prepare.safe_member("nested/source.rs", b"0"),
                          Path("nested/source.rs"))
+
+    def test_export_preserves_exact_git_blob_bytes_under_text_filters(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "repo"
+            repo.mkdir()
+            subprocess.run(["git", "-C", str(repo), "init", "-q"], check=True)
+            subprocess.run(["git", "-C", str(repo), "config", "user.email", "test@example.invalid"], check=True)
+            subprocess.run(["git", "-C", str(repo), "config", "user.name", "Test"], check=True)
+            (repo / ".gitattributes").write_bytes(b"* text eol=crlf\n")
+            (repo / "source.txt").write_bytes(b"line one\nline two\n")
+            subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+            subprocess.run(["git", "-C", str(repo), "commit", "-qm", "fixture"], check=True)
+            revision = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"], text=True).strip()
+            destination = Path(tmp) / "export"
+            receipt = prepare.export(repo, revision, destination)
+            blob = subprocess.check_output(["git", "-C", str(repo), "show", revision + ":source.txt"])
+            self.assertEqual((destination / "source.txt").read_bytes(), blob)
+            self.assertEqual(receipt["fileCount"], 2)
 
 
 if __name__ == "__main__":
