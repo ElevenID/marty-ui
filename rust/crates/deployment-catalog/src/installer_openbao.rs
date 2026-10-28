@@ -946,11 +946,23 @@ pub fn start_openbao(
                 role,
                 ContainerPhase::ExitedSuccessfully,
             )?;
+            let completion_bytes =
+                serde_json::to_vec(&json!({"role":role,"container_id":container,"exit_code":0}))
+                    .map_err(|_| "cannot encode OpenBao completion")?;
             exclusive(
                 &installation.join(format!("openbao-completed-{role}.json")),
-                &serde_json::to_vec(&json!({"role":role,"container_id":container,"exit_code":0}))
-                    .map_err(|_| "cannot encode OpenBao completion")?,
+                &completion_bytes,
             )?;
+            if role == "openbao-tls-init" {
+                state.persist_openbao_owner_transition_receipt(
+                    installation,
+                    &binding.engine_id,
+                    plugin_image,
+                    &created.image_id,
+                    container,
+                    &completion_bytes,
+                )?;
+            }
         } else {
             observe_role(
                 &docker,

@@ -4,7 +4,7 @@
 #![cfg(target_os = "linux")]
 
 use crate::installer_purge_host::{HostIdentity, Kind};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{
     ffi::CString,
     fs::File,
@@ -20,8 +20,10 @@ pub(crate) const RECEIPT: &str = "installation-created-identity.json";
 pub(crate) const CREDENTIAL_RECEIPT: &str = "credential-created-identity.json";
 pub(crate) const APPLICATION_RECEIPT: &str = "application-storage-created-identity.json";
 pub(crate) const OPENBAO_STATE_RECEIPT: &str = "openbao-state-created-identity.json";
+pub(crate) const OPENBAO_OWNER_TRANSITION_RECEIPT: &str = "openbao-state-owner-transition.json";
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct ObservedDirectory {
     pub identity: HostIdentity,
     pub mount_id: u64,
@@ -391,6 +393,15 @@ impl NewApplicationStorage {
 
 /// The OpenBao state root is created separately, before its environment file
 /// or any Compose operation. Never reconstruct this chain on resume.
+pub(crate) struct OpenBaoTransitionChain<'a> {
+    pub initial_receipt: &'a [u8],
+    pub credential_receipt: &'a [u8],
+    pub state_receipt: &'a [u8],
+    pub root: &'a ObservedDirectory,
+    pub evidence: &'a ObservedDirectory,
+    pub state: &'a ObservedDirectory,
+}
+
 #[derive(Clone)]
 pub(crate) struct NewOpenBaoState {
     root: ObservedDirectory,
@@ -398,6 +409,7 @@ pub(crate) struct NewOpenBaoState {
     initial_receipt: Option<Vec<u8>>,
     credential_receipt: Option<Vec<u8>>,
     state: Option<ObservedDirectory>,
+    state_receipt: Option<Vec<u8>>,
 }
 
 impl NewOpenBaoState {
@@ -408,6 +420,7 @@ impl NewOpenBaoState {
             initial_receipt: None,
             credential_receipt: None,
             state: None,
+            state_receipt: None,
         })
     }
 
@@ -447,6 +460,26 @@ impl NewOpenBaoState {
             self.initial_receipt.as_deref().ok_or(REFUSED)?,
             self.credential_receipt.as_deref().ok_or(REFUSED)?,
         ))
+    }
+
+    pub fn remember_state_receipt(&mut self, bytes: &[u8]) -> Result<(), String> {
+        if self.state.is_none() || self.state_receipt.is_some() || bytes.is_empty() {
+            return Err(REFUSED.into());
+        }
+        self.state_receipt = Some(bytes.to_vec());
+        Ok(())
+    }
+
+    pub fn transition_chain(&self) -> Result<OpenBaoTransitionChain<'_>, String> {
+        let (initial, credential) = self.prior_receipts()?;
+        Ok(OpenBaoTransitionChain {
+            initial_receipt: initial,
+            credential_receipt: credential,
+            state_receipt: self.state_receipt.as_deref().ok_or(REFUSED)?,
+            root: &self.root,
+            evidence: self.evidence.as_ref().ok_or(REFUSED)?,
+            state: self.state.as_ref().ok_or(REFUSED)?,
+        })
     }
 
     pub fn capture_state(&mut self, state: &File) -> Result<(), String> {
@@ -682,6 +715,145 @@ mod tests {
         assert!(state
             .persist_openbao_state_creation_receipt(&installation)
             .is_err());
+    }
+
+    #[test]
+    fn tls_completion_records_owner_metadata_and_refuses_retry() {
+        let (_parent, installation, mut state) = openbao_setup();
+        state
+            .persist_openbao_state_creation_receipt(&installation)
+            .unwrap();
+        let container = "c".repeat(64);
+        let completion = serde_json::to_vec(&serde_json::json!({
+            "role":"openbao-tls-init", "container_id":container, "exit_code":0
+        }))
+        .unwrap();
+        let completed = installation.join("openbao-completed-openbao-tls-init.json");
+        fs::write(&completed, &completion).unwrap();
+        fs::set_permissions(&completed, fs::Permissions::from_mode(0o600)).unwrap();
+        let image = format!(
+            "ghcr.io/elevenid/marty-ui-oss/openbao-didcomm@sha256:{}",
+            "b".repeat(64)
+        );
+        let image_id = format!("sha256:{}", "d".repeat(64));
+        state
+            .persist_openbao_owner_transition_receipt(
+                &installation,
+                "synthetic-engine",
+                &image,
+                &image_id,
+                &container,
+                &completion,
+            )
+            .unwrap();
+        let path = installation
+            .join("evidence")
+            .join(OPENBAO_OWNER_TRANSITION_RECEIPT);
+        let receipt: serde_json::Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+        assert_eq!(receipt["deletion_authorized"], false);
+        assert_eq!(
+            receipt["openbao_state_before"],
+            receipt["openbao_state_after"]
+        );
+        assert!(state
+            .persist_openbao_owner_transition_receipt(
+                &installation,
+                "synthetic-engine",
+                &image,
+                &image_id,
+                &container,
+                &completion,
+            )
+            .is_err());
+    }
+
+    #[test]
+    fn wrong_engine_or_interrupted_tls_completion_cannot_mint_transition() {
+        let (_parent, installation, mut state) = openbao_setup();
+        state
+            .persist_openbao_state_creation_receipt(&installation)
+            .unwrap();
+        let container = "c".repeat(64);
+        let completion = serde_json::to_vec(&serde_json::json!({
+            "role":"openbao-tls-init", "container_id":container, "exit_code":0
+        }))
+        .unwrap();
+        let image = format!(
+            "ghcr.io/elevenid/marty-ui-oss/openbao-didcomm@sha256:{}",
+            "b".repeat(64)
+        );
+        let image_id = format!("sha256:{}", "d".repeat(64));
+        assert!(state
+            .persist_openbao_owner_transition_receipt(
+                &installation,
+                "foreign-engine",
+                &image,
+                &image_id,
+                &container,
+                &completion,
+            )
+            .is_err());
+        assert!(!installation
+            .join("evidence")
+            .join(OPENBAO_OWNER_TRANSITION_RECEIPT)
+            .exists());
+        let (_parent, installation, mut state) = openbao_setup();
+        state
+            .persist_openbao_state_creation_receipt(&installation)
+            .unwrap();
+        assert!(state
+            .persist_openbao_owner_transition_receipt(
+                &installation,
+                "synthetic-engine",
+                &image,
+                &image_id,
+                &container,
+                &completion,
+            )
+            .is_err());
+        assert!(!installation
+            .join("evidence")
+            .join(OPENBAO_OWNER_TRANSITION_RECEIPT)
+            .exists());
+    }
+
+    #[test]
+    fn changed_prior_receipt_blocks_owner_transition() {
+        let (_parent, installation, mut state) = openbao_setup();
+        state
+            .persist_openbao_state_creation_receipt(&installation)
+            .unwrap();
+        let container = "c".repeat(64);
+        let completion = serde_json::to_vec(&serde_json::json!({
+            "role":"openbao-tls-init", "container_id":container, "exit_code":0
+        }))
+        .unwrap();
+        let completed = installation.join("openbao-completed-openbao-tls-init.json");
+        fs::write(&completed, &completion).unwrap();
+        fs::set_permissions(&completed, fs::Permissions::from_mode(0o600)).unwrap();
+        let receipt = installation.join("evidence").join(OPENBAO_STATE_RECEIPT);
+        let mut bytes = fs::read(&receipt).unwrap();
+        bytes.push(b' ');
+        fs::write(&receipt, bytes).unwrap();
+        let image = format!(
+            "ghcr.io/elevenid/marty-ui-oss/openbao-didcomm@sha256:{}",
+            "b".repeat(64)
+        );
+        let image_id = format!("sha256:{}", "d".repeat(64));
+        assert!(state
+            .persist_openbao_owner_transition_receipt(
+                &installation,
+                "synthetic-engine",
+                &image,
+                &image_id,
+                &container,
+                &completion,
+            )
+            .is_err());
+        assert!(!installation
+            .join("evidence")
+            .join(OPENBAO_OWNER_TRANSITION_RECEIPT)
+            .exists());
     }
 
     #[test]
