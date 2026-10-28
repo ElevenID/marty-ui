@@ -4,7 +4,8 @@
 #![cfg(target_os = "linux")]
 
 use crate::installer_creation_identity::{
-    NewCredentials, NewInstallation, CREDENTIAL_RECEIPT, RECEIPT as CREATION_RECEIPT,
+    ApplicationHandles, NewApplicationStorage, NewCredentials, NewInstallation,
+    APPLICATION_RECEIPT, CREDENTIAL_RECEIPT, RECEIPT as CREATION_RECEIPT,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -1093,6 +1094,8 @@ pub struct InstallerState {
     creation: Option<NewInstallation>,
     /// Captured only while this fresh normal installer owns the creation chain.
     credential_creation: Option<NewCredentials>,
+    /// Four application roots can be recorded only by their original writer.
+    application_creation: Option<NewApplicationStorage>,
 }
 impl InstallerState {
     /// Borrow the writer's lock for diagnostics without reacquiring or unlocking it.
@@ -1271,6 +1274,9 @@ impl InstallerState {
             if let Some(creation) = &mut self.credential_creation {
                 creation.capture_evidence(&child)?;
             }
+            if let Some(creation) = &mut self.application_creation {
+                creation.capture_evidence(&child)?;
+            }
         }
         self.poisoned = false;
         Ok(())
@@ -1353,6 +1359,12 @@ impl InstallerState {
         if confirmed.is_err() {
             self.poisoned = true;
             return Err("creation identity receipt cannot be confirmed".into());
+        }
+        if let Some(application_creation) = &mut self.application_creation {
+            if let Err(error) = application_creation.remember_initial_receipt(&bytes) {
+                self.poisoned = true;
+                return Err(error);
+            }
         }
         if let Some(credential_creation) = &mut self.credential_creation {
             if let Err(error) = credential_creation.remember_initial_receipt(bytes) {
@@ -1585,6 +1597,12 @@ impl InstallerState {
             self.poisoned = true;
             return Err("credential identity receipt cannot be confirmed".into());
         }
+        if let Some(application_creation) = &mut self.application_creation {
+            if let Err(error) = application_creation.remember_credential_receipt(&bytes) {
+                self.poisoned = true;
+                return Err(error);
+            }
+        }
         self.credential_creation = None;
         Ok(())
     }
@@ -1619,9 +1637,9 @@ impl InstallerState {
         for entry in ["postgres", "redis", "applicant"] {
             make(&state, entry)?;
         }
-        for entry in ["backups", "openbao-exports", "openbao-snapshot-identity"] {
-            make(&self.directory, entry)?;
-        }
+        let backups = make(&self.directory, "backups")?;
+        let exports = make(&self.directory, "openbao-exports")?;
+        let snapshot_identity = make(&self.directory, "openbao-snapshot-identity")?;
         for entry in crate::installer_application_env::OPTIONAL_EMPTY_SECRETS {
             let file = open_at(
                 &secrets,
@@ -1639,7 +1657,104 @@ impl InstallerState {
         secrets
             .sync_all()
             .map_err(|_| "persist application placeholders")?;
+        if let Some(creation) = &mut self.application_creation {
+            creation.capture(&state, &backups, &exports, &snapshot_identity)?;
+        }
         self.poisoned = false;
+        Ok(())
+    }
+
+    /// Publish only the four fixed application-root creation identities.
+    /// Prior local receipts are compared byte-for-byte; no path is adopted on
+    /// resume, and this receipt grants no deletion authority.
+    pub(crate) fn persist_application_storage_creation_receipt(
+        &mut self,
+        installation: &Path,
+    ) -> Result<()> {
+        self.require_live_phase(Phase::Provisioning)?;
+        let creation = match self.application_creation.as_ref() {
+            Some(creation) => creation.clone(),
+            None if !matches!(self.journal.execution_scope(), ExecutionScope::Unclassified) => {
+                return Ok(());
+            }
+            None => return Err("application root creation identity is unavailable".into()),
+        };
+        let prepared = (|| {
+            let (initial, credentials) = creation.prior_receipts()?;
+            self.with_inspection(|view| {
+                view.require_path_binding(installation)?;
+                if view.read_evidence(CREATION_RECEIPT)? != initial
+                    || view.read_evidence(CREDENTIAL_RECEIPT)? != credentials
+                {
+                    return Err("prior creation identity receipt changed".into());
+                }
+                Ok(())
+            })?;
+            let open = |entry: &str| open_at(&self.directory, &name(entry), libc::O_PATH, 0);
+            let evidence = open("evidence")?;
+            let state = open("state")?;
+            let backups = open("backups")?;
+            let exports = open("openbao-exports")?;
+            let snapshot_identity = open("openbao-snapshot-identity")?;
+            for directory in [&evidence, &state, &backups, &exports, &snapshot_identity] {
+                private(directory, true)?;
+            }
+            creation.receipt_bytes(
+                self.journal.installation_id(),
+                &self.journal.identity().source_sha,
+                ApplicationHandles {
+                    root: &self.directory,
+                    evidence: &evidence,
+                    state: &state,
+                    backups: &backups,
+                    exports: &exports,
+                    snapshot_identity: &snapshot_identity,
+                },
+            )
+        })();
+        let bytes = match prepared {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                self.poisoned = true;
+                return Err(error);
+            }
+        };
+        self.write_evidence(APPLICATION_RECEIPT, &bytes)?;
+        let confirmed = (|| {
+            let open = |entry: &str| open_at(&self.directory, &name(entry), libc::O_PATH, 0);
+            let evidence = open("evidence")?;
+            let state = open("state")?;
+            let backups = open("backups")?;
+            let exports = open("openbao-exports")?;
+            let snapshot_identity = open("openbao-snapshot-identity")?;
+            if creation.receipt_bytes(
+                self.journal.installation_id(),
+                &self.journal.identity().source_sha,
+                ApplicationHandles {
+                    root: &self.directory,
+                    evidence: &evidence,
+                    state: &state,
+                    backups: &backups,
+                    exports: &exports,
+                    snapshot_identity: &snapshot_identity,
+                },
+            )? != bytes
+            {
+                return Err("application root identity changed after receipt write".into());
+            }
+            self.with_inspection(|view| {
+                view.require_path_binding(installation)?;
+                if view.read_evidence(APPLICATION_RECEIPT)? != bytes {
+                    return Err("application root receipt changed".into());
+                }
+                Ok(())
+            })
+        })();
+        if confirmed.is_err() {
+            self.poisoned = true;
+            return Err("application root identity receipt cannot be confirmed".into());
+        }
+        self.application_creation = None;
         Ok(())
     }
 
@@ -1799,6 +1914,11 @@ impl InstallerState {
         } else {
             None
         };
+        let application_creation = if creation.is_some() {
+            Some(NewApplicationStorage::new(&directory)?)
+        } else {
+            None
+        };
         let journal = Journal {
             schema: SCHEMA.into(),
             installation_id,
@@ -1814,6 +1934,7 @@ impl InstallerState {
             poisoned: false,
             creation,
             credential_creation,
+            application_creation,
         };
         state.persist(&journal)?;
         Ok(state)
@@ -1848,6 +1969,7 @@ impl InstallerState {
             poisoned: false,
             creation: None,
             credential_creation: None,
+            application_creation: None,
         })
     }
     pub fn journal(&self) -> &Journal {
