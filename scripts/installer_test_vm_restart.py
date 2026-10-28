@@ -30,6 +30,7 @@ from installer_candidate_vm_launch_evidence import bind_provisioned_launch
 from installer_candidate_vm_runtime import _identity, _named_disk, _same_path
 from installer_candidate_vm_seed import _cloud_config, _private_key, _public_key
 from installer_candidate_vm_policy import GUEST_USER
+from installer_host_probe import command
 import installer_candidate_vm_launch as launcher
 import installer_release as release
 
