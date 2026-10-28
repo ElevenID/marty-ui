@@ -21,6 +21,7 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
+use uuid::{Variant, Version};
 type Result<T> = std::result::Result<T, String>;
 const REFUSED: &str =
     "Application startup refused; preserve owned resources and installation evidence for recovery";
@@ -76,15 +77,27 @@ fn object_output(output: &str) -> Result<Value> {
     require(array.len() == 1 && array[0].is_object())?;
     Ok(array[0].clone())
 }
-/// Capture the immutable creation evidence available for a Docker volume.
-/// Docker does not expose a volume ID, so later removal must also recheck the
-/// exact engine, name, timestamp and complete label map before mutation.
+/// Capture creation-time identity evidence available for a Docker volume.
+/// Docker does not expose an immutable volume ID, so later removal must also
+/// recheck the exact engine, name, timestamp and complete label map.
 fn volume_creation_evidence(
     observed: &Value,
     installation_id: &str,
     engine_id: &str,
     name: &str,
 ) -> Result<Value> {
+    let owner = uuid::Uuid::parse_str(installation_id).map_err(|_| REFUSED)?;
+    let project = format!("marty-install-{}", owner.simple());
+    require(
+        owner.get_version() == Some(Version::Random)
+            && owner.get_variant() == Variant::RFC4122
+            && name == format!("{project}_redis-socket")
+            && !engine_id.is_empty()
+            && engine_id.len() <= 128
+            && engine_id
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b":._-".contains(&b)),
+    )?;
     let created_at = text(&observed["CreatedAt"])?;
     let labels = observed["Labels"].as_object().ok_or(REFUSED)?;
     require(
@@ -95,6 +108,8 @@ fn volume_creation_evidence(
             && created_at.len() <= 64
             && DateTime::parse_from_rfc3339(created_at).is_ok()
             && (2..=8).contains(&labels.len())
+            && labels.get("com.docker.compose.project") == Some(&json!(project))
+            && labels.get("com.docker.compose.volume") == Some(&json!("redis-socket"))
             && labels.iter().all(|(key, value)| {
                 !key.is_empty()
                     && key.len() <= 128
@@ -602,21 +617,24 @@ mod tests {
     }
     #[test]
     fn volume_creation_evidence_binds_full_identity_without_host_mountpoint() {
-        let name = "marty-install-owned_redis-socket";
+        let installation_id = "12345678-1234-4234-8234-123456789abc";
+        let project = "marty-install-12345678123442348234123456789abc";
+        let name = format!("{project}_redis-socket");
         let observed = json!({
-            "Name": name,
+            "Name": &name,
             "Driver": "local",
             "Scope": "local",
             "CreatedAt": "2026-10-27T12:30:00Z",
             "Options": null,
             "Mountpoint": "/var/lib/docker/volumes/private-data/_data",
             "Labels": {
-                "com.docker.compose.project": "marty-install-owned",
+                "com.docker.compose.project": project,
                 "com.docker.compose.volume": "redis-socket",
                 "com.docker.compose.version": "2.39.0"
             }
         });
-        let receipt = volume_creation_evidence(&observed, "installation", "engine", name).unwrap();
+        let receipt =
+            volume_creation_evidence(&observed, installation_id, "engine", &name).unwrap();
         assert_eq!(receipt["created_at"], observed["CreatedAt"]);
         assert_eq!(receipt["labels"], observed["Labels"]);
         assert_eq!(receipt["engine_id"], "engine");
@@ -631,12 +649,17 @@ mod tests {
             let mut changed = observed.clone();
             changed[field] = value;
             assert!(
-                volume_creation_evidence(&changed, "installation", "engine", name).is_err(),
+                volume_creation_evidence(&changed, installation_id, "engine", &name).is_err(),
                 "{field}"
             );
         }
-        let mut changed = observed;
+        let mut changed = observed.clone();
         changed["Labels"]["com.docker.compose.version"] = json!("unsafe\nlabel");
-        assert!(volume_creation_evidence(&changed, "installation", "engine", name).is_err());
+        assert!(volume_creation_evidence(&changed, installation_id, "engine", &name).is_err());
+        let mut changed = observed.clone();
+        changed["Labels"]["com.docker.compose.project"] = json!("foreign");
+        assert!(volume_creation_evidence(&changed, installation_id, "engine", &name).is_err());
+        assert!(volume_creation_evidence(&observed, "not-a-uuid", "engine", &name).is_err());
+        assert!(volume_creation_evidence(&observed, installation_id, "bad engine", &name).is_err());
     }
 }
