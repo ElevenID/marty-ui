@@ -116,7 +116,7 @@ fn mkdir_at(parent: &File, entry: &str) -> Result<bool> {
         Err(REFUSED.into())
     }
 }
-fn read_record(parent: &File, entry: &str, limit: usize) -> Result<Option<Vec<u8>>> {
+fn read_record_once(parent: &File, entry: &str, limit: usize) -> Result<Option<(Vec<u8>, File)>> {
     let Some(held) = open_at(parent, entry, libc::O_PATH, 0)? else {
         return Ok(None);
     };
@@ -141,11 +141,38 @@ fn read_record(parent: &File, entry: &str, limit: usize) -> Result<Option<Vec<u8
     require(before.dev() == after.dev() && before.ino() == after.ino())?;
     require(mount_id(&held)? == mount_id(&file)?)?;
     let mut bytes = Vec::new();
-    file.take((limit + 1) as u64)
+    (&file)
+        .take((limit + 1) as u64)
         .read_to_end(&mut bytes)
         .map_err(|_| REFUSED)?;
     require(!bytes.is_empty() && bytes.len() <= limit)?;
-    Ok(Some(bytes))
+    Ok(Some((bytes, file)))
+}
+// A name visible after rename is not necessarily durable. Stabilize the
+// record inode and its containing directory, then reopen the exact name and
+// require the same inode and bytes before allowing a retry to trust it.
+fn read_record(parent: &File, entry: &str, limit: usize) -> Result<Option<Vec<u8>>> {
+    let first = read_record_once(parent, entry, limit)?;
+    if let Some((_, file)) = &first {
+        file.sync_all().map_err(|_| REFUSED)?;
+    }
+    parent.sync_all().map_err(|_| REFUSED)?;
+    let second = read_record_once(parent, entry, limit)?;
+    match (first, second) {
+        (None, None) => Ok(None),
+        (Some((before, held)), Some((after, current))) => {
+            let a = held.metadata().map_err(|_| REFUSED)?;
+            let b = current.metadata().map_err(|_| REFUSED)?;
+            require(
+                before == after
+                    && a.dev() == b.dev()
+                    && a.ino() == b.ino()
+                    && mount_id(&held)? == mount_id(&current)?,
+            )?;
+            Ok(Some(after))
+        }
+        _ => Err(REFUSED.into()),
+    }
 }
 /// Return true if this call created the record. Existing bytes must match
 /// exactly; a mismatch is never treated as a resumable transaction.
@@ -322,6 +349,12 @@ impl PurgeLedger {
         )
     }
     fn verify_manifest(&self) -> Result<Vec<u8>> {
+        // Existing ledger and quarantine names, and any tombstones under the
+        // latter, need durable publication before their absence or contents
+        // can participate in crash recovery.
+        self.parent.sync_all().map_err(|_| REFUSED)?;
+        self.directory.sync_all().map_err(|_| REFUSED)?;
+        self.quarantine.sync_all().map_err(|_| REFUSED)?;
         let current = open_at(
             &self.parent,
             &directory_name(self.installation_id),
@@ -598,6 +631,72 @@ mod tests {
         let plan = br#"{"schema":"synthetic-purge-plan","resources":1}"#.to_vec();
         let hash = digest(&plan);
         (root, parent, id, plan, hash)
+    }
+    #[test]
+    fn recovered_rename_is_stabilized_before_record_is_trusted() {
+        let (_root, parent, id, plan, hash) = fixture();
+        let ledger = PurgeLedger::create_or_resume(&parent, id, &plan, &hash).unwrap();
+        let identity = digest(b"interrupted-intent-identity");
+        let record = IntentRecord {
+            schema: "elevenid.installer-purge-intent/v1".into(),
+            installation_id: id,
+            plan_sha256: hash,
+            resource: ResourceKind::HostEntry,
+            identity_sha256: identity.clone(),
+            action: "remove".into(),
+        };
+        let bytes = serde_json::to_vec(&record).unwrap();
+        let name = format!("intent-{}.json", digest(&bytes));
+        let pending = format!(".tmp-{}", uuid::Uuid::new_v4().simple());
+        let mut file = open_at(
+            &ledger.directory,
+            &pending,
+            libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL,
+            0o600,
+        )
+        .unwrap()
+        .unwrap();
+        file.write_all(&bytes).unwrap();
+        file.sync_all().unwrap();
+        let source = CString::new(pending).unwrap();
+        let target = CString::new(name).unwrap();
+        assert_eq!(
+            unsafe {
+                libc::renameat(
+                    ledger.directory.as_raw_fd(),
+                    source.as_ptr(),
+                    ledger.directory.as_raw_fd(),
+                    target.as_ptr(),
+                )
+            },
+            0
+        );
+        // No directory sync followed rename. Recovery must supply that sync
+        // and rebind the record name before this can become a retry.
+        let retry = ledger
+            .record_intent(ResourceKind::HostEntry, &identity)
+            .unwrap();
+        assert!(retry.is_retry());
+    }
+    #[test]
+    fn recovered_record_refuses_when_containing_directory_cannot_sync() {
+        let (root, _parent, _id, _plan, _hash) = fixture();
+        let name = "intent-canary.json";
+        let path = root.path().join(name);
+        fs::write(&path, b"canary").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        let held = open_at(&File::open(root.path()).unwrap(), ".", libc::O_PATH, 0)
+            .unwrap()
+            .unwrap();
+        assert!(read_record(&held, name, MAX_RECORD).is_err());
+    }
+    #[test]
+    fn existing_ledger_refuses_when_ancestor_cannot_sync() {
+        let (root, parent, id, plan, hash) = fixture();
+        drop(PurgeLedger::create_or_resume(&parent, id, &plan, &hash).unwrap());
+        let held = open_at(&parent, ".", libc::O_PATH, 0).unwrap().unwrap();
+        assert!(PurgeLedger::open_existing(&held, id, &hash).is_err());
+        assert!(root.path().join(directory_name(id)).exists());
     }
     #[test]
     fn exact_manifest_intent_and_result_survive_resume() {
