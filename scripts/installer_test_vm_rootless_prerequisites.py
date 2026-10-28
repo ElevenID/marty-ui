@@ -41,7 +41,7 @@ def binary(name):
     try:
         s=os.lstat("/usr/bin/"+name)
     except FileNotFoundError:
-        return {"kind":"missing","root_owned":False,"not_writable":False,"setuid":False}
+        return {"kind":"not_observed_at_approved_path","root_owned":False,"not_writable":False,"setuid":False}
     except OSError:
         return {"kind":"unknown","root_owned":False,"not_writable":False,"setuid":False}
     k="regular" if stat.S_ISREG(s.st_mode) else "symlink" if stat.S_ISLNK(s.st_mode) else "other"
@@ -56,10 +56,20 @@ def fixed_bytes(path,limit):
                 return None
             r=os.open("/proc/self/fd/%d"%h,os.O_RDONLY|os.O_CLOEXEC)
             try:
-                data=os.read(r,limit+1)
+                chunks=[]
+                remaining=limit+1
+                while remaining:
+                    chunk=os.read(r,min(8192,remaining))
+                    if not chunk:break
+                    chunks.append(chunk)
+                    remaining-=len(chunk)
+                data=b"".join(chunks)
                 b=os.fstat(r)
                 n=os.stat(path,follow_symlinks=False)
-                if len(data)>limit or any(getattr(a,x)!=getattr(b,x) or getattr(a,x)!=getattr(n,x)
+                # procfs/sysfs regular pseudo-files report st_size=0 despite
+                # content. For nonzero-sized ordinary files require exact bytes;
+                # the bounded loop also confirms EOF for both kinds.
+                if len(data)>limit or (a.st_size>0 and len(data)!=a.st_size) or any(getattr(a,x)!=getattr(b,x) or getattr(a,x)!=getattr(n,x)
                     for x in ("st_dev","st_ino","st_uid","st_gid","st_mode","st_size","st_mtime_ns","st_ctime_ns")):
                     return None
                 return data
@@ -69,27 +79,31 @@ def fixed_bytes(path,limit):
         return None
 def subids(path,uid):
     data=fixed_bytes(path,65536)
-    if data is None:return {"status":"unknown","account_entries":0,"sufficient_65536":False}
+    if data is None:return {"status":"unknown","account_entries":0,"declared_contiguous_65536":False}
     try: lines=data.decode("ascii").splitlines()
-    except UnicodeError:return {"status":"unknown","account_entries":0,"sufficient_65536":False}
+    except UnicodeError:return {"status":"unknown","account_entries":0,"declared_contiguous_65536":False}
     found=[]
     for line in lines:
         pieces=line.split(":")
         if len(pieces)!=3:continue
         if pieces[0] not in ("installer",str(uid)):continue
         if not all(v.isdecimal() for v in pieces[1:]):
-            return {"status":"unknown","account_entries":0,"sufficient_65536":False}
+            return {"status":"unknown","account_entries":0,"declared_contiguous_65536":False}
         start,count=map(int,pieces[1:])
         if start<1 or count<1 or start+count>4294967296:
-            return {"status":"unknown","account_entries":0,"sufficient_65536":False}
+            return {"status":"unknown","account_entries":0,"declared_contiguous_65536":False}
         found.append((start,count))
+    # This observes a declared contiguous allocation only. It does not test
+    # mapping usability, overlap with other accounts, or a rootless daemon.
     return {"status":"observed","account_entries":min(len(found),65536),
-            "sufficient_65536":any(count>=65536 for _,count in found)}
+            "declared_contiguous_65536":any(count>=65536 for _,count in found)}
 def decimal(path):
     data=fixed_bytes(path,128)
     if data is None:return None
     value=data.strip()
-    return int(value) if value.isdecimal() and len(value)<20 else None
+    try: number=value.decode("ascii")
+    except UnicodeError:return None
+    return int(number) if number.isdecimal() and len(number)<20 else None
 def groups():
     actual=set(os.getgroups())|{os.getgid()}
     result={}
@@ -127,7 +141,7 @@ try:
            "mem_available_kib":available,
            "home_available_bytes":s.f_bavail*s.f_frsize,
            "home_total_bytes":s.f_blocks*s.f_frsize,
-           "daemon_started":False,"rootless_ready":False}
+           "daemon_start_attempted_by_probe":False,"rootless_ready":False}
     print(json.dumps(value,sort_keys=True,separators=(",",":")))
 except Exception:
     print("rootless prerequisite observation refused",file=sys.stderr)
@@ -147,15 +161,15 @@ def _decode_guest(raw: bytes, expected_uid: int) -> dict:
                            "sudo_policy_known", "binaries", "subuid", "subgid",
                            "userns_clone", "max_user_namespaces", "cgroup_v2_controllers",
                            "mem_available_kib", "home_available_bytes",
-                           "home_total_bytes", "daemon_started", "rootless_ready"},
+                           "home_total_bytes", "daemon_start_attempted_by_probe", "rootless_ready"},
                   "VM rootless guest observation")
     release.require(type(result["uid"]) is int and result["uid"] == expected_uid
                     and type(result["gid"]) is int and result["gid"] >= 0
                     and all(type(result[k]) is bool for k in
                             ("docker_group", "sudo_group", "sudo_policy_known",
-                             "daemon_started", "rootless_ready"))
+                             "daemon_start_attempted_by_probe", "rootless_ready"))
                     and result["sudo_policy_known"] is False
-                    and result["daemon_started"] is False
+                    and result["daemon_start_attempted_by_probe"] is False
                     and result["rootless_ready"] is False,
                     "VM rootless guest identity or authority differs")
     release.require(type(result["binaries"]) is dict
@@ -164,18 +178,18 @@ def _decode_guest(raw: bytes, expected_uid: int) -> dict:
     for value in result["binaries"].values():
         release.exact(value, {"kind", "root_owned", "not_writable", "setuid"},
                       "VM rootless binary observation")
-        release.require(value["kind"] in ("missing", "unknown", "regular", "symlink", "other")
+        release.require(value["kind"] in ("not_observed_at_approved_path", "unknown", "regular", "symlink", "other")
                         and all(type(value[k]) is bool for k in
                                 ("root_owned", "not_writable", "setuid")),
                         "VM rootless binary metadata invalid")
     for key in ("subuid", "subgid"):
         value = result[key]
-        release.exact(value, {"status", "account_entries", "sufficient_65536"},
+        release.exact(value, {"status", "account_entries", "declared_contiguous_65536"},
                       "VM rootless subordinate ID observation")
         release.require(value["status"] in ("unknown", "observed")
                         and type(value["account_entries"]) is int
                         and 0 <= value["account_entries"] <= 65536
-                        and type(value["sufficient_65536"]) is bool,
+                        and type(value["declared_contiguous_65536"]) is bool,
                         "VM rootless subordinate ID metadata invalid")
     for key in ("userns_clone", "max_user_namespaces", "mem_available_kib",
                 "home_available_bytes", "home_total_bytes"):
@@ -246,7 +260,7 @@ def observe(*, source: Path, registry: Path, runtime_parent: Path,
                   "pid": before["pid"], "start_ticks": before["start_ticks"],
                   "engine_id": before["engine_id"], "guest": guest,
                   "systemd_user": systemd_user,
-                  "daemon_started": False, "rootless_ready": False,
+                  "daemon_start_attempted_by_probe": False, "rootless_ready": False,
                   "qualified": False, "installation_authorized": False,
                   "application_deployment_authorized": False,
                   "current_installer_least_privileged": False,

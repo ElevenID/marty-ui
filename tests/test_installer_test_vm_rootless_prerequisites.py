@@ -2,10 +2,17 @@
 from __future__ import annotations
 
 import os
+import contextlib
+import grp
+import io
+import json
 from pathlib import Path
+import pwd
 import shlex
+import stat
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest import mock
 
@@ -24,21 +31,77 @@ def guest() -> dict:
     return {"schema": subject.GUEST_SCHEMA, "uid": 1000, "gid": 1000,
             "docker_group": True, "sudo_group": True,
             "sudo_policy_known": False,
-            "binaries": {name: {"kind": "missing", "root_owned": False,
+            "binaries": {name: {"kind": "not_observed_at_approved_path", "root_owned": False,
                                 "not_writable": False, "setuid": False}
                          for name in subject.BINARY_NAMES},
             "subuid": {"status": "observed", "account_entries": 1,
-                       "sufficient_65536": True},
+                       "declared_contiguous_65536": True},
             "subgid": {"status": "unknown", "account_entries": 0,
-                       "sufficient_65536": False},
+                       "declared_contiguous_65536": False},
             "userns_clone": 1, "max_user_namespaces": 10000,
             "cgroup_v2_controllers": {"cpu": True, "memory": True, "pids": True},
             "mem_available_kib": 1200000, "home_available_bytes": 4000000000,
-            "home_total_bytes": 8000000000, "daemon_started": False,
+            "home_total_bytes": 8000000000, "daemon_start_attempted_by_probe": False,
             "rootless_ready": False}
 
 
 class RootlessPrerequisites(unittest.TestCase):
+    def test_actual_guest_script_reads_only_fixed_synthetic_paths(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            home = base / "home"
+            home.mkdir(mode=0o700)
+            files = {
+                "/etc/subuid": b"foreign:1:65536\ninstaller:100000:65536\n",
+                "/etc/subgid": b"installer:200000:65536\n",
+                "/proc/sys/kernel/unprivileged_userns_clone": b"1\n",
+                "/proc/sys/user/max_user_namespaces": b"10000\n",
+                "/sys/fs/cgroup/cgroup.controllers": b"cpu memory pids\n",
+                "/proc/meminfo": b"MemTotal: 2000000 kB\nMemAvailable: 1200000 kB\n",
+            }
+            mapped = {}
+            for index, (name, content) in enumerate(files.items()):
+                destination = base / str(index)
+                destination.write_bytes(content)
+                mapped[name] = destination
+            real_open, real_read, real_fstat, real_stat, real_statvfs = (
+                os.open, os.read, os.fstat, os.stat, os.statvfs)
+            def owned(item):
+                return SimpleNamespace(**{name: (0 if name == "st_uid" else getattr(item, name))
+                    for name in ("st_dev", "st_ino", "st_uid", "st_gid", "st_mode",
+                                 "st_size", "st_mtime_ns", "st_ctime_ns")})
+            def opening(path, flags, *args, **kwargs):
+                return real_open(mapped.get(path, path), flags, *args, **kwargs)
+            def statting(path, *args, **kwargs):
+                return owned(real_stat(mapped.get(path, path), *args, **kwargs))
+            def lstatting(path):
+                if path == "/home/installer":
+                    return SimpleNamespace(st_mode=stat.S_IFDIR | 0o700, st_uid=1000)
+                raise FileNotFoundError(path)
+            out = io.StringIO()
+            with mock.patch.object(os, "getuid", return_value=1000), \
+                 mock.patch.object(os, "getgid", return_value=1000), \
+                 mock.patch.object(os, "getgroups", return_value=[27, 998]), \
+                 mock.patch.object(os, "open", side_effect=opening), \
+                 mock.patch.object(os, "read", side_effect=lambda fd, count:
+                                   real_read(fd, min(count, 3))), \
+                 mock.patch.object(os, "fstat", side_effect=lambda fd: owned(real_fstat(fd))), \
+                 mock.patch.object(os, "stat", side_effect=statting), \
+                 mock.patch.object(os, "lstat", side_effect=lstatting), \
+                 mock.patch.object(os, "statvfs", side_effect=lambda path: real_statvfs(home)), \
+                 mock.patch.object(pwd, "getpwuid", return_value=SimpleNamespace(pw_name="installer")), \
+                 mock.patch.object(grp, "getgrnam", side_effect=lambda name:
+                                   SimpleNamespace(gr_gid={"docker": 998, "sudo": 27}[name])), \
+                 contextlib.redirect_stdout(out):
+                exec(subject.GUEST_SCRIPT, {"__name__": "__main__"})
+            value = json.loads(out.getvalue())
+            self.assertEqual(value["subuid"]["account_entries"], 1)
+            self.assertTrue(value["subuid"]["declared_contiguous_65536"])
+            self.assertTrue(value["subgid"]["declared_contiguous_65536"])
+            self.assertEqual(value["mem_available_kib"], 1200000)
+            self.assertNotIn("foreign", out.getvalue())
+            self.assertEqual(subject._decode_guest(out.getvalue().encode(), 1000), value)
+
     def test_fixed_guest_command_and_sanitized_schema(self):
         argv = shlex.split(subject._guest_command())
         self.assertEqual(argv[:5], ["/usr/bin/python3", "-E", "-I", "-B", "-c"])
@@ -51,7 +114,7 @@ class RootlessPrerequisites(unittest.TestCase):
         for bad in (dict(guest(), uid=0), dict(guest(), rootless_ready=True),
                     dict(guest(), unrelated_secret="canary"),
                     dict(guest(), subuid={"status": "observed", "account_entries": 1,
-                                          "sufficient_65536": True,
+                                          "declared_contiguous_65536": True,
                                           "raw_line": "foreign:1:2"})):
             with self.assertRaises(ValueError):
                 subject._decode_guest(subject.release.encode(bad), 1000)
