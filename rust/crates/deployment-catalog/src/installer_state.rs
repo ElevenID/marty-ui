@@ -5,8 +5,10 @@
 
 use crate::installer_creation_identity::{
     ApplicationHandles, NewApplicationStorage, NewCredentials, NewInstallation, NewOpenBaoState,
-    APPLICATION_RECEIPT, CREDENTIAL_RECEIPT, OPENBAO_STATE_RECEIPT, RECEIPT as CREATION_RECEIPT,
+    APPLICATION_RECEIPT, CREDENTIAL_RECEIPT, OPENBAO_OWNER_TRANSITION_RECEIPT,
+    OPENBAO_STATE_RECEIPT, RECEIPT as CREATION_RECEIPT,
 };
+use crate::installer_openbao_owner_transition::{self, Evidence as OpenBaoOwnerEvidence};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
@@ -1937,6 +1939,127 @@ impl InstallerState {
             self.poisoned = true;
             return Err("OpenBao state identity receipt cannot be confirmed".into());
         }
+        if let Some(creation) = &mut self.openbao_creation {
+            if let Err(error) = creation.remember_state_receipt(&bytes) {
+                self.poisoned = true;
+                return Err(error);
+            }
+        }
+        Ok(())
+    }
+
+    /// Record the exact metadata observed after the retained TLS initializer
+    /// completed. The initial creation receipt remains immutable; this later
+    /// local observation is neither ownership authentication nor deletion grant.
+    pub(crate) fn persist_openbao_owner_transition_receipt(
+        &mut self,
+        installation: &Path,
+        observed_engine_id: &str,
+        image: &str,
+        image_id: &str,
+        container_id: &str,
+        completion_bytes: &[u8],
+    ) -> Result<()> {
+        self.require_live_phase(Phase::Provisioning)?;
+        if !matches!(self.journal.execution_scope(), ExecutionScope::Unclassified) {
+            return Ok(());
+        }
+        let creation = self
+            .openbao_creation
+            .as_ref()
+            .ok_or("fresh OpenBao transition capability unavailable")?
+            .clone();
+        let binding = self
+            .journal
+            .runtime()
+            .ok_or("OpenBao runtime binding absent")?;
+        binding.validate()?;
+        if observed_engine_id != binding.engine_id {
+            self.poisoned = true;
+            return Err("OpenBao engine binding changed".into());
+        }
+        let engine_id = binding.engine_id.clone();
+        let prepare = |this: &Self| -> Result<Vec<u8>> {
+            this.with_inspection(|view| view.require_path_binding(installation))?;
+            let completion = open_at(
+                &this.directory,
+                &name("openbao-completed-openbao-tls-init.json"),
+                libc::O_PATH,
+                0,
+            )?;
+            private(&completion, false)?;
+            let mut bytes = Vec::new();
+            reopen_regular(&completion)?
+                .take(LIMIT + 1)
+                .read_to_end(&mut bytes)
+                .map_err(|_| "OpenBao TLS completion record unavailable")?;
+            if bytes != completion_bytes || bytes.is_empty() || bytes.len() as u64 > LIMIT {
+                return Err("OpenBao TLS completion record changed".into());
+            }
+            let saved = creation.transition_chain()?;
+            let (initial, credential, state_creation) = this.with_inspection(|view| {
+                Ok((
+                    view.read_evidence(CREATION_RECEIPT)?,
+                    view.read_evidence(CREDENTIAL_RECEIPT)?,
+                    view.read_evidence(OPENBAO_STATE_RECEIPT)?,
+                ))
+            })?;
+            if initial != saved.initial_receipt
+                || credential != saved.credential_receipt
+                || state_creation != saved.state_receipt
+            {
+                return Err("OpenBao prior creation receipts changed".into());
+            }
+            let evidence = open_at(&this.directory, &name("evidence"), libc::O_PATH, 0)?;
+            let state = open_at(&this.directory, &name("openbao-state"), libc::O_PATH, 0)?;
+            private(&evidence, true)?;
+            let root_observed = crate::installer_creation_identity::observe(&this.directory)?;
+            let evidence_observed = crate::installer_creation_identity::observe(&evidence)?;
+            let state_observed = crate::installer_creation_identity::observe(&state)?;
+            if root_observed != *saved.root
+                || evidence_observed != *saved.evidence
+                || state_observed.mount_id != saved.state.mount_id
+                || state_observed.identity.dev != saved.state.identity.dev
+                || state_observed.identity.ino != saved.state.identity.ino
+                || state_observed.identity.kind != saved.state.identity.kind
+                || state_observed.identity.mode != saved.state.identity.mode
+            {
+                return Err("OpenBao creation inode changed before owner transition".into());
+            }
+            installer_openbao_owner_transition::receipt_bytes(&OpenBaoOwnerEvidence {
+                initial_bytes: &initial,
+                state_bytes: &state_creation,
+                completion_bytes: &bytes,
+                installation_id: this.journal.installation_id(),
+                source_sha: &this.journal.identity().source_sha,
+                engine_id: &engine_id,
+                image,
+                image_id,
+                container_id,
+                root: &root_observed,
+                evidence: &evidence_observed,
+                state: &state_observed,
+            })
+        };
+        let bytes = match prepare(self) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                self.poisoned = true;
+                return Err(error);
+            }
+        };
+        self.write_evidence(OPENBAO_OWNER_TRANSITION_RECEIPT, &bytes)?;
+        if prepare(self).as_ref() != Ok(&bytes) {
+            self.poisoned = true;
+            return Err("OpenBao owner transition changed after receipt write".into());
+        }
+        if !matches!(
+            self.with_inspection(|view| view.read_evidence(OPENBAO_OWNER_TRANSITION_RECEIPT)),
+            Ok(confirmed) if confirmed == bytes
+        ) {
+            self.poisoned = true;
+            return Err("OpenBao owner transition receipt cannot be confirmed".into());
+        }
         self.openbao_creation = None;
         Ok(())
     }
@@ -2601,6 +2724,70 @@ mod tests {
             release_tag: "v1.2.3".into(),
             inventory_sha256: format!("sha256:{}", "b".repeat(64)),
         }
+    }
+    #[test]
+    fn missing_fresh_transition_capability_cannot_be_rebuilt_from_disk() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let installation = root.path().join("installation");
+        let mut state = InstallerState::create_with_runtime(
+            &installation,
+            identity(),
+            RuntimeBinding {
+                docker_host: "unix:///var/run/docker.sock".into(),
+                engine_id: "test-engine".into(),
+                openbao_port: 18200,
+                profile: RuntimeProfile::Rootful,
+            },
+        )
+        .unwrap();
+        state.create_private_directory("evidence").unwrap();
+        state.create_private_directory("downloads").unwrap();
+        state
+            .persist_initial_creation_receipt(&installation)
+            .unwrap();
+        state.advance(Phase::Verified).unwrap();
+        state.advance(Phase::Provisioning).unwrap();
+        state
+            .generate_local_credentials(&serde_json::json!({"passwordPolicy": PASSWORD_POLICY}))
+            .unwrap();
+        state
+            .persist_credential_creation_receipt(&installation)
+            .unwrap();
+        state.create_private_directory("openbao-state").unwrap();
+        state
+            .persist_openbao_state_creation_receipt(&installation)
+            .unwrap();
+        state.openbao_creation = None;
+        let container = "c".repeat(64);
+        let completion = serde_json::to_vec(
+            &serde_json::json!({"role":"openbao-tls-init","container_id":container,"exit_code":0}),
+        )
+        .unwrap();
+        let completed = installation.join("openbao-completed-openbao-tls-init.json");
+        std::fs::write(&completed, &completion).unwrap();
+        std::fs::set_permissions(&completed, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let image = format!(
+            "ghcr.io/elevenid/marty-ui-oss/openbao-didcomm@sha256:{}",
+            "b".repeat(64)
+        );
+        let image_id = format!("sha256:{}", "d".repeat(64));
+        assert!(state
+            .persist_openbao_owner_transition_receipt(
+                &installation,
+                "test-engine",
+                &image,
+                &image_id,
+                &container,
+                &completion
+            )
+            .is_err());
+        assert!(!installation
+            .join("evidence")
+            .join(OPENBAO_OWNER_TRANSITION_RECEIPT)
+            .exists());
+        drop(state);
+        assert!(InstallerState::resume(&installation, &identity()).is_err());
     }
     fn cleanup_test_records(journal: &Journal) -> (serde_json::Value, serde_json::Value) {
         use serde_json::json;
