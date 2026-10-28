@@ -1,6 +1,7 @@
 'use strict';
 // SOURCE-ONLY process/secret-transport control; this does not exercise Canvas or a wallet.
 const assert=require('node:assert/strict'),fs=require('node:fs'),os=require('node:os'),path=require('node:path');
+const {createHash}=require('node:crypto');
 const {fork}=require('node:child_process'),test=require('node:test');
 const name='CANVAS_OSS_OWNED_BOUNDARY_TEST_SECRET';
 if(process.env.CANVAS_OWNED_BOUNDARY_CHILD==='1'){
@@ -12,6 +13,8 @@ if(process.env.CANVAS_OWNED_BOUNDARY_CHILD==='1'){
   const boundary=stock.requireOwnedNativeExecutionBoundary(evidence);
   assert.equal(boundary.release_qualified,false);assert.equal(boundary.recording_qualified,false);
   assert.equal(stock.requireSecretFile(name),'SOURCE_ONLY_VALUE');
+  process.env[name+'_SHA256']='0'.repeat(64);assert.throws(()=>stock.requireSecretFile(name));
+  process.env[name+'_SHA256']=process.env.CANVAS_OWNED_BOUNDARY_GOOD_HASH;
   process.env[name]='SOURCE_ONLY_RAW';assert.throws(()=>stock.requireSecretFile(name));delete process.env[name];
   process.env[name+'_FILE']=path.join(os.tmpdir(),'outside-owned-root');
   assert.throws(()=>stock.requireSecretFile(name));
@@ -27,7 +30,8 @@ if(process.env.CANVAS_OWNED_BOUNDARY_CHILD==='1'){
   const env={...process.env,CANVAS_OWNED_BOUNDARY_CHILD:'1',CANVAS_OSS_EXECUTION_BOUNDARY:'local_owned_windows_functional',
    CANVAS_OSS_SECRET_TRANSPORT:'owned_host_private_files',CANVAS_OSS_OWNED_SECRET_ROOT:root,
    CANVAS_OSS_DRIVER_SOURCE_SHA:'a'.repeat(40),MARTY_TEST_WALLET_ORIGIN:'http://127.0.0.1:8791',
-   RECORD_VIDEO:'0',[name+'_FILE']:secretFile};
+   RECORD_VIDEO:'0',[name+'_FILE']:secretFile,[name+'_SHA256']:createHash('sha256').update(fs.readFileSync(secretFile)).digest('hex')};
+  env.CANVAS_OWNED_BOUNDARY_GOOD_HASH=env[name+'_SHA256'];
   const child=fork(__filename,[],{env,stdio:['ignore','ignore','pipe','ipc'],windowsHide:true});
   let stderr='';child.stderr.on('data',chunk=>{stderr+=chunk.toString().slice(0,1000)});
   const message=await new Promise((resolve,reject)=>{child.once('message',resolve);child.once('error',reject);});

@@ -240,7 +240,9 @@ function requireSecretFile(name) {
   const filePath = String(process.env[`${name}_FILE`] || '').trim();
   if (ownedNativeBoundary) {
     requireCondition(path.isAbsolute(filePath), 'secret_file_missing', `${name} owned host secret file is missing.`);
-    try { return readBoundedSecretFile(filePath,{root:ownedNativeBoundary.secretRoot,maxBytes:1024*1024}).value; }
+    const sha256=String(process.env[`${name}_SHA256`]||'');
+    requireCondition(/^[a-f0-9]{64}$/.test(sha256),'secret_transport_invalid',`${name} owned host secret hash is missing.`);
+    try { return readBoundedSecretFile(filePath,{root:ownedNativeBoundary.secretRoot,maxBytes:1024*1024,sha256}).value; }
     catch { fail('secret_file_unreadable', `${name} owned host secret is unreadable.`); }
   }
   requireCondition(
