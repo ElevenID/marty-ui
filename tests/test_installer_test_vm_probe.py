@@ -178,6 +178,28 @@ class Probe(unittest.TestCase):
                     probe._guest_operator({"guest_uid": os.getuid()},
                                           str(target), expected)
 
+            # Grow the named regular file just after the initial fstat in a
+            # test-only copy of the guest observer. The exact-byte reader must
+            # stop at the authenticated size and reject the extra EOF byte.
+            target.write_bytes(b"a" * (1024 * 1024))
+            target.chmod(0o700)
+            expected = {"binary_bytes": target.stat().st_size,
+                        "binary_sha256": probe.hashlib.sha256(target.read_bytes()).hexdigest()}
+            def concurrent_growth(_binding, script, **_kwargs):
+                argv = shlex.split(script)
+                marker = "left=size;h=hashlib.sha256()"
+                self.assertIn(marker, argv[4])
+                argv[4] = argv[4].replace(marker,
+                    "os.truncate(p,size+1);" + marker)
+                run = subprocess.run(argv, capture_output=True, timeout=5)
+                self.assertNotEqual(run.returncode, 0)
+                raise ValueError("bounded guest observation refused")
+            with mock.patch.object(probe, "_ssh", side_effect=concurrent_growth):
+                with self.assertRaisesRegex(ValueError, "bounded guest observation refused"):
+                    probe._guest_operator({"guest_uid": os.getuid()},
+                                          str(target), expected)
+            self.assertEqual(target.stat().st_size, expected["binary_bytes"] + 1)
+
     def test_sealed_guest_exec_keeps_verified_bytes_and_clean_fixed_argv(self):
         if shutil.which("cc") is None:
             self.skipTest("C compiler unavailable for synthetic executable")

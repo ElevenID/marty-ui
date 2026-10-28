@@ -72,7 +72,9 @@ try:
         digest.update(block)
         view=memoryview(block)
         while view:
-            view=view[os.write(sealed,view):]
+            written=os.write(sealed,view)
+            assert written>0
+            view=view[written:]
         remaining-=len(block)
     assert os.read(readable,1)==b"" and digest.hexdigest()==expected_sha
     assert stamp(before)==stamp(os.fstat(readable))==stamp(os.stat(path,follow_symlinks=False))
@@ -421,7 +423,12 @@ def _guest_operator(binding: dict, target: str, expected: dict) -> tuple[int, in
         "a.st_mtime_ns,a.st_ctime_ns)"
         "==(b.st_dev,b.st_ino,b.st_uid,b.st_gid,b.st_mode,b.st_nlink,b.st_size,"
         "b.st_mtime_ns,b.st_ctime_ns);"
-        "h=hashlib.file_digest(os.fdopen(r,\"rb\",closefd=False),\"sha256\").hexdigest();"
+        "left=size;h=hashlib.sha256()\n"
+        "while left:\n"
+        "    block=os.read(r,min(65536,left))\n"
+        "    assert block\n"
+        "    h.update(block);left-=len(block)\n"
+        "assert os.read(r,1)==b\"\"\n"
         "c=os.fstat(r);n=os.stat(p,follow_symlinks=False);"
         "assert (a.st_dev,a.st_ino,a.st_uid,a.st_gid,a.st_mode,a.st_nlink,a.st_size,"
         "a.st_mtime_ns,a.st_ctime_ns)"
@@ -430,7 +437,7 @@ def _guest_operator(binding: dict, target: str, expected: dict) -> tuple[int, in
         "==(n.st_dev,n.st_ino,n.st_uid,n.st_gid,n.st_mode,n.st_nlink,n.st_size,"
         "n.st_mtime_ns,n.st_ctime_ns);"
         "print(\"%d:%d:%d:%o:%d:%d:%s\"%(a.st_dev,a.st_ino,a.st_uid,"
-        "stat.S_IMODE(a.st_mode),a.st_nlink,a.st_size,h))"
+        "stat.S_IMODE(a.st_mode),a.st_nlink,a.st_size,h.hexdigest()))"
     )
     raw = _ssh(binding, "/usr/bin/python3 -I -B -c '" + code + "' "
                + target + " " + str(expected["binary_bytes"]),
