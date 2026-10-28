@@ -31,6 +31,7 @@ const {
   credentialInventoryEvidence,
   membershipLoginBehaviorAssertions,
   requireCompletedLoginNonce,
+  loginNonceCompletionEvidence,
   isTerminalLoginNonceStatus,
 } = require('./beta-credential-contract');
 const {
@@ -370,8 +371,8 @@ async function runCredentialLogin({ retainedFirstParty = false, evidence = null 
     const terminal = await terminalStatusResponse;
     const completion = terminal ? await terminal.json().catch(() => ({ status: 'invalid-response' }))
       : { status: 'pending-timeout' };
-    report.completion = { status: completion?.status || null,
-      observedNonceStatus: completion?.status || null, authenticated: false };
+    const nonceEvidence = loginNonceCompletionEvidence(completion);
+    report.completion = { ...nonceEvidence, authenticated: false };
     requireCompletedLoginNonce(completion?.status);
     if (completion?.redirect_to) {
       await loginPage.goto(new URL(completion.redirect_to, BETA_ORIGIN).href, {
@@ -392,8 +393,7 @@ async function runCredentialLogin({ retainedFirstParty = false, evidence = null 
     await loginPage.screenshot({ path: path.join(artifactDir, '02-login-complete.png'), fullPage: true });
 
     report.completion = {
-      status: completion.status,
-      observedNonceStatus: completion?.status || null,
+      ...nonceEvidence,
       authenticated: auth.body?.authenticated === true,
       authStatus: auth.status,
       authenticatedEmail: auth.body?.authenticated ? auth.body?.user?.email : null,
