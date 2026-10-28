@@ -36,6 +36,7 @@ pub mod installer_keycloak_bridge;
 pub mod installer_logs;
 pub mod installer_openbao;
 pub mod installer_prepare;
+pub(crate) mod installer_purge_host;
 #[allow(dead_code)] // Dormant until the reviewed purge coordinator supplies durable intent.
 pub(crate) mod installer_purge_volume;
 pub mod installer_release;
