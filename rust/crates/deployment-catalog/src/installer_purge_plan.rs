@@ -78,14 +78,45 @@ pub(crate) struct AuthenticatedHostRoots<'a> {
     pub receipt_sha256: &'a str,
 }
 
+/// Fresh first-attempt observation only. A resumed purge must load its saved
+/// ledger plan; it must not require the retained volume to still be present.
+pub(crate) enum NormalProfileError {
+    Incomplete(IncompleteReason),
+    Unsupported(UnsupportedReason),
+}
+
+/// Completed uninstall and creation receipt have been checked, but Docker
+/// readiness has not. This state cannot be used as a purge plan.
+pub(crate) struct PendingNormalProfileFacts {
+    installation_id: Uuid,
+    journal_revision: u64,
+    plan_sha256: String,
+    plan: CleanupPlan,
+    volume: VolumeCreation,
+}
+
+/// Typed, point-in-time facts for a fresh first attempt. These are not an
+/// ownership proof, a durable snapshot, or deletion authorization.
+pub(crate) struct ValidatedNormalProfileFacts {
+    pub(crate) installation_id: Uuid,
+    pub(crate) journal_revision: u64,
+    pub(crate) engine_id: String,
+    pub(crate) cleanup_plan_sha256: String,
+    pub(crate) project: String,
+    pub(crate) network_id: String,
+    pub(crate) network_name: String,
+    pub(crate) resources: Vec<CleanupResource>,
+    pub(crate) volume: VolumeCreation,
+}
+
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct CleanupResource {
-    role: String,
-    container_id: String,
-    bao: bool,
+pub(crate) struct CleanupResource {
+    pub(crate) role: String,
+    pub(crate) container_id: String,
+    pub(crate) bao: bool,
 }
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct CleanupPlan {
     schema: String,
@@ -102,15 +133,15 @@ struct CleanupPlan {
 }
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct VolumeCreation {
-    schema: String,
-    installation_id: String,
-    engine_id: String,
-    name: String,
-    created_at: String,
-    labels: BTreeMap<String, String>,
-    driver: String,
-    scope: String,
+pub(crate) struct VolumeCreation {
+    pub(crate) schema: String,
+    pub(crate) installation_id: String,
+    pub(crate) engine_id: String,
+    pub(crate) name: String,
+    pub(crate) created_at: String,
+    pub(crate) labels: BTreeMap<String, String>,
+    pub(crate) driver: String,
+    pub(crate) scope: String,
 }
 #[derive(Serialize)]
 struct PrivatePlan<'a> {
@@ -335,6 +366,101 @@ fn docker_absent_except_volume<D: DockerRead>(
     Ok(())
 }
 
+/// Inspect only a fresh first attempt under the journal lock. The caller must
+/// independently establish host custody and stop writers before planning.
+pub(crate) fn completed_normal_profile_cleanup(
+    locked: &LockedInspection,
+    installation: &Path,
+) -> Result<PendingNormalProfileFacts, NormalProfileError> {
+    use IncompleteReason::*;
+    if locked.require_path_binding(installation).is_err() || locked.require_unchanged().is_err() {
+        return Err(NormalProfileError::Incomplete(InstallationChanged));
+    }
+    let journal = locked.journal();
+    supported_journal(journal).map_err(NormalProfileError::Unsupported)?;
+    match locked.cleanup_status() {
+        Ok(status)
+            if status.state == CleanupState::Completed && status.data_retained == Some(true) => {}
+        Ok(_) => return Err(NormalProfileError::Incomplete(CleanupNotComplete)),
+        Err(_) => return Err(NormalProfileError::Incomplete(InstallationChanged)),
+    }
+    let plan_bytes = match locked.diagnostic_record("uninstall-plan.json", true) {
+        Ok(Some(bytes)) => bytes,
+        Ok(None) => return Err(NormalProfileError::Incomplete(CleanupNotComplete)),
+        Err(_) => return Err(NormalProfileError::Incomplete(InstallationChanged)),
+    };
+    let Ok(plan) = serde_json::from_slice::<CleanupPlan>(&plan_bytes) else {
+        return Err(NormalProfileError::Incomplete(CleanupNotComplete));
+    };
+    let runtime = journal.runtime().expect("checked above");
+    if plan.schema != "elevenid.installer-uninstall-plan/v1"
+        || plan.installation_id != journal.installation_id().to_string()
+        || plan.engine_id != runtime.engine_id
+        || plan.project != journal.compose_project()
+        || !hex64(&plan.network_id)
+        || plan.network_name != format!("{}-bao_default", plan.project)
+        || plan.resources.len() != 34
+        || plan.retained_redis_volume.is_none()
+        || plan.absent_redis_volume.is_some()
+        || plan.resources.iter().any(|r| !hex64(&r.container_id))
+    {
+        return Err(NormalProfileError::Unsupported(
+            UnsupportedReason::LegacyOrPreApplicationCleanup,
+        ));
+    }
+    let volume_name = plan
+        .retained_redis_volume
+        .as_deref()
+        .expect("checked above");
+    let receipt_bytes = match locked.diagnostic_record("application-created-volume.json", true) {
+        Ok(Some(bytes)) => bytes,
+        Ok(None) => return Err(NormalProfileError::Incomplete(MissingCreationEvidence)),
+        Err(_) => return Err(NormalProfileError::Incomplete(InvalidCreationEvidence)),
+    };
+    let Some(volume) = volume_evidence(
+        &receipt_bytes,
+        journal.installation_id(),
+        &runtime.engine_id,
+        volume_name,
+    ) else {
+        return Err(NormalProfileError::Incomplete(InvalidCreationEvidence));
+    };
+    Ok(PendingNormalProfileFacts {
+        installation_id: journal.installation_id(),
+        journal_revision: journal.revision(),
+        plan_sha256: format!("{:x}", Sha256::digest(&plan_bytes)),
+        plan,
+        volume,
+    })
+}
+
+impl PendingNormalProfileFacts {
+    pub(crate) fn verify_docker(
+        self,
+        docker: &DockerRunner,
+    ) -> Result<ValidatedNormalProfileFacts, IncompleteReason> {
+        self.verify_docker_with(docker)
+    }
+
+    fn verify_docker_with<D: DockerRead>(
+        self,
+        docker: &D,
+    ) -> Result<ValidatedNormalProfileFacts, IncompleteReason> {
+        docker_absent_except_volume(docker, &self.plan, &self.volume)?;
+        Ok(ValidatedNormalProfileFacts {
+            installation_id: self.installation_id,
+            journal_revision: self.journal_revision,
+            engine_id: self.plan.engine_id,
+            cleanup_plan_sha256: self.plan_sha256,
+            project: self.plan.project,
+            network_id: self.plan.network_id,
+            network_name: self.plan.network_name,
+            resources: self.plan.resources,
+            volume: self.volume,
+        })
+    }
+}
+
 /// Produces only a candidate plan. The caller must hold the journal lock and
 /// independently authenticate `host` against creation-time identity evidence.
 pub(crate) fn prepare(
@@ -356,50 +482,10 @@ pub(crate) fn prepare(
     if !hex64(host.receipt_sha256) || host.expected_mount == 0 {
         return PrepareOutcome::Incomplete(HostSnapshotIncomplete);
     }
-    match locked.cleanup_status() {
-        Ok(status)
-            if status.state == CleanupState::Completed && status.data_retained == Some(true) => {}
-        Ok(_) => return PrepareOutcome::Incomplete(CleanupNotComplete),
-        Err(_) => return PrepareOutcome::Incomplete(InstallationChanged),
-    }
-    let plan_bytes = match locked.diagnostic_record("uninstall-plan.json", true) {
-        Ok(Some(bytes)) => bytes,
-        Ok(None) => return PrepareOutcome::Incomplete(CleanupNotComplete),
-        Err(_) => return PrepareOutcome::Incomplete(InstallationChanged),
-    };
-    let Ok(plan) = serde_json::from_slice::<CleanupPlan>(&plan_bytes) else {
-        return PrepareOutcome::Incomplete(CleanupNotComplete);
-    };
-    let runtime = journal.runtime().expect("checked above");
-    if plan.schema != "elevenid.installer-uninstall-plan/v1"
-        || plan.installation_id != journal.installation_id().to_string()
-        || plan.engine_id != runtime.engine_id
-        || plan.project != journal.compose_project()
-        || !hex64(&plan.network_id)
-        || plan.network_name != format!("{}-bao_default", plan.project)
-        || plan.resources.len() != 34
-        || plan.retained_redis_volume.is_none()
-        || plan.absent_redis_volume.is_some()
-        || plan.resources.iter().any(|r| !hex64(&r.container_id))
-    {
-        return PrepareOutcome::Unsupported(UnsupportedReason::LegacyOrPreApplicationCleanup);
-    }
-    let volume_name = plan
-        .retained_redis_volume
-        .as_deref()
-        .expect("checked above");
-    let receipt_bytes = match locked.diagnostic_record("application-created-volume.json", true) {
-        Ok(Some(bytes)) => bytes,
-        Ok(None) => return PrepareOutcome::Incomplete(MissingCreationEvidence),
-        Err(_) => return PrepareOutcome::Incomplete(InvalidCreationEvidence),
-    };
-    let Some(volume) = volume_evidence(
-        &receipt_bytes,
-        journal.installation_id(),
-        &runtime.engine_id,
-        volume_name,
-    ) else {
-        return PrepareOutcome::Incomplete(InvalidCreationEvidence);
+    let pending = match completed_normal_profile_cleanup(locked, installation) {
+        Ok(facts) => facts,
+        Err(NormalProfileError::Incomplete(reason)) => return PrepareOutcome::Incomplete(reason),
+        Err(NormalProfileError::Unsupported(reason)) => return PrepareOutcome::Unsupported(reason),
     };
     let snapshot = match installer_host_snapshot::build(
         locked,
@@ -419,29 +505,30 @@ pub(crate) fn prepare(
     {
         return PrepareOutcome::Incomplete(HostSnapshotIncomplete);
     }
-    if let Err(reason) = docker_absent_except_volume(docker, &plan, &volume) {
-        return PrepareOutcome::Incomplete(reason);
-    }
+    let facts = match pending.verify_docker(docker) {
+        Ok(facts) => facts,
+        Err(reason) => return PrepareOutcome::Incomplete(reason),
+    };
     if locked.require_path_binding(installation).is_err() || locked.require_unchanged().is_err() {
         return PrepareOutcome::Incomplete(InstallationChanged);
     }
-    let mut containers: Vec<_> = plan.resources.iter().collect();
+    let mut containers: Vec<_> = facts.resources.iter().collect();
     containers.sort_unstable_by(|a, b| a.container_id.cmp(&b.container_id));
     let private = PrivatePlan {
         schema: SCHEMA,
         coverage: snapshot.coverage,
-        installation_id: journal.installation_id(),
-        journal_revision: journal.revision(),
-        engine_id: &runtime.engine_id,
-        cleanup_plan_sha256: format!("{:x}", Sha256::digest(&plan_bytes)),
+        installation_id: facts.installation_id,
+        journal_revision: facts.journal_revision,
+        engine_id: &facts.engine_id,
+        cleanup_plan_sha256: facts.cleanup_plan_sha256,
         host_receipt_sha256: host.receipt_sha256,
         host_root: &snapshot.root,
         host_mount_id: snapshot.mount_id,
         host_entries: &snapshot.entries,
         containers,
-        network_id: &plan.network_id,
-        network_name: &plan.network_name,
-        volume: &volume,
+        network_id: &facts.network_id,
+        network_name: &facts.network_name,
+        volume: &facts.volume,
         point_in_time: true,
         deletion_eligible: false,
         installation_root_included: false,
@@ -682,6 +769,153 @@ mod tests {
             docker_absent_except_volume(&mock, &plan, &volume),
             Err(IncompleteReason::DockerObservationIncomplete)
         );
+    }
+
+    #[test]
+    fn verified_first_attempt_returns_exact_typed_cleanup_facts() {
+        let (id, plan, volume) = fixture();
+        let plan_sha256 = "a".repeat(64);
+        let pending = PendingNormalProfileFacts {
+            installation_id: id,
+            journal_revision: 17,
+            plan_sha256: plan_sha256.clone(),
+            plan,
+            volume,
+        };
+        let mock = docker(&pending.plan, &pending.volume);
+        let facts = pending.verify_docker_with(&mock).unwrap();
+        assert_eq!(facts.installation_id, id);
+        assert_eq!(facts.journal_revision, 17);
+        assert_eq!(facts.engine_id, "synthetic-engine");
+        assert_eq!(facts.cleanup_plan_sha256, plan_sha256);
+        assert_eq!(facts.project, format!("marty-install-{}", id.simple()));
+        assert_eq!(facts.network_id, "a".repeat(64));
+        assert_eq!(facts.network_name, format!("{}-bao_default", facts.project));
+        assert_eq!(facts.resources.len(), 1);
+        assert_eq!(facts.resources[0].container_id, "b".repeat(64));
+        assert_eq!(facts.volume.name, format!("{}_redis-socket", facts.project));
+        assert_eq!(facts.volume.created_at, "2026-10-27T12:30:00Z");
+    }
+
+    #[test]
+    fn completed_cleanup_helper_requires_recorded_result_and_volume_receipt() {
+        let parent = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(parent.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let installation = parent.path().join("installation");
+        let mut state = InstallerState::create_with_runtime(
+            &installation,
+            Identity {
+                source_sha: "a".repeat(40),
+                release_tag: "v1.1.263".into(),
+                inventory_sha256: format!("sha256:{}", "b".repeat(64)),
+            },
+            RuntimeBinding {
+                docker_host: "unix:///var/run/docker.sock".into(),
+                engine_id: "synthetic-engine".into(),
+                openbao_port: 8200,
+            },
+        )
+        .unwrap();
+        state.advance(Phase::Verified).unwrap();
+        state.advance(Phase::Provisioning).unwrap();
+        state.create_private_directory("evidence").unwrap();
+        let id = state.journal().installation_id();
+        let project = state.journal().compose_project();
+        let (_, mut plan, mut volume) = fixture();
+        plan.installation_id = id.to_string();
+        plan.project = project.clone();
+        plan.network_name = format!("{project}-bao_default");
+        plan.retained_redis_volume = Some(format!("{project}_redis-socket"));
+        plan.resources = (0..30)
+            .map(|i| CleanupResource {
+                role: format!("app-{i}"),
+                container_id: format!("{:064x}", i + 1),
+                bao: false,
+            })
+            .chain(
+                [
+                    "openbao",
+                    "openbao-unseal",
+                    "openbao-bootstrap",
+                    "openbao-tls-init",
+                ]
+                .into_iter()
+                .enumerate()
+                .map(|(i, role)| CleanupResource {
+                    role: role.into(),
+                    container_id: format!("{:064x}", i + 40),
+                    bao: true,
+                }),
+            )
+            .collect();
+        plan.source_hashes = [
+            "evidence/application-plan.json",
+            "evidence/application-compose.json",
+            "evidence/application-created-resources.json",
+            "root/openbao-created.json",
+            "root/openbao-compose-model.json",
+            "evidence/keycloak-container-removed.json",
+            "evidence/tls-container-removed.json",
+            "evidence/ingress-container-removed.json",
+        ]
+        .into_iter()
+        .map(|name| (name.into(), "a".repeat(64)))
+        .collect();
+        volume.installation_id = id.to_string();
+        volume.name = format!("{project}_redis-socket");
+        volume
+            .labels
+            .insert("com.docker.compose.project".into(), project);
+        let inspect = |state: &InstallerState| {
+            state
+                .with_inspection(|locked| {
+                    Ok(completed_normal_profile_cleanup(locked, &installation))
+                })
+                .unwrap()
+        };
+        assert!(matches!(
+            inspect(&state),
+            Err(NormalProfileError::Incomplete(
+                IncompleteReason::CleanupNotComplete
+            ))
+        ));
+        state
+            .write_evidence("uninstall-plan.json", &serde_json::to_vec(&plan).unwrap())
+            .unwrap();
+        let result = json!({
+            "schema":"elevenid.installer-uninstall-result/v1",
+            "installation_id":id,
+            "engine_id":"synthetic-engine",
+            "containers_removed":34,
+            "network_removed":true,
+            "host_data_retained":true,
+            "credentials_retained":true,
+            "images_retained":true,
+            "redis_volume_retained":volume.name,
+            "installation_ready":false
+        });
+        state
+            .write_evidence(
+                "uninstall-result.json",
+                &serde_json::to_vec(&result).unwrap(),
+            )
+            .unwrap();
+        assert!(matches!(
+            inspect(&state),
+            Err(NormalProfileError::Incomplete(
+                IncompleteReason::MissingCreationEvidence
+            ))
+        ));
+        state
+            .write_evidence(
+                "application-created-volume.json",
+                &serde_json::to_vec(&volume).unwrap(),
+            )
+            .unwrap();
+        let pending = inspect(&state).ok().expect("valid completed cleanup");
+        assert_eq!(pending.installation_id, id);
+        assert_eq!(pending.plan.resources.len(), 34);
+        assert_eq!(pending.plan_sha256.len(), 64);
     }
 
     #[test]
