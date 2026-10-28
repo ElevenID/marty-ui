@@ -324,7 +324,9 @@ fn names(root: &File) -> Result<BTreeSet<String>, IncompleteReason> {
     Ok(result)
 }
 
-fn inspect_held(
+/// Descriptor-only current census. The caller's expected identities are not
+/// authenticated by this function; host receipt checks remain in the wrapper.
+pub(crate) fn inspect_held(
     root: &File,
     installation_id: uuid::Uuid,
     expected_root: &HostIdentity,
@@ -436,6 +438,82 @@ pub(crate) fn inspect(
     result
 }
 
+/// Derive the closed normal-profile names from the held directory for a fresh
+/// observation. The caller must separately compare receipt-bound identities;
+/// current metadata alone is not historical ownership evidence.
+pub(crate) fn derive_current_fixed_specs(
+    locked: &LockedInspection,
+    installation: &Path,
+    expected_root: &HostIdentity,
+    expected_mount: u64,
+) -> Result<Vec<ExpectedTopLevel>, IncompleteReason> {
+    locked
+        .require_path_binding(installation)
+        .and_then(|_| locked.require_unchanged())
+        .map_err(|_| IncompleteReason::InstallationChanged)?;
+    let result = derive_current_fixed_specs_held(
+        locked.installation_directory(),
+        expected_root,
+        expected_mount,
+    );
+    locked
+        .require_path_binding(installation)
+        .and_then(|_| locked.require_unchanged())
+        .map_err(|_| IncompleteReason::InstallationChanged)?;
+    result
+}
+
+/// Enumerate only the fixed 31-name current profile beneath a held root FD.
+/// `expected_mount` belongs to this caller's mount namespace. This does not
+/// authenticate ownership or prove that the observed children may be deleted.
+pub(crate) fn derive_current_fixed_specs_held(
+    root: &File,
+    expected_root: &HostIdentity,
+    expected_mount: u64,
+) -> Result<Vec<ExpectedTopLevel>, IncompleteReason> {
+    if identity(root).ok().as_ref() != Some(expected_root)
+        || mount_id(root).ok() != Some(expected_mount)
+        || expected_mount == 0
+    {
+        return Err(IncompleteReason::InstallationChanged);
+    }
+    let observed_names = names(root)?;
+    let required_names: BTreeSet<_> = TopLevelName::REQUIRED
+        .iter()
+        .map(|name| name.name())
+        .collect();
+    if observed_names != required_names {
+        return Err(
+            if observed_names.difference(&required_names).next().is_some() {
+                IncompleteReason::UnknownTopLevel
+            } else {
+                IncompleteReason::MissingOrChangedEntry
+            },
+        );
+    }
+    let mut specs = Vec::with_capacity(TopLevelName::REQUIRED.len());
+    for name in TopLevelName::REQUIRED {
+        let held = open_child(root, OsStr::new(&name.name()))
+            .map_err(|_| IncompleteReason::UnsafeEntry)?
+            .ok_or(IncompleteReason::MissingOrChangedEntry)?;
+        let observed = identity(&held).map_err(|_| IncompleteReason::UnsafeEntry)?;
+        if observed.kind != name.expected_kind() || mount_id(&held).ok() != Some(expected_mount) {
+            return Err(IncompleteReason::UnsafeEntry);
+        }
+        specs.push(ExpectedTopLevel {
+            name,
+            identity: observed,
+        });
+    }
+    if names(root)? != observed_names
+        || identity(root).ok().as_ref() != Some(expected_root)
+        || mount_id(root).ok() != Some(expected_mount)
+    {
+        return Err(IncompleteReason::InstallationChanged);
+    }
+    Ok(specs)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -472,6 +550,33 @@ mod tests {
         let root_identity = identity(&root).unwrap();
         let mount = mount_id(&root).unwrap();
         (temp, root, root_identity, mount, specs)
+    }
+
+    #[test]
+    fn descriptor_only_fixed_derivation_rejects_wrong_root_mount_and_unknown_name() {
+        let (temp, root, wanted, mount, _specs) = fixture();
+        let derived = derive_current_fixed_specs_held(&root, &wanted, mount).unwrap();
+        assert_eq!(derived.len(), TopLevelName::REQUIRED.len());
+        let observed = inspect_held(&root, uuid::Uuid::new_v4(), &wanted, mount, &derived);
+        assert!(matches!(
+            observed,
+            CensusOutcome::ExactExpectedSetObserved(_)
+        ));
+        let mut wrong = wanted.clone();
+        wrong.ino = wrong.ino.wrapping_add(1);
+        assert!(matches!(
+            derive_current_fixed_specs_held(&root, &wrong, mount),
+            Err(IncompleteReason::InstallationChanged)
+        ));
+        assert!(matches!(
+            derive_current_fixed_specs_held(&root, &wanted, mount + 1),
+            Err(IncompleteReason::InstallationChanged)
+        ));
+        fs::write(temp.path().join("unknown-private-canary"), b"synthetic").unwrap();
+        assert!(matches!(
+            derive_current_fixed_specs_held(&root, &wanted, mount),
+            Err(IncompleteReason::UnknownTopLevel)
+        ));
     }
 
     #[test]
