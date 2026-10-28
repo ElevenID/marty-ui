@@ -7,6 +7,7 @@ reads secret contents, grants operator authority, or qualifies a release.
 
 from copy import deepcopy
 import json
+import ipaddress
 import re
 import unicodedata
 from urllib.parse import urlsplit
@@ -29,6 +30,42 @@ def _object(pairs):
         require(key not in result, "DUPLICATE_PUBLIC_JSON_KEY")
         result[key] = value
     return result
+
+
+def _public_host(host):
+    """Conservative literal IP/ASCII DNS subset of the runtime URL parser.
+
+    urllib splits authorities without validating URL host syntax. Do not accept
+    percent escapes, scoped IPs, ambiguous numeric hosts or invalid A-labels as
+    proof that reqwest::Url will parse the signer configuration at startup.
+    """
+    require(
+        isinstance(host, str) and host and "%" not in host, "PUBLIC_URI_HOST_REQUIRED"
+    )
+    if ":" in host:
+        ipaddress.IPv6Address(host)
+        return
+    labels = host.rstrip(".").split(".")
+    require(
+        len(host.rstrip(".")) <= 253
+        and all(
+            re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?", part)
+            for part in labels
+        ),
+        "PUBLIC_URI_HOST_REQUIRED",
+    )
+    if re.fullmatch(r"(?:[0-9]+|0[xX][0-9a-fA-F]+)", labels[-1]):
+        ipaddress.IPv4Address(host)
+    for label in labels:
+        if label.lower().startswith("xn--"):
+            try:
+                require(
+                    label.encode("ascii").decode("idna").encode("idna").decode("ascii")
+                    == label.lower(),
+                    "PUBLIC_URI_HOST_REQUIRED",
+                )
+            except UnicodeError as error:
+                raise ValueError("PUBLIC_URI_HOST_REQUIRED") from error
 
 
 def authorities(raw):
@@ -79,6 +116,7 @@ def authorities(raw):
                 "PUBLIC_URI_REQUIRED",
             )
             parsed = urlsplit(uri)
+            _public_host(parsed.hostname)
             require(
                 parsed.scheme in ("http", "https")
                 and parsed.hostname

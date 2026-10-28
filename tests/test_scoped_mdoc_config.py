@@ -205,6 +205,11 @@ class DeltaControls(unittest.TestCase):
             "https://example.test/contact#",
             "https://example.test:99999/contact",
             "https://example.test\\contact",
+            "https://%/issuer.crl",
+            "https://bad|host/issuer.crl",
+            "https://999.999.999.999/issuer.crl",
+            "https://xn--a/issuer.crl",
+            "https://[fe80::1%25eth0]/issuer.crl",
         ):
             rows = copy.deepcopy(additions)
             rows[0]["certificate"]["issuer_contact_uri"] = uri
@@ -213,6 +218,14 @@ class DeltaControls(unittest.TestCase):
         rows = copy.deepcopy(additions)
         rows[0]["issuer_did"] += "\u0085"
         with self.assertRaises(ValueError):
+            subject.merged_authorities(None, rows)
+        for uri in (
+            "https://beta.elevenidllc.com/issuer.crl",
+            "http://127.0.0.1/issuer.crl",
+            "https://[::1]/issuer.crl",
+        ):
+            rows = copy.deepcopy(additions)
+            rows[0]["certificate"]["crl_distribution_uri"] = uri
             subject.merged_authorities(None, rows)
 
     def test_runtime_environment_seam_does_not_hide_extra_values(self):
