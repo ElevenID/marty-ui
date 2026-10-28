@@ -54,6 +54,8 @@ pub mod installer_prepare;
 pub(crate) mod installer_purge_host;
 #[allow(dead_code)] // No production caller until the purge coordinator is reviewed.
 pub(crate) mod installer_purge_ledger;
+#[cfg(target_os = "linux")]
+pub(crate) mod installer_purge_plan;
 #[allow(dead_code)] // Dormant until the reviewed purge coordinator supplies durable intent.
 pub(crate) mod installer_purge_volume;
 pub mod installer_release;
