@@ -45,8 +45,16 @@ def _absent(parent: int, name: str) -> None:
     raise ValueError("VM probe recovery record already exists")
 
 
-def _admitted_controller(admission: Path) -> tuple[str, str]:
-    """Bind the loaded module bytes to a separately Git-admitted root snapshot."""
+ADMISSION_FIELDS = {"schema", "source_sha", "module_sha256", "vm_id",
+                    "probe_id", "original_intent_sha256", "readiness_sha256",
+                    "directory_device", "directory_inode", "operator_device",
+                    "operator_inode", "operator_sha256", "operator_bytes",
+                    "operator_mode", "original_controller_sha", "original_failure",
+                    "classified_stage"}
+
+
+def _admitted_controller(admission: Path) -> dict:
+    """Bind loaded bytes and one reviewed event to a root-owned admission."""
     release.require(admission.is_absolute() and not admission.is_symlink(),
                     "VM probe recovery admission path invalid")
     module = Path(__file__).resolve(strict=True)
@@ -94,18 +102,35 @@ def _admitted_controller(admission: Path) -> tuple[str, str]:
     manifest = release.decode(raw)
     release.require(release.encode(manifest) == raw,
                     "VM probe recovery admission is not canonical")
-    release.exact(manifest, {"schema", "source_sha", "module_sha256"},
+    release.exact(manifest, ADMISSION_FIELDS,
                   "VM probe recovery source admission")
     release.require(manifest["schema"] == ADMISSION_SCHEMA
+                    and manifest["original_controller_sha"] == ORIGINAL_CONTROLLER_SHA
+                    and manifest["original_failure"] == ORIGINAL_FAILURE
+                    and manifest["classified_stage"] == STAGE
                     and isinstance(manifest["source_sha"], str)
                     and re.fullmatch(r"[0-9a-f]{40}", manifest["source_sha"])
                     and manifest["source_sha"] != ORIGINAL_CONTROLLER_SHA
                     and isinstance(manifest["module_sha256"], str)
                     and re.fullmatch(r"[0-9a-f]{64}", manifest["module_sha256"])
                     and hashlib.sha256(read(module, 131072)).hexdigest()
-                    == manifest["module_sha256"],
+                    == manifest["module_sha256"]
+                    and all(isinstance(manifest[key], int) and not isinstance(manifest[key], bool)
+                            and manifest[key] > 0 for key in
+                            ("directory_device", "directory_inode", "operator_device",
+                             "operator_inode", "operator_bytes"))
+                    and manifest["operator_mode"] == 600
+                    and isinstance(manifest["readiness_sha256"], str)
+                    and re.fullmatch(r"[0-9a-f]{64}", manifest["readiness_sha256"])
+                    and isinstance(manifest["operator_sha256"], str)
+                    and re.fullmatch(r"[0-9a-f]{64}", manifest["operator_sha256"]),
                     "VM probe recovery source admission differs")
-    return manifest["source_sha"], manifest["module_sha256"]
+    probe._uuid(manifest["vm_id"])
+    probe._uuid(manifest["probe_id"])
+    release.require(isinstance(manifest["original_intent_sha256"], str)
+                    and re.fullmatch(r"[0-9a-f]{64}", manifest["original_intent_sha256"]),
+                    "VM probe recovery admitted event digest invalid")
+    return manifest
 
 
 def _held_chmod(binding: dict, target: str, expected: dict,
@@ -149,7 +174,13 @@ def recover(*, source: Path, registry: Path, runtime_parent: Path, vm_id: str,
     probe._uuid(recovery_id)
     release.require(re.fullmatch(r"[0-9a-f]{64}", original_intent_sha256) is not None,
                     "VM probe recovery original digest invalid")
-    recovery_controller_source_sha, module_sha = _admitted_controller(controller_admission)
+    admission = _admitted_controller(controller_admission)
+    release.require((vm_id, probe_id, original_intent_sha256)
+                    == (admission["vm_id"], admission["probe_id"],
+                        admission["original_intent_sha256"]),
+                    "VM probe recovery event is not the admitted interruption")
+    recovery_controller_source_sha = admission["source_sha"]
+    module_sha = admission["module_sha256"]
     release.require(all(path.is_absolute() for path in
                         (source, registry, runtime_parent, assets, gh, cosign)),
                     "VM probe recovery path must be absolute")
@@ -195,6 +226,10 @@ def recover(*, source: Path, registry: Path, runtime_parent: Path, vm_id: str,
         }
         release.require(all(original[name] == value for name, value in comparisons.items()),
                         "VM probe recovery binding differs")
+        release.require(binding["readiness_sha256"] == admission["readiness_sha256"]
+                        and expected["binary_sha256"] == admission["operator_sha256"]
+                        and expected["binary_bytes"] == admission["operator_bytes"],
+                        "VM probe recovery admitted binding differs")
         directory = original["guest_directory"]
         target = directory + "/marty-deploy"
         release.require(probe._guest_home_stamp(binding) == binding["home_stamp"],
@@ -206,6 +241,10 @@ def recover(*, source: Path, registry: Path, runtime_parent: Path, vm_id: str,
         staged = probe._guest_operator(binding, target, expected, mode=600)
         release.require(staged[0] == held_directory[0],
                         "VM probe recovery file mount differs")
+        release.require((held_directory[0], held_directory[1], staged[0], staged[1])
+                        == (admission["directory_device"], admission["directory_inode"],
+                            admission["operator_device"], admission["operator_inode"]),
+                        "VM probe recovery admitted staging differs")
         release.require(probe._guest_stamp(binding, directory) == held_directory
                         and probe._guest_home_stamp(binding) == binding["home_stamp"]
                         and _read_record(lease.parent, original_name)[0] == original_raw
@@ -239,8 +278,7 @@ def recover(*, source: Path, registry: Path, runtime_parent: Path, vm_id: str,
         }
         recovery_raw = _write(lease.parent, recovery_name, recovery_intent)
         release.require(_read_record(lease.parent, recovery_name)[0] == recovery_raw
-                        and _admitted_controller(controller_admission)
-                        == (recovery_controller_source_sha, module_sha)
+                        and _admitted_controller(controller_admission) == admission
                         and _read_record(lease.parent, original_name)[0] == original_raw
                         and probe._guest_operator(binding, target, expected, mode=600) == staged
                         and probe._guest_stamp(binding, directory) == held_directory,
@@ -269,8 +307,7 @@ def recover(*, source: Path, registry: Path, runtime_parent: Path, vm_id: str,
                         and _read_record(lease.parent, original_name)[0] == original_raw
                         and _read_record(lease.parent, recovery_name)[0] == recovery_raw,
                         "VM probe recovery observations changed")
-        release.require(_admitted_controller(controller_admission)
-                        == (recovery_controller_source_sha, module_sha),
+        release.require(_admitted_controller(controller_admission) == admission,
                         "VM probe recovery controller changed")
         result = {
             "schema": probe.RESULT_SCHEMA, "phase": "observed", "vm_id": vm_id,

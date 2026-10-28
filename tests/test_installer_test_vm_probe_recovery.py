@@ -35,12 +35,21 @@ class Recovery(unittest.TestCase):
             admission = root / "admission.json"
             sha = hashlib.sha256(module.read_bytes()).hexdigest()
             record = {"schema": recovery.ADMISSION_SCHEMA,
-                      "source_sha": "9" * 40, "module_sha256": sha}
+                      "original_controller_sha": recovery.ORIGINAL_CONTROLLER_SHA,
+                      "original_failure": recovery.ORIGINAL_FAILURE,
+                      "classified_stage": recovery.STAGE,
+                      "source_sha": "9" * 40, "module_sha256": sha,
+                      "vm_id": VM, "probe_id": PROBE,
+                      "original_intent_sha256": "7" * 64,
+                      "readiness_sha256": "e" * 64,
+                      "directory_device": 10, "directory_inode": 20,
+                      "operator_device": 10, "operator_inode": 21,
+                      "operator_sha256": "a" * 64,
+                      "operator_bytes": 42, "operator_mode": 600}
             admission.write_bytes(recovery.release.encode(record))
             admission.chmod(0o600)
             with mock.patch.object(recovery, "__file__", str(module)):
-                self.assertEqual(recovery._admitted_controller(admission),
-                                 ("9" * 40, sha))
+                self.assertEqual(recovery._admitted_controller(admission), record)
                 module.write_bytes(module.read_bytes() + b"\n")
                 with self.assertRaisesRegex(ValueError, "source admission differs"):
                     recovery._admitted_controller(admission)
@@ -168,9 +177,23 @@ class Recovery(unittest.TestCase):
                           controller_admission=Path("/admission.json"),
                           assets=Path("/assets"), gh=Path("/gh"),
                           cosign=Path("/cosign"), client=None)
+            admission = {"schema": recovery.ADMISSION_SCHEMA,
+                         "original_controller_sha": recovery.ORIGINAL_CONTROLLER_SHA,
+                         "original_failure": recovery.ORIGINAL_FAILURE,
+                         "classified_stage": recovery.STAGE,
+                         "source_sha": "9" * 40, "module_sha256": "8" * 64,
+                         "vm_id": VM, "probe_id": PROBE,
+                         "original_intent_sha256": original_sha,
+                         "readiness_sha256": binding["readiness_sha256"],
+                         "directory_device": directory_stamp[0],
+                         "directory_inode": directory_stamp[1],
+                         "operator_device": staged[0], "operator_inode": staged[1],
+                         "operator_sha256": expected["binary_sha256"],
+                         "operator_bytes": expected["binary_bytes"],
+                         "operator_mode": 600}
             with mock.patch.object(recovery.os, "geteuid", return_value=0), \
                  mock.patch.object(recovery, "_admitted_controller",
-                                   return_value=("9" * 40, "8" * 64)), \
+                                   return_value=admission), \
                  mock.patch.object(recovery, "ControllerLease", Lease), \
                  mock.patch.object(recovery, "_read_record", side_effect=read), \
                  mock.patch.object(recovery, "_write", side_effect=write), \
@@ -184,17 +207,23 @@ class Recovery(unittest.TestCase):
                  mock.patch.object(recovery.probe, "_execute_sealed",
                                    side_effect=lambda *_a: {"matched": True,
                                        "output_sha256": "f" * 64, "output_bytes": 100}) as run:
-                with self.assertRaisesRegex(ValueError, "original probe intent differs"):
+                with self.assertRaisesRegex(ValueError, "not the admitted interruption"):
                     recovery.recover(**dict(kwargs, original_intent_sha256="0" * 64))
-                with self.assertRaisesRegex(ValueError, "original probe intent differs"):
+                with self.assertRaisesRegex(ValueError, "not the admitted interruption"):
                     recovery.recover(**dict(kwargs, probe_id=RECOVERY))
+                with self.assertRaisesRegex(ValueError, "not the admitted interruption"):
+                    recovery.recover(**dict(kwargs, vm_id=RECOVERY))
                 with self.assertRaisesRegex(ValueError, "binding differs"):
                     original["engine_id"] = "different-engine"
                     (registry / original_name).write_bytes(recovery.release.encode(original))
-                    recovery.recover(**dict(kwargs, original_intent_sha256=
-                        recovery.release.digest(recovery.release.encode(original))))
+                    changed_sha = recovery.release.digest(recovery.release.encode(original))
+                    with mock.patch.dict(admission, {"original_intent_sha256": changed_sha}):
+                        recovery.recover(**dict(kwargs, original_intent_sha256=changed_sha))
                 original["engine_id"] = binding["engine_id"]
                 (registry / original_name).write_bytes(original_raw)
+                with mock.patch.dict(admission, {"operator_inode": 99}):
+                    with self.assertRaisesRegex(ValueError, "admitted staging differs"):
+                        recovery.recover(**kwargs)
                 names.return_value = b"unexpected-new-file\n"
                 with self.assertRaisesRegex(ValueError, "directory content differs"):
                     recovery.recover(**kwargs)
