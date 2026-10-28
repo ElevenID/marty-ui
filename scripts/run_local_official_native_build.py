@@ -129,6 +129,7 @@ def execute(mode: str, packet_path: Path, packet_sha: str, prepared_sha: str) ->
 
 
 def main() -> None:
+    require(sys.version_info >= (3, 12), "PYTHON312_REQUIRED_FOR_REVIEWED_TRANSPORT")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("mode", choices=("prepare", "check", "start", "finish"))
     parser.add_argument("--source-export", type=Path, required=True)
