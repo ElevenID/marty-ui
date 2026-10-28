@@ -17,6 +17,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
+    os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
 };
 type Result<T> = std::result::Result<T, String>;
@@ -782,6 +783,81 @@ fn pre_application_mutation_guard(
     }
     Ok(())
 }
+/// Inspect the same ownership boundary as uninstall without creating receipts
+/// or changing Docker resources. This is a point-in-time view; uninstall must
+/// repeat every check before it mutates anything.
+pub fn plan(args: &[String]) -> Result<String> {
+    plan_inner(args).map_err(|_| REFUSED.to_owned())
+}
+fn plan_inner(args: &[String]) -> Result<String> {
+    let args = arguments(args)?;
+    let state = LockedMaintenance::open(&args.installation)?;
+    let loaded = load(&state, &args.installation)?;
+    let binding = state.journal().runtime().ok_or(REFUSED)?;
+    // Keep Docker's isolated configuration outside the installation being
+    // inspected. The temporary directory is private and removed on return.
+    let staging = tempfile::Builder::new()
+        .prefix("marty-uninstall-preview-")
+        .tempdir_in("/tmp")
+        .map_err(|_| REFUSED)?;
+    std::fs::set_permissions(staging.path(), std::fs::Permissions::from_mode(0o700))
+        .map_err(|_| REFUSED)?;
+    let docker = DockerRunner::new(
+        &args.docker,
+        &binding.docker_host,
+        &binding.engine_id,
+        staging.path(),
+    )?;
+    docker.preflight()?;
+    let saved_plan = state.read_evidence("uninstall-plan.json")?;
+    if let Some(saved) = &saved_plan {
+        require(parse::<CleanupPlan>(saved)? == loaded.plan)?;
+    }
+    let live = scope(&docker, &state, &loaded)?;
+    require(saved_plan.is_some() || live.len() == loaded.plan.resources.len())?;
+    let mut containers = Vec::with_capacity(loaded.plan.resources.len());
+    for resource in &loaded.plan.resources {
+        let action = if live.contains(&resource.container_id) {
+            let observed = observe(&docker, &loaded, resource)?;
+            let status = text(&observed["State"]["Status"])?;
+            match status {
+                "running" if observed["State"]["Running"] == true => "stop_and_remove",
+                "exited" | "created" if observed["State"]["Running"] == false => "remove",
+                _ => return Err(REFUSED.into()),
+            }
+        } else {
+            "already_removed"
+        };
+        containers
+            .push(json!({"role": resource.role, "id": resource.container_id, "action": action}));
+    }
+    unchanged(&state, &loaded)?;
+    let plan_bytes = serde_json::to_vec(&loaded.plan).map_err(|_| REFUSED)?;
+    let network_action = if network_present(&docker, &loaded.plan)? {
+        "remove_after_containers"
+    } else {
+        "already_removed"
+    };
+    unchanged(&state, &loaded)?;
+    serde_json::to_string(&json!({
+        "schema": "elevenid.installer-uninstall-preview/v1",
+        "installation_id": loaded.plan.installation_id,
+        "engine_id": loaded.plan.engine_id,
+        "project": loaded.plan.project,
+        "cleanup_plan_sha256": format!("{:x}", Sha256::digest(plan_bytes)),
+        "containers": containers,
+        "network": {"id": loaded.plan.network_id, "name": loaded.plan.network_name, "action": network_action},
+        "retained": {
+            "installation_directory": args.installation,
+            "host_data_credentials_backups_and_evidence": true,
+            "redis_volume": loaded.plan.retained_redis_volume,
+            "images": true
+        },
+        "purge_supported": false,
+        "point_in_time": true
+    }))
+    .map_err(|_| REFUSED.into())
+}
 /// Remove a complete runtime or the proven pre-application boundary, retaining data.
 /// A retry resumes this cleanup transaction; it never resumes provisioning.
 pub fn uninstall(args: &[String]) -> Result<String> {
@@ -1084,6 +1160,7 @@ from pathlib import Path
 p=Path(__file__).parent/'ledger.json'
 s=json.loads(p.read_text()); a=sys.argv[1:]
 s.setdefault('commands',[]).append(a)
+s['installation_staging_seen']=s.get('installation_staging_seen',False) or any(x.name.startswith('.installer-command-') for x in (p.parent/'install').iterdir())
 p.write_text(json.dumps(s))
 def persist(): p.write_text(json.dumps(s))
 def out(v): print(json.dumps(v))
@@ -1642,6 +1719,80 @@ else: sys.exit(98)
             b"unchanged-synthetic-scalar"
         );
         assert_eq!(ledger(&root)["mutations"].as_array().unwrap().len(), 9);
+    }
+    #[test]
+    fn preview_is_read_only_and_lists_exact_scoped_actions() {
+        for (mode, count) in [("normal", 34), ("pre-application", 4)] {
+            let (root, args) = if mode == "normal" {
+                mock("normal")
+            } else {
+                pre_application_mock("normal")
+            };
+            let installation = root.path().join("install");
+            let before = fs::read_dir(installation.join("evidence"))
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name())
+                .collect::<BTreeSet<_>>();
+            let preview: Value = serde_json::from_str(&plan_inner(&args).unwrap_or_else(|error| {
+                panic!("{mode}: {error}; commands={}", ledger(&root)["commands"])
+            }))
+            .unwrap();
+            assert_eq!(preview["schema"], "elevenid.installer-uninstall-preview/v1");
+            assert_eq!(preview["containers"].as_array().unwrap().len(), count);
+            assert_eq!(preview["network"]["action"], "remove_after_containers");
+            assert_eq!(
+                preview["retained"]["installation_directory"],
+                installation.to_str().unwrap()
+            );
+            assert_eq!(preview["purge_supported"], false);
+            assert!(preview["containers"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|r| r["action"] == "stop_and_remove" && id(r["id"].as_str().unwrap())));
+            let after = fs::read_dir(installation.join("evidence"))
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name())
+                .collect::<BTreeSet<_>>();
+            assert_eq!(before, after);
+            assert!(ledger(&root)["mutations"].as_array().unwrap().is_empty());
+            assert_eq!(ledger(&root)["installation_staging_seen"], false);
+        }
+    }
+    #[test]
+    fn preview_refuses_foreign_project_resources_without_mutation() {
+        let (root, args) = mock("unknown");
+        assert_eq!(plan(&args).unwrap_err(), REFUSED);
+        assert!(ledger(&root)["mutations"].as_array().unwrap().is_empty());
+        assert!(!root
+            .path()
+            .join("install/evidence/uninstall-plan.json")
+            .exists());
+    }
+    #[test]
+    fn preview_reports_stopped_container_as_remove_only() {
+        let (root, args) = mock("normal");
+        let mut observed = ledger(&root);
+        let container = observed["containers"]
+            .as_object_mut()
+            .unwrap()
+            .values_mut()
+            .next()
+            .unwrap();
+        container["State"]["Status"] = json!("exited");
+        container["State"]["Running"] = json!(false);
+        save(root.path().join("ledger.json"), &observed);
+        let preview: Value = serde_json::from_str(&plan(&args).unwrap()).unwrap();
+        assert_eq!(
+            preview["containers"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|resource| resource["action"] == "remove")
+                .count(),
+            1
+        );
+        assert!(ledger(&root)["mutations"].as_array().unwrap().is_empty());
     }
     #[test]
     fn pre_application_records_and_mid_cleanup_drift_refuse() {

@@ -536,7 +536,11 @@ fn run() -> Result<(), String> {
     if args.first().is_some_and(|arg| arg == "uninstall") {
         #[cfg(target_os = "linux")]
         {
-            let report = marty_deployment_catalog::installer_uninstall::uninstall(&args[1..])?;
+            let report = if args.get(1).is_some_and(|arg| arg == "plan") {
+                marty_deployment_catalog::installer_uninstall::plan(&args[2..])?
+            } else {
+                marty_deployment_catalog::installer_uninstall::uninstall(&args[1..])?
+            };
             println!("{report}");
             return Ok(());
         }
