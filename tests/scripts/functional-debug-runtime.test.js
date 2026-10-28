@@ -301,3 +301,42 @@ test('maintenance receipt rejects missing role, foreign profile and later proces
  const wrong=structuredClone(receipt);wrong.baseProfile=f.write('foreign-prior.json',{...f.profile,scope:'RELEASE'});assert.throws(()=>expectedRuntime(f.bind(wrong)));
  const profile=f.bind(receipt);f.mutateActual(actual=>{actual.hostPid++;});assert.throws(()=>verifyFunctionalRuntime(profile,{readDocker:f.readDocker}));
 });
+
+function scopedRowsFixture(t){
+ const f=issuanceFixture(t),expected=expectedRuntime(f.profile),before=verifyFunctionalRuntime(f.profile,{observe:f.observe});
+ const roles=['signing-keys','gateway'],hashes={'marty-signing-keys':H('6'),'marty-gateway':H('7')};
+ const deployed={roles:Object.fromEntries(roles.map((role,index)=>{const old=before.roles.find(row=>row.role===role),binary='marty-'+role;return [role,{
+  containerId:crypto.createHash('sha256').update('scoped:'+role).digest('hex'),imageId:old.imageId,startedAt:'2026-10-26T02:00:00Z',hostPid:400+index,
+  configuredRuntimeUid:old.configuredRuntimeUid,effectiveUid:old.effectiveUid,
+  binaryMount:{type:'bind',source:path.join(path.dirname(f.profile.baseProfile.path),'candidate-'+binary),destination:'/usr/local/bin/'+binary,writable:false},
+  processExecutablePath:'/usr/local/bin/'+binary,processExecutableSha256:hashes[binary],mountedBinarySha256:hashes[binary]}]}))};
+ const selection={roles,source:'3b862bebdd2cc0707d9a38f6df55db198b6be417',coreSource:'4320b5fa1c6f41231ee0aa2bc57d8008549f67ac',kind:'SCOPED_NATIVE_FUNCTIONAL_OVERLAY',hashes};
+ return {f,expected,before,deployed,selection};
+}
+test('shared native overlay changes exactly signing/gateway and preserves actual other20 generations',t=>{
+ const {applyNativeOverlayRows}=require('./functional-debug-runtime'),x=scopedRowsFixture(t);
+ const result=applyNativeOverlayRows(x.expected,x.before,x.deployed,x.selection);assert.equal(result.length,22);
+ assert.equal(result.filter(row=>row.kind==='SCOPED_NATIVE_FUNCTIONAL_OVERLAY').length,2);
+ for(const row of result){const old=x.before.roles.find(item=>item.role===row.role);
+  if(x.selection.roles.includes(row.role)){assert.equal(row.source,x.selection.source);assert.equal(row.coreSource,x.selection.coreSource);assert.equal(row.sha256,x.selection.hashes[row.binary]);assert.equal(row.requiredContainerId,x.deployed.roles[row.role].containerId);assert.equal(row.requiredObservation,undefined);}
+  else{assert.equal(row.source,old.source);assert.equal(row.sha256,old.sha256);assert.equal(row.coreSource,old.coreSource);for(const [field,value]of Object.entries(row.requiredObservation))assert.deepEqual(value,old[field]);}
+ }
+ assert.deepEqual(result.filter(row=>['issuance','issuance-native'].includes(row.role)).map(row=>row.coreSource),[require('./functional-debug-runtime').ISSUANCE_CORE,require('./functional-debug-runtime').ISSUANCE_CORE]);
+});
+for(const fault of ['wrongRole','extraRole','source','elf','mountedElf','generation','untouchedPid','coreSource'])test('shared native overlay rejects '+fault,t=>{
+ const {applyNativeOverlayRows}=require('./functional-debug-runtime'),x=scopedRowsFixture(t);
+ if(fault==='wrongRole'){x.deployed.roles.flow=x.deployed.roles.gateway;delete x.deployed.roles.gateway;}
+ if(fault==='extraRole')x.deployed.roles.flow=x.deployed.roles.gateway;
+ if(fault==='source')x.before.roles.find(row=>row.role==='signing-keys').source=R('0');
+ if(fault==='elf')x.deployed.roles.gateway.processExecutableSha256=H('0');
+ if(fault==='mountedElf')x.deployed.roles.gateway.mountedBinarySha256=H('0');
+ if(fault==='generation')x.deployed.roles.gateway.startedAt=x.before.roles.find(row=>row.role==='gateway').startedAt;
+ if(fault==='untouchedPid')x.before.roles.find(row=>row.role==='issuance').hostPid++;
+ if(fault==='coreSource')x.before.roles.find(row=>row.role==='issuance').coreSource=R('0');
+ assert.throws(()=>applyNativeOverlayRows(x.expected,x.before,x.deployed,x.selection));
+});
+test('native envelope rejects foreign base and supplied observation before any runtime read',t=>{
+ const f=issuanceFixture(t),profile={schema:'marty.functional-mixed-runtime/v2',scope:'FUNCTIONAL_ONLY',releaseQualified:false,recordingQualified:false,baseProfile:f.write('foreign-v2.json',f.profile),nativeOverlay:{profile:'d02-signing-cas'}};
+ assert.throws(()=>expectedRuntime(profile),/Foreign native-overlay base/);
+ assert.throws(()=>verifyFunctionalRuntime(profile,{observe:()=>assert.fail('No supplied observations')}));
+});
