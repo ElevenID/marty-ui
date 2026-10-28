@@ -84,6 +84,27 @@ async fn filtering_window(pool: &PgPool, router: &axum::Router) {
         json!([]),
         "foreign organization cannot read seeded reviews"
     );
+
+    // A binding's own job must remain visible behind more than the former
+    // 500-row organization window of unrelated, newer jobs.
+    sqlx::query("UPDATE issuance_service.canvas_evidence_sync_jobs SET created_at='2000-01-01T00:00:00Z' WHERE id='job-dead'")
+        .execute(pool).await.unwrap();
+    sqlx::query("INSERT INTO issuance_service.canvas_evidence_sync_targets
+        (id,organization_id,platform_id,binding_id,target_type,logical_key,application_id)
+        VALUES ('target-window','org-review','platform-review','binding-foreign','background_roster','foreign-window',NULL)")
+        .execute(pool).await.unwrap();
+    sqlx::query("INSERT INTO issuance_service.canvas_evidence_sync_jobs
+        (id,organization_id,target_id,status,attempt_count,max_attempts,available_at,result,created_at,updated_at)
+        SELECT 'job-window-'||i,'org-review','target-window','succeeded',0,8,now(),'{}'::jsonb,
+        '2026-01-01T00:00:00Z'::timestamptz+i*interval '1 second',now()
+        FROM generate_series(1,501) i")
+        .execute(pool).await.unwrap();
+    let (status, _, body) = request_case(router, &json!({
+        "path":"/v1/integrations/canvas/canvas-sync-jobs?binding_id=binding-review&limit=1"
+    })).await;
+    assert_eq!(status, 200);
+    assert_eq!(body.as_array().unwrap().len(), 1);
+    assert_eq!(body[0]["id"], "job-dead", "owned job survives 501 newer foreign jobs");
 }
 
 pub async fn replay_inputs(pool: &PgPool) {
