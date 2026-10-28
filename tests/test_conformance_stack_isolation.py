@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
 import re
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import yaml
@@ -329,6 +331,135 @@ def test_haip_overlay_is_explicit_and_isolation_is_last() -> None:
     assert any(
         path.endswith("docker-compose.profile.conformance-images.yml") for path in files
     )
+
+
+def test_local_source_issuance_migration_uses_exact_binary_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    binary = tmp_path / "marty-issuance-service"
+    binary.write_bytes(b"current-source-native-migrator")
+    digest = hashlib.sha256(binary.read_bytes()).hexdigest()
+    monkeypatch.setenv("MARTY_CONFORMANCE_SOURCE_VOLUME_ROOT", str(tmp_path))
+    monkeypatch.setenv("MARTY_CONFORMANCE_SOURCE_MIGRATION_BINARY", str(binary))
+    monkeypatch.setenv("MARTY_CONFORMANCE_SOURCE_MIGRATION_SHA256", digest)
+
+    command = stack.compose_command("marty-conformance-test1")
+    files = [command[index + 1] for index, value in enumerate(command) if value == "--file"]
+    assert Path(files[-3]).name == stack.LOCAL_SOURCE_MIGRATION_FILE
+    assert Path(files[-1]).name == stack.ISOLATION_FILE
+    overlay = yaml.safe_load((ROOT / stack.LOCAL_SOURCE_MIGRATION_FILE).read_text())
+    assert set(overlay["services"]) == {"issuance-migrations"}
+    assert overlay["services"]["issuance-migrations"]["volumes"][0]["read_only"] is True
+
+    binary.write_bytes(b"changed-native-migrator")
+    with pytest.raises(ValueError, match="digest changed"):
+        stack.compose_command("marty-conformance-test1")
+    with pytest.raises(ValueError, match="native immutable-image mode"):
+        stack.compose_command("marty-conformance-test1", use_ghcr=False)
+
+
+def test_local_source_migration_receipt_requires_exact_owned_terminal_container(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    product = tmp_path / "product"
+    migrations = product / "rust/services/issuance/migrations"
+    migrations.mkdir(parents=True)
+    (migrations / "0009.sql").write_text("SELECT 1;", encoding="utf-8")
+    binary = tmp_path / "marty-issuance-service"
+    binary.write_bytes(b"native")
+    receipt = tmp_path / "migration.json"
+    revision = "a" * 40
+    project = "marty-conformance-test1"
+    other_id, owned_id = "b" * 64, "a" * 64
+    monkeypatch.setattr(stack, "ROOT", product)
+    monkeypatch.setattr(stack, "project_container_ids", lambda _project: [other_id, owned_id])
+    monkeypatch.setenv("MARTY_CONFORMANCE_SOURCE_VOLUME_ROOT", str(tmp_path))
+    monkeypatch.setenv("MARTY_CONFORMANCE_SOURCE_MIGRATION_BINARY", str(binary))
+    monkeypatch.setenv("MARTY_CONFORMANCE_SOURCE_MIGRATION_SHA256", hashlib.sha256(binary.read_bytes()).hexdigest())
+    monkeypatch.setenv("MARTY_CONFORMANCE_SOURCE_REVISION", revision)
+    monkeypatch.setenv("MARTY_CONFORMANCE_SOURCE_MIGRATION_RECEIPT", str(receipt))
+    row = {
+        "Id": owned_id,
+        "Path": "/usr/local/bin/marty-issuance-service", "Args": ["migrate"],
+        "State": {"Status": "exited", "ExitCode": 0, "OOMKilled": False},
+        "Config": {"Image": "sha256:baseline", "Entrypoint": ["/usr/local/bin/marty-issuance-service"],
+                   "Cmd": ["migrate"], "Labels": {
+            "com.docker.compose.project": project,
+            "com.docker.compose.service": "issuance-migrations",
+        }},
+        "Mounts": [{"Source": str(binary), "Destination": "/usr/local/bin/marty-issuance-service", "RW": False}],
+    }
+    other = {"Id": other_id, "Config": {"Labels": {
+        "com.docker.compose.project": project, "com.docker.compose.service": "postgres",
+    }}}
+
+    def output(command, **_kwargs):
+        return revision if command[0] == "git" else json.dumps([other, row])
+
+    monkeypatch.setattr(stack.subprocess, "check_output", output)
+    config = {"services": {"issuance-migrations": {
+        "image": "sha256:baseline", "entrypoint": ["/usr/local/bin/marty-issuance-service"],
+        "command": ["migrate"],
+    }}}
+    with pytest.raises(ValueError, match="prior local migrator lacks"):
+        stack.attest_local_source_migration(
+            project, config, resume=True, preexisting_container_id=owned_id,
+        )
+    assert not receipt.exists()
+    # A canonical --resume can mean only OpenBao was prebootstrapped. This is
+    # the first full-stack up, so its freshly completed migrator gets a receipt.
+    stack.attest_local_source_migration(project, config, resume=True)
+    assert json.loads(receipt.read_text())["containerId"] == owned_id
+    stack.attest_local_source_migration(
+        project, config, resume=True, preexisting_container_id=owned_id,
+    )
+    row["Mounts"][0]["RW"] = True
+    with pytest.raises(ValueError, match="did not complete"):
+        stack.attest_local_source_migration(
+            project, config, resume=True, preexisting_container_id=owned_id,
+        )
+    row["Mounts"][0]["RW"] = False
+    binary.write_bytes(b"changed-after-migration")
+    with pytest.raises(ValueError, match="did not complete"):
+        stack.attest_local_source_migration(
+            project, config, resume=True, preexisting_container_id=owned_id,
+        )
+
+
+def test_source_migration_prior_container_probe_distinguishes_kms_only_resume(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: list[list[str]] = []
+    output = ""
+
+    def inspect(command, **_kwargs):
+        observed.append(command)
+        return output
+
+    monkeypatch.setattr(stack.subprocess, "check_output", inspect)
+    project = "marty-conformance-local-test1"
+    assert stack.source_migration_container_before_up(project) is None
+    assert f"label=com.docker.compose.project={project}" in observed[0]
+    assert "label=com.docker.compose.service=issuance-migrations" in observed[0]
+    output = "a" * 64 + "\n"
+    assert stack.source_migration_container_before_up(project) == "a" * 64
+    output = "a" * 64 + "\n" + "b" * 64 + "\n"
+    with pytest.raises(ValueError, match="ambiguous"):
+        stack.source_migration_container_before_up(project)
+
+
+def test_project_inventory_uses_full_ids_for_migration_readback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed = []
+
+    def inventory(command, **_kwargs):
+        observed.append(command)
+        return SimpleNamespace(stdout="a" * 64 + "\n" + "b" * 64 + "\n")
+
+    monkeypatch.setattr(stack.subprocess, "run", inventory)
+    assert stack.project_container_ids("marty-conformance-local-test1") == ["a" * 64, "b" * 64]
+    assert "--no-trunc" in observed[0]
 
 
 def test_didcomm_authcrypt_overlay_is_explicit_and_isolation_is_last() -> None:
