@@ -250,17 +250,71 @@ def wait_for(path: Path, seconds: int = 30) -> None:
 
 def wait_for_keycloak(base: str, container: str, seconds: int = 35) -> None:
     deadline = time.monotonic() + seconds
+    last_discovery = "not_attempted"
     while time.monotonic() < deadline:
         try:
             http_json(base + "/realms/master/.well-known/openid-configuration")
             return
-        except (HTTPError, URLError, OSError):
-            pass
+        except HTTPError as error:
+            status = error.code
+            last_discovery = f"http_{status}" if type(status) is int and 100 <= status <= 599 else "http_unknown"
+        except URLError as error:
+            last_discovery = f"network_{type(error.reason).__name__}"
+        except OSError as error:
+            last_discovery = f"socket_{type(error).__name__}"
         state = run("docker", "inspect", "-f", "{{.State.Running}}", container)
         if state != "true":
             raise RuntimeError("Keycloak exited before OIDC discovery was ready")
         time.sleep(0.4)
-    raise RuntimeError("Keycloak OIDC discovery did not become ready")
+    raise RuntimeError(f"Keycloak OIDC discovery did not become ready; last={last_discovery}")
+
+
+def keycloak_startup_diagnostics(container: str) -> dict:
+    """Report bounded, fixed-category startup evidence without raw log contents."""
+    try:
+        observed = subprocess.run(["docker", "inspect", "--format", "{{json .State}}", container],
+                                  capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        return {"inspectFailureClass": type(error).__name__}
+    state = {"inspectExitCode": observed.returncode}
+    if observed.returncode == 0:
+        try:
+            parsed = json.loads(observed.stdout)
+        except (TypeError, ValueError):
+            return {"container": state, "inspectParseFailure": True}
+        if not isinstance(parsed, dict):
+            return {"container": state, "inspectParseFailure": True}
+        health = parsed.get("Health")
+        health = health if isinstance(health, dict) else {}
+        status = parsed.get("Status")
+        health_status = health.get("Status")
+        state.update(status=status if isinstance(status, str) and status in {
+                         "created", "running", "restarting", "removing", "paused", "exited", "dead"} else "unknown",
+                     running=parsed.get("Running") if isinstance(parsed.get("Running"), bool) else None,
+                     exitCode=parsed.get("ExitCode") if type(parsed.get("ExitCode")) is int else None,
+                     oomKilled=parsed.get("OOMKilled") if isinstance(parsed.get("OOMKilled"), bool) else None,
+                     healthStatus=health_status if isinstance(health_status, str) and health_status in {
+                         "starting", "healthy", "unhealthy"} else None)
+    try:
+        observed = subprocess.run(["docker", "logs", "--tail", "60", container],
+                                  capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        return {"container": state, "logFailureClass": type(error).__name__}
+    # CI's OpenBao startup helper redacts known secrets. Fixed labels are even
+    # narrower here because Keycloak logs may contain unknown token formats.
+    lines = (observed.stdout + observed.stderr)[-16384:].splitlines()[-40:]
+    events = []
+    for line in lines:
+        lower = line.lower()
+        level = ("error" if "error" in lower or "exception" in lower else
+                 "warning" if "warn" in lower else "info")
+        phase = ("database" if "database" in lower or "jdbc" in lower or "postgres" in lower else
+                 "kms_provider" if "openbao" in lower or "remote key" in lower or "kms" in lower else
+                 "http_listener" if "listening" in lower or "http" in lower else
+                 "keycloak_boot" if "keycloak" in lower or "quarkus" in lower else "other")
+        events.append({"level": level, "phase": phase})
+    return {"container": state, "logExitCode": observed.returncode,
+            "logLineCount": len(lines), "startupTail": events[-20:]}
 
 
 def database_key_counts(container: str) -> tuple[int, int]:
@@ -595,11 +649,9 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path,
             try:
                 wait_for_keycloak(base, kc_name)
             except RuntimeError as error:
-                observed = subprocess.run(["docker", "logs", "--tail", "100", kc_name],
-                                          capture_output=True, text=True, timeout=10)
-                logs = "\n".join(line for line in (observed.stdout + observed.stderr).splitlines()
-                                 if "ERROR" in line or "Caused by" in line or "Remote key providers" in line)[:1800]
-                raise RuntimeError(f"Keycloak did not start: {error}\n{logs}") from error
+                diagnostics = keycloak_startup_diagnostics(kc_name)
+                raise RuntimeError(f"Keycloak did not start: {error}; "
+                                   f"startup={json.dumps(diagnostics, sort_keys=True)}") from error
             if database_key_counts(pg_name) != (0, 0):
                 raise RuntimeError("Keycloak bootstrap stored private key material")
             try:
