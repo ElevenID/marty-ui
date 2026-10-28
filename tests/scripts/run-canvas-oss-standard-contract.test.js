@@ -783,6 +783,24 @@ test('engineering CLI permits explicit media-free mode while recorded mode requi
   assert.match(recorded.video,/contract\.webm$/);
 });
 
+test('host engineering refuses a recovery directory other than its run-owned directory before setup',async()=>{
+  const {prepareCanvasCaptureFixtures}=require('./run-canvas-oss-standard-contract');
+  const beforeReceipt=process.env.DEMO_LOCAL_FUNCTIONAL_RUNTIME_RECEIPT;
+  const beforeRecovery=process.env.DEMO_CANVAS_PRIVATE_RECOVERY_DIRECTORY;
+  try{
+    process.env.DEMO_LOCAL_FUNCTIONAL_RUNTIME_RECEIPT='source-only';
+    process.env.DEMO_CANVAS_PRIVATE_RECOVERY_DIRECTORY='C:\\different-private-run';
+    await assert.rejects(prepareCanvasCaptureFixtures({browser:{},ledger:{},
+      runSuffix:'owned-run-1234',ownedPrivateRecoveryDirectory:'C:\\expected-private-run'}),
+    error=>error.code==='canvas_private_custody_missing');
+  }finally{
+    if(beforeReceipt===undefined)delete process.env.DEMO_LOCAL_FUNCTIONAL_RUNTIME_RECEIPT;
+    else process.env.DEMO_LOCAL_FUNCTIONAL_RUNTIME_RECEIPT=beforeReceipt;
+    if(beforeRecovery===undefined)delete process.env.DEMO_CANVAS_PRIVATE_RECOVERY_DIRECTORY;
+    else process.env.DEMO_CANVAS_PRIVATE_RECOVERY_DIRECTORY=beforeRecovery;
+  }
+});
+
 test('shared stock login emits only static stages and preserves original navigation failure',async()=>{
  const {loginCanvas}=require('./run-canvas-oss-standard-contract');const stages=[];
  const locator={first(){return this},fill:async()=>{},click:async()=>{},isVisible:async()=>false};
@@ -967,12 +985,14 @@ test('engineering unresolved resources still retire independent owned sessions a
   const probes=[];let privateRetired=false;
   const context=role=>({cookies:async()=>[{name:'_csrf_token',value:'CONTROLLED'}],request:{get:async()=>{probes.push(role);return {status:()=>401}}}});
   const state={bindingActivationPossible:true,canvasOrigin:'https://canvas-test.elevenidllc.com',
-    adminContext:context('admin'),learnerContext:context('learner'),custody:{retire(){privateRetired=true;return true}}};
+    adminContext:context('admin'),learnerContext:context('learner'),
+    ownedVerificationFlow:{retirementConfirmed:false},custody:{retire(){privateRetired=true;return true}}};
   await assert.rejects(retireCanvasEngineeringSetup(state),error=>{
     assert.equal(error.code,'owned_canvas_cleanup_incomplete');
     assert.equal(error.canvasCleanupEvidence.complete,false);
     assert.equal(error.canvasCleanupEvidence.sessionsRetired,true);
     assert.equal(error.canvasCleanupEvidence.privateAuthorityRetired,false);
+    assert(error.canvasCleanupEvidence.failures.some(item=>item.stage==='VERIFICATION_FLOW'));
     assert.equal(error.canvasCleanupEvidence.failures[0].stage,'OWNED_RESOURCES');return true;
   });
   assert.deepEqual(probes,['learner','admin']);assert.equal(privateRetired,false);
