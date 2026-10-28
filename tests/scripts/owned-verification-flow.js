@@ -3,8 +3,8 @@
 // the canonical lifecycle verify() helper; no credential or signing logic here.
 const fs=require('node:fs'),path=require('node:path');
 const {randomUUID}=require('node:crypto');
+const {inspectOwnedFlow,retireOwnedFlow}=require('./lifecycle-flow-cleanup');
 const UUID=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
-const TERMINAL=new Set(['COMPLETED','PASSED','VERIFIED','FAILED','EXPIRED','CANCELLED']);
 function check(ok,code){if(!ok){const error=Error(code);error.code=code;throw error;}}
 
 function browserFlowApi(page){
@@ -21,6 +21,8 @@ function ownedVerificationFlow({organizationId,runId,privateDirectory,api}){
   check(typeof api==='function','OWNED_FLOW_API_REQUIRED');
   const reference=`canvas-engineering-${runId}-${randomUUID()}`;
   const journal=path.join(privateDirectory,`canvas-verification-${runId}.json`);
+  const read=(route,options)=>api(options?.method||'GET',route);
+  const owned=id=>({id,organizationId,externalReference:reference});
   let state={scope:'OWNED_CANVAS_VERIFICATION_FLOW',organizationId,reference,runId,
     createIntent:false,instanceId:null,postResponseLost:false,retirementConfirmed:false,
     state:'PREPARED'};
@@ -42,15 +44,6 @@ function ownedVerificationFlow({organizationId,runId,privateDirectory,api}){
     }
     check(false,'OWNED_FLOW_LIST_INCOMPLETE');
   }
-  async function exact(id){
-    check(UUID.test(id||''),'OWNED_FLOW_INSTANCE_ID_INVALID');
-    const response=await api('GET',`/v1/flows/instances/${encodeURIComponent(id)}`);
-    const row=response.body;
-    check(response.ok&&response.status===200&&row?.id===id
-      &&row.organization_id===organizationId&&row.metadata?.external_reference===reference,
-    'OWNED_FLOW_TUPLE_CHANGED');
-    return row;
-  }
   return {
     reference,journal,
     get terminalStatus(){return state.terminalStatus||null;},
@@ -65,7 +58,7 @@ function ownedVerificationFlow({organizationId,runId,privateDirectory,api}){
       if(!session?.ok)return;
       check(UUID.test(session.instanceId||''),'OWNED_FLOW_ACK_INVALID');
       state.instanceId=session.instanceId;state.state='ACKNOWLEDGED';save();
-      await exact(session.instanceId);
+      await inspectOwnedFlow(read,owned(session.instanceId));
     },
     async finalize(){
       if(!state.createIntent){state.retirementConfirmed=true;state.state='NO_CREATE';save();return;}
@@ -79,16 +72,9 @@ function ownedVerificationFlow({organizationId,runId,privateDirectory,api}){
       const id=matches[0].id;
       check(!state.instanceId||state.instanceId===id,'OWNED_FLOW_ACK_MISMATCH');
       state.instanceId=id;state.state='RETIRE_INTENT';save();
-      let row=await exact(id),status=String(row.status||'').toUpperCase();
-      if(!TERMINAL.has(status)){
-        state.cancelIntent=true;save();
-        const cancelled=await api('POST',`/v1/flows/instances/${encodeURIComponent(id)}/cancel`);
-        row=await exact(id);status=String(row.status||'').toUpperCase();
-        check((cancelled.ok&&cancelled.status===200&&status==='CANCELLED')
-          ||(!cancelled.ok&&TERMINAL.has(status)),
-        'OWNED_FLOW_CANCEL_READBACK_FAILED');
-      }
-      state.terminalStatus=status;state.retirementConfirmed=true;state.state='TERMINAL';save();
+      const retired=await retireOwnedFlow(read,owned(id),{beforeCancel:()=>{
+        state.cancelIntent=true;save();}});
+      state.terminalStatus=retired.status;state.retirementConfirmed=true;state.state='TERMINAL';save();
     },
     async run(task){
       let value,primary,cleanup;
