@@ -20,6 +20,26 @@ NONCE = "23157141-54e9-4744-8c80-a2321e850dec"
 
 
 class Records(unittest.TestCase):
+    def test_retained_guest_uses_pinned_command_and_observes_current_memory(self):
+        seed = {"guest_user": restart.GUEST_USER, "controller_private_sha256":
+                restart.release.digest(b"fixture"), "known_hosts_sha256":
+                restart.release.digest(b"fixture")}
+        replies = [b"1000\ninstaller\n1000:700:directory\n", b'"engine-705"\n',
+                   b"active\n", b"x86_64\n", b'"engine-705"\n',
+                   b"MemTotal: 2010000 kB\n"]
+        with mock.patch.object(restart, "SSH", mock.Mock(lstat=mock.Mock(return_value=
+                 mock.Mock(st_mode=0o100755, st_uid=0)), __str__=lambda _self: "/usr/bin/ssh")), \
+             mock.patch.object(restart, "_bytes", return_value=b"fixture"), \
+             mock.patch.object(restart, "command", side_effect=replies) as pinned:
+            guest = restart._retained_guest(Path("/fixture/control"), port=22024,
+                                             seed=seed, guest_memory_mib=2048)
+        self.assertEqual(guest["docker_engine_id"], "engine-705")
+        self.assertEqual(guest["guest_mem_total_kib"], 2010000)
+        self.assertEqual(pinned.call_count, 6)
+        self.assertTrue(all(call.args[0][-2] == "installer@127.0.0.1"
+                            and call.kwargs["timeout"] == 15
+                            for call in pinned.call_args_list))
+
     def test_installer_only_memory_changes_only_qemu_m_and_preserves_first_launch(self):
         runtime = Path("/runtime") / VM
         original = restart.launcher._arguments(runtime, VM, 22024)
