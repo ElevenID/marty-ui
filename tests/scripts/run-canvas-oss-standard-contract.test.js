@@ -985,12 +985,14 @@ test('engineering unresolved resources still retire independent owned sessions a
   const probes=[];let privateRetired=false;
   const context=role=>({cookies:async()=>[{name:'_csrf_token',value:'CONTROLLED'}],request:{get:async()=>{probes.push(role);return {status:()=>401}}}});
   const state={bindingActivationPossible:true,canvasOrigin:'https://canvas-test.elevenidllc.com',
-    adminContext:context('admin'),learnerContext:context('learner'),custody:{retire(){privateRetired=true;return true}}};
+    adminContext:context('admin'),learnerContext:context('learner'),
+    ownedVerificationFlow:{retirementConfirmed:false},custody:{retire(){privateRetired=true;return true}}};
   await assert.rejects(retireCanvasEngineeringSetup(state),error=>{
     assert.equal(error.code,'owned_canvas_cleanup_incomplete');
     assert.equal(error.canvasCleanupEvidence.complete,false);
     assert.equal(error.canvasCleanupEvidence.sessionsRetired,true);
     assert.equal(error.canvasCleanupEvidence.privateAuthorityRetired,false);
+    assert(error.canvasCleanupEvidence.failures.some(item=>item.stage==='VERIFICATION_FLOW'));
     assert.equal(error.canvasCleanupEvidence.failures[0].stage,'OWNED_RESOURCES');return true;
   });
   assert.deepEqual(probes,['learner','admin']);assert.equal(privateRetired,false);
