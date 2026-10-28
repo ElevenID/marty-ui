@@ -1,4 +1,6 @@
-use marty_service_runtime::{shutdown_signal_best_effort as shutdown_signal, wait_for_shutdown};
+use marty_service_runtime::{
+    keyless_incoming, shutdown_signal_best_effort as shutdown_signal, wait_for_shutdown,
+};
 use std::{error::Error, future::Future, pin::Pin, sync::Arc, time::Duration};
 
 use marty_presentation_policy::{
@@ -15,7 +17,6 @@ use mmf_security::ServiceTokenAuthenticator;
 use sqlx::postgres::PgPoolOptions;
 use tokio::{net::TcpListener, sync::watch};
 use tokio_stream::wrappers::TcpListenerStream;
-use tokio_stream::StreamExt;
 use tonic::transport::Server;
 use tower_http::trace::TraceLayer;
 use tracing::{error, info};
@@ -133,15 +134,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .add_service(grpc_server);
     let grpc: Pin<Box<dyn Future<Output = Result<(), tonic::transport::Error>> + Send>> =
         if let Some(acceptor) = tls_acceptor {
-            let incoming = TcpListenerStream::new(grpc_listener).then(move |connection| {
-                let acceptor = acceptor.clone();
-                async move {
-                    match connection {
-                        Ok(stream) => acceptor.accept(stream).await,
-                        Err(error) => Err(error),
-                    }
-                }
-            });
+            let incoming = keyless_incoming(grpc_listener, acceptor);
             Box::pin(router.serve_with_incoming_shutdown(incoming, async move {
                 wait_for_shutdown(&mut grpc_shutdown).await;
             }))

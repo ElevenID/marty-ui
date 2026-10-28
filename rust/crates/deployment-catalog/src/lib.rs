@@ -20,11 +20,15 @@ pub mod installer_candidate_command;
 pub mod installer_candidate_nonce;
 pub mod installer_candidate_prepare;
 pub mod installer_command;
+#[cfg(target_os = "linux")]
+mod installer_container;
 pub mod installer_doctor;
 pub mod installer_fetch;
 pub mod installer_generation;
 pub mod installer_generation_binding;
 pub mod installer_generation_host;
+#[cfg(target_os = "linux")]
+mod installer_host_fs;
 #[cfg(target_os = "linux")]
 pub(crate) mod installer_host_snapshot;
 pub mod installer_host_storage_inventory;
@@ -33,6 +37,7 @@ pub mod installer_ingress_config;
 pub mod installer_ingress_model;
 pub mod installer_ingress_outputs;
 pub mod installer_ingress_provision;
+mod installer_json;
 pub mod installer_keycloak;
 pub mod installer_keycloak_bridge;
 pub mod installer_logs;

@@ -12,8 +12,7 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use std::{
     collections::BTreeMap,
-    fs::{File, OpenOptions},
-    os::unix::fs::{MetadataExt, OpenOptionsExt},
+    fs::File,
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -112,16 +111,10 @@ fn run(docker: &DockerRunner, args: &[String]) -> Result<String> {
     docker.run_checked(&args.iter().map(String::as_str).collect::<Vec<_>>())
 }
 fn inspect(docker: &DockerRunner, container: &str) -> Result<Value> {
-    let result: Value =
-        serde_json::from_str(&docker.run_checked(&["inspect", container])?).map_err(|_| REFUSAL)?;
-    let list = result.as_array().ok_or(REFUSAL)?;
-    require(list.len() == 1)?;
-    Ok(list[0].clone())
+    crate::installer_container::inspect(docker, container, REFUSAL)
 }
 fn empty_or_null(value: &Value) -> bool {
-    value.is_null()
-        || value.as_array().is_some_and(Vec::is_empty)
-        || value.as_object().is_some_and(serde_json::Map::is_empty)
+    crate::installer_container::empty_or_null(value)
 }
 fn validate_observation(
     c: &Value,
@@ -131,47 +124,38 @@ fn validate_observation(
 ) -> Result<()> {
     let host = &c["HostConfig"];
     let config = &c["Config"];
+    crate::installer_container::validate_identity_and_security(
+        c,
+        &crate::installer_container::ExpectedContainer {
+            id: container,
+            name: &contract.name,
+            owner: &contract.owner,
+            image: &contract.image,
+            image_id: &contract.image_id,
+            network_id: &contract.network_id,
+            stage: "ingress",
+            entrypoint: json!(["/input/marty-deploy"]),
+            command: json!([
+                "installer-ingress-provision",
+                "--installation-id",
+                contract.owner
+            ]),
+        },
+        REFUSAL,
+    )?;
     require(
-        c["Id"] == container
-            && c["Image"] == contract.image_id
-            && c["Name"] == format!("/{}", contract.name)
-            && config["Image"] == contract.image
-            && config["User"] == "0:0"
-            && config["Entrypoint"] == json!(["/input/marty-deploy"])
-            && config["Cmd"]
-                == json!([
-                    "installer-ingress-provision",
-                    "--installation-id",
-                    contract.owner
-                ])
-            && config["Labels"]["com.elevenid.installer.id"] == contract.owner
-            && config["Labels"]["com.elevenid.installer.stage"] == "ingress"
-            && host["ReadonlyRootfs"] == true
-            && host["Privileged"] == false
-            && host["CapDrop"] == json!(["ALL"])
-            && (host["CapAdd"] == json!(["DAC_OVERRIDE"])
-                || host["CapAdd"] == json!(["CAP_DAC_OVERRIDE"]))
-            && (host["SecurityOpt"] == json!(["no-new-privileges"])
-                || host["SecurityOpt"] == json!(["no-new-privileges:true"]))
-            && host["NetworkMode"] == contract.network_id
-            && host["AutoRemove"] == false
-            && host["RestartPolicy"]["Name"] == "no"
-            && host["PidMode"].as_str().is_some_and(str::is_empty)
-            && host["UsernsMode"].as_str().is_some_and(str::is_empty)
-            && matches!(host["IpcMode"].as_str(), Some("private" | ""))
-            && empty_or_null(&host["PortBindings"])
-            && empty_or_null(&host["Devices"])
-            && empty_or_null(&host["DeviceRequests"])
-            && empty_or_null(&host["Binds"])
+        (host["CapAdd"] == json!(["DAC_OVERRIDE"])
+            || host["CapAdd"] == json!(["CAP_DAC_OVERRIDE"]))
             && empty_or_null(&host["Tmpfs"]),
     )?;
     require(environment_map(&config["Env"])? == contract.environment)?;
-    let networks = c["NetworkSettings"]["Networks"]
-        .as_object()
-        .ok_or(REFUSAL)?;
-    require(networks.len() == 1 && networks.contains_key(&contract.network_name))?;
-    let network_id = &networks[&contract.network_name]["NetworkID"];
-    require(network_id == &json!(contract.network_id) || (!terminal && network_id == ""))?;
+    crate::installer_container::validate_network(
+        c,
+        &contract.network_name,
+        &contract.network_id,
+        terminal,
+        REFUSAL,
+    )?;
     let mut mounts = BTreeMap::new();
     for mount in c["Mounts"].as_array().ok_or(REFUSAL)? {
         require(mount["Type"] == "bind")?;
@@ -185,70 +169,21 @@ fn validate_observation(
                 .is_none(),
         )?;
     }
-    require(mounts == contract.mounts && c["State"]["Running"] == false)?;
-    if terminal {
-        require(
-            c["State"]["Status"] == "exited"
-                && c["State"]["ExitCode"] == 0
-                && c["State"]["OOMKilled"] == false,
-        )?;
-    } else {
-        require(c["State"]["Status"] == "created")?;
-    }
+    require(mounts == contract.mounts)?;
+    crate::installer_container::validate_stopped_state(c, terminal, REFUSAL)?;
     Ok(())
 }
 fn directory(path: &Path) -> Result<File> {
-    require(path.canonicalize().map_err(|_| REFUSAL)? == path)?;
-    let file = OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
-        .open(path)
-        .map_err(|_| REFUSAL)?;
-    let metadata = file.metadata().map_err(|_| REFUSAL)?;
-    require(
-        metadata.is_dir()
-            && metadata.uid() == unsafe { libc::geteuid() }
-            && metadata.mode() & 0o7777 == 0o700,
-    )?;
-    Ok(file)
+    crate::installer_host_fs::directory(path, REFUSAL)
 }
 
 fn environment_map(value: &Value) -> Result<BTreeMap<String, String>> {
-    let mut result = BTreeMap::new();
-    for item in value.as_array().ok_or(REFUSAL)? {
-        let (key, value) = item
-            .as_str()
-            .ok_or(REFUSAL)?
-            .split_once('=')
-            .ok_or(REFUSAL)?;
-        require(
-            !key.is_empty()
-                && key.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
-                && !value.chars().any(char::is_control)
-                && result.insert(key.to_owned(), value.to_owned()).is_none(),
-        )?;
-    }
-    Ok(result)
+    crate::installer_container::environment_map(value, REFUSAL)
 }
 // The image is digest-admitted; no host environment is inherited. This fixed
 // native helper receives its authority through readonly files, never env values.
 fn bootstrap_environment(inherited: &Value) -> Result<BTreeMap<String, String>> {
-    let environment = environment_map(inherited)?;
-    require(!environment.keys().any(|key| {
-        key.starts_with("BAO_")
-            || key.starts_with("MARTY_TLS_")
-            || key.starts_with("SELFHOST_")
-            || [
-                "HTTP_PROXY",
-                "HTTPS_PROXY",
-                "ALL_PROXY",
-                "NO_PROXY",
-                "LD_PRELOAD",
-                "LD_LIBRARY_PATH",
-            ]
-            .contains(&key.to_ascii_uppercase().as_str())
-    }))?;
-    Ok(environment)
+    crate::installer_container::bootstrap_environment(inherited, REFUSAL)
 }
 
 /// Caller has authenticated the shared gateway/signing-keys services digest.

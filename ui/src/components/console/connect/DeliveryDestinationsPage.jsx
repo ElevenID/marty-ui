@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useAsyncData } from '../../../hooks/useAsyncData';
 import {
   Alert,
   Box,
@@ -31,35 +32,29 @@ const INITIAL_FORM = { name: '', description: '' };
 
 function DeliveryDestinations({ organizationId, canCreate }) {
   const mounted = useRef(false);
-  const generation = useRef(0);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
-  const [destinations, setDestinations] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
+  const { data, loading, error: loadError, reload, clearError } = useAsyncData(async () => {
+    const result = await listDeliveryDestinations({ organizationId, activeOnly: false });
+    if (!Array.isArray(result) || !result.every((destination) => typeof destination?.id === 'string'
+      && (destination.is_system === true ? destination.organization_id == null : destination.organization_id === organizationId))) {
+      throw new Error('Destination inventory is invalid or outside the selected organization.');
+    }
+    return result;
+  }, [organizationId]);
+  const destinations = data || [];
+  const [actionError, setActionError] = useState('');
+  const error = actionError || (loadError ? loadError.message || 'Delivery destinations could not be loaded.' : '');
+  const setError = (value) => {
+    clearError();
+    setActionError(value);
+  };
   const [dialogOpen, setDialogOpen] = useState(false);
   const [form, setForm] = useState(INITIAL_FORM);
   const [saving, setSaving] = useState(false);
-
   const load = useCallback(async () => {
-    const request = ++generation.current;
-    setLoading(true);
-    setError('');
-    try {
-      const result = await listDeliveryDestinations({ organizationId, activeOnly: false });
-      if (!mounted.current || request !== generation.current) return;
-      if (!Array.isArray(result) || !result.every((destination) => typeof destination?.id === 'string'
-        && (destination.is_system === true ? destination.organization_id == null : destination.organization_id === organizationId))) {
-        throw new Error('Destination inventory is invalid or outside the selected organization.');
-      }
-      setDestinations(result);
-    } catch (cause) {
-      if (mounted.current && request === generation.current) setError(cause.message || 'Delivery destinations could not be loaded.');
-    } finally {
-      if (mounted.current && request === generation.current) setLoading(false);
-    }
-  }, [organizationId]);
-
-  useEffect(() => { load(); }, [load]);
+    setActionError('');
+    await reload();
+  }, [reload]);
 
   const createPhysicalDestination = async () => {
     if (!canCreate) return;

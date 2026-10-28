@@ -6,13 +6,15 @@ use std::{error::Error, net::SocketAddr};
 use axum::{
     body::Body,
     extract::{ConnectInfo, State},
-    http::{header, HeaderMap, HeaderName, HeaderValue, Request, Response, StatusCode, Uri},
+    http::{header, HeaderMap, HeaderValue, Request, Response, StatusCode, Uri},
     routing::any,
     Router,
 };
 use hyper::client::conn::http1;
 use hyper_util::rt::TokioIo;
-use marty_passport_keyless_edge::{keyless_tls_config, required};
+use marty_passport_keyless_edge::{
+    caller_forwarding_header as forwarded, hop_by_hop, keyless_tls_config, required,
+};
 use tokio::{
     io::copy_bidirectional,
     net::TcpStream,
@@ -131,28 +133,6 @@ fn target<'a>(path: &str, state: &'a EdgeState) -> &'a str {
     } else {
         &state.gateway
     }
-}
-
-fn hop_by_hop(name: &HeaderName, connection: &str) -> bool {
-    matches!(
-        name.as_str(),
-        "connection"
-            | "keep-alive"
-            | "proxy-authenticate"
-            | "proxy-authorization"
-            | "te"
-            | "trailer"
-            | "transfer-encoding"
-            | "upgrade"
-    ) || connection
-        .split(',')
-        .any(|item| item.trim().eq_ignore_ascii_case(name.as_str()))
-}
-
-fn forwarded(name: &HeaderName) -> bool {
-    name.as_str() == "forwarded"
-        || name.as_str() == "x-real-ip"
-        || name.as_str().starts_with("x-forwarded-")
 }
 
 fn failure(status: StatusCode) -> Response<Body> {

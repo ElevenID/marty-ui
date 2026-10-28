@@ -12,13 +12,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
     collections::{BTreeMap, BTreeSet},
-    ffi::CString,
-    fs::{File, OpenOptions},
-    io::{Read, Write},
-    os::{
-        fd::{AsRawFd, FromRawFd},
-        unix::fs::{MetadataExt, OpenOptionsExt},
-    },
+    fs::File,
+    os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -121,16 +116,10 @@ fn run(docker: &DockerRunner, args: &[String]) -> Result<String> {
     docker.run_checked(&args.iter().map(String::as_str).collect::<Vec<_>>())
 }
 fn inspect(docker: &DockerRunner, container: &str) -> Result<Value> {
-    let result: Value =
-        serde_json::from_str(&docker.run_checked(&["inspect", container])?).map_err(|_| REFUSAL)?;
-    let list = result.as_array().ok_or(REFUSAL)?;
-    require(list.len() == 1)?;
-    Ok(list[0].clone())
+    crate::installer_container::inspect(docker, container, REFUSAL)
 }
 fn empty_or_null(value: &Value) -> bool {
-    value.is_null()
-        || value.as_array().is_some_and(Vec::is_empty)
-        || value.as_object().is_some_and(serde_json::Map::is_empty)
+    crate::installer_container::empty_or_null(value)
 }
 fn validate_observation(
     c: &Value,
@@ -140,46 +129,34 @@ fn validate_observation(
 ) -> Result<()> {
     let host = &c["HostConfig"];
     let config = &c["Config"];
-    require(
-        c["Id"] == container
-            && c["Image"] == contract.image_id
-            && c["Name"] == format!("/{}", contract.name)
-            && config["Image"] == contract.image
-            && config["User"] == "0:0"
-            && config["Entrypoint"] == json!(["/input/marty-deploy"])
-            && config["Cmd"]
-                == json!([
-                    "installer-renewal-bootstrap-transfer",
-                    "--installation-id",
-                    contract.owner
-                ])
-            && config["Labels"]["com.elevenid.installer.id"] == contract.owner
-            && config["Labels"]["com.elevenid.installer.stage"] == "renewal"
-            && host["ReadonlyRootfs"] == true
-            && host["Privileged"] == false
-            && host["CapDrop"] == json!(["ALL"])
-            && capabilities(&host["CapAdd"])
-            && (host["SecurityOpt"] == json!(["no-new-privileges"])
-                || host["SecurityOpt"] == json!(["no-new-privileges:true"]))
-            && host["NetworkMode"] == contract.network_id
-            && host["AutoRemove"] == false
-            && host["RestartPolicy"]["Name"] == "no"
-            && host["PidMode"].as_str().is_some_and(str::is_empty)
-            && host["UsernsMode"].as_str().is_some_and(str::is_empty)
-            && matches!(host["IpcMode"].as_str(), Some("private" | ""))
-            && empty_or_null(&host["PortBindings"])
-            && empty_or_null(&host["Devices"])
-            && empty_or_null(&host["DeviceRequests"])
-            && empty_or_null(&host["Binds"])
-            && empty_or_null(&host["Tmpfs"]),
+    crate::installer_container::validate_identity_and_security(
+        c,
+        &crate::installer_container::ExpectedContainer {
+            id: container,
+            name: &contract.name,
+            owner: &contract.owner,
+            image: &contract.image,
+            image_id: &contract.image_id,
+            network_id: &contract.network_id,
+            stage: "renewal",
+            entrypoint: json!(["/input/marty-deploy"]),
+            command: json!([
+                "installer-renewal-bootstrap-transfer",
+                "--installation-id",
+                contract.owner
+            ]),
+        },
+        REFUSAL,
     )?;
+    require(capabilities(&host["CapAdd"]) && empty_or_null(&host["Tmpfs"]))?;
     require(environment_map(&config["Env"])? == contract.environment)?;
-    let networks = c["NetworkSettings"]["Networks"]
-        .as_object()
-        .ok_or(REFUSAL)?;
-    require(networks.len() == 1 && networks.contains_key(&contract.network_name))?;
-    let network_id = &networks[&contract.network_name]["NetworkID"];
-    require(network_id == &json!(contract.network_id) || (!terminal && network_id == ""))?;
+    crate::installer_container::validate_network(
+        c,
+        &contract.network_name,
+        &contract.network_id,
+        terminal,
+        REFUSAL,
+    )?;
     let mut mounts = BTreeMap::new();
     for mount in c["Mounts"].as_array().ok_or(REFUSAL)? {
         require(mount["Type"] == "bind")?;
@@ -193,32 +170,12 @@ fn validate_observation(
                 .is_none(),
         )?;
     }
-    require(mounts == contract.mounts && c["State"]["Running"] == false)?;
-    if terminal {
-        require(
-            c["State"]["Status"] == "exited"
-                && c["State"]["ExitCode"] == 0
-                && c["State"]["OOMKilled"] == false,
-        )?;
-    } else {
-        require(c["State"]["Status"] == "created")?;
-    }
+    require(mounts == contract.mounts)?;
+    crate::installer_container::validate_stopped_state(c, terminal, REFUSAL)?;
     Ok(())
 }
 fn directory(path: &Path) -> Result<File> {
-    require(path.canonicalize().map_err(|_| REFUSAL)? == path)?;
-    let file = OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
-        .open(path)
-        .map_err(|_| REFUSAL)?;
-    let metadata = file.metadata().map_err(|_| REFUSAL)?;
-    require(
-        metadata.is_dir()
-            && metadata.uid() == unsafe { libc::geteuid() }
-            && metadata.mode() & 0o7777 == 0o700,
-    )?;
-    Ok(file)
+    crate::installer_host_fs::directory(path, REFUSAL)
 }
 
 fn capabilities(value: &Value) -> bool {
@@ -239,48 +196,11 @@ fn capabilities(value: &Value) -> bool {
 }
 
 fn file_names(dir: &File) -> Result<BTreeSet<String>> {
-    std::fs::read_dir(format!("/proc/self/fd/{}", dir.as_raw_fd()))
-        .map_err(|_| REFUSAL)?
-        .map(|entry| {
-            entry
-                .map_err(|_| REFUSAL.to_string())
-                .and_then(|e| e.file_name().into_string().map_err(|_| REFUSAL.into()))
-        })
-        .collect()
+    crate::installer_host_fs::file_names(dir, REFUSAL)
 }
 
 fn read_entry(dir: &File, name: &str, mode: u32, allow_root: bool) -> Result<Vec<u8>> {
-    require(!name.contains('/') && !name.contains('\\') && name != "." && name != "..")?;
-    let name = CString::new(name).map_err(|_| REFUSAL)?;
-    let fd = unsafe {
-        libc::openat(
-            dir.as_raw_fd(),
-            name.as_ptr(),
-            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC,
-        )
-    };
-    require(fd >= 0)?;
-    let file = unsafe { File::from_raw_fd(fd) };
-    let m = file.metadata().map_err(|_| REFUSAL)?;
-    require(
-        m.is_file()
-            && m.nlink() == 1
-            && m.len() > 0
-            && m.len() <= 65536
-            && m.mode() & 0o7777 == mode
-            && (m.uid() == unsafe { libc::geteuid() } || (allow_root && m.uid() == 0)),
-    )?;
-    let mut value = Vec::new();
-    file.take(65537)
-        .read_to_end(&mut value)
-        .map_err(|_| REFUSAL)?;
-    require(
-        value.len() as u64 == m.len()
-            && value.is_ascii()
-            && !value.contains(&0)
-            && !value.windows(11).any(|v| v == b"PRIVATE KEY"),
-    )?;
-    Ok(value)
+    crate::installer_host_fs::read_entry(dir, name, mode, allow_root, REFUSAL)
 }
 
 fn read_inputs(secrets: &File) -> Result<BTreeMap<String, Vec<u8>>> {
@@ -296,31 +216,7 @@ fn read_inputs(secrets: &File) -> Result<BTreeMap<String, Vec<u8>>> {
 }
 
 fn stage_inputs(secrets: &File, output: &File) -> Result<BTreeMap<String, Vec<u8>>> {
-    require(file_names(output)?.is_empty())?;
-    let values = read_inputs(secrets)?;
-    for (name, value) in &values {
-        let name = CString::new(name.as_str()).map_err(|_| REFUSAL)?;
-        let fd = unsafe {
-            libc::openat(
-                output.as_raw_fd(),
-                name.as_ptr(),
-                libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC,
-                0o600,
-            )
-        };
-        require(fd >= 0)?;
-        let mut file = unsafe { File::from_raw_fd(fd) };
-        output.sync_all().map_err(|_| REFUSAL)?;
-        file.write_all(value)
-            .and_then(|_| file.sync_all())
-            .map_err(|_| REFUSAL)?;
-        require(unsafe { libc::fchmod(file.as_raw_fd(), 0o444) } == 0)?;
-        file.sync_all()
-            .and_then(|_| output.sync_all())
-            .map_err(|_| REFUSAL)?;
-    }
-    require(read_inputs(output)? == values)?;
-    Ok(values)
+    crate::installer_host_fs::stage_inputs(secrets, output, read_inputs, REFUSAL)
 }
 
 #[derive(Deserialize)]
@@ -350,36 +246,11 @@ const IDENTITY_FILES: [&str; 3] = [
 ];
 
 fn require_directory_binding(path: &Path, held: &File) -> Result<()> {
-    let observed = directory(path)?.metadata().map_err(|_| REFUSAL)?;
-    let original = held.metadata().map_err(|_| REFUSAL)?;
-    require(
-        (
-            observed.dev(),
-            observed.ino(),
-            observed.uid(),
-            observed.gid(),
-            observed.mode(),
-        ) == (
-            original.dev(),
-            original.ino(),
-            original.uid(),
-            original.gid(),
-            original.mode(),
-        ),
-    )
+    crate::installer_host_fs::require_directory_binding(path, held, REFUSAL)
 }
 
 fn open_child(parent: &File, name: &str, flags: i32) -> Result<File> {
-    let name = CString::new(name).map_err(|_| REFUSAL)?;
-    let fd = unsafe {
-        libc::openat(
-            parent.as_raw_fd(),
-            name.as_ptr(),
-            flags | libc::O_NOFOLLOW | libc::O_CLOEXEC,
-        )
-    };
-    require(fd >= 0)?;
-    Ok(unsafe { File::from_raw_fd(fd) })
+    crate::installer_host_fs::open_child(parent, name, flags, REFUSAL)
 }
 
 fn validate_delivery(parent: &Path, held: &File, owner: &str) -> Result<Vec<String>> {
@@ -476,41 +347,12 @@ fn validate_delivered(delivered: &File, owner: &str) -> Result<Vec<String>> {
 }
 
 fn environment_map(value: &Value) -> Result<BTreeMap<String, String>> {
-    let mut result = BTreeMap::new();
-    for item in value.as_array().ok_or(REFUSAL)? {
-        let (key, value) = item
-            .as_str()
-            .ok_or(REFUSAL)?
-            .split_once('=')
-            .ok_or(REFUSAL)?;
-        require(
-            !key.is_empty()
-                && key.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
-                && !value.chars().any(char::is_control)
-                && result.insert(key.to_owned(), value.to_owned()).is_none(),
-        )?;
-    }
-    Ok(result)
+    crate::installer_container::environment_map(value, REFUSAL)
 }
 // The image is digest-admitted; no host environment is inherited. This fixed
 // native helper receives its authority through readonly files, never env values.
 fn bootstrap_environment(inherited: &Value) -> Result<BTreeMap<String, String>> {
-    let environment = environment_map(inherited)?;
-    require(!environment.keys().any(|key| {
-        key.starts_with("BAO_")
-            || key.starts_with("MARTY_TLS_")
-            || key.starts_with("SELFHOST_")
-            || [
-                "HTTP_PROXY",
-                "HTTPS_PROXY",
-                "ALL_PROXY",
-                "NO_PROXY",
-                "LD_PRELOAD",
-                "LD_LIBRARY_PATH",
-            ]
-            .contains(&key.to_ascii_uppercase().as_str())
-    }))?;
-    Ok(environment)
+    crate::installer_container::bootstrap_environment(inherited, REFUSAL)
 }
 
 /// Caller has authenticated the shared gateway/signing-keys services digest.
