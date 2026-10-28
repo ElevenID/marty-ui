@@ -133,6 +133,54 @@ fn lifecycle(c: &Value, completion: Completion) -> Result<Value> {
         "expected":expected,"expected_state_observed":satisfied}),
     )
 }
+
+/// A bounded summary of Docker's inspected container configuration. This is
+/// emitted only after the complete owned-container observation succeeds. Do not
+/// include environment values, mount paths, command arguments or option text.
+fn security_posture(c: &Value) -> Result<Value> {
+    let host = &c["HostConfig"];
+    let user = text(&c["Config"]["User"])?;
+    let principal = user.split(':').next().ok_or(REFUSED)?;
+    let uid = principal.parse::<u32>().ok();
+    let user_class = if principal.is_empty() || principal == "root" || uid == Some(0) {
+        "root"
+    } else if uid.is_some() {
+        "numeric_non_root"
+    } else {
+        "named_unresolved"
+    };
+    let options = host["SecurityOpt"]
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
+    let dropped = host["CapDrop"].as_array().map(Vec::as_slice).unwrap_or(&[]);
+    let added = host["CapAdd"].as_array().map(Vec::as_slice).unwrap_or(&[]);
+    let mounts = c["Mounts"].as_array().ok_or(REFUSED)?;
+    let writable_mounts = mounts.iter().try_fold(0usize, |count, mount| {
+        mount["RW"]
+            .as_bool()
+            .map(|writable| count + usize::from(writable))
+            .ok_or_else(|| REFUSED.to_owned())
+    })?;
+    let ports = &host["PortBindings"];
+    let published_ports = if ports.is_null() {
+        0
+    } else {
+        ports.as_object().ok_or(REFUSED)?.len()
+    };
+    Ok(json!({
+        "source":"docker_inspect",
+        "user_class":user_class,
+        "privileged":host["Privileged"].as_bool().ok_or(REFUSED)?,
+        "read_only_rootfs":host["ReadonlyRootfs"].as_bool().ok_or(REFUSED)?,
+        "no_new_privileges":options.iter().any(|v| v == "no-new-privileges:true"),
+        "cap_drop_all":dropped.iter().any(|v| v.as_str().is_some_and(|s| s.eq_ignore_ascii_case("all"))),
+        "cap_add_count":added.len(),
+        "device_count":host["Devices"].as_array().map_or(0, Vec::len),
+        "writable_mount_count":writable_mounts,
+        "published_port_count":published_ports,
+    }))
+}
 fn inventory(
     docker: &DockerRunner,
     projects: &[String],
@@ -353,6 +401,7 @@ fn inspect(state: &LockedInspection, installation: &Path, docker: &DockerRunner)
             }
             result["container_id"] = json!(container);
             result["configuration_verified"] = json!(true);
+            result["security_posture"] = security_posture(&c)?;
             services.insert(role.clone(), result);
         }
     }
@@ -452,6 +501,11 @@ mod tests {
         assert_eq!(result["services"].as_object().unwrap().len(), 34);
         assert_eq!(result["all_expected_states_observed"], true);
         assert_eq!(result["installation_ready"], false);
+        let postgres_security = &result["services"]["postgres"]["security_posture"];
+        assert_eq!(postgres_security["source"], "docker_inspect");
+        assert_eq!(postgres_security["privileged"], false);
+        assert!(postgres_security["writable_mount_count"].is_number());
+        assert!(postgres_security["published_port_count"].is_number());
         assert!(!result.to_string().contains("private-health-output"));
         let path = root.path().join("ledger.json");
         let mut v: Value = parse(&fs::read(&path).unwrap()).unwrap();
@@ -471,9 +525,30 @@ mod tests {
         fs::write(path, serde_json::to_vec(&v).unwrap()).unwrap();
         let result = inspect_fixture(&root).unwrap();
         assert_eq!(result["services"]["gateway"]["status"], "missing");
+        assert!(result["services"]["gateway"]
+            .get("security_posture")
+            .is_none());
         assert_eq!(result["services"]["postgres"]["oom_killed"], true);
         assert_eq!(result["all_expected_states_observed"], false);
         assert_read_only(&root);
+    }
+    #[test]
+    fn security_summary_omits_sensitive_runtime_strings_and_rejects_bad_mount_state() {
+        let mut container = json!({
+            "Config":{"User":"1001:1001","Env":["CANARY=private-secret"]},
+            "HostConfig":{"Privileged":false,"ReadonlyRootfs":true,
+                "SecurityOpt":["no-new-privileges:true","private-secret"],
+                "CapDrop":["ALL"],"CapAdd":[],"Devices":[],"PortBindings":{}},
+            "Mounts":[{"Source":"/private-secret","Destination":"/run/secrets/private-secret","RW":false}]
+        });
+        let summary = security_posture(&container).unwrap();
+        assert_eq!(summary["user_class"], "numeric_non_root");
+        assert_eq!(summary["no_new_privileges"], true);
+        assert_eq!(summary["cap_drop_all"], true);
+        assert_eq!(summary["writable_mount_count"], 0);
+        assert!(!summary.to_string().contains("private-secret"));
+        container["Mounts"][0]["RW"] = json!("unknown");
+        assert!(security_posture(&container).is_err());
     }
     #[test]
     fn actual_mocked_routing_refuses_replacement_foreign_attachment_and_command_failure() {

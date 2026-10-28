@@ -40,6 +40,23 @@ impl Check {
 fn services_passed(v: &Value) -> bool {
     v["services_observed"] == true && v["all_expected_states_observed"] == true
 }
+fn security_summary(v: &Value) -> Option<Value> {
+    Some(Value::Object(
+        v["services"]
+            .as_object()?
+            .iter()
+            .map(|(role, service)| {
+                (
+                    role.clone(),
+                    service
+                        .get("security_posture")
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                )
+            })
+            .collect(),
+    ))
+}
 fn valid_origin(origin: &str) -> Option<u16> {
     let port = origin.strip_prefix("https://localhost:")?;
     let number = port.parse::<u16>().ok()?;
@@ -254,7 +271,8 @@ pub(crate) fn run_locked(
         .as_ref()
         .ok()
         .and_then(|d| installer_doctor::services(state, installation, d).ok());
-    let stable_services = owned && before == after && Instant::now() < deadline;
+    let stable_inspection = before.is_some() && before == after && Instant::now() < deadline;
+    let stable_services = owned && stable_inspection;
     let stable_trust = trust.as_ref().is_some_and(|original| {
         installer_trust::inspect_locked(installation, state)
             .ok()
@@ -301,6 +319,9 @@ pub(crate) fn run_locked(
         .iter()
         .filter(|c| c.required)
         .all(|c| c.status == "pass");
+    let container_security_posture = stable_inspection
+        .then(|| before.as_ref().and_then(security_summary))
+        .flatten();
     let report = json!({"schema":"elevenid.deployment-validation/v1", "validation_id":uuid::Uuid::new_v4(),
         "installation_id":journal.installation_id(), "release":journal.identity(),
         "engine_id":runtime.map(|r|r.engine_id.as_str()), "scope":"read_only_deployment",
@@ -308,6 +329,7 @@ pub(crate) fn run_locked(
         "elapsed_ms":started.elapsed().as_millis() as u64, "status":if passed {"passed"} else {"failed"},
         "checks":checks, "not_atomic_snapshot":true, "installation_ready":false,
         "host_trust_observed":false, "qualification":"not_assessed",
+        "container_security_posture":container_security_posture,
         "trust_evidence_sha256":trust.as_ref().map(|t| &t.evidence_sha256)});
     let bytes =
         serde_json::to_vec_pretty(&report).map_err(|_| "cannot encode validation report")?;
@@ -441,6 +463,18 @@ esac
         assert!(services_passed(
             &json!({"services_observed":true,"all_expected_states_observed":true})
         ));
+    }
+    #[test]
+    fn security_summary_contains_only_sanitized_service_posture() {
+        let observed = json!({"services":{
+            "gateway":{"security_posture":{"source":"docker_inspect","user_class":"root"},
+                "private_environment":"CANARY=private-secret"},
+            "missing":{"status":"missing"}
+        }});
+        let summary = security_summary(&observed).unwrap();
+        assert_eq!(summary["gateway"]["user_class"], "root");
+        assert!(summary["missing"].is_null());
+        assert!(!summary.to_string().contains("private-secret"));
     }
     #[test]
     fn fixed_loopback_origin_refuses_url_overrides() {

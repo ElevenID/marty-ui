@@ -98,6 +98,15 @@ PATH` continues to validate the deployment catalog.
 Validation uses only the installation's recorded Docker Engine, owned resources,
 local HTTPS origin and verified certificate material. It does not restart or
 repair services, alter host CA trust, create test credentials, or remove data.
+When the before and after service inspections agree, the validation report also
+includes `container_security_posture` for each observed service. This redacted
+summary comes from Docker inspect after the installer verifies the container's
+recorded identity and configuration. It records configured user class, privileged
+mode, read-only root filesystem, `no-new-privileges`, capability changes, and
+counts of devices, writable mounts and published ports. A `null` service entry
+means that service was missing; a `null` top-level value means the inspection
+could not be held stable. It does not inspect kernel-effective UID or capabilities
+inside a running process and is not a container-hardening qualification.
 The credential journey is explicitly reported as `SKIP`: login and actual
 issue/present/verify/revoke/deny tests require isolated test fixtures and remain
 in the separate disposable qualification runner. Authorization metadata checks
