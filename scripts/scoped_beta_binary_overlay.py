@@ -27,9 +27,22 @@ def overlay_roles(profile=None, selected_roles=None):
     return {role: binary for role, binary in roles.items() if role in selected}
 
 
-def binary_overlay(binaries, profile=None, selected_roles=None):
+def binary_overlay(binaries, profile=None, selected_roles=None, before=None):
     roles = overlay_roles(profile, selected_roles)
     require(set(binaries) == set(overlay_roles(profile)), "EXACT_PROFILE_BINARIES_REQUIRED")
+    if profile is not None:
+        require(isinstance(before, dict), "EXISTING_MODEL_REQUIRED_FOR_BINARY_SOURCE_ONLY")
+        services = {}
+        for role, binary in roles.items():
+            mounts = before.get("services", {}).get(role, {}).get("volumes", [])
+            require(len({m["target"] for m in mounts}) == len(mounts), "DUPLICATE_MOUNT_TARGET")
+            matches = [m for m in mounts if m["target"] == "/usr/local/bin/" + binary]
+            require(len(matches) == 1 and matches[0]["type"] == "bind" and matches[0].get("read_only") is True, "EXISTING_READ_ONLY_EXECUTABLE_BIND_REQUIRED")
+            mount = deepcopy(matches[0])
+            mount["source"] = str(read_ref(binaries[role], 512 * 1024 * 1024))
+            services[role] = {"volumes": [mount]}
+        return {"services": services}
+    require(before is None, "LEGACY_THREE_ROLE_SCOPE_REQUIRED")
     return {"services": {role: {"volumes": [{"type": "bind", "source": str(read_ref(binaries[role], 512 * 1024 * 1024)),
         "target": "/usr/local/bin/" + binary, "read_only": True, "bind": {"create_host_path": False}}]}
         for role, binary in roles.items()}}

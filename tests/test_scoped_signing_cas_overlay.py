@@ -33,8 +33,21 @@ class SigningOverlayTests(unittest.TestCase):
             after = copy.deepcopy(before)
             after["services"][role]["volumes"][0]["source"] = binaries[role]["path"]
             overlay.validate_delta(before, after, binaries, "d02-signing-cas", [role])
-            rendered = overlay.binary_overlay(binaries, "d02-signing-cas", [role])
+            rendered = overlay.binary_overlay(binaries, "d02-signing-cas", [role], before)
             self.assertEqual(set(rendered["services"]), {role})
+
+    def test_renderer_preserves_absent_and_explicit_bind_options_exactly(self):
+        before, binaries = self.fixture()
+        for options in [None, {"create_host_path": False}, {"create_host_path": True, "propagation": "rprivate"}]:
+            mount = before["services"]["signing-keys"]["volumes"][0]
+            mount.pop("bind", None)
+            if options is not None:
+                mount["bind"] = options
+            rendered = overlay.binary_overlay(binaries, "d02-signing-cas", ["signing-keys"], before)
+            actual = rendered["services"]["signing-keys"]["volumes"][0]
+            self.assertEqual({k: v for k, v in actual.items() if k != "source"}, {k: v for k, v in mount.items() if k != "source"})
+        with self.assertRaises(ValueError):
+            overlay.binary_overlay(binaries, "d02-signing-cas", ["signing-keys"])
 
     def test_unselected_image_env_mount_and_other_binary_are_immutable(self):
         before, binaries = self.fixture()
@@ -67,10 +80,10 @@ class SigningOverlayTests(unittest.TestCase):
                 overlay.validate_delta(bad, copy.deepcopy(bad), binaries, "d02-signing-cas", ["gateway"])
 
     def test_candidate_hash_ref_is_verified_without_docker(self):
-        _, binaries = self.fixture()
+        before, binaries = self.fixture()
         Path(binaries["gateway"]["path"]).write_bytes(b"changed")
         with self.assertRaises(ValueError):
-            overlay.binary_overlay(binaries, "d02-signing-cas", ["gateway"])
+            overlay.binary_overlay(binaries, "d02-signing-cas", ["gateway"], before)
 
     def test_recreate_is_one_selected_service_no_dependencies_build_or_pull(self):
         args = ["docker", "compose", "-p", "elevenid-beta", "--project-directory", "/owned/project", "-f", "/owned/base.json"]
