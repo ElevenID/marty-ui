@@ -115,6 +115,7 @@ fn observe_operator(file: &File) -> Result<ObservedFile, String> {
 pub(crate) struct NewCredentials {
     root: ObservedDirectory,
     evidence: Option<ObservedDirectory>,
+    initial_receipt: Option<Vec<u8>>,
     secrets: Option<ObservedDirectory>,
     operator: Option<ObservedFile>,
 }
@@ -124,6 +125,7 @@ impl NewCredentials {
         Ok(Self {
             root: observe(root)?,
             evidence: None,
+            initial_receipt: None,
             secrets: None,
             operator: None,
         })
@@ -142,6 +144,18 @@ impl NewCredentials {
         }
         self.evidence = Some(observed);
         Ok(())
+    }
+
+    pub fn remember_initial_receipt(&mut self, bytes: Vec<u8>) -> Result<(), String> {
+        if self.evidence.is_none() || self.initial_receipt.is_some() || bytes.is_empty() {
+            return Err(REFUSED.into());
+        }
+        self.initial_receipt = Some(bytes);
+        Ok(())
+    }
+
+    pub fn initial_receipt(&self) -> Result<&[u8], String> {
+        self.initial_receipt.as_deref().ok_or(REFUSED.into())
     }
 
     pub fn capture(&mut self, secrets: &File, operator: &File) -> Result<(), String> {
@@ -178,6 +192,7 @@ impl NewCredentials {
         operator: &File,
     ) -> Result<Vec<u8>, String> {
         let recorded_evidence = self.evidence.as_ref().ok_or(REFUSED)?;
+        self.initial_receipt()?;
         let recorded_secrets = self.secrets.as_ref().ok_or(REFUSED)?;
         let recorded_operator = self.operator.as_ref().ok_or(REFUSED)?;
         if observe(root)? != self.root
@@ -295,7 +310,11 @@ mod tests {
     use crate::installer_state::{
         Identity, InstallerState, Phase, RuntimeBinding, PASSWORD_POLICY,
     };
-    use std::{fs, os::unix::fs::PermissionsExt, path::PathBuf};
+    use std::{
+        fs,
+        os::unix::{ffi::OsStrExt, fs::PermissionsExt},
+        path::PathBuf,
+    };
 
     fn identity() -> Identity {
         Identity {
@@ -387,6 +406,37 @@ mod tests {
             .persist_credential_creation_receipt(&installation)
             .is_err());
         assert_eq!(fs::read(&path).unwrap(), b"partial foreign data");
+        assert!(state.with_inspection(|_| Ok(())).is_err());
+    }
+
+    #[test]
+    fn changed_initial_receipt_is_refused_before_credential_receipt() {
+        let (_parent, installation, mut state) = credential_setup();
+        fs::write(installation.join("evidence").join(RECEIPT), b"{} ").unwrap();
+        assert!(state
+            .persist_credential_creation_receipt(&installation)
+            .is_err());
+        assert!(!installation
+            .join("evidence")
+            .join(CREDENTIAL_RECEIPT)
+            .exists());
+        assert!(state.with_inspection(|_| Ok(())).is_err());
+    }
+
+    #[test]
+    fn substituted_operator_fifo_is_refused_without_read_open() {
+        let (_parent, installation, mut state) = credential_setup();
+        let operator = installation.join("operator-password");
+        fs::rename(&operator, installation.join("saved-operator")).unwrap();
+        let name = CString::new(operator.as_os_str().as_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+        assert!(state
+            .persist_credential_creation_receipt(&installation)
+            .is_err());
+        assert!(!installation
+            .join("evidence")
+            .join(CREDENTIAL_RECEIPT)
+            .exists());
         assert!(state.with_inspection(|_| Ok(())).is_err());
     }
 
