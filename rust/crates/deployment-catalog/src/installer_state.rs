@@ -81,12 +81,29 @@ pub enum Phase {
 /// Immutable local daemon/port selection, committed before any Docker mutation.
 /// The runtime must re-observe this engine ID before every mutation. This is
 /// intent, not evidence that containers or networks exist or are owned.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeProfile {
+    #[default]
+    Rootful,
+    Rootless,
+}
+
+impl RuntimeProfile {
+    fn is_rootful(&self) -> bool {
+        *self == Self::Rootful
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeBinding {
     pub docker_host: String,
     pub engine_id: String,
     pub openbao_port: u16,
+    // Omitted for historical rootful journals, preserving their exact bytes.
+    #[serde(default, skip_serializing_if = "RuntimeProfile::is_rootful")]
+    pub profile: RuntimeProfile,
 }
 impl RuntimeBinding {
     pub fn validate(&self) -> Result<()> {
@@ -108,6 +125,12 @@ impl RuntimeBinding {
                 .unwrap()
                 .is_match(&self.engine_id)
             || self.openbao_port < 1024
+            || (self.profile == RuntimeProfile::Rootless
+                && (unsafe { libc::geteuid() } == 0
+                    || self.docker_host
+                        != format!("unix:///run/user/{}/docker.sock", unsafe {
+                            libc::geteuid()
+                        })))
         {
             return Err("invalid local installer runtime binding".into());
         }
@@ -1936,6 +1959,34 @@ mod tests {
             docker_host: "unix:///var/run/docker.sock".into(),
             engine_id: "01234567-89ab-cdef".into(),
             openbao_port: 18200,
+            profile: RuntimeProfile::Rootful,
+        }
+    }
+    #[test]
+    fn runtime_profile_preserves_legacy_rootful_bytes_and_requires_explicit_rootless_binding() {
+        let old = br#"{"docker_host":"unix:///var/run/docker.sock","engine_id":"01234567-89ab-cdef","openbao_port":18200}"#;
+        let restored: RuntimeBinding = serde_json::from_slice(old).unwrap();
+        assert_eq!(restored, acceptance_runtime());
+        assert_eq!(serde_json::to_vec(&restored).unwrap(), old);
+        let mut rootless = restored.clone();
+        rootless.profile = RuntimeProfile::Rootless;
+        rootless.docker_host = format!("unix:///run/user/{}/docker.sock", unsafe {
+            libc::geteuid()
+        });
+        if unsafe { libc::geteuid() } == 0 {
+            assert!(rootless.validate().is_err());
+        } else {
+            rootless.validate().unwrap();
+            let bytes = serde_json::to_vec(&rootless).unwrap();
+            assert!(bytes
+                .windows(b"\"profile\":\"rootless\"".len())
+                .any(|w| w == b"\"profile\":\"rootless\""));
+            assert_eq!(
+                serde_json::from_slice::<RuntimeBinding>(&bytes).unwrap(),
+                rootless
+            );
+            rootless.docker_host = "unix:///var/run/docker.sock".into();
+            assert!(rootless.validate().is_err());
         }
     }
     #[test]
@@ -2172,6 +2223,7 @@ mod tests {
                 docker_host: "unix:///var/run/docker.sock".into(),
                 engine_id: "test-engine".into(),
                 openbao_port: 18200,
+                profile: crate::installer_state::RuntimeProfile::Rootful,
             },
         )
         .unwrap()
@@ -2685,6 +2737,7 @@ mod tests {
             docker_host: "unix:///var/run/docker.sock".into(),
             engine_id: "01234567-89ab-cdef".into(),
             openbao_port: 18200,
+            profile: crate::installer_state::RuntimeProfile::Rootful,
         };
         let mut state =
             InstallerState::create_with_runtime(&path, identity(), runtime.clone()).unwrap();
@@ -2713,6 +2766,7 @@ mod tests {
                 docker_host: host.into(),
                 engine_id: "engine-id".into(),
                 openbao_port: 18200,
+                profile: crate::installer_state::RuntimeProfile::Rootful,
             };
             assert!(InstallerState::create_with_runtime(&path, identity(), runtime).is_err());
             assert!(!path.exists());
@@ -2722,6 +2776,7 @@ mod tests {
                 docker_host: "unix:///run/docker.sock".into(),
                 engine_id: engine.into(),
                 openbao_port: port,
+                profile: crate::installer_state::RuntimeProfile::Rootful,
             };
             assert!(InstallerState::create_with_runtime(&path, identity(), runtime).is_err());
             assert!(!path.exists());
@@ -2778,6 +2833,7 @@ mod tests {
                 docker_host: "unix:///var/run/docker.sock".into(),
                 engine_id: "engine-id".into(),
                 openbao_port: 18200,
+                profile: crate::installer_state::RuntimeProfile::Rootful,
             },
         )
         .unwrap();
