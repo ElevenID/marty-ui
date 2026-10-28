@@ -6,12 +6,14 @@ use std::{error::Error, net::SocketAddr, time::Duration};
 use axum::{
     body::{to_bytes, Body},
     extract::{ConnectInfo, State},
-    http::{header, HeaderMap, HeaderName, HeaderValue, Method, Request, Response, StatusCode},
+    http::{header, HeaderMap, HeaderValue, Method, Request, Response, StatusCode},
     routing::any,
     Router,
 };
 use futures_util::StreamExt;
-use marty_passport_keyless_edge::{keyless_tls_config, required};
+use marty_passport_keyless_edge::{
+    caller_forwarding_header, hop_by_hop, keyless_tls_config, required,
+};
 
 const MAX_BODY_BYTES: usize = 32 * 1024 * 1024;
 const UPSTREAM: &str = "http://gateway:8000";
@@ -20,28 +22,6 @@ const UPSTREAM: &str = "http://gateway:8000";
 struct EdgeState {
     client: reqwest::Client,
     upstream: String,
-}
-
-fn hop_by_hop(name: &HeaderName, connection: &str) -> bool {
-    matches!(
-        name.as_str(),
-        "connection"
-            | "keep-alive"
-            | "proxy-authenticate"
-            | "proxy-authorization"
-            | "te"
-            | "trailer"
-            | "transfer-encoding"
-            | "upgrade"
-    ) || connection
-        .split(',')
-        .any(|item| item.trim().eq_ignore_ascii_case(name.as_str()))
-}
-
-fn caller_forwarding_header(name: &HeaderName) -> bool {
-    name.as_str() == "forwarded"
-        || name.as_str() == "x-real-ip"
-        || name.as_str().starts_with("x-forwarded-")
 }
 
 fn error_response(status: StatusCode) -> Response<Body> {

@@ -1,4 +1,4 @@
-use marty_service_runtime::{shutdown_signal, wait_for_shutdown};
+use marty_service_runtime::{keyless_incoming, shutdown_signal, wait_for_shutdown};
 use std::{error::Error, future::Future, pin::Pin, sync::Arc};
 
 use axum::middleware;
@@ -18,7 +18,6 @@ use marty_auth::{
 use mmf_messaging::{run_outbox_dispatcher, MessageTransport};
 use tokio::{net::TcpListener, sync::watch};
 use tokio_stream::wrappers::TcpListenerStream;
-use tokio_stream::StreamExt;
 use tonic::transport::Server;
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
@@ -80,15 +79,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         .add_service(auth_server);
     let grpc: Pin<Box<dyn Future<Output = Result<(), tonic::transport::Error>> + Send>> =
         if let Some(acceptor) = tls_acceptor {
-            let incoming = TcpListenerStream::new(grpc_listener).then(move |connection| {
-                let acceptor = acceptor.clone();
-                async move {
-                    match connection {
-                        Ok(stream) => acceptor.accept(stream).await,
-                        Err(error) => Err(error),
-                    }
-                }
-            });
+            let incoming = keyless_incoming(grpc_listener, acceptor);
             Box::pin(router.serve_with_incoming_shutdown(incoming, async move {
                 wait_for_shutdown(&mut grpc_shutdown).await;
             }))

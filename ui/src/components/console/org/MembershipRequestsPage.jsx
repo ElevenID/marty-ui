@@ -5,7 +5,8 @@
  * pending membership requests from users who want to join the organization.
  */
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
+import { useAsyncData } from '../../../hooks/useAsyncData';
 import { useDialog } from '../../../hooks/useDialog';
 import { useNotifications } from '../../../hooks/useNotifications';
 import {
@@ -57,28 +58,23 @@ function MembershipRequestsPage() {
   const { t } = useTranslation('console');
   const { showSuccess } = useNotifications();
   const rejectDialog = useDialog();
-  const [requests, setRequests] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
+  const { data, loading, error: loadError, reload, clearError } = useAsyncData(
+    async () => (await getPendingRequests()).requests || [],
+    [],
+  );
+  const requests = data || [];
+  const [actionError, setActionError] = useState(null);
+  const error = actionError || loadError?.message;
   const [rejectionReason, setRejectionReason] = useState('');
   const [actionLoading, setActionLoading] = useState(false);
-
-  const loadRequests = async () => {
-    try {
-      setLoading(true);
-      setError(null);
-      const data = await getPendingRequests();
-      setRequests(data.requests || []);
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
+  const setError = (value) => {
+    clearError();
+    setActionError(value);
   };
-
-  useEffect(() => {
-    loadRequests();
-  }, []);
+  const loadRequests = async () => {
+    setActionError(null);
+    await reload();
+  };
 
   const handleApprove = async (request) => {
     try {

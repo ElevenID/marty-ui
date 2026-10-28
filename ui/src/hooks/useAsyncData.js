@@ -20,7 +20,7 @@ import { useState, useEffect, useLayoutEffect, useCallback, useRef } from 'react
  *   wrap it in useCallback when needed.
  * @param {any[]} [deps=[]] - Dependency array (same semantics as useEffect).
  *   The fetch is re-triggered whenever any dependency changes.
- * @returns {{ data: any, loading: boolean, error: Error|null, reload: () => Promise<void> }}
+ * @returns {{ data: any, loading: boolean, error: Error|null, reload: () => Promise<void>, clearError: () => void }}
  */
 export function useAsyncData(fetchFn, deps = []) {
   const [data, setData] = useState(null);
@@ -39,7 +39,6 @@ export function useAsyncData(fetchFn, deps = []) {
     };
   }, []);
 
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   const reload = useCallback(async () => {
     const requestGeneration = ++generation.current;
     setLoading(true);
@@ -65,7 +64,9 @@ export function useAsyncData(fetchFn, deps = []) {
     reload();
   }, [reload]);
 
-  return { data, loading, error, reload };
+  const clearError = useCallback(() => setError(null), []);
+
+  return { data, loading, error, reload, clearError };
 }
 
 export default useAsyncData;
