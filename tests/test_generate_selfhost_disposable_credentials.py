@@ -14,10 +14,9 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 from generate_selfhost_disposable_credentials import (  # noqa: E402
-    GENERATED, OPERATOR_PASSWORD_POLICY, generate, generate_operator_password,
-    validate_operator_password, write_operator_password,
+    GENERATED, MDOC_OPERATORS, OPERATOR_PASSWORD_POLICY, generate,
+    generate_operator_password, main, validate_operator_password, write_operator_password,
 )
-from run_selfhost_business_journey import LOCAL_SECRET_NAMES  # noqa: E402
 
 
 EXPECTED = {
@@ -95,6 +94,8 @@ def test_operator_password_file_is_private_and_never_overwrites(tmp_path: Path, 
 
 
 def test_generated_names_match_local_catalog_without_managed_keys() -> None:
+    from run_selfhost_business_journey import LOCAL_SECRET_NAMES
+
     catalog = json.loads((ROOT / "deploy-config/catalog/secrets.json").read_text(
         encoding="utf-8"))["secrets"]
     assert GENERATED == EXPECTED
@@ -105,6 +106,71 @@ def test_generated_names_match_local_catalog_without_managed_keys() -> None:
                    or name.startswith("keycloak_11id_")
                    or name in {"haip_kms_token", "openbao_tls_ca_cert"}
                    for name in GENERATED)
+
+
+def test_mdoc_operator_selection_does_not_expand_default_secret_closure() -> None:
+    assert MDOC_OPERATORS == {"mdoc_iaca_issue_gateway_key", "mdoc_dsc_issue_gateway_key"}
+    assert MDOC_OPERATORS.isdisjoint(GENERATED)
+    assert GENERATED == EXPECTED
+
+
+def test_mdoc_selection_requires_secret_root_not_operator_password(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys,
+) -> None:
+    output = tmp_path / "operator-password"
+    monkeypatch.setattr(sys, "argv", ["generator", "--operator-password-file", str(output),
+                                    "--mdoc-operators-only"])
+    with pytest.raises(SystemExit) as caught:
+        main()
+    assert caught.value.code == 2
+    assert "requires --secret-root" in capsys.readouterr().err
+    assert not output.exists()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX private file modes")
+def test_mdoc_selection_writes_exactly_two_distinct_values_and_preserves_existing(
+    tmp_path: Path, capsys,
+) -> None:
+    tmp_path.chmod(0o700)
+    original = tmp_path / "signing_keys_issuer_sign_key"
+    original.write_text("existing-authority-preserved", encoding="ascii")
+    values = iter(["a" * 64, "b" * 64])
+    requested = []
+    generate(tmp_path, lambda size: requested.append(size) or next(values), mdoc_operators_only=True)
+    assert requested == [32, 32]
+    assert {entry.name for entry in tmp_path.iterdir()} == MDOC_OPERATORS | {original.name}
+    assert {(tmp_path / name).read_text() for name in MDOC_OPERATORS} == {"a" * 64, "b" * 64}
+    assert all((tmp_path / name).stat().st_mode & 0o777 == 0o444 for name in MDOC_OPERATORS)
+    assert original.read_text() == "existing-authority-preserved"
+    assert not capsys.readouterr().out
+    with pytest.raises(ValueError, match="overwrite"):
+        generate(tmp_path, mdoc_operators_only=True)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX private file modes")
+@pytest.mark.parametrize("material", ["a" * 64, "invalid-private-fixture"])
+def test_mdoc_selection_rejects_reused_or_invalid_material_without_partial_files(
+    tmp_path: Path, material: str,
+) -> None:
+    tmp_path.chmod(0o700)
+    with pytest.raises(ValueError, match="invalid or reused") as caught:
+        generate(tmp_path, lambda _: material, mdoc_operators_only=True)
+    assert material not in str(caught.value)
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX ownership and mode contract")
+def test_mdoc_selection_retains_private_root_and_link_guards(tmp_path: Path) -> None:
+    tmp_path.chmod(0o755)
+    with pytest.raises(ValueError, match="owner-private"):
+        generate(tmp_path, mdoc_operators_only=True)
+    tmp_path.chmod(0o700)
+    outside = tmp_path / "untouched"
+    outside.write_text("preserve", encoding="ascii")
+    (tmp_path / sorted(MDOC_OPERATORS)[0]).symlink_to(outside)
+    with pytest.raises(ValueError, match="overwrite"):
+        generate(tmp_path, mdoc_operators_only=True)
+    assert outside.read_text() == "preserve"
 
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX private file modes")

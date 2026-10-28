@@ -479,6 +479,22 @@ password or reuse its state. Journey input validation rejects an incompatible
 operator password before Compose rendering, converter compilation or startup;
 the fixture also rejects it before contacting Keycloak.
 
+An optional MDOC certificate setup can select only its two operator credentials:
+
+```bash
+python3 "$source_root/scripts/generate_selfhost_disposable_credentials.py" \
+  --secret-root "$mdoc_private_root" --mdoc-operators-only
+```
+
+Use a fresh owner-private POSIX directory outside the checkout. This creates only
+`mdoc_iaca_issue_gateway_key` and `mdoc_dsc_issue_gateway_key`, with distinct
+256-bit values and the same ownership and overwrite checks as the default mode.
+The default credential set and required secret catalog are unchanged. This does
+not configure services, provision managed keys, issue certificates, or publish
+CRLs; those remain separately governed operations. Windows operators must run
+the generator in a reviewed POSIX environment and validate private host export
+custody rather than bypassing its ownership check.
+
 After provisioning, inspect the effective expirations without printing token
 values. Run this from the clean release source checkout with its `scripts/`
 directory on `PYTHONPATH`; `BAO_ADDR` must name the same locally controlled
