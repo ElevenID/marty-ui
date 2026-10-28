@@ -130,7 +130,7 @@ class LinuxJournalTests(unittest.TestCase):
             self.assertEqual(list(root.glob("linux-journal-request-*.json")), [])
 
     def test_legacy_passport_cannot_select_linux_backend(self):
-        with self.assertRaisesRegex(ValueError, "LINUX_JOURNAL_IS_D02_ONLY"):
+        with self.assertRaisesRegex(ValueError, "LINUX_JOURNAL_REVIEWED_PROFILE_REQUIRED"):
             build.build_journal({"journalBackend": {}}, Path("SOURCE_ONLY"))
 
 
