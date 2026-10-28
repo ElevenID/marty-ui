@@ -124,6 +124,9 @@ class OfficialNativeBuildTests(unittest.TestCase):
             subprocess.run(["git", "-C", str(repo), "config", "user.name", "Test"], check=True)
             (repo / ".gitattributes").write_bytes(b"* text eol=crlf\n")
             (repo / "source.txt").write_bytes(b"line one\nline two\n")
+            (repo / "scripts").mkdir()
+            operator = repo / "scripts/scoped_native_build.py"
+            operator.write_bytes(b"print('source')\n")
             subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
             subprocess.run(["git", "-C", str(repo), "commit", "-qm", "fixture"], check=True)
             revision = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"], text=True).strip()
@@ -131,7 +134,12 @@ class OfficialNativeBuildTests(unittest.TestCase):
             receipt = prepare.export(repo, revision, destination)
             blob = subprocess.check_output(["git", "-C", str(repo), "show", revision + ":source.txt"])
             self.assertEqual((destination / "source.txt").read_bytes(), blob)
-            self.assertEqual(receipt["fileCount"], 2)
+            self.assertEqual(receipt["fileCount"], 3)
+            operator.write_bytes(b"print('source')\r\n")
+            staged = Path(tmp) / "staged-operator.py"
+            bound = prepare.stage_operator(repo, revision, "scoped_native_build.py", staged)
+            self.assertEqual(staged.read_bytes(), b"print('source')\n")
+            self.assertEqual(bound["bytes"], len(staged.read_bytes()))
 
 
 if __name__ == "__main__":

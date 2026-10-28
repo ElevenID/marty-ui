@@ -11,7 +11,6 @@ import hashlib
 import json
 import os
 from pathlib import Path, PurePosixPath
-import shutil
 import subprocess
 
 import scoped_native_build as build
@@ -98,6 +97,20 @@ def export(repo: Path, revision: str, destination: Path) -> dict:
             "tree": git(repo, "rev-parse", revision + "^{tree}").decode().strip()}
 
 
+def stage_operator(repo: Path, revision: str, name: str, destination: Path) -> dict:
+    require(name in ("scoped_native_build.py", "scoped_native_profiles.py",
+                     "scoped_native_runtime.py", "scoped_linux_journal.py",
+                     "prepare_local_official_native_build.py",
+                     "seed_local_official_native_target.py",
+                     "run_local_official_native_build.py",
+                     "build-rust-service-binaries.sh"), "REVIEWED_OPERATOR_NAME_REQUIRED")
+    raw = git(repo, "show", revision + ":scripts/" + name)
+    with destination.open("xb") as target:
+        target.write(raw)
+    require(destination.read_bytes() == raw, "OPERATOR_GIT_OBJECT_COPY_CHANGED")
+    return ref(destination)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--product-repo", type=Path, required=True)
@@ -153,12 +166,8 @@ def main() -> None:
                  "build-rust-service-binaries.sh"):
         source = Path(__file__).with_name(name)
         target = operator_directory / name
-        require(source.is_file() and not source.is_symlink()
-                and git(producer, "show", producer_revision + ":scripts/" + name) == source.read_bytes(),
-                "OPERATOR_SOURCE_NOT_COMMITTED")
-        shutil.copyfile(source, target)
-        require(target.read_bytes() == source.read_bytes(), "OPERATOR_COPY_CHANGED")
-        operator_files[name] = ref(target)
+        require(source.is_file() and not source.is_symlink(), "OPERATOR_SOURCE_MISSING")
+        operator_files[name] = stage_operator(producer, producer_revision, name, target)
     (output / "output").mkdir()
     receipt = {"schema": "marty.local-official-native-source-export/v1",
                "state": "SOURCE_EXPORTED_NO_COMPILER", "freeze": ref(freeze),
