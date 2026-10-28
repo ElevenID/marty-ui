@@ -20,6 +20,8 @@ pub mod installer_candidate_command;
 pub mod installer_candidate_nonce;
 pub mod installer_candidate_prepare;
 pub mod installer_command;
+#[cfg(target_os = "linux")]
+pub(crate) mod installer_creation_identity;
 pub mod installer_doctor;
 pub mod installer_fetch;
 pub mod installer_generation;
