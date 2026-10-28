@@ -1,8 +1,8 @@
 use chrono::{TimeZone, Utc};
 use marty_flow::{
     application_flow_logical_key, create_definition_record, parse_request,
-    prepare_application_event_plan, ApplicationApprovedWebhook, CreateFlowDefinitionRequest,
-    DefinitionStatus,
+    prepare_application_event_plan, ApplicationApprovalError, ApplicationApprovedWebhook,
+    CreateFlowDefinitionRequest, DefinitionStatus,
 };
 use mmf_security::{
     ApplicationEventEvidence, APPLICATION_EVENT_AUDIENCE, APPLICATION_EVENT_PRODUCER,
@@ -273,6 +273,37 @@ fn manual_attempt_claim_and_semantics_failures_are_closed() {
     let empty: Vec<marty_flow::FlowDefinitionRecord> = Vec::new();
     let no_match = prepare_application_event_plan(&event(), &evidence(), &empty, now()).unwrap();
     assert!(no_match.planned_flows.is_empty());
+}
+
+#[test]
+fn manual_issue_rejects_multiple_matching_flows_before_reservation() {
+    let mut manual = event();
+    manual.data.insert(
+        "triggered_by_event".into(),
+        Value::String("application.manual_issue".into()),
+    );
+    manual.data.insert(
+        "issuance_attempt_id".into(),
+        Value::String("11111111-1111-4111-8111-111111111111".into()),
+    );
+    manual.data.insert(
+        "credential_template_id".into(),
+        Value::String("template-1".into()),
+    );
+    let definitions = vec![
+        definition("flow-a", "template-1"),
+        definition("flow-b", "template-1"),
+    ];
+    assert!(matches!(
+        prepare_application_event_plan(&manual, &evidence(), &definitions, now()),
+        Err(ApplicationApprovalError::Conflict(
+            "manual application issuance matches multiple active credential flows"
+        ))
+    ));
+    // Non-manual events retain the multi-flow plan used by other consumers.
+    let automatic =
+        prepare_application_event_plan(&event(), &evidence(), &definitions, now()).unwrap();
+    assert_eq!(automatic.planned_flows.len(), 2);
 }
 
 #[test]

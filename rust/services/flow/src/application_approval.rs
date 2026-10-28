@@ -445,6 +445,15 @@ pub fn prepare_application_event_plan(
         });
     }
 
+    // Applicant's manual /issue path can represent one offer. Reject an
+    // ambiguous configuration before reserving any Flow instance or offer.
+    // Other application events retain their existing multi-flow behavior.
+    if manual_issue && planned_flows.len() > 1 {
+        return Err(ApplicationApprovalError::Conflict(
+            "manual application issuance matches multiple active credential flows",
+        ));
+    }
+
     let now_ms = u64::try_from(now.timestamp_millis())
         .map_err(|_| ApplicationApprovalError::InvalidClock)?;
     Ok(PreparedApplicationEventPlan {
