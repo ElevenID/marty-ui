@@ -284,6 +284,20 @@ def observe(*, source: Path, registry: Path, runtime_parent: Path,
                         "package admission status identity changed")
         release.require(admission.private_file(status_path, admission.MAX_STATUS) == first,
                         "VM dpkg snapshot changed")
+        for row in child["packages"]:
+            raw = admission.private_file(bundle / (row["package"] + ".deb"),
+                                         admission.MAX_DEB, uid=65534)
+            release.require(len(raw) == row["size"] and hashlib.sha256(raw).hexdigest()
+                            == row["sha256"], "package admission archive changed")
+        for row in child["archive_releases"]:
+            raw = admission.private_file(bundle / (row["pocket"] + ".inrelease"),
+                                         admission.MAX_INRELEASE, uid=65534)
+            release.require(hashlib.sha256(raw).hexdigest() == row["inrelease_sha256"],
+                            "package admission release changed")
+        release.require(admission.private_file(Path(admission.__file__), 1024 * 1024, uid=0)
+                        == module_bytes
+                        and admission.private_file(Path(__file__), 1024 * 1024, uid=0)
+                        == controller_bytes, "package admission source changed")
         release.require(probe._bound_vm(source, registry, runtime_parent, vm_id, lease)
                         == before and _guest_status(before) == first,
                         "VM package admission source changed")

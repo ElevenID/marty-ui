@@ -59,10 +59,15 @@ def test_child_uses_fixed_nonroot_clean_exec(monkeypatch, tmp_path):
 
 def test_child_refuses_nonzero_or_authorizing_result(monkeypatch, tmp_path):
     monkeypatch.setattr(controller.admission, "trusted_tool", lambda path: (1, 2, 3, 4))
-    for exit_code, payload in ((1, b"{}"),
-                               (0, json.dumps({**_result(),
-                                               "package_actions_authorized": True}).encode()),
-                               (0, b"not-json")):
+    invalid = [
+        (1, b"{}"),
+        (0, json.dumps({**_result(), "package_actions_authorized": True}).encode()),
+        (0, json.dumps({**_result(), "surprise_secret": "canary"}).encode()),
+        (0, json.dumps({**_result(), "new_package_actions": [
+            {"package": "docker.io", "version": "29.1.3"}]}).encode()),
+        (0, b"not-json"),
+    ]
+    for exit_code, payload in invalid:
         def run(*args, **kwargs):
             return subprocess.CompletedProcess(args, exit_code, payload, b"")
         with monkeypatch.context() as patch:
