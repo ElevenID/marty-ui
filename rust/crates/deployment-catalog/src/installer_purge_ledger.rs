@@ -443,12 +443,17 @@ impl PurgeLedger {
         };
         let bytes = serde_json::to_vec(&record).map_err(|_| REFUSED)?;
         let key = digest(&bytes);
-        let created = write_or_verify(
-            &self.directory,
-            &format!("intent-{key}.json"),
-            &bytes,
-            MAX_RECORD,
-        )?;
+        let intent_entry = format!("intent-{key}.json");
+        let result_entry = format!("result-{key}.json");
+        if read_record(&self.directory, &intent_entry, MAX_RECORD)?.is_none() {
+            // A surviving result with a missing intent is an inconsistent
+            // ledger, not permission to recreate the earlier transaction.
+            require(read_record(&self.directory, &result_entry, MAX_RECORD)?.is_none())?;
+        }
+        let created = write_or_verify(&self.directory, &intent_entry, &bytes, MAX_RECORD)?;
+        if created {
+            require(read_record(&self.directory, &result_entry, MAX_RECORD)?.is_none())?;
+        }
         self.verify_manifest()?;
         require(
             read_record(&self.directory, &format!("intent-{key}.json"), MAX_RECORD)?.as_deref()
@@ -709,6 +714,12 @@ mod tests {
         ledger.record_result(&intent, Outcome::Removed).unwrap();
         fs::remove_file(directory.join(format!("intent-{}.json", intent.sha256()))).unwrap();
         assert!(ledger.recorded_result(&intent).is_err());
+        assert!(ledger
+            .record_intent(ResourceKind::HostEntry, &digest(b"owned-file"))
+            .is_err());
+        assert!(!directory
+            .join(format!("intent-{}.json", intent.sha256()))
+            .exists());
     }
     #[test]
     fn foreign_ledger_entry_and_replaced_manifest_refuse() {
