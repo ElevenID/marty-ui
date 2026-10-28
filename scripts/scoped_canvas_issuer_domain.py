@@ -4,6 +4,7 @@ from ctypes import wintypes
 import json
 import os
 import subprocess
+import time
 import uuid
 
 SQL = """SELECT json_build_object(
@@ -96,6 +97,20 @@ def attach_context(context, inputs):
         require("role" in last, "ACTUAL_CANDIDATE_READBACK_REQUIRED")
         return node("inventory", {"before": last["before"], "role": last["role"]})
 
+    def wait_dependents_healthy(before):
+        gateway = next(row for row in before["binding"]["roles"] if row["role"] == "gateway")
+        deadline = time.monotonic() + 120
+        while True:
+            actual = json.loads(command(["docker", "inspect", gateway["containerId"]]))[0]
+            require(actual["Id"] == gateway["containerId"] and actual["Image"] == gateway["imageId"]
+                    and actual["State"]["StartedAt"] == gateway["startedAt"] and actual["State"]["Pid"] == gateway["hostPid"]
+                    and actual["State"]["Running"] and not actual["State"]["Paused"], "DEPENDENT_GATEWAY_IDENTITY_CHANGED")
+            status = actual["State"].get("Health", {}).get("Status")
+            if status == "healthy":
+                return
+            require(status in ("starting", "unhealthy") and time.monotonic() < deadline, "DEPENDENT_GATEWAY_READINESS_NOT_RECOVERED")
+            time.sleep(2)
+
     def publish(preview, row, readback, auth):
         require(readback["state"] == "ACTUAL22_READBACK_VERIFIED" and len(readback["roles"]) == 22, "ACTUAL22_READBACK_REQUIRED")
         before = context["save"]("before-runtime-binding.private.json", {
@@ -126,7 +141,8 @@ def attach_context(context, inputs):
         require(state.get("failureAt") not in ("STOP_INTENT", "CREATE_INTENT", "START_INTENT", "ROLLBACK_CREATE_INTENT", "ROLLBACK_START_INTENT"),
                 "UNKNOWN_DAEMON_OUTCOME_REQUIRES_ROOT_RECONCILIATION")
         preview = context["document"](inputs["preview"])
-        node("untouched", {"before": preview["before"]})
+        node("untouched", {"before": preview["before"], **({"nativeTransition": state["new"]} if state["new"].get("containerId") else {
+            "nativeTransition": {"containerId": "75a9e465fbbf139a528739f36a71121a63860f17e9aca45c612d5f49532b7f60", "originalConfig": preview["beforeConfig"]}})})
         cid = state["new"].get("containerId")
         if cid:
             saved = context["document"](state["new"]["createdConfig"])
@@ -139,4 +155,5 @@ def attach_context(context, inputs):
         return True
 
     context.update(node=node, database_snapshot=database_snapshot, scoped_inventory_read=inventory,
-                   publish_profile=publish, reconcile_owned=reconcile_owned, controller_identity=process_identity)
+                   publish_profile=publish, reconcile_owned=reconcile_owned, controller_identity=process_identity,
+                   wait_dependents_healthy=wait_dependents_healthy)

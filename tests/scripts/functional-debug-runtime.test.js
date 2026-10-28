@@ -349,6 +349,16 @@ test('issuer-only row transition preserves separate issuance proxy and all21 oth
  }
  assert.throws(()=>applyNativeOverlayRows(x.expected,x.before,{roles:{issuance:replacement}},selection));
 });
+
+test('identity-only validation retains unhealthy readiness and still rejects generation or mount drift',t=>{
+ const {validateRuntimeIdentity,validateRuntimeObservation}=require('./functional-debug-runtime'),x=scopedRowsFixture(t);
+ const row=x.expected.find(value=>value.role==='gateway'),actual=x.f.observe(row);
+ actual.health='unhealthy';
+ assert.equal(validateRuntimeIdentity(row,actual).health,'unhealthy');
+ assert.throws(()=>validateRuntimeObservation(row,actual));
+ assert.throws(()=>validateRuntimeIdentity(row,{...actual,hostPid:actual.hostPid+1}));
+ assert.throws(()=>validateRuntimeIdentity(row,{...actual,binaryMounts:actual.binaryMounts.map(m=>({...m,writable:true}))}));
+});
 for(const fault of ['wrongRole','extraRole','source','elf','mountedElf','generation','untouchedPid','coreSource'])test('shared native overlay rejects '+fault,t=>{
  const {applyNativeOverlayRows}=require('./functional-debug-runtime'),x=scopedRowsFixture(t);
  if(fault==='wrongRole'){x.deployed.roles.flow=x.deployed.roles.gateway;delete x.deployed.roles.gateway;}

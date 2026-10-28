@@ -224,6 +224,10 @@ const CANVAS_ISSUER_EVIDENCE=Object.freeze({
  artifacts:'9b10a869668b9ac5e8423e35c4628c0b8eae96e267a21a9cdffd66eecba33db9',
  compatibility:'41dac1cfb8c71785de9a85001c28d363526aecdb6b1894ac8faae326d37c2b7b',
  compatibilityPlan:'418202b47e1fd6329b1710c711a3cf5b01999e901aeb22a7a4f58edcac63dcb8'});
+const CANVAS_ORIGINAL_RESTORE=Object.freeze({readback:'7f08e0303b2a3d3550999deda540fa7221685e190f0f0c605e34de60c81ec83b',
+ intent:'ccd9acdfca68bea9498944fdc46e4e1e393898847885b9caf0056e8f2cc5c046',
+ authority:'ceb2a11d4b852724a23cd4c85bf30a23d9045a9ea0270cba6fb2426199550365',
+ startAck:'b9c7b7b237dfa28ada941fb0b25853078a6d00ba3484641948bc194389684985'});
 function nativeBuildEvidence(overlay,pins){
  for(const [key,pin]of [['buildReceipt','build'],['preparedSource','prepared'],['compatibilityResult','compatibility'],['compatibilityPlan','compatibilityPlan']])assert.equal(overlay[key].sha256,pins[pin],'Unreviewed native-overlay evidence');
  const build=boundJson(overlay.buildReceipt),prepared=boundJson(overlay.preparedSource),compatibility=boundJson(overlay.compatibilityResult),compatibilityPlan=boundJson(overlay.compatibilityPlan);
@@ -266,23 +270,63 @@ function expectedScopedNativeOverlay(profile){
 
 function canvasIssuerSourceChain(baseProfile,evidence){
  assert.equal(baseProfile.sha256,CANVAS_ISSUER.base,'Foreign Canvas issuer predecessor');
- assert.deepEqual(Object.keys(evidence).sort(),['buildReceipt','compatibilityPlan','compatibilityResult','preparedSource','profile']);
+ assert.deepEqual(Object.keys(evidence).sort(),['buildReceipt','compatibilityPlan','compatibilityResult','preparedSource','priorRestore','profile']);
  assert.equal(evidence.profile,CANVAS_ISSUER.profile);
  const base=boundJson(baseProfile);
  assert.equal(base.schema,'marty.functional-mixed-runtime/v2');
  assert.equal(base.nativeOverlay.profile,D02_HEADER.profile,'Canvas successor must preserve the qualified signer predecessor');
- const expected=expectedRuntime(base);
+ const expected=canvasRestoredPreimage(expectedRuntime(base),evidence.priorRestore);
  const {build}=nativeBuildEvidence(evidence,{...CANVAS_ISSUER,...CANVAS_ISSUER_EVIDENCE});
  return {expected,build,base};
+}
+function canvasRestoredPreimage(expected,refs){
+ assert.deepEqual(Object.keys(refs).sort(),Object.keys(CANVAS_ORIGINAL_RESTORE).sort());
+ for(const [key,hash]of Object.entries(CANVAS_ORIGINAL_RESTORE))assert.equal(refs[key].sha256,hash,'Foreign original restore evidence');
+ const result=boundJson(refs.readback),intent=boundJson(refs.intent),authority=boundJson(refs.authority),ack=boundJson(refs.startAck);
+ assert.equal(authority.authority,'LINUX_PRIVATE_JOURNAL');assert.equal(authority.windowsDurabilityClaimed,false);
+ assert.equal(authority.authoritativeSha256,refs.intent.sha256);assert(JSON.stringify(authority.value)===JSON.stringify(intent),'Restore authority differs');
+ assert.equal(intent.schema,'marty.original-issuer-restore-intent/v1');
+ assert.equal(intent.operation,'RESTORE_ORIGINAL_AFTER_KNOWN_PARSE_REJECTION');
+ assert.equal(intent.originalContainerId,CANVAS_ISSUER.nativeBefore);assert.equal(intent.newContainerAbsent,true);
+ assert.equal(intent.other21IdentityVerified,true);assert.equal(intent.automaticRetry,false);
+ const failed=intent.originalFailedState;
+ assert.equal(failed.operation,'CANVAS_ISSUER_SCOPED_JOBS');assert.equal(failed.phase,'FAILED_OR_UNKNOWN');
+ assert.equal(failed.failureAt,'CREATE_INTENT');assert.deepEqual(failed.new,{});
+ const parse=boundJson(intent.parseFailure);assert(parse.exitCode!==0&&parse.stderr.includes('unknown flag: --no-deps'),'Known parse rejection is missing');
+ assert.equal(ack.containerId,CANVAS_ISSUER.nativeBefore);assert.equal(ack.startAcknowledged,true);assert.equal(ack.automaticRetry,false);
+ assert.equal(result.state,'RESTORED_ORIGINAL_ACTUAL22_VERIFIED');assert.equal(result.scope,'RESTORE_READBACK_ONLY_NOT_A_RUNTIME_PROFILE');
+ for(const field of ['originalFailurePreserved','originalSourceRestored','databaseUnchanged'])assert.equal(result[field],true);
+ for(const field of ['oldProfileReused','releaseQualified','recordingQualified'])assert.equal(result[field],false);
+ assert.equal(result.raw.length,22);assert.equal(new Set(result.raw.map(row=>row.role)).size,22);
+ assert.deepEqual(result.raw.map(row=>row.role).sort(),expected.map(row=>row.role).sort());
+ return expected.map(row=>{
+  const actual=result.raw.find(value=>value.role===row.role);
+  if(row.role!=='issuance-native'){validateRuntimeObservation(row,actual);return row;}
+  validateRuntimeObservation(row,actual,true);
+  assert.equal(actual.containerId,CANVAS_ISSUER.nativeBefore);
+  assert(Date.parse(actual.startedAt)>Date.parse(row.requiredStartedAt??row.requiredObservation?.startedAt),'Restore generation must be newer');
+  return {...row,startedAt:actual.startedAt,hostPid:actual.hostPid,requiredStartedAt:actual.startedAt,requiredHostPid:actual.hostPid,
+   requiredObservation:{...row.requiredObservation,startedAt:actual.startedAt,hostPid:actual.hostPid}};
+ });
 }
 // Expectations for an explicit preflight only. This never returns a runtime
 // binding or accepts a planned deployment receipt as APPLIED evidence.
 function expectedCanvasIssuerPreimage(baseProfile,evidence){
  return canvasIssuerSourceChain(baseProfile,evidence).expected;
 }
+function verifyCanvasIssuerPreimage(baseProfile,evidence,{readDocker=defaultDockerRead}={}){
+ assert.equal(typeof readDocker,'function','Actual Docker reader required');
+ assert.equal(readDocker(['info','--format','{{.ID}}']).trim(),'3dbbbe66-1c98-4e0c-b0a6-f927c05e7341');
+ const {expected,base}=canvasIssuerSourceChain(baseProfile,evidence);
+ const roles=expected.map(row=>validateRuntimeObservation(row,observeDocker(row,readDocker)));
+ canvasIssuerSourceChain(baseProfile,evidence);
+ assert.equal(readDocker(['info','--format','{{.ID}}']).trim(),'3dbbbe66-1c98-4e0c-b0a6-f927c05e7341');
+ return {schema:'marty.functional-mixed-runtime-binding/v2',scope:'FUNCTIONAL_ONLY',releaseQualified:false,
+  recordingQualified:false,mixedSourceStack:true,roles,receiptDigests:receiptDigests(base)};
+}
 function expectedCanvasIssuerSuccessor(profile){
  const overlay=profile.nativeOverlay;
- assert.deepEqual(Object.keys(overlay).sort(),['buildReceipt','compatibilityPlan','compatibilityResult','deploymentReceipt','preparedSource','profile']);
+ assert.deepEqual(Object.keys(overlay).sort(),['buildReceipt','compatibilityPlan','compatibilityResult','deploymentReceipt','preparedSource','priorRestore','profile']);
  const {deploymentReceipt,...evidence}=overlay;
  const {expected,build,base}=canvasIssuerSourceChain(profile.baseProfile,evidence);
  const deployed=boundJson(deploymentReceipt);
@@ -466,7 +510,7 @@ function configuredUid(value){
  if(/^\d+(?::[^:]+)?$/.test(value))return Number(value.split(':')[0]);
  return null;
 }
-function receiptDigests(profile){if(profile.nativeOverlay)return {baseProfile:profile.baseProfile.sha256,nativeBuild:profile.nativeOverlay.buildReceipt.sha256,nativeDeployment:profile.nativeOverlay.deploymentReceipt.sha256,nativeCompatibility:profile.nativeOverlay.compatibilityResult.sha256,...(profile.nativeOverlay.predecessor?{nativePredecessorAuthority:profile.nativeOverlay.predecessor.failedAuthority.sha256,nativePriorBuild:profile.nativeOverlay.predecessor.buildReceipt.sha256}:{})};return profile.schema==='marty.functional-mixed-runtime/v2'?{baseProfile:profile.baseProfile.sha256,issuanceBuild:profile.issuanceOverlay.buildReceipt.sha256,issuanceDeployment:profile.issuanceOverlay.deploymentReceipt.sha256,...(profile.maintenanceRestart?{maintenanceRestart:profile.maintenanceRestart.sha256}:{})}:{baselineDeployment:profile.baselineDeployment.sha256,baselineBuild:profile.baselineBuild.sha256,
+function receiptDigests(profile){if(profile.nativeOverlay)return {baseProfile:profile.baseProfile.sha256,nativeBuild:profile.nativeOverlay.buildReceipt.sha256,nativeDeployment:profile.nativeOverlay.deploymentReceipt.sha256,nativeCompatibility:profile.nativeOverlay.compatibilityResult.sha256,...(profile.nativeOverlay.predecessor?{nativePredecessorAuthority:profile.nativeOverlay.predecessor.failedAuthority.sha256,nativePriorBuild:profile.nativeOverlay.predecessor.buildReceipt.sha256}:{}),...(profile.nativeOverlay.priorRestore?{nativeOriginalRestore:profile.nativeOverlay.priorRestore.readback.sha256}:{})};return profile.schema==='marty.functional-mixed-runtime/v2'?{baseProfile:profile.baseProfile.sha256,issuanceBuild:profile.issuanceOverlay.buildReceipt.sha256,issuanceDeployment:profile.issuanceOverlay.deploymentReceipt.sha256,...(profile.maintenanceRestart?{maintenanceRestart:profile.maintenanceRestart.sha256}:{})}:{baselineDeployment:profile.baselineDeployment.sha256,baselineBuild:profile.baselineBuild.sha256,
    debugDeployment:profile.debugDeployment.sha256,debugBuild:profile.debugBuild.sha256,
    retainedBuilds:Object.fromEntries(Object.entries(profile.retainedBuilds).map(([role,ref])=>[role,ref.sha256])),
    ...(profile.priorNativeOverlay?{priorNativeOverlay:profile.priorNativeOverlay.sha256,priorNativeBuild:profile.priorNativeBuild.sha256,priorNativeArtifacts:profile.priorNativeArtifacts.sha256}:{})};}
@@ -513,10 +557,10 @@ function observeDocker(expected,read=defaultDockerRead){
   effectiveUid,configuredRuntimeUid};
 }
 function isNativeOverlayRow(row){return ['ISSUANCE_CORE_FUNCTIONAL_OVERLAY','SCOPED_NATIVE_FUNCTIONAL_OVERLAY'].includes(row.kind);}
-function validateRuntimeObservation(row,actual,ignoreGeneration=false){
+function validateRuntimeIdentity(row,actual,ignoreGeneration=false){
  assert.equal(actual.role,row.role);assert.equal(actual.project,row.project);
  assert.equal(actual.service,row.role);assert.equal(actual.imageId,row.imageId);assert(HASH.test(actual.containerId));
- if(row.requiredObservation)for(const [field,value]of Object.entries(row.requiredObservation)){if(ignoreGeneration&&['startedAt','hostPid'].includes(field))continue;assert.deepEqual(field==='binaryMounts'?comparableBinaryMounts(actual[field]):actual[field],field==='binaryMounts'?comparableBinaryMounts(value):value,'Unchanged role observation differs: '+row.role+'/'+field);}
+ if(row.requiredObservation)for(const [field,value]of Object.entries(row.requiredObservation)){if(field==='health'||ignoreGeneration&&['startedAt','hostPid'].includes(field))continue;assert.deepEqual(field==='binaryMounts'?comparableBinaryMounts(actual[field]):actual[field],field==='binaryMounts'?comparableBinaryMounts(value):value,'Unchanged role observation differs: '+row.role+'/'+field);}
  if(row.requiredContainerId)assert.equal(actual.containerId,row.requiredContainerId,'Reviewed debug container changed');
  if(!ignoreGeneration&&row.requiredStartedAt!==undefined){assert.equal(actual.startedAt,row.requiredStartedAt);assert.equal(actual.hostPid,row.requiredHostPid);}
  if(isNativeOverlayRow(row)){
@@ -526,7 +570,6 @@ function validateRuntimeObservation(row,actual,ignoreGeneration=false){
   assert.equal(actual.effectiveUid,row.requiredEffectiveUid);assert.equal(actual.configuredRuntimeUid,row.requiredEffectiveUid);
   assert.deepEqual(comparableBinaryMounts(actual.binaryMounts),comparableBinaryMounts(row.requiredBinaryMounts),'Reviewed native overlay executable mount changed');}
  assert.equal(actual.running,true);assert.equal(actual.status,'running');
- assert(actual.health==='healthy'||(row.role==='canvas-sync-worker'&&actual.health===null),'Role health not established');
  assert.equal(actual.binarySha256,row.sha256,'Actual mounted executable differs from source-bound role');
  if(row.binary){assert.equal(actual.executablePath,'/usr/local/bin/'+row.binary,'PID1 is not the exact expected service');
   assert.equal(actual.processExecutableSha256,row.sha256,'Running inode differs from source-bound executable');
@@ -536,6 +579,12 @@ function validateRuntimeObservation(row,actual,ignoreGeneration=false){
  return {...row,containerId:actual.containerId,health:actual.health,startedAt:actual.startedAt,hostPid:actual.hostPid,
   executablePath:actual.executablePath,processExecutableSha256:actual.processExecutableSha256,binaryMounts:actual.binaryMounts,
   ...(actual.effectiveUid!==undefined?{effectiveUid:actual.effectiveUid,configuredRuntimeUid:actual.configuredRuntimeUid}:{})};
+}
+function validateRuntimeObservation(row,actual,ignoreGeneration=false){
+ const observed=validateRuntimeIdentity(row,actual,ignoreGeneration);
+ if(row.requiredObservation&&Object.hasOwn(row.requiredObservation,'health'))assert.equal(actual.health,row.requiredObservation.health,'Unchanged role health differs');
+ assert(actual.health==='healthy'||(row.role==='canvas-sync-worker'&&actual.health===null),'Role health not established');
+ return observed;
 }
 function validateRestartObservation(row,actual){
  validateRuntimeObservation(row,actual,true);
@@ -567,4 +616,4 @@ function verifyFunctionalRuntime(profile,{qualification='FUNCTIONAL_ONLY',observ
   releaseQualified:false,recordingQualified:false,mixedSourceStack:true,roles,
   receiptDigests:receiptDigests(profile)};
 }
-module.exports={expectedCanvasIssuerPreimage,expectedHeaderSuccessorPreimage,applyNativeOverlayObservedRows:applyNativeOverlayObservations,validateSigningDomainTransition,validateHeaderSuccessorGate,expectedUnqualifiedNativePreimage,applyNativeOverlayRows,validateRuntimeObservation,observeDocker,DOCKER_READ_TRANSPORT_SCHEMA:'marty.functional-runtime-docker-read/v1',boundJson,expectedRuntime,verifyFunctionalRuntime,produceMaintenanceRestart,DEBUG_ROLES,RETAINED_ROLES,ISSUANCE_SOURCE,ISSUANCE_CORE};
+module.exports={verifyCanvasIssuerPreimage,expectedCanvasIssuerPreimage,expectedHeaderSuccessorPreimage,applyNativeOverlayObservedRows:applyNativeOverlayObservations,validateSigningDomainTransition,validateHeaderSuccessorGate,expectedUnqualifiedNativePreimage,applyNativeOverlayRows,validateRuntimeIdentity,validateRuntimeObservation,observeDocker,DOCKER_READ_TRANSPORT_SCHEMA:'marty.functional-runtime-docker-read/v1',boundJson,expectedRuntime,verifyFunctionalRuntime,produceMaintenanceRestart,DEBUG_ROLES,RETAINED_ROLES,ISSUANCE_SOURCE,ISSUANCE_CORE};

@@ -59,6 +59,15 @@ class IssuerSuccessor:
         require(path.stat().st_size == output["bytes"], "ORIGINAL_ELF_SIZE_CHANGED")
         return path
 
+    def wait_healthy(self, cid):
+        until = time.monotonic() + 120
+        while True:
+            current = self.inspect(cid)
+            if current["State"].get("Health", {}).get("Status") == "healthy":
+                return current
+            require(current["State"]["Running"] and time.monotonic() < until, "ISSUER_HEALTH_NOT_ESTABLISHED")
+            time.sleep(2)
+
     def preflight(self):
         self.g["assert_inputs"](rollback=False)
         binary = self.candidate()
@@ -125,7 +134,7 @@ class IssuerSuccessor:
         argv, old, binary = self.prepare_model(preview, rollback=rollback)
         active = self.state["new"].get("containerId") if rollback else BEFORE
         require(active, "KNOWN_OWNED_CONTAINER_REQUIRED")
-        self.g["node"]("untouched", {"before": preview["before"]})
+        self.g["node"]("untouched", {"before": preview["before"], **({"nativeTransition": self.state["new"]} if rollback else {})})
         current = self.inspect(active)
         if rollback and not current["State"]["Running"]:
             require(current["State"]["Status"] in ("created", "exited") and current["State"]["Pid"] == 0
@@ -139,7 +148,8 @@ class IssuerSuccessor:
                     and stopped["State"]["ExitCode"] == 0 and not stopped["State"]["OOMKilled"], "ISSUER_NOT_CLEANLY_STOPPED")
             self.record("STOP_ACK", activeContainerId=active)
         self.record("ROLLBACK_CREATE_INTENT" if rollback else "CREATE_INTENT")
-        self.command(argv + ["create", "--no-build", "--no-deps", "--pull", "never", "--force-recreate", ROLE])
+        recreate = self.g["overlay"].compose_recreate_arguments(argv, None, PROFILE, [ROLE], no_start=True)
+        self.command(recreate)
         ids = self.command(["docker", "ps", "-aq", "--no-trunc", "--filter", "label=com.docker.compose.project=elevenid-beta",
                             "--filter", "label=com.docker.compose.service=" + ROLE]).decode().split()
         require(len(ids) == 1, "CREATE_OUTCOME_UNKNOWN")
@@ -147,18 +157,13 @@ class IssuerSuccessor:
         self.state["new"] = {"containerId": created["Id"],
                              "createdConfig": self.g["save"]("created-native-config-" + created["Id"] + ".private.json", created)}
         self.record("ROLLBACK_CREATED" if rollback else "CREATED")
-        self.g["created_matches"](old, created, binary, argv)
-        self.g["node"]("untouched", {"before": preview["before"]})
+        self.g["created_matches"](old, created, binary, recreate)
+        self.g["node"]("untouched", {"before": preview["before"], "nativeTransition": self.state["new"]})
         self.record("ROLLBACK_START_INTENT" if rollback else "START_INTENT")
         self.command(["docker", "start", created["Id"]])
         self.record("START_ACK", activeContainerId=created["Id"])
-        until = time.monotonic() + 120
-        while True:
-            current = self.inspect(created["Id"])
-            if current["State"].get("Health", {}).get("Status") == "healthy":
-                break
-            require(current["State"]["Running"] and time.monotonic() < until, "ISSUER_HEALTH_NOT_ESTABLISHED")
-            time.sleep(2)
+        current = self.wait_healthy(created["Id"])
+        self.g["wait_dependents_healthy"](preview["before"])
         return self.g["observe_replacement"](current, binary, rollback)
 
     def apply(self, preview_ref):
@@ -205,12 +210,18 @@ class IssuerSuccessor:
                     "ORIGINAL_OWNED_CONFIG_CHANGED")
             require(stopped["State"]["Status"] == "exited" and stopped["State"]["Pid"] == 0
                     and not stopped["State"]["OOMKilled"], "ORIGINAL_STOP_NOT_RECONCILED")
-            self.g["node"]("untouched", {"before": preview["before"]})
+            self.g["node"]("untouched", {"before": preview["before"], "nativeTransition": {
+                "containerId": BEFORE, "originalConfig": preview["beforeConfig"]}})
             self.record("RESTORE_ORIGINAL_START_INTENT")
             self.command(["docker", "start", BEFORE])
+            self.record("RESTORE_ORIGINAL_START_ACK")
+            self.wait_healthy(BEFORE)
+            self.g["wait_dependents_healthy"](preview["before"])
             row = self.g["observe_original_restored"](BEFORE)
         else:
             row = self.replace(preview, rollback=True)
-        self.g["node"]("after-rollback", {"before": preview["before"], "role": row})
+        self.g["node"]("after-original-restore" if not self.state["new"].get("containerId") else "after-rollback",
+                       {"before": preview["before"], "role": row})
+        require(self.g["database_snapshot"]() == preview["database"], "DATABASE_CHANGED_DURING_RECOVERY")
         self.record("ROLLED_BACK_UNQUALIFIED_NEW_GENERATION", actualRole=row, originalProfileReused=False)
         return self.state

@@ -63,6 +63,18 @@ class CanvasScopedJobBuildTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 overlay.binary_overlay(binaries, profiles.CANVAS_SCOPED_JOBS.name, selected_roles=["issuance"], before=before)
 
+    def test_scoped_no_start_uses_supported_up_grammar_and_preserves_legacy_defaults(self):
+        arguments = ["docker", "compose", "--project-name", "elevenid-beta", "--project-directory", "C:/frozen", "-f", "C:/frozen/base.yml"]
+        actual = overlay.compose_recreate_arguments(arguments, None, profiles.CANVAS_SCOPED_JOBS.name,
+                                                   ["issuance-native"], no_start=True)
+        self.assertEqual(actual[len(arguments):], ["up", "--no-start", "--no-build", "--no-deps", "--pull", "never", "--force-recreate", "issuance-native"])
+        default = overlay.compose_recreate_arguments(arguments, "C:/frozen/overlay.yml")
+        self.assertIn("--detach", default)
+        self.assertNotIn("--no-start", default)
+        for change in (arguments[:3] + ["foreign"] + arguments[4:], arguments + ["up", "--detach"]):
+            with self.assertRaises(ValueError):
+                overlay.compose_recreate_arguments(change, None, profiles.CANVAS_SCOPED_JOBS.name, no_start=True)
+
     @unittest.skipUnless(os.name == "nt", "Windows MAX_PATH regression")
     def test_long_tracked_export_is_included_in_actual_verification(self):
         with tempfile.TemporaryDirectory() as temporary:

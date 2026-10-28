@@ -34,11 +34,39 @@ async function execute(input,mode,payload={}){
   const actual=observations(next);return {state:'ACTUAL22_READBACK_VERIFIED',roles:actual.map(x=>x.row),actualRows:actual.map(x=>x.actual),runtimeProfileQualified:false};
  };
  let result;
- if(mode==='before')result={binding:verifier.verifyFunctionalRuntime(verifier.boundJson(input.baseProfile),{readDocker:read})};
+ if(mode==='before')result={binding:verifier.verifyCanvasIssuerPreimage(input.baseProfile,input.evidence,{readDocker:read})};
  else if(mode==='untouched'){
-  const rows=observations(expected().filter(row=>row.role!=='issuance-native'));
-  result={state:'UNCHANGED21_VERIFIED',roles:rows.map(x=>x.row)};
+  let transition=false;
+  if(payload.nativeTransition){
+   const proof=payload.nativeTransition,reference=proof.createdConfig||proof.originalConfig;
+   const saved=json(reference),actual=JSON.parse(read(['inspect',proof.containerId]))[0];
+   assert(actual.Id===proof.containerId&&actual.Id===saved.Id&&actual.Image===saved.Image,'TRANSITION_OWNER_CHANGED');
+   assert(actual.Config.Labels['com.docker.compose.project']==='elevenid-beta'
+    &&actual.Config.Labels['com.docker.compose.service']==='issuance-native','TRANSITION_ROLE_CHANGED');
+   assert(['created','exited','running'].includes(actual.State.Status),'TRANSITION_STATE_UNKNOWN');
+   if(!actual.State.Running)assert(actual.State.Pid===0&&!actual.State.OOMKilled,'TRANSITION_PROCESS_UNKNOWN');
+   for(const key of ['Name','Config','HostConfig','Mounts'])assert(JSON.stringify(actual[key])===JSON.stringify(saved[key]),'TRANSITION_CONFIG_CHANGED');
+   if(proof.originalConfig)assert(!actual.State.Running&&actual.State.Status==='exited','ORIGINAL_TRANSITION_NOT_STOPPED');
+   transition=true;
+  }
+  const rows=expected().filter(row=>row.role!=='issuance-native').map(row=>{
+   const actual=verifier.observeDocker(row,read);
+   const observed=transition&&row.role==='gateway'?verifier.validateRuntimeIdentity(row,actual):verifier.validateRuntimeObservation(row,actual);
+   return {actual,row:observed};
+  });
+  result={state:'UNCHANGED21_IDENTITY_VERIFIED',roles:rows.map(x=>x.row),actualRows:rows.map(x=>x.actual),
+   readinessVerified:rows.every(x=>x.actual.health==='healthy'||x.actual.role==='canvas-sync-worker'&&x.actual.health===null)};
  }else if(mode==='after'||mode==='after-rollback')result=after(mode==='after-rollback');
+ else if(mode==='after-original-restore'){
+  const actual=expected().map(row=>{
+   const observed=verifier.observeDocker(row,read);
+   if(row.role!=='issuance-native')return {actual:observed,row:verifier.validateRuntimeObservation(row,observed)};
+   const validated=verifier.validateRuntimeObservation(row,observed,true);
+   assert(observed.containerId===row.requiredContainerId&&Date.parse(observed.startedAt)>Date.parse(row.requiredStartedAt),'ORIGINAL_RESTORE_GENERATION_INVALID');
+   return {actual:observed,row:validated};
+  });
+  result={state:'ORIGINAL_RESTORED_ACTUAL22_VERIFIED',roles:actual.map(x=>x.row),actualRows:actual.map(x=>x.actual),runtimeProfileQualified:false};
+ }
  else if(mode==='verify-profile')result={binding:verifier.verifyFunctionalRuntime(verifier.boundJson(payload.profile),{readDocker:read})};
  else if(mode==='inventory'){
   after(false); // Prove the actual scoped backend before interpreting a short list.

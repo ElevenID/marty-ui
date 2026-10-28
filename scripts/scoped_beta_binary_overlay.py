@@ -130,10 +130,13 @@ def validate_runtime_after(before, after, binaries, maintenance_restart_roles):
         "scope": "FUNCTIONAL_ONLY", "releaseQualified": False, "recordingQualified": False,
         "acceptedByExistingFunctionalRuntimeV2": False}
 
-def compose_recreate_arguments(frozen_arguments, overlay_path, profile=None, selected_roles=None):
+def compose_recreate_arguments(frozen_arguments, overlay_path, profile=None, selected_roles=None, *, no_start=False):
     # Existing operator invokes this only AFTER reviewed maintenance/SQL/backup
     # gates, while holding the host operation lock. It is not an apply function.
-    require(frozen_arguments[:4] == ["docker", "compose", "-p", "elevenid-beta"], "FROZEN_BETA_COMPOSE_ARGUMENTS_REQUIRED")
+    require(frozen_arguments[:4] in (["docker", "compose", "-p", "elevenid-beta"],
+                                     ["docker", "compose", "--project-name", "elevenid-beta"]), "FROZEN_BETA_COMPOSE_ARGUMENTS_REQUIRED")
+    require(isinstance(no_start, bool) and (not no_start or profile == "canvas-issuer-scoped-jobs"), "REVIEWED_NO_START_PROFILE_REQUIRED")
+    require(overlay_path is not None or no_start, "OVERLAY_PATH_REQUIRED")
     require(len(frozen_arguments) >= 8 and len(frozen_arguments[4:]) % 2 == 0, "EXACT_BASE_COMPOSE_GRAMMAR_REQUIRED")
     counts = {"--project-directory": 0, "--env-file": 0, "-f": 0}
     for flag, value in zip(frozen_arguments[4::2], frozen_arguments[5::2]):
@@ -146,4 +149,5 @@ def compose_recreate_arguments(frozen_arguments, overlay_path, profile=None, sel
     require(counts["--project-directory"] == 1 and counts["-f"] >= 1, "EXACT_COMPOSE_PROJECT_DIRECTORY_REQUIRED")
     roles = ["flow", "issuance-native", "gateway"] if profile is None else list(overlay_roles(profile, selected_roles))
     require(profile is not None or selected_roles is None, "LEGACY_THREE_ROLE_SCOPE_REQUIRED")
-    return [*frozen_arguments, "-f", str(overlay_path), "up", "--detach", "--no-build", "--no-deps", "--pull", "never", "--force-recreate", *roles]
+    extra = ["-f", str(overlay_path)] if overlay_path is not None else []
+    return [*frozen_arguments, *extra, "up", "--no-start" if no_start else "--detach", "--no-build", "--no-deps", "--pull", "never", "--force-recreate", *roles]
