@@ -76,6 +76,15 @@ struct CreationReceipts<'a> {
 }
 
 #[derive(Serialize)]
+struct ExecutionQuarantinePolicy {
+    relative_name: &'static str,
+    creation: &'static str,
+    prerequisite: &'static str,
+    retirement: &'static str,
+    absent_after_retry: &'static str,
+}
+
+#[derive(Serialize)]
 struct PrivateNormalPlan<'a> {
     schema: &'static str,
     coverage: &'static str,
@@ -97,6 +106,7 @@ struct PrivateNormalPlan<'a> {
     removed_network_id: &'a str,
     removed_network_name: &'a str,
     retained_redis_volume: &'a VolumeCreation,
+    execution_quarantine: ExecutionQuarantinePolicy,
     not_atomic_snapshot: bool,
     deletion_eligible: bool,
     deletion_authorized: bool,
@@ -328,6 +338,14 @@ fn prepare_normal_with<D: DockerRead>(
         removed_network_id: &facts.network_id,
         removed_network_name: &facts.network_name,
         retained_redis_volume: &facts.volume,
+        execution_quarantine: ExecutionQuarantinePolicy {
+            relative_name: ".marty-purge-quarantine",
+            creation: "exclusive_create_after_confirmation",
+            prerequisite: "host_durable_intent_and_unchanged_custody_required",
+            retirement: "retire_empty_before_root_last",
+            absent_after_retry:
+                "origin_and_quarantine_absent_only_with_prior_exact_intent_and_unchanged_custody",
+        },
         not_atomic_snapshot: true,
         deletion_eligible: false,
         deletion_authorized: false,
@@ -531,6 +549,14 @@ mod tests {
         assert_eq!(private["cleanup_result_sha256"].as_str().unwrap().len(), 64);
         assert_eq!(private["deletion_eligible"], false);
         assert_eq!(private["deletion_authorized"], false);
+        assert_eq!(
+            private["execution_quarantine"]["relative_name"],
+            ".marty-purge-quarantine"
+        );
+        assert_eq!(
+            private["execution_quarantine"]["creation"],
+            "exclusive_create_after_confirmation"
+        );
         let entries = private["entries_deepest_first"].as_array().unwrap();
         assert!(entries.len() > 31);
         assert!(entries
@@ -579,6 +605,16 @@ mod tests {
         assert!(matches!(
             prepare(&state, &path, &docker),
             PrepareNormalOutcome::Incomplete(IncompleteReason::CreationEvidenceIncomplete)
+        ));
+    }
+
+    #[test]
+    fn preexisting_reserved_quarantine_is_unknown_top_level() {
+        let (_parent, path, state, docker) = fixture();
+        fs::create_dir(path.join(".marty-purge-quarantine")).unwrap();
+        assert!(matches!(
+            prepare(&state, &path, &docker),
+            PrepareNormalOutcome::Incomplete(IncompleteReason::FixedTopLevelIncomplete)
         ));
     }
 
