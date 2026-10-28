@@ -13,7 +13,9 @@ import uuid
 HOME = PurePosixPath("/home/canvasrunner")
 UUID = re.compile(r"[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}")
 MAXIMUM = 256 * 1024
-FILES = {"build-apply-intent.json", "build-state.json", "build-receipt.json"}
+# This worker runs with Python -I: no unverified sibling import before source
+# checks. The verified shared module must contain this exact closed allowlist.
+FILES = frozenset(("build-apply-intent.json", "build-state.json", "build-receipt.json", "configuration-receipt.json"))
 
 
 def require(value, code):
@@ -85,6 +87,7 @@ def worker(request_file, expected_sha):
     shared = types.ModuleType("reviewed_journal_shared")
     shared.__file__ = str(shared_file)
     exec(compile(shared_bytes, str(shared_file), "exec"), shared.__dict__)
+    require(FILES == shared.JOURNAL_FILES, "JOURNAL_SHARED_FILENAME_POLICY_CHANGED")
     if request["operation"] == "initialize":
         root = Path(root_path(request["runId"]))
         parent = root.parent
@@ -112,10 +115,17 @@ def worker(request_file, expected_sha):
         barrier = None
     require(operation == "read" or shared.durable_barrier(barrier), "JOURNAL_WRITE_BARRIER")
     require(target.is_file() and not target.is_symlink(), "JOURNAL_TARGET_CHANGED")
-    value = json.loads(target.read_bytes())
+    with target.open("rb") as stream:
+        stored = stream.read(MAXIMUM + 1)
+    require(0 < len(stored) <= MAXIMUM, "JOURNAL_READ_TARGET")
+    reopened = shared.journal_readback(stored)
+    value = reopened["value"]
     require(operation == "read" or value == request["value"], "JOURNAL_REOPEN_CHANGED")
-    return {"ok": True, "rootProof": request["rootProof"], "name": request["name"],
-            "sha256": sha(target), "value": value, "barrier": barrier}
+    response = {"ok": True, "rootProof": request["rootProof"], "name": request["name"],
+                "sha256": reopened["sha256"], "value": value, "barrier": barrier,
+                **({"storedBytesBase64": reopened["storedBytesBase64"]} if operation == "read" else {})}
+    require(len(json.dumps(response).encode("utf-8")) + 1 <= shared.JOURNAL_RESPONSE_MAXIMUM, "JOURNAL_RESPONSE_BOUND")
+    return response
 
 
 def client_path(file):
@@ -183,8 +193,8 @@ class LinuxBuildJournal:
                                                         Path(__file__).with_name("scoped_native_runtime.py"), client_path)
         except subprocess.TimeoutExpired as error:
             raise RuntimeError("LINUX_JOURNAL_OUTCOME_UNKNOWN_NO_RETRY") from error
-        require(result.returncode == 0 and len(result.stdout) <= MAXIMUM and len(result.stderr) <= 4096, "LINUX_JOURNAL_REFUSED_RETAIN_REQUEST")
-        response = json.loads(result.stdout)
+        require(result.returncode == 0 and len(result.stdout) <= 1024 * 1024 and len(result.stderr) <= 4096, "LINUX_JOURNAL_REFUSED_RETAIN_REQUEST")
+        response = json.loads(result.stdout.decode("utf-8", errors="strict"))
         require(response.get("ok") is True, "LINUX_JOURNAL_RESPONSE_CHANGED")
         if operation == "initialize":
             validate_root(response.get("rootProof"), self.run_id)
@@ -193,7 +203,11 @@ class LinuxBuildJournal:
         else:
             require(response.get("rootProof") == specification["rootProof"] and response.get("name") == name,
                     "LINUX_JOURNAL_RESPONSE_CHANGED")
-            require(response.get("sha256") == hashlib.sha256(encoded(response.get("value"))).hexdigest(), "LINUX_JOURNAL_REOPEN_HASH_CHANGED")
+            if operation == "read":
+                from scoped_native_runtime import validate_journal_readback
+                validate_journal_readback(response)
+            else:
+                require(response.get("sha256") == hashlib.sha256(encoded(response.get("value"))).hexdigest(), "LINUX_JOURNAL_REOPEN_HASH_CHANGED")
         if operation not in {"read", "initialize"}:
             from scoped_native_runtime import durable_barrier, save_state
             require(response["value"] == value and durable_barrier(response.get("barrier", {})), "LINUX_JOURNAL_BARRIER_UNCONFIRMED")

@@ -4,6 +4,7 @@ const assert=require('node:assert/strict');
 const fs=require('node:fs');
 const path=require('node:path');
 const crypto=require('node:crypto');
+const {isDeepStrictEqual}=require('node:util');
 const {execFileSync}=require('node:child_process');
 const HASH=/^[a-f0-9]{64}$/,REV=/^[a-f0-9]{40}$/;
 const DEBUG_ROLES=Object.freeze({applicant:'marty-applicant',issuance:'marty-issuance-service',
@@ -27,6 +28,7 @@ function boundJson(ref){
 function binaryFor(role){return ({issuance:'marty-issuance-service','issuance-native':'marty-issuance-service',verification:'marty-verification-service'})[role]||'marty-'+role;}
 function expectedRuntime(profile){
  if(profile?.schema==='marty.functional-mixed-runtime/v2'){
+  if(profile.configurationOverlay)return expectedConfigurationSuccessor(profile);
   if(profile.nativeOverlay)return expectedScopedNativeOverlay(profile);
   const expected=expectedIssuanceOverlay(profile);
   return profile.maintenanceRestart?expectedMaintenanceRestart(profile,expected):expected;
@@ -510,10 +512,177 @@ function configuredUid(value){
  if(/^\d+(?::[^:]+)?$/.test(value))return Number(value.split(':')[0]);
  return null;
 }
-function receiptDigests(profile){if(profile.nativeOverlay)return {baseProfile:profile.baseProfile.sha256,nativeBuild:profile.nativeOverlay.buildReceipt.sha256,nativeDeployment:profile.nativeOverlay.deploymentReceipt.sha256,nativeCompatibility:profile.nativeOverlay.compatibilityResult.sha256,...(profile.nativeOverlay.predecessor?{nativePredecessorAuthority:profile.nativeOverlay.predecessor.failedAuthority.sha256,nativePriorBuild:profile.nativeOverlay.predecessor.buildReceipt.sha256}:{}),...(profile.nativeOverlay.priorRestore?{nativeOriginalRestore:profile.nativeOverlay.priorRestore.readback.sha256}:{})};return profile.schema==='marty.functional-mixed-runtime/v2'?{baseProfile:profile.baseProfile.sha256,issuanceBuild:profile.issuanceOverlay.buildReceipt.sha256,issuanceDeployment:profile.issuanceOverlay.deploymentReceipt.sha256,...(profile.maintenanceRestart?{maintenanceRestart:profile.maintenanceRestart.sha256}:{})}:{baselineDeployment:profile.baselineDeployment.sha256,baselineBuild:profile.baselineBuild.sha256,
+function receiptDigests(profile){if(profile.configurationOverlay)return {...receiptDigests(boundJson(profile.baseProfile)),configurationBase:profile.baseProfile.sha256,configurationAuthority:profile.configurationOverlay.authority.sha256,configurationDeployment:profile.configurationOverlay.deploymentReceipt.sha256};if(profile.nativeOverlay)return {baseProfile:profile.baseProfile.sha256,nativeBuild:profile.nativeOverlay.buildReceipt.sha256,nativeDeployment:profile.nativeOverlay.deploymentReceipt.sha256,nativeCompatibility:profile.nativeOverlay.compatibilityResult.sha256,...(profile.nativeOverlay.predecessor?{nativePredecessorAuthority:profile.nativeOverlay.predecessor.failedAuthority.sha256,nativePriorBuild:profile.nativeOverlay.predecessor.buildReceipt.sha256}:{}),...(profile.nativeOverlay.priorRestore?{nativeOriginalRestore:profile.nativeOverlay.priorRestore.readback.sha256}:{})};return profile.schema==='marty.functional-mixed-runtime/v2'?{baseProfile:profile.baseProfile.sha256,issuanceBuild:profile.issuanceOverlay.buildReceipt.sha256,issuanceDeployment:profile.issuanceOverlay.deploymentReceipt.sha256,...(profile.maintenanceRestart?{maintenanceRestart:profile.maintenanceRestart.sha256}:{})}:{baselineDeployment:profile.baselineDeployment.sha256,baselineBuild:profile.baselineBuild.sha256,
    debugDeployment:profile.debugDeployment.sha256,debugBuild:profile.debugBuild.sha256,
    retainedBuilds:Object.fromEntries(Object.entries(profile.retainedBuilds).map(([role,ref])=>[role,ref.sha256])),
    ...(profile.priorNativeOverlay?{priorNativeOverlay:profile.priorNativeOverlay.sha256,priorNativeBuild:profile.priorNativeBuild.sha256,priorNativeArtifacts:profile.priorNativeArtifacts.sha256}:{})};}
+const MDOC_ROLES=Object.freeze(['gateway','signing-keys']);
+const MDOC_NAMES=Object.freeze(['mdoc_iaca_issue_gateway_key','mdoc_dsc_issue_gateway_key']);
+const MDOC_PUBLIC='SIGNING_KEYS_MDOC_CERTIFICATE_AUTHORITIES_JSON';
+const MDOC_OPERATION='D03_MDOC_CONFIGURATION_SUCCESSOR';
+const privateEqual=(a,b,code)=>assert(isDeepStrictEqual(a,b),code);
+const mdocVariable=name=>'SIGNING_KEYS_'+name.toUpperCase();
+const canonicalJson=value=>JSON.stringify(value&&typeof value==='object'&&!Array.isArray(value)?Object.fromEntries(Object.keys(value).sort().map(key=>[key,JSON.parse(canonicalJson(value[key]))])):Array.isArray(value)?value.map(item=>JSON.parse(canonicalJson(item))):value).replace(/[\u007f-\uffff]/g,c=>'\\u'+c.charCodeAt(0).toString(16).padStart(4,'0'));
+function mdocEnvironment(values){
+ assert(Array.isArray(values)&&values.every(v=>typeof v==='string'&&v.includes('=')),'MDOC_ENV_SCHEMA');
+ const rows=values.map(v=>{const i=v.indexOf('=');return [v.slice(0,i),v.slice(i+1)];});
+ const result=Object.fromEntries(rows);assert.equal(Object.keys(result).length,rows.length,'MDOC_DUPLICATE_ENV');return result;
+}
+function mdocSource(value){return comparableBinaryMounts([{source:value}])[0].source;}
+function mdocMounts(rows,key){
+ assert(Array.isArray(rows),'MDOC_MOUNT_SCHEMA');const result=new Map();
+ for(const row of rows){assert(row&&typeof row[key]==='string'&&!result.has(row[key]),'MDOC_DUPLICATE_MOUNT');result.set(row[key],{...row,Source:mdocSource(row.Source)});}
+ return result;
+}
+function mdocBinds(rows){
+ assert(Array.isArray(rows),'MDOC_BIND_SCHEMA');const result=new Map();
+ for(const value of rows){assert(typeof value==='string');const match=value.match(/^(.*):([^:]+):([^:]+)$/);assert(match&&!result.has(match[2]),'MDOC_DUPLICATE_BIND');result.set(match[2],{source:mdocSource(match[1]),mode:match[3]});}
+ return result;
+}
+// Same created/start-only fields as scoped_signing_successor.normalized_created.
+// A first started snapshot freezes those values; later reads cannot adopt a
+// reconnect, changed network membership or endpoint merely because PID1 lives.
+const MDOC_NETWORK_ASSIGNED=Object.freeze(['NetworkID','EndpointID','Gateway','IPAddress','IPPrefixLen','IPv6Gateway','GlobalIPv6Address','GlobalIPv6PrefixLen','MacAddress','DNSNames']);
+function mdocNetworks(before,after,started=false){
+ const a=before.NetworkSettings.Networks,b=after.NetworkSettings.Networks;
+ privateEqual(Object.keys(a).sort(),Object.keys(b).sort(),'MDOC_NETWORK_SET_CHANGED');
+ for(const name of Object.keys(a)){
+  assert(HASH.test(a[name].NetworkID),'MDOC_NETWORK_ID_REQUIRED');
+  assert(started?b[name].NetworkID===a[name].NetworkID:[a[name].NetworkID,''].includes(b[name].NetworkID),'MDOC_NETWORK_ID_CHANGED');
+  privateEqual(Object.fromEntries(Object.entries(a[name]).filter(([k])=>!MDOC_NETWORK_ASSIGNED.includes(k))),Object.fromEntries(Object.entries(b[name]).filter(([k])=>!MDOC_NETWORK_ASSIGNED.includes(k))),'MDOC_NETWORK_STATIC_OPTIONS_CHANGED');
+  if(!started){for(const field of MDOC_NETWORK_ASSIGNED.filter(k=>!['NetworkID','DNSNames'].includes(k)))assert(isDeepStrictEqual(b[name][field],a[name][field])||[undefined,null,'',0].includes(b[name][field]),'MDOC_UNPROVEN_CREATED_NETWORK_VALUE');
+   const old=new Set((a[name].DNSNames||[]).filter(n=>n!==before.Id.slice(0,12))),fresh=new Set((b[name].DNSNames||[]).filter(n=>n!==after.Id.slice(0,12)));
+   assert(!fresh.size||isDeepStrictEqual(old,fresh),'MDOC_NETWORK_DNS_CHANGED');
+  }
+ }
+}
+function mdocNetworkSnapshot(row){return Object.fromEntries(Object.entries(row.NetworkSettings.Networks).map(([name,value])=>[name,{...value,...(value.DNSNames?{DNSNames:[...new Set(value.DNSNames)].sort()}: {})}]));}
+function validateMdocConfigContainer(before,created,role,authority,provenance){
+ assert(MDOC_ROLES.includes(role));assert.equal(created.Image,before.Image,'MDOC_IMAGE_CHANGED');assert.equal(created.Name,before.Name,'MDOC_ROLE_CHANGED');
+ const oldEnv=mdocEnvironment(before.Config.Env),newEnv=mdocEnvironment(created.Config.Env),wanted={...oldEnv};
+ for(const file of authority.files){const variable=mdocVariable(file.name);assert(!Object.hasOwn(oldEnv,variable)&&!Object.hasOwn(oldEnv,variable+'_FILE'),'MDOC_ALREADY_CONFIGURED');wanted[variable+'_FILE']='/run/secrets/'+file.name;}
+ if(role==='signing-keys'){
+  const previous=oldEnv[MDOC_PUBLIC]===undefined?[]:JSON.parse(oldEnv[MDOC_PUBLIC]);assert(Array.isArray(previous));
+  const keys=new Set(previous.map(row=>row.organization_id+'\0'+row.issuer_did));
+  for(const row of authority.publicAuthorities){const key=row.organization_id+'\0'+row.issuer_did;assert(!keys.has(key),'MDOC_AUTHORITY_COLLISION');keys.add(key);}
+  wanted[MDOC_PUBLIC]=canonicalJson([...previous,...authority.publicAuthorities]);
+ }
+ privateEqual(newEnv,wanted,'MDOC_UNAPPROVED_ENV_DELTA');
+ const a=structuredClone(before.Config),b=structuredClone(created.Config);delete a.Env;delete b.Env;
+ if(a.Hostname===before.Id.slice(0,12)){assert.equal(b.Hostname,created.Id.slice(0,12));delete a.Hostname;delete b.Hostname;}
+ const labelsA=a.Labels,labelsB=b.Labels;delete a.Labels;delete b.Labels;
+ const generated=['com.docker.compose.config-hash','com.docker.compose.project.config_files','com.docker.compose.version','com.docker.compose.project.environment_file','com.docker.compose.depends_on'];
+ privateEqual(Object.fromEntries(Object.entries(labelsA).filter(([k])=>!generated.includes(k))),Object.fromEntries(Object.entries(labelsB).filter(([k])=>!generated.includes(k))),'MDOC_CUSTOM_LABEL_CHANGED');
+ assert.equal(labelsB['com.docker.compose.project'],'elevenid-beta');assert.equal(labelsB['com.docker.compose.service'],role);
+ assert.equal(labelsB['com.docker.compose.config-hash'],provenance.configHash);assert.equal(labelsB['com.docker.compose.project.config_files'],provenance.configFiles.join(','));
+ assert.equal(labelsB['com.docker.compose.version'],provenance.composeVersion);assert.equal(labelsB['com.docker.compose.project.environment_file'],provenance.environmentFiles.join(','));
+ assert.equal(labelsB['com.docker.compose.depends_on'],'');privateEqual(a,b,'MDOC_OTHER_CONFIG_CHANGED');
+ const oldMounts=mdocMounts(before.Mounts,'Destination'),newMounts=mdocMounts(created.Mounts,'Destination');
+ assert.equal(newMounts.size,oldMounts.size+2);for(const [target,mount]of oldMounts)privateEqual(newMounts.get(target),mount,'MDOC_EXISTING_MOUNT_CHANGED');
+ const oldBinds=mdocBinds(before.HostConfig.Binds||[]),newBinds=mdocBinds(created.HostConfig.Binds||[]);assert.equal(newBinds.size,oldBinds.size+2);
+ for(const [target,bind]of oldBinds)privateEqual(newBinds.get(target),bind,'MDOC_EXISTING_BIND_CHANGED');
+ for(const file of authority.files){const target='/run/secrets/'+file.name;assert(!oldMounts.has(target)&&!oldBinds.has(target),'MDOC_ALREADY_MOUNTED');
+  const mount=newMounts.get(target);assert(mount&&Object.keys(mount).sort().join(',')==='Destination,Mode,Propagation,RW,Source,Type','MDOC_CLOSED_MOUNT_REQUIRED');
+  privateEqual(mount,{Type:'bind',Source:mdocSource(file.path),Destination:target,Mode:'ro',RW:false,Propagation:'rprivate'},'MDOC_RO_MOUNT_REQUIRED');
+  privateEqual(newBinds.get(target),{source:mdocSource(file.path),mode:'ro'},'MDOC_RO_BIND_REQUIRED');
+ }
+ const hA=structuredClone(before.HostConfig),hB=structuredClone(created.HostConfig);delete hA.Binds;delete hB.Binds;
+ for(const name of ['Dns','DnsSearch','DnsOptions'])if((hA[name]===null||Array.isArray(hA[name])&&!hA[name].length)&&(hB[name]===null||Array.isArray(hB[name])&&!hB[name].length))hA[name]=hB[name]=[];
+ if([null,false].includes(hA.OomKillDisable)&&[null,false].includes(hB.OomKillDisable))hA.OomKillDisable=hB.OomKillDisable=false;
+ privateEqual(hA,hB,'MDOC_OTHER_HOST_CONFIG_CHANGED');
+ mdocNetworks(before,created,created.State.Status!=='created');
+}
+function mdocJournalRead(ref){
+ const body=boundBytes(ref);assert(body.length<=1024*1024,'MDOC_JOURNAL_RESPONSE_BOUND');let response,raw,value;
+ try{
+  response=JSON.parse(new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(body));
+  const text=response.storedBytesBase64;
+  assert(typeof text==='string'&&text.length>0&&text.length<=4*Math.ceil((256*1024)/3)&&/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(text),'MDOC_JOURNAL_BASE64');
+  raw=Buffer.from(text,'base64');assert(raw.length>0&&raw.length<=256*1024&&raw.toString('base64')===text,'MDOC_JOURNAL_BASE64_CANONICAL');
+  value=JSON.parse(new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(raw));
+ }catch{throw new Error('MDOC_JOURNAL_BYTES_INVALID');}
+ assert.equal(digest(raw),response.sha256,'MDOC_JOURNAL_STORED_SHA_CHANGED');privateEqual(value,response.value,'MDOC_JOURNAL_STORED_VALUE_CHANGED');return response;
+}
+function validateMdocKnownOutcome(authority,deployed){
+ const spec=boundJson(authority.journalSpecification),known=boundJson(deployed.knownOutcome);
+ assert.equal(spec.schema,1);assert(/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(authority.runId));
+ assert.equal(spec.backend,'DOCKER_DESKTOP_PRIVATE_JOURNAL_V1');assert.equal(spec.desktop.engineId,deployed.engineId);
+ assert.equal(spec.desktop.volumeName,'marty-d02-journal-'+authority.runId);assert.equal(spec.desktop.volumeProof.Name,spec.desktop.volumeName);
+ assert.equal(spec.desktop.volumeProof.Labels['elevenid.owner'],'d02-private-journal');assert.equal(spec.desktop.volumeProof.Labels['elevenid.run'],authority.runId);
+ assert(spec.bootstrapParent.supported===true&&spec.bootstrapParent.synced===true);assert.equal(spec.rootProof.uid,1000);assert.equal(spec.rootProof.mode,0o700);
+ assert.equal(spec.rootProof.root,'/home/canvasrunner/.codex/private/d02-build-journal-'+authority.runId);for(const key of ['device','inode'])assert(Number.isSafeInteger(spec.rootProof[key])&&spec.rootProof[key]>0);
+ assert.equal(known.schema,'marty.mdoc-config-known-outcome/v1');assert.equal(known.runId,authority.runId);assert.equal(known.specificationSha256,authority.journalSpecification.sha256);
+ const names=['build-apply-intent.json','build-state.json','configuration-receipt.json'];assert.deepEqual(Object.keys(known.responses).sort(),[...names].sort());
+ const values={};for(const name of names){const response=mdocJournalRead(known.responses[name]);assert.equal(response.ok,true);assert.equal(response.name,name);privateEqual(response.rootProof,spec.rootProof,'MDOC_JOURNAL_ROOT_CHANGED');values[name]=response.value;}
+ for(const value of Object.values(values)){assert.equal(value.runId,authority.runId);assert.equal(value.inputSha256,authority.inputSha256);assert.equal(value.operation,MDOC_OPERATION);assert.equal(value.operatorSha256,authority.operator.sha256);}
+ assert.equal(values['build-state.json'].phase,'APPLIED_FUNCTIONAL_ONLY');assert(!values['build-state.json'].failure,'MDOC_UNKNOWN_OUTCOME');
+ assert.equal(values['configuration-receipt.json'].state,'CONFIGURATION_APPLIED_KNOWN');assert.equal(values['configuration-receipt.json'].configurationEvidence.sha256,deployed.configurationEvidence.sha256);
+ assert.equal(values['build-state.json'].configurationReceiptSha256,mdocJournalRead(known.responses['configuration-receipt.json']).sha256);
+ return {receipt:values['configuration-receipt.json'],state:values['build-state.json'],intent:values['build-apply-intent.json']};
+}
+function mdocConfigurationData(profile){
+ assert.deepEqual(Object.keys(profile).sort(),['baseProfile','configurationOverlay','recordingQualified','releaseQualified','schema','scope']);
+ assert.equal(profile.schema,'marty.functional-mixed-runtime/v2');assert.equal(profile.scope,'FUNCTIONAL_ONLY');assert.equal(profile.releaseQualified,false);assert.equal(profile.recordingQualified,false);
+ const overlay=profile.configurationOverlay;assert.deepEqual(Object.keys(overlay).sort(),['authority','deploymentReceipt','profile']);assert.equal(overlay.profile,'mdoc-operator-configuration');
+ const base=boundJson(profile.baseProfile);assert.equal(base.schema,'marty.functional-mixed-runtime/v2');assert(!base.configurationOverlay,'MDOC_CONFIG_LAYER_ALREADY_PRESENT');
+ const expected=expectedRuntime(base),authority=boundJson(overlay.authority),deployed=boundJson(overlay.deploymentReceipt);
+ assert.equal(authority.schema,'marty.mdoc-config-authority/v1');assert.equal(authority.operation,MDOC_OPERATION);assert(REV.test(authority.producerRevision));assert(HASH.test(authority.inputSha256));boundBytes(authority.operator);
+ assert.equal(authority.baseProfileSha256,profile.baseProfile.sha256);assert.equal(deployed.schema,'marty.mdoc-config-deployment/v1');assert.equal(deployed.state,'APPLIED_FUNCTIONAL_ONLY');
+ assert.equal(deployed.baseProfileSha256,profile.baseProfile.sha256);assert.equal(deployed.authoritySha256,overlay.authority.sha256);assert.equal(deployed.imagesBuilt,false);assert.equal(deployed.productionTouched,false);assert.equal(deployed.releaseQualified,false);assert.equal(deployed.recordingQualified,false);
+ assert(Array.isArray(authority.files)&&authority.files.length===2);assert.deepEqual(authority.files.map(f=>f.name).sort(),[...MDOC_NAMES].sort());assert.equal(new Set(authority.files.map(f=>f.sha256)).size,2);assert.equal(new Set(authority.files.map(f=>mdocSource(f.path))).size,2);
+ for(const file of authority.files){assert.equal(file.bytes,64);assert(HASH.test(file.sha256));}
+ assert(Array.isArray(authority.publicAuthorities)&&authority.publicAuthorities.length===2);const unique=new Set();
+ assert.equal(new Set(authority.publicAuthorities.map(row=>row.organization_id)).size,1);
+ for(const row of authority.publicAuthorities){assert.deepEqual(Object.keys(row).sort(),['certificate','issuer_did','organization_id']);assert(/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(row.organization_id)&&typeof row.issuer_did==='string'&&row.issuer_did.startsWith('did:')&&Buffer.byteLength(row.issuer_did)<=2048&&!/[\x00-\x1f\x7f-\x9f]/.test(row.issuer_did));
+  const key=row.organization_id+'\0'+row.issuer_did;assert(!unique.has(key));unique.add(key);assert.deepEqual(Object.keys(row.certificate).sort(),['crl_distribution_uri','issuer_contact_uri']);
+  for(const uri of Object.values(row.certificate)){assert(typeof uri==='string'&&uri.length<=2048&&!/[^\x21-\x7e]/.test(uri)&&!/[?#\\]/.test(uri));const parsed=new URL(uri);assert(['http:','https:'].includes(parsed.protocol)&&parsed.hostname&&!parsed.username&&!parsed.password&&!parsed.host.includes('@')&&!uri.slice(uri.indexOf('://')+3).split('/')[0].includes('@'));}
+ }
+ const evidence=boundJson(deployed.configurationEvidence);assert.equal(evidence.schema,'marty.mdoc-config-evidence/v1');assert.equal(evidence.baseProfileSha256,profile.baseProfile.sha256);assert.equal(evidence.authoritySha256,overlay.authority.sha256);
+ const snapshot=boundJson(evidence.beforeRuntimeBinding);assert.equal(snapshot.baseProfileSha256,profile.baseProfile.sha256);assert.deepEqual(snapshot.binding.receiptDigests,receiptDigests(base));assert.equal(snapshot.binding.roles.length,22);
+ assert.equal(snapshot.binding.schema,'marty.functional-mixed-runtime-binding/v2');assert.equal(snapshot.binding.scope,'FUNCTIONAL_ONLY');assert.equal(snapshot.binding.releaseQualified,false);assert.equal(snapshot.binding.recordingQualified,false);assert.equal(snapshot.binding.mixedSourceStack,true);
+ assert.equal(new Set(snapshot.binding.roles.map(r=>r.role)).size,22);assert.equal(new Set(snapshot.binding.roles.map(r=>r.containerId)).size,22);
+ const known=validateMdocKnownOutcome(authority,deployed);assert.deepEqual(known.receipt.roles,deployed.roles);assert.deepEqual(Object.keys(deployed.roles).sort(),MDOC_ROLES);assert.deepEqual(Object.keys(evidence.roles).sort(),MDOC_ROLES);assert.deepEqual(Object.keys(known.state.new).sort(),MDOC_ROLES);assert.deepEqual(Object.keys(known.intent.beforeConfigs).sort(),MDOC_ROLES);
+ const configs={};const ids=new Set();
+ const anchored=applyNativeOverlayObservations(expected,snapshot.binding.roles,{roles:{}},{roles:[]});
+ const rows=anchored.map(row=>{const old=snapshot.binding.roles.find(r=>r.role===row.role);assert(old);
+  for(const field of ['binary','source','coreSource','sha256','kind','imageId','project'])assert.equal(old[field],row[field],'MDOC_PRIOR_LINEAGE_CHANGED');
+  const required=Object.fromEntries(['containerId','imageId','health','executablePath','processExecutableSha256','binaryMounts','startedAt','hostPid','effectiveUid','configuredRuntimeUid'].map(field=>[field,old[field]]));
+  if(MDOC_ROLES.includes(row.role)){const actual=deployed.roles[row.role];assert.deepEqual(Object.keys(actual).sort(),['containerId','hostPid','startedAt']);assert(HASH.test(actual.containerId)&&!snapshot.binding.roles.some(r=>r.containerId===actual.containerId)&&!ids.has(actual.containerId),'MDOC_FRESH_GENERATION_REQUIRED');ids.add(actual.containerId);
+   assert(Number.isSafeInteger(actual.hostPid)&&actual.hostPid>0&&Date.parse(actual.startedAt)>Date.parse(old.startedAt),'MDOC_NEW_GENERATION_REQUIRED');
+   const item=evidence.roles[row.role],before=boundJson(item.beforeConfig),created=boundJson(item.createdConfig);assert.equal(before.Id,old.containerId);assert.equal(created.Id,actual.containerId);assert.equal(created.State.Status,'created');assert.equal(created.State.Running,false);assert.equal(created.State.Pid,0);
+   assert.equal(known.intent.beforeConfigs[row.role].sha256,item.beforeConfig.sha256);assert.equal(known.state.new[row.role].containerId,actual.containerId);assert.equal(known.state.new[row.role].createdVerified,true);assert.equal(known.state.new[row.role].createdInspect.sha256,item.createdConfig.sha256);assert.equal(known.state.new[row.role].startedInspect.sha256,item.startedConfig.sha256);
+   assert.equal(before.Image,old.imageId);assert.equal(before.State.Running,true);assert.equal(before.State.Pid,old.hostPid);assert.equal(before.State.StartedAt,old.startedAt);
+   const started=boundJson(item.startedConfig);assert.equal(started.Id,actual.containerId);assert.equal(started.State.Pid,actual.hostPid);assert.equal(started.State.StartedAt,actual.startedAt);assert.equal(started.State.Running,true);
+   validateMdocConfigContainer(before,created,row.role,authority,item.provenance);validateMdocConfigContainer(before,started,row.role,authority,item.provenance);
+   privateEqual(started.Config,created.Config,'MDOC_STARTED_CONFIG_CHANGED');privateEqual(started.HostConfig,created.HostConfig,'MDOC_STARTED_HOST_CONFIG_CHANGED');privateEqual(mdocMounts(started.Mounts,'Destination'),mdocMounts(created.Mounts,'Destination'),'MDOC_STARTED_MOUNTS_CHANGED');
+   configs[row.role]={before,created,started};Object.assign(required,{containerId:actual.containerId,startedAt:actual.startedAt,hostPid:actual.hostPid});
+  }
+  return {...row,requiredContainerId:required.containerId,requiredStartedAt:required.startedAt,requiredHostPid:required.hostPid,requiredEffectiveUid:required.effectiveUid,requiredBinaryMounts:required.binaryMounts,requiredObservation:required};
+ });return {base,authority,deployed,evidence,rows,configs};
+}
+function expectedConfigurationSuccessor(profile){return mdocConfigurationData(profile).rows;}
+function observeMdocConfiguration(profile,read){
+ assert.equal(typeof read,'function','MDOC_ACTUAL_DOCKER_TRANSPORT_REQUIRED');const data=mdocConfigurationData(profile);
+ assert.equal(JSON.parse(read(['info','--format','{{json .}}'])).ID,data.deployed.engineId);
+ const journal=boundJson(data.authority.journalSpecification),volumes=JSON.parse(read(['volume','inspect',journal.desktop.volumeName]));
+ assert.equal(volumes.length,1);for(const field of ['Name','Driver','Scope','CreatedAt','Labels','Mountpoint'])privateEqual(volumes[0][field],journal.desktop.volumeProof[field],'MDOC_DURABLE_JOURNAL_VOLUME_CHANGED');
+ for(const role of MDOC_ROLES){const selected=data.deployed.roles[role],actual=JSON.parse(read(['inspect',selected.containerId]))[0],created=data.configs[role].created,started=data.configs[role].started;
+  assert.equal(actual.Id,selected.containerId);assert.equal(actual.State.StartedAt,selected.startedAt);assert.equal(actual.State.Pid,selected.hostPid);assert.equal(actual.State.Running,true);assert.equal(actual.State.OOMKilled,false);
+  validateMdocConfigContainer(data.configs[role].before,actual,role,data.authority,data.evidence.roles[role].provenance);
+  privateEqual(actual.Config,created.Config,'MDOC_CURRENT_CONFIG_DRIFT');privateEqual(actual.HostConfig,created.HostConfig,'MDOC_CURRENT_HOST_CONFIG_DRIFT');
+  privateEqual(mdocMounts(actual.Mounts,'Destination'),mdocMounts(created.Mounts,'Destination'),'MDOC_CURRENT_MOUNT_DRIFT');
+  privateEqual(mdocNetworkSnapshot(actual),mdocNetworkSnapshot(started),'MDOC_CURRENT_NETWORK_DRIFT');
+  for(const [name,network]of Object.entries(actual.NetworkSettings.Networks)){const live=JSON.parse(read(['network','inspect',name]));assert.equal(live.length,1);assert.equal(live[0].Name,name);assert.equal(live[0].Id,network.NetworkID,'MDOC_CURRENT_NETWORK_ID_DRIFT');assert.equal(live[0].Containers?.[actual.Id]?.EndpointID,network.EndpointID,'MDOC_CURRENT_NETWORK_ENDPOINT_DRIFT');}
+ }
+ for(const file of data.authority.files){const bytes=boundBytes(file);assert.equal(bytes.length,64,'MDOC_SECRET_SIZE_CHANGED');}
+ return data;
+}
+function produceMdocConfigurationSuccessor(baseProfile,authority,deploymentReceipt,{readDocker}={}){
+ assert.equal(typeof readDocker,'function','MDOC_ACTUAL_DOCKER_TRANSPORT_REQUIRED');
+ const profile={schema:'marty.functional-mixed-runtime/v2',scope:'FUNCTIONAL_ONLY',releaseQualified:false,recordingQualified:false,baseProfile,
+  configurationOverlay:{profile:'mdoc-operator-configuration',authority,deploymentReceipt}};
+ const binding=verifyFunctionalRuntime(profile,{readDocker});return {profile,binding};
+}
 const defaultDockerRead=args=>execFileSync('docker',args,{encoding:'utf8',timeout:30000,maxBuffer:4*1024*1024,windowsHide:true});
 function comparableBinaryMounts(mounts){
  assert(Array.isArray(mounts));
@@ -592,13 +761,14 @@ function validateRestartObservation(row,actual){
  assert(Number.isFinite(Date.parse(previous))&&Date.parse(actual.startedAt)>Date.parse(previous),'Maintenance generation must be newer');
 }
 function verifyFunctionalRuntime(profile,{qualification='FUNCTIONAL_ONLY',observe,readDocker}={}){
- if(profile.maintenanceRestart||profile.nativeOverlay){assert(!observe,'Maintenance verification requires actual Docker transport');readDocker=readDocker||defaultDockerRead;}
+ if(profile.maintenanceRestart||profile.nativeOverlay||profile.configurationOverlay){assert(!observe,'Maintenance verification requires actual Docker transport');readDocker=readDocker||defaultDockerRead;}
  assert(!(observe&&readDocker),'Select one observation transport');
  if(readDocker)assert.equal(typeof readDocker,'function');
  observe=observe||(readDocker?(expected=>observeDocker(expected,readDocker)):observeDocker);
  assert.equal(qualification,'FUNCTIONAL_ONLY','Mixed/debug stack cannot qualify release or recording');
  const expected=expectedRuntime(profile),roles=[];
- const maintenance=profile.maintenanceRestart?boundJson(profile.maintenanceRestart):profile.nativeOverlay?boundJson(profile.nativeOverlay.deploymentReceipt):null;
+ if(profile.configurationOverlay)observeMdocConfiguration(profile,readDocker);
+ const maintenance=profile.maintenanceRestart?boundJson(profile.maintenanceRestart):profile.nativeOverlay?boundJson(profile.nativeOverlay.deploymentReceipt):profile.configurationOverlay?boundJson(profile.configurationOverlay.deploymentReceipt):null;
  if(maintenance)assert.equal(JSON.parse(readDocker(['info','--format','{{json .}}'])).ID,maintenance.engineId);
  for(const row of expected){
   let actual;
@@ -611,9 +781,10 @@ function verifyFunctionalRuntime(profile,{qualification='FUNCTIONAL_ONLY',observ
  }
  // A changed receipt during the observation window cannot acquire a binding.
  expectedRuntime(profile);
+ if(profile.configurationOverlay)observeMdocConfiguration(profile,readDocker);
  if(maintenance)assert.equal(JSON.parse(readDocker(['info','--format','{{json .}}'])).ID,maintenance.engineId);
  return {schema:profile.schema==='marty.functional-mixed-runtime/v2'?'marty.functional-mixed-runtime-binding/v2':'marty.functional-mixed-runtime-binding/v1',scope:'FUNCTIONAL_ONLY',
   releaseQualified:false,recordingQualified:false,mixedSourceStack:true,roles,
   receiptDigests:receiptDigests(profile)};
 }
-module.exports={verifyCanvasIssuerPreimage,expectedCanvasIssuerPreimage,expectedHeaderSuccessorPreimage,applyNativeOverlayObservedRows:applyNativeOverlayObservations,validateSigningDomainTransition,validateHeaderSuccessorGate,expectedUnqualifiedNativePreimage,applyNativeOverlayRows,validateRuntimeIdentity,validateRuntimeObservation,observeDocker,DOCKER_READ_TRANSPORT_SCHEMA:'marty.functional-runtime-docker-read/v1',boundJson,expectedRuntime,verifyFunctionalRuntime,produceMaintenanceRestart,DEBUG_ROLES,RETAINED_ROLES,ISSUANCE_SOURCE,ISSUANCE_CORE};
+module.exports={validateMdocJournalRead:mdocJournalRead,produceMdocConfigurationSuccessor,validateMdocConfigContainer,validateMdocKnownOutcome,verifyCanvasIssuerPreimage,expectedCanvasIssuerPreimage,expectedHeaderSuccessorPreimage,applyNativeOverlayObservedRows:applyNativeOverlayObservations,validateSigningDomainTransition,validateHeaderSuccessorGate,expectedUnqualifiedNativePreimage,applyNativeOverlayRows,validateRuntimeIdentity,validateRuntimeObservation,observeDocker,DOCKER_READ_TRANSPORT_SCHEMA:'marty.functional-runtime-docker-read/v1',boundJson,expectedRuntime,verifyFunctionalRuntime,produceMaintenanceRestart,DEBUG_ROLES,RETAINED_ROLES,ISSUANCE_SOURCE,ISSUANCE_CORE};

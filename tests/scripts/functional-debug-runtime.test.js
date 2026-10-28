@@ -48,10 +48,10 @@ test('prior in-place canonical overlay is explicit rather than relabeled R32',t=
 });
 
 
-function issuanceFixture(t){
+function issuanceFixture(t,runtimeUid=0){
  const f=fixture(t),{ISSUANCE_SOURCE,ISSUANCE_CORE}=require('./functional-debug-runtime');
  const sha=value=>crypto.createHash('sha256').update(value).digest('hex');
- const baseObserve=row=>({...f.observe(row),containerId:row.requiredContainerId||sha('base:'+row.role),effectiveUid:0,configuredRuntimeUid:0});
+ const baseObserve=row=>({...f.observe(row),containerId:row.requiredContainerId||sha('base:'+row.role),effectiveUid:runtimeUid,configuredRuntimeUid:runtimeUid});
  const base=f.write('immutable-v1.json',f.profile),before=verifyFunctionalRuntime(f.profile,{observe:baseObserve});
  const build={scope:'ISSUANCE_ONLY_NATIVE_FUNCTIONAL_OVERLAY',state:'BUILD_SUCCEEDED',exitCode:0,profile:'dev',
   sourceRevision:ISSUANCE_SOURCE,coreRevision:ISSUANCE_CORE,sourceCleanBeforeAfter:true,releaseQualified:false,recordingQualified:false,imageBuilt:false,
@@ -64,7 +64,7 @@ function issuanceFixture(t){
   recipeSha256:'2beef9b635f8fefeb36470722b0b87089810b0666ecbf37b0d60a6dcf4236fd1',localizerSha256:'b1dd31880f82f91d2f9151d05cb01c29ca702ce057595ff18c2708378d2167f5',builderImage:'sha256:6258907abe69656e41cd992e0b705cdcfabcbbe3db374f92ed2d47121282d4a1'});
  build.coreCompilerArtifacts=f.write('core-artifacts.json',['marty-crypto','marty-didcomm','marty-oid4vci','marty-verification'].map(name=>({name,manifest:'/build/core/'+name+'/Cargo.toml',features:['kms-only'],fresh:false,filenames:['/target/debug/deps/lib'+name+'.rlib']})));
  const buildReceipt=f.write('issuer-build.json',build),roles=Object.fromEntries(['issuance','issuance-native'].map((role,index)=>[role,{
-  containerId:sha('new:'+role),imageId:image,startedAt:'2026-10-26T01:00:00Z',hostPid:200+index,configuredRuntimeUid:0,effectiveUid:0,
+  containerId:sha('new:'+role),imageId:image,startedAt:'2026-10-26T01:00:00Z',hostPid:200+index,configuredRuntimeUid:runtimeUid,effectiveUid:runtimeUid,
   binaryMount:{type:'bind',source:path.join(path.dirname(base.path),'owned-issuer'),destination:'/usr/local/bin/marty-issuance-service',writable:false},
   processExecutablePath:'/usr/local/bin/marty-issuance-service',processExecutableSha256:H('9'),mountedBinarySha256:H('9')}]));
  const deployed={scope:'ISSUANCE_ONLY_NATIVE_FUNCTIONAL_OVERLAY',state:'APPLIED_FUNCTIONAL_ONLY',baseProfileSha256:base.sha256,
@@ -451,6 +451,113 @@ function domainFixture(){
   rows:[{key:org+'signing-key-services',type:'string',valueHex:registry,dumpHex:'aabb',pttl:-1},
    {key:org+'signing-key-services-revision',type:'string',valueHex:Buffer.from(uuid+':'+hash).toString('hex'),dumpHex:'ccdd',pttl:-1}]};
 }
+
+// Deterministic source fixtures only: no operational credentials or Docker.
+test('mdoc journal bytes use actual stored UTF8 bytes independent of key order and formatting',t=>{
+ const f=fixture(t),helper=require('./functional-debug-runtime');
+ for(const raw of [Buffer.from('{"10":"ten","2":"two","unicode":"π雪","float":1e-7}\n'),Buffer.from('{\n  "2": "two",\n  "10": "ten",\n  "unicode": "\\u03c0\\u96ea"\n}\n')]){
+  const filename=path.join(path.dirname(f.profile.debugBuild.path),'stored-metadata.json');fs.writeFileSync(filename,raw);const stored=fs.readFileSync(filename);
+  const response=f.write('read-stored.json',{sha256:crypto.createHash('sha256').update(stored).digest('hex'),storedBytesBase64:stored.toString('base64'),value:JSON.parse(stored)});
+  assert.deepEqual(helper.validateMdocJournalRead(response).value,JSON.parse(stored));
+ }
+});
+test('mdoc journal bytes reject malformed, noncanonical, oversized and inconsistent proofs',t=>{
+ const f=fixture(t),helper=require('./functional-debug-runtime'),raw=Buffer.from('{}'),base={sha256:crypto.createHash('sha256').update(raw).digest('hex'),storedBytesBase64:raw.toString('base64'),value:{}};
+ for(const change of [{storedBytesBase64:'e31='},{storedBytesBase64:'e30=\n'},{storedBytesBase64:'e30==='},{storedBytesBase64:'e30'},{sha256:H('0')},{value:{forged:true}},{storedBytesBase64:'A'.repeat(4*Math.ceil((256*1024)/3)+4)}])assert.throws(()=>helper.validateMdocJournalRead(f.write('bad-byte-proof.json',{...base,...change})));
+ const invalid=Buffer.from([0x7b,0x22,0x78,0x22,0x3a,0x22,0xff,0x22,0x7d]);assert.throws(()=>helper.validateMdocJournalRead(f.write('bad-utf8-proof.json',{sha256:crypto.createHash('sha256').update(invalid).digest('hex'),storedBytesBase64:invalid.toString('base64'),value:{x:'�'}})));
+ const oversized=path.join(path.dirname(f.profile.debugBuild.path),'oversized-response.json');fs.writeFileSync(oversized,Buffer.alloc(1024*1024+1,32));assert.throws(()=>helper.validateMdocJournalRead({path:oversized,sha256:crypto.createHash('sha256').update(fs.readFileSync(oversized)).digest('hex')}));
+});
+function dockerObservationFixture(expected,observe){
+ const observations=expected.map(row=>({...observe(row),binary:row.binary}));
+ const raw=Object.fromEntries(observations.map(row=>[row.role,{Id:row.containerId,Image:row.imageId,
+  Config:{User:String(row.configuredRuntimeUid),Labels:{'com.docker.compose.project':row.project,'com.docker.compose.service':row.role}},
+  State:{Running:true,Status:'running',Pid:row.hostPid,StartedAt:row.startedAt,...(row.health?{Health:{Status:row.health}}:{})},
+  Mounts:row.binaryMounts.map(m=>({Type:m.type,Source:m.source,Destination:m.destination,RW:m.writable}))}]));
+ const readDocker=args=>{
+  if(args[0]==='ps'){const role=args.find(a=>a.startsWith('label=com.docker.compose.service=')).split('=').at(-1);return raw[role].Id+'\n';}
+  const row=Object.values(raw).find(r=>r.Id===args[1]);assert(row,'Unknown synthetic role');
+  if(args[0]==='inspect')return JSON.stringify([row]);
+  const observation=observations.find(o=>o.containerId===args[1]);
+  if(args[2]==='readlink')return observation.executablePath+'\n';
+  if(args[2]==='sha256sum')return observation.processExecutableSha256+'  '+args[3]+'\n';
+  if(args[2]==='cat')return 'Uid:\t'+[observation.effectiveUid,observation.effectiveUid,observation.effectiveUid,observation.effectiveUid].join('\t')+'\n';
+  assert.fail('Unknown synthetic Docker read');
+ };return {readDocker,raw};
+}
+function mdocConfigurationFixture(t){
+ const f=issuanceFixture(t,10001),helper=require('./functional-debug-runtime'),base=f.write('config-base.json',f.profile);
+ const oldBinding=verifyFunctionalRuntime(f.profile,{observe:f.observe}),expected=expectedRuntime(f.profile),run='11111111-1111-4111-8111-111111111111';
+ const files=['mdoc_iaca_issue_gateway_key','mdoc_dsc_issue_gateway_key'].map((name,index)=>{const filename=path.join(path.dirname(base.path),name);fs.writeFileSync(filename,Buffer.alloc(64,index+65));return {name,path:filename,bytes:64,sha256:crypto.createHash('sha256').update(fs.readFileSync(filename)).digest('hex')};});
+ const operator=f.write('config-operator.json',{sourceOnly:true}),rootProof={root:'/home/canvasrunner/.codex/private/d02-build-journal-'+run,device:1,inode:2,uid:1000,mode:448};
+ const spec=f.write('config-journal.json',{schema:1,backend:'DOCKER_DESKTOP_PRIVATE_JOURNAL_V1',bootstrapParent:{supported:true,synced:true},rootProof,
+  desktop:{engineId:'3dbbbe66-1c98-4e0c-b0a6-f927c05e7341',volumeName:'marty-d02-journal-'+run,volumeProof:{Name:'marty-d02-journal-'+run,Labels:{'elevenid.owner':'d02-private-journal','elevenid.run':run}}}});
+ const authority={schema:'marty.mdoc-config-authority/v1',operation:'D03_MDOC_CONFIGURATION_SUCCESSOR',runId:run,producerRevision:R('f'),inputSha256:H('e'),operator,baseProfileSha256:base.sha256,files,journalSpecification:spec,
+  publicAuthorities:['trusted','rejected'].map(name=>({organization_id:'00000000-0000-0000-0000-000000000001',issuer_did:'did:web:example.test:'+name,certificate:{issuer_contact_uri:'https://example.test',crl_distribution_uri:'https://example.test/'+name+'.crl'}}))};
+ const authorityRef=f.write('config-authority.json',authority),roles={},configs={},raw={};
+ for(const [index,role]of ['gateway','signing-keys'].entries()){
+  const beforeRole=oldBinding.roles.find(row=>row.role===role),newId=crypto.createHash('sha256').update('config-new:'+role).digest('hex');
+  roles[role]={containerId:newId,hostPid:990+index,startedAt:'2026-10-27T01:00:00Z'};
+  const labels={'com.docker.compose.project':'elevenid-beta','com.docker.compose.service':role,'com.docker.compose.config-hash':'old','com.docker.compose.project.config_files':'old.yml','com.docker.compose.version':'5.4.0','com.docker.compose.project.environment_file':'old.env','com.docker.compose.depends_on':'postgres'};
+  const mounts=beforeRole.binaryMounts.map(m=>({Type:m.type,Source:m.source,Destination:m.destination,Mode:'ro',RW:false,Propagation:'rprivate'}));
+  const before={Id:beforeRole.containerId,Name:'/beta-'+role,Image:beforeRole.imageId,Config:{Hostname:beforeRole.containerId.slice(0,12),Labels:labels,Env:['EXISTING=unchanged'],User:'10001:10001'},
+   HostConfig:{Binds:mounts.map(m=>m.Source+':'+m.Destination+':ro'),Mounts:null,Dns:null,DnsOptions:[],DnsSearch:[],OomKillDisable:false,Privileged:false},Mounts:mounts,State:{Running:true,Status:'running',Pid:beforeRole.hostPid,StartedAt:beforeRole.startedAt}};
+  before.NetworkSettings={Networks:{beta:{NetworkID:H('8'),EndpointID:H('7'),Gateway:'172.19.0.1',IPAddress:'172.19.0.2',IPPrefixLen:16,IPv6Gateway:'',GlobalIPv6Address:'',GlobalIPv6PrefixLen:0,MacAddress:'02:00:00:00:00:01',DNSNames:['beta-'+role,before.Id.slice(0,12),role],Aliases:[role],IPAMConfig:null,Links:null,DriverOpts:null}}};
+  const created=structuredClone(before);created.Id=newId;created.Config.Hostname=newId.slice(0,12);created.State={Status:'created',Running:false,Pid:0};
+  Object.assign(created.NetworkSettings.Networks.beta,{NetworkID:'',EndpointID:'',Gateway:'',IPAddress:'',IPPrefixLen:0,MacAddress:'',DNSNames:['beta-'+role,newId.slice(0,12),role]});
+  created.Config.Labels={...labels,'com.docker.compose.config-hash':'new','com.docker.compose.project.config_files':'old.yml,mdoc.yml','com.docker.compose.project.environment_file':'old.env','com.docker.compose.depends_on':''};
+  for(const file of files){const target='/run/secrets/'+file.name;created.Config.Env.push('SIGNING_KEYS_'+file.name.toUpperCase()+'_FILE='+target);created.Mounts.push({Type:'bind',Source:file.path,Destination:target,Mode:'ro',RW:false,Propagation:'rprivate'});created.HostConfig.Binds.push(file.path+':'+target+':ro');}
+  if(role==='signing-keys')created.Config.Env.push('SIGNING_KEYS_MDOC_CERTIFICATE_AUTHORITIES_JSON='+JSON.stringify(authority.publicAuthorities));
+  // The operator emits the same sorted ASCII JSON as the shared Python validator.
+  const sort=value=>Array.isArray(value)?value.map(sort):value&&typeof value==='object'?Object.fromEntries(Object.keys(value).sort().map(k=>[k,sort(value[k])])):value;
+  if(role==='signing-keys')created.Config.Env[created.Config.Env.length-1]='SIGNING_KEYS_MDOC_CERTIFICATE_AUTHORITIES_JSON='+JSON.stringify(sort(authority.publicAuthorities));
+  configs[role]={beforeConfig:f.write('config-before-'+role+'.json',before),createdConfig:f.write('config-created-'+role+'.json',created),provenance:{configHash:'new',configFiles:['old.yml','mdoc.yml'],environmentFiles:['old.env'],composeVersion:'5.4.0'}};
+  raw[role]=structuredClone(created);raw[role].State={Status:'running',Running:true,Pid:roles[role].hostPid,StartedAt:roles[role].startedAt,OOMKilled:false,Health:{Status:'healthy'}};
+  Object.assign(raw[role].NetworkSettings.Networks.beta,{NetworkID:H('8'),EndpointID:crypto.createHash('sha256').update('endpoint:'+role).digest('hex'),Gateway:'172.19.0.1',IPAddress:'172.19.0.'+(index+30),IPPrefixLen:16,MacAddress:'02:00:00:00:00:0'+(index+3)});configs[role].startedConfig=f.write('config-started-'+role+'.json',raw[role]);
+ }
+ const evidence={schema:'marty.mdoc-config-evidence/v1',baseProfileSha256:base.sha256,authoritySha256:authorityRef.sha256,
+  beforeRuntimeBinding:f.write('config-before-binding.json',{baseProfileSha256:base.sha256,binding:oldBinding}),roles:configs};
+ const evidenceRef=f.write('config-evidence.json',evidence),common={runId:run,inputSha256:authority.inputSha256,operation:authority.operation,operatorSha256:operator.sha256};
+ const configReceipt={...common,state:'CONFIGURATION_APPLIED_KNOWN',configurationEvidence:evidenceRef,roles};
+ const response=(name,value)=>{const stored=Buffer.from(JSON.stringify(value,null,2)+'\n');return f.write('read-'+name,{ok:true,name,rootProof,sha256:crypto.createHash('sha256').update(stored).digest('hex'),storedBytesBase64:stored.toString('base64'),value});};
+ const known={schema:'marty.mdoc-config-known-outcome/v1',runId:run,specificationSha256:spec.sha256,responses:{
+  'build-apply-intent.json':response('build-apply-intent.json',{...common,beforeConfigs:Object.fromEntries(Object.entries(configs).map(([role,item])=>[role,item.beforeConfig]))}),
+  'build-state.json':response('build-state.json',{...common,phase:'APPLIED_FUNCTIONAL_ONLY',new:Object.fromEntries(Object.entries(configs).map(([role,item])=>[role,{containerId:roles[role].containerId,createdVerified:true,createdInspect:item.createdConfig,startedInspect:item.startedConfig}])),configurationReceiptSha256:crypto.createHash('sha256').update(JSON.stringify(configReceipt,null,2)+'\n').digest('hex')}),
+  'configuration-receipt.json':response('configuration-receipt.json',configReceipt)}};
+ const deployed={schema:'marty.mdoc-config-deployment/v1',state:'APPLIED_FUNCTIONAL_ONLY',baseProfileSha256:base.sha256,authoritySha256:authorityRef.sha256,
+  engineId:'3dbbbe66-1c98-4e0c-b0a6-f927c05e7341',configurationEvidence:evidenceRef,knownOutcome:f.write('config-known.json',known),roles,imagesBuilt:false,productionTouched:false,releaseQualified:false,recordingQualified:false};
+ const deployedRef=f.write('config-deployed.json',deployed),profile={schema:'marty.functional-mixed-runtime/v2',scope:'FUNCTIONAL_ONLY',releaseQualified:false,recordingQualified:false,baseProfile:base,configurationOverlay:{profile:'mdoc-operator-configuration',authority:authorityRef,deploymentReceipt:deployedRef}};
+ const {readDocker,raw:otherRaw}=dockerObservationFixture(expected, row=>{const value=f.observe(row),selected=roles[row.role];if(selected)Object.assign(value,{containerId:selected.containerId,hostPid:selected.hostPid,startedAt:selected.startedAt});return value;});
+ const transport=args=>args[0]==='network'?JSON.stringify([{Name:'beta',Id:H('8'),Containers:Object.fromEntries(Object.values(raw).map(row=>[row.Id,{EndpointID:row.NetworkSettings.Networks.beta.EndpointID}]))}]):args[0]==='volume'?JSON.stringify([JSON.parse(fs.readFileSync(authority.journalSpecification.path)).desktop.volumeProof]):args[0]==='info'?JSON.stringify({ID:deployed.engineId}):args[0]==='inspect'&&Object.values(roles).some(r=>r.containerId===args[1])?JSON.stringify([raw[Object.keys(roles).find(r=>roles[r].containerId===args[1])]]):readDocker(args);
+ return {...f,profile,base,authorityRef,deployedRef,authority,deployed,evidence,known,oldBinding,raw,otherRaw,transport,roles};
+}
+
+test('mdoc configuration successor preserves all22 per-role binary lineage',t=>{
+ const f=mdocConfigurationFixture(t),helper=require('./functional-debug-runtime');
+ const result=helper.produceMdocConfigurationSuccessor(f.base,f.authorityRef,f.deployedRef,{readDocker:f.transport});
+ assert.equal(result.binding.roles.length,22);assert.equal(result.binding.releaseQualified,false);assert.equal(result.binding.recordingQualified,false);
+ for(const row of result.binding.roles){const old=f.oldBinding.roles.find(r=>r.role===row.role);for(const key of ['binary','source','coreSource','sha256','kind','imageId'])assert.equal(row[key],old[key]);
+  if(!['gateway','signing-keys'].includes(row.role))for(const key of ['containerId','hostPid','startedAt'])assert.equal(row[key],old[key]);}
+});
+
+for(const fault of ['observeOnly','env','forgedConfigOnly','hostReadonly','mountReadonly','generation','nonselectedGeneration','extraNetwork','networkId','networkStatic','endpointReconnect','sourceStamp','thirdRole','knownPending','knownHash','durability'])test('mdoc configuration successor rejects '+fault,t=>{
+ const f=mdocConfigurationFixture(t),helper=require('./functional-debug-runtime');
+ if(fault==='observeOnly'){assert.throws(()=>verifyFunctionalRuntime(f.profile,{observe:()=>assert.fail('No caller observations')}));return;}
+ if(fault==='env')f.raw.gateway.Config.Env.push('UNEXPECTED=sensitive-must-not-print');
+ if(fault==='forgedConfigOnly')f.raw.gateway.Config.Env=['EXISTING=unchanged'];
+ if(fault==='nonselectedGeneration')f.otherRaw.auth.State.Pid++;
+ if(fault==='hostReadonly')f.raw.gateway.HostConfig.Binds[f.raw.gateway.HostConfig.Binds.length-1]=f.raw.gateway.HostConfig.Binds.at(-1).replace(/:ro$/,':rw');
+ if(fault==='mountReadonly')f.raw.gateway.Mounts.at(-1).RW=true;
+ if(fault==='generation')f.raw.gateway.State.Pid++;
+ if(fault==='extraNetwork')f.raw.gateway.NetworkSettings.Networks.extra=structuredClone(f.raw.gateway.NetworkSettings.Networks.beta);
+ if(fault==='networkId')f.raw.gateway.NetworkSettings.Networks.beta.NetworkID=H('f');
+ if(fault==='networkStatic')f.raw.gateway.NetworkSettings.Networks.beta.DriverOpts={parent:'other'};
+ if(fault==='endpointReconnect')f.raw.gateway.NetworkSettings.Networks.beta.EndpointID=H('f');
+ if(fault==='sourceStamp'){f.deployed.roles.gateway.source=R('f');f.profile.configurationOverlay.deploymentReceipt=f.write('bad-deployment.json',f.deployed);}
+ if(fault==='thirdRole'){f.deployed.roles.auth={containerId:H('f'),hostPid:1,startedAt:'2026-10-27T01:00:00Z'};f.profile.configurationOverlay.deploymentReceipt=f.write('bad-deployment.json',f.deployed);}
+ if(['knownPending','knownHash'].includes(fault)){const value=JSON.parse(fs.readFileSync(f.known.responses['build-state.json'].path));value.value.phase='CREATE_PENDING';if(fault==='knownPending'){const raw=Buffer.from(JSON.stringify(value.value,null,2)+'\n');value.sha256=crypto.createHash('sha256').update(raw).digest('hex');value.storedBytesBase64=raw.toString('base64');}f.known.responses['build-state.json']=f.write('bad-state.json',value);f.deployed.knownOutcome=f.write('bad-known.json',f.known);f.profile.configurationOverlay.deploymentReceipt=f.write('bad-deployment.json',f.deployed);}
+ if(fault==='durability'){const spec=JSON.parse(fs.readFileSync(f.authority.journalSpecification.path));spec.bootstrapParent.synced=false;f.authority.journalSpecification=f.write('bad-journal.json',spec);f.profile.configurationOverlay.authority=f.write('bad-authority.json',f.authority);f.deployed.authoritySha256=f.profile.configurationOverlay.authority.sha256;f.evidence.authoritySha256=f.deployed.authoritySha256;f.deployed.configurationEvidence=f.write('bad-evidence.json',f.evidence);f.profile.configurationOverlay.deploymentReceipt=f.write('bad-deployment.json',f.deployed);}
+ assert.throws(()=>verifyFunctionalRuntime(f.profile,{readDocker:f.transport}),error=>{assert(!String(error).includes('sensitive-must-not-print'));return true;});
+});
 for(const fault of ['valid','planned','retirement','weakEtag','sidecar','extraGet','rawRegistry','foreignKey','revisionDigest','database'])test('signer successor gate '+fault,t=>{
  const {validateHeaderSuccessorGate}=require('./functional-debug-runtime'),f=fixture(t),prior=domainFixture(),before=structuredClone(prior),after=structuredClone(prior);
  const response=f.write('response.json',{services:[]});

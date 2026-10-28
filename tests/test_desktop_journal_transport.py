@@ -30,6 +30,30 @@ def readonly_files():
 
 
 class DesktopTransportTests(unittest.TestCase):
+    def test_configuration_receipt_names_refuse_before_desktop_helper(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            worker, shared, request = (root / name for name in ("worker.py", "shared.py", "request.json"))
+            worker.write_bytes(b"# source fixture")
+            shared.write_bytes(b"# source fixture")
+            store = transport.DesktopPrivateJournalTransport.__new__(transport.DesktopPrivateJournalTransport)
+            store.private, store.spec = root, {"volumeProof": {}}
+            store._helper = mock.Mock(return_value="SOURCE_ONLY")
+            for operation, name, accepted in (("exclusive", "configuration-receipt.json", True),
+                                              ("read", "configuration-receipt.json", True),
+                                              ("state", "configuration-receipt.json", False),
+                                              ("read", "../configuration-receipt.json", False),
+                                              ("read", "unsupported.json", False)):
+                request.write_text(json.dumps({"operation": operation, "name": name}), encoding="utf-8")
+                store._helper.reset_mock()
+                if accepted:
+                    store.execute(request, transport.sha(request), worker, shared, lambda p: "/fixture/" + p.name)
+                    store._helper.assert_called_once()
+                else:
+                    with self.assertRaises(ValueError):
+                        store.execute(request, transport.sha(request), worker, shared, lambda p: "/fixture/" + p.name)
+                    store._helper.assert_not_called()
+
     def test_worker_is_uid1000_networknone_64m_only_metadata_rw_and_three_files_ro(self):
         args = transport.helper_arguments(specification(), RUN, "d02-journal-" + RUN + "-test", ["/usr/bin/python3", "-I", "/worker"], readonly_files())
         self.assertEqual(args[args.index("--user") + 1], "1000:1000")
@@ -118,10 +142,10 @@ class DesktopTransportTests(unittest.TestCase):
             self.assertEqual(execute.call_count, 1)
             self.assertEqual(len(list(root.glob("linux-journal-request-*"))), 1)
 
-    def test_existing_worker_and_request_schema_source_is_unchanged(self):
+    def test_worker_io_and_verified_filename_policy_source_is_bound(self):
         file = Path(journal.__file__)
-        # Digests reviewed against e4e946242; no historical Git object required in CI.
-        expected = {'root_path': '8776013728682c4a3d52f62b4f8d5f69a9964a499462ba2ea666819336854c60', 'validate_request': '34bb84bb561c4eb753c3bd7014a10c14bd3f03cf2a41ff78f50fb4d9a69810cb', 'actual_root': 'ebb952b73c8edcf784e01386411474f8ab60ccd0c52290f15915e32944133b05', 'worker': 'b44a9e67c332d131b6102a1eae3e398f8cad1ad0bf094748f62d03b4472d7fec'}
+        # Original I/O remains pinned; worker adds verified filename parity and bounded exact-byte readback.
+        expected = {'root_path': '8776013728682c4a3d52f62b4f8d5f69a9964a499462ba2ea666819336854c60', 'validate_request': '34bb84bb561c4eb753c3bd7014a10c14bd3f03cf2a41ff78f50fb4d9a69810cb', 'actual_root': 'ebb952b73c8edcf784e01386411474f8ab60ccd0c52290f15915e32944133b05', 'worker': 'b1c4a225c25406c53179adf747f7faab9b8a0c1342971e082e2a262adffb3dd6'}
         current = file.read_text()
         for name, digest in expected.items():
             node = next(n for n in ast.parse(current).body if isinstance(n, ast.FunctionDef) and n.name == name)
