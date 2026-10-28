@@ -21,7 +21,7 @@ def overlay_roles(profile=None, selected_roles=None):
         return ROLE_BINARIES
     from scoped_native_profiles import reviewed_profile
     roles = dict(reviewed_profile(profile).roles)
-    require(profile == "d02-signing-cas", "UNREVIEWED_OVERLAY_PROFILE")
+    require(profile in ("d02-signing-cas", "d02-signing-cas-no-transform"), "UNREVIEWED_OVERLAY_PROFILE")
     selected = set(roles) if selected_roles is None else set(selected_roles)
     require(selected and selected.issubset(roles) and (selected_roles is None or len(selected) == len(selected_roles)), "EXACT_SELECTED_OVERLAY_ROLES_REQUIRED")
     return {role: binary for role, binary in roles.items() if role in selected}

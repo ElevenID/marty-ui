@@ -138,13 +138,16 @@ function expectedIssuanceOverlay(profile){
   coreSource:build.coreRevision,kind:'ISSUANCE_CORE_FUNCTIONAL_OVERLAY',hashes:{'marty-issuance-service':build.binary.sha256}});
 }
 function applyNativeOverlayRows(expected,before,deployed,selection){
- assert.equal(expected.length,22);assert.equal(new Set(expected.map(row=>row.role)).size,22);
  assert(['marty.functional-mixed-runtime-binding/v1','marty.functional-mixed-runtime-binding/v2'].includes(before.schema));
  assert.equal(before.scope,'FUNCTIONAL_ONLY');assert.equal(before.releaseQualified,false);assert.equal(before.recordingQualified,false);assert.equal(before.mixedSourceStack,true);
- assert.equal(before.roles.length,22);assert.equal(new Set(before.roles.map(row=>row.role)).size,22);assert.equal(new Set(before.roles.map(row=>row.containerId)).size,22);
+ return applyNativeOverlayObservations(expected,before.roles,deployed,selection);
+}
+function applyNativeOverlayObservations(expected,priorRoles,deployed,selection){
+ assert.equal(expected.length,22);assert.equal(new Set(expected.map(row=>row.role)).size,22);
+ assert.equal(priorRoles.length,22);assert.equal(new Set(priorRoles.map(row=>row.role)).size,22);assert.equal(new Set(priorRoles.map(row=>row.containerId)).size,22);
  assert.deepEqual(Object.keys(deployed.roles).sort(),[...selection.roles].sort());
  for(const row of expected){
-  const old=before.roles.find(item=>item.role===row.role);assert(old,'Missing prior role identity');
+  const old=priorRoles.find(item=>item.role===row.role);assert(old,'Missing prior role identity');
   for(const field of ['binary','source','sha256','kind','imageId','project'])assert.equal(old[field],row[field],'Prior role lineage mismatch');
   assert.equal(old.coreSource,row.coreSource,'Prior Core lineage mismatch');
   assert(HASH.test(old.containerId));if(row.requiredContainerId)assert.equal(old.containerId,row.requiredContainerId);
@@ -159,10 +162,10 @@ function applyNativeOverlayRows(expected,before,deployed,selection){
  }
  const ids=new Set();
  return expected.map(row=>{
-  const old=before.roles.find(item=>item.role===row.role);
+  const old=priorRoles.find(item=>item.role===row.role);
   if(!selection.roles.includes(row.role))return {...row,requiredObservation:Object.fromEntries(['containerId','imageId','health','executablePath','processExecutableSha256','binaryMounts','startedAt','hostPid','effectiveUid','configuredRuntimeUid'].map(field=>[field,old[field]]))};
   const actual=deployed.roles[row.role],target='/usr/local/bin/'+row.binary,hash=selection.hashes[row.binary];assert(HASH.test(hash));
-  assert(HASH.test(actual.containerId));assert(!before.roles.some(previous=>previous.containerId===actual.containerId),'Native overlay requires a fresh noncolliding container');
+  assert(HASH.test(actual.containerId));assert(!priorRoles.some(previous=>previous.containerId===actual.containerId),'Native overlay requires a fresh noncolliding container');
   assert(!ids.has(actual.containerId));ids.add(actual.containerId);assert.equal(actual.imageId,row.imageId);
   assert.equal(actual.processExecutablePath,target);assert.equal(actual.processExecutableSha256,hash);assert.equal(actual.mountedBinarySha256,hash);
   assert(Number.isInteger(actual.configuredRuntimeUid)&&actual.configuredRuntimeUid>=0);assert.equal(actual.effectiveUid,actual.configuredRuntimeUid);assert.equal(actual.effectiveUid,old.effectiveUid);assert.equal(actual.configuredRuntimeUid,old.configuredRuntimeUid);
@@ -204,27 +207,41 @@ function expectedUnqualifiedNativePreimage(expected,before,raw,disposition,selec
  for(const row of rows)validateRuntimeObservation(row,raw.rows.find(actual=>actual.role===row.role));
  return rows;
 }
+const D02_HEADER=Object.freeze({source:'9b1efd21163dadeff7cf1ced5fe47c5e046d2121',core:D02_NATIVE.core,base:D02_NATIVE.base,
+ profile:'d02-signing-cas-no-transform',build:'b620c4d184af2f7e9652ee59944ac74d58f23ea50e36cdb9ac3b46625c7f7848',
+ prepared:'c39572315e1982bb28e97bbf7c40876570e6dbe6cfa5ced6cf4b1184f32435c2',artifacts:'11104e1fc1ee5cce1298f33970fd4d53ff5bda38fe1250e27b7c4837f85cd8e0',
+ compatibility:'9612c78b915063f1e5306adc19333c7b6956628326a537ea2143d585e3e3c374',compatibilityPlan:'23d2a605e21cbde167f33986a9fcc4329e4a66211394e90bb029b60cfac450cd',
+ before:'5e692c8355ed89c380646553febf2bb69c8c5388a29a2f9046d0bc27b0acc482',observed:'75c3628415065733602b399e0d185d20e6e38be4dde09a01632c22297d837495',
+ failedAuthority:'c18570fd8f89585200df021904b1e0f7bf639efdb83adc5a90c6f724349d0686',roles:Object.freeze({'signing-keys':'marty-signing-keys'})});
+function nativeBuildEvidence(overlay,pins){
+ for(const [key,pin]of [['buildReceipt','build'],['preparedSource','prepared'],['compatibilityResult','compatibility'],['compatibilityPlan','compatibilityPlan']])assert.equal(overlay[key].sha256,pins[pin],'Unreviewed native-overlay evidence');
+ const build=boundJson(overlay.buildReceipt),prepared=boundJson(overlay.preparedSource),compatibility=boundJson(overlay.compatibilityResult),compatibilityPlan=boundJson(overlay.compatibilityPlan);
+ assert.equal(build.state,'BUILD_SUCCEEDED');assert.equal(build.exitCode,0);assert.equal(build.oomKilled,false);assert.equal(build.buildProfile,pins.profile);
+ assert.equal(build.uiRevision,pins.source);assert.equal(build.coreRevision,pins.core);assert.deepEqual(build.roleBinaries,pins.roles);
+ assert.equal(build.preparationSha256,overlay.preparedSource.sha256);assert.equal(prepared.uiRevision,build.uiRevision);assert.equal(prepared.coreRevision,build.coreRevision);assert.deepEqual(prepared.roleBinaries,pins.roles);
+ assert.equal(build.releaseQualified,false);assert.equal(build.recordingQualified,false);assert.equal(build.coreCompilerArtifacts.sha256,pins.artifacts);boundJson(build.coreCompilerArtifacts);
+ if(pins.profile==='d02-signing-cas-no-transform'){assert.equal(compatibility.schema,1);assert.equal(compatibility.state,'ELF_LOADER_UID_COMPATIBILITY_PASS');}
+ else{assert.equal(compatibility.scope,'ELF_LOADER_UID_COMPATIBILITY_ONLY');assert.equal(compatibility.status,'PASSED');}
+ assert.equal(compatibilityPlan.scope,'ELF_LOADER_UID_COMPATIBILITY_ONLY');assert.equal(compatibility.planSha256,overlay.compatibilityPlan.sha256);
+ assert.equal(compatibilityPlan.buildReceiptAuthoritativeSha256,overlay.buildReceipt.sha256);assert.equal(compatibility.candidateServiceEntrypointExecuted,false);assert.equal(compatibility.signingOrApi,false);assert.equal(compatibility.runtimeDeployed,false);
+ assert.deepEqual(Object.keys(build.binaries).sort(),Object.values(pins.roles).sort());
+ assert.equal(compatibility.rows.length,Object.keys(pins.roles).length);assert.equal(new Set(compatibility.rows.map(row=>row.binary)).size,Object.keys(pins.roles).length);
+ for(const [binary,output]of Object.entries(build.binaries)){
+  assert(HASH.test(output.sha256));const row=compatibility.rows.find(item=>item.binary===binary);assert(row);assert.equal(row.sha256,output.sha256);assert.equal(row.exitCode,0);assert.equal(row.uid,10001);
+  for(const field of ['candidateReadableExecutable','loaderListSucceeded','ownedContainerRemoved'])assert.equal(row[field],true);
+ }
+ return {build,prepared,compatibility,compatibilityPlan};
+}
 function expectedScopedNativeOverlay(profile){
  assert.equal(profile.scope,'FUNCTIONAL_ONLY');assert.equal(profile.releaseQualified,false);assert.equal(profile.recordingQualified,false);
  assert.deepEqual(Object.keys(profile).sort(),['baseProfile','nativeOverlay','recordingQualified','releaseQualified','schema','scope']);
  assert.equal(profile.baseProfile.sha256,D02_NATIVE.base,'Foreign native-overlay base');
  const base=boundJson(profile.baseProfile);assert.equal(base.schema,'marty.functional-mixed-runtime/v2');assert(!base.nativeOverlay);assert(base.maintenanceRestart);
- const expected=expectedRuntime(base),overlay=profile.nativeOverlay;assert.equal(overlay.profile,'d02-signing-cas');
+ const expected=expectedRuntime(base),overlay=profile.nativeOverlay;
+ if(overlay.profile===D02_HEADER.profile)return expectedHeaderSuccessor(profile,base,expected);
+ assert.equal(overlay.profile,'d02-signing-cas');
  assert.deepEqual(Object.keys(overlay).sort(),['buildReceipt','compatibilityPlan','compatibilityResult','deploymentReceipt','preparedSource','profile']);
- for(const [key,pin]of [['buildReceipt','build'],['preparedSource','prepared'],['compatibilityResult','compatibility'],['compatibilityPlan','compatibilityPlan']])assert.equal(overlay[key].sha256,D02_NATIVE[pin],'Unreviewed native-overlay evidence');
- const build=boundJson(overlay.buildReceipt),prepared=boundJson(overlay.preparedSource),compatibility=boundJson(overlay.compatibilityResult),compatibilityPlan=boundJson(overlay.compatibilityPlan);
- assert.equal(build.state,'BUILD_SUCCEEDED');assert.equal(build.exitCode,0);assert.equal(build.oomKilled,false);assert.equal(build.buildProfile,overlay.profile);
- assert.equal(build.uiRevision,D02_NATIVE.source);assert.equal(build.coreRevision,D02_NATIVE.core);assert.deepEqual(build.roleBinaries,D02_NATIVE.roles);
- assert.equal(build.preparationSha256,overlay.preparedSource.sha256);assert.equal(prepared.uiRevision,build.uiRevision);assert.equal(prepared.coreRevision,build.coreRevision);assert.deepEqual(prepared.roleBinaries,D02_NATIVE.roles);
- assert.equal(build.releaseQualified,false);assert.equal(build.recordingQualified,false);assert.equal(build.coreCompilerArtifacts.sha256,D02_NATIVE.artifacts);boundJson(build.coreCompilerArtifacts);
- assert.equal(compatibility.scope,'ELF_LOADER_UID_COMPATIBILITY_ONLY');assert.equal(compatibility.status,'PASSED');assert.equal(compatibility.planSha256,overlay.compatibilityPlan.sha256);
- assert.equal(compatibilityPlan.buildReceiptAuthoritativeSha256,overlay.buildReceipt.sha256);assert.equal(compatibility.candidateServiceEntrypointExecuted,false);assert.equal(compatibility.signingOrApi,false);assert.equal(compatibility.runtimeDeployed,false);
- assert.deepEqual(Object.keys(build.binaries).sort(),Object.values(D02_NATIVE.roles).sort());
- assert.equal(compatibility.rows.length,2);assert.equal(new Set(compatibility.rows.map(row=>row.binary)).size,2);
- for(const [binary,output]of Object.entries(build.binaries)){
-  assert(HASH.test(output.sha256));const row=compatibility.rows.find(item=>item.binary===binary);assert(row);assert.equal(row.sha256,output.sha256);assert.equal(row.exitCode,0);assert.equal(row.uid,10001);
-  for(const field of ['candidateReadableExecutable','loaderListSucceeded','ownedContainerRemoved'])assert.equal(row[field],true);
- }
+ const {build}=nativeBuildEvidence(overlay,{...D02_NATIVE,profile:'d02-signing-cas'});
  const deployed=boundJson(overlay.deploymentReceipt);assert.equal(deployed.schema,'marty.scoped-native-overlay-deployment/v1');assert.equal(deployed.profile,overlay.profile);
  assert.equal(deployed.state,'APPLIED_FUNCTIONAL_ONLY');assert.equal(deployed.actualReadbackVerified,true);assert.equal(deployed.baseProfileSha256,profile.baseProfile.sha256);
  assert.equal(deployed.buildReceiptSha256,overlay.buildReceipt.sha256);assert.equal(deployed.compatibilityResultSha256,overlay.compatibilityResult.sha256);
@@ -233,6 +250,94 @@ function expectedScopedNativeOverlay(profile){
  const snapshot=boundJson(deployed.beforeRuntimeBinding);assert.equal(snapshot.baseProfileSha256,profile.baseProfile.sha256);assert.deepEqual(snapshot.binding.receiptDigests,receiptDigests(base));
  return applyNativeOverlayRows(expected,snapshot.binding,deployed,{roles:Object.keys(D02_NATIVE.roles),source:build.uiRevision,coreSource:build.coreRevision,
   kind:'SCOPED_NATIVE_FUNCTIONAL_OVERLAY',hashes:Object.fromEntries(Object.entries(build.binaries).map(([binary,row])=>[binary,row.sha256]))});
+}
+
+function headerSuccessorPreimage(profile,base,expected){
+ const overlay=profile.nativeOverlay;
+ assert.deepEqual(Object.keys(overlay).sort(),['buildReceipt','compatibilityPlan','compatibilityResult','deploymentReceipt','predecessor','preparedSource','profile']);
+ const {build}=nativeBuildEvidence(overlay,D02_HEADER),prior=overlay.predecessor;
+ assert.deepEqual(Object.keys(prior).sort(),['beforeRuntimeBinding','buildReceipt','compatibilityPlan','compatibilityResult','failedAuthority','observedRuntime','preparedSource']);
+ const {build:priorBuild}=nativeBuildEvidence(prior,{...D02_NATIVE,profile:'d02-signing-cas'});
+ for(const [key,pin]of [['beforeRuntimeBinding','before'],['observedRuntime','observed'],['failedAuthority','failedAuthority']])assert.equal(prior[key].sha256,D02_HEADER[pin],'Foreign unqualified predecessor');
+ const snapshot=boundJson(prior.beforeRuntimeBinding);assert.equal(snapshot.baseProfileSha256,profile.baseProfile.sha256);assert.deepEqual(snapshot.binding.receiptDigests,receiptDigests(base));
+ const authority=boundJson(prior.failedAuthority);assert.equal(authority.authority,'LINUX_PRIVATE_JOURNAL');assert.equal(authority.windowsDurabilityClaimed,false);
+ assert(HASH.test(authority.authoritativeSha256));
+ const observed=boundJson(prior.observedRuntime),preimage=expectedUnqualifiedNativePreimage(expected,snapshot.binding,observed,authority.value,
+  {roles:Object.keys(D02_NATIVE.roles),source:priorBuild.uiRevision,coreSource:priorBuild.coreRevision,kind:'SCOPED_NATIVE_FUNCTIONAL_OVERLAY',
+   hashes:Object.fromEntries(Object.entries(priorBuild.binaries).map(([binary,row])=>[binary,row.sha256]))});
+ return {preimage,build,authority,prior};
+}
+function expectedHeaderSuccessorPreimage(profile){
+ assert.equal(profile.schema,'marty.functional-mixed-runtime/v2');assert.equal(profile.scope,'FUNCTIONAL_ONLY');
+ assert.equal(profile.releaseQualified,false);assert.equal(profile.recordingQualified,false);assert.equal(profile.baseProfile.sha256,D02_NATIVE.base);
+ assert.equal(profile.nativeOverlay.profile,D02_HEADER.profile);const base=boundJson(profile.baseProfile);
+ assert(!base.nativeOverlay&&base.maintenanceRestart);return headerSuccessorPreimage(profile,base,expectedRuntime(base)).preimage;
+}
+function expectedHeaderSuccessor(profile,base,expected){
+ const overlay=profile.nativeOverlay,{preimage,build,authority,prior}=headerSuccessorPreimage(profile,base,expected);
+ const deployed=boundJson(overlay.deploymentReceipt);assert.equal(deployed.schema,'marty.scoped-native-overlay-deployment/v1');assert.equal(deployed.profile,overlay.profile);
+ assert.equal(deployed.state,'APPLIED_FUNCTIONAL_ONLY');assert.equal(deployed.actualReadbackVerified,true);assert.equal(deployed.baseProfileSha256,profile.baseProfile.sha256);
+ assert.equal(deployed.buildReceiptSha256,overlay.buildReceipt.sha256);assert.equal(deployed.compatibilityResultSha256,overlay.compatibilityResult.sha256);
+ assert.equal(deployed.sourceRevision,build.uiRevision);assert.equal(deployed.coreRevision,build.coreRevision);assert.equal(deployed.engineId,boundJson(base.maintenanceRestart).engineId);
+ assert.equal(deployed.predecessorAuthoritySha256,prior.failedAuthority.sha256);
+ for(const field of ['productionTouched','imagesBuilt','releaseQualified','recordingQualified'])assert.equal(deployed[field],false);
+ validateHeaderSuccessorGate(deployed,boundJson(authority.value.headerGateFailure.signingDomainReadback));
+ const current=boundJson(deployed.beforeObservedRuntime);assert.equal(current.releaseQualified,false);assert.equal(current.rows.length,22);
+ assert.equal(new Set(current.rows.map(row=>row.role)).size,22);
+ const priorRoles=preimage.map(row=>validateRuntimeObservation(row,current.rows.find(actual=>actual.role===row.role)));
+ return applyNativeOverlayObservations(preimage,priorRoles,deployed,{roles:['signing-keys'],source:build.uiRevision,coreSource:build.coreRevision,
+  kind:'SCOPED_NATIVE_FUNCTIONAL_OVERLAY',hashes:Object.fromEntries(Object.entries(build.binaries).map(([binary,row])=>[binary,row.sha256]))});
+}
+
+function validateHeaderSuccessorGate(deployed,priorDomain){
+ assert.equal(deployed.state,'APPLIED_FUNCTIONAL_ONLY');assert.equal(deployed.actualReadbackVerified,true);
+ const gate=deployed.configGate;assert.equal(gate.registryUnchanged,true);assert.equal(gate.revisionBindingVerified,true);
+ const before=boundJson(gate.signingDomainBefore),after=boundJson(gate.signingDomainAfter);
+ validateSigningDomainTransition(priorDomain,before);
+ validateSigningDomainTransition(before,after,boundJson(gate.authResult).etag);
+ const auth=boundJson(gate.authResult);assert.equal(auth.state,'PASSED');assert.equal(auth.scope,'D02_EXPLICIT_SIGNING_CONFIG_GET_WRITE_CAPABLE');
+ assert.equal(auth.httpStatus,200);assert.equal(auth.explicitConfigGetCount,1);assert.equal(auth.providerEditRequested,false);
+ assert.equal(auth.strongOpaqueRevision,true);assert.equal(auth.cacheControlNoStore,true);assert.equal(auth.cacheControlNoTransform,true);
+ assert(typeof auth.etag==='string'&&/^"r-[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}"$/.test(auth.etag),'INVALID_STRONG_ETAG');
+ for(const field of ['sessionRetired','privateCookieRetired','browserClosed'])assert.equal(auth[field],true);assert(!auth.cleanupFailure);
+ const body=boundBytes(auth.privateResponse);assert(body.length<=1024*1024,'CONFIG_BODY_BOUND');assert(auth.bodySha256===digest(body),'CONFIG_BODY_DIGEST');
+ let document;try{document=JSON.parse(body.toString('utf8'));}catch{throw new Error('CONFIG_BODY_JSON');}assert(Array.isArray(document.services),'CONFIG_BODY_SCHEMA');assert(document.services.length===auth.serviceCount,'CONFIG_SERVICE_COUNT');
+}
+
+function signingDomainRows(snapshot){
+ assert(snapshot&&snapshot.database===2&&snapshot.complete===true,'SIGNING_DB_OR_SCAN');
+ assert(snapshot.configuredBy==='SIGNING_KEYS_REDIS_URL'&&snapshot.credentialMatchesConfiguredUrl===true&&snapshot.redisWrites===false,'SIGNING_CONFIG_AUTHORITY');
+ assert(Array.isArray(snapshot.blockers)&&snapshot.blockers.length===0,'ROTATION_NOT_QUIESCENT');
+ assert(Array.isArray(snapshot.rows)&&snapshot.rows.length<=2048,'SIGNING_ROWS_BOUND');
+ const rows=new Map();
+ for(const row of snapshot.rows){
+  assert(typeof row.key==='string'&&row.key.length>0&&!rows.has(row.key),'SIGNING_DUPLICATE_KEY');
+  assert(typeof row.dumpHex==='string'&&/^(?:[a-f0-9]{2})+$/.test(row.dumpHex),'SIGNING_DUMP_ENCODING');
+  assert(typeof row.valueHex==='string'&&/^(?:[a-f0-9]{2})*$/.test(row.valueHex),'SIGNING_VALUE_ENCODING');
+  assert(Number.isInteger(row.pttl)&&row.pttl>=-1,'SIGNING_KEY_EXPIRED');
+  assert(['string','hash','list','set','zset','stream'].includes(row.type),'SIGNING_KEY_TYPE');rows.set(row.key,row);
+ }
+ return rows;
+}
+function validateSigningDomainTransition(before,after,etag){
+ const old=signingDomainRows(before),current=signingDomainRows(after);
+ for(const key of ['containerId','image','networkId','hostname','port'])assert(before[key]===after[key],'SIGNING_REDIS_IDENTITY');
+ const org='00000000-0000-0000-0000-000000000001',permitted=etag===undefined?null:'org:'+org+':signing-key-services-revision';
+ for(const key of new Set([...old.keys(),...current.keys()])){
+  if(key===permitted)continue;
+  const a=old.get(key),b=current.get(key);
+  // Never print private DUMP or value bytes through assertion diffs.
+  assert(a&&b&&a.dumpHex===b.dumpHex&&a.type===b.type&&a.valueHex===b.valueHex,'SIGNING_DOMAIN_CHANGED');
+ }
+ if(permitted){
+  assert(typeof etag==='string'&&/^"r-[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}"$/.test(etag),'INVALID_STRONG_ETAG');
+  const sidecar=current.get(permitted),raw=current.get('org:'+org+':signing-key-services');
+  assert(sidecar&&sidecar.type==='string'&&sidecar.pttl===-1,'REVISION_SIDECAR_MISSING');
+  assert(!raw||raw.type==='string','SIGNING_REGISTRY_TYPE');
+  const payload=raw?Buffer.concat([Buffer.from('present\0'),Buffer.from(raw.valueHex,'hex')]):Buffer.from('absent\0');
+  const expected=Buffer.from(etag.slice(3,-1)+':'+digest(payload),'ascii');
+  assert(Buffer.from(sidecar.valueHex,'hex').equals(expected),'REVISION_PAYLOAD_BINDING_FAILED');
+ }
 }
 
 function maintenanceAuthority(ref,expected){
@@ -308,7 +413,7 @@ function configuredUid(value){
  if(/^\d+(?::[^:]+)?$/.test(value))return Number(value.split(':')[0]);
  return null;
 }
-function receiptDigests(profile){if(profile.nativeOverlay)return {baseProfile:profile.baseProfile.sha256,nativeBuild:profile.nativeOverlay.buildReceipt.sha256,nativeDeployment:profile.nativeOverlay.deploymentReceipt.sha256,nativeCompatibility:profile.nativeOverlay.compatibilityResult.sha256};return profile.schema==='marty.functional-mixed-runtime/v2'?{baseProfile:profile.baseProfile.sha256,issuanceBuild:profile.issuanceOverlay.buildReceipt.sha256,issuanceDeployment:profile.issuanceOverlay.deploymentReceipt.sha256,...(profile.maintenanceRestart?{maintenanceRestart:profile.maintenanceRestart.sha256}:{})}:{baselineDeployment:profile.baselineDeployment.sha256,baselineBuild:profile.baselineBuild.sha256,
+function receiptDigests(profile){if(profile.nativeOverlay)return {baseProfile:profile.baseProfile.sha256,nativeBuild:profile.nativeOverlay.buildReceipt.sha256,nativeDeployment:profile.nativeOverlay.deploymentReceipt.sha256,nativeCompatibility:profile.nativeOverlay.compatibilityResult.sha256,...(profile.nativeOverlay.predecessor?{nativePredecessorAuthority:profile.nativeOverlay.predecessor.failedAuthority.sha256,nativePriorBuild:profile.nativeOverlay.predecessor.buildReceipt.sha256}:{})};return profile.schema==='marty.functional-mixed-runtime/v2'?{baseProfile:profile.baseProfile.sha256,issuanceBuild:profile.issuanceOverlay.buildReceipt.sha256,issuanceDeployment:profile.issuanceOverlay.deploymentReceipt.sha256,...(profile.maintenanceRestart?{maintenanceRestart:profile.maintenanceRestart.sha256}:{})}:{baselineDeployment:profile.baselineDeployment.sha256,baselineBuild:profile.baselineBuild.sha256,
    debugDeployment:profile.debugDeployment.sha256,debugBuild:profile.debugBuild.sha256,
    retainedBuilds:Object.fromEntries(Object.entries(profile.retainedBuilds).map(([role,ref])=>[role,ref.sha256])),
    ...(profile.priorNativeOverlay?{priorNativeOverlay:profile.priorNativeOverlay.sha256,priorNativeBuild:profile.priorNativeBuild.sha256,priorNativeArtifacts:profile.priorNativeArtifacts.sha256}:{})};}
@@ -409,4 +514,4 @@ function verifyFunctionalRuntime(profile,{qualification='FUNCTIONAL_ONLY',observ
   releaseQualified:false,recordingQualified:false,mixedSourceStack:true,roles,
   receiptDigests:receiptDigests(profile)};
 }
-module.exports={expectedUnqualifiedNativePreimage,applyNativeOverlayRows,validateRuntimeObservation,observeDocker,DOCKER_READ_TRANSPORT_SCHEMA:'marty.functional-runtime-docker-read/v1',boundJson,expectedRuntime,verifyFunctionalRuntime,produceMaintenanceRestart,DEBUG_ROLES,RETAINED_ROLES,ISSUANCE_SOURCE,ISSUANCE_CORE};
+module.exports={expectedHeaderSuccessorPreimage,applyNativeOverlayObservedRows:applyNativeOverlayObservations,validateSigningDomainTransition,validateHeaderSuccessorGate,expectedUnqualifiedNativePreimage,applyNativeOverlayRows,validateRuntimeObservation,observeDocker,DOCKER_READ_TRANSPORT_SCHEMA:'marty.functional-runtime-docker-read/v1',boundJson,expectedRuntime,verifyFunctionalRuntime,produceMaintenanceRestart,DEBUG_ROLES,RETAINED_ROLES,ISSUANCE_SOURCE,ISSUANCE_CORE};

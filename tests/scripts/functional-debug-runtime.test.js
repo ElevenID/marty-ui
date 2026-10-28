@@ -406,3 +406,30 @@ for(const fault of ['promotedFailure','cleanup','missingRole','gatewayGeneration
  if(fault==='writableMount')x.raw.rows.find(row=>row.role==='gateway').binaryMounts[0].writable=true;
  assert.throws(()=>expectedUnqualifiedNativePreimage(x.expected,x.before,x.raw,x.disposition,x.selection));
 });
+
+
+function domainFixture(){
+ const org='org:00000000-0000-0000-0000-000000000001:',registry=Buffer.from('{"services":[]}').toString('hex');
+ const uuid='00000000-0000-4000-8000-000000000000',hash=crypto.createHash('sha256').update(Buffer.concat([Buffer.from('present\0'),Buffer.from(registry,'hex')])).digest('hex');
+ return {containerId:H('a'),image:'sha256:'+H('b'),networkId:H('c'),hostname:'redis',port:6379,database:2,configuredBy:'SIGNING_KEYS_REDIS_URL',credentialMatchesConfiguredUrl:true,redisWrites:false,complete:true,blockers:[],
+  rows:[{key:org+'signing-key-services',type:'string',valueHex:registry,dumpHex:'aabb',pttl:-1},
+   {key:org+'signing-key-services-revision',type:'string',valueHex:Buffer.from(uuid+':'+hash).toString('hex'),dumpHex:'ccdd',pttl:-1}]};
+}
+for(const fault of ['valid','planned','retirement','weakEtag','sidecar','extraGet','rawRegistry','foreignKey','revisionDigest','database'])test('signer successor gate '+fault,t=>{
+ const {validateHeaderSuccessorGate}=require('./functional-debug-runtime'),f=fixture(t),prior=domainFixture(),before=structuredClone(prior),after=structuredClone(prior);
+ const response=f.write('response.json',{services:[]});
+ const auth={state:'PASSED',scope:'D02_EXPLICIT_SIGNING_CONFIG_GET_WRITE_CAPABLE',httpStatus:200,explicitConfigGetCount:1,providerEditRequested:false,
+  strongOpaqueRevision:true,cacheControlNoStore:true,cacheControlNoTransform:true,etag:'"r-00000000-0000-4000-8000-000000000000"',sessionRetired:true,privateCookieRetired:true,browserClosed:true,
+  privateResponse:response,bodySha256:response.sha256,serviceCount:0};
+ const deployed={state:'APPLIED_FUNCTIONAL_ONLY',actualReadbackVerified:true,configGate:{registryUnchanged:true,revisionBindingVerified:true}};
+ if(fault==='planned')deployed.state='PLANNED';if(fault==='retirement')auth.sessionRetired=false;if(fault==='weakEtag')auth.etag='W/'+auth.etag;
+ if(fault==='sidecar')deployed.configGate.revisionBindingVerified=false;if(fault==='extraGet')auth.explicitConfigGetCount=2;
+ if(fault==='rawRegistry')after.rows[0].valueHex=Buffer.from('sensitive-must-not-print').toString('hex');
+ if(fault==='foreignKey')after.rows.push({...after.rows[0],key:'signing-service:global-rotation-fence'});
+ if(fault==='revisionDigest')after.rows[1].valueHex=Buffer.from('00000000-0000-4000-8000-000000000000:'+H('0')).toString('hex');
+ if(fault==='database')after.database=0;
+ deployed.configGate.signingDomainBefore=f.write('domain-before.json',before);deployed.configGate.signingDomainAfter=f.write('domain-after.json',after);
+ deployed.configGate.authResult=f.write('config-get.json',auth);
+ if(fault==='valid')assert.equal(validateHeaderSuccessorGate(deployed,prior),undefined);
+ else assert.throws(()=>validateHeaderSuccessorGate(deployed,prior),error=>{assert(!String(error).includes('sensitive-must-not-print'));assert(!String(error).includes(Buffer.from('sensitive-must-not-print').toString('hex')));return true;});
+});
