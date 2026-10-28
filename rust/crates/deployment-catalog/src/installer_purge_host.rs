@@ -377,16 +377,18 @@ fn sync_directories(parent: &File, expected: &HostIdentity, quarantine: &File) -
     Ok(())
 }
 
-fn apply_inner<F, H>(
+fn apply_inner<F, H, C>(
     root: &File,
     quarantine: &File,
     manifest: &HostPurgeManifest,
     callback: &mut F,
     after_move: &mut H,
+    completed: &mut C,
 ) -> Result<Vec<Outcome>>
 where
     F: FnMut(&HostPurgeEntry, ObservedState, &str) -> Result<Permit>,
     H: FnMut(&HostPurgeEntry) -> Result<()>,
+    C: FnMut(&HostPurgeEntry, Outcome, &str) -> Result<()>,
 {
     validate(manifest)?;
     verify(root, &manifest.root)?;
@@ -450,8 +452,8 @@ where
             ObservedState::Absent
         };
         authorize(manifest, entry, state, callback)?;
-        match state {
-            ObservedState::Absent => outcomes.push(Outcome::AlreadyAbsent),
+        let outcome = match state {
+            ObservedState::Absent => Outcome::AlreadyAbsent,
             ObservedState::Present => {
                 let parent = parent.as_ref().ok_or(REFUSED)?;
                 move_to_quarantine(parent, leaf(&entry.relative_path), &held_quarantine, &name)?;
@@ -464,7 +466,7 @@ where
                 verify(&held_quarantine, &manifest.quarantine)?;
                 remove_quarantined(&held_quarantine, &name, entry.target.kind)?;
                 sync_directories(parent, &entry.parent, &held_quarantine)?;
-                outcomes.push(Outcome::Removed);
+                Outcome::Removed
             }
             ObservedState::Quarantined => {
                 let parent = parent.as_ref().ok_or(REFUSED)?;
@@ -475,9 +477,14 @@ where
                 verify(&held_quarantine, &manifest.quarantine)?;
                 remove_quarantined(&held_quarantine, &name, entry.target.kind)?;
                 sync_directories(parent, &entry.parent, &held_quarantine)?;
-                outcomes.push(Outcome::Removed);
+                Outcome::Removed
             }
-        }
+        };
+        // Stop on persistence failure, before authorizing or touching the next
+        // entry. An interrupted result write leaves the prior exact intent as
+        // the coordinator's only basis for acknowledging absence on retry.
+        completed(entry, outcome, &intent_sha256(manifest, entry)?)?;
+        outcomes.push(outcome);
     }
     Ok(outcomes)
 }
@@ -495,7 +502,32 @@ pub(crate) fn apply<F>(
 where
     F: FnMut(&HostPurgeEntry, ObservedState, &str) -> Result<Permit>,
 {
-    apply_inner(root, quarantine, manifest, &mut authorize, &mut |_| Ok(()))
+    apply_with_results(root, quarantine, manifest, &mut authorize, |_, _, _| Ok(()))
+}
+
+/// Persist each result after removal and directory fsync, before the next
+/// authorization. The coordinator must durably bind it to the exact prior
+/// intent, and preserve an existing result when retry observes absence. Both
+/// callbacks may fail closed; this function cannot roll back a completed unlink.
+pub(crate) fn apply_with_results<F, C>(
+    root: &File,
+    quarantine: &File,
+    manifest: &HostPurgeManifest,
+    mut authorize: F,
+    mut completed: C,
+) -> Result<Vec<Outcome>>
+where
+    F: FnMut(&HostPurgeEntry, ObservedState, &str) -> Result<Permit>,
+    C: FnMut(&HostPurgeEntry, Outcome, &str) -> Result<()>,
+{
+    apply_inner(
+        root,
+        quarantine,
+        manifest,
+        &mut authorize,
+        &mut |_| Ok(()),
+        &mut completed,
+    )
 }
 
 #[cfg(test)]
@@ -590,6 +622,108 @@ mod tests {
     }
 
     #[test]
+    fn result_failure_stops_before_next_entry_and_retry_reports_absence() {
+        let mut f = fixture();
+        fs::write(f.root_path.join("z-canary"), b"later-customer-data").unwrap();
+        f.manifest.entries.push(HostPurgeEntry {
+            relative_path: "z-canary".into(),
+            parent: f.manifest.root.clone(),
+            target: identity(&fs::metadata(f.root_path.join("z-canary")).unwrap()).unwrap(),
+        });
+        let mut authorized = Vec::new();
+        let mut reported = Vec::new();
+        assert!(apply_with_results(
+            &f.root,
+            &f.quarantine,
+            &f.manifest,
+            |entry, state, digest| {
+                authorized.push(entry.relative_path.clone());
+                permitted(entry, state, digest)
+            },
+            |entry, outcome, digest| {
+                assert!(!f.root_path.join(&entry.relative_path).exists());
+                assert_eq!(fs::read_dir(&f.quarantine_path).unwrap().count(), 0);
+                assert_eq!(digest, intent_sha256(&f.manifest, entry).unwrap());
+                reported.push((entry.relative_path.clone(), outcome));
+                Err("synthetic durable-result failure".into())
+            },
+        )
+        .is_err());
+        assert_eq!(authorized, ["payload"]);
+        assert_eq!(reported, [("payload".into(), Outcome::Removed)]);
+        assert_eq!(
+            fs::read(f.root_path.join("z-canary")).unwrap(),
+            b"later-customer-data"
+        );
+        let mut retry_results = Vec::new();
+        assert_eq!(
+            apply_with_results(
+                &f.root,
+                &f.quarantine,
+                &f.manifest,
+                permitted,
+                |entry, outcome, digest| {
+                    assert_eq!(digest, intent_sha256(&f.manifest, entry).unwrap());
+                    retry_results.push(outcome);
+                    Ok(())
+                },
+            )
+            .unwrap(),
+            [Outcome::AlreadyAbsent, Outcome::Removed]
+        );
+        assert_eq!(retry_results, [Outcome::AlreadyAbsent, Outcome::Removed]);
+    }
+
+    #[test]
+    fn no_result_is_reported_before_authorization_or_durable_removal() {
+        let f = fixture();
+        let mut reports = 0;
+        assert!(apply_with_results(
+            &f.root,
+            &f.quarantine,
+            &f.manifest,
+            |_, _, _| Err("synthetic intent failure".into()),
+            |_, _, _| {
+                reports += 1;
+                Ok(())
+            },
+        )
+        .is_err());
+        assert_eq!(reports, 0);
+        assert_eq!(fs::read(f.root_path.join("payload")).unwrap(), b"synthetic");
+        assert!(apply_inner(
+            &f.root,
+            &f.quarantine,
+            &f.manifest,
+            &mut permitted,
+            &mut |_| Err("synthetic interruption after quarantine rename".into()),
+            &mut |_, _, _| {
+                reports += 1;
+                Ok(())
+            },
+        )
+        .is_err());
+        assert_eq!(reports, 0);
+        assert_eq!(fs::read_dir(&f.quarantine_path).unwrap().count(), 1);
+        assert_eq!(
+            apply_with_results(
+                &f.root,
+                &f.quarantine,
+                &f.manifest,
+                permitted,
+                |_, outcome, _| {
+                    assert_eq!(outcome, Outcome::Removed);
+                    reports += 1;
+                    Ok(())
+                },
+            )
+            .unwrap(),
+            [Outcome::Removed]
+        );
+        assert_eq!(reports, 1);
+    }
+
+    #[test]
     fn unexplained_absence_and_wrong_permit_refuse() {
         let f = fixture();
         fs::remove_file(f.root_path.join("payload")).unwrap();
@@ -620,7 +754,8 @@ mod tests {
             &f.quarantine,
             &f.manifest,
             &mut permitted,
-            &mut |_| Err("synthetic interruption".into())
+            &mut |_| Err("synthetic interruption".into()),
+            &mut |_, _, _| Ok(())
         )
         .is_err());
         assert!(!f.root_path.join("payload").exists());
