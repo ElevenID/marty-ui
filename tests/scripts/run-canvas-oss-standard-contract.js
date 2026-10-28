@@ -2365,6 +2365,20 @@ async function reconcileCanvasPrelaunchApplicationAbsence(state) {
   requireCondition(state.owned?.martyBindingId===bindingId && !state.owned?.martyLearnerLaunchIntent
     && !state.owned?.martyApplicationId && state.marty,
   'canvas_background_application_uncertain','An owned learner launch may have created an application.');
+  const bindingPath=`/v1/integrations/canvas/program-bindings/${encodeURIComponent(bindingId)}`;
+  const ownedBinding=await state.marty.get(bindingPath);
+  requireCondition(ownedBinding.id===bindingId && ownedBinding.organization_id===organizationId
+    && ownedBinding.platform_id===state.platformId
+    && ownedBinding.display_name===`Portable Canvas badge ${state.runSuffix}`,
+  'canvas_background_application_uncertain','Canvas binding ownership changed before retirement.');
+  if (ownedBinding.enabled || ownedBinding.activated_at) {
+    await state.marty.post(`${bindingPath}/deactivate`, {}, [200]);
+  }
+  const disabledBinding=await state.marty.get(bindingPath);
+  requireCondition(disabledBinding.id===bindingId && disabledBinding.organization_id===organizationId
+    && disabledBinding.platform_id===state.platformId
+    && disabledBinding.enabled===false && disabledBinding.activated_at==null,
+  'canvas_background_application_uncertain','Owned Canvas binding remains active after deactivation.');
   const prefix=`?organization_id=${encodeURIComponent(organizationId)}&binding_id=${encodeURIComponent(bindingId)}&limit=100`;
   const jobs=safeList(await state.marty.get(`/v1/integrations/canvas/canvas-sync-jobs${prefix}`));
   const candidates=safeList(await state.marty.get(`/v1/integrations/canvas/canvas-award-candidates${prefix}`));
@@ -2866,6 +2880,7 @@ module.exports = {
   retireCanvasSetupFixtures,
   CanvasClient,
   CanvasSessionClient,
+  MartyClient,
   findCanvasDeveloperKey,
   waitForCanvasCourseCompletion,
   canvasLaunchErrorSummary,
