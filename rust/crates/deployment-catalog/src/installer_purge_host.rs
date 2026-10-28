@@ -11,6 +11,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     ffi::CString,
     fs::{self, File, Metadata},
+    io::Read,
     os::{
         fd::{AsRawFd, FromRawFd},
         unix::fs::MetadataExt,
@@ -178,21 +179,51 @@ fn openat2(parent: &File, path: &str, flags: i32) -> Result<Option<File>> {
 }
 
 fn mount_id(file: &File) -> Result<u64> {
-    let mut info: libc::statx = unsafe { std::mem::zeroed() };
-    let empty = cstr("")?;
-    let status = unsafe {
-        libc::statx(
-            file.as_raw_fd(),
-            empty.as_ptr(),
-            libc::AT_EMPTY_PATH,
-            libc::STATX_MNT_ID,
-            &mut info,
-        )
-    };
-    if status != 0 || info.stx_mask & libc::STATX_MNT_ID == 0 {
+    // Linux exposes the mount ID of this exact held descriptor in fdinfo.
+    // Check the directory is genuine procfs before trusting its contents.
+    const PROC_SUPER_MAGIC: i64 = 0x9fa0;
+    let proc = File::open("/proc/self/fdinfo").map_err(|_| REFUSED)?;
+    let mut fs_info: libc::statfs = unsafe { std::mem::zeroed() };
+    if unsafe { libc::fstatfs(proc.as_raw_fd(), &mut fs_info) } != 0
+        || fs_info.f_type as i64 != PROC_SUPER_MAGIC
+    {
         return Err(REFUSED.into());
     }
-    Ok(info.stx_mnt_id)
+    let name = cstr(&file.as_raw_fd().to_string())?;
+    let fd = unsafe {
+        libc::openat(
+            proc.as_raw_fd(),
+            name.as_ptr(),
+            libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+        )
+    };
+    if fd < 0 {
+        return Err(REFUSED.into());
+    }
+    let fdinfo = unsafe { File::from_raw_fd(fd) };
+    let mut bytes = Vec::new();
+    fdinfo
+        .take(4097)
+        .read_to_end(&mut bytes)
+        .map_err(|_| REFUSED)?;
+    if bytes.len() > 4096 {
+        return Err(REFUSED.into());
+    }
+    parse_mount_id(&bytes)
+}
+
+fn parse_mount_id(bytes: &[u8]) -> Result<u64> {
+    let text = std::str::from_utf8(bytes).map_err(|_| REFUSED)?;
+    let mut ids = text.lines().filter_map(|line| line.strip_prefix("mnt_id:"));
+    let raw = ids.next().ok_or(REFUSED)?.trim_ascii();
+    if ids.next().is_some() || raw.is_empty() || !raw.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(REFUSED.into());
+    }
+    let value = raw.parse::<u64>().map_err(|_| REFUSED)?;
+    if value == 0 {
+        return Err(REFUSED.into());
+    }
+    Ok(value)
 }
 
 fn identity(meta: &Metadata) -> Result<HostIdentity> {
@@ -308,8 +339,11 @@ where
 fn move_to_quarantine(parent: &File, source: &str, quarantine: &File, name: &str) -> Result<()> {
     let source = cstr(source)?;
     let name = cstr(name)?;
+    // The syscall is available on supported Linux kernels even when musl does
+    // not export a renameat2 wrapper. ENOSYS fails closed on older kernels.
     let status = unsafe {
-        libc::renameat2(
+        libc::syscall(
+            libc::SYS_renameat2,
             parent.as_raw_fd(),
             source.as_ptr(),
             quarantine.as_raw_fd(),
@@ -513,6 +547,24 @@ mod tests {
             root,
             quarantine,
             manifest,
+        }
+    }
+
+    #[test]
+    fn mount_id_is_bound_to_fdinfo_and_parser_fails_closed() {
+        let f = fixture();
+        let root_mount = mount_id(&f.root).unwrap();
+        assert_ne!(root_mount, 0);
+        assert_eq!(root_mount, mount_id(&f.quarantine).unwrap());
+        assert_eq!(parse_mount_id(b"pos:\t0\nmnt_id:\t123\n").unwrap(), 123);
+        for invalid in [
+            &b"pos:\t0\n"[..],
+            &b"mnt_id:\t0\n"[..],
+            &b"mnt_id:\t12x\n"[..],
+            &b"mnt_id:\t12\nmnt_id:\t12\n"[..],
+            &b"mnt_id:\t18446744073709551616\n"[..],
+        ] {
+            assert!(parse_mount_id(invalid).is_err());
         }
     }
     fn permitted(_: &HostPurgeEntry, state: ObservedState, digest: &str) -> Result<Permit> {
