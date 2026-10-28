@@ -37,9 +37,109 @@ const {
   validateAuthoritativeEvidenceHeads,
   validateReadinessSnapshot,
   verifyCompactJws,
+  rosterJobBaseline,
+  waitForLatestRosterJob,
+  activatedRosterJobTimestamp,
+  reconcileCanvasPrelaunchApplicationAbsence,
+  requireCanvasSetupMutationReconciliation,
+  retireCanvasOwnedReferences,
 } = require('./run-canvas-oss-standard-contract');
 
 const NOW = '2026-07-15T06:00:00.000Z';
+
+test('roster activation selects a new exact job despite host and server clock skew', async () => {
+  const organization_id = 'org-1', binding_id = 'binding-1';
+  const oldJob = { id: 'old-job', organization_id, binding_id, target_type: 'background_roster' };
+  const activatedAt='2026-07-15T05:59:59.500120+00:00';
+  const freshJob = { id: 'new-job', organization_id, binding_id,
+    target_type: 'background_roster', created_at: '2026-07-15T05:59:59.50012Z' };
+  const periodicJob={...freshJob,id:'periodic-job',created_at:'2026-07-15T05:59:59.500121+00:00'};
+  let activated = false;
+  const marty = { async get(path) {
+    if (path.endsWith('/new-job')) return { ...freshJob, status: 'succeeded' };
+    if (path.includes('/program-bindings/')) return { id:binding_id,
+      organization_id,platform_id:'platform-1',enabled:true,config_version:2,activated_at:activatedAt };
+    return activated ? [periodicJob, oldJob, freshJob] : [oldJob];
+  } };
+  const baseline = await rosterJobBaseline(marty, organization_id, binding_id);
+  activated = true;
+  const serverInstant=await activatedRosterJobTimestamp(marty, organization_id,'platform-1',binding_id,2);
+  await assert.rejects(activatedRosterJobTimestamp(marty, organization_id,'platform-1',binding_id,3),
+    error=>error.code==='canvas_roster_activation_binding_invalid');
+  const observed = await waitForLatestRosterJob(marty, organization_id, binding_id, baseline,serverInstant);
+  assert.equal(observed.id, 'new-job');
+});
+
+test('roster baseline rejects a foreign organization and an incomplete inventory', async () => {
+  const foreign = { id: 'job', organization_id: 'foreign', binding_id: 'binding-1' };
+  await assert.rejects(rosterJobBaseline({ get: async () => [foreign] }, 'org-1', 'binding-1'),
+    error => error.code === 'canvas_roster_job_inventory_incomplete');
+  const full = Array.from({ length: 500 }, (_, id) => ({ id: String(id), organization_id: 'org-1', binding_id: 'foreign' }));
+  await assert.rejects(rosterJobBaseline({ get: async () => full }, 'org-1', 'binding-1'),
+    error => error.code === 'canvas_roster_job_inventory_incomplete');
+});
+
+test('prelaunch cleanup accepts only terminal owned roster with no application or claim', async () => {
+  const org='org-1', binding='binding-1', platform='platform-1';
+  const jobs=[{id:'job-1',organization_id:org,binding_id:binding,platform_id:platform,
+    target_type:'background_roster',application_id:null,status:'succeeded'}];
+  const candidates=[{id:'candidate-1',organization_id:org,binding_id:binding,
+    application_id:null,status:'identity_link_required'}];
+  let deactivated=false;
+  const state={bindingActivationPossible:true,binding:{id:binding},organizationId:org,
+    platformId:platform,runSuffix:'owned-run-1',owned:{martyBindingId:binding},marty:{
+      async get(path){
+        if(path.includes('/program-bindings/'))return {id:binding,organization_id:org,
+          platform_id:platform,display_name:'Portable Canvas badge owned-run-1',
+          enabled:!deactivated,activated_at:deactivated?null:NOW};
+        return path.includes('canvas-sync-jobs')?jobs:candidates;
+      },
+      async post(path){assert.match(path,/\/deactivate$/);deactivated=true;return {active:false}},
+    }};
+  assert.throws(()=>requireCanvasSetupMutationReconciliation(state),
+    error=>error.code==='canvas_background_application_uncertain');
+  await reconcileCanvasPrelaunchApplicationAbsence(state);
+  assert.equal(deactivated,true);
+  requireCanvasSetupMutationReconciliation(state);
+  for(const change of [
+    () => {state.owned.martyLearnerLaunchIntent=true},
+    () => {state.owned.martyLearnerLaunchIntent=false;jobs[0].status='queued'},
+    () => {jobs[0].status='succeeded';candidates[0].application_id='foreign-app'},
+    () => {candidates[0].application_id=null;candidates[0].status='pending_claim'},
+  ]) {
+    state.prelaunchAbsenceConfirmed=false;
+    change();
+    await assert.rejects(reconcileCanvasPrelaunchApplicationAbsence(state),
+      error=>error.code==='canvas_background_application_uncertain');
+  }
+  state.owned.martyLearnerLaunchIntent=false;candidates[0].status='identity_link_required';
+  jobs.splice(0,jobs.length,...Array.from({length:500},(_,id)=>({id:String(id),
+    organization_id:org,binding_id:'foreign',platform_id:platform,
+    target_type:'background_roster',application_id:null,status:'succeeded'})));
+  await assert.rejects(reconcileCanvasPrelaunchApplicationAbsence(state),
+    error=>error.code==='canvas_roster_job_inventory_incomplete');
+});
+
+test('Canvas secret retirement requires authorized collection metadata, never detail GET 404', async () => {
+  const secret='secret-1', org='org-1', platform='platform-1';
+  const events=[];
+  let row={id:secret,organization_id:org,name:'foreign',provider:'canvas',purpose:'oauth_client_secret'};
+  const state={prelaunchAbsenceConfirmed:true,bindingActivationPossible:true,
+    organizationId:org,platformId:platform,integrationSecretId:secret,
+    owned:{martySecretIntent:{name:'owned',state:'CREATED'}},
+    marty:{
+      async get(path){events.push('GET '+path);return row?[row]:[]},
+      async delete(path){events.push('DELETE '+path);if(path.includes('integration-secrets'))row=null},
+      async request(method,path){events.push(method+' '+path);return null},
+    }};
+  await assert.rejects(retireCanvasOwnedReferences(state),
+    error=>error.code==='canvas_owned_secret_identity_mismatch');
+  assert.equal(events.some(event=>event.startsWith('DELETE ')),false);
+  row={...row,name:'owned'};
+  await retireCanvasOwnedReferences(state);
+  assert.equal(events.filter(event=>event.startsWith('DELETE ')).length,2);
+  assert.equal(events.some(event=>event.includes('GET /v1/integrations/canvas/integration-secrets/secret-1')),false);
+});
 
 test('HTTPS transport failure retains bounded network causes without secret-bearing diagnostics', async (t) => {
   const secret = 'private-token-in-message-url-and-stack';

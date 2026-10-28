@@ -1533,17 +1533,84 @@ async function waitForJob(marty, jobId) {
   }, JOB_TIMEOUT_MS, 1_500, 'canvas_sync_job_timeout');
 }
 
-async function waitForLatestRosterJob(marty, organizationId, bindingId, afterIso) {
+async function rosterJobBaseline(marty, organizationId, bindingId) {
+  const jobs=(await completeOrganizationJobInventory(marty,organizationId))
+    .filter(job=>job.binding_id===bindingId);
+  for (const job of jobs) {
+    requireCondition(job.organization_id === organizationId && job.binding_id === bindingId && job.id,
+      'canvas_roster_job_inventory_scope_invalid', 'Canvas job inventory escaped the owned binding.');
+  }
+  return new Set(jobs.map(job => job.id));
+}
+
+async function completeOrganizationJobInventory(marty,organizationId) {
+  // The deployed operations API applies binding_id after a 500-row organization
+  // window. A short scoped result cannot prove absence. The unfiltered window
+  // is complete only when it contains fewer than 500 rows.
+  const jobs=await marty.get(`/v1/integrations/canvas/canvas-sync-jobs?organization_id=${encodeURIComponent(organizationId)}&limit=500`);
+  requireCondition(Array.isArray(jobs)&&jobs.length<500
+    && jobs.every(job=>job.organization_id===organizationId && job.id),
+  'canvas_roster_job_inventory_incomplete','Canvas organization job inventory is incomplete.');
+  return jobs;
+}
+
+function canvasInstantMicros(value) {
+  if (typeof value !== 'string') return null;
+  const match=/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,6}))?(Z|[+-]\d{2}:\d{2})$/.exec(value);
+  if (!match) return null;
+  const [,yearText,monthText,dayText,hourText,minuteText,secondText,fraction='',zone]=match;
+  const [year,month,day,hour,minute,second]=[yearText,monthText,dayText,hourText,minuteText,secondText].map(Number);
+  const date=new Date(Date.UTC(year,month-1,day));
+  if (date.getUTCFullYear()!==year || date.getUTCMonth()+1!==month || date.getUTCDate()!==day
+    || hour>23 || minute>59 || second>59) return null;
+  let offsetMinutes=0;
+  if (zone!=='Z') {
+    const offsetHour=Number(zone.slice(1,3)),offsetMinute=Number(zone.slice(4,6));
+    if (offsetHour>23 || offsetMinute>59) return null;
+    offsetMinutes=(zone[0]==='+'?1:-1)*(offsetHour*60+offsetMinute);
+  }
+  const milliseconds=Date.UTC(year,month-1,day,hour,minute,second)-offsetMinutes*60_000;
+  return BigInt(milliseconds)*1_000n+BigInt(fraction.padEnd(6,'0'));
+}
+
+async function activatedRosterJobTimestamp(marty, organizationId, platformId, bindingId, configVersion) {
+  const binding=await marty.get(`/v1/integrations/canvas/program-bindings/${encodeURIComponent(bindingId)}`);
+  requireCondition(binding.id===bindingId && binding.organization_id===organizationId
+    && binding.platform_id===platformId && binding.enabled===true
+    && binding.config_version===configVersion && typeof binding.activated_at==='string'
+    && canvasInstantMicros(binding.activated_at)!==null,
+  'canvas_roster_activation_binding_invalid','Activated Canvas binding has no exact server-side activation identity.');
+  return binding.activated_at;
+}
+
+async function waitForLatestRosterJob(marty, organizationId, bindingId, beforeJobIds, activatedAt) {
+  requireCondition(beforeJobIds instanceof Set, 'canvas_roster_job_baseline_missing',
+    'A fresh activation requires its exact preactivation job inventory.');
+  const activatedMicros=canvasInstantMicros(activatedAt);
+  requireCondition(activatedMicros!==null,
+    'canvas_roster_activation_timestamp_missing','Roster job must bind the exact server activation instant.');
   return waitFor(async () => {
     const jobs = safeList(await marty.get(
       `/v1/integrations/canvas/canvas-sync-jobs?organization_id=${encodeURIComponent(organizationId)}&binding_id=${encodeURIComponent(bindingId)}&limit=100`,
     ));
+    requireCondition(jobs.length < 100, 'canvas_roster_job_inventory_incomplete',
+      'The bounded Canvas job inventory cannot establish a fresh activation job.');
     const job = jobs.find((item) => (
       item.target_type === 'background_roster'
-        && Date.parse(item.created_at || 0) >= Date.parse(afterIso || 0)
+        && item.organization_id === organizationId && item.binding_id === bindingId
+        // Rust enqueues this job with the same server DateTime as binding.activated_at.
+        // Binding and PostgreSQL JSON can serialize the same microsecond instant
+        // with different trailing zeroes. Date.parse loses microseconds entirely.
+        && canvasInstantMicros(item.created_at)===activatedMicros
+        && !beforeJobIds.has(item.id)
     ));
     if (!job) return null;
-    return waitForJob(marty, job.id);
+    const completed=await waitForJob(marty, job.id);
+    requireCondition(completed.id===job.id && completed.organization_id===organizationId
+      && completed.binding_id===bindingId && completed.target_type==='background_roster'
+      && canvasInstantMicros(completed.created_at)===activatedMicros,
+    'canvas_roster_job_identity_mismatch','Completed roster job differs from the activated binding job.');
+    return completed;
   }, JOB_TIMEOUT_MS, 1_500, 'canvas_roster_job_timeout');
 }
 
@@ -2194,13 +2261,15 @@ async function prepareCanvasCaptureFixtures({ browser, ledger, markActive = () =
     }, [200]);
 
     markActive('standard_lti_13_install');
-    const activationStartedAt = new Date().toISOString();
+    const activationJobBaseline = await rosterJobBaseline(marty, organizationId, binding.id);
     state.bindingActivationPossible=true;owned.martyBindingActivationPossible=true;persistOwned();
-    await validateAndActivateBinding(marty, binding.id);
+    const {activation}=await validateAndActivateBinding(marty, binding.id);
+    const activationAt=await activatedRosterJobTimestamp(marty, organizationId, platformId,
+      binding.id, activation.config_version);
     pass('standard_lti_13_install', `Stock Canvas installed LTI 1.3 and all ${BLOCKING_READINESS_CHECK_CODES.length} production blocking readiness checks passed.`);
 
     markActive('nrps_roster');
-    await waitForLatestRosterJob(marty, organizationId, binding.id, activationStartedAt);
+    await waitForLatestRosterJob(marty, organizationId, binding.id, activationJobBaseline, activationAt);
 
     markActive('module_completion');
     await waitFor(async () => {
@@ -2332,12 +2401,50 @@ function createCanvasCaptureCustody(runSuffix, directory = process.env.DEMO_CANV
 }
 
 function requireCanvasSetupMutationReconciliation(state) {
-  requireCondition(!state.bindingActivationPossible||Boolean(state.applicationId),
+  requireCondition(!state.bindingActivationPossible||Boolean(state.applicationId)
+    || state.prelaunchAbsenceConfirmed===true,
     'canvas_background_application_uncertain','An activated owned binding without its returned application tuple requires reconciliation.');
   for(const field of ['martyPlatformIntent','martySecretIntent']) {
     const intent=state.owned?.[field];
     requireCondition(!intent||intent.state==='CREATED','canvas_setup_creation_uncertain','Owned Canvas setup creation requires exact reconciliation.');
   }
+}
+
+async function reconcileCanvasPrelaunchApplicationAbsence(state) {
+  if (!state.bindingActivationPossible || state.applicationId) return;
+  const bindingId=state.binding?.id, organizationId=state.organizationId;
+  requireCondition(state.owned?.martyBindingId===bindingId && !state.owned?.martyLearnerLaunchIntent
+    && !state.owned?.martyApplicationId && state.marty,
+  'canvas_background_application_uncertain','An owned learner launch may have created an application.');
+  const bindingPath=`/v1/integrations/canvas/program-bindings/${encodeURIComponent(bindingId)}`;
+  const ownedBinding=await state.marty.get(bindingPath);
+  requireCondition(ownedBinding.id===bindingId && ownedBinding.organization_id===organizationId
+    && ownedBinding.platform_id===state.platformId
+    && ownedBinding.display_name===`Portable Canvas badge ${state.runSuffix}`,
+  'canvas_background_application_uncertain','Canvas binding ownership changed before retirement.');
+  if (ownedBinding.enabled || ownedBinding.activated_at) {
+    await state.marty.post(`${bindingPath}/deactivate`, {}, [200]);
+  }
+  const disabledBinding=await state.marty.get(bindingPath);
+  requireCondition(disabledBinding.id===bindingId && disabledBinding.organization_id===organizationId
+    && disabledBinding.platform_id===state.platformId
+    && disabledBinding.enabled===false && disabledBinding.activated_at==null,
+  'canvas_background_application_uncertain','Owned Canvas binding remains active after deactivation.');
+  const prefix=`?organization_id=${encodeURIComponent(organizationId)}&binding_id=${encodeURIComponent(bindingId)}&limit=100`;
+  const jobs=(await completeOrganizationJobInventory(state.marty,organizationId))
+    .filter(job=>job.binding_id===bindingId);
+  const candidates=await state.marty.get(`/v1/integrations/canvas/canvas-award-candidates${prefix}`);
+  requireCondition(jobs.length>0 && Array.isArray(candidates) && candidates.length<100,
+    'canvas_background_application_uncertain','Owned Canvas background inventory is incomplete.');
+  requireCondition(jobs.every(job=>job.organization_id===organizationId&&job.binding_id===bindingId
+    && job.platform_id===state.platformId&&job.target_type==='background_roster'
+    && job.application_id==null&&job.status==='succeeded'),
+  'canvas_background_application_uncertain','Owned Canvas jobs are pending or reference an application.');
+  requireCondition(candidates.every(candidate=>candidate.organization_id===organizationId
+    && candidate.binding_id===bindingId&&candidate.application_id==null
+    && candidate.status==='identity_link_required'),
+  'canvas_background_application_uncertain','Owned Canvas candidates reference an application or claim.');
+  state.prelaunchAbsenceConfirmed=true;
 }
 
 async function retireCanvasOAuthAuthority(state, observe = () => {}, {requireAccess = false} = {}) {
@@ -2349,13 +2456,25 @@ async function retireCanvasOAuthAuthority(state, observe = () => {}, {requireAcc
 
 async function retireCanvasOwnedReferences(state) {
   requireCanvasSetupMutationReconciliation(state);
+  const secretsPath='/v1/integrations/canvas/integration-secrets?organization_id='
+    +encodeURIComponent(state.organizationId)+'&provider=canvas';
+  if(state.integrationSecretId) {
+    const rows=await state.marty.get(secretsPath);
+    requireCondition(Array.isArray(rows),'canvas_owned_secret_inventory_invalid',
+      'Authorized Canvas secret collection is unavailable.');
+    const exactRows=rows.filter(row=>row.id===state.integrationSecretId);
+    requireCondition(exactRows.length===1 && exactRows[0].organization_id===state.organizationId
+      && exactRows[0].name===state.owned?.martySecretIntent?.name
+      && exactRows[0].provider==='canvas' && exactRows[0].purpose==='oauth_client_secret',
+    'canvas_owned_secret_identity_mismatch','Owned Canvas secret metadata changed before retirement.');
+  }
   if(state.platformId) {
     const target=`/v1/integrations/canvas/platforms/${encodeURIComponent(state.platformId)}`;
     await state.marty.delete(target,[204]);await state.marty.request('GET',target,{expected:[404]});
   }
   if(state.integrationSecretId) {
     await state.marty.delete(`/v1/integrations/canvas/integration-secrets/${encodeURIComponent(state.integrationSecretId)}`,[204]);
-    const remaining=await state.marty.get('/v1/integrations/canvas/integration-secrets?organization_id='+encodeURIComponent(state.organizationId)+'&provider=canvas');
+    const remaining=await state.marty.get(secretsPath);
     assert(Array.isArray(remaining));assert(!remaining.some(row=>row.id===state.integrationSecretId));
   }
 }
@@ -2405,6 +2524,7 @@ async function retireCanvasEngineeringSetup(state, observeSessions = () => {}) {
   let retired={scope:'OWNED_CANVAS_FIXTURE_RETIREMENT',complete:false,resources:[]};
   const failures=[];
   try {
+      await reconcileCanvasPrelaunchApplicationAbsence(state);
       requireCanvasSetupMutationReconciliation(state);
       const issuanceRetirement = await retireCanvasApplication({ marty:state.marty, organizationId: state.organizationId,
         applicationId: state.applicationId, credentialTemplateId: state.templates?.credential?.id,
@@ -2524,6 +2644,7 @@ async function main(options = {}) {
     await showVideoStep(recordedPage, 'Canvas evidence is complete', 'The learner completed a native assignment, a Classic Quiz, and the module in stock Canvas.');
 
     markActive('learner_resource_launch');
+    preparationState.owned.martyLearnerLaunchIntent=true;preparationState.persistOwned();
     const firstLaunch = await launchLearnerResource(recordedPage, learnerCanvas, fixtures, externalAssignment, martyOrigin);
     recordedPage = firstLaunch.page;
     const firstBootstrap = firstLaunch.bootstrap;
@@ -2532,10 +2653,13 @@ async function main(options = {}) {
     pass('learner_resource_launch', 'The enrolled learner launched the Deep Linked resource through standard LTI 1.3 and reached ElevenID.');
     await showVideoStep(recordedPage, 'Portable learner launch verified', 'Canvas supplied the signed learner, course, and resource context; no email identity match was used.');
 
-    const secondActivationAt = new Date().toISOString();
+    const secondActivationJobBaseline = await rosterJobBaseline(marty, organizationId, binding.id);
     markActive('nrps_roster');
-    await validateAndActivateBinding(marty, binding.id);
-    const rosterJob = await waitForLatestRosterJob(marty, organizationId, binding.id, secondActivationAt);
+    const {activation:secondActivation}=await validateAndActivateBinding(marty, binding.id);
+    const secondActivationAt=await activatedRosterJobTimestamp(marty, organizationId, platformId,
+      binding.id, secondActivation.config_version);
+    const rosterJob = await waitForLatestRosterJob(marty, organizationId, binding.id,
+      secondActivationJobBaseline, secondActivationAt);
     markActive('background_pending_claim_unsigned');
     const pendingCandidate = await waitForCandidate(marty, organizationId, binding.id, 'pending_claim');
     requireCondition(Number(rosterJob?.result?.pending_claim || 0) >= 1 || pendingCandidate, 'background_candidate_not_pending', 'Background roster synchronization did not produce an unsigned pending claim.');
@@ -2812,6 +2936,7 @@ module.exports = {
   createOauthDeveloperKey,
   createCanvasCaptureCustody,
   requireCanvasSetupMutationReconciliation,
+  reconcileCanvasPrelaunchApplicationAbsence,
   retireCanvasOAuthAuthority,
   retireCanvasOwnedReferences,
   retireCanvasCaptureSessions,
@@ -2822,6 +2947,7 @@ module.exports = {
   retireCanvasSetupFixtures,
   CanvasClient,
   CanvasSessionClient,
+  MartyClient,
   findCanvasDeveloperKey,
   waitForCanvasCourseCompletion,
   canvasLaunchErrorSummary,
@@ -2839,6 +2965,8 @@ module.exports = {
   prepareCanvasCaptureFixtures,
   validateAndActivateBinding,
   waitForLatestRosterJob,
+  rosterJobBaseline,
+  activatedRosterJobTimestamp,
   waitForCandidate,
   launchLearnerResource,
   triggerLearnerSync,
