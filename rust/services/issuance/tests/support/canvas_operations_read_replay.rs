@@ -89,6 +89,10 @@ async fn filtering_window(pool: &PgPool, router: &axum::Router) {
     // 500-row organization window of unrelated, newer jobs.
     sqlx::query("UPDATE issuance_service.canvas_evidence_sync_jobs SET created_at='2000-01-01T00:00:00Z' WHERE id='job-dead'")
         .execute(pool).await.unwrap();
+    sqlx::query("INSERT INTO issuance_service.canvas_program_bindings
+        (id,organization_id,platform_id,application_template_id,credential_template_id)
+        VALUES ('binding-foreign','org-review','platform-review','template-review','credential-template')")
+        .execute(pool).await.unwrap();
     sqlx::query("INSERT INTO issuance_service.canvas_evidence_sync_targets
         (id,organization_id,platform_id,binding_id,target_type,logical_key,application_id)
         VALUES ('target-window','org-review','platform-review','binding-foreign','background_roster','foreign-window',NULL)")
