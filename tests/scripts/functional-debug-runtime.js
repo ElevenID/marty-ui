@@ -329,15 +329,19 @@ function observeDocker(expected,read=defaultDockerRead){
   binaryMounts,executablePath,processExecutableSha256:processHash,startedAt:row.State?.StartedAt,hostPid:row.State?.Pid,
   effectiveUid,configuredRuntimeUid};
 }
+function isNativeOverlayRow(row){return ['ISSUANCE_CORE_FUNCTIONAL_OVERLAY','SCOPED_NATIVE_FUNCTIONAL_OVERLAY'].includes(row.kind);}
 function validateRuntimeObservation(row,actual,ignoreGeneration=false){
  assert.equal(actual.role,row.role);assert.equal(actual.project,row.project);
  assert.equal(actual.service,row.role);assert.equal(actual.imageId,row.imageId);assert(HASH.test(actual.containerId));
  if(row.requiredObservation)for(const [field,value]of Object.entries(row.requiredObservation)){if(ignoreGeneration&&['startedAt','hostPid'].includes(field))continue;assert.deepEqual(field==='binaryMounts'?comparableBinaryMounts(actual[field]):actual[field],field==='binaryMounts'?comparableBinaryMounts(value):value,'Unchanged role observation differs: '+row.role+'/'+field);}
  if(row.requiredContainerId)assert.equal(actual.containerId,row.requiredContainerId,'Reviewed debug container changed');
  if(!ignoreGeneration&&row.requiredStartedAt!==undefined){assert.equal(actual.startedAt,row.requiredStartedAt);assert.equal(actual.hostPid,row.requiredHostPid);}
- if(row.kind==='ISSUANCE_CORE_FUNCTIONAL_OVERLAY'){
+ if(isNativeOverlayRow(row)){
+  assert(Number.isInteger(row.requiredEffectiveUid)&&row.requiredEffectiveUid>=0,'Native overlay effective UID expectation is missing');
+  assert(Array.isArray(row.requiredBinaryMounts)&&row.requiredBinaryMounts.length>0,'Native overlay executable mount expectation is missing');
+  assert(Number.isFinite(Date.parse(row.requiredStartedAt))&&Number.isInteger(row.requiredHostPid)&&row.requiredHostPid>0,'Native overlay generation expectation is missing');
   assert.equal(actual.effectiveUid,row.requiredEffectiveUid);assert.equal(actual.configuredRuntimeUid,row.requiredEffectiveUid);
-  assert.deepEqual(comparableBinaryMounts(actual.binaryMounts),comparableBinaryMounts(row.requiredBinaryMounts),'Reviewed issuance executable mount changed');}
+  assert.deepEqual(comparableBinaryMounts(actual.binaryMounts),comparableBinaryMounts(row.requiredBinaryMounts),'Reviewed native overlay executable mount changed');}
  assert.equal(actual.running,true);assert.equal(actual.status,'running');
  assert(actual.health==='healthy'||(row.role==='canvas-sync-worker'&&actual.health===null),'Role health not established');
  assert.equal(actual.binarySha256,row.sha256,'Actual mounted executable differs from source-bound role');
@@ -380,4 +384,4 @@ function verifyFunctionalRuntime(profile,{qualification='FUNCTIONAL_ONLY',observ
   releaseQualified:false,recordingQualified:false,mixedSourceStack:true,roles,
   receiptDigests:receiptDigests(profile)};
 }
-module.exports={applyNativeOverlayRows,DOCKER_READ_TRANSPORT_SCHEMA:'marty.functional-runtime-docker-read/v1',boundJson,expectedRuntime,verifyFunctionalRuntime,produceMaintenanceRestart,DEBUG_ROLES,RETAINED_ROLES,ISSUANCE_SOURCE,ISSUANCE_CORE};
+module.exports={applyNativeOverlayRows,validateRuntimeObservation,DOCKER_READ_TRANSPORT_SCHEMA:'marty.functional-runtime-docker-read/v1',boundJson,expectedRuntime,verifyFunctionalRuntime,produceMaintenanceRestart,DEBUG_ROLES,RETAINED_ROLES,ISSUANCE_SOURCE,ISSUANCE_CORE};

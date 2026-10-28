@@ -340,3 +340,32 @@ test('native envelope rejects foreign base and supplied observation before any r
  assert.throws(()=>expectedRuntime(profile),/Foreign native-overlay base/);
  assert.throws(()=>verifyFunctionalRuntime(profile,{observe:()=>assert.fail('No supplied observations')}));
 });
+
+for(const kind of ['ISSUANCE_CORE_FUNCTIONAL_OVERLAY','SCOPED_NATIVE_FUNCTIONAL_OVERLAY']){
+ function liveOverlayContract(t){
+  const x=scopedRowsFixture(t),row=require('./functional-debug-runtime').applyNativeOverlayRows(x.expected,x.before,x.deployed,x.selection).find(item=>item.role==='gateway');
+  row.kind=kind;row.requiredEffectiveUid=10001;
+  const actual={...x.before.roles.find(item=>item.role==='gateway'),role:'gateway',service:'gateway',project:row.project,imageId:row.imageId,
+   containerId:row.requiredContainerId,startedAt:row.requiredStartedAt,hostPid:row.requiredHostPid,effectiveUid:10001,configuredRuntimeUid:10001,
+   running:true,status:'running',health:'healthy',binarySha256:row.sha256,processExecutableSha256:row.sha256,
+   executablePath:'/usr/local/bin/marty-gateway',binaryMounts:structuredClone(row.requiredBinaryMounts)};
+  return {row,actual};
+ }
+ test(kind+' live observation enforces UID and exact reviewed mount',t=>{
+  const {row,actual}=liveOverlayContract(t),validate=require('./functional-debug-runtime').validateRuntimeObservation;
+  assert.equal(validate(row,actual).effectiveUid,10001);
+  row.requiredBinaryMounts[0].source='C:/owned/runtime/marty-gateway';actual.binaryMounts[0].source='/run/desktop/mnt/host/c/owned/runtime/marty-gateway';
+  assert.equal(validate(row,actual).effectiveUid,10001);
+ });
+ for(const fault of ['uid0','configuredUid0','missingMount','writableMount','wrongSource','staleGeneration','wrongPid'])test(kind+' rejects actual '+fault,t=>{
+  const {row,actual}=liveOverlayContract(t),validate=require('./functional-debug-runtime').validateRuntimeObservation;
+  if(fault==='uid0')actual.effectiveUid=0;
+  if(fault==='configuredUid0')actual.configuredRuntimeUid=0;
+  if(fault==='missingMount')actual.binaryMounts=[];
+  if(fault==='writableMount')actual.binaryMounts[0].writable=true;
+  if(fault==='wrongSource')actual.binaryMounts[0].source='/foreign/marty-gateway';
+  if(fault==='staleGeneration')actual.startedAt='2026-10-26T00:00:00Z';
+  if(fault==='wrongPid')actual.hostPid++;
+  assert.throws(()=>validate(row,actual));
+ });
+}
