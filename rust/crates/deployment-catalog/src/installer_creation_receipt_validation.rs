@@ -6,7 +6,8 @@
 
 use crate::{
     installer_creation_identity::{
-        observe, observe_operator, ObservedDirectory, ObservedFile, CREDENTIAL_RECEIPT, RECEIPT,
+        observe, observe_operator, ObservedDirectory, ObservedFile, APPLICATION_RECEIPT,
+        CREDENTIAL_RECEIPT, RECEIPT,
     },
     installer_purge_host::{HostIdentity, Kind},
     installer_state::LockedInspection,
@@ -14,6 +15,7 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
+    collections::BTreeMap,
     ffi::CString,
     fs::File,
     io::Read,
@@ -155,6 +157,7 @@ struct Receipt {
 }
 /// Private metadata only. This observation is point-in-time and authorizes no
 /// deletion; a complete inventory and separate coordinator are still required.
+#[derive(PartialEq, Eq)]
 pub(crate) struct ObservedInitialCreation {
     pub root: ObservedDirectory,
     pub evidence: ObservedDirectory,
@@ -278,6 +281,7 @@ struct CredentialReceipt {
 }
 /// Current local identity evidence only. Password/scalar contents are never
 /// read. This does not inventory the contents of the secrets directory.
+#[derive(PartialEq, Eq)]
 pub(crate) struct ObservedCredentialCreation {
     pub initial: ObservedInitialCreation,
     pub secrets: ObservedDirectory,
@@ -364,6 +368,118 @@ pub(crate) fn inspect_credentials(
         Ok(Some(observed)) => CredentialInspectionOutcome::MatchedLocalReceipt(Box::new(observed)),
         Ok(None) => CredentialInspectionOutcome::Missing,
         Err(()) => CredentialInspectionOutcome::Unusable,
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawApplicationRoots {
+    state: RawDirectory,
+    backups: RawDirectory,
+    openbao_exports: RawDirectory,
+    openbao_snapshot_identity: RawDirectory,
+}
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ApplicationReceipt {
+    schema: String,
+    installation_id: uuid::Uuid,
+    source_sha: String,
+    roots: RawApplicationRoots,
+    local_historical_evidence: bool,
+    deletion_authorized: bool,
+}
+/// Four fixed root identities only; their current descendants are left to the
+/// complete tree observer after writers have been stopped.
+pub(crate) struct ObservedApplicationCreation {
+    pub credentials: ObservedCredentialCreation,
+    pub roots: BTreeMap<&'static str, ObservedDirectory>,
+    pub receipt_sha256: String,
+}
+pub(crate) enum ApplicationInspectionOutcome {
+    Missing,
+    Unusable,
+    MatchedLocalReceipt(Box<ObservedApplicationCreation>),
+}
+fn verify_application(
+    locked: &LockedInspection,
+    installation: &Path,
+) -> Result<Option<ObservedApplicationCreation>> {
+    let Some(credentials) = verify_credentials(locked, installation)? else {
+        return Ok(None);
+    };
+    let root = locked.installation_directory();
+    let evidence = child(root, "evidence", libc::O_RDONLY | libc::O_DIRECTORY)?.ok_or(())?;
+    let Some(record) = child(&evidence, APPLICATION_RECEIPT, libc::O_PATH)? else {
+        return Ok(None);
+    };
+    let bytes = read_regular(&record)?;
+    let receipt: ApplicationReceipt = serde_json::from_slice(&bytes).map_err(|_| ())?;
+    if serde_json::to_vec(&receipt).map_err(|_| ())? != bytes
+        || receipt.schema != "elevenid.installer-created-application-storage/v1"
+        || receipt.installation_id != locked.journal().installation_id()
+        || receipt.source_sha != locked.journal().identity().source_sha
+        || !receipt.local_historical_evidence
+        || receipt.deletion_authorized
+        || observe(&evidence).map_err(|_| ())? != credentials.initial.evidence
+    {
+        return Err(());
+    }
+    let mut held = Vec::new();
+    for (name, expected) in [
+        ("state", &receipt.roots.state),
+        ("backups", &receipt.roots.backups),
+        ("openbao-exports", &receipt.roots.openbao_exports),
+        (
+            "openbao-snapshot-identity",
+            &receipt.roots.openbao_snapshot_identity,
+        ),
+    ] {
+        let file = child(root, name, libc::O_RDONLY | libc::O_DIRECTORY)?.ok_or(())?;
+        let observed = observe(&file).map_err(|_| ())?;
+        if !expected.matches(&observed) || observed.mount_id != credentials.initial.root.mount_id {
+            return Err(());
+        }
+        held.push((name, observed, file));
+    }
+    let mut roots = BTreeMap::new();
+    for (name, observed, file) in held {
+        let latest = child(root, name, libc::O_RDONLY | libc::O_DIRECTORY)?.ok_or(())?;
+        if observe(&file).map_err(|_| ())? != observed
+            || observe(&latest).map_err(|_| ())? != observed
+        {
+            return Err(());
+        }
+        roots.insert(name, observed);
+    }
+    let latest_record = child(&evidence, APPLICATION_RECEIPT, libc::O_PATH)?.ok_or(())?;
+    let before = record.metadata().map_err(|_| ())?;
+    let after = latest_record.metadata().map_err(|_| ())?;
+    if before.dev() != after.dev()
+        || before.ino() != after.ino()
+        || read_regular(&latest_record)? != bytes
+        || verify_credentials(locked, installation)?.ok_or(())? != credentials
+    {
+        return Err(());
+    }
+    Ok(Some(ObservedApplicationCreation {
+        credentials,
+        roots,
+        receipt_sha256: format!("{:x}", Sha256::digest(&bytes)),
+    }))
+}
+pub(crate) fn inspect_application(
+    locked: &LockedInspection,
+    installation: &Path,
+) -> ApplicationInspectionOutcome {
+    let result = verify_application(locked, installation);
+    if locked.require_path_binding(installation).is_err() || locked.require_unchanged().is_err() {
+        return ApplicationInspectionOutcome::Unusable;
+    }
+    match result {
+        Ok(Some(observed)) => ApplicationInspectionOutcome::MatchedLocalReceipt(Box::new(observed)),
+        Ok(None) => ApplicationInspectionOutcome::Missing,
+        Err(()) => ApplicationInspectionOutcome::Unusable,
     }
 }
 
@@ -599,5 +715,96 @@ mod tests {
             CredentialInspectionOutcome::Missing
         ));
         assert!(!receipt.exists());
+    }
+    fn application_fixture() -> (tempfile::TempDir, PathBuf, InstallerState) {
+        let (parent, path, mut state) = credential_fixture();
+        state.prepare_application_storage().unwrap();
+        state
+            .persist_application_storage_creation_receipt(&path)
+            .unwrap();
+        (parent, path, state)
+    }
+    fn inspect_application_state(
+        state: &InstallerState,
+        path: &Path,
+    ) -> ApplicationInspectionOutcome {
+        state
+            .with_inspection(|locked| Ok(inspect_application(locked, path)))
+            .unwrap()
+    }
+    #[test]
+    fn application_receipt_matches_four_roots_without_reading_descendants() {
+        let (_parent, path, state) = application_fixture();
+        fs::write(
+            path.join("backups/private-child-canary"),
+            b"private-content-canary",
+        )
+        .unwrap();
+        let before = fs::read(path.join("evidence").join(APPLICATION_RECEIPT)).unwrap();
+        let ApplicationInspectionOutcome::MatchedLocalReceipt(observed) =
+            inspect_application_state(&state, &path)
+        else {
+            panic!("expected local application evidence")
+        };
+        assert_eq!(observed.roots.len(), 4);
+        assert_eq!(
+            observed.receipt_sha256,
+            format!("{:x}", Sha256::digest(&before))
+        );
+        for (name, identity) in &observed.roots {
+            assert_eq!(
+                *identity,
+                observe(&File::open(path.join(name)).unwrap()).unwrap()
+            );
+            assert_eq!(
+                identity.mount_id,
+                observed.credentials.initial.root.mount_id
+            );
+        }
+        assert_eq!(
+            fs::read(path.join("backups/private-child-canary")).unwrap(),
+            b"private-content-canary"
+        );
+        assert_eq!(
+            fs::read(path.join("evidence").join(APPLICATION_RECEIPT)).unwrap(),
+            before
+        );
+    }
+    #[test]
+    fn application_receipt_refuses_changed_roots_and_changed_prior_evidence() {
+        let (_parent, path, state) = application_fixture();
+        fs::rename(path.join("backups"), path.join("saved-backups")).unwrap();
+        fs::create_dir(path.join("backups")).unwrap();
+        fs::set_permissions(path.join("backups"), fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(matches!(
+            inspect_application_state(&state, &path),
+            ApplicationInspectionOutcome::Unusable
+        ));
+        let (_parent, path, state) = application_fixture();
+        fs::write(
+            path.join("evidence").join(CREDENTIAL_RECEIPT),
+            b"private-invalid-canary",
+        )
+        .unwrap();
+        assert!(matches!(
+            inspect_application_state(&state, &path),
+            ApplicationInspectionOutcome::Unusable
+        ));
+    }
+    #[test]
+    fn application_missing_and_fifo_receipts_do_not_grant_scope() {
+        let (_parent, path, state) = application_fixture();
+        let receipt = path.join("evidence").join(APPLICATION_RECEIPT);
+        fs::remove_file(&receipt).unwrap();
+        assert!(matches!(
+            inspect_application_state(&state, &path),
+            ApplicationInspectionOutcome::Missing
+        ));
+        let name = CString::new(receipt.as_os_str().as_encoded_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+        assert!(matches!(
+            inspect_application_state(&state, &path),
+            ApplicationInspectionOutcome::Unusable
+        ));
     }
 }
