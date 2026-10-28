@@ -369,3 +369,40 @@ for(const kind of ['ISSUANCE_CORE_FUNCTIONAL_OVERLAY','SCOPED_NATIVE_FUNCTIONAL_
   assert.throws(()=>validate(row,actual));
  });
 }
+
+function unqualifiedPreimageFixture(t){
+ const x=scopedRowsFixture(t),raw={releaseQualified:false,rows:x.before.roles.map(row=>{
+  const actual=x.deployed.roles[row.role];
+  return {...row,role:row.role,service:row.role,running:true,status:'running',binarySha256:row.sha256,
+   ...(actual?{...actual,executablePath:actual.processExecutablePath,binarySha256:actual.mountedBinarySha256,binaryMounts:[actual.binaryMount]}:{})};
+ })};
+ const disposition={phase:'DEPLOYED_UNQUALIFIED_ETAG_GATE_FAILED',releaseQualified:false,recordingQualified:false,
+  headerGateFailure:{authOutcomeKnown:true,authCleanupComplete:true,runtimeRestartPerformed:false}};
+ return {...x,raw,disposition};
+}
+test('failed API gate yields only observed preimage rows; signer successor preserves gateway and other20',t=>{
+ const {expectedUnqualifiedNativePreimage,applyNativeOverlayRows,validateRuntimeObservation}=require('./functional-debug-runtime');
+ const x=unqualifiedPreimageFixture(t),rows=expectedUnqualifiedNativePreimage(x.expected,x.before,x.raw,x.disposition,x.selection);
+ assert(Array.isArray(rows));assert.equal(rows.length,22);assert.equal(rows.schema,undefined);
+ const before={...x.before,roles:rows.map(row=>validateRuntimeObservation(row,x.raw.rows.find(actual=>actual.role===row.role)))};
+ const signer=structuredClone(x.deployed.roles['signing-keys']);signer.containerId=crypto.createHash('sha256').update('header-successor:signing-keys').digest('hex');signer.startedAt='2026-10-26T03:00:00Z';signer.hostPid++;
+ signer.processExecutableSha256=H('9');signer.mountedBinarySha256=H('9');signer.binaryMount.source+='-successor';
+ const result=applyNativeOverlayRows(rows,before,{roles:{'signing-keys':signer}},
+  {...x.selection,roles:['signing-keys'],source:'9b1efd21163dadeff7cf1ced5fe47c5e046d2121',hashes:{'marty-signing-keys':H('9')}});
+ assert.equal(result.find(row=>row.role==='signing-keys').sha256,H('9'));
+ for(const row of result.filter(row=>row.role!=='signing-keys')){
+  const prior=before.roles.find(old=>old.role===row.role);assert.equal(row.source,prior.source);
+  assert.equal(row.requiredObservation.containerId,prior.containerId);assert.equal(row.requiredObservation.hostPid,prior.hostPid);
+ }
+ assert.equal(result.find(row=>row.role==='gateway').source,x.selection.source);
+});
+for(const fault of ['promotedFailure','cleanup','missingRole','gatewayGeneration','other20Pid','writableMount'])test('unqualified preimage refuses '+fault,t=>{
+ const {expectedUnqualifiedNativePreimage}=require('./functional-debug-runtime'),x=unqualifiedPreimageFixture(t);
+ if(fault==='promotedFailure')x.disposition.phase='APPLIED_FUNCTIONAL_ONLY';
+ if(fault==='cleanup')x.disposition.headerGateFailure.authCleanupComplete=false;
+ if(fault==='missingRole')x.raw.rows.pop();
+ if(fault==='gatewayGeneration')x.raw.rows.find(row=>row.role==='gateway').startedAt=x.before.roles.find(row=>row.role==='gateway').startedAt;
+ if(fault==='other20Pid')x.raw.rows.find(row=>row.role==='auth').hostPid++;
+ if(fault==='writableMount')x.raw.rows.find(row=>row.role==='gateway').binaryMounts[0].writable=true;
+ assert.throws(()=>expectedUnqualifiedNativePreimage(x.expected,x.before,x.raw,x.disposition,x.selection));
+});

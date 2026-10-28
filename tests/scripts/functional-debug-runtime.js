@@ -179,6 +179,31 @@ const D02_NATIVE=Object.freeze({source:'3b862bebdd2cc0707d9a38f6df55db198b6be417
  prepared:'2e618ca73c38ec34758b1197f69232ab4a6829151233cc2c0ff576f80bc1a152',artifacts:'4361e285bbe45003cd4995e4ca224649d8749b10d2c7e5f866a32596502e6abd',
  compatibility:'d515a42d7c50c5809fbe6fd28c4032f9a46372320e258392191e7229c4bea699',compatibilityPlan:'312f63030f5869b22bdd2bda4eff17e07c2767e4560302981f1e40a64dec0b0b',
  roles:Object.freeze({'signing-keys':'marty-signing-keys',gateway:'marty-gateway'})});
+// Expected rows only: a failed API gate can establish an observed preimage,
+// never a qualified binding. The enclosing profile must bind these documents
+// to reviewed immutable refs before using the successor's actual readback.
+function expectedUnqualifiedNativePreimage(expected,before,raw,disposition,selection){
+ assert.equal(disposition.phase,'DEPLOYED_UNQUALIFIED_ETAG_GATE_FAILED');
+ assert.equal(disposition.releaseQualified,false);assert.equal(disposition.recordingQualified,false);
+ assert.equal(disposition.headerGateFailure?.authOutcomeKnown,true);
+ assert.equal(disposition.headerGateFailure?.authCleanupComplete,true);
+ assert.equal(disposition.headerGateFailure?.runtimeRestartPerformed,false);
+ assert.equal(selection.source,D02_NATIVE.source);assert.equal(selection.coreSource,D02_NATIVE.core);
+ assert.deepEqual([...selection.roles].sort(),Object.keys(D02_NATIVE.roles).sort());
+ assert.equal(selection.kind,'SCOPED_NATIVE_FUNCTIONAL_OVERLAY');
+ assert.equal(raw.releaseQualified,false);assert.equal(raw.rows.length,22);
+ assert.equal(new Set(raw.rows.map(row=>row.role)).size,22);
+ assert.equal(new Set(raw.rows.map(row=>row.containerId)).size,22);
+ assert.deepEqual(raw.rows.map(row=>row.role).sort(),expected.map(row=>row.role).sort());
+ const deployed={roles:Object.fromEntries(selection.roles.map(role=>{
+  const actual=raw.rows.find(row=>row.role===role);assert.equal(actual.binaryMounts.length,1);
+  return [role,{...actual,processExecutablePath:actual.executablePath,
+   mountedBinarySha256:actual.binarySha256,binaryMount:actual.binaryMounts[0]}];
+ }))};
+ const rows=applyNativeOverlayRows(expected,before,deployed,selection);
+ for(const row of rows)validateRuntimeObservation(row,raw.rows.find(actual=>actual.role===row.role));
+ return rows;
+}
 function expectedScopedNativeOverlay(profile){
  assert.equal(profile.scope,'FUNCTIONAL_ONLY');assert.equal(profile.releaseQualified,false);assert.equal(profile.recordingQualified,false);
  assert.deepEqual(Object.keys(profile).sort(),['baseProfile','nativeOverlay','recordingQualified','releaseQualified','schema','scope']);
@@ -384,4 +409,4 @@ function verifyFunctionalRuntime(profile,{qualification='FUNCTIONAL_ONLY',observ
   releaseQualified:false,recordingQualified:false,mixedSourceStack:true,roles,
   receiptDigests:receiptDigests(profile)};
 }
-module.exports={applyNativeOverlayRows,validateRuntimeObservation,observeDocker,DOCKER_READ_TRANSPORT_SCHEMA:'marty.functional-runtime-docker-read/v1',boundJson,expectedRuntime,verifyFunctionalRuntime,produceMaintenanceRestart,DEBUG_ROLES,RETAINED_ROLES,ISSUANCE_SOURCE,ISSUANCE_CORE};
+module.exports={expectedUnqualifiedNativePreimage,applyNativeOverlayRows,validateRuntimeObservation,observeDocker,DOCKER_READ_TRANSPORT_SCHEMA:'marty.functional-runtime-docker-read/v1',boundJson,expectedRuntime,verifyFunctionalRuntime,produceMaintenanceRestart,DEBUG_ROLES,RETAINED_ROLES,ISSUANCE_SOURCE,ISSUANCE_CORE};
