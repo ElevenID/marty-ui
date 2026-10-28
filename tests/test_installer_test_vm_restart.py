@@ -92,6 +92,19 @@ class Records(unittest.TestCase):
                 self.assertFalse(restart._original_still_live(
                     os.getpid(), current_start, str(uuid.uuid4())))
 
+    def test_real_self_descriptor_census_keeps_enumerator_open(self):
+        with tempfile.TemporaryDirectory() as directory:
+            disk = Path(directory) / "disk.qcow2"
+            disk.write_bytes(b"synthetic-disk")
+            proc = Path("/proc") / str(os.getpid())
+            with disk.open("rb") as held:
+                restart._scan_descriptors(proc, disk.stat())
+                self.assertEqual(os.fstat(held.fileno()).st_ino, disk.stat().st_ino)
+            with disk.open("r+b") as held:
+                with self.assertRaisesRegex(ValueError, "live process holder"):
+                    restart._scan_descriptors(proc, disk.stat())
+                self.assertEqual(os.fstat(held.fileno()).st_ino, disk.stat().st_ino)
+
     def test_mutable_disk_digest_is_stable_and_bounded(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "disk.qcow2"

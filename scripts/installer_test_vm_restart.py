@@ -140,6 +140,27 @@ def _original_still_live(old_pid: int, old_start: str, old_boot: str) -> bool:
     return False
 
 
+def _scan_descriptors(proc: Path, disk: os.stat_result) -> None:
+    # Keep the scandir DIR descriptor open while statting each yielded entry.
+    # Listing it first closes /proc/self/fd's own enumeration descriptor.
+    count = 0
+    with os.scandir(proc / "fd") as descriptors:
+        for descriptor in descriptors:
+            count += 1
+            release.require(count <= 4096, "VM descriptor census oversized")
+            try:
+                held = descriptor.stat()
+                if (held.st_dev, held.st_ino) == (disk.st_dev, disk.st_ino):
+                    release.require(
+                        int(proc.name) == os.getpid()
+                        and fcntl.fcntl(int(descriptor.name), fcntl.F_GETFL)
+                        & os.O_ACCMODE == os.O_RDONLY,
+                        "VM disk has a live process holder")
+            except FileNotFoundError:
+                release.require(not proc.exists(), "VM descriptor inventory changed")
+                break
+
+
 def _no_live_owner(uid: int, old_pid: int, old_start: str, old_boot: str,
                    runtime_dir: Path, port: int) -> None:
     # PID absence alone does not prove shutdown. Refuse any actor under the
@@ -162,22 +183,7 @@ def _no_live_owner(uid: int, old_pid: int, old_start: str, old_boot: str,
             start = _process_start(proc)
             release.require(not _actor_is_uid(proc, uid),
                             "VM runtime identity has an existing process")
-            descriptors = list((proc / "fd").iterdir())
-            release.require(len(descriptors) <= 4096,
-                            "VM descriptor census oversized")
-            for descriptor in descriptors:
-                try:
-                    held = descriptor.stat()
-                    if (held.st_dev, held.st_ino) == (disk.st_dev, disk.st_ino):
-                        release.require(
-                            int(proc.name) == os.getpid()
-                            and fcntl.fcntl(int(descriptor.name), fcntl.F_GETFL)
-                            & os.O_ACCMODE == os.O_RDONLY,
-                            "VM disk has a live process holder")
-                except FileNotFoundError:
-                    release.require(not proc.exists(),
-                                    "VM descriptor inventory changed")
-                    break
+            _scan_descriptors(proc, disk)
             release.require(_process_start(proc) == start,
                             "VM process changed during inventory")
         except FileNotFoundError:
