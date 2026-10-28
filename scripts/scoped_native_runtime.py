@@ -83,9 +83,18 @@ def durable_barrier(proof):
             and proof["parentDirectory"].get("synced") is True)
 
 
-def selected_sources(plan):
-    require(plan.get("uiRevision") == UI_REVISION and plan.get("coreRevision") == CORE_REVISION, "REVIEWED_UI_AND_LOCKED_CORE_REQUIRED")
-    require(plan.get("roleBinaries") == ROLE_BINARIES, "EXACT_THREE_ROLE_SCOPE_REQUIRED")
+def selected_sources(plan, profile=None):
+    if profile is None:
+        ui_revision, roles = UI_REVISION, ROLE_BINARIES
+    else:
+        import scoped_native_profiles
+        selected = scoped_native_profiles.reviewed_profile(profile)
+        require(plan.get("buildProfile") == selected.name
+                and plan.get("profileSourceSha256") == sha(Path(scoped_native_profiles.__file__)),
+                "EXACT_REVIEWED_PROFILE_SOURCE_REQUIRED")
+        ui_revision, roles = selected.ui_revision, dict(selected.roles)
+    require(plan.get("uiRevision") == ui_revision and plan.get("coreRevision") == CORE_REVISION, "REVIEWED_UI_AND_LOCKED_CORE_REQUIRED")
+    require(plan.get("roleBinaries") == roles, "EXACT_THREE_ROLE_SCOPE_REQUIRED" if profile is None else "EXACT_SIGNING_CAS_ROLE_SCOPE_REQUIRED")
     require(plan.get("releaseQualified") is False and plan.get("recordingQualified") is False, "FUNCTIONAL_SCOPE_ONLY")
 
 def daemon_source(value):
