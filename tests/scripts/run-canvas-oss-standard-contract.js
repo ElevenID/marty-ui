@@ -238,6 +238,11 @@ function requireEnv(name) {
 function requireSecretFile(name) {
   requireCondition(!process.env[name], 'secret_transport_invalid', `${name} must not be supplied through the process environment.`);
   const filePath = String(process.env[`${name}_FILE`] || '').trim();
+  if (ownedNativeBoundary) {
+    requireCondition(path.isAbsolute(filePath), 'secret_file_missing', `${name} owned host secret file is missing.`);
+    try { return readBoundedSecretFile(filePath,{root:ownedNativeBoundary.secretRoot,maxBytes:1024*1024}).value; }
+    catch { fail('secret_file_unreadable', `${name} owned host secret is unreadable.`); }
+  }
   requireCondition(
     filePath.startsWith('/run/secrets/') && !filePath.includes('/../'),
     'secret_file_missing',
@@ -252,6 +257,36 @@ function requireSecretFile(name) {
   }
   requireCondition(value.length > 0, 'secret_file_empty', `${name} Compose secret is empty.`);
   return value;
+}
+
+let ownedNativeBoundary = null;
+function requireOwnedNativeExecutionBoundary(evidence) {
+  requireCondition(!ownedNativeBoundary,'execution_boundary_invalid','Owned host boundary may be selected once.');
+  requireCondition(process.platform==='win32'&&!fs.existsSync('/.dockerenv')&&process.connected,
+    'execution_boundary_invalid','Owned host functional run requires Windows and recorder IPC.');
+  requireCondition(process.env.RECORD_VIDEO==='0'&&process.env.CANVAS_OSS_EXECUTION_BOUNDARY==='local_owned_windows_functional'
+    &&process.env.CANVAS_OSS_SECRET_TRANSPORT==='owned_host_private_files',
+    'execution_boundary_invalid','Owned host functional boundary is incomplete.');
+  requireCondition(evidence?.functionalRuntimeBinding?.scope==='FUNCTIONAL_ONLY'
+    &&evidence?.ownedWalletBinding?.kind==='OWNED_NATIVE_WALLET_V1'
+    &&evidence.ownedWalletBinding.scope==='FUNCTIONAL_ONLY'
+    &&evidence.ownedWalletBinding.releaseQualified===false
+    &&evidence.ownedWalletBinding.recordingQualified===false
+    &&evidence.ownedWalletBinding.origin===process.env.MARTY_TEST_WALLET_ORIGIN,
+    'execution_boundary_invalid','Recorder-owned runtime and wallet IPC bindings are required.');
+  const secretRoot=path.resolve(process.env.CANVAS_OSS_OWNED_SECRET_ROOT||'');
+  const privateRoot=path.join(require('node:os').homedir(),'.codex','private');
+  const privateRelative=path.relative(privateRoot,secretRoot);
+  requireCondition(path.isAbsolute(process.env.CANVAS_OSS_OWNED_SECRET_ROOT||'')
+    &&privateRelative&&!privateRelative.startsWith('..')&&!path.isAbsolute(privateRelative)
+    &&fs.realpathSync(secretRoot)===secretRoot&&!fs.lstatSync(secretRoot).isSymbolicLink(),
+    'secret_transport_invalid','Owned host secret root must be a private directory.');
+  requireCondition(/^[a-f0-9]{40}$/.test(process.env.CANVAS_OSS_DRIVER_SOURCE_SHA||''),
+    'contract_source_invalid','Owned host driver source SHA is invalid.');
+  ownedNativeBoundary=Object.freeze({secretRoot});
+  return Object.freeze({boundary:'local_owned_windows_functional',containerized:false,host_browser_processes:true,
+    secret_transport:'owned_host_private_files',release_qualified:false,recording_qualified:false,
+    source_sha:process.env.CANVAS_OSS_DRIVER_SOURCE_SHA});
 }
 
 function requireComposeExecutionBoundary() {
@@ -2702,6 +2737,7 @@ module.exports = {
   resolveOid4vciEndpoints,
   resolveProofNonce,
   requireComposeExecutionBoundary,
+  requireOwnedNativeExecutionBoundary,
   requireSecretFile,
   responseJson,
   fetchWithTimeout,

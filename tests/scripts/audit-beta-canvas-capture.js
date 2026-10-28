@@ -33,7 +33,9 @@ function localOverlayBinding(env = process.env) {
 
 function localFunctionalRuntimeBinding(env = process.env) {
   if (!env.DEMO_LOCAL_FUNCTIONAL_RUNTIME_RECEIPT) return null;
-  assert.equal(env.DEMO_LOCAL_FUNCTIONAL_RUNTIME_RECEIPT,'/capture-prerequisites/functional-runtime.json');
+  if(env.CANVAS_OSS_EXECUTION_BOUNDARY==='local_owned_windows_functional')
+    assert.ok(path.isAbsolute(env.DEMO_LOCAL_FUNCTIONAL_RUNTIME_RECEIPT));
+  else assert.equal(env.DEMO_LOCAL_FUNCTIONAL_RUNTIME_RECEIPT,'/capture-prerequisites/functional-runtime.json');
   assert.equal(env.RECORD_VIDEO,'0','Mixed runtime cannot qualify a recording');
   const helper=env.DEMO_EXECUTION_EVIDENCE_HELPER;assert(helper);
   const {loadFunctionalRuntimeObservation}=require(path.join(path.dirname(helper),'canvasNativeRuntime.js'));
@@ -51,23 +53,30 @@ async function main() {
     'Browser admin and Canvas service actor must select the same organization');
   assert.ok(!process.env.NODE_TLS_REJECT_UNAUTHORIZED || process.env.NODE_TLS_REJECT_UNAUTHORIZED === '1');
   assert.ok(!process.env.MARTY_UI_CANDIDATE_DIST && process.env.BETA_LOCAL_PROXY !== '1');
-  const executionBoundary = stock.requireComposeExecutionBoundary();
-  // Existing governed administrator IDs are file-backed; only the fresh learner
-  // namespace must be synthetic. Their identity is established by actual login/readback.
-  for (const key of ['CANVAS_OSS_ADMIN_EMAIL','CANVAS_CAPTURE_ADMIN_EMAIL']) {
-    const value=stock.requireSecretFile(key);assert(value.length>0&&value.length<=254&&!/[\x00-\x1f\x7f]/.test(value));
-  }
-  assert.match(stock.requireSecretFile('CANVAS_OSS_LEARNER_EMAIL'),/^[a-z0-9._+-]+@(?:marty\.demo|[a-z0-9.-]+\.test)$/i);
   assert.ok(process.connected, 'Canvas capture requires recorder-owned live IPC');
   const helper = process.env.DEMO_EXECUTION_EVIDENCE_HELPER;
   assert.equal(createHash('sha256').update(fs.readFileSync(helper)).digest('hex'),
     process.env.DEMO_EXECUTION_EVIDENCE_HELPER_SHA256);
   const evidence = await require(helper).createLiveEvidenceClient();
+  const nativeFunctional=process.env.CANVAS_OSS_EXECUTION_BOUNDARY==='local_owned_windows_functional';
+  let executionBoundary,overlay,functionalRuntime;
+  try {
+    executionBoundary = nativeFunctional
+      ? stock.requireOwnedNativeExecutionBoundary(evidence) : stock.requireComposeExecutionBoundary();
+    // Existing governed administrator IDs are file-backed; only the fresh learner
+    // namespace must be synthetic. Their identity is established by actual login/readback.
+    for (const key of ['CANVAS_OSS_ADMIN_EMAIL','CANVAS_CAPTURE_ADMIN_EMAIL']) {
+      const value=stock.requireSecretFile(key);assert(value.length>0&&value.length<=254&&!/[\x00-\x1f\x7f]/.test(value));
+    }
+    assert.match(stock.requireSecretFile('CANVAS_OSS_LEARNER_EMAIL'),/^[a-z0-9._+-]+@(?:marty\.demo|[a-z0-9.-]+\.test)$/i);
+    overlay = localOverlayBinding();functionalRuntime = localFunctionalRuntimeBinding();
+    assert.equal(Boolean(evidence.ownedWalletBinding),nativeFunctional,
+      'Owned native wallet is required only for the explicit Windows functional boundary');
+    if(nativeFunctional)assert.ok(functionalRuntime,'Owned native Canvas requires exact functional runtime observation');
+    assert(!(overlay&&functionalRuntime),'Select one local runtime mode');
+  } catch(error) { evidence.close();throw error; }
   const dir = path.resolve(process.env.DEMO_ARTIFACT_DIR);
   const recording = process.env.RECORD_VIDEO === '1';
-  const overlay = localOverlayBinding();
-  const functionalRuntime = localFunctionalRuntimeBinding();
-  assert(!(overlay&&functionalRuntime),'Select one local runtime mode');
   const report = { scenario, startedAt: new Date().toISOString(), status: 'FAIL',
     executionBoundary,
     releaseReady: false, captureClassification: 'FIRST_PARTY_BROWSER_RUST_WALLET',
@@ -102,6 +111,7 @@ async function main() {
       delete report.localOverlayBinding.baselineSourceIds;
     }
     if (functionalRuntime) report.localFunctionalRuntime=functionalRuntime;
+    if (nativeFunctional) report.localFunctionalWallet=evidence.ownedWalletBinding;
     // This exact recorder checkout is already bound by the parent and helper
     // handshake. The imported report remains a prerequisite, never an assertion.
     const localEngineering = process.env.CANVAS_LOCAL_ENGINEERING_PREREQUISITE === '1';
@@ -177,7 +187,8 @@ async function main() {
       'Canvas admin must select the capture organization');
     phase = 'wallet-session';
     const walletContext = await recordContext();
-    session = await acquireWalletSession(walletContext, { origin: 'http://127.0.0.1:8787', runId: actual.runId });
+    session = await acquireWalletSession(walletContext, { origin: nativeFunctional
+      ? evidence.ownedWalletBinding.origin : 'http://127.0.0.1:8787', runId: actual.runId });
     report.walletSession = session.evidence;
     const walletPage = await walletContext.newPage();
     evidence.bindPage(walletPage);
