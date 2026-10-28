@@ -84,6 +84,21 @@ pub struct ValidatedBundle {
     pub image_lock_sha256: String,
     pub runtime_observed: bool,
 }
+/// Private expected closure from the already validated bundle marker. This is
+/// path-based content evidence, not inode/mount provenance or purge authority.
+/// The caller must authenticate `expected_inventory_sha256` independently.
+#[allow(dead_code)] // Dormant until receipt-bound auxiliary inventory integration.
+pub(crate) struct ValidatedBundleInventory {
+    pub coverage: &'static str,
+    pub inventory_sha256: String,
+    pub archive_sha256: String,
+    pub marker_sha256: String,
+    pub image_lock_sha256: String,
+    pub files: BTreeMap<String, String>,
+    pub directories: BTreeSet<String>,
+    pub not_atomic_snapshot: bool,
+    pub deletion_eligible: bool,
+}
 fn valid_path(path: &str, root: bool) -> bool {
     (root && path.is_empty())
         || (!path.is_empty()
@@ -208,11 +223,11 @@ impl Observed {
     }
 }
 
-pub fn validate_bundle(
+fn validate_bundle_inner(
     root: &Path,
     inventory: &Inventory,
     external_image_lock_bytes: &[u8],
-) -> Result<ValidatedBundle> {
+) -> Result<(ValidatedBundle, Marker)> {
     crate::installer_runtime::private_parent(root.parent().ok_or("bundle parent missing")?)?;
     require(
         root.is_absolute() && root.canonicalize().map_err(|_| "bundle root unavailable")? == root,
@@ -315,13 +330,64 @@ pub fn validate_bundle(
         observed.files.contains_key("docker-compose.yml"),
         "rendered Compose file missing",
     )?;
-    Ok(ValidatedBundle {
+    let summary = ValidatedBundle {
         schema: "elevenid.installer-bundle-validation/v1",
         file_count: observed.files.len() + 1,
         directory_count: observed.directories.len(),
         marker_sha256: marker_sha,
         image_lock_sha256: installer_release::sha256(external_image_lock_bytes),
         runtime_observed: false,
+    };
+    Ok((summary, marker))
+}
+
+pub fn validate_bundle(
+    root: &Path,
+    inventory: &Inventory,
+    external_image_lock_bytes: &[u8],
+) -> Result<ValidatedBundle> {
+    validate_bundle_inner(root, inventory, external_image_lock_bytes).map(|(summary, _)| summary)
+}
+
+/// Reuse the existing full marker/content validation and expose its exact
+/// expected file/directory set to a future descriptor-bound observer. The
+/// digest argument is an assertion from an external signature/ledger verifier;
+/// this function only checks that the supplied bytes match it.
+#[allow(dead_code)] // Dormant until receipt-bound auxiliary inventory integration.
+pub(crate) fn validate_bundle_inventory(
+    root: &Path,
+    authenticated_inventory_bytes: &[u8],
+    expected_inventory_sha256: &str,
+    external_image_lock_bytes: &[u8],
+) -> Result<ValidatedBundleInventory> {
+    let inventory_digest = installer_release::sha256(authenticated_inventory_bytes);
+    require(
+        expected_inventory_sha256 == format!("sha256:{inventory_digest}"),
+        "bundle inventory digest differs from authenticated anchor",
+    )?;
+    let inventory = installer_release::parse_inventory(authenticated_inventory_bytes)?;
+    let archive_sha256 = inventory
+        .artifact("prepared-selfhost-bundle.zip")?
+        .sha256
+        .clone();
+    let (summary, marker) = validate_bundle_inner(root, &inventory, external_image_lock_bytes)?;
+    let mut files = marker.files;
+    require(
+        files
+            .insert(MARKER.into(), summary.marker_sha256.clone())
+            .is_none(),
+        "bundle marker is duplicated",
+    )?;
+    Ok(ValidatedBundleInventory {
+        coverage: "validated_bundle_subtree_only",
+        inventory_sha256: expected_inventory_sha256.to_owned(),
+        archive_sha256,
+        marker_sha256: summary.marker_sha256,
+        image_lock_sha256: summary.image_lock_sha256,
+        files,
+        directories: marker.directories.into_iter().collect(),
+        not_atomic_snapshot: true,
+        deletion_eligible: false,
     })
 }
 
@@ -336,7 +402,13 @@ mod tests {
         fs::write(&path, bytes).unwrap();
         fs::set_permissions(&path, fs::Permissions::from_mode(mode)).unwrap();
     }
-    fn fixture() -> (tempfile::TempDir, std::path::PathBuf, Inventory, Vec<u8>) {
+    fn fixture() -> (
+        tempfile::TempDir,
+        std::path::PathBuf,
+        Inventory,
+        Vec<u8>,
+        Vec<u8>,
+    ) {
         let parent = tempfile::tempdir().unwrap();
         fs::set_permissions(parent.path(), fs::Permissions::from_mode(0o700)).unwrap();
         let root = parent.path().join("selfhost-prepared");
@@ -367,16 +439,18 @@ mod tests {
         let inv = json!({"schema":"elevenid.installer-inventory/v1","repository":installer_release::REPOSITORY,
           "source_sha":"a".repeat(40),"release_tag":"v1.2.3","platform":"linux/amd64","build_run_id":42,"build_run_attempt":1,
           "artifacts":artifacts,"images":{"app":lock["services"]["app"],"openbao_didcomm_image":lock["openbao_didcomm_image"]}});
+        let inv_bytes = serde_json::to_vec(&inv).unwrap();
         (
             parent,
             root,
-            installer_release::parse_inventory(&serde_json::to_vec(&inv).unwrap()).unwrap(),
+            installer_release::parse_inventory(&inv_bytes).unwrap(),
             lock_bytes,
+            inv_bytes,
         )
     }
     #[test]
     fn exact_marker_complete_inventory_and_image_binding_pass() {
-        let (_owned, root, inv, lock) = fixture();
+        let (_owned, root, inv, lock, _) = fixture();
         let result = validate_bundle(&root, &inv, &lock).unwrap();
         assert_eq!(result.file_count, 4);
         assert_eq!(result.directory_count, 2);
@@ -384,9 +458,40 @@ mod tests {
         assert!(serde_json::to_value(result).is_ok());
     }
     #[test]
+    fn private_closure_reuses_validated_marker_and_bound_inventory_digest() {
+        let (_owned, root, _inv, lock, inv_bytes) = fixture();
+        let digest = format!("sha256:{}", installer_release::sha256(&inv_bytes));
+        let closure = validate_bundle_inventory(&root, &inv_bytes, &digest, &lock).unwrap();
+        assert_eq!(closure.coverage, "validated_bundle_subtree_only");
+        assert_eq!(closure.inventory_sha256, digest);
+        assert_eq!(closure.archive_sha256, "a".repeat(64));
+        assert_eq!(closure.files.len(), 4);
+        assert_eq!(
+            closure.directories,
+            BTreeSet::from(["".into(), "scripts".into()])
+        );
+        assert_eq!(closure.files[MARKER], closure.marker_sha256);
+        assert_eq!(closure.files[LOCK], closure.image_lock_sha256);
+        assert!(closure.not_atomic_snapshot);
+        assert!(!closure.deletion_eligible);
+    }
+    #[test]
+    fn private_closure_rejects_wrong_digest_extra_and_changed_content() {
+        for mutation in ["digest", "extra", "changed"] {
+            let (_owned, root, _inv, lock, inv_bytes) = fixture();
+            let mut digest = format!("sha256:{}", installer_release::sha256(&inv_bytes));
+            match mutation {
+                "digest" => digest = format!("sha256:{}", "0".repeat(64)),
+                "extra" => write(&root, "customer-secret-name", b"x", 0o644),
+                _ => fs::write(root.join("scripts/start.sh"), b"changed").unwrap(),
+            }
+            assert!(validate_bundle_inventory(&root, &inv_bytes, &digest, &lock).is_err());
+        }
+    }
+    #[test]
     fn validates_actual_production_packager_and_extractor_output() {
         use marty_selfhost_bundle::{package_with_image_lock, Options};
-        let (owned, _fixture_root, inv, lock) = fixture();
+        let (owned, _fixture_root, inv, lock, _) = fixture();
         let source = owned.path().join("source");
         fs::create_dir(&source).unwrap();
         for name in [
@@ -453,7 +558,7 @@ mod tests {
     #[test]
     fn refuses_modified_executable_extra_file_directory_and_missing_file() {
         for mutation in ["script", "extra-file", "extra-dir", "missing"] {
-            let (_owned, root, inv, lock) = fixture();
+            let (_owned, root, inv, lock, _) = fixture();
             match mutation {
                 "script" => fs::write(root.join("scripts/start.sh"), b"changed").unwrap(),
                 "extra-file" => write(&root, "unrecorded", b"x", 0o644),
@@ -469,7 +574,7 @@ mod tests {
     #[test]
     fn refuses_links_and_public_writable_modes() {
         for mutation in ["symlink", "hardlink", "file-mode", "dir-mode"] {
-            let (owned, root, inv, lock) = fixture();
+            let (owned, root, inv, lock, _) = fixture();
             let path = root.join("scripts/start.sh");
             match mutation {
                 "symlink" => {
@@ -488,7 +593,7 @@ mod tests {
     }
     #[test]
     fn rejects_duplicate_marker_unknown_fields_and_image_mismatches() {
-        let (_owned, root, mut inv, lock) = fixture();
+        let (_owned, root, mut inv, lock, _) = fixture();
         let original = fs::read_to_string(root.join(MARKER)).unwrap();
         for raw in [
             original.replacen('{', "{\"schema\":\"duplicate\",", 1),
@@ -518,7 +623,7 @@ mod tests {
             json!(["", "scripts", "scripts"]),
             json!(["", "scripts", "absent"]),
         ] {
-            let (_owned, root, inv, lock) = fixture();
+            let (_owned, root, inv, lock, _) = fixture();
             let mut marker: Value =
                 serde_json::from_slice(&fs::read(root.join(MARKER)).unwrap()).unwrap();
             marker["directories"] = directories;
