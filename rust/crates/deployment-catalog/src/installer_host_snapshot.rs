@@ -139,7 +139,7 @@ fn cstr(name: &OsStr) -> Result<CString> {
     }
     CString::new(bytes).map_err(|_| REFUSED.into())
 }
-fn open_child(parent: &File, name: &OsStr, flags: i32) -> Result<Option<File>> {
+pub(crate) fn open_child(parent: &File, name: &OsStr, flags: i32) -> Result<Option<File>> {
     let name = cstr(name)?;
     let how = OpenHow {
         flags: (flags | libc::O_CLOEXEC) as u64,
@@ -163,7 +163,7 @@ fn open_child(parent: &File, name: &OsStr, flags: i32) -> Result<Option<File>> {
     }
     Ok(Some(unsafe { File::from_raw_fd(fd as i32) }))
 }
-fn mount_id(file: &File) -> Result<u64> {
+pub(crate) fn mount_id(file: &File) -> Result<u64> {
     const PROC_SUPER_MAGIC: i64 = 0x9fa0;
     let proc = File::open("/proc/self/fdinfo").map_err(|_| REFUSED)?;
     let mut info: libc::statfs = unsafe { std::mem::zeroed() };
@@ -203,7 +203,7 @@ fn mount_id(file: &File) -> Result<u64> {
     }
     Ok(id)
 }
-fn identity(file: &File) -> Result<HostIdentity> {
+pub(crate) fn identity(file: &File) -> Result<HostIdentity> {
     let meta = file.metadata().map_err(|_| REFUSED)?;
     let kind = if meta.is_dir() {
         Kind::Directory
@@ -221,7 +221,7 @@ fn identity(file: &File) -> Result<HostIdentity> {
         kind,
     })
 }
-fn names(directory: &File) -> Result<Vec<std::ffi::OsString>> {
+pub(crate) fn names(directory: &File) -> Result<Vec<std::ffi::OsString>> {
     let mut names = Vec::new();
     for item in
         fs::read_dir(format!("/proc/self/fd/{}", directory.as_raw_fd())).map_err(|_| REFUSED)?
@@ -234,7 +234,7 @@ fn names(directory: &File) -> Result<Vec<std::ffi::OsString>> {
     names.sort();
     Ok(names)
 }
-fn directory(held: &File, expected: &HostIdentity, expected_mount: u64) -> Result<File> {
+pub(crate) fn directory(held: &File, expected: &HostIdentity, expected_mount: u64) -> Result<File> {
     let dir =
         open_child(held, OsStr::new("."), libc::O_RDONLY | libc::O_DIRECTORY)?.ok_or(REFUSED)?;
     if identity(&dir)? != *expected || mount_id(&dir)? != expected_mount {
