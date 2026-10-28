@@ -240,7 +240,7 @@ fn volume_evidence(bytes: &[u8], id: Uuid, engine: &str, name: &str) -> Option<V
     .then_some(v)
 }
 
-trait DockerRead {
+pub(crate) trait DockerRead {
     fn engine_id(&self) -> Result<String, ()>;
     fn run(&self, args: &[&str]) -> Result<String, ()>;
 }
@@ -442,7 +442,7 @@ impl PendingNormalProfileFacts {
         self.verify_docker_with(docker)
     }
 
-    fn verify_docker_with<D: DockerRead>(
+    pub(crate) fn verify_docker_with<D: DockerRead>(
         self,
         docker: &D,
     ) -> Result<ValidatedNormalProfileFacts, IncompleteReason> {

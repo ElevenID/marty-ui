@@ -537,6 +537,7 @@ struct TlsCompletion {
 /// Local identity evidence for all seven storage boundaries (six directories
 /// and the operator-password file). No descendants are read or authorized for
 /// deletion. Foreign-owned OpenBao data may remain inaccessible to the caller.
+#[derive(PartialEq, Eq)]
 pub(crate) struct ObservedNormalCreation {
     pub application: ObservedApplicationCreation,
     pub openbao_state: ObservedDirectory,
@@ -739,7 +740,7 @@ pub(crate) fn inspect_normal(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::installer_state::{Identity, InstallerState, RuntimeBinding};
     use std::{
@@ -770,7 +771,7 @@ mod tests {
         state.persist_initial_creation_receipt(&path).unwrap();
         (parent, path, state)
     }
-    fn normal_fixture() -> (tempfile::TempDir, PathBuf, InstallerState) {
+    pub(crate) fn normal_fixture() -> (tempfile::TempDir, PathBuf, InstallerState) {
         normal_fixture_with_chown(false, |_| {})
     }
     struct RestoreRootOnUnwind(bool);

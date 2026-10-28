@@ -436,6 +436,64 @@ pub(crate) fn inspect(
     result
 }
 
+/// Derive the closed normal-profile names from the held directory for a fresh
+/// observation. The caller must separately compare receipt-bound identities;
+/// current metadata alone is not historical ownership evidence.
+pub(crate) fn derive_current_fixed_specs(
+    locked: &LockedInspection,
+    installation: &Path,
+    expected_root: &HostIdentity,
+    expected_mount: u64,
+) -> Result<Vec<ExpectedTopLevel>, IncompleteReason> {
+    locked
+        .require_path_binding(installation)
+        .and_then(|_| locked.require_unchanged())
+        .map_err(|_| IncompleteReason::InstallationChanged)?;
+    let root = locked.installation_directory();
+    if identity(root).ok().as_ref() != Some(expected_root)
+        || mount_id(root).ok() != Some(expected_mount)
+        || expected_mount == 0
+    {
+        return Err(IncompleteReason::InstallationChanged);
+    }
+    let observed_names = names(root)?;
+    let required_names: BTreeSet<_> = TopLevelName::REQUIRED
+        .iter()
+        .map(|name| name.name())
+        .collect();
+    if observed_names != required_names {
+        return Err(
+            if observed_names.difference(&required_names).next().is_some() {
+                IncompleteReason::UnknownTopLevel
+            } else {
+                IncompleteReason::MissingOrChangedEntry
+            },
+        );
+    }
+    let mut specs = Vec::with_capacity(TopLevelName::REQUIRED.len());
+    for name in TopLevelName::REQUIRED {
+        let held = open_child(root, OsStr::new(&name.name()))
+            .map_err(|_| IncompleteReason::UnsafeEntry)?
+            .ok_or(IncompleteReason::MissingOrChangedEntry)?;
+        let observed = identity(&held).map_err(|_| IncompleteReason::UnsafeEntry)?;
+        if observed.kind != name.expected_kind() || mount_id(&held).ok() != Some(expected_mount) {
+            return Err(IncompleteReason::UnsafeEntry);
+        }
+        specs.push(ExpectedTopLevel {
+            name,
+            identity: observed,
+        });
+    }
+    locked
+        .require_path_binding(installation)
+        .and_then(|_| locked.require_unchanged())
+        .map_err(|_| IncompleteReason::InstallationChanged)?;
+    if names(root)? != observed_names {
+        return Err(IncompleteReason::InstallationChanged);
+    }
+    Ok(specs)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

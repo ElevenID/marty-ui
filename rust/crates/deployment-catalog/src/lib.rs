@@ -21,6 +21,8 @@ pub mod installer_candidate_nonce;
 pub mod installer_candidate_prepare;
 pub mod installer_command;
 #[cfg(target_os = "linux")]
+pub(crate) mod installer_complete_purge_plan;
+#[cfg(target_os = "linux")]
 pub(crate) mod installer_creation_identity;
 pub(crate) mod installer_creation_receipt_validation;
 pub mod installer_doctor;
@@ -48,8 +50,6 @@ pub mod installer_prepare;
 pub(crate) mod installer_purge_host;
 #[cfg(target_os = "linux")]
 pub(crate) mod installer_purge_plan;
-#[cfg(target_os = "linux")]
-pub(crate) mod installer_top_level_census;
 #[allow(dead_code)] // Dormant until the reviewed purge coordinator supplies durable intent.
 pub(crate) mod installer_purge_volume;
 pub mod installer_release;
@@ -59,6 +59,8 @@ pub mod installer_runtime;
 pub mod installer_state;
 pub mod installer_tls;
 pub mod installer_tls_outputs;
+#[cfg(target_os = "linux")]
+pub(crate) mod installer_top_level_census;
 pub mod installer_trust;
 pub mod installer_uninstall;
 pub mod installer_validation;
