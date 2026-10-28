@@ -33,6 +33,8 @@ const {
   requireCompletedLoginNonce,
   loginNonceCompletionEvidence,
   isExactLoginNonceStatusUrl,
+  isExactLoginNonceFinalizeUrl,
+  loginFinalizeRedirectEvidence,
   isTerminalLoginNonceStatus,
 } = require('./beta-credential-contract');
 const {
@@ -374,6 +376,12 @@ async function runCredentialLogin({ retainedFirstParty = false, evidence = null 
       nonceStatusObservation.lastReasonCode = safe.reasonCode || null;
       return isTerminalLoginNonceStatus(body);
     }, { timeout: 60_000 }).catch(() => null);
+    const browserFinalizeResponse = loginPage.waitForResponse((response) =>
+      response.request().method() === 'GET'
+        && isExactLoginNonceFinalizeUrl(response.url(), BETA_ORIGIN, loginRequest.nonce),
+    { timeout: 60_000 }).then(async (response) => loginFinalizeRedirectEvidence({
+      url: response.url(), status: response.status(), headers: await response.allHeaders(),
+    }, BETA_ORIGIN, loginRequest.nonce)).catch(() => null);
     report.presentation = await presentBadge(walletPage, loginRequest.href);
     if (!report.presentation.accepted || (retainedFirstParty && report.presentation.status !== 200)) {
       throw new Error(`Browser wallet presentation failed: ${report.presentation.error || 'unknown error'}`);
@@ -384,13 +392,24 @@ async function runCredentialLogin({ retainedFirstParty = false, evidence = null 
       'The browser wallet submitted the selected badge to the signed credential-login callback.',
     );
 
-    const terminal = await terminalStatusResponse;
+    const first = await Promise.race([
+      terminalStatusResponse.then(response => ({ kind: 'status', response })),
+      browserFinalizeResponse.then(evidence => ({ kind: 'finalize', evidence })),
+    ]);
+    const terminal = first.kind === 'status' ? first.response : null;
     const completion = terminal ? await terminal.json().catch(() => ({ status: 'invalid-response' }))
       : { status: 'pending-timeout' };
-    const nonceEvidence = loginNonceCompletionEvidence(completion);
+    const browserFinalize = first.kind === 'finalize' ? first.evidence
+      : completion.status === 'completed' ? await browserFinalizeResponse : null;
+    const nonceEvidence = browserFinalize?.verified
+      ? { status: 'completed', observedNonceStatus: nonceStatusObservation.lastStatus === 'completed'
+        ? 'completed' : 'not-observed' }
+      : loginNonceCompletionEvidence(completion);
     report.completion = { ...nonceEvidence, authenticated: false,
-      statusObservation: nonceStatusObservation };
-    if (!terminal) {
+      statusObservation: nonceStatusObservation,
+      browserFinalizeVerified: browserFinalize?.verified === true,
+      browserFinalize: browserFinalize || null };
+    if (!terminal && !browserFinalize) {
       let diagnosticTimer;
       const diagnostic = await Promise.race([
         loginPage.evaluate(async (nonce) => {
@@ -415,14 +434,13 @@ async function runCredentialLogin({ retainedFirstParty = false, evidence = null 
         authenticated: diagnostic?.authenticated === true,
       };
     }
-    requireCompletedLoginNonce(completion?.status);
-    if (completion?.redirect_to) {
-      await loginPage.goto(new URL(completion.redirect_to, BETA_ORIGIN).href, {
-        waitUntil: 'domcontentloaded', timeout: 60_000,
-      }).catch((error) => {
-        if (!String(error?.message || error).includes('ERR_ABORTED')) throw error;
-      });
-    }
+    requireCompletedLoginNonce(nonceEvidence.status);
+    if (!browserFinalize?.verified) throw new Error('Credential login browser finalize not verified');
+    await loginPage.waitForURL((url) => url.origin === new URL(BETA_ORIGIN).origin
+      && url.pathname === '/console/applicant/catalog'
+      && url.searchParams.size === 1 && url.searchParams.get('auth_method') === 'credential',
+    { timeout: 60_000 });
+    report.completion.uiDestinationVerified = true;
     await waitFor(() => loginPage.evaluate(async () => {
       const response = await fetch('/v1/auth/me', { credentials: 'include' });
       const body = await response.json().catch(() => null);
@@ -437,6 +455,9 @@ async function runCredentialLogin({ retainedFirstParty = false, evidence = null 
     report.completion = {
       ...nonceEvidence,
       statusObservation: nonceStatusObservation,
+      browserFinalizeVerified: true,
+      browserFinalize,
+      uiDestinationVerified: true,
       authenticated: auth.body?.authenticated === true,
       authStatus: auth.status,
       authenticatedEmail: auth.body?.authenticated ? auth.body?.user?.email : null,
