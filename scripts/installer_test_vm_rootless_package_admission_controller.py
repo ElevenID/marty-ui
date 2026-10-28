@@ -2,6 +2,10 @@
 
 It stages only private archive data and an offline APT simulation. No package,
 account, daemon, or guest application change is authorized by the result.
+Root operation is forbidden until a separate root-private bootstrap has
+authenticated this controller and its full import closure against exact Git
+objects before Python imports them. Runtime hash checks below only detect
+post-admission change; they do not retroactively authenticate imported code.
 """
 from __future__ import annotations
 
@@ -27,6 +31,7 @@ SCHEMA = "elevenid.installer-only-vm-rootless-package-admission/v1"
 INTENT_SUFFIX = ".installer-only-package-admission-intent.json"
 RESULT_SUFFIX = ".installer-only-package-admission.json"
 KEYRING = Path("/usr/share/keyrings/ubuntu-archive-keyring.gpg")
+STAGE_PARENT = Path("/var/tmp/marty-installer-package-admission")
 STATUS_SCRIPT = r'''
 import os,stat,sys
 p='/var/lib/dpkg/status'; m=16777216
@@ -59,41 +64,57 @@ def _guest_status(binding: dict) -> bytes:
 
 def _private_parent(parent: Path) -> None:
     info = parent.lstat()
-    release.require(parent == Path("/var/tmp") and stat.S_ISDIR(info.st_mode)
-                    and info.st_uid == 0 and stat.S_IMODE(info.st_mode) == 0o1777,
+    outer = Path("/var/tmp").lstat()
+    release.require(parent == STAGE_PARENT and stat.S_ISDIR(info.st_mode)
+                    and info.st_uid == 0 and stat.S_IMODE(info.st_mode) == 0o755
+                    and stat.S_ISDIR(outer.st_mode) and outer.st_uid == 0
+                    and stat.S_IMODE(outer.st_mode) == 0o1777,
                     "package admission parent custody invalid")
 
 
 def _stage(parent: Path, observation_id: str, status: bytes) -> tuple[Path, Path, Path]:
     _private_parent(parent)
-    stage = parent / ("package-admission-" + observation_id)
-    stage.mkdir(mode=0o700)
-    os.chown(stage, 65534, 65534)
-    fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    leaf = "package-admission-" + observation_id
+    stage = parent / leaf
+    parent_fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
     try:
-        os.fsync(fd)
+        held_parent = os.fstat(parent_fd)
+        release.require((held_parent.st_dev, held_parent.st_ino) ==
+                        (parent.lstat().st_dev, parent.lstat().st_ino),
+                        "package admission parent changed")
+        os.mkdir(leaf, mode=0o700, dir_fd=parent_fd)
+        os.fsync(parent_fd)
+        stage_fd = os.open(leaf, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW |
+                           os.O_CLOEXEC, dir_fd=parent_fd)
+        try:
+            status_fd = os.open("status", os.O_WRONLY | os.O_CREAT | os.O_EXCL |
+                                os.O_NOFOLLOW | os.O_CLOEXEC, 0o600, dir_fd=stage_fd)
+            try:
+                position = 0
+                while position < len(status):
+                    written = os.write(status_fd, status[position:position + 65536])
+                    release.require(written > 0, "VM dpkg status staging stalled")
+                    position += written
+                os.fchown(status_fd, 65534, 65534)
+                os.fsync(status_fd)
+            finally:
+                os.close(status_fd)
+            os.mkdir("bundle", mode=0o700, dir_fd=stage_fd)
+            os.chown("bundle", 65534, 65534, dir_fd=stage_fd,
+                     follow_symlinks=False)
+            os.fsync(stage_fd)
+            # The root-owned nonwritable parent prevents the shared nobody UID
+            # from replacing the top-level leaf after this final handoff.
+            os.fchown(stage_fd, 65534, 65534)
+            os.fsync(stage_fd)
+        finally:
+            os.close(stage_fd)
+        os.fsync(parent_fd)
     finally:
-        os.close(fd)
+        os.close(parent_fd)
+    _private_parent(parent)
     status_path = stage / "status"
-    fd = os.open(status_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC, 0o600)
-    try:
-        position = 0
-        while position < len(status):
-            written = os.write(fd, status[position:position + 65536])
-            release.require(written > 0, "VM dpkg status staging stalled")
-            position += written
-        os.fchown(fd, 65534, 65534)
-        os.fsync(fd)
-    finally:
-        os.close(fd)
     bundle = stage / "bundle"
-    bundle.mkdir(mode=0o700)
-    os.chown(bundle, 65534, 65534)
-    stage_fd = os.open(stage, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
-    try:
-        os.fsync(stage_fd)
-    finally:
-        os.close(stage_fd)
     return stage, status_path, bundle
 
 
@@ -106,10 +127,11 @@ def _child(module_bytes: bytes, bundle: Path, status: Path) -> dict:
             "/usr/bin/python3", "-I", "-B",
             "-c", CHILD_BOOTSTRAP, str(bundle), str(status), str(KEYRING)]
     try:
-        done = subprocess.run(args, input=module_bytes, capture_output=True,
-                              env={"PATH": "/usr/bin", "HOME": "/nonexistent", "LC_ALL": "C"},
-                              cwd="/", timeout=240, check=False, close_fds=True)
-    except (OSError, subprocess.TimeoutExpired) as exc:
+        done = admission.run_bounded(args, input_bytes=module_bytes,
+                                     stdout_limit=65536, stderr_limit=4096,
+                                     env={"PATH": "/usr/bin", "HOME": "/nonexistent",
+                                          "LC_ALL": "C"}, timeout=240)
+    except (OSError, admission.Refused) as exc:
         raise ValueError("package admission child unavailable") from exc
     release.require(done.returncode == 0 and len(done.stdout) <= 65536
                     and len(done.stderr) <= 4096,
@@ -201,7 +223,7 @@ def _status_identity(path: Path) -> tuple[int, int, int, int, int, int, int, int
 
 def observe(*, source: Path, registry: Path, runtime_parent: Path,
             stage_parent: Path, vm_id: str, observation_id: str,
-            admitted_module_sha256: str) -> dict:
+            admitted_module_sha256: str, admitted_controller_sha256: str) -> dict:
     release.require(os.geteuid() == 0, "root VM controller required")
     probe._uuid(vm_id)
     probe._uuid(observation_id)
@@ -210,8 +232,12 @@ def observe(*, source: Path, registry: Path, runtime_parent: Path,
                     "package admission path must be absolute")
     _private_parent(stage_parent)
     module_bytes = admission.private_file(Path(admission.__file__), 1024 * 1024, uid=0)
+    controller_bytes = admission.private_file(Path(__file__), 1024 * 1024, uid=0)
     release.require(hashlib.sha256(module_bytes).hexdigest() == admitted_module_sha256,
                     "package admission source differs from admitted code")
+    release.require(hashlib.sha256(controller_bytes).hexdigest() ==
+                    admitted_controller_sha256,
+                    "package admission controller differs from admitted code")
     with ControllerLease(registry) as lease:
         intent_name = vm_id + INTENT_SUFFIX
         result_name = vm_id + RESULT_SUFFIX
@@ -234,6 +260,7 @@ def observe(*, source: Path, registry: Path, runtime_parent: Path,
                   "pid": before["pid"], "start_ticks": before["start_ticks"],
                   "dpkg_status_sha256": hashlib.sha256(first).hexdigest(),
                   "module_sha256": admitted_module_sha256,
+                  "controller_sha256": admitted_controller_sha256,
                   "purpose": "installer_only_rootless_package_admission",
                   "package_actions_authorized": False,
                   "installation_authorized": False}
@@ -267,6 +294,7 @@ def observe(*, source: Path, registry: Path, runtime_parent: Path,
                   "readiness_sha256": before["readiness_sha256"],
                   "dpkg_status_sha256": intent["dpkg_status_sha256"],
                   "module_sha256": admitted_module_sha256,
+                  "controller_sha256": admitted_controller_sha256,
                   "private_stage": str(stage),
                   "packages": child["packages"],
                   "archive_releases": child["archive_releases"],
@@ -287,12 +315,13 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("source", "registry", "runtime-parent"):
         parser.add_argument("--" + name, required=True, type=Path)
-    for name in ("vm-id", "observation-id", "admitted-module-sha256"):
+    for name in ("vm-id", "observation-id", "admitted-module-sha256",
+                 "admitted-controller-sha256"):
         parser.add_argument("--" + name, required=True)
     try:
         args = {key.replace("-", "_"): value for key, value in
                 vars(parser.parse_args()).items()}
-        result = observe(stage_parent=Path("/var/tmp"), **args)
+        result = observe(stage_parent=STAGE_PARENT, **args)
         print(json.dumps({"phase": result["phase"], "vm_id": result["vm_id"],
                           "rootless_ready": False, "qualified": False}, sort_keys=True))
         return 0
@@ -301,5 +330,6 @@ def main() -> int:
         return 1
 
 
-if __name__ == "__main__":
-    raise SystemExit(main())
+# Deliberately no direct script entrypoint: a separate admitted root-private
+# bootstrap must verify the exact source/import closure before importing and
+# calling main(). Running this file from a checkout cannot attempt admission.

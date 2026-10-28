@@ -14,9 +14,12 @@ import lzma
 import os
 from pathlib import Path, PurePosixPath
 import re
+import selectors
+import signal
 import stat
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -122,6 +125,84 @@ def trusted_tool(path: Path) -> tuple[int, int, int, int]:
             and not info.st_mode & 0o022 and info.st_mode & 0o111,
             "archive tool custody invalid")
     return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns)
+
+
+def run_bounded(args: list[str], *, env: dict[str, str], timeout: int,
+                stdout_limit: int, stderr_limit: int, input_bytes: bytes = b"") -> subprocess.CompletedProcess:
+    """Collect child pipes with fixed caps; retain leader PID until group reaped."""
+    require(os.name == "posix" and len(input_bytes) <= 1024 * 1024,
+            "bounded child invocation invalid")
+    require(signal.getsignal(signal.SIGCHLD) == signal.SIG_DFL,
+            "bounded child signal policy invalid")
+    proc = subprocess.Popen(args, stdin=subprocess.PIPE if input_bytes else subprocess.DEVNULL,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            cwd="/", env=env, close_fds=True, start_new_session=True)
+    selector = selectors.DefaultSelector()
+    output = bytearray()
+    errors = bytearray()
+    sent = 0
+    deadline = time.monotonic() + timeout
+    try:
+        for stream, kind in ((proc.stdout, "out"), (proc.stderr, "err")):
+            os.set_blocking(stream.fileno(), False)
+            selector.register(stream, selectors.EVENT_READ, kind)
+        if input_bytes:
+            os.set_blocking(proc.stdin.fileno(), False)
+            selector.register(proc.stdin, selectors.EVENT_WRITE, "in")
+        while selector.get_map():
+            remaining = deadline - time.monotonic()
+            require(remaining > 0, "bounded child timed out")
+            for key, _ in selector.select(remaining):
+                stream = key.fileobj
+                if key.data == "in":
+                    try:
+                        count = os.write(stream.fileno(), input_bytes[sent:sent + 65536])
+                    except BrokenPipeError as exc:
+                        raise Refused("bounded child input closed") from exc
+                    require(count > 0, "bounded child input stalled")
+                    sent += count
+                    if sent == len(input_bytes):
+                        selector.unregister(stream)
+                        stream.close()
+                    continue
+                target = output if key.data == "out" else errors
+                limit = stdout_limit if key.data == "out" else stderr_limit
+                part = os.read(stream.fileno(), min(65536, limit + 1 - len(target)))
+                if not part:
+                    selector.unregister(stream)
+                    stream.close()
+                else:
+                    target.extend(part)
+                    require(len(target) <= limit, "bounded child output oversized")
+        require(sent == len(input_bytes), "bounded child input incomplete")
+        while True:
+            require(time.monotonic() < deadline, "bounded child timed out")
+            exited = os.waitid(os.P_PID, proc.pid,
+                               os.WEXITED | os.WNOWAIT | os.WNOHANG)
+            if exited is not None:
+                break
+            time.sleep(0.01)
+        # The leader is still an unreaped zombie here, so its PID/PGID cannot
+        # be recycled while descendants in the owned group are terminated.
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        proc.wait()
+        return subprocess.CompletedProcess(args, proc.returncode, bytes(output), bytes(errors))
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        raise Refused("bounded child failed") from exc
+    finally:
+        if proc.returncode is None:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            proc.wait()
+        selector.close()
+        for stream in (proc.stdin, proc.stdout, proc.stderr):
+            if stream is not None and not stream.closed:
+                stream.close()
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -276,10 +357,9 @@ def verify_inrelease(path: Path, keyring: Path, pocket: str,
     command = ("/usr/bin/gpgv", "--status-fd", "1", "--keyring", str(keyring), str(path))
     tool = trusted_tool(Path("/usr/bin/gpgv"))
     try:
-        done = subprocess.run(command, env={"PATH": "/usr/bin", "LC_ALL": "C"},
-                              cwd="/", stdin=subprocess.DEVNULL, capture_output=True,
-                              timeout=20, check=False)
-    except (OSError, subprocess.TimeoutExpired) as exc:
+        done = run_bounded(list(command), env={"PATH": "/usr/bin", "LC_ALL": "C"},
+                           timeout=20, stdout_limit=16384, stderr_limit=16384)
+    except (OSError, Refused) as exc:
         raise Refused("archive signature verification unavailable") from exc
     require(done.returncode == 0 and len(done.stdout) <= 16384 and len(done.stderr) <= 16384,
             "archive signature invalid")
@@ -515,13 +595,12 @@ def _apt_run(args: list[str], config: Path) -> bytes:
     require(args in allowed, "APT command not admitted")
     tool = trusted_tool(Path("/usr/bin/apt-get"))
     try:
-        done = subprocess.run(["/usr/bin/apt-get", *args],
-                              env={"APT_CONFIG": str(config), "HOME": "/nonexistent",
-                                   "LC_ALL": "C", "PATH": "/usr/bin",
-                                   "DEBIAN_FRONTEND": "noninteractive"},
-                              cwd="/", stdin=subprocess.DEVNULL, capture_output=True,
-                              timeout=90, check=False)
-    except (OSError, subprocess.TimeoutExpired) as exc:
+        done = run_bounded(["/usr/bin/apt-get", *args],
+                           env={"APT_CONFIG": str(config), "HOME": "/nonexistent",
+                                "LC_ALL": "C", "PATH": "/usr/bin",
+                                "DEBIAN_FRONTEND": "noninteractive"},
+                           timeout=90, stdout_limit=65536, stderr_limit=16384)
+    except (OSError, Refused) as exc:
         raise Refused("private APT simulator unavailable") from exc
     require(done.returncode == 0 and len(done.stdout) <= 65536
             and done.stderr == b"",
@@ -627,13 +706,30 @@ def inspect_simulation(raw: bytes, initially_installed: dict[str, str],
         raise Refused("package simulation encoding invalid") from exc
     actions = []
     configured = []
+    summary_new = None
+    in_list = False
     for line in lines:
-        if line.startswith(("Reading package lists", "Building dependency tree",
-                            "Reading state information", "The following NEW packages",
-                            "The following additional packages", "Suggested packages:",
-                            "Recommended packages:", "0 upgraded, ")):
+        if line in ("Reading package lists...", "Building dependency tree...",
+                    "Reading state information..."):
             continue
-        if line.startswith(" ") or not line.strip():
+        if line in ("The following NEW packages will be installed:",
+                    "The following additional packages will be installed:",
+                    "Suggested packages:", "Recommended packages:"):
+            in_list = True
+            continue
+        if line.startswith(" ") and in_list:
+            require(re.fullmatch(r"  [a-z0-9+.-]+(?: [a-z0-9+.-]+)*", line) is not None,
+                    "package simulation list invalid")
+            continue
+        in_list = False
+        if not line:
+            continue
+        summary = re.fullmatch(r"([0-9]+) upgraded, ([0-9]+) newly installed, "
+                               r"([0-9]+) to remove and ([0-9]+) not upgraded\.", line)
+        if summary:
+            require(summary_new is None and summary.group(1) == "0"
+                    and summary.group(3) == "0", "package simulation changes installed packages")
+            summary_new = int(summary.group(2))
             continue
         match = re.fullmatch(r"(Inst|Conf) ([a-z0-9][a-z0-9+.-]*) \(([A-Za-z0-9.+:~_-]+) [^)]+\)", line)
         require(match is not None, "package simulation action invalid")
@@ -643,6 +739,7 @@ def inspect_simulation(raw: bytes, initially_installed: dict[str, str],
         (actions if action == "Inst" else configured).append(
             {"package": package, "version": version})
     require({action["package"] for action in actions} >= set(REQUIRED)
+            and summary_new == len(actions)
             and len(actions) == len({action["package"] for action in actions})
             and len(configured) == len(actions)
             and {(item["package"], item["version"]) for item in configured}

@@ -42,7 +42,7 @@ def test_child_uses_fixed_nonroot_clean_exec(monkeypatch, tmp_path):
     def run(args, **kwargs):
         observed.update({"args": args, "kwargs": kwargs})
         return Completed()
-    monkeypatch.setattr(subprocess, "run", run)
+    monkeypatch.setattr(controller.admission, "run_bounded", run)
     assert controller._child(b"verified code", tmp_path / "bundle",
                              tmp_path / "status")["transaction_simulated"] is True
     args = observed["args"]
@@ -50,12 +50,11 @@ def test_child_uses_fixed_nonroot_clean_exec(monkeypatch, tmp_path):
                         "--clear-groups", "--no-new-privs", "--bounding-set=-all",
                         "--inh-caps=-all", "--ambient-caps=-all"]
     assert args[8:11] == ["/usr/bin/python3", "-I", "-B"]
-    assert observed["kwargs"]["close_fds"] is True
-    assert observed["kwargs"]["cwd"] == "/"
+    assert observed["kwargs"]["stdout_limit"] == 65536
+    assert observed["kwargs"]["stderr_limit"] == 4096
     assert observed["kwargs"]["env"] == {"PATH": "/usr/bin", "HOME": "/nonexistent",
                                             "LC_ALL": "C"}
-    assert observed["kwargs"]["input"] == b"verified code"
-    assert "shell" not in observed["kwargs"]
+    assert observed["kwargs"]["input_bytes"] == b"verified code"
 
 
 def test_child_refuses_nonzero_or_authorizing_result(monkeypatch, tmp_path):
@@ -67,6 +66,6 @@ def test_child_refuses_nonzero_or_authorizing_result(monkeypatch, tmp_path):
         def run(*args, **kwargs):
             return subprocess.CompletedProcess(args, exit_code, payload, b"")
         with monkeypatch.context() as patch:
-            patch.setattr(subprocess, "run", run)
+            patch.setattr(controller.admission, "run_bounded", run)
             with pytest.raises(ValueError):
                 controller._child(b"verified code", tmp_path / "bundle", tmp_path / "status")
