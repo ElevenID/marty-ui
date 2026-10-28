@@ -15,6 +15,7 @@ const {
   membershipLoginBehaviorAssertions,
   requireCompletedLoginNonce,
   loginNonceCompletionEvidence,
+  isExactLoginNonceStatusUrl,
   isTerminalLoginNonceStatus,
   verificationResultEvidence,
   verificationSessionRequest,
@@ -158,6 +159,18 @@ test('verification session request fails closed without exact public identifiers
 });
 
 test('membership recording exposes the three exact happy-path behavior assertions', () => {
+  const nonce = 'sample_-nonce';
+  const exact = `https://beta.elevenidllc.com/v1/auth/credential-login/status?nonce=${nonce}`;
+  assert.equal(isExactLoginNonceStatusUrl(exact, 'https://beta.elevenidllc.com', nonce), true);
+  assert.equal(isExactLoginNonceStatusUrl(exact.replace('_', '%5F'),
+    'https://beta.elevenidllc.com', nonce), true);
+  assert.equal(isExactLoginNonceStatusUrl(exact.replace('beta.', 'foreign.'),
+    'https://beta.elevenidllc.com', nonce), false);
+  assert.equal(isExactLoginNonceStatusUrl(`${exact}&nonce=${nonce}`,
+    'https://beta.elevenidllc.com', nonce), false);
+  assert.equal(isExactLoginNonceStatusUrl(`${exact}&other=1`,
+    'https://beta.elevenidllc.com', nonce), false);
+  assert.equal(isExactLoginNonceStatusUrl(exact, 'https://beta.elevenidllc.com', 'different'), false);
   assert.deepEqual(loginNonceCompletionEvidence({ status: 'completed', reason_code: 'ignored' }), {
     status: 'completed', observedNonceStatus: 'completed',
   });
@@ -171,6 +184,9 @@ test('membership recording exposes the three exact happy-path behavior assertion
     'unclassified');
   assert.deepEqual(loginNonceCompletionEvidence({ status: 'pending-timeout' }), {
     status: 'pending-timeout', observedNonceStatus: 'pending-timeout',
+  });
+  assert.deepEqual(loginNonceCompletionEvidence({ status: 'private-value' }), {
+    status: 'invalid-response', observedNonceStatus: 'invalid-response',
   });
   for (const status of ['completed', 'failed', 'expired']) {
     assert.equal(isTerminalLoginNonceStatus({ status }), true);
@@ -201,6 +217,12 @@ test('membership recording exposes the three exact happy-path behavior assertion
     }).same_device_passwordless_login, false,
     'An authenticated browser cannot substitute for completion of this login nonce');
   }
+  assert.equal(membershipLoginBehaviorAssertions({
+    presentation: { accepted: true },
+    completion: { status: 'pending-timeout', observedNonceStatus: 'pending-timeout',
+      authenticated: false, timeoutDiagnostic: { status: 'completed', authenticated: true } },
+  }).same_device_passwordless_login, false,
+  'A late diagnostic completion cannot qualify the missing observed UI completion');
 });
 
 test('lifecycle recording requires status-aware allow and deny decisions', () => {
