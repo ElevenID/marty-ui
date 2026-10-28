@@ -954,6 +954,11 @@ impl LockedMaintenance {
     pub(crate) fn journal(&self) -> &Journal {
         self.inspection.journal()
     }
+    /// Share the held read-only installation descriptor with inventory checks
+    /// without taking a second, conflicting lifecycle lock.
+    pub(crate) fn inspection(&self) -> &LockedInspection {
+        &self.inspection
+    }
     pub(crate) fn require_unchanged(&self) -> Result<()> {
         if self.poisoned {
             return Err("uncertain maintenance receipt; reopen and reconcile".into());
