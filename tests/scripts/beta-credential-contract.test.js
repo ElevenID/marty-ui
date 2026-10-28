@@ -15,6 +15,10 @@ const {
   membershipLoginBehaviorAssertions,
   requireCompletedLoginNonce,
   loginNonceCompletionEvidence,
+  readLoginNonceStatusSnapshot,
+  isExactLoginNonceStatusUrl,
+  isExactLoginNonceFinalizeUrl,
+  loginFinalizeRedirectEvidence,
   isTerminalLoginNonceStatus,
   verificationResultEvidence,
   verificationSessionRequest,
@@ -32,6 +36,22 @@ test('functional lifecycle requires explicit governed source before fixture inta
   assert.equal(requireLifecycleSourceSelection({RECORD_VIDEO:'0',BETA_AUDIT_TEMPLATE_ID:'owned-current-source'}),'owned-current-source');
   assert.equal(requireLifecycleSourceSelection({RECORD_VIDEO:'1'}),DEFAULT_LIFECYCLE_SOURCE_TEMPLATE_ID);
   assert.equal(requireLifecycleSourceSelection({}),DEFAULT_LIFECYCLE_SOURCE_TEMPLATE_ID);
+});
+
+test('parsed terminal status survives an unavailable response body after navigation', async () => {
+  let reads = 0;
+  const response = { json: async () => {
+    reads += 1;
+    if (reads > 1) throw new Error('navigation consumed response body');
+    return { status: 'completed', redirect_to: '/v1/auth/credential-login/finalize?nonce=private' };
+  } };
+  const snapshot = await readLoginNonceStatusSnapshot(response);
+  assert.deepEqual(snapshot, { status: 'completed', observedNonceStatus: 'completed' });
+  await assert.rejects(response.json(), /navigation consumed/);
+  assert.equal(reads, 2);
+  assert.deepEqual(await readLoginNonceStatusSnapshot({ json: async () => {
+    throw new Error('body unavailable');
+  } }), { status: 'invalid-response', observedNonceStatus: 'invalid-response' });
 });
 
 test('beta gates target the canonical Marty organization and Open Badge login contract', () => {
@@ -158,6 +178,40 @@ test('verification session request fails closed without exact public identifiers
 });
 
 test('membership recording exposes the three exact happy-path behavior assertions', () => {
+  const nonce = 'sample_-nonce';
+  const exact = `https://beta.elevenidllc.com/v1/auth/credential-login/status?nonce=${nonce}`;
+  assert.equal(isExactLoginNonceStatusUrl(exact, 'https://beta.elevenidllc.com', nonce), true);
+  assert.equal(isExactLoginNonceStatusUrl(exact.replace('_', '%5F'),
+    'https://beta.elevenidllc.com', nonce), true);
+  assert.equal(isExactLoginNonceStatusUrl(exact.replace('beta.', 'foreign.'),
+    'https://beta.elevenidllc.com', nonce), false);
+  assert.equal(isExactLoginNonceStatusUrl(`${exact}&nonce=${nonce}`,
+    'https://beta.elevenidllc.com', nonce), false);
+  assert.equal(isExactLoginNonceStatusUrl(`${exact}&other=1`,
+    'https://beta.elevenidllc.com', nonce), false);
+  assert.equal(isExactLoginNonceStatusUrl(exact, 'https://beta.elevenidllc.com', 'different'), false);
+  const finalize = `https://beta.elevenidllc.com/v1/auth/credential-login/finalize?nonce=${nonce}`;
+  const finalHeaders = { location: 'https://beta.elevenidllc.com/console/applicant/catalog?auth_method=credential',
+    'set-cookie': 'sessionId=fresh-session; Path=/; HttpOnly; Secure' };
+  assert.deepEqual(loginFinalizeRedirectEvidence({ url: finalize, status: 302, headers: finalHeaders },
+    'https://beta.elevenidllc.com', nonce), {
+    exactNonce: true, redirectStatus: 302, expectedUi: true, sessionCookieSet: true, verified: true,
+  });
+  for (const response of [
+    { url: finalize.replace(`nonce=${nonce}`, 'nonce=other'), status: 302, headers: finalHeaders },
+    { url: finalize.replace('beta.', 'foreign.'), status: 302, headers: finalHeaders },
+    { url: `${finalize}&nonce=${nonce}`, status: 302, headers: finalHeaders },
+    { url: finalize, status: 200, headers: finalHeaders },
+    { url: finalize, status: 302, headers: { ...finalHeaders, 'set-cookie': '' } },
+    { url: finalize, status: 302, headers: { ...finalHeaders,
+      location: 'https://foreign.example/console/applicant/catalog?auth_method=credential' } },
+    { url: finalize, status: 302, headers: { ...finalHeaders,
+      location: 'https://beta.elevenidllc.com/?auth_error=Login+session+expired' } },
+  ]) {
+    assert.equal(loginFinalizeRedirectEvidence(response, 'https://beta.elevenidllc.com', nonce).verified,
+      false, 'Only an exact current-nonce browser finalize with fresh session cookie qualifies');
+  }
+  assert.equal(isExactLoginNonceFinalizeUrl(finalize, 'https://beta.elevenidllc.com', nonce), true);
   assert.deepEqual(loginNonceCompletionEvidence({ status: 'completed', reason_code: 'ignored' }), {
     status: 'completed', observedNonceStatus: 'completed',
   });
@@ -171,6 +225,9 @@ test('membership recording exposes the three exact happy-path behavior assertion
     'unclassified');
   assert.deepEqual(loginNonceCompletionEvidence({ status: 'pending-timeout' }), {
     status: 'pending-timeout', observedNonceStatus: 'pending-timeout',
+  });
+  assert.deepEqual(loginNonceCompletionEvidence({ status: 'private-value' }), {
+    status: 'invalid-response', observedNonceStatus: 'invalid-response',
   });
   for (const status of ['completed', 'failed', 'expired']) {
     assert.equal(isTerminalLoginNonceStatus({ status }), true);
@@ -187,7 +244,8 @@ test('membership recording exposes the three exact happy-path behavior assertion
       offerSource: 'canonical-ui', loggedOut: true, accepted: true, storedExpectedCredential: true,
     },
     presentation: { accepted: true },
-    completion: { status: 'completed', observedNonceStatus: 'completed', authenticated: true },
+    completion: { status: 'completed', observedNonceStatus: 'not-observed',
+      browserFinalizeVerified: true, uiDestinationVerified: true, authenticated: true },
   }), {
     governed_claim: true,
     conformant_open_badge_issuance: true,
@@ -197,10 +255,21 @@ test('membership recording exposes the three exact happy-path behavior assertion
   for (const observedNonceStatus of ['failed', 'expired', 'pending-timeout', null]) {
     assert.equal(membershipLoginBehaviorAssertions({
       presentation: { accepted: true },
-      completion: { status: 'completed', observedNonceStatus, authenticated: true },
+      completion: { status: 'completed', observedNonceStatus, authenticated: true,
+        browserFinalizeVerified: false, uiDestinationVerified: true },
     }).same_device_passwordless_login, false,
-    'An authenticated browser cannot substitute for completion of this login nonce');
+    'An authenticated browser cannot substitute for an exact browser finalize');
   }
+  assert.equal(membershipLoginBehaviorAssertions({
+    presentation: { accepted: true }, completion: { status: 'completed', authenticated: true,
+      browserFinalizeVerified: true, uiDestinationVerified: false },
+  }).same_device_passwordless_login, false, 'A redirect without the expected UI is incomplete');
+  assert.equal(membershipLoginBehaviorAssertions({
+    presentation: { accepted: true },
+    completion: { status: 'pending-timeout', observedNonceStatus: 'pending-timeout',
+      authenticated: false, timeoutDiagnostic: { status: 'completed', authenticated: true } },
+  }).same_device_passwordless_login, false,
+  'A late diagnostic completion cannot qualify the missing observed UI completion');
 });
 
 test('lifecycle recording requires status-aware allow and deny decisions', () => {
