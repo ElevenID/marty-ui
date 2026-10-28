@@ -21,6 +21,8 @@ const {
   GRANT, assertions, awaitNaturalExpiry, credentialContract, expiryWindow, hash,
   loginInstanceBinding, nativeLoginResult, validateFixture, validateIssuerSetup, validateLoginSetup,
 } = require('./beta-membership-support-contract');
+const {requireCompletedLoginNonce} = require('./beta-credential-contract');
+const {observeCredentialLoginBrowser} = require('./credential-login-browser-observation');
 
 const ROOT = path.resolve(__dirname, '../..');
 const FIXTURE_FILE = 'd05-support-fixture.json';
@@ -329,6 +331,7 @@ async function present({ authPage, walletPage, authContext, operator, fixture, o
   assert.ok(requestUrl.origin === origin && match, 'Native login Flow request binding is required');
   const instancePath = `/v1/flows/instances/${match[1]}`;
   const binding = loginInstanceBinding(details, await requireJson(operator, instancePath), fixture, origin);
+  const browserObservation = allowed ? observeCredentialLoginBrowser(authPage, origin, details.nonce) : null;
   await step(authPage, allowed ? '4. Sign in with the trusted badge' : '2. Try the foreign issuer badge',
     'The real credential sign-in page has created a signed request. The separate wallet is the first-party Rust test client.');
   await maskProtocolField(walletPage, 'Presentation request URI', record);
@@ -337,7 +340,8 @@ async function present({ authPage, walletPage, authContext, operator, fixture, o
     && response.request().method() === 'POST', { timeout: 60_000 });
   await walletPage.getByRole('button', { name: /^present$/i }).click();
   const response = await pending;
-  const outcome = await waitFor(async () => {
+  const observed = allowed ? await browserObservation.completion() : null;
+  const outcome = allowed ? observed.nonceEvidence : await waitFor(async () => {
     const polled = await authContext.request.get(`${origin}/v1/auth/credential-login/status?nonce=${encodeURIComponent(details.nonce)}`, { timeout: 15_000 });
     assert.equal(polled.status(), 200);
     const body = await polled.json();
@@ -349,13 +353,18 @@ async function present({ authPage, walletPage, authContext, operator, fixture, o
   const result = nativeLoginResult(await requireJson(operator, `${instancePath}/result`), binding, fixture, issuerDid, allowed);
   if (allowed) {
     assert.ok(response.ok(), 'Wallet must complete the actual trusted presentation');
-    assert.equal(outcome.status, 'completed');
+    requireCompletedLoginNonce(outcome.status);
+    assert.equal(observed.browserFinalize?.verified, true,
+      'Trusted recovery requires the browser-owned exact-nonce finalize redirect and fresh session cookie');
     await waitFor(async () => (await authMe(authContext, origin)).authenticated === true, 60_000, 500);
     await authPage.waitForURL((url) => url.origin === origin && !url.pathname.includes('credential-login'), { timeout: 60_000 });
     const user = await authMe(authContext, origin);
     assert.equal(user.authenticated, true);
     assert.equal(user.user?.email || user.email, fixture.applicant.email, 'Recovered login must be the existing synthetic account');
-    return { binding, result, status: outcome.status, walletHttpStatus: response.status(), authenticated: true };
+    return { binding, result, status: outcome.status, observedNonceStatus: outcome.observedNonceStatus,
+      browserFinalizeVerified: true, browserFinalize: observed.browserFinalize,
+      statusObservation: observed.statusObservation,
+      walletHttpStatus: response.status(), authenticated: true };
   }
   assert.equal(outcome.status, 'failed');
   assert.equal(outcome.reason_code, 'issuer_not_trusted');
