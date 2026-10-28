@@ -835,6 +835,13 @@ mod tests {
     #[test]
     #[ignore = "requires isolated root runner with --exact --ignored --test-threads=1"]
     fn foreign_owned_private_openbao_metadata_qualification() {
+        let args: Vec<_> = std::env::args().collect();
+        assert!(
+            ["--exact", "--ignored", "--test-threads=1", "installer_creation_receipt_validation::tests::foreign_owned_private_openbao_metadata_qualification"]
+                .iter().all(|required| args.iter().any(|arg| arg.as_str() == *required)),
+            "select only this qualification in a single-threaded test process"
+        );
+        assert_eq!(unsafe { libc::getuid() }, 0);
         assert_eq!(
             unsafe { libc::geteuid() },
             0,
