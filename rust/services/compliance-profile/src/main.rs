@@ -43,7 +43,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .layer(TraceLayer::new_for_http());
     let (tx, mut rx) = watch::channel(false);
     let server = axum::serve(listener, app).with_graceful_shutdown(async move {
-        while !*rx.borrow() && rx.changed().await.is_ok() {}
+        mmf_runtime::wait_for_shutdown(&mut rx).await;
     });
     runtime.activate()?;
     info!(http_address=%c.http_addr,"native Rust Compliance Profile service active");
@@ -53,17 +53,5 @@ async fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 async fn shutdown() {
-    let c = async {
-        let _ = tokio::signal::ctrl_c().await;
-    };
-    #[cfg(unix)]
-    let t = async {
-        if let Ok(mut s) = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-        {
-            s.recv().await;
-        }
-    };
-    #[cfg(not(unix))]
-    let t = std::future::pending::<()>();
-    tokio::select! {()=c=>{},()=t=>{}}
+    mmf_runtime::shutdown_signal_best_effort().await;
 }

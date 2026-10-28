@@ -7,22 +7,12 @@
 
 import { get, patch, del, post } from './api';
 import { postWithIdempotency } from './idempotency';
+import { requireOrganizationId as requireScopedOrganizationId } from './queryUtils';
 
 const API_BASE = '/v1/application-templates';
 
 function requireOrganizationId(value) {
-  const organizationId = String(value || '').trim();
-  if (
-    !organizationId
-    || organizationId.toLowerCase() === 'null'
-    || organizationId.toLowerCase() === 'undefined'
-  ) {
-    const error = new Error('organization_id is required');
-    error.code = 'ORG_REQUIRED';
-    error.status = 400;
-    throw error;
-  }
-  return organizationId;
+  return requireScopedOrganizationId(value || '', undefined, 'organization_id is required');
 }
 
 // ── Listing ──────────────────────────────────────────────────────────────────

@@ -57,9 +57,10 @@ export function withQuery(path, queryString) {
  *
  * @param {string} organizationId
  * @param {string} action
+ * @param {string} [errorMessage] - Optional existing service-specific message.
  * @returns {string}
  */
-export function requireOrganizationId(organizationId, action = 'using organization-scoped API') {
+export function requireOrganizationId(organizationId, action = 'using organization-scoped API', errorMessage = `Organization is required for ${action}.`) {
   if (
     organizationId === undefined
     || organizationId === null
@@ -67,7 +68,7 @@ export function requireOrganizationId(organizationId, action = 'using organizati
     || String(organizationId).trim().toLowerCase() === 'null'
     || String(organizationId).trim().toLowerCase() === 'undefined'
   ) {
-    const error = new Error(`Organization is required for ${action}.`);
+    const error = new Error(errorMessage);
     error.code = 'ORG_REQUIRED';
     error.status = 400;
     throw error;

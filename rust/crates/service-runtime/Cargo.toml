@@ -12,6 +12,7 @@ marty-crypto = { workspace = true, optional = true }
 mmf-security = { workspace = true, optional = true }
 tonic = { workspace = true, optional = true }
 mmf-platform.workspace = true
+mmf-runtime.workspace = true
 tokio.workspace = true
 tokio-stream.workspace = true
 tokio-rustls.workspace = true

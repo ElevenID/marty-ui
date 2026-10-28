@@ -7,32 +7,12 @@
 
 import { get, post, patch, del } from './api';
 import { postWithIdempotency } from './idempotency';
-import { buildDefinedQueryString, withQuery } from './queryUtils';
+import { buildDefinedQueryString, withQuery, requireOrganizationId as requireScopedOrganizationId } from './queryUtils';
 
 const BASE_PATH = '/v1/deployment-profiles';
 
-const resolveOrganizationId = (filters = {}) => {
-  if (filters?.organization_id) {
-    return filters.organization_id;
-  }
-
-  return null;
-};
-
 const requireOrganizationId = (filters = {}) => {
-  const organizationId = resolveOrganizationId(filters);
-  const normalized = String(organizationId ?? '').trim();
-  if (
-    normalized === ''
-    || normalized.toLowerCase() === 'null'
-    || normalized.toLowerCase() === 'undefined'
-  ) {
-    const error = new Error('An active organization is required before loading deployment profiles.');
-    error.code = 'ORG_REQUIRED';
-    error.status = 400;
-    throw error;
-  }
-  return normalized;
+  return requireScopedOrganizationId(filters?.organization_id || null, undefined, 'An active organization is required before loading deployment profiles.');
 };
 
 /**
