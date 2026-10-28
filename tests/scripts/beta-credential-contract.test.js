@@ -15,6 +15,7 @@ const {
   membershipLoginBehaviorAssertions,
   requireCompletedLoginNonce,
   loginNonceCompletionEvidence,
+  readLoginNonceStatusSnapshot,
   isExactLoginNonceStatusUrl,
   isExactLoginNonceFinalizeUrl,
   loginFinalizeRedirectEvidence,
@@ -35,6 +36,22 @@ test('functional lifecycle requires explicit governed source before fixture inta
   assert.equal(requireLifecycleSourceSelection({RECORD_VIDEO:'0',BETA_AUDIT_TEMPLATE_ID:'owned-current-source'}),'owned-current-source');
   assert.equal(requireLifecycleSourceSelection({RECORD_VIDEO:'1'}),DEFAULT_LIFECYCLE_SOURCE_TEMPLATE_ID);
   assert.equal(requireLifecycleSourceSelection({}),DEFAULT_LIFECYCLE_SOURCE_TEMPLATE_ID);
+});
+
+test('parsed terminal status survives an unavailable response body after navigation', async () => {
+  let reads = 0;
+  const response = { json: async () => {
+    reads += 1;
+    if (reads > 1) throw new Error('navigation consumed response body');
+    return { status: 'completed', redirect_to: '/v1/auth/credential-login/finalize?nonce=private' };
+  } };
+  const snapshot = await readLoginNonceStatusSnapshot(response);
+  assert.deepEqual(snapshot, { status: 'completed', observedNonceStatus: 'completed' });
+  await assert.rejects(response.json(), /navigation consumed/);
+  assert.equal(reads, 2);
+  assert.deepEqual(await readLoginNonceStatusSnapshot({ json: async () => {
+    throw new Error('body unavailable');
+  } }), { status: 'invalid-response', observedNonceStatus: 'invalid-response' });
 });
 
 test('beta gates target the canonical Marty organization and Open Badge login contract', () => {

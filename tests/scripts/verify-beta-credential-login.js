@@ -32,6 +32,7 @@ const {
   membershipLoginBehaviorAssertions,
   requireCompletedLoginNonce,
   loginNonceCompletionEvidence,
+  readLoginNonceStatusSnapshot,
   isExactLoginNonceStatusUrl,
   isExactLoginNonceFinalizeUrl,
   loginFinalizeRedirectEvidence,
@@ -363,18 +364,19 @@ async function runCredentialLogin({ retainedFirstParty = false, evidence = null 
     loginPage.on('request', (request) => {
       if (request.method() === 'GET' && isExactStatus(request.url())) nonceStatusObservation.requestCount += 1;
     });
+    let terminalStatusSnapshot = null;
     const terminalStatusResponse = loginPage.waitForResponse(async (response) => {
       if (!isExactStatus(response.url()) || response.request().method() !== 'GET') return false;
       nonceStatusObservation.responseCount += 1;
       nonceStatusObservation.lastHttpStatus = response.status();
       if (response.status() !== 200) return false;
-      const body = await response.json().catch(() => null);
-      const safe = loginNonceCompletionEvidence(body);
+      const safe = await readLoginNonceStatusSnapshot(response);
       if (safe.status === 'pending') nonceStatusObservation.pendingCount += 1;
       if (safe.status === 'invalid-response') nonceStatusObservation.parseFailureCount += 1;
       nonceStatusObservation.lastStatus = safe.status;
       nonceStatusObservation.lastReasonCode = safe.reasonCode || null;
-      return isTerminalLoginNonceStatus(body);
+      if (isTerminalLoginNonceStatus(safe)) terminalStatusSnapshot = safe;
+      return isTerminalLoginNonceStatus(safe);
     }, { timeout: 60_000 }).catch(() => null);
     const browserFinalizeResponse = loginPage.waitForResponse((response) =>
       response.request().method() === 'GET'
@@ -397,7 +399,7 @@ async function runCredentialLogin({ retainedFirstParty = false, evidence = null 
       browserFinalizeResponse.then(evidence => ({ kind: 'finalize', evidence })),
     ]);
     const terminal = first.kind === 'status' ? first.response : null;
-    const completion = terminal ? await terminal.json().catch(() => ({ status: 'invalid-response' }))
+    const completion = terminal ? terminalStatusSnapshot
       : { status: 'pending-timeout' };
     const browserFinalize = first.kind === 'finalize' ? first.evidence
       : completion.status === 'completed' ? await browserFinalizeResponse : null;
