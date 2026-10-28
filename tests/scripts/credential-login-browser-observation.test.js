@@ -67,6 +67,7 @@ test('verified browser finalize remains complete when a later consumed-nonce sta
       'set-cookie': 'sessionId=fresh; Path=/; HttpOnly; Secure'}});
   await new Promise(resolve => setImmediate(resolve));
   page.send(`${origin}/v1/auth/credential-login/status?nonce=${nonce}`, {status: 'expired'});
+  await new Promise(resolve => setImmediate(resolve));
   const result = await observed.completion();
   assert.equal(result.browserFinalize.verified, true);
   assert.equal(result.nonceEvidence.status, 'completed');

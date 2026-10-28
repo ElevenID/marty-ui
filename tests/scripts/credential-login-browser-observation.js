@@ -38,12 +38,14 @@ function observeCredentialLoginBrowser(page, origin, nonce, timeoutMs = 60_000) 
   {timeout: timeoutMs}).then(async response => loginFinalizeRedirectEvidence({
     url: response.url(), status: response.status(), headers: await response.allHeaders(),
   }, origin, nonce)).catch(() => null);
+  // Preserve arrival order even when the caller awaits wallet presentation or narration.
+  const firstTerminal = Promise.race([
+    terminalStatusResponse.then(snapshot => ({kind: 'status', snapshot})),
+    browserFinalizeResponse.then(evidence => ({kind: 'finalize', evidence})),
+  ]);
 
   return {async completion() {
-    const first = await Promise.race([
-      terminalStatusResponse.then(snapshot => ({kind: 'status', snapshot})),
-      browserFinalizeResponse.then(evidence => ({kind: 'finalize', evidence})),
-    ]);
+    const first = await firstTerminal;
     let terminal = first.kind === 'status' ? first.snapshot : null;
     const browserFinalize = first.kind === 'finalize' ? first.evidence
       : terminal?.status === 'failed' || terminal?.status === 'expired'
