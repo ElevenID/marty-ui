@@ -1,0 +1,362 @@
+"""Synthetic, non-VM tests for the one-shot installer test VM restart path."""
+from __future__ import annotations
+
+import os
+from pathlib import Path
+import sys
+import tempfile
+import unittest
+from unittest import mock
+import uuid
+
+if sys.platform != "linux":
+    raise unittest.SkipTest("Linux VM controller tests")
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+import installer_test_vm_restart as restart
+
+VM = "70573b98-a002-468c-a932-f27c1ca20440"
+NONCE = "23157141-54e9-4744-8c80-a2321e850dec"
+
+
+class Records(unittest.TestCase):
+    def test_poweroff_binds_original_pid_and_result(self):
+        launch = {"pid": 862, "start_ticks": "73433773", "observed_at": 100}
+        intent = {"acceptance": False, "disk_retained": True, "pid": 862,
+                  "reason": "bootstrap-only", "requested_at": 110,
+                  "start_ticks": "73433773", "vm_id": VM}
+        result = {"acceptance": False, "disk_retained": True, "observed_at": 111,
+                  "original_pid": 862, "original_process_absent": True,
+                  "original_start_ticks": "73433773", "request_error_type": None,
+                  "vm_id": VM}
+        original = [restart.release.encode(intent), restart.release.encode(result)]
+
+        def read(_fd, name):
+            return (original[0], intent) if name.endswith("poweroff-intent.json") else (original[1], result)
+
+        with mock.patch.object(restart, "_read_record", side_effect=read):
+            self.assertEqual(restart._poweroff(1, VM, {"launch_receipt": launch}),
+                             tuple(original))
+            for key, value in (("original_process_absent", False),
+                               ("original_pid", 999), ("request_error_type", "SSH"),
+                               ("disk_retained", False)):
+                previous = result[key]
+                result[key] = value
+                with self.assertRaises(ValueError):
+                    restart._poweroff(1, VM, {"launch_receipt": launch})
+                result[key] = previous
+
+    def test_missing_or_unknown_attempt(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                restart._no_prior_attempt(fd, VM)
+                (Path(directory) / (VM + ".restart-intent.json")).write_text("partial")
+                with self.assertRaisesRegex(ValueError, "already recorded"):
+                    restart._no_prior_attempt(fd, VM)
+            finally:
+                os.close(fd)
+
+    def test_dangling_monitor_name_blocks_before_port_check(self):
+        with tempfile.TemporaryDirectory() as directory:
+            runtime = Path(directory)
+            (runtime / "disk.qcow2").write_bytes(b"disk")
+            (runtime / "qmp.sock").symlink_to("missing-socket")
+            with mock.patch.object(restart.launcher, "_idle_uid"):
+                with self.assertRaisesRegex(ValueError, "monitor endpoint"):
+                    restart._no_live_owner(os.getuid(), 99999999, runtime, 22024)
+
+    def test_mutable_disk_digest_is_stable_and_bounded(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "disk.qcow2"
+            path.write_bytes(b"mutable-test-disk")
+            with path.open("rb") as file:
+                self.assertEqual(restart._mutable_digest(file.fileno())[:2],
+                                 (17, restart.hashlib.sha256(b"mutable-test-disk").hexdigest()))
+            path.write_bytes(b"")
+            with path.open("rb") as file:
+                with self.assertRaisesRegex(ValueError, "bounds"):
+                    restart._mutable_digest(file.fileno())
+
+    def test_disk_metadata_open_refuses_fifo_and_symlink(self):
+        with tempfile.TemporaryDirectory() as directory:
+            parent = Path(directory)
+            path = parent / "disk.qcow2"
+            os.mkfifo(path, 0o600)
+            fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                info = path.lstat()
+                with self.assertRaisesRegex(ValueError, "held metadata"):
+                    restart._disk_fd(fd, os.getuid(), os.getgid(), info.st_dev, info.st_ino)
+                path.unlink()
+                path.symlink_to("missing")
+                info = path.lstat()
+                with self.assertRaisesRegex(ValueError, "held metadata"):
+                    restart._disk_fd(fd, os.getuid(), os.getgid(), info.st_dev, info.st_ino)
+            finally:
+                os.close(fd)
+
+    def test_record_chain_refusal_precedes_mutation(self):
+        with mock.patch.object(restart, "_read_record", side_effect=ValueError("record changed")), \
+             mock.patch.object(restart, "_write") as write:
+            with self.assertRaisesRegex(ValueError, "record changed"):
+                restart._record_set(1, VM)
+            write.assert_not_called()
+
+    def test_historical_guest_engine_and_chain_are_exact(self):
+        history = {"creation_intent": b"created", "launch_receipt": b"launched"}
+        record = {"vm_id": VM, "phase": "guest-ready", "qualified": False,
+                  "dispatch_authorized": False,
+                  "record_sha256": {name + "_sha256": restart.release.digest(raw)
+                                    for name, raw in history.items()},
+                  "guest": {"docker_engine_id": "engine-705",
+                            "guest_uid": 1000, "guest_user": "installer"}}
+        def read(_fd, _name):
+            return restart.release.encode(record), record
+        with mock.patch.object(restart, "_read_record", side_effect=read):
+            self.assertEqual(restart._historical_guest(1, VM, history)[1], "engine-705")
+            record["record_sha256"]["launch_receipt_sha256"] = "0" * 64
+            with self.assertRaisesRegex(ValueError, "historical guest"):
+                restart._historical_guest(1, VM, history)
+
+    def test_mutable_image_rejects_external_data_file(self):
+        disk = Path("/fixture/disk.qcow2")
+        base = "/fixture/base.img"
+        observed = {"filename": str(disk), "format": "qcow2",
+                    "backing-filename": base, "full-backing-filename": base,
+                    "format-specific": {"data": {"data-file": "/other/secret"}}}
+        with mock.patch.object(restart.launcher, "_trusted_tool", return_value="a" * 64), \
+             mock.patch.object(restart, "command",
+                               side_effect=lambda *_a, **_k: restart.release.encode(observed)):
+            with self.assertRaisesRegex(ValueError, "backing differs"):
+                restart._mutable_image_info(disk, base)
+            observed["format-specific"] = {}
+            restart._mutable_image_info(disk, base)
+            observed["backing-filename"] = "/other/base"
+            with self.assertRaisesRegex(ValueError, "backing differs"):
+                restart._mutable_image_info(disk, base)
+
+    def test_pre_spawn_rejects_changed_disk_and_intent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            registry = base / "registry"
+            runtime_parent = base / "runtime"
+            runtime_dir = runtime_parent / VM
+            registry.mkdir(mode=0o700)
+            control = registry / (VM + ".control")
+            control.mkdir(mode=0o700)
+            runtime_parent.mkdir(mode=0o755)
+            runtime_dir.mkdir(mode=0o700)
+            disk = runtime_dir / "disk.qcow2"
+            disk.write_bytes(b"booted-overlay")
+            disk.chmod(0o600)
+            info = disk.stat()
+            with disk.open("rb") as held:
+                observed = restart._mutable_digest(held.fileno())
+            intent = {"runtime_dir_device": runtime_dir.stat().st_dev,
+                      "runtime_dir_inode": runtime_dir.stat().st_ino,
+                      "control_dir_device": control.stat().st_dev,
+                      "control_dir_inode": control.stat().st_ino,
+                      "disk_device": info.st_dev, "disk_inode": info.st_ino,
+                      "mutable_disk_bytes": observed[0], "mutable_disk_sha256": observed[1],
+                      "mutable_disk_mtime_ns": observed[2],
+                      "mutable_disk_ctime_ns": observed[3],
+                      "poweroff_intent_sha256": restart.release.digest(b"record"),
+                      "poweroff_result_sha256": restart.release.digest(b"record"),
+                      "historical_guest_readiness_sha256": restart.release.digest(b"record")}
+            raw = restart.release.encode(intent)
+            context = {"raw": {}, "records": {"runtime_receipt": {
+                "runtime_uid": os.getuid(), "runtime_gid": os.getgid()},
+                "seed_receipt": {}, "creation_intent": {
+                    "image": {"image_path": "/fixture/base.img"}}}}
+            class Lease:
+                parent = os.open(registry, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                def read(_fd, name):
+                    return (raw, intent) if name.endswith("restart-intent.json") else (b"record", {})
+                with mock.patch.object(restart, "_read_record", side_effect=read), \
+                     mock.patch.object(restart.launcher, "_seed_media"), \
+                     mock.patch.object(restart, "_mutable_image_info"), \
+                     mock.patch.object(restart, "_source_and_control"):
+                    self.assertEqual(restart._recheck_before_spawn(
+                        Path("/source"), registry, runtime_parent, VM, Lease(), intent, context), raw)
+                    disk.write_bytes(b"changed-overlay")
+                    with self.assertRaisesRegex(ValueError, "mutable disk changed"):
+                        restart._recheck_before_spawn(
+                            Path("/source"), registry, runtime_parent, VM, Lease(), intent, context)
+                    disk.write_bytes(b"booted-overlay")
+                    changed = dict(intent, disk_inode=info.st_ino + 1)
+                    with self.assertRaisesRegex(ValueError, "restart intent changed"):
+                        restart._recheck_before_spawn(
+                            Path("/source"), registry, runtime_parent, VM, Lease(), changed, context)
+            finally:
+                os.close(Lease.parent)
+
+    def test_preflight_writes_only_after_stable_owned_inputs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            registry = base / "registry"
+            runtime_parent = base / "runtime"
+            runtime_dir = runtime_parent / VM
+            control_dir = registry / (VM + ".control")
+            registry.mkdir(mode=0o700)
+            runtime_parent.mkdir(mode=0o755)
+            runtime_dir.mkdir(mode=0o700)
+            control_dir.mkdir(mode=0o700)
+            disk = runtime_dir / "disk.qcow2"
+            disk.write_bytes(b"booted-overlay")
+            disk.chmod(0o600)
+            info = disk.stat()
+            runtime = {"runtime_uid": os.getuid(), "runtime_gid": os.getgid(),
+                       "runtime_account": "account", "runtime_dir_device": runtime_dir.stat().st_dev,
+                       "runtime_dir_inode": runtime_dir.stat().st_ino,
+                       "disk_device": info.st_dev, "disk_inode": info.st_ino}
+            seed = {"ssh_port": 22024, "control_dir_device": control_dir.stat().st_dev,
+                    "control_dir_inode": control_dir.stat().st_ino}
+            args = restart.launcher._arguments(runtime_dir, VM, 22024)
+            records = {"runtime_receipt": runtime, "seed_receipt": seed,
+                       "creation_intent": {"image": {"image_path": "/fixture/base.img"}},
+                       "launch_intent": {"runtime_dir": str(runtime_dir),
+                                         "control_dir": str(control_dir), "args": args,
+                                         "qemu_sha256": "a" * 64, "kvm_gid": 993},
+                       "launch_pid": {"pid": 862}}
+            class Lease:
+                parent = os.open(registry, os.O_RDONLY | os.O_DIRECTORY)
+                owner_pid = os.getpid()
+            wrote = []
+            def write(_fd, _name, record):
+                wrote.append(record)
+                return restart.release.encode(record)
+            def read(_fd, name):
+                return (b"history", {}) if name.endswith("guest-readiness.json") else (b"power", {})
+            try:
+                with mock.patch.object(restart, "_record_set", return_value=({}, records)), \
+                     mock.patch.object(restart, "_poweroff", return_value=(b"power", b"power")), \
+                     mock.patch.object(restart, "_historical_guest",
+                                       return_value=(b"history", "engine", 1000)), \
+                     mock.patch.object(restart, "_identity", return_value="account"), \
+                     mock.patch.object(restart, "_source_and_control"), \
+                     mock.patch.object(restart, "_no_live_owner"), \
+                     mock.patch.object(restart, "_mutable_image_info"), \
+                     mock.patch.object(restart.launcher, "_seed_media"), \
+                     mock.patch.object(restart.launcher, "_host_headroom"), \
+                     mock.patch.object(restart.launcher, "_trusted_tool", return_value="a" * 64), \
+                     mock.patch.object(restart.launcher, "_kvm_group", return_value=993), \
+                     mock.patch.object(restart.launcher, "_boot_id", return_value=str(uuid.uuid4())), \
+                     mock.patch.object(restart, "_read_record", side_effect=read), \
+                     mock.patch.object(restart, "_write", side_effect=write):
+                    intent, _ = restart._check_and_intent(Path("/source"), registry,
+                                                          runtime_parent, VM, NONCE, Lease())
+                    self.assertEqual(intent["mutable_disk_sha256"],
+                                     restart.hashlib.sha256(b"booted-overlay").hexdigest())
+                    self.assertEqual(len(wrote), 1)
+                    wrote.clear()
+                    disk.write_bytes(b"changed-overlay")
+                    with mock.patch.object(restart, "_mutable_digest",
+                                           side_effect=ValueError("disk changed")):
+                        with self.assertRaisesRegex(ValueError, "disk changed"):
+                            restart._check_and_intent(Path("/source"), registry,
+                                                      runtime_parent, VM, NONCE, Lease())
+                    self.assertEqual(wrote, [])
+                    runtime["runtime_dir_inode"] += 1
+                    with self.assertRaisesRegex(ValueError, "runtime directory differs"):
+                        restart._check_and_intent(Path("/source"), registry,
+                                                  runtime_parent, VM, NONCE, Lease())
+                    self.assertEqual(wrote, [])
+                    runtime["runtime_dir_inode"] -= 1
+                    with mock.patch.object(restart, "_no_live_owner",
+                                           side_effect=ValueError("active VM")):
+                        with self.assertRaisesRegex(ValueError, "active VM"):
+                            restart._check_and_intent(Path("/source"), registry,
+                                                      runtime_parent, VM, NONCE, Lease())
+                    with mock.patch.object(restart, "_poweroff",
+                                           side_effect=ValueError("poweroff missing")):
+                        with self.assertRaisesRegex(ValueError, "poweroff missing"):
+                            restart._check_and_intent(Path("/source"), registry,
+                                                      runtime_parent, VM, NONCE, Lease())
+                    with mock.patch.object(restart, "_record_set",
+                                           side_effect=ValueError("historical chain changed")):
+                        with self.assertRaisesRegex(ValueError, "historical chain changed"):
+                            restart._check_and_intent(Path("/source"), registry,
+                                                      runtime_parent, VM, NONCE, Lease())
+                    self.assertEqual(wrote, [])
+            finally:
+                os.close(Lease.parent)
+
+    def test_restart_refusal_precedes_spawn(self):
+        class Lease:
+            parent = 5
+            def __init__(self, registry):
+                self.registry = registry
+            def __enter__(self):
+                return self
+            def __exit__(self, *_args):
+                return None
+
+        with mock.patch.object(restart.os, "geteuid", return_value=0), \
+             mock.patch.object(restart, "ControllerLease", Lease), \
+             mock.patch.object(restart.launcher, "_trusted_tool", return_value="a" * 64), \
+             mock.patch.object(restart.launcher, "_kvm_group", return_value=993), \
+             mock.patch.object(restart, "_check_and_intent", side_effect=ValueError("custody")), \
+             mock.patch.object(restart.subprocess, "Popen") as spawn:
+            with self.assertRaisesRegex(ValueError, "custody"):
+                restart.restart(Path("/source"), Path("/registry"), Path("/runtime"),
+                                vm_id=VM, attempt_nonce=NONCE)
+            spawn.assert_not_called()
+
+    def test_restart_writes_exact_attempt_chain_with_mock_process(self):
+        class Lease:
+            parent = 5
+            def __init__(self, registry):
+                self.registry = registry
+            def __enter__(self):
+                return self
+            def __exit__(self, *_args):
+                return None
+
+        class Process:
+            pid = 12345
+            def poll(self):
+                return None
+
+        runtime = {"runtime_uid": 994, "runtime_gid": 987}
+        intent = {"schema": restart.SCHEMA, "phase": "intent", "vm_id": VM,
+                  "attempt_nonce": NONCE, "ssh_port": 22024,
+                  "qemu_sha256": "a" * 64, "args": ["/usr/bin/qemu-system-x86_64"],
+                  "disk_device": 1, "disk_inode": 2, "controller_boot_id": str(uuid.uuid4()),
+                  "qualified": False, "dispatch_authorized": False,
+                  "application_deployment_authorized": False}
+        context = {"runtime_dir": Path("/runtime") / VM,
+                   "records": {"runtime_receipt": runtime, "launch_pid": {"pid": 862}}}
+        live = {"pid": 12345, "start_ticks": "123", "disk_fd": 7}
+        written = {}
+        def write(_fd, name, record):
+            written[name] = record
+            return restart.release.encode(record)
+        with mock.patch.object(restart.os, "geteuid", return_value=0), \
+             mock.patch.object(restart, "ControllerLease", Lease), \
+             mock.patch.object(restart.launcher, "_trusted_tool", return_value="a" * 64), \
+             mock.patch.object(restart.launcher, "_kvm_group", return_value=993), \
+             mock.patch.object(restart, "_check_and_intent", return_value=(intent, context)), \
+             mock.patch.object(restart, "_recheck_before_spawn", return_value=b"intent"), \
+             mock.patch.object(restart, "_same_path"), \
+             mock.patch.object(restart, "_no_live_owner"), \
+             mock.patch.object(restart.subprocess, "Popen", return_value=Process()) as spawn, \
+             mock.patch.object(restart.launcher, "_start_ticks", return_value="123"), \
+             mock.patch.object(restart, "_read_record", return_value=(b"intent", intent)), \
+             mock.patch.object(restart, "_write", side_effect=write), \
+             mock.patch.object(restart.os, "readlink", return_value=str(restart.launcher.QEMU)), \
+             mock.patch.object(restart.launcher, "_live", return_value=live):
+            result = restart.restart(Path("/source"), Path("/registry"), Path("/runtime"),
+                                     vm_id=VM, attempt_nonce=NONCE)
+        self.assertEqual(spawn.call_count, 1)
+        self.assertEqual(result["pid"], 12345)
+        self.assertEqual(result["intent_sha256"], restart.release.digest(b"intent"))
+        self.assertFalse(result["qualified"] or result["dispatch_authorized"]
+                         or result["application_deployment_authorized"])
+        self.assertEqual(written[VM + ".restart-pid.json"]["attempt_nonce"], NONCE)
+        self.assertEqual(written[VM + ".restart-receipt.json"]["start_ticks"], "123")
+
+
+if __name__ == "__main__":
+    unittest.main()
