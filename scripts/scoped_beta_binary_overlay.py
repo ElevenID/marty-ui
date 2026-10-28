@@ -112,10 +112,11 @@ def validate_runtime_after(before, after, binaries, maintenance_restart_roles):
                 changes.append(role)
             require(actual == expected, "UNSELECTED_RUNTIME_CHANGED:" + role)
             continue
-        changed_fields = {"containerId", "startedAt", "hostPid", "source", "sha256", "processExecutableSha256", "binaryMounts", "requiredObservation"}
+        changed_fields = {"containerId", "startedAt", "hostPid", "source", "coreSource", "kind", "sha256", "processExecutableSha256", "binaryMounts", "requiredObservation"}
         require({k: v for k, v in actual.items() if k not in changed_fields} == {k: v for k, v in prior.items() if k not in changed_fields}, "UNRELATED_SELECTED_RUNTIME_CHANGED")
         require("requiredObservation" not in actual, "LEGACY_EXPECTATION_CANNOT_BECOME_NEW_D12_OBSERVATION")
         require(actual["containerId"] not in {row["containerId"] for row in old.values()} and actual["source"] == UI_REVISION, "FRESH_SELECTED_SOURCE_REQUIRED")
+        require(actual.get("coreSource") == CORE_REVISION and actual.get("kind") == "SCOPED_NATIVE_FUNCTIONAL_OVERLAY", "SELECTED_RUNTIME_LINEAGE_CHANGED")
         require(actual["sha256"] == actual["processExecutableSha256"] == binaries[role]["sha256"], "RUNNING_ELF_HASH_CHANGED")
         require(actual["health"] == "healthy" and started_later(actual["startedAt"], prior["startedAt"]) and type(actual["hostPid"]) is int and actual["hostPid"] > 0, "SELECTED_RUNTIME_NOT_READY")
         target = "/usr/local/bin/" + ROLE_BINARIES[role]
