@@ -2746,10 +2746,39 @@ mod tests {
         assert_eq!(project.len(), 46);
         state.advance(Phase::Verified).unwrap();
         drop(state);
+        let raw = std::fs::read(path.join(JOURNAL)).unwrap();
+        assert!(!raw
+            .windows(b"\"profile\"".len())
+            .any(|v| v == b"\"profile\""));
         let state = InstallerState::resume(&path, &identity()).unwrap();
         assert_eq!(state.journal().runtime(), Some(&runtime));
         assert_eq!(state.journal().compose_project(), project);
         assert!(InstallerState::create_with_runtime(&path, identity(), runtime).is_err());
+    }
+    #[test]
+    fn explicit_rootless_runtime_profile_survives_private_journal_reopen() {
+        if unsafe { libc::geteuid() } == 0 {
+            return;
+        }
+        let parent = tempfile::tempdir().unwrap();
+        let path = parent.path().join("rootless-intent");
+        let binding = RuntimeBinding {
+            docker_host: format!("unix:///run/user/{}/docker.sock", unsafe {
+                libc::geteuid()
+            }),
+            engine_id: "rootless-engine-identity".into(),
+            openbao_port: 18200,
+            profile: RuntimeProfile::Rootless,
+        };
+        let state =
+            InstallerState::create_with_runtime(&path, identity(), binding.clone()).unwrap();
+        drop(state);
+        let raw = std::fs::read(path.join(JOURNAL)).unwrap();
+        assert!(raw
+            .windows(b"\"profile\":\"rootless\"".len())
+            .any(|v| v == b"\"profile\":\"rootless\""));
+        let resumed = InstallerState::resume(&path, &identity()).unwrap();
+        assert_eq!(resumed.journal().runtime(), Some(&binding));
     }
     #[test]
     fn invalid_runtime_is_refused_before_directory_creation() {

@@ -6,11 +6,13 @@
 use crate::installer_state::RuntimeProfile;
 use serde::{Deserialize, Serialize};
 use std::{
-    fs,
+    ffi::CString,
+    fs::{self, File},
     io::{ErrorKind, Read},
     os::{
-        fd::AsRawFd,
+        fd::{AsRawFd, FromRawFd},
         unix::{
+            ffi::OsStrExt,
             fs::{FileTypeExt, MetadataExt, PermissionsExt},
             process::CommandExt,
         },
@@ -80,7 +82,9 @@ fn endpoint(host: &str) -> Result<()> {
     }
     Ok(())
 }
-fn endpoint_for_profile(host: &str, profile: RuntimeProfile) -> Result<Option<(u64, u64)>> {
+struct HeldRootlessSocket(File);
+
+fn endpoint_for_profile(host: &str, profile: RuntimeProfile) -> Result<Option<HeldRootlessSocket>> {
     endpoint(host)?;
     if profile == RuntimeProfile::Rootful {
         return Ok(None);
@@ -93,7 +97,7 @@ fn endpoint_for_profile(host: &str, profile: RuntimeProfile) -> Result<Option<(u
         host.strip_prefix("unix://")
             .ok_or("invalid local Docker endpoint")?,
     );
-    checked_rootless_socket(path, uid).map(Some)
+    hold_rootless_socket(path, uid).map(Some)
 }
 fn checked_rootless_socket(path: &Path, uid: u32) -> Result<(u64, u64)> {
     trusted_ancestors(path)?;
@@ -110,6 +114,33 @@ fn checked_rootless_socket(path: &Path, uid: u32) -> Result<(u64, u64)> {
         return Err("rootless Docker socket custody differs".into());
     }
     Ok((socket.dev(), socket.ino()))
+}
+fn hold_rootless_socket(path: &Path, uid: u32) -> Result<HeldRootlessSocket> {
+    let named = checked_rootless_socket(path, uid)?;
+    let c_path =
+        CString::new(path.as_os_str().as_bytes()).map_err(|_| "invalid rootless socket")?;
+    let fd = unsafe {
+        libc::open(
+            c_path.as_ptr(),
+            libc::O_PATH | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        )
+    };
+    if fd < 0 {
+        return Err("rootless socket unavailable".into());
+    }
+    let held = HeldRootlessSocket(unsafe { File::from_raw_fd(fd) });
+    let metadata = held
+        .0
+        .metadata()
+        .map_err(|_| "rootless socket unavailable")?;
+    if !metadata.file_type().is_socket()
+        || metadata.uid() != uid
+        || (metadata.dev(), metadata.ino()) != named
+        || checked_rootless_socket(path, uid)? != named
+    {
+        return Err("rootless Docker socket custody differs".into());
+    }
+    Ok(held)
 }
 fn engine_id(value: &str) -> bool {
     !value.is_empty()
@@ -359,13 +390,25 @@ fn validate_info_for_profile(
     };
     let rootless = mode("name=rootless");
     let userns = mode("name=userns");
+    let exact_rootless_count = info
+        .security_options
+        .iter()
+        .filter(|option| option.as_str() == "name=rootless")
+        .count();
+    let rootless_marker_count = info
+        .security_options
+        .iter()
+        .filter(|option| option.as_str() == "name=rootless" || option.starts_with("name=rootless,"))
+        .count();
     if info.id != expected
         || !engine_id(&info.id)
         || info.os != "linux"
         || !matches!(info.architecture.as_str(), "amd64" | "x86_64")
         || match profile {
             RuntimeProfile::Rootful => rootless || userns,
-            RuntimeProfile::Rootless => !rootless || userns,
+            RuntimeProfile::Rootless => {
+                !rootless || exact_rootless_count != 1 || rootless_marker_count != 1 || userns
+            }
         }
         || info.server_version.is_empty()
         || info.server_version.len() > 128
@@ -391,20 +434,47 @@ pub struct DockerRunner {
     runner: BoundedRunner,
     expected_engine_id: String,
     profile: RuntimeProfile,
-    socket_identity: Option<(u64, u64)>,
+    socket_identity: Option<HeldRootlessSocket>,
     deadline: Option<Instant>,
 }
 impl DockerRunner {
     fn recheck_endpoint(&self) -> Result<()> {
-        if endpoint_for_profile(
-            self.runner
-                .docker_host
-                .as_deref()
-                .ok_or("Docker endpoint unavailable")?,
-            self.profile,
-        )? != self.socket_identity
-        {
-            return Err("rootless Docker socket changed".into());
+        let host = self
+            .runner
+            .docker_host
+            .as_deref()
+            .ok_or("Docker endpoint unavailable")?;
+        match self.profile {
+            RuntimeProfile::Rootful => {
+                endpoint(host)?;
+                if self.socket_identity.is_some() {
+                    return Err("rootless Docker socket changed".into());
+                }
+            }
+            RuntimeProfile::Rootless => {
+                let uid = unsafe { libc::geteuid() };
+                if uid == 0 {
+                    return Err("rootless Docker socket must belong to the installer user".into());
+                }
+                let path = Path::new(
+                    host.strip_prefix("unix://")
+                        .ok_or("invalid local Docker endpoint")?,
+                );
+                let held = self
+                    .socket_identity
+                    .as_ref()
+                    .ok_or("rootless socket unavailable")?;
+                let metadata = held
+                    .0
+                    .metadata()
+                    .map_err(|_| "rootless socket unavailable")?;
+                if !metadata.file_type().is_socket()
+                    || metadata.uid() != uid
+                    || checked_rootless_socket(path, uid)? != (metadata.dev(), metadata.ino())
+                {
+                    return Err("rootless Docker socket changed".into());
+                }
+            }
         }
         Ok(())
     }
@@ -621,6 +691,16 @@ mod tests {
             RuntimeProfile::Rootless
         )
         .is_err());
+        for ambiguous in [
+            rootless.replace("name=rootless", "name=rootless,disabled"),
+            rootless.replace("name=rootless", "name=rootless\",\"name=rootless"),
+            rootless.replace("name=rootless", "name=rootless\",\"name=rootless,disabled"),
+        ] {
+            assert!(
+                validate_info_for_profile(&ambiguous, "test-engine", RuntimeProfile::Rootless)
+                    .is_err()
+            );
+        }
         assert!(validate_info_for_profile(
             &rootless.replace("name=rootless", "name=rootless,enabled\",\"name=userns"),
             "test-engine",
@@ -649,6 +729,80 @@ mod tests {
         assert!(checked_rootless_socket(&socket, uid).is_err());
         drop(listener);
         drop(other);
+    }
+    #[test]
+    fn rootless_runner_refuses_mode_engine_and_socket_drift_before_next_command() {
+        if unsafe { libc::geteuid() } == 0 {
+            return;
+        }
+        let parent = private_temp();
+        let socket = parent.path().join("docker.sock");
+        let _listener = UnixListener::bind(&socket).unwrap();
+        let info_path = parent.path().join("engine-info.json");
+        let rootless = info().replace("name=seccomp,profile=builtin", "name=rootless");
+        fs::write(&info_path, &rootless).unwrap();
+        let binary = script(
+            parent.path(),
+            r#"case "$1" in
+info) cat "${0%/*}/engine-info.json" ;;
+ps) printf x >> "${0%/*}/resource-calls"; printf 'owned' ;;
+*) exit 9 ;;
+esac"#,
+        );
+        // The production constructor admits only /run/user/<uid>/docker.sock.
+        // Construct the same runner state with a private test socket to prove
+        // the per-command guard without touching any host Docker endpoint.
+        assert!(DockerRunner::new_for_profile(
+            &binary,
+            &format!("unix://{}", socket.display()),
+            "test-engine",
+            parent.path(),
+            RuntimeProfile::Rootless,
+        )
+        .is_err());
+        let docker = DockerRunner {
+            runner: BoundedRunner::new(
+                &binary,
+                &format!("unix://{}", socket.display()),
+                parent.path(),
+            )
+            .unwrap(),
+            expected_engine_id: "test-engine".into(),
+            profile: RuntimeProfile::Rootless,
+            socket_identity: Some(
+                hold_rootless_socket(&socket, unsafe { libc::geteuid() }).unwrap(),
+            ),
+            deadline: None,
+        };
+        assert_eq!(docker.run_checked(&["ps"]).unwrap(), "owned");
+        let calls = fs::read(parent.path().join("resource-calls")).unwrap();
+        for changed in [
+            info().to_owned(),
+            rootless.replace("test-engine", "other-engine"),
+        ] {
+            fs::write(&info_path, changed).unwrap();
+            assert!(docker.run_checked(&["ps"]).is_err());
+            assert_eq!(
+                fs::read(parent.path().join("resource-calls")).unwrap(),
+                calls
+            );
+        }
+        fs::write(&info_path, rootless).unwrap();
+        let other_path = parent.path().join("other.sock");
+        let _other = UnixListener::bind(&other_path).unwrap();
+        fs::rename(&other_path, &socket).unwrap();
+        assert!(docker.run_checked(&["ps"]).is_err());
+        assert_eq!(
+            fs::read(parent.path().join("resource-calls")).unwrap(),
+            calls
+        );
+        let held_fd = docker.socket_identity.as_ref().unwrap().0.as_raw_fd();
+        assert_ne!(
+            unsafe { libc::fcntl(held_fd, libc::F_GETFD) } & libc::FD_CLOEXEC,
+            0
+        );
+        drop(docker);
+        assert_eq!(unsafe { libc::fcntl(held_fd, libc::F_GETFD) }, -1);
     }
     #[test]
     fn diagnostic_capture_bounds_arguments_and_keeps_both_streams_private() {
