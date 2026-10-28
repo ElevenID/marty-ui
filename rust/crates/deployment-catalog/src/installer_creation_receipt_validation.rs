@@ -5,7 +5,9 @@
 #![allow(dead_code)] // No purge coordinator exists yet.
 
 use crate::{
-    installer_creation_identity::{observe, ObservedDirectory, RECEIPT},
+    installer_creation_identity::{
+        observe, observe_operator, ObservedDirectory, ObservedFile, CREDENTIAL_RECEIPT, RECEIPT,
+    },
     installer_purge_host::{HostIdentity, Kind},
     installer_state::LockedInspection,
 };
@@ -238,6 +240,133 @@ pub(crate) fn inspect(locked: &LockedInspection, installation: &Path) -> Inspect
     }
 }
 
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawFile {
+    identity: RawIdentity,
+    mount_id: u64,
+}
+impl RawFile {
+    fn matches(&self, observed: &ObservedFile) -> bool {
+        let m = &self.identity;
+        let expected = HostIdentity {
+            dev: m.dev,
+            ino: m.ino,
+            uid: m.uid,
+            gid: m.gid,
+            mode: m.mode,
+            kind: Kind::File,
+        };
+        self.mount_id != 0
+            && self.mount_id == observed.mount_id
+            && m.kind == "file"
+            && observed.identity == expected
+            && m.mode == 0o600
+            && m.uid == unsafe { libc::geteuid() }
+    }
+}
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CredentialReceipt {
+    schema: String,
+    installation_id: uuid::Uuid,
+    source_sha: String,
+    secrets: RawDirectory,
+    operator_password: RawFile,
+    local_historical_evidence: bool,
+    deletion_authorized: bool,
+}
+/// Current local identity evidence only. Password/scalar contents are never
+/// read. This does not inventory the contents of the secrets directory.
+pub(crate) struct ObservedCredentialCreation {
+    pub initial: ObservedInitialCreation,
+    pub secrets: ObservedDirectory,
+    pub operator_password: ObservedFile,
+    pub receipt_sha256: String,
+}
+pub(crate) enum CredentialInspectionOutcome {
+    Missing,
+    Unusable,
+    MatchedLocalReceipt(Box<ObservedCredentialCreation>),
+}
+fn verify_credentials(
+    locked: &LockedInspection,
+    installation: &Path,
+) -> Result<Option<ObservedCredentialCreation>> {
+    let Some(initial) = verify(locked, installation)? else {
+        return Ok(None);
+    };
+    let root = locked.installation_directory();
+    let evidence = child(root, "evidence", libc::O_RDONLY | libc::O_DIRECTORY)?.ok_or(())?;
+    let Some(record) = child(&evidence, CREDENTIAL_RECEIPT, libc::O_PATH)? else {
+        return Ok(None);
+    };
+    let bytes = read_regular(&record)?;
+    let receipt: CredentialReceipt = serde_json::from_slice(&bytes).map_err(|_| ())?;
+    if serde_json::to_vec(&receipt).map_err(|_| ())? != bytes
+        || receipt.schema != "elevenid.installer-created-credentials/v1"
+        || receipt.installation_id != locked.journal().installation_id()
+        || receipt.source_sha != locked.journal().identity().source_sha
+        || !receipt.local_historical_evidence
+        || receipt.deletion_authorized
+        || observe(&evidence).map_err(|_| ())? != initial.evidence
+    {
+        return Err(());
+    }
+    let secrets = child(root, "secrets", libc::O_RDONLY | libc::O_DIRECTORY)?.ok_or(())?;
+    let operator = child(root, "operator-password", libc::O_PATH)?.ok_or(())?;
+    let observed_secrets = observe(&secrets).map_err(|_| ())?;
+    let observed_operator = observe_operator(&operator).map_err(|_| ())?;
+    if !receipt.secrets.matches(&observed_secrets)
+        || !receipt.operator_password.matches(&observed_operator)
+        || observed_secrets.mount_id != initial.root.mount_id
+        || observed_operator.mount_id != initial.root.mount_id
+    {
+        return Err(());
+    }
+    let latest_secrets = child(root, "secrets", libc::O_RDONLY | libc::O_DIRECTORY)?.ok_or(())?;
+    let latest_operator = child(root, "operator-password", libc::O_PATH)?.ok_or(())?;
+    let latest_record = child(&evidence, CREDENTIAL_RECEIPT, libc::O_PATH)?.ok_or(())?;
+    let before = record.metadata().map_err(|_| ())?;
+    let after = latest_record.metadata().map_err(|_| ())?;
+    if observe(&latest_secrets).map_err(|_| ())? != observed_secrets
+        || observe_operator(&latest_operator).map_err(|_| ())? != observed_operator
+        || before.dev() != after.dev()
+        || before.ino() != after.ino()
+        || read_regular(&latest_record)? != bytes
+    {
+        return Err(());
+    }
+    let latest_initial = verify(locked, installation)?.ok_or(())?;
+    if latest_initial.root != initial.root
+        || latest_initial.evidence != initial.evidence
+        || latest_initial.downloads != initial.downloads
+        || latest_initial.receipt_sha256 != initial.receipt_sha256
+    {
+        return Err(());
+    }
+    Ok(Some(ObservedCredentialCreation {
+        initial,
+        secrets: observed_secrets,
+        operator_password: observed_operator,
+        receipt_sha256: format!("{:x}", Sha256::digest(&bytes)),
+    }))
+}
+pub(crate) fn inspect_credentials(
+    locked: &LockedInspection,
+    installation: &Path,
+) -> CredentialInspectionOutcome {
+    let result = verify_credentials(locked, installation);
+    if locked.require_path_binding(installation).is_err() || locked.require_unchanged().is_err() {
+        return CredentialInspectionOutcome::Unusable;
+    }
+    match result {
+        Ok(Some(observed)) => CredentialInspectionOutcome::MatchedLocalReceipt(Box::new(observed)),
+        Ok(None) => CredentialInspectionOutcome::Missing,
+        Err(()) => CredentialInspectionOutcome::Unusable,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -370,6 +499,104 @@ mod tests {
         assert!(matches!(
             inspect_state(&state, &path),
             InspectionOutcome::Missing
+        ));
+        assert!(!receipt.exists());
+    }
+    fn credential_fixture() -> (tempfile::TempDir, PathBuf, InstallerState) {
+        use crate::installer_state::{Phase, PASSWORD_POLICY};
+        let (parent, path, mut state) = fixture();
+        state.advance(Phase::Verified).unwrap();
+        state.advance(Phase::Provisioning).unwrap();
+        state
+            .generate_local_credentials(&serde_json::json!({"passwordPolicy":PASSWORD_POLICY}))
+            .unwrap();
+        state.persist_credential_creation_receipt(&path).unwrap();
+        (parent, path, state)
+    }
+    fn inspect_credential_state(
+        state: &InstallerState,
+        path: &Path,
+    ) -> CredentialInspectionOutcome {
+        state
+            .with_inspection(|locked| Ok(inspect_credentials(locked, path)))
+            .unwrap()
+    }
+    #[test]
+    fn credential_receipt_matches_metadata_without_changing_secret_bytes() {
+        let (_parent, path, state) = credential_fixture();
+        let password = fs::read(path.join("operator-password")).unwrap();
+        let receipt = fs::read(path.join("evidence").join(CREDENTIAL_RECEIPT)).unwrap();
+        let CredentialInspectionOutcome::MatchedLocalReceipt(observed) =
+            inspect_credential_state(&state, &path)
+        else {
+            panic!("expected local credential evidence")
+        };
+        assert_eq!(
+            observed.secrets,
+            observe(&File::open(path.join("secrets")).unwrap()).unwrap()
+        );
+        assert_eq!(observed.operator_password.identity.kind, Kind::File);
+        assert_eq!(
+            observed.initial.root.mount_id,
+            observed.operator_password.mount_id
+        );
+        assert_eq!(
+            observed.receipt_sha256,
+            format!("{:x}", Sha256::digest(&receipt))
+        );
+        assert_eq!(fs::read(path.join("operator-password")).unwrap(), password);
+        assert_eq!(
+            fs::read(path.join("evidence").join(CREDENTIAL_RECEIPT)).unwrap(),
+            receipt
+        );
+    }
+    #[test]
+    fn changed_credential_path_or_fifo_receipt_is_unusable() {
+        let (_parent, path, state) = credential_fixture();
+        fs::rename(path.join("secrets"), path.join("saved-secrets")).unwrap();
+        fs::create_dir(path.join("secrets")).unwrap();
+        fs::set_permissions(path.join("secrets"), fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(matches!(
+            inspect_credential_state(&state, &path),
+            CredentialInspectionOutcome::Unusable
+        ));
+        let (_parent, path, state) = credential_fixture();
+        let receipt = path.join("evidence").join(CREDENTIAL_RECEIPT);
+        fs::remove_file(&receipt).unwrap();
+        let name = CString::new(receipt.as_os_str().as_encoded_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+        assert!(matches!(
+            inspect_credential_state(&state, &path),
+            CredentialInspectionOutcome::Unusable
+        ));
+        let (_parent, path, state) = credential_fixture();
+        let password = path.join("operator-password");
+        fs::remove_file(&password).unwrap();
+        let name = CString::new(password.as_os_str().as_encoded_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+        assert!(matches!(
+            inspect_credential_state(&state, &path),
+            CredentialInspectionOutcome::Unusable
+        ));
+    }
+    #[test]
+    fn missing_or_tampered_credential_evidence_never_adopts_paths() {
+        let (_parent, path, state) = credential_fixture();
+        let receipt = path.join("evidence").join(CREDENTIAL_RECEIPT);
+        let mut data: serde_json::Value =
+            serde_json::from_slice(&fs::read(&receipt).unwrap()).unwrap();
+        data["deletion_authorized"] = true.into();
+        let bytes = serde_json::to_vec(&data).unwrap();
+        fs::write(&receipt, &bytes).unwrap();
+        assert!(matches!(
+            inspect_credential_state(&state, &path),
+            CredentialInspectionOutcome::Unusable
+        ));
+        assert_eq!(fs::read(&receipt).unwrap(), bytes);
+        fs::remove_file(&receipt).unwrap();
+        assert!(matches!(
+            inspect_credential_state(&state, &path),
+            CredentialInspectionOutcome::Missing
         ));
         assert!(!receipt.exists());
     }
