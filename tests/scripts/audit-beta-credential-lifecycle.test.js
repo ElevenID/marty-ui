@@ -1045,3 +1045,12 @@ test('HTTP200 body failure retains sanitized reason and only whitelisted submiss
  assert.equal(r.wallet.ok,false);assert.equal(r.wallet.status,200);assert.equal(r.wallet.errorClass,'JWT error');assert(r.wallet.error.includes('[redacted]'));assert(!JSON.stringify(r).includes(secret));
  assert.deepEqual(r.wallet.submission,{submitted:false,verifier_http_status:null,verifier_error:null});assert.equal(r.diagnostic.outcome,'REJECTED_BEFORE_SUBMISSION');assert.equal(r.result,null);assert.equal(f.page.requests.length,1);
 });
+
+
+test('verification records current-run Flow ownership before wallet failure for finally retirement',async()=>{
+ const report={ownedResources:{flowInstances:[]}},flows=report.ownedResources.flowInstances,f=verificationBrowserFixture(400,{ok:false,error:'Invalid request: request object rejected'});
+ const r=await f.run({ownedFlows:flows,runId:'SOURCE_ONLY_FRESH_RUN',organizationId:'11111111-1111-4111-8111-111111111111',presentationPolicyId:'22222222-2222-4222-8222-222222222222'});
+ assert.equal(r.result,null);assert.deepEqual(flows,[{id:'SOURCE_ONLY_INSTANCE',organizationId:'11111111-1111-4111-8111-111111111111',presentationPolicyId:'22222222-2222-4222-8222-222222222222',externalReference:'SOURCE_ONLY_VERIFY:SOURCE_ONLY_FRESH_RUN'}]);
+ assert.equal(JSON.parse(f.page.requests[0].options.body).external_reference,flows[0].externalReference);
+ assert.deepEqual(JSON.parse(JSON.stringify(report)).ownedResources.flowInstances,flows);
+});

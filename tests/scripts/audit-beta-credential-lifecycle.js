@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 /* eslint-disable no-console */
 
+const {requireLifecyclePolicySelection,readLifecyclePolicyAuthority}=require('./lifecycle-policy-authority');
+const {cleanupLifecycleFlows}=require('./lifecycle-flow-cleanup');
 const fs = require('fs');
 const { acquireWalletSession, openIsolatedWallet, resetIsolatedWallet } = require('./demo-wallet-session');
 const path = require('path');
@@ -862,6 +864,8 @@ async function verify(page, walletPage, label, {
   returnOnWalletFailure = false,
   resultTimeoutMs = 60_000,
   resultIntervalMs = 1_000,
+  ownedFlows = null,
+  runId = null,
 } = {}) {
   assert(Number.isInteger(resultTimeoutMs)&&resultTimeoutMs>0&&resultTimeoutMs<=60_000);
   assert(Number.isInteger(resultIntervalMs)&&resultIntervalMs>=0&&resultIntervalMs<=1_000);
@@ -870,8 +874,10 @@ async function verify(page, walletPage, label, {
     organizationId,
     presentationPolicyId,
     issuerDid,
-    externalReference: label,
+    externalReference: ownedFlows ? `${label}:${runId}` : label,
   });
+  const ownedFlow=ownedFlows?{id:null,organizationId,presentationPolicyId,externalReference:request.external_reference}:null;
+  if(ownedFlow){assert(typeof runId==='string'&&runId,'Fresh run identity is required');ownedFlows.push(ownedFlow);}
   const session = await page.evaluate(async (payload) => {
     const response = await fetch('/v1/flows/verify', {
       method: 'POST',
@@ -896,6 +902,7 @@ async function verify(page, walletPage, label, {
           || 'Session creation failed',
     };
   }, request);
+  if(ownedFlow)ownedFlow.id=session.instanceId;
   const sanitizedSession = {
     ...session,
     requestUri: session.requestUri ? '[present]' : null,
@@ -970,6 +977,7 @@ async function verify(page, walletPage, label, {
 
 async function main() {
   assert.equal(requireLifecycleSourceSelection(process.env),SOURCE_TEMPLATE_ID);
+  assert.equal(requireLifecyclePolicySelection(process.env),POLICY_ID);
   const email = process.env.TEST_VENDOR_EMAIL || process.env.TEST_ADMIN_EMAIL;
   const password = process.env.TEST_VENDOR_PASSWORD || process.env.TEST_ADMIN_PASSWORD;
   if (!email || !password) throw new Error('Missing beta operator credentials');
@@ -980,7 +988,7 @@ async function main() {
   // engineering helpers remains possible without starting this live entry point.
   const evidence = await liveClient();
   const uiCandidate = resolveUiCandidateDist();
-  const ownedResources = { templateId: null, transactionIds: [], credentialIds: [], uncertainMutations: [] };
+  const ownedResources = { templateId: null, transactionIds: [], credentialIds: [], uncertainMutations: [], flowInstances: [] };
   const report = {
     createdAt: new Date().toISOString(),
     organizationId: ORG_ID,
@@ -1062,6 +1070,8 @@ async function main() {
       };
     }, ORG_ID);
 
+    report.policyAuthority = await readLifecyclePolicyAuthority(route=>browserJson(page,route),
+      {organizationId:ORG_ID,templateId:SOURCE_TEMPLATE_ID,policyId:POLICY_ID});
     walletSession = await acquireLifecycleWalletAfterSource(page,context,stamp,profile=>{report.revocationProfile=profile;});
     report.walletSession = walletSession.evidence;
     report.credentialTemplate = await ensureLifecycleTemplate(
@@ -1107,6 +1117,7 @@ async function main() {
 
     report.initialVerification = await verify(page, walletPage, `${PRESENTATION_TEST_ID}: initial active trial`, {
       issuerDid: resolveVerificationIssuerDid(VERIFIER_DID, credential),
+      ownedFlows:ownedResources.flowInstances,runId:stamp,
     });
     report.initialActiveAllowed = initialActiveVerificationPassed(report.initialVerification);
     report.storyAssertions = { initial_active_access_allowed: report.initialActiveAllowed };
@@ -1185,6 +1196,7 @@ async function main() {
     report.suspend.current = await getCredentialStatus(page, credential.id);
     report.suspend.verification = await verify(page, walletPage, `${PRESENTATION_TEST_ID}: suspended trial`, {
       issuerDid: resolveVerificationIssuerDid(VERIFIER_DID, credential),
+      ownedFlows:ownedResources.flowInstances,runId:stamp,
     });
     requireLifecycleActionEvidence('suspend', report.suspend);
     await showLifecycleStep(page, 'Suspension denies verification', 'The status-aware verifier returns the credential\'s suspended-state denial reason.', '3 of 5');
@@ -1201,6 +1213,7 @@ async function main() {
     report.reinstate.current = await getCredentialStatus(page, credential.id);
     report.reinstate.verification = await verify(page, walletPage, `${PRESENTATION_TEST_ID}: reinstated trial`, {
       issuerDid: resolveVerificationIssuerDid(VERIFIER_DID, credential),
+      ownedFlows:ownedResources.flowInstances,runId:stamp,
     });
     requireLifecycleActionEvidence('reinstate', report.reinstate);
     await showLifecycleStep(page, 'Reinstatement restores verification', 'The same credential fixture passes again after the issuer reinstates it.', '4 of 5');
@@ -1217,6 +1230,7 @@ async function main() {
     report.revoke.current = await getCredentialStatus(page, credential.id);
     report.revoke.verification = await verify(page, walletPage, `${PRESENTATION_TEST_ID}: revoked trial`, {
       issuerDid: resolveVerificationIssuerDid(VERIFIER_DID, credential),
+      ownedFlows:ownedResources.flowInstances,runId:stamp,
     });
     requireLifecycleActionEvidence('revoke', report.revoke);
     await showLifecycleStep(page, 'Revoked credential is denied', 'In this test scenario, the verifier denies the revoked credential and the issuer inventory retains the revoked state.', '5 of 5');
@@ -1265,11 +1279,14 @@ async function main() {
   } finally {
     await finalizeLiveRun({
       cleanup: async () => {
+        report.flowCleanup=await cleanupLifecycleFlows((route,options)=>browserJson(page,route,options),ownedResources.flowInstances);
         try {
           report.cleanup = await cleanupOwnedLifecycle(page, ownedResources);
         } catch (error) {
           report.cleanup = { ok: false, error: redact(error.message || String(error)) };
         }
+        report.cleanup.flowInstancesRetired=report.flowCleanup.ok;
+        if(!report.flowCleanup.ok){report.cleanup.ok=false;report.cleanup.complete=false;}
         if (walletSession) {
           try {
             await walletSession.close();
