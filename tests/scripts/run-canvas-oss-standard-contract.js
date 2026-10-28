@@ -1546,9 +1546,21 @@ async function rosterJobBaseline(marty, organizationId, bindingId) {
   return new Set(jobs.map(job => job.id));
 }
 
-async function waitForLatestRosterJob(marty, organizationId, bindingId, beforeJobIds) {
+async function activatedRosterJobTimestamp(marty, organizationId, platformId, bindingId, configVersion) {
+  const binding=await marty.get(`/v1/integrations/canvas/program-bindings/${encodeURIComponent(bindingId)}`);
+  requireCondition(binding.id===bindingId && binding.organization_id===organizationId
+    && binding.platform_id===platformId && binding.enabled===true
+    && binding.config_version===configVersion && typeof binding.activated_at==='string'
+    && Number.isFinite(Date.parse(binding.activated_at)),
+  'canvas_roster_activation_binding_invalid','Activated Canvas binding has no exact server-side activation identity.');
+  return binding.activated_at;
+}
+
+async function waitForLatestRosterJob(marty, organizationId, bindingId, beforeJobIds, activatedAt) {
   requireCondition(beforeJobIds instanceof Set, 'canvas_roster_job_baseline_missing',
     'A fresh activation requires its exact preactivation job inventory.');
+  requireCondition(typeof activatedAt==='string' && Number.isFinite(Date.parse(activatedAt)),
+    'canvas_roster_activation_timestamp_missing','Roster job must bind the exact server activation instant.');
   return waitFor(async () => {
     const jobs = safeList(await marty.get(
       `/v1/integrations/canvas/canvas-sync-jobs?organization_id=${encodeURIComponent(organizationId)}&binding_id=${encodeURIComponent(bindingId)}&limit=100`,
@@ -1558,10 +1570,19 @@ async function waitForLatestRosterJob(marty, organizationId, bindingId, beforeJo
     const job = jobs.find((item) => (
       item.target_type === 'background_roster'
         && item.organization_id === organizationId && item.binding_id === bindingId
+        // Rust enqueues this job with the same server DateTime as binding.activated_at.
+        // Compare the serialized value exactly: Date.parse loses microseconds and
+        // could admit an unrelated periodic job in the same millisecond.
+        && item.created_at === activatedAt
         && !beforeJobIds.has(item.id)
     ));
     if (!job) return null;
-    return waitForJob(marty, job.id);
+    const completed=await waitForJob(marty, job.id);
+    requireCondition(completed.id===job.id && completed.organization_id===organizationId
+      && completed.binding_id===bindingId && completed.target_type==='background_roster'
+      && completed.created_at===activatedAt,
+    'canvas_roster_job_identity_mismatch','Completed roster job differs from the activated binding job.');
+    return completed;
   }, JOB_TIMEOUT_MS, 1_500, 'canvas_roster_job_timeout');
 }
 
@@ -2214,11 +2235,13 @@ async function prepareCanvasCaptureFixtures({ browser, ledger, markActive = () =
     markActive('standard_lti_13_install');
     const activationJobBaseline = await rosterJobBaseline(marty, organizationId, binding.id);
     state.bindingActivationPossible=true;owned.martyBindingActivationPossible=true;persistOwned();
-    await validateAndActivateBinding(marty, binding.id);
+    const {activation}=await validateAndActivateBinding(marty, binding.id);
+    const activationAt=await activatedRosterJobTimestamp(marty, organizationId, platformId,
+      binding.id, activation.config_version);
     pass('standard_lti_13_install', `Stock Canvas installed LTI 1.3 and all ${BLOCKING_READINESS_CHECK_CODES.length} production blocking readiness checks passed.`);
 
     markActive('nrps_roster');
-    await waitForLatestRosterJob(marty, organizationId, binding.id, activationJobBaseline);
+    await waitForLatestRosterJob(marty, organizationId, binding.id, activationJobBaseline, activationAt);
 
     markActive('module_completion');
     await waitFor(async () => {
@@ -2603,8 +2626,11 @@ async function main(options = {}) {
 
     const secondActivationJobBaseline = await rosterJobBaseline(marty, organizationId, binding.id);
     markActive('nrps_roster');
-    await validateAndActivateBinding(marty, binding.id);
-    const rosterJob = await waitForLatestRosterJob(marty, organizationId, binding.id, secondActivationJobBaseline);
+    const {activation:secondActivation}=await validateAndActivateBinding(marty, binding.id);
+    const secondActivationAt=await activatedRosterJobTimestamp(marty, organizationId, platformId,
+      binding.id, secondActivation.config_version);
+    const rosterJob = await waitForLatestRosterJob(marty, organizationId, binding.id,
+      secondActivationJobBaseline, secondActivationAt);
     markActive('background_pending_claim_unsigned');
     const pendingCandidate = await waitForCandidate(marty, organizationId, binding.id, 'pending_claim');
     requireCondition(Number(rosterJob?.result?.pending_claim || 0) >= 1 || pendingCandidate, 'background_candidate_not_pending', 'Background roster synchronization did not produce an unsigned pending claim.');
@@ -2911,6 +2937,7 @@ module.exports = {
   validateAndActivateBinding,
   waitForLatestRosterJob,
   rosterJobBaseline,
+  activatedRosterJobTimestamp,
   waitForCandidate,
   launchLearnerResource,
   triggerLearnerSync,

@@ -39,6 +39,7 @@ const {
   verifyCompactJws,
   rosterJobBaseline,
   waitForLatestRosterJob,
+  activatedRosterJobTimestamp,
   reconcileCanvasPrelaunchApplicationAbsence,
   requireCanvasSetupMutationReconciliation,
   retireCanvasOwnedReferences,
@@ -49,16 +50,23 @@ const NOW = '2026-07-15T06:00:00.000Z';
 test('roster activation selects a new exact job despite host and server clock skew', async () => {
   const organization_id = 'org-1', binding_id = 'binding-1';
   const oldJob = { id: 'old-job', organization_id, binding_id, target_type: 'background_roster' };
+  const activatedAt='2026-07-15T05:59:59.500123+00:00';
   const freshJob = { id: 'new-job', organization_id, binding_id,
-    target_type: 'background_roster', created_at: '2026-07-15T05:59:59.500Z' };
+    target_type: 'background_roster', created_at: activatedAt };
+  const periodicJob={...freshJob,id:'periodic-job',created_at:'2026-07-15T05:59:59.500124+00:00'};
   let activated = false;
   const marty = { async get(path) {
     if (path.endsWith('/new-job')) return { ...freshJob, status: 'succeeded' };
-    return activated ? [oldJob, freshJob] : [oldJob];
+    if (path.includes('/program-bindings/')) return { id:binding_id,
+      organization_id,platform_id:'platform-1',enabled:true,config_version:2,activated_at:activatedAt };
+    return activated ? [periodicJob, oldJob, freshJob] : [oldJob];
   } };
   const baseline = await rosterJobBaseline(marty, organization_id, binding_id);
   activated = true;
-  const observed = await waitForLatestRosterJob(marty, organization_id, binding_id, baseline);
+  const serverInstant=await activatedRosterJobTimestamp(marty, organization_id,'platform-1',binding_id,2);
+  await assert.rejects(activatedRosterJobTimestamp(marty, organization_id,'platform-1',binding_id,3),
+    error=>error.code==='canvas_roster_activation_binding_invalid');
+  const observed = await waitForLatestRosterJob(marty, organization_id, binding_id, baseline,serverInstant);
   assert.equal(observed.id, 'new-job');
 });
 
