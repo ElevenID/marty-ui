@@ -28,11 +28,18 @@ const BAO: [&str; 4] = [
 /// Report only fixed local-evidence status. Receipt metadata and content stay
 /// private, and a matching receipt grants no purge or production readiness.
 pub fn creation_evidence(state: &LockedInspection, installation: &Path) -> Value {
-    use crate::installer_creation_receipt_validation::{inspect, InspectionOutcome};
+    use crate::installer_creation_receipt_validation::{
+        inspect, inspect_normal, InspectionOutcome, NormalInspectionOutcome,
+    };
     let status = match inspect(state, installation) {
         InspectionOutcome::Missing => "missing",
         InspectionOutcome::Unusable => "unusable",
         InspectionOutcome::MatchedLocalReceipt(_) => "matched_local_identity",
+    };
+    let storage_status = match inspect_normal(state, installation) {
+        NormalInspectionOutcome::Missing => "missing",
+        NormalInspectionOutcome::Unusable => "unusable",
+        NormalInspectionOutcome::MatchedLocalReceipt(_) => "matched_local_identity",
     };
     json!({
         "status": status,
@@ -40,6 +47,13 @@ pub fn creation_evidence(state: &LockedInspection, installation: &Path) -> Value
         "point_in_time": true,
         "cryptographic_authentication": false,
         "deletion_authorized": false,
+        "storage_boundaries": {
+            "status": storage_status,
+            "coverage": "seven_storage_boundary_identities_only",
+            "point_in_time": true,
+            "cryptographic_authentication": false,
+            "deletion_authorized": false,
+        },
     })
 }
 fn require(ok: bool) -> Result<()> {
@@ -488,13 +502,20 @@ mod tests {
         let before = fs::read(&receipt).unwrap();
         let matched = report(&state);
         assert_eq!(matched["status"], "matched_local_identity");
+        assert_eq!(matched["storage_boundaries"]["status"], "missing");
+        assert_eq!(matched["storage_boundaries"]["deletion_authorized"], false);
+        assert_eq!(
+            matched["storage_boundaries"]["coverage"],
+            "seven_storage_boundary_identities_only"
+        );
         assert_eq!(matched["deletion_authorized"], false);
         assert_eq!(matched["cryptographic_authentication"], false);
-        assert_eq!(matched.as_object().unwrap().len(), 5);
+        assert_eq!(matched.as_object().unwrap().len(), 6);
         assert_eq!(fs::read(&receipt).unwrap(), before);
         fs::write(&receipt, b"private-secret-canary").unwrap();
         let unusable = report(&state);
         assert_eq!(unusable["status"], "unusable");
+        assert_eq!(unusable["storage_boundaries"]["status"], "unusable");
         for output in [matched.to_string(), unusable.to_string()] {
             for private in ["canary", "ino", "uid", "gid", "sha256", "synthetic-engine"] {
                 assert!(!output.contains(private));
