@@ -1,0 +1,69 @@
+name: Installer rootless package admission tests
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/installer-rootless-package-admission.yml
+      - scripts/installer_test_vm_rootless_package_admission.py
+      - scripts/installer_test_vm_rootless_package_admission_controller.py
+      - tests/test_installer_test_vm_rootless_package_admission.py
+      - tests/test_installer_test_vm_rootless_package_admission_controller.py
+
+permissions:
+  contents: read
+
+jobs:
+  unprivileged-package-admission:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Run only private signed archive and APT simulation fixtures
+        shell: bash
+        env:
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+          test "$(id -u)" -ne 0
+          test "$(lsb_release -is)" = Ubuntu
+          test "$(lsb_release -rs)" = 24.04
+          for binary in /usr/bin/gpg /usr/bin/gpgv /usr/bin/apt-get /usr/bin/python3; do
+            test -x "$binary"
+          done
+          python3 -m venv "$RUNNER_TEMP/package-admission-venv"
+          "$RUNNER_TEMP/package-admission-venv/bin/python" -m pip install \
+            --disable-pip-version-check --no-cache-dir 'pytest==9.1.1'
+          "$RUNNER_TEMP/package-admission-venv/bin/python" - <<'PY'
+          import pytest
+
+          class Gate:
+              def __init__(self):
+                  self.passed = set()
+                  self.skipped = set()
+
+              def pytest_runtest_logreport(self, report):
+                  if report.when == "call" and report.passed:
+                      self.passed.add(report.nodeid)
+                  if report.skipped:
+                      self.skipped.add(report.nodeid)
+
+          gate = Gate()
+          result = pytest.main([
+              "-q", "--noconftest", "-o", "addopts=", "-p", "no:cacheprovider",
+              "tests/test_installer_test_vm_rootless_package_admission.py",
+              "tests/test_installer_test_vm_rootless_package_admission_controller.py",
+          ], plugins=[gate])
+          assert result == 0 and not gate.skipped, (result, gate.skipped)
+          assert len(gate.passed) == 12, gate.passed
+          for exact in (
+              "test_real_gpgv_signature_wrong_key_and_stale_release",
+              "test_real_private_apt_solver_accepts_only_new_packages",
+              "test_bounded_child_kills_closed_pipe_descendant_before_reaping",
+          ):
+              assert sum(node.endswith("::" + exact) for node in gate.passed) == 1, exact
+          PY
