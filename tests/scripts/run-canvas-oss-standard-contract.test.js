@@ -37,9 +37,65 @@ const {
   validateAuthoritativeEvidenceHeads,
   validateReadinessSnapshot,
   verifyCompactJws,
+  rosterJobBaseline,
+  waitForLatestRosterJob,
+  reconcileCanvasPrelaunchApplicationAbsence,
+  requireCanvasSetupMutationReconciliation,
 } = require('./run-canvas-oss-standard-contract');
 
 const NOW = '2026-07-15T06:00:00.000Z';
+
+test('roster activation selects a new exact job despite host and server clock skew', async () => {
+  const organization_id = 'org-1', binding_id = 'binding-1';
+  const oldJob = { id: 'old-job', organization_id, binding_id, target_type: 'background_roster' };
+  const freshJob = { id: 'new-job', organization_id, binding_id,
+    target_type: 'background_roster', created_at: '2026-07-15T05:59:59.500Z' };
+  let activated = false;
+  const marty = { async get(path) {
+    if (path.endsWith('/new-job')) return { ...freshJob, status: 'succeeded' };
+    return activated ? [oldJob, freshJob] : [oldJob];
+  } };
+  const baseline = await rosterJobBaseline(marty, organization_id, binding_id);
+  activated = true;
+  const observed = await waitForLatestRosterJob(marty, organization_id, binding_id, baseline);
+  assert.equal(observed.id, 'new-job');
+});
+
+test('roster baseline rejects a foreign binding and an incomplete inventory', async () => {
+  const foreign = { id: 'job', organization_id: 'org-1', binding_id: 'foreign' };
+  await assert.rejects(rosterJobBaseline({ get: async () => [foreign] }, 'org-1', 'binding-1'),
+    error => error.code === 'canvas_roster_job_inventory_scope_invalid');
+  const full = Array.from({ length: 100 }, (_, id) => ({ id: String(id), organization_id: 'org-1', binding_id: 'binding-1' }));
+  await assert.rejects(rosterJobBaseline({ get: async () => full }, 'org-1', 'binding-1'),
+    error => error.code === 'canvas_roster_job_inventory_incomplete');
+});
+
+test('prelaunch cleanup accepts only terminal owned roster with no application or claim', async () => {
+  const org='org-1', binding='binding-1', platform='platform-1';
+  const jobs=[{id:'job-1',organization_id:org,binding_id:binding,platform_id:platform,
+    target_type:'background_roster',application_id:null,status:'succeeded'}];
+  const candidates=[{id:'candidate-1',organization_id:org,binding_id:binding,
+    application_id:null,status:'identity_link_required'}];
+  const state={bindingActivationPossible:true,binding:{id:binding},organizationId:org,
+    platformId:platform,owned:{martyBindingId:binding},marty:{async get(path){
+      return path.includes('canvas-sync-jobs')?jobs:candidates;
+    }}};
+  assert.throws(()=>requireCanvasSetupMutationReconciliation(state),
+    error=>error.code==='canvas_background_application_uncertain');
+  await reconcileCanvasPrelaunchApplicationAbsence(state);
+  requireCanvasSetupMutationReconciliation(state);
+  for(const change of [
+    () => {state.owned.martyLearnerLaunchIntent=true},
+    () => {state.owned.martyLearnerLaunchIntent=false;jobs[0].status='queued'},
+    () => {jobs[0].status='succeeded';candidates[0].application_id='foreign-app'},
+    () => {candidates[0].application_id=null;candidates[0].status='pending_claim'},
+  ]) {
+    state.prelaunchAbsenceConfirmed=false;
+    change();
+    await assert.rejects(reconcileCanvasPrelaunchApplicationAbsence(state),
+      error=>error.code==='canvas_background_application_uncertain');
+  }
+});
 
 test('HTTPS transport failure retains bounded network causes without secret-bearing diagnostics', async (t) => {
   const secret = 'private-token-in-message-url-and-stack';
