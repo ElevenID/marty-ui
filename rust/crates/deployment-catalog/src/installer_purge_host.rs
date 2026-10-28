@@ -5,7 +5,7 @@
 #![cfg(target_os = "linux")]
 #![allow(dead_code)] // No production caller exists until the purge coordinator is reviewed.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -34,14 +34,15 @@ struct OpenHow {
     resolve: u64,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum Kind {
     File,
     Directory,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct HostIdentity {
     pub dev: u64,
     pub ino: u64,

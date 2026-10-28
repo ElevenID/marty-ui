@@ -39,6 +39,8 @@ pub mod installer_keycloak;
 pub mod installer_keycloak_bridge;
 pub mod installer_logs;
 pub mod installer_openbao;
+#[cfg(target_os = "linux")]
+pub(crate) mod installer_openbao_owner_transition;
 pub mod installer_prepare;
 pub(crate) mod installer_purge_host;
 #[allow(dead_code)] // Dormant until the reviewed purge coordinator supplies durable intent.
