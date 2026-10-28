@@ -1,9 +1,9 @@
 //! Canvas operations handlers with explicit native runtime composition.
 //! Gateway routing and consumer cutover remain separately qualified.
 //!
-//! Read projections never serialize raw rows. Filtering deliberately follows
-//! the published 500-row pre-filter window rather than pushing every filter
-//! ahead of LIMIT and silently changing which records callers can observe.
+//! Read projections never serialize raw rows. Reviews and candidates preserve
+//! their published pre-filter windows. Jobs scope target ownership before LIMIT
+//! so a short binding result cannot hide a job behind foreign-binding traffic.
 
 use axum::{
     extract::{Path, RawQuery, State},
@@ -209,23 +209,33 @@ impl CanvasOperationsService {
         }
         let status = kind.status(query.status.as_deref())?;
         let window = match kind {
-            Collection::Jobs if nonempty(&query.platform) || nonempty(&query.binding) => 500,
             Collection::Candidates if nonempty(&query.platform) => 500,
             Collection::Reviews if nonempty(&query.binding) => 500,
             _ => query.limit,
         };
-        let rows: Vec<Value> = sqlx::query_scalar(kind.list_sql())
-            .bind(organization)
-            .bind(status)
-            .bind(if kind == Collection::Candidates {
-                query.binding.as_deref()
-            } else {
-                None
-            })
-            .bind(window)
-            .fetch_all(&self.pool)
-            .await
-            .map_err(|_| OperationsError::Internal)?;
+        let rows: Vec<Value> = if kind == Collection::Jobs {
+            sqlx::query_scalar(kind.list_sql())
+                .bind(organization)
+                .bind(status)
+                .bind(query.platform.as_deref().filter(|value| !value.is_empty()))
+                .bind(query.binding.as_deref().filter(|value| !value.is_empty()))
+                .bind(window)
+                .fetch_all(&self.pool)
+                .await
+        } else {
+            sqlx::query_scalar(kind.list_sql())
+                .bind(organization)
+                .bind(status)
+                .bind(if kind == Collection::Candidates {
+                    query.binding.as_deref()
+                } else {
+                    None
+                })
+                .bind(window)
+                .fetch_all(&self.pool)
+                .await
+        }
+        .map_err(|_| OperationsError::Internal)?;
         let mut result = Vec::new();
         for row in rows {
             let view = if kind == Collection::Jobs {
@@ -648,8 +658,12 @@ impl Collection {
     fn list_sql(self) -> &'static str {
         match self {
             Self::Jobs => "SELECT to_jsonb(record) FROM issuance_service.canvas_evidence_sync_jobs record
-                WHERE organization_id=$1 AND ($2::text IS NULL OR status=$2) AND $3::text IS NULL
-                ORDER BY created_at DESC LIMIT $4",
+                LEFT JOIN issuance_service.canvas_evidence_sync_targets target
+                  ON target.id=record.target_id AND target.organization_id=record.organization_id
+                WHERE record.organization_id=$1 AND ($2::text IS NULL OR record.status=$2)
+                  AND ($3::text IS NULL OR target.platform_id=$3)
+                  AND ($4::text IS NULL OR target.binding_id=$4)
+                ORDER BY record.created_at DESC LIMIT $5",
             Self::Candidates => "SELECT to_jsonb(record) FROM issuance_service.canvas_award_candidates record
                 WHERE organization_id=$1 AND ($2::text IS NULL OR state=$2) AND ($3::text IS NULL OR binding_id=$3)
                 ORDER BY updated_at DESC LIMIT $4",
