@@ -119,6 +119,7 @@ fn prepare_inner(
     if state.validate_applicant_storage()? != parameters.applicant_state_gid {
         return Err("applicant state group changed during preparation".into());
     }
+    state.persist_application_storage_creation_receipt(installation)?;
     state.stage_operator_password()?;
     let source_env = if select_generation {
         "application-source.env"
