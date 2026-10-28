@@ -71,6 +71,8 @@ class Records(unittest.TestCase):
             b"Name:\tactor\nUid:\t0\t0\t994\t0\n"), (0, 0, 994, 0))
         with self.assertRaisesRegex(ValueError, "UID inventory"):
             restart._status_uids(b"Uid:\t0\t0\t994\n")
+        with self.assertRaisesRegex(ValueError, "status inventory"):
+            restart._status_uids(b"Uid:\t0\t0\t994\t0\n" + b"x" * 65536)
         with tempfile.TemporaryDirectory() as directory:
             proc = Path(directory)
             (proc / "status").write_bytes(b"Uid:\t0\t0\t994\t0\n")

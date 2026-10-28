@@ -115,7 +115,8 @@ def _status_uids(raw: bytes) -> tuple[int, int, int, int]:
 
 
 def _process_start(proc: Path) -> str:
-    raw = (proc / "stat").read_bytes()
+    with (proc / "stat").open("rb") as stream:
+        raw = stream.read(65537)
     release.require(0 < len(raw) <= 65536 and b") " in raw,
                     "VM process start inventory invalid")
     fields = raw.rsplit(b") ", 1)[1].split()
@@ -125,7 +126,8 @@ def _process_start(proc: Path) -> str:
 
 
 def _actor_is_uid(proc: Path, uid: int) -> bool:
-    return uid in _status_uids((proc / "status").read_bytes())
+    with (proc / "status").open("rb") as stream:
+        return uid in _status_uids(stream.read(65537))
 
 
 def _original_still_live(old_pid: int, old_start: str, old_boot: str) -> bool:
@@ -151,14 +153,19 @@ def _no_live_owner(uid: int, old_pid: int, old_start: str, old_boot: str,
     else:
         raise ValueError("VM monitor endpoint still exists")
     disk = (runtime_dir / "disk.qcow2").lstat()
-    for proc in Path("/proc").iterdir():
+    processes = list(Path("/proc").iterdir())
+    release.require(len(processes) <= 65536, "VM process census oversized")
+    for proc in processes:
         if not proc.name.isdecimal():
             continue
         try:
             start = _process_start(proc)
             release.require(not _actor_is_uid(proc, uid),
                             "VM runtime identity has an existing process")
-            for descriptor in (proc / "fd").iterdir():
+            descriptors = list((proc / "fd").iterdir())
+            release.require(len(descriptors) <= 4096,
+                            "VM descriptor census oversized")
+            for descriptor in descriptors:
                 try:
                     held = descriptor.stat()
                     if (held.st_dev, held.st_ino) == (disk.st_dev, disk.st_ino):
