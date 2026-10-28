@@ -129,30 +129,21 @@ fn visit(
     Ok(current)
 }
 
-/// Each expected top-level identity must first be validated against local
-/// creation/receipt custody. Descendants are observed as current contents,
-/// without an invented historical `expected_children` receipt map.
-fn observe_with_hook<F: FnOnce()>(
-    locked: &LockedInspection,
-    installation: &Path,
+/// Shared held-FD walk. `inspect_top` enforces the exact fixed top level both
+/// before and after the descendant walk; its caller owns authentication.
+fn observe_core<I: FnMut() -> CensusOutcome, F: FnOnce()>(
+    root: &File,
     expected_root: &HostIdentity,
     expected_mount: u64,
-    specs: &[ExpectedTopLevel],
+    mut inspect_top: I,
     after_walk: F,
 ) -> TreeOutcome {
-    let first = match installer_top_level_census::inspect(
-        locked,
-        installation,
-        expected_root,
-        expected_mount,
-        specs,
-    ) {
+    let first = match inspect_top() {
         CensusOutcome::ExactExpectedSetObserved(snapshot) => snapshot,
         CensusOutcome::Incomplete(reason) => {
             return TreeOutcome::Incomplete(IncompleteReason::TopLevel(reason));
         }
     };
-    let root = locked.installation_directory();
     let mut entries = Vec::new();
     let mut directory_names = BTreeMap::new();
     for top in &first.entries {
@@ -173,13 +164,7 @@ fn observe_with_hook<F: FnOnce()>(
         }
     }
     after_walk();
-    let second = match installer_top_level_census::inspect(
-        locked,
-        installation,
-        expected_root,
-        expected_mount,
-        specs,
-    ) {
+    let second = match inspect_top() {
         CensusOutcome::ExactExpectedSetObserved(snapshot) => snapshot,
         CensusOutcome::Incomplete(reason) => {
             return TreeOutcome::Incomplete(IncompleteReason::TopLevel(reason));
@@ -250,6 +235,64 @@ fn observe_with_hook<F: FnOnce()>(
         not_atomic_snapshot: true,
         deletion_eligible: false,
     })
+}
+
+/// Descriptor-only full current tree observation. The caller must derive the
+/// fixed 31-name specs inside the same namespace and authenticate any
+/// receipt-bound roots separately. No journal or ownership assertion is made.
+pub(crate) fn observe_held(
+    root: &File,
+    installation_id: uuid::Uuid,
+    expected_root: &HostIdentity,
+    expected_mount: u64,
+    specs: &[ExpectedTopLevel],
+) -> TreeOutcome {
+    observe_core(
+        root,
+        expected_root,
+        expected_mount,
+        || {
+            installer_top_level_census::inspect_held(
+                root,
+                installation_id,
+                expected_root,
+                expected_mount,
+                specs,
+            )
+        },
+        || {},
+    )
+}
+
+/// Host wrapper retains its original locked path/journal checks at both
+/// top-level inspections. A held FD alone does not bind the installation path.
+fn observe_with_hook<F: FnOnce()>(
+    locked: &LockedInspection,
+    installation: &Path,
+    expected_root: &HostIdentity,
+    expected_mount: u64,
+    specs: &[ExpectedTopLevel],
+    after_walk: F,
+) -> TreeOutcome {
+    let result = observe_core(
+        locked.installation_directory(),
+        expected_root,
+        expected_mount,
+        || {
+            installer_top_level_census::inspect(
+                locked,
+                installation,
+                expected_root,
+                expected_mount,
+                specs,
+            )
+        },
+        after_walk,
+    );
+    if locked.require_path_binding(installation).is_err() || locked.require_unchanged().is_err() {
+        return TreeOutcome::Incomplete(IncompleteReason::ChangedTopLevel);
+    }
+    result
 }
 pub(crate) fn observe(
     locked: &LockedInspection,
@@ -363,6 +406,71 @@ mod tests {
         assert_eq!(tree.installation_id, f.locked.journal().installation_id());
         assert!(tree.not_atomic_snapshot);
         assert!(!tree.deletion_eligible);
+    }
+
+    #[test]
+    fn held_backend_matches_host_tree_but_host_wrapper_rejects_path_rebinding() {
+        let f = fixture();
+        let derived = installer_top_level_census::derive_current_fixed_specs_held(
+            f.locked.installation_directory(),
+            &f.root,
+            f.mount,
+        )
+        .unwrap();
+        let TreeOutcome::Observed(held) = observe_held(
+            f.locked.installation_directory(),
+            f.locked.journal().installation_id(),
+            &f.root,
+            f.mount,
+            &derived,
+        ) else {
+            panic!("expected descriptor-only observation")
+        };
+        let TreeOutcome::Observed(host) = result(&f) else {
+            panic!("expected host-bound observation")
+        };
+        assert_eq!(held.entries, host.entries);
+        assert_eq!(held.root, host.root);
+        assert_eq!(held.mount_id, host.mount_id);
+        assert!(!held.deletion_eligible);
+        assert!(held.not_atomic_snapshot);
+        let mut wrong = f.root.clone();
+        wrong.ino = wrong.ino.wrapping_add(1);
+        assert!(matches!(
+            observe_held(
+                f.locked.installation_directory(),
+                f.locked.journal().installation_id(),
+                &wrong,
+                f.mount,
+                &derived,
+            ),
+            TreeOutcome::Incomplete(_)
+        ));
+        assert!(matches!(
+            observe_held(
+                f.locked.installation_directory(),
+                f.locked.journal().installation_id(),
+                &f.root,
+                f.mount + 1,
+                &derived,
+            ),
+            TreeOutcome::Incomplete(_)
+        ));
+        let moved = f.path.with_file_name("held-original");
+        fs::rename(&f.path, &moved).unwrap();
+        fs::create_dir(&f.path).unwrap();
+        fs::set_permissions(&f.path, fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(matches!(
+            observe_held(
+                f.locked.installation_directory(),
+                f.locked.journal().installation_id(),
+                &f.root,
+                f.mount,
+                &derived,
+            ),
+            TreeOutcome::Observed(_)
+        ));
+        assert!(matches!(result(&f), TreeOutcome::Incomplete(_)));
     }
     #[test]
     fn unknown_top_level_link_hardlink_and_special_refuse() {
