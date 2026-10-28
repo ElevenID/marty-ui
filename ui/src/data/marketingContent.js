@@ -7,134 +7,131 @@
 
 // Core value proposition
 export const VALUE_PROPOSITION = {
-  headline: 'Identity verification is not enough.',
-  supportingSubheadline: 'Move from one-time checks to reusable, cryptographically verifiable identity.',
-  subheadline: 'Build verifiable identity infrastructure.',
-  extendedSubheadline: 'Issue, verify, and govern credentials—built for EUDI Wallets, Open Badges, and enterprise trust.',
-  primaryCTA: 'Start Verifying Credentials',
-  secondaryCTA: {
-    label: 'View Verification API',
-    path: '/verifiable-credential-api',
-  },
-  concreteExample: 'A user verifies their age once, then reuses that proof across services—without re-uploading documents.',
+  headline: 'Marty: identity workflows you operate.',
+  supportingSubheadline: 'One product for portable credentials, applicant and document verification, and Travel Trust.',
+  subheadline: 'Build trust around your workflow.',
+  extendedSubheadline: 'Choose a defined use case, evaluate it with synthetic data, and run the agreed deployment yourself or with your chosen partner.',
+  primaryCTA: 'Explore the Developer Docs',
+  secondaryCTA: { label: 'View Verification API', path: '/verifiable-credential-api' },
+  concreteExample: 'For example, an organization can issue a workforce credential and evaluate how another verifier checks the issuer, the claims, and its own access policy.',
 };
 
 // IDV vs ElevenID LLC comparison
 export const IDV_COMPARISON = {
-  title: 'From IDV to Verifiable Identity',
-  takeaway: 'ElevenID LLC replaces repeated verification with reusable trust.',
-  traditional: [
-    { label: 'One-time document checks', category: 'Traditional IDV' },
-    { label: 'Vendor-controlled identity data', category: 'Traditional IDV' },
-    { label: 'Biometric decision outputs', category: 'Traditional IDV' },
-    { label: 'Closed, proprietary APIs', category: 'Traditional IDV' },
-    { label: 'Manual trust configuration', category: 'Traditional IDV' },
-    { label: 'Re-verification everywhere', category: 'Traditional IDV' },
+  "title": "Plan the Trust Exchange",
+  "takeaway": "Start with the questions your workflow must answer, then evaluate the selected implementation.",
+  "traditional": [
+    {
+      "label": "Which claim must be checked?",
+      "category": "Questions to Resolve"
+    },
+    {
+      "label": "Who operates the data and keys?",
+      "category": "Questions to Resolve"
+    },
+    {
+      "label": "How is the presenter bound to the credential?",
+      "category": "Questions to Resolve"
+    },
+    {
+      "label": "Which interfaces and profiles are required?",
+      "category": "Questions to Resolve"
+    },
+    {
+      "label": "Which issuers and rules are trusted?",
+      "category": "Questions to Resolve"
+    },
+    {
+      "label": "When can a credential be reused?",
+      "category": "Questions to Resolve"
+    }
   ],
-  elevenid: [
-    { label: 'Reusable verifiable credentials', category: 'ElevenID LLC' },
-    { label: 'Holder-controlled digital wallets', category: 'ElevenID LLC' },
-    { label: 'Cryptographic proofs', category: 'ElevenID LLC' },
-    { label: 'Open standards (W3C VC, OID4VC, ISO)', category: 'ElevenID LLC' },
-    { label: 'Governed trust registries', category: 'ElevenID LLC' },
-    { label: 'Identity reuse across ecosystems', category: 'ElevenID LLC' },
-  ],
+  "elevenid": [
+    {
+      "label": "Defined credential and document inputs",
+      "category": "Marty Evaluation"
+    },
+    {
+      "label": "Customer or selected-partner operations",
+      "category": "Marty Evaluation"
+    },
+    {
+      "label": "Profile-specific holder-binding tests",
+      "category": "Marty Evaluation"
+    },
+    {
+      "label": "Documented interfaces and tested combinations",
+      "category": "Marty Evaluation"
+    },
+    {
+      "label": "Explicit issuer trust and policy configuration",
+      "category": "Marty Evaluation"
+    },
+    {
+      "label": "Reuse evaluated within an agreed workflow",
+      "category": "Marty Evaluation"
+    }
+  ]
 };
 
 // EUDI & Open Badges strategic positioning
 export const EUDI_OPEN_BADGES = {
-  title: 'Built for EUDI Wallets and Verifiable Credentials',
+  title: 'Explore Wallet and Credential Interoperability',
   points: [
-    'Verify Verifiable Credentials—not just documents.',
-    'Trust issuers—not databases.',
-    'Wallet-first by design—EUDI-ready.',
+    'Define the credential format and presentation profile you need.',
+    'Identify trusted issuers and acceptance rules.',
+    'Test the chosen wallets and release together.',
   ],
-  quote: 'IDV platforms stop at a one-time decision. ElevenID LLC produces cryptographically verifiable outcomes that can be reused across wallets, ecosystems, and trust registries.',
+  quote: 'A named standard is a starting point for interoperability testing. Availability and conformance depend on the exact release, profile, and participating systems.',
 };
 
 // Why this matters for organizations
 export const ORGANIZATION_OUTCOMES = {
-  title: 'Why This Matters',
+  title: 'What You Can Evaluate',
   outcomes: [
-    { text: 'Reduce repeat KYC costs with reusable credentials', bold: 'cost reduction', metric: 'Up to 80% fewer repeat checks' },
-    { text: 'Prepare for EUDI Wallet acceptance', bold: 'compliance', metric: 'EUDI & eIDAS 2.0 ready' },
-    { text: 'Avoid vendor lock-in with open standards', bold: 'interoperability', metric: 'W3C, ISO, OpenID native' },
-    { text: 'Support Open Badges, workforce credentials, and government IDs in one system', bold: 'unification', metric: 'One platform, all formats' },
+    { text: 'Explore credential reuse across an agreed workflow', bold: 'reuse', metric: 'Portable credentials' },
+    { text: 'Make applicant and document checks explicit', bold: 'review', metric: 'Defined verification scope' },
+    { text: 'Evaluate travel-document trust and journey rules', bold: 'trust', metric: 'Travel Trust' },
+    { text: 'Keep production operations with your team or chosen partner', bold: 'control', metric: 'Customer-operated' },
   ],
 };
 
 // Audience routing - helps different buyer personas find their path
 export const AUDIENCE_ROUTING = {
   title: 'Choose Your Path',
-  subtitle: 'Pick your entry point—enterprise, government, or developers.',
+  subtitle: 'Explore Marty directly or through a partner or OEM integration.',
   paths: [
-    {
-      id: 'enterprise',
-      title: 'Enterprise',
-      description: 'Reduce repeat KYC, enable partner interoperability, and govern trust at scale.',
-      benefit: 'Reduce KYC cost by up to 80%',
-      cta: 'Explore Solutions',
-      path: '/solutions',
-      color: 'primary',
-      icon: 'Business',
-    },
-    {
-      id: 'government',
-      title: 'Government',
-      description: 'EUDI-ready infrastructure for ISO credentials, trust lists, and regulated acceptance.',
-      benefit: 'EUDI-ready compliance out of the box',
-      cta: 'View Architecture',
-      path: '/architecture',
-      color: 'secondary',
-      icon: 'AccountBalance',
-    },
-    {
-      id: 'developers',
-      title: 'Developers',
-      description: 'Docs, SDKs, and quickstarts for VC issuance and verification.',
-      benefit: 'Ship VC flows fast',
-      cta: 'Start Verifying',
-      path: '/developers',
-      color: 'info',
-      icon: 'Code',
-    },
+    { id: 'enterprise', title: 'Enterprise', description: 'Define a useful credential or document workflow and the team that will operate it.', benefit: 'Start with a bounded use case', cta: 'Explore Solutions', path: '/solutions', color: 'primary', icon: 'Business' },
+    { id: 'government', title: 'Government', description: 'Review trust sources, required credential profiles, and deployment constraints.', benefit: 'Validate the exact profile', cta: 'View Architecture', path: '/architecture', color: 'secondary', icon: 'AccountBalance' },
+    { id: 'developers', title: 'Developers and Partners', description: 'Inspect APIs, source, and integration requirements for the selected workflow.', benefit: 'Build against documented interfaces', cta: 'Read Developer Docs', path: '/developers', color: 'info', icon: 'Code' },
   ],
 };
 
 // Substantiated proof claims - only include claims we can defend
 export const PROOF_STRIP = {
-  title: 'Built on Proven Foundations',
+  title: 'A Defined Product and Operating Model',
   claims: [
-    { label: 'W3C VC / SD-JWT / OID4VP', category: 'Interoperability' },
-    { label: '72-hour offline cache', category: 'Offline Verification' },
-    { label: 'SaaS + Self-hosted', category: 'Deployment' },
-    { label: 'HSM / Vault integration', category: 'Key Security' },
-    { label: 'Immutable audit logs', category: 'Compliance' },
+    { label: 'One Marty product, three use cases', category: 'Scope' },
+    { label: 'Synthetic evaluation first', category: 'Evaluation' },
+    { label: 'Customer or partner operated', category: 'Operations' },
+    { label: 'Explicit trust and key configuration', category: 'Security' },
+    { label: 'Release-specific evidence', category: 'Evidence' },
   ],
 };
 
 export const ECOSYSTEM_SIGNALS = {
-  title: 'Built for the ecosystems reviewers already know',
+  title: 'Connect the workflow to its requirements',
   categories: [
-    {
-      label: 'Wallet and VC standards',
-      items: ['W3C VC', 'OpenID4VCI', 'OpenID4VP', 'SD-JWT'],
-    },
-    {
-      label: 'Government and regulated credentials',
-      items: ['ISO 18013-5', 'ICAO 9303', 'EUDI Wallet', 'Trust lists'],
-    },
-    {
-      label: 'Operational deployment',
-      items: ['SaaS', 'Self-hosted', 'Offline kiosks', 'Audit logs'],
-    },
+    { label: 'Portable credentials', items: ['Issuer trust', 'Credential profiles', 'Wallet compatibility'] },
+    { label: 'Applicant and document verification', items: ['Document inputs', 'Review rules', 'Recorded decisions'] },
+    { label: 'Travel Trust', items: ['Travel-document trust', 'Journey policy', 'Deployment evidence'] },
   ],
 };
 
 export const HERO_INTERACTIVE_DEMO = {
-  eyebrow: 'Interactive credential moment',
-  title: 'Issue once. Reuse everywhere.',
-  description: 'Walk through the reusable identity flow buyers need to understand in under 20 seconds.',
+  eyebrow: 'Illustrative credential journey',
+  title: 'Explore how credential reuse works.',
+  description: 'A synthetic example of issuance, presentation, and reuse. The illustrated result is not production or interoperability evidence.',
   steps: [
     {
       id: 'issue',
@@ -173,8 +170,8 @@ export const HERO_INTERACTIVE_DEMO = {
 };
 
 export const END_USER_EXPERIENCES = {
-  title: 'Make the end-user moment obvious',
-  subtitle: 'Protocols matter, but adoption happens when the experience is fast, private, and repeatable.',
+  title: 'Explore the holder experience',
+  subtitle: 'Illustrative journeys show the questions a holder and verifier need to answer. Validate the chosen wallet, profile, and workflow before use.',
   journeys: [
     {
       id: 'building-access',
@@ -208,11 +205,11 @@ export const END_USER_EXPERIENCES = {
         { label: 'Decide', description: 'The cashier or kiosk receives a clear pass or fail result.' },
       ],
       holderView: 'The user consents to a minimal proof instead of exposing a full identity document.',
-      verifierView: 'The verifier gets a compliant answer tied to policy, trust, and freshness checks.',
+      verifierView: 'The example verifier evaluates the requested claim against its policy and trust requirements.',
       disclosed: ['age_over_21', 'issuer_trust'],
       verifierChecks: ['Policy evaluated', 'Issuer trusted', 'Expiry and revocation checked'],
-      benefits: ['Privacy-preserving compliance', 'Less manual inspection'],
-      outcome: 'A privacy-first experience that still satisfies regulated verification requirements.',
+      benefits: ['Bounded disclosure', 'Explicit review criteria'],
+      outcome: 'A design example for evaluating minimal disclosure against the responsible organization’s acceptance requirements.',
     },
     {
       id: 'travel-checkpoint',
@@ -254,13 +251,13 @@ export const DEVELOPER_QUICKSTART = {
     'Select organization_id and presentation_policy_id in the query string.',
     'Use /flows/verify when the user needs a wallet, QR, or kiosk presentation step.',
   ],
-  note: 'Replace the signed-credential placeholder with a credential you are authorized to verify.',
+  note: 'Run against your authorized, configured environment with synthetic test credentials first. The response shown is illustrative.',
 };
 
 export const INTERACTIVE_PROOF_LAB = {
-  eyebrow: 'Code-native proof lab',
-  title: 'See the decision surface without a staged demo.',
-  subtitle: 'Switch scenarios to inspect the request, the bounded proof, the verifier checks, and the decision that comes back.',
+  eyebrow: 'Synthetic proof lab',
+  title: 'Try a synthetic verification example.',
+  subtitle: 'Inspect example requests and predetermined results. This browser demonstration does not execute a production verification service.',
   scenarios: [
     {
       id: 'retail-age',
@@ -353,8 +350,8 @@ export const INTERACTIVE_PROOF_LAB = {
           status: 'pass',
         },
         {
-          label: 'Offline-ready runtime',
-          detail: 'The deployment profile keeps the lane moving during unstable connectivity.',
+          label: 'Connectivity requirement',
+          detail: 'This synthetic example assumes a defined freshness policy; actual offline behavior needs separate testing.',
           status: 'pass',
         },
         {
@@ -368,7 +365,7 @@ export const INTERACTIVE_PROOF_LAB = {
         'Gate verifier validates trust and freshness locally.',
         'Boarding continues with a clear allow or deny result.',
       ],
-      outcome: 'Throughput stays high without weakening the assurance model.',
+      outcome: 'The example illustrates a decision; it does not measure throughput or production assurance.',
       proof: 'Travel constraints become policy and runtime settings, not bespoke code.',
       slug: 'deploy-airline-boarding',
       cta: 'Read the travel guide',
@@ -377,14 +374,14 @@ export const INTERACTIVE_PROOF_LAB = {
 };
 
 export const DEPLOYMENT_PLAYBOOKS = {
-  title: 'Start from a deployment playbook.',
-  subtitle: 'Use real scenario guides already in the site to connect standards language to rollout constraints and operating conditions.',
+  title: 'Explore a scenario guide.',
+  subtitle: 'Use these design examples to discuss requirements. A guide is not evidence that its workflow is available or approved for production.',
   items: [
     {
       slug: 'deploy-age-verification',
       title: 'Age Verification in Retail',
       badge: 'Retail privacy',
-      proof: 'A verifier can ask one bounded question and still satisfy regulated compliance checks.',
+      proof: 'Explore how a verifier could request a bounded age claim, then confirm the applicable acceptance requirements.',
       signals: ['Selective disclosure', 'Minimal data', 'Retail checkout'],
       cta: 'Read the retail guide',
     },
@@ -400,8 +397,8 @@ export const DEPLOYMENT_PLAYBOOKS = {
       slug: 'deploy-airline-boarding',
       title: 'Deploying Marty for Airline Boarding',
       badge: 'Travel throughput',
-      proof: 'High-throughput lanes can keep trust, latency, and offline resilience aligned in one deployment profile.',
-      signals: ['ICAO 9303', 'Offline runtime', 'Gate operations'],
+      proof: 'Identify the trust, latency, and connectivity requirements a travel deployment would need to demonstrate.',
+      signals: ['Travel-document trust', 'Connectivity tests', 'Gate operations'],
       cta: 'Read the travel guide',
     },
     {
@@ -416,152 +413,74 @@ export const DEPLOYMENT_PLAYBOOKS = {
 };
 
 export const DEPLOYMENT_MODELS = {
-  title: 'How ElevenID Deploys',
-  subtitle: 'ElevenID runs where your identity infrastructure needs to operate-from cloud APIs to offline checkpoints.',
+  title: 'How You Operate Marty',
+  subtitle: 'Production runs with your organization or a partner you select. Agree the workflow, release, and operating responsibilities before deployment.',
   questions: [
-    {
-      question: 'Where does this run?',
-      answer: 'Across managed APIs, private infrastructure, and checkpoint runtimes with the same trust model and policy surfaces.',
-    },
-    {
-      question: 'What infrastructure do I need?',
-      answer: 'Choose SaaS verification, self-hosted services, or edge runtimes based on data-sovereignty, latency, and connectivity requirements.',
-    },
-    {
-      question: 'How does this integrate with my systems?',
-      answer: 'Issuer workflows, wallets, kiosks, and relying applications connect through standards-based issuance, verification, and trust-registry interfaces.',
-    },
+    { question: 'Who runs production?', answer: 'Your organization or your chosen partner owns hosting, keys, access, backups, monitoring, and day-to-day operations.' },
+    { question: 'What infrastructure do I need?', answer: 'Review the requirements for the selected release. The current installer path targets Linux amd64 with local rootful Docker and Compose; other profiles need their own validation.' },
+    { question: 'How do we start?', answer: 'Review a relevant demonstration, define the scope, and evaluate with synthetic data. Real data and production each need their own approval.' },
   ],
   modes: [
-    {
-      id: 'saas-verification',
-      badge: 'Hosted runtime',
-      title: 'SaaS Verification',
-      summary: 'Hosted verification infrastructure for rapid deployment.',
-      path: '/product#verification-api',
-      cta: 'Open Verification API',
-      features: [
-        'managed verification API',
-        'automatic trust registry updates',
-        'high-availability runtime',
-      ],
-      bestFor: ['startups', 'enterprise pilots', 'API integrations'],
-    },
-    {
-      id: 'self-hosted-infrastructure',
-      badge: 'Private environment',
-      title: 'Self-Hosted Infrastructure',
-      summary: 'Run the verification platform in your own environment.',
-      path: '/product#issuance-api',
-      cta: 'Review Self-Hosted Issuance',
-      features: [
-        'full data sovereignty',
-        'internal network verification',
-        'custom trust policies',
-      ],
-      bestFor: ['governments', 'regulated industries', 'internal enterprise deployments'],
-    },
-    {
-      id: 'offline-checkpoint-runtime',
-      badge: 'Edge verification',
-      title: 'Offline Checkpoint Runtime',
-      summary: 'Edge verification for locations with unreliable connectivity.',
-      path: '/product#kiosk',
-      cta: 'See Offline Kiosk Runtime',
-      features: [
-        '72-hour offline trust cache',
-        'QR / NFC / BLE credential exchange',
-        'kiosk and facility integration',
-      ],
-      bestFor: ['airports', 'stadiums', 'building entry systems'],
-    },
+    { id: 'customer-operated', badge: 'Your operations team', title: 'Customer-Operated Deployment', summary: 'Run the agreed Marty scope in an environment your team controls.', path: '/product#verification-api', cta: 'Review Verification Scope', features: ['Named workflows and release', 'Customer-managed keys and access', 'Documented operating responsibilities'], bestFor: ['internal platforms', 'API integrations', 'customer-run evaluations'] },
+    { id: 'partner-operated', badge: 'Your selected partner', title: 'Partner or OEM Integration', summary: 'Work with your own delivery or platform partner under separately agreed responsibilities.', path: '/product#issuance-api', cta: 'Review Integration Components', features: ['Direct and partner channels', 'Defined integration boundaries', 'Separately scoped custom work'], bestFor: ['platform partners', 'integrators', 'OEM teams'] },
+    { id: 'offline-evaluation', badge: 'Profile evaluation', title: 'Offline and Headless Evaluation', summary: 'Evaluate constrained-connectivity or API-only needs against the exact implementation and release.', path: '/product#kiosk', cta: 'Review Checkpoint Scope', features: ['Test freshness and failure behavior', 'Qualify each device and transport', 'Confirm source and installer availability'], bestFor: ['checkpoint research', 'restricted networks', 'API-only integration'] },
   ],
   example: {
-    title: 'Example: Airport Boarding Gate',
-    flow: ['Passenger Wallet', 'Gate Kiosk', 'ElevenID Verifier', 'Trust Registry'],
-    summary: 'Verification happens in under one second, even if the network drops.',
+    title: 'Example: Travel Trust Evaluation',
+    flow: ['Synthetic travel input', 'Customer-run verifier', 'Configured trust policy', 'Recorded result'],
+    summary: 'Test document trust, policy decisions, and failure cases in your environment before discussing a production lane.',
   },
 };
 
 // Products (from product-catalog)
 export const PRODUCTS = [
   {
-    id: 'verification-api',
-    name: 'Verification API',
-    tagline: 'Verify VCs, SD-JWTs, and ISO credentials against governed trust.',
-    description: 'ICAO 9303 eMRTD and ISO 18013-5 mDoc verification. PKD trust anchor sync. OID4VP presentation flows.',
-    deployment: ['SaaS', 'Self-hosted'],
-    capabilities: [
-      'ICAO 9303 eMRTD verification',
-      'ISO 18013-5 mDL verification',
-      'PKD trust anchor sync',
-      'Signature validation & policy engine',
-      'OID4VP, SD-JWT support',
-      'QR/NFC presentation',
-    ],
-    standards: ['ICAO 9303', 'ISO 18013-5', 'OpenID4VP', 'SD-JWT'],
-    pricing: 'Volume tiers (SaaS) or annual license (self-hosted)',
-    useCase: 'Border control, DMV, high-assurance identity verification',
-    replacesExtends: 'Replaces repeated IDV checks with reusable verification.',
-    useWhen: 'Use when verifying EUDI wallets, Open Badges, or ISO credentials.',
+    id: 'verification-api', name: 'Verification API',
+    tagline: 'A Marty component for credential and document checks.',
+    description: 'Connect signed credential or document inputs to explicit trust and verification policies. Confirm supported formats, endpoints, and trust sources for the selected release.',
+    deployment: ['Customer-operated'],
+    capabilities: ['Credential and document verification workflows', 'Explicit issuer and trust configuration', 'Policy decisions and recorded results', 'Release-specific API scope'],
+    standards: ['Profile-specific formats', 'Documented API contracts'],
+    pricing: 'Included only as defined in the agreed Marty scope; annual software licensing is the default direction.',
+    useCase: 'Portable credentials, applicant/document verification, and Travel Trust',
+    replacesExtends: 'Connect verification to the acceptance rules your organization owns.',
+    useWhen: 'Start when a credential or document check is part of your workflow.',
   },
   {
-    id: 'issuance-api',
-    name: 'Issuance API',
-    tagline: 'Issue standards-based credentials with lifecycle controls.',
-    description: 'OpenID4VCI credential offers, document signing, audit trails, and selective disclosure policies',
-    deployment: ['Self-hosted'],
-    capabilities: [
-      'OpenID4VCI credential issuance',
-      'Pre-authorized flows',
-      'Document signing',
-      'Audit trails & policy engine',
-      'Selective disclosure',
-      'Batch & API-driven issuance',
-    ],
-    standards: ['OpenID4VCI', 'SD-JWT', 'W3C VC', 'mDoc (ISO 18013-5)'],
-    pricing: 'Annual license per environment',
-    useCase: 'DMV, government issuers, enterprise credential programs',
-    replacesExtends: 'Replaces proprietary credential silos.',
-    useWhen: 'Use when issuing workforce, education, or government credentials.',
+    id: 'issuance-api', name: 'Issuance API',
+    tagline: 'A Marty component for issuing defined credentials.',
+    description: 'Configure a credential template, issuer, and lifecycle for the chosen workflow. Validate the specific format and recipient wallet before use.',
+    deployment: ['Customer-operated'],
+    capabilities: ['Credential templates', 'Issuer and signing-key configuration', 'Documented issuance interfaces', 'Lifecycle rules for the selected scope'],
+    standards: ['Profile-specific issuance', 'Tested wallet combinations'],
+    pricing: 'Part of the agreed Marty scope, with applicable component rights preserved.',
+    useCase: 'Workforce, education, membership, and other defined credential programs',
+    replacesExtends: 'Give a defined claim a reusable credential representation.',
+    useWhen: 'Use when your organization is authorized to issue the credential.',
   },
   {
-    id: 'kiosk',
-    name: 'Kiosk',
-    tagline: 'Edge/offline verification for facilities and checkpoints.',
-    description: 'Offline-first verification with QR/NFC/BLE support and optional biometrics',
-    deployment: ['On-site application'],
-    capabilities: [
-      'Offline-first (72h cache)',
-      'QR/NFC/BLE scanning',
-      'Biometric verification',
-      'TPM-bound licensing',
-      'Local policy enforcement',
-    ],
-    standards: ['ICAO 9303', 'ISO 18013-5', 'BLE', 'NFC'],
-    pricing: 'Per-device license with optional hardware bundles',
-    useCase: 'Airports, checkpoints, secure facilities',
-    replacesExtends: 'Extends EUDI acceptance to edge/offline environments.',
-    useWhen: 'Use when connectivity is limited or controlled.',
+    id: 'kiosk', name: 'Checkpoint Components',
+    tagline: 'Evaluate the endpoint your workflow needs.',
+    description: 'Checkpoint and constrained-connectivity scenarios need device, transport, trust freshness, and failure-behavior testing. Availability is specific to the selected release and configuration.',
+    deployment: ['Profile evaluation'],
+    capabilities: ['Endpoint and device requirements', 'Connectivity and freshness policy', 'Negative-case testing', 'Operator and integration responsibilities'],
+    standards: ['Device-specific transport', 'Profile-specific verification'],
+    pricing: 'Scope and third-party hardware costs are agreed separately; no per-device offer is implied.',
+    useCase: 'Travel Trust, facilities, and other checkpoint evaluations',
+    replacesExtends: 'Bring the same defined trust questions to a specific physical endpoint.',
+    useWhen: 'Review when the operating environment has device or connectivity constraints.',
   },
   {
-    id: 'authenticator',
-    name: 'Authenticator',
-    tagline: 'A wallet for holding and presenting verifiable credentials.',
-    description: 'Mobile/desktop wallet for mDoc/mDL/VC credential storage and presentation',
-    deployment: ['Mobile (iOS, Android)', 'Desktop'],
-    capabilities: [
-      'mDoc/mDL/VC storage',
-      'QR offline presentations',
-      'OpenID4VP flows',
-      'Biometric protection',
-      'Multi-credential support',
-    ],
-    standards: ['ISO 18013-5', 'W3C VC', 'OpenID4VP'],
-    pricing: 'Free / Community edition',
-    useCase: 'End users, citizens, credential holders',
-    replacesExtends: 'Wallet-centric alternative to biometric re-verification.',
-    useWhen: 'Use when users must present proofs across services.',
+    id: 'authenticator', name: 'Authenticator',
+    tagline: 'A holder-facing component to evaluate with your workflow.',
+    description: 'Review credential storage and presentation behavior for the exact wallet build, platform, and verifier profile. Device security and interoperability require their own evidence.',
+    deployment: ['Build-specific platforms'],
+    capabilities: ['Credential storage and presentation workflows', 'Wallet and verifier compatibility testing', 'Holder experience evaluation'],
+    standards: ['Build-specific wallet profiles'],
+    pricing: 'Existing component and community license terms apply; commercial rights are reviewed for the agreed distribution.',
+    useCase: 'Credential holders in a defined portable-credential workflow',
+    replacesExtends: 'Let the holder participate in the credential exchange.',
+    useWhen: 'Use when the chosen workflow requires a holder wallet.',
   },
 ];
 
@@ -572,7 +491,7 @@ export const STANDARDS_INFO = {
     points: [
       {
         title: 'Portability',
-        description: 'Credentials work across vendors and jurisdictions',
+        description: 'Common formats create a basis for testing compatibility between selected systems',
       },
       {
         title: 'Trust',
@@ -580,11 +499,11 @@ export const STANDARDS_INFO = {
       },
       {
         title: 'Longevity',
-        description: 'Investment protection through stable, evolving specs',
+        description: 'Versioned specifications make dependencies and migration needs explicit',
       },
       {
         title: 'Interoperability',
-        description: 'Seamless integration with global identity ecosystems',
+        description: 'Interoperability is demonstrated with specific profiles and participants',
       },
     ],
   },
@@ -652,12 +571,12 @@ export const IDENTITY_CONCEPTS = {
       {
         question: 'Binding',
         description: 'Is the presenter the legitimate holder of this credential?',
-        detail: 'Proof of possession through cryptographic challenges and biometric binding',
+        detail: 'Evaluate the holder-binding mechanism required by the selected credential and presentation profile',
       },
       {
         question: 'Appropriateness',
         description: 'Is the disclosed information sufficient—and no more than necessary?',
-        detail: 'Selective disclosure and zero-knowledge proofs for data minimization',
+        detail: 'Request only the claims needed, using disclosure mechanisms supported by the selected profile',
       },
     ],
     conclusion: 'Identity becomes a transaction: request → present → validate → decide',
@@ -738,18 +657,18 @@ export const IDENTITY_CONCEPTS = {
 
 // Infrastructure value proposition
 export const INFRASTRUCTURE_VALUE = {
-  title: 'Why Infrastructure Beats Per-Check Pricing',
+  title: 'Start with a Useful Workflow',
   points: [
-    'Verification becomes a commodity',
-    'Trust orchestration compounds in value',
-    'Reusable credentials reduce long-term cost',
-    'Standards prevent vendor lock-in',
+    'Agree the inputs, trust sources, and expected result',
+    'Evaluate with synthetic data before real records',
+    'Keep production ownership explicit',
+    'Expand scope when evidence supports it',
   ],
 };
 
 // Standards as strategic advantage
 export const STANDARDS_STRATEGIC = {
-  header: 'Standards are not integrations. They are the product.',
+  header: 'Standards guide the design. Tests establish compatibility.',
   categories: [
     {
       name: 'Wallet Interoperability',
@@ -773,7 +692,7 @@ export const PROTOCOL = {
   version: '0.5.0',
   status: 'Draft',
   license: 'Apache 2.0',
-  githubUrl: 'https://github.com/mip-protocol/marty-protocol',
+  githubUrl: 'https://github.com/Marty-Protocol/Marty-Protocol',
   tagline: 'An open, vendor-neutral specification for cryptographically verifiable digital identity management.',
   description: 'MIP defines the minimum automatable set of primitives required for issuing, holding, presenting, and verifying digital credentials under explicit rules of trust and disclosure.',
   thesis: 'Digital identity management can be represented by Trust Profiles + Credential Templates + Presentation Policies + Deployment Profiles, orchestrated by Flows.',
@@ -790,7 +709,7 @@ export const PROTOCOL = {
     },
     {
       name: 'Presentation Policy',
-      purpose: 'What must be shown— minimum disclosure and ZK predicates',
+      purpose: 'What must be shown— claims and disclosure requirements',
       icon: 'Policy',
     },
     {
@@ -806,14 +725,14 @@ export const PROTOCOL = {
   ],
   standards: [
     { name: 'ISO 18013-5', coverage: 'mDoc format, proximity presentation' },
-    { name: 'ICAO 9303 / DTC', coverage: 'Travel document trust, CSCA/DS PKI' },
+    { name: 'ICAO 9303 / DTC', coverage: 'Draft travel-document mappings; no active conformance claim' },
     { name: 'OpenID4VCI', coverage: 'Issuance protocol (pre-auth + auth code flows)' },
     { name: 'OpenID4VP', coverage: 'Presentation protocol' },
     { name: 'W3C Verifiable Credentials', coverage: 'VC-JWT, JSON-LD' },
     { name: 'SD-JWT-VC', coverage: 'Selective disclosure' },
     { name: 'W3C DID Core', coverage: 'Decentralized identifier resolution' },
-    { name: 'EUDI Wallet ARF', coverage: 'EU regulatory alignment' },
-    { name: 'AAMVA mDL', coverage: 'North American driver\'s license' },
+    { name: 'EUDI Wallet ARF', coverage: 'Profile mapping to review; not regulatory approval' },
+    { name: 'AAMVA mDL', coverage: 'Mobile-license profile references to evaluate' },
   ],
   governance: {
     model: 'Vendor-neutral, community-governed',
@@ -823,9 +742,9 @@ export const PROTOCOL = {
   },
   components: [
     { name: 'Specification', description: 'Formal definition of all primitives and their relationships' },
-    { name: 'JSON Schemas', description: '35 schemas for all protocol entities' },
+    { name: 'JSON Schemas', description: 'Versioned schemas for protocol entities' },
     { name: 'Cedar Policies', description: 'Deny-by-default authorization using AWS Cedar' },
-    { name: 'Compliance Profiles', description: 'ICAO, AAMVA, EUDI, enterprise, and Open Badge mappings' },
+    { name: 'Profile Mappings', description: 'Draft mappings whose scope and status must be reviewed separately' },
     { name: 'Reference Implementations', description: 'Rust, Python, and TypeScript type libraries' },
     { name: 'Conformance Suite', description: 'Validation test fixtures for implementers' },
   ],
@@ -839,22 +758,7 @@ export { BLOG_AUTHORS, BLOG_POSTS, BLOG_ROADMAP, AUTHOR_AVATAR_PROMPTS } from '@
 
 // Trust and infrastructure messaging
 export const TRUST_SIGNALS = {
-  security: [
-    'Enterprise-grade cryptographic validation',
-    'PKI and revocation management',
-    'HSM and key vault integration',
-  ],
-  infrastructure: [
-    'Offline-first capability (72h cache)',
-    'High-availability SaaS deployment',
-    'Self-hosted options for sovereignty',
-    'Horizontal scaling and load balancing',
-    'Built with AI-assisted development workflows to maintain high quality at lower cost.',
-  ],
-  compliance: [
-    'Implements ICAO 9303',
-    'Implements ISO 18013-5 (mDoc)',
-    'GDPR and privacy by design',
-    'Selective disclosure and data minimization',
-  ],
+  security: ['Configure trusted issuers and keys explicitly', 'Test signature, expiry, and failure handling', 'Review key storage for the selected deployment'],
+  infrastructure: ['Customer or selected-partner operations', 'Release-specific installation requirements', 'Offline and headless profiles need validation', 'No included managed production or uptime SLA', 'Issue and vulnerability reporting through documented channels'],
+  compliance: ['Define the required standard and profile', 'Review evidence for the exact release', 'Approve real-data handling separately', 'Confirm acceptance requirements with the responsible organization'],
 };

@@ -25,15 +25,15 @@ import { DeploymentModelDiagram } from '../diagrams';
 import { Section, SectionHeading } from './LandingSection';
 
 const DEPLOYMENT_MODE_META = {
-  'saas-verification': {
+  'customer-operated': {
     icon: <ApiIcon sx={{ fontSize: 34, color: 'primary.main' }} />,
     color: 'primary',
   },
-  'self-hosted-infrastructure': {
+  'partner-operated': {
     icon: <BusinessIcon sx={{ fontSize: 34, color: 'secondary.main' }} />,
     color: 'secondary',
   },
-  'offline-checkpoint-runtime': {
+  'offline-evaluation': {
     icon: <SettingsInputAntennaIcon sx={{ fontSize: 34, color: 'warning.main' }} />,
     color: 'warning',
   },
@@ -78,12 +78,12 @@ export default function DeploymentModelsSection({ t, onSelectMode }) {
           >
             <Chip label="Architecture fit" color="info" variant="outlined" sx={{ fontWeight: 700, mb: 2 }} />
             <Typography variant="h5" fontWeight={800} sx={{ mb: 1.5 }}>
-              {t('landingPage.deploymentModels.panelTitle', 'Where the platform sits in production.')}
+              {t('landingPage.deploymentModels.panelTitle', 'Plan the operating responsibilities.')}
             </Typography>
             <Typography variant="body2" color="text.secondary" sx={{ mb: 2.5 }}>
               {t(
                 'landingPage.deploymentModels.panelSubtitle',
-                'Show buyers the runtime choices early so deployment and integration questions are answered before they need a sales call.'
+                'Review who runs the environment, which workflow is covered, and what must be demonstrated before production.'
               )}
             </Typography>
 
@@ -140,7 +140,7 @@ export default function DeploymentModelsSection({ t, onSelectMode }) {
       </Grid>
       <Grid container spacing={3}>
         {DEPLOYMENT_MODELS.modes.map((mode) => {
-          const meta = DEPLOYMENT_MODE_META[mode.id] || DEPLOYMENT_MODE_META['saas-verification'];
+          const meta = DEPLOYMENT_MODE_META[mode.id] || DEPLOYMENT_MODE_META['customer-operated'];
 
           return (
             <Grid item xs={12} md={4} key={mode.id}>

@@ -5,6 +5,13 @@
 Microservice-based control plane and UI for Marty credential, trust, policy,
 applicant, and flow management.
 
+Marty is one customer-operated product with education/workforce credential,
+applicant/document-verification, and Travel Trust use cases. The customer or
+their selected integrator owns production operation. The current commercial
+direction is a bounded annual software license; managed deployment, guaranteed
+support response, uptime SLAs, and 24/7 operations are not included. Applicable
+orders and component licenses define the released scope and rights.
+
 For custom applications and CLI consumers, see
 [machine API authentication](docs/API_MACHINE_AUTHENTICATION.md), including
 organization-scoped API keys, credential lifecycle and the current OAuth
@@ -129,69 +136,44 @@ do not install a Python MMF package.
 
 See [IMPORT_MIGRATION.md](IMPORT_MIGRATION.md) for import path details.
 
-## Features
+## Workflow scope and qualification
 
-### Issuer Service
+Choose one useful workflow and verify its exact release, profile, inputs, and
+limitations. These use cases share a product and backlog; they are not three
+independently qualified distributions.
 
-- **Credential Issuance**: Creates ISO 18013-5 compliant mDL credentials
-- **Document Types**: Supports driving licenses, ID cards, and custom documents
-- **Security**: Uses secure random generation for credential IDs
-- **Standards Compliance**: Implements mso_mdoc format with proper
-  cryptographic signatures
+| Use case | Evidence required for the selected scope |
+| --- | --- |
+| Education and workforce credentials | Synthetic issuance, holder delivery, policy-based verification, and applicable rejected/revoked cases |
+| Applicant and document verification | Named supported input and demonstrated checks; structural checks, cryptographic authenticity, and holder binding distinguished |
+| Travel Trust | Customer-operated trust-material import, provenance, validation, policy, and verification using synthetic or authorized sources |
 
-### Verifier Service
+Travel Trust does not include an ElevenID-operated CA, shared trust network,
+redistributed certificate feed, or automatic international acceptance. Confirm
+source rights, freshness rules, and customer trust decisions for any real
+material.
 
-- **Presentation Verification**: Validates mDoc presentations using OpenID4VP
-- **Proximity Verification**: Supports ISO 18013-5 proximity presentation via BLE
-- **Selective Disclosure**: Verifies only requested attributes
-- **Security Validation**: Checks cryptographic signatures and certificate chains
+Repository modules and demo screens describe implementation areas. They do not
+establish blanket ISO conformance, certified identity proofing, secure wallet
+storage, zero-knowledge proofs, network-free replay protection, or support for
+every wallet, transport, and document format. Link each external capability claim
+to the specific component/version, test, evidence, and known limitations.
 
-### Wallet Service
+Linux amd64 and API/CLI operation are the initial delivery focus. The
+[console-free source composition](docs/SELFHOST_API_ONLY.md) is not yet a
+qualified distribution in published self-host bundles or installers. Current
+[installer validation](docs/installer-bootstrap.md#deployment-validation)
+reports the credential journey as `SKIP` and retains `installation_ready: false`
+while trust onboarding and installed-journey completion remain open. Passing
+read-only health and metadata checks does not pass those gates.
 
-- **Credential Management**: Stores and organizes multiple credentials
-- **Selective Disclosure**: Allows users to share only required information
-- **Secure Storage**: Implements secure area storage for sensitive data
-- **Presentation Logic**: Handles both remote and proximity presentation flows
-
-## Enhanced Features
-
-### 🛡️ Age Verification with Selective Disclosure
-
-- **Privacy-Preserving**: Verify age without disclosing birth date
-- **Multiple Use Cases**: Alcohol purchase, voting, senior discounts, employment
-- **Zero-Knowledge Proofs**: Demonstrate age thresholds without revealing exact
-  age
-- **Policy-Based**: Context-aware verification with privacy level reporting
-
-### 📱 Offline QR Code Verification
-
-- **Network-Free**: Verify credentials without internet connectivity
-- **Cryptographic Security**: ECDSA signatures with CBOR encoding
-- **Single-Use**: QR codes with built-in replay protection
-- **Compact**: Optimized for mobile QR code display and scanning
-
-### 🔒 Certificate Lifecycle Monitoring
-
-- **mDL DSC Tracking**: Monitor Document Signer Certificate expiry
-- **Proactive Alerts**: Early warning system for certificate renewals
-- **Renewal Simulation**: Automated certificate renewal workflows
-- **Dashboard**: Comprehensive certificate health monitoring
-
-### 📋 Policy-Based Selective Disclosure
-
-- **Context-Aware**: Intelligent attribute sharing based on verification context
-- **Trust Levels**: Verifier trust assessment and appropriate disclosure
-- **Privacy Controls**: User consent and attribute sensitivity classification
-- **Integration**: Uses Marty's authorization engine for policy decisions
-
-### Demo UI
-
-- **Interactive Testing**: Web interface for all demo scenarios
-- **QR Code Generation**: For mobile wallet integration and offline verification
-- **Real-time Updates**: Live status updates during credential flows
-- **Responsive Design**: Works on desktop and mobile devices
-- **Enhanced Navigation**: Dedicated tab for advanced features
-- **Interactive Demos**: Hands-on exploration of all enhanced capabilities
+Use the exact release's
+[disposable qualification runbook](docs/selfhost-disposable-qualification-runbook.md)
+to obtain independent installation and workflow evidence. Evaluate with synthetic
+data; real-data and production authorization require the applicable customer
+operator, security/privacy review, and recovery evidence. Source tests, CI smoke
+results, artifact signatures, and commercial payment each establish different
+facts and do not substitute for this qualification.
 
 ## Detailed local start
 
@@ -493,6 +475,9 @@ This project works across standards and service domains including:
 - **OpenID4VP**
 - **W3C VC Data Model**: Verifiable Credentials specification
 - **Trust / policy / revocation profile services** used by the Marty platform
+
+Verify the exact standards version and interoperability profile against release
+evidence. This list does not establish certification or regulatory compliance.
 
 ## 📋 Future Work - SEO & Analytics
 

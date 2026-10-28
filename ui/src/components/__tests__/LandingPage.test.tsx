@@ -133,24 +133,24 @@ describe('LandingPage', () => {
   it('renders the upgraded proof, deployment, and developer quickstart sections in the intended order', async () => {
     render(<LandingPage />);
 
-    expect(screen.getByText('Issue once. Reuse everywhere.')).toBeInTheDocument();
+    expect(screen.getByText('Explore how credential reuse works.')).toBeInTheDocument();
     expect(screen.getByText('Start where you are')).toBeInTheDocument();
     expect(screen.getByText('Verify Credentials')).toBeInTheDocument();
     expect(screen.getByText('Issue Credentials')).toBeInTheDocument();
     expect(screen.getByText('Build With ElevenID')).toBeInTheDocument();
-    expect(screen.getByText('Built for the ecosystems reviewers already know')).toBeInTheDocument();
+    expect(screen.getByText('Connect the workflow to its requirements')).toBeInTheDocument();
     expect(
-      await screen.findByText('See the decision surface without a staged demo.', undefined, { timeout: 10000 }),
+      await screen.findByText('Try a synthetic verification example.', undefined, { timeout: 10000 }),
     ).toBeInTheDocument();
-    expect(screen.getByText('Start from a deployment playbook.')).toBeInTheDocument();
+    expect(screen.getByText('Explore a scenario guide.')).toBeInTheDocument();
     await waitFor(
       () => {
-        expect(screen.getByText('How ElevenID Deploys')).toBeInTheDocument();
+        expect(screen.getByText('How You Operate Marty')).toBeInTheDocument();
         expect(screen.getByText('Deployment Model Diagram')).toBeInTheDocument();
-        expect(screen.getByText('SaaS Verification')).toBeInTheDocument();
-        expect(screen.getByText('Self-Hosted Infrastructure')).toBeInTheDocument();
-        expect(screen.getByText('Offline Checkpoint Runtime')).toBeInTheDocument();
-        expect(screen.getByText('Example: Airport Boarding Gate')).toBeInTheDocument();
+        expect(screen.getByText('Customer-Operated Deployment')).toBeInTheDocument();
+        expect(screen.getByText('Partner or OEM Integration')).toBeInTheDocument();
+        expect(screen.getByText('Offline and Headless Evaluation')).toBeInTheDocument();
+        expect(screen.getByText('Example: Travel Trust Evaluation')).toBeInTheDocument();
       },
       { timeout: 10000 },
     );
@@ -162,12 +162,12 @@ describe('LandingPage', () => {
     expect(screen.getByText('Verify Credentials').closest('a')).toHaveAttribute('href', '/product#verification-api');
     expect(screen.getByText('Issue Credentials').closest('a')).toHaveAttribute('href', '/product#issuance-api');
     expect(screen.getByText('Build With ElevenID').closest('a')).toHaveAttribute('href', '/docs');
-    expect(screen.getByText('SaaS Verification').closest('a')).toHaveAttribute('href', '/product#verification-api');
-    expect(screen.getByText('Self-Hosted Infrastructure').closest('a')).toHaveAttribute('href', '/product#issuance-api');
-    expect(screen.getByText('Offline Checkpoint Runtime').closest('a')).toHaveAttribute('href', '/product#kiosk');
+    expect(screen.getByText('Customer-Operated Deployment').closest('a')).toHaveAttribute('href', '/product#verification-api');
+    expect(screen.getByText('Partner or OEM Integration').closest('a')).toHaveAttribute('href', '/product#issuance-api');
+    expect(screen.getByText('Offline and Headless Evaluation').closest('a')).toHaveAttribute('href', '/product#kiosk');
 
-    const productsHeading = await screen.findByText('Products & Capabilities');
-    const deploymentHeading = screen.getByText('How ElevenID Deploys');
+    const productsHeading = await screen.findByText('Marty Components');
+    const deploymentHeading = screen.getByText('How You Operate Marty');
     const quickstartHeading = screen.getByText('Verify a credential in one request.');
     const standardsHeading = screen.getByText('Standards-Based Architecture');
 
@@ -193,13 +193,13 @@ describe('LandingPage', () => {
       })
     );
 
-    await user.click(await screen.findByText('SaaS Verification'));
+    await user.click(await screen.findByText('Customer-Operated Deployment'));
     expect(mockTrackEvent).toHaveBeenCalledWith(
       'landing_deployment_mode_selected',
       expect.objectContaining({
         page: 'landing',
         section: 'deployment_models',
-        card_id: 'saas-verification',
+        card_id: 'customer-operated',
         destination_path: '/product#verification-api',
       })
     );
@@ -282,7 +282,7 @@ describe('LandingPage', () => {
 
     await user.click(screen.getByRole('button', { name: 'Airline boarding' }));
     expect(screen.getByText('Travel boarding check')).toBeInTheDocument();
-    expect(screen.getByText('Throughput stays high without weakening the assurance model.')).toBeInTheDocument();
+    expect(screen.getByText('The example illustrates a decision; it does not measure throughput or production assurance.')).toBeInTheDocument();
   });
 
   it('runs the proof lab verification flow for the selected scenario', async () => {
