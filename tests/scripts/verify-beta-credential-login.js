@@ -26,10 +26,12 @@ const {
   DEFAULT_LOGIN_BADGE_CONFIGURATION_ID,
   DEFAULT_LOGIN_BADGE_TEMPLATE_ID,
   DEFAULT_LOGIN_BADGE_APPLICATION_TEMPLATE_ID,
+  DEFAULT_LOGIN_BADGE_FLOW_ID,
   DEFAULT_BETA_ORGANIZATION_ID,
   credentialInventoryEvidence,
   membershipLoginBehaviorAssertions,
   requireCompletedLoginNonce,
+  loginNonceCompletionEvidence,
   isTerminalLoginNonceStatus,
 } = require('./beta-credential-contract');
 const {
@@ -177,6 +179,7 @@ async function runCredentialLogin({ retainedFirstParty = false, evidence = null 
     organizationId: process.env.BETA_AUDIT_ORG_ID || DEFAULT_BETA_ORGANIZATION_ID,
     credentialTemplateId: process.env.LOGIN_BADGE_TEMPLATE_ID || DEFAULT_LOGIN_BADGE_TEMPLATE_ID,
     sourceApplicationTemplateId: process.env.LOGIN_BADGE_APPLICATION_TEMPLATE_ID || DEFAULT_LOGIN_BADGE_APPLICATION_TEMPLATE_ID,
+    sourceFlowDefinitionId: DEFAULT_LOGIN_BADGE_FLOW_ID,
     configurationId: MEMBERSHIP_BADGE_CONFIGURATION_ID, vct: MEMBERSHIP_BADGE_VCT,
     email: process.env.TEST_APPLICANT_EMAIL, givenName: 'Jamie', familyName: 'Lee',
     identityBoundary: 'AUTHORIZED_EXISTING_BETA_TEST_ACCOUNT_WITH_SYNTHETIC_FORM_VALUES',
@@ -368,8 +371,8 @@ async function runCredentialLogin({ retainedFirstParty = false, evidence = null 
     const terminal = await terminalStatusResponse;
     const completion = terminal ? await terminal.json().catch(() => ({ status: 'invalid-response' }))
       : { status: 'pending-timeout' };
-    report.completion = { status: completion?.status || null,
-      observedNonceStatus: completion?.status || null, authenticated: false };
+    const nonceEvidence = loginNonceCompletionEvidence(completion);
+    report.completion = { ...nonceEvidence, authenticated: false };
     requireCompletedLoginNonce(completion?.status);
     if (completion?.redirect_to) {
       await loginPage.goto(new URL(completion.redirect_to, BETA_ORIGIN).href, {
@@ -390,8 +393,7 @@ async function runCredentialLogin({ retainedFirstParty = false, evidence = null 
     await loginPage.screenshot({ path: path.join(artifactDir, '02-login-complete.png'), fullPage: true });
 
     report.completion = {
-      status: completion.status,
-      observedNonceStatus: completion?.status || null,
+      ...nonceEvidence,
       authenticated: auth.body?.authenticated === true,
       authStatus: auth.status,
       authenticatedEmail: auth.body?.authenticated ? auth.body?.user?.email : null,
@@ -486,7 +488,7 @@ async function runCredentialLogin({ retainedFirstParty = false, evidence = null 
     }
     report.finishedAt = new Date().toISOString();
     fs.writeFileSync(path.join(artifactDir, 'report.json'), JSON.stringify(report, null, 2));
-    console.log(JSON.stringify(report, null, 2));
+    console.log(redact(JSON.stringify(report, null, 2)));
     if (!report.engineeringReady) process.exitCode = 1;
   }
 }
