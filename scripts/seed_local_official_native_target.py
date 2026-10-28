@@ -117,7 +117,7 @@ def operator_mounts() -> list[tuple[str, str, bool]]:
     script = Path(__file__).resolve()
     runtime = script.with_name("scoped_native_runtime.py")
     require(runtime.is_file() and not runtime.is_symlink(), "SEED_RUNTIME_MODULE_MISSING")
-    return [(str(script), "/operator.py", True),
+    return [(str(script), "/seed_entry.py", True),
             (str(runtime), "/scoped_native_runtime.py", True)]
 
 
@@ -136,7 +136,7 @@ def owned_helper(client, name: str, mode: str, mounts: list[tuple[str, str, bool
         args += ["--mount", "type=" + ("volume" if source == VOLUME else "bind")
                  + ",src=" + (source if source == VOLUME else daemon_source(source))
                  + ",dst=" + destination + (",readonly" if readonly else "")]
-    args += ["--entrypoint", "python", IMAGE, "/operator.py", mode]
+    args += ["--entrypoint", "python", IMAGE, "/seed_entry.py", mode]
     save_exclusive(intent, {"state": "CREATE_INTENT", "name": name, "image": IMAGE,
                             "argsSha256": hashlib.sha256(json.dumps(args).encode()).hexdigest(),
                             "engine": ENGINE, "operatorSha256": sha(Path(__file__))})

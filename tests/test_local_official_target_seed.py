@@ -90,12 +90,16 @@ class TargetSeedTests(unittest.TestCase):
     def test_staged_operator_imports_shared_runtime_module(self):
         with tempfile.TemporaryDirectory() as tmp:
             import subprocess
-            for name in ("seed_local_official_native_target.py", "scoped_native_runtime.py"):
-                source = Path(seed.__file__).with_name(name)
-                (Path(tmp) / name).write_bytes(source.read_bytes())
+            entry = Path(tmp) / "seed_entry.py"
+            entry.write_bytes(Path(seed.__file__).read_bytes())
+            source = Path(seed.__file__).with_name("scoped_native_runtime.py")
+            (Path(tmp) / source.name).write_bytes(source.read_bytes())
+            self.assertEqual([target for _, target, _ in seed.operator_mounts()],
+                             ["/seed_entry.py", "/scoped_native_runtime.py"])
             result = subprocess.run([sys.executable, "-c",
-                                     "import sys;sys.path.insert(0,sys.argv[1]);"
-                                     "import seed_local_official_native_target" , tmp],
+                                     "import runpy,sys;sys.path.insert(0,sys.argv[1]);"
+                                     "runpy.run_path(sys.argv[2],run_name='seed_import_probe')",
+                                     tmp, str(entry)],
                                     capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
 
