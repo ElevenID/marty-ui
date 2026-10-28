@@ -172,9 +172,28 @@ async function runCanvasCapture({ setup, page, adminPage, walletPage, scenario,
     report.currentOperation = 'grade-score-binding';
     assert.equal(Number(changed.score), value);
   }
+  async function withRestoredGrade(operation) {
+    let primaryFailure;
+    try { return await operation(); }
+    catch (error) {
+      primaryFailure = error;
+      report.operationFailures ||= [];
+      report.operationFailures.push(stock.contractFailureLocation(error, report.currentOperation));
+      throw error;
+    } finally {
+      try { await grade(95); }
+      catch (error) {
+        report.operationFailures ||= [];
+        report.operationFailures.push(stock.contractFailureLocation(error, report.currentOperation));
+        if (primaryFailure) throw new AggregateError([primaryFailure, error],
+          'Canvas operation and grade restoration both failed');
+        throw error;
+      }
+    }
+  }
   async function correction(prefix) {
-    let denied, primaryFailure;
-    try {
+    let denied;
+    await withRestoredGrade(async () => {
       await grade(40);
       denied = await sync(`${prefix}-deny`, false);
       assert.notEqual(headFingerprint(denied), headFingerprint(initial), 'Correction reused initial evidence');
@@ -200,23 +219,7 @@ async function runCanvasCapture({ setup, page, adminPage, walletPage, scenario,
         transactionCount: 0, credentialCount: 0, claimAvailable: false };
       report.pendingOperations = report.pendingOperations.filter(operation => operation !== 'scoped-approval');
       await checkpoint(page, 'approval-denied-on-current-evidence', report.deniedApproval);
-    } catch (error) {
-      primaryFailure = error;
-      report.operationFailures ||= [];
-      report.operationFailures.push(stock.contractFailureLocation(error, report.currentOperation));
-      throw error;
-    } finally {
-      // Always restore the exact synthetic grade, including when denial/readback fails.
-      try {
-        await grade(95);
-      } catch (error) {
-        report.operationFailures ||= [];
-        report.operationFailures.push(stock.contractFailureLocation(error, report.currentOperation));
-        if (primaryFailure) throw new AggregateError([primaryFailure, error],
-          'Canvas negative operation and grade restoration both failed');
-        throw error;
-      }
-    }
+    });
     let recovered = null;
     for (let attempt = 0; attempt < 4 && !recovered; attempt++) {
       await operations.waitForCanvasCourseCompletion(adminCanvas, fixtures);
@@ -305,7 +308,7 @@ async function runCanvasCapture({ setup, page, adminPage, walletPage, scenario,
     const reviewsPath = `/v1/integrations/canvas/evidence-policy-reviews?organization_id=${enc(organizationId)}&binding_id=${enc(binding.id)}&limit=100`;
     assert.equal((await marty.get(reviewsPath)).filter(r => r.application_id === applicationId && r.status === 'open').length, 0);
     let review, postDenied;
-    try {
+    await withRestoredGrade(async () => {
       await grade(40);
       postDenied = await sync('post-issuance-deny', false);
       assert.notEqual(headFingerprint(postDenied), headFingerprint(report.preIssuanceCorrection.recovered),
@@ -321,7 +324,7 @@ async function runCanvasCapture({ setup, page, adminPage, walletPage, scenario,
       assert.equal(String(current.status).toUpperCase(), 'ACTIVE');
       report.correctionReview = { id: review.id, applicationId, credentialId, status: 'open', credentialStatus: 'ACTIVE' };
       await checkpoint(page, 'correction-review-open', report.correctionReview);
-    } finally { await grade(95); }
+    });
     const postRecovered = await sync('post-issuance-recovery', true);
     assert.notEqual(headFingerprint(postRecovered), headFingerprint(postDenied),
       'Post-issuance recovery reused denied evidence');
