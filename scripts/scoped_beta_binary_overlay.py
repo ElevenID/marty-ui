@@ -69,7 +69,7 @@ def validate_runtime_after(before, after, binaries, maintenance_restart_roles):
     new = {row["role"]: row for row in after["roles"]}
     require(len(before["roles"]) == len(after["roles"]) == len(old) == len(new) == 22 and set(old) == set(new) == RUNTIME_ROLES, "EXACT_22_ROLE_SET_REQUIRED")
     require(len({row["containerId"] for row in new.values()}) == 22 and all(re.fullmatch(r"[a-f0-9]{64}", row["containerId"]) for row in new.values()), "UNIQUE_CONTAINER_IDENTITIES_REQUIRED")
-    require(set(maintenance_restart_roles).issubset(MARTY_CLIENTS - set(ROLE_BINARIES)), "UNREVIEWED_RESTART_ROLE")
+    require(set(maintenance_restart_roles).issubset(RUNTIME_ROLES - set(ROLE_BINARIES)), "UNREVIEWED_RESTART_ROLE")
     changes = []
     for role, prior in old.items():
         actual = new[role]
