@@ -2416,6 +2416,11 @@ async function retireCanvasEngineeringSetup(state, observeSessions = () => {}) {
       retired = await retireCanvasSetupFixtures(state, true, !state.oauthConnected);
       retired.issuanceRetirement = issuanceRetirement;
   } catch(error) {failures.push({stage:'OWNED_RESOURCES',location:contractFailureLocation(error,'owned_fixture_cleanup')});}
+  if(state.ownedVerificationFlow){
+    retired.verificationFlowRetired=state.ownedVerificationFlow.retirementConfirmed===true;
+    if(!retired.verificationFlowRetired)failures.push({stage:'VERIFICATION_FLOW',
+      location:{code:'owned_verification_flow_cleanup_incomplete'}});
+  }
   if (state.custody) {
     try {
       retired.sessionRetirement=await retireCanvasCaptureSessions(state,value=>{retired.sessionRetirement=value;observeSessions(value)});
@@ -2646,9 +2651,15 @@ async function main(options = {}) {
       requireCondition(policy.organization_id===organizationId&&String(policy.status).toUpperCase()==='ACTIVE'
         &&policy.credential_requirements?.some(row=>row.credential_template_id===templates.credential.id),
       'engineering_policy_unbound','Engineering verification policy differs from the issued badge.');
-      const verified=await require('./audit-beta-credential-lifecycle').verify(betaAdminPage,ownedWalletPage,
-        `Canvas engineering ${firstBootstrap.application_id}`,{organizationId,presentationPolicyId:policyId,
-          issuerDid:issuedRecords.issuer_did,returnOnWalletFailure:true});
+      const {ownedVerificationFlow,browserFlowApi}=require('./owned-verification-flow');
+      const flow=ownedVerificationFlow({organizationId,runId:options.runId,
+        privateDirectory:options.privateRecoveryDirectory,api:browserFlowApi(betaAdminPage)});
+      preparationState.ownedVerificationFlow=flow;
+      const verified=await flow.run(()=>require('./audit-beta-credential-lifecycle').verify(
+        betaAdminPage,ownedWalletPage,flow.reference,{organizationId,presentationPolicyId:policyId,
+          issuerDid:issuedRecords.issuer_did,returnOnWalletFailure:true,flowCustody:flow}));
+      requireCondition(['COMPLETED','PASSED','VERIFIED'].includes(flow.terminalStatus),
+        'engineering_wallet_flow_not_verified','Run-owned verification Flow was not a terminal success.');
       try {require('./beta-demo-review-ui').requireVerificationDecision(verified,'allow');}
       catch {fail('engineering_wallet_verification_failed','Real Rust wallet presentation did not verify.');}
     }
