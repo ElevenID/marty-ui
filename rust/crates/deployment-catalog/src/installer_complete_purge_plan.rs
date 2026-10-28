@@ -293,6 +293,28 @@ fn prepare_normal_with<D: DockerRead>(
     if !same_plan || !still_completed {
         return PrepareNormalOutcome::Incomplete(InstallationChanged);
     }
+    // Docker observation can take time. Do not silently adopt or omit children
+    // that appeared, disappeared, or changed after the first exact census.
+    let final_tree = match installer_host_tree_observer::observe(
+        locked,
+        installation,
+        &root.identity,
+        root.mount_id,
+        &specs,
+    ) {
+        TreeOutcome::Observed(value) => value,
+        TreeOutcome::Incomplete(_) => return PrepareNormalOutcome::Incomplete(FullTreeIncomplete),
+    };
+    if final_tree.coverage != tree.coverage
+        || final_tree.installation_id != tree.installation_id
+        || final_tree.root != tree.root
+        || final_tree.mount_id != tree.mount_id
+        || final_tree.entries != tree.entries
+        || final_tree.not_atomic_snapshot != tree.not_atomic_snapshot
+        || final_tree.deletion_eligible != tree.deletion_eligible
+    {
+        return PrepareNormalOutcome::Incomplete(FullTreeIncomplete);
+    }
     if locked.require_path_binding(installation).is_err() || locked.require_unchanged().is_err() {
         return PrepareNormalOutcome::Incomplete(InstallationChanged);
     }
@@ -677,5 +699,76 @@ mod tests {
             outcome,
             PrepareNormalOutcome::Incomplete(IncompleteReason::CreationEvidenceIncomplete)
         ));
+    }
+
+    #[test]
+    fn auxiliary_tree_drift_during_docker_observation_is_refused() {
+        #[derive(Clone, Copy)]
+        enum Change {
+            Add,
+            Remove,
+            Replace,
+            UnknownTopLevel,
+        }
+        struct MutatingDocker {
+            inner: MockDocker,
+            installation: PathBuf,
+            change: Change,
+        }
+        impl DockerRead for MutatingDocker {
+            fn engine_id(&self) -> Result<String, ()> {
+                let child = self.installation.join("backups/private-customer-filename");
+                match self.change {
+                    Change::Add => {
+                        fs::write(
+                            self.installation.join("renewal-inputs/late-synthetic"),
+                            b"late",
+                        )
+                        .unwrap();
+                    }
+                    Change::Remove => fs::remove_file(child).unwrap(),
+                    Change::Replace => {
+                        let bytes = fs::read(&child).unwrap();
+                        fs::rename(
+                            &child,
+                            self.installation
+                                .parent()
+                                .unwrap()
+                                .join("old-synthetic-backup"),
+                        )
+                        .unwrap();
+                        fs::write(&child, bytes).unwrap();
+                    }
+                    Change::UnknownTopLevel => {
+                        fs::write(self.installation.join("late-unknown-synthetic"), b"late")
+                            .unwrap();
+                    }
+                }
+                self.inner.engine_id()
+            }
+            fn run(&self, args: &[&str]) -> Result<String, ()> {
+                self.inner.run(args)
+            }
+        }
+        for change in [
+            Change::Add,
+            Change::Remove,
+            Change::Replace,
+            Change::UnknownTopLevel,
+        ] {
+            let (_parent, path, state, inner) = fixture();
+            let docker = MutatingDocker {
+                inner,
+                installation: path.clone(),
+                change,
+            };
+            let outcome = state
+                .with_inspection(|locked| Ok(prepare_normal_with(locked, &path, &docker)))
+                .unwrap();
+            assert!(matches!(
+                outcome,
+                PrepareNormalOutcome::Incomplete(IncompleteReason::FullTreeIncomplete)
+            ));
+        }
     }
 }
