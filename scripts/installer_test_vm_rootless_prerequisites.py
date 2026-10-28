@@ -37,6 +37,9 @@ import grp,json,os,pwd,stat,sys
 N=("docker","dockerd-rootless.sh","dockerd-rootless-setuptool.sh",
    "rootlesskit","slirp4netns","fuse-overlayfs","newuidmap","newgidmap",
    "systemctl","loginctl")
+PSEUDO=("/proc/sys/kernel/unprivileged_userns_clone",
+        "/proc/sys/user/max_user_namespaces","/proc/meminfo",
+        "/sys/fs/cgroup/cgroup.controllers")
 def binary(name):
     try:
         s=os.lstat("/usr/bin/"+name)
@@ -52,7 +55,7 @@ def fixed_bytes(path,limit):
         h=os.open(path,os.O_PATH|os.O_NOFOLLOW|os.O_CLOEXEC)
         try:
             a=os.fstat(h)
-            if not stat.S_ISREG(a.st_mode) or a.st_uid!=0 or a.st_mode&0o022 or a.st_size>limit:
+            if not stat.S_ISREG(a.st_mode) or a.st_uid!=0 or a.st_mode&0o022 or (path not in PSEUDO and a.st_size>limit):
                 return None
             r=os.open("/proc/self/fd/%d"%h,os.O_RDONLY|os.O_CLOEXEC)
             try:
@@ -66,10 +69,10 @@ def fixed_bytes(path,limit):
                 data=b"".join(chunks)
                 b=os.fstat(r)
                 n=os.stat(path,follow_symlinks=False)
-                # procfs/sysfs regular pseudo-files report st_size=0 despite
-                # content. For nonzero-sized ordinary files require exact bytes;
-                # the bounded loop also confirms EOF for both kinds.
-                if len(data)>limit or (a.st_size>0 and len(data)!=a.st_size) or any(getattr(a,x)!=getattr(b,x) or getattr(a,x)!=getattr(n,x)
+                # Only the closed procfs/sysfs path set may report a size
+                # unrelated to its bytes (often 0 or 4096). All reads still
+                # require bounded EOF and unchanged held/named metadata.
+                if len(data)>limit or (path not in PSEUDO and len(data)!=a.st_size) or any(getattr(a,x)!=getattr(b,x) or getattr(a,x)!=getattr(n,x)
                     for x in ("st_dev","st_ino","st_uid","st_gid","st_mode","st_size","st_mtime_ns","st_ctime_ns")):
                     return None
                 return data

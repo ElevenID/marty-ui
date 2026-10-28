@@ -66,26 +66,36 @@ class RootlessPrerequisites(unittest.TestCase):
                 mapped[name] = destination
             real_open, real_read, real_fstat, real_stat, real_statvfs = (
                 os.open, os.read, os.fstat, os.stat, os.statvfs)
-            def owned(item):
-                return SimpleNamespace(**{name: (0 if name == "st_uid" else getattr(item, name))
+            pseudo = {"/proc/sys/kernel/unprivileged_userns_clone",
+                      "/proc/sys/user/max_user_namespaces", "/proc/meminfo",
+                      "/sys/fs/cgroup/cgroup.controllers"}
+            file_paths = {}
+            def owned(item, path=None):
+                return SimpleNamespace(**{name: (0 if name == "st_uid" else
+                    4096 if name == "st_size" and path in pseudo else getattr(item, name))
                     for name in ("st_dev", "st_ino", "st_uid", "st_gid", "st_mode",
                                  "st_size", "st_mtime_ns", "st_ctime_ns")})
             def opening(path, flags, *args, **kwargs):
-                return real_open(mapped.get(path, path), flags, *args, **kwargs)
+                descriptor = real_open(mapped.get(path, path), flags, *args, **kwargs)
+                file_paths[descriptor] = (file_paths.get(int(path.rsplit("/", 1)[1]))
+                    if path.startswith("/proc/self/fd/") else path)
+                return descriptor
             def statting(path, *args, **kwargs):
-                return owned(real_stat(mapped.get(path, path), *args, **kwargs))
+                return owned(real_stat(mapped.get(path, path), *args, **kwargs), path)
             def lstatting(path):
                 if path == "/home/installer":
                     return SimpleNamespace(st_mode=stat.S_IFDIR | 0o700, st_uid=1000)
                 raise FileNotFoundError(path)
             out = io.StringIO()
+            scope = {"__name__": "__main__"}
             with mock.patch.object(os, "getuid", return_value=1000), \
                  mock.patch.object(os, "getgid", return_value=1000), \
                  mock.patch.object(os, "getgroups", return_value=[27, 998]), \
                  mock.patch.object(os, "open", side_effect=opening), \
                  mock.patch.object(os, "read", side_effect=lambda fd, count:
                                    real_read(fd, min(count, 3))), \
-                 mock.patch.object(os, "fstat", side_effect=lambda fd: owned(real_fstat(fd))), \
+                 mock.patch.object(os, "fstat", side_effect=lambda fd:
+                                   owned(real_fstat(fd), file_paths.get(fd))), \
                  mock.patch.object(os, "stat", side_effect=statting), \
                  mock.patch.object(os, "lstat", side_effect=lstatting), \
                  mock.patch.object(os, "statvfs", side_effect=lambda path: real_statvfs(home)), \
@@ -93,7 +103,16 @@ class RootlessPrerequisites(unittest.TestCase):
                  mock.patch.object(grp, "getgrnam", side_effect=lambda name:
                                    SimpleNamespace(gr_gid={"docker": 998, "sudo": 27}[name])), \
                  contextlib.redirect_stdout(out):
-                exec(subject.GUEST_SCRIPT, {"__name__": "__main__"})
+                exec(subject.GUEST_SCRIPT, scope)
+                seen = set()
+                def truncated(fd, count):
+                    if file_paths.get(fd) == "/etc/subuid":
+                        if fd in seen:
+                            return b""
+                        seen.add(fd)
+                    return real_read(fd, min(count, 3))
+                with mock.patch.object(os, "read", side_effect=truncated):
+                    self.assertIsNone(scope["fixed_bytes"]("/etc/subuid", 65536))
             value = json.loads(out.getvalue())
             self.assertEqual(value["subuid"]["account_entries"], 1)
             self.assertTrue(value["subuid"]["declared_contiguous_65536"])
