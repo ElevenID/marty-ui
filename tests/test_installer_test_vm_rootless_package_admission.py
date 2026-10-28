@@ -30,7 +30,8 @@ def test_package_index_and_deb_chain_rejects_digest_path_and_duplicates(tmp_path
     index = tmp_path / "Packages.xz"
     index.write_bytes(compressed)
     hashes = {"universe/binary-amd64/Packages.xz":
-              (len(compressed), admission.sha(compressed))}
+              (len(compressed), admission.sha(compressed)),
+              "universe/binary-amd64/Packages": (len(plain), admission.sha(plain))}
     selected = admission.select_package(admission.verify_index(index, hashes, "universe"),
                                         row["Package"], row["Version"])
     deb = tmp_path / "package.deb"
@@ -47,6 +48,10 @@ def test_package_index_and_deb_chain_rejects_digest_path_and_duplicates(tmp_path
     deb.write_bytes(b"bad")
     with pytest.raises(admission.Refused, match="digest"):
         admission.verify_deb(deb, selected)
+    assert admission._consistent_candidate([{**selected, "pocket": "noble-updates"},
+                                            {**selected, "pocket": "noble-security"}])["sha256"] == row["SHA256"]
+    with pytest.raises(admission.Refused, match="mixed"):
+        admission._consistent_candidate([selected, {**selected, "sha256": "0" * 64}])
 
 
 def test_simulation_rejects_existing_change_unknown_action_and_dependency():
@@ -64,6 +69,19 @@ def test_simulation_rejects_existing_change_unknown_action_and_dependency():
                     transcript.replace(b"Conf uidmap", b"Conf docker.io")):
         with pytest.raises(admission.Refused):
             admission.inspect_simulation(changed, {"docker.io": "29.1.3"}, admitted)
+
+
+def test_guest_status_and_apt_command_are_closed(tmp_path):
+    status = (b"Package: docker.io\nStatus: install ok installed\n"
+              b"Version: 29.1.3-0ubuntu3~24.04.2\n\n"
+              b"Package: libc6\nStatus: install ok installed\nVersion: 2.39-0ubuntu8\n\n")
+    assert admission._installed_status(status)["docker.io"] == "29.1.3-0ubuntu3~24.04.2"
+    for changed in (status.replace(b"install ok installed", b"deinstall ok config-files", 1),
+                    status + status.split(b"\n\n")[0] + b"\n\n"):
+        with pytest.raises(admission.Refused):
+            admission._installed_status(changed)
+    with pytest.raises(admission.Refused, match="not admitted"):
+        admission._apt_run(["install", "docker-ce"], tmp_path / "config")
 
 
 def test_read_refuses_special_link_and_growth(tmp_path):
@@ -150,6 +168,7 @@ def test_real_gpgv_signature_wrong_key_and_stale_release(tmp_path, monkeypatch):
     keyring = tmp_path / "keyring.gpg"
     keyring.write_bytes(subprocess.run(["/usr/bin/gpg", "--batch", "--export", fpr],
                                        env=env, capture_output=True, check=True).stdout)
+    monkeypatch.setattr(admission, "KEYRING", keyring)
     now = dt.datetime.now(dt.timezone.utc)
     date = now.strftime("%a, %d %b %Y %H:%M:%S UTC")
     release = (f"Origin: Ubuntu\nLabel: Ubuntu\nSuite: noble-updates\nCodename: noble\n"
@@ -173,3 +192,65 @@ def test_real_gpgv_signature_wrong_key_and_stale_release(tmp_path, monkeypatch):
     monkeypatch.setattr(admission, "ARCHIVE_FINGERPRINT", fpr)
     with pytest.raises(admission.Refused, match="stale"):
         admission.verify_inrelease(signed, keyring, "noble-updates", now + dt.timedelta(days=3))
+
+
+@pytest.mark.skipif(not Path("/usr/bin/apt-get").exists() or
+                    not Path("/usr/bin/gpg").exists(), reason="requires Linux APT and gpg")
+def test_real_private_apt_solver_accepts_only_new_packages(tmp_path, monkeypatch):
+    home = tmp_path / "gnupg"
+    home.mkdir(mode=0o700)
+    env = {"GNUPGHOME": str(home), "PATH": "/usr/bin", "LC_ALL": "C"}
+    subprocess.run(["/usr/bin/gpg", "--batch", "--passphrase", "", "--quick-generate-key",
+                    "Synthetic Ubuntu Archive <synthetic@example.invalid>", "rsa2048", "sign", "0"],
+                   env=env, capture_output=True, check=True, timeout=30)
+    listing = subprocess.run(["/usr/bin/gpg", "--batch", "--with-colons", "--list-keys"],
+                             env=env, capture_output=True, check=True).stdout
+    fpr = next(line.split(b":")[9].decode() for line in listing.splitlines()
+               if line.startswith(b"fpr:"))
+    keyring = tmp_path / "keyring.gpg"
+    keyring.write_bytes(subprocess.run(["/usr/bin/gpg", "--batch", "--export", fpr],
+                                       env=env, capture_output=True, check=True).stdout)
+    monkeypatch.setattr(admission, "KEYRING", keyring)
+    monkeypatch.setattr(admission, "ARCHIVE_FINGERPRINT", fpr)
+    monkeypatch.setattr(admission, "POCKETS", {"noble-updates": "https://archive.ubuntu.com/ubuntu/"})
+    monkeypatch.setattr(admission, "COMPONENTS", ("main",))
+    monkeypatch.setattr(admission, "TARGETS", ("uidmap", "rootlesskit"))
+    monkeypatch.setattr(admission, "EXPECTED_VERSIONS", {"uidmap": "1", "rootlesskit": "1"})
+    original = admission.private_file
+    monkeypatch.setattr(admission, "private_file", lambda p, limit, uid=None: original(p, limit))
+    bundle = tmp_path / "bundle"
+    bundle.mkdir(mode=0o700)
+    rows = []
+    selected = []
+    for package in admission.TARGETS:
+        payload = b"synthetic-" + package.encode()
+        row = _row(package, "1", payload)
+        rows.append(row)
+        (bundle / f"{package}.deb").write_bytes(payload)
+        selected.append({"package": package, "version": "1", "pocket": "noble-updates",
+                         "component": "main", "sha256": row["SHA256"], "size": len(payload)})
+    plain = b"".join(("\n".join(f"{k}: {v}" for k, v in row.items()) +
+                      "\nDescription: Synthetic package\n\n").encode() for row in rows)
+    compressed = lzma.compress(plain)
+    (bundle / "noble-updates.main.packages.xz").write_bytes(compressed)
+    now = dt.datetime.now(dt.timezone.utc)
+    release = (f"Origin: Ubuntu\nLabel: Ubuntu\nSuite: noble-updates\nCodename: noble\n"
+               f"Date: {now.strftime('%a, %d %b %Y %H:%M:%S UTC')}\n"
+               f"Architectures: amd64\nComponents: main universe\nSHA256:\n"
+               f" {hashlib.sha256(plain).hexdigest()} {len(plain)} "
+               "main/binary-amd64/Packages\n"
+               f" {hashlib.sha256(compressed).hexdigest()} {len(compressed)} "
+               "main/binary-amd64/Packages.xz\n")
+    unsigned = tmp_path / "Release"
+    unsigned.write_text(release)
+    signed = subprocess.run(["/usr/bin/gpg", "--batch", "--armor", "--clearsign",
+                             "--output", "-", str(unsigned)], env=env,
+                            capture_output=True, check=True).stdout
+    (bundle / "noble-updates.inrelease").write_bytes(signed)
+    status = (b"Package: docker.io\nStatus: install ok installed\n"
+              b"Version: 29.1.3-0ubuntu3~24.04.2\n\n")
+    result = admission.simulate_verified_bundle(bundle, keyring, status,
+                                                {"packages": selected}, now)
+    assert result["transaction_simulated"] is True
+    assert {row["package"] for row in result["new_package_actions"]} == set(admission.REQUIRED)
+    assert result["rootful_docker_package_simulated_change"] is False

@@ -8,18 +8,22 @@ from __future__ import annotations
 
 import datetime as dt
 import hashlib
+import io
+import json
 import lzma
 import os
 from pathlib import Path, PurePosixPath
 import re
 import stat
 import subprocess
+import sys
 import urllib.error
 import urllib.parse
 import urllib.request
 
 
 ARCHIVE_FINGERPRINT = "F6ECB3762474EDA9D21B7022871920D1991BC93C"
+KEYRING = Path("/usr/share/keyrings/ubuntu-archive-keyring.gpg")
 BASE = "https://archive.ubuntu.com/ubuntu/"
 SECURITY = "https://security.ubuntu.com/ubuntu/"
 POCKETS = {
@@ -93,6 +97,31 @@ def private_file(path: Path, maximum: int, uid: int | None = None) -> bytes:
 
 def sha(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+def trusted_tool(path: Path) -> tuple[int, int, int, int]:
+    require(path in (Path("/usr/bin/gpgv"), Path("/usr/bin/apt-get"),
+                     Path("/usr/bin/setpriv"), Path("/usr/bin/python3")),
+            "archive tool path invalid")
+    original = path.lstat()
+    if stat.S_ISLNK(original.st_mode):
+        require(path == Path("/usr/bin/python3") and original.st_uid == 0,
+                "archive tool link invalid")
+        target = path.resolve(strict=True)
+        require(target == Path("/usr/bin/python3.12"),
+                "archive Python target invalid")
+    else:
+        target = path
+    for ancestor in (Path("/"), Path("/usr"), Path("/usr/bin")):
+        parent = ancestor.lstat()
+        require(stat.S_ISDIR(parent.st_mode) and parent.st_uid == 0
+                and not parent.st_mode & 0o022,
+                "archive tool ancestor custody invalid")
+    info = target.lstat()
+    require(stat.S_ISREG(info.st_mode) and info.st_uid == 0
+            and not info.st_mode & 0o022 and info.st_mode & 0o111,
+            "archive tool custody invalid")
+    return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns)
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -192,9 +221,11 @@ def _release_fields(payload: bytes) -> tuple[dict[str, str], dict[str, tuple[int
     fields: dict[str, str] = {}
     hashes: dict[str, tuple[int, str]] = {}
     in_hashes = False
+    seen_sha256 = False
     for line in lines:
         if line == "SHA256:":
-            require(not in_hashes, "archive SHA256 section duplicated")
+            require(not seen_sha256, "archive SHA256 section duplicated")
+            seen_sha256 = True
             in_hashes = True
             continue
         if line.startswith(" "):
@@ -212,7 +243,7 @@ def _release_fields(payload: bytes) -> tuple[dict[str, str], dict[str, tuple[int
         if sep:
             require(key not in fields, "archive field duplicated")
             fields[key] = value.strip()
-    require(bool(hashes), "archive SHA256 unavailable")
+    require(seen_sha256 and bool(hashes), "archive SHA256 unavailable")
     return fields, hashes
 
 
@@ -237,11 +268,13 @@ def _utc(value: str) -> dt.datetime:
 def verify_inrelease(path: Path, keyring: Path, pocket: str,
                      now: dt.datetime) -> tuple[dict, dict]:
     require(os.geteuid() != 0, "archive parser must run unprivileged")
+    require(keyring == KEYRING, "archive keyring path invalid")
     require(pocket in POCKETS, "archive pocket invalid")
     raw = private_file(path, MAX_INRELEASE)
     key = private_file(keyring, 1024 * 1024, uid=0)
     require(bool(key), "archive keyring empty")
     command = ("/usr/bin/gpgv", "--status-fd", "1", "--keyring", str(keyring), str(path))
+    tool = trusted_tool(Path("/usr/bin/gpgv"))
     try:
         done = subprocess.run(command, env={"PATH": "/usr/bin", "LC_ALL": "C"},
                               cwd="/", stdin=subprocess.DEVNULL, capture_output=True,
@@ -250,6 +283,8 @@ def verify_inrelease(path: Path, keyring: Path, pocket: str,
         raise Refused("archive signature verification unavailable") from exc
     require(done.returncode == 0 and len(done.stdout) <= 16384 and len(done.stderr) <= 16384,
             "archive signature invalid")
+    require(trusted_tool(Path("/usr/bin/gpgv")) == tool,
+            "archive signature tool changed")
     valid = [line.split() for line in done.stdout.decode("ascii", "replace").splitlines()
              if line.startswith("[GNUPG:] VALIDSIG ")]
     require(len(valid) == 1 and len(valid[0]) >= 3 and valid[0][2] == ARCHIVE_FINGERPRINT,
@@ -289,16 +324,45 @@ def verify_index(path: Path, release_hashes: dict, component: str) -> list[dict[
     size, digest = release_hashes[suffix]
     require(len(compressed) == size and sha(compressed) == digest,
             "archive index digest invalid")
+    plain_name = f"{component}/binary-amd64/Packages"
+    require(plain_name in release_hashes, "archive plain index not signed")
+    expected_size, expected_sha = release_hashes[plain_name]
+    require(0 < expected_size <= MAX_PLAIN_INDEX,
+            "archive plain index size invalid")
+    selected = []
+    total = 0
+    digest_plain = hashlib.sha256()
+    stanza = bytearray()
     try:
-        decompressor = lzma.LZMADecompressor()
-        plain = decompressor.decompress(compressed, max_length=MAX_PLAIN_INDEX + 1)
-    except lzma.LZMAError as exc:
+        with lzma.LZMAFile(io.BytesIO(compressed)) as stream:
+            while True:
+                line = stream.readline(65537)
+                if not line:
+                    break
+                require(len(line) <= 65536 and (line.endswith(b"\n") or
+                        total + len(line) == expected_size),
+                        "archive index line invalid")
+                total += len(line)
+                require(total <= expected_size, "archive index grew")
+                digest_plain.update(line)
+                if line == b"\n":
+                    if stanza:
+                        raw = bytes(stanza)
+                        if any(raw.startswith(f"Package: {name}\n".encode()) or
+                               f"\nPackage: {name}\n".encode() in raw
+                               for name in TARGETS):
+                            selected.extend(_paragraphs(raw, 65536))
+                            require(len(selected) <= 64,
+                                    "archive selected entries ambiguous")
+                        stanza.clear()
+                else:
+                    stanza.extend(line)
+                    require(len(stanza) <= 65536, "archive package stanza oversized")
+        require(not stanza and total == expected_size and digest_plain.hexdigest() == expected_sha,
+                "archive plain index digest invalid")
+    except (lzma.LZMAError, EOFError, OSError) as exc:
         raise Refused("archive index compression invalid") from exc
-    require(decompressor.eof and not decompressor.unused_data
-            and len(plain) <= MAX_PLAIN_INDEX,
-            "archive index size invalid")
-    rows = _paragraphs(plain, MAX_PLAIN_INDEX)
-    return rows
+    return selected
 
 
 def select_package(rows: list[dict[str, str]], package: str, version: str) -> dict:
@@ -325,6 +389,14 @@ def verify_deb(path: Path, selected: dict) -> dict:
     return {key: selected[key] for key in ("package", "version", "sha256", "size")}
 
 
+def _consistent_candidate(rows: list[dict]) -> dict:
+    require(bool(rows) and len(rows) <= len(POCKETS) * len(COMPONENTS),
+            "fixed package candidate unavailable or ambiguous")
+    identities = {(row["sha256"], row["size"], row["filename"]) for row in rows}
+    require(len(identities) == 1, "mixed archive package identity")
+    return rows[-1]
+
+
 def _private_directory(path: Path) -> None:
     info = path.lstat()
     require(stat.S_ISDIR(info.st_mode) and info.st_uid == os.geteuid()
@@ -333,7 +405,7 @@ def _private_directory(path: Path) -> None:
 
 
 def _publish_file(directory: Path, name: str, data: bytes) -> Path:
-    require(bool(re.fullmatch(r"[a-z0-9][a-z0-9.-]{0,95}", name))
+    require(bool(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.-]{0,95}", name))
             and len(data) <= MAX_PLAIN_INDEX,
             "archive bundle record invalid")
     _private_directory(directory)
@@ -392,11 +464,7 @@ def acquire_verified_bundle(directory: Path, keyring: Path,
                                                     "component": component})
     selected_packages = []
     for package in TARGETS:
-        rows = candidates[package]
-        require(bool(rows), "fixed package candidate unavailable")
-        identities = {(row["sha256"], row["size"], row["filename"]) for row in rows}
-        require(len(identities) == 1, "mixed archive package identity")
-        selected = rows[-1]
+        selected = _consistent_candidate(candidates[package])
         deb_path = _publish_file(directory, f"{package}.deb",
                                  fetch_fixed(selected["pocket"], selected["filename"],
                                              MAX_DEB))
@@ -406,6 +474,147 @@ def acquire_verified_bundle(directory: Path, keyring: Path,
     _private_directory(directory)
     return {"archive_releases": releases, "packages": selected_packages,
             "transaction_simulated": False, "package_actions_authorized": False}
+
+
+def _mkdir_private(parent: Path, name: str) -> Path:
+    require(re.fullmatch(r"[a-z0-9][a-z0-9.-]{0,95}", name) is not None,
+            "archive directory name invalid")
+    _private_directory(parent)
+    child = parent / name
+    child.mkdir(mode=0o700)
+    fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    _private_directory(child)
+    return child
+
+
+def _installed_status(raw: bytes) -> dict[str, str]:
+    installed = {}
+    for row in _paragraphs(raw, MAX_STATUS):
+        package = row.get("Package", "")
+        version = row.get("Version", "")
+        require(re.fullmatch(r"[a-z0-9][a-z0-9+.-]*", package) is not None,
+                "dpkg status package invalid")
+        if row.get("Status") == "install ok installed":
+            require(package not in installed and VERSION.fullmatch(version) is not None,
+                    "dpkg status installed identity invalid")
+            installed[package] = version
+    require("docker.io" in installed and len(installed) < 65536,
+            "rootful Docker package status unavailable")
+    return installed
+
+
+def _apt_run(args: list[str], config: Path) -> bytes:
+    require(os.geteuid() != 0, "APT simulator must run unprivileged")
+    allowed = (["update"], ["--simulate", "--no-install-recommends", "--no-remove",
+                            "install", "uidmap=" + EXPECTED_VERSIONS["uidmap"],
+                            "rootlesskit=" + EXPECTED_VERSIONS["rootlesskit"]])
+    require(args in allowed, "APT command not admitted")
+    tool = trusted_tool(Path("/usr/bin/apt-get"))
+    try:
+        done = subprocess.run(["/usr/bin/apt-get", *args],
+                              env={"APT_CONFIG": str(config), "HOME": "/nonexistent",
+                                   "LC_ALL": "C", "PATH": "/usr/bin",
+                                   "DEBIAN_FRONTEND": "noninteractive"},
+                              cwd="/", stdin=subprocess.DEVNULL, capture_output=True,
+                              timeout=90, check=False)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise Refused("private APT simulator unavailable") from exc
+    require(done.returncode == 0 and len(done.stdout) <= 65536
+            and done.stderr == b"",
+            "private APT simulator refused")
+    require(trusted_tool(Path("/usr/bin/apt-get")) == tool,
+            "private APT tool changed")
+    return done.stdout
+
+
+def simulate_verified_bundle(directory: Path, keyring: Path, status: bytes,
+                             bundle: dict, now: dt.datetime) -> dict:
+    """Use APT only as an offline solver against exact verified private inputs.
+
+    This requires a fresh bundle and leaves its private solver state intact for
+    review. It performs no dpkg action and confers no future install authority.
+    """
+    require(os.geteuid() != 0, "APT admission must run unprivileged")
+    _private_directory(directory)
+    require(type(bundle) is dict and type(bundle.get("packages")) is list
+            and {row.get("package") for row in bundle["packages"]} == set(TARGETS),
+            "archive bundle manifest invalid")
+    installed = _installed_status(status)
+    status_sha = sha(status)
+    solver = _mkdir_private(directory, "solver")
+    repo = _mkdir_private(solver, "repository")
+    dists = _mkdir_private(repo, "dists")
+    for pocket in POCKETS:
+        target_pocket = _mkdir_private(dists, pocket)
+        raw_release = private_file(directory / f"{pocket}.inrelease", MAX_INRELEASE)
+        release, hashes = verify_inrelease(directory / f"{pocket}.inrelease",
+                                           keyring, pocket, now)
+        _publish_file(target_pocket, "InRelease", raw_release)
+        for component in COMPONENTS:
+            component_dir = _mkdir_private(target_pocket, component)
+            binary_dir = _mkdir_private(component_dir, "binary-amd64")
+            index = directory / f"{pocket}.{component}.packages.xz"
+            verify_index(index, hashes, component)
+            _publish_file(binary_dir, "Packages.xz", private_file(index, MAX_INDEX))
+    admitted = {}
+    for row in bundle["packages"]:
+        require(type(row) is dict and row.get("package") in TARGETS
+                and row.get("version") == EXPECTED_VERSIONS[row["package"]]
+                and row.get("pocket") in POCKETS
+                and row.get("component") in COMPONENTS,
+                "archive bundle package identity invalid")
+        package = row["package"]
+        pocket = row["pocket"]
+        component = row["component"]
+        release, hashes = verify_inrelease(directory / f"{pocket}.inrelease",
+                                           keyring, pocket, now)
+        rows = verify_index(directory / f"{pocket}.{component}.packages.xz",
+                            hashes, component)
+        selected = select_package(rows, package, row["version"])
+        require(all(row.get(key) == selected.get(key)
+                    for key in ("sha256", "size")),
+                "archive bundle package manifest differs")
+        verify_deb(directory / f"{package}.deb", selected)
+        admitted[package] = row["version"]
+    _publish_file(solver, "status", status)
+    sources = "".join(f"deb [arch=amd64 signed-by={keyring}] "
+                      f"{repo.as_uri()} {pocket} main universe\n" for pocket in POCKETS)
+    _publish_file(solver, "sources.list", sources.encode("ascii"))
+    lists = _mkdir_private(solver, "lists")
+    archives = _mkdir_private(solver, "archives")
+    empty = _mkdir_private(solver, "empty")
+    blank = _publish_file(solver, "blank", b"")
+    config = (f'Dir::Etc::sourcelist "{solver / "sources.list"}";\n'
+              f'Dir::Etc::sourceparts "{empty}";\nDir::Etc::parts "{empty}";\n'
+              f'Dir::Etc::main "{blank}";\nDir::Etc::preferences "{blank}";\n'
+              f'Dir::Etc::preferencesparts "{empty}";\n'
+              f'Dir::State::status "{solver / "status"}";\n'
+              f'Dir::State::lists "{lists}";\n'
+              f'Dir::Cache::archives "{archives}";\n'
+              'Dir::Cache::pkgcache "";\nDir::Cache::srcpkgcache "";\n'
+              'Acquire::Languages "none";\nAcquire::By-Hash "false";\n'
+              'APT::Get::List-Cleanup "false";\n'
+              'APT::Install-Recommends "false";\n'
+              'APT::Get::Show-User-Simulation-Note "false";\n')
+    config_path = _publish_file(solver, "apt.conf", config.encode("ascii"))
+    _apt_run(["update"], config_path)
+    output = _apt_run(["--simulate", "--no-install-recommends", "--no-remove",
+                       "install", "uidmap=" + EXPECTED_VERSIONS["uidmap"],
+                       "rootlesskit=" + EXPECTED_VERSIONS["rootlesskit"]], config_path)
+    actions = inspect_simulation(output, installed, admitted)
+    require(private_file(solver / "status", MAX_STATUS) == status
+            and sha(status) == status_sha,
+            "dpkg status snapshot changed")
+    _private_directory(directory)
+    return {"status_sha256": status_sha, "installed_docker_io_version": installed["docker.io"],
+            "new_package_actions": actions, "transaction_simulated": True,
+            "rootful_docker_package_simulated_change": False,
+            "package_actions_authorized": False, "installation_authorized": False,
+            "rootless_ready": False}
 
 
 def inspect_simulation(raw: bytes, initially_installed: dict[str, str],
@@ -440,3 +649,25 @@ def inspect_simulation(raw: bytes, initially_installed: dict[str, str],
                 == {(item["package"], item["version"]) for item in actions},
             "package simulation incomplete")
     return actions
+
+
+def child_main(arguments: list[str]) -> dict:
+    """Unprivileged fixed-input entrypoint used only by the root controller."""
+    require(len(arguments) == 3 and os.geteuid() == 65534,
+            "package admission child invocation invalid")
+    bundle, status_path, keyring = map(Path, arguments)
+    require(all(path.is_absolute() for path in (bundle, status_path, keyring))
+            and keyring == Path("/usr/share/keyrings/ubuntu-archive-keyring.gpg")
+            and bundle.name == "bundle" and status_path.name == "status"
+            and bundle.parent == status_path.parent,
+            "package admission child paths invalid")
+    status = private_file(status_path, MAX_STATUS, uid=65534)
+    now = dt.datetime.now(dt.timezone.utc)
+    archive = acquire_verified_bundle(bundle, keyring, now)
+    simulation = simulate_verified_bundle(bundle, keyring, status, archive,
+                                          dt.datetime.now(dt.timezone.utc))
+    return {"schema": "elevenid.installer-only-rootless-package-child/v1",
+            "packages": archive["packages"],
+            "archive_releases": archive["archive_releases"], **simulation,
+            "package_actions_authorized": False,
+            "installation_authorized": False}
