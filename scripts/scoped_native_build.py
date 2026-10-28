@@ -46,6 +46,10 @@ def verify_export(repository, revision, directory, inventory_ref, git):
         require(mode in (b"100644", b"100755") and kind == b"blob", "SOURCE_LINK_OR_GITLINK_UNSUPPORTED")
         tracked[name.decode()] = oid.decode()
     directory = Path(directory)
+    # Ordinary Windows enumeration can silently omit tracked paths above MAX_PATH.
+    # The extended spelling preserves the same path and all link/file-set guards.
+    if os.name == "nt" and not str(directory).startswith("\\\\?\\"):
+        directory = Path("\\\\?\\" + os.path.abspath(directory))
     paths = list(directory.rglob("*"))
     require(not directory.is_symlink() and not getattr(directory, "is_junction", lambda: False)(), "SOURCE_EXPORT_LINK")
     require(all(not p.is_symlink() and not getattr(p, "is_junction", lambda: False)() for p in paths), "SOURCE_EXPORT_LINK")

@@ -2,6 +2,10 @@
 import sys
 from pathlib import Path
 import unittest
+import os
+import tempfile
+import json
+import hashlib
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import scoped_native_build as build
@@ -38,6 +42,32 @@ class CanvasScopedJobBuildTests(unittest.TestCase):
     def test_prior_profiles_keep_original_core(self):
         for profile in (None, profiles.SIGNING_CAS.name, profiles.SIGNING_CAS_NO_TRANSFORM.name):
             self.assertEqual(build.build_scope(profile)["coreRevision"], shared.CORE_REVISION)
+
+    @unittest.skipUnless(os.name == "nt", "Windows MAX_PATH regression")
+    def test_long_tracked_export_is_included_in_actual_verification(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            relative = "/".join(["tracked" * 5] * 7) + "/source.txt"
+            target = Path("\\\\?\\" + str(root / "export" / relative))
+            target.parent.mkdir(parents=True)
+            raw = b"exact Git bytes\n"
+            target.write_bytes(raw)
+            inventory = root / "inventory.json"
+            inventory.write_text(json.dumps([{"path": relative, "bytes": len(raw),
+                "sha256": hashlib.sha256(raw).hexdigest()}]))
+            oid = hashlib.sha1(b"blob " + str(len(raw)).encode() + b"\0" + raw).hexdigest()
+            tree = b"100644 blob " + oid.encode() + b"\t" + relative.encode() + b"\0"
+            build.verify_export("repository", "revision", root / "export", shared.ref(inventory), lambda _: tree)
+            target.write_bytes(b"foreign bytes")
+            with self.assertRaises(ValueError):
+                build.verify_export("repository", "revision", root / "export", shared.ref(inventory), lambda _: tree)
+            # TemporaryDirectory's ordinary rmtree has the same Windows limit.
+            target.unlink()
+            current = target.parent
+            extended_root = Path("\\\\?\\" + str(root))
+            while current != extended_root:
+                current.rmdir()
+                current = current.parent
 
 
 if __name__ == "__main__":
