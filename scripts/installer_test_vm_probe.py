@@ -395,7 +395,7 @@ def _guest_stamp(binding: dict, directory: str) -> tuple[int, int, int, int, str
     return stamp
 
 
-def _guest_home_stamp(binding: dict) -> tuple[int, int, int, int, str, int]:
+def _guest_home_stamp(binding: dict) -> tuple[int, int, int, int, str]:
     raw = _ssh(binding, "/usr/bin/stat -c '%d:%i:%u:%a:%F:%h' -- /home/installer")
     parts = raw.decode("ascii").strip().split(":")
     release.require(len(parts) == 6 and all(item.isdecimal() for item in
@@ -405,18 +405,22 @@ def _guest_home_stamp(binding: dict) -> tuple[int, int, int, int, str, int]:
              parts[4], int(parts[5]))
     release.require(stamp[2] == binding["guest_uid"] and stamp[3] == 700
                     and stamp[5] >= 2, "VM probe guest home custody differs")
-    return stamp
+    # Creating our exclusively named child legitimately increments the home
+    # directory's link count. Require a sane count but bind stable identity.
+    return stamp[:5]
 
 
-def _guest_operator(binding: dict, target: str, expected: dict) -> tuple[int, int, int, int, int, int]:
+def _guest_operator(binding: dict, target: str, expected: dict,
+                    mode: int = 700) -> tuple[int, int, int, int, int, int]:
     """Classify O_PATH, reopen that inode, hash it, and rebind the named path."""
+    release.require(mode in (600, 700), "VM probe operator mode unsupported")
     code = (
         "import hashlib,os,stat,sys;"
-        "p=sys.argv[1];size=int(sys.argv[2]);"
+        "p=sys.argv[1];size=int(sys.argv[2]);mode=int(sys.argv[3],8);"
         "f=os.open(p,os.O_PATH|os.O_NOFOLLOW|os.O_CLOEXEC);"
         "a=os.fstat(f);"
         "assert stat.S_ISREG(a.st_mode) and a.st_nlink==1 and "
-        "a.st_size==size and 0<size<=67108864;"
+        "a.st_size==size and 0<size<=67108864 and stat.S_IMODE(a.st_mode)==mode;"
         "r=os.open(\"/proc/self/fd/%d\"%f,os.O_RDONLY|os.O_CLOEXEC);"
         "b=os.fstat(r);"
         "assert (a.st_dev,a.st_ino,a.st_uid,a.st_gid,a.st_mode,a.st_nlink,a.st_size,"
@@ -440,14 +444,14 @@ def _guest_operator(binding: dict, target: str, expected: dict) -> tuple[int, in
         "stat.S_IMODE(a.st_mode),a.st_nlink,a.st_size,h.hexdigest()))"
     )
     raw = _ssh(binding, "/usr/bin/python3 -I -B -c '" + code + "' "
-               + target + " " + str(expected["binary_bytes"]),
+               + target + " " + str(expected["binary_bytes"]) + " " + str(mode),
                limit=256, timeout=30)
     parts = raw.decode("ascii").strip().split(":")
     release.require(len(parts) == 7 and all(part.isdecimal() for part in parts[:6])
                     and re.fullmatch("[0-9a-f]{64}", parts[6]) is not None,
                     "VM probe operator observation invalid")
     stamp = tuple(int(part) for part in parts[:6])
-    release.require(stamp[2] == binding["guest_uid"] and stamp[3] == 700
+    release.require(stamp[2] == binding["guest_uid"] and stamp[3] == mode
                     and stamp[4] == 1 and stamp[5] == expected["binary_bytes"]
                     and parts[6] == expected["binary_sha256"],
                     "VM probe guest operator differs")

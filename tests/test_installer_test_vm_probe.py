@@ -98,13 +98,28 @@ class Probe(unittest.TestCase):
     def test_guest_home_stamp_binds_owner_mode_and_inode(self):
         with mock.patch.object(probe, "_ssh", return_value=b"10:11:1000:700:directory:4\n"):
             self.assertEqual(probe._guest_home_stamp({"guest_uid": 1000}),
-                             (10, 11, 1000, 700, "directory", 4))
+                             (10, 11, 1000, 700, "directory"))
         for raw in (b"10:11:0:700:directory:4\n",
                     b"10:11:1000:755:directory:4\n",
                     b"10:11:1000:700:symbolic link:4\n"):
             with mock.patch.object(probe, "_ssh", return_value=raw):
                 with self.assertRaises(ValueError):
                     probe._guest_home_stamp({"guest_uid": 1000})
+
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory) / "home"
+            home.mkdir(mode=0o700)
+            def real_stamp(_binding, _script, **_kwargs):
+                item = home.stat()
+                return (f"{item.st_dev}:{item.st_ino}:{item.st_uid}:"
+                        f"{item.st_mode & 0o777:o}:directory:{item.st_nlink}\n").encode()
+            with mock.patch.object(probe, "_ssh", side_effect=real_stamp):
+                before_links = home.stat().st_nlink
+                before = probe._guest_home_stamp({"guest_uid": os.getuid()})
+                (home / "new-owned-probe").mkdir(mode=0o700)
+                self.assertEqual(home.stat().st_nlink, before_links + 1)
+                self.assertEqual(probe._guest_home_stamp({"guest_uid": os.getuid()}),
+                                 before)
 
     def test_transport_uses_exact_directory_and_digest_before_probe_commands(self):
         directory = probe._guest_dir(PROBE)
@@ -115,12 +130,12 @@ class Probe(unittest.TestCase):
                    b"10:20:1000:700:directory:2\n"]
         with mock.patch.object(probe, "_ssh", side_effect=replies) as ssh, \
              mock.patch.object(probe, "_pinned", return_value=["-F", "/dev/null"]), \
-             mock.patch.object(probe, "_guest_home_stamp", return_value=(10, 11, 1000, 700, "directory", 2)), \
+             mock.patch.object(probe, "_guest_home_stamp", return_value=(10, 11, 1000, 700, "directory")), \
              mock.patch.object(probe, "_guest_operator",
                                return_value=(10, 21, 1000, 700, 1, 42)), \
              mock.patch.object(probe, "command", return_value=b"") as scp:
             result = probe._transport({"guest_uid": 1000, "port": 22024,
-                                       "home_stamp": (10, 11, 1000, 700, "directory", 2)},
+                                       "home_stamp": (10, 11, 1000, 700, "directory")},
                                       Path("/private/operator"), expected, PROBE)
         self.assertEqual(result["directory_stamp"],
                          (10, 20, 1000, 700, "directory", 2))
@@ -133,13 +148,13 @@ class Probe(unittest.TestCase):
 
         with mock.patch.object(probe, "_ssh", side_effect=replies), \
              mock.patch.object(probe, "_pinned", return_value=[]), \
-             mock.patch.object(probe, "_guest_home_stamp", return_value=(10, 11, 1000, 700, "directory", 2)), \
+             mock.patch.object(probe, "_guest_home_stamp", return_value=(10, 11, 1000, 700, "directory")), \
              mock.patch.object(probe, "_guest_operator",
                                side_effect=ValueError("operator digest differs")), \
              mock.patch.object(probe, "command", return_value=b""):
             with self.assertRaisesRegex(ValueError, "operator digest differs"):
                 probe._transport({"guest_uid": 1000, "port": 22024,
-                                  "home_stamp": (10, 11, 1000, 700, "directory", 2)},
+                                  "home_stamp": (10, 11, 1000, 700, "directory")},
                                  Path("/private/operator"), expected, PROBE)
 
     def test_held_guest_operator_digest_and_inode_are_required(self):
@@ -167,14 +182,16 @@ class Probe(unittest.TestCase):
                         "binary_sha256": probe.hashlib.sha256(target.read_bytes()).hexdigest()}
             def local(_binding, script, **_kwargs):
                 run = subprocess.run(shlex.split(script), capture_output=True,
-                                     check=True, timeout=5)
+                                     check=False, timeout=5)
+                if run.returncode != 0:
+                    raise ValueError("bounded guest observation refused")
                 return run.stdout
             with mock.patch.object(probe, "_ssh", side_effect=local):
                 observed = probe._guest_operator({"guest_uid": os.getuid()},
                                                   str(target), expected)
                 self.assertEqual(observed[1], target.stat().st_ino)
                 target.chmod(0o600)
-                with self.assertRaisesRegex(ValueError, "guest operator differs"):
+                with self.assertRaisesRegex(ValueError, "bounded guest observation refused"):
                     probe._guest_operator({"guest_uid": os.getuid()},
                                           str(target), expected)
 
