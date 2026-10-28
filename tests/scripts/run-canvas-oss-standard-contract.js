@@ -2404,13 +2404,25 @@ async function retireCanvasOAuthAuthority(state, observe = () => {}, {requireAcc
 
 async function retireCanvasOwnedReferences(state) {
   requireCanvasSetupMutationReconciliation(state);
+  const secretsPath='/v1/integrations/canvas/integration-secrets?organization_id='
+    +encodeURIComponent(state.organizationId)+'&provider=canvas';
+  if(state.integrationSecretId) {
+    const rows=await state.marty.get(secretsPath);
+    requireCondition(Array.isArray(rows),'canvas_owned_secret_inventory_invalid',
+      'Authorized Canvas secret collection is unavailable.');
+    const exactRows=rows.filter(row=>row.id===state.integrationSecretId);
+    requireCondition(exactRows.length===1 && exactRows[0].organization_id===state.organizationId
+      && exactRows[0].name===state.owned?.martySecretIntent?.name
+      && exactRows[0].provider==='canvas' && exactRows[0].purpose==='oauth_client_secret',
+    'canvas_owned_secret_identity_mismatch','Owned Canvas secret metadata changed before retirement.');
+  }
   if(state.platformId) {
     const target=`/v1/integrations/canvas/platforms/${encodeURIComponent(state.platformId)}`;
     await state.marty.delete(target,[204]);await state.marty.request('GET',target,{expected:[404]});
   }
   if(state.integrationSecretId) {
     await state.marty.delete(`/v1/integrations/canvas/integration-secrets/${encodeURIComponent(state.integrationSecretId)}`,[204]);
-    const remaining=await state.marty.get('/v1/integrations/canvas/integration-secrets?organization_id='+encodeURIComponent(state.organizationId)+'&provider=canvas');
+    const remaining=await state.marty.get(secretsPath);
     assert(Array.isArray(remaining));assert(!remaining.some(row=>row.id===state.integrationSecretId));
   }
 }
