@@ -422,6 +422,7 @@ pub(crate) fn provision_runtime(
     .map_err(|_| "packaged Keycloak realm invalid")?;
     state.advance(Phase::Provisioning)?;
     state.generate_local_credentials(&realm)?;
+    state.persist_credential_creation_receipt(installation)?;
     drop(port_reservation);
     let plugin = inventory
         .images
