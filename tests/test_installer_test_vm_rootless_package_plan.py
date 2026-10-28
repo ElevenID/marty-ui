@@ -96,6 +96,7 @@ class PackagePlan(unittest.TestCase):
                 return fd
             output = io.StringIO()
             with mock.patch.object(os, "getuid", return_value=1000), \
+                 mock.patch.object(os, "getgid", return_value=1001), \
                  mock.patch.object(pwd, "getpwuid", return_value=SimpleNamespace(pw_name="installer")), \
                  mock.patch.object(os, "open", side_effect=opening), \
                  mock.patch.object(os, "read", side_effect=lambda fd, count:
@@ -166,6 +167,8 @@ class PackagePlan(unittest.TestCase):
                 self.assertEqual(result["proposed_supplementary_groups"], [])
                 self.assertFalse(result["proposed_sudo_grants"])
                 self.assertFalse(result["proposed_docker_group_membership"])
+                self.assertIn("docker_io_package_version_at_observation", result)
+                self.assertNotIn("rootful_docker_installed_version_at_observation", result)
                 with self.assertRaisesRegex(ValueError, "already observed"):
                     subject.observe(**kwargs)
             (registry / (VM + subject.RESULT_SUFFIX)).unlink()

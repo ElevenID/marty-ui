@@ -107,6 +107,8 @@ def local_account(passwd,group):
         groups=[line.split(":") for line in group]
         if any(len(x)<4 or not x[2].isdecimal() or not x[3].isdecimal() for x in users):raise ValueError()
         if any(len(x)<3 or not x[2].isdecimal() for x in groups):raise ValueError()
+        if not any(x[0]=="installer" and int(x[2])==os.getuid() and int(x[3])==os.getgid()
+                   for x in users):raise ValueError()
         names={x[0] for x in users}|{x[0] for x in groups}
         used={int(x[2]) for x in users}|{int(x[2]) for x in groups}
         free=next((n for n in range(2000,65000) if n not in used),None)
@@ -319,7 +321,7 @@ def observe(*, source: Path, registry: Path, runtime_parent: Path,
                                                 "slirp4netns", "fuse-overlayfs"],
                   "rootless_script_provider": "unresolved",
                   "rootful_docker_package_changed_by_probe": False,
-                  "rootful_docker_installed_version_at_observation":
+                  "docker_io_package_version_at_observation":
                       packages["docker.io"]["dpkg"]["installed_version"],
                   "rootful_docker_version_preservation_proven_for_install": False,
                   "package_source_key_trust_admitted": False,
