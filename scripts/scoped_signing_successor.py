@@ -54,9 +54,10 @@ def live_compose_arguments(arguments, working_directory):
     return arguments[:4] + ["--project-directory", working_directory] + arguments[4:]
 
 
-def normalized_created(old, actual, role, candidate, compose_hash, files, version, *, core, adapter, network_read, command):
+def normalized_created(old, actual, role, candidate, compose_hash, files, version, *, core, adapter, network_read, command, reviewed_role="signing-keys"):
     """Only previously proven Docker/Compose representation equivalences."""
-    require(role == "signing-keys" and "--no-deps" in command, "SIGNER_ONLY_NO_DEPS_REQUIRED")
+    require(reviewed_role in ("signing-keys", "issuance-native") and role == reviewed_role
+            and "--no-deps" in command, "REVIEWED_SINGLE_ROLE_NO_DEPS_REQUIRED")
     a, b = deepcopy(old), deepcopy(actual)
     environment(a["Config"]["Env"]); environment(b["Config"]["Env"])
     env_files = [command[i + 1] for i, arg in enumerate(command) if arg == "--env-file"]

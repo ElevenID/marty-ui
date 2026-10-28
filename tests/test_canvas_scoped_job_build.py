@@ -6,11 +6,13 @@ import os
 import tempfile
 import json
 import hashlib
+from copy import deepcopy
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import scoped_native_build as build
 import scoped_native_profiles as profiles
 import scoped_native_runtime as shared
+import scoped_beta_binary_overlay as overlay
 
 
 class CanvasScopedJobBuildTests(unittest.TestCase):
@@ -42,6 +44,24 @@ class CanvasScopedJobBuildTests(unittest.TestCase):
     def test_prior_profiles_keep_original_core(self):
         for profile in (None, profiles.SIGNING_CAS.name, profiles.SIGNING_CAS_NO_TRANSFORM.name):
             self.assertEqual(build.build_scope(profile)["coreRevision"], shared.CORE_REVISION)
+
+    def test_closed_issuer_renderer_changes_only_native_bind_source(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            candidate = Path(temporary) / "issuer"
+            candidate.write_bytes(b"source-test-only")
+            binaries = {"issuance-native": shared.ref(candidate)}
+            mount = {"type": "bind", "source": "C:/frozen/old", "target": "/usr/local/bin/marty-issuance-service",
+                     "read_only": True, "bind": {"create_host_path": False, "propagation": "rprivate"}}
+            before = {"services": {"issuance-native": {"image": "same", "volumes": [mount]},
+                                   "issuance": {"image": "same", "volumes": [deepcopy(mount)]}}}
+            rendered = overlay.binary_overlay(binaries, profiles.CANVAS_SCOPED_JOBS.name, before=before)
+            self.assertEqual(set(rendered["services"]), {"issuance-native"})
+            after = deepcopy(before)
+            after["services"]["issuance-native"]["volumes"] = rendered["services"]["issuance-native"]["volumes"]
+            overlay.validate_delta(before, after, binaries, profiles.CANVAS_SCOPED_JOBS.name)
+            self.assertEqual(after["services"]["issuance"], before["services"]["issuance"])
+            with self.assertRaises(ValueError):
+                overlay.binary_overlay(binaries, profiles.CANVAS_SCOPED_JOBS.name, selected_roles=["issuance"], before=before)
 
     @unittest.skipUnless(os.name == "nt", "Windows MAX_PATH regression")
     def test_long_tracked_export_is_included_in_actual_verification(self):
