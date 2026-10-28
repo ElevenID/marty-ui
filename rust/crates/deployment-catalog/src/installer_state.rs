@@ -284,6 +284,45 @@ fn private(file: &File, directory: bool) -> Result<()> {
     }
     Ok(())
 }
+/// Reopen a held, already policy-checked ordinary inode for reading. O_PATH
+/// classification must precede any read-open: O_NONBLOCK alone does not avoid
+/// device open side effects. Ownership/mode policy stays with each caller.
+fn reopen_regular(held: &File) -> Result<File> {
+    const REFUSED: &str = "installer record cannot be safely opened";
+    let before = held.metadata().map_err(|_| REFUSED)?;
+    if !before.is_file() || before.nlink() != 1 {
+        return Err(REFUSED.into());
+    }
+    let proc = File::open("/proc/self/fd").map_err(|_| REFUSED)?;
+    let mut info: libc::statfs = unsafe { std::mem::zeroed() };
+    if unsafe { libc::fstatfs(proc.as_raw_fd(), &mut info) } != 0 || info.f_type as i64 != 0x9fa0 {
+        return Err(REFUSED.into());
+    }
+    let entry = name(&held.as_raw_fd().to_string());
+    let fd = unsafe {
+        libc::openat(
+            proc.as_raw_fd(),
+            entry.as_ptr(),
+            libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NONBLOCK,
+        )
+    };
+    if fd < 0 {
+        return Err(REFUSED.into());
+    }
+    let file = unsafe { File::from_raw_fd(fd) };
+    let after = file.metadata().map_err(|_| REFUSED)?;
+    if !after.is_file()
+        || after.nlink() != 1
+        || before.dev() != after.dev()
+        || before.ino() != after.ino()
+        || before.uid() != after.uid()
+        || before.gid() != after.gid()
+        || before.mode() != after.mode()
+    {
+        return Err(REFUSED.into());
+    }
+    Ok(file)
+}
 fn parent(path: &Path) -> Result<(File, CString)> {
     if !path.is_absolute() {
         return Err("installation path must be absolute".into());
@@ -357,13 +396,9 @@ fn lock(directory: File) -> Result<LockedDirectory> {
     })
 }
 fn read(directory: &File) -> Result<Journal> {
-    let file = open_at(
-        directory,
-        &name(JOURNAL),
-        libc::O_RDONLY | libc::O_NONBLOCK,
-        0,
-    )?;
+    let file = open_at(directory, &name(JOURNAL), libc::O_PATH, 0)?;
     private(&file, false)?;
+    let file = reopen_regular(&file)?;
     let mut bytes = Vec::new();
     file.take(LIMIT + 1)
         .read_to_end(&mut bytes)
@@ -444,11 +479,13 @@ fn cleanup_open_optional(
     entry: &str,
     is_directory: bool,
 ) -> Result<Option<File>> {
-    let flags = libc::O_RDONLY
-        | libc::O_CLOEXEC
+    let flags = if is_directory {
+        libc::O_RDONLY | libc::O_DIRECTORY
+    } else {
+        libc::O_PATH
+    } | libc::O_CLOEXEC
         | libc::O_NOFOLLOW
-        | libc::O_NONBLOCK
-        | if is_directory { libc::O_DIRECTORY } else { 0 };
+        | libc::O_NONBLOCK;
     let fd = unsafe { libc::openat(directory.as_raw_fd(), name(entry).as_ptr(), flags) };
     if fd < 0 {
         if std::io::Error::last_os_error().raw_os_error() == Some(libc::ENOENT) {
@@ -458,7 +495,11 @@ fn cleanup_open_optional(
     }
     let file = unsafe { File::from_raw_fd(fd) };
     private(&file, is_directory)?;
-    Ok(Some(file))
+    Ok(Some(if is_directory {
+        file
+    } else {
+        reopen_regular(&file)?
+    }))
 }
 type CleanupRecords = (Option<Vec<u8>>, Option<Vec<u8>>);
 fn cleanup_records(directory: &File) -> Result<CleanupRecords> {
@@ -723,11 +764,12 @@ impl LockedInspection {
         if !same(held, &current)? {
             return Err("validation evidence directory changed".into());
         }
-        let file = open_at(&current, &name(entry), libc::O_RDONLY | libc::O_NONBLOCK, 0)?;
+        let file = open_at(&current, &name(entry), libc::O_PATH, 0)?;
         private(&file, false)?;
         if !same(output, &file)? {
             return Err("validation report replaced".into());
         }
+        let file = reopen_regular(&file)?;
         let mut observed = Vec::new();
         file.take(65537)
             .read_to_end(&mut observed)
@@ -795,7 +837,7 @@ impl LockedInspection {
             0,
         )?;
         private(&secrets, true)?;
-        let file = open_at(&secrets, &name(entry), libc::O_RDONLY | libc::O_NONBLOCK, 0)?;
+        let file = open_at(&secrets, &name(entry), libc::O_PATH, 0)?;
         let metadata = file
             .metadata()
             .map_err(|_| "diagnostic credential metadata unavailable")?;
@@ -808,7 +850,7 @@ impl LockedInspection {
             return Err("diagnostic credential must be ordinary protected data".into());
         }
         let bytes = self.read_credential_bytes(
-            file,
+            reopen_regular(&file)?,
             crate::installer_application_env::OPTIONAL_EMPTY_SECRETS.contains(&entry),
         )?;
         if entry == "openbao_tls_ca_cert" {
@@ -824,14 +866,9 @@ impl LockedInspection {
     }
     pub(crate) fn read_operator_password(&self) -> Result<Vec<u8>> {
         self.require_unchanged()?;
-        let file = open_at(
-            &self.directory,
-            &name("operator-password"),
-            libc::O_RDONLY | libc::O_NONBLOCK,
-            0,
-        )?;
+        let file = open_at(&self.directory, &name("operator-password"), libc::O_PATH, 0)?;
         private(&file, false)?;
-        self.read_credential_bytes(file, false)
+        self.read_credential_bytes(reopen_regular(&file)?, false)
     }
     fn read_credential_bytes(&self, file: File, allow_empty: bool) -> Result<Vec<u8>> {
         let mut bytes = Vec::new();
@@ -868,13 +905,9 @@ impl LockedInspection {
             0,
         )?;
         private(&evidence, true)?;
-        let file = open_at(
-            &evidence,
-            &name(entry),
-            libc::O_RDONLY | libc::O_NONBLOCK,
-            0,
-        )?;
+        let file = open_at(&evidence, &name(entry), libc::O_PATH, 0)?;
         private(&file, false)?;
+        let file = reopen_regular(&file)?;
         let mut bytes = Vec::new();
         file.take(4 * 1024 * 1024 + 1)
             .read_to_end(&mut bytes)
@@ -917,7 +950,7 @@ impl LockedInspection {
             libc::openat(
                 directory.as_raw_fd(),
                 entry.as_ptr(),
-                libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK,
+                libc::O_PATH | libc::O_NOFOLLOW | libc::O_CLOEXEC,
             )
         };
         if fd < 0 {
@@ -929,6 +962,7 @@ impl LockedInspection {
         }
         let file = unsafe { File::from_raw_fd(fd) };
         private(&file, false)?;
+        let file = reopen_regular(&file)?;
         let mut bytes = Vec::new();
         file.take(4 * 1024 * 1024 + 1)
             .read_to_end(&mut bytes)
@@ -989,7 +1023,7 @@ impl LockedMaintenance {
             libc::openat(
                 directory.as_raw_fd(),
                 entry.as_ptr(),
-                libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK,
+                libc::O_PATH | libc::O_NOFOLLOW | libc::O_CLOEXEC,
             )
         };
         if fd < 0 {
@@ -1002,6 +1036,7 @@ impl LockedMaintenance {
         }
         let file = unsafe { File::from_raw_fd(fd) };
         private(&file, false)?;
+        let file = reopen_regular(&file)?;
         let mut bytes = Vec::new();
         file.take(4 * 1024 * 1024 + 1)
             .read_to_end(&mut bytes)
@@ -1096,7 +1131,7 @@ impl InstallerState {
         self.poisoned = true;
         let (source_parent, leaf) = parent(source)?;
         private(&source_parent, true)?;
-        let mut input = open_at(&source_parent, &leaf, libc::O_RDONLY | libc::O_NONBLOCK, 0)?;
+        let input = open_at(&source_parent, &leaf, libc::O_PATH, 0)?;
         let metadata = input
             .metadata()
             .map_err(|_| "operator metadata unavailable")?;
@@ -1110,6 +1145,7 @@ impl InstallerState {
         {
             return Err("operator source must be owned ordinary executable data".into());
         }
+        let mut input = reopen_regular(&input)?;
         let partial = name("marty-deploy.partial");
         let target = name("marty-deploy");
         let mut output = open_at(
@@ -1610,13 +1646,9 @@ impl InstallerState {
     pub fn stage_operator_password(&mut self) -> Result<()> {
         self.require_live_phase(Phase::Provisioning)?;
         private(&self.directory, true)?;
-        let mut source = open_at(
-            &self.directory,
-            &name("operator-password"),
-            libc::O_RDONLY | libc::O_NONBLOCK,
-            0,
-        )?;
+        let source = open_at(&self.directory, &name("operator-password"), libc::O_PATH, 0)?;
         private(&source, false)?;
+        let mut source = reopen_regular(&source)?;
         let metadata = source
             .metadata()
             .map_err(|_| "operator credential unavailable")?;
@@ -1878,6 +1910,65 @@ impl InstallerState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn classified_read_reopens_held_inode_and_refuses_special_entries() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("record");
+        std::fs::write(&path, b"held-record-canary").unwrap();
+        let directory = File::open(root.path()).unwrap();
+        let held = open_at(&directory, &name("record"), libc::O_PATH, 0).unwrap();
+        std::fs::rename(&path, root.path().join("saved-record")).unwrap();
+        let fifo = CString::new(path.as_os_str().as_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+        let mut observed = Vec::new();
+        reopen_regular(&held)
+            .unwrap()
+            .read_to_end(&mut observed)
+            .unwrap();
+        assert_eq!(observed, b"held-record-canary");
+        let special = open_at(&directory, &name("record"), libc::O_PATH, 0).unwrap();
+        assert!(reopen_regular(&special).is_err());
+        std::fs::hard_link(
+            root.path().join("saved-record"),
+            root.path().join("linked-record"),
+        )
+        .unwrap();
+        assert!(reopen_regular(&held).is_err());
+    }
+    #[test]
+    fn private_record_surfaces_refuse_fifo_without_consuming_it() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let path = root.path().join("installation");
+        let mut writer = InstallerState::create(&path, identity()).unwrap();
+        writer.create_private_directory("evidence").unwrap();
+        drop(writer);
+        let fifo = |target: &Path| {
+            let name = CString::new(target.as_os_str().as_bytes()).unwrap();
+            assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+        };
+        fifo(&path.join("evidence/uninstall-plan.json"));
+        fifo(&path.join("operator-password"));
+        fifo(&path.join("root-record.json"));
+        let view = LockedInspection::open(&path).unwrap();
+        assert!(view.read_evidence("uninstall-plan.json").is_err());
+        assert!(view.diagnostic_record("uninstall-plan.json", true).is_err());
+        assert!(view.diagnostic_record("root-record.json", false).is_err());
+        assert!(view.cleanup_status().is_err());
+        assert!(view.read_operator_password().is_err());
+        drop(view);
+        let maintenance = LockedMaintenance::open(&path).unwrap();
+        assert!(maintenance.read_evidence("uninstall-plan.json").is_err());
+        assert!(maintenance.read_record("root-record.json").is_err());
+        drop(maintenance);
+        std::fs::remove_file(path.join(JOURNAL)).unwrap();
+        fifo(&path.join(JOURNAL));
+        assert!(LockedInspection::open(&path).is_err());
+        assert!(std::fs::symlink_metadata(path.join(JOURNAL))
+            .unwrap()
+            .file_type()
+            .is_fifo());
+    }
     #[test]
     fn diagnostic_view_never_unlocks_writer_on_success_error_or_panic() {
         let root = tempfile::tempdir().unwrap();
@@ -2158,7 +2249,7 @@ mod tests {
         );
         assert!(lock(File::open(root.path()).unwrap()).is_ok());
     }
-    use std::os::unix::fs::{symlink, PermissionsExt};
+    use std::os::unix::fs::{symlink, FileTypeExt, PermissionsExt};
     fn identity() -> Identity {
         Identity {
             source_sha: "a".repeat(40),
