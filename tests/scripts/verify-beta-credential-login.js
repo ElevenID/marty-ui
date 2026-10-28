@@ -26,6 +26,7 @@ const {
   DEFAULT_LOGIN_BADGE_CONFIGURATION_ID,
   DEFAULT_LOGIN_BADGE_TEMPLATE_ID,
   DEFAULT_LOGIN_BADGE_APPLICATION_TEMPLATE_ID,
+  DEFAULT_LOGIN_BADGE_FLOW_ID,
   DEFAULT_BETA_ORGANIZATION_ID,
   credentialInventoryEvidence,
   membershipLoginBehaviorAssertions,
@@ -177,6 +178,7 @@ async function runCredentialLogin({ retainedFirstParty = false, evidence = null 
     organizationId: process.env.BETA_AUDIT_ORG_ID || DEFAULT_BETA_ORGANIZATION_ID,
     credentialTemplateId: process.env.LOGIN_BADGE_TEMPLATE_ID || DEFAULT_LOGIN_BADGE_TEMPLATE_ID,
     sourceApplicationTemplateId: process.env.LOGIN_BADGE_APPLICATION_TEMPLATE_ID || DEFAULT_LOGIN_BADGE_APPLICATION_TEMPLATE_ID,
+    sourceFlowDefinitionId: DEFAULT_LOGIN_BADGE_FLOW_ID,
     configurationId: MEMBERSHIP_BADGE_CONFIGURATION_ID, vct: MEMBERSHIP_BADGE_VCT,
     email: process.env.TEST_APPLICANT_EMAIL, givenName: 'Jamie', familyName: 'Lee',
     identityBoundary: 'AUTHORIZED_EXISTING_BETA_TEST_ACCOUNT_WITH_SYNTHETIC_FORM_VALUES',
@@ -486,7 +488,7 @@ async function runCredentialLogin({ retainedFirstParty = false, evidence = null 
     }
     report.finishedAt = new Date().toISOString();
     fs.writeFileSync(path.join(artifactDir, 'report.json'), JSON.stringify(report, null, 2));
-    console.log(JSON.stringify(report, null, 2));
+    console.log(redact(JSON.stringify(report, null, 2)));
     if (!report.engineeringReady) process.exitCode = 1;
   }
 }
