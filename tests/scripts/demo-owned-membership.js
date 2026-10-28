@@ -16,7 +16,9 @@ async function requireGovernedMembershipFlow(operator, owned, flowId, read = req
   assert.equal(flow.organization_id, owned.organizationId);
   assert.equal(flow.credential_template_id, owned.credentialTemplateId);
   assert.equal(flow.status, 'ACTIVE');
-  assert.equal(flow.flow_type, 'oid4vci_pre_authorized');
+  const effectiveType = flow.flow_type === 'custom'
+    ? flow.extension?.extends_flow_type : flow.flow_type;
+  assert.equal(effectiveType, 'oid4vci_pre_authorized');
   assert.equal(flow.trigger?.trigger_type, 'WEBHOOK');
   assert.equal(flow.trigger?.config?.event_type, 'APPLICATION_APPROVED');
   const definitions = [];
