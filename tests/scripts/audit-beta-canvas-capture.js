@@ -144,7 +144,8 @@ async function main() {
     phase = 'canvas-fixture-setup';
     setup = await stock.prepareCanvasCaptureFixtures({ browser, ledger, state: setupState,
       runSuffix: actual.runId, ownershipDirectory: dir, pass: (id, detail) => ledger.pass(id, detail),
-      prerequisiteDirectory: path.dirname(path.resolve(process.env.CANVAS_PORTABILITY_ATTESTATION_PATH)) });
+      prerequisiteDirectory: path.dirname(path.resolve(process.env.CANVAS_PORTABILITY_ATTESTATION_PATH)),
+      ownedPrivateRecoveryDirectory: nativeFunctional?executionBoundary.privateRecoveryDirectory:null });
     assert.equal(setup.organizationId, actual.organizationId);
     const policyId = process.env.CANVAS_CAPTURE_PRESENTATION_POLICY_ID;
     assert.match(policyId || '', /^[a-f0-9-]{36}$/i);
