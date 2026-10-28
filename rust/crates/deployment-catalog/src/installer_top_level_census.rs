@@ -99,7 +99,7 @@ pub(crate) enum TopLevelName {
     OpenBaoCompleted(OpenBaoCompletedRole),
 }
 impl TopLevelName {
-    const REQUIRED: [Self; 31] = [
+    pub(crate) const REQUIRED: [Self; 31] = [
         Self::Journal,
         Self::Operator,
         Self::OperatorPassword,
@@ -132,7 +132,7 @@ impl TopLevelName {
         Self::OpenBaoCompleted(OpenBaoCompletedRole::TlsInit),
         Self::OpenBaoCompleted(OpenBaoCompletedRole::Bootstrap),
     ];
-    fn name(self) -> String {
+    pub(crate) fn name(self) -> String {
         match self {
             Self::Journal => "installation.json".into(),
             Self::Operator => "marty-deploy".into(),
@@ -163,7 +163,7 @@ impl TopLevelName {
             Self::OpenBaoCompleted(role) => format!("openbao-completed-{}.json", role.name()),
         }
     }
-    fn expected_kind(self) -> Kind {
+    pub(crate) fn expected_kind(self) -> Kind {
         match self {
             Self::Downloads
             | Self::Evidence
