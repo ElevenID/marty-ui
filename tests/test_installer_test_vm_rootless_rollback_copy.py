@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import os
 from pathlib import Path
+import socket
 import sys
 from unittest import mock
 
@@ -135,3 +136,96 @@ def test_nonroot_or_same_uuid_refuses_before_source_access(tmp_path):
                               runtime_parent=tmp_path / "runtime",
                               vm_id=VM, copy_vm_id=VM, copy_port=22024)
     source.assert_not_called()
+
+
+def test_copy_intent_precedes_any_destination_creation(tmp_path):
+    intent_raw, intent, pending_raw, pending = pending_records()
+    provenance = {"image_sha256": "1" * 64, "manifest_sha256": "2" * 64,
+                  "signature_sha256": "3" * 64, "keyring_sha256": "4" * 64}
+    vm_parent = tmp_path / "vm"
+    runtime_parent = tmp_path / "runtime"
+    registry = tmp_path / "registry"
+    for path in (vm_parent, runtime_parent, registry):
+        path.mkdir()
+    old = runtime_parent / VM
+    old.mkdir()
+    payload = old / "source"
+    payload.write_bytes(b"synthetic")
+    stop_intent = dict(intent,
+                       launch_sha256=release.digest(b"launch receipt\n"),
+                       setup_readiness_sha256=release.digest(b"ready\n"))
+    stop_raw = release.encode(stop_intent)
+    pending = dict(pending, intent_sha256=release.digest(stop_raw),
+                   disk_bytes=9, snapshot_bytes=9)
+    pending_raw = release.encode(pending)
+    receipts = {
+        VM + stopped.INTENT_SUFFIX: (stop_raw, stop_intent),
+        VM + stopped.PENDING_SUFFIX: (pending_raw, pending),
+        VM + ".creation-receipt.json":
+            (b"creation\n", {"image": provenance}),
+        VM + ".runtime-receipt.json":
+            (b"transfer\n", {"runtime_uid": 994, "runtime_gid": 994,
+                               "disk_device": 12, "disk_inode": 34}),
+        VM + ".seed-receipt.json":
+            (b"seed\n", {"seed_device": 12, "seed_inode": 38,
+                           "seed_bytes": 9, "seed_sha256": "c" * 64}),
+        VM + ".launch-intent.json":
+            (b"launch\n", {"ssh_port": 22024}),
+        VM + ".launch-receipt.json": (b"launch receipt\n", {}),
+        VM + ".rootless-fixture-setup-readiness.json": (b"ready\n", {}),
+    }
+    class Lease:
+        def __enter__(self):
+            self.parent = os.open(registry, os.O_RDONLY | os.O_DIRECTORY)
+            return self
+        def __exit__(self, *_):
+            os.close(self.parent)
+    def vm_dir(_path):
+        return os.open(vm_parent, os.O_RDONLY | os.O_DIRECTORY)
+    def runtime_dir(_path):
+        return os.open(runtime_parent, os.O_RDONLY | os.O_DIRECTORY)
+    def old_dir(_path, _uid):
+        return os.open(old, os.O_RDONLY | os.O_DIRECTORY)
+    def old_file(*_args, **_kwargs):
+        return os.open(payload, os.O_RDONLY)
+    events = []
+    def write(_parent, name, _record):
+        events.append(("intent", name))
+        return b"copy intent\n"
+    def refuse_copy(*_args, **_kwargs):
+        events.append(("destination", None))
+        raise ValueError("injected destination failure")
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as reserve:
+        reserve.bind(("127.0.0.1", 0))
+        port = reserve.getsockname()[1]
+    with mock.patch.object(copy.os, "geteuid", return_value=0), \
+         mock.patch.object(copy, "ControllerLease", return_value=Lease()), \
+         mock.patch.object(copy, "_directory", side_effect=vm_dir), \
+         mock.patch.object(copy.runtime, "_runtime_parent",
+                           side_effect=runtime_dir), \
+         mock.patch.object(copy.fixture, "_fresh_uuid"), \
+         mock.patch.object(copy.create, "verify_source", return_value=provenance), \
+         mock.patch.object(copy.create, "_rebind_directory"), \
+         mock.patch.object(copy.create, "_read_record",
+                           side_effect=lambda _fd, name: receipts[name]), \
+         mock.patch.object(copy.launch, "_boot_id", return_value=BOOT), \
+         mock.patch.object(copy.restart, "_no_live_owner"), \
+         mock.patch.object(copy.observer, "open_vm_dir", side_effect=old_dir), \
+         mock.patch.object(copy.restart, "_disk_fd", side_effect=old_file), \
+         mock.patch.object(copy, "_held_regular", side_effect=old_file), \
+         mock.patch.object(copy.restart, "_mutable_digest",
+                           return_value=(9, "c" * 64, 1, 1)), \
+         mock.patch.object(copy, "_snapshot",
+                           side_effect=lambda *_: (os.open(old, os.O_RDONLY),
+                                                    os.open(payload, os.O_RDONLY))), \
+         mock.patch.object(copy.create, "_write", side_effect=write), \
+         mock.patch.object(copy, "_copy_target", side_effect=refuse_copy):
+        with pytest.raises(ValueError, match="injected destination"):
+            copy.prepare_copy(source=tmp_path / "source", registry=registry,
+                              vm_parent=vm_parent, runtime_parent=runtime_parent,
+                              vm_id=VM,
+                              copy_vm_id="33333333-4444-4555-8666-777777777777",
+                              copy_port=port)
+    assert events == [("intent",
+                       "33333333-4444-4555-8666-777777777777"
+                       + copy.INTENT_SUFFIX), ("destination", None)]
