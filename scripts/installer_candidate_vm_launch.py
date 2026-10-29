@@ -24,7 +24,7 @@ from installer_candidate_controller import ControllerLease, _directory
 import installer_candidate_qemu_observe as observer
 from installer_candidate_vm_create import _bytes, _disk_digest, _read_record, _write
 from installer_candidate_vm_runtime import _named_disk, _same_path
-from installer_candidate_vm_seed import verify_seed
+from installer_candidate_vm_seed import ROOTLESS_FIXTURE_PROFILE, verify_seed
 import installer_release as release
 
 SCHEMA = "elevenid.installer-vm-launch/v1"
@@ -32,11 +32,14 @@ PID_SCHEMA = "elevenid.installer-vm-pid/v2"
 QEMU = Path("/usr/bin/qemu-system-x86_64")
 SETPRIV = Path("/usr/bin/setpriv")
 MEMORY_MIB = 4096
+ROOTLESS_FIXTURE_MEMORY_MIB = 2048
 CPUS = 2
 ENV = {"HOME": "/", "PATH": "/usr/bin:/bin", "LANG": "C"}
 
 
-def _host_headroom() -> int:
+def _host_headroom(memory_mib: int = MEMORY_MIB) -> int:
+    release.require(memory_mib in (MEMORY_MIB, ROOTLESS_FIXTURE_MEMORY_MIB),
+                    "VM memory profile unsupported")
     raw = Path("/proc/meminfo").read_bytes()
     release.require(len(raw) <= 65536, "VM host memory inventory oversized")
     values = [
@@ -52,7 +55,7 @@ def _host_headroom() -> int:
     available = int(values[0][1]) * 1024
     # Engineering trial only; the independent 32GiB/20GiB release gate stays.
     release.require(
-        available >= (MEMORY_MIB + 2048) * 1024 * 1024,
+        available >= (memory_mib + 2048) * 1024 * 1024,
         "VM engineering host memory headroom insufficient",
     )
     return available
@@ -134,7 +137,10 @@ def _kvm_group() -> int:
     return group.gr_gid
 
 
-def _arguments(runtime_dir: Path, vm_id: str, port: int) -> list[str]:
+def _arguments(runtime_dir: Path, vm_id: str, port: int,
+               memory_mib: int = MEMORY_MIB) -> list[str]:
+    release.require(memory_mib in (MEMORY_MIB, ROOTLESS_FIXTURE_MEMORY_MIB),
+                    "VM memory profile unsupported")
     _safe_runtime_path(runtime_dir)
     disk = runtime_dir / "disk.qcow2"
     seed = runtime_dir / "seed.iso"
@@ -146,7 +152,7 @@ def _arguments(runtime_dir: Path, vm_id: str, port: int) -> list[str]:
         "-machine",
         "q35,accel=kvm",
         "-m",
-        str(MEMORY_MIB),
+        str(memory_mib),
         "-smp",
         str(CPUS),
         "-nodefaults",
@@ -375,12 +381,15 @@ def _launch_held(
         )
         _seed_media(runtime_fd, seed, runtime["runtime_gid"])
         _idle_uid(runtime["runtime_uid"])
-        _host_headroom()
+        memory_mib = (ROOTLESS_FIXTURE_MEMORY_MIB
+                      if seed.get("fixture_profile") == ROOTLESS_FIXTURE_PROFILE
+                      else MEMORY_MIB)
+        _host_headroom(memory_mib)
         boot_id = _boot_id()
         release.require(
             not (runtime_dir / "qmp.sock").exists(), "VM monitor path already exists"
         )
-        args = _arguments(runtime_dir, vm_id, seed["ssh_port"])
+        args = _arguments(runtime_dir, vm_id, seed["ssh_port"], memory_mib)
         reserve = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
             reserve.bind(("127.0.0.1", seed["ssh_port"]))
@@ -414,7 +423,7 @@ def _launch_held(
                 "gid": runtime["runtime_gid"],
                 "kvm_gid": kvm_gid,
                 "ssh_port": seed["ssh_port"],
-                "memory_mib": MEMORY_MIB,
+                "memory_mib": memory_mib,
                 "cpus": CPUS,
                 "args": args,
                 "qemu_sha256": qemu_sha256,
@@ -427,7 +436,7 @@ def _launch_held(
         finally:
             reserve.close()
         rebind()
-        _host_headroom()
+        _host_headroom(memory_mib)
         _idle_uid(runtime["runtime_uid"])
         _named_disk(runtime_fd, disk_fd, runtime["runtime_uid"], runtime["runtime_gid"])
         _seed_media(runtime_fd, seed, runtime["runtime_gid"])
@@ -651,9 +660,12 @@ def observe_existing(registry: Path, runtime_parent: Path, *, vm_id: str) -> dic
             == (runtime["runtime_uid"], runtime["runtime_gid"])
             and intent["kvm_gid"] == _kvm_group()
             and intent["ssh_port"] == seed["ssh_port"]
-            and intent["memory_mib"] == MEMORY_MIB
+            and intent["memory_mib"] == (ROOTLESS_FIXTURE_MEMORY_MIB
+                                        if seed.get("fixture_profile") == ROOTLESS_FIXTURE_PROFILE
+                                        else MEMORY_MIB)
             and intent["cpus"] == CPUS
-            and intent["args"] == _arguments(runtime_dir, vm_id, seed["ssh_port"])
+            and intent["args"] == _arguments(runtime_dir, vm_id, seed["ssh_port"],
+                                             intent["memory_mib"])
             and intent["qemu_sha256"] == _trusted_tool(QEMU)
             and intent["controller_boot_id"] == _boot_id()
             and intent["qualified"] is False
