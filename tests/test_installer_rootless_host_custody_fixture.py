@@ -3,6 +3,7 @@
 import importlib.util
 from pathlib import Path
 import subprocess
+import threading
 import tempfile
 import unittest
 
@@ -50,6 +51,19 @@ class RootlessHostCustodyFixtureTests(unittest.TestCase):
         self.assertEqual(output.split()[-1], "1")
         with self.assertRaisesRegex(RuntimeError, "bounded command output exceeded"):
             fixture.run(["/usr/bin/python3", "-c", "import os;os.write(1,b'x'*70000)"], env)
+
+    def test_no_new_privileges_exec_is_bounded_while_log_thread_is_live(self):
+        release = threading.Event()
+        worker = threading.Thread(target=lambda: release.wait(2), daemon=True)
+        worker.start()
+        try:
+            self.assertTrue(worker.is_alive())
+            output = fixture.run(["/bin/sh", "-c", "grep '^NoNewPrivs:' /proc/self/status"],
+                                 {"PATH": "/usr/bin:/bin"}, timeout=2)
+            self.assertEqual(output.split()[-1], "1")
+        finally:
+            release.set()
+            worker.join(timeout=2)
 
     def test_client_timeout_kills_only_its_process_group(self):
         with self.assertRaisesRegex(RuntimeError, "bounded command timeout"):

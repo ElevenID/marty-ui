@@ -6,7 +6,6 @@ its own daemon. Docker clients run with no_new_privs. No rootful socket, sudo,
 package installation, existing Docker context, or pre-existing state is used.
 """
 
-import ctypes
 import errno
 import hashlib
 import json
@@ -33,7 +32,7 @@ INVENTORY_SHA = "54b593a48bbf139838e6c0a79441e9eb1ebbe79faf7d2347cb775ff2140a967
 IMAGE = ("ghcr.io/elevenid/marty-ui-oss/openbao-didcomm@sha256:"
          "f8832a8b325fc017d9d10baf6742bf692cd573fa9a3ec09cb6c976a2fde56c54")
 CANARY = b"marty-rootless-owned-canary\n"
-PR_SET_NO_NEW_PRIVS = 38
+SET_PRIV = "/usr/bin/setpriv"
 
 
 def require(ok, message):
@@ -55,16 +54,15 @@ def write_record(path, value):
         os.close(parent)
 
 
-def no_new_privs():
-    require(ctypes.CDLL(None).prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) == 0,
-            "cannot set no_new_privs")
-
-
-def run(argv, env, *, timeout=40, nnp=True):
+def run(argv, env, *, timeout=40):
     require(type(argv) is list and all(type(a) is str for a in argv), "invalid command")
-    proc = subprocess.Popen(argv, env=env, cwd="/", stdin=subprocess.DEVNULL,
+    m = Path(SET_PRIV).lstat()
+    require(stat.S_ISREG(m.st_mode) and m.st_uid == 0 and m.st_mode & 0o022 == 0
+            and m.st_mode & 0o111 != 0, "trusted no-new-privs launcher unavailable")
+    proc = subprocess.Popen([SET_PRIV, "--no-new-privs", "--", *argv],
+                            env=env, cwd="/", stdin=subprocess.DEVNULL,
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                            start_new_session=True, preexec_fn=no_new_privs if nnp else None)
+                            start_new_session=True)
     chunks = {"out": bytearray(), "err": bytearray()}
     selector = selectors.DefaultSelector()
     selector.register(proc.stdout, selectors.EVENT_READ, "out")
@@ -153,9 +151,13 @@ def stop_daemon(daemon, stamp, socket_path, socket_identity, context):
     while not leader_exited(daemon.pid) and time.monotonic() < deadline:
         time.sleep(0.1)
     require(leader_exited(daemon.pid), "rootlesskit leader did not stop")
-    if socket_path.exists():
+    try:
         named = socket_path.lstat()
-        require((named.st_dev, named.st_ino, named.st_uid) == socket_identity,
+    except FileNotFoundError:
+        named = None
+    if named is not None:
+        require(stat.S_ISSOCK(named.st_mode)
+                and (named.st_dev, named.st_ino, named.st_uid) == socket_identity,
                 "rootless socket changed during daemon stop")
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as probe:
             probe.settimeout(1.0)
@@ -182,7 +184,7 @@ def mapped(uid_map, guest):
 def preflight(*, record=False):
     uid = os.geteuid()
     require(uid != 0 and os.getuid() == uid, "ordinary nonroot runner required")
-    names = ("docker", "dockerd-rootless.sh", "rootlesskit", "newuidmap", "newgidmap")
+    names = ("docker", "dockerd-rootless.sh", "rootlesskit", "newuidmap", "newgidmap", "setpriv")
     missing = [name for name in names if not shutil.which(name)]
     user = pwd.getpwuid(uid).pw_name
     ranges = {}
@@ -198,7 +200,8 @@ def preflight(*, record=False):
               "daemon_started": False, "installer_executed": False}
     if record:
         write_record(Path(os.environ["RUNNER_TEMP"]) / "marty-rootless-preflight.json", report)
-    require(not missing, "missing preinstalled rootless tools: " + ",".join(missing))
+    require(not missing and shutil.which("setpriv") == SET_PRIV,
+            "missing preinstalled rootless tools: " + ",".join(missing))
     require(allowed, "no preconfigured >=65536 subordinate UID/GID range")
     return {"uid": uid, "tools": {n: shutil.which(n) for n in names},
             "subordinate_ranges_present": True,
