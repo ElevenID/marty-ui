@@ -420,7 +420,7 @@ def peel_validated_inspect(before, actual, role, bindings, additions):
             set(row) == {"Type", "Source", "Destination", "Mode", "RW", "Propagation"}
             and row["Type"] == "bind"
             and row["RW"] is False
-            and row["Mode"] == "ro"
+            and row["Mode"] == ""
             and row["Propagation"] == "rprivate"
             and daemon_source(row["Source"]) == daemon_source(bindings[name]["path"]),
             "EXACT_READONLY_OPERATOR_RUNTIME_MOUNT_REQUIRED",
