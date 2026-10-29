@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import ctypes
 from ctypes import wintypes
+from datetime import datetime, timezone
 import importlib.util
 from copy import deepcopy
 import json
@@ -16,6 +17,7 @@ import os
 from pathlib import Path
 import secrets
 import sys
+import traceback
 import uuid
 from scoped_native_database import NativeDatabasePhase, schema_url, ENGINE, BUILD_RECEIPT_SHA, bounded_run
 from scoped_native_runtime import read_ref, ref, require, save_state, MIGRATIONS
@@ -508,11 +510,32 @@ def context_for(path, digest, inputs):
     return modules, context, operator
 
 
+def private_failure_diagnostic(error):
+    causes = []
+    seen = set()
+    current = error
+    while current is not None and id(current) not in seen and len(causes) < 4:
+        seen.add(id(current))
+        causes.append({"errorClass": type(current).__name__, "message": str(current)[:2048],
+            "frames": [{"file": item.filename, "line": item.lineno, "function": item.name}
+                       for item in traceback.extract_tb(current.__traceback__)[-16:]]})
+        current = current.__cause__ if current.__cause__ is not None else current.__context__
+    return {"privateOnly": True, "causes": causes}
+
+
 def capacity(context, inputs):
     command = "$o=Get-CimInstance Win32_OperatingSystem;[long]$o.FreePhysicalMemory*1024"
-    result = bounded_run([inputs["executables"]["powershell"]["path"], "-NoProfile", "-NonInteractive", "-Command", command], env=context["env"], timeout=20, stdout_limit=4096)
-    require(result.returncode == 0 and not result.observation["failures"] and not result.observation["timedOut"], "PHYSICAL_CAPACITY_UNKNOWN")
-    free = int(result.stdout.decode().strip())
+    result = bounded_run([inputs["executables"]["powershell"]["path"], "-NoProfile", "-NonInteractive", "-Command", command],
+        env=context["env"], timeout=20, stdout_limit=4096, stderr_limit=4096)
+    text = result.stdout.decode("utf-8", errors="replace").strip()
+    free = int(text) if text.isascii() and text.isdigit() else None
+    context["capacityObservation"] = context["save"]("capacity-observation.private.json", {
+        "observedAtUtc": datetime.now(timezone.utc).isoformat(),
+        "exitCode": result.returncode, "observation": result.observation,
+        "stdout": text, "stderr": result.stderr.decode("utf-8", errors="replace"),
+        "freePhysicalBytes": free, "requiredPhysicalBytes": 4 * 1024 ** 3})
+    require(result.returncode == 0 and not result.observation["failures"] and not result.observation["timedOut"]
+            and free is not None, "PHYSICAL_CAPACITY_UNKNOWN")
     require(free >= 4 * 1024 ** 3, "PHYSICAL_4GIB_REQUIRED")
     return free
 
@@ -550,7 +573,8 @@ def main():
             result = context["save"]("result.json", output)
             print(json.dumps({"state": output["phase"], "result": result, "betaDatabaseAccessed": False, "runtimeDeployed": False}))
         except BaseException as error:
-            context["save"]("failure.json", {"errorClass": type(error).__name__, "state": operator.state,
+            context["save"]("failure.json", {"errorClass": type(error).__name__, "privateDiagnostic": private_failure_diagnostic(error),
+                "capacityObservation": context.get("capacityObservation"), "state": operator.state,
                 "inputsSha256": args.inputs_sha256, "controllerIdentity": controller,
                 "ownedPostgresId": operator.pg_cid, "ownedNetworkId": operator.network_id,
                 "noRetry": True, "betaDatabaseAccessed": False})

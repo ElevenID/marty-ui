@@ -160,3 +160,33 @@ def test_cleanup_refuses_extra_network_and_binds_created_default(tmp_path):
     value.command = lambda args: json.dumps([{"Id": value.network_id, "Name": "owned", "Internal": True,
         "Labels": {"elevenid.owner": rehearsal.OWNER, "elevenid.run": value.fixture_run}}]).encode()
     value.cleanup_network(row)
+
+
+@pytest.mark.parametrize("stdout,code,expected", [(b"4000000000", 0, "PHYSICAL_4GIB_REQUIRED"), (b"unknown", 1, "PHYSICAL_CAPACITY_UNKNOWN")])
+def test_capacity_persists_actual_sample_before_refusal(monkeypatch, stdout, code, expected):
+    from types import SimpleNamespace
+    result = SimpleNamespace(stdout=stdout, stderr=b"bounded diagnostic", returncode=code,
+        observation={"failures": [], "timedOut": False})
+    monkeypatch.setattr(rehearsal, "bounded_run", lambda *args, **kwargs: result)
+    saved = []
+    context = {"env": {}, "save": lambda name, value: saved.append((name, value)) or {"sha256": "actual"}}
+    with pytest.raises(ValueError, match=expected):
+        rehearsal.capacity(context, {"executables": {"powershell": {"path": "not-executed"}}})
+    assert len(saved) == 1 and saved[0][1]["stdout"] == stdout.decode()
+    assert saved[0][1]["exitCode"] == code and saved[0][1]["requiredPhysicalBytes"] == 4294967296
+    assert context["capacityObservation"] == {"sha256": "actual"}
+
+
+def test_private_failure_diagnostic_retains_bounded_cause_without_locals():
+    try:
+        try:
+            raise ValueError("EXACT_PRIVATE_REASON" + "x" * 5000)
+        except ValueError as cause:
+            raise RuntimeError("OUTER_REASON") from cause
+    except RuntimeError as error:
+        diagnostic = rehearsal.private_failure_diagnostic(error)
+    assert diagnostic["privateOnly"] is True
+    assert [row["errorClass"] for row in diagnostic["causes"]] == ["RuntimeError", "ValueError"]
+    assert diagnostic["causes"][1]["message"].startswith("EXACT_PRIVATE_REASON")
+    assert len(diagnostic["causes"][1]["message"]) == 2048
+    assert all(set(frame) == {"file", "line", "function"} for row in diagnostic["causes"] for frame in row["frames"])
