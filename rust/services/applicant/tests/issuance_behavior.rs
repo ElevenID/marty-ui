@@ -186,3 +186,31 @@ fn missing_active_flow_persists_stable_issuer_owned_blocker() {
         "ISSUER"
     );
 }
+
+#[test]
+fn per_offer_lifetime_is_reserved_and_retry_cannot_change_it() {
+    use marty_applicant::issuance::reserve_attempt_with_lifetime;
+    let (mut application, _) = state();
+    let now = application.created_at;
+    let (id, _) =
+        reserve_attempt_with_lifetime(&mut application, Map::new(), now, Some(60)).unwrap();
+    assert_eq!(
+        reserve_attempt_with_lifetime(&mut application, Map::new(), now, Some(60))
+            .unwrap()
+            .0,
+        id
+    );
+    for changed in [None, Some(120)] {
+        assert!(reserve_attempt_with_lifetime(&mut application, Map::new(), now, changed).is_err());
+    }
+    let (mut legacy, _) = state();
+    let (id, _) = reserve_attempt(&mut legacy, Map::new(), now).unwrap();
+    legacy
+        .system_data
+        .get_mut("active_issuance_attempt")
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .remove("offer_ttl_seconds");
+    assert_eq!(reserve_attempt(&mut legacy, Map::new(), now).unwrap().0, id);
+}

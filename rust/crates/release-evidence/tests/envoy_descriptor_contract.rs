@@ -36,6 +36,8 @@ struct Field {
     number: i32,
     #[prost(int32, tag = "5")]
     kind: i32,
+    #[prost(bool, tag = "17")]
+    proto3_optional: bool,
 }
 #[derive(Clone, PartialEq, Message)]
 struct Service {
@@ -75,10 +77,11 @@ struct Http {
 #[test]
 fn shipped_descriptor_preserves_exact_initiation_capability_and_all_eleven_siblings() {
     // Reviewed policy transport, credential-template schema, additive auth_time,
-    // and PolicyEvaluationResponse authentication_diagnostic_json field 14.
+    // PolicyEvaluationResponse authentication_diagnostic_json field 14, and
+    // optional per-offer lifetime at InitiateIssuanceRequest field 13.
     assert_eq!(
         format!("{:x}", Sha256::digest(DESCRIPTOR)),
-        "201b944fc553e2435082a75138fff5b83e07b76617abfd7d0c34266159916723"
+        "f3f6a0c03d724bff696cb39948cabfa5f181099315f2a314ca504b0c7bc73611"
     );
     let set = DescriptorSet::decode(DESCRIPTOR).unwrap();
     let files: Vec<_> = set
@@ -170,6 +173,7 @@ fn shipped_descriptor_preserves_exact_initiation_capability_and_all_eleven_sibli
                 "delivery_mode",
                 "idempotency_key",
                 "claims_json",
+                "offer_ttl_seconds",
             ],
         ),
         (
@@ -193,9 +197,14 @@ fn shipped_descriptor_preserves_exact_initiation_capability_and_all_eleven_sibli
         for (index, (field, name)) in found[0].fields.iter().zip(fields).enumerate() {
             assert_eq!(field.name, name);
             assert_eq!(field.number, index as i32 + 1);
+            assert_eq!(field.proto3_optional, name == "offer_ttl_seconds");
             assert_eq!(
                 field.kind,
-                if ["claims", "credential_offer_uris", "credential_offer_labels"].contains(&name) {
+                if name == "offer_ttl_seconds" {
+                    4 // TYPE_UINT64; existing field types remain unchanged.
+                } else if ["claims", "credential_offer_uris", "credential_offer_labels"]
+                    .contains(&name)
+                {
                     11
                 } else {
                     9

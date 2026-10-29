@@ -426,6 +426,9 @@ async fn initialize_oid4vci(
             provider: "issuance",
         })?
         .initiate(&IssuanceInitiationRequest {
+            offer_ttl_seconds: context
+                .get("_marty_offer_ttl_seconds")
+                .and_then(Value::as_u64),
             organization_id: instance.organization_id.clone(),
             flow_instance_id: instance.id.clone(),
             credential_template_id: template_id.into(),

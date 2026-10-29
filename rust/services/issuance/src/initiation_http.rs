@@ -58,6 +58,22 @@ impl InitiationHttpService {
         self.initiate_authorized(headers, request).await
     }
 
+    /// Same authority and expiry kernel as initiation, without reservation or projection.
+    pub fn validate_offer_lifetime(
+        &self,
+        headers: &HeaderMap,
+        seconds: u64,
+    ) -> Result<String, InitiationHttpError> {
+        self.authorize(headers)?;
+        reject_direct_signing_headers(headers)?;
+        let organization = header(headers, "X-Organization-ID")
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .ok_or(TransactionReadError::TrustedOrganizationRequired)?;
+        self.initiation.validate_offer_lifetime(seconds)?;
+        Ok(organization.to_owned())
+    }
+
     pub fn authorize(&self, headers: &HeaderMap) -> Result<(), InitiationHttpError> {
         self.security
             .authorize(header(headers, "X-API-Key"))

@@ -181,6 +181,7 @@ async fn execute(
 fn request(conflict: bool, deployed: bool) -> IssuanceInitiationRequest {
     let profile = if deployed { "selfhost" } else { "base_native" };
     IssuanceInitiationRequest {
+        offer_ttl_seconds: None,
         organization_id: "org-1".into(),
         flow_instance_id: format!("rendered-{profile}-flow-instance"),
         credential_template_id: "template-1".into(),

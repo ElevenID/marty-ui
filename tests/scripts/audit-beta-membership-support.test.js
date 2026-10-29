@@ -9,7 +9,7 @@ const {
   GRANT, assertions, awaitNaturalExpiry, expiryWindow, loginInstanceBinding, nativeLoginResult,
   validateFixture, validateIssuerSetup, validateLoginSetup,
 } = require('./beta-membership-support-contract');
-const { createSupportController, guards, main, prepareFixture } = require('./audit-beta-membership-support');
+const { createSupportController, guards, main, prepareFixture,startLogin } = require('./audit-beta-membership-support');
 
 const uuid = (n) => `10000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const ORIGIN = 'https://service.example.test';
@@ -541,4 +541,34 @@ test('a preflight-blocked functional run writes both JSON receipts without crede
     process.exitCode = previousExitCode;
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+
+test('shared login hook journals before navigation and acknowledges only exact server binding',async()=>{
+ const f=fixture(),events=[],instance={id:uuid(30),organization_id:f.login.organizationId,context_data:{
+  presentation_policy_id:f.login.presentationPolicyId,trust_profile_id:f.login.trustProfileId,oid4vp_issuer_did:f.login.verifierDid}};
+ const authPage={goto:async()=>events.push('navigation'),evaluate:async()=>({nonce:'PRIVATE_NONCE',href:'PRIVATE_WALLET_LINK',
+  dcApiRequestUrl:ORIGIN+'/v1/flows/instances/'+instance.id+'/request'})};
+ const operator={evaluate:async()=>({ok:true,status:200,body:instance})};
+ const flowHooks={beforeStart:async()=>events.push('intent'),acknowledge:async({binding})=>{assert.equal(binding.instanceId,instance.id);events.push('ack');}};
+ await startLogin({authPage,operator,fixture:f,origin:ORIGIN,flowHooks});assert.deepEqual(events,['intent','navigation','ack']);
+ events.length=0;instance.context_data.presentation_policy_id=uuid(999);
+ await assert.rejects(startLogin({authPage,operator,fixture:f,origin:ORIGIN,flowHooks}));
+ assert.deepEqual(events,['intent','navigation']);
+});
+
+test('dedicated owned expiry offer uses optional server TTL; recovery preserves configured defaults', async () => {
+  const f=fixture(); delete f.expiry.isolatedDeployment; f.expiry.mode='PER_OWNED_OFFER';
+  validateFixture(f,'expired-offer');
+  const invalid=structuredClone(f);invalid.expiry.mode='CALLER_TRUST';assert.throws(()=>validateFixture(invalid,'expired-offer'));
+  const service=fakeService(f); await service.controller.preflight();
+  await assert.rejects(service.controller.issue(f.trusted,'invalid-ttl',{offerTtlSeconds:1}));
+  assert.equal(service.applications.length,0);
+  const short=await service.controller.issue(f.trusted,'dedicated-expiry',{offerTtlSeconds:60});
+  let issues=service.requests.filter(r=>r.path.endsWith('/issue'));
+  assert.deepEqual(JSON.parse(issues[0].body),{offer_ttl_seconds:60});
+  await service.controller.cleanupOne(short.owned);
+  await service.controller.reissue(short,f.trusted);
+  issues=service.requests.filter(r=>r.path.endsWith('/issue'));
+  assert.equal(issues.length,2); assert.equal(issues[1].body,undefined);
 });

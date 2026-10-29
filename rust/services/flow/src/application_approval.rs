@@ -350,6 +350,17 @@ pub fn prepare_application_event_plan(
             "manual application issuance requires issuance_attempt_id",
         ));
     }
+    let offer_ttl_seconds = match event.data.get("offer_ttl_seconds") {
+        None => None,
+        Some(value) => Some(value.as_u64().ok_or(ApplicationApprovalError::Conflict(
+            "offer_ttl_seconds must be an unsigned integer",
+        ))?),
+    };
+    if offer_ttl_seconds.is_some() && !manual_issue {
+        return Err(ApplicationApprovalError::Conflict(
+            "offer lifetime requires manual issuance",
+        ));
+    }
     let claims = match event.data.get("claims") {
         Some(Value::Object(claims)) => Value::Object(claims.clone()),
         Some(Value::Null) | None => json!({}),
@@ -403,6 +414,9 @@ pub fn prepare_application_event_plan(
             "claims": claims
         });
         let mut trusted = Map::new();
+        if let Some(seconds) = offer_ttl_seconds {
+            trusted.insert("_marty_offer_ttl_seconds".into(), seconds.into());
+        }
         trusted.insert(
             PRECONDITION_EVIDENCE_KEY.into(),
             json!({"application_approved": evidence}),
@@ -541,6 +555,9 @@ fn application_offer_semantics(
         "applicant_id": applicant_id,
         "claims": claims
     });
+    if let Some(seconds) = event.data.get("offer_ttl_seconds") {
+        payload["offer_ttl_seconds"] = seconds.clone();
+    }
     let (version, context_key) =
         issuance_attempt_id.map_or(("v1", SEMANTICS_V1_KEY), |attempt_id| {
             payload["issuance_attempt_id"] = Value::String(attempt_id.into());

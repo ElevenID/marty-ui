@@ -1040,7 +1040,12 @@ fn router_with_optional_services(
         api = api.route("/v1/issuance/credential", post(issue_credential));
     }
     if services.initiation.is_some() {
-        api = api.route("/v1/issuance/initiate", post(initiate_issuance));
+        api = api
+            .route("/v1/issuance/initiate", post(initiate_issuance))
+            .route(
+                "/internal/compat/issuance/offer-lifetime/validate",
+                post(validate_offer_lifetime),
+            );
     }
     if services.didcomm_delivery.is_some() {
         api = api.route(
@@ -2587,6 +2592,32 @@ async fn issue_credential(
         .await
         .map(Json)
         .map_err(Into::into)
+}
+
+async fn validate_offer_lifetime(State(state): State<IssuanceState>, request: Request) -> Response {
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Input {
+        offer_ttl_seconds: u64,
+    }
+    let Some(service) = state.initiation.as_ref() else {
+        return InitiationHttpError::Unavailable.into_response();
+    };
+    if let Err(error) = service.authorize(request.headers()) {
+        return error.into_response();
+    }
+    let headers = request.headers().clone();
+    let Json(input) = match Json::<Input>::from_request(request, &state).await {
+        Ok(value) => value,
+        Err(error) => return error.into_response(),
+    };
+    match service.validate_offer_lifetime(&headers, input.offer_ttl_seconds) {
+        Ok(organization) => Json(
+            json!({"organization_id":organization,"offer_ttl_seconds":input.offer_ttl_seconds}),
+        )
+        .into_response(),
+        Err(error) => error.into_response(),
+    }
 }
 
 async fn initiate_issuance(State(state): State<IssuanceState>, request: Request) -> Response {
