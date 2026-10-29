@@ -12,7 +12,7 @@ test('attestation source/digest/owner are independently compared',()=>{const v={
 for(const [name,edit]of [['missing native migration',c=>c.ledgers.flow=['rust_flow_0001']],['missing issuer migration',c=>c.ledgers.issuance.pop()],['missing relation',c=>c.relations.pop()],['wrong relation owner',c=>c.relations[0].owner='marty'],['wrong ACL relation',c=>c.aclTables.flowIntent=null]])test(name+' refuses after-catalog qualification',()=>{const c=catalog();c.control.roles[0].canLogin=true;edit(c);assert.throws(()=>m.catalog(c,'BEFORE_START'));});
 
 
-test('both operational verifiers expand one exact shared trigger guard',()=>{
+test('both standalone verifiers authenticate one exact generated trigger guard',()=>{
  const fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypto');
  const root=path.resolve(__dirname,'../../scripts/sql'),refs={};
  for(const [name,sha256]of Object.entries(m.SQL_SOURCES)){const file=path.join(root,name),bytes=fs.readFileSync(file);assert.equal(crypto.createHash('sha256').update(bytes).digest('hex'),sha256);refs[name]={path:file,sha256,bytes:bytes.length};}
@@ -21,4 +21,19 @@ test('both operational verifiers expand one exact shared trigger guard',()=>{
   assert(raw.includes('FULL JOIN actual'));assert(raw.includes("'0011_passport_administrative_cancellation'"));
  }
  const helper='passport-beta-issuer-trigger-verify.sql';assert.throws(()=>m.operationalSql('passport-beta-fence-verify.sql',{...refs,[helper]:{...refs[helper],sha256:'0'.repeat(64)}}));
+});
+
+
+test('one canonical generator covers template and standalone verifier callers',()=>{
+ const fs=require('node:fs'),path=require('node:path');const root=path.resolve(__dirname,'../../scripts/sql');
+ const guard=fs.readFileSync(path.join(root,'passport-beta-issuer-trigger-verify.sql'));
+ for(const name of ['passport-beta-fence-verify.sql','passport-beta-rust-owner-verify.sql']){
+  const standalone=fs.readFileSync(path.join(root,name));assert(!/^\\[a-z]/im.test(standalone.toString()));
+  assert(m.generateStandaloneVerifier(name,standalone,guard).equals(standalone));
+  const template=Buffer.from(standalone.toString().replace(guard.toString(),'\\ir passport-beta-issuer-trigger-verify.sql'));
+  assert(m.generateStandaloneVerifier(name,template,guard).equals(standalone));
+  const stale=Buffer.from(standalone.toString().replace('FULL JOIN actual','LEFT JOIN actual'));
+  assert(m.generateStandaloneVerifier(name,stale,guard).equals(standalone));
+ }
+ assert.throws(()=>m.generateStandaloneVerifier('unreviewed.sql',Buffer.from('SELECT 1'),guard));
 });
