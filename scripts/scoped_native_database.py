@@ -15,8 +15,8 @@ import subprocess
 import threading
 import time
 import os
-from urllib.parse import urlencode, urlsplit, urlunsplit
-from scoped_native_runtime import daemon_source, durable_barrier, read_ref, require
+from urllib.parse import parse_qs, urlencode, urlsplit, urlunsplit
+from scoped_native_runtime import daemon_source, durable_barrier, read_executable_ref, read_ref, require
 from scoped_native_maintenance import (SOURCE, CORE, ROLE_BINARIES, PROFILE,
     select_canonical_binaries, validate_compatibility)
 from scoped_linux_journal import LinuxBuildJournal
@@ -111,6 +111,12 @@ def bounded_run(argv, *, env, input=None, timeout=150, stdout_limit=1024 * 1024,
     return result
 
 
+def schema_input_contract(inputs):
+    required = {"runId", "executables", "metadataModule", "sqlSources", "migrationSetSha256", "databaseNetwork", "selection"}
+    require(required.issubset(inputs), "FROZEN_SCHEMA_ADAPTER_INPUT_CONTRACT_REQUIRED")
+    return json.loads(read_ref(inputs["selection"]).read_bytes())
+
+
 def schema_url(raw, command):
     """SQLx consumes URL options, not an assumed libpq PGOPTIONS environment."""
     value = urlsplit(raw.strip())
@@ -124,6 +130,8 @@ def schema_url(raw, command):
 
 
 class NativeDatabasePhase:
+    SCHEMA_BINARIES = {role: ROLE_BINARIES[role] for role in SCHEMA_ROLES}
+
     """Reuse the frozen host command/save/guard and original private journal."""
     def __init__(self, context, inputs, store):
         require(type(store) is LinuxBuildJournal, "ORIGINAL_LINUX_JOURNAL_REQUIRED")
@@ -133,7 +141,7 @@ class NativeDatabasePhase:
         require(read_ref(inputs["executorSource"]).resolve() == Path(__file__).resolve(), "DATABASE_EXECUTOR_SOURCE_CHANGED")
         self.g, self.i, self.store = context, inputs, store
         self.identity = json.loads(read_ref(inputs["databaseBefore"]).read_bytes())["databaseIdentity"]
-        self.selection = json.loads(read_ref(inputs["selection"]).read_bytes())
+        self.selection = schema_input_contract(inputs)
         require(self.selection["roleBinaries"] == ROLE_BINARIES
                 and self.selection["sourceRevision"] == SOURCE and self.selection["coreRevision"] == CORE
                 and self.selection["canonicalBuildReceipt"]["sha256"] == BUILD_RECEIPT_SHA, "EXACT_FOUR_ROLE_SELECTION_REQUIRED")
@@ -149,7 +157,7 @@ class NativeDatabasePhase:
     def result(self, args, *, input=None):
         self.g["assert_inputs"](rollback=False)
         require(args and args[0] == "docker", "EXACT_DOCKER_COMMAND_REQUIRED")
-        docker = read_ref(self.i["executables"]["docker"])
+        docker = read_executable_ref(self.i["executables"]["docker"])
         self.command_index += 1
         result = bounded_run([str(docker), "--context", "desktop-linux", *args[1:]],
             input=input, env=self.g["env"], timeout=150)
@@ -191,9 +199,15 @@ class NativeDatabasePhase:
         require(durable_barrier(proof), "DURABLE_DATABASE_STATE_REQUIRED")
         return proof
 
+    def verify_quiescence(self):
+        self.g["verify_all22_quiescent"](self.i["quiescence"])
+
+    def database_url(self, command):
+        return schema_url(read_ref(self.i["databaseAdminUrl"], 8192).read_text(), command)
+
     def step(self, step_id, operation):
         self.guard()
-        self.g["verify_all22_quiescent"](self.i["quiescence"])
+        self.verify_quiescence()
         index = len(self.state["operations"])
         self.state.update(phase="DATABASE_OPERATION_PENDING", pendingStep=step_id, pendingRequest=None)
         intent = self.persist()
@@ -249,7 +263,7 @@ class NativeDatabasePhase:
 
     def backup(self):
         self.g["assert_inputs"](rollback=False)
-        docker = read_ref(self.i["executables"]["docker"])
+        docker = read_executable_ref(self.i["executables"]["docker"])
         path = Path(self.g["root"]) / "quiesced-database.dump"
         self.state["pendingBackup"] = str(path)
         self.persist()
@@ -269,11 +283,12 @@ class NativeDatabasePhase:
             "backupFile": self.g["ref"](path)}
 
     def schema(self, role, command):
-        require(role in SCHEMA_ROLES and command in ("migrate", "verify-owned-schema"), "CLOSED_SCHEMA_COMMAND_REQUIRED")
-        binary = ROLE_BINARIES[role]
+        require(schema_input_contract(self.i) == self.selection, "SCHEMA_SELECTION_CHANGED")
+        require(role in self.SCHEMA_BINARIES and command in ("migrate", "verify-owned-schema"), "CLOSED_SCHEMA_COMMAND_REQUIRED")
+        binary = self.SCHEMA_BINARIES[role]
         bound = self.selection["binaries"][role]
         path = read_ref(bound, 512 * 1024 * 1024)
-        url = schema_url(read_ref(self.i["databaseAdminUrl"], 8192).read_text(), command)
+        url = self.database_url(command)
         url_ref = self.g["save_bytes"](role + "-" + command + ".url.private", url.encode())
         env_ref = self.g["save_bytes"](role + "-" + command + ".env.private", ("DATABASE_URL=" + url + "\n").encode())
         name = "marty-native-schema-" + self.i["runId"] + "-" + role + "-" + command
@@ -299,14 +314,15 @@ class NativeDatabasePhase:
                 and not actual["State"]["OOMKilled"] and actual["State"]["Pid"] == 0, "SCHEMA_COMMAND_NOT_TERMINAL_SUCCESS")
         return {"runId": self.i["runId"], "selectionSha256": self.i["selection"]["sha256"],
             "role": role, "command": command, "sourceRevision": SOURCE, "coreRevision": CORE,
-            "databaseIdentity": self.identity, "databaseRole": "postgres" if command == "migrate" else "marty",
+            "databaseIdentity": self.identity, "databaseRole": parse_qs(urlsplit(url).query)["options[role]"][0],
             "databaseLoginRole": "postgres", "databaseUrl": url_ref,
             "imageId": IMAGE, "elfSha256": bound["sha256"], "containerId": cid,
             "argv": ["/usr/local/bin/" + binary, command], "state": "exited", "exitCode": 0, "oomKilled": False,
             "stdout": self.g["save_bytes"](role + "-" + command + ".stdout", result.stdout),
             "stderr": self.g["save_bytes"](role + "-" + command + ".stderr", result.stderr)}
 
-    def validate_schema(self, cid, *, created):
+    def validate_schema(self, cid, *, created, expected_exit=0, ownership_only=False):
+        require(expected_exit in (0, 1), "CLOSED_SCHEMA_CONTROL_EXIT_REQUIRED")
         expected = self.schema_records[cid]
         row = json.loads(self.command(["docker", "inspect", cid]))[0]
         config, host, state = row["Config"], row["HostConfig"], row["State"]
@@ -330,19 +346,23 @@ class NativeDatabasePhase:
         require(len(mounts) == 1 and mounts[0]["Type"] == "bind" and not mounts[0]["RW"]
                 and mounts[0]["Destination"] == "/usr/local/bin/" + expected["binary"]
                 and daemon_source(mounts[0]["Source"]) == daemon_source(expected["bound"]["path"]), "SCHEMA_HELPER_MOUNT_CHANGED")
-        require(not state["Running"] and not state["Paused"] and not state["OOMKilled"]
-                and state["Status"] == ("created" if created else "exited")
-                and state["Pid"] == 0 and (created or state["ExitCode"] == 0), "SCHEMA_HELPER_NOT_OWNED_TERMINAL")
-        database = self.guard()
-        network = database["NetworkSettings"]["Networks"].get(self.i["databaseNetwork"])
-        require(network is not None and network["NetworkID"] == self.i["databaseNetworkId"]
-                and "postgres" in (network.get("Aliases") or []), "SCHEMA_DATABASE_NETWORK_CHANGED")
-        self.g["save"]("schema-" + cid + ("-created" if created else "-terminal") + ".json", row)
+        if ownership_only:
+            require(not state["Paused"] and state["Status"] in ("created", "running", "exited")
+                    and (state["Pid"] > 0 if state["Running"] else state["Pid"] == 0), "SCHEMA_HELPER_STATE_UNKNOWN")
+        else:
+            require(not state["Running"] and not state["Paused"] and not state["OOMKilled"]
+                    and state["Status"] == ("created" if created else "exited")
+                    and state["Pid"] == 0 and (created or state["ExitCode"] == expected_exit), "SCHEMA_HELPER_NOT_OWNED_TERMINAL")
+            database = self.guard()
+            network = database["NetworkSettings"]["Networks"].get(self.i["databaseNetwork"])
+            require(network is not None and network["NetworkID"] == self.i["databaseNetworkId"]
+                    and "postgres" in (network.get("Aliases") or []), "SCHEMA_DATABASE_NETWORK_CHANGED")
+        self.g["save"]("schema-" + cid + ("-ownership-" + str(self.command_index) if ownership_only else "-created" if created else "-terminal-" + str(self.command_index)) + ".json", row)
         return row
 
-    def retire_schema_helper(self, cid):
+    def retire_schema_helper(self, cid, *, expected_exit=0):
         self.guard()
-        self.validate_schema(cid, created=False)
+        self.validate_schema(cid, created=False, expected_exit=expected_exit)
         self.state["pendingCleanup"] = cid
         self.persist()
         self.command(["docker", "rm", cid])

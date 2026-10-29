@@ -12,7 +12,7 @@ from scoped_native_runtime import (CORE_REVISION, UI_REVISION, ROLE_BINARIES,
 
 SQL_FILES = ("passport-beta-db-maintenance-start.sql", "passport-beta-batch-acl-finalize.sql",
     "passport-beta-db-enable-app-login.sql", "passport-beta-rust-owner-transition.sql", "passport-beta-rust-owner-verify.sql")
-SQL_SHA256 = {'passport-beta-db-maintenance-start.sql': '0129b6047f8ad3db2fa271f4b275bca6160b68c3bb6625dcc3937aba6f241608', 'passport-beta-batch-acl-finalize.sql': '5cca0125986da948eb5a684fc1ea24e349e680c967a6ff1e837659f4b22ee2ff', 'passport-beta-db-enable-app-login.sql': '4f30d51de9978ce1c9c62c41fc4a8fb600b4b275d1c82535ffcf0f67a1001720', 'passport-beta-rust-owner-transition.sql': '2cc812c71a6abc7db72f701ef83f51514ba620cfcba9af1f62025b3164bbe01a', 'passport-beta-rust-owner-verify.sql': '3c098a5d6b13f95a63bdabdf5a029b119563ea7045ffe3cbb870f12d97386f0d'}
+SQL_SHA256 = {'passport-beta-db-maintenance-start.sql': '0129b6047f8ad3db2fa271f4b275bca6160b68c3bb6625dcc3937aba6f241608', 'passport-beta-batch-acl-finalize.sql': '5cca0125986da948eb5a684fc1ea24e349e680c967a6ff1e837659f4b22ee2ff', 'passport-beta-db-enable-app-login.sql': '4f30d51de9978ce1c9c62c41fc4a8fb600b4b275d1c82535ffcf0f67a1001720', 'passport-beta-rust-owner-transition.sql': '2cc812c71a6abc7db72f701ef83f51514ba620cfcba9af1f62025b3164bbe01a', 'passport-beta-rust-owner-verify.sql': 'ce0f770268d1043248cfa8a5fd039fa8db4b9e6a367804870670378684e73047'}
 FLOW_MUTABLE_COLUMNS = frozenset(("status", "claim_token", "claim_expires_at", "updated_at"))
 
 def overlay_roles(profile=None, selected_roles=None):

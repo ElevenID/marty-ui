@@ -40,6 +40,13 @@ def read_ref(bound, maximum=16 * 1024 * 1024):
     require(sha(file) == bound["sha256"], "BOUND_FILE_CHANGED")
     return file
 
+EXECUTABLE_REF_MAXIMUM = 512 * 1024 * 1024
+
+def read_executable_ref(bound):
+    """Executable bytes need a separate bound; JSON/log refs stay narrow."""
+    return read_ref(bound, EXECUTABLE_REF_MAXIMUM)
+
+
 def sync_parent(file):
     """One bounded directory flush; unexpected errors stop before dispatch.
 

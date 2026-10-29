@@ -54,7 +54,9 @@ def operational_sql_sources():
     return {**SQL_SHA256,
         "passport-beta-fence-install.sql": "070d05156230ffc86658857ac8f7c7301d935cad772760942e40155030e6244f",
         "passport-beta-fence-drain.sql": "c1728e56e456a5e1a4d043d911fe6f16cb53addea60a00eed65724000bc0d2bc",
-        "passport-beta-fence-verify.sql": "a228e73ff9e2820d01e31e6d06fca91d309a182e1a221a1548b8d10e14c480dd",
+        "passport-beta-fence-verify.sql": "ff05feb0d08fc943ccbc7a1f85af9e87703563392a80667bbebfd66da7921db2",
+        "passport-beta-rust-owner-verify.sql": "ce0f770268d1043248cfa8a5fd039fa8db4b9e6a367804870670378684e73047",
+        "passport-beta-issuer-trigger-verify.sql": "584b2f9fade26bf8ec7744328bb3566fe4692d026f0cbefc5245d78c7f6834de",
         "passport-beta-native-attestation.sql": "9fea7b48ada94accad6920a51479b3dfeb2aea87603cba964a48041a2c2689eb"}
 
 
