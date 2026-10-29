@@ -9,7 +9,12 @@ from __future__ import annotations
 import os
 from pathlib import Path
 from contextlib import ExitStack
+import json
+import re
+import shlex
 import stat
+import time
+import uuid
 
 from installer_candidate_controller import ControllerLease, _directory
 import installer_candidate_qemu_observe as observer
@@ -17,6 +22,8 @@ import installer_candidate_vm_create as create
 import installer_candidate_vm_launch as launch
 import installer_candidate_vm_launch_evidence as evidence
 import installer_candidate_vm_runtime as runtime
+import installer_test_vm_probe as probe
+from installer_host_probe import command
 import installer_candidate_vm_seed as seed
 import installer_release as release
 import installer_test_vm_rootless_fixture as fixture
@@ -26,6 +33,193 @@ CHAIN_NAMES = (
     "seed-intent", "seed-receipt", "launch-intent", "launch-pid",
     "launch-receipt",
 )
+SETUP_READINESS_SUFFIX = ".rootless-fixture-setup-readiness.json"
+SETUP_READINESS_SCHEMA = "elevenid.installer-only-rootless-fixture-setup-readiness/v1"
+INSTALLER_GUEST_SCRIPT = r'''
+import errno, grp, json, os, pwd, socket, stat
+uid=os.getuid(); gid=os.getgid(); groups=set(os.getgroups())|{gid}
+assert uid>0 and os.geteuid()==uid and pwd.getpwuid(uid).pw_name=='installer'
+docker_gid=grp.getgrnam('docker').gr_gid
+sudo_gid=grp.getgrnam('sudo').gr_gid
+sock='/var/run/docker.sock'; info=os.lstat(sock)
+assert stat.S_ISSOCK(info.st_mode) and info.st_uid==0 and info.st_gid==docker_gid
+assert not (info.st_mode & 0o007) and docker_gid not in groups and sudo_gid not in groups
+client=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM); client.settimeout(2)
+try:
+ try: client.connect(sock)
+ except OSError as exc: assert exc.errno in (errno.EACCES,errno.EPERM)
+ else: raise AssertionError('setup Engine socket accessible')
+finally: client.close()
+status=open('/proc/self/status',encoding='ascii').read(16384)
+fields={line.split(':',1)[0]:line.split(':',1)[1].strip() for line in status.splitlines() if ':' in line}
+assert fields.get('NoNewPrivs')=='1'
+assert all(fields.get(key)=='0000000000000000' for key in ('CapEff','CapPrm','CapAmb'))
+print(json.dumps({'schema':'elevenid.fixture-installer-account/v1','uid':uid,'gid':gid,
+ 'docker_group':False,'sudo_group':False,'setup_socket_denied':True,
+ 'no_new_privs':True,'effective_caps_zero':True},sort_keys=True,separators=(',',':')))
+'''
+SETUP_ENGINE_COMMAND = ("/usr/bin/env -i HOME=/nonexistent PATH=/usr/bin:/bin "
+                        "/usr/bin/sudo -n /usr/bin/docker --host "
+                        "unix:///var/run/docker.sock info --format '{{json .ID}}'")
+SETUP_SERVICE_COMMAND = "/usr/bin/systemctl is-active docker.service"
+SETUP_CLOUD_INIT_COMMAND = "/usr/bin/cloud-init status --format json"
+
+
+def _ssh_as(binding: dict, user: str, script: str, *, limit: int = 1024,
+            timeout: int = 20) -> bytes:
+    release.require((user, script) in (("installer", _installer_command()),
+                                       ("fixture-admin", SETUP_ENGINE_COMMAND),
+                                       ("fixture-admin", SETUP_SERVICE_COMMAND),
+                                       ("fixture-admin", SETUP_CLOUD_INIT_COMMAND)),
+                    "fixture guest command unsupported")
+    opts = probe._pinned(binding)
+    raw = command([str(probe.SSH), *opts, "-p", str(binding["port"]),
+                   user + "@127.0.0.1", script],
+                  env=launch.ENV, timeout=timeout, limit=limit)
+    probe._pinned(binding)
+    return raw
+
+
+def _installer_command() -> str:
+    return ("/usr/bin/setpriv --no-new-privs -- /usr/bin/python3 -E -I -B -c "
+            + shlex.quote(INSTALLER_GUEST_SCRIPT))
+
+
+def _decode_installer(raw: bytes) -> dict:
+    value = release.decode(raw)
+    release.exact(value, {"schema", "uid", "gid", "docker_group", "sudo_group",
+                          "setup_socket_denied", "no_new_privs",
+                          "effective_caps_zero"}, "fixture ordinary account")
+    release.require(release.encode(value) == raw
+                    and value["schema"] == "elevenid.fixture-installer-account/v1"
+                    and type(value["uid"]) is int and value["uid"] > 0
+                    and type(value["gid"]) is int and value["gid"] > 0
+                    and value["docker_group"] is False
+                    and value["sudo_group"] is False
+                    and value["setup_socket_denied"] is True
+                    and value["no_new_privs"] is True
+                    and value["effective_caps_zero"] is True,
+                    "fixture ordinary guest account differs")
+    return value
+
+
+def observe_setup_readiness(*, source: Path, registry: Path, vm_parent: Path,
+                            runtime_parent: Path, vm_id: str) -> dict:
+    """Record only the separate guest setup Engine and ordinary-user denial.
+
+    The rootful setup Engine is not selected for product installation. A later
+    controller must stop it and bind a distinct rootless Engine before any
+    candidate invocation. This observation never starts or stops a service.
+    """
+    before = bound_fixture(source=source, registry=registry, vm_parent=vm_parent,
+                           runtime_parent=runtime_parent, vm_id=vm_id)
+    ordinary = _decode_installer(_ssh_as(before, "installer",
+                                        _installer_command(), limit=2048))
+    cloud_raw = _ssh_as(before, "fixture-admin", SETUP_CLOUD_INIT_COMMAND,
+                        limit=4096)
+    cloud = release.decode(cloud_raw)
+    release.require(type(cloud) is dict and cloud.get("status") == "done"
+                    and cloud.get("extended_status") == "done"
+                    and cloud.get("errors") in ([], {})
+                    and cloud.get("recoverable_errors") in (None, [], {}),
+                    "fixture cloud-init incomplete")
+    release.require(_ssh_as(before, "fixture-admin", SETUP_SERVICE_COMMAND,
+                            limit=64) == b"active\n",
+                    "fixture setup Engine service inactive")
+    raw_engine = _ssh_as(before, "fixture-admin", SETUP_ENGINE_COMMAND,
+                         limit=256)
+    engine = json.loads(raw_engine)
+    release.require(type(engine) is str and str(uuid.UUID(engine)) == engine,
+                    "fixture setup Engine identity invalid")
+    after = bound_fixture(source=source, registry=registry, vm_parent=vm_parent,
+                          runtime_parent=runtime_parent, vm_id=vm_id)
+    release.require(after == before
+                    and _decode_installer(_ssh_as(after, "installer",
+                                                  _installer_command(),
+                                                  limit=2048)) == ordinary
+                    and _ssh_as(after, "fixture-admin", SETUP_ENGINE_COMMAND,
+                                limit=256) == raw_engine,
+                    "fixture setup observation changed")
+    result = {"schema": SETUP_READINESS_SCHEMA,
+              "phase": "setup_engine_observed", "vm_id": vm_id,
+              "launch_sha256": before["launch_sha256"],
+              "seed_sha256": before["seed_sha256"],
+              "pid": before["pid"], "start_ticks": before["start_ticks"],
+              "boot_id": before["boot_id"],
+              "setup_engine_id": engine,
+              "ordinary_uid": ordinary["uid"],
+              "ordinary_gid": ordinary["gid"],
+              "ordinary_no_sudo_or_docker_group": True,
+              "setup_socket_denied_to_installer": True,
+              "setup_engine_stopped": False,
+              "rootless_engine_observed": False,
+              "rootless_ready": False, "qualified": False,
+              "product_dispatch_authorized": False,
+              "observed_at": int(time.time())}
+    with ControllerLease(registry) as lease:
+        create._write(lease.parent, vm_id + SETUP_READINESS_SUFFIX, result)
+    return result
+
+
+def bound_setup_fixture(*, source: Path, registry: Path, vm_parent: Path,
+                        runtime_parent: Path, vm_id: str) -> dict:
+    """Reobserve a prepared guest's exact setup Engine for package admission.
+
+    This intentionally returns the old admission controller's private binding
+    shape, while retaining false product/rootless authority. It never selects
+    the setup Engine for a product invocation.
+    """
+    before = bound_fixture(source=source, registry=registry, vm_parent=vm_parent,
+                           runtime_parent=runtime_parent, vm_id=vm_id)
+    with ControllerLease(registry) as lease:
+        raw, recorded = create._read_record(lease.parent,
+                                            vm_id + SETUP_READINESS_SUFFIX)
+    release.exact(recorded, {"schema", "phase", "vm_id", "launch_sha256",
+                             "seed_sha256", "pid", "start_ticks", "boot_id",
+                             "setup_engine_id", "ordinary_uid", "ordinary_gid",
+                             "ordinary_no_sudo_or_docker_group",
+                             "setup_socket_denied_to_installer",
+                             "setup_engine_stopped", "rootless_engine_observed",
+                             "rootless_ready", "qualified",
+                             "product_dispatch_authorized", "observed_at"},
+                  "fixture setup readiness")
+    release.require(recorded["schema"] == SETUP_READINESS_SCHEMA
+                    and recorded["phase"] == "setup_engine_observed"
+                    and recorded["vm_id"] == vm_id
+                    and recorded["launch_sha256"] == before["launch_sha256"]
+                    and recorded["seed_sha256"] == before["seed_sha256"]
+                    and recorded["pid"] == before["pid"]
+                    and recorded["start_ticks"] == before["start_ticks"]
+                    and recorded["boot_id"] == before["boot_id"]
+                    and all(recorded[key] is True for key in
+                            ("ordinary_no_sudo_or_docker_group",
+                             "setup_socket_denied_to_installer"))
+                    and all(recorded[key] is False for key in
+                            ("setup_engine_stopped", "rootless_engine_observed",
+                             "rootless_ready", "qualified",
+                             "product_dispatch_authorized")),
+                    "fixture setup readiness evidence invalid")
+    ordinary = _decode_installer(_ssh_as(before, "installer",
+                                        _installer_command(), limit=2048))
+    release.require((ordinary["uid"], ordinary["gid"])
+                    == (recorded["ordinary_uid"], recorded["ordinary_gid"])
+                    and _ssh_as(before, "fixture-admin", SETUP_SERVICE_COMMAND,
+                                limit=64) == b"active\n"
+                    and json.loads(_ssh_as(before, "fixture-admin",
+                                           SETUP_ENGINE_COMMAND, limit=256))
+                    == recorded["setup_engine_id"],
+                    "fixture setup Engine changed")
+    after = bound_fixture(source=source, registry=registry, vm_parent=vm_parent,
+                          runtime_parent=runtime_parent, vm_id=vm_id)
+    release.require(after == before, "fixture launch changed")
+    with ControllerLease(registry) as lease:
+        release.require(create._read_record(lease.parent,
+                        vm_id + SETUP_READINESS_SUFFIX)[0] == raw,
+                        "fixture setup evidence changed")
+    return {**before, "engine_id": recorded["setup_engine_id"],
+            "readiness_sha256": release.digest(raw),
+            "guest_uid": ordinary["uid"], "rootless_ready": False,
+            "product_dispatch_authorized": False}
 
 
 def bound_fixture(*, source: Path, registry: Path, vm_parent: Path,

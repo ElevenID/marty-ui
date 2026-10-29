@@ -192,3 +192,136 @@ def test_mixed_factory_or_records_refuse(change):
         with pytest.raises((ValueError, KeyError)):
             bound_with_mocks(records, provenance, source, registry,
                              vm_parent, run, vm_id, boot)
+
+
+def test_setup_observation_uses_fixed_read_only_guest_commands():
+    binding = {"vm_id": "11111111-2222-4333-8444-555555555555",
+               "pid": 1509, "start_ticks": "123456", "boot_id":
+               "01234567-89ab-4cde-8f01-23456789abcd",
+               "launch_sha256": "a" * 64, "seed_sha256": "b" * 64}
+    ordinary = release.encode({"schema": "elevenid.fixture-installer-account/v1",
+                               "uid": 1000, "gid": 1001, "docker_group": False,
+                               "sudo_group": False, "setup_socket_denied": True,
+                               "no_new_privs": True,
+                               "effective_caps_zero": True})
+    cloud = b'{"status":"done","extended_status":"done","errors":[],"recoverable_errors":[]}\n'
+    outputs = {setup._installer_command(): ordinary,
+               setup.SETUP_CLOUD_INIT_COMMAND: cloud,
+               setup.SETUP_SERVICE_COMMAND: b"active\n",
+               setup.SETUP_ENGINE_COMMAND:
+               b'"6c3ab358-4b21-4979-b2ff-916bbd32d891"\n'}
+    class Lease:
+        def __enter__(self):
+            self.parent = 20
+            return self
+        def __exit__(self, *_):
+            pass
+    calls = []
+    def fixed(_binding, user, script, **_):
+        calls.append((user, script))
+        return outputs[script]
+    with mock.patch.object(setup, "bound_fixture", return_value=binding) as bound, \
+         mock.patch.object(setup, "_ssh_as", side_effect=fixed), \
+         mock.patch.object(setup, "ControllerLease", return_value=Lease()), \
+         mock.patch.object(setup.create, "_write") as write:
+        result = setup.observe_setup_readiness(source=Path("/source"),
+            registry=Path("/registry"), vm_parent=Path("/vm"),
+            runtime_parent=Path("/runtime"), vm_id=binding["vm_id"])
+    assert bound.call_count == 2
+    assert write.call_count == 1
+    assert result["setup_engine_stopped"] is False
+    assert result["rootless_ready"] is False
+    assert result["product_dispatch_authorized"] is False
+    assert set(calls) == {("installer", setup._installer_command()),
+                          ("fixture-admin", setup.SETUP_CLOUD_INIT_COMMAND),
+                          ("fixture-admin", setup.SETUP_SERVICE_COMMAND),
+                          ("fixture-admin", setup.SETUP_ENGINE_COMMAND)}
+
+
+def test_changed_setup_engine_refuses_before_result_record():
+    binding = {"vm_id": "11111111-2222-4333-8444-555555555555",
+               "pid": 1509, "start_ticks": "123456", "boot_id":
+               "01234567-89ab-4cde-8f01-23456789abcd",
+               "launch_sha256": "a" * 64, "seed_sha256": "b" * 64}
+    ordinary = release.encode({"schema": "elevenid.fixture-installer-account/v1",
+                               "uid": 1000, "gid": 1001, "docker_group": False,
+                               "sudo_group": False, "setup_socket_denied": True,
+                               "no_new_privs": True,
+                               "effective_caps_zero": True})
+    engines = iter((b'"6c3ab358-4b21-4979-b2ff-916bbd32d891"\n',
+                    b'"7c3ab358-4b21-4979-b2ff-916bbd32d891"\n'))
+    def fixed(_binding, _user, script, **_):
+        if script == setup._installer_command():
+            return ordinary
+        if script == setup.SETUP_CLOUD_INIT_COMMAND:
+            return b'{"status":"done","extended_status":"done","errors":[]}\n'
+        if script == setup.SETUP_SERVICE_COMMAND:
+            return b"active\n"
+        return next(engines)
+    with mock.patch.object(setup, "bound_fixture", return_value=binding), \
+         mock.patch.object(setup, "_ssh_as", side_effect=fixed), \
+         mock.patch.object(setup, "ControllerLease") as lease, \
+         mock.patch.object(setup.create, "_write") as write:
+        with pytest.raises(ValueError):
+            setup.observe_setup_readiness(source=Path("/source"),
+                registry=Path("/registry"), vm_parent=Path("/vm"),
+                runtime_parent=Path("/runtime"), vm_id=binding["vm_id"])
+    lease.assert_not_called()
+    write.assert_not_called()
+
+
+def test_package_adapter_rebinds_setup_engine_without_product_authority():
+    vm_id = "11111111-2222-4333-8444-555555555555"
+    before = {"vm_id": vm_id, "pid": 1509, "start_ticks": "123456",
+              "boot_id": "01234567-89ab-4cde-8f01-23456789abcd",
+              "seed_sha256": "a" * 64, "launch_sha256": "b" * 64}
+    engine = "6c3ab358-4b21-4979-b2ff-916bbd32d891"
+    record = {"schema": setup.SETUP_READINESS_SCHEMA,
+              "phase": "setup_engine_observed", "vm_id": vm_id,
+              "launch_sha256": before["launch_sha256"],
+              "seed_sha256": before["seed_sha256"],
+              "pid": before["pid"], "start_ticks": before["start_ticks"],
+              "boot_id": before["boot_id"], "setup_engine_id": engine,
+              "ordinary_uid": 1000, "ordinary_gid": 1001,
+              "ordinary_no_sudo_or_docker_group": True,
+              "setup_socket_denied_to_installer": True,
+              "setup_engine_stopped": False, "rootless_engine_observed": False,
+              "rootless_ready": False, "qualified": False,
+              "product_dispatch_authorized": False, "observed_at": 1000}
+    raw = release.encode(record)
+    account = release.encode({"schema": "elevenid.fixture-installer-account/v1",
+                              "uid": 1000, "gid": 1001, "docker_group": False,
+                              "sudo_group": False, "setup_socket_denied": True,
+                              "no_new_privs": True, "effective_caps_zero": True})
+    class Lease:
+        def __enter__(self):
+            self.parent = 20
+            return self
+        def __exit__(self, *_):
+            pass
+    def run(_binding, _user, script, **_):
+        return (account if script == setup._installer_command() else
+                b"active\n" if script == setup.SETUP_SERVICE_COMMAND else
+                ('"' + engine + '"\n').encode())
+    with mock.patch.object(setup, "bound_fixture", return_value=before), \
+         mock.patch.object(setup, "ControllerLease", return_value=Lease()), \
+         mock.patch.object(setup.create, "_read_record", return_value=(raw, record)), \
+         mock.patch.object(setup, "_ssh_as", side_effect=run):
+        result = setup.bound_setup_fixture(source=Path("/source"),
+            registry=Path("/registry"), vm_parent=Path("/vm"),
+            runtime_parent=Path("/runtime"), vm_id=vm_id)
+    assert result["engine_id"] == engine
+    assert result["readiness_sha256"] == release.digest(raw)
+    assert result["rootless_ready"] is False
+    assert result["product_dispatch_authorized"] is False
+    record["setup_engine_stopped"] = True
+    with mock.patch.object(setup, "bound_fixture", return_value=before), \
+         mock.patch.object(setup, "ControllerLease", return_value=Lease()), \
+         mock.patch.object(setup.create, "_read_record",
+                           return_value=(release.encode(record), record)), \
+         mock.patch.object(setup, "_ssh_as") as ssh:
+        with pytest.raises(ValueError):
+            setup.bound_setup_fixture(source=Path("/source"),
+                registry=Path("/registry"), vm_parent=Path("/vm"),
+                runtime_parent=Path("/runtime"), vm_id=vm_id)
+        ssh.assert_not_called()
