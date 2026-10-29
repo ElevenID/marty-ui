@@ -261,6 +261,7 @@ fn verify_model(
         let service = &model["services"][role];
         let mut allowed = BTreeSet::from([
             "image",
+            "mem_limit",
             "networks",
             "restart",
             "volumes",
@@ -279,6 +280,7 @@ fn verify_model(
                 && service["networks"] == json!({"default":null}),
             "OpenBao service image or runtime overrides differ",
         )?;
+        crate::installer_application_model::memory_limit(&service["mem_limit"])?;
         let entrypoint = match role {
             "openbao-tls-init" => json!(["/usr/local/bin/selfhost-tls-init"]),
             "openbao-unseal" => json!(["/usr/local/bin/selfhost-unseal"]),
@@ -1135,6 +1137,26 @@ mod tests {
         assert!(private(root.path()).is_err());
     }
     #[test]
+    fn openbao_source_requires_a_finite_memory_cap() {
+        let validate = |model: &Value| {
+            verify_model(
+                model,
+                "image",
+                Path::new("/private/openbao-state"),
+                Path::new("/private/secrets"),
+                Path::new("/bundle"),
+                18200,
+                "owned",
+            )
+        };
+        validate(&production_model()).unwrap();
+        for invalid in [Value::Null, json!(0), json!(-1), json!("unlimited")] {
+            let mut model = production_model();
+            model["services"]["openbao"]["mem_limit"] = invalid;
+            assert!(validate(&model).is_err());
+        }
+    }
+    #[test]
     fn admits_normalized_production_model_and_refuses_mount_mutations() {
         let validate = |model: &Value| {
             verify_model(
@@ -1238,6 +1260,7 @@ mod tests {
   "services": {
     "openbao-tls-init": {
       "image": "image",
+      "mem_limit": "536870912",
       "networks": {
         "default": null
       },
@@ -1256,6 +1279,7 @@ mod tests {
     },
     "openbao": {
       "image": "image",
+      "mem_limit": "536870912",
       "networks": {
         "default": null
       },
@@ -1309,6 +1333,7 @@ mod tests {
     },
     "openbao-unseal": {
       "image": "image",
+      "mem_limit": "536870912",
       "networks": {
         "default": null
       },
@@ -1338,6 +1363,7 @@ mod tests {
     },
     "openbao-bootstrap": {
       "image": "image",
+      "mem_limit": "536870912",
       "networks": {
         "default": null
       },
