@@ -76,3 +76,16 @@ test('TTL mismatch, timeout, wrong denial or issued credential never qualify exp
 test('missing or truthy invented outcomes never become contract passes',()=>{
  assert(Object.values(assertions({checks:{actual_server_expiry:'passed',harness_cancel_no_login:1}})).every(v=>v===false));
 });
+
+test('four existing manifest assertions require both real receipts and both independent post-close410 observations',()=>{
+ const {coreAssertions}=require('./dev-test-wallet-contract');
+ const report={receipts:['a','b'].map(id=>({applicationId:id,transactionId:'tx-'+id,credentialId:'credential-'+id,httpStatus:201,ok:true})),
+ checks:{two_session_inventory:true},initialLogin:{authenticated:true,browserFinalizeVerified:true},recoveryLogin:{authenticated:true,browserFinalizeVerified:true},
+ walletSessions:['a','b'].map(id=>({instanceId:'owned',sessionId:id,runId:id,closed:true})),
+ closedWalletSessions:['a','b'].map(id=>({instanceId:'owned',sessionId:id,runId:id,status:410}))};
+ assert(Object.values(coreAssertions(report)).every(v=>v===true));
+ for(const mutate of [r=>r.receipts[1].applicationId='a',r=>r.receipts[0].httpStatus=200,r=>r.closedWalletSessions.pop(),
+ r=>r.closedWalletSessions[1].sessionId='a',r=>r.closedWalletSessions[1].status=200,r=>r.recoveryLogin.authenticated=false]){
+  const changed=structuredClone(report);mutate(changed);assert(Object.values(coreAssertions(changed)).some(v=>v===false));
+ }
+});

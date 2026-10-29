@@ -100,7 +100,20 @@ async function expiredOffer({issuance,prerequisite,readOffer,exchangeCachedCode,
    ok:false,visibleMessage:receipt.visibleMessage===true,responseHasError:receipt.responseHasError===true},
   inventoryEmpty:true,noIssuedCredential:true};
 }
+function coreAssertions(report){
+ const receipts=report.receipts||[],sessions=report.walletSessions||[],denials=report.closedWalletSessions||[];
+ const received=receipts.length===2&&new Set(receipts.map(r=>r.applicationId)).size===2
+  &&receipts.every(r=>r.httpStatus===201&&r.ok===true&&r.applicationId&&r.transactionId&&r.credentialId);
+ return {governed_claim:received,
+  expected_credential_received_and_stored:received&&report.checks?.two_session_inventory===true,
+  presentation_authenticated:report.initialLogin?.authenticated===true&&report.initialLogin?.browserFinalizeVerified===true
+   &&report.recoveryLogin?.authenticated===true&&report.recoveryLogin?.browserFinalizeVerified===true,
+  closed_wallet_session_rejected:sessions.length===2&&denials.length===2
+   &&new Set(denials.map(d=>d.sessionId)).size===2
+   &&sessions.every(s=>s.closed===true&&denials.some(d=>d.status===410&&d.instanceId===s.instanceId
+    &&d.sessionId===s.sessionId&&d.runId===s.runId))};
+}
 function assertions(report){
  return Object.fromEntries(REQUIRED.map(key=>[key,report.checks?.[key]===true]));
 }
-module.exports={REQUIRED,SUPPORTED,assertions,cancelOwnedLogin,expiredOffer,freshLoginRecovery,inventory,inventoryIds,sessionIsolation,retireLoginFlow};
+module.exports={coreAssertions,REQUIRED,SUPPORTED,assertions,cancelOwnedLogin,expiredOffer,freshLoginRecovery,inventory,inventoryIds,sessionIsolation,retireLoginFlow};

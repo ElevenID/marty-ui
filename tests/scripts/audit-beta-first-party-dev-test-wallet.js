@@ -6,6 +6,7 @@ const {createHash}=require('node:crypto');
 const support=require('./audit-beta-membership-support');
 const contract=require('./dev-test-wallet-contract');
 const {GRANT}=require('./beta-membership-support-contract');
+const {closeControlSession}=require('./verify-beta-credential-login');
 const {acquireWalletSession}=require('./demo-wallet-session');
 const {createDemoLiveEvidence,applyLocalNativeReadiness}=require('./demo-live-evidence');
 const {createCanvasCaptureCustody,retireCanvasBetaSession}=require('./run-canvas-oss-standard-contract');
@@ -24,7 +25,7 @@ async function main(env=process.env){
   controlScope:{classification:'FIRST_PARTY_CONTROL',publicWalletProduct:false},runId:env.DEMO_EXECUTION_EVIDENCE_RUN_ID,
   devTestWalletContract:{kind:'SUPPORTED_SDK_DEV_TEST_V1',supportedOperations:contract.SUPPORTED,
    keyBoundary:'SHARED_CONFIGURED_SIGNER_SESSION_ISOLATION_ONLY',independentHolderKeysClaimed:false},
-  checks:{},flows:[],walletSessions:[],cleanup:{complete:false},releaseReady:false,demo_qualified:false,
+  checks:{},flows:[],walletSessions:[],receipts:[],closedWalletSessions:[],cleanup:{complete:false},releaseReady:false,demo_qualified:false,
   recordingQualified:false,mediaGenerated:false,fullLegacyContractQualified:false,errors:[]};
  const save=()=>{const p=path.join(directory,'report.json'),fd=fs.openSync(p+'.next','wx',0o600);
   try{fs.writeFileSync(fd,JSON.stringify(report,null,2)+'\n');fs.fsyncSync(fd);}finally{fs.closeSync(fd);}fs.renameSync(p+'.next',p);};
@@ -98,8 +99,10 @@ async function main(env=process.env){
   stage='RECEIPT';
   for(const [index,holder] of holders.entries()){
    const issued=index===0?fresh:await controller.issue(fixture.trusted,'dev-test-holder-'+index);
-   assert((await support.receive(holder.page,settings.wallet,issued.offerUri,false)).ok);
-   await controller.issuedCredential(issued,fixture.trusted);
+   const receipt=await support.receive(holder.page,settings.wallet,issued.offerUri,false);assert(receipt.ok);
+   const credential=await controller.issuedCredential(issued,fixture.trusted);
+   report.receipts.push({httpStatus:receipt.httpStatus,ok:receipt.ok,
+    applicationId:issued.owned.applicationId,transactionId:issued.owned.transactionId,credentialId:credential.id});
    await holder.page.locator('#credentials li:not(.empty)').first().waitFor();
    assert.equal(await holder.page.locator('#credentials li:not(.empty)').count(),1);
   }
@@ -129,18 +132,21 @@ async function main(env=process.env){
   }catch{report.errors.push({stage:'FLOW_CLEANUP',code:'OWNED_FLOW_RETIREMENT_UNCONFIRMED'});}}
   if(controller){try{report.resourceCleanup=await controller.cleanup();report.configurationReadback=await controller.invariantReadback();}
    catch{report.errors.push({stage:'RESOURCE_CLEANUP',code:'OWNED_RESOURCE_CLEANUP_UNCONFIRMED'});}}
-  for(const holder of holders){try{assert(holder.session,'Session creation outcome unknown');await holder.session.close();}
+  for(const holder of holders){try{assert(holder.session,'Session creation outcome unknown');
+   report.closedWalletSessions.push(await closeControlSession(holder.session,holder.context));}
    catch{report.errors.push({stage:'WALLET_CLEANUP',code:'OWNED_WALLET_CLEANUP_UNCONFIRMED'});}}
   for(const c of contexts.filter(c=>c.kind==='beta')){try{await retire(c);}catch{report.errors.push({stage:'AUTH_CLEANUP',code:'OWNED_AUTH_CLEANUP_UNCONFIRMED'});}}
   for(const c of contexts){try{await c.context.close();}catch{report.errors.push({stage:'CONTEXT_CLEANUP',code:'CONTEXT_CLOSE_UNCONFIRMED'});}}
   if(browser){try{await browser.close();}catch{report.errors.push({stage:'BROWSER_CLEANUP',code:'BROWSER_CLOSE_UNCONFIRMED'});}}
   report.devTestWalletAssertions=contract.assertions(report);
+  report.devTestWalletCoreAssertions=contract.coreAssertions(report);
   report.authRetirements=contexts.filter(c=>c.kind==='beta').map(c=>({retired:c.retired,...c.retirement}));
   report.cleanup.complete=report.resourceCleanup?.ok===true&&report.configurationReadback?.ok===true
    &&report.walletSessions.length===2&&report.walletSessions.every(s=>s.closed===true)
    &&contexts.filter(c=>c.kind==='beta').every(c=>c.retired)&&report.flows.length===3
    &&report.flows.every(f=>f.retirementConfirmed)&&report.errors.length===0;
-  report.engineeringReady=Object.values(report.devTestWalletAssertions).every(Boolean)&&report.cleanup.complete;
+  report.engineeringReady=Object.values(report.devTestWalletAssertions).every(v=>v===true)
+   &&Object.values(report.devTestWalletCoreAssertions).every(v=>v===true)&&report.cleanup.complete;
   report.state=report.engineeringReady?'FINISHED':'FAILED';
   if(evidence){try{
    applyLocalNativeReadiness(report,evidence,{ready:report.engineeringReady,cleanupComplete:report.cleanup.complete});
