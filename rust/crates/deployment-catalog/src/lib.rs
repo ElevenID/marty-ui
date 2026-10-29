@@ -34,6 +34,8 @@ mod installer_host_fs;
 #[cfg(target_os = "linux")]
 pub(crate) mod installer_host_snapshot;
 pub mod installer_host_storage_inventory;
+#[cfg(target_os = "linux")]
+pub(crate) mod installer_host_tree_observer;
 pub mod installer_ingress;
 pub mod installer_ingress_config;
 pub mod installer_ingress_model;
@@ -57,6 +59,8 @@ pub mod installer_runtime;
 pub mod installer_state;
 pub mod installer_tls;
 pub mod installer_tls_outputs;
+#[cfg(target_os = "linux")]
+pub(crate) mod installer_top_level_census;
 pub mod installer_trust;
 pub mod installer_uninstall;
 pub mod installer_validation;
