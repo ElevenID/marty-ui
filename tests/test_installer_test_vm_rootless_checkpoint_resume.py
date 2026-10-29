@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from contextlib import ExitStack
+import json
 import os
 from pathlib import Path
 import socket
@@ -67,6 +68,16 @@ def test_resume_intent_precedes_fixed_unprivileged_spawn(tmp_path):
             (b"creation", {"image": provenance, "virtual_gib": 32}),
         VM + ".seed-receipt.json":
             (b"seed", {"ssh_port": port}),
+        VM + resumed.setup.SETUP_READINESS_SUFFIX:
+            (b"setup", {key: None for key in (
+                "schema", "phase", "vm_id", "launch_sha256", "seed_sha256",
+                "pid", "start_ticks", "boot_id", "setup_engine_id",
+                "ordinary_uid", "ordinary_gid", "ordinary_home",
+                "setup_uid", "setup_gid", "setup_home",
+                "setup_principal_distinct", "ordinary_no_sudo_or_docker_group",
+                "setup_socket_denied_to_installer", "setup_engine_stopped",
+                "rootless_engine_observed", "rootless_ready", "qualified",
+                "product_dispatch_authorized", "observed_at")}),
     }
     events = []
     class Lease:
@@ -133,3 +144,71 @@ def test_resume_intent_precedes_fixed_unprivileged_spawn(tmp_path):
         "--groups", "999", "--bounding-set=-all", "--inh-caps=-all",
         "--ambient-caps=-all", "--no-new-privs", "--"]
     assert events[1][2]["close_fds"] is True
+
+
+@pytest.mark.parametrize("status_matches", [True, False])
+def test_current_readiness_is_bound_before_record(tmp_path, status_matches):
+    registry = tmp_path / "registry"
+    registry.mkdir()
+    engine = "6c3ab358-4b21-4979-b2ff-916bbd32d891"
+    status = b"Package: synthetic\nStatus: install ok installed\n"
+    admitted = {"engine_id": engine,
+                "dpkg_status_sha256": resumed.archive.sha(status)}
+    admission_raw = resumed.release.encode(admitted)
+    binding = {"vm_id": VM, "copy_vm_id": COPY,
+               "guest_uid": 1000, "historical_engine_id": engine,
+               "resume_receipt_sha256": "a" * 64,
+               "checkpoint_sha256": "b" * 64,
+               "pid": 1888, "start_ticks": "18", "boot_id": BOOT}
+    events = []
+    class Lease:
+        def __enter__(self):
+            self.parent = os.open(registry, os.O_RDONLY | os.O_DIRECTORY)
+            return self
+        def __exit__(self, *_):
+            os.close(self.parent)
+    def read(_fd, name):
+        if name.endswith(resumed.admission.RESULT_SUFFIX):
+            return admission_raw, admitted
+        if name.endswith(resumed.checkpoint.SUFFIX):
+            return b"checkpoint", {"admission_result_sha256":
+                                    resumed.release.digest(admission_raw)}
+        raise AssertionError(name)
+    def ssh(_binding, _user, script, **_kwargs):
+        if script == resumed.setup._installer_command():
+            return b"ordinary"
+        if script == resumed.setup._admin_identity_command():
+            return b"admin"
+        assert script == resumed.setup.SETUP_ENGINE_COMMAND
+        return (json.dumps(engine) + "\n").encode()
+    patches = [
+        mock.patch.object(resumed.os, "geteuid", return_value=0),
+        mock.patch.object(resumed, "ControllerLease", return_value=Lease()),
+        mock.patch.object(resumed, "bound_resumed", return_value=binding),
+        mock.patch.object(resumed.create, "_read_record", side_effect=read),
+        mock.patch.object(resumed.setup, "_ssh_as", side_effect=ssh),
+        mock.patch.object(resumed.setup, "_decode_installer",
+                          return_value={"uid": 1000}),
+        mock.patch.object(resumed.setup, "_decode_admin",
+                          return_value={"uid": 1002}),
+        mock.patch.object(resumed.admission, "_guest_status",
+                          return_value=(status if status_matches else b"changed")),
+        mock.patch.object(resumed.create, "_write",
+                          side_effect=lambda _fd, name, _value:
+                          events.append(name)),
+    ]
+    with ExitStack() as stack:
+        for patch in patches:
+            stack.enter_context(patch)
+        if status_matches:
+            observed = resumed.observe_current_readiness(
+                source=tmp_path, registry=registry,
+                runtime_parent=tmp_path, vm_id=VM, copy_vm_id=COPY)
+            assert observed["package_install_authorized"] is False
+            assert events == [VM + resumed.READINESS_SUFFIX]
+        else:
+            with pytest.raises(ValueError, match="guest baseline differs"):
+                resumed.observe_current_readiness(
+                    source=tmp_path, registry=registry,
+                    runtime_parent=tmp_path, vm_id=VM, copy_vm_id=COPY)
+            assert events == []
