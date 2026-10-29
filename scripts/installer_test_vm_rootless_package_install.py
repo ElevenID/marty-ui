@@ -421,7 +421,7 @@ def _repo(private_dir: Path, bundle_dir: Path, package_files: list[dict]) -> Pat
             next_path = parent / component
             if next_path.exists():
                 st = next_path.lstat()
-                require(stat.S_ISDIR(st.st_mode) and st.st_uid == 0
+                require(stat.S_ISDIR(st.st_mode) and st.st_uid == os.geteuid()
                         and stat.S_IMODE(st.st_mode) == 0o700,
                         "offline repository path changed")
                 parent = next_path

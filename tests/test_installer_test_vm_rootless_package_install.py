@@ -275,6 +275,12 @@ class OneShotTests(unittest.TestCase):
             return b"simulation" if args[0] == "--simulate" else b""
         with self.assertRaises(install.Refused):
             self.run_install(apt)
+        result = json.loads((self.private / "result.json").read_bytes())
+        self.assertEqual(result["phase"], "uncertain")
+        self.assertEqual(result["last_stage"], "installing")
+        self.assertTrue(result["manual_checkpoint_recovery_required"])
+        with self.assertRaises(install.Refused):
+            self.run_install(apt)
 
     def test_unplanned_new_package_after_apt_is_uncertain(self):
         def apt(args, _config):
@@ -289,9 +295,6 @@ class OneShotTests(unittest.TestCase):
         result = json.loads((self.private / "result.json").read_bytes())
         self.assertEqual(result["phase"], "uncertain")
         self.assertEqual(result["last_stage"], "verifying")
-        result = json.loads((self.private / "result.json").read_bytes())
-        self.assertEqual(result["phase"], "uncertain")
-        self.assertEqual(result["last_stage"], "installing")
         self.assertTrue(result["manual_checkpoint_recovery_required"])
         with self.assertRaises(install.Refused):
             self.run_install(apt)
