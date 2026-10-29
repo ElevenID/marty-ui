@@ -88,6 +88,7 @@ fn prepare_inner(
     let origin = format!("https://localhost:{}", ports[0]);
     let parameters = ApplicationParameters {
         installation: installation.into(),
+        applicant_state_gid: crate::installer_state::applicant_state_gid()?,
         version: state.journal().identity().release_tag.clone(),
         origin: origin.clone(),
         gateway_port: ports[1],
@@ -150,6 +151,7 @@ fn prepare_inner(
         images,
         &ApplicationModelParameters {
             installation: installation.into(),
+            applicant_state_gid: crate::installer_state::applicant_state_gid()?,
             bundle: bundle.into(),
             compose_project: project,
             openbao_network_name: bao.network_name.clone(),
