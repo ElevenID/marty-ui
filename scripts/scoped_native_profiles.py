@@ -69,8 +69,20 @@ OFFICIAL_ALL_SERVICES = BuildProfile(
 )
 
 
+LATEST_ALL_SERVICES = BuildProfile(
+    "oid4vc-latest-maintenance-all-services",
+    "852dbb5cc0cca79cfe0bbbed5cb8fb94cda0ad34",
+    OFFICIAL_ALL_SERVICES.roles,
+    (),
+    "marty-native-latest-maintenance-",
+    "native-latest-maintenance",
+    volumes=OFFICIAL_ALL_SERVICES.volumes,
+    cargo_profile="release",
+)
+
+
 def reviewed_profile(name):
-    for profile in (SIGNING_CAS, SIGNING_CAS_NO_TRANSFORM, CANVAS_SCOPED_JOBS, OFFICIAL_ALL_SERVICES):
+    for profile in (SIGNING_CAS, SIGNING_CAS_NO_TRANSFORM, CANVAS_SCOPED_JOBS, OFFICIAL_ALL_SERVICES, LATEST_ALL_SERVICES):
         if name == profile.name:
             return profile
     raise ValueError("UNKNOWN_REVIEWED_BUILD_PROFILE")
