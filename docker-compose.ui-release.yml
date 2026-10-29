@@ -2,6 +2,7 @@ name: elevenid-beta-ui
 
 services:
   ui-prod:
+    mem_limit: ${MARTY_UI_PROD_MEMORY_LIMIT:-256m}
     image: ${MARTY_UI_RELEASE_IMAGE:?MARTY_UI_RELEASE_IMAGE must be set}
     restart: unless-stopped
     ports:
