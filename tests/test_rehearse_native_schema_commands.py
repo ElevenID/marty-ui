@@ -190,3 +190,37 @@ def test_private_failure_diagnostic_retains_bounded_cause_without_locals():
     assert diagnostic["causes"][1]["message"].startswith("EXACT_PRIVATE_REASON")
     assert len(diagnostic["causes"][1]["message"]) == 2048
     assert all(set(frame) == {"file", "line", "function"} for row in diagnostic["causes"] for frame in row["frames"])
+
+
+def test_private_exclusive_file_roundtrip_beyond_windows_max_path(tmp_path):
+    import os
+    parent = tmp_path
+    while len(str(parent)) < 280:
+        parent = parent / ("owned-private-" + "x" * 24)
+    native = Path("\\\\?\\" + str(parent.absolute())) if os.name == "nt" else parent
+    native.mkdir(parents=True)
+    target = parent / "owned-receipt.json"
+    bound = rehearsal.write_private_bytes(target, b"PRIVATE_SYNTHETIC_CONTROL")
+    assert len(str(target)) > 260
+    assert rehearsal.read_ref(bound).read_bytes() == b"PRIVATE_SYNTHETIC_CONTROL"
+    with pytest.raises(FileExistsError):
+        rehearsal.write_private_bytes(target, b"MUST_NOT_OVERWRITE")
+    assert rehearsal.read_ref(bound).read_bytes() == b"PRIVATE_SYNTHETIC_CONTROL"
+
+
+def test_explicit_recovery_preserves_resource_scope_and_sql_assets():
+    from copy import deepcopy
+    keys = ("schema", "runId", "privateRoot", "sourceRevision", "coreRevision", "postgresName", "databaseNetwork",
+        "stageIds", "buildReceipt", "binaries", "executables", "dockerConfig", "dockerConfigFiles", "guardModules", "guardFiles", "migrationSetSha256")
+    prior = {key: key for key in keys}
+    prior.update(sqlSources={"fixed.sql": {"sha256": "a" * 64}}, migrationSources={"fixed.rs": {"sha256": "b" * 64}})
+    inputs = deepcopy(prior)
+    inputs["recoveryFrom"] = {"sha256": "old-input"}
+    rehearsal.validate_recovery_scope(inputs, prior)
+    inputs["runId"] = "different-resource-generation"
+    with pytest.raises(ValueError, match="EXACT_FAILED_RESOURCE_SCOPE_REQUIRED"):
+        rehearsal.validate_recovery_scope(inputs, prior)
+    inputs["runId"] = prior["runId"]
+    inputs["sqlSources"]["fixed.sql"]["sha256"] = "c" * 64
+    with pytest.raises(ValueError, match="RECOVERY_SOURCE_ASSETS_CHANGED"):
+        rehearsal.validate_recovery_scope(inputs, prior)

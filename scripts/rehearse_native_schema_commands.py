@@ -272,7 +272,8 @@ class Rehearsal(NativeDatabasePhase):
         require(parsed.version == 4 and str(parsed) == cleanup_run_id, "UUID4_CLEANUP_REQUIRED")
         prefix = "cleanup-" + cleanup_run_id
         self.stage = prefix
-        require(failure["inputsSha256"] == self.g["inputSha256"], "EXACT_FAILED_INPUT_REQUIRED")
+        expected_failure_input = self.i.get("recoveryFrom", {}).get("sha256", self.g["inputSha256"])
+        require(failure["inputsSha256"] == expected_failure_input, "EXACT_FAILED_INPUT_REQUIRED")
         previous = failure["controllerIdentity"]
         current = process_identity(previous["pid"])
         require(current is None or current["creationFileTime"] != previous["creationFileTime"] or not current["running"], "ORIGINAL_REHEARSAL_CONTROLLER_STILL_LIVE")
@@ -413,6 +414,15 @@ def disabled_operator_source(raw):
     return raw.replace(enabled, b"\nDISPATCH_ENABLED = False\n", 1)
 
 
+def validate_recovery_scope(inputs, prior):
+    require("recoveryFrom" not in prior, "NESTED_RECOVERY_INPUT_FORBIDDEN")
+    fields = ("schema", "runId", "privateRoot", "sourceRevision", "coreRevision", "postgresName", "databaseNetwork",
+        "stageIds", "buildReceipt", "binaries", "executables", "dockerConfig", "dockerConfigFiles", "guardModules", "guardFiles", "migrationSetSha256")
+    require(all(inputs[key] == prior[key] for key in fields), "EXACT_FAILED_RESOURCE_SCOPE_REQUIRED")
+    for key in ("sqlSources", "migrationSources"):
+        require(set(inputs[key]) == set(prior[key]) and all(inputs[key][name]["sha256"] == prior[key][name]["sha256"] for name in inputs[key]), "RECOVERY_SOURCE_ASSETS_CHANGED")
+
+
 def validate_inputs(path, digest):
     require(ref(path)["sha256"] == digest, "REHEARSAL_INPUT_CHANGED")
     value = json.loads(Path(path).read_bytes())
@@ -423,6 +433,8 @@ def validate_inputs(path, digest):
     require(parsed.version == 4 and str(parsed) == value["runId"], "UUID4_REHEARSAL_RUN_REQUIRED")
     run_id = str(parsed)
     require(not set(value).intersection({"databaseBefore", "baseProfile", "beforeBinding", "runtimeProfile", "quiescence"}), "BETA_CONTEXT_FORBIDDEN_IN_REHEARSAL")
+    if value.get("recoveryFrom"):
+        validate_recovery_scope(value, json.loads(read_ref(value["recoveryFrom"]).read_bytes()))
     root = Path(value["privateRoot"])
     require(root.name == "native-schema-rehearsal-" + run_id and root.is_dir() and not root.is_symlink(), "OWNED_REHEARSAL_ROOT_REQUIRED")
     require(value["postgresName"] == "marty-schema-rehearsal-" + run_id
@@ -477,6 +489,17 @@ def closed_environment(inputs):
     return env
 
 
+def write_private_bytes(output, data):
+    output = Path(output)
+    if os.name == "nt" and not str(output).startswith("\\\\?\\"):
+        output = Path("\\\\?\\" + str(output.absolute()))
+    with output.open("xb") as stream:
+        stream.write(data)
+        stream.flush()
+        os.fsync(stream.fileno())
+    return ref(output)
+
+
 def context_for(path, digest, inputs):
     root = Path(inputs["privateRoot"])
     modules = {name: load(name, inputs["guardModules"][name]) for name in ("beta_haip_guard", "beta_private_acl", "beta_operation_lock")}
@@ -487,11 +510,7 @@ def context_for(path, digest, inputs):
         require(Path(name).name == name, "PRIVATE_BASENAME_REQUIRED")
         prefix = active["operator"].stage if "operator" in active else "prepare"
         output = root / (prefix + "-" + name)
-        with output.open("xb") as stream:
-            stream.write(data)
-            stream.flush()
-            os.fsync(stream.fileno())
-        return ref(output)
+        return write_private_bytes(output, data)
     def save(name, value):
         return save_bytes(name, (json.dumps(value, indent=2) + "\n").encode())
     def assert_inputs(**kwargs):
@@ -550,6 +569,7 @@ def main():
     parser.add_argument("--cleanup-run-id")
     args = parser.parse_args()
     inputs = validate_inputs(args.inputs, args.inputs_sha256)
+    require(not inputs.get("recoveryFrom") or args.mode in ("check", "cleanup"), "RECOVERY_INPUT_CLEANUP_ONLY")
     if args.mode == "check":
         print(json.dumps({"state": "SYNTHETIC_REHEARSAL_INPUTS_CHECKED", "dispatchEnabled": DISPATCH_ENABLED, "dockerDispatched": False}))
         return
