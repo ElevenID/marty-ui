@@ -200,7 +200,7 @@ pub(crate) fn prepare_normal(
     prepare_normal_with(locked, installation, docker)
 }
 
-fn prepare_normal_with<D: DockerRead>(
+pub(crate) fn prepare_normal_with<D: DockerRead>(
     locked: &LockedInspection,
     installation: &Path,
     docker: &D,
@@ -386,7 +386,7 @@ fn prepare_normal_with<D: DockerRead>(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::{
         installer_creation_receipt_validation::tests::normal_fixture,
@@ -400,7 +400,7 @@ mod tests {
         path::PathBuf,
     };
 
-    struct MockDocker {
+    pub(crate) struct MockDocker {
         engine: String,
         outputs: BTreeMap<Vec<String>, String>,
     }
@@ -416,7 +416,7 @@ mod tests {
         }
     }
 
-    fn fixture() -> (tempfile::TempDir, PathBuf, InstallerState, MockDocker) {
+    pub(crate) fn fixture() -> (tempfile::TempDir, PathBuf, InstallerState, MockDocker) {
         let (parent, path, mut state) = normal_fixture();
         for name in TopLevelName::REQUIRED {
             let target = path.join(name.name());

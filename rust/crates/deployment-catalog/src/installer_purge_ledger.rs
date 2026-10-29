@@ -25,6 +25,7 @@ const MAX_RECORD: usize = 4096;
 const EXECUTION_Q_NAME: &str = ".marty-purge-quarantine";
 const EXECUTION_Q_INTENT: &str = "execution-q-create-intent.json";
 const EXECUTION_Q_CREATED: &str = "execution-q-created.json";
+const CONFIRMATION: &str = "confirmation.json";
 
 fn require(ok: bool) -> Result<()> {
     if ok {
@@ -245,6 +246,7 @@ fn entries(directory: &File) -> Result<Vec<String>> {
         let item = item.map_err(|_| REFUSED)?;
         let name = item.file_name().into_string().map_err(|_| REFUSED)?;
         let allowed = name == "manifest.json"
+            || name == CONFIRMATION
             || name == "custody.json"
             || name == "quarantine"
             || name == EXECUTION_Q_INTENT
@@ -287,7 +289,46 @@ pub(crate) struct DirectoryStamp {
     pub mode: u32,
     pub mount_id: u64,
 }
-fn directory_stamp(file: &File) -> Result<DirectoryStamp> {
+/// Exact local-custody assertion prepared by the coordinator after a separate
+/// operator confirmation. It is not a cryptographic proof of who typed it.
+#[derive(Clone, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ConfirmationBinding {
+    pub installation_id: uuid::Uuid,
+    pub plan_sha256: String,
+    pub engine_id: String,
+    pub installation_path_sha256: String,
+    pub installation_parent: DirectoryStamp,
+    pub root: DirectoryStamp,
+    pub operator_challenge_sha256: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ConfirmationRecord {
+    schema: String,
+    action: String,
+    binding: ConfirmationBinding,
+    deletion_authorized: bool,
+}
+fn valid_confirmation_binding(binding: &ConfirmationBinding) -> bool {
+    hex_digest(&binding.plan_sha256)
+        && hex_digest(&binding.installation_path_sha256)
+        && hex_digest(&binding.operator_challenge_sha256)
+        && !binding.engine_id.is_empty()
+        && binding.engine_id.len() <= 128
+        && !binding
+            .engine_id
+            .bytes()
+            .any(|byte| byte.is_ascii_control())
+        && binding.root.mode == 0o700
+        && binding.root.uid == unsafe { libc::geteuid() }
+        && binding.root.ino != 0
+        && binding.root.mount_id != 0
+        && binding.installation_parent.ino != 0
+        && binding.installation_parent.dev == binding.root.dev
+        && binding.installation_parent.mount_id == binding.root.mount_id
+}
+pub(crate) fn directory_stamp(file: &File) -> Result<DirectoryStamp> {
     let m = file.metadata().map_err(|_| REFUSED)?;
     require(m.is_dir())?;
     Ok(DirectoryStamp {
@@ -391,6 +432,73 @@ fn empty_directory(directory: &File) -> Result<()> {
     require(observed.next().is_none())
 }
 impl PurgeLedger {
+    fn confirmation(&self) -> Result<Option<ConfirmationBinding>> {
+        self.verify_manifest()?;
+        require(
+            !entries(&self.directory)?
+                .iter()
+                .any(|name| name.starts_with(".tmp-")),
+        )?;
+        let Some(bytes) = read_record(&self.directory, CONFIRMATION, MAX_RECORD)? else {
+            return Ok(None);
+        };
+        let record: ConfirmationRecord = serde_json::from_slice(&bytes).map_err(|_| REFUSED)?;
+        require(
+            record.schema == "elevenid.installer-purge-confirmation/v1"
+                && record.action == "confirm_exact_private_plan"
+                && !record.deletion_authorized
+                && record.binding.installation_id == self.installation_id
+                && record.binding.plan_sha256 == self.plan_sha256
+                && valid_confirmation_binding(&record.binding)
+                && serde_json::to_vec(&record).map_err(|_| REFUSED)? == bytes,
+        )?;
+        self.verify_manifest()?;
+        Ok(Some(record.binding))
+    }
+    fn require_confirmation(&self) -> Result<ConfirmationBinding> {
+        self.confirmation()?.ok_or(REFUSED.into())
+    }
+    /// Publish exact confirmation after the original manifest is durable.
+    /// Manifest-only interruption may be retried with this same binding, but
+    /// any prior intent or execution-q record forbids retroactive confirmation.
+    pub(crate) fn record_confirmation(&self, binding: &ConfirmationBinding) -> Result<()> {
+        self.verify_manifest()?;
+        require(
+            binding.installation_id == self.installation_id
+                && binding.plan_sha256 == self.plan_sha256
+                && valid_confirmation_binding(binding),
+        )?;
+        if let Some(saved) = self.confirmation()? {
+            return require(saved == *binding);
+        }
+        let names = entries(&self.directory)?;
+        require(
+            names.iter().all(|name| {
+                !name.starts_with("intent-")
+                    && !name.starts_with("result-")
+                    && name != EXECUTION_Q_INTENT
+                    && name != EXECUTION_Q_CREATED
+                    && !name.starts_with(".tmp-")
+            }) && entries(&self.quarantine)?.is_empty(),
+        )?;
+        let record = ConfirmationRecord {
+            schema: "elevenid.installer-purge-confirmation/v1".into(),
+            action: "confirm_exact_private_plan".into(),
+            binding: binding.clone(),
+            deletion_authorized: false,
+        };
+        let bytes = serde_json::to_vec(&record).map_err(|_| REFUSED)?;
+        require(write_exact(
+            &self.directory,
+            CONFIRMATION,
+            &bytes,
+            MAX_RECORD,
+        )?)?;
+        require(self.require_confirmation()? == *binding)
+    }
+    pub(crate) fn confirmed_binding(&self) -> Result<Option<ConfirmationBinding>> {
+        self.confirmation()
+    }
     fn open_directory(
         parent: &File,
         id: uuid::Uuid,
@@ -570,6 +678,7 @@ impl PurgeLedger {
         write_or_verify(&ledger.directory, "manifest.json", plan_bytes, MAX_MANIFEST)?;
         ledger.verify_manifest()?;
         ledger.execution_q_pair()?;
+        ledger.confirmation()?;
         Ok(ledger)
     }
     /// Resume after the installation root may be partly or fully gone. The
@@ -592,9 +701,11 @@ impl PurgeLedger {
         };
         let plan = ledger.verify_manifest()?;
         ledger.execution_q_pair()?;
+        ledger.require_confirmation()?;
         Ok((ledger, plan))
     }
     pub(crate) fn quarantine(&self) -> Result<&File> {
+        self.require_confirmation()?;
         self.verify_manifest()?;
         private(&self.quarantine, true)?;
         let current = open_at(
@@ -639,7 +750,7 @@ impl PurgeLedger {
         expected_root: &DirectoryStamp,
         after_intent: F,
     ) -> Result<ExecutionQuarantineCustody> {
-        self.verify_manifest()?;
+        self.require_confirmation()?;
         let parent_stamp =
             checked_installation_root(installation_parent, installation_leaf, root, expected_root)?;
         // The held root may be O_PATH. Reopen only the already classified
@@ -727,7 +838,7 @@ impl PurgeLedger {
         root: &File,
         expected_root: &DirectoryStamp,
     ) -> Result<ExecutionQuarantineCustody> {
-        self.verify_manifest()?;
+        self.require_confirmation()?;
         let (intent, created) = self.execution_q_pair()?.ok_or(REFUSED)?;
         require(
             intent.installation_leaf == installation_leaf.0
@@ -775,7 +886,7 @@ impl PurgeLedger {
         resource: ResourceKind,
         identity_sha256: &str,
     ) -> Result<PersistedIntent> {
-        self.verify_manifest()?;
+        self.require_confirmation()?;
         require(hex_digest(identity_sha256))?;
         let record = IntentRecord {
             schema: "elevenid.installer-purge-intent/v1".into(),
@@ -806,7 +917,7 @@ impl PurgeLedger {
         Ok(PersistedIntent { key, created })
     }
     fn verify_intent(&self, intent: &PersistedIntent) -> Result<()> {
-        self.verify_manifest()?;
+        self.require_confirmation()?;
         require(hex_digest(&intent.key))?;
         let original = read_record(
             &self.directory,
@@ -967,16 +1078,121 @@ mod tests {
 
     fn fixture() -> (tempfile::TempDir, File, uuid::Uuid, Vec<u8>, String) {
         let root = tempfile::tempdir().unwrap();
+        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
         let parent = File::open(root.path()).unwrap();
         let id = uuid::Uuid::new_v4();
         let plan = br#"{"schema":"synthetic-purge-plan","resources":1}"#.to_vec();
         let hash = digest(&plan);
         (root, parent, id, plan, hash)
     }
+    fn synthetic_binding(
+        id: uuid::Uuid,
+        hash: &str,
+        installation_parent: &File,
+        root: &File,
+    ) -> ConfirmationBinding {
+        ConfirmationBinding {
+            installation_id: id,
+            plan_sha256: hash.into(),
+            engine_id: "synthetic-engine".into(),
+            installation_path_sha256: digest(b"/synthetic/installation"),
+            installation_parent: directory_stamp(installation_parent).unwrap(),
+            root: directory_stamp(root).unwrap(),
+            operator_challenge_sha256: digest(format!("PURGE {id} {hash}").as_bytes()),
+        }
+    }
+    fn create_confirmed(
+        parent: &File,
+        id: uuid::Uuid,
+        plan: &[u8],
+        hash: &str,
+    ) -> Result<PurgeLedger> {
+        let ledger = PurgeLedger::create_or_resume(parent, id, plan, hash)?;
+        let binding = synthetic_binding(id, hash, parent, parent);
+        ledger.record_confirmation(&binding)?;
+        Ok(ledger)
+    }
+    #[test]
+    fn manifest_without_confirmation_grants_no_intent_or_quarantine() {
+        let (_root, parent, id, plan, hash) = fixture();
+        let ledger = PurgeLedger::create_or_resume(&parent, id, &plan, &hash).unwrap();
+        assert!(ledger
+            .record_intent(ResourceKind::HostEntry, &digest(b"synthetic-child"))
+            .is_err());
+        assert!(ledger.quarantine().is_err());
+        assert!(PurgeLedger::open_existing(&parent, id, &hash).is_err());
+        assert!(ledger.confirmed_binding().unwrap().is_none());
+        let binding = synthetic_binding(id, &hash, &parent, &parent);
+        ledger.record_confirmation(&binding).unwrap();
+        assert!(ledger.confirmed_binding().unwrap() == Some(binding));
+        assert!(ledger
+            .record_intent(ResourceKind::HostEntry, &digest(b"synthetic-child"))
+            .is_ok());
+    }
+    #[test]
+    fn confirmation_mismatch_and_corruption_refuse_without_adoption() {
+        let (root, parent, id, plan, hash) = fixture();
+        let ledger = PurgeLedger::create_or_resume(&parent, id, &plan, &hash).unwrap();
+        let binding = synthetic_binding(id, &hash, &parent, &parent);
+        ledger.record_confirmation(&binding).unwrap();
+        let mut changed = binding.clone();
+        changed.operator_challenge_sha256 = digest(b"wrong challenge");
+        assert!(ledger.record_confirmation(&changed).is_err());
+        let record = root.path().join(directory_name(id)).join(CONFIRMATION);
+        let original = fs::read(&record).unwrap();
+        let mut duplicate = original.clone();
+        let needle = b"\"deletion_authorized\":false";
+        let index = duplicate
+            .windows(needle.len())
+            .position(|window| window == needle)
+            .unwrap();
+        duplicate.splice(
+            index..index,
+            b"\"deletion_authorized\":false,".iter().copied(),
+        );
+        fs::write(&record, &duplicate).unwrap();
+        assert!(ledger
+            .record_intent(ResourceKind::HostEntry, &digest(b"synthetic-child"))
+            .is_err());
+        assert_eq!(fs::read(&record).unwrap(), duplicate);
+    }
+    #[test]
+    fn unconfirmed_manifest_cannot_create_execution_quarantine() {
+        let temp = tempfile::tempdir().unwrap();
+        let external_path = temp.path().join("external");
+        let installation_parent_path = temp.path().join("installation-parent");
+        let installation_path = installation_parent_path.join("installation");
+        fs::create_dir(&external_path).unwrap();
+        fs::create_dir(&installation_parent_path).unwrap();
+        fs::create_dir(&installation_path).unwrap();
+        fs::set_permissions(&external_path, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::set_permissions(&installation_path, fs::Permissions::from_mode(0o700)).unwrap();
+        let external = File::open(&external_path).unwrap();
+        let installation_parent = File::open(&installation_parent_path).unwrap();
+        let root = File::open(&installation_path).unwrap();
+        let expected = directory_stamp(&root).unwrap();
+        let id = uuid::Uuid::new_v4();
+        let plan = b"synthetic-unconfirmed-plan";
+        let hash = digest(plan);
+        let ledger = PurgeLedger::create_or_resume(&external, id, plan, &hash).unwrap();
+        assert!(ledger
+            .create_execution_quarantine(
+                &installation_parent,
+                &InstallationLeaf::new("installation").unwrap(),
+                &root,
+                &expected,
+            )
+            .is_err());
+        assert!(!installation_path.join(EXECUTION_Q_NAME).exists());
+        assert!(!external_path
+            .join(directory_name(id))
+            .join(EXECUTION_Q_INTENT)
+            .exists());
+    }
     #[test]
     fn recovered_rename_is_stabilized_before_record_is_trusted() {
         let (_root, parent, id, plan, hash) = fixture();
-        let ledger = PurgeLedger::create_or_resume(&parent, id, &plan, &hash).unwrap();
+        let ledger = create_confirmed(&parent, id, &plan, &hash).unwrap();
         let identity = digest(b"interrupted-intent-identity");
         let record = IntentRecord {
             schema: "elevenid.installer-purge-intent/v1".into(),
@@ -1034,7 +1250,7 @@ mod tests {
     #[test]
     fn existing_ledger_refuses_when_ancestor_cannot_sync() {
         let (root, parent, id, plan, hash) = fixture();
-        drop(PurgeLedger::create_or_resume(&parent, id, &plan, &hash).unwrap());
+        drop(create_confirmed(&parent, id, &plan, &hash).unwrap());
         let held = open_at(&parent, ".", libc::O_PATH, 0).unwrap().unwrap();
         assert!(PurgeLedger::open_existing(&held, id, &hash).is_err());
         assert!(root.path().join(directory_name(id)).exists());
@@ -1042,7 +1258,7 @@ mod tests {
     #[test]
     fn exact_manifest_intent_and_result_survive_resume() {
         let (_root, parent, id, plan, hash) = fixture();
-        let ledger = PurgeLedger::create_or_resume(&parent, id, &plan, &hash).unwrap();
+        let ledger = create_confirmed(&parent, id, &plan, &hash).unwrap();
         assert_eq!(ledger.installation_id(), id);
         assert_eq!(ledger.plan_sha256(), hash);
         private(ledger.quarantine().unwrap(), true).unwrap();
@@ -1088,12 +1304,12 @@ mod tests {
             .unwrap()
             .is_retry());
         assert!(PurgeLedger::open_existing(&parent, id, &digest(b"wrong")).is_err());
-        assert!(PurgeLedger::create_or_resume(&parent, id, b"different", &hash).is_err());
+        assert!(create_confirmed(&parent, id, b"different", &hash).is_err());
     }
     #[test]
     fn retained_duplicate_does_not_extend_or_release_owner_lock() {
         let (_root, parent, id, plan, hash) = fixture();
-        let owner = PurgeLedger::create_or_resume(&parent, id, &plan, &hash).unwrap();
+        let owner = create_confirmed(&parent, id, &plan, &hash).unwrap();
         let inherited = owner.directory.try_clone().unwrap();
         assert!(PurgeLedger::open_existing(&parent, id, &hash).is_err());
         drop(owner);
@@ -1115,7 +1331,7 @@ mod tests {
             "duplicate",
         ] {
             let (root, parent, id, plan, hash) = fixture();
-            let ledger = PurgeLedger::create_or_resume(&parent, id, &plan, &hash).unwrap();
+            let ledger = create_confirmed(&parent, id, &plan, &hash).unwrap();
             let intent = ledger
                 .record_intent(ResourceKind::HostEntry, &digest(b"owned-file"))
                 .unwrap();
@@ -1153,7 +1369,7 @@ mod tests {
     #[test]
     fn orphaned_or_special_result_never_grants_a_durable_outcome() {
         let (root, parent, id, plan, hash) = fixture();
-        let ledger = PurgeLedger::create_or_resume(&parent, id, &plan, &hash).unwrap();
+        let ledger = create_confirmed(&parent, id, &plan, &hash).unwrap();
         let intent = ledger
             .record_intent(ResourceKind::HostEntry, &digest(b"owned-file"))
             .unwrap();
@@ -1178,7 +1394,7 @@ mod tests {
     #[test]
     fn foreign_ledger_entry_and_replaced_manifest_refuse() {
         let (root, parent, id, plan, hash) = fixture();
-        let ledger = PurgeLedger::create_or_resume(&parent, id, &plan, &hash).unwrap();
+        let ledger = create_confirmed(&parent, id, &plan, &hash).unwrap();
         drop(ledger);
         let path = root.path().join(directory_name(id));
         fs::write(path.join("foreign"), b"canary").unwrap();
@@ -1194,7 +1410,7 @@ mod tests {
     #[test]
     fn fifo_manifest_is_refused_before_opening_for_read() {
         let (root, parent, id, plan, hash) = fixture();
-        let ledger = PurgeLedger::create_or_resume(&parent, id, &plan, &hash).unwrap();
+        let ledger = create_confirmed(&parent, id, &plan, &hash).unwrap();
         drop(ledger);
         let path = root.path().join(directory_name(id)).join("manifest.json");
         fs::remove_file(&path).unwrap();
@@ -1203,25 +1419,22 @@ mod tests {
         assert!(PurgeLedger::open_existing(&parent, id, &hash).is_err());
     }
     #[test]
-    fn orphaned_temp_file_cannot_make_first_intent_a_retry() {
+    fn orphaned_temp_file_blocks_confirmed_resume_and_preserves_evidence() {
         let (root, parent, id, plan, hash) = fixture();
-        let ledger = PurgeLedger::create_or_resume(&parent, id, &plan, &hash).unwrap();
+        let ledger = create_confirmed(&parent, id, &plan, &hash).unwrap();
         drop(ledger);
         let path = root.path().join(directory_name(id));
         let orphan = path.join(format!(".tmp-{}", uuid::Uuid::new_v4().simple()));
         fs::write(&orphan, b"incomplete intent").unwrap();
         fs::set_permissions(&orphan, fs::Permissions::from_mode(0o600)).unwrap();
-        let (resumed, _) = PurgeLedger::open_existing(&parent, id, &hash).unwrap();
-        let first = resumed
-            .record_intent(ResourceKind::HostEntry, &digest(b"owned-file"))
-            .unwrap();
-        assert!(!first.is_retry());
+        assert!(PurgeLedger::open_existing(&parent, id, &hash).is_err());
+        assert!(create_confirmed(&parent, id, &plan, &hash).is_err());
         assert_eq!(fs::read(&orphan).unwrap(), b"incomplete intent");
     }
     #[test]
     fn held_ledger_refuses_rebound_sibling_path() {
         let (root, parent, id, plan, hash) = fixture();
-        let ledger = PurgeLedger::create_or_resume(&parent, id, &plan, &hash).unwrap();
+        let ledger = create_confirmed(&parent, id, &plan, &hash).unwrap();
         let path = root.path().join(directory_name(id));
         fs::rename(&path, root.path().join("moved-ledger")).unwrap();
         fs::create_dir(&path).unwrap();
@@ -1235,7 +1448,7 @@ mod tests {
     #[test]
     fn held_quarantine_refuses_rebound_child_path() {
         let (root, parent, id, plan, hash) = fixture();
-        let ledger = PurgeLedger::create_or_resume(&parent, id, &plan, &hash).unwrap();
+        let ledger = create_confirmed(&parent, id, &plan, &hash).unwrap();
         let path = root.path().join(directory_name(id));
         fs::rename(path.join("quarantine"), path.join("moved-quarantine")).unwrap();
         fs::create_dir(path.join("quarantine")).unwrap();
@@ -1245,7 +1458,7 @@ mod tests {
     #[test]
     fn resumed_ledger_refuses_replaced_quarantine_and_preserves_pending_data() {
         let (root, parent, id, plan, hash) = fixture();
-        let ledger = PurgeLedger::create_or_resume(&parent, id, &plan, &hash).unwrap();
+        let ledger = create_confirmed(&parent, id, &plan, &hash).unwrap();
         ledger
             .record_intent(ResourceKind::HostEntry, &digest(b"owned-file"))
             .unwrap();
@@ -1258,7 +1471,7 @@ mod tests {
         fs::set_permissions(path.join("quarantine"), fs::Permissions::from_mode(0o700)).unwrap();
         drop(ledger);
         assert!(PurgeLedger::open_existing(&parent, id, &hash).is_err());
-        assert!(PurgeLedger::create_or_resume(&parent, id, &plan, &hash).is_err());
+        assert!(create_confirmed(&parent, id, &plan, &hash).is_err());
         assert_eq!(
             fs::read(old.join("pending-owned-data")).unwrap(),
             b"retained-pending-canary"
@@ -1268,11 +1481,11 @@ mod tests {
     #[test]
     fn missing_quarantine_is_not_recreated_on_resume() {
         let (root, parent, id, plan, hash) = fixture();
-        let ledger = PurgeLedger::create_or_resume(&parent, id, &plan, &hash).unwrap();
+        let ledger = create_confirmed(&parent, id, &plan, &hash).unwrap();
         let path = root.path().join(directory_name(id));
         drop(ledger);
         fs::remove_dir(path.join("quarantine")).unwrap();
-        assert!(PurgeLedger::create_or_resume(&parent, id, &plan, &hash).is_err());
+        assert!(create_confirmed(&parent, id, &plan, &hash).is_err());
         assert!(PurgeLedger::open_existing(&parent, id, &hash).is_err());
         assert!(!path.join("quarantine").exists());
     }
@@ -1280,7 +1493,7 @@ mod tests {
     fn missing_or_changed_custody_record_is_never_adopted() {
         for missing in [true, false] {
             let (root, parent, id, plan, hash) = fixture();
-            let ledger = PurgeLedger::create_or_resume(&parent, id, &plan, &hash).unwrap();
+            let ledger = create_confirmed(&parent, id, &plan, &hash).unwrap();
             let record = root.path().join(directory_name(id)).join("custody.json");
             drop(ledger);
             if missing {
@@ -1289,7 +1502,7 @@ mod tests {
                 fs::write(&record, b"foreign-custody-canary").unwrap();
             }
             assert!(PurgeLedger::open_existing(&parent, id, &hash).is_err());
-            assert!(PurgeLedger::create_or_resume(&parent, id, &plan, &hash).is_err());
+            assert!(create_confirmed(&parent, id, &plan, &hash).is_err());
             if missing {
                 assert!(!record.exists());
             } else {
@@ -1305,7 +1518,7 @@ mod tests {
         let custody = fs::read(directory.join("custody.json")).unwrap();
         drop(ledger);
         fs::remove_file(directory.join("manifest.json")).unwrap();
-        let resumed = PurgeLedger::create_or_resume(&parent, id, &plan, &hash).unwrap();
+        let resumed = create_confirmed(&parent, id, &plan, &hash).unwrap();
         assert!(resumed.quarantine().is_ok());
         assert_eq!(fs::read(directory.join("manifest.json")).unwrap(), plan);
         assert_eq!(fs::read(directory.join("custody.json")).unwrap(), custody);
@@ -1343,6 +1556,9 @@ mod tests {
         let plan = br#"{"schema":"synthetic-execution-q-plan","reserved_q":true}"#;
         let hash = digest(plan);
         let ledger = PurgeLedger::create_or_resume(&ledger_parent, id, plan, &hash).unwrap();
+        ledger
+            .record_confirmation(&synthetic_binding(id, &hash, &installation_parent, &root))
+            .unwrap();
         (
             temp,
             ledger_parent,
