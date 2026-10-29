@@ -32,6 +32,7 @@ def source_store(private):
     # entrypoint still checks that separately before any WSL request.
     store = object.__new__(journal.LinuxBuildJournal)
     store.private, store.run_id = private, RUN
+    # Match the real Linux constructor's explicit transport selection.
     store.desktop_transport = None
     store.specification = {"rootProof": copy.deepcopy(PROOF), "workerSha256": "a" * 64, "sharedSha256": "b" * 64}
     return store

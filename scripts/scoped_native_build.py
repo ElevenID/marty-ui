@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import re
+from contextlib import contextmanager
 from scoped_native_runtime import (CORE_REVISION, UI_REVISION, ROLE_BINARIES,
     daemon_source, durable_barrier, read_ref, ref, require, save_exclusive, save_state, selected_sources, sha)
 
@@ -17,20 +18,29 @@ PACKAGES = ("marty-flow", "marty-gateway", "marty-issuance-service")
 CARGO_ARGV = ["cargo", "build", "--locked", "--offline", "--message-format=json"] + [item for package in PACKAGES for item in ("-p", package, "--bin", package)]
 REVIEWED_BUILD_HELPER_SHA256 = "60f061cc55f6c254ce4b883caa71cf02bdefdded6b581cc004da87fadbce8356"
 VOLUMES = ("ui-canvas-cargo", "d05-rust-target-20261026")
+OFFICIAL_PROFILE = "oid4vc-all-services"
+OFFICIAL_FREEZE_SHA256 = "b77d6883f51bc1d3cf19d6cfa76fe567477c7d27e32134e05007c9104e49c941"
 
 def build_scope(profile=None):
     if profile is None:
         return {"uiRevision": UI_REVISION, "coreRevision": CORE_REVISION, "roles": ROLE_BINARIES, "packages": PACKAGES,
-                "prefix": "marty-d12-", "owner": "d12-scoped-native"}
+                "prefix": "marty-d12-", "owner": "d12-scoped-native", "volumes": VOLUMES,
+                "cargoProfile": "dev"}
     from scoped_native_profiles import reviewed_profile
     selected = reviewed_profile(profile)
     return {"uiRevision": selected.ui_revision, "coreRevision": selected.core_revision, "roles": dict(selected.roles),
-            "packages": selected.packages, "prefix": selected.container_prefix, "owner": selected.owner}
+            "packages": selected.packages, "prefix": selected.container_prefix, "owner": selected.owner,
+            "volumes": selected.volumes, "cargoProfile": selected.cargo_profile}
 
 
 def cargo_arguments(profile=None):
     return ["cargo", "build", "--locked", "--offline", "--message-format=json"] + [
         item for package in build_scope(profile)["packages"] for item in ("-p", package, "--bin", package)]
+
+
+def artifact_directory(profile=None):
+    cargo_profile = build_scope(profile)["cargoProfile"]
+    return "debug" if cargo_profile == "dev" else cargo_profile
 
 
 def verify_export(repository, revision, directory, inventory_ref, git):
@@ -61,6 +71,30 @@ def verify_export(repository, revision, directory, inventory_ref, git):
         oid = hashlib.sha1(b"blob " + str(len(raw)).encode() + b"\0" + raw).hexdigest()
         require(oid == tracked[row["path"]] and len(raw) == row["bytes"] and sha(files[row["path"]]) == row["sha256"], "SOURCE_EXPORT_BYTES_CHANGED")
 
+
+def verify_official_inputs(freeze, seed, source_script, scope, build_tool=None):
+    require(freeze["productRevision"] == scope["uiRevision"]
+            and freeze["coreRevision"] == CORE_REVISION
+            and freeze["imagesBuilt"] is False and freeze["releaseQualified"] is False,
+            "EXACT_OFFICIAL_SOURCE_FREEZE_REQUIRED")
+    names = set(re.findall(r"--bin (marty-[a-z0-9-]+)", source_script))
+    require(len(names) == 29 and names == set(scope["roles"].values()),
+            "CANONICAL_ALL_SERVICES_SET_CHANGED")
+    if build_tool is not None:
+        tool_names = set(re.findall(r"--bin (marty-[a-z0-9-]+)", build_tool))
+        require(tool_names == names and len(tool_names) == 29,
+                "BUILD_TOOL_BINARY_SET_CHANGED")
+    require(seed.get("state") == "COPIED_AND_READBACK_MATCHED"
+            and seed.get("targetVolume") == scope["volumes"][1]
+            and seed.get("sourceTarget") == "marty-demo-native-cache-20261021/target"
+            and seed.get("copyKind") == "ordinary-byte-copy-no-hardlinks"
+            and re.fullmatch(r"[a-f0-9]{64}", seed.get("sourceManifestSha256", ""))
+            and seed["sourceManifestSha256"] == seed.get("targetManifestSha256")
+            and seed.get("sourceBeforeAfterMatched") is True
+            and seed.get("sourceMountedReadOnly") is True
+            and seed.get("targetHardlinksToSource") is False,
+            "ISOLATED_TARGET_SEED_REQUIRED")
+
 def verify(plan, git, profile=None):
     selected_sources(plan, profile)
     scope = build_scope(profile)
@@ -72,6 +106,19 @@ def verify(plan, git, profile=None):
         directory = Path(source["directory"]).resolve()
         require(directory.is_relative_to(private), "EXPORT_OUTSIDE_CUSTODY")
         verify_export(source["repository"], revision, directory, source["inventory"], git)
+    if profile == OFFICIAL_PROFILE:
+        require(plan["sourceFreezeReceipt"]["sha256"] == OFFICIAL_FREEZE_SHA256,
+                "EXACT_OFFICIAL_SOURCE_FREEZE_REQUIRED")
+        freeze = json.loads(read_ref(plan["sourceFreezeReceipt"]).read_bytes())
+        source_script = Path(plan["sources"]["ui"]["directory"]) / "scripts/build-rust-service-binaries.sh"
+        seed = json.loads(read_ref(plan["targetSeedReceipt"]).read_bytes())
+        tool = read_ref(plan["buildTool"])
+        lock_guard = read_ref(plan["lockGuard"])
+        require(sha(tool) == sha(Path(__file__).with_name("build-rust-service-binaries.sh")),
+                "EXACT_REVIEWED_BUILD_TOOL_REQUIRED")
+        require(sha(lock_guard) == sha(Path(__file__).with_name("ci") / "check_core_localized_lock.py"),
+                "EXACT_REVIEWED_LOCK_GUARD_REQUIRED")
+        verify_official_inputs(freeze, seed, source_script.read_text(), scope, tool.read_text())
     recipe = read_ref(plan["recipe"])
     require(recipe.read_text() == render_recipe(profile), "THREE_ROLE_RECIPE_CHANGED")
     require(re.fullmatch(r"sha256:[a-f0-9]{64}", plan.get("builderImage", "")), "PINNED_BUILDER_REQUIRED")
@@ -81,6 +128,8 @@ def verify(plan, git, profile=None):
     return private, output
 
 def render_recipe(profile=None):
+    if profile == OFFICIAL_PROFILE:
+        return render_official_recipe()
     scope = build_scope(profile)
     binaries = tuple(scope["roles"].values())
     return """#!/bin/sh
@@ -143,6 +192,83 @@ for binary in """ + " ".join(binaries) + """; do
 done
 """
 
+
+def render_official_recipe():
+    """Compile the frozen canonical 29-bin release set with KMS-only Core proof."""
+    names = tuple(build_scope(OFFICIAL_PROFILE)["roles"].values())
+    return """#!/bin/sh
+set -eu
+export CARGO_HOME=/cargo CARGO_TARGET_DIR=/target CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 CARGO_NET_OFFLINE=true
+finish() { status=$?; printf '%s\\n' "$status" > /out/exit-code; }
+trap finish EXIT
+rustc -vV > /out/rustc-version.txt
+cargo -vV > /out/cargo-version.txt
+grep -Fx 'release: 1.95.0' /out/rustc-version.txt
+grep -Fx 'host: x86_64-unknown-linux-gnu' /out/rustc-version.txt
+mkdir -p /build/ui
+cp -a /src/ui/. /build/ui/
+cd /build/ui
+cp rust/Cargo.lock /out/original-cargo-lock.toml
+python3 scripts/localize_marty_core_dependencies.py rust/Cargo.toml .github/feature-regression/rust-probe/Cargo.toml --core-root /build/core > /out/localizer.log
+cargo metadata --offline --format-version 1 --manifest-path rust/Cargo.toml > /out/localized-metadata.json
+cp rust/Cargo.lock /out/localized-cargo-lock.toml
+python3 /build/lock_guard.py /out/original-cargo-lock.toml /out/localized-cargo-lock.toml > /out/localized-lock-proof.json
+cargo metadata --offline --locked --format-version 1 --manifest-path rust/Cargo.toml > /out/locked-localized-metadata.json
+python3 - <<'BOUNDARY'
+import json,pathlib,subprocess,sys
+sys.path.insert(0,'scripts/ci')
+import check_marty_core_kms_boundary as guard
+m=json.loads(pathlib.Path('/out/localized-metadata.json').read_text())
+nodes={n['id']:n for n in m['resolve']['nodes']}
+core=[p for p in m['packages'] if p['name'] in guard.CORE_CRATES]
+assert {p['name'] for p in core}==guard.CORE_CRATES
+assert not any('github.com/ElevenID/marty-core' in (p.get('source') or '') for p in m['packages'])
+for p in core:
+ assert p['source'] is None and pathlib.Path(p['manifest_path']).resolve().is_relative_to(pathlib.Path('/build/core'))
+ features=set(nodes[p['id']]['features']);assert not features&guard.FORBIDDEN_FEATURES
+ if p['name'] in guard.KMS_ONLY_CRATES:assert 'kms-only' in features
+services=pathlib.Path('/build/ui/rust/services')
+packages=sorted(p['name'] for p in m['packages'] if pathlib.Path(p['manifest_path']).resolve().is_relative_to(services))
+assert packages
+command=['cargo','tree','--offline','--locked','--manifest-path','rust/Cargo.toml','-e','features,no-dev']
+for name in packages:command.extend(['-p',name])
+tree=subprocess.run(command,check=True,capture_output=True,text=True).stdout
+pathlib.Path('/out/production-feature-tree.txt').write_text(tree)
+guard.check_production_crypto_tree(tree)
+rows=[{'name':p['name'],'manifest':p['manifest_path'],'features':sorted(nodes[p['id']]['features'])} for p in core]
+pathlib.Path('/out/core-feature-resolution.json').write_text(json.dumps(rows,indent=2)+'\\n')
+BOUNDARY
+cd rust
+sh /build/tool.sh default --offline -j1 --message-format=json > /out/compiler-artifacts.jsonl 2> /out/compiler.log
+python3 - <<'ARTIFACTS'
+import json,pathlib,sys
+sys.path.insert(0,'/build/ui/scripts/ci')
+import check_marty_core_kms_boundary as guard
+m=json.loads(pathlib.Path('/out/localized-metadata.json').read_text())
+core={p['id']:p for p in m['packages'] if p['name'] in guard.CORE_CRATES}
+expected=set(""" + repr(names) + """)
+core_rows=[];services=[]
+for line in pathlib.Path('/out/compiler-artifacts.jsonl').read_text().splitlines():
+ x=json.loads(line)
+ if x.get('reason')!='compiler-artifact':continue
+ if x['package_id'] in core:
+  p=core[x['package_id']];features=set(x['features']);assert not features&guard.FORBIDDEN_FEATURES
+  if p['name'] in guard.KMS_ONLY_CRATES:assert 'kms-only' in features
+  core_rows.append({'name':p['name'],'manifest':p['manifest_path'],'features':sorted(features),'fresh':x['fresh'],'filenames':x['filenames']})
+ if x.get('executable') in {'/target/release/'+name for name in expected}:services.append(x)
+assert 'marty-oid4vci' in {p['name'] for p in core_rows}
+assert len(services)==len(expected)==29 and {pathlib.Path(s['executable']).name for s in services}==expected
+pathlib.Path('/out/core-compiler-artifacts.json').write_text(json.dumps(core_rows,indent=2)+'\\n')
+pathlib.Path('/out/service-compiler-artifacts.json').write_text(json.dumps(services,indent=2)+'\\n')
+ARTIFACTS
+for binary in """ + " ".join(names) + """; do
+ install -m 0755 /target/release/$binary /out/$binary
+ sha256sum /out/$binary > /out/$binary.sha256
+ readelf -h -d /out/$binary > /out/$binary.elf.txt
+ ldd /out/$binary > /out/$binary.libraries.txt
+done
+"""
+
 def build_arguments(plan, profile=None):
     selected_sources(plan, profile)
     scope = build_scope(profile)
@@ -153,7 +279,12 @@ def build_arguments(plan, profile=None):
     for source, target, readonly in ((plan["sources"]["ui"]["directory"], "/src/ui", True), (plan["sources"]["core"]["directory"], "/build/core", True),
             (plan["outputDirectory"], "/out", False), (plan["recipe"]["path"], "/build.sh", True)):
         args += ["--mount", "type=bind,src=" + daemon_source(source) + ",dst=" + target + (",readonly" if readonly else "")]
-    for volume, target in zip(VOLUMES, ("/cargo", "/target")):
+    if profile == OFFICIAL_PROFILE:
+        args += ["--mount", "type=bind,src=" + daemon_source(plan["buildTool"]["path"])
+                 + ",dst=/build/tool.sh,readonly"]
+        args += ["--mount", "type=bind,src=" + daemon_source(plan["lockGuard"]["path"])
+                 + ",dst=/build/lock_guard.py,readonly"]
+    for volume, target in zip(scope["volumes"], ("/cargo", "/target")):
         args += ["--mount", "type=volume,src=" + volume + ",dst=" + target]
     return args + ["--entrypoint", "/bin/sh", plan["builderImage"], "/build.sh"]
 
@@ -174,9 +305,20 @@ class LocalBuildJournal:
 def build_journal(plan, private, profile=None):
     if "journalBackend" not in plan:
         return LocalBuildJournal(private)
-    require(profile in ("d02-signing-cas", "d02-signing-cas-no-transform", "canvas-issuer-scoped-jobs"), "LINUX_JOURNAL_REVIEWED_PROFILE_REQUIRED")
+    require(profile in ("d02-signing-cas", "d02-signing-cas-no-transform", "canvas-issuer-scoped-jobs", OFFICIAL_PROFILE), "LINUX_JOURNAL_REVIEWED_PROFILE_REQUIRED")
     from scoped_linux_journal import LinuxBuildJournal
     return LinuxBuildJournal(private, plan["runId"], plan["journalBackend"])
+
+
+@contextmanager
+def selected_resource_volumes(helper, volumes):
+    """Use the reviewed resource probe on one closed volume pair, then restore it."""
+    require(helper.VOLUMES == VOLUMES, "SHARED_RESOURCE_SCOPE_CHANGED")
+    try:
+        helper.VOLUMES = volumes
+        yield
+    finally:
+        helper.VOLUMES = VOLUMES
 
 
 def start(prepared_ref, helper, git, profile=None):
@@ -190,6 +332,13 @@ def start(prepared_ref, helper, git, profile=None):
     require(not list(output.iterdir()), "PRESERVE_PREVIOUS_BUILD_OUTPUTS")
     require(helper.VOLUMES == VOLUMES, "SHARED_RESOURCE_SCOPE_CHANGED")
     require(helper.run("docker", "--context", "desktop-linux", "info", "--format", "{{.ID}}").stdout.strip() == plan["engineId"], "ENGINE_CHANGED")
+    if profile == OFFICIAL_PROFILE:
+        volume = build_scope(profile)["volumes"][1]
+        rows = json.loads(helper.run("docker", "volume", "inspect", volume).stdout)
+        require(len(rows) == 1 and rows[0]["Name"] == volume
+                and rows[0]["Labels"].get("io.elevenid.demo-audit.owner")
+                == "root-local-oid4vc-current-source-20261028",
+                "OWNED_SEEDED_TARGET_VOLUME_MISSING")
     resource_state = None
     if profile is not None:
         # The existing resource helper itself creates one 64 MiB read-only probe.
@@ -199,9 +348,13 @@ def start(prepared_ref, helper, git, profile=None):
         resource_state = {"state": "RESOURCE_CHECK_INTENT", "runId": plan["runId"],
                           "preparationSha256": preparation_sha, "buildProfile": profile,
                           "resourceProbe": {"effect": "EXISTING_64M_READONLY_NETWORK_NONE_DOCKER_PROBE",
-                                            "image": plan["builderImage"], "volumes": list(VOLUMES),
+                                            "image": plan["builderImage"], "volumes": list(build_scope(profile)["volumes"]),
                                             "containerId": None, "outcome": "INTENT_DISPATCH_MAY_FOLLOW"},
                           "releaseQualified": False, "recordingQualified": False}
+        if profile == OFFICIAL_PROFILE:
+            resource_state["targetSeedProbe"] = {
+                "effect": "EXISTING_READONLY_NETWORK_NONE_TARGET_MANIFEST_PROBE",
+                "volume": build_scope(profile)["volumes"][1], "outcome": "INTENT_DISPATCH_MAY_FOLLOW"}
         resource_state["intentDurability"] = store.exclusive("build-apply-intent.json", resource_state)
         barrier = store.state(resource_state)
         if not (durable_barrier(resource_state["intentDurability"]) and durable_barrier(barrier)):
@@ -210,7 +363,15 @@ def start(prepared_ref, helper, git, profile=None):
             store.state(resource_state)
             raise ValueError("DURABLE_INTENT_AND_JOURNAL_REQUIRED")
         try:
-            resource = helper.resources(private, plan["builderImage"])
+            if profile == OFFICIAL_PROFILE:
+                from seed_local_official_native_target import inspect_target
+                resource_state["targetSeedReadback"] = inspect_target(
+                    Path(plan["targetSeedReceipt"]["path"]))
+                resource_state["targetSeedProbe"]["outcome"] = "READBACK_MATCHED"
+                require(durable_barrier(store.state(resource_state)),
+                        "DURABLE_TARGET_SEED_RESULT_REQUIRED")
+            with selected_resource_volumes(helper, build_scope(profile)["volumes"]):
+                resource = helper.resources(private, plan["builderImage"])
             resource_state.update(state="RESOURCE_CHECK_READY", resourcesBefore=resource)
             resource_state["resourceProbe"]["outcome"] = "HELPER_RETURNED_READY_CID_NOT_EXPOSED"
             require(durable_barrier(store.state(resource_state)),
@@ -220,7 +381,8 @@ def start(prepared_ref, helper, git, profile=None):
             store.state(resource_state)
             raise
     else:
-        resource = helper.resources(private, plan["builderImage"])
+        with selected_resource_volumes(helper, build_scope(profile)["volumes"]):
+            resource = helper.resources(private, plan["builderImage"])
     image = json.loads(helper.run("docker", "image", "inspect", plan["builderImage"]).stdout)[0]
     require(image["Id"] == plan["builderImage"] and image["Os"] == "linux" and image["Architecture"] == "amd64", "BUILDER_IDENTITY_CHANGED")
     require(helper.run("docker", "--context", "desktop-linux", "info", "--format", "{{.ID}}").stdout.strip() == plan["engineId"], "ENGINE_CHANGED_AFTER_RESOURCE_CHECK")
@@ -230,6 +392,9 @@ def start(prepared_ref, helper, git, profile=None):
     else:
         state.update(intentDurability=resource_state["intentDurability"],
                      buildProfile=profile, resourceProbe=resource_state["resourceProbe"])
+        if profile == OFFICIAL_PROFILE:
+            state.update(targetSeedProbe=resource_state["targetSeedProbe"],
+                         targetSeedReadback=resource_state["targetSeedReadback"])
     journal_barrier = store.state(state)
     if not (durable_barrier(state["intentDurability"]) and durable_barrier(journal_barrier)):
         state["state"] = "BUILD_DURABILITY_BLOCKED_NO_DOCKER_DISPATCH" if resource_state is None else "BUILD_DURABILITY_BLOCKED_NO_COMPILER_DISPATCH"
@@ -263,12 +428,29 @@ def finish(prepared_ref, helper, git, profile=None):
     require(row["Id"] == state["containerId"] and row["Image"] == plan["builderImage"] and row["Config"]["Labels"]["elevenid.run"] == plan["runId"]
         and row["Config"]["Labels"]["elevenid.owner"] == scope["owner"], "BUILD_OWNER_CHANGED")
     require(row["State"]["Status"] == "exited", "BUILD_STILL_ACTIVE")
+    if profile == OFFICIAL_PROFILE:
+        mounts = {mount["Destination"]: mount for mount in row["Mounts"]}
+        for destination, volume in zip(("/cargo", "/target"), scope["volumes"]):
+            require(mounts[destination]["Type"] == "volume" and mounts[destination]["Name"] == volume,
+                    "OFFICIAL_COMPILER_VOLUME_CHANGED")
+        require(all(mounts[d]["RW"] is False for d in ("/src/ui", "/build/core", "/build.sh", "/build/tool.sh", "/build/lock_guard.py")),
+                "OFFICIAL_SOURCE_MOUNT_CHANGED")
     result = {**state, "state": "BUILD_FAILED_RETAINED", "exitCode": row["State"]["ExitCode"], "oomKilled": row["State"].get("OOMKilled", False), "uiRevision": scope["uiRevision"], "coreRevision": scope["coreRevision"], "roleBinaries": scope["roles"]}
     if result["exitCode"] == 0 and not result["oomKilled"]:
         output = Path(plan["outputDirectory"])
         require((output / "exit-code").read_text().strip() == "0", "BUILD_RECIPE_OUTCOME_MISSING")
         artifacts = {}
-        require((output / "compiler-artifacts.jsonl").stat().st_size <= 64 * 1024 * 1024, "COMPILER_METADATA_TOO_LARGE")
+        if profile == OFFICIAL_PROFILE:
+            require((output / "core-feature-resolution.json").is_file()
+                    and (output / "production-feature-tree.txt").is_file()
+                    and (output / "original-cargo-lock.toml").is_file()
+                    and (output / "localized-cargo-lock.toml").is_file()
+                    and (output / "locked-localized-metadata.json").is_file()
+                    and (output / "compiler.log").is_file()
+                    and (output / "localized-lock-proof.json").is_file(),
+                    "ACTUAL_CORE_FEATURE_EVIDENCE_MISSING")
+        require((output / "compiler-artifacts.jsonl").stat().st_size <= 64 * 1024 * 1024,
+                "COMPILER_METADATA_TOO_LARGE")
         require((output / "core-compiler-artifacts.json").is_file(), "ACTUAL_CORE_FEATURE_EVIDENCE_MISSING")
         messages = [json.loads(line) for line in (output / "compiler-artifacts.jsonl").read_text().splitlines()]
         for binary in scope["roles"].values():
@@ -276,9 +458,23 @@ def finish(prepared_ref, helper, git, profile=None):
             header = file.open("rb").read(20)
             require(header[:6] == b"\x7fELF\x02\x01" and header[18:20] == b"\x3e\x00", "AMD64_ELF_REQUIRED")
             require((output / (binary + ".sha256")).read_text().split()[0] == sha(file), "ELF_COPY_HASH_CHANGED")
-            matches = [m for m in messages if m.get("reason") == "compiler-artifact" and m.get("executable") == "/target/debug/" + binary]
+            target_profile = artifact_directory(profile)
+            matches = [m for m in messages if m.get("reason") == "compiler-artifact"
+                       and m.get("executable") == "/target/" + target_profile + "/" + binary]
             require(len(matches) == 1, "EXACT_COMPILER_OUTPUT_REQUIRED")
             artifacts[binary] = ref(file)
-        result.update(state="BUILD_SUCCEEDED", binaries=artifacts, runtimeUidLibrariesValidated=False, coreCompilerArtifacts=ref(output / "core-compiler-artifacts.json"))
+        result.update(state="BUILD_SUCCEEDED", binaries=artifacts, runtimeUidLibrariesValidated=False)
+        if profile == OFFICIAL_PROFILE:
+            require(len(artifacts) == 29, "OFFICIAL_NATIVE_BINARY_COVERAGE_CHANGED")
+            result.update(state="PASSED", source=scope["uiRevision"], canonicalAllServices=True,
+                          imagesBuilt=False, releaseQualified=False,
+                          originalCargoLock=ref(output / "original-cargo-lock.toml"),
+                          localizedCargoLock=ref(output / "localized-cargo-lock.toml"),
+                          localizedLockProof=ref(output / "localized-lock-proof.json"),
+                          lockedLocalizedMetadata=ref(output / "locked-localized-metadata.json"),
+                          coreFeatureResolution=ref(output / "core-feature-resolution.json"),
+                          productionFeatureTree=ref(output / "production-feature-tree.txt"),
+                          canonicalCompilerLog=ref(output / "compiler.log"))
+        result["coreCompilerArtifacts"] = ref(output / "core-compiler-artifacts.json")
     store.exclusive("build-receipt.json", result)
     return result
