@@ -40,6 +40,24 @@ def test_imported_checkout_module_refused_for_private_source(tmp_path):
             {"installer_test_vm_rootless_checkpoint_transfer.py": "a" * 64})
 
 
+def test_historical_admission_module_drift_refused(tmp_path, monkeypatch):
+    module = b"archive-v1"
+    controller = b"controller-v1"
+    checkpoint = b"checkpoint"
+    monkeypatch.setattr(subject.archive, "private_file",
+                        lambda path, *_args, **_kwargs:
+                        module if path.name.endswith("admission.py")
+                        else controller)
+    result = {"module_sha256": subject.release.digest(module),
+              "controller_sha256": subject.release.digest(controller)}
+    binding = {"checkpoint_sha256": subject.release.digest(checkpoint)}
+    assert subject._historical_source(tmp_path, result, checkpoint,
+                                      binding) == module
+    result["controller_sha256"] = "0" * 64
+    with pytest.raises(ValueError, match="admitted source differs"):
+        subject._historical_source(tmp_path, result, checkpoint, binding)
+
+
 def test_existing_intent_refuses_before_guest_or_vm_call(tmp_path, monkeypatch):
     vm_id = str(uuid.uuid4())
     copy_id = str(uuid.uuid4())

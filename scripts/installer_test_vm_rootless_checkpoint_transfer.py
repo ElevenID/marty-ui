@@ -263,6 +263,23 @@ def _guest_baseline(binding: dict, readiness: dict) -> tuple[bytes, ...]:
     return ordinary_raw, admin_raw, engine_raw, status
 
 
+def _historical_source(source_dir: Path, result_record: dict,
+                       checkpoint_raw: bytes, binding: dict) -> bytes:
+    module = archive.private_file(
+        source_dir / "installer_test_vm_rootless_package_admission.py",
+        1024 * 1024, uid=0)
+    controller = archive.private_file(
+        source_dir / "installer_test_vm_rootless_package_admission_controller.py",
+        1024 * 1024, uid=0)
+    release.require(release.digest(module) == result_record["module_sha256"]
+                    and release.digest(controller)
+                    == result_record["controller_sha256"]
+                    and release.digest(checkpoint_raw)
+                    == binding["checkpoint_sha256"],
+                    "fixture transfer admitted source differs")
+    return module
+
+
 def transfer_once(*, source: Path, registry: Path, runtime_parent: Path,
                   source_git: Path, source_dir: Path, source_commit: str,
                   vm_id: str, copy_vm_id: str) -> dict:
@@ -346,9 +363,8 @@ def transfer_once(*, source: Path, registry: Path, runtime_parent: Path,
                         == readiness["dpkg_status_sha256"],
                         "fixture transfer admission identity differs")
         current_guest = _guest_baseline(before, readiness)
-        source_module = archive.private_file(
-            source_dir / "installer_test_vm_rootless_package_admission.py",
-            1024 * 1024, uid=0)
+        source_module = _historical_source(
+            source_dir, result_record, checkpoint_raw, before)
         checkpoint._stage_recheck(result_record, source_module)
         stage = admission.STAGE_PARENT / (
             "package-admission-" + result_record["observation_id"])
