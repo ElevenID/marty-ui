@@ -202,7 +202,9 @@ fn shipped_descriptor_preserves_exact_initiation_capability_and_all_eleven_sibli
                 field.kind,
                 if name == "offer_ttl_seconds" {
                     4 // TYPE_UINT64; existing field types remain unchanged.
-                } else if ["claims", "credential_offer_uris", "credential_offer_labels"].contains(&name) {
+                } else if ["claims", "credential_offer_uris", "credential_offer_labels"]
+                    .contains(&name)
+                {
                     11
                 } else {
                     9
