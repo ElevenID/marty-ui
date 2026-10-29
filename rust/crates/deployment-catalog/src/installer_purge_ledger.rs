@@ -1218,6 +1218,12 @@ mod tests {
     }
     #[test]
     fn orphaned_temp_file_cannot_make_first_intent_a_retry() {
+        if isolated_resume_fixture(
+            "installer_purge_ledger::tests::orphaned_temp_file_cannot_make_first_intent_a_retry",
+            &["MARTY_LEDGER_ORPHAN_RESUME_OK"],
+        ) {
+            return;
+        }
         let (root, parent, id, plan, hash) = fixture();
         let ledger = PurgeLedger::create_or_resume(&parent, id, &plan, &hash).unwrap();
         drop(ledger);
@@ -1231,6 +1237,7 @@ mod tests {
             .unwrap();
         assert!(!first.is_retry());
         assert_eq!(fs::read(&orphan).unwrap(), b"incomplete intent");
+        println!("MARTY_LEDGER_ORPHAN_RESUME_OK");
     }
     #[test]
     fn held_ledger_refuses_rebound_sibling_path() {
