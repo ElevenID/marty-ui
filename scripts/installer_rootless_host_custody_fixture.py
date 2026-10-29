@@ -396,8 +396,8 @@ def daemon_log_evidence(raw):
                 (b"operation not permitted", "operation_not_permitted_observed"),
                 (b"permission denied", "permission_denied_observed"),
                 (b"address already in use", "address_in_use_observed"))
-    return {"daemon_log_bytes": len(raw),
-            "daemon_log_sha256": hashlib.sha256(raw).hexdigest(),
+    return {"captured_log_bytes": len(raw),
+            "captured_log_sha256": hashlib.sha256(raw).hexdigest(),
             "observed_log_codes": [code for marker, code in patterns if marker in observed]}
 
 

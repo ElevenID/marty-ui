@@ -31,8 +31,8 @@ class RootlessHostCustodyFixtureTests(unittest.TestCase):
         raw = (b"password=topsecret Bearer hiddenvalue /private/path\n"
                b"newuidmap: write to uid_map failed: Operation not permitted\n")
         evidence = fixture.daemon_log_evidence(raw)
-        self.assertEqual(evidence["daemon_log_bytes"], len(raw))
-        self.assertEqual(evidence["daemon_log_sha256"], hashlib.sha256(raw).hexdigest())
+        self.assertEqual(evidence["captured_log_bytes"], len(raw))
+        self.assertEqual(evidence["captured_log_sha256"], hashlib.sha256(raw).hexdigest())
         self.assertEqual(evidence["observed_log_codes"],
                          ["newuidmap_write_failed", "operation_not_permitted_observed"])
         for secret in ("topsecret", "hiddenvalue", "/private/path"):
