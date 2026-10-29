@@ -113,8 +113,11 @@ def verify(plan, git, profile=None):
         source_script = Path(plan["sources"]["ui"]["directory"]) / "scripts/build-rust-service-binaries.sh"
         seed = json.loads(read_ref(plan["targetSeedReceipt"]).read_bytes())
         tool = read_ref(plan["buildTool"])
+        lock_guard = read_ref(plan["lockGuard"])
         require(sha(tool) == sha(Path(__file__).with_name("build-rust-service-binaries.sh")),
                 "EXACT_REVIEWED_BUILD_TOOL_REQUIRED")
+        require(sha(lock_guard) == sha(Path(__file__).with_name("ci") / "check_core_localized_lock.py"),
+                "EXACT_REVIEWED_LOCK_GUARD_REQUIRED")
         verify_official_inputs(freeze, seed, source_script.read_text(), scope, tool.read_text())
     recipe = read_ref(plan["recipe"])
     require(recipe.read_text() == render_recipe(profile), "THREE_ROLE_RECIPE_CHANGED")
@@ -209,22 +212,7 @@ cp rust/Cargo.lock /out/original-cargo-lock.toml
 python3 scripts/localize_marty_core_dependencies.py rust/Cargo.toml .github/feature-regression/rust-probe/Cargo.toml --core-root /build/core > /out/localizer.log
 cargo metadata --offline --format-version 1 --manifest-path rust/Cargo.toml > /out/localized-metadata.json
 cp rust/Cargo.lock /out/localized-cargo-lock.toml
-python3 - <<'LOCK_BOUNDARY'
-import pathlib,tomllib
-old=tomllib.loads(pathlib.Path('/out/original-cargo-lock.toml').read_text())
-new=tomllib.loads(pathlib.Path('/out/localized-cargo-lock.toml').read_text())
-assert set(old)==set(new) and old['version']==new['version']
-assert {k:v for k,v in old.items() if k!='package'}=={k:v for k,v in new.items() if k!='package'}
-def core(p):return 'github.com/ElevenID/marty-core' in p.get('source','')
-old_core=[p for p in old['package'] if core(p)]
-assert len(old_core)==9
-old_other=sorted((p for p in old['package'] if not core(p)),key=lambda p:(p['name'],p['version'],p.get('source','')))
-new_other=sorted((p for p in new['package'] if p['name'] not in {c['name'] for c in old_core}),key=lambda p:(p['name'],p['version'],p.get('source','')))
-assert old_other==new_other
-new_core=[p for p in new['package'] if p['name'] in {c['name'] for c in old_core}]
-assert len(new_core)==len(old_core) and all('source' not in p for p in new_core)
-assert sorted(({k:v for k,v in p.items() if k!='source'} for p in old_core),key=lambda p:p['name'])==sorted(new_core,key=lambda p:p['name'])
-LOCK_BOUNDARY
+python3 /build/lock_guard.py /out/original-cargo-lock.toml /out/localized-cargo-lock.toml > /out/localized-lock-proof.json
 cargo metadata --offline --locked --format-version 1 --manifest-path rust/Cargo.toml > /out/locked-localized-metadata.json
 python3 - <<'BOUNDARY'
 import json,pathlib,subprocess,sys
@@ -294,6 +282,8 @@ def build_arguments(plan, profile=None):
     if profile == OFFICIAL_PROFILE:
         args += ["--mount", "type=bind,src=" + daemon_source(plan["buildTool"]["path"])
                  + ",dst=/build/tool.sh,readonly"]
+        args += ["--mount", "type=bind,src=" + daemon_source(plan["lockGuard"]["path"])
+                 + ",dst=/build/lock_guard.py,readonly"]
     for volume, target in zip(scope["volumes"], ("/cargo", "/target")):
         args += ["--mount", "type=volume,src=" + volume + ",dst=" + target]
     return args + ["--entrypoint", "/bin/sh", plan["builderImage"], "/build.sh"]
@@ -442,7 +432,7 @@ def finish(prepared_ref, helper, git, profile=None):
         for destination, volume in zip(("/cargo", "/target"), scope["volumes"]):
             require(mounts[destination]["Type"] == "volume" and mounts[destination]["Name"] == volume,
                     "OFFICIAL_COMPILER_VOLUME_CHANGED")
-        require(all(mounts[d]["RW"] is False for d in ("/src/ui", "/build/core", "/build.sh", "/build/tool.sh")),
+        require(all(mounts[d]["RW"] is False for d in ("/src/ui", "/build/core", "/build.sh", "/build/tool.sh", "/build/lock_guard.py")),
                 "OFFICIAL_SOURCE_MOUNT_CHANGED")
     result = {**state, "state": "BUILD_FAILED_RETAINED", "exitCode": row["State"]["ExitCode"], "oomKilled": row["State"].get("OOMKilled", False), "uiRevision": scope["uiRevision"], "coreRevision": CORE_REVISION, "roleBinaries": scope["roles"]}
     if result["exitCode"] == 0 and not result["oomKilled"]:
@@ -455,7 +445,8 @@ def finish(prepared_ref, helper, git, profile=None):
                     and (output / "original-cargo-lock.toml").is_file()
                     and (output / "localized-cargo-lock.toml").is_file()
                     and (output / "locked-localized-metadata.json").is_file()
-                    and (output / "compiler.log").is_file(),
+                    and (output / "compiler.log").is_file()
+                    and (output / "localized-lock-proof.json").is_file(),
                     "ACTUAL_CORE_FEATURE_EVIDENCE_MISSING")
         require((output / "compiler-artifacts.jsonl").stat().st_size <= 64 * 1024 * 1024,
                 "COMPILER_METADATA_TOO_LARGE")
@@ -478,6 +469,7 @@ def finish(prepared_ref, helper, git, profile=None):
                           imagesBuilt=False, releaseQualified=False,
                           originalCargoLock=ref(output / "original-cargo-lock.toml"),
                           localizedCargoLock=ref(output / "localized-cargo-lock.toml"),
+                          localizedLockProof=ref(output / "localized-lock-proof.json"),
                           lockedLocalizedMetadata=ref(output / "locked-localized-metadata.json"),
                           coreFeatureResolution=ref(output / "core-feature-resolution.json"),
                           productionFeatureTree=ref(output / "production-feature-tree.txt"),

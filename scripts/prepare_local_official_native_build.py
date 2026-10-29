@@ -104,6 +104,7 @@ def stage_operator(repo: Path, revision: str, name: str, destination: Path) -> d
                      "seed_local_official_native_target.py",
                      "run_local_official_native_build.py",
                      "desktop_journal_transport.py",
+                     "ci/check_core_localized_lock.py",
                      "build-rust-service-binaries.sh"), "REVIEWED_OPERATOR_NAME_REQUIRED")
     raw = git(repo, "show", revision + ":scripts/" + name)
     with destination.open("xb") as target:
@@ -165,9 +166,11 @@ def main() -> None:
                  "seed_local_official_native_target.py",
                  "run_local_official_native_build.py",
                  "desktop_journal_transport.py",
+                 "ci/check_core_localized_lock.py",
                  "build-rust-service-binaries.sh"):
-        source = Path(__file__).with_name(name)
+        source = Path(__file__).parent / name
         target = operator_directory / name
+        target.parent.mkdir(parents=True, exist_ok=True)
         require(source.is_file() and not source.is_symlink(), "OPERATOR_SOURCE_MISSING")
         operator_files[name] = stage_operator(producer, producer_revision, name, target)
     (output / "output").mkdir()
@@ -178,6 +181,7 @@ def main() -> None:
                "producerRevision": producer_revision,
                "producerTree": git(producer, "rev-parse", "HEAD^{tree}").decode().strip(),
                "buildTool": operator_files["build-rust-service-binaries.sh"],
+               "lockGuard": operator_files["ci/check_core_localized_lock.py"],
                "imagesBuilt": False, "releaseQualified": False}
     with (output / "source-export-receipt.json").open("x", encoding="utf-8") as target:
         json.dump(receipt, target, indent=2)

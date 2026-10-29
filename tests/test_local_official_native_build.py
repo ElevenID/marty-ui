@@ -8,10 +8,12 @@ from types import SimpleNamespace
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts" / "ci"))
 build = importlib.import_module("scoped_native_build")
 profiles = importlib.import_module("scoped_native_profiles")
 prepare = importlib.import_module("prepare_local_official_native_build")
 launcher = importlib.import_module("run_local_official_native_build")
+lock_guard = importlib.import_module("check_core_localized_lock")
 
 
 class OfficialNativeBuildTests(unittest.TestCase):
@@ -42,9 +44,67 @@ class OfficialNativeBuildTests(unittest.TestCase):
         self.assertIn("guard.FORBIDDEN_FEATURES", recipe)
         self.assertIn("'kms-only' in features", recipe)
         self.assertIn("compiler-artifacts.jsonl", recipe)
-        for delimiter in ("LOCK_BOUNDARY", "BOUNDARY", "ARTIFACTS"):
+        self.assertIn("python3 /build/lock_guard.py /out/original-cargo-lock.toml /out/localized-cargo-lock.toml", recipe)
+        for delimiter in ("BOUNDARY", "ARTIFACTS"):
             code = recipe.split("<<'" + delimiter + "'\n", 1)[1].split("\n" + delimiter, 1)[0]
             compile(code, delimiter, "exec")
+
+    def test_localized_lock_allows_only_two_exact_unused_core_patch_source_removals(self):
+        core_source = "git+https://github.com/ElevenID/marty-core?rev=4320b5fa1c6f41231ee0aa2bc57d8008549f67ac#4320b5fa1c6f41231ee0aa2bc57d8008549f67ac"
+        ssi_source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
+
+        def lock(localized=False, ssi_version="0.16.0"):
+            rows = ["version = 4\n"]
+            for number in range(9):
+                rows.append(f'[[package]]\nname = "marty-core-{number}"\nversion = "1.0.0"\n')
+                if not localized:
+                    rows.append(f'source = "{core_source}"\n')
+            rows.append('[[package]]\nname = "other"\nversion = "2.0.0"\n')
+            for name, version, source in (("bls12_381_plus", "0.8.18", core_source),
+                                          ("elliptic-curve", "0.13.8", core_source),
+                                          ("ssi", ssi_version, ssi_source)):
+                rows.append(f'[[patch.unused]]\nname = "{name}"\nversion = "{version}"\n')
+                if not localized or source != core_source:
+                    rows.append(f'source = "{source}"\n')
+            return "\n".join(rows)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            original = Path(tmp) / "original.toml"
+            localized = Path(tmp) / "localized.toml"
+            original.write_text(lock(), encoding="utf-8")
+            localized.write_text(lock(localized=True), encoding="utf-8")
+            proof = lock_guard.verify_files(original, localized)
+            self.assertEqual(proof["corePackagesLocalized"], 9)
+            self.assertEqual(proof["unusedCorePatchesLocalized"], 2)
+            localized.write_text(lock(localized=True, ssi_version="0.16.1"), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "LOCK_PATCH_DELTA_CHANGED"):
+                lock_guard.verify_files(original, localized)
+            localized.write_text(lock(localized=True).replace('version = "0.8.18"',
+                                                               'version = "0.8.19"'), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "LOCK_PATCH_DELTA_CHANGED"):
+                lock_guard.verify_files(original, localized)
+            localized.write_text(lock(localized=True).replace('version = "2.0.0"',
+                                                               'version = "2.0.1"'), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "LOCK_PACKAGE_DELTA_CHANGED"):
+                lock_guard.verify_files(original, localized)
+            original.write_text(lock().replace(core_source, core_source.replace("4320b5fa", "ffffffff")),
+                                encoding="utf-8")
+            localized.write_text(lock(localized=True), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "LOCK_CORE_SOURCE_CHANGED"):
+                lock_guard.verify_files(original, localized)
+            original.write_text(lock().replace('name = "other"\nversion = "2.0.0"',
+                                               'name = "other"\nversion = "2.0.0"\nchecksum = "' + "a" * 64 + '"'),
+                                encoding="utf-8")
+            localized.write_text(lock(localized=True).replace('name = "other"\nversion = "2.0.0"',
+                                                                'name = "other"\nversion = "2.0.0"\nchecksum = "' + "b" * 64 + '"'),
+                                 encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "LOCK_PACKAGE_DELTA_CHANGED"):
+                lock_guard.verify_files(original, localized)
+            original.write_text(lock(), encoding="utf-8")
+            localized.write_text(lock(localized=True) + '\n[[patch.unused]]\nname = "extra"\nversion = "1.0.0"\n',
+                                 encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "LOCK_PATCH_SET_CHANGED"):
+                lock_guard.verify_files(original, localized)
 
     def test_wrong_lineage_or_seed_refuses_before_compiler(self):
         for field, value in (("productRevision", "f" * 40), ("coreRevision", "f" * 40),
@@ -108,12 +168,13 @@ class OfficialNativeBuildTests(unittest.TestCase):
                 "sources": {"ui": {"directory": "C:/owned/ui"}, "core": {"directory": "C:/owned/core"}},
                 "outputDirectory": "C:/owned/out", "recipe": {"path": "C:/owned/build.sh"},
                 "buildTool": {"path": "C:/owned/tool.sh"},
+                "lockGuard": {"path": "C:/owned/lock_guard.py"},
                 "builderImage": "sha256:" + "a" * 64}
         args = build.build_arguments(plan, self.profile.name)
         mounts = [args[i + 1] for i, value in enumerate(args) if value == "--mount"]
         self.assertIn("type=volume,src=" + self.profile.volumes[1] + ",dst=/target", mounts)
         self.assertNotIn("type=volume,src=d05-rust-target-20261026,dst=/target", mounts)
-        self.assertTrue(all(m.endswith(",readonly") for m in mounts if "/src/ui" in m or "/build/core" in m or "/build.sh" in m or "/build/tool.sh" in m))
+        self.assertTrue(all(m.endswith(",readonly") for m in mounts if "/src/ui" in m or "/build/core" in m or "/build.sh" in m or "/build/tool.sh" in m or "/build/lock_guard.py" in m))
         for field, value in (("--memory", "2g"), ("--memory-swap", "4g"), ("--cpus", "1")):
             self.assertEqual(args[args.index(field) + 1], value)
         self.assertEqual(args[args.index("--network") + 1], "none")
@@ -136,8 +197,10 @@ class OfficialNativeBuildTests(unittest.TestCase):
             (repo / ".gitattributes").write_bytes(b"* text eol=crlf\n")
             (repo / "source.txt").write_bytes(b"line one\nline two\n")
             (repo / "scripts").mkdir()
+            (repo / "scripts/ci").mkdir()
             operator = repo / "scripts/scoped_native_build.py"
             operator.write_bytes(b"print('source')\n")
+            (repo / "scripts/ci/check_core_localized_lock.py").write_bytes(b"print('guard')\n")
             subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
             subprocess.run(["git", "-C", str(repo), "commit", "-qm", "fixture"], check=True)
             revision = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"], text=True).strip()
@@ -145,12 +208,17 @@ class OfficialNativeBuildTests(unittest.TestCase):
             receipt = prepare.export(repo, revision, destination)
             blob = subprocess.check_output(["git", "-C", str(repo), "show", revision + ":source.txt"])
             self.assertEqual((destination / "source.txt").read_bytes(), blob)
-            self.assertEqual(receipt["fileCount"], 3)
+            self.assertEqual(receipt["fileCount"], 4)
             operator.write_bytes(b"print('source')\r\n")
             staged = Path(tmp) / "staged-operator.py"
             bound = prepare.stage_operator(repo, revision, "scoped_native_build.py", staged)
             self.assertEqual(staged.read_bytes(), b"print('source')\n")
             self.assertEqual(bound["bytes"], len(staged.read_bytes()))
+            nested = Path(tmp) / "staged-lock-guard.py"
+            bound_guard = prepare.stage_operator(repo, revision,
+                                                  "ci/check_core_localized_lock.py", nested)
+            self.assertEqual(nested.read_bytes(), b"print('guard')\n")
+            self.assertEqual(bound_guard["bytes"], len(nested.read_bytes()))
 
 
 if __name__ == "__main__":

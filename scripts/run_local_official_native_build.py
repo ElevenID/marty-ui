@@ -102,6 +102,7 @@ def prepare(packet_path: Path, packet_sha: str, seed_path: Path, seed_sha: str,
             "roleBinaries": scope["roles"], "sources": packet["sources"],
             "sourceFreezeReceipt": packet["freeze"], "targetSeedReceipt": ref(seed_path),
             "recipe": packet["recipe"], "buildTool": packet["buildTool"],
+            "lockGuard": packet["lockGuard"],
             "buildToolProducerRevision": packet["producerRevision"],
             "builderImage": IMAGE, "engineId": engine_id,
             "runId": run_id, "containerName": scope["prefix"] + run_id,
@@ -123,6 +124,7 @@ def execute(mode: str, packet_path: Path, packet_sha: str, prepared_sha: str) ->
     require(plan["buildProfile"] == PROFILE and plan["builderImage"] == IMAGE
             and plan["profileSourceSha256"] == packet["operatorFiles"]["scoped_native_profiles.py"]["sha256"]
             and plan["buildTool"] == packet["buildTool"]
+            and plan["lockGuard"] == packet["lockGuard"]
             and plan["buildToolProducerRevision"] == packet["producerRevision"],
             "PREPARED_PROFILE_CHANGED")
     reference = {"path": str(prepared), "sha256": prepared_sha}
