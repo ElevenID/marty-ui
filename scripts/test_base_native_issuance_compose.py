@@ -518,6 +518,7 @@ def expected_model(baseline, *, local, authcrypt, inputs, policy_directory):
             ],
         ],
         "networks": {"marty-network": None},
+        "mem_limit": "536870912",
         "restart": "unless-stopped",
     }
     if local:
