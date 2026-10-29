@@ -1979,7 +1979,6 @@ impl InstallerState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::os::unix::fs::PermissionsExt;
     #[test]
     fn classified_read_reopens_held_inode_and_refuses_special_entries() {
         let root = tempfile::tempdir().unwrap();
