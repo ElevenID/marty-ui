@@ -1,0 +1,290 @@
+{
+  "scope": "SANITIZED_CAPTURED_COMPOSE540_MOUNT_LAYOUT_SOURCE_FIXTURE_NOT_RUNTIME_PROOF",
+  "composeSource": {
+    "revision": "ef61d7410a0c816a71705026e638ec256a591d69",
+    "path": "pkg/compose/create.go",
+    "createHostPathFalseUsesMountAPI": true
+  },
+  "redactions": "Only mount metadata retained; all host source paths and volume names replaced with fixture aliases. No Env, keys, labels, credentials or userdata.",
+  "roles": {
+    "gateway": {
+      "Mounts": [
+        {
+          "Type": "bind",
+          "Source": "/run/desktop/mnt/host/c/fixtures/gateway-bind-0",
+          "Destination": "/run/secrets/gateway_workload_client_cert",
+          "Mode": "",
+          "RW": false,
+          "Propagation": "rprivate"
+        },
+        {
+          "Type": "bind",
+          "Source": "/run/desktop/mnt/host/c/fixtures/gateway-bind-1",
+          "Destination": "/usr/local/bin/marty-gateway",
+          "Mode": "",
+          "RW": false,
+          "Propagation": "rprivate"
+        },
+        {
+          "Type": "bind",
+          "Source": "/run/desktop/mnt/host/c/fixtures/gateway-bind-2",
+          "Destination": "/run/secrets/dsc_issue_gateway_key",
+          "Mode": "",
+          "RW": false,
+          "Propagation": "rprivate"
+        },
+        {
+          "Type": "bind",
+          "Source": "/run/desktop/mnt/host/c/fixtures/gateway-bind-3",
+          "Destination": "/run/secrets/csca_issue_gateway_key",
+          "Mode": "",
+          "RW": false,
+          "Propagation": "rprivate"
+        },
+        {
+          "Type": "volume",
+          "Name": "fixture_gateway_volume_4",
+          "Source": "/var/lib/docker/volumes/fixture_gateway_volume_4/_data",
+          "Destination": "/bao/public-ca",
+          "Driver": "local",
+          "Mode": "ro",
+          "RW": false,
+          "Propagation": ""
+        },
+        {
+          "Type": "volume",
+          "Name": "fixture_gateway_volume_5",
+          "Source": "/var/lib/docker/volumes/fixture_gateway_volume_5/_data",
+          "Destination": "/bao/gateway-grant",
+          "Driver": "local",
+          "Mode": "ro",
+          "RW": false,
+          "Propagation": ""
+        },
+        {
+          "Type": "bind",
+          "Source": "/run/desktop/mnt/host/c/fixtures/gateway-bind-6",
+          "Destination": "/run/secrets/openbao_tls_ca_cert",
+          "Mode": "",
+          "RW": false,
+          "Propagation": "rprivate"
+        },
+        {
+          "Type": "bind",
+          "Source": "/run/desktop/mnt/host/c/fixtures/gateway-bind-7",
+          "Destination": "/run/secrets/gateway_tls_kms_token",
+          "Mode": "",
+          "RW": false,
+          "Propagation": "rprivate"
+        },
+        {
+          "Type": "bind",
+          "Source": "/run/desktop/mnt/host/c/fixtures/gateway-bind-8",
+          "Destination": "/run/secrets/workload_identity_ca_cert",
+          "Mode": "",
+          "RW": false,
+          "Propagation": "rprivate"
+        }
+      ],
+      "HostConfig": {
+        "Binds": [
+          "fixture_gateway_volume_4:/bao/public-ca:ro",
+          "fixture_gateway_volume_5:/bao/gateway-grant:ro"
+        ],
+        "Mounts": [
+          {
+            "Type": "bind",
+            "Source": "C:/fixtures/gateway-bind-6",
+            "Target": "/run/secrets/openbao_tls_ca_cert",
+            "ReadOnly": true,
+            "BindOptions": {}
+          },
+          {
+            "Type": "bind",
+            "Source": "C:/fixtures/gateway-bind-7",
+            "Target": "/run/secrets/gateway_tls_kms_token",
+            "ReadOnly": true,
+            "BindOptions": {}
+          },
+          {
+            "Type": "bind",
+            "Source": "C:/fixtures/gateway-bind-0",
+            "Target": "/run/secrets/gateway_workload_client_cert",
+            "ReadOnly": true,
+            "BindOptions": {}
+          },
+          {
+            "Type": "bind",
+            "Source": "C:/fixtures/gateway-bind-1",
+            "Target": "/usr/local/bin/marty-gateway",
+            "ReadOnly": true,
+            "BindOptions": {}
+          },
+          {
+            "Type": "bind",
+            "Source": "C:/fixtures/gateway-bind-2",
+            "Target": "/run/secrets/dsc_issue_gateway_key",
+            "ReadOnly": true,
+            "BindOptions": {}
+          },
+          {
+            "Type": "bind",
+            "Source": "C:/fixtures/gateway-bind-3",
+            "Target": "/run/secrets/csca_issue_gateway_key",
+            "ReadOnly": true,
+            "BindOptions": {}
+          },
+          {
+            "Type": "bind",
+            "Source": "C:/fixtures/gateway-bind-8",
+            "Target": "/run/secrets/workload_identity_ca_cert",
+            "ReadOnly": true,
+            "BindOptions": {}
+          }
+        ]
+      }
+    },
+    "signing-keys": {
+      "Mounts": [
+        {
+          "Type": "bind",
+          "Source": "/run/desktop/mnt/host/c/fixtures/signing-keys-bind-0",
+          "Destination": "/run/secrets/csca_issue_gateway_key",
+          "Mode": "",
+          "RW": false,
+          "Propagation": "rprivate"
+        },
+        {
+          "Type": "bind",
+          "Source": "/run/desktop/mnt/host/c/fixtures/signing-keys-bind-1",
+          "Destination": "/run/secrets/dev_integration_secret_ca",
+          "Mode": "",
+          "RW": false,
+          "Propagation": "rprivate"
+        },
+        {
+          "Type": "bind",
+          "Source": "/run/desktop/mnt/host/c/fixtures/signing-keys-bind-2",
+          "Destination": "/run/secrets/dsc_issue_gateway_key",
+          "Mode": "",
+          "RW": false,
+          "Propagation": "rprivate"
+        },
+        {
+          "Type": "volume",
+          "Name": "fixture_signing_keys_volume_3",
+          "Source": "/var/lib/docker/volumes/fixture_signing_keys_volume_3/_data",
+          "Destination": "/bao/verify-grant",
+          "Driver": "local",
+          "Mode": "ro",
+          "RW": false,
+          "Propagation": ""
+        },
+        {
+          "Type": "volume",
+          "Name": "fixture_signing_keys_volume_4",
+          "Source": "/var/lib/docker/volumes/fixture_signing_keys_volume_4/_data",
+          "Destination": "/bao/public-ca",
+          "Driver": "local",
+          "Mode": "ro",
+          "RW": false,
+          "Propagation": ""
+        },
+        {
+          "Type": "bind",
+          "Source": "/run/desktop/mnt/host/c/fixtures/signing-keys-bind-5",
+          "Destination": "/usr/local/bin/marty-signing-keys",
+          "Mode": "ro",
+          "RW": false,
+          "Propagation": "rprivate"
+        },
+        {
+          "Type": "bind",
+          "Source": "/run/desktop/mnt/host/c/fixtures/signing-keys-bind-6",
+          "Destination": "/run/secrets/dev_integration_secret_server_cert",
+          "Mode": "",
+          "RW": false,
+          "Propagation": "rprivate"
+        },
+        {
+          "Type": "bind",
+          "Source": "/run/desktop/mnt/host/c/fixtures/signing-keys-bind-7",
+          "Destination": "/run/secrets/openbao_tls_ca_cert",
+          "Mode": "",
+          "RW": false,
+          "Propagation": "rprivate"
+        },
+        {
+          "Type": "bind",
+          "Source": "/run/desktop/mnt/host/c/fixtures/signing-keys-bind-8",
+          "Destination": "/run/secrets/signing_keys_tls_kms_token",
+          "Mode": "",
+          "RW": false,
+          "Propagation": "rprivate"
+        },
+        {
+          "Type": "volume",
+          "Name": "fixture_signing_keys_volume_9",
+          "Source": "/var/lib/docker/volumes/fixture_signing_keys_volume_9/_data",
+          "Destination": "/bao/signing-keys-token",
+          "Driver": "local",
+          "Mode": "ro",
+          "RW": false,
+          "Propagation": ""
+        }
+      ],
+      "HostConfig": {
+        "Binds": [
+          "fixture_signing_keys_volume_3:/bao/verify-grant:ro",
+          "fixture_signing_keys_volume_4:/bao/public-ca:ro",
+          "fixture_signing_keys_volume_9:/bao/signing-keys-token:ro",
+          "C:/fixtures/signing-keys-bind-5:/usr/local/bin/marty-signing-keys:ro"
+        ],
+        "Mounts": [
+          {
+            "Type": "bind",
+            "Source": "C:/fixtures/signing-keys-bind-0",
+            "Target": "/run/secrets/csca_issue_gateway_key",
+            "ReadOnly": true,
+            "BindOptions": {}
+          },
+          {
+            "Type": "bind",
+            "Source": "C:/fixtures/signing-keys-bind-6",
+            "Target": "/run/secrets/dev_integration_secret_server_cert",
+            "ReadOnly": true,
+            "BindOptions": {}
+          },
+          {
+            "Type": "bind",
+            "Source": "C:/fixtures/signing-keys-bind-1",
+            "Target": "/run/secrets/dev_integration_secret_ca",
+            "ReadOnly": true,
+            "BindOptions": {}
+          },
+          {
+            "Type": "bind",
+            "Source": "C:/fixtures/signing-keys-bind-2",
+            "Target": "/run/secrets/dsc_issue_gateway_key",
+            "ReadOnly": true,
+            "BindOptions": {}
+          },
+          {
+            "Type": "bind",
+            "Source": "C:/fixtures/signing-keys-bind-7",
+            "Target": "/run/secrets/openbao_tls_ca_cert",
+            "ReadOnly": true,
+            "BindOptions": {}
+          },
+          {
+            "Type": "bind",
+            "Source": "C:/fixtures/signing-keys-bind-8",
+            "Target": "/run/secrets/signing_keys_tls_kms_token",
+            "ReadOnly": true,
+            "BindOptions": {}
+          }
+        ]
+      }
+    }
+  }
+}

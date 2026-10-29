@@ -289,17 +289,109 @@ def peel_inspect_environment(before, actual, role, additions):
     return list(before)
 
 
-def bind_map(rows):
+def daemon_mount_map(rows):
+    require(isinstance(rows, list), "INSPECT_MOUNT_ARRAY_REQUIRED")
+    parsed = {}
+    for row in rows:
+        require(
+            isinstance(row, dict)
+            and isinstance(row.get("Destination"), str)
+            and row["Destination"].startswith("/")
+            and row["Destination"] not in parsed,
+            "CLOSED_UNIQUE_DAEMON_MOUNTS_REQUIRED",
+        )
+        parsed[row["Destination"]] = row
+    return parsed
+
+
+def named_volume(source, observed):
+    require(
+        isinstance(source, str)
+        and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", source)
+        and observed.get("Type") == "volume"
+        and observed.get("Name") == source,
+        "EXACT_EXISTING_NAMED_VOLUME_REQUIRED",
+    )
+    return source
+
+
+def bind_map(rows, mounts):
+    """Typed Binds: retain named volumes, normalize only actual bind paths."""
+    require(isinstance(rows, list), "HOST_BIND_ARRAY_REQUIRED")
     parsed = {}
     for bind in rows:
         require(isinstance(bind, str), "HOST_BIND_STRING_REQUIRED")
         parts = bind.rsplit(":", 2)
         require(
-            len(parts) == 3 and parts[1] not in parsed,
+            len(parts) == 3 and parts[1] not in parsed and parts[1] in mounts,
             "CLOSED_UNIQUE_HOST_BINDS_REQUIRED",
         )
-        parsed[parts[1]] = (daemon_source(parts[0]), parts[2])
+        source, target, mode = parts
+        observed = mounts[target]
+        require(
+            isinstance(mode, str)
+            and re.fullmatch(r"[A-Za-z0-9_,.-]+", mode)
+            and type(observed.get("RW")) is bool
+            and observed["RW"] == ("ro" not in mode.split(",")),
+            "HOST_BIND_READONLY_CHANGED",
+        )
+        if observed.get("Type") == "bind":
+            source = daemon_source(source)
+            require(
+                source == daemon_source(observed["Source"]),
+                "HOST_BIND_SOURCE_CHANGED",
+            )
+        else:
+            source = named_volume(source, observed)
+        parsed[target] = (observed["Type"], source, mode)
     return parsed
+
+
+def host_mount_map(rows, mounts):
+    require(isinstance(rows, list), "HOST_MOUNT_ARRAY_REQUIRED")
+    parsed = {}
+    for row in rows:
+        require(
+            isinstance(row, dict)
+            and isinstance(row.get("Target"), str)
+            and row["Target"] in mounts
+            and row["Target"] not in parsed
+            and type(row.get("ReadOnly")) is bool,
+            "CLOSED_UNIQUE_HOST_MOUNTS_REQUIRED",
+        )
+        target = row["Target"]
+        observed = mounts[target]
+        require(
+            row.get("Type") == observed.get("Type")
+            and type(observed.get("RW")) is bool
+            and row["ReadOnly"] is (not observed["RW"]),
+            "HOST_MOUNT_TYPE_OR_READONLY_CHANGED",
+        )
+        normalized = deepcopy(row)
+        if row["Type"] == "bind":
+            normalized["Source"] = daemon_source(row["Source"])
+            require(
+                normalized["Source"] == daemon_source(observed["Source"]),
+                "HOST_MOUNT_SOURCE_CHANGED",
+            )
+        else:
+            normalized["Source"] = named_volume(row.get("Source"), observed)
+        # Preserve every option and metadata field on retained mounts.
+        parsed[target] = normalized
+    return parsed
+
+
+def host_mounts(inspect):
+    mounts = daemon_mount_map(inspect["Mounts"])
+    host = inspect["HostConfig"]
+    binds = bind_map(host.get("Binds") or [], mounts)
+    api = host_mount_map(host.get("Mounts") or [], mounts)
+    require(not set(binds) & set(api), "DUPLICATE_HOST_MOUNT_REPRESENTATION")
+    require(
+        set(binds) | set(api) == set(mounts),
+        "COMPLETE_HOST_MOUNT_REPRESENTATIONS_REQUIRED",
+    )
+    return binds, api
 
 
 def peel_validated_inspect(before, actual, role, bindings, additions):
@@ -317,13 +409,7 @@ def peel_validated_inspect(before, actual, role, bindings, additions):
     )
     targets = {"/run/secrets/" + n: n for n in NAMES}
 
-    def mounts(rows):
-        require(isinstance(rows, list), "INSPECT_MOUNT_ARRAY_REQUIRED")
-        parsed = {m["Destination"]: m for m in rows}
-        require(len(parsed) == len(rows), "DUPLICATE_RUNTIME_MOUNT")
-        return parsed
-
-    old, new = mounts(before["Mounts"]), mounts(actual["Mounts"])
+    old, new = daemon_mount_map(before["Mounts"]), daemon_mount_map(actual["Mounts"])
     require(
         not set(old) & set(targets) and set(new) == set(old) | set(targets),
         "EXACT_ADDITIVE_RUNTIME_MOUNTS_REQUIRED",
@@ -334,49 +420,42 @@ def peel_validated_inspect(before, actual, role, bindings, additions):
             set(row) == {"Type", "Source", "Destination", "Mode", "RW", "Propagation"}
             and row["Type"] == "bind"
             and row["RW"] is False
-            and row["Mode"] in ("ro", "ro,rprivate")
+            and row["Mode"] == "ro"
             and row["Propagation"] == "rprivate"
             and daemon_source(row["Source"]) == daemon_source(bindings[name]["path"]),
             "EXACT_READONLY_OPERATOR_RUNTIME_MOUNT_REQUIRED",
         )
     # Existing mounts retain their actual values for the strict checker.
     result["Mounts"] = [m for m in actual["Mounts"] if m["Destination"] not in targets]
-    old_binds = before["HostConfig"].get("Binds") or []
-    new_binds = actual["HostConfig"].get("Binds") or []
+    old_binds, old_api = host_mounts(before)
+    new_binds, new_api = host_mounts(actual)
+    require(old_binds == new_binds, "EXISTING_HOST_BINDS_CHANGED")
+    # Compose 5.4.0 create.go bindRequiresMountAPI chooses HostConfig.Mounts
+    # when the reviewed long-syntax bind has create_host_path=false. Existing
+    # named volumes may remain in Binds; never reinterpret them as host paths.
     require(
-        isinstance(old_binds, list)
-        and isinstance(new_binds, list)
-        and len(new_binds) == len(old_binds) + 2,
-        "EXACT_ADDITIVE_HOST_BINDS_REQUIRED",
+        not set(old_api) & set(targets)
+        and set(new_api) == set(old_api) | set(targets)
+        and all(new_api[k] == v for k, v in old_api.items()),
+        "EXACT_ADDITIVE_HOST_API_MOUNTS_REQUIRED",
     )
-    retained, observed = [], set()
-    for bind in new_binds:
-        require(isinstance(bind, str), "HOST_BIND_STRING_REQUIRED")
-        parts = bind.rsplit(":", 2)
-        require(len(parts) == 3, "CLOSED_HOST_BIND_GRAMMAR_REQUIRED")
-        source, target, mode = parts
-        if target not in targets:
-            retained.append(bind)
-            continue
+    for target, name in targets.items():
         require(
-            target not in observed
-            and mode in ("ro", "ro,rprivate")
-            and daemon_source(source)
-            == daemon_source(bindings[targets[target]]["path"]),
-            "EXACT_READONLY_OPERATOR_HOST_BIND_REQUIRED",
+            new_api[target]
+            == {
+                "Type": "bind",
+                "Source": daemon_source(bindings[name]["path"]),
+                "Target": target,
+                "ReadOnly": True,
+                "BindOptions": {},
+            },
+            "EXACT_READONLY_OPERATOR_HOST_API_MOUNT_REQUIRED",
         )
-        observed.add(target)
-    require(observed == set(targets), "TWO_OPERATOR_HOST_BINDS_REQUIRED")
-
-    require(bind_map(retained) == bind_map(old_binds), "EXISTING_HOST_BINDS_CHANGED")
-    # The existing production checker omits HostConfig Binds/Mounts after its
-    # daemon mount check. Independently close both here; do not rely on it to
-    # catch an unproved configuration-only mount option/representation change.
-    require(
-        before["HostConfig"].get("Mounts") == actual["HostConfig"].get("Mounts"),
-        "UNPROVED_HOST_MOUNT_REPRESENTATION_CHANGE",
-    )
-    result["HostConfig"]["Binds"] = before["HostConfig"].get("Binds")
+    for key in ("Binds", "Mounts"):
+        if key in before["HostConfig"]:
+            result["HostConfig"][key] = deepcopy(before["HostConfig"][key])
+        else:
+            result["HostConfig"].pop(key, None)
     return result
 
 
@@ -431,16 +510,15 @@ def checked_rollback_container(before, actual, role, strict_checker):
         )
     # Keep only the already proven Windows/Desktop source equivalence.
     require(
-        bind_map(before["HostConfig"].get("Binds") or [])
-        == bind_map(actual["HostConfig"].get("Binds") or []),
-        "ROLLBACK_HOST_MOUNT_CONFIGURATION_CHANGED",
-    )
-    require(
-        before["HostConfig"].get("Mounts") == actual["HostConfig"].get("Mounts"),
+        host_mounts(before) == host_mounts(actual),
         "ROLLBACK_HOST_MOUNT_CONFIGURATION_CHANGED",
     )
     checked = deepcopy(actual)
-    checked["HostConfig"]["Binds"] = before["HostConfig"].get("Binds")
+    for key in ("Binds", "Mounts"):
+        if key in before["HostConfig"]:
+            checked["HostConfig"][key] = deepcopy(before["HostConfig"][key])
+        else:
+            checked["HostConfig"].pop(key, None)
     strict_checker(before, checked, role)
     return {
         "role": role,

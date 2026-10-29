@@ -257,11 +257,19 @@ class DeltaControls(unittest.TestCase):
         actual["Config"]["Env"] = [
             k + "=" + v for k, v in after["services"]["gateway"]["environment"].items()
         ]
-        actual["HostConfig"]["Binds"] = []
+        actual["HostConfig"]["Mounts"] = []
         for name in subject.NAMES:
             source = subject.daemon_source(bindings[name]["path"])
             target = "/run/secrets/" + name
-            actual["HostConfig"]["Binds"].append(source + ":" + target + ":ro")
+            actual["HostConfig"]["Mounts"].append(
+                {
+                    "Type": "bind",
+                    "Source": source,
+                    "Target": target,
+                    "ReadOnly": True,
+                    "BindOptions": {},
+                }
+            )
             actual["Mounts"].append(
                 {
                     "Type": "bind",
@@ -306,9 +314,7 @@ class DeltaControls(unittest.TestCase):
             if field == "writable":
                 bad["Mounts"][0]["RW"] = True
             elif field == "host_bind":
-                bad["HostConfig"]["Binds"][0] = (
-                    bad["HostConfig"]["Binds"][0][:-2] + "rw"
-                )
+                bad["HostConfig"]["Binds"] = ["foreign:/run/secrets/new:ro"]
             elif field == "duplicate":
                 bad["Mounts"].append(copy.deepcopy(bad["Mounts"][0]))
             elif field == "host_mounts":
@@ -340,6 +346,14 @@ class DeltaControls(unittest.TestCase):
         subject.checked_rollback_container(old, copy.deepcopy(old), "gateway", strict)
         self.assertEqual(checked, ["gateway"])
         old["HostConfig"]["Binds"] = ["C:/private/native:/usr/local/bin/gateway:ro"]
+        old["Mounts"] = [
+            {
+                "Type": "bind",
+                "Source": "C:/private/native",
+                "Destination": "/usr/local/bin/gateway",
+                "RW": False,
+            }
+        ]
         equivalent = copy.deepcopy(old)
         equivalent["HostConfig"]["Binds"] = [
             "/run/desktop/mnt/host/c/private/native:/usr/local/bin/gateway:ro"
@@ -366,6 +380,117 @@ class DeltaControls(unittest.TestCase):
                 self.assertRaises((ValueError, AssertionError)),
             ):
                 subject.checked_rollback_container(old, actual, "gateway", strict)
+
+    def test_captured_compose540_layout_keeps_named_volumes_and_mount_metadata(self):
+        layouts = json.loads(
+            (
+                Path(__file__).parent / "fixtures/mdoc-compose540-mount-layout.json"
+            ).read_text()
+        )["roles"]
+        before_compose, after_compose, bindings, additions = fixture()
+        for role, layout in layouts.items():
+            old = copy.deepcopy(layout)
+            old["Config"] = {
+                "Env": [
+                    k + "=" + v
+                    for k, v in before_compose["services"][role]["environment"].items()
+                ]
+            }
+            actual = copy.deepcopy(old)
+            actual["Config"]["Env"] = [
+                k + "=" + v
+                for k, v in after_compose["services"][role]["environment"].items()
+            ]
+            for name in subject.NAMES:
+                source, target = bindings[name]["path"], "/run/secrets/" + name
+                actual["HostConfig"]["Mounts"].append(
+                    {
+                        "Type": "bind",
+                        "Source": source,
+                        "Target": target,
+                        "ReadOnly": True,
+                        "BindOptions": {},
+                    }
+                )
+                actual["Mounts"].append(
+                    {
+                        "Type": "bind",
+                        "Source": subject.daemon_source(source),
+                        "Destination": target,
+                        "Mode": "ro",
+                        "RW": False,
+                        "Propagation": "rprivate",
+                    }
+                )
+            called = []
+
+            def strict(a, b, selected):
+                called.append(selected)
+                self.assertEqual(
+                    a, b
+                )  # every retained volume field reaches the checker
+
+            subject.checked_container(old, actual, role, bindings, additions, strict)
+            subject.checked_rollback_container(old, copy.deepcopy(old), role, strict)
+            self.assertEqual(called, [role, role])
+            for mutation in (
+                "named_source",
+                "named_rw",
+                "volume_name",
+                "volume_driver",
+                "volume_source",
+                "host_source",
+                "host_rw",
+                "host_type",
+                "host_duplicate",
+                "host_missing",
+                "host_option",
+                "host_extra",
+                "cross_duplicate",
+                "wrong_representation",
+            ):
+                bad = copy.deepcopy(actual)
+                volume = next(m for m in bad["Mounts"] if m["Type"] == "volume")
+                api = bad["HostConfig"]["Mounts"]
+                if mutation == "named_source":
+                    parts = bad["HostConfig"]["Binds"][0].rsplit(":", 2)
+                    bad["HostConfig"]["Binds"][0] = "foreign:" + ":".join(parts[1:])
+                elif mutation == "named_rw":
+                    bad["HostConfig"]["Binds"][0] += ",rw"
+                elif mutation == "volume_name":
+                    volume["Name"] += "-foreign"
+                elif mutation == "volume_driver":
+                    volume["Driver"] = "foreign"
+                elif mutation == "volume_source":
+                    volume["Source"] += "-foreign"
+                elif mutation == "host_source":
+                    api[-1]["Source"] = "C:/foreign"
+                elif mutation == "host_rw":
+                    api[-1]["ReadOnly"] = False
+                elif mutation == "host_type":
+                    api[-1]["Type"] = "volume"
+                elif mutation == "host_duplicate":
+                    api.append(copy.deepcopy(api[-1]))
+                elif mutation == "host_missing":
+                    api.pop(0)
+                elif mutation == "host_option":
+                    api[-1]["BindOptions"]["CreateMountpoint"] = True
+                elif mutation == "host_extra":
+                    api[-1]["Unreviewed"] = True
+                elif mutation in ("cross_duplicate", "wrong_representation"):
+                    row = api[-1]
+                    bad["HostConfig"]["Binds"].append(
+                        row["Source"] + ":" + row["Target"] + ":ro"
+                    )
+                    if mutation == "wrong_representation":
+                        api.pop()
+                with (
+                    self.subTest(role=role, mutation=mutation),
+                    self.assertRaises((ValueError, AssertionError)),
+                ):
+                    subject.checked_container(
+                        old, bad, role, bindings, additions, strict
+                    )
 
 
 if __name__ == "__main__":
