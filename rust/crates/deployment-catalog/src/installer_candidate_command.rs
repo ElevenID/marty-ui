@@ -548,7 +548,7 @@ mod tests {
         assert!(options(&duplicate).is_err());
     }
     #[test]
-    fn candidate_entry_refuses_missing_duplicate_and_bypass_options() {
+    fn candidate_entry_preserves_rootless_hold_and_refuses_bypass_options() {
         for args in [
             vec![],
             vec!["--skip-verification", "true"],
@@ -558,9 +558,16 @@ mod tests {
             let args = args.into_iter().map(str::to_owned).collect::<Vec<_>>();
             assert!(options(&args).is_err());
             let error = install(&args, "not-a-build").unwrap_err();
-            assert_eq!(error, REFUSED);
+            assert_eq!(
+                error,
+                "Acceptance-only candidate installation requires qualified rootless storage mapping"
+            );
             assert!(!error.contains("sensitive-input"));
         }
+        assert_eq!(
+            install(&valid_options(), "not-a-build").unwrap_err(),
+            "Acceptance-only candidate installation requires qualified rootless storage mapping"
+        );
     }
 
     #[test]
