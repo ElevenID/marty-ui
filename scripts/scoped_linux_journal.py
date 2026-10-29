@@ -132,8 +132,18 @@ class LinuxBuildJournal:
         require(self.private.is_relative_to(Path.home() / ".codex/private") and self.private.is_dir() and not self.private.is_symlink()
                 and not self.private.is_junction(), "JOURNAL_WINDOWS_PRIVATE_ROOT")
         self.run_id, self.specification = run_id, specification
-        require(set(specification) == {"schema", "backend", "workerSha256", "sharedSha256", "rootProof", "bootstrapParent"}
-                and specification["schema"] == 1 and specification["backend"] == "UBUNTU_PRIVATE_JOURNAL_V1", "JOURNAL_BACKEND_SCHEMA")
+        keys = {"schema", "backend", "workerSha256", "sharedSha256", "rootProof", "bootstrapParent"}
+        desktop = specification.get("backend") == "DOCKER_DESKTOP_PRIVATE_JOURNAL_V1"
+        require(set(specification) == keys | ({"desktop"} if desktop else set()) and specification["schema"] == 1
+                and specification["backend"] in {"UBUNTU_PRIVATE_JOURNAL_V1", "DOCKER_DESKTOP_PRIVATE_JOURNAL_V1"}, "JOURNAL_BACKEND_SCHEMA")
+        self.desktop_transport = None
+        if desktop:
+            transport = Path(__file__).with_name("desktop_journal_transport.py")
+            require(sha(transport) == specification["desktop"]["transportSha256"], "JOURNAL_DESKTOP_TRANSPORT_CHANGED")
+            module = types.ModuleType("reviewed_desktop_journal_transport")
+            module.__file__ = str(transport)
+            exec(compile(transport.read_bytes(), str(transport), "exec"), module.__dict__)
+            self.desktop_transport = module.DesktopPrivateJournalTransport(self.private, run_id, specification["desktop"])
         require(specification["workerSha256"] == sha(Path(__file__)) and
                 specification["sharedSha256"] == sha(Path(__file__).with_name("scoped_native_runtime.py")), "JOURNAL_BACKEND_SOURCE_CHANGED")
         if initializing:
@@ -141,6 +151,8 @@ class LinuxBuildJournal:
                     "JOURNAL_INITIALIZATION_SCHEMA")
             root_path(run_id)
         else:
+            if desktop:
+                require(isinstance(specification["desktop"]["volumeProof"], dict), "JOURNAL_DESKTOP_VOLUME_PROOF_REQUIRED")
             require(specification["bootstrapParent"].get("supported") is True and specification["bootstrapParent"].get("synced") is True, "JOURNAL_BOOTSTRAP_REQUIRED")
             validate_root(specification["rootProof"], run_id)
 
@@ -164,7 +176,11 @@ class LinuxBuildJournal:
                 "/usr/bin/python3", "-I", client_path(Path(__file__)), "--worker", client_path(file), hashlib.sha256(raw).hexdigest()]
         environment = {k: v for k, v in os.environ.items() if k.upper() in {"PATH", "SYSTEMROOT", "WINDIR", "TEMP", "TMP", "USERPROFILE", "HOME", "APPDATA", "LOCALAPPDATA", "COMSPEC", "PATHEXT"}}
         try:
-            result = subprocess.run(args, env=environment, stdin=subprocess.DEVNULL, capture_output=True, timeout=15)
+            if self.desktop_transport is None:
+                result = subprocess.run(args, env=environment, stdin=subprocess.DEVNULL, capture_output=True, timeout=15)
+            else:
+                result = self.desktop_transport.execute(file, hashlib.sha256(raw).hexdigest(), Path(__file__),
+                                                        Path(__file__).with_name("scoped_native_runtime.py"), client_path)
         except subprocess.TimeoutExpired as error:
             raise RuntimeError("LINUX_JOURNAL_OUTCOME_UNKNOWN_NO_RETRY") from error
         require(result.returncode == 0 and len(result.stdout) <= MAXIMUM and len(result.stderr) <= 4096, "LINUX_JOURNAL_REFUSED_RETAIN_REQUEST")
@@ -205,6 +221,17 @@ def prepare_linux_journal(private, run_id, worker_sha256, shared_sha256):
     specification = {"schema": 1, "backend": "UBUNTU_PRIVATE_JOURNAL_V1", "workerSha256": worker_sha256,
                      "sharedSha256": shared_sha256, "rootProof": None, "bootstrapParent": None}
     store = LinuxBuildJournal(private, run_id, specification, initializing=True)
+    response = store.invoke("initialize", None)
+    return {**specification, "rootProof": response["rootProof"], "bootstrapParent": response["bootstrapParent"]}
+
+
+def prepare_desktop_journal(private, run_id, worker_sha256, shared_sha256, desktop):
+    """Explicit owned Docker resource initialization; never a WSL fallback."""
+    require(desktop.get("volumeProof") is None, "DESKTOP_NEW_VOLUME_REQUIRED")
+    specification = {"schema": 1, "backend": "DOCKER_DESKTOP_PRIVATE_JOURNAL_V1", "workerSha256": worker_sha256,
+                     "sharedSha256": shared_sha256, "rootProof": None, "bootstrapParent": None, "desktop": dict(desktop)}
+    store = LinuxBuildJournal(private, run_id, specification, initializing=True)
+    store.desktop_transport.prepare_volume()
     response = store.invoke("initialize", None)
     return {**specification, "rootProof": response["rootProof"], "bootstrapParent": response["bootstrapParent"]}
 

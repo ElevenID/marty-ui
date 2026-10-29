@@ -222,7 +222,12 @@ fn write_or_verify(parent: &File, entry: &str, bytes: &[u8], limit: usize) -> Re
     }
 }
 fn lock(directory: &File) -> Result<()> {
-    require(unsafe { libc::flock(directory.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0)
+    let status = unsafe { libc::flock(directory.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    #[cfg(test)]
+    if status != 0 {
+        tests::record_lock_refusal(std::io::Error::last_os_error().raw_os_error());
+    }
+    require(status == 0)
 }
 fn directory_name(id: uuid::Uuid) -> String {
     format!("marty-purge-{}", id.simple())
@@ -921,6 +926,33 @@ impl PersistedIntent {
 
 #[cfg(test)]
 mod tests {
+    std::thread_local! {
+        static LAST_LOCK_ERRNO: std::cell::Cell<Option<i32>> = const { std::cell::Cell::new(None) };
+    }
+
+    pub(super) fn record_lock_refusal(errno: Option<i32>) {
+        LAST_LOCK_ERRNO.with(|value| value.set(errno));
+    }
+
+    fn observed_resume(
+        parent: &File,
+        installation_id: uuid::Uuid,
+        confirmed_sha256: &str,
+    ) -> Result<(PurgeLedger, Vec<u8>)> {
+        LAST_LOCK_ERRNO.with(|value| value.set(None));
+        let result = PurgeLedger::open_existing(parent, installation_id, confirmed_sha256);
+        if result.is_err() {
+            let errno = LAST_LOCK_ERRNO.with(|value| value.get());
+            let stage = if errno.is_some() {
+                "directory-flock"
+            } else {
+                "unclassified"
+            };
+            eprintln!("MARTY_LEDGER_RESUME_REFUSED stage={stage} errno={errno:?}");
+        }
+        result
+    }
+
     use super::*;
     use std::os::unix::{
         ffi::OsStrExt,
@@ -1306,6 +1338,33 @@ mod tests {
 
     #[test]
     fn execution_q_create_and_complete_pair_survive_separate_parent_resume() {
+        // A concurrent test's fork can briefly inherit this locked open-file
+        // description until exec closes CLOEXEC descriptors. Keep this positive
+        // release/resume fixture isolated; the production LOCK_NB guard stays exact.
+        const CHILD: &str = "MARTY_LEDGER_RESUME_TEST_CHILD";
+        const MARKER: &str = "MARTY_LEDGER_RESUME_CHILD_OK";
+        if std::env::var_os(CHILD).as_deref() != Some(std::ffi::OsStr::new("1")) {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "--nocapture",
+                    "--test-threads=1",
+                    "installer_purge_ledger::tests::execution_q_create_and_complete_pair_survive_separate_parent_resume",
+                ])
+                .env(CHILD, "1")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "isolated synthetic ledger resume failed: {}",
+                String::from_utf8_lossy(&output.stderr[..output.stderr.len().min(2048)])
+            );
+            let stdout = std::str::from_utf8(&output.stdout).unwrap();
+            assert!(stdout.contains(MARKER));
+            assert!(stdout.contains("MARTY_LEDGER_RETAINED_DESCRIPTION_REFUSED"));
+            assert!(stdout.contains("1 passed; 0 failed"));
+            return;
+        }
         let (temp, ledger_parent, installation_parent, root, ledger, leaf, expected, id, hash) =
             execution_fixture();
         let held_opath = open_at(
@@ -1341,9 +1400,18 @@ mod tests {
             serde_json::from_slice(&fs::read(ledger_path.join(EXECUTION_Q_CREATED)).unwrap())
                 .unwrap();
         assert!(!created.deletion_authorized);
+        let retained_description = ledger.directory.try_clone().unwrap();
         drop(q);
         drop(ledger);
-        let (resumed, _) = PurgeLedger::open_existing(&ledger_parent, id, &hash).unwrap();
+        assert!(observed_resume(&ledger_parent, id, &hash).is_err());
+        assert_eq!(
+            LAST_LOCK_ERRNO.with(|value| value.get()),
+            Some(libc::EWOULDBLOCK)
+        );
+        println!("MARTY_LEDGER_RETAINED_DESCRIPTION_REFUSED");
+        drop(retained_description);
+        let (resumed, _) = observed_resume(&ledger_parent, id, &hash).unwrap();
+        assert_eq!(LAST_LOCK_ERRNO.with(|value| value.get()), None);
         assert!(
             resumed
                 .open_execution_quarantine(&installation_parent, &leaf, &root, &expected)
@@ -1351,6 +1419,7 @@ mod tests {
                 .stamp
                 == created.execution_q
         );
+        println!("{MARKER}");
     }
 
     #[test]
