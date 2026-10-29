@@ -131,3 +131,32 @@ def test_actual_operator_arming_normalizes_only_unique_assignment():
     assert enabled != raw and rehearsal.disabled_operator_source(enabled) == raw
     with pytest.raises(ValueError, match="ONLY_DISPATCH_FLAG_MAY_CHANGE"):
         rehearsal.disabled_operator_source(enabled + b"\nDISPATCH_ENABLED = True\n")
+
+
+def test_cleanup_refuses_recreated_known_helper_generation(tmp_path):
+    value = fixture(tmp_path)
+    failure = {"state": {"pendingStage": "migrate-flow", "pendingContainerId": "a" * 64}}
+    with pytest.raises(ValueError, match="KNOWN_HELPER_CID_CHANGED"):
+        value.cleanup_generation("migrate-flow", "b" * 64, failure)
+    value.cleanup_generation("migrate-flow", "a" * 64, failure)
+    with pytest.raises(ValueError, match="NON_PENDING_HELPER"):
+        value.cleanup_generation("bootstrap-flow", "a" * 64, failure)
+
+
+def test_cleanup_refuses_extra_network_and_binds_created_default(tmp_path):
+    value = fixture(tmp_path)
+    value.i["databaseNetwork"] = "owned"
+    value.network_id = "a" * 64
+    row = {"NetworkSettings": {"Networks": {"owned": {"NetworkID": value.network_id}, "beta": {"NetworkID": "b" * 64}}},
+           "State": {"Status": "running", "Running": True, "Pid": 123}}
+    value.command = lambda *args: pytest.fail("Extra network must fail before network read/effect")
+    with pytest.raises(ValueError, match="CLEANUP_EXTRA_OR_MISSING_NETWORK"):
+        value.cleanup_network(row)
+    del row["NetworkSettings"]["Networks"]["beta"]
+    row["NetworkSettings"]["Networks"]["owned"]["NetworkID"] = ""
+    with pytest.raises(ValueError, match="CLEANUP_NETWORK_ID_CHANGED"):
+        value.cleanup_network(row)
+    row["State"] = {"Status": "created", "Running": False, "Pid": 0}
+    value.command = lambda args: json.dumps([{"Id": value.network_id, "Name": "owned", "Internal": True,
+        "Labels": {"elevenid.owner": rehearsal.OWNER, "elevenid.run": value.fixture_run}}]).encode()
+    value.cleanup_network(row)

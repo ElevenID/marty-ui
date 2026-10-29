@@ -246,6 +246,21 @@ class Rehearsal(NativeDatabasePhase):
         return self.state
 
 
+    def cleanup_network(self, row):
+        networks = row["NetworkSettings"]["Networks"]
+        require(set(networks) == {self.i["databaseNetwork"]} and self.network_id, "CLEANUP_EXTRA_OR_MISSING_NETWORK")
+        observed = networks[self.i["databaseNetwork"]]["NetworkID"]
+        created = row["State"]["Status"] == "created" and not row["State"]["Running"] and row["State"]["Pid"] == 0
+        require(observed == self.network_id or created and observed == "", "CLEANUP_NETWORK_ID_CHANGED")
+        network = json.loads(self.command(["docker", "network", "inspect", self.network_id]))[0]
+        require(network["Id"] == self.network_id and network["Name"] == self.i["databaseNetwork"] and network["Internal"]
+                and network["Labels"].get("elevenid.owner") == OWNER and network["Labels"].get("elevenid.run") == self.fixture_run, "CLEANUP_NETWORK_OWNERSHIP_CHANGED")
+
+    def cleanup_generation(self, stage, cid, failure):
+        require(stage == failure["state"].get("pendingStage"), "NON_PENDING_HELPER_RECONCILIATION_REFUSED")
+        known = failure["state"].get("pendingContainerId")
+        require(not known or known == cid, "KNOWN_HELPER_CID_CHANGED")
+
     def cleanup_effect(self, args):
         require(self.command(["docker", "info", "--format", "{{.ID}}"]).decode().strip() == ENGINE, "ENGINE_CHANGED")
         return self.command(args)
@@ -291,6 +306,7 @@ class Rehearsal(NativeDatabasePhase):
         helper_stages = {"bootstrap-flow", "bootstrap-issuer", "migrate-flow", "migrate-issuer", "reject-flow-before-acl", "reject-issuer-before-acl", "verify-flow", "verify-issuer", "reject-admin-issuer"}
         for stage, stage_id, cid in owned:
             require(stage in helper_stages, "NON_HELPER_STAGE_CONTAINER_REFUSED")
+            self.cleanup_generation(stage, cid, failure)
             self.stage = prefix + "-" + stage
             self.i["runId"] = stage_id
             original = json.loads(self.command(["docker", "inspect", cid]))[0]
@@ -304,13 +320,15 @@ class Rehearsal(NativeDatabasePhase):
             url_file = Path(self.g["root"]) / (stage + "-" + role + "-" + command + ".url.private")
             self.schema_records[cid] = {"name": "marty-native-schema-" + stage_id + "-" + role + "-" + command,
                 "binary": binary, "command": command, "url": url_file.read_text(), "bound": self.i["binaries"][role]}
-            self.validate_schema(cid, created=False, ownership_only=True)
+            verified = self.validate_schema(cid, created=False, ownership_only=True)
+            self.cleanup_network(verified)
             self.state["pendingCleanup"] = cid
             self.persist()
             self.command(["docker", "logs", "--tail", "100", cid])
             if original["State"]["Running"]:
                 self.cleanup_effect(["docker", "stop", "--signal", "SIGTERM", "--timeout", "-1", cid])
             terminal = self.validate_schema(cid, created=False, ownership_only=True)
+            self.cleanup_network(terminal)
             require(not terminal["State"]["Running"] and terminal["State"]["Pid"] == 0, "OWNED_HELPER_STILL_RUNNING")
             self.cleanup_effect(["docker", "rm", cid])
         self.stage = prefix
@@ -329,6 +347,7 @@ class Rehearsal(NativeDatabasePhase):
                     and set(row["HostConfig"].get("Tmpfs") or {}) == {"/var/lib/postgresql/data", "/var/run/postgresql", "/tmp"}
                     and {x.removeprefix("CAP_") for x in row["HostConfig"].get("CapDrop") or []} == {"ALL"}
                     and row["HostConfig"].get("SecurityOpt") in (["no-new-privileges"], ["no-new-privileges:true"]), "OWNED_PG_CLEANUP_REFUSED")
+            self.cleanup_network(row)
             self.g["save"]("pg-original-failure-inspect.json", row)
             self.command(["docker", "logs", "--tail", "100", cid])
             self.state["pendingCleanup"] = cid
@@ -337,6 +356,7 @@ class Rehearsal(NativeDatabasePhase):
                 self.cleanup_effect(["docker", "stop", "--signal", "SIGINT", "--timeout", "-1", cid])
             stopped = json.loads(self.command(["docker", "inspect", cid]))[0]
             require(stopped["Id"] == cid and not stopped["State"]["Running"] and stopped["State"]["Pid"] == 0, "OWNED_PG_STOP_UNKNOWN")
+            self.cleanup_network(stopped)
             self.g["save"]("pg-terminal-inspect.json", stopped)
             self.cleanup_effect(["docker", "rm", cid])
         if self.network_id:
