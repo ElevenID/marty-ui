@@ -60,6 +60,10 @@ pub(crate) mod installer_purge_volume;
 pub mod installer_release;
 pub mod installer_renewal;
 pub mod installer_renewal_bootstrap;
+#[cfg(target_os = "linux")]
+pub mod installer_rootless_canary_helper;
+#[cfg(target_os = "linux")]
+pub mod installer_rootless_storage_canary;
 pub mod installer_runtime;
 pub mod installer_state;
 pub mod installer_tls;

@@ -84,6 +84,7 @@ x-issuance-application-env: &issuance-application-env
 
 services:
   postgres:
+    mem_limit: ${MARTY_POSTGRES_MEMORY_LIMIT:-1g}
     image: postgres:15-alpine
     environment:
       POSTGRES_DB: postgres
@@ -109,6 +110,7 @@ services:
     restart: unless-stopped
 
   redis:
+    mem_limit: ${MARTY_REDIS_MEMORY_LIMIT:-512m}
     image: redis:7-alpine
     # The official entrypoint chowns /data (including this project-scoped socket
     # volume) before dropping privileges. The socket mode serves heterogeneous
@@ -130,6 +132,7 @@ services:
     restart: unless-stopped
 
   keycloak:
+    mem_limit: ${MARTY_KEYCLOAK_MEMORY_LIMIT:-2g}
     image: ${MARTY_KEYCLOAK_KMS_IMAGE:?MARTY_KEYCLOAK_KMS_IMAGE must pin the remote-key image by digest}
     entrypoint: ["/bin/sh", "/scripts/keycloak-selfhost-start.sh"]
     command:
@@ -142,6 +145,8 @@ services:
     ports:
       - "127.0.0.1:${SELFHOST_KEYCLOAK_HOST_PORT:-18180}:8080"
     environment:
+      # Leave room for metaspace, native buffers, threads and the remote-key provider.
+      JAVA_OPTS_KC_HEAP: "-XX:InitialRAMPercentage=20 -XX:MaxRAMPercentage=65"
       KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:-admin}
       KEYCLOAK_ADMIN_PASSWORD_FILE: /run/secrets/keycloak_admin_password
       KC_DB: postgres
@@ -206,6 +211,7 @@ services:
     restart: unless-stopped
 
   keycloak-configurator:
+    mem_limit: ${MARTY_KEYCLOAK_CONFIGURATOR_MEMORY_LIMIT:-512m}
     image: ${MARTY_KEYCLOAK_KMS_IMAGE:?MARTY_KEYCLOAK_KMS_IMAGE must pin the remote-key image by digest}
     entrypoint: ["/bin/bash", "/scripts/setup-keycloak-selfhost-production.sh"]
     environment:
@@ -255,6 +261,7 @@ services:
   # Rust owns the revocation-profile schema. Complete this one-shot migration
   # before the remaining shared Alembic graph reads that schema.
   revocation-profile-migrate:
+    mem_limit: ${MARTY_REVOCATION_PROFILE_MIGRATE_MEMORY_LIMIT:-1g}
     build:
       context: .
       dockerfile: services/Dockerfile
@@ -277,6 +284,7 @@ services:
     restart: "no"
 
   db-migrate:
+    mem_limit: ${MARTY_DB_MIGRATE_MEMORY_LIMIT:-1g}
     build:
       context: .
       dockerfile: services/Dockerfile.migrations
@@ -317,6 +325,7 @@ services:
   # Explicit one-time KMS/DID provisioning. The ordinary migration and all
   # application restarts never mount or use the privileged bootstrap token.
   kms-initialize:
+    mem_limit: ${MARTY_KMS_INITIALIZE_MEMORY_LIMIT:-512m}
     profiles: [kms-init]
     build:
       context: .
@@ -338,6 +347,7 @@ services:
 
   # Apply the native issuance schema with the same Rust build as the API.
   issuance-migrations:
+    mem_limit: ${MARTY_ISSUANCE_MIGRATIONS_MEMORY_LIMIT:-1g}
     build:
       context: .
       dockerfile: services/Dockerfile
@@ -369,6 +379,7 @@ services:
     restart: "no"
 
   gateway:
+    mem_limit: ${MARTY_GATEWAY_MEMORY_LIMIT:-512m}
     build:
       context: .
       dockerfile: services/Dockerfile
@@ -482,6 +493,7 @@ services:
     restart: unless-stopped
 
   auth:
+    mem_limit: ${MARTY_AUTH_MEMORY_LIMIT:-512m}
     build:
       context: .
       dockerfile: services/Dockerfile
@@ -572,6 +584,7 @@ services:
     restart: unless-stopped
 
   organization:
+    mem_limit: ${MARTY_ORGANIZATION_MEMORY_LIMIT:-512m}
     build:
       context: .
       dockerfile: services/Dockerfile
@@ -617,6 +630,7 @@ services:
     restart: unless-stopped
 
   credential-template:
+    mem_limit: ${MARTY_CREDENTIAL_TEMPLATE_MEMORY_LIMIT:-512m}
     build:
       context: .
       dockerfile: services/Dockerfile
@@ -661,6 +675,7 @@ services:
     restart: unless-stopped
 
   trust-profile:
+    mem_limit: ${MARTY_TRUST_PROFILE_MEMORY_LIMIT:-512m}
     build:
       context: .
       dockerfile: services/Dockerfile
@@ -694,6 +709,7 @@ services:
     restart: unless-stopped
 
   issuance:
+    mem_limit: ${MARTY_ISSUANCE_MEMORY_LIMIT:-512m}
     build:
       context: .
       dockerfile: services/Dockerfile
@@ -758,6 +774,7 @@ services:
 
   # Native owner for passport routes; the issuance alias runs the same binary.
   issuance-native:
+    mem_limit: ${MARTY_ISSUANCE_NATIVE_MEMORY_LIMIT:-512m}
     extends:
       file: docker-compose.service.issuance-native-runtime.yml
       service: issuance-native
@@ -827,6 +844,7 @@ services:
 
   # Durable Canvas jobs must never run inside the web-service lifespan.
   canvas-sync-worker:
+    mem_limit: ${MARTY_CANVAS_SYNC_WORKER_MEMORY_LIMIT:-512m}
     build:
       context: .
       dockerfile: services/Dockerfile
@@ -896,6 +914,7 @@ services:
     restart: unless-stopped
 
   applicant:
+    mem_limit: ${MARTY_APPLICANT_MEMORY_LIMIT:-512m}
     build:
       context: .
       dockerfile: services/Dockerfile
@@ -939,6 +958,7 @@ services:
     restart: unless-stopped
 
   notification:
+    mem_limit: ${MARTY_NOTIFICATION_MEMORY_LIMIT:-512m}
     build:
       context: .
       dockerfile: services/Dockerfile
@@ -987,6 +1007,7 @@ services:
     restart: unless-stopped
 
   compliance-profile:
+    mem_limit: ${MARTY_COMPLIANCE_PROFILE_MEMORY_LIMIT:-512m}
     build:
       context: .
       dockerfile: rust/services/Dockerfile.ci
@@ -1028,6 +1049,7 @@ services:
     restart: unless-stopped
 
   presentation-policy:
+    mem_limit: ${MARTY_PRESENTATION_POLICY_MEMORY_LIMIT:-512m}
     build:
       context: .
       dockerfile: services/Dockerfile
@@ -1080,6 +1102,7 @@ services:
     restart: unless-stopped
 
   deployment-profile:
+    mem_limit: ${MARTY_DEPLOYMENT_PROFILE_MEMORY_LIMIT:-512m}
     build:
       context: .
       dockerfile: rust/services/Dockerfile.ci
@@ -1121,6 +1144,7 @@ services:
     restart: unless-stopped
 
   signing-keys:
+    mem_limit: ${MARTY_SIGNING_KEYS_MEMORY_LIMIT:-512m}
     build:
       context: .
       dockerfile: services/Dockerfile
@@ -1176,6 +1200,7 @@ services:
     restart: unless-stopped
 
   flow:
+    mem_limit: ${MARTY_FLOW_MEMORY_LIMIT:-512m}
     build:
       context: .
       dockerfile: services/Dockerfile
@@ -1270,6 +1295,7 @@ services:
     restart: unless-stopped
 
   verification:
+    mem_limit: ${MARTY_VERIFICATION_MEMORY_LIMIT:-512m}
     build:
       context: .
       dockerfile: services/Dockerfile
@@ -1318,6 +1344,7 @@ services:
     restart: unless-stopped
 
   revocation-profile:
+    mem_limit: ${MARTY_REVOCATION_PROFILE_MEMORY_LIMIT:-512m}
     build:
       context: .
       dockerfile: services/Dockerfile
@@ -1364,6 +1391,7 @@ services:
     restart: unless-stopped
 
   device-registration:
+    mem_limit: ${MARTY_DEVICE_REGISTRATION_MEMORY_LIMIT:-512m}
     build:
       context: .
       dockerfile: services/Dockerfile
@@ -1403,6 +1431,7 @@ services:
     restart: unless-stopped
 
   event-stream:
+    mem_limit: ${MARTY_EVENT_STREAM_MEMORY_LIMIT:-512m}
     build:
       context: .
       dockerfile: services/Dockerfile
@@ -1433,6 +1462,7 @@ services:
     restart: unless-stopped
 
   ui:
+    mem_limit: ${MARTY_UI_MEMORY_LIMIT:-1g}
     image: nginx:alpine
     environment:
       GOOGLE_ANALYTICS_MEASUREMENT_ID_FILE: /run/secrets/google_analytics_measurement_id
@@ -1454,6 +1484,7 @@ services:
     restart: unless-stopped
 
   edge:
+    mem_limit: ${MARTY_EDGE_MEMORY_LIMIT:-512m}
     image: nginx:alpine
     ports:
       - "127.0.0.1:${SELFHOST_EDGE_HOST_PORT:-19080}:80"
@@ -1484,6 +1515,7 @@ services:
     restart: unless-stopped
 
   cloudflared:
+    mem_limit: ${MARTY_CLOUDFLARED_MEMORY_LIMIT:-512m}
     build:
       context: .
       dockerfile: docker/cloudflared-wrapper.Dockerfile
@@ -1500,6 +1532,7 @@ services:
     restart: unless-stopped
 
   tunnel-nginx-proxy:
+    mem_limit: ${MARTY_TUNNEL_NGINX_PROXY_MEMORY_LIMIT:-512m}
     profiles: ["beta-tunnel"]
     image: nginx:alpine
     volumes:
@@ -1516,6 +1549,7 @@ services:
     restart: unless-stopped
 
   cloudflared-beta:
+    mem_limit: ${MARTY_CLOUDFLARED_BETA_MEMORY_LIMIT:-512m}
     profiles: ["beta-tunnel"]
     build:
       context: .

@@ -254,6 +254,32 @@ fn print_plan(plan: &Value) {
 
 fn run() -> Result<(), String> {
     let mut args: Vec<String> = env::args().skip(1).collect();
+    if args
+        .first()
+        .is_some_and(|arg| arg == "installer-rootless-canary-helper")
+    {
+        #[cfg(target_os = "linux")]
+        return marty_deployment_catalog::installer_rootless_canary_helper::run(&args[1..]);
+        #[cfg(not(target_os = "linux"))]
+        return Err("internal rootless canary helper requires Linux".into());
+    }
+    if args
+        .first()
+        .is_some_and(|arg| arg == "restore-rootless-canary")
+    {
+        if args.len() != 5 || args[1] != "--installation" || args[3] != "--docker-bin" {
+            return Err(
+                "rootless canary restore requires exact installation and Docker executable".into(),
+            );
+        }
+        #[cfg(target_os = "linux")]
+        return marty_deployment_catalog::installer_rootless_storage_canary::restore_interrupted(
+            &PathBuf::from(&args[2]),
+            &PathBuf::from(&args[4]),
+        );
+        #[cfg(not(target_os = "linux"))]
+        return Err("rootless canary restore requires Linux".into());
+    }
     if args.first().is_some_and(|arg| {
         matches!(
             arg.as_str(),

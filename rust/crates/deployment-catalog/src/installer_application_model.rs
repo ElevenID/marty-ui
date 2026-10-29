@@ -35,6 +35,20 @@ fn require(ok: bool) -> Result<()> {
         Err(REFUSED.into())
     }
 }
+// Compose versions normalize byte sizes as either a JSON number or decimal
+// string. Admit only finite positive limits, never Docker's unlimited sentinel.
+pub(crate) fn memory_limit(value: &Value) -> Result<u64> {
+    let bytes = value.as_u64().or_else(|| {
+        value.as_str().and_then(|s| {
+            (!s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()))
+                .then(|| s.parse::<u64>().ok())
+                .flatten()
+        })
+    });
+    bytes
+        .filter(|n| (6 * 1024 * 1024..=64 * 1024 * 1024 * 1024).contains(n))
+        .ok_or_else(|| REFUSED.into())
+}
 fn object(v: &Value) -> Result<&Map<String, Value>> {
     v.as_object().ok_or_else(|| REFUSED.into())
 }
@@ -270,9 +284,11 @@ pub fn prepare(
                 "working_dir",
                 "stop_grace_period",
                 "pull_policy",
+                "mem_limit",
             ],
         )?;
         require(service["image"].as_str() == images.get(name).map(String::as_str))?;
+        memory_limit(&service["mem_limit"])?;
         if name == "applicant" {
             require(service.get("user").is_none())?;
             require(service["group_add"] == json!([p.applicant_state_gid.to_string()]))?;
@@ -1149,7 +1165,7 @@ mod tests {
                 secrets.push(json!({"source":source,"target":target}));
                 model["secrets"][source] = json!({"name":format!("marty-selfhost-prod_{source}"),"file":compose_path(&p.installation.join("secrets").join(source)).unwrap()});
             }
-            model["services"][name] = json!({"image":image,"networks":{"default":null},"profiles":c["profiles"],"depends_on":deps,"volumes":mounts,"secrets":secrets,"environment":{"BAO_ADDR":"https://openbao:8200"},"healthcheck":{"test":["CMD","true"]},"restart":"no"});
+            model["services"][name] = json!({"image":image,"mem_limit":536870912,"networks":{"default":null},"profiles":c["profiles"],"depends_on":deps,"volumes":mounts,"secrets":secrets,"environment":{"BAO_ADDR":"https://openbao:8200"},"healthcheck":{"test":["CMD","true"]},"restart":"no"});
         }
         for (name, target, published) in [
             ("keycloak", 8080, "18180"),
@@ -1249,6 +1265,39 @@ mod tests {
         let mut foreign_group = model.clone();
         foreign_group["services"]["postgres"]["group_add"] = json!(["10001"]);
         assert!(prepare(&foreign_group, &images, &p).is_err());
+    }
+    #[test]
+    fn memory_caps_are_finite_required_and_compose_version_compatible() {
+        let (model, images, p) = fixture();
+        for valid in [json!(2147483648u64), json!("2147483648")] {
+            let mut changed = model.clone();
+            changed["services"]["keycloak"]["mem_limit"] = valid;
+            prepare(&changed, &images, &p).unwrap();
+        }
+        for invalid in [
+            Value::Null,
+            json!(0),
+            json!(-1),
+            json!("0"),
+            json!("-1"),
+            json!(true),
+            json!(1.5),
+            json!("2g"),
+            json!("+2147483648"),
+            json!(1),
+            json!(64 * 1024 * 1024 * 1024u64 + 1),
+            json!("9999999999999999999999999999999999999999"),
+        ] {
+            let mut changed = model.clone();
+            changed["services"]["keycloak"]["mem_limit"] = invalid;
+            assert!(prepare(&changed, &images, &p).is_err());
+        }
+        let mut missing = model;
+        missing["services"]["keycloak"]
+            .as_object_mut()
+            .unwrap()
+            .remove("mem_limit");
+        assert!(prepare(&missing, &images, &p).is_err());
     }
     #[test]
     fn rejects_resource_and_privilege_drift() {

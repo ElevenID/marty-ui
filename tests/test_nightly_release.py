@@ -37,7 +37,12 @@ def test_nightly_guide_has_one_unedited_rootless_boundary_command():
         f"curl -fsSL https://github.com/ElevenID/marty-ui/releases/download/{tag}/install.sh | "
         f"sh -s -- --candidate-test {tag}"
     ]
-    assert "Provisioning is held" in guide
+    assert "experimental root-free candidate" in guide
+    assert "Normal admitted installation remains held" in guide
+    assert "rootless storage ownership canary" in guide
+    assert "recovery-only command" in guide
+    assert "restore-rootless-canary" in guide
+    assert "production Ready status" in guide
     assert "--install-dir" not in guide
     assert "stage_selfhost_disposable_preview" not in guide
     assert "sudo KMS" not in guide

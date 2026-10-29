@@ -161,6 +161,17 @@ fn actual_source_compose_matches_installer_application_contract() {
     )
     .unwrap();
     assert_eq!(plan.selected_services.len(), 29);
+    for service in plan.model["services"].as_object().unwrap().values() {
+        let limit = &service["mem_limit"];
+        let bytes = limit
+            .as_u64()
+            .or_else(|| limit.as_str()?.parse::<u64>().ok());
+        assert!(bytes.is_some_and(|n| n > 0), "service lost its RAM cap");
+    }
+    assert_eq!(
+        plan.model["services"]["keycloak"]["environment"]["JAVA_OPTS_KC_HEAP"],
+        "-XX:InitialRAMPercentage=20 -XX:MaxRAMPercentage=65"
+    );
     assert!(!plan.installation_ready);
     let order = marty_deployment_catalog::installer_application_graph::startup_order(
         &plan.model,

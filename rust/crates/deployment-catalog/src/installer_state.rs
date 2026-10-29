@@ -1117,7 +1117,10 @@ impl LockedMaintenance {
     pub(crate) fn write_evidence_exclusive(&mut self, entry: &str, bytes: &[u8]) -> Result<()> {
         self.require_unchanged()?;
         let filename = Self::entry(entry)?;
-        if !entry.starts_with("uninstall-") || bytes.is_empty() || bytes.len() > 4 * 1024 * 1024 {
+        if !(entry.starts_with("uninstall-") || entry.starts_with("rootless-canary-"))
+            || bytes.is_empty()
+            || bytes.len() > 4 * 1024 * 1024
+        {
             return Err("invalid maintenance evidence".into());
         }
         let directory = self.evidence()?;

@@ -75,6 +75,7 @@ pub fn add(
     )?;
     let service = json!({
         "image":services_image,"pull_policy":"always",
+        "mem_limit":536870912,
         "entrypoint":["/usr/local/bin/marty-oidf-keyless-edge"],"command":[],
         "user":"10001:10001","read_only":true,"cap_drop":["ALL"],
         "security_opt":["no-new-privileges:true"],"restart":"no",
