@@ -475,7 +475,38 @@ mod tests {
     }
     #[tokio::test]
     async fn offer_lifetime_validation_requires_authenticated_exact_issuer_echo() {
-        use axum::{body::Body, response::Response, routing::post};
+        use axum::{
+            body::Body,
+            response::Response,
+            routing::{any, post},
+        };
+        let redirected: Arc<Mutex<Vec<HeaderMap>>> = Arc::new(Mutex::new(Vec::new()));
+        let target_seen = redirected.clone();
+        let alternate = Router::new().route(
+            "/valid-echo",
+            any(move |headers: HeaderMap| {
+                let target_seen = target_seen.clone();
+                async move {
+                    target_seen.lock().unwrap().push(headers);
+                    Json(json!({"organization_id":"org-1","offer_ttl_seconds":60}))
+                }
+            }),
+        );
+        let alternate_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let alternate_url = format!(
+            "http://{}/valid-echo",
+            alternate_listener.local_addr().unwrap()
+        );
+        let alternate_server =
+            tokio::spawn(async move { axum::serve(alternate_listener, alternate).await.unwrap() });
+        // Positive reachability prevents a closed port from masking accidental redirect following.
+        let probe = Client::new().get(&alternate_url).send().await.unwrap();
+        assert_eq!(
+            probe.json::<Value>().await.unwrap(),
+            json!({"organization_id":"org-1","offer_ttl_seconds":60})
+        );
+        assert_eq!(redirected.lock().unwrap().len(), 1);
+        redirected.lock().unwrap().clear();
         for (status, body, accepted) in [
             (
                 200,
@@ -510,15 +541,17 @@ mod tests {
         ] {
             let captured = Arc::new(Mutex::new(None));
             let sink = captured.clone();
+            let redirect_location = alternate_url.clone();
             let app = Router::new().route(
                 "/internal/compat/issuance/offer-lifetime/validate",
                 post(move |headers: HeaderMap, Json(input): Json<Value>| {
                     let sink = sink.clone();
+                    let redirect_location = redirect_location.clone();
                     async move {
                         *sink.lock().unwrap() = Some((headers, input));
                         Response::builder()
                             .status(status)
-                            .header("location", "http://127.0.0.1:1/no-follow")
+                            .header("location", redirect_location)
                             .body(Body::from(body))
                             .unwrap()
                     }
@@ -539,7 +572,12 @@ mod tests {
             assert_eq!(headers["x-api-key"], "test-native-key");
             assert_eq!(headers["x-organization-id"], "org-1");
             assert_eq!(input, json!({"offer_ttl_seconds":60}));
+            assert!(
+                redirected.lock().unwrap().is_empty(),
+                "issuer validation followed a redirect or forwarded credentials"
+            );
             server.abort();
         }
+        alternate_server.abort();
     }
 }
