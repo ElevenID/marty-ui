@@ -245,7 +245,25 @@ def preflight(*, record=False, tool_dir=None):
                 and admission["docker_version"] == report["dockerd_version"]
                 and admission["system_install"] is False,
                 "rootless tool admission differs")
-        for member in extras:
+        admitted = admission["member_sha256"]
+        allowed_tools = {"dockerd-rootless.sh", "rootlesskit",
+                         "rootlesskit-docker-proxy", "vpnkit"}
+        require(type(admitted) is dict and set(admitted).issubset(
+                    {"./usr/bin/" + name for name in allowed_tools})
+                and {"./usr/bin/" + name for name in extras}.issubset(admitted),
+                "admitted rootless tool set differs")
+        expected_names = {"docker.gpg", "InRelease", "gnupg", "trusted.gpg",
+                          "rootless-extras.deb"} | {name.removeprefix("./usr/bin/") for name in admitted}
+        with os.scandir(directory) as listing:
+            actual_names = []
+            for entry in listing:
+                actual_names.append(entry.name)
+                require(len(actual_names) <= 10, "private tool directory exceeds bound")
+        require(set(actual_names) == expected_names and len(actual_names) == len(expected_names),
+                "private rootless tool directory has unknown entries")
+        for member in allowed_tools:
+            if "./usr/bin/" + member not in admitted:
+                continue
             path = directory / member
             m = path.lstat()
             require(stat.S_ISREG(m.st_mode) and m.st_uid == uid
@@ -260,7 +278,7 @@ def preflight(*, record=False, tool_dir=None):
                     (m.st_dev, m.st_ino, m.st_uid, m.st_mode, m.st_size),
                     "admitted rootless tool changed")
             digest = hashlib.sha256(data).hexdigest()
-            require(digest == admission["member_sha256"]["./usr/bin/" + member],
+            require(digest == admitted["./usr/bin/" + member],
                     "admitted rootless tool bytes differ")
             tools[member] = str(path)
     return {"uid": uid, "tools": tools,

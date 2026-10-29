@@ -17,8 +17,6 @@ import sys
 import tarfile
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
-from urllib.parse import urlsplit
-from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 import installer_rootless_host_custody_fixture as fixture
 
@@ -51,19 +49,17 @@ def trusted_system_binary(path):
 def bounded_get(relative, limit):
     fixture.require(re.fullmatch(r"[A-Za-z0-9/._+~%-]+", relative) is not None
                     and ".." not in relative.split("/"), "invalid repository path")
-    url = BASE + relative
-    class DockerRedirect(HTTPRedirectHandler):
-        def redirect_request(self, request, fp, code, msg, headers, newurl):
-            target = urlsplit(newurl)
-            fixture.require(target.scheme == "https" and target.netloc == "download.docker.com",
-                            "repository redirect differs")
-            return super().redirect_request(request, fp, code, msg, headers, newurl)
-    opener = build_opener(DockerRedirect)
-    with opener.open(Request(url, headers={"User-Agent": "marty-rootless-fixture/1"}), timeout=30) as response:
-        final = urlsplit(response.geturl())
-        fixture.require(final.scheme == "https" and final.netloc == "download.docker.com",
-                        "repository redirect differs")
-        data = response.read(limit + 1)
+    trusted_system_binary("/usr/bin/curl")
+    footer = b"\nMARTY_HTTP_STATUS:200"
+    data = fixture.run(["/usr/bin/curl", "-q", "--fail", "--silent", "--show-error",
+                        "--proto", "=https", "--max-redirs", "0", "--proxy", "",
+                        "--connect-timeout", "10", "--max-time", "60",
+                        "--max-filesize", str(limit), "--write-out",
+                        "\nMARTY_HTTP_STATUS:%{http_code}", BASE + relative],
+                       {"PATH": "/usr/bin:/bin", "HOME": "/"}, timeout=65,
+                       output_limit=limit + len(footer), binary=True)
+    fixture.require(data.endswith(footer), "repository response was not exact HTTP 200")
+    data = data[:-len(footer)]
     fixture.require(0 < len(data) <= limit, "repository object exceeds bound")
     return data
 

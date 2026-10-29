@@ -2,11 +2,13 @@
 
 import importlib.util
 import hashlib
+import io
 from pathlib import Path
 import subprocess
 import sys
 import threading
 import tempfile
+import tarfile
 import unittest
 from datetime import datetime, timezone
 from email.utils import format_datetime
@@ -90,13 +92,32 @@ class RootlessHostCustodyFixtureTests(unittest.TestCase):
                   "Architecture: amd64\n"
                   "Filename: dists/noble/pool/stable/amd64/"
                   "docker-ce-rootless-extras_28.0.4-1~ubuntu.24.04~noble_amd64.deb\n"
-                  "SHA256: " + "a" * 64 + "\nSize: 6092294\n")
+                  "SHA256: 2abb177d60561ac77b50a42b60500ab194b70f40f4b225d837c1fdccaaab7a28"
+                  "\nSize: 6092294\n")
         selected = admission.package_record(record, "28.0.4")
         self.assertEqual(selected["Version"], "5:28.0.4-1~ubuntu.24.04~noble")
         for changed in (record.replace("amd64\n", "arm64\n", 1),
                         record.replace("28.0.4", "29.0.4"), record + "\n" + record):
             with self.subTest(changed=changed[-80:]), self.assertRaises(RuntimeError):
                 admission.package_record(changed, "28.0.4")
+
+    def test_observed_noble_package_member_layout_is_closed(self):
+        # Member names and package row were observed through a verified Docker
+        # InRelease/Packages/.deb chain on 2026-10-29; live admission re-verifies.
+        archive_bytes = io.BytesIO()
+        with tarfile.open(fileobj=archive_bytes, mode="w") as archive:
+            for name in ("./usr/bin/dockerd-rootless.sh", "./usr/bin/rootlesskit"):
+                member = tarfile.TarInfo(name)
+                member.size = 1
+                member.mode = 0o755
+                archive.addfile(member, io.BytesIO(b"x"))
+        with tempfile.TemporaryDirectory() as temp, \
+             mock.patch.object(admission, "trusted_system_binary"), \
+             mock.patch.object(admission.fixture, "run", return_value=archive_bytes.getvalue()):
+            result = admission.extract_closed(Path(temp) / "package.deb", Path(temp), "a" * 64)
+            self.assertEqual(set(result["member_sha256"]),
+                             {"./usr/bin/dockerd-rootless.sh", "./usr/bin/rootlesskit"})
+            self.assertEqual(result["archive_members"], 2)
 
     def test_owned_daemon_group_stops_before_leader_reap(self):
         with tempfile.TemporaryDirectory() as temp:
