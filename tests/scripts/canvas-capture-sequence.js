@@ -88,10 +88,13 @@ async function runCanvasCapture({ setup, page, adminPage, walletPage, scenario,
   }
   onApplication(applicationId);
   report.currentOperation = 'background-roster-activation';
-  const activationAt = new Date().toISOString();
-  await operations.validateAndActivateBinding(marty, binding.id);
+  const activationJobBaseline = await operations.rosterJobBaseline(marty, organizationId, binding.id);
+  const { activation } = await operations.validateAndActivateBinding(marty, binding.id);
+  const activationAt = await operations.activatedRosterJobTimestamp(marty, organizationId,
+    platformId, binding.id, activation.config_version);
   report.currentOperation = 'background-roster-job';
-  const rosterJob = await operations.waitForLatestRosterJob(marty, organizationId, binding.id, activationAt);
+  const rosterJob = await operations.waitForLatestRosterJob(marty, organizationId, binding.id,
+    activationJobBaseline, activationAt);
   report.currentOperation = 'unsigned-pending-candidate';
   const candidate = await operations.waitForCandidate(marty, organizationId, binding.id, 'pending_claim');
   assert.ok(Number(rosterJob?.result?.pending_claim || 0) >= 1 || candidate,
