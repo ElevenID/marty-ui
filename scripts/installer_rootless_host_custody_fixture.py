@@ -404,8 +404,25 @@ def daemon_log_evidence(raw):
             "observed_log_codes": [code for marker, code in patterns if marker in observed]}
 
 
+def require_no_process_capabilities(raw):
+    require(len(raw) <= 16384, "process status exceeds bound")
+    lines = raw.decode("ascii", "strict").splitlines()
+    for field in ("CapEff", "CapPrm", "CapAmb", "CapInh"):
+        matches = [line.split(":", 1)[1].strip() for line in lines
+                   if line.startswith(field + ":")]
+        require(len(matches) == 1 and re.fullmatch(r"[0-9a-fA-F]+", matches[0])
+                and int(matches[0], 16) == 0,
+                "ordinary probe has inherited process capabilities")
+
+
 def userns_probe():
-    require(os.getuid() == os.geteuid() != 0, "ordinary nonroot probe required")
+    uids = os.getresuid()
+    gids = os.getresgid()
+    require(len(set(uids)) == 1 and uids[0] != 0
+            and len(set(gids)) == 1 and gids[0] != 0,
+            "ordinary nonroot real/effective/saved identity required")
+    with open("/proc/self/status", "rb") as stream:
+        require_no_process_capabilities(stream.read(16385))
     flags = {}
     for name, path in (("max_user_namespaces", "/proc/sys/user/max_user_namespaces"),
                        ("unprivileged_userns_clone", "/proc/sys/kernel/unprivileged_userns_clone"),

@@ -54,6 +54,15 @@ class RootlessHostCustodyFixtureTests(unittest.TestCase):
             self.assertEqual((Path(temp) / "marty-rootless-userns-probe.json").stat().st_mode & 0o777,
                              0o600)
 
+    def test_userns_probe_refuses_any_inherited_capability(self):
+        empty = b"CapEff:\t0000000000000000\nCapPrm:\t0000000000000000\nCapAmb:\t0000000000000000\nCapInh:\t0000000000000000\n"
+        fixture.require_no_process_capabilities(empty)
+        for field in (b"CapEff", b"CapPrm", b"CapAmb", b"CapInh"):
+            with self.subTest(field=field), self.assertRaises(RuntimeError):
+                fixture.require_no_process_capabilities(
+                    empty.replace(field + b":\t0000000000000000",
+                                  field + b":\t0000000000000001"))
+
     def test_exact_mapping_for_root_and_openbao_user(self):
         mapping = "         0       1000          1\n         1     231072      65536\n"
         self.assertEqual(fixture.mapped(mapping, 0), 1000)
