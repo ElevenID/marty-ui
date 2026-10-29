@@ -176,7 +176,9 @@ def test_exact_prepared_live_fixture_binds_without_product_authority():
         assert binding["product_dispatch_authorized"] is False
 
 
-@pytest.mark.parametrize("change", ["source", "profile", "result", "launch"])
+@pytest.mark.parametrize("change", ["source", "profile", "result", "launch",
+                                    "intent_extra", "result_extra",
+                                    "intent_authority", "result_authority"])
 def test_mixed_factory_or_records_refuse(change):
     with tempfile.TemporaryDirectory() as tmp:
         records, provenance, source, registry, vm_parent, run, vm_id, boot = \
@@ -187,6 +189,14 @@ def test_mixed_factory_or_records_refuse(change):
             records[vm_id + ".seed-receipt.json"]["fixture_profile"] = "legacy"
         elif change == "result":
             records[vm_id + fixture.RESULT_SUFFIX]["seed_sha256"] = "b" * 64
+        elif change == "intent_extra":
+            records[vm_id + fixture.RECORD_SUFFIX]["unexpected"] = "canary"
+        elif change == "result_extra":
+            records[vm_id + fixture.RESULT_SUFFIX]["unexpected"] = "canary"
+        elif change == "intent_authority":
+            records[vm_id + fixture.RECORD_SUFFIX]["product_dispatch_authorized"] = True
+        elif change == "result_authority":
+            records[vm_id + fixture.RESULT_SUFFIX]["product_dispatch_authorized"] = True
         else:
             records[vm_id + ".launch-intent.json"]["memory_mib"] = 4096
         with pytest.raises((ValueError, KeyError)):
@@ -316,6 +326,19 @@ def test_package_adapter_rebinds_setup_engine_without_product_authority():
     assert result["rootless_ready"] is False
     assert result["product_dispatch_authorized"] is False
     record["setup_engine_stopped"] = True
+    with mock.patch.object(setup, "bound_fixture", return_value=before), \
+         mock.patch.object(setup, "ControllerLease", return_value=Lease()), \
+         mock.patch.object(setup.create, "_rebind_directory"), \
+         mock.patch.object(setup.create, "_read_record",
+                           return_value=(release.encode(record), record)), \
+         mock.patch.object(setup, "_ssh_as") as ssh:
+        with pytest.raises(ValueError):
+            setup.bound_setup_fixture(source=Path("/source"),
+                registry=Path("/registry"), vm_parent=Path("/vm"),
+                runtime_parent=Path("/runtime"), vm_id=vm_id)
+        ssh.assert_not_called()
+    record["setup_engine_stopped"] = False
+    record["unexpected"] = "canary"
     with mock.patch.object(setup, "bound_fixture", return_value=before), \
          mock.patch.object(setup, "ControllerLease", return_value=Lease()), \
          mock.patch.object(setup.create, "_rebind_directory"), \
