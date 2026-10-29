@@ -357,7 +357,7 @@ class NativeDatabasePhase:
             network = database["NetworkSettings"]["Networks"].get(self.i["databaseNetwork"])
             require(network is not None and network["NetworkID"] == self.i["databaseNetworkId"]
                     and "postgres" in (network.get("Aliases") or []), "SCHEMA_DATABASE_NETWORK_CHANGED")
-        self.g["save"]("schema-" + cid + ("-ownership-" + str(self.command_index) if ownership_only else "-created" if created else "-terminal") + ".json", row)
+        self.g["save"]("schema-" + cid + ("-ownership-" + str(self.command_index) if ownership_only else "-created" if created else "-terminal-" + str(self.command_index)) + ".json", row)
         return row
 
     def retire_schema_helper(self, cid, *, expected_exit=0):

@@ -270,6 +270,7 @@ def test_real_inherited_schema_boundary_returns_build_bound_selection(tmp_path):
         "NetworkSettings": {"Networks": {value.i["databaseNetwork"]: {"NetworkID": value.network_id, "Aliases": ["postgres"]}}}}
     calls = []
     def command(args):
+        value.command_index += 1
         calls.append(args)
         if args[1] == "create":
             return cid.encode()
@@ -279,6 +280,8 @@ def test_real_inherited_schema_boundary_returns_build_bound_selection(tmp_path):
             return json.dumps([{"Config": {"Env": []}}]).encode()
         if args[1] == "inspect":
             return json.dumps([helper if args[2] == cid else pg]).encode()
+        if args[1] in ("rm", "ps"):
+            return b""
         pytest.fail("Unexpected mock transport operation")
     def result(args):
         assert args == ["docker", "start", "--attach", cid]
@@ -286,8 +289,7 @@ def test_real_inherited_schema_boundary_returns_build_bound_selection(tmp_path):
         return SimpleNamespace(stdout=b"SYNTHETIC_MIGRATED", stderr=b"")
     def save_bytes(name, raw):
         output = tmp_path / name
-        output.write_bytes(raw)
-        return ref(output)
+        return rehearsal.write_private_bytes(output, raw)
     value.command, value.result = command, result
     value.g.update(save_bytes=save_bytes, save=lambda name, row: save_bytes(name, json.dumps(row).encode()))
     row = value.schema("flow", "migrate")
@@ -296,6 +298,15 @@ def test_real_inherited_schema_boundary_returns_build_bound_selection(tmp_path):
     assert row["sourceRevision"] == rehearsal.SOURCE and row["coreRevision"] == rehearsal.CORE
     assert row["containerId"] == cid and row["exitCode"] == 0
     assert any(args[1] == "create" for args in calls)
+
+    # The negative-control path validates terminal evidence, then retirement
+    # validates it again. Both observations must survive exclusive writes.
+    value.validate_schema(cid, created=False)
+    value.retire_schema_helper(cid)
+    terminal_snapshots = list(tmp_path.glob("schema-" + cid + "-terminal-*.json"))
+    assert len(terminal_snapshots) == 2
+    assert all(json.loads(p.read_bytes())["State"]["Status"] == "exited" for p in terminal_snapshots)
+    assert value.state["pendingContainerId"] is None
 
 
 def test_fresh_fixture_reuses_production_bootstrap_order_and_closed_cleanup_inventory():
