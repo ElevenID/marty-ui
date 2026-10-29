@@ -34,6 +34,38 @@ def local_native_overlay_binding(capture, image_source_id: str) -> dict[str, Any
     """Bind the recorder's canonical live observation, not an imported verifier."""
     receipt = os.environ.get("DEMO_LOCAL_NATIVE_OVERLAY_RECEIPT")
     context = getattr(capture, "native_runtime_binding", None)
+    functional_receipt = os.environ.get("DEMO_LOCAL_FUNCTIONAL_RUNTIME_RECEIPT")
+    functional = getattr(capture, "functional_runtime_binding", None)
+    require(not (receipt and functional_receipt) and not (context and functional),
+            "Select one recorder-owned passport runtime mode")
+    if functional_receipt:
+        path = Path(functional_receipt)
+        require(context is None and os.environ.get("RECORD_VIDEO") == "0"
+                and isinstance(functional, Mapping)
+                and set(functional) == {"kind", "profileSha256", "receiptSha256", "scope",
+                                        "releaseQualified", "recordingQualified"}
+                and functional["kind"] == "FUNCTIONAL_RUNTIME_V2"
+                and functional["scope"] == "FUNCTIONAL_ONLY"
+                and functional["releaseQualified"] is False
+                and functional["recordingQualified"] is False
+                and all(isinstance(functional[key], str)
+                        and re.fullmatch(r"[a-f0-9]{64}", functional[key])
+                        for key in ("profileSha256", "receiptSha256")),
+                "Passport v2 requires the exact functional-only recorder ACK")
+        require(path.is_absolute() and path.is_file() and not path.is_symlink()
+                and path.stat().st_size <= 1024 * 1024
+                and functional["receiptSha256"] == os.environ.get("DEMO_LOCAL_FUNCTIONAL_RUNTIME_SHA256")
+                == hashlib.sha256(path.read_bytes()).hexdigest(), "Passport functional receipt changed")
+        observed = json.loads(path.read_bytes())
+        require(observed.get("schema") == "marty.canvas-functional-runtime-observation/v2"
+                and observed.get("profileSha256") == functional["profileSha256"]
+                and observed.get("scope") == "FUNCTIONAL_ONLY"
+                and observed.get("releaseQualified") is False and observed.get("recordingQualified") is False,
+                "Passport functional observation differs from recorder ACK")
+        # Full actual22 observations remain owned by the recorder before/after
+        # capture. Image markers and simulator deployment checks stay separate.
+        return dict(functional)
+    require(functional is None, "Unexpected functional ACK without selected observation")
     if not receipt:
         require(context is None, "Unexpected native runtime binding without an overlay")
         return None
@@ -792,13 +824,17 @@ def _run_bound_capture(capture) -> dict[str, Any]:
         source_manifest.verify_manifest(workspace, Path(scenario["sourceManifest"]["path"]))
     capture._passport_failure_stage = "EVIDENCE_COMPLETION"
     result.update(productRevision=receipt["sourceRevision"], productSourceId=receipt["sourceId"],
-                  effectiveNativeProductRevision=(overlay_binding or {}).get("nativeSourceRevision", receipt["sourceRevision"]),
+                  effectiveNativeProductRevision=(None if (overlay_binding or {}).get("kind") == "FUNCTIONAL_RUNTIME_V2"
+                      else (overlay_binding or {}).get("nativeSourceRevision", receipt["sourceRevision"])),
                   localOverlayBinding=overlay_binding,
                   productionInvariantPreserved=True,
                   qualification=("LOCAL_MIXED_RUNTIME_FUNCTIONAL_OPERATIONS" if overlay_binding
                                  else "CURRENT_SOURCE_FUNCTIONAL_OPERATIONS"),
                   ownershipJournalSha256=hashlib.sha256(ownership_path.read_bytes()).hexdigest(),
                   stackManifestKind="LOCAL_DEPLOYED_DEMO_MANIFEST", signedManifestVerified=False)
+    if (overlay_binding or {}).get("kind") == "FUNCTIONAL_RUNTIME_V2":
+        result["localFunctionalRuntime"] = {key: overlay_binding[key] for key in
+            ("profileSha256", "receiptSha256", "scope", "releaseQualified", "recordingQualified")}
     output = Path(os.environ["DEMO_ARTIFACT_DIR"]) / "passport-fresh-operations.json"
     require(output.parent.is_dir() and not output.is_symlink() and not output.exists(),
             "Owned passport operation output is unavailable")

@@ -19,6 +19,10 @@ def overlay_roles(profile=None, selected_roles=None):
     if profile is None:
         require(selected_roles is None, "LEGACY_THREE_ROLE_SCOPE_REQUIRED")
         return ROLE_BINARIES
+    if profile == "d12-passport-canonical-subset":
+        require(selected_roles is None or len(selected_roles) == 3
+                and set(selected_roles) == set(ROLE_BINARIES), "EXACT_D12_THREE_ROLE_SCOPE_REQUIRED")
+        return ROLE_BINARIES
     from scoped_native_profiles import reviewed_profile
     roles = dict(reviewed_profile(profile).roles)
     require(profile in ("d02-signing-cas", "d02-signing-cas-no-transform", "canvas-issuer-scoped-jobs"), "UNREVIEWED_OVERLAY_PROFILE")
@@ -71,8 +75,8 @@ def validate_delta(before, after, binaries, profile=None, selected_roles=None):
         require(old == new, "UNRELATED_SERVICE_SETTINGS_CHANGED:" + role)
 
 
-def maintenance_contract(plan):
-    selected_sources(plan)
+def maintenance_contract(plan, profile=None):
+    selected_sources(plan, profile)
     require(set(plan.get("databaseClientRoles", [])) == MARTY_CLIENTS, "EXACT_BROADER_DATABASE_CLIENT_SCOPE_REQUIRED")
     require(plan.get("requiresSeparateMaintenanceReview") is True, "BROAD_MAINTENANCE_NOT_ACKNOWLEDGED")
     require(set(plan.get("migrationNames", [])) == set(MIGRATIONS), "EXACT_MIGRATION_SET_REQUIRED")
@@ -136,7 +140,9 @@ def compose_recreate_arguments(frozen_arguments, overlay_path, profile=None, sel
     # gates, while holding the host operation lock. It is not an apply function.
     require(frozen_arguments[:4] in (["docker", "compose", "-p", "elevenid-beta"],
                                      ["docker", "compose", "--project-name", "elevenid-beta"]), "FROZEN_BETA_COMPOSE_ARGUMENTS_REQUIRED")
-    require(isinstance(no_start, bool) and (not no_start or profile == "canvas-issuer-scoped-jobs"), "REVIEWED_NO_START_PROFILE_REQUIRED")
+    require(isinstance(no_start, bool) and (not no_start or profile in
+            ("canvas-issuer-scoped-jobs", "d12-passport-canonical-subset")), "REVIEWED_NO_START_PROFILE_REQUIRED")
+    require(profile != "d12-passport-canonical-subset" or no_start, "D12_CREATE_BEFORE_INSPECTION_REQUIRED")
     require(overlay_path is not None or no_start, "OVERLAY_PATH_REQUIRED")
     require(len(frozen_arguments) >= 8 and len(frozen_arguments[4:]) % 2 == 0, "EXACT_BASE_COMPOSE_GRAMMAR_REQUIRED")
     counts = {"--project-directory": 0, "--env-file": 0, "-f": 0}
