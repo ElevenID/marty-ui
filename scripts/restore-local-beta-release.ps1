@@ -500,6 +500,8 @@ test "$(find /data -mindepth 1 -maxdepth 1 | wc -l)" -eq 1
 test "$(sha256sum /backup/applicant_store.json | cut -d ' ' -f 1)" = "$EXPECTED_SHA256"
 case "$(stat -c '%u:%g' /data)" in 0:0|10001:10001) ;; *) exit 41;; esac
 case "$(stat -c '%u:%g' /data/applicant_store.json)" in 0:0|10001:10001) ;; *) exit 42;; esac
+case "$(stat -c '%a' /data)" in 700|750|755|770) ;; *) exit 43;; esac
+case "$(stat -c '%a' /data/applicant_store.json)" in 600|640|644|660) ;; *) exit 44;; esac
 cp /backup/applicant_store.json /data/applicant_store.json.tmp
 chown 10001:10001 /data /data/applicant_store.json.tmp
 chmod 0700 /data

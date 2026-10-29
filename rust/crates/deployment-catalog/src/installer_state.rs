@@ -300,6 +300,21 @@ pub fn applicant_state_gid() -> Result<u32> {
     }
     Ok(gid)
 }
+
+fn require_applicant_storage(directory: &File, gid: u32) -> Result<()> {
+    let metadata = directory
+        .metadata()
+        .map_err(|_| "inspect applicant state ownership")?;
+    if metadata.uid() != unsafe { libc::geteuid() }
+        || metadata.gid() != gid
+        || metadata.mode() & 0o7777 != 0o2770
+        || !metadata.is_dir()
+        || metadata.nlink() < 2
+    {
+        return Err("applicant state ownership differs from the reviewed contract".into());
+    }
+    Ok(())
+}
 /// Reopen a held, already policy-checked ordinary inode for reading. O_PATH
 /// classification must precede any read-open: O_NONBLOCK alone does not avoid
 /// device open side effects. Ownership/mode policy stays with each caller.
@@ -1642,17 +1657,7 @@ impl InstallerState {
         {
             return Err(error("provision applicant state ownership"));
         }
-        let metadata = applicant
-            .metadata()
-            .map_err(|_| "inspect applicant state ownership")?;
-        if metadata.uid() != unsafe { libc::geteuid() }
-            || metadata.gid() != gid
-            || metadata.mode() & 0o7777 != 0o2770
-            || !metadata.is_dir()
-            || metadata.nlink() < 2
-        {
-            return Err("applicant state ownership differs from the reviewed contract".into());
-        }
+        require_applicant_storage(&applicant, gid)?;
         applicant
             .sync_all()
             .and_then(|_| state.sync_all())
@@ -1679,6 +1684,28 @@ impl InstallerState {
             .map_err(|_| "persist application placeholders")?;
         self.poisoned = false;
         Ok(())
+    }
+
+    /// Reopen the exact held installation child without following links before
+    /// a prepared model can start containers, including after a resumed run.
+    pub fn validate_applicant_storage(&self) -> Result<u32> {
+        private(&self.directory, true)?;
+        let state = open_at(
+            &self.directory,
+            &name("state"),
+            libc::O_RDONLY | libc::O_DIRECTORY,
+            0,
+        )?;
+        private(&state, true)?;
+        let applicant = open_at(
+            &state,
+            &name("applicant"),
+            libc::O_RDONLY | libc::O_DIRECTORY,
+            0,
+        )?;
+        let gid = applicant_state_gid()?;
+        require_applicant_storage(&applicant, gid)?;
+        Ok(gid)
     }
 
     /// Stage the operator password for one narrowly mounted configurator input.
@@ -1953,6 +1980,7 @@ impl InstallerState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::PermissionsExt;
     #[test]
     fn classified_read_reopens_held_inode_and_refuses_special_entries() {
         let root = tempfile::tempdir().unwrap();
@@ -3054,6 +3082,16 @@ mod tests {
         assert_eq!(applicant.uid(), unsafe { libc::geteuid() });
         assert_eq!(applicant.gid(), applicant_state_gid().unwrap());
         assert_eq!(applicant.mode() & 0o7777, 0o2770);
+        assert_eq!(
+            state.validate_applicant_storage().unwrap(),
+            applicant_state_gid().unwrap()
+        );
+        std::fs::set_permissions(
+            path.join("state/applicant"),
+            std::fs::Permissions::from_mode(0o700),
+        )
+        .unwrap();
+        assert!(state.validate_applicant_storage().is_err());
         for entry in crate::installer_application_env::OPTIONAL_EMPTY_SECRETS {
             let metadata = std::fs::metadata(path.join("secrets").join(entry)).unwrap();
             assert!(metadata.is_file());

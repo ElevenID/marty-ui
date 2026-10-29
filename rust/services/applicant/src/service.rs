@@ -232,21 +232,30 @@ impl FilePersistence {
     }
 }
 
+fn store_parent(path: &Path) -> &Path {
+    path.parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
+}
+
 impl StorePersistence for FilePersistence {
     fn persist(&self, store: &StoreDocument) -> Result<(), ProviderError> {
-        if let Some(parent) = self.path.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|error| ProviderError::Persistence(error.to_string()))?;
-        }
+        let parent = store_parent(&self.path);
+        fs::create_dir_all(parent)
+            .map_err(|error| ProviderError::Persistence(error.to_string()))?;
         let temporary = self.path.with_extension(format!("{}.tmp", Uuid::new_v4()));
         let bytes = store
             .encode()
             .map_err(|error| ProviderError::Persistence(error.to_string()))?;
         let result = (|| -> std::io::Result<()> {
-            let mut file = OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&temporary)?;
+            let mut options = OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                options.mode(0o660);
+            }
+            let mut file = options.open(&temporary)?;
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
@@ -255,9 +264,8 @@ impl StorePersistence for FilePersistence {
             file.write_all(&bytes)?;
             file.sync_all()?;
             fs::rename(&temporary, &self.path)?;
-            if let Some(parent) = self.path.parent() {
-                fs::File::open(parent)?.sync_all()?;
-            }
+            #[cfg(unix)]
+            fs::File::open(parent)?.sync_all()?;
             Ok(())
         })();
         if result.is_err() {
@@ -294,6 +302,11 @@ mod file_persistence_tests {
             );
         }
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn bare_relative_filename_uses_current_directory_as_parent() {
+        assert_eq!(store_parent(Path::new("store.json")), Path::new("."));
     }
 
     #[cfg(unix)]

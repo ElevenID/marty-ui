@@ -121,6 +121,9 @@ fn prepare_inner(
         "optional_empty_secrets":env.optional_empty_secrets, "installation_ready":false,
     })).map_err(|_| "cannot serialize application intent")?)?;
     state.prepare_application_storage()?;
+    if state.validate_applicant_storage()? != parameters.applicant_state_gid {
+        return Err("applicant state group changed during preparation".into());
+    }
     state.stage_operator_password()?;
     let source_env = if select_generation {
         "application-source.env"

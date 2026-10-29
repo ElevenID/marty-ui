@@ -150,6 +150,8 @@ test -f /data/applicant_store.json && test ! -L /data/applicant_store.json
 test "$(find /data -mindepth 1 -maxdepth 1 | wc -l)" -eq 1
 case "$(stat -c '%u:%g' /data)" in 0:0|10001:10001) ;; *) exit 41;; esac
 case "$(stat -c '%u:%g' /data/applicant_store.json)" in 0:0|10001:10001) ;; *) exit 42;; esac
+case "$(stat -c '%a' /data)" in 700|750|755|770) ;; *) exit 43;; esac
+case "$(stat -c '%a' /data/applicant_store.json)" in 600|640|644|660) ;; *) exit 44;; esac
 test "$(sha256sum /data/applicant_store.json | cut -d ' ' -f 1)" = "$EXPECTED_SHA256"
 chown 10001:10001 /data /data/applicant_store.json
 chmod 0700 /data
