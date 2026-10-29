@@ -4,7 +4,9 @@
 
 use crate::{
     installer_release as release,
-    installer_state::{CandidateTestScope, Identity, InstallerState, Phase, RuntimeBinding},
+    installer_state::{
+        CandidateTestScope, Identity, InstallerState, Phase, RuntimeBinding, RuntimeProfile,
+    },
     installer_verify::{self, VerificationTools},
 };
 use std::{
@@ -24,6 +26,7 @@ struct Options {
     engine: String,
     directory: Option<PathBuf>,
     channel: Option<(String, PathBuf)>,
+    profile: RuntimeProfile,
     yes: bool,
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -56,6 +59,7 @@ fn options(args: &[String]) -> Result<Options> {
             "--install-dir",
             "--channel",
             "--verified-channel",
+            "--runtime-profile",
         ]
         .contains(&key)
         {
@@ -83,6 +87,10 @@ fn options(args: &[String]) -> Result<Options> {
     let docker = PathBuf::from(take("--docker-bin")?);
     let host = take("--docker-host")?;
     let engine = take("--docker-engine-id")?;
+    let profile = match values.remove("--runtime-profile").as_deref() {
+        Some("rootless") => RuntimeProfile::Rootless,
+        _ => return Err("new installation requires the explicit rootless runtime profile".into()),
+    };
     let directory = values.remove("--install-dir").map(PathBuf::from);
     let channel = match (
         values.remove("--channel"),
@@ -106,7 +114,7 @@ fn options(args: &[String]) -> Result<Options> {
         docker_host: host.clone(),
         engine_id: engine.clone(),
         openbao_port: 18200,
-        profile: crate::installer_state::RuntimeProfile::Rootful,
+        profile,
     }
     .validate()?;
     Ok(Options {
@@ -119,6 +127,7 @@ fn options(args: &[String]) -> Result<Options> {
         engine,
         directory,
         channel,
+        profile,
         yes,
     })
 }
@@ -151,8 +160,8 @@ fn confirm(directory: &Path) -> Result<()> {
         .map_err(|_| "installation confirmation requires a terminal; use --yes to accept the documented defaults")?;
     writeln!(
         tty,
-        "Create an isolated Marty installation at {}? [y/N]",
-        directory.display()
+        "Continue with a user-owned rootless Docker installation at {:?}? [y/N]",
+        directory
     )
     .map_err(|_| "cannot request confirmation")?;
     tty.flush().map_err(|_| "cannot request confirmation")?;
@@ -190,11 +199,57 @@ pub fn install(args: &[String], build_identity: &str) -> Result<()> {
 pub fn candidate_test(args: &[String], build_identity: &str) -> Result<()> {
     install_inner(args, build_identity, InstallMode::CandidateTest)
 }
+fn require_rootless_process() -> Result<()> {
+    let mut real_uid = 0;
+    let mut effective_uid = 0;
+    let mut saved_uid = 0;
+    let mut real_gid = 0;
+    let mut effective_gid = 0;
+    let mut saved_gid = 0;
+    if unsafe { libc::getresuid(&mut real_uid, &mut effective_uid, &mut saved_uid) } != 0
+        || unsafe { libc::getresgid(&mut real_gid, &mut effective_gid, &mut saved_gid) } != 0
+        || real_uid == 0
+        || real_gid == 0
+        || real_uid != effective_uid
+        || real_uid != saved_uid
+        || real_gid != effective_gid
+        || real_gid != saved_gid
+        || unsafe { libc::prctl(libc::PR_GET_NO_NEW_PRIVS, 0, 0, 0, 0) } != 1
+    {
+        return Err(
+            "rootless trial requires an unprivileged process with no-new-privileges".into(),
+        );
+    }
+    let mut status = String::new();
+    std::fs::File::open("/proc/self/status")
+        .map_err(|_| "rootless process capability state unavailable")?
+        .take(16 * 1024 + 1)
+        .read_to_string(&mut status)
+        .map_err(|_| "rootless process capability state unavailable")?;
+    if status.len() > 16 * 1024 {
+        return Err("rootless process capability state unavailable".into());
+    }
+    for key in ["CapEff", "CapPrm", "CapAmb"] {
+        let mut values = status
+            .lines()
+            .filter_map(|line| line.split_once(':'))
+            .filter(|(name, _)| *name == key)
+            .map(|(_, value)| value.trim());
+        if values.next() != Some("0000000000000000") || values.next().is_some() {
+            return Err("rootless process has capabilities".into());
+        }
+    }
+    Ok(())
+}
+fn require_rootless_storage_qualification() -> Result<()> {
+    Err("rootless Docker observed; host-output ownership and storage mappings are not yet qualified, so no installation state or Docker resource was created".into())
+}
 fn install_inner(args: &[String], build_identity: &str, mode: InstallMode) -> Result<()> {
     let o = match mode {
         InstallMode::Admitted => options(args)?,
         InstallMode::CandidateTest => candidate_test_options(args)?,
     };
+    require_rootless_process()?;
     if unsafe { libc::geteuid() } == 0 || !cfg!(target_arch = "x86_64") {
         return Err("installer requires a regular Docker-enabled Linux amd64 user".into());
     }
@@ -260,9 +315,6 @@ fn install_inner(args: &[String], build_identity: &str, mode: InstallMode) -> Re
             "installation must use persistent absolute storage outside bootstrap staging".into(),
         );
     }
-    if !o.yes {
-        confirm(&directory)?;
-    }
     let port_reservation = std::net::TcpListener::bind(("127.0.0.1", 0))
         .map_err(|_| "cannot select local OpenBao port")?;
     let runtime = RuntimeBinding {
@@ -272,12 +324,16 @@ fn install_inner(args: &[String], build_identity: &str, mode: InstallMode) -> Re
             .local_addr()
             .map_err(|_| "cannot inspect local port")?
             .port(),
-        profile: crate::installer_state::RuntimeProfile::Rootful,
+        profile: o.profile,
     };
     let docker = o.docker.as_path();
     let observed =
         crate::installer_runtime::DockerRunner::from_binding(docker, &runtime, &o.tools)?
             .preflight()?;
+    require_rootless_storage_qualification()?;
+    if !o.yes {
+        confirm(&directory)?;
+    }
     let inventory_sha = if let Some((_, record)) = &admitted {
         record.inventory_sha256.clone()
     } else {
@@ -591,12 +647,26 @@ mod tests {
             ("--docker-host", "unix:///var/run/docker.sock"),
             ("--docker-engine-id", "exact-engine"),
             ("--docker-bin", "/usr/bin/docker"),
+            ("--runtime-profile", "rootless"),
         ]
         .into_iter()
         .flat_map(|(key, value)| [key.to_owned(), value.to_owned()])
         .collect::<Vec<_>>();
+        let host = args
+            .iter()
+            .position(|value| value == "--docker-host")
+            .unwrap()
+            + 1;
+        args[host] = format!("unix:///run/user/{}/docker.sock", unsafe {
+            libc::geteuid()
+        });
         assert!(candidate_test_options(&args).is_ok());
         assert!(options(&args).is_err());
+        args.truncate(args.len() - 2);
+        assert!(candidate_test_options(&args).is_err());
+        args.extend(["--runtime-profile".into(), "rootful".into()]);
+        assert!(candidate_test_options(&args).is_err());
+        *args.last_mut().unwrap() = "rootless".into();
         args[1] = "v1.1.263".into();
         assert!(candidate_test_options(&args).is_err());
         args[1] = "v1.1.263-nightly.20261027.42".into();

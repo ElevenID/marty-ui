@@ -323,7 +323,14 @@ fn fetch_published_inner(args: &[String], build_identity: &str) -> Result<()> {
 /// The controller chooses expected run/phase/nonce independently of the signed
 /// records. This entry does not prove guest origin or public acquisition itself.
 pub fn install(args: &[String], build_identity: &str) -> Result<()> {
+    // Acceptance-only execution still records a rootful Docker binding. Keep
+    // the read-only acquisition command available, but refuse this new-install
+    // entry before inspecting Docker, consuming a nonce, or creating state.
+    require_rootless_candidate_qualification()?;
     install_inner(args, build_identity).map_err(|_| REFUSED.into())
+}
+fn require_rootless_candidate_qualification() -> Result<()> {
+    Err("Acceptance-only candidate installation requires qualified rootless storage mapping".into())
 }
 fn install_inner(args: &[String], build_identity: &str) -> Result<()> {
     let o = options(args)?;
