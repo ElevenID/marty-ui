@@ -557,8 +557,12 @@ impl DockerRunner {
             return Err("invalid expected Docker Engine identity".into());
         }
         let socket_identity = endpoint_for_profile(docker_host, profile)?;
+        let runner = BoundedRunner::new(docker_executable, docker_host, private_parent)?;
+        if profile == RuntimeProfile::Rootless {
+            crate::installer_compose_plugin::admit_current_user_compose(runner.staging.path())?;
+        }
         Ok(Self {
-            runner: BoundedRunner::new(docker_executable, docker_host, private_parent)?,
+            runner,
             expected_engine_id: expected_engine_id.into(),
             profile,
             socket_identity,
@@ -1016,6 +1020,24 @@ esac"#,
             calls,
             "identity mismatch must refuse before executing the requested command"
         );
+    }
+    #[test]
+    fn preflight_refuses_when_isolated_cli_has_no_compose_plugin() {
+        let parent = private_temp();
+        fs::write(parent.path().join("engine-info.json"), info()).unwrap();
+        let binary = script(
+            parent.path(),
+            "case \"$1\" in info) cat \"${0%/*}/engine-info.json\" ;; compose) exit 42 ;; *) exit 9 ;; esac",
+        );
+        let docker = DockerRunner::new(
+            &binary,
+            "unix:///var/run/docker.sock",
+            "test-engine",
+            parent.path(),
+        )
+        .unwrap();
+        assert!(docker.preflight().is_err());
+        assert!(!parent.path().join("cli-plugins").exists());
     }
     #[test]
     fn persisted_binding_selects_profile_without_rootful_fallback() {

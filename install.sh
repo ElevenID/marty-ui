@@ -69,7 +69,6 @@ main() (
         fi
         docker_engine_id=$(isolated_docker info --format '{{.ID}}') || fail 'Docker Engine identity unavailable'
         [ -n "$docker_engine_id" ] || fail 'Docker Engine identity unavailable'
-        isolated_docker compose version >/dev/null 2>&1 || fail 'Docker Compose plugin is required'
     }
     select_docker_binary() {
         docker_bin=$(command -v docker) || fail 'Docker client unavailable'
