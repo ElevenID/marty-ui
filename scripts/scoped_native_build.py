@@ -392,6 +392,9 @@ def start(prepared_ref, helper, git, profile=None):
     else:
         state.update(intentDurability=resource_state["intentDurability"],
                      buildProfile=profile, resourceProbe=resource_state["resourceProbe"])
+        if profile == OFFICIAL_PROFILE:
+            state.update(targetSeedProbe=resource_state["targetSeedProbe"],
+                         targetSeedReadback=resource_state["targetSeedReadback"])
     journal_barrier = store.state(state)
     if not (durable_barrier(state["intentDurability"]) and durable_barrier(journal_barrier)):
         state["state"] = "BUILD_DURABILITY_BLOCKED_NO_DOCKER_DISPATCH" if resource_state is None else "BUILD_DURABILITY_BLOCKED_NO_COMPILER_DISPATCH"

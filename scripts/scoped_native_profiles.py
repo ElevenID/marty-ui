@@ -68,6 +68,7 @@ OFFICIAL_ALL_SERVICES = BuildProfile(
     cargo_profile="release",
 )
 
+
 def reviewed_profile(name):
     for profile in (SIGNING_CAS, SIGNING_CAS_NO_TRANSFORM, CANVAS_SCOPED_JOBS, OFFICIAL_ALL_SERVICES):
         if name == profile.name:
