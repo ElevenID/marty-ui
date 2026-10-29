@@ -52,11 +52,14 @@ def local_native_overlay_binding(capture, image_source_id: str) -> dict[str, Any
                         and re.fullmatch(r"[a-f0-9]{64}", functional[key])
                         for key in ("profileSha256", "receiptSha256")),
                 "Passport v2 requires the exact functional-only recorder ACK")
-        require(path.is_absolute() and path.is_file() and not path.is_symlink()
-                and path.stat().st_size <= 1024 * 1024
+        require(path.is_absolute() and path.is_file() and not path.is_symlink(),
+                "Passport functional receipt must be regular")
+        with path.open("rb") as stream:
+            raw = stream.read(1024 * 1024 + 1)
+        require(0 < len(raw) <= 1024 * 1024
                 and functional["receiptSha256"] == os.environ.get("DEMO_LOCAL_FUNCTIONAL_RUNTIME_SHA256")
-                == hashlib.sha256(path.read_bytes()).hexdigest(), "Passport functional receipt changed")
-        observed = json.loads(path.read_bytes())
+                == hashlib.sha256(raw).hexdigest(), "Passport functional receipt changed")
+        observed = json.loads(raw)
         require(observed.get("schema") == "marty.canvas-functional-runtime-observation/v2"
                 and observed.get("profileSha256") == functional["profileSha256"]
                 and observed.get("scope") == "FUNCTIONAL_ONLY"
