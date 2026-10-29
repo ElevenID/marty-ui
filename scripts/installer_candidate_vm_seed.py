@@ -28,6 +28,8 @@ KEYGEN = Path("/usr/bin/ssh-keygen")
 LOCALDS = Path("/usr/bin/cloud-localds")
 CLOUD_INIT = Path("/usr/bin/cloud-init")
 ENV = {"HOME": "/", "PATH": "/usr/bin:/bin", "LANG": "C"}
+ROOTLESS_FIXTURE_PROFILE = "installer_only_rootless_fixture"
+ROOTLESS_FIXTURE_PACKAGES = {"openssh-server": PACKAGES["openssh-server"]}
 
 
 def _tool(path: Path) -> None:
@@ -125,23 +127,40 @@ def _install_media(runtime_fd: int, raw: bytes, gid: int) -> tuple[int, os.stat_
         raise
 
 
-def _cloud_config(controller_public: str, host_public: str, host_private: str) -> bytes:
+def _cloud_config(controller_public: str, host_public: str, host_private: str,
+                  profile: str | None = None) -> bytes:
     # All variable scalars are constrained by _public_key/_private_key.
+    release.require(profile in (None, ROOTLESS_FIXTURE_PROFILE),
+                    "VM seed profile unsupported")
     lines = ["#cloud-config", "users:", "  - name: installer",
-             "    lock_passwd: true", "    sudo: ALL=(ALL) NOPASSWD:ALL",
-             "    groups: docker", "    homedir: /home/installer",
-             "    ssh_authorized_keys:", "      - " + controller_public,
+             "    lock_passwd: true"]
+    if profile is None:
+        lines.extend(["    sudo: ALL=(ALL) NOPASSWD:ALL", "    groups: docker"])
+    else:
+        lines.extend(["    sudo: false", "    groups: installer"])
+    lines.extend(["    homedir: /home/installer",
+             "    ssh_authorized_keys:", "      - " + controller_public])
+    if profile == ROOTLESS_FIXTURE_PROFILE:
+        # Distinct guest-only infrastructure principal. The installer user has
+        # no sudo/docker membership; this principal is never a product actor.
+        lines.extend(["  - name: fixture-admin", "    lock_passwd: true",
+                      "    sudo: ALL=(ALL) NOPASSWD:ALL",
+                      "    homedir: /home/fixture-admin",
+                      "    ssh_authorized_keys:", "      - " + controller_public])
+    lines.extend([
              "ssh_pwauth: false", "disable_root: true",
              "allow_public_ssh_keys: false", "ssh_deletekeys: true",
-             "ssh_genkeytypes: [ed25519]", "ssh_keys:", "  ed25519_private: |"]
+             "ssh_genkeytypes: [ed25519]", "ssh_keys:", "  ed25519_private: |"])
     lines.extend("    " + line for line in host_private.splitlines())
     lines.extend(["  ed25519_public: " + host_public,
                   "package_update: true", "package_upgrade: false", "packages:"])
+    packages = PACKAGES if profile is None else ROOTLESS_FIXTURE_PACKAGES
     lines.extend("  - [" + name + ", " + json.dumps(version) + "]"
-                 for name, version in PACKAGES.items())
-    lines.extend(["runcmd:", "  - [chmod, '0700', /home/installer]",
-                  "  - [systemctl, enable, --now, docker]",
-                  "  - [systemctl, enable, --now, ssh]", ""])
+                 for name, version in packages.items())
+    lines.extend(["runcmd:", "  - [chmod, '0700', /home/installer]"])
+    if profile is None:
+        lines.append("  - [systemctl, enable, --now, docker]")
+    lines.extend(["  - [systemctl, enable, --now, ssh]", ""])
     raw = "\n".join(lines).encode("ascii")
     release.require(len(raw) <= 65536, "VM cloud-init configuration oversized")
     return raw
@@ -160,9 +179,11 @@ def _keypair(control: Path, basename: str) -> tuple[str, str]:
 
 
 def prepare(source: Path, registry: Path, vm_parent: Path, runtime_parent: Path, *,
-            vm_id: str, ssh_port: int) -> dict:
+            vm_id: str, ssh_port: int, profile: str | None = None) -> dict:
     release.require(os.geteuid() == 0 and type(ssh_port) is int
-                    and 1024 <= ssh_port <= 65535, "VM seed request invalid")
+                    and 1024 <= ssh_port <= 65535
+                    and profile in (None, ROOTLESS_FIXTURE_PROFILE),
+                    "VM seed request invalid")
     for path in (KEYGEN, LOCALDS, CLOUD_INIT):
         _tool(path)
     transfer = verify_transfer(source, registry, vm_parent, runtime_parent, vm_id=vm_id)
@@ -184,9 +205,12 @@ def prepare(source: Path, registry: Path, vm_parent: Path, runtime_parent: Path,
                               runtime_receipt_sha256=release.digest(runtime_raw),
                               control_dir=str(registry / (vm_id + ".control")),
                               runtime_dir=str(runtime_dir), ssh_port=ssh_port,
-                              guest_user=GUEST_USER, packages=PACKAGES,
+                              guest_user=GUEST_USER,
+                              packages=PACKAGES if profile is None else ROOTLESS_FIXTURE_PACKAGES,
                               started_at=int(time.time()), qualified=False,
                               launch_authorized=False)
+                if profile is not None:
+                    intent["fixture_profile"] = profile
                 intent_raw = _write(lease.parent, vm_id + ".seed-intent.json", intent)
                 _same_path(registry, lease.parent, _directory)
                 control_name = vm_id + ".control"
@@ -202,7 +226,8 @@ def prepare(source: Path, registry: Path, vm_parent: Path, runtime_parent: Path,
                         host_public, host_private_hash = _keypair(
                             control_dir, "guest_host_ed25519")
                         host_private = _private_key(_bytes(control_dir / "guest_host_ed25519", 8192))
-                        user_data = _cloud_config(controller_public, host_public, host_private)
+                        user_data = _cloud_config(controller_public, host_public,
+                                                  host_private, profile)
                         metadata = ("instance-id: " + vm_id + "\nlocal-hostname: marty-vm-"
                                     + vm_id[:8] + "\n").encode("ascii")
                         known_hosts = ("[127.0.0.1]:" + str(ssh_port) + " "
@@ -288,6 +313,11 @@ def verify_seed(source: Path, registry: Path, vm_parent: Path,
         base = {"schema", "phase", "vm_id", "runtime_receipt_sha256", "control_dir",
                 "runtime_dir", "ssh_port", "guest_user", "packages", "started_at",
                 "qualified", "launch_authorized"}
+        profile = intent.get("fixture_profile")
+        release.require(profile in (None, ROOTLESS_FIXTURE_PROFILE),
+                        "VM seed profile unsupported")
+        if profile is not None:
+            base.add("fixture_profile")
         release.exact(intent, base, "VM seed intent")
         release.exact(receipt, base | {"intent_sha256", "control_dir_device",
                                       "control_dir_inode", "seed_device", "seed_inode",
@@ -305,7 +335,8 @@ def verify_seed(source: Path, registry: Path, vm_parent: Path,
                         and type(intent["ssh_port"]) is int
                         and 1024 <= intent["ssh_port"] <= 65535
                         and intent["guest_user"] == GUEST_USER
-                        and intent["packages"] == PACKAGES
+                        and intent["packages"] == (PACKAGES if profile is None
+                                                   else ROOTLESS_FIXTURE_PACKAGES)
                         and type(intent["started_at"]) is int
                         and type(receipt["seeded_at"]) is int
                         and 0 < intent["started_at"] <= receipt["seeded_at"]
@@ -335,7 +366,7 @@ def verify_seed(source: Path, registry: Path, vm_parent: Path,
             expected_meta = ("instance-id: " + vm_id + "\nlocal-hostname: marty-vm-"
                              + vm_id[:8] + "\n").encode("ascii")
             release.require(user_data == _cloud_config(controller_public, host_public,
-                                                        host_private)
+                                                        host_private, profile)
                             and metadata == expected_meta and known_hosts == expected_hosts
                             and release.digest(controller_private)
                             == receipt["controller_private_sha256"]
