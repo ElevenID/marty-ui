@@ -144,46 +144,7 @@ BEGIN
     ) THEN
         RAISE EXCEPTION 'passport fence trigger changed';
     END IF;
-    -- No companion BEFORE trigger may change a row before or after the
-    -- alphabetically ordered fence trigger. The native submission-intent
-    -- trigger is mandatory after the signed Rust migrations.
-    IF (SELECT count(*) FROM pg_trigger AS t JOIN pg_class AS c
-        ON c.oid = t.tgrelid JOIN pg_namespace AS n ON n.oid = c.relnamespace
-        WHERE n.nspname = 'flow_service' AND c.relname IN
-            ('flow_definitions', 'flow_instances') AND NOT t.tgisinternal) <> 4
-        OR (SELECT count(*) FROM pg_trigger AS t JOIN pg_class AS c
-            ON c.oid = t.tgrelid JOIN pg_namespace AS n ON n.oid = c.relnamespace
-            WHERE n.nspname = 'issuance_service'
-              AND c.relname = 'physical_document_jobs'
-              AND NOT t.tgisinternal) <> 3
-        OR EXISTS (
-            SELECT 1 FROM pg_trigger AS t JOIN pg_class AS c
-                ON c.oid = t.tgrelid JOIN pg_namespace AS n
-                ON n.oid = c.relnamespace
-            JOIN pg_proc AS p ON p.oid = t.tgfoid
-            JOIN pg_namespace AS fn ON fn.oid = p.pronamespace
-            WHERE n.nspname = 'issuance_service'
-              AND c.relname = 'physical_document_jobs'
-              AND NOT t.tgisinternal
-              AND t.tgname NOT IN ('passport_fence_job',
-                                   'passport_fence_job_truncate')
-              AND NOT (t.tgname = 'trg_physical_document_submission_intent'
-                       AND t.tgtype::integer = 19
-                       AND t.tgenabled IN ('O', 'A') AND t.tgqual IS NULL
-                       AND t.tgattr::text = ''
-                       AND encode(t.tgargs, 'hex') = ''
-                       AND fn.nspname = 'issuance_service'
-                       AND p.proname = 'guard_physical_document_submission_intent'
-                       AND pg_get_userbyid(p.proowner) = 'marty_passport_fence_owner'
-                       AND NOT p.prosecdef
-                       AND NOT has_function_privilege('marty', p.oid, 'EXECUTE')
-                       AND md5(pg_get_triggerdef(t.oid)) =
-                           '2cf46bf0d5d5d2794b8eb6346ef30622'
-                       AND md5(replace(pg_get_functiondef(p.oid), E'\r\n', E'\n')) =
-                           '936f63e7df56a3d116b98dadc7645158')
-        ) THEN
-        RAISE EXCEPTION 'passport fence trigger inventory changed';
-    END IF;
+    -- Exact released companion-trigger inventory is checked by the shared source below.
     IF (SELECT count(*) FROM pg_proc AS p JOIN pg_namespace AS n
         ON n.oid = p.pronamespace WHERE n.nspname = 'passport_cutover') <> 7
         OR EXISTS (
@@ -209,6 +170,8 @@ BEGIN
     END IF;
 END
 $verify$;
+
+\ir passport-beta-issuer-trigger-verify.sql
 
 SELECT jsonb_build_object(
     'schema', 'marty.passport-beta-rust-owner-verification/v1',

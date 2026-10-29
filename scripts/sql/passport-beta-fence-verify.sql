@@ -103,40 +103,7 @@ BEGIN
     ) THEN
         RAISE EXCEPTION 'passport fence trigger changed';
     END IF;
-    -- No companion BEFORE trigger may change a row before or after the
-    -- alphabetically ordered fence trigger. The released Rust submission
-    -- intent trigger is the sole optional exception on the always-denied job
-    -- table; its own shape is checked below.
-    IF (SELECT count(*) FROM pg_trigger AS t JOIN pg_class AS c
-        ON c.oid = t.tgrelid JOIN pg_namespace AS n ON n.oid = c.relnamespace
-        WHERE n.nspname = 'flow_service' AND c.relname IN
-            ('flow_definitions', 'flow_instances') AND NOT t.tgisinternal) <> 4
-        OR (SELECT count(*) FROM pg_trigger AS t JOIN pg_class AS c
-            ON c.oid = t.tgrelid JOIN pg_namespace AS n ON n.oid = c.relnamespace
-            WHERE n.nspname = 'issuance_service'
-              AND c.relname = 'physical_document_jobs'
-              AND NOT t.tgisinternal) NOT IN (2, 3)
-        OR EXISTS (
-            SELECT 1 FROM pg_trigger AS t JOIN pg_class AS c
-                ON c.oid = t.tgrelid JOIN pg_namespace AS n
-                ON n.oid = c.relnamespace
-            JOIN pg_proc AS p ON p.oid = t.tgfoid
-            JOIN pg_namespace AS fn ON fn.oid = p.pronamespace
-            WHERE n.nspname = 'issuance_service'
-              AND c.relname = 'physical_document_jobs'
-              AND NOT t.tgisinternal
-              AND t.tgname NOT IN ('passport_fence_job',
-                                   'passport_fence_job_truncate')
-              AND NOT (t.tgname = 'trg_physical_document_submission_intent'
-                       AND t.tgtype::integer = 19
-                       AND t.tgenabled IN ('O', 'A') AND t.tgqual IS NULL
-                       AND t.tgattr::text = ''
-                       AND encode(t.tgargs, 'hex') = ''
-                       AND fn.nspname = 'issuance_service'
-                       AND p.proname = 'guard_physical_document_submission_intent')
-        ) THEN
-        RAISE EXCEPTION 'passport fence trigger inventory changed';
-    END IF;
+    -- Exact released companion-trigger inventory is checked by the shared source below.
     IF (SELECT count(*) FROM pg_proc AS p JOIN pg_namespace AS n
         ON n.oid = p.pronamespace WHERE n.nspname = 'passport_cutover') <> 7
         OR EXISTS (
@@ -162,6 +129,8 @@ BEGIN
     END IF;
 END
 $verify$;
+
+\ir passport-beta-issuer-trigger-verify.sql
 
 SELECT jsonb_build_object(
     'schema', 'marty.passport-beta-fence-verification/v1',

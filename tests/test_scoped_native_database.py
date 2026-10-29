@@ -187,3 +187,18 @@ def test_owned_child_timeout_is_unknown_and_has_no_implicit_retry():
     result = database.bounded_run([sys.executable, "-c", "import time;time.sleep(3)"], env=dict(os.environ), timeout=0.05)
     assert result.observation["timedOut"] is True
     assert result.returncode is not None
+
+
+def test_executable_ref_has_distinct_bound_and_generic_refs_stay_small(tmp_path):
+    from scoped_native_runtime import read_executable_ref, read_ref, ref, EXECUTABLE_REF_MAXIMUM
+    large = tmp_path / "synthetic-executable"
+    with large.open("wb") as stream:
+        stream.truncate(17 * 1024 * 1024)
+    bound = ref(large)
+    assert read_executable_ref(bound) == large
+    with pytest.raises(ValueError, match="BOUNDED_EXACT_REF_REQUIRED"):
+        read_ref(bound)
+    with large.open("wb") as stream:
+        stream.truncate(EXECUTABLE_REF_MAXIMUM + 1)
+    with pytest.raises(ValueError, match="BOUNDED_EXACT_REF_REQUIRED"):
+        read_executable_ref(bound)
