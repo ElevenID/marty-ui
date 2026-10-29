@@ -25,6 +25,7 @@ use std::{
 
 type Result<T> = std::result::Result<T, String>;
 const REFUSED: &str = "rootless storage canary refused; preserve installation and probe evidence";
+const PULL_INTENT: &str = "rootless-canary-pull-intent.json";
 const INTENT: &str = "rootless-canary-intent.json";
 const CREATED: &str = "rootless-canary-created.json";
 const TRANSITION_CONTAINER: &str = "rootless-canary-transition-container.json";
@@ -32,8 +33,13 @@ const RESTORE_CONTAINER: &str = "rootless-canary-restore-container.json";
 const START_INTENT: &str = "rootless-canary-start-intent.json";
 const FOREIGN: &str = "rootless-canary-foreign-observed.json";
 const RESTORE_INTENT: &str = "rootless-canary-restore-intent.json";
+const RESTORE_RETRY_INTENT: &str = "rootless-canary-restore-retry-intent.json";
+const ABORT_INTENT: &str = "rootless-canary-abort-intent.json";
+const ABORT_COMPLETE: &str = "rootless-canary-abort-complete.json";
 const RESULT: &str = "rootless-canary-result.json";
 const REMOVE_INTENT: &str = "rootless-canary-remove-intent.json";
+const TRANSITION_REMOVED: &str = "rootless-canary-transition-removed.json";
+const RESTORE_REMOVED: &str = "rootless-canary-restore-removed.json";
 const COMPLETE: &str = "rootless-canary-complete.json";
 
 fn require(ok: bool) -> Result<()> {
@@ -204,11 +210,32 @@ fn exact_children(parent: &File, expected: &[&str]) -> Result<()> {
     }
     require(names == expected.iter().map(|s| (*s).to_owned()).collect())
 }
+fn entry_exists(parent: &File, name: &str) -> Result<bool> {
+    let name = CString::new(name).map_err(|_| REFUSED)?;
+    let mut st: libc::stat = unsafe { std::mem::zeroed() };
+    if unsafe {
+        libc::fstatat(
+            parent.as_raw_fd(),
+            name.as_ptr(),
+            &mut st,
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    } == 0
+    {
+        return Ok(true);
+    }
+    if std::io::Error::last_os_error().raw_os_error() == Some(libc::ENOENT) {
+        Ok(false)
+    } else {
+        Err(REFUSED.into())
+    }
+}
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Intent {
     schema: String,
+    pull_intent_sha256: String,
     installation_id: uuid::Uuid,
     canary_id: uuid::Uuid,
     source_sha: String,
@@ -223,6 +250,38 @@ struct Intent {
     marker_sha256: String,
     host_uid: u32,
     host_gid: u32,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PullIntent {
+    schema: String,
+    installation_id: uuid::Uuid,
+    canary_id: uuid::Uuid,
+    source_sha: String,
+    inventory_sha256: String,
+    engine_id: String,
+    docker_host: String,
+    image: String,
+    root: Stamp,
+    evidence: Stamp,
+}
+fn verify_pull_intent(bytes: &[u8], intent: &Intent, docker_host: &str) -> Result<()> {
+    let pull: PullIntent = serde_json::from_slice(bytes).map_err(|_| REFUSED)?;
+    require(
+        encoded(&pull)? == bytes
+            && pull.schema == "elevenid.rootless-storage-canary-pull-intent/v1"
+            && sha(bytes) == intent.pull_intent_sha256
+            && pull.installation_id == intent.installation_id
+            && pull.canary_id == intent.canary_id
+            && pull.source_sha == intent.source_sha
+            && pull.inventory_sha256 == intent.inventory_sha256
+            && pull.engine_id == intent.engine_id
+            && pull.docker_host == docker_host
+            && pull.image == intent.image
+            && pull.root == intent.root
+            && pull.evidence == intent.evidence,
+    )
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -282,6 +341,16 @@ fn host_parent(
     let parent = open_dir(&evidence, name)?;
     view.require_path_binding(installation)?;
     Ok((root, evidence, parent))
+}
+fn request_bytes(intent: &Intent) -> Result<Vec<u8>> {
+    encoded(&json!({
+        "schema":"elevenid.rootless-storage-canary-request/v1",
+        "installation_id":intent.installation_id,
+        "canary_id":intent.canary_id,
+        "host_uid":intent.host_uid,
+        "host_gid":intent.host_gid,
+        "marker_sha256":intent.marker_sha256,
+    }))
 }
 
 struct Contract {
@@ -532,6 +601,7 @@ fn bound_layout(
             && created.intent_sha256 == sha(&encoded(intent)?)
             && created.schema == "elevenid.rootless-storage-canary-created/v1",
     )?;
+    require(read_file(&parent, "request.json", 4096)? == request_bytes(intent)?)?;
     let child = path_dir(&parent, "child")?;
     let observed = stamp(&child)?;
     require(
@@ -578,7 +648,108 @@ fn helper_output(
     )?;
     Ok(output)
 }
-fn foreign_child(parent: &File, created: &Created, output: &HelperOutput) -> Result<Stamp> {
+fn foreign_record_bytes(
+    intent_bytes: &[u8],
+    child: &Stamp,
+    output: &HelperOutput,
+) -> Result<Vec<u8>> {
+    encoded(&json!({
+        "schema":"elevenid.rootless-storage-canary-foreign/v1",
+        "intent_sha256":sha(intent_bytes),"child":child,
+        "host_uid_hundred":output.host_uid_hundred,
+        "host_gid_hundred":output.host_gid_hundred
+    }))
+}
+fn recorded_foreign(
+    bytes: &[u8],
+    intent_bytes: &[u8],
+    created: &Created,
+    output: &HelperOutput,
+) -> Result<Stamp> {
+    let value: Value = serde_json::from_slice(bytes).map_err(|_| REFUSED)?;
+    let child: Stamp = serde_json::from_value(value["child"].clone()).map_err(|_| REFUSED)?;
+    require(
+        (child.dev, child.ino, child.mount, child.mode)
+            == (
+                created.child.dev,
+                created.child.ino,
+                created.child.mount,
+                0o700,
+            )
+            && child.uid == output.host_uid_hundred
+            && child.gid == output.host_gid_hundred
+            && bytes == foreign_record_bytes(intent_bytes, &child, output)?,
+    )?;
+    Ok(child)
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TransitionRoute {
+    AbortWithoutForeignOwnership,
+    RestoreForeignOwnership,
+    VerifyPriorRestoration,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RestoreRoute {
+    StartCreated,
+    WaitRunning,
+    RetryExitedOnce,
+    VerifyRestored,
+}
+fn restore_route(
+    status: &str,
+    running: bool,
+    foreign: bool,
+    prior_intent: bool,
+    prior_retry: bool,
+    output_present: bool,
+) -> Result<RestoreRoute> {
+    if output_present && !prior_intent {
+        return Err(REFUSED.into());
+    }
+    match (status, running, foreign) {
+        ("created", false, true) if !output_present && !prior_retry => {
+            Ok(RestoreRoute::StartCreated)
+        }
+        (_, true, _) if prior_intent && status == "running" => Ok(RestoreRoute::WaitRunning),
+        ("exited", false, true) if prior_intent && !prior_retry => {
+            Ok(RestoreRoute::RetryExitedOnce)
+        }
+        ("exited", false, false) if prior_intent => Ok(RestoreRoute::VerifyRestored),
+        _ => Err(REFUSED.into()),
+    }
+}
+fn transition_route(
+    status: &str,
+    exit_code: i64,
+    current: &Stamp,
+    created: &Created,
+    output: Option<&HelperOutput>,
+    has_foreign_receipt: bool,
+) -> Result<TransitionRoute> {
+    let original = current == &created.child;
+    match (status, original, has_foreign_receipt) {
+        ("created", true, false) | ("exited", true, false)
+            if status == "created" || exit_code != 0 =>
+        {
+            Ok(TransitionRoute::AbortWithoutForeignOwnership)
+        }
+        ("exited", true, true) if output.is_some() => Ok(TransitionRoute::VerifyPriorRestoration),
+        ("exited", false, _)
+            if output.is_some_and(|map| {
+                current.uid == map.host_uid_hundred && current.gid == map.host_gid_hundred
+            }) =>
+        {
+            Ok(TransitionRoute::RestoreForeignOwnership)
+        }
+        _ => Err(REFUSED.into()),
+    }
+}
+fn foreign_child(
+    parent: &File,
+    created: &Created,
+    output: &HelperOutput,
+    restore_output: bool,
+) -> Result<Stamp> {
     let child = path_dir(parent, "child")?;
     let observed = stamp(&child)?;
     require(
@@ -605,7 +776,19 @@ fn foreign_child(parent: &File, created: &Created, output: &HelperOutput) -> Res
         return Err(REFUSED.into());
     }
     require(std::io::Error::last_os_error().raw_os_error() == Some(libc::EACCES))?;
-    exact_children(parent, &["child", "request.json", "transition-output.json"])?;
+    if restore_output {
+        exact_children(
+            parent,
+            &[
+                "child",
+                "request.json",
+                "transition-output.json",
+                "restore-output.json",
+            ],
+        )?;
+    } else {
+        exact_children(parent, &["child", "request.json", "transition-output.json"])?;
+    }
     Ok(observed)
 }
 fn restored_child(
@@ -654,17 +837,247 @@ fn receipt(intent: &Intent, role: &str, name: String, id: String) -> ContainerRe
         id,
     }
 }
-fn remove_exact(docker: &DockerRunner, id: &str, contract: &Contract) -> Result<()> {
+fn removal_presence(output: &str, id: &str) -> Result<bool> {
+    require(output.trim().is_empty() || output.trim() == id)?;
+    Ok(output.trim() == id)
+}
+fn remove_exact(
+    docker: &DockerRunner,
+    id: &str,
+    contract: &Contract,
+    allow_absent_after_intent: bool,
+    require_success: bool,
+) -> Result<&'static str> {
     docker.preflight()?;
-    validate_container(docker, id, contract, true)?;
+    let query =
+        || docker.run_checked(&["ps", "-aq", "--no-trunc", "--filter", &format!("id={id}")]);
+    if !removal_presence(&query()?, id)? {
+        require(allow_absent_after_intent)?;
+        return Ok("already_absent_after_retry");
+    }
+    if require_success {
+        validate_container(docker, id, contract, true)?;
+    } else {
+        let c = container_config(docker, id, contract)?;
+        require(
+            c["State"]["Running"] == false
+                && matches!(c["State"]["Status"].as_str(), Some("created" | "exited")),
+        )?;
+    }
     let result = docker.run_checked(&["rm", id])?;
     require(result.trim() == id || result.trim() == contract.name)?;
+    require(!removal_presence(&query()?, id)?)?;
+    Ok("removed")
+}
+fn removed_bytes(intent_bytes: &[u8], record: &ContainerReceipt, outcome: &str) -> Result<Vec<u8>> {
+    require(matches!(outcome, "removed" | "already_absent_after_retry"))?;
+    encoded(&json!({
+        "schema":"elevenid.rootless-storage-canary-removal/v1",
+        "intent_sha256":sha(intent_bytes), "role":record.role,
+        "id":record.id, "outcome":outcome
+    }))
+}
+fn verify_removed_bytes(
+    bytes: &[u8],
+    intent_bytes: &[u8],
+    record: &ContainerReceipt,
+) -> Result<()> {
+    for outcome in ["removed", "already_absent_after_retry"] {
+        if bytes == removed_bytes(intent_bytes, record, outcome)? {
+            return Ok(());
+        }
+    }
+    Err(REFUSED.into())
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RemovalRoute {
+    AlreadyRecorded,
+    RemoveObservedId,
+    RecordAbsentAfterIntent,
+}
+fn removal_route(
+    prior: Option<&[u8]>,
+    intent_bytes: &[u8],
+    record: &ContainerReceipt,
+    present: bool,
+) -> Result<RemovalRoute> {
+    if let Some(bytes) = prior {
+        verify_removed_bytes(bytes, intent_bytes, record)?;
+        require(!present)?;
+        Ok(RemovalRoute::AlreadyRecorded)
+    } else if present {
+        Ok(RemovalRoute::RemoveObservedId)
+    } else {
+        Ok(RemovalRoute::RecordAbsentAfterIntent)
+    }
+}
+fn resume_removal(
+    maintenance: &mut LockedMaintenance,
+    docker: &DockerRunner,
+    name: &str,
+    intent_bytes: &[u8],
+    record: &ContainerReceipt,
+    contract: &Contract,
+    require_success: bool,
+) -> Result<()> {
+    docker.preflight()?;
+    let prior = maintenance.read_evidence(name)?;
+    let present = removal_presence(
+        &docker.run_checked(&[
+            "ps",
+            "-aq",
+            "--no-trunc",
+            "--filter",
+            &format!("id={}", record.id),
+        ])?,
+        &record.id,
+    )?;
+    match removal_route(prior.as_deref(), intent_bytes, record, present)? {
+        RemovalRoute::AlreadyRecorded => Ok(()),
+        RemovalRoute::RecordAbsentAfterIntent => maintenance_record(
+            maintenance,
+            name,
+            &removed_bytes(intent_bytes, record, "already_absent_after_retry")?,
+        ),
+        RemovalRoute::RemoveObservedId => {
+            let outcome = remove_exact(docker, &record.id, contract, true, require_success)?;
+            maintenance_record(
+                maintenance,
+                name,
+                &removed_bytes(intent_bytes, record, outcome)?,
+            )
+        }
+    }
+}
+fn removal_intent_bytes(
+    intent_bytes: &[u8],
+    transition: &ContainerReceipt,
+    restore: &ContainerReceipt,
+) -> Result<Vec<u8>> {
+    encoded(&json!({
+        "schema":"elevenid.rootless-storage-canary-remove-intent/v1",
+        "intent_sha256":sha(intent_bytes),"transition_id":transition.id,"restore_id":restore.id
+    }))
+}
+fn completion_bytes(intent_bytes: &[u8]) -> Result<Vec<u8>> {
+    encoded(&json!({
+        "schema":"elevenid.rootless-storage-canary-complete/v1",
+        "intent_sha256":sha(intent_bytes),"containers_removed":true,
+        "host_traversal_restored":true,"installation_ready":false
+    }))
+}
+fn abort_intent_bytes(
+    intent_bytes: &[u8],
+    transition: &ContainerReceipt,
+    restore: &ContainerReceipt,
+) -> Result<Vec<u8>> {
+    encoded(&json!({
+        "schema":"elevenid.rootless-storage-canary-abort-intent/v1",
+        "intent_sha256":sha(intent_bytes),"transition_id":transition.id,"restore_id":restore.id,
+        "qualification_succeeded":false,"provisioning_resumed":false
+    }))
+}
+fn retry_intent_bytes(
+    intent_bytes: &[u8],
+    restore: &ContainerReceipt,
+    foreign: &Stamp,
+    output_present: bool,
+) -> Result<Vec<u8>> {
+    encoded(&json!({
+        "schema":"elevenid.rootless-storage-canary-restore-retry-intent/v1",
+        "intent_sha256":sha(intent_bytes),"restore_id":restore.id,
+        "foreign_child":foreign,"prior_output_present":output_present,
+        "provisioning_resumed":false
+    }))
+}
+#[derive(Clone, Copy)]
+struct AbortContext<'a> {
+    installation: &'a Path,
+    intent: &'a Intent,
+    intent_bytes: &'a [u8],
+    created: &'a Created,
+    transition: &'a ContainerReceipt,
+    restore: &'a ContainerReceipt,
+    transition_contract: &'a Contract,
+    restore_contract: &'a Contract,
+}
+fn abort_cleanup(
+    maintenance: &mut LockedMaintenance,
+    docker: &DockerRunner,
+    context: &AbortContext<'_>,
+) -> Result<()> {
+    let AbortContext {
+        installation,
+        intent,
+        intent_bytes,
+        created,
+        transition,
+        restore,
+        transition_contract,
+        restore_contract,
+    } = *context;
     require(
-        docker
-            .run_checked(&["ps", "-aq", "--no-trunc", "--filter", &format!("id={id}")])?
-            .trim()
-            .is_empty(),
-    )
+        maintenance.read_evidence(ABORT_INTENT)?.as_deref()
+            == Some(&abort_intent_bytes(intent_bytes, transition, restore)?),
+    )?;
+    require(
+        maintenance.read_evidence(FOREIGN)?.is_none()
+            && maintenance.read_evidence(RESTORE_INTENT)?.is_none()
+            && maintenance.read_evidence(RESULT)?.is_none()
+            && maintenance.read_evidence(REMOVE_INTENT)?.is_none(),
+    )?;
+    let (parent, _) = bound_layout(maintenance.inspection(), installation, intent, created)?;
+    let child = open_dir(&parent, "child")?;
+    require(stamp(&child)? == created.child)?;
+    let marker = format!("marty-rootless-canary/v1:{}\n", intent.canary_id);
+    require(
+        sha(marker.as_bytes()) == intent.marker_sha256
+            && read_file(&child, "marker", 256)? == marker.as_bytes(),
+    )?;
+    exact_children(&child, &["marker"])?;
+    require(!entry_exists(&parent, "restore-output.json")?)?;
+    if entry_exists(&parent, "transition-output.json")? {
+        helper_output(&parent, intent, created, "transition")?;
+        exact_children(
+            &parent,
+            &["child", "request.json", "transition-output.json"],
+        )?;
+    } else {
+        exact_children(&parent, &["child", "request.json"])?;
+    }
+    for (name, record, contract) in [
+        (
+            "rootless-canary-abort-transition-removed.json",
+            transition,
+            transition_contract,
+        ),
+        (
+            "rootless-canary-abort-restore-removed.json",
+            restore,
+            restore_contract,
+        ),
+    ] {
+        resume_removal(
+            maintenance,
+            docker,
+            name,
+            intent_bytes,
+            record,
+            contract,
+            false,
+        )?;
+    }
+    maintenance_record(
+        maintenance,
+        ABORT_COMPLETE,
+        &encoded(&json!({
+            "schema":"elevenid.rootless-storage-canary-abort-complete/v1",
+            "intent_sha256":sha(intent_bytes),"containers_removed":true,
+            "host_traversal_available":true,"qualification_succeeded":false,
+            "provisioning_resumed":false,"installation_ready":false
+        }))?,
+    )?;
+    Ok(())
 }
 
 fn maintenance_record(maintenance: &mut LockedMaintenance, name: &str, bytes: &[u8]) -> Result<()> {
@@ -749,6 +1162,8 @@ pub fn restore_interrupted(installation: &Path, dockerpath: &Path) -> Result<()>
             && intent.host_gid != 0
             && intent.parent_name == format!("rootless-canary-{}", intent.canary_id.simple()),
     )?;
+    let pull_intent_bytes = maintenance.read_evidence(PULL_INTENT)?.ok_or(REFUSED)?;
+    verify_pull_intent(&pull_intent_bytes, &intent, &binding.docker_host)?;
     let (created, transition, restore) = verified_records(
         &intent,
         &intent_bytes,
@@ -791,8 +1206,56 @@ pub fn restore_interrupted(installation: &Path, dockerpath: &Path) -> Result<()>
     };
     let transition_contract = contract("transition", &transition);
     let restore_contract = contract("restore", &restore);
+    let abort_context = AbortContext {
+        installation,
+        intent: &intent,
+        intent_bytes: &intent_bytes,
+        created: &created,
+        transition: &transition,
+        restore: &restore,
+        transition_contract: &transition_contract,
+        restore_contract: &restore_contract,
+    };
+    if maintenance.read_evidence(ABORT_INTENT)?.is_some() {
+        return abort_cleanup(&mut maintenance, &docker, &abort_context);
+    }
+    if let Some(recorded_remove_intent) = maintenance.read_evidence(REMOVE_INTENT)? {
+        require(
+            recorded_remove_intent == removal_intent_bytes(&intent_bytes, &transition, &restore)?,
+        )?;
+        let (parent, _) = bound_layout(maintenance.inspection(), installation, &intent, &created)?;
+        let marker = format!("marty-rootless-canary/v1:{}\n", intent.canary_id).into_bytes();
+        require(sha(&marker) == intent.marker_sha256)?;
+        let restored = restored_child(&parent, &intent, &created, &marker)?;
+        let expected_result = encoded(&json!({
+            "schema":"elevenid.rootless-storage-canary-result/v1",
+            "intent_sha256":sha(&intent_bytes),"restored_child":restored,
+            "host_traversal_restored":true,"deletion_authorized":false,
+            "installation_ready":false
+        }))?;
+        require(maintenance.read_evidence(RESULT)?.as_deref() == Some(&expected_result))?;
+        for (name, record, contract) in [
+            (TRANSITION_REMOVED, &transition, &transition_contract),
+            (RESTORE_REMOVED, &restore, &restore_contract),
+        ] {
+            resume_removal(
+                &mut maintenance,
+                &docker,
+                name,
+                &intent_bytes,
+                record,
+                contract,
+                true,
+            )?;
+        }
+        maintenance_record(
+            &mut maintenance,
+            COMPLETE,
+            &completion_bytes(&intent_bytes)?,
+        )?;
+        return Ok(());
+    }
     let transition_inspect = container_config(&docker, &transition.id, &transition_contract)?;
-    require(transition_inspect["State"]["Status"] != "created")?;
     if transition_inspect["State"]["Running"] == true {
         let _ =
             docker.run_checked_with_timeout(&["wait", &transition.id], Duration::from_secs(120))?;
@@ -800,57 +1263,139 @@ pub fn restore_interrupted(installation: &Path, dockerpath: &Path) -> Result<()>
     let transition_inspect = container_config(&docker, &transition.id, &transition_contract)?;
     require(
         transition_inspect["State"]["Running"] == false
-            && transition_inspect["State"]["Status"] == "exited",
+            && matches!(
+                transition_inspect["State"]["Status"].as_str(),
+                Some("created" | "exited")
+            ),
     )?;
     let (parent, child) = bound_layout(maintenance.inspection(), installation, &intent, &created)?;
     require(stamp(&parent)? == created.parent)?;
-    let transition_output = helper_output(&parent, &intent, &created, "transition")?;
-    let current = stamp(&child)?;
-    let foreign = current.uid == transition_output.host_uid_hundred
-        && current.gid == transition_output.host_gid_hundred;
-    let expected_foreign = encoded(&json!({
-        "schema":"elevenid.rootless-storage-canary-foreign/v1",
-        "intent_sha256":sha(&intent_bytes),"child":current,
-        "host_uid_hundred":transition_output.host_uid_hundred,
-        "host_gid_hundred":transition_output.host_gid_hundred
-    }))?;
-    if foreign {
-        foreign_child(&parent, &created, &transition_output)?;
-        maintenance_record(&mut maintenance, FOREIGN, &expected_foreign)?;
+    let transition_output = if entry_exists(&parent, "transition-output.json")? {
+        Some(helper_output(&parent, &intent, &created, "transition")?)
     } else {
+        None
+    };
+    let current = stamp(&child)?;
+    let route = transition_route(
+        transition_inspect["State"]["Status"]
+            .as_str()
+            .ok_or(REFUSED)?,
+        transition_inspect["State"]["ExitCode"]
+            .as_i64()
+            .ok_or(REFUSED)?,
+        &current,
+        &created,
+        transition_output.as_ref(),
+        maintenance.read_evidence(FOREIGN)?.is_some(),
+    )?;
+    if route == TransitionRoute::AbortWithoutForeignOwnership {
+        require(!entry_exists(&parent, "restore-output.json")?)?;
+        let restore_state = container_config(&docker, &restore.id, &restore_contract)?;
+        require(
+            restore_state["State"]["Status"] == "created"
+                && restore_state["State"]["Running"] == false,
+        )?;
+        maintenance_record(
+            &mut maintenance,
+            ABORT_INTENT,
+            &abort_intent_bytes(&intent_bytes, &transition, &restore)?,
+        )?;
+        return abort_cleanup(&mut maintenance, &docker, &abort_context);
+    }
+    let transition_output = transition_output.ok_or(REFUSED)?;
+    let foreign = route == TransitionRoute::RestoreForeignOwnership;
+    let expected_foreign = foreign_record_bytes(&intent_bytes, &current, &transition_output)?;
+    if !foreign {
         require(
             current.uid == intent.host_uid
                 && current.gid == intent.host_gid
                 && maintenance.read_evidence(FOREIGN)?.is_some(),
         )?;
     }
+    let historical_foreign = if foreign {
+        current.clone()
+    } else {
+        recorded_foreign(
+            &maintenance.read_evidence(FOREIGN)?.ok_or(REFUSED)?,
+            &intent_bytes,
+            &created,
+            &transition_output,
+        )?
+    };
     let expected_restore = encoded(&json!({
         "schema":"elevenid.rootless-storage-canary-restore-intent/v1",
         "intent_sha256":sha(&intent_bytes),"restore_id":restore.id,
-        "foreign_child": if foreign { current.clone() } else {
-            let evidence = maintenance.read_evidence(FOREIGN)?.ok_or(REFUSED)?;
-            let value: Value = serde_json::from_slice(&evidence).map_err(|_| REFUSED)?;
-            serde_json::from_value::<Stamp>(value["child"].clone()).map_err(|_| REFUSED)?
-        }
+        "foreign_child": historical_foreign
     }))?;
+    let has_restore_output = entry_exists(&parent, "restore-output.json")?;
     if foreign {
-        let state = container_config(&docker, &restore.id, &restore_contract)?;
-        if state["State"]["Status"] == "created" {
+        if has_restore_output {
+            require(
+                maintenance.read_evidence(RESTORE_INTENT)?.as_deref() == Some(&expected_restore),
+            )?;
+            let prior = helper_output(&parent, &intent, &created, "restore")?;
+            require(
+                prior.host_uid_hundred == transition_output.host_uid_hundred
+                    && prior.host_gid_hundred == transition_output.host_gid_hundred,
+            )?;
+        }
+        foreign_child(&parent, &created, &transition_output, has_restore_output)?;
+        maintenance_record(&mut maintenance, FOREIGN, &expected_foreign)?;
+    }
+    let prior_restore_intent = maintenance.read_evidence(RESTORE_INTENT)?;
+    if let Some(bytes) = &prior_restore_intent {
+        require(bytes == &expected_restore)?;
+    }
+    let prior_retry = maintenance.read_evidence(RESTORE_RETRY_INTENT)?;
+    if let Some(bytes) = &prior_retry {
+        require(
+            bytes == &retry_intent_bytes(&intent_bytes, &restore, &historical_foreign, false)?
+                || bytes
+                    == &retry_intent_bytes(&intent_bytes, &restore, &historical_foreign, true)?,
+        )?;
+    }
+    let state = container_config(&docker, &restore.id, &restore_contract)?;
+    match restore_route(
+        state["State"]["Status"].as_str().ok_or(REFUSED)?,
+        state["State"]["Running"].as_bool().ok_or(REFUSED)?,
+        foreign,
+        prior_restore_intent.is_some(),
+        prior_retry.is_some(),
+        has_restore_output,
+    )? {
+        RestoreRoute::StartCreated => {
             maintenance_record(&mut maintenance, RESTORE_INTENT, &expected_restore)?;
             start_and_wait(&docker, &restore.id, &restore_contract)?;
-        } else if state["State"]["Running"] == true {
-            require(
-                maintenance.read_evidence(RESTORE_INTENT)?.as_deref() == Some(&expected_restore),
-            )?;
-            let _ = docker
-                .run_checked_with_timeout(&["wait", &restore.id], Duration::from_secs(120))?;
-        } else {
-            require(
-                maintenance.read_evidence(RESTORE_INTENT)?.as_deref() == Some(&expected_restore),
-            )?;
         }
-    } else {
-        require(maintenance.read_evidence(RESTORE_INTENT)?.as_deref() == Some(&expected_restore))?;
+        RestoreRoute::WaitRunning => {
+            let waited = docker
+                .run_checked_with_timeout(&["wait", &restore.id], Duration::from_secs(120))?;
+            require(waited.trim() == "0")?;
+        }
+        RestoreRoute::RetryExitedOnce => {
+            maintenance_record(
+                &mut maintenance,
+                RESTORE_RETRY_INTENT,
+                &retry_intent_bytes(
+                    &intent_bytes,
+                    &restore,
+                    &historical_foreign,
+                    has_restore_output,
+                )?,
+            )?;
+            // The existing exact-ID stopped helper is re-executed at most once.
+            // The helper accepts only its own exact prior output on this retry.
+            require(
+                crate::installer_verify::operator_digest(&operator)? == intent.operator_sha256,
+            )?;
+            docker.preflight()?;
+            let started = docker.run_checked(&["start", &restore.id])?;
+            require(started.trim() == restore.id || started.trim() == restore.name)?;
+            let waited = docker
+                .run_checked_with_timeout(&["wait", &restore.id], Duration::from_secs(120))?;
+            require(waited.trim() == "0")?;
+        }
+        RestoreRoute::VerifyRestored => {}
     }
     let restore_inspect = container_config(&docker, &restore.id, &restore_contract)?;
     require(
@@ -904,7 +1449,6 @@ pub(crate) fn qualify_candidate(
     require(
         crate::installer_verify::operator_digest(&operator)? == operator_sha && id(operator_sha),
     )?;
-    let (image_id, environment) = image(&docker, reference, true)?;
     let canary_id = uuid::Uuid::new_v4();
     let parent_name = format!("rootless-canary-{}", canary_id.simple());
     let marker = format!("marty-rootless-canary/v1:{canary_id}\n").into_bytes();
@@ -915,8 +1459,25 @@ pub(crate) fn qualify_candidate(
         Ok((stamp(root)?, stamp(&evidence)?))
     })?;
     let journal = state.journal();
+    let pull_intent = PullIntent {
+        schema: "elevenid.rootless-storage-canary-pull-intent/v1".into(),
+        installation_id: journal.installation_id(),
+        canary_id,
+        source_sha: journal.identity().source_sha.clone(),
+        inventory_sha256: journal.identity().inventory_sha256.clone(),
+        engine_id: binding.engine_id.clone(),
+        docker_host: binding.docker_host.clone(),
+        image: reference.clone(),
+        root: root.clone(),
+        evidence: evidence.clone(),
+    };
+    let pull_intent_bytes = encoded(&pull_intent)?;
+    persist(state, PULL_INTENT, &pull_intent_bytes)?;
+    let (image_id, environment) = image(&docker, reference, true)?;
+    let journal = state.journal();
     let intent = Intent {
         schema: "elevenid.rootless-storage-canary-intent/v1".into(),
+        pull_intent_sha256: sha(&pull_intent_bytes),
         installation_id: journal.installation_id(),
         canary_id,
         source_sha: journal.identity().source_sha.clone(),
@@ -935,14 +1496,7 @@ pub(crate) fn qualify_candidate(
     require(intent.host_uid != 0 && intent.host_gid != 0 && intent.root.uid == intent.host_uid)?;
     let intent_bytes = encoded(&intent)?;
     persist(state, INTENT, &intent_bytes)?;
-    let request = encoded(&json!({
-        "schema":"elevenid.rootless-storage-canary-request/v1",
-        "installation_id":intent.installation_id,
-        "canary_id":canary_id,
-        "host_uid":intent.host_uid,
-        "host_gid":intent.host_gid,
-        "marker_sha256":intent.marker_sha256,
-    }))?;
+    let request = request_bytes(&intent)?;
     let created = state
         .with_inspection(|view| create_layout(view, installation, &intent, &request, &marker))?;
     persist(state, CREATED, &encoded(&created)?)?;
@@ -1024,7 +1578,7 @@ pub(crate) fn qualify_candidate(
         let (parent, _) = bound_layout(view, installation, &intent, &created)?;
         require(stamp(&parent)? == created.parent)?;
         let output = helper_output(&parent, &intent, &created, "transition")?;
-        let foreign = foreign_child(&parent, &created, &output)?;
+        let foreign = foreign_child(&parent, &created, &output, false)?;
         Ok((foreign, output))
     })?;
     persist(
@@ -1050,7 +1604,7 @@ pub(crate) fn qualify_candidate(
     state.with_inspection(|view| {
         let (parent, _) = bound_layout(view, installation, &intent, &created)?;
         require(stamp(&parent)? == created.parent)?;
-        foreign_child(&parent, &created, &transition_output).map(|_| ())
+        foreign_child(&parent, &created, &transition_output, false).map(|_| ())
     })?;
     require(crate::installer_verify::operator_digest(&operator)? == intent.operator_sha256)?;
     start_and_wait(&docker, &restore.id, &restore_contract)?;
@@ -1077,22 +1631,21 @@ pub(crate) fn qualify_candidate(
     persist(
         state,
         REMOVE_INTENT,
-        &encoded(&json!({
-            "schema":"elevenid.rootless-storage-canary-remove-intent/v1",
-            "intent_sha256":sha(&intent_bytes),"transition_id":transition.id,"restore_id":restore.id
-        }))?,
+        &removal_intent_bytes(&intent_bytes, &transition, &restore)?,
     )?;
-    remove_exact(&docker, &transition.id, &transition_contract)?;
-    remove_exact(&docker, &restore.id, &restore_contract)?;
+    let outcome = remove_exact(&docker, &transition.id, &transition_contract, false, true)?;
     persist(
         state,
-        COMPLETE,
-        &encoded(&json!({
-            "schema":"elevenid.rootless-storage-canary-complete/v1",
-            "intent_sha256":sha(&intent_bytes),"containers_removed":true,
-            "host_traversal_restored":true,"installation_ready":false
-        }))?,
+        TRANSITION_REMOVED,
+        &removed_bytes(&intent_bytes, &transition, outcome)?,
     )?;
+    let outcome = remove_exact(&docker, &restore.id, &restore_contract, false, true)?;
+    persist(
+        state,
+        RESTORE_REMOVED,
+        &removed_bytes(&intent_bytes, &restore, outcome)?,
+    )?;
+    persist(state, COMPLETE, &completion_bytes(&intent_bytes)?)?;
     Ok(())
 }
 
@@ -1122,8 +1675,9 @@ mod tests {
             mode: 0o700,
             mount: 3,
         };
-        let intent = Intent {
+        let mut intent = Intent {
             schema: "elevenid.rootless-storage-canary-intent/v1".into(),
+            pull_intent_sha256: "9".repeat(64),
             installation_id,
             canary_id,
             source_sha: "a".repeat(40),
@@ -1142,6 +1696,28 @@ mod tests {
             host_uid: 1000,
             host_gid: 1000,
         };
+        let pull = PullIntent {
+            schema: "elevenid.rootless-storage-canary-pull-intent/v1".into(),
+            installation_id,
+            canary_id,
+            source_sha: intent.source_sha.clone(),
+            inventory_sha256: intent.inventory_sha256.clone(),
+            engine_id: intent.engine_id.clone(),
+            docker_host: "unix:///run/user/1000/docker.sock".into(),
+            image: intent.image.clone(),
+            root: intent.root.clone(),
+            evidence: intent.evidence.clone(),
+        };
+        let pull_bytes = encoded(&pull).unwrap();
+        intent.pull_intent_sha256 = sha(&pull_bytes);
+        verify_pull_intent(&pull_bytes, &intent, &pull.docker_host).unwrap();
+        assert!(verify_pull_intent(&pull_bytes, &intent, "unix:///var/run/docker.sock").is_err());
+        let mut altered_pull = pull.clone();
+        altered_pull.engine_id = uuid::Uuid::new_v4().to_string();
+        assert!(
+            verify_pull_intent(&encoded(&altered_pull).unwrap(), &intent, &pull.docker_host)
+                .is_err()
+        );
         let intent_bytes = encoded(&intent).unwrap();
         let created = Created {
             schema: "elevenid.rootless-storage-canary-created/v1".into(),
@@ -1201,6 +1777,156 @@ mod tests {
             &start
         )
         .is_err());
+        let removal = removal_intent_bytes(&intent_bytes, &transition, &restore).unwrap();
+        assert!(removal
+            .windows(transition.id.len())
+            .any(|part| part == transition.id.as_bytes()));
+        let removed = removed_bytes(&intent_bytes, &transition, "removed").unwrap();
+        let absent =
+            removed_bytes(&intent_bytes, &transition, "already_absent_after_retry").unwrap();
+        verify_removed_bytes(&removed, &intent_bytes, &transition).unwrap();
+        verify_removed_bytes(&absent, &intent_bytes, &transition).unwrap();
+        assert!(verify_removed_bytes(&removed, &intent_bytes, &restore).is_err());
+        assert!(removal_presence("", &transition.id).is_ok_and(|present| !present));
+        assert!(removal_presence(&transition.id, &transition.id).unwrap());
+        assert!(removal_presence(&restore.id, &transition.id).is_err());
+        for (prior, present, expected) in [
+            (None, true, Some(RemovalRoute::RemoveObservedId)),
+            (None, false, Some(RemovalRoute::RecordAbsentAfterIntent)),
+            (
+                Some(removed.as_slice()),
+                false,
+                Some(RemovalRoute::AlreadyRecorded),
+            ),
+            (
+                Some(absent.as_slice()),
+                false,
+                Some(RemovalRoute::AlreadyRecorded),
+            ),
+            (Some(removed.as_slice()), true, None),
+        ] {
+            assert_eq!(
+                removal_route(prior, &intent_bytes, &transition, present).ok(),
+                expected
+            );
+        }
+        assert!(removal_route(Some(&removed), &intent_bytes, &restore, false).is_err());
+        let output = HelperOutput {
+            schema: "elevenid.rootless-storage-canary-helper/v1".into(),
+            installation_id,
+            canary_id,
+            phase: "transition".into(),
+            host_uid_zero: 1000,
+            host_uid_hundred: 100099,
+            host_gid_zero: 1000,
+            host_gid_hundred: 100099,
+            marker_sha256: "f".repeat(64),
+            child_dev: created.child.dev,
+            child_ino: created.child.ino,
+        };
+        let mut foreign_child = created.child.clone();
+        foreign_child.uid = 100099;
+        foreign_child.gid = 100099;
+        for (status, code, child, prior, expected) in [
+            (
+                "created",
+                0,
+                &created.child,
+                false,
+                Some(TransitionRoute::AbortWithoutForeignOwnership),
+            ),
+            (
+                "exited",
+                1,
+                &created.child,
+                false,
+                Some(TransitionRoute::AbortWithoutForeignOwnership),
+            ),
+            ("exited", 0, &created.child, false, None),
+            (
+                "exited",
+                0,
+                &foreign_child,
+                false,
+                Some(TransitionRoute::RestoreForeignOwnership),
+            ),
+            (
+                "exited",
+                1,
+                &foreign_child,
+                true,
+                Some(TransitionRoute::RestoreForeignOwnership),
+            ),
+            (
+                "exited",
+                0,
+                &created.child,
+                true,
+                Some(TransitionRoute::VerifyPriorRestoration),
+            ),
+            ("created", 0, &foreign_child, false, None),
+        ] {
+            assert_eq!(
+                transition_route(status, code, child, &created, Some(&output), prior).ok(),
+                expected
+            );
+        }
+        assert!(transition_route("exited", 1, &foreign_child, &created, None, true).is_err());
+        for (status, running, foreign, intent, retry, output, expected) in [
+            (
+                "created",
+                false,
+                true,
+                false,
+                false,
+                false,
+                Some(RestoreRoute::StartCreated),
+            ),
+            (
+                "running",
+                true,
+                true,
+                true,
+                false,
+                true,
+                Some(RestoreRoute::WaitRunning),
+            ),
+            (
+                "exited",
+                false,
+                true,
+                true,
+                false,
+                true,
+                Some(RestoreRoute::RetryExitedOnce),
+            ),
+            ("exited", false, true, true, true, true, None),
+            (
+                "exited",
+                false,
+                false,
+                true,
+                false,
+                true,
+                Some(RestoreRoute::VerifyRestored),
+            ),
+            (
+                "running",
+                true,
+                false,
+                true,
+                true,
+                true,
+                Some(RestoreRoute::WaitRunning),
+            ),
+            ("created", false, true, false, false, true, None),
+            ("exited", false, false, false, false, true, None),
+        ] {
+            assert_eq!(
+                restore_route(status, running, foreign, intent, retry, output).ok(),
+                expected
+            );
+        }
     }
 
     #[test]

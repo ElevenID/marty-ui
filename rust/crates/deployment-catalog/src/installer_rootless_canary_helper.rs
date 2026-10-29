@@ -235,12 +235,27 @@ fn write_entry(parent: &File, name: &str, bytes: &[u8]) -> Result<()> {
     if bytes.is_empty() || bytes.len() > 4096 {
         return Err(REFUSED.into());
     }
-    let mut file = open_at(
-        parent.as_raw_fd(),
-        name,
-        libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL,
-        0o600,
-    )?;
+    let entry = CString::new(name).map_err(|_| REFUSED)?;
+    let fd = unsafe {
+        libc::openat(
+            parent.as_raw_fd(),
+            entry.as_ptr(),
+            libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            0o600,
+        )
+    };
+    let mut file = if fd >= 0 {
+        unsafe { File::from_raw_fd(fd) }
+    } else {
+        if std::io::Error::last_os_error().raw_os_error() == Some(libc::EEXIST) {
+            // A scoped restore retry may find the exact output fsynced before
+            // its preceding helper was interrupted ahead of fchown.
+            if read_entry(parent, name, 4096)? == bytes {
+                return Ok(());
+            }
+        }
+        return Err(REFUSED.into());
+    };
     file.write_all(bytes)
         .and_then(|_| file.sync_all())
         .and_then(|_| parent.sync_all())
@@ -329,9 +344,11 @@ pub fn run(args: &[String]) -> Result<()> {
     } else {
         (0, 0)
     };
-    if unsafe { libc::fchown(child.as_raw_fd(), new_uid, new_gid) } != 0
-        || unsafe { libc::fchmod(child.as_raw_fd(), 0o700) } != 0
-    {
+    if unsafe { libc::fchown(child.as_raw_fd(), new_uid, new_gid) } != 0 {
+        return Err(REFUSED.into());
+    }
+    let after = child.metadata().map_err(|_| REFUSED)?;
+    if after.uid() != new_uid || after.gid() != new_gid || after.mode() & 0o7777 != 0o700 {
         return Err(REFUSED.into());
     }
     child.sync_all().map_err(|_| REFUSED)?;
@@ -341,6 +358,17 @@ pub fn run(args: &[String]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn exact_prior_output_is_retryable_but_changed_output_refuses() {
+        let parent = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(parent.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let held = File::open(parent.path()).unwrap();
+        write_entry(&held, "restore-output.json", b"synthetic").unwrap();
+        write_entry(&held, "restore-output.json", b"synthetic").unwrap();
+        assert!(write_entry(&held, "restore-output.json", b"changed").is_err());
+    }
 
     #[test]
     fn uid_map_requires_distinct_nonhost_zero_and_hundred() {
