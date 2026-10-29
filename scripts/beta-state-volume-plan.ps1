@@ -119,21 +119,31 @@ function ConvertTo-BetaStateVolumeOverride {
 # necessarily 10001. Bind that single legacy owner to the exact stopped image,
 # without mounting or changing the state volume.
 function Get-BetaApplicantImageStateOwner {
-    param([Parameter(Mandatory = $true)][object[]]$Expected)
-    Assert-BetaStateVolumePlan -Expected $Expected -SameContainers
+    param(
+        [Parameter(Mandatory = $true)][object[]]$Expected,
+        [string]$HistoricalImageId
+    )
+    if ($HistoricalImageId) {
+        Assert-BetaStateVolumePlan -Expected $Expected
+    } else {
+        Assert-BetaStateVolumePlan -Expected $Expected -SameContainers
+    }
     $owned = @($Expected | Where-Object { $_.service -ceq 'applicant' -and $_.logical_name -ceq 'applicant_data' })
     if ($owned.Count -ne 1 -or $owned[0].destination -cne '/app/data') {
         throw 'Applicant state ownership is ambiguous'
     }
-    $raw = & docker inspect $owned[0].container_id
+    $current = @(Get-BetaStateVolumePlan | Where-Object { $_.service -ceq 'applicant' -and $_.logical_name -ceq 'applicant_data' })
+    if ($current.Count -ne 1) { throw 'Current applicant state owner is ambiguous' }
+    $raw = & docker inspect $current[0].container_id
     if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect stopped applicant image' }
     $container = @(($raw -join [Environment]::NewLine) | ConvertFrom-Json)
-    if ($container.Count -ne 1 -or $container[0].Id -cne $owned[0].container_id -or
+    if ($container.Count -ne 1 -or $container[0].Id -cne $current[0].container_id -or
         $container[0].State.Status -cne 'exited' -or $container[0].State.ExitCode -ne 0 -or
         $container[0].Image -cnotmatch '^sha256:[0-9a-f]{64}$') {
         throw 'Stopped applicant image identity changed'
     }
-    $imageId = [string]$container[0].Image
+    $imageId = if ($HistoricalImageId) { $HistoricalImageId } else { [string]$container[0].Image }
+    if ($imageId -cnotmatch '^sha256:[0-9a-f]{64}$') { throw 'Historical applicant image ID is invalid' }
     $raw = & docker image inspect $imageId
     if ($LASTEXITCODE -ne 0) { throw 'Stopped applicant image is unavailable' }
     $images = @(($raw -join [Environment]::NewLine) | ConvertFrom-Json)

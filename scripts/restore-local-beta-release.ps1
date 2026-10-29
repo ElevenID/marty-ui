@@ -490,7 +490,18 @@ Wait-ForServiceHealth @("redis")
 $applicantBackup = Join-Path $backupDir 'applicant_store.json'
 $applicantDigest = (Get-FileHash -LiteralPath $applicantBackup -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($applicantDigest -cnotmatch '^[0-9a-f]{64}$') { throw 'Applicant restore digest is invalid' }
-$legacyApplicantOwner = Get-BetaApplicantImageStateOwner -Expected @(Get-BetaStateVolumePlan)
+$priorApplicant = @($preDeploy | Where-Object { $_.service -ceq 'applicant' })
+$savedApplicantVolume = @($stateVolumes | Where-Object { $_.service -ceq 'applicant' -and $_.logical_name -ceq 'applicant_data' })
+if ($priorApplicant.Count -ne 1 -or $savedApplicantVolume.Count -ne 1 -or
+    $priorApplicant[0].container_id -cne $savedApplicantVolume[0].container_id -or
+    $priorApplicant[0].compose_project -cne 'elevenid-beta' -or
+    $priorApplicant[0].compose_service -cne 'applicant' -or
+    -not $priorApplicant[0].running -or
+    $priorApplicant[0].image_id -cnotmatch '^sha256:[0-9a-f]{64}$') {
+    throw 'Saved applicant image and state volume lineage is ambiguous'
+}
+$legacyApplicantOwner = Get-BetaApplicantImageStateOwner -Expected $stateVolumes `
+    -HistoricalImageId $priorApplicant[0].image_id
 $applicantRestore = @'
 set -eu
 test -d /data && test ! -L /data

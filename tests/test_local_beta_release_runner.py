@@ -575,7 +575,9 @@ def test_applicant_legacy_group_is_bound_to_the_stopped_image() -> None:
     restore = text("scripts/restore-local-beta-release.ps1")
 
     assert "Get-BetaApplicantImageStateOwner -Expected $Expected" in plan
-    assert "Get-BetaApplicantImageStateOwner -Expected @(Get-BetaStateVolumePlan)" in restore
+    assert "Get-BetaApplicantImageStateOwner -Expected $stateVolumes" in restore
+    assert "-HistoricalImageId $priorApplicant[0].image_id" in restore
+    assert "$priorApplicant[0].container_id -cne $savedApplicantVolume[0].container_id" in restore
     assert "$container[0].State.Status -cne 'exited'" in plan
     assert "$images[0].Id -cne $imageId" in plan
     assert "$null -ne $images[0].Config.Volumes -and" in plan
