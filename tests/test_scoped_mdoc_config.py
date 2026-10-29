@@ -59,6 +59,28 @@ def fixture():
     return before, after, bindings, additions
 
 
+def captured_layouts():
+    return json.loads(
+        (
+            Path(__file__).parent / "fixtures/mdoc-compose540-mount-layout.json"
+        ).read_text()
+    )["roles"]
+
+
+def new_api_mount(bindings, name, role="gateway"):
+    layout = captured_layouts()[role]
+    api = copy.deepcopy(layout["HostConfig"]["Mounts"][0])
+    daemon = copy.deepcopy(
+        next(m for m in layout["Mounts"] if m["Destination"] == api["Target"])
+    )
+    target = "/run/secrets/" + name
+    api.update(Source=bindings[name]["path"], Target=target)
+    daemon.update(
+        Source=subject.daemon_source(bindings[name]["path"]), Destination=target
+    )
+    return api, daemon
+
+
 class DeltaControls(unittest.TestCase):
     def test_exact_additions_and_existing_authority_preserved(self):
         before, after, bindings, additions = fixture()
@@ -259,27 +281,9 @@ class DeltaControls(unittest.TestCase):
         ]
         actual["HostConfig"]["Mounts"] = []
         for name in subject.NAMES:
-            source = subject.daemon_source(bindings[name]["path"])
-            target = "/run/secrets/" + name
-            actual["HostConfig"]["Mounts"].append(
-                {
-                    "Type": "bind",
-                    "Source": source,
-                    "Target": target,
-                    "ReadOnly": True,
-                    "BindOptions": {},
-                }
-            )
-            actual["Mounts"].append(
-                {
-                    "Type": "bind",
-                    "Source": source,
-                    "Destination": target,
-                    "Mode": "ro",
-                    "RW": False,
-                    "Propagation": "rprivate",
-                }
-            )
+            api, daemon = new_api_mount(bindings, name)
+            actual["HostConfig"]["Mounts"].append(api)
+            actual["Mounts"].append(daemon)
         called = []
 
         def checker(a, b, role):
@@ -382,11 +386,7 @@ class DeltaControls(unittest.TestCase):
                 subject.checked_rollback_container(old, actual, "gateway", strict)
 
     def test_captured_compose540_layout_keeps_named_volumes_and_mount_metadata(self):
-        layouts = json.loads(
-            (
-                Path(__file__).parent / "fixtures/mdoc-compose540-mount-layout.json"
-            ).read_text()
-        )["roles"]
+        layouts = captured_layouts()
         before_compose, after_compose, bindings, additions = fixture()
         for role, layout in layouts.items():
             old = copy.deepcopy(layout)
@@ -402,26 +402,9 @@ class DeltaControls(unittest.TestCase):
                 for k, v in after_compose["services"][role]["environment"].items()
             ]
             for name in subject.NAMES:
-                source, target = bindings[name]["path"], "/run/secrets/" + name
-                actual["HostConfig"]["Mounts"].append(
-                    {
-                        "Type": "bind",
-                        "Source": source,
-                        "Target": target,
-                        "ReadOnly": True,
-                        "BindOptions": {},
-                    }
-                )
-                actual["Mounts"].append(
-                    {
-                        "Type": "bind",
-                        "Source": subject.daemon_source(source),
-                        "Destination": target,
-                        "Mode": "ro",
-                        "RW": False,
-                        "Propagation": "rprivate",
-                    }
-                )
+                api, daemon = new_api_mount(bindings, name, role)
+                actual["HostConfig"]["Mounts"].append(api)
+                actual["Mounts"].append(daemon)
             called = []
 
             def strict(a, b, selected):
@@ -448,6 +431,7 @@ class DeltaControls(unittest.TestCase):
                 "host_extra",
                 "cross_duplicate",
                 "wrong_representation",
+                "daemon_mode",
             ):
                 bad = copy.deepcopy(actual)
                 volume = next(m for m in bad["Mounts"] if m["Type"] == "volume")
@@ -463,6 +447,8 @@ class DeltaControls(unittest.TestCase):
                     volume["Driver"] = "foreign"
                 elif mutation == "volume_source":
                     volume["Source"] += "-foreign"
+                elif mutation == "daemon_mode":
+                    bad["Mounts"][-1]["Mode"] = "ro"
                 elif mutation == "host_source":
                     api[-1]["Source"] = "C:/foreign"
                 elif mutation == "host_rw":
