@@ -2,8 +2,11 @@
 from __future__ import annotations
 
 import copy as clone
+import os
 from pathlib import Path
 import sys
+from types import SimpleNamespace
+from unittest import mock
 
 import pytest
 
@@ -231,3 +234,31 @@ def test_rehashed_admission_still_must_match_stopped_incarnation(field, value):
            remove_intent_sha256=proof.release.digest(rows["remove_intent"][0]))
     with pytest.raises(ValueError, match="admission chain differs"):
         proof._exact_chain(rows, VM, COPY)
+
+
+def test_named_snapshot_rebind_refuses_replaced_name(tmp_path):
+    path = tmp_path / "disk.qcow2"
+    path.write_bytes(b"synthetic snapshot")
+    path.chmod(0o600)
+    directory = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
+    held = os.open(path, os.O_RDONLY)
+    actual_stat, actual_fstat = os.stat, os.fstat
+    def root_owned(value):
+        fields = ("st_mode", "st_dev", "st_ino", "st_nlink", "st_size",
+                  "st_mtime_ns", "st_ctime_ns")
+        return SimpleNamespace(**{key: getattr(value, key) for key in fields},
+                               st_uid=0, st_gid=0)
+    try:
+        with mock.patch.object(proof.os, "stat", side_effect=lambda *a, **kw:
+                               root_owned(actual_stat(*a, **kw))), \
+             mock.patch.object(proof.os, "fstat", side_effect=lambda *a, **kw:
+                               root_owned(actual_fstat(*a, **kw))):
+            proof._named_snapshot(directory, held)
+            path.unlink()
+            path.write_bytes(b"synthetic snapshot")
+            path.chmod(0o600)
+            with pytest.raises(ValueError, match="named snapshot changed"):
+                proof._named_snapshot(directory, held)
+    finally:
+        os.close(held)
+        os.close(directory)

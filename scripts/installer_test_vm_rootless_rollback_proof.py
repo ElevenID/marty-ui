@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import socket
+import stat
 
 from installer_candidate_controller import ControllerLease
 import installer_candidate_qemu_observe as observer
@@ -316,6 +317,22 @@ def _exact_chain(records: dict[str, tuple[bytes, dict]], vm_id: str,
                     "fixture rollback proof cleanup chain differs")
 
 
+def _named_snapshot(directory: int, held_file: int) -> None:
+    held = os.fstat(held_file)
+    named = os.stat("disk.qcow2", dir_fd=directory, follow_symlinks=False)
+    release.require(stat.S_ISREG(held.st_mode) and stat.S_ISREG(named.st_mode)
+                    and (held.st_dev, held.st_ino, held.st_uid, held.st_gid,
+                         stat.S_IMODE(held.st_mode), held.st_nlink,
+                         held.st_size, held.st_mtime_ns, held.st_ctime_ns)
+                    == (named.st_dev, named.st_ino, named.st_uid, named.st_gid,
+                        stat.S_IMODE(named.st_mode), named.st_nlink,
+                        named.st_size, named.st_mtime_ns, named.st_ctime_ns)
+                    and held.st_uid == held.st_gid == 0
+                    and held.st_nlink == 1
+                    and stat.S_IMODE(held.st_mode) == 0o600,
+                    "fixture rollback named snapshot changed")
+
+
 def inspect_proof(*, source: Path, registry: Path, runtime_parent: Path,
                   vm_id: str, copy_vm_id: str) -> dict:
     """Return private historical evidence only after exact current rechecks."""
@@ -442,6 +459,9 @@ def inspect_proof(*, source: Path, registry: Path, runtime_parent: Path,
                             == (pending["snapshot_bytes"],
                                 pending["snapshot_sha256"]),
                             "fixture rollback proof named files changed")
+            runtime._named_disk(original, current_disk,
+                                intent["runtime_uid"], intent["runtime_gid"])
+            _named_snapshot(current_snapshot_dir, current_snapshot_file)
             launch._same_path(
                 original_dir, original,
                 lambda path: observer.open_vm_dir(path, intent["runtime_uid"]))
