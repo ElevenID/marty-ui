@@ -32,8 +32,12 @@ class FixtureTests(unittest.TestCase):
             b"  - name: fixture-admin\n", 1)[0]
         self.assertNotIn(b"NOPASSWD", installer_block)
         self.assertIn(b"  - name: fixture-admin", raw)
-        for forbidden in (b"groups: docker", b"docker.io",
-                          b"enable, --now, docker", b"rootlesskit", b"uidmap"):
+        self.assertNotIn(b"groups: docker", raw)
+        self.assertIn(b"docker.io", raw)
+        self.assertIn(b"enable, --now, docker", raw)
+        # This setup-phase daemon is confined to the disposable guest and is
+        # never the endpoint of the ordinary product installer account.
+        for forbidden in (b"rootlesskit", b"uidmap"):
             self.assertNotIn(forbidden, raw)
 
     def test_rootless_seed_cloud_init_schema_when_tool_available(self):

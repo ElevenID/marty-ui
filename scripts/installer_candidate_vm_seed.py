@@ -29,7 +29,12 @@ LOCALDS = Path("/usr/bin/cloud-localds")
 CLOUD_INIT = Path("/usr/bin/cloud-init")
 ENV = {"HOME": "/", "PATH": "/usr/bin:/bin", "LANG": "C"}
 ROOTLESS_FIXTURE_PROFILE = "installer_only_rootless_fixture"
-ROOTLESS_FIXTURE_PACKAGES = {"openssh-server": PACKAGES["openssh-server"]}
+# The setup-phase Engine is confined to the new disposable guest. It is test
+# infrastructure for the existing signed package admission chain, never the
+# product installer's selected daemon. Product dispatch remains disabled until
+# a later controller proves this service stopped and a distinct user-owned
+# rootless Engine is bound to the ordinary installer account.
+ROOTLESS_FIXTURE_PACKAGES = dict(PACKAGES)
 
 
 def _tool(path: Path) -> None:
@@ -158,8 +163,7 @@ def _cloud_config(controller_public: str, host_public: str, host_private: str,
     lines.extend("  - [" + name + ", " + json.dumps(version) + "]"
                  for name, version in packages.items())
     lines.extend(["runcmd:", "  - [chmod, '0700', /home/installer]"])
-    if profile is None:
-        lines.append("  - [systemctl, enable, --now, docker]")
+    lines.append("  - [systemctl, enable, --now, docker]")
     lines.extend(["  - [systemctl, enable, --now, ssh]", ""])
     raw = "\n".join(lines).encode("ascii")
     release.require(len(raw) <= 65536, "VM cloud-init configuration oversized")

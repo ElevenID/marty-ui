@@ -2,7 +2,10 @@
 """Fresh disposable installer-only rootless VM preparation.
 
 This root-controller primitive prepares a distinct signed-image overlay and a
-guest seed without sudo, Docker group membership, or a rootful daemon start.
+guest seed whose ordinary installer account has no sudo or Docker membership.
+The seed starts a rootful guest-only setup Engine for the existing authenticated
+package admission chain. Product dispatch must later prove that Engine stopped
+and inaccessible, and bind a distinct user-owned rootless Engine.
 It deliberately stops before launch, guest package installation, account
 qualification, daemon start, or product dispatch. An interrupted intent is
 never adopted or retried automatically. Root-private source admission and a
