@@ -87,7 +87,7 @@ function fixture(t){
   row.transportArgv=['docker','--context','desktop-linux','exec','-i','-e','PGOPTIONS='+row.pgOptions,identity.containerId,...row.argv];
   sqlRows[id]=row;sqlReceipts[name]=add(row);
  }
- for(const row of commands)Object.assign(row,{databaseIdentity:identity,sourceRevision:latest.SOURCE,coreRevision:latest.CORE,imageId:f.before.find(x=>x.role===row.role).imageId,stdout:addBytes(Buffer.alloc(0)),stderr:addBytes(Buffer.alloc(0))});
+ for(const row of commands)Object.assign(row,{databaseRole:row.command==='migrate'?'postgres':'marty',databaseLoginRole:'postgres',databaseUrl:addBytes(Buffer.from('postgres://postgres:SYNTHETIC_FIXTURE_PASSWORD@postgres:5432/marty?options%5Brole%5D='+(row.command==='migrate'?'postgres':'marty'))),databaseIdentity:identity,sourceRevision:latest.SOURCE,coreRevision:latest.CORE,imageId:f.before.find(x=>x.role===row.role).imageId,stdout:addBytes(Buffer.alloc(0)),stderr:addBytes(Buffer.alloc(0))});
  const operations=metadata.DATABASE_ORDER.map(([id,kind,key],index)=>({stepId:id,state:'SUCCEEDED',unknownOutcome:false,exitCode:0,terminalDurability:{fileFsync:true,parentDirectory:{supported:true,synced:true}},sequence:index+1,intentSequence:2*index+1,terminalSequence:2*index+2,intentDurability:{fileFsync:true,parentDirectory:{supported:true,synced:true}},startedAt:new Date(Date.UTC(2026,9,29,0,0,index*2)).toISOString(),finishedAt:new Date(Date.UTC(2026,9,29,0,0,index*2+1)).toISOString(),receipt:kind==='sql'?sqlReceipts[key]:kind==='rust'?add(commands.find(x=>x.role+':'+x.command===key)):kind==='backup'?outcome.databaseBackup:key==='beforeCatalog'?beforeCatalog:afterCatalog}));
  const operationState={schema:'marty.native-four-role-operation-state/v1',phase:'DATABASE_MAINTENANCE_COMPLETED',runId,sourceRevision:latest.SOURCE,coreRevision:latest.CORE,selectionSha256:selection.sha256,databaseIdentity:identity,executorSource,operations};
  const metadataProof={schema:'marty.native-maintenance-metadata-proof/v1',databaseBefore:pgBefore,beforeCatalog,afterCatalog,sqlSources,sqlReceipts,migrationSources,databaseBackup:outcome.databaseBackup,operationState:add(operationState)};
@@ -147,6 +147,7 @@ test('real Docker observation seam parses PID1 GID and enforces the configured p
 });
 
 for(const [name,mutate]of Object.entries({
+ 'verify under privileged role':f=>f.commands[1].databaseRole='postgres',
  'Rust command source mismatch':f=>f.commands[0].sourceRevision='0'.repeat(40),
  'Rust Core mismatch':f=>f.commands[1].coreRevision='0'.repeat(40),
  'reused Rust helper':f=>f.commands[1].containerId=f.commands[0].containerId,
@@ -166,3 +167,8 @@ for(const [name,mutate]of Object.entries({
  'catalog before native migration':f=>f.metadataAfter.projection.ledgers.issuance.pop(),
 }))test('journal-bound metadata refuses '+name,t=>{const f=fixture(t);mutate(f);assert.throws(()=>latest.produceLatestProfile(f.inputs,f));});
 test('stored operation history cannot replace actual journal read',t=>{const f=fixture(t),read=f.readMaintenanceJournal;f.readMaintenanceJournal=(j,n)=>n==='build-state.json'?{...read(j,n),sha256:'0'.repeat(64)}:read(j,n);assert.throws(()=>latest.produceLatestProfile(f.inputs,f),/assert|actual|expected/i);});
+
+test('application schema verification follows both migrations and final ACL grants',()=>{
+ const order=metadata.DATABASE_ORDER.map(x=>x[0]);
+ for(const verify of ['FLOW_VERIFY','ISSUER_VERIFY'])for(const dependency of ['FLOW_MIGRATE','ISSUER_MIGRATE','ACL_FINALIZE'])assert(order.indexOf(dependency)<order.indexOf(verify));
+});

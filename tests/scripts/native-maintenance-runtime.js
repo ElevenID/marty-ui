@@ -81,6 +81,12 @@ function commandRows(rows,selection,before){
   const key=row.role+':'+row.command;assert(expected.delete(key),'EXACT_SCHEMA_COMMAND_SET');
   const binary=ROLES[row.role];assert(binary);same(row.argv,['/usr/local/bin/'+binary,row.command],'EXACT_SCHEMA_COMMAND_ARGV');
   assert.equal(row.sourceRevision,SOURCE);assert.equal(row.coreRevision,CORE);
+  const role=row.command==='migrate'?'postgres':'marty';assert.equal(row.databaseRole,role);assert.equal(row.databaseLoginRole,'postgres');
+  const url=new URL(runtime.boundBytes(row.databaseUrl).toString('utf8'));
+  // Generic assertions avoid disclosing any private URL/credential value.
+  assert(['postgres:','postgresql:'].includes(url.protocol)&&url.username==='postgres'&&url.hostname==='postgres'&&['','5432'].includes(url.port)&&url.pathname==='/marty'&&!url.hash,'EXACT_PRIVATE_SCHEMA_DATABASE_URL_REQUIRED');
+  same([...url.searchParams.entries()],[['options[role]',role]],'EXACT_SQLX_DATABASE_ROLE_OPTIONS_REQUIRED');
+
   assert.equal(row.imageId,before.find(x=>x.role===row.role).imageId);runtime.boundBytes(row.stdout);runtime.boundBytes(row.stderr);
   assert.equal(row.elfSha256,selection.binaries[row.role].sha256);assert(HASH.test(row.containerId));assert(!before.some(x=>x.containerId===row.containerId));
   assert.equal(row.state,'exited');assert.equal(row.exitCode,0);assert.equal(row.oomKilled,false);helpers.push(row.containerId);

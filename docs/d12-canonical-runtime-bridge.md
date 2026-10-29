@@ -124,7 +124,8 @@ failure receipts and backups preserved and no reverse DDL or blind retry.
 The new four-role path starts from the actual unfenced beta database; it cannot
 reuse a fully-fenced boolean DTO. Its closed database operation order is fence
 install/verify, application-login drain, before-schema catalog and backup,
-Flow migrate/verify, issuer migrate/verify, ACL finalizer, metadata-only native
+Flow and issuer migrations, ACL finalizer, both application-role schema
+verifications, metadata-only native
 attestation, app-login enable, Rust-owner transition/verify, and before-start
 catalog. App-login enable must precede the owner transition because its existing
 SQL guard requires the fully_fenced phase. The final verification requires
@@ -149,3 +150,12 @@ recorded as rust_flow_0002), required relation owners/kinds and ACL relation
 identities. This implementation has only source/mock verification. No new SQL,
 state ownership transition, four-role deployment or functional profile is
 qualified until a separately reviewed operational candidate actually executes.
+
+The application-role verification commands run only after the ACL finalizer;
+issuance verify-owned-schema explicitly requires current_user=marty and its
+append-only cancellation permissions. The admin-authenticated schema connection
+therefore supplies SQLx URL options[role]=marty for verification while marty
+remains NOLOGIN. Migration commands use the admin role. Environment PGOPTIONS is
+not assumed to configure SQLx: the selected SQLx0.9 URL parser and startup
+options path are source-verified, and the disposable rehearsal must prove that
+the actual selected Rust ELFs observe the intended role before beta execution.
