@@ -86,6 +86,11 @@ def durable_barrier(proof):
 def selected_sources(plan, profile=None):
     if profile is None:
         ui_revision, core_revision, roles = UI_REVISION, CORE_REVISION, ROLE_BINARIES
+    elif profile == "d12-passport-canonical-subset":
+        from scoped_passport_successor import SOURCE, CORE, PROFILE
+        require(plan.get("rolloutProfile") == PROFILE and plan.get("buildProfile") is None,
+                "D12_ROLLOUT_IS_NOT_A_BUILD_PROFILE")
+        ui_revision, core_revision, roles = SOURCE, CORE, ROLE_BINARIES
     else:
         import scoped_native_profiles
         selected = scoped_native_profiles.reviewed_profile(profile)
