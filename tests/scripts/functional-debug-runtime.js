@@ -20,14 +20,16 @@ function boundBytes(ref){
  assert.equal(digest(bytes),ref.sha256,'Reviewed receipt changed');
  return bytes;
 }
-function verifyBoundFile(ref,maxBytes=512*1024*1024){
+function verifyBoundFile(ref,maxBytes=512*1024*1024,minBytes=1){
+ assert(Number.isSafeInteger(minBytes)&&minBytes>=0&&Number.isSafeInteger(maxBytes)&&maxBytes>=minBytes);
  assert(ref&&path.isAbsolute(ref.path)&&HASH.test(ref.sha256),'Explicit hash-bound file required');
- const stat=fs.lstatSync(ref.path);assert(stat.isFile()&&!stat.isSymbolicLink()&&stat.size>0&&stat.size<=maxBytes,'Bound file size/type invalid');
+ const stat=fs.lstatSync(ref.path);assert(stat.isFile()&&!stat.isSymbolicLink()&&stat.size>=minBytes&&stat.size<=maxBytes,'Bound file size/type invalid');
  const fd=fs.openSync(ref.path,'r'),hash=crypto.createHash('sha256'),buffer=Buffer.alloc(64*1024);let total=0;
  try{let count;while((count=fs.readSync(fd,buffer,0,buffer.length,null))>0){hash.update(buffer.subarray(0,count));total+=count;assert(total<=maxBytes,'Bound file size invalid');}}
  finally{fs.closeSync(fd);}
  assert(total===stat.size&&hash.digest('hex')===ref.sha256,'Bound file changed');return total;
 }
+function verifyCommandOutput(ref){return verifyBoundFile(ref,1024*1024,0);}
 function boundJson(ref){
  const bytes=boundBytes(ref),text=bytes[0]===255&&bytes[1]===254?bytes.subarray(2).toString('utf16le'):bytes.toString('utf8').replace(/^\uFEFF/,'');
  return JSON.parse(text);
@@ -631,4 +633,4 @@ function verifyFunctionalRuntime(profile,{qualification='FUNCTIONAL_ONLY',observ
   releaseQualified:false,recordingQualified:false,mixedSourceStack:true,roles,
   receiptDigests:receiptDigests(profile)};
 }
-module.exports={verifyBoundFile,boundBytes,comparableBinaryMounts,verifyCanvasIssuerPreimage,expectedCanvasIssuerPreimage,expectedHeaderSuccessorPreimage,applyNativeOverlayObservedRows:applyNativeOverlayObservations,validateSigningDomainTransition,validateHeaderSuccessorGate,expectedUnqualifiedNativePreimage,applyNativeOverlayRows,validateRuntimeIdentity,validateRuntimeObservation,observeDocker,DOCKER_READ_TRANSPORT_SCHEMA:'marty.functional-runtime-docker-read/v1',boundJson,expectedRuntime,verifyFunctionalRuntime,produceMaintenanceRestart,DEBUG_ROLES,RETAINED_ROLES,ISSUANCE_SOURCE,ISSUANCE_CORE};
+module.exports={verifyCommandOutput,verifyBoundFile,boundBytes,comparableBinaryMounts,verifyCanvasIssuerPreimage,expectedCanvasIssuerPreimage,expectedHeaderSuccessorPreimage,applyNativeOverlayObservedRows:applyNativeOverlayObservations,validateSigningDomainTransition,validateHeaderSuccessorGate,expectedUnqualifiedNativePreimage,applyNativeOverlayRows,validateRuntimeIdentity,validateRuntimeObservation,observeDocker,DOCKER_READ_TRANSPORT_SCHEMA:'marty.functional-runtime-docker-read/v1',boundJson,expectedRuntime,verifyFunctionalRuntime,produceMaintenanceRestart,DEBUG_ROLES,RETAINED_ROLES,ISSUANCE_SOURCE,ISSUANCE_CORE};
