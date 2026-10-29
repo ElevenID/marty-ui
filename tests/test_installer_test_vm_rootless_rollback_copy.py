@@ -127,6 +127,23 @@ def test_special_or_linked_snapshot_refuses_before_read(tmp_path):
         os.close(parent)
 
 
+def test_prelaunch_layout_refuses_dangling_monitor_and_unknown_child(tmp_path):
+    (tmp_path / "disk.qcow2").write_bytes(b"disk")
+    (tmp_path / "seed.iso").write_bytes(b"seed")
+    held = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        copy._prelaunch_layout(held)
+        (tmp_path / "qmp.sock").symlink_to("missing")
+        with pytest.raises(ValueError, match="unexpected entries"):
+            copy._prelaunch_layout(held)
+        (tmp_path / "qmp.sock").unlink()
+        (tmp_path / "canary").write_bytes(b"unexpected")
+        with pytest.raises(ValueError, match="unexpected entries"):
+            copy._prelaunch_layout(held)
+    finally:
+        os.close(held)
+
+
 def test_nonroot_or_same_uuid_refuses_before_source_access(tmp_path):
     with mock.patch.object(copy.create, "verify_source") as source:
         with pytest.raises(ValueError, match="request invalid"):
