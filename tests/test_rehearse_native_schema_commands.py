@@ -67,7 +67,7 @@ def test_expected_negative_requires_actual_acl_reason_not_generic_exit1(tmp_path
 
 def test_rehearsal_is_not_armed_and_stages_are_exact():
     assert rehearsal.DISPATCH_ENABLED is False
-    assert len(set(rehearsal.STAGES)) == len(rehearsal.STAGES) == 20
+    assert len(set(rehearsal.STAGES)) == len(rehearsal.STAGES) == 23
     assert "reject-flow-before-acl" in rehearsal.STAGES and "reject-admin-issuer" in rehearsal.STAGES
 
 
@@ -84,7 +84,7 @@ def test_closed_python_export_resolves_lazy_operational_sql_import(tmp_path):
         target = tmp_path / name
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes((root / name).read_bytes())
-    code = "import sys;sys.path.insert(0,sys.argv[1]);from rehearse_native_schema_commands import operational_sql_sources;assert len(operational_sql_sources())==9"
+    code = "import sys;sys.path.insert(0,sys.argv[1]);from rehearse_native_schema_commands import operational_sql_sources;assert len(operational_sql_sources())==10"
     subprocess.run([sys.executable, "-I", "-c", code, str(tmp_path / "scripts")], check=True)
 
 
@@ -327,3 +327,42 @@ def test_real_rehearsal_dispatches_canonical_prerequisites_before_fence(tmp_path
         value.run()
     assert [value.SCHEMA_BINARIES[role] for _, role, _, _ in observed] == ["marty-flow", *NATIVE_BINARIES]
     assert all(command == "migrate" and kw == {"bootstrap": True} for _, _, command, kw in observed)
+
+
+@pytest.mark.parametrize("exact_cause", [True, False])
+def test_fixture_trigger_negative_requires_exact_refusal_then_source_recheck(tmp_path, exact_cause):
+    import base64
+    value = fixture(tmp_path)
+    control = "unknown-trigger"
+    stage = "reject-trigger-" + control
+    value.i["stageIds"] = {stage: "22222222-2222-4222-8222-222222222222"}
+    source_path = Path(__file__).resolve().parents[1] / rehearsal.FENCE_NEGATIVE_SOURCES[control]
+    value.i["operatorFiles"] = {rehearsal.FENCE_NEGATIVE_SOURCES[control]: rehearsal.ref(source_path)}
+    value.i["sqlSources"] = {"passport-beta-fence-verify.sql": {"sha256": "f" * 64}}
+    value.pg_cid = "c" * 64
+    value.command_index = 5
+    value.guard = lambda: None
+    value.target_settings = lambda: {}
+    value.node = lambda *args, **kwargs: {"stdin": base64.b64encode(b"SOURCE_BOUND_VERIFIER").decode(), "pgOptions": "fixed", "argv": ["psql"]}
+    restored = []
+    value.sql = lambda name: restored.append(name) or {"state": "exited", "exitCode": 0}
+    def save_bytes(name, raw):
+        output = tmp_path / name
+        output.write_bytes(raw)
+        return rehearsal.ref(output)
+    value.g.update(save_bytes=save_bytes, save=lambda name, row: save_bytes(name, json.dumps(row).encode()))
+    def rejected(args, *, input):
+        assert input.startswith(b"-- Synthetic fixture only.") and b"BEGIN;" in input
+        assert b"SOURCE_BOUND_VERIFIER" in input and input.endswith(b"ROLLBACK;\n")
+        name = stage + "-database-command-5"
+        (tmp_path / (name + ".terminal.json")).write_text(json.dumps({"exitCode": 3, "observation": {"timedOut": False, "failures": []}}))
+        (tmp_path / (name + ".stderr")).write_bytes(b"passport fence trigger inventory changed" if exact_cause else b"unrelated permission failure")
+        raise ValueError("DATABASE_COMMAND_NONZERO_RECONCILE")
+    value.result = rejected
+    if exact_cause:
+        value.fence_negative(control)
+        assert restored == ["passport-beta-fence-verify.sql"] and value.fence_rejections == [control]
+    else:
+        with pytest.raises(ValueError, match="EXACT_TRIGGER_CONTROL_REFUSAL_REQUIRED"):
+            value.fence_negative(control)
+        assert not restored and not value.fence_rejections

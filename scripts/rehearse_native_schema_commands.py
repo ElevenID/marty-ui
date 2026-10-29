@@ -7,6 +7,7 @@ or beta migration receipt can be produced by this operator.
 """
 from __future__ import annotations
 import argparse
+import base64
 import ctypes
 from ctypes import wintypes
 from datetime import datetime, timezone
@@ -41,12 +42,14 @@ SCHEMA_STAGE_OPERATIONS = {"bootstrap-flow": ("flow", "migrate"),
     "reject-flow-before-acl": ("flow", "verify-owned-schema"), "reject-issuer-before-acl": ("issuance-native", "verify-owned-schema"),
     "verify-flow": ("flow", "verify-owned-schema"), "verify-issuer": ("issuance-native", "verify-owned-schema"),
     "reject-admin-issuer": ("issuance-native", "verify-owned-schema")}
-STAGES = ("bootstrap-flow", *("bootstrap-" + role for role in BOOTSTRAP_ROLES), "install", "fence", "maintenance",
+FENCE_NEGATIVE_SOURCES = {name: "tests/fixtures/native-schema-trigger-" + name + ".sql"
+                          for name in ("stale-ledger", "unknown-trigger", "wrong-shape")}
+STAGES = ("bootstrap-flow", *("bootstrap-" + role for role in BOOTSTRAP_ROLES), "install", "fence", *("reject-trigger-" + name for name in FENCE_NEGATIVE_SOURCES), "maintenance",
     "migrate-flow", "migrate-issuer", "reject-flow-before-acl", "reject-issuer-before-acl", "acl",
     "verify-flow", "verify-issuer", "reject-admin-issuer", "attest", "login", "owner", "owner-verify")
 
 
-OPERATOR_FILES = ('scripts/qualify_selfhost_migrations.py', 'scripts/sql/kms-private-key-schema.sql', 'scripts/sql/kms-private-key-content.sql', 'scripts/rehearse_native_schema_commands.py', 'scripts/scoped_native_database.py', 'scripts/scoped_native_runtime.py', 'scripts/scoped_native_profiles.py', 'scripts/scoped_native_maintenance.py', 'scripts/scoped_beta_binary_overlay.py', 'scripts/scoped_passport_successor.py', 'scripts/scoped_linux_journal.py', 'scripts/scoped_signing_successor.py', 'scripts/prepare_local_official_native_build.py', 'scripts/scoped_native_build.py', 'tests/scripts/native-maintenance-metadata.js', 'tests/scripts/functional-debug-runtime.js')
+OPERATOR_FILES = (*FENCE_NEGATIVE_SOURCES.values(), 'scripts/qualify_selfhost_migrations.py', 'scripts/sql/kms-private-key-schema.sql', 'scripts/sql/kms-private-key-content.sql', 'scripts/rehearse_native_schema_commands.py', 'scripts/scoped_native_database.py', 'scripts/scoped_native_runtime.py', 'scripts/scoped_native_profiles.py', 'scripts/scoped_native_maintenance.py', 'scripts/scoped_beta_binary_overlay.py', 'scripts/scoped_passport_successor.py', 'scripts/scoped_linux_journal.py', 'scripts/scoped_signing_successor.py', 'scripts/prepare_local_official_native_build.py', 'scripts/scoped_native_build.py', 'tests/scripts/native-maintenance-metadata.js', 'tests/scripts/functional-debug-runtime.js')
 
 MIGRATION_FILES = tuple("rust/services/" + name.split("/", 1)[0] + "/migrations/" + name.split("/", 1)[1] + ".sql" for name in MIGRATIONS)
 
@@ -72,6 +75,7 @@ class Rehearsal(NativeDatabasePhase):
         self.pg_cid = None
         self.helpers = []
         self.rejections = []
+        self.fence_rejections = []
         self.positive = []
         self.admin_control = False
 
@@ -216,6 +220,41 @@ class Rehearsal(NativeDatabasePhase):
         self.positive.append(stage)
         self.g["save"]("schema-receipt.json", row)
 
+    def fence_negative(self, control):
+        require(control in FENCE_NEGATIVE_SOURCES, "CLOSED_FIXTURE_TRIGGER_CONTROL_REQUIRED")
+        self.stage_intent("reject-trigger-" + control)
+        self.guard()
+        source_ref = self.i["operatorFiles"][FENCE_NEGATIVE_SOURCES[control]]
+        prefix = read_ref(source_ref).read_bytes()
+        descriptor = self.node("render", name="passport-beta-fence-verify.sql", sqlSources=self.i["sqlSources"], settings=self.target_settings())
+        stdin = prefix + base64.b64decode(descriptor["stdin"], validate=True) + b"\nROLLBACK;\n"
+        stdin_ref = self.g["save_bytes"]("negative.stdin.private", stdin)
+        args = ["docker", "exec", "-i", "-e", "PGOPTIONS=" + descriptor["pgOptions"], self.pg_cid, *descriptor["argv"]]
+        self.state["pendingRequest"] = {"kind": "SYNTHETIC_ROLLBACK_ONLY_TRIGGER_NEGATIVE", "fixtureSource": source_ref,
+            "verifierSource": self.i["sqlSources"]["passport-beta-fence-verify.sql"], "stdin": stdin_ref, "transportArgv": args}
+        self.persist()
+        try:
+            self.result(args, input=stdin)
+        except ValueError as error:
+            require(str(error) == "DATABASE_COMMAND_NONZERO_RECONCILE", "UNEXPECTED_TRIGGER_CONTROL_FAILURE")
+            name = self.stage + "-database-command-" + str(self.command_index)
+            root = Path(self.g["root"])
+            terminal = json.loads((root / (name + ".terminal.json")).read_bytes())
+            stderr = (root / (name + ".stderr")).read_bytes()
+            require(terminal["exitCode"] == 3 and not terminal["observation"]["timedOut"] and not terminal["observation"]["failures"]
+                    and b"passport fence trigger inventory changed" in stderr, "EXACT_TRIGGER_CONTROL_REFUSAL_REQUIRED")
+        else:
+            raise ValueError("TRIGGER_NEGATIVE_UNEXPECTEDLY_SUCCEEDED")
+        # A fresh successful source verifier proves the failed transaction rolled
+        # back; it uses a distinct receipt prefix, never overwrites the negative.
+        self.stage += "-restored"
+        restored = self.sql("passport-beta-fence-verify.sql")
+        self.g["save"]("negative-and-rollback-proof.json", {"control": control, "negativeRequest": stdin_ref,
+            "expectedPsqlExit": 3, "restoredVerifier": restored, "betaDatabaseAccessed": False})
+        self.fence_rejections.append(control)
+        self.state["expectedFenceRejections"] = self.fence_rejections.copy()
+        self.persist()
+
     def run(self):
         self.create_fixture()
         self.schema_stage("bootstrap-flow", "flow", "migrate", bootstrap=True)
@@ -224,6 +263,8 @@ class Rehearsal(NativeDatabasePhase):
         self.sql_stage("install", "passport-beta-fence-install.sql")
         row = self.sql_stage("fence", "passport-beta-fence-verify.sql")
         self.epoch = self.node("json", stdout=row["stdout"], schema="marty.passport-beta-fence-verification/v1")["epoch"]
+        for control in FENCE_NEGATIVE_SOURCES:
+            self.fence_negative(control)
         self.sql_stage("maintenance", "passport-beta-db-maintenance-start.sql")
         self.schema_stage("migrate-flow", "flow", "migrate")
         self.schema_stage("migrate-issuer", "issuance-native", "migrate")
@@ -240,7 +281,8 @@ class Rehearsal(NativeDatabasePhase):
         txid = self.node("json", stdout=row["stdout"], schema="marty.passport-beta-rust-owner-transition/v1")["transition_txid"]
         self.sql_stage("owner-verify", "passport-beta-rust-owner-verify.sql", transition=txid)
         require(self.rejections == ["reject-flow-before-acl", "reject-issuer-before-acl", "reject-admin-issuer"]
-                and len(self.positive) == 9 and len(set(self.helpers)) == 12, "EXACT_SCHEMA_REHEARSAL_ASSERTIONS_REQUIRED")
+                and len(self.positive) == 9 and len(set(self.helpers)) == 12
+                and self.fence_rejections == list(FENCE_NEGATIVE_SOURCES), "EXACT_SCHEMA_REHEARSAL_ASSERTIONS_REQUIRED")
         self.guard()
         self.state.update(phase="STOP_OWNED_FIXTURE", pendingResource="STOP_OWNED_POSTGRES")
         self.persist()
@@ -258,7 +300,7 @@ class Rehearsal(NativeDatabasePhase):
         require(remaining == self.baseline and not remaining.intersection(self.helpers), "BASELINE_OR_HELPER_ABSENCE_CHANGED")
         self.state.update(phase="SYNTHETIC_SCHEMA_REHEARSAL_PASSED", pendingResource=None,
             pgFixtureRemoved=True, ownedSchemaHelpersRemoved=True, helperContainerIds=self.helpers,
-            expectedRejectedStages=self.rejections, positiveStages=self.positive, baselineIdsUnchanged=True,
+            expectedRejectedStages=self.rejections, expectedFenceRejectedControls=self.fence_rejections, positiveStages=self.positive, baselineIdsUnchanged=True,
             runtimeDeployed=False, releaseQualified=False, recordingQualified=False)
         self.persist()
         return self.state
