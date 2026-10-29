@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from contextlib import ExitStack
+from contextlib import ExitStack, nullcontext
 import json
 import re
 import shlex
@@ -162,7 +162,8 @@ def observe_setup_readiness(*, source: Path, registry: Path, vm_parent: Path,
 
 
 def bound_setup_fixture(*, source: Path, registry: Path, vm_parent: Path,
-                        runtime_parent: Path, vm_id: str) -> dict:
+                        runtime_parent: Path, vm_id: str,
+                        _lease: ControllerLease | None = None) -> dict:
     """Reobserve a prepared guest's exact setup Engine for package admission.
 
     This intentionally returns the old admission controller's private binding
@@ -170,8 +171,9 @@ def bound_setup_fixture(*, source: Path, registry: Path, vm_parent: Path,
     the setup Engine for a product invocation.
     """
     before = bound_fixture(source=source, registry=registry, vm_parent=vm_parent,
-                           runtime_parent=runtime_parent, vm_id=vm_id)
-    with ControllerLease(registry) as lease:
+                           runtime_parent=runtime_parent, vm_id=vm_id, _lease=_lease)
+    with (ControllerLease(registry) if _lease is None else nullcontext(_lease)) as lease:
+        create._rebind_directory(registry, lease.parent)
         raw, recorded = create._read_record(lease.parent,
                                             vm_id + SETUP_READINESS_SUFFIX)
     release.exact(recorded, {"schema", "phase", "vm_id", "launch_sha256",
@@ -191,6 +193,15 @@ def bound_setup_fixture(*, source: Path, registry: Path, vm_parent: Path,
                     and recorded["pid"] == before["pid"]
                     and recorded["start_ticks"] == before["start_ticks"]
                     and recorded["boot_id"] == before["boot_id"]
+                    and type(recorded["ordinary_uid"]) is int
+                    and recorded["ordinary_uid"] > 0
+                    and type(recorded["ordinary_gid"]) is int
+                    and recorded["ordinary_gid"] > 0
+                    and type(recorded["setup_engine_id"]) is str
+                    and str(uuid.UUID(recorded["setup_engine_id"]))
+                    == recorded["setup_engine_id"]
+                    and type(recorded["observed_at"]) is int
+                    and recorded["observed_at"] > 0
                     and all(recorded[key] is True for key in
                             ("ordinary_no_sudo_or_docker_group",
                              "setup_socket_denied_to_installer"))
@@ -210,9 +221,10 @@ def bound_setup_fixture(*, source: Path, registry: Path, vm_parent: Path,
                     == recorded["setup_engine_id"],
                     "fixture setup Engine changed")
     after = bound_fixture(source=source, registry=registry, vm_parent=vm_parent,
-                          runtime_parent=runtime_parent, vm_id=vm_id)
+                          runtime_parent=runtime_parent, vm_id=vm_id, _lease=_lease)
     release.require(after == before, "fixture launch changed")
-    with ControllerLease(registry) as lease:
+    with (ControllerLease(registry) if _lease is None else nullcontext(_lease)) as lease:
+        create._rebind_directory(registry, lease.parent)
         release.require(create._read_record(lease.parent,
                         vm_id + SETUP_READINESS_SUFFIX)[0] == raw,
                         "fixture setup evidence changed")
@@ -223,7 +235,8 @@ def bound_setup_fixture(*, source: Path, registry: Path, vm_parent: Path,
 
 
 def bound_fixture(*, source: Path, registry: Path, vm_parent: Path,
-                  runtime_parent: Path, vm_id: str) -> dict:
+                  runtime_parent: Path, vm_id: str,
+                  _lease: ControllerLease | None = None) -> dict:
     """Bind exact root-owned records, signed source, and live QEMU disk FD.
 
     A root-private admitted controller must call this before and after every
@@ -234,7 +247,8 @@ def bound_fixture(*, source: Path, registry: Path, vm_parent: Path,
                     (source, registry, vm_parent, runtime_parent)),
                     "fixture observation request invalid")
     provenance = create.verify_source(source)
-    with ControllerLease(registry) as lease:
+    with (ControllerLease(registry) if _lease is None else nullcontext(_lease)) as lease:
+        create._rebind_directory(registry, lease.parent)
         intent_raw, intent = create._read_record(lease.parent,
                                                 vm_id + fixture.RECORD_SUFFIX)
         result_raw, result = create._read_record(lease.parent,
@@ -250,6 +264,21 @@ def bound_fixture(*, source: Path, registry: Path, vm_parent: Path,
         seeded = raw["seed_receipt"][1]
         launch_intent = raw["launch_intent"][1]
         launched = raw["launch_receipt"][1]
+        release.exact(intent, {"schema", "phase", "vm_id", "source_image_sha256",
+                               "source_manifest_sha256", "source_signature_sha256",
+                               "source_keyring_sha256", "vm_parent",
+                               "vm_parent_device", "vm_parent_inode", "runtime_parent",
+                               "runtime_parent_device", "runtime_parent_inode",
+                               "runtime_uid", "runtime_gid", "ssh_port", "virtual_gib",
+                               "guest_profile", "started_at", "qualified",
+                               "launch_authorized", "product_dispatch_authorized"},
+                      "fixture preparation intent")
+        release.exact(result, {"schema", "phase", "vm_id", "intent_sha256",
+                               "creation_sha256", "transfer_sha256", "seed_sha256",
+                               "guest_profile", "runtime_uid", "runtime_gid",
+                               "prepared_at", "qualified", "launch_authorized",
+                               "product_dispatch_authorized", "rootless_daemon_ready"},
+                      "fixture preparation result")
         release.require(intent["schema"] == result["schema"] == fixture.SCHEMA
                         and intent["phase"] == "intent"
                         and result["phase"] == "prepared"

@@ -305,6 +305,7 @@ def test_package_adapter_rebinds_setup_engine_without_product_authority():
                 ('"' + engine + '"\n').encode())
     with mock.patch.object(setup, "bound_fixture", return_value=before), \
          mock.patch.object(setup, "ControllerLease", return_value=Lease()), \
+         mock.patch.object(setup.create, "_rebind_directory"), \
          mock.patch.object(setup.create, "_read_record", return_value=(raw, record)), \
          mock.patch.object(setup, "_ssh_as", side_effect=run):
         result = setup.bound_setup_fixture(source=Path("/source"),
@@ -317,6 +318,7 @@ def test_package_adapter_rebinds_setup_engine_without_product_authority():
     record["setup_engine_stopped"] = True
     with mock.patch.object(setup, "bound_fixture", return_value=before), \
          mock.patch.object(setup, "ControllerLease", return_value=Lease()), \
+         mock.patch.object(setup.create, "_rebind_directory"), \
          mock.patch.object(setup.create, "_read_record",
                            return_value=(release.encode(record), record)), \
          mock.patch.object(setup, "_ssh_as") as ssh:

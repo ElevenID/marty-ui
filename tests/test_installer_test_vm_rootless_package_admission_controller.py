@@ -1,8 +1,10 @@
 """Nonprivileged source tests for the fixed package admission controller."""
 import json
+import hashlib
 from pathlib import Path
 import subprocess
 import sys
+from unittest import mock
 
 import pytest
 
@@ -74,3 +76,31 @@ def test_child_refuses_nonzero_or_authorizing_result(monkeypatch, tmp_path):
             patch.setattr(controller.admission, "run_bounded", run)
             with pytest.raises(ValueError):
                 controller._child(b"verified code", tmp_path / "bundle", tmp_path / "status")
+
+
+def test_new_fixture_admission_selects_exact_setup_binding_before_stage(monkeypatch):
+    class Lease:
+        def __enter__(self):
+            self.parent = 20
+            return self
+        def __exit__(self, *_):
+            pass
+    monkeypatch.setattr(controller.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(controller, "_private_parent", lambda _p: None)
+    monkeypatch.setattr(controller.admission, "private_file", lambda *_a, **_k: b"code")
+    monkeypatch.setattr(controller, "ControllerLease", lambda _p: Lease())
+    monkeypatch.setattr(controller.os, "stat", lambda *_a, **_k: (_ for _ in ()).throw(
+        FileNotFoundError()))
+    with mock.patch.object(controller.fixture_setup, "bound_setup_fixture",
+                           side_effect=RuntimeError("selected fixture binding")) as bound, \
+         mock.patch.object(controller.probe, "_bound_vm") as old:
+        with pytest.raises(RuntimeError, match="selected fixture binding"):
+            controller.observe(source=Path("/source"), registry=Path("/registry"),
+                runtime_parent=Path("/runtime"), stage_parent=Path("/stage"),
+                vm_parent=Path("/vm"),
+                vm_id="11111111-2222-4333-8444-555555555555",
+                observation_id="22222222-3333-4444-8555-666666666666",
+                admitted_module_sha256=hashlib.sha256(b"code").hexdigest(),
+                admitted_controller_sha256=hashlib.sha256(b"code").hexdigest())
+    bound.assert_called_once()
+    old.assert_not_called()
