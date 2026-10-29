@@ -512,6 +512,14 @@ fn validate_container_inner(
     let p = project(plan)?;
     let config = &c["Config"];
     let host = &c["HostConfig"];
+    // Historical cleanup observations may have no declared cap. New source
+    // models require it at admission, and each observed container must match.
+    if let Some(limit) = s.get("mem_limit") {
+        require(
+            host["Memory"].as_u64()
+                == Some(crate::installer_application_model::memory_limit(limit)?),
+        )?;
+    }
     let image_ref = text(&s["image"])?;
     let image_id = text(&image["Id"])?;
     require(id(container_id))?;
@@ -842,6 +850,20 @@ mod tests {
             "Mounts":[{"Type":"bind","Source":"/private/install $literal/secrets/token","Destination":"/run/secrets/token","RW":false,"Propagation":"rprivate"}],
             "State":{"Status":"created","Running":false,"Paused":false,"Restarting":false,"OOMKilled":false}});
         (plan, image, observed)
+    }
+    #[test]
+    fn observed_ram_cap_must_match_declared_finite_limit() {
+        let (mut plan, image, mut c) = fixture();
+        let id = "d".repeat(64);
+        plan.model["services"]["app"]["mem_limit"] = json!("536870912");
+        for actual in [Value::Null, json!(0), json!(1073741824)] {
+            c["HostConfig"]["Memory"] = actual;
+            assert!(
+                validate_container(&c, &id, "app", &plan, &image, ContainerPhase::Created).is_err()
+            );
+        }
+        c["HostConfig"]["Memory"] = json!(536870912);
+        validate_container(&c, &id, "app", &plan, &image, ContainerPhase::Created).unwrap();
     }
     #[test]
     fn binds_actual_identity_mounts_execution_and_phase() {

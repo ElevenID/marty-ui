@@ -19,7 +19,12 @@ guarantee. Optional overlays can override them: check the final rendered model.
 Set `MARTY_<SERVICE>_MEMORY_LIMIT` in the deployment environment to tune a
 service, replacing hyphens with underscores. For example,
 `MARTY_KEYCLOAK_MEMORY_LIMIT=3g` or `MARTY_ISSUANCE_MEMORY_LIMIT=1g`.
-Use a positive size; zero disables a memory limit. Base-stack overrides must
+Use a positive size; zero disables Docker's memory limit.
+The native installer admits normalized limits from 6 MiB through 64 GiB and
+refuses missing, zero, negative or out-of-range values. It also checks that
+Docker's observed container RAM setting matches the admitted model.
+
+Base-stack overrides must
 remain above its existing memory reservations. Sum the enabled services' needs
 and leave host headroom; these defaults are not evidence that the entire stack
 fits a small VM or that a workload cannot be OOM-killed.
