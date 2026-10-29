@@ -175,6 +175,10 @@ def _exact_chain(records: dict[str, tuple[bytes, dict]], vm_id: str,
                     and ai["observation_id"] == ar["observation_id"]
                     and ai["purpose"]
                     == "disposable_fixture_setup_package_admission"
+                    and ai["readiness_sha256"]
+                    == row["stop"]["setup_readiness_sha256"]
+                    and ai["pid"] == row["stop"]["pid"]
+                    and ai["start_ticks"] == row["stop"]["start_ticks"]
                     and all(ai[key] == ar[key] for key in
                             ("engine_id", "readiness_sha256",
                              "dpkg_status_sha256", "module_sha256",
@@ -379,6 +383,7 @@ def inspect_proof(*, source: Path, registry: Path, runtime_parent: Path,
             reserved.bind(("127.0.0.1", ci["copy_port"]))
         parent = runtime._runtime_parent(runtime_parent)
         original = disk = snapshot_dir = snapshot_file = None
+        current_disk = current_snapshot_dir = current_snapshot_file = None
         try:
             release.require((os.fstat(parent).st_dev, os.fstat(parent).st_ino)
                             == (ci["runtime_parent_device"],
@@ -426,6 +431,26 @@ def inspect_proof(*, source: Path, registry: Path, runtime_parent: Path,
                             == (pending["snapshot_bytes"],
                                 pending["snapshot_sha256"]),
                             "fixture rollback proof observation changed")
+            current_disk = restart._disk_fd(
+                original, intent["runtime_uid"], intent["runtime_gid"],
+                pending["disk_device"], pending["disk_inode"])
+            current_snapshot_dir, current_snapshot_file = copy._snapshot(
+                registry, lease, vm_id, pending)
+            release.require(restart._mutable_digest(current_disk)[:2]
+                            == (pending["disk_bytes"], pending["disk_sha256"])
+                            and restart._mutable_digest(current_snapshot_file)[:2]
+                            == (pending["snapshot_bytes"],
+                                pending["snapshot_sha256"]),
+                            "fixture rollback proof named files changed")
+            launch._same_path(
+                original_dir, original,
+                lambda path: observer.open_vm_dir(path, intent["runtime_uid"]))
+            cleanup._require_absent(parent, copy_vm_id)
+            restart._no_live_owner(intent["runtime_uid"], intent["pid"],
+                                   intent["start_ticks"], intent["boot_id"],
+                                   original_dir, original_launch["ssh_port"])
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as reserved:
+                reserved.bind(("127.0.0.1", ci["copy_port"]))
             return {"vm_id": vm_id, "copy_vm_id": copy_vm_id,
                     "pending_sha256": release.digest(before["pending"][0]),
                     "snapshot_sha256": pending["snapshot_sha256"],
@@ -439,6 +464,8 @@ def inspect_proof(*, source: Path, registry: Path, runtime_parent: Path,
                     "package_install_authorized": False,
                     "product_dispatch_authorized": False}
         finally:
-            for fd in (snapshot_file, snapshot_dir, disk, original, parent):
+            for fd in (current_snapshot_file, current_snapshot_dir,
+                       current_disk, snapshot_file, snapshot_dir, disk,
+                       original, parent):
                 if fd is not None:
                     os.close(fd)

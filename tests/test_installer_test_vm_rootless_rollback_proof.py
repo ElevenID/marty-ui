@@ -98,7 +98,7 @@ def _fixture():
     put("launch_receipt", receipt)
     ai = {"schema": proof.admission.SCHEMA, "phase": "intent",
           "vm_id": VM, "observation_id": COPY,
-          "engine_id": "e" * 64, "readiness_sha256": "d" * 64,
+          "engine_id": "e" * 64, "readiness_sha256": "a" * 64,
           "pid": 1777, "start_ticks": "17",
           "dpkg_status_sha256": "f" * 64,
           "module_sha256": "1" * 64,
@@ -111,7 +111,7 @@ def _fixture():
           "vm_id": VM, "observation_id": COPY,
           "intent_sha256": proof.release.digest(rows["admission_intent"][0]),
           "engine_id": "e" * 64, "dpkg_status_sha256": "f" * 64,
-          "readiness_sha256": "d" * 64,
+          "readiness_sha256": "a" * 64,
           "module_sha256": "1" * 64,
           "controller_sha256": "2" * 64,
           "private_stage": "/private/stage", "packages": [],
@@ -192,10 +192,42 @@ def test_exact_full_record_chain_and_cleanup_digest():
     ("cleanup_result", "remove_intent_sha256", "0" * 64),
     ("launch_receipt", "pid", 1999),
     ("pending", "snapshot_sha256", "0" * 64),
+    ("admission_intent", "readiness_sha256", "0" * 64),
+    ("admission_intent", "pid", 1999),
 ])
 def test_chain_refuses_changed_record(key, field, value):
     rows = clone.deepcopy(_fixture())
     changed = {**rows[key][1], field: value}
     rows[key] = (proof.release.encode(changed), changed)
     with pytest.raises((ValueError, KeyError)):
+        proof._exact_chain(rows, VM, COPY)
+
+
+@pytest.mark.parametrize("field,value", [
+    ("readiness_sha256", "0" * 64), ("pid", 1999),
+])
+def test_rehashed_admission_still_must_match_stopped_incarnation(field, value):
+    rows = _fixture()
+    def update(key, **changes):
+        record = {**rows[key][1], **changes}
+        rows[key] = (proof.release.encode(record), record)
+    update("admission_intent", **{field: value})
+    update("admission_result",
+           intent_sha256=proof.release.digest(rows["admission_intent"][0]),
+           **({field: value} if field == "readiness_sha256" else {}))
+    update("baseline", admission_result_sha256=proof.release.digest(
+        rows["admission_result"][0]))
+    update("cleanup_intent", baseline_sha256=proof.release.digest(
+        rows["baseline"][0]))
+    update("copy_stopped", intent_sha256=proof.release.digest(
+        rows["cleanup_intent"][0]))
+    update("remove_intent",
+           cleanup_intent_sha256=proof.release.digest(rows["cleanup_intent"][0]),
+           stopped_sha256=proof.release.digest(rows["copy_stopped"][0]))
+    update("cleanup_result",
+           baseline_sha256=proof.release.digest(rows["baseline"][0]),
+           cleanup_intent_sha256=proof.release.digest(rows["cleanup_intent"][0]),
+           stopped_sha256=proof.release.digest(rows["copy_stopped"][0]),
+           remove_intent_sha256=proof.release.digest(rows["remove_intent"][0]))
+    with pytest.raises(ValueError, match="admission chain differs"):
         proof._exact_chain(rows, VM, COPY)
