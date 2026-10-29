@@ -145,6 +145,58 @@ class Opener:
             raise urllib.error.HTTPError(request.full_url,302,"redirect",{"Location":self.target},None)
         return Response(self.payload)
 
+
+def test_published_release_metadata_bound_is_exact_and_endpoint_specific():
+    class Direct:
+        def __init__(self, payload):
+            self.payload = payload
+            self.requests = []
+        def open(self, request, timeout):
+            self.requests.append(request)
+            return Response(self.payload)
+    path = t.REPO + "/releases/tags/v1.1.263-nightly.20261027.40597099479"
+    prefix, suffix = b'{"x":"', b'"}'
+    exact = prefix + b"a" * (t.MAX_PUBLISHED_RELEASE_METADATA_BYTES
+                            - len(prefix) - len(suffix)) + suffix
+    assert len(exact) == t.MAX_PUBLISHED_RELEASE_METADATA_BYTES
+    client = t.Client("synthetic-token")
+    client.opener = Direct(exact)
+    assert len(client.request("GET", path)["x"]) > t.MAX_BYTES
+    assert len(client.opener.requests) == 1
+    request = client.opener.requests[0]
+    assert request.full_url == "https://api.github.com" + path
+    assert request.get_method() == "GET" and request.data is None
+    assert request.get_header("Authorization") == "Bearer synthetic-token"
+
+    client.opener = Direct(exact + b" ")
+    with pytest.raises(ValueError, match="transport response exceeds bound"):
+        client.request("GET", path)
+    assert len(client.opener.requests) == 1
+
+    client.opener = Direct(prefix + b"a" * (t.MAX_BYTES - len(prefix) - len(suffix) + 1) + suffix)
+    with pytest.raises(ValueError, match="transport response exceeds bound"):
+        client.request("GET", t.REPO + "/releases/123")
+    with pytest.raises(ValueError, match="transport response exceeds bound"):
+        t.json_bytes(prefix + b"a" * (t.MAX_BYTES - len(prefix) - len(suffix) + 1) + suffix)
+
+    client.opener = Direct(b"{}")
+    for method, candidate, body in (
+        ("POST", path, {"unexpected": True}),
+        ("GET", "https://evil.example" + path, None),
+        ("GET", t.REPO + "/other/tags/v1.2.3", None),
+    ):
+        with pytest.raises(ValueError):
+            client.request(method, candidate, body)
+    assert client.opener.requests == []
+
+    observed = []
+    def read(url, **kwargs):
+        observed.append((url, kwargs["maximum"]))
+        return b"{}"
+    client._read = read
+    client.request("GET", path + "/extra")
+    assert observed == [("https://api.github.com" + path + "/extra", t.MAX_BYTES)]
+
 def test_download_drops_bearer_on_fixed_release_host():
     client=t.Client("synthetic-token")
     client.opener=Opener("https://release-assets.githubusercontent.com/fixed?signature=opaque",b"abc")
