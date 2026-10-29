@@ -32,11 +32,76 @@ def source_store(private):
     # entrypoint still checks that separately before any WSL request.
     store = object.__new__(journal.LinuxBuildJournal)
     store.private, store.run_id = private, RUN
+    store.desktop_transport = None
     store.specification = {"rootProof": copy.deepcopy(PROOF), "workerSha256": "a" * 64, "sharedSha256": "b" * 64}
     return store
 
 
 class LinuxJournalTests(unittest.TestCase):
+    def test_journal_bytes_real_read_preserves_unicode_numeric_keys_and_encoding(self):
+        import scoped_native_runtime as shared
+        value = {"10": "ten", "2": "two", "unicode": "π雪", "nested": {"z": 2, "a": 1}, "float": 1e-7}
+        with tempfile.TemporaryDirectory() as temporary:
+            file = Path(temporary) / "configuration-receipt.json"
+            shared.save_exclusive(file, value)
+            for raw in (file.read_bytes(), json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")):
+                file.write_bytes(raw)
+                actual = file.read_bytes()
+                response = shared.journal_readback(actual)
+                self.assertEqual(shared.validate_journal_readback(response), actual)
+                self.assertEqual(response["sha256"], hashlib.sha256(actual).hexdigest())
+                self.assertEqual(response["value"], value)
+
+    def test_journal_bytes_refuse_tampering_noncanonical_and_oversize(self):
+        import scoped_native_runtime as shared
+        good = shared.journal_readback(b"{}")
+        for edit in (lambda r: r.update(storedBytesBase64="e31="),
+                     lambda r: r.update(storedBytesBase64="e30=\n"),
+                     lambda r: r.update(storedBytesBase64="e30==="),
+                     lambda r: r.update(storedBytesBase64="e30"),
+                     lambda r: r.update(sha256="0" * 64),
+                     lambda r: r.update(value={"forged": True}),
+                     lambda r: r.update(storedBytesBase64="A" * (4 * ((256 * 1024 + 2) // 3) + 4))):
+            changed = copy.deepcopy(good)
+            edit(changed)
+            with self.assertRaises(ValueError):
+                shared.validate_journal_readback(changed)
+        for raw in (b'{"x":"\xff"}', b"x" * (256 * 1024 + 1), b'{"x":NaN}'):
+            with self.assertRaises(ValueError):
+                shared.journal_readback(raw)
+
+    def test_configuration_receipt_is_closed_exclusive_and_read_only(self):
+        for operation in ("exclusive", "read"):
+            value = request()
+            value.update(operation=operation, name="configuration-receipt.json",
+                         value=None if operation == "read" else {"state": "SOURCE_ONLY"})
+            journal.validate_request(value)
+        for name in ("../configuration-receipt.json", "configuration-receipt.json/other", "unknown.json"):
+            value = request()
+            value["name"] = name
+            with self.assertRaises(ValueError):
+                journal.validate_request(value)
+        value = request()
+        value.update(operation="state", name="configuration-receipt.json")
+        with self.assertRaises(ValueError):
+            journal.validate_request(value)
+
+    def test_configuration_receipt_actual_exclusive_write_and_barrier(self):
+        import scoped_native_runtime as shared
+        self.assertEqual(journal.FILES, shared.JOURNAL_FILES)
+        with tempfile.TemporaryDirectory() as temporary:
+            file = Path(temporary) / "configuration-receipt.json"
+            barrier = shared.save_exclusive(file, {"state": "SOURCE_ONLY"})
+            original = file.read_bytes()
+            with self.assertRaises(FileExistsError):
+                shared.save_exclusive(file, {"state": "OVERWRITE_REFUSED"})
+            self.assertEqual(file.read_bytes(), original)
+            self.assertTrue(barrier["fileFsync"])
+            if os.name == "posix":
+                self.assertTrue(shared.durable_barrier(barrier))
+            else:
+                self.assertFalse(shared.durable_barrier(barrier))
+
     def test_linux_root_stays_posix_on_the_windows_controller(self):
         self.assertEqual(str(journal.root_path(RUN)),
                          "/home/canvasrunner/.codex/private/d02-build-journal-" + RUN)
@@ -116,6 +181,9 @@ class LinuxJournalTests(unittest.TestCase):
                 self.assertEqual(actual["rootProof"], PROOF)
                 response = {"ok": True, "rootProof": PROOF, "name": actual["name"], "value": value,
                             "sha256": hashlib.sha256(journal.encoded(value)).hexdigest(), "barrier": BARRIER}
+                if actual["operation"] == "read":
+                    import scoped_native_runtime as shared
+                    response.update(shared.journal_readback(journal.encoded(value)))
                 return SimpleNamespace(returncode=0, stdout=json.dumps(response).encode(), stderr=b"")
 
             with mock.patch.object(journal, "client_path", return_value="/source-only/request"), \
@@ -129,7 +197,7 @@ class LinuxJournalTests(unittest.TestCase):
             self.assertEqual(list(root.glob("linux-journal-request-*.json")), [])
 
     def test_legacy_passport_cannot_select_linux_backend(self):
-        with self.assertRaisesRegex(ValueError, "LINUX_JOURNAL_IS_D02_ONLY"):
+        with self.assertRaisesRegex(ValueError, "LINUX_JOURNAL_REVIEWED_PROFILE_REQUIRED"):
             build.build_journal({"journalBackend": {}}, Path("SOURCE_ONLY"))
 
 

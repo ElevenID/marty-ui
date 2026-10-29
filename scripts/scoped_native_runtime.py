@@ -6,6 +6,8 @@ Compose helpers may be supplied by a hash-bound private wrapper at execution.
 """
 from __future__ import annotations
 import hashlib
+import base64
+import binascii
 import errno
 import json
 import os
@@ -20,6 +22,34 @@ ROLE_BINARIES = {"flow": "marty-flow", "gateway": "marty-gateway", "issuance-nat
 MARTY_CLIENTS = frozenset("auth organization credential-template trust-profile applicant notification compliance-profile presentation-policy deployment-profile flow verification revocation-profile device-registration issuance issuance-native canvas-sync-worker passport-beta-bureau".split())
 RUNTIME_ROLES = MARTY_CLIENTS | frozenset(("gateway", "signing-keys", "passport-callback-signer", "canvas-sandbox", "ui-prod"))
 MIGRATIONS = ("flow/0003_physical_start_intents", "issuance/0010_passport_start_idempotency", "issuance/0011_passport_administrative_cancellation")
+JOURNAL_FILES = frozenset(("build-apply-intent.json", "build-state.json", "build-receipt.json", "configuration-receipt.json"))
+JOURNAL_FILE_MAXIMUM = 256 * 1024
+JOURNAL_RESPONSE_MAXIMUM = 1024 * 1024
+
+
+def journal_readback(raw):
+    """Exact private stored bytes; never reconstruct a writer's JSON encoding."""
+    require(isinstance(raw, bytes) and 0 < len(raw) <= JOURNAL_FILE_MAXIMUM, "JOURNAL_STORED_BYTES_BOUND")
+    def nonfinite(_):
+        raise ValueError("JOURNAL_NONFINITE_JSON")
+    value = json.loads(raw.decode("utf-8", errors="strict"), parse_constant=nonfinite)
+    return {"sha256": hashlib.sha256(raw).hexdigest(), "value": value,
+            "storedBytesBase64": base64.b64encode(raw).decode("ascii")}
+
+
+def validate_journal_readback(response):
+    encoded = response.get("storedBytesBase64")
+    require(isinstance(encoded, str) and 0 < len(encoded) <= 4 * ((JOURNAL_FILE_MAXIMUM + 2) // 3), "JOURNAL_BASE64_BOUND")
+    try:
+        raw = base64.b64decode(encoded, validate=True)
+    except (ValueError, binascii.Error) as error:
+        raise ValueError("JOURNAL_BASE64_INVALID") from error
+    require(base64.b64encode(raw).decode("ascii") == encoded, "JOURNAL_BASE64_NONCANONICAL")
+    reopened = journal_readback(raw)
+    require(response.get("sha256") == reopened["sha256"], "JOURNAL_STORED_SHA_CHANGED")
+    require(json.dumps(response.get("value"), sort_keys=True, ensure_ascii=True, allow_nan=False)
+            == json.dumps(reopened["value"], sort_keys=True, ensure_ascii=True, allow_nan=False), "JOURNAL_STORED_VALUE_CHANGED")
+    return raw
 
 def require(value, code):
     if not value:
@@ -85,15 +115,15 @@ def durable_barrier(proof):
 
 def selected_sources(plan, profile=None):
     if profile is None:
-        ui_revision, roles = UI_REVISION, ROLE_BINARIES
+        ui_revision, core_revision, roles = UI_REVISION, CORE_REVISION, ROLE_BINARIES
     else:
         import scoped_native_profiles
         selected = scoped_native_profiles.reviewed_profile(profile)
         require(plan.get("buildProfile") == selected.name
                 and plan.get("profileSourceSha256") == sha(Path(scoped_native_profiles.__file__)),
                 "EXACT_REVIEWED_PROFILE_SOURCE_REQUIRED")
-        ui_revision, roles = selected.ui_revision, dict(selected.roles)
-    require(plan.get("uiRevision") == ui_revision and plan.get("coreRevision") == CORE_REVISION, "REVIEWED_UI_AND_LOCKED_CORE_REQUIRED")
+        ui_revision, core_revision, roles = selected.ui_revision, selected.core_revision, dict(selected.roles)
+    require(plan.get("uiRevision") == ui_revision and plan.get("coreRevision") == core_revision, "REVIEWED_UI_AND_LOCKED_CORE_REQUIRED")
     require(plan.get("roleBinaries") == roles, "EXACT_THREE_ROLE_SCOPE_REQUIRED" if profile is None else "EXACT_SIGNING_CAS_ROLE_SCOPE_REQUIRED")
     require(plan.get("releaseQualified") is False and plan.get("recordingQualified") is False, "FUNCTIONAL_SCOPE_ONLY")
 
