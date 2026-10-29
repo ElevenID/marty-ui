@@ -1,7 +1,8 @@
 use crate::{
     issuance::{
-        apply_offer, mark_no_active_flow, matches_active_attempt, matches_completed_offer,
-        reconcile_transaction, reserve_attempt_with_lifetime, IssuanceError, IssuanceOffer,
+        apply_offer, has_matching_reserved_lifetime, mark_no_active_flow, matches_active_attempt,
+        matches_completed_offer, reconcile_transaction, reserve_attempt_with_lifetime,
+        IssuanceError, IssuanceOffer,
     },
     store::StoreDocument,
     validate_form_data, Applicant, ApplicantError, Application, Biometric, CheckStatus, CheckType,
@@ -109,6 +110,17 @@ pub struct ReviewRequestContext<'a> {
 
 #[async_trait]
 pub trait TemplateProvider: Send + Sync {
+    /// Authoritative, read-only issuer validation; never mirror its configured default.
+    async fn validate_offer_lifetime(
+        &self,
+        _organization_id: &str,
+        _seconds: u64,
+    ) -> Result<(), ProviderError> {
+        Err(ProviderError::Unavailable(
+            "issuer lifetime validation is unavailable".into(),
+        ))
+    }
+
     async fn get(
         &self,
         organization_id: &str,
@@ -1353,6 +1365,13 @@ impl ApplicantService {
                 &application_snapshot.application_template_id,
             )
             .await?;
+        if !has_matching_reserved_lifetime(&application_snapshot, offer_ttl_seconds)? {
+            if let Some(seconds) = offer_ttl_seconds {
+                self.templates
+                    .validate_offer_lifetime(&application_snapshot.organization_id, seconds)
+                    .await?;
+            }
+        }
         let claims = build_claims(&application_snapshot, &applicant_snapshot, &template, now);
 
         let (application, applicant, attempt_id, reserved_claims) = {
@@ -1690,6 +1709,8 @@ fn build_claims(
 
 #[derive(Debug, Error)]
 pub enum ProviderError {
+    #[error("requested offer lifetime is outside issuer policy")]
+    InvalidOfferLifetime,
     #[error("provider unavailable: {0}")]
     Unavailable(String),
     #[error("no active issuance flow")]

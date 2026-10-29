@@ -69,3 +69,14 @@ field is additive. Applicant, Flow, and issuer must all support this path before
 short-lifetime test can qualify; an older server retaining the default is a test
 failure, never evidence of expiry. Natural-expiry tests wait for the actual server
 410 and cached-code denial, then create a fresh owned recovery offer.
+
+Custom lifetimes are admitted before a new applicant attempt is persisted or its
+Flow event is sent. Applicant reuses its authenticated native issuer client for
+`/internal/compat/issuance/offer-lifetime/validate`. This internal route has the
+same initiation management authority and uses the same configured expiry kernel
+and issuer clock without creating a transaction, offer or signing operation.
+Applicant requires the exact tenant/lifetime echo; invalid, malformed or
+unavailable validation leaves the application unchanged so a corrected request can
+succeed. Already validated reservations retain their exact lifetime on retry and
+are not re-admitted against a later default. Requests omitting the option retain
+the original behavior and require no new validation dependency.

@@ -369,6 +369,14 @@ impl InitiationService {
             .ok_or(InitiationServiceError::OfferExpiryOutOfRange)
     }
 
+    pub(crate) fn validate_offer_lifetime(
+        &self,
+        seconds: u64,
+    ) -> Result<(), InitiationServiceError> {
+        self.offer_expires_at(self.ports.clock.now(), Some(seconds))
+            .map(|_| ())
+    }
+
     pub async fn initiate(
         &self,
         request: &InitiationRequest,
@@ -1101,6 +1109,56 @@ mod tests {
                 assert!(!stages.contains(&"reserve-transaction-atomically"));
             }
         }
+    }
+
+    #[test]
+    fn offer_lifetime_preflight_has_initiation_authority_and_no_reservation_or_projection() {
+        use crate::initiation_http::InitiationHttpService;
+        use crate::initiation_response::{
+            InitiationDidcommDelivery, InitiationDidcommDeliveryError,
+            InitiationDidcommDeliveryReceipt, InitiationOfferProjector,
+        };
+        use axum::http::HeaderMap;
+        use axum::response::IntoResponse;
+        struct NeverDeliver;
+        #[async_trait]
+        impl InitiationDidcommDelivery for NeverDeliver {
+            async fn deliver(
+                &self,
+                _: &CredentialTransaction,
+                _: &str,
+            ) -> Result<InitiationDidcommDeliveryReceipt, InitiationDidcommDeliveryError>
+            {
+                panic!("read-only lifetime validation must not deliver or project an offer")
+            }
+        }
+        let (service, repository, calls) = service_harness();
+        let service = service.with_offer_ttl_minutes(2_i64.into());
+        let projector =
+            InitiationOfferProjector::new("https://issuer.example", Arc::new(NeverDeliver))
+                .unwrap();
+        let http = InitiationHttpService::new(service, projector, Some("test-api-key"));
+        let mut headers = HeaderMap::new();
+        headers.insert("x-organization-id", "org-1".parse().unwrap());
+        assert!(http.validate_offer_lifetime(&headers, 60).is_err());
+        headers.insert("x-api-key", "wrong".parse().unwrap());
+        assert!(http.validate_offer_lifetime(&headers, 60).is_err());
+        headers.insert("x-api-key", "test-api-key".parse().unwrap());
+        for seconds in [0, 59, 121, u64::MAX] {
+            assert_eq!(
+                http.validate_offer_lifetime(&headers, seconds)
+                    .unwrap_err()
+                    .into_response()
+                    .status(),
+                422
+            );
+            assert!(repository.transaction.lock().unwrap().is_none());
+        }
+        assert_eq!(http.validate_offer_lifetime(&headers, 60).unwrap(), "org-1");
+        headers.remove("x-organization-id");
+        assert!(http.validate_offer_lifetime(&headers, 60).is_err());
+        assert!(repository.transaction.lock().unwrap().is_none());
+        assert!(calls.take().is_empty());
     }
 
     #[tokio::test]

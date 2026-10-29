@@ -165,6 +165,9 @@ impl From<ServiceError> for ApiError {
             | ServiceError::InactiveEvidence
             | ServiceError::NoActiveFlow
             | ServiceError::Domain(ApplicantError::Locked(_)) => StatusCode::CONFLICT,
+            ServiceError::Provider(crate::service::ProviderError::InvalidOfferLifetime) => {
+                StatusCode::UNPROCESSABLE_ENTITY
+            }
             ServiceError::Provider(_) => StatusCode::SERVICE_UNAVAILABLE,
             ServiceError::Domain(ApplicantError::EvidenceSize { .. }) => {
                 StatusCode::PAYLOAD_TOO_LARGE

@@ -27,7 +27,10 @@ pub struct HttpTemplateProvider {
 impl HttpTemplateProvider {
     pub fn new(base_url: String, api_key: Option<String>) -> Self {
         Self {
-            client: Client::new(),
+            client: Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .expect("native issuer HTTP client"),
             base_url: base_url.trim_end_matches('/').into(),
             api_key,
         }
@@ -36,6 +39,67 @@ impl HttpTemplateProvider {
 
 #[async_trait]
 impl TemplateProvider for HttpTemplateProvider {
+    async fn validate_offer_lifetime(
+        &self,
+        organization_id: &str,
+        seconds: u64,
+    ) -> Result<(), ProviderError> {
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Echo {
+            organization_id: String,
+            offer_ttl_seconds: u64,
+        }
+        if organization_id.trim().is_empty() {
+            return Err(ProviderError::Unavailable(
+                "issuer lifetime tenant is required".into(),
+            ));
+        }
+        let mut request = self
+            .client
+            .post(format!(
+                "{}/internal/compat/issuance/offer-lifetime/validate",
+                self.base_url
+            ))
+            .header("x-organization-id", organization_id)
+            .timeout(std::time::Duration::from_secs(15))
+            .json(&json!({"offer_ttl_seconds": seconds}));
+        if let Some(key) = &self.api_key {
+            request = request.header("x-api-key", key);
+        }
+        let mut response = request.send().await.map_err(|_| {
+            ProviderError::Unavailable("issuer lifetime validation is unavailable".into())
+        })?;
+        if response.status() == StatusCode::UNPROCESSABLE_ENTITY {
+            return Err(ProviderError::InvalidOfferLifetime);
+        }
+        if response.status() != StatusCode::OK {
+            return Err(ProviderError::Unavailable(
+                "issuer lifetime validation refused".into(),
+            ));
+        }
+        let mut body = Vec::new();
+        while let Some(chunk) = response.chunk().await.map_err(|_| {
+            ProviderError::Unavailable("issuer lifetime response is unavailable".into())
+        })? {
+            if body.len() + chunk.len() > 1024 {
+                return Err(ProviderError::Unavailable(
+                    "issuer lifetime response is invalid".into(),
+                ));
+            }
+            body.extend_from_slice(&chunk);
+        }
+        let echo: Echo = serde_json::from_slice(&body).map_err(|_| {
+            ProviderError::Unavailable("issuer lifetime response is invalid".into())
+        })?;
+        if echo.organization_id != organization_id || echo.offer_ttl_seconds != seconds {
+            return Err(ProviderError::Unavailable(
+                "issuer lifetime response binding changed".into(),
+            ));
+        }
+        Ok(())
+    }
+
     async fn get(
         &self,
         organization_id: &str,
@@ -408,5 +472,74 @@ mod tests {
         assert_eq!(stream.correlation_id, event.correlation_id);
         assert_eq!(notification["event_id"], "event-1");
         assert_eq!(notification["correlation_id"], event.correlation_id);
+    }
+    #[tokio::test]
+    async fn offer_lifetime_validation_requires_authenticated_exact_issuer_echo() {
+        use axum::{body::Body, response::Response, routing::post};
+        for (status, body, accepted) in [
+            (
+                200,
+                r#"{"organization_id":"org-1","offer_ttl_seconds":60}"#,
+                true,
+            ),
+            (
+                200,
+                r#"{"organization_id":"foreign","offer_ttl_seconds":60}"#,
+                false,
+            ),
+            (
+                200,
+                r#"{"organization_id":"org-1","offer_ttl_seconds":120}"#,
+                false,
+            ),
+            (
+                200,
+                r#"{"organization_id":"org-1","offer_ttl_seconds":60,"extra":true}"#,
+                false,
+            ),
+            (
+                200,
+                r#"{"organization_id":"org-1","organization_id":"org-1","offer_ttl_seconds":60}"#,
+                false,
+            ),
+            (200, "not json", false),
+            (422, "{}", false),
+            (403, "{}", false),
+            (503, "{}", false),
+            (302, "{}", false),
+        ] {
+            let captured = Arc::new(Mutex::new(None));
+            let sink = captured.clone();
+            let app = Router::new().route(
+                "/internal/compat/issuance/offer-lifetime/validate",
+                post(move |headers: HeaderMap, Json(input): Json<Value>| {
+                    let sink = sink.clone();
+                    async move {
+                        *sink.lock().unwrap() = Some((headers, input));
+                        Response::builder()
+                            .status(status)
+                            .header("location", "http://127.0.0.1:1/no-follow")
+                            .body(Body::from(body))
+                            .unwrap()
+                    }
+                }),
+            );
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+            let provider = HttpTemplateProvider::new(
+                format!("http://{address}"),
+                Some("test-native-key".into()),
+            );
+            assert_eq!(
+                provider.validate_offer_lifetime("org-1", 60).await.is_ok(),
+                accepted
+            );
+            let (headers, input) = captured.lock().unwrap().take().unwrap();
+            assert_eq!(headers["x-api-key"], "test-native-key");
+            assert_eq!(headers["x-organization-id"], "org-1");
+            assert_eq!(input, json!({"offer_ttl_seconds":60}));
+            server.abort();
+        }
     }
 }

@@ -60,23 +60,38 @@ pub fn reserve_attempt(
     reserve_attempt_with_lifetime(application, claims, now, None)
 }
 
+/// Existing validated reservations keep their exact lifetime even if defaults later change.
+pub fn has_matching_reserved_lifetime(
+    application: &Application,
+    requested: Option<u64>,
+) -> Result<bool, IssuanceError> {
+    let Some(active) = application.system_data.get(ACTIVE_ATTEMPT) else {
+        return Ok(false);
+    };
+    let active = active
+        .as_object()
+        .ok_or(IssuanceError::InvalidAttemptState)?;
+    let reserved = match active.get("offer_ttl_seconds") {
+        None | Some(Value::Null) => None,
+        Some(value) => Some(value.as_u64().ok_or(IssuanceError::InvalidAttemptState)?),
+    };
+    if reserved != requested {
+        return Err(IssuanceError::AttemptChanged);
+    }
+    Ok(true)
+}
+
 pub fn reserve_attempt_with_lifetime(
     application: &mut Application,
     claims: Map<String, Value>,
     now: DateTime<Utc>,
     offer_ttl_seconds: Option<u64>,
 ) -> Result<(Uuid, Map<String, Value>), IssuanceError> {
+    has_matching_reserved_lifetime(application, offer_ttl_seconds)?;
     if let Some(active) = application.system_data.get(ACTIVE_ATTEMPT) {
         let active = active
             .as_object()
             .ok_or(IssuanceError::InvalidAttemptState)?;
-        let reserved_lifetime = match active.get("offer_ttl_seconds") {
-            None | Some(Value::Null) => None,
-            Some(value) => Some(value.as_u64().ok_or(IssuanceError::InvalidAttemptState)?),
-        };
-        if reserved_lifetime != offer_ttl_seconds {
-            return Err(IssuanceError::AttemptChanged);
-        }
         let id = active
             .get("id")
             .and_then(Value::as_str)
