@@ -20,6 +20,7 @@ import installer_candidate_qemu_observe as observer
 import installer_candidate_vm_create as create
 import installer_candidate_vm_launch as launch
 import installer_candidate_vm_runtime as runtime
+import installer_candidate_vm_seed as seed_module
 import installer_release as release
 import installer_test_vm_restart as restart
 import installer_test_vm_rootless_fixture as fixture
@@ -30,6 +31,27 @@ INTENT_SUFFIX = ".rootless-rollback-copy-intent.json"
 PREPARED_SUFFIX = ".rootless-rollback-copy-prepared.json"
 CHUNK = 1024 * 1024
 MAX_SEED = 16 * 1024 * 1024
+INTENT_FIELDS = {"schema", "phase", "vm_id", "copy_vm_id",
+                 "stop_intent_sha256", "pending_sha256",
+                 "source_image_sha256", "source_manifest_sha256",
+                 "source_signature_sha256", "source_keyring_sha256",
+                 "creation_sha256", "transfer_sha256", "seed_sha256",
+                 "launch_sha256", "launch_receipt_sha256",
+                 "setup_readiness_sha256", "runtime_parent_device",
+                 "runtime_parent_inode", "runtime_uid", "runtime_gid",
+                 "copy_port", "snapshot_directory_device",
+                 "snapshot_directory_inode", "snapshot_device",
+                 "snapshot_inode", "snapshot_bytes", "snapshot_sha256",
+                 "created_at", "rollback_qualified",
+                 "package_install_authorized", "product_dispatch_authorized"}
+PREPARED_FIELDS = {"schema", "phase", "vm_id", "copy_vm_id",
+                   "intent_sha256", "pending_sha256", "copy_port",
+                   "runtime_uid", "runtime_gid", "runtime_directory_device",
+                   "runtime_directory_inode", "disk_device", "disk_inode",
+                   "disk_bytes", "disk_sha256", "seed_device", "seed_inode",
+                   "seed_bytes", "seed_sha256", "prepared_at",
+                   "rollback_qualified", "package_install_authorized",
+                   "product_dispatch_authorized"}
 
 
 def _exact_pending(intent_raw: bytes, intent: dict,
@@ -431,3 +453,213 @@ def prepare_copy(*, source: Path, registry: Path, vm_parent: Path,
         finally:
             os.close(runtime_parent_fd)
             os.close(parent)
+
+
+def bound_prepared_copy(*, source: Path, registry: Path,
+                        runtime_parent: Path, vm_id: str,
+                        copy_vm_id: str, _lease: ControllerLease | None = None) -> dict:
+    """Reobserve exact prepared copy, original stopped state and snapshot.
+
+    The returned private binding has no launch or package authority. A later
+    launcher must repeat it under the same held registry lease before spawn.
+    """
+    from contextlib import nullcontext
+    fixture._uuid4(vm_id)
+    fixture._uuid4(copy_vm_id)
+    release.require(os.geteuid() == 0 and vm_id != copy_vm_id
+                    and all(p.is_absolute() for p in
+                            (source, registry, runtime_parent)),
+                    "fixture rollback-copy binding request invalid")
+    provenance = create.verify_source(source)
+    with (ControllerLease(registry) if _lease is None else nullcontext(_lease)) as lease:
+        create._rebind_directory(registry, lease.parent)
+        copy_intent_raw, copy_intent = create._read_record(
+            lease.parent, copy_vm_id + INTENT_SUFFIX)
+        prepared_raw, prepared = create._read_record(
+            lease.parent, copy_vm_id + PREPARED_SUFFIX)
+        stop_raw, stop_intent = create._read_record(
+            lease.parent, vm_id + stopped.INTENT_SUFFIX)
+        pending_raw, pending = create._read_record(
+            lease.parent, vm_id + stopped.PENDING_SUFFIX)
+        _exact_pending(stop_raw, stop_intent, pending_raw, pending, vm_id)
+        release.exact(copy_intent, INTENT_FIELDS, "fixture rollback-copy intent")
+        release.exact(prepared, PREPARED_FIELDS, "fixture rollback-copy prepared")
+        release.require(copy_intent["schema"] == prepared["schema"] == SCHEMA
+                        and copy_intent["phase"] == "copy_intent"
+                        and prepared["phase"] == "copy_prepared"
+                        and copy_intent["vm_id"] == prepared["vm_id"] == vm_id
+                        and copy_intent["copy_vm_id"] == prepared["copy_vm_id"]
+                        == copy_vm_id
+                        and prepared["intent_sha256"]
+                        == release.digest(copy_intent_raw)
+                        and copy_intent["stop_intent_sha256"]
+                        == release.digest(stop_raw)
+                        and copy_intent["pending_sha256"]
+                        == prepared["pending_sha256"] == release.digest(pending_raw)
+                        and all(copy_intent["source_" + key] == provenance[key]
+                                for key in ("image_sha256", "manifest_sha256",
+                                            "signature_sha256", "keyring_sha256"))
+                        and all(copy_intent[key] == pending[key] for key in
+                                ("snapshot_directory_device",
+                                 "snapshot_directory_inode", "snapshot_device",
+                                 "snapshot_inode", "snapshot_bytes",
+                                 "snapshot_sha256"))
+                        and all(copy_intent[key] == prepared[key] for key in
+                                ("runtime_uid", "runtime_gid", "copy_port"))
+                        and prepared["disk_bytes"] == pending["snapshot_bytes"]
+                        and prepared["disk_sha256"] == pending["snapshot_sha256"]
+                        and all(value is False for value in
+                                (copy_intent["rollback_qualified"],
+                                 copy_intent["package_install_authorized"],
+                                 copy_intent["product_dispatch_authorized"],
+                                 prepared["rollback_qualified"],
+                                 prepared["package_install_authorized"],
+                                 prepared["product_dispatch_authorized"]))
+                        and type(copy_intent["created_at"]) is int
+                        and type(prepared["prepared_at"]) is int
+                        and copy_intent["created_at"] > 0
+                        and prepared["prepared_at"] >= copy_intent["created_at"]
+                        and type(prepared["copy_port"]) is int
+                        and 1024 <= prepared["copy_port"] <= 65535,
+                        "fixture rollback-copy record chain invalid")
+        original_launch_raw, original_launch = create._read_record(
+            lease.parent, vm_id + ".launch-intent.json")
+        creation_raw, creation = create._read_record(
+            lease.parent, vm_id + ".creation-receipt.json")
+        transfer_raw, transfer = create._read_record(
+            lease.parent, vm_id + ".runtime-receipt.json")
+        seed_raw, seed = create._read_record(
+            lease.parent, vm_id + ".seed-receipt.json")
+        launch_receipt_raw, _ = create._read_record(
+            lease.parent, vm_id + ".launch-receipt.json")
+        readiness_raw, _ = create._read_record(
+            lease.parent, vm_id + ".rootless-fixture-setup-readiness.json")
+        release.require(release.digest(original_launch_raw)
+                        == copy_intent["launch_sha256"]
+                        and release.digest(creation_raw)
+                        == copy_intent["creation_sha256"]
+                        and release.digest(transfer_raw)
+                        == copy_intent["transfer_sha256"]
+                        and release.digest(seed_raw)
+                        == copy_intent["seed_sha256"]
+                        and release.digest(launch_receipt_raw)
+                        == copy_intent["launch_receipt_sha256"]
+                        and release.digest(readiness_raw)
+                        == copy_intent["setup_readiness_sha256"]
+                        == stop_intent["setup_readiness_sha256"]
+                        and creation["image"] == provenance
+                        and transfer["runtime_uid"] == prepared["runtime_uid"]
+                        and transfer["runtime_gid"] == prepared["runtime_gid"]
+                        and (transfer["disk_device"], transfer["disk_inode"])
+                        == (pending["disk_device"], pending["disk_inode"])
+                        and seed["seed_sha256"] == prepared["seed_sha256"]
+                        and prepared["runtime_uid"] == stop_intent["runtime_uid"]
+                        and prepared["runtime_gid"] == stop_intent["runtime_gid"]
+                        and original_launch["ssh_port"] != prepared["copy_port"]
+                        and launch._boot_id() == pending["boot_id"],
+                        "fixture original epoch or copy identity differs")
+        original_dir = runtime_parent / vm_id
+        restart._no_live_owner(stop_intent["runtime_uid"],
+                               stop_intent["pid"], stop_intent["start_ticks"],
+                               stop_intent["boot_id"], original_dir,
+                               original_launch["ssh_port"])
+        parent_fd = runtime._runtime_parent(runtime_parent)
+        target_fd = snapshot_dir = snapshot_fd = disk_fd = seed_fd = control_fd = None
+        try:
+            release.require((os.fstat(parent_fd).st_dev,
+                             os.fstat(parent_fd).st_ino)
+                            == (copy_intent["runtime_parent_device"],
+                                copy_intent["runtime_parent_inode"]),
+                            "fixture rollback runtime parent differs")
+            target_fd = observer.open_vm_dir(runtime_parent / copy_vm_id,
+                                             prepared["runtime_uid"])
+            release.require((os.fstat(target_fd).st_dev,
+                             os.fstat(target_fd).st_ino)
+                            == (prepared["runtime_directory_device"],
+                                prepared["runtime_directory_inode"]),
+                            "fixture rollback runtime directory differs")
+            disk_fd = _held_regular(
+                target_fd, "disk.qcow2", owner=prepared["runtime_uid"],
+                group=prepared["runtime_gid"], mode=0o600,
+                device=prepared["disk_device"], inode=prepared["disk_inode"],
+                size=prepared["disk_bytes"])
+            seed_fd = _held_regular(
+                target_fd, "seed.iso", owner=0,
+                group=prepared["runtime_gid"], mode=0o440,
+                device=prepared["seed_device"], inode=prepared["seed_inode"],
+                size=prepared["seed_bytes"])
+            snapshot_dir, snapshot_fd = _snapshot(registry, lease, vm_id, pending)
+            control_dir = registry / (vm_id + ".control")
+            control_fd = _directory(control_dir)
+            release.require((os.fstat(control_fd).st_dev,
+                             os.fstat(control_fd).st_ino)
+                            == (seed["control_dir_device"],
+                                seed["control_dir_inode"])
+                            and release.digest(seed_module._bytes(
+                                control_dir / "controller_ed25519", 8192))
+                            == seed["controller_private_sha256"]
+                            and release.digest(seed_module._bytes(
+                                control_dir / "known_hosts", 4096))
+                            == seed["known_hosts_sha256"],
+                            "fixture rollback SSH control identity differs")
+            release.require((prepared["disk_device"], prepared["disk_inode"])
+                            != (pending["snapshot_device"], pending["snapshot_inode"])
+                            and restart._mutable_digest(disk_fd)[:2]
+                            == (prepared["disk_bytes"], prepared["disk_sha256"])
+                            and restart._mutable_digest(seed_fd)[:2]
+                            == (prepared["seed_bytes"], prepared["seed_sha256"])
+                            and restart._mutable_digest(snapshot_fd)[:2]
+                            == (pending["snapshot_bytes"],
+                                pending["snapshot_sha256"]),
+                            "fixture rollback-copy bytes differ")
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as reserved:
+                reserved.bind(("127.0.0.1", prepared["copy_port"]))
+            release.require(not (runtime_parent / copy_vm_id / "qmp.sock").exists(),
+                            "fixture rollback monitor path exists")
+            runtime._same_path(runtime_parent, parent_fd,
+                               runtime._runtime_parent)
+            launch._same_path(
+                runtime_parent / copy_vm_id, target_fd,
+                lambda path: observer.open_vm_dir(path, prepared["runtime_uid"]))
+            create._rebind_directory(
+                registry / (vm_id + stopped.SNAPSHOT_SUFFIX), snapshot_dir)
+            create._rebind_directory(control_dir, control_fd)
+            create._rebind_directory(registry, lease.parent)
+            release.require(create._read_record(
+                            lease.parent, copy_vm_id + INTENT_SUFFIX)[0]
+                            == copy_intent_raw
+                            and create._read_record(
+                            lease.parent, copy_vm_id + PREPARED_SUFFIX)[0]
+                            == prepared_raw
+                            and create._read_record(
+                            lease.parent, vm_id + stopped.PENDING_SUFFIX)[0]
+                            == pending_raw
+                            and create.verify_source(source) == provenance,
+                            "fixture rollback-copy source changed")
+            return {"vm_id": vm_id, "copy_vm_id": copy_vm_id,
+                    "runtime_uid": prepared["runtime_uid"],
+                    "runtime_gid": prepared["runtime_gid"],
+                    "runtime_dir": runtime_parent / copy_vm_id,
+                    "runtime_directory_device": prepared["runtime_directory_device"],
+                    "runtime_directory_inode": prepared["runtime_directory_inode"],
+                    "disk_device": prepared["disk_device"],
+                    "disk_inode": prepared["disk_inode"],
+                    "disk_bytes": prepared["disk_bytes"],
+                    "disk_sha256": prepared["disk_sha256"],
+                    "seed_device": prepared["seed_device"],
+                    "seed_inode": prepared["seed_inode"],
+                    "seed_bytes": prepared["seed_bytes"],
+                    "seed_sha256": prepared["seed_sha256"],
+                    "copy_port": prepared["copy_port"],
+                    "control_dir": control_dir,
+                    "key_sha256": seed["controller_private_sha256"],
+                    "known_hosts_sha256": seed["known_hosts_sha256"],
+                    "prepared_sha256": release.digest(prepared_raw),
+                    "pending_sha256": release.digest(pending_raw),
+                    "package_install_authorized": False,
+                    "product_dispatch_authorized": False}
+        finally:
+            for fd in (control_fd, seed_fd, disk_fd, snapshot_fd, snapshot_dir,
+                       target_fd, parent_fd):
+                if fd is not None:
+                    os.close(fd)
