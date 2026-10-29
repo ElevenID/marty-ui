@@ -570,6 +570,26 @@ def test_applicant_backup_and_restore_use_the_quiesced_named_volume() -> None:
     assert helper_digest in restore
 
 
+def test_applicant_legacy_group_is_bound_to_the_stopped_image() -> None:
+    plan = text("scripts/beta-state-volume-plan.ps1")
+    restore = text("scripts/restore-local-beta-release.ps1")
+
+    assert "Get-BetaApplicantImageStateOwner -Expected $Expected" in plan
+    assert "Get-BetaApplicantImageStateOwner -Expected @(Get-BetaStateVolumePlan)" in restore
+    assert "$container[0].State.Status -cne 'exited'" in plan
+    assert "$images[0].Id -cne $imageId" in plan
+    assert "$null -ne $images[0].Config.Volumes -and" in plan
+    assert "--rm --pull never --network none --read-only --user 0" in plan
+    assert "--cap-drop ALL --security-opt no-new-privileges --pids-limit 16" in plan
+    assert "--memory 128m --memory-swap 128m --cpus 0.5" in plan
+    assert "--entrypoint /usr/bin/timeout $imageId 10 /usr/bin/stat -c '%u:%g:%a' /app/data" in plan
+    assert "^10001:([1-9][0-9]*):700$" in plan
+    for source in (plan, restore):
+        assert '0:0|10001:10001|"$LEGACY_OWNER"' in source
+        assert '0:0|10001:10001) ;;' not in source
+        assert 'LEGACY_OWNER=$' in source
+
+
 def test_beta_inventory_records_only_non_secret_rollback_connection_metadata() -> None:
     deploy = text("scripts/deploy-local-beta-release.ps1")
 

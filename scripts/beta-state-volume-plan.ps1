@@ -114,6 +114,45 @@ function ConvertTo-BetaStateVolumeOverride {
     return ([ordered]@{ volumes = $volumes } | ConvertTo-Json -Depth 5)
 }
 
+# A preexisting named volume may have inherited /app/data from its original
+# applicant image. The image's marty group is allocated by useradd and is not
+# necessarily 10001. Bind that single legacy owner to the exact stopped image,
+# without mounting or changing the state volume.
+function Get-BetaApplicantImageStateOwner {
+    param([Parameter(Mandatory = $true)][object[]]$Expected)
+    Assert-BetaStateVolumePlan -Expected $Expected -SameContainers
+    $owned = @($Expected | Where-Object { $_.service -ceq 'applicant' -and $_.logical_name -ceq 'applicant_data' })
+    if ($owned.Count -ne 1 -or $owned[0].destination -cne '/app/data') {
+        throw 'Applicant state ownership is ambiguous'
+    }
+    $raw = & docker inspect $owned[0].container_id
+    if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect stopped applicant image' }
+    $container = @(($raw -join [Environment]::NewLine) | ConvertFrom-Json)
+    if ($container.Count -ne 1 -or $container[0].Id -cne $owned[0].container_id -or
+        $container[0].State.Status -cne 'exited' -or $container[0].State.ExitCode -ne 0 -or
+        $container[0].Image -cnotmatch '^sha256:[0-9a-f]{64}$') {
+        throw 'Stopped applicant image identity changed'
+    }
+    $imageId = [string]$container[0].Image
+    $raw = & docker image inspect $imageId
+    if ($LASTEXITCODE -ne 0) { throw 'Stopped applicant image is unavailable' }
+    $images = @(($raw -join [Environment]::NewLine) | ConvertFrom-Json)
+    if ($images.Count -ne 1 -or $images[0].Id -cne $imageId -or
+        ($null -ne $images[0].Config.Volumes -and
+        @($images[0].Config.Volumes.PSObject.Properties).Count -ne 0)) {
+        throw 'Stopped applicant image is ambiguous'
+    }
+    $observed = @(& docker run --rm --pull never --network none --read-only --user 0 `
+        --cap-drop ALL --security-opt no-new-privileges --pids-limit 16 `
+        --memory 128m --memory-swap 128m --cpus 0.5 `
+        --entrypoint /usr/bin/timeout $imageId 10 /usr/bin/stat -c '%u:%g:%a' /app/data)
+    if ($LASTEXITCODE -ne 0 -or $observed.Count -ne 1 -or
+        $observed[0] -cnotmatch '^10001:([1-9][0-9]*):700$') {
+        throw 'Image-created applicant state owner is unknown'
+    }
+    return ($observed[0] -creplace ':700$', '')
+}
+
 # Change only the exact applicant named volume after the coordinated stop and
 # byte-identical quiesced backup. A changed store is preserved for recovery.
 function Set-BetaApplicantNonrootState {
@@ -143,13 +182,14 @@ function Set-BetaApplicantNonrootState {
     }
     $digest = (Get-FileHash -LiteralPath $BackupFile -Algorithm SHA256).Hash.ToLowerInvariant()
     if ($digest -cnotmatch '^[0-9a-f]{64}$') { throw 'Invalid applicant backup digest' }
+    $legacyOwner = Get-BetaApplicantImageStateOwner -Expected $Expected
     $script = @'
 set -eu
 test -d /data && test ! -L /data
 test -f /data/applicant_store.json && test ! -L /data/applicant_store.json
 test "$(find /data -mindepth 1 -maxdepth 1 | wc -l)" -eq 1
-case "$(stat -c '%u:%g' /data)" in 0:0|10001:10001) ;; *) exit 41;; esac
-case "$(stat -c '%u:%g' /data/applicant_store.json)" in 0:0|10001:10001) ;; *) exit 42;; esac
+case "$(stat -c '%u:%g' /data)" in 0:0|10001:10001|"$LEGACY_OWNER") ;; *) exit 41;; esac
+case "$(stat -c '%u:%g' /data/applicant_store.json)" in 0:0|10001:10001|"$LEGACY_OWNER") ;; *) exit 42;; esac
 case "$(stat -c '%a' /data)" in 700|750|755|770) ;; *) exit 43;; esac
 case "$(stat -c '%a' /data/applicant_store.json)" in 600|640|644|660) ;; *) exit 44;; esac
 test "$(sha256sum /data/applicant_store.json | cut -d ' ' -f 1)" = "$EXPECTED_SHA256"
@@ -161,7 +201,7 @@ test "$(stat -c '%u:%g:%a' /data/applicant_store.json)" = "10001:10001:660"
 test "$(sha256sum /data/applicant_store.json | cut -d ' ' -f 1)" = "$EXPECTED_SHA256"
 sync
 '@
-    & docker run --rm --network none --env "EXPECTED_SHA256=$digest" --mount "type=volume,src=$($owned[0].volume_name),dst=/data" $HelperImage sh -lc $script
+    & docker run --rm --network none --env "EXPECTED_SHA256=$digest" --env "LEGACY_OWNER=$legacyOwner" --mount "type=volume,src=$($owned[0].volume_name),dst=/data" $HelperImage sh -lc $script
     if ($LASTEXITCODE -ne 0) {
         throw 'Exact applicant state ownership migration failed; preserve backup and stopped service'
     }

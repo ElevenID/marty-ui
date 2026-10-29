@@ -490,6 +490,7 @@ Wait-ForServiceHealth @("redis")
 $applicantBackup = Join-Path $backupDir 'applicant_store.json'
 $applicantDigest = (Get-FileHash -LiteralPath $applicantBackup -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($applicantDigest -cnotmatch '^[0-9a-f]{64}$') { throw 'Applicant restore digest is invalid' }
+$legacyApplicantOwner = Get-BetaApplicantImageStateOwner -Expected @(Get-BetaStateVolumePlan)
 $applicantRestore = @'
 set -eu
 test -d /data && test ! -L /data
@@ -498,8 +499,8 @@ test -f /backup/applicant_store.json && test ! -L /backup/applicant_store.json
 test ! -e /data/applicant_store.json.tmp && test ! -L /data/applicant_store.json.tmp
 test "$(find /data -mindepth 1 -maxdepth 1 | wc -l)" -eq 1
 test "$(sha256sum /backup/applicant_store.json | cut -d ' ' -f 1)" = "$EXPECTED_SHA256"
-case "$(stat -c '%u:%g' /data)" in 0:0|10001:10001) ;; *) exit 41;; esac
-case "$(stat -c '%u:%g' /data/applicant_store.json)" in 0:0|10001:10001) ;; *) exit 42;; esac
+case "$(stat -c '%u:%g' /data)" in 0:0|10001:10001|"$LEGACY_OWNER") ;; *) exit 41;; esac
+case "$(stat -c '%u:%g' /data/applicant_store.json)" in 0:0|10001:10001|"$LEGACY_OWNER") ;; *) exit 42;; esac
 case "$(stat -c '%a' /data)" in 700|750|755|770) ;; *) exit 43;; esac
 case "$(stat -c '%a' /data/applicant_store.json)" in 600|640|644|660) ;; *) exit 44;; esac
 cp /backup/applicant_store.json /data/applicant_store.json.tmp
@@ -511,7 +512,7 @@ sync
 mv /data/applicant_store.json.tmp /data/applicant_store.json
 sync
 '@
-Invoke-Checked docker @("run", "--rm", "--network", "none", "--env", "EXPECTED_SHA256=$applicantDigest", "--mount", "type=volume,src=$applicantVolumeName,dst=/data", "--mount", "type=bind,src=$backupDir,dst=/backup,readonly", $volumeHelperImage, "sh", "-lc", $applicantRestore)
+Invoke-Checked docker @("run", "--rm", "--network", "none", "--env", "EXPECTED_SHA256=$applicantDigest", "--env", "LEGACY_OWNER=$legacyApplicantOwner", "--mount", "type=volume,src=$applicantVolumeName,dst=/data", "--mount", "type=bind,src=$backupDir,dst=/backup,readonly", $volumeHelperImage, "sh", "-lc", $applicantRestore)
 Set-BetaApplicantNonrootState -Expected @(Get-BetaStateVolumePlan) -BackupFile $applicantBackup -HelperImage $volumeHelperImage
 $callbackRestore = @($restoreServices | Where-Object { $_ -in @("passport-callback-signer", "passport-beta-bureau") })
 if ($priorBureau.Count -eq 1 -and $callbackRestore.Count -ne 2) {
