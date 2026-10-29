@@ -48,6 +48,7 @@ class StoppedSnapshotEvidence:
 
 
 def _qmp_powerdown(path: Path, disk: Path, *, pid: int, uid: int,
+                   start_ticks: str, boot_id: str,
                    socket_device: int, socket_inode: int) -> None:
     """Issue only system_powerdown to the exact live QEMU peer."""
     before = path.lstat()
@@ -56,6 +57,8 @@ def _qmp_powerdown(path: Path, disk: Path, *, pid: int, uid: int,
                     and (before.st_dev, before.st_ino)
                     == (socket_device, socket_inode),
                     "fixture QMP socket changed")
+    release.require(restart._original_still_live(pid, start_ticks, boot_id),
+                    "fixture process changed before powerdown")
     # The existing observer checks running state and exact writable qcow2.
     observer.qmp(path, disk, pid=pid, uid=uid)
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
@@ -68,6 +71,8 @@ def _qmp_powerdown(path: Path, disk: Path, *, pid: int, uid: int,
         release.require((current.st_dev, current.st_ino, current.st_uid)
                         == (socket_device, socket_inode, uid),
                         "fixture QMP path changed")
+        release.require(restart._original_still_live(pid, start_ticks, boot_id),
+                        "fixture process changed before powerdown")
         with connection.makefile("rwb") as stream:
             greeting = release.decode(stream.readline(MAX_QMP_LINE + 1))
             release.require(type(greeting) is dict and "QMP" in greeting,
@@ -228,6 +233,8 @@ def stop_and_snapshot(*, source: Path, registry: Path, vm_parent: Path,
         # No action before the durable intent. Any exception from here onward
         # leaves that intent and refuses a second invocation.
         _qmp_powerdown(sock, disk, pid=before["pid"], uid=uid,
+                       start_ticks=before["start_ticks"],
+                       boot_id=before["boot_id"],
                        socket_device=socket_stat.st_dev,
                        socket_inode=socket_stat.st_ino)
         _wait_stopped(uid, before["pid"], before["start_ticks"],

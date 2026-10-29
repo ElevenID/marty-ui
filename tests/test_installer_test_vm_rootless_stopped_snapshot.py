@@ -47,9 +47,13 @@ def test_qmp_sends_only_fixed_powerdown_to_exact_peer(tmp_path):
     worker.start()
     assert ready.wait(2)
     info = path.lstat()
-    with mock.patch.object(stopped.observer, "qmp") as observed:
+    with mock.patch.object(stopped.observer, "qmp") as observed, \
+         mock.patch.object(stopped.restart, "_original_still_live",
+                           return_value=True):
         stopped._qmp_powerdown(path, tmp_path / "disk.qcow2", pid=os.getpid(),
-                               uid=os.getuid(), socket_device=info.st_dev,
+                               uid=os.getuid(), start_ticks="123",
+                               boot_id="11111111-2222-4333-8444-555555555555",
+                               socket_device=info.st_dev,
                                socket_inode=info.st_ino)
     worker.join(2)
     assert not worker.is_alive()
@@ -64,10 +68,14 @@ def test_qmp_wrong_peer_refuses_before_powerdown(tmp_path):
         listener.bind(str(path))
         listener.listen(1)
         info = path.lstat()
-        with mock.patch.object(stopped.observer, "qmp"):
+        with mock.patch.object(stopped.observer, "qmp"), \
+             mock.patch.object(stopped.restart, "_original_still_live",
+                               return_value=True):
             with pytest.raises(ValueError, match="QMP peer changed"):
                 stopped._qmp_powerdown(path, tmp_path / "disk.qcow2",
                                        pid=os.getpid() + 10000, uid=os.getuid(),
+                                       start_ticks="123",
+                                       boot_id="11111111-2222-4333-8444-555555555555",
                                        socket_device=info.st_dev,
                                        socket_inode=info.st_ino)
 
