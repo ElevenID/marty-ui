@@ -158,6 +158,7 @@ def stop_daemon(daemon, stamp, socket_path, socket_identity, context):
         require((named.st_dev, named.st_ino, named.st_uid) == socket_identity,
                 "rootless socket changed during daemon stop")
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as probe:
+            probe.settimeout(1.0)
             outcome = probe.connect_ex(str(socket_path))
         require(outcome in (errno.ENOENT, errno.ECONNREFUSED),
                 "rootless daemon socket still serves or cannot be classified")
