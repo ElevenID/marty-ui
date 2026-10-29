@@ -275,13 +275,9 @@ fn install_inner(args: &[String], build_identity: &str, mode: InstallMode) -> Re
         profile: crate::installer_state::RuntimeProfile::Rootful,
     };
     let docker = o.docker.as_path();
-    let observed = crate::installer_runtime::DockerRunner::new(
-        docker,
-        &runtime.docker_host,
-        &runtime.engine_id,
-        &o.tools,
-    )?
-    .preflight()?;
+    let observed =
+        crate::installer_runtime::DockerRunner::from_binding(docker, &runtime, &o.tools)?
+            .preflight()?;
     let inventory_sha = if let Some((_, record)) = &admitted {
         record.inventory_sha256.clone()
     } else {
