@@ -302,12 +302,7 @@ fn logs_inner(args: &[String]) -> Result<String> {
     };
     let credentials = selected_corpus(&state, &names, &args.installation, generation.as_ref())?;
     let patterns = patterns(&credentials)?;
-    let docker = DockerRunner::new(
-        &args.docker,
-        &binding.docker_host,
-        &binding.engine_id,
-        &args.installation,
-    )?;
+    let docker = DockerRunner::from_binding(&args.docker, binding, &args.installation)?;
     docker.preflight()?;
     observe(&docker, &plan, &args.service, id, &project)?;
     let (stdout, stderr) = docker.capture_logs(id, args.tail)?;

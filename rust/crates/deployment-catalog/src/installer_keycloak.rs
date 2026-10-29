@@ -278,12 +278,7 @@ pub fn provision(
     state.require_live_phase(Phase::Provisioning)?;
     require(InstallerState::inspect(installation)? == *state.journal())?;
     let binding = state.journal().runtime().ok_or(REFUSAL)?.clone();
-    let docker = DockerRunner::new(
-        dockerpath,
-        &binding.docker_host,
-        &binding.engine_id,
-        installation,
-    )?;
+    let docker = DockerRunner::from_binding(dockerpath, &binding, installation)?;
     installer_openbao::verify_observation(&docker, installation, bundle, state, bao)?;
     let operator = installation.join("marty-deploy");
     require(installer_verify::operator_digest(&operator)? == expected_operator_sha)?;

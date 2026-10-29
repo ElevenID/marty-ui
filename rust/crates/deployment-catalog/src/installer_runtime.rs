@@ -3,7 +3,7 @@
 //! arguments and must persist resource ownership before using run_checked.
 #![cfg(target_os = "linux")]
 
-use crate::installer_state::RuntimeProfile;
+use crate::installer_state::{RuntimeBinding, RuntimeProfile};
 use serde::{Deserialize, Serialize};
 use std::{
     ffi::CString,
@@ -438,6 +438,22 @@ pub struct DockerRunner {
     deadline: Option<Instant>,
 }
 impl DockerRunner {
+    /// Select the exact profile persisted with this installation. In particular,
+    /// a rootless journal must never be reopened through the rootful constructor.
+    pub fn from_binding(
+        docker_executable: &Path,
+        binding: &RuntimeBinding,
+        private_parent: &Path,
+    ) -> Result<Self> {
+        binding.validate()?;
+        Self::new_for_profile(
+            docker_executable,
+            &binding.docker_host,
+            &binding.engine_id,
+            private_parent,
+            binding.profile,
+        )
+    }
     fn recheck_endpoint(&self) -> Result<()> {
         let host = self
             .runner
@@ -530,7 +546,6 @@ impl DockerRunner {
     }
     /// Dormant rootless preflight primitive. A future reviewed installer path
     /// must persist the selected profile before using it for resource changes.
-    #[allow(dead_code)]
     pub(crate) fn new_for_profile(
         docker_executable: &Path,
         docker_host: &str,
@@ -1001,6 +1016,39 @@ esac"#,
             calls,
             "identity mismatch must refuse before executing the requested command"
         );
+    }
+    #[test]
+    fn persisted_binding_selects_profile_without_rootful_fallback() {
+        let parent = private_temp();
+        let info_path = parent.path().join("engine-info.json");
+        fs::write(&info_path, info()).unwrap();
+        let binary = script(
+            parent.path(),
+            "case \"$1\" in info) cat \"${0%/*}/engine-info.json\" ;; compose) printf '2.39.0\\n' ;; *) exit 9 ;; esac",
+        );
+        // Historical journals omit profile and remain explicitly Rootful.
+        let binding: RuntimeBinding = serde_json::from_value(serde_json::json!({
+            "docker_host": "unix:///var/run/docker.sock",
+            "engine_id": "test-engine",
+            "openbao_port": 18200
+        }))
+        .unwrap();
+        assert_eq!(binding.profile, RuntimeProfile::Rootful);
+        let docker = DockerRunner::from_binding(&binary, &binding, parent.path()).unwrap();
+        assert_eq!(docker.profile, RuntimeProfile::Rootful);
+        assert!(docker.preflight().is_ok());
+        fs::write(
+            &info_path,
+            info().replace("name=seccomp,profile=builtin", "name=rootless"),
+        )
+        .unwrap();
+        assert!(docker.preflight().is_err());
+        let rootless = RuntimeBinding {
+            profile: RuntimeProfile::Rootless,
+            ..binding
+        };
+        // A rootless journal cannot be reopened through the rootful socket.
+        assert!(DockerRunner::from_binding(&binary, &rootless, parent.path()).is_err());
     }
     #[test]
     fn executable_writer_failure_reports_only_os_classification() {

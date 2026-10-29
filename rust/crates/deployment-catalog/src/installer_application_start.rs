@@ -337,12 +337,7 @@ pub fn start(
     require(volume == format!("{project}_redis-socket"))?;
     bound_document(installation, &plan)?;
     validate_selected_inputs(&plan, installation, bundle, state)?;
-    let docker = DockerRunner::new(
-        dockerpath,
-        &binding.docker_host,
-        &binding.engine_id,
-        installation,
-    )?;
+    let docker = DockerRunner::from_binding(dockerpath, &binding, installation)?;
     installer_openbao::verify_observation(&docker, installation, bundle, state, bao)?;
     fresh(&docker, &project, &volume, &roles)?;
     persist(

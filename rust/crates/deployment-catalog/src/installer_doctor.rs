@@ -473,12 +473,8 @@ mod tests {
         let installation = root.path().join("install");
         let state = LockedInspection::open(&installation)?;
         let binding = state.journal().runtime().unwrap();
-        let docker = DockerRunner::new(
-            &root.path().join("docker-stub"),
-            &binding.docker_host,
-            &binding.engine_id,
-            &installation,
-        )?;
+        let docker =
+            DockerRunner::from_binding(&root.path().join("docker-stub"), binding, &installation)?;
         docker.preflight()?;
         services(&state, &installation, &docker)
     }

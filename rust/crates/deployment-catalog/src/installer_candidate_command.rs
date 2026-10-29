@@ -393,13 +393,7 @@ fn install_inner(args: &[String], build_identity: &str) -> Result<()> {
         openbao_port: port.local_addr().map_err(|_| REFUSED)?.port(),
         profile: crate::installer_state::RuntimeProfile::Rootful,
     };
-    let observed = DockerRunner::new(
-        &o.docker,
-        &runtime.docker_host,
-        &runtime.engine_id,
-        &o.tools,
-    )?
-    .preflight()?;
+    let observed = DockerRunner::from_binding(&o.docker, &runtime, &o.tools)?.preflight()?;
     let consumed = installer_candidate_nonce::consume(
         &registry,
         &Consumption {

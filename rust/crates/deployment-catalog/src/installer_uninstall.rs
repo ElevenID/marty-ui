@@ -861,12 +861,7 @@ fn plan_inner(args: &[String]) -> Result<String> {
         .map_err(|_| REFUSED)?;
     std::fs::set_permissions(staging.path(), std::fs::Permissions::from_mode(0o700))
         .map_err(|_| REFUSED)?;
-    let docker = DockerRunner::new(
-        &args.docker,
-        &binding.docker_host,
-        &binding.engine_id,
-        staging.path(),
-    )?;
+    let docker = DockerRunner::from_binding(&args.docker, binding, staging.path())?;
     docker.preflight()?;
     let saved_plan = state.read_evidence("uninstall-plan.json")?;
     if let Some(saved) = &saved_plan {
@@ -932,12 +927,7 @@ fn uninstall_inner(args: &[String]) -> Result<String> {
     let mut state = LockedMaintenance::open(&args.installation)?;
     let loaded = load(&state, &args.installation)?;
     let binding = state.journal().runtime().ok_or(REFUSED)?;
-    let docker = DockerRunner::new(
-        &args.docker,
-        &binding.docker_host,
-        &binding.engine_id,
-        &args.installation,
-    )?;
+    let docker = DockerRunner::from_binding(&args.docker, binding, &args.installation)?;
     docker.preflight()?;
     let plan_value = serde_json::to_value(&loaded.plan).map_err(|_| REFUSED)?;
     let saved_plan = state.read_evidence("uninstall-plan.json")?;
