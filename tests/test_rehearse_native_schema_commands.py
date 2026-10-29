@@ -13,7 +13,11 @@ def fixture(tmp_path):
     admin.write_text("postgres://postgres:SYNTHETIC_PASSWORD@postgres/marty")
     from scoped_native_runtime import ref
     inputs = {"runId": "11111111-1111-4111-8111-111111111111", "binaries": {"flow": {}, "issuance-native": {}},
-              "databaseAdminUrl": ref(admin)}
+              "databaseAdminUrl": ref(admin), "buildReceipt": {"sha256": "a" * 64},
+              "executables": {}, "metadataModule": {}, "sqlSources": {}, "migrationSetSha256": "b" * 64, "databaseNetwork": "fixture"}
+    selection = tmp_path / "selection.json"
+    selection.write_text(json.dumps(rehearsal.expected_synthetic_selection(inputs)))
+    inputs["selection"] = ref(selection)
     return rehearsal.Rehearsal({"root": tmp_path}, inputs)
 
 
@@ -224,3 +228,72 @@ def test_explicit_recovery_preserves_resource_scope_and_sql_assets():
     inputs["sqlSources"]["fixed.sql"]["sha256"] = "c" * 64
     with pytest.raises(ValueError, match="RECOVERY_SOURCE_ASSETS_CHANGED"):
         rehearsal.validate_recovery_scope(inputs, prior)
+
+
+def test_missing_selection_contract_refuses_before_helper_dispatch(tmp_path):
+    value = fixture(tmp_path)
+    del value.i["selection"]
+    value.command = lambda *args: pytest.fail("Missing selection must refuse before dispatch")
+    with pytest.raises(ValueError, match="FROZEN_SCHEMA_ADAPTER_INPUT_CONTRACT_REQUIRED"):
+        value.schema("flow", "migrate")
+
+
+def test_real_inherited_schema_boundary_returns_build_bound_selection(tmp_path):
+    from types import SimpleNamespace
+    from scoped_native_database import IMAGE
+    from scoped_native_runtime import ref, daemon_source
+    value = fixture(tmp_path)
+    binary = tmp_path / "synthetic-flow-elf"
+    binary.write_bytes(b"UNIT_TRANSPORT_ONLY_NOT_A_REAL_ELF")
+    value.i["binaries"]["flow"] = ref(binary)
+    selection_file = Path(value.i["selection"]["path"])
+    selection_file.write_text(json.dumps(rehearsal.expected_synthetic_selection(value.i)))
+    value.i["selection"] = ref(selection_file)
+    value.selection = rehearsal.schema_input_contract(value.i)
+    value.i.update(databaseNetwork="marty-schema-rehearsal-" + value.fixture_run, databaseNetworkId="c" * 64)
+    value.network_id = "c" * 64
+    value.pg_cid = "d" * 64
+    value.identity = {"containerId": value.pg_cid, "systemIdentifier": "SYNTHETIC", "databaseOid": "123"}
+    value.bootstrap = True
+    cid = "e" * 64
+    config = {"User": "10001:10001", "Entrypoint": ["/usr/local/bin/marty-flow"], "Cmd": ["migrate"],
+        "Labels": {"elevenid.owner": "native-maintenance-schema", "elevenid.run": value.i["runId"]},
+        "Env": ["DATABASE_URL=" + value.database_url("migrate")]}
+    helper = {"Id": cid, "Name": "/marty-native-schema-" + value.i["runId"] + "-flow-migrate", "Image": IMAGE,
+        "Config": config, "HostConfig": {"ReadonlyRootfs": True, "Privileged": False, "Memory": 268435456,
+            "MemorySwap": 268435456, "NanoCpus": 250000000, "NetworkMode": value.i["databaseNetwork"],
+            "CapDrop": ["ALL"], "SecurityOpt": ["no-new-privileges:true"], "RestartPolicy": {"Name": "no"}},
+        "Mounts": [{"Type": "bind", "RW": False, "Destination": "/usr/local/bin/marty-flow", "Source": daemon_source(binary)}],
+        "State": {"Status": "created", "Running": False, "Paused": False, "OOMKilled": False, "Pid": 0, "ExitCode": 0}}
+    pg = {"Id": value.pg_cid, "Image": rehearsal.PG_IMAGE,
+        "Config": {"Labels": {"elevenid.owner": rehearsal.OWNER, "elevenid.run": value.fixture_run}},
+        "State": {"Running": True, "Paused": False},
+        "NetworkSettings": {"Networks": {value.i["databaseNetwork"]: {"NetworkID": value.network_id, "Aliases": ["postgres"]}}}}
+    calls = []
+    def command(args):
+        calls.append(args)
+        if args[1] == "create":
+            return cid.encode()
+        if args[1] == "info":
+            return rehearsal.ENGINE.encode()
+        if args[1:3] == ["image", "inspect"]:
+            return json.dumps([{"Config": {"Env": []}}]).encode()
+        if args[1] == "inspect":
+            return json.dumps([helper if args[2] == cid else pg]).encode()
+        pytest.fail("Unexpected mock transport operation")
+    def result(args):
+        assert args == ["docker", "start", "--attach", cid]
+        helper["State"]["Status"] = "exited"
+        return SimpleNamespace(stdout=b"SYNTHETIC_MIGRATED", stderr=b"")
+    def save_bytes(name, raw):
+        output = tmp_path / name
+        output.write_bytes(raw)
+        return ref(output)
+    value.command, value.result = command, result
+    value.g.update(save_bytes=save_bytes, save=lambda name, row: save_bytes(name, json.dumps(row).encode()))
+    row = value.schema("flow", "migrate")
+    assert row["selectionSha256"] == value.i["selection"]["sha256"]
+    assert row["selectionSha256"] != value.i["buildReceipt"]["sha256"]
+    assert row["sourceRevision"] == rehearsal.SOURCE and row["coreRevision"] == rehearsal.CORE
+    assert row["containerId"] == cid and row["exitCode"] == 0
+    assert any(args[1] == "create" for args in calls)

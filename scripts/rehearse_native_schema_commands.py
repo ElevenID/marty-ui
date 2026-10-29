@@ -19,7 +19,7 @@ import secrets
 import sys
 import traceback
 import uuid
-from scoped_native_database import NativeDatabasePhase, schema_url, ENGINE, BUILD_RECEIPT_SHA, bounded_run
+from scoped_native_database import NativeDatabasePhase, schema_url, ENGINE, BUILD_RECEIPT_SHA, bounded_run, schema_input_contract
 from scoped_native_runtime import read_executable_ref, read_ref, ref, require, save_state, MIGRATIONS
 from scoped_signing_successor import environment
 from scoped_native_maintenance import SOURCE, CORE, ROLE_BINARIES, operational_sql_sources
@@ -45,7 +45,7 @@ class Rehearsal(NativeDatabasePhase):
         self.stage = "prepare"
         self.command_index = 0
         self.schema_records = {}
-        self.selection = {"binaries": {role: inputs["binaries"][role] for role in ("flow", "issuance-native")}}
+        self.selection = schema_input_contract(inputs)
         self.state = {"schema": SCHEMA, "phase": "PREPARING", "runId": self.fixture_run, "operations": [],
             "sourceRevision": SOURCE, "coreRevision": CORE, "betaDatabaseAccessed": False,
             "sourceSqlBetaGuardSettingsAreSynthetic": True, "durableAuthorityClaimed": False}
@@ -414,6 +414,12 @@ def disabled_operator_source(raw):
     return raw.replace(enabled, b"\nDISPATCH_ENABLED = False\n", 1)
 
 
+def expected_synthetic_selection(inputs):
+    return {"schema": "marty.synthetic-native-schema-selection/v1", "sourceRevision": SOURCE, "coreRevision": CORE,
+        "canonicalBuildReceipt": inputs["buildReceipt"], "binaries": inputs["binaries"],
+        "betaRuntimeSelection": False, "runtimeQualified": False}
+
+
 def validate_recovery_scope(inputs, prior):
     require("recoveryFrom" not in prior, "NESTED_RECOVERY_INPUT_FORBIDDEN")
     fields = ("schema", "runId", "privateRoot", "sourceRevision", "coreRevision", "postgresName", "databaseNetwork",
@@ -450,6 +456,7 @@ def validate_inputs(path, digest):
         bound = value["binaries"][role]
         require(bound == receipt["binaries"][ROLE_BINARIES[role]], "ACTUAL_SCHEMA_ELF_REQUIRED")
         read_ref(bound, 512 * 1024 * 1024)
+    require(schema_input_contract(value) == expected_synthetic_selection(value), "EXACT_BUILD_BOUND_SYNTHETIC_SELECTION_REQUIRED")
     require(set(value["migrationSources"]) == set(MIGRATION_FILES), "EXACT_RUST_MIGRATION_SOURCES_REQUIRED")
     expected_files = set(OPERATOR_FILES) | {"scripts/sql/" + name for name in operational_sql_sources()} | set(value["migrationSources"])
     require(set(value["operatorFiles"]) == expected_files, "COMPLETE_EXECUTED_SOURCE_CLOSURE_REQUIRED")

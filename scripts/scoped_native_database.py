@@ -111,6 +111,12 @@ def bounded_run(argv, *, env, input=None, timeout=150, stdout_limit=1024 * 1024,
     return result
 
 
+def schema_input_contract(inputs):
+    required = {"runId", "executables", "metadataModule", "sqlSources", "migrationSetSha256", "databaseNetwork", "selection"}
+    require(required.issubset(inputs), "FROZEN_SCHEMA_ADAPTER_INPUT_CONTRACT_REQUIRED")
+    return json.loads(read_ref(inputs["selection"]).read_bytes())
+
+
 def schema_url(raw, command):
     """SQLx consumes URL options, not an assumed libpq PGOPTIONS environment."""
     value = urlsplit(raw.strip())
@@ -133,7 +139,7 @@ class NativeDatabasePhase:
         require(read_ref(inputs["executorSource"]).resolve() == Path(__file__).resolve(), "DATABASE_EXECUTOR_SOURCE_CHANGED")
         self.g, self.i, self.store = context, inputs, store
         self.identity = json.loads(read_ref(inputs["databaseBefore"]).read_bytes())["databaseIdentity"]
-        self.selection = json.loads(read_ref(inputs["selection"]).read_bytes())
+        self.selection = schema_input_contract(inputs)
         require(self.selection["roleBinaries"] == ROLE_BINARIES
                 and self.selection["sourceRevision"] == SOURCE and self.selection["coreRevision"] == CORE
                 and self.selection["canonicalBuildReceipt"]["sha256"] == BUILD_RECEIPT_SHA, "EXACT_FOUR_ROLE_SELECTION_REQUIRED")
@@ -275,6 +281,7 @@ class NativeDatabasePhase:
             "backupFile": self.g["ref"](path)}
 
     def schema(self, role, command):
+        require(schema_input_contract(self.i) == self.selection, "SCHEMA_SELECTION_CHANGED")
         require(role in SCHEMA_ROLES and command in ("migrate", "verify-owned-schema"), "CLOSED_SCHEMA_COMMAND_REQUIRED")
         binary = ROLE_BINARIES[role]
         bound = self.selection["binaries"][role]
