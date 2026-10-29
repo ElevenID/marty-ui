@@ -53,6 +53,8 @@ pub mod installer_openbao;
 #[cfg(target_os = "linux")]
 pub(crate) mod installer_openbao_owner_transition;
 pub mod installer_prepare;
+#[cfg(target_os = "linux")]
+pub(crate) mod installer_purge_coordinator;
 pub(crate) mod installer_purge_host;
 #[allow(dead_code)] // No production caller until the purge coordinator is reviewed.
 pub(crate) mod installer_purge_ledger;
