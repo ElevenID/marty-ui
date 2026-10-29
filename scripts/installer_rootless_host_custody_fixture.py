@@ -384,19 +384,21 @@ def closed_names(path, limit):
     return set(names)
 
 
-def sanitized_daemon_tail(raw, context):
-    # The daemon receives a fixed clean environment and an empty private data
-    # directory. Even so, preserve only a bounded, scrubbed diagnostic tail.
-    tail = raw[-16384:].decode("utf-8", "replace")
-    tail = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", tail)
-    tail = tail.replace(str(context), "<fixture>")
-    tail = re.sub(r"(?i)\b(?:https?|ssh)://\S+", "<url>", tail)
-    tail = re.sub(r"(?i)\b(?:token|password|secret|credential|authorization|bearer)\b"
-                  r"\s*[:= ]\s*\S+", "<redacted>", tail)
-    tail = re.sub(r"\b[A-Za-z0-9+/=_-]{64,}\b", "<long-value>", tail)
-    tail = "".join(char if char in "\n\r\t" or 32 <= ord(char) <= 126 else "?"
-                   for char in tail)
-    return tail.encode("utf-8")[-16384:].decode("utf-8", "replace")
+def daemon_log_evidence(raw):
+    # Raw daemon output remains in the private, unuploaded context. A digest
+    # permits exact later comparison without publishing unknown log contents.
+    require(len(raw) <= 4 * 1024 * 1024, "daemon log evidence exceeds bound")
+    observed = raw.lower()
+    patterns = ((b"newuidmap: write to uid_map failed", "newuidmap_write_failed"),
+                (b"newgidmap: write to gid_map failed", "newgidmap_write_failed"),
+                (b"slirp4netns: not found", "slirp4netns_not_found"),
+                (b"rootlesskit: not found", "rootlesskit_not_found"),
+                (b"operation not permitted", "operation_not_permitted_observed"),
+                (b"permission denied", "permission_denied_observed"),
+                (b"address already in use", "address_in_use_observed"))
+    return {"daemon_log_bytes": len(raw),
+            "daemon_log_sha256": hashlib.sha256(raw).hexdigest(),
+            "observed_log_codes": [code for marker, code in patterns if marker in observed]}
 
 
 def fixture(inventory, tool_dir):
@@ -636,9 +638,9 @@ def fixture(inventory, tool_dir):
                 "leader_exited_before_socket": leader_exited_before_socket,
                 "cleanup_error_count": len(cleanup_errors),
                 "daemon_log_overflow": daemon_log_overflow[0],
-                "sanitized_daemon_tail": sanitized_daemon_tail(daemon_output, context),
+                **daemon_log_evidence(daemon_output),
                 "daemon_launch_attempted": daemon is not None,
-                "extracted_rootless_tools_invoked": daemon is not None,
+                "extracted_daemon_script_spawned": daemon is not None,
                 "installer_executed": False})
         require(not cleanup_errors, "; ".join(cleanup_errors))
         if success_summary is not None:
