@@ -1320,6 +1320,12 @@ mod tests {
     }
     #[test]
     fn durable_custody_allows_retry_before_manifest_publication() {
+        if isolated_resume_fixture(
+            "installer_purge_ledger::tests::durable_custody_allows_retry_before_manifest_publication",
+            &["MARTY_LEDGER_CUSTODY_RETRY_OK"],
+        ) {
+            return;
+        }
         let (root, parent, id, plan, hash) = fixture();
         let ledger = PurgeLedger::create_or_resume(&parent, id, &plan, &hash).unwrap();
         let directory = root.path().join(directory_name(id));
@@ -1330,6 +1336,7 @@ mod tests {
         assert!(resumed.quarantine().is_ok());
         assert_eq!(fs::read(directory.join("manifest.json")).unwrap(), plan);
         assert_eq!(fs::read(directory.join("custody.json")).unwrap(), custody);
+        println!("MARTY_LEDGER_CUSTODY_RETRY_OK");
     }
 
     fn execution_fixture() -> (
