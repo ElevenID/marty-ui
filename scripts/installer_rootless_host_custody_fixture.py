@@ -56,9 +56,21 @@ def write_record(path, value):
 
 def run(argv, env, *, timeout=40):
     require(type(argv) is list and all(type(a) is str for a in argv), "invalid command")
+    for parent in (Path("/usr"), Path("/usr/bin")):
+        ancestor = parent.lstat()
+        require(stat.S_ISDIR(ancestor.st_mode) and ancestor.st_uid == 0
+                and ancestor.st_mode & 0o022 == 0,
+                "no-new-privs launcher ancestor differs")
     m = Path(SET_PRIV).lstat()
     require(stat.S_ISREG(m.st_mode) and m.st_uid == 0 and m.st_mode & 0o022 == 0
-            and m.st_mode & 0o111 != 0, "trusted no-new-privs launcher unavailable")
+            and m.st_mode & 0o6000 == 0 and m.st_mode & 0o111 != 0,
+            "trusted no-new-privs launcher unavailable")
+    try:
+        capability = os.getxattr(SET_PRIV, "security.capability", follow_symlinks=False)
+    except OSError as error:
+        require(error.errno == errno.ENODATA, "setpriv capability metadata unavailable")
+    else:
+        require(not capability, "setpriv has file capabilities")
     proc = subprocess.Popen([SET_PRIV, "--no-new-privs", "--", *argv],
                             env=env, cwd="/", stdin=subprocess.DEVNULL,
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
