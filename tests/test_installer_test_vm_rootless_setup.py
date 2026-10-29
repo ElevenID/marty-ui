@@ -205,6 +205,7 @@ def test_mixed_factory_or_records_refuse(change):
 
 
 def test_setup_observation_uses_fixed_read_only_guest_commands():
+    compile(setup.INSTALLER_GUEST_SCRIPT, "fixture_installer_guest", "exec")
     binding = {"vm_id": "11111111-2222-4333-8444-555555555555",
                "pid": 1509, "start_ticks": "123456", "boot_id":
                "01234567-89ab-4cde-8f01-23456789abcd",
@@ -246,6 +247,15 @@ def test_setup_observation_uses_fixed_read_only_guest_commands():
                           ("fixture-admin", setup.SETUP_CLOUD_INIT_COMMAND),
                           ("fixture-admin", setup.SETUP_SERVICE_COMMAND),
                           ("fixture-admin", setup.SETUP_ENGINE_COMMAND)}
+
+
+def test_guest_command_allowlist_refuses_shell_input_before_ssh():
+    with mock.patch.object(setup.probe, "_pinned") as pinned, \
+         mock.patch.object(setup, "command") as command:
+        with pytest.raises(ValueError):
+            setup._ssh_as({"port": 22022}, "installer", "id; sudo true")
+    pinned.assert_not_called()
+    command.assert_not_called()
 
 
 def test_changed_setup_engine_refuses_before_result_record():
