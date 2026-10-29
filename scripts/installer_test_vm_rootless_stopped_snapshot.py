@@ -116,7 +116,7 @@ def _wait_stopped(uid: int, pid: int, start: str, boot: str,
 
 
 def _copy_snapshot(source_fd: int, parent: int, vm_id: str,
-                   expected_size: int, expected_sha: str) -> tuple[int, str, int, int]:
+                   expected_size: int, expected_sha: str) -> tuple[int, str, int, int, int, int]:
     """Copy exact held stopped disk bytes to an exclusive private inode."""
     dirname = vm_id + SNAPSHOT_SUFFIX
     os.mkdir(dirname, 0o700, dir_fd=parent)
@@ -163,10 +163,11 @@ def _copy_snapshot(source_fd: int, parent: int, vm_id: str,
                         == (directory_stat.st_dev, directory_stat.st_ino, 0, 0o700),
                         "fixture snapshot directory changed")
         named = os.stat("disk.qcow2", dir_fd=directory, follow_symlinks=False)
-        release.require((named.st_dev, named.st_ino, named.st_size,
-                         named.st_mtime_ns, named.st_ctime_ns)
-                        == (saved.st_dev, saved.st_ino, saved.st_size,
-                            saved.st_mtime_ns, saved.st_ctime_ns),
+        release.require((named.st_dev, named.st_ino, named.st_uid,
+                         stat.S_IMODE(named.st_mode), named.st_nlink,
+                         named.st_size, named.st_mtime_ns, named.st_ctime_ns)
+                        == (saved.st_dev, saved.st_ino, 0, 0o600, 1,
+                            saved.st_size, saved.st_mtime_ns, saved.st_ctime_ns),
                         "fixture snapshot name changed")
         reader = os.open("disk.qcow2", os.O_RDONLY | os.O_NOFOLLOW |
                          os.O_CLOEXEC, dir_fd=directory)
@@ -182,14 +183,23 @@ def _copy_snapshot(source_fd: int, parent: int, vm_id: str,
                             and actual.hexdigest() == expected_sha,
                             "fixture snapshot digest differs")
             observed = os.fstat(reader)
-            release.require((observed.st_dev, observed.st_ino, observed.st_size,
-                             observed.st_mtime_ns, observed.st_ctime_ns)
-                            == (saved.st_dev, saved.st_ino, saved.st_size,
-                                saved.st_mtime_ns, saved.st_ctime_ns),
+            release.require((observed.st_dev, observed.st_ino, observed.st_uid,
+                             stat.S_IMODE(observed.st_mode), observed.st_nlink,
+                             observed.st_size, observed.st_mtime_ns,
+                             observed.st_ctime_ns)
+                            == (saved.st_dev, saved.st_ino, 0, 0o600, 1,
+                                saved.st_size, saved.st_mtime_ns,
+                                saved.st_ctime_ns),
                             "fixture snapshot changed during rehash")
         finally:
             os.close(reader)
-        return expected_size, expected_sha, saved.st_dev, saved.st_ino
+        rebound = os.stat(dirname, dir_fd=parent, follow_symlinks=False)
+        release.require((rebound.st_dev, rebound.st_ino, rebound.st_uid,
+                         stat.S_IMODE(rebound.st_mode))
+                        == (directory_stat.st_dev, directory_stat.st_ino, 0, 0o700),
+                        "fixture snapshot directory changed after rehash")
+        return (expected_size, expected_sha, directory_stat.st_dev,
+                directory_stat.st_ino, saved.st_dev, saved.st_ino)
     finally:
         os.close(directory)
 
@@ -288,7 +298,9 @@ def stop_and_snapshot(*, source: Path, registry: Path, vm_parent: Path,
                    "disk_inode": before["disk_inode"],
                    "disk_bytes": size, "disk_sha256": digest,
                    "snapshot_bytes": copied[0], "snapshot_sha256": copied[1],
-                   "snapshot_device": copied[2], "snapshot_inode": copied[3],
+                   "snapshot_directory_device": copied[2],
+                   "snapshot_directory_inode": copied[3],
+                   "snapshot_device": copied[4], "snapshot_inode": copied[5],
                    "observed_at": int(time.time()), "stopped": True,
                    "snapshot_qualified": False,
                    "package_install_authorized": False,
