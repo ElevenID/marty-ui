@@ -65,6 +65,24 @@ def test_compose_files_have_no_duplicate_mapping_keys() -> None:
         _assert_unique_yaml_keys(document, path)
 
 
+def test_applicant_uses_image_nonroot_user_in_conformance_and_selfhost() -> None:
+    base = yaml.safe_load((ROOT / "docker-compose.base.yml").read_text(encoding="utf-8"))
+    selfhost = yaml.safe_load(
+        (ROOT / "docker-compose.selfhost.prod.yml").read_text(encoding="utf-8")
+    )
+    beta = yaml.safe_load((ROOT / "docker-compose.beta.yml").read_text(encoding="utf-8"))
+    applicant_base = base["services"]["applicant"]
+    applicant_selfhost = selfhost["services"]["applicant"]
+    assert "user" not in applicant_base
+    assert "group_add" not in applicant_base
+    assert "user" not in beta["services"]["applicant"]
+    assert "user" not in applicant_selfhost
+    assert applicant_selfhost["group_add"] == [
+        "${APPLICANT_STATE_GID:?APPLICANT_STATE_GID must match the provisioned state group}"
+    ]
+    assert "docker-compose.base.yml" in stack.BASE_FILES
+
+
 def test_base_stack_host_publications_are_loopback_only() -> None:
     compose = yaml.safe_load(
         (ROOT / "docker-compose.base.yml").read_text(encoding="utf-8")

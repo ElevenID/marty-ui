@@ -16,7 +16,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use std::{
-    fs,
+    fs::{self, OpenOptions},
+    io::Write,
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -225,8 +226,17 @@ impl FilePersistence {
 
     pub fn load(path: impl AsRef<Path>) -> Result<StoreDocument, ProviderError> {
         let path = path.as_ref();
-        if !path.exists() {
-            return Ok(StoreDocument::default());
+        let metadata = match fs::symlink_metadata(path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(StoreDocument::default());
+            }
+            Err(error) => return Err(ProviderError::Persistence(error.to_string())),
+        };
+        if !metadata.is_file() {
+            return Err(ProviderError::Persistence(
+                "applicant store must be an ordinary file".into(),
+            ));
         }
         let bytes =
             fs::read(path).map_err(|error| ProviderError::Persistence(error.to_string()))?;
@@ -234,20 +244,95 @@ impl FilePersistence {
     }
 }
 
+fn store_parent(path: &Path) -> &Path {
+    path.parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
+}
+
 impl StorePersistence for FilePersistence {
     fn persist(&self, store: &StoreDocument) -> Result<(), ProviderError> {
-        if let Some(parent) = self.path.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|error| ProviderError::Persistence(error.to_string()))?;
-        }
-        let temporary = self.path.with_extension("tmp");
+        let parent = store_parent(&self.path);
+        fs::create_dir_all(parent)
+            .map_err(|error| ProviderError::Persistence(error.to_string()))?;
+        let temporary = self.path.with_extension(format!("{}.tmp", Uuid::new_v4()));
         let bytes = store
             .encode()
             .map_err(|error| ProviderError::Persistence(error.to_string()))?;
-        fs::write(&temporary, bytes)
-            .map_err(|error| ProviderError::Persistence(error.to_string()))?;
-        fs::rename(&temporary, &self.path)
-            .map_err(|error| ProviderError::Persistence(error.to_string()))
+        let result = (|| -> std::io::Result<()> {
+            let mut options = OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                options.mode(0o660);
+            }
+            let mut file = options.open(&temporary)?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                file.set_permissions(fs::Permissions::from_mode(0o660))?;
+            }
+            file.write_all(&bytes)?;
+            file.sync_all()?;
+            fs::rename(&temporary, &self.path)?;
+            #[cfg(unix)]
+            fs::File::open(parent)?.sync_all()?;
+            Ok(())
+        })();
+        if result.is_err() {
+            let _ = fs::remove_file(&temporary);
+        }
+        result.map_err(|error| ProviderError::Persistence(error.to_string()))
+    }
+}
+
+#[cfg(test)]
+mod file_persistence_tests {
+    use super::*;
+
+    #[test]
+    fn replaces_existing_store_atomically_and_reloads_after_restart() {
+        let root = std::env::temp_dir().join(format!("marty-applicant-store-{}", Uuid::new_v4()));
+        fs::create_dir(&root).unwrap();
+        let path = root.join("store.json");
+        fs::write(&path, b"old state").unwrap();
+        let store = StoreDocument::default();
+        FilePersistence::new(&path).persist(&store).unwrap();
+        assert_eq!(fs::read(&path).unwrap(), store.encode().unwrap());
+        assert_eq!(
+            FilePersistence::load(&path).unwrap().encode().unwrap(),
+            store.encode().unwrap()
+        );
+        assert_eq!(fs::read_dir(&root).unwrap().count(), 1);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o660
+            );
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn bare_relative_filename_uses_current_directory_as_parent() {
+        assert_eq!(store_parent(Path::new("store.json")), Path::new("."));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn refuses_symlink_store_without_following_target() {
+        let root = std::env::temp_dir().join(format!("marty-applicant-link-{}", Uuid::new_v4()));
+        fs::create_dir(&root).unwrap();
+        let target = root.join("target.json");
+        fs::write(&target, b"unchanged").unwrap();
+        let link = root.join("store.json");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        assert!(FilePersistence::load(&link).is_err());
+        assert_eq!(fs::read(&target).unwrap(), b"unchanged");
+        fs::remove_dir_all(root).unwrap();
     }
 }
 

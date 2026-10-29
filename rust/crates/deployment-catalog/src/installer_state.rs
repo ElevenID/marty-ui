@@ -307,6 +307,36 @@ fn private(file: &File, directory: bool) -> Result<()> {
     }
     Ok(())
 }
+
+/// The applicant image runs as 10001:10001. A rootless installer shares only
+/// its nonzero effective group with that service; a root installer provisions
+/// the dedicated image group instead of granting the container group zero.
+pub fn applicant_state_gid() -> Result<u32> {
+    let uid = unsafe { libc::geteuid() };
+    let gid = if uid == 0 {
+        10001
+    } else {
+        unsafe { libc::getegid() }
+    };
+    if gid == 0 {
+        return Err("applicant state requires a nonroot group".into());
+    }
+    Ok(gid)
+}
+
+fn require_applicant_storage(directory: &File, gid: u32) -> Result<()> {
+    let metadata = directory
+        .metadata()
+        .map_err(|_| "inspect applicant state ownership")?;
+    if metadata.uid() != unsafe { libc::geteuid() }
+        || metadata.gid() != gid
+        || metadata.mode() & 0o7777 != 0o2770
+        || !metadata.is_dir()
+    {
+        return Err("applicant state ownership differs from the reviewed contract".into());
+    }
+    Ok(())
+}
 /// Reopen a held, already policy-checked ordinary inode for reading. O_PATH
 /// classification must precede any read-open: O_NONBLOCK alone does not avoid
 /// device open side effects. Ownership/mode policy stays with each caller.
@@ -1639,9 +1669,21 @@ impl InstallerState {
             Ok(child)
         };
         let state = make(&self.directory, "state")?;
-        for entry in ["postgres", "redis", "applicant"] {
+        for entry in ["postgres", "redis"] {
             make(&state, entry)?;
         }
+        let applicant = make(&state, "applicant")?;
+        let gid = applicant_state_gid()?;
+        if unsafe { libc::fchown(applicant.as_raw_fd(), !0, gid) } != 0
+            || unsafe { libc::fchmod(applicant.as_raw_fd(), 0o2770) } != 0
+        {
+            return Err(error("provision applicant state ownership"));
+        }
+        require_applicant_storage(&applicant, gid)?;
+        applicant
+            .sync_all()
+            .and_then(|_| state.sync_all())
+            .map_err(|_| "persist applicant state ownership")?;
         for entry in ["backups", "openbao-exports", "openbao-snapshot-identity"] {
             make(&self.directory, entry)?;
         }
@@ -1664,6 +1706,28 @@ impl InstallerState {
             .map_err(|_| "persist application placeholders")?;
         self.poisoned = false;
         Ok(())
+    }
+
+    /// Reopen the exact held installation child without following links before
+    /// a prepared model can start containers, including after a resumed run.
+    pub fn validate_applicant_storage(&self) -> Result<u32> {
+        private(&self.directory, true)?;
+        let state = open_at(
+            &self.directory,
+            &name("state"),
+            libc::O_RDONLY | libc::O_DIRECTORY,
+            0,
+        )?;
+        private(&state, true)?;
+        let applicant = open_at(
+            &state,
+            &name("applicant"),
+            libc::O_RDONLY | libc::O_DIRECTORY,
+            0,
+        )?;
+        let gid = applicant_state_gid()?;
+        require_applicant_storage(&applicant, gid)?;
+        Ok(gid)
     }
 
     /// Stage the operator password for one narrowly mounted configurator input.
@@ -3089,7 +3153,6 @@ mod tests {
             "state",
             "state/postgres",
             "state/redis",
-            "state/applicant",
             "backups",
             "openbao-exports",
             "openbao-snapshot-identity",
@@ -3098,6 +3161,20 @@ mod tests {
             assert!(metadata.is_dir());
             assert_eq!(metadata.mode() & 0o777, 0o700);
         }
+        let applicant = std::fs::metadata(path.join("state/applicant")).unwrap();
+        assert_eq!(applicant.uid(), unsafe { libc::geteuid() });
+        assert_eq!(applicant.gid(), applicant_state_gid().unwrap());
+        assert_eq!(applicant.mode() & 0o7777, 0o2770);
+        assert_eq!(
+            state.validate_applicant_storage().unwrap(),
+            applicant_state_gid().unwrap()
+        );
+        std::fs::set_permissions(
+            path.join("state/applicant"),
+            std::fs::Permissions::from_mode(0o700),
+        )
+        .unwrap();
+        assert!(state.validate_applicant_storage().is_err());
         for entry in crate::installer_application_env::OPTIONAL_EMPTY_SECRETS {
             let metadata = std::fs::metadata(path.join("secrets").join(entry)).unwrap();
             assert!(metadata.is_file());
@@ -3105,6 +3182,29 @@ mod tests {
             assert_eq!(metadata.mode() & 0o777, 0o444);
         }
         assert!(state.prepare_application_storage().is_err());
+        assert!(state.advance(Phase::Provisioned).is_err());
+    }
+    #[test]
+    fn applicant_state_group_is_nonroot_and_legacy_directory_is_not_adopted() {
+        let expected = if unsafe { libc::geteuid() } == 0 {
+            10001
+        } else {
+            unsafe { libc::getegid() }
+        };
+        assert_eq!(applicant_state_gid().unwrap(), expected);
+        assert_ne!(expected, 0);
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("install");
+        let mut state = InstallerState::create(&path, identity()).unwrap();
+        state.advance(Phase::Verified).unwrap();
+        state.advance(Phase::Provisioning).unwrap();
+        state
+            .generate_local_credentials(&serde_json::json!({"passwordPolicy": PASSWORD_POLICY}))
+            .unwrap();
+        std::fs::create_dir(path.join("state")).unwrap();
+        std::fs::create_dir(path.join("state/applicant")).unwrap();
+        assert!(state.prepare_application_storage().is_err());
+        assert!(path.join("state/applicant").is_dir());
         assert!(state.advance(Phase::Provisioned).is_err());
     }
     #[test]

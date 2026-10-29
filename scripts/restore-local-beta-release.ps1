@@ -487,7 +487,44 @@ Invoke-Checked docker (Get-ComposeArgs @("stop", "redis"))
 Invoke-Checked docker @("run", "--rm", "--mount", "type=volume,src=$redisVolumeName,dst=/data", "--mount", "type=bind,src=$backupDir,dst=/backup,readonly", $volumeHelperImage, "sh", "-lc", "rm -rf /data/appendonlydir && rm -f /data/dump.rdb && cp /backup/redis-dump.rdb /data/dump.rdb")
 Invoke-Checked docker (Get-ComposeArgs @("start", "redis"))
 Wait-ForServiceHealth @("redis")
-Invoke-Checked docker @("run", "--rm", "--mount", "type=volume,src=$applicantVolumeName,dst=/data", "--mount", "type=bind,src=$backupDir,dst=/backup,readonly", $volumeHelperImage, "sh", "-lc", "test -s /backup/applicant_store.json && cp /backup/applicant_store.json /data/applicant_store.json.tmp && mv /data/applicant_store.json.tmp /data/applicant_store.json")
+$applicantBackup = Join-Path $backupDir 'applicant_store.json'
+$applicantDigest = (Get-FileHash -LiteralPath $applicantBackup -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($applicantDigest -cnotmatch '^[0-9a-f]{64}$') { throw 'Applicant restore digest is invalid' }
+$priorApplicant = @($preDeploy | Where-Object { $_.service -ceq 'applicant' })
+$savedApplicantVolume = @($stateVolumes | Where-Object { $_.service -ceq 'applicant' -and $_.logical_name -ceq 'applicant_data' })
+if ($priorApplicant.Count -ne 1 -or $savedApplicantVolume.Count -ne 1 -or
+    $priorApplicant[0].container_id -cne $savedApplicantVolume[0].container_id -or
+    $priorApplicant[0].compose_project -cne 'elevenid-beta' -or
+    $priorApplicant[0].compose_service -cne 'applicant' -or
+    -not $priorApplicant[0].running -or
+    $priorApplicant[0].image_id -cnotmatch '^sha256:[0-9a-f]{64}$') {
+    throw 'Saved applicant image and state volume lineage is ambiguous'
+}
+$legacyApplicantOwner = Get-BetaApplicantImageStateOwner -Expected $stateVolumes `
+    -HistoricalImageId $priorApplicant[0].image_id
+$applicantRestore = @'
+set -eu
+test -d /data && test ! -L /data
+test -f /data/applicant_store.json && test ! -L /data/applicant_store.json
+test -f /backup/applicant_store.json && test ! -L /backup/applicant_store.json
+test ! -e /data/applicant_store.json.tmp && test ! -L /data/applicant_store.json.tmp
+test "$(find /data -mindepth 1 -maxdepth 1 | wc -l)" -eq 1
+test "$(sha256sum /backup/applicant_store.json | cut -d ' ' -f 1)" = "$EXPECTED_SHA256"
+case "$(stat -c '%u:%g' /data)" in 0:0|10001:10001|"$LEGACY_OWNER") ;; *) exit 41;; esac
+case "$(stat -c '%u:%g' /data/applicant_store.json)" in 0:0|10001:10001|"$LEGACY_OWNER") ;; *) exit 42;; esac
+case "$(stat -c '%a' /data)" in 700|750|755|770) ;; *) exit 43;; esac
+case "$(stat -c '%a' /data/applicant_store.json)" in 600|640|644|660) ;; *) exit 44;; esac
+cp /backup/applicant_store.json /data/applicant_store.json.tmp
+chown 10001:10001 /data /data/applicant_store.json.tmp
+chmod 0700 /data
+chmod 0660 /data/applicant_store.json.tmp
+test "$(sha256sum /data/applicant_store.json.tmp | cut -d ' ' -f 1)" = "$EXPECTED_SHA256"
+sync
+mv /data/applicant_store.json.tmp /data/applicant_store.json
+sync
+'@
+Invoke-Checked docker @("run", "--rm", "--network", "none", "--env", "EXPECTED_SHA256=$applicantDigest", "--env", "LEGACY_OWNER=$legacyApplicantOwner", "--mount", "type=volume,src=$applicantVolumeName,dst=/data", "--mount", "type=bind,src=$backupDir,dst=/backup,readonly", $volumeHelperImage, "sh", "-lc", $applicantRestore)
+Set-BetaApplicantNonrootState -Expected @(Get-BetaStateVolumePlan) -BackupFile $applicantBackup -HelperImage $volumeHelperImage
 $callbackRestore = @($restoreServices | Where-Object { $_ -in @("passport-callback-signer", "passport-beta-bureau") })
 if ($priorBureau.Count -eq 1 -and $callbackRestore.Count -ne 2) {
     throw "Both passport callback services must be running in the restored beta snapshot"

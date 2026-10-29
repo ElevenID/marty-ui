@@ -541,10 +541,16 @@ def test_postmutation_failure_keeps_beta_in_maintenance_for_rust_forward_repair(
 def test_applicant_backup_and_restore_use_the_quiesced_named_volume() -> None:
     deploy = text("scripts/deploy-local-beta-release.ps1")
     restore = text("scripts/restore-local-beta-release.ps1")
+    volume_plan = text("scripts/beta-state-volume-plan.ps1")
 
     assert 'Assert-BetaStateVolumePlan -Expected $script:StateVolumePlan -SameContainers' in deploy
     assert "type=volume,src=$applicantVolume,dst=/source,readonly" in deploy
     assert "test -s /source/applicant_store.json" in deploy
+    assert "Set-BetaApplicantNonrootState -Expected $script:StateVolumePlan" in deploy
+    assert "State.Status -cne 'exited'" in volume_plan
+    assert "State.ExitCode -ne 0" in volume_plan
+    assert 'test "$(sha256sum /data/applicant_store.json | cut -d \' \' -f 1)" = "$EXPECTED_SHA256"' in volume_plan
+    assert "chown 10001:10001 /data /data/applicant_store.json" in volume_plan
     assert "${applicant}:/app/data/applicant_store.json" not in deploy
 
     volume_restore = restore.index('Assert-BetaStateVolumePlan -Expected $stateVolumes')
@@ -553,13 +559,37 @@ def test_applicant_backup_and_restore_use_the_quiesced_named_volume() -> None:
     )
     assert volume_restore < service_start
     assert "type=volume,src=$applicantVolumeName,dst=/data" in restore
-    assert "test -s /backup/applicant_store.json" in restore
+    assert "test -f /backup/applicant_store.json && test ! -L /backup/applicant_store.json" in restore
+    assert "chown 10001:10001 /data /data/applicant_store.json.tmp" in restore
+    assert "Set-BetaApplicantNonrootState -Expected @(Get-BetaStateVolumePlan)" in restore
     assert "${applicant}:/app/data/applicant_store.json" not in restore
     helper_digest = (
         "alpine@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc"
     )
     assert helper_digest in deploy
     assert helper_digest in restore
+
+
+def test_applicant_legacy_group_is_bound_to_the_stopped_image() -> None:
+    plan = text("scripts/beta-state-volume-plan.ps1")
+    restore = text("scripts/restore-local-beta-release.ps1")
+
+    assert "Get-BetaApplicantImageStateOwner -Expected $Expected" in plan
+    assert "Get-BetaApplicantImageStateOwner -Expected $stateVolumes" in restore
+    assert "-HistoricalImageId $priorApplicant[0].image_id" in restore
+    assert "$priorApplicant[0].container_id -cne $savedApplicantVolume[0].container_id" in restore
+    assert "$container[0].State.Status -cne 'exited'" in plan
+    assert "$images[0].Id -cne $imageId" in plan
+    assert "$null -ne $images[0].Config.Volumes -and" in plan
+    assert "--rm --pull never --network none --read-only --user 0" in plan
+    assert "--cap-drop ALL --security-opt no-new-privileges --pids-limit 16" in plan
+    assert "--memory 128m --memory-swap 128m --cpus 0.5" in plan
+    assert "--entrypoint /usr/bin/timeout $imageId 10 /usr/bin/stat -c '%u:%g:%a' /app/data" in plan
+    assert "^10001:([1-9][0-9]*):700$" in plan
+    for source in (plan, restore):
+        assert '0:0|10001:10001|"$LEGACY_OWNER"' in source
+        assert '0:0|10001:10001) ;;' not in source
+        assert 'LEGACY_OWNER=$' in source
 
 
 def test_beta_inventory_records_only_non_secret_rollback_connection_metadata() -> None:
