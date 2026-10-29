@@ -221,9 +221,40 @@ def assert_signing_binding(model):
     assert target != defaults[0], "Separate container must not use loopback fallback"
 
 
-def assert_models(approved, actual):
+def assert_models(approved, actual, *, interpolated=False):
     """Check the complete current KMS-only model against its reviewed snapshot."""
     expected = deepcopy(approved)
+    # Keep the approved snapshot and its hash frozen. Admit only the exact
+    # memory ceilings and Keycloak heap setting reviewed for this change;
+    # the whole-model comparison below still rejects every other drift.
+    one_gib = {
+        "postgres",
+        "db-migrate",
+        "issuance-migrations",
+        "revocation-profile-migrate",
+        "ui",
+    }
+    for name, service in expected["services"].items():
+        assert "mem_limit" not in service
+        default = "2g" if name == "keycloak" else "1g" if name in one_gib else "512m"
+        if interpolated:
+            service["mem_limit"] = str(
+                (2 if name == "keycloak" else 1) * 1024**3
+                if default.endswith("g")
+                else 512 * 1024**2
+            )
+        else:
+            service["mem_limit"] = (
+                "${MARTY_"
+                + name.upper().replace("-", "_")
+                + "_MEMORY_LIMIT:-"
+                + default
+                + "}"
+            )
+    assert "JAVA_OPTS_KC_HEAP" not in expected["services"]["keycloak"]["environment"]
+    expected["services"]["keycloak"]["environment"]["JAVA_OPTS_KC_HEAP"] = (
+        "-XX:InitialRAMPercentage=20 -XX:MaxRAMPercentage=65"
+    )
     issuance = expected["services"]["issuance"]
     envelope = "signing_keys_integration_secret_key"
     envelope_path = f"/run/secrets/{envelope}"
@@ -417,7 +448,7 @@ def interpolated_models():
                 assert actual_publication == expected_publication
             if mode == "custom":
                 assert set(expected_publication.values()) == {"synthetic-custom"}
-            assert_models(render(APPROVED, values), after)
+            assert_models(render(APPROVED, values), after, interpolated=True)
             print(f"PASS: self-host {mode} interpolated whole model")
         for name in sorted(required):
             for value in (None, ""):
@@ -451,6 +482,20 @@ def run():
     before = GATE["render"](APPROVED)
     after = GATE["render"](GATE["BASE"])
     assert_models(before, after)
+    for change in ("limit", "heap"):
+        changed = deepcopy(after)
+        if change == "limit":
+            changed["services"]["keycloak"]["mem_limit"] = "1g"
+        else:
+            changed["services"]["keycloak"]["environment"]["JAVA_OPTS_KC_HEAP"] = (
+                "-XX:MaxRAMPercentage=100"
+            )
+        try:
+            assert_models(before, changed)
+        except AssertionError:
+            pass
+        else:
+            raise AssertionError(f"Unreviewed Keycloak {change} drift was accepted")
     interpolated_models()
     print(
         "PASS: approved KMS-only self-host model and synthetic bindings (configuration only)"
