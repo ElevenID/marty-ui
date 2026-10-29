@@ -54,6 +54,20 @@ PREPARED_FIELDS = {"schema", "phase", "vm_id", "copy_vm_id",
                    "product_dispatch_authorized"}
 
 
+def _prelaunch_layout(directory: int) -> None:
+    """A fresh copy has exactly the two producer-created files."""
+    with os.scandir(directory) as entries:
+        release.require({entry.name for entry in entries}
+                        == {"disk.qcow2", "seed.iso"},
+                        "fixture rollback directory has unexpected entries")
+    try:
+        os.stat("qmp.sock", dir_fd=directory, follow_symlinks=False)
+    except FileNotFoundError:
+        pass
+    else:
+        raise ValueError("fixture rollback monitor path exists")
+
+
 def _exact_pending(intent_raw: bytes, intent: dict,
                    pending_raw: bytes, pending: dict, vm_id: str) -> None:
     release.exact(intent, {"schema", "phase", "vm_id",
@@ -578,6 +592,7 @@ def bound_prepared_copy(*, source: Path, registry: Path,
                             == (prepared["runtime_directory_device"],
                                 prepared["runtime_directory_inode"]),
                             "fixture rollback runtime directory differs")
+            _prelaunch_layout(target_fd)
             disk_fd = _held_regular(
                 target_fd, "disk.qcow2", owner=prepared["runtime_uid"],
                 group=prepared["runtime_gid"], mode=0o600,
@@ -614,8 +629,6 @@ def bound_prepared_copy(*, source: Path, registry: Path,
                             "fixture rollback-copy bytes differ")
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as reserved:
                 reserved.bind(("127.0.0.1", prepared["copy_port"]))
-            release.require(not (runtime_parent / copy_vm_id / "qmp.sock").exists(),
-                            "fixture rollback monitor path exists")
             runtime._same_path(runtime_parent, parent_fd,
                                runtime._runtime_parent)
             launch._same_path(

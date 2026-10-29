@@ -26,6 +26,28 @@ def test_old_launch_output_refuses_before_spawn(tmp_path):
         os.close(registry)
 
 
+def test_live_disk_binding_accepts_growth_on_same_inode_and_rejects_link(tmp_path):
+    disk = tmp_path / "disk.qcow2"
+    disk.write_bytes(b"initial qcow2 fixture")
+    disk.chmod(0o600)
+    original = disk.stat()
+    directory = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        disk.write_bytes(b"initial qcow2 fixture" * 20)
+        held = launched._held_mutable_disk(
+            directory, uid=os.getuid(), gid=os.getgid(),
+            device=original.st_dev, inode=original.st_ino)
+        os.close(held)
+        disk.unlink()
+        disk.symlink_to("missing")
+        with pytest.raises(ValueError, match="live disk identity differs"):
+            launched._held_mutable_disk(
+                directory, uid=os.getuid(), gid=os.getgid(),
+                device=original.st_dev, inode=original.st_ino)
+    finally:
+        os.close(directory)
+
+
 def test_exact_copy_intent_precedes_fixed_unprivileged_spawn(tmp_path):
     registry = tmp_path / "registry"
     runtime = tmp_path / "runtime"
@@ -116,3 +138,97 @@ def test_exact_copy_intent_precedes_fixed_unprivileged_spawn(tmp_path):
     assert opts["close_fds"] is True and opts["start_new_session"] is True
     assert receipt["package_install_authorized"] is False
     assert receipt["product_dispatch_authorized"] is False
+
+
+def test_baseline_observes_only_fixed_principals_engine_and_status(tmp_path):
+    registry = tmp_path / "registry"
+    registry.mkdir()
+    engine = "6c3ab358-4b21-4979-b2ff-916bbd32d891"
+    status = b"Package: synthetic\nStatus: install ok installed\n"
+    binding = {"vm_id": VM, "copy_vm_id": COPY, "pid": 1699,
+               "start_ticks": "12345",
+               "boot_id": "22222222-3333-4444-8555-666666666666",
+               "ordinary_uid": 1000, "setup_uid": 1002,
+               "setup_engine_id": engine, "launch_sha256": "a" * 64,
+               "prepared_sha256": "b" * 64}
+    ordinary = launched.release.encode({
+        "schema": "elevenid.fixture-installer-account/v1",
+        "uid": 1000, "gid": 1001, "home": "/home/installer",
+        "docker_group": False, "sudo_group": False,
+        "setup_socket_denied": True, "no_new_privs": True,
+        "effective_caps_zero": True})
+    admin = launched.release.encode({
+        "schema": "elevenid.fixture-admin-identity/v1",
+        "uid": 1002, "gid": 1002, "home": "/home/fixture-admin"})
+    def ssh(_binding, _user, script, **_kwargs):
+        if script == launched.setup._installer_command():
+            return ordinary
+        if script == launched.setup._admin_identity_command():
+            return admin
+        assert script == launched.setup.SETUP_ENGINE_COMMAND
+        return ('"' + engine + '"\n').encode()
+    class Lease:
+        parent = 20
+        def __enter__(self):
+            return self
+        def __exit__(self, *_):
+            pass
+    with mock.patch.object(launched, "ControllerLease", return_value=Lease()), \
+         mock.patch.object(launched, "bound_live_copy", return_value=binding), \
+         mock.patch.object(launched.setup, "_ssh_as", side_effect=ssh), \
+         mock.patch.object(launched.probe, "_ssh", return_value=status) as read, \
+         mock.patch.object(launched.create, "_write") as write:
+        result = launched.observe_baseline(
+            source=tmp_path / "source", registry=registry,
+            runtime_parent=tmp_path / "runtime", vm_id=VM, copy_vm_id=COPY,
+            expected_engine_id=engine,
+            expected_status_sha256=launched.release.digest(status),
+            admission_result_sha256="d" * 64)
+    assert read.call_count == 2
+    assert write.call_count == 1
+    assert result["dpkg_status_sha256"] == launched.release.digest(status)
+    assert status not in str(result).encode()
+    assert result["rollback_qualified"] is False
+    assert result["package_install_authorized"] is False
+    assert result["product_dispatch_authorized"] is False
+
+
+def test_baseline_wrong_engine_refuses_without_record(tmp_path):
+    binding = {"ordinary_uid": 1000, "setup_uid": 1002,
+               "setup_engine_id": "6c3ab358-4b21-4979-b2ff-916bbd32d891"}
+    ordinary = launched.release.encode({
+        "schema": "elevenid.fixture-installer-account/v1",
+        "uid": 1000, "gid": 1001, "home": "/home/installer",
+        "docker_group": False, "sudo_group": False,
+        "setup_socket_denied": True, "no_new_privs": True,
+        "effective_caps_zero": True})
+    admin = launched.release.encode({
+        "schema": "elevenid.fixture-admin-identity/v1",
+        "uid": 1002, "gid": 1002, "home": "/home/fixture-admin"})
+    def ssh(_binding, _user, script, **_kwargs):
+        if script == launched.setup._installer_command():
+            return ordinary
+        if script == launched.setup._admin_identity_command():
+            return admin
+        return b'"7c3ab358-4b21-4979-b2ff-916bbd32d891"\n'
+    class Lease:
+        parent = 20
+        def __enter__(self):
+            return self
+        def __exit__(self, *_):
+            pass
+    with mock.patch.object(launched, "ControllerLease", return_value=Lease()), \
+         mock.patch.object(launched, "bound_live_copy", return_value=binding), \
+         mock.patch.object(launched.setup, "_ssh_as", side_effect=ssh), \
+         mock.patch.object(launched.probe, "_ssh") as status, \
+         mock.patch.object(launched.create, "_write") as write:
+        with pytest.raises(ValueError, match="Engine differs"):
+            launched.observe_baseline(
+                source=tmp_path / "source", registry=tmp_path / "registry",
+                runtime_parent=tmp_path / "runtime", vm_id=VM,
+                copy_vm_id=COPY,
+                expected_engine_id=binding["setup_engine_id"],
+                expected_status_sha256="c" * 64,
+                admission_result_sha256="d" * 64)
+    status.assert_not_called()
+    write.assert_not_called()
