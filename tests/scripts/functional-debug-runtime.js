@@ -20,6 +20,14 @@ function boundBytes(ref){
  assert.equal(digest(bytes),ref.sha256,'Reviewed receipt changed');
  return bytes;
 }
+function verifyBoundFile(ref,maxBytes=512*1024*1024){
+ assert(ref&&path.isAbsolute(ref.path)&&HASH.test(ref.sha256),'Explicit hash-bound file required');
+ const stat=fs.lstatSync(ref.path);assert(stat.isFile()&&!stat.isSymbolicLink()&&stat.size>0&&stat.size<=maxBytes,'Bound file size/type invalid');
+ const fd=fs.openSync(ref.path,'r'),hash=crypto.createHash('sha256'),buffer=Buffer.alloc(64*1024);let total=0;
+ try{let count;while((count=fs.readSync(fd,buffer,0,buffer.length,null))>0){hash.update(buffer.subarray(0,count));total+=count;assert(total<=maxBytes,'Bound file size invalid');}}
+ finally{fs.closeSync(fd);}
+ assert(total===stat.size&&hash.digest('hex')===ref.sha256,'Bound file changed');return total;
+}
 function boundJson(ref){
  const bytes=boundBytes(ref),text=bytes[0]===255&&bytes[1]===254?bytes.subarray(2).toString('utf16le'):bytes.toString('utf8').replace(/^\uFEFF/,'');
  return JSON.parse(text);
@@ -27,6 +35,7 @@ function boundJson(ref){
 function binaryFor(role){return ({issuance:'marty-issuance-service','issuance-native':'marty-issuance-service',verification:'marty-verification-service'})[role]||'marty-'+role;}
 function expectedRuntime(profile){
  if(profile?.schema==='marty.functional-mixed-runtime/v2'){
+  if(profile.nativeMaintenance)return require('./native-maintenance-runtime').expectedLatestRuntime(profile);
   if(profile.nativeOverlay)return expectedScopedNativeOverlay(profile);
   const expected=expectedIssuanceOverlay(profile);
   return profile.maintenanceRestart?expectedMaintenanceRestart(profile,expected):expected;
@@ -510,7 +519,7 @@ function configuredUid(value){
  if(/^\d+(?::[^:]+)?$/.test(value))return Number(value.split(':')[0]);
  return null;
 }
-function receiptDigests(profile){if(profile.nativeOverlay)return {baseProfile:profile.baseProfile.sha256,nativeBuild:profile.nativeOverlay.buildReceipt.sha256,nativeDeployment:profile.nativeOverlay.deploymentReceipt.sha256,nativeCompatibility:profile.nativeOverlay.compatibilityResult.sha256,...(profile.nativeOverlay.predecessor?{nativePredecessorAuthority:profile.nativeOverlay.predecessor.failedAuthority.sha256,nativePriorBuild:profile.nativeOverlay.predecessor.buildReceipt.sha256}:{}),...(profile.nativeOverlay.priorRestore?{nativeOriginalRestore:profile.nativeOverlay.priorRestore.readback.sha256}:{})};return profile.schema==='marty.functional-mixed-runtime/v2'?{baseProfile:profile.baseProfile.sha256,issuanceBuild:profile.issuanceOverlay.buildReceipt.sha256,issuanceDeployment:profile.issuanceOverlay.deploymentReceipt.sha256,...(profile.maintenanceRestart?{maintenanceRestart:profile.maintenanceRestart.sha256}:{})}:{baselineDeployment:profile.baselineDeployment.sha256,baselineBuild:profile.baselineBuild.sha256,
+function receiptDigests(profile){if(profile.nativeMaintenance)return {baseProfile:profile.baseProfile.sha256,nativeSelection:profile.nativeMaintenance.selection.sha256,nativeMaintenance:profile.nativeMaintenance.outcome.sha256,nativeReadback:profile.nativeMaintenance.readback.sha256,nativeCompatibility:profile.nativeMaintenance.compatibility.result.sha256};if(profile.nativeOverlay)return {baseProfile:profile.baseProfile.sha256,nativeBuild:profile.nativeOverlay.buildReceipt.sha256,nativeDeployment:profile.nativeOverlay.deploymentReceipt.sha256,nativeCompatibility:profile.nativeOverlay.compatibilityResult.sha256,...(profile.nativeOverlay.predecessor?{nativePredecessorAuthority:profile.nativeOverlay.predecessor.failedAuthority.sha256,nativePriorBuild:profile.nativeOverlay.predecessor.buildReceipt.sha256}:{}),...(profile.nativeOverlay.priorRestore?{nativeOriginalRestore:profile.nativeOverlay.priorRestore.readback.sha256}:{})};return profile.schema==='marty.functional-mixed-runtime/v2'?{baseProfile:profile.baseProfile.sha256,issuanceBuild:profile.issuanceOverlay.buildReceipt.sha256,issuanceDeployment:profile.issuanceOverlay.deploymentReceipt.sha256,...(profile.maintenanceRestart?{maintenanceRestart:profile.maintenanceRestart.sha256}:{})}:{baselineDeployment:profile.baselineDeployment.sha256,baselineBuild:profile.baselineBuild.sha256,
    debugDeployment:profile.debugDeployment.sha256,debugBuild:profile.debugBuild.sha256,
    retainedBuilds:Object.fromEntries(Object.entries(profile.retainedBuilds).map(([role,ref])=>[role,ref.sha256])),
    ...(profile.priorNativeOverlay?{priorNativeOverlay:profile.priorNativeOverlay.sha256,priorNativeBuild:profile.priorNativeBuild.sha256,priorNativeArtifacts:profile.priorNativeArtifacts.sha256}:{})};}
@@ -547,6 +556,10 @@ function observeDocker(expected,read=defaultDockerRead){
  const uidStatus=read(['exec',row.Id,'cat','/proc/1/status']);
  const uidMatch=uidStatus.match(/^Uid:\s+\d+\s+(\d+)\s+/m);assert(uidMatch,'PID1 effective UID unavailable');
  const effectiveUid=Number(uidMatch[1]),configuredRuntimeUid=configuredUid(row.Config?.User||'');
+ const gidMatch=uidStatus.match(/^Gid:\s+\d+\s+(\d+)\s+/m);
+ const effectiveGid=gidMatch?Number(gidMatch[1]):undefined;
+ const configuredUser=row.Config?.User||'';
+ const configuredRuntimeGid=/^\d+:\d+$/.test(configuredUser)?Number(configuredUser.split(':')[1]):undefined;
  const after=JSON.parse(read(['inspect',row.Id]))[0];
  assert.equal(after.State?.StartedAt,row.State?.StartedAt,'Role restarted during executable observation');
  assert.equal(after.State?.Pid,row.State?.Pid,'Role process changed during executable observation');
@@ -554,7 +567,7 @@ function observeDocker(expected,read=defaultDockerRead){
   service:labels['com.docker.compose.service'],running:row.State?.Running===true,
   status:row.State?.Status,health:row.State?.Health?.Status||null,binarySha256:hash,
   binaryMounts,executablePath,processExecutableSha256:processHash,startedAt:row.State?.StartedAt,hostPid:row.State?.Pid,
-  effectiveUid,configuredRuntimeUid};
+  effectiveUid,configuredRuntimeUid,...(gidMatch?{effectiveGid,configuredRuntimeGid}:{})};
 }
 function isNativeOverlayRow(row){return ['ISSUANCE_CORE_FUNCTIONAL_OVERLAY','SCOPED_NATIVE_FUNCTIONAL_OVERLAY'].includes(row.kind);}
 function validateRuntimeIdentity(row,actual,ignoreGeneration=false){
@@ -568,6 +581,7 @@ function validateRuntimeIdentity(row,actual,ignoreGeneration=false){
   assert(Array.isArray(row.requiredBinaryMounts)&&row.requiredBinaryMounts.length>0,'Native overlay executable mount expectation is missing');
   assert(Number.isFinite(Date.parse(row.requiredStartedAt))&&Number.isInteger(row.requiredHostPid)&&row.requiredHostPid>0,'Native overlay generation expectation is missing');
   assert.equal(actual.effectiveUid,row.requiredEffectiveUid);assert.equal(actual.configuredRuntimeUid,row.requiredEffectiveUid);
+  if(row.requiredEffectiveGid!==undefined){assert.equal(actual.effectiveGid,row.requiredEffectiveGid);assert.equal(actual.configuredRuntimeGid,row.requiredEffectiveGid);}
   assert.deepEqual(comparableBinaryMounts(actual.binaryMounts),comparableBinaryMounts(row.requiredBinaryMounts),'Reviewed native overlay executable mount changed');}
  assert.equal(actual.running,true);assert.equal(actual.status,'running');
  assert.equal(actual.binarySha256,row.sha256,'Actual mounted executable differs from source-bound role');
@@ -578,7 +592,8 @@ function validateRuntimeIdentity(row,actual,ignoreGeneration=false){
  assert(Number.isInteger(actual.hostPid)&&actual.hostPid>0);assert(typeof actual.startedAt==='string'&&Number.isFinite(Date.parse(actual.startedAt)));
  return {...row,containerId:actual.containerId,health:actual.health,startedAt:actual.startedAt,hostPid:actual.hostPid,
   executablePath:actual.executablePath,processExecutableSha256:actual.processExecutableSha256,binaryMounts:actual.binaryMounts,
-  ...(actual.effectiveUid!==undefined?{effectiveUid:actual.effectiveUid,configuredRuntimeUid:actual.configuredRuntimeUid}:{})};
+  ...(actual.effectiveUid!==undefined?{effectiveUid:actual.effectiveUid,configuredRuntimeUid:actual.configuredRuntimeUid}:{}),
+  ...(actual.effectiveGid!==undefined?{effectiveGid:actual.effectiveGid,configuredRuntimeGid:actual.configuredRuntimeGid}:{})};
 }
 function validateRuntimeObservation(row,actual,ignoreGeneration=false){
  const observed=validateRuntimeIdentity(row,actual,ignoreGeneration);
@@ -592,13 +607,13 @@ function validateRestartObservation(row,actual){
  assert(Number.isFinite(Date.parse(previous))&&Date.parse(actual.startedAt)>Date.parse(previous),'Maintenance generation must be newer');
 }
 function verifyFunctionalRuntime(profile,{qualification='FUNCTIONAL_ONLY',observe,readDocker}={}){
- if(profile.maintenanceRestart||profile.nativeOverlay){assert(!observe,'Maintenance verification requires actual Docker transport');readDocker=readDocker||defaultDockerRead;}
+ if(profile.maintenanceRestart||profile.nativeOverlay||profile.nativeMaintenance){assert(!observe,'Maintenance verification requires actual Docker transport');readDocker=readDocker||defaultDockerRead;}
  assert(!(observe&&readDocker),'Select one observation transport');
  if(readDocker)assert.equal(typeof readDocker,'function');
  observe=observe||(readDocker?(expected=>observeDocker(expected,readDocker)):observeDocker);
  assert.equal(qualification,'FUNCTIONAL_ONLY','Mixed/debug stack cannot qualify release or recording');
  const expected=expectedRuntime(profile),roles=[];
- const maintenance=profile.maintenanceRestart?boundJson(profile.maintenanceRestart):profile.nativeOverlay?boundJson(profile.nativeOverlay.deploymentReceipt):null;
+ const maintenance=profile.maintenanceRestart?boundJson(profile.maintenanceRestart):profile.nativeOverlay?boundJson(profile.nativeOverlay.deploymentReceipt):profile.nativeMaintenance?boundJson(profile.nativeMaintenance.outcome):null;
  if(maintenance)assert.equal(JSON.parse(readDocker(['info','--format','{{json .}}'])).ID,maintenance.engineId);
  for(const row of expected){
   let actual;
@@ -616,4 +631,4 @@ function verifyFunctionalRuntime(profile,{qualification='FUNCTIONAL_ONLY',observ
   releaseQualified:false,recordingQualified:false,mixedSourceStack:true,roles,
   receiptDigests:receiptDigests(profile)};
 }
-module.exports={comparableBinaryMounts,verifyCanvasIssuerPreimage,expectedCanvasIssuerPreimage,expectedHeaderSuccessorPreimage,applyNativeOverlayObservedRows:applyNativeOverlayObservations,validateSigningDomainTransition,validateHeaderSuccessorGate,expectedUnqualifiedNativePreimage,applyNativeOverlayRows,validateRuntimeIdentity,validateRuntimeObservation,observeDocker,DOCKER_READ_TRANSPORT_SCHEMA:'marty.functional-runtime-docker-read/v1',boundJson,expectedRuntime,verifyFunctionalRuntime,produceMaintenanceRestart,DEBUG_ROLES,RETAINED_ROLES,ISSUANCE_SOURCE,ISSUANCE_CORE};
+module.exports={verifyBoundFile,boundBytes,comparableBinaryMounts,verifyCanvasIssuerPreimage,expectedCanvasIssuerPreimage,expectedHeaderSuccessorPreimage,applyNativeOverlayObservedRows:applyNativeOverlayObservations,validateSigningDomainTransition,validateHeaderSuccessorGate,expectedUnqualifiedNativePreimage,applyNativeOverlayRows,validateRuntimeIdentity,validateRuntimeObservation,observeDocker,DOCKER_READ_TRANSPORT_SCHEMA:'marty.functional-runtime-docker-read/v1',boundJson,expectedRuntime,verifyFunctionalRuntime,produceMaintenanceRestart,DEBUG_ROLES,RETAINED_ROLES,ISSUANCE_SOURCE,ISSUANCE_CORE};

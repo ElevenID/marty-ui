@@ -1,4 +1,4 @@
-"""Preview-only all22-role maintenance wrapper for the scoped D12 overlay.
+"""Preview-only all22-role maintenance for closed native subsets.
 
 It renders bounded, no-SIGKILL graceful stop/start commands and validates
 observations. It never executes Docker, SQL, backup, credential operations or
@@ -8,7 +8,7 @@ consume a durable private intent, and authenticate every actual observation.
 from __future__ import annotations
 from copy import deepcopy
 import re
-from scoped_native_runtime import RUNTIME_ROLES, ROLE_BINARIES, read_ref, require, selected_sources
+from scoped_native_runtime import RUNTIME_ROLES, read_ref, require, selected_sources
 
 
 def exact_roles(observed):
@@ -86,6 +86,8 @@ def _reviewed_cross_edges(plan):
 
 def preview(plan, before, compose_models):
     selected_sources(plan, plan.get("rolloutProfile"))
+    from scoped_beta_binary_overlay import overlay_roles
+    selected = overlay_roles(plan.get("rolloutProfile"))
     rows = exact_roles(before)
     require(set(plan["stopContracts"]) == RUNTIME_ROLES, "ALL_22_STOP_CONTRACTS_REQUIRED")
     for row in rows.values():
@@ -98,7 +100,7 @@ def preview(plan, before, compose_models):
         require(frozen == compose_models[project], "FROZEN_COMPOSE_MODEL_CHANGED:" + project)
     restore = _restore_order(compose_models, rows, _reviewed_cross_edges(plan))
     # Fence public ingress first, then reverse dependency order. All22 must be
-    # terminal before any privileged SQL, not merely the three replaced roles.
+    # terminal before any privileged SQL, not merely the selected replacement roles.
     order = ["gateway", *[role for role in reversed(restore) if role != "gateway"]]
     stops = []
     for role in order:
@@ -109,13 +111,13 @@ def preview(plan, before, compose_models):
             "noOom": True, "requirePidZero": True})
     return {"schema": "marty.passport-maintenance-preview/v1", "state": "PREVIEW_ONLY_NOT_QUIESCED",
         "allStopRoles": order, "composeProjects": sorted(PROJECTS), "stopSteps": stops, "restoreOrder": restore,
-        "additionalUnselectedRestartRoles": sorted(RUNTIME_ROLES - set(ROLE_BINARIES)),
+        "additionalUnselectedRestartRoles": sorted(RUNTIME_ROLES - set(selected)),
         "existingLocksRequired": ["beta_operation_lock", "canonical_recording_lock_without_nested_acquire"],
         "durableOneShotIntentRequiredBeforeFirstStop": True,
         "phaseGates": ["actual22_and_retained_D12_D05_readonly_baseline", "all22_owned_stops_terminal_pid0_noOom",
             "consistent_current_database_backup", "existing_fully_fenced_source_bound_SQL_and_zero_app_connections",
             "version_checked_additive_migrations_and_0009_ledger", "existing_ACL_finalizer_denials_and_owner_receipt",
-            "reviewed_exact3_binary_overlay", "all22_start_pass_before_any_health_wait",
+            "reviewed_exact4_binary_and_applicant_user_state_transition" if len(selected) == 4 else "reviewed_exact3_binary_overlay", "all22_start_pass_before_any_health_wait",
             "all22_health_source_uid_mounts_and_retained_data_proof", "new_explicit_runtime_generation_profile"],
         "noHistoricalJobMutation": True, "noAutomaticRollback": True, "noApplyAuthority": True,
         "releaseQualified": False, "recordingQualified": False}
@@ -170,7 +172,7 @@ def restore_commands(before, current, outcomes, restore_order):
 def with_observed_state(binding, inspections):
     """Project only allowlisted Docker State metadata; never Env or arguments."""
     allowed = {"role", "binary", "source", "sha256", "kind", "imageId", "project", "containerId", "health",
-               "startedAt", "hostPid", "executablePath", "processExecutableSha256", "binaryMounts", "effectiveUid", "configuredRuntimeUid"}
+               "startedAt", "hostPid", "executablePath", "processExecutableSha256", "binaryMounts", "effectiveUid", "configuredRuntimeUid", "effectiveGid", "configuredRuntimeGid"}
     rows = [{key: deepcopy(value) for key, value in row.items() if key in allowed} for row in binding["roles"]]
     by_id = {item["Id"]: item for item in inspections}
     require(len(by_id) == len(inspections) == 22, "EXACT_22_INSPECTIONS_REQUIRED")
