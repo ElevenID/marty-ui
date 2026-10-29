@@ -23,12 +23,12 @@ OFFICIAL_FREEZE_SHA256 = "b77d6883f51bc1d3cf19d6cfa76fe567477c7d27e32134e05007c9
 
 def build_scope(profile=None):
     if profile is None:
-        return {"uiRevision": UI_REVISION, "roles": ROLE_BINARIES, "packages": PACKAGES,
+        return {"uiRevision": UI_REVISION, "coreRevision": CORE_REVISION, "roles": ROLE_BINARIES, "packages": PACKAGES,
                 "prefix": "marty-d12-", "owner": "d12-scoped-native", "volumes": VOLUMES,
                 "cargoProfile": "dev"}
     from scoped_native_profiles import reviewed_profile
     selected = reviewed_profile(profile)
-    return {"uiRevision": selected.ui_revision, "roles": dict(selected.roles),
+    return {"uiRevision": selected.ui_revision, "coreRevision": selected.core_revision, "roles": dict(selected.roles),
             "packages": selected.packages, "prefix": selected.container_prefix, "owner": selected.owner,
             "volumes": selected.volumes, "cargoProfile": selected.cargo_profile}
 
@@ -56,8 +56,8 @@ def verify_export(repository, revision, directory, inventory_ref, git):
         require(mode in (b"100644", b"100755") and kind == b"blob", "SOURCE_LINK_OR_GITLINK_UNSUPPORTED")
         tracked[name.decode()] = oid.decode()
     directory = Path(directory)
-    # Windows enumeration can omit tracked paths beyond MAX_PATH. Use the
-    # extended spelling while preserving the same exact file-set checks.
+    # Ordinary Windows enumeration can silently omit tracked paths above MAX_PATH.
+    # The extended spelling preserves the same path and all link/file-set guards.
     if os.name == "nt" and not str(directory).startswith("\\\\?\\"):
         directory = Path("\\\\?\\" + os.path.abspath(directory))
     paths = list(directory.rglob("*"))
@@ -100,7 +100,7 @@ def verify(plan, git, profile=None):
     scope = build_scope(profile)
     private = Path(plan["privateDirectory"]).resolve()
     require(private.is_relative_to(Path.home() / ".codex/private"), "OWNED_PRIVATE_BUILD_ROOT_REQUIRED")
-    for name, revision in (("ui", scope["uiRevision"]), ("core", CORE_REVISION)):
+    for name, revision in (("ui", scope["uiRevision"]), ("core", scope["coreRevision"])):
         source = plan["sources"][name]
         require(source["revision"] == revision, "SOURCE_REVISION_CHANGED")
         directory = Path(source["directory"]).resolve()
@@ -305,9 +305,7 @@ class LocalBuildJournal:
 def build_journal(plan, private, profile=None):
     if "journalBackend" not in plan:
         return LocalBuildJournal(private)
-    if profile is None:
-        raise ValueError("LINUX_JOURNAL_IS_D02_ONLY")
-    require(profile in ("d02-signing-cas", OFFICIAL_PROFILE), "LINUX_JOURNAL_REVIEWED_PROFILE_REQUIRED")
+    require(profile in ("d02-signing-cas", "d02-signing-cas-no-transform", "canvas-issuer-scoped-jobs", OFFICIAL_PROFILE), "LINUX_JOURNAL_REVIEWED_PROFILE_REQUIRED")
     from scoped_linux_journal import LinuxBuildJournal
     return LinuxBuildJournal(private, plan["runId"], plan["journalBackend"])
 
@@ -437,7 +435,7 @@ def finish(prepared_ref, helper, git, profile=None):
                     "OFFICIAL_COMPILER_VOLUME_CHANGED")
         require(all(mounts[d]["RW"] is False for d in ("/src/ui", "/build/core", "/build.sh", "/build/tool.sh", "/build/lock_guard.py")),
                 "OFFICIAL_SOURCE_MOUNT_CHANGED")
-    result = {**state, "state": "BUILD_FAILED_RETAINED", "exitCode": row["State"]["ExitCode"], "oomKilled": row["State"].get("OOMKilled", False), "uiRevision": scope["uiRevision"], "coreRevision": CORE_REVISION, "roleBinaries": scope["roles"]}
+    result = {**state, "state": "BUILD_FAILED_RETAINED", "exitCode": row["State"]["ExitCode"], "oomKilled": row["State"].get("OOMKilled", False), "uiRevision": scope["uiRevision"], "coreRevision": scope["coreRevision"], "roleBinaries": scope["roles"]}
     if result["exitCode"] == 0 and not result["oomKilled"]:
         output = Path(plan["outputDirectory"])
         require((output / "exit-code").read_text().strip() == "0", "BUILD_RECIPE_OUTCOME_MISSING")

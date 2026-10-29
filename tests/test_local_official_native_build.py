@@ -37,6 +37,29 @@ class OfficialNativeBuildTests(unittest.TestCase):
                      "targetHardlinksToSource": False}
         self.script = (Path(__file__).resolve().parents[1] / "scripts/build-rust-service-binaries.sh").read_text()
 
+    def test_closed_profile_union_preserves_core_target_and_journal_dispatch(self):
+        expected = (
+            ("d02-signing-cas", "4320b5fa1c6f41231ee0aa2bc57d8008549f67ac", "dev", "d05-rust-target-20261026"),
+            ("d02-signing-cas-no-transform", "4320b5fa1c6f41231ee0aa2bc57d8008549f67ac", "dev", "d05-rust-target-20261026"),
+            ("canvas-issuer-scoped-jobs", "44040270000f93b7e7499cbec31b3bb3dd7e3df1", "dev", "d05-rust-target-20261026"),
+            (self.profile.name, "4320b5fa1c6f41231ee0aa2bc57d8008549f67ac", "release", "marty-oid4vc-native-d2de-target-20261028"),
+        )
+        plan = {"runId": "SOURCE_ONLY", "journalBackend": {"backend": "SOURCE_ONLY"}}
+        private = Path("SOURCE_ONLY")
+        with mock.patch("scoped_linux_journal.LinuxBuildJournal") as factory:
+            for name, core, cargo, target in expected:
+                scope = build.build_scope(name)
+                self.assertEqual(scope["coreRevision"], core)
+                self.assertEqual(scope["cargoProfile"], cargo)
+                self.assertEqual(scope["volumes"], ("ui-canvas-cargo", target))
+                self.assertIs(build.build_journal(plan, private, name), factory.return_value)
+            self.assertEqual(factory.call_count, 4)
+            factory.reset_mock()
+            for unsupported in (None, "unreviewed-profile"):
+                with self.assertRaisesRegex(ValueError, "LINUX_JOURNAL_REVIEWED_PROFILE_REQUIRED"):
+                    build.build_journal(plan, private, unsupported)
+            factory.assert_not_called()
+
     def test_canonical_29_release_outputs_and_kms_proof_are_required(self):
         build.verify_official_inputs(self.freeze, self.seed, self.script, self.scope)
         recipe = build.render_recipe(self.profile.name)
