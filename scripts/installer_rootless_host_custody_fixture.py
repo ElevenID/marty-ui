@@ -384,6 +384,21 @@ def closed_names(path, limit):
     return set(names)
 
 
+def sanitized_daemon_tail(raw, context):
+    # The daemon receives a fixed clean environment and an empty private data
+    # directory. Even so, preserve only a bounded, scrubbed diagnostic tail.
+    tail = raw[-16384:].decode("utf-8", "replace")
+    tail = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", tail)
+    tail = tail.replace(str(context), "<fixture>")
+    tail = re.sub(r"(?i)\b(?:https?|ssh)://\S+", "<url>", tail)
+    tail = re.sub(r"(?i)\b(?:token|password|secret|credential|authorization|bearer)\b"
+                  r"\s*[:= ]\s*\S+", "<redacted>", tail)
+    tail = re.sub(r"\b[A-Za-z0-9+/=_-]{64,}\b", "<long-value>", tail)
+    tail = "".join(char if char in "\n\r\t" or 32 <= ord(char) <= 126 else "?"
+                   for char in tail)
+    return tail.encode("utf-8")[-16384:].decode("utf-8", "replace")
+
+
 def fixture(inventory, tool_dir):
     prerequisites = preflight(tool_dir=tool_dir)
     authenticated_image(inventory)
@@ -421,6 +436,10 @@ def fixture(inventory, tool_dir):
     daemon_output = bytearray()
     daemon_log_overflow = [False]
     log_reader = None
+    startup_phase = "before_daemon"
+    socket_observed = False
+    socket_lstat_error = None
+    leader_exited_before_socket = None
     try:
         daemon = subprocess.Popen([prerequisites["tools"]["dockerd-rootless.sh"],
                                   "--host", host, "--data-root", str(context / "data"),
@@ -440,12 +459,20 @@ def fixture(inventory, tool_dir):
         write_record(context / "daemon.json", {"pid": daemon.pid, "start_ticks": stamp,
                     "pgid": os.getpgid(daemon.pid), "uid": os.geteuid()})
         deadline = time.monotonic() + 45
+        startup_phase = "await_socket"
         while time.monotonic() < deadline:
             if (context / "runtime" / "docker.sock").exists():
+                socket_observed = True
                 break
             time.sleep(0.2)
+        leader_exited_before_socket = leader_exited(daemon.pid)
         socket_path = context / "runtime" / "docker.sock"
-        sock = socket_path.lstat()
+        try:
+            sock = socket_path.lstat()
+        except FileNotFoundError:
+            socket_lstat_error = "ENOENT"
+            raise
+        startup_phase = "socket_bound"
         require(stat.S_ISSOCK(sock.st_mode) and sock.st_uid == os.geteuid(),
                 "owned rootless socket unavailable")
         held_socket = os.open(socket_path, os.O_PATH | os.O_NOFOLLOW | os.O_CLOEXEC)
@@ -600,6 +627,19 @@ def fixture(inventory, tool_dir):
             cleanup_errors.append("daemon log exceeded evidence bound")
         if held_socket is not None:
             os.close(held_socket)
+        if startup_phase == "await_socket":
+            write_record(base / "marty-rootless-startup-diagnostic.json", {
+                "schema": "marty.rootless-startup-diagnostic/v1",
+                "phase": startup_phase, "daemon_pid": daemon.pid if daemon else None,
+                "daemon_start_ticks": stamp, "socket_observed": socket_observed,
+                "socket_lstat_error": socket_lstat_error,
+                "leader_exited_before_socket": leader_exited_before_socket,
+                "cleanup_error_count": len(cleanup_errors),
+                "daemon_log_overflow": daemon_log_overflow[0],
+                "sanitized_daemon_tail": sanitized_daemon_tail(daemon_output, context),
+                "daemon_launch_attempted": daemon is not None,
+                "extracted_rootless_tools_invoked": daemon is not None,
+                "installer_executed": False})
         require(not cleanup_errors, "; ".join(cleanup_errors))
         if success_summary is not None:
             write_record(base / "marty-rootless-custody-result.json", success_summary)

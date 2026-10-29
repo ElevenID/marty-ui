@@ -27,6 +27,16 @@ ADMISSION_SPEC.loader.exec_module(admission)
 
 
 class RootlessHostCustodyFixtureTests(unittest.TestCase):
+    def test_startup_diagnostic_tail_is_bounded_and_scrubbed(self):
+        context = Path("/tmp/marty-private-test")
+        raw = (b"x" * 20000 + b"\npassword=topsecret Bearer hiddenvalue "
+               b"https://example.test/token\n/tmp/marty-private-test/runtime/docker.sock\n")
+        tail = fixture.sanitized_daemon_tail(raw, context)
+        self.assertLessEqual(len(tail.encode()), 16384)
+        for secret in ("topsecret", "hiddenvalue", "example.test", "marty-private-test"):
+            self.assertNotIn(secret, tail)
+        self.assertIn("<fixture>/runtime/docker.sock", tail)
+
     def test_exact_mapping_for_root_and_openbao_user(self):
         mapping = "         0       1000          1\n         1     231072      65536\n"
         self.assertEqual(fixture.mapped(mapping, 0), 1000)

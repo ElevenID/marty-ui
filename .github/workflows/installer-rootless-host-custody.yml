@@ -112,6 +112,7 @@ jobs:
           path: |
             ${{ runner.temp }}/marty-rootless-preflight.json
             ${{ runner.temp }}/marty-rootless-admission.json
+            ${{ runner.temp }}/marty-rootless-startup-diagnostic.json
             ${{ runner.temp }}/marty-rootless-custody-result.json
           if-no-files-found: warn
           retention-days: 7
