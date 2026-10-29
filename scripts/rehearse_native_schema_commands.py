@@ -29,7 +29,7 @@ SCHEMA = "marty.synthetic-native-schema-rehearsal/v1"
 STAGES = ("bootstrap-flow", "bootstrap-issuer", "install", "fence", "maintenance", "migrate-flow", "migrate-issuer",
     "reject-flow-before-acl", "reject-issuer-before-acl", "acl", "verify-flow", "verify-issuer", "reject-admin-issuer", "attest", "login", "owner", "owner-verify")
 
-OPERATOR_FILES = ('scripts/rehearse_native_schema_commands.py', 'scripts/scoped_native_database.py', 'scripts/scoped_native_runtime.py', 'scripts/scoped_native_profiles.py', 'scripts/scoped_native_maintenance.py', 'scripts/scoped_passport_successor.py', 'scripts/scoped_linux_journal.py', 'scripts/scoped_signing_successor.py', 'scripts/prepare_local_official_native_build.py', 'scripts/scoped_native_build.py', 'tests/scripts/native-maintenance-metadata.js', 'tests/scripts/functional-debug-runtime.js')
+OPERATOR_FILES = ('scripts/rehearse_native_schema_commands.py', 'scripts/scoped_native_database.py', 'scripts/scoped_native_runtime.py', 'scripts/scoped_native_profiles.py', 'scripts/scoped_native_maintenance.py', 'scripts/scoped_beta_binary_overlay.py', 'scripts/scoped_passport_successor.py', 'scripts/scoped_linux_journal.py', 'scripts/scoped_signing_successor.py', 'scripts/prepare_local_official_native_build.py', 'scripts/scoped_native_build.py', 'tests/scripts/native-maintenance-metadata.js', 'tests/scripts/functional-debug-runtime.js')
 
 MIGRATION_FILES = tuple("rust/services/" + name.split("/", 1)[0] + "/migrations/" + name.split("/", 1)[1] + ".sql" for name in MIGRATIONS)
 

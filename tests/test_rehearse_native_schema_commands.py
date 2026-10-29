@@ -71,3 +71,15 @@ def test_rehearsal_business_sql_asset_paths_exist_in_actual_source():
     root = Path(__file__).resolve().parents[1]
     assert len(rehearsal.MIGRATION_FILES) == 3
     assert all((root / name).is_file() for name in rehearsal.MIGRATION_FILES)
+
+
+def test_closed_python_export_resolves_lazy_operational_sql_import(tmp_path):
+    import subprocess
+    root = Path(__file__).resolve().parents[1]
+    for name in rehearsal.OPERATOR_FILES:
+        if name.endswith(".py"):
+            target = tmp_path / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes((root / name).read_bytes())
+    code = "import sys;sys.path.insert(0,sys.argv[1]);from rehearse_native_schema_commands import operational_sql_sources;assert len(operational_sql_sources())==9"
+    subprocess.run([sys.executable, "-I", "-c", code, str(tmp_path / "scripts")], check=True)
