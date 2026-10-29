@@ -287,6 +287,7 @@ def main() -> None:
                "sources": sources, "recipe": ref(recipe), "buildProfile": args.build_profile,
                "operatorFiles": operator_files,
                "producerRevision": producer_revision,
+               "producerRepository": str(producer.resolve()),
                "producerTree": git(producer, "rev-parse", producer_revision + "^{tree}").decode().strip(),
                "buildTool": operator_files["build-rust-service-binaries.sh"],
                "lockGuard": operator_files["ci/check_core_localized_lock.py"],

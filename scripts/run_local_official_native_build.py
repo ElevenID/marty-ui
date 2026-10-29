@@ -8,9 +8,10 @@ import json
 import os
 from pathlib import Path
 import re
-import subprocess
 import sys
+import subprocess
 
+import prepare_local_official_native_build as source_preparer
 import scoped_native_build as build
 import scoped_native_profiles as profiles
 import seed_local_official_native_target as seed
@@ -46,17 +47,15 @@ def source_export(path: Path, digest: str) -> dict:
             and sha(Path(profiles.__file__)) == packet["operatorFiles"]["scoped_native_profiles.py"]["sha256"],
             "LOADED_BUILD_SOURCE_CHANGED")
     product_repo = Path(packet["sources"]["ui"]["repository"])
+    producer_repo = Path(packet.get("producerRepository", product_repo))
     producer = packet["producerRevision"]
     tool = Path(packet["buildTool"]["path"])
     require(re.fullmatch(r"[a-f0-9]{40}", producer)
-            and subprocess.check_output(["git", "-C", str(product_repo), "rev-parse",
-                                         producer + "^{tree}"], text=True).strip() == packet["producerTree"]
-            and subprocess.check_output(["git", "-C", str(product_repo), "show",
-                                         producer + ":scripts/build-rust-service-binaries.sh"]) == tool.read_bytes(),
+            and source_preparer.git(producer_repo, "rev-parse", producer + "^{tree}").decode().strip() == packet["producerTree"]
+            and source_preparer.git(producer_repo, "show", producer + ":scripts/build-rust-service-binaries.sh") == tool.read_bytes(),
             "REVIEWED_BUILD_TOOL_GIT_OBJECT_CHANGED")
     for name, bound in packet["operatorFiles"].items():
-        require(subprocess.check_output(["git", "-C", str(product_repo), "show",
-                                         producer + ":scripts/" + name])
+        require(source_preparer.git(producer_repo, "show", producer + ":scripts/" + name)
                 == Path(bound["path"]).read_bytes(), "OPERATOR_GIT_OBJECT_CHANGED")
     return packet
 

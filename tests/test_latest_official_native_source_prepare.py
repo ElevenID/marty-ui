@@ -2,6 +2,7 @@
 import sys
 import os
 import hashlib
+import json
 import subprocess
 import tempfile
 import unittest
@@ -134,6 +135,47 @@ class LatestPreparationTests(unittest.TestCase):
             self.assertEqual(result["fileCount"], 1)
             self.assertEqual((repository / "export/code.rs").read_bytes(), b"// source-only fixture\n")
             self.assertEqual(prepare.git(repository, "config", "--get", "core.worktree").strip(), b"/mnt/unavailable")
+
+
+    def test_launcher_uses_separate_producer_git_objects_and_preserves_old_receipts(self):
+        import run_local_official_native_build as launcher
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            product, producer_repo = root / "product", root / "producer"
+            for repo in (product, producer_repo):
+                subprocess.run(["git", "init", "-q", str(repo)], check=True)
+            operator = root / "export/operator"
+            operator.mkdir(parents=True)
+            names = ["run_local_official_native_build.py", "scoped_native_build.py", "scoped_native_profiles.py"]
+            for name in names:
+                data = ("# reviewed fixture " + name + "\n").encode()
+                (operator / name).write_bytes(data)
+                path = producer_repo / "scripts" / name
+                path.parent.mkdir(exist_ok=True)
+                path.write_bytes(data)
+            tool = producer_repo / "scripts/build-rust-service-binaries.sh"
+            tool.write_bytes(b"# reviewed build tool\n")
+            subprocess.run(["git", "-C", str(producer_repo), "-c", "core.autocrlf=false", "add", "scripts"], check=True)
+            tree = subprocess.check_output(["git", "-C", str(producer_repo), "write-tree"]).decode().strip()
+            commit = subprocess.check_output(["git", "-C", str(producer_repo), "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", "commit-tree", tree, "-m", "producer only"]).decode().strip()
+            subprocess.run(["git", "--git-dir=" + str(producer_repo / ".git"), "--work-tree=" + str(producer_repo), "config", "core.worktree", "/mnt/unavailable"], check=True)
+            packet = {"state": "SOURCE_EXPORTED_NO_COMPILER", "buildProfile": launcher.LATEST_PROFILE,
+                      "freeze": {"sha256": prepare.build.LATEST_FREEZE_SHA256}, "producerRevision": commit,
+                      "producerRepository": str(producer_repo), "producerTree": tree,
+                      "buildTool": {"path": str(tool)}, "sources": {"ui": {"repository": str(product)}},
+                      "operatorFiles": {name: {"path": str(operator / name), "bytes": (operator / name).stat().st_size,
+                                              "sha256": launcher.sha(operator / name)} for name in names}}
+            packet_path = operator.parent / "source-export.json"
+            with mock.patch.object(launcher, "__file__", str(operator / names[0])), mock.patch.object(prepare.build, "__file__", str(operator / names[1])), mock.patch.object(launcher.profiles, "__file__", str(operator / names[2])):
+                def check():
+                    packet_path.write_text(json.dumps(packet), encoding="utf-8")
+                    return launcher.source_export(packet_path, launcher.sha(packet_path))
+                self.assertEqual(check()["producerRepository"], str(producer_repo))
+                self.assertEqual(prepare.git(producer_repo, "config", "--get", "core.worktree").strip(), b"/mnt/unavailable")
+                # Existing immutable receipts resolve their producer in the product repository.
+                del packet["producerRepository"]
+                packet["sources"]["ui"]["repository"] = str(producer_repo)
+                self.assertEqual(check()["producerRevision"], commit)
 
 
 if __name__ == "__main__":
