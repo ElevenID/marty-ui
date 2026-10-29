@@ -20,6 +20,9 @@ type Result<T> = std::result::Result<T, String>;
 const REFUSED: &str = "purge ledger refused; retain installation and recovery evidence";
 const MAX_MANIFEST: usize = 4 * 1024 * 1024;
 const MAX_RECORD: usize = 4096;
+const EXECUTION_Q_NAME: &str = ".marty-purge-quarantine";
+const EXECUTION_Q_INTENT: &str = "execution-q-create-intent.json";
+const EXECUTION_Q_CREATED: &str = "execution-q-created.json";
 
 fn require(ok: bool) -> Result<()> {
     if ok {
@@ -237,6 +240,8 @@ fn entries(directory: &File) -> Result<Vec<String>> {
         let allowed = name == "manifest.json"
             || name == "custody.json"
             || name == "quarantine"
+            || name == EXECUTION_Q_INTENT
+            || name == EXECUTION_Q_CREATED
             || name
                 .strip_prefix("intent-")
                 .and_then(|v| v.strip_suffix(".json"))
@@ -263,14 +268,17 @@ pub(crate) struct PurgeLedger {
     installation_id: uuid::Uuid,
     plan_sha256: String,
 }
-#[derive(PartialEq, Eq, Serialize)]
-struct DirectoryStamp {
-    dev: u64,
-    ino: u64,
-    uid: u32,
-    gid: u32,
-    mode: u32,
-    mount_id: u64,
+/// Plain expected metadata supplied by the future receipt-authenticating
+/// coordinator. Constructing this value does not grant deletion authority.
+#[derive(Clone, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DirectoryStamp {
+    pub dev: u64,
+    pub ino: u64,
+    pub uid: u32,
+    pub gid: u32,
+    pub mode: u32,
+    pub mount_id: u64,
 }
 fn directory_stamp(file: &File) -> Result<DirectoryStamp> {
     let m = file.metadata().map_err(|_| REFUSED)?;
@@ -283,6 +291,97 @@ fn directory_stamp(file: &File) -> Result<DirectoryStamp> {
         mode: m.mode() & 0o7777,
         mount_id: mount_id(file)?,
     })
+}
+
+/// One ordinary child name relative to a held installation parent. The future
+/// coordinator must still authenticate that parent and this installation path.
+pub(crate) struct InstallationLeaf(String);
+impl InstallationLeaf {
+    pub(crate) fn new(value: &str) -> Result<Self> {
+        require(
+            !value.is_empty()
+                && value.len() <= 128
+                && value != "."
+                && value != ".."
+                && value.as_bytes()[0].is_ascii_alphanumeric()
+                && value
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-')),
+        )?;
+        Ok(Self(value.into()))
+    }
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ExecutionQCreateIntent {
+    schema: String,
+    installation_id: uuid::Uuid,
+    plan_sha256: String,
+    action: String,
+    installation_leaf: String,
+    parent: DirectoryStamp,
+    root: DirectoryStamp,
+    execution_q_name: String,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ExecutionQCreated {
+    schema: String,
+    installation_id: uuid::Uuid,
+    plan_sha256: String,
+    create_intent_sha256: String,
+    status: String,
+    execution_q: DirectoryStamp,
+    deletion_authorized: bool,
+}
+
+/// Held q descriptor is returned only after the exact external creation pair
+/// and current root/q custody have been verified. It is not a helper permit.
+pub(crate) struct ExecutionQuarantineCustody {
+    directory: File,
+    pub stamp: DirectoryStamp,
+}
+impl ExecutionQuarantineCustody {
+    pub(crate) fn directory(&self) -> &File {
+        &self.directory
+    }
+}
+
+fn checked_installation_root(
+    parent: &File,
+    leaf: &InstallationLeaf,
+    held: &File,
+    expected: &DirectoryStamp,
+) -> Result<DirectoryStamp> {
+    let parent_stamp = directory_stamp(parent)?;
+    private(held, true)?;
+    let held_stamp = directory_stamp(held)?;
+    let current = open_at(parent, &leaf.0, libc::O_PATH | libc::O_DIRECTORY, 0)?.ok_or(REFUSED)?;
+    private(&current, true)?;
+    require(
+        held_stamp == *expected
+            && directory_stamp(&current)? == held_stamp
+            && parent_stamp.mount_id == held_stamp.mount_id,
+    )?;
+    Ok(parent_stamp)
+}
+
+fn checked_execution_q(root: &File, expected: &DirectoryStamp) -> Result<File> {
+    let q = open_at(root, EXECUTION_Q_NAME, libc::O_PATH | libc::O_DIRECTORY, 0)?.ok_or(REFUSED)?;
+    private(&q, true)?;
+    require(
+        directory_stamp(&q)? == *expected
+            && expected.mount_id == mount_id(root)?
+            && expected.mode == 0o700,
+    )?;
+    Ok(q)
+}
+fn empty_directory(directory: &File) -> Result<()> {
+    let mut observed =
+        fs::read_dir(format!("/proc/self/fd/{}", directory.as_raw_fd())).map_err(|_| REFUSED)?;
+    require(observed.next().is_none())
 }
 impl PurgeLedger {
     fn open_directory(parent: &File, id: uuid::Uuid, create: bool) -> Result<(File, bool)> {
@@ -373,6 +472,53 @@ impl PurgeLedger {
         require(digest(&bytes) == self.plan_sha256)?;
         Ok(bytes)
     }
+
+    /// Reject orphaned or incomplete auxiliary creation records on ledger
+    /// reopen. Current installation/q path custody is checked separately when
+    /// requesting the execution-q descriptor.
+    fn execution_q_pair(&self) -> Result<Option<(ExecutionQCreateIntent, ExecutionQCreated)>> {
+        let intent = read_record(&self.directory, EXECUTION_Q_INTENT, MAX_RECORD)?;
+        let created = read_record(&self.directory, EXECUTION_Q_CREATED, MAX_RECORD)?;
+        let (Some(intent), Some(created)) = (intent, created) else {
+            require(
+                read_record(&self.directory, EXECUTION_Q_INTENT, MAX_RECORD)?.is_none()
+                    && read_record(&self.directory, EXECUTION_Q_CREATED, MAX_RECORD)?.is_none(),
+            )?;
+            return Ok(None);
+        };
+        let intent_record: ExecutionQCreateIntent =
+            serde_json::from_slice(&intent).map_err(|_| REFUSED)?;
+        let created_record: ExecutionQCreated =
+            serde_json::from_slice(&created).map_err(|_| REFUSED)?;
+        require(
+            intent_record.schema == "elevenid.installer-execution-q-create-intent/v1"
+                && intent_record.installation_id == self.installation_id
+                && intent_record.plan_sha256 == self.plan_sha256
+                && intent_record.action == "create_execution_quarantine"
+                && intent_record.execution_q_name == EXECUTION_Q_NAME
+                && InstallationLeaf::new(&intent_record.installation_leaf).is_ok()
+                && intent_record.root.mode == 0o700
+                && intent_record.root.uid == unsafe { libc::geteuid() }
+                && intent_record.root.ino != 0
+                && intent_record.root.mount_id != 0
+                && intent_record.root.mount_id == intent_record.parent.mount_id
+                && intent_record.root.dev == intent_record.parent.dev
+                && created_record.schema == "elevenid.installer-execution-q-created/v1"
+                && created_record.installation_id == self.installation_id
+                && created_record.plan_sha256 == self.plan_sha256
+                && created_record.create_intent_sha256 == digest(&intent)
+                && created_record.status == "created"
+                && !created_record.deletion_authorized
+                && created_record.execution_q.mode == 0o700
+                && created_record.execution_q.uid == unsafe { libc::geteuid() }
+                && created_record.execution_q.ino != 0
+                && created_record.execution_q.mount_id == intent_record.root.mount_id
+                && created_record.execution_q.dev == intent_record.root.dev
+                && serde_json::to_vec(&intent_record).map_err(|_| REFUSED)? == intent
+                && serde_json::to_vec(&created_record).map_err(|_| REFUSED)? == created,
+        )?;
+        Ok(Some((intent_record, created_record)))
+    }
     /// Create the private sibling ledger only after coordinator confirmation.
     /// The exact canonical plan bytes are durable before any intent is returned.
     pub(crate) fn create_or_resume(
@@ -412,6 +558,7 @@ impl PurgeLedger {
         ledger.verify_custody()?;
         write_or_verify(&ledger.directory, "manifest.json", plan_bytes, MAX_MANIFEST)?;
         ledger.verify_manifest()?;
+        ledger.execution_q_pair()?;
         Ok(ledger)
     }
     /// Resume after the installation root may be partly or fully gone. The
@@ -433,6 +580,7 @@ impl PurgeLedger {
             plan_sha256: confirmed_sha256.into(),
         };
         let plan = ledger.verify_manifest()?;
+        ledger.execution_q_pair()?;
         Ok((ledger, plan))
     }
     pub(crate) fn quarantine(&self) -> Result<&File> {
@@ -452,6 +600,158 @@ impl PurgeLedger {
         require(mount_id(&self.directory)? == mount_id(&self.quarantine)?)?;
         require(mount_id(&self.quarantine)? == mount_id(&current)?)?;
         Ok(&self.quarantine)
+    }
+    /// Create the fixed execution quarantine under the *installation* root,
+    /// never under a separate Docker bind. The caller must authenticate the
+    /// expected root and held installation parent against the confirmed plan.
+    /// Intent-only crashes are intentionally manual-recovery cases in v1.
+    pub(crate) fn create_execution_quarantine(
+        &self,
+        installation_parent: &File,
+        installation_leaf: &InstallationLeaf,
+        root: &File,
+        expected_root: &DirectoryStamp,
+    ) -> Result<ExecutionQuarantineCustody> {
+        self.create_execution_quarantine_inner(
+            installation_parent,
+            installation_leaf,
+            root,
+            expected_root,
+            || Ok(()),
+        )
+    }
+    fn create_execution_quarantine_inner<F: FnOnce() -> Result<()>>(
+        &self,
+        installation_parent: &File,
+        installation_leaf: &InstallationLeaf,
+        root: &File,
+        expected_root: &DirectoryStamp,
+        after_intent: F,
+    ) -> Result<ExecutionQuarantineCustody> {
+        self.verify_manifest()?;
+        let parent_stamp =
+            checked_installation_root(installation_parent, installation_leaf, root, expected_root)?;
+        // The held root may be O_PATH. Reopen only the already classified
+        // directory for mkdir/fsync and bind that descriptor to its exact inode.
+        let writable_root = open_at(
+            installation_parent,
+            &installation_leaf.0,
+            libc::O_RDONLY | libc::O_DIRECTORY,
+            0,
+        )?
+        .ok_or(REFUSED)?;
+        private(&writable_root, true)?;
+        require(directory_stamp(&writable_root)? == *expected_root)?;
+        require(
+            read_record(&self.directory, EXECUTION_Q_INTENT, MAX_RECORD)?.is_none()
+                && read_record(&self.directory, EXECUTION_Q_CREATED, MAX_RECORD)?.is_none()
+                && open_at(&writable_root, EXECUTION_Q_NAME, libc::O_PATH, 0)?.is_none(),
+        )?;
+        let intent = ExecutionQCreateIntent {
+            schema: "elevenid.installer-execution-q-create-intent/v1".into(),
+            installation_id: self.installation_id,
+            plan_sha256: self.plan_sha256.clone(),
+            action: "create_execution_quarantine".into(),
+            installation_leaf: installation_leaf.0.clone(),
+            parent: parent_stamp.clone(),
+            root: expected_root.clone(),
+            execution_q_name: EXECUTION_Q_NAME.into(),
+        };
+        let intent_bytes = serde_json::to_vec(&intent).map_err(|_| REFUSED)?;
+        require(write_exact(
+            &self.directory,
+            EXECUTION_Q_INTENT,
+            &intent_bytes,
+            MAX_RECORD,
+        )?)?;
+        self.verify_manifest()?;
+        after_intent()?;
+        require(
+            checked_installation_root(installation_parent, installation_leaf, root, expected_root)?
+                == parent_stamp,
+        )?;
+        require(mkdir_at(&writable_root, EXECUTION_Q_NAME)?)?;
+        let q = open_at(
+            &writable_root,
+            EXECUTION_Q_NAME,
+            libc::O_RDONLY | libc::O_DIRECTORY,
+            0,
+        )?
+        .ok_or(REFUSED)?;
+        private(&q, true)?;
+        q.sync_all().map_err(|_| REFUSED)?;
+        writable_root.sync_all().map_err(|_| REFUSED)?;
+        empty_directory(&q)?;
+        let stamp = directory_stamp(&q)?;
+        checked_execution_q(&writable_root, &stamp)?;
+        require(
+            checked_installation_root(installation_parent, installation_leaf, root, expected_root)?
+                == parent_stamp,
+        )?;
+        let created = ExecutionQCreated {
+            schema: "elevenid.installer-execution-q-created/v1".into(),
+            installation_id: self.installation_id,
+            plan_sha256: self.plan_sha256.clone(),
+            create_intent_sha256: digest(&intent_bytes),
+            status: "created".into(),
+            execution_q: stamp,
+            deletion_authorized: false,
+        };
+        let created_bytes = serde_json::to_vec(&created).map_err(|_| REFUSED)?;
+        require(write_exact(
+            &self.directory,
+            EXECUTION_Q_CREATED,
+            &created_bytes,
+            MAX_RECORD,
+        )?)?;
+        self.open_execution_quarantine(installation_parent, installation_leaf, root, expected_root)
+    }
+    /// Reopen only a complete, canonical creation pair with exact live root/q
+    /// custody. The returned O_PATH descriptor is observational, not a permit
+    /// to start a privileged helper or to remove any entry.
+    pub(crate) fn open_execution_quarantine(
+        &self,
+        installation_parent: &File,
+        installation_leaf: &InstallationLeaf,
+        root: &File,
+        expected_root: &DirectoryStamp,
+    ) -> Result<ExecutionQuarantineCustody> {
+        self.verify_manifest()?;
+        let (intent, created) = self.execution_q_pair()?.ok_or(REFUSED)?;
+        require(
+            intent.installation_leaf == installation_leaf.0
+                && intent.root == *expected_root
+                && intent.parent
+                    == checked_installation_root(
+                        installation_parent,
+                        installation_leaf,
+                        root,
+                        expected_root,
+                    )?,
+        )?;
+        let q = checked_execution_q(root, &created.execution_q)?;
+        require(
+            intent.parent
+                == checked_installation_root(
+                    installation_parent,
+                    installation_leaf,
+                    root,
+                    expected_root,
+                )?,
+        )?;
+        self.verify_manifest()?;
+        let (again_intent, again_created) = self.execution_q_pair()?.ok_or(REFUSED)?;
+        require(
+            serde_json::to_vec(&intent).map_err(|_| REFUSED)?
+                == serde_json::to_vec(&again_intent).map_err(|_| REFUSED)?
+                && serde_json::to_vec(&created).map_err(|_| REFUSED)?
+                    == serde_json::to_vec(&again_created).map_err(|_| REFUSED)?
+                && directory_stamp(&q)? == created.execution_q,
+        )?;
+        Ok(ExecutionQuarantineCustody {
+            directory: q,
+            stamp: created.execution_q,
+        })
     }
     pub(crate) fn installation_id(&self) -> uuid::Uuid {
         self.installation_id
@@ -622,7 +922,10 @@ impl PersistedIntent {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::os::unix::fs::{symlink, PermissionsExt};
+    use std::os::unix::{
+        ffi::OsStrExt,
+        fs::{symlink, PermissionsExt},
+    };
 
     fn fixture() -> (tempfile::TempDir, File, uuid::Uuid, Vec<u8>, String) {
         let root = tempfile::tempdir().unwrap();
@@ -954,5 +1257,362 @@ mod tests {
         assert!(resumed.quarantine().is_ok());
         assert_eq!(fs::read(directory.join("manifest.json")).unwrap(), plan);
         assert_eq!(fs::read(directory.join("custody.json")).unwrap(), custody);
+    }
+
+    fn execution_fixture() -> (
+        tempfile::TempDir,
+        File,
+        File,
+        File,
+        PurgeLedger,
+        InstallationLeaf,
+        DirectoryStamp,
+        uuid::Uuid,
+        String,
+    ) {
+        let temp = tempfile::tempdir().unwrap();
+        let ledger_path = temp.path().join("external-ledger-parent");
+        let installation_parent_path = temp.path().join("installation-parent");
+        fs::create_dir(&ledger_path).unwrap();
+        fs::create_dir(&installation_parent_path).unwrap();
+        let installation_path = installation_parent_path.join("installation");
+        fs::create_dir(&installation_path).unwrap();
+        fs::set_permissions(&installation_path, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::write(
+            installation_path.join("private-canary"),
+            b"unread-synthetic-secret",
+        )
+        .unwrap();
+        let ledger_parent = File::open(&ledger_path).unwrap();
+        let installation_parent = File::open(&installation_parent_path).unwrap();
+        let root = File::open(&installation_path).unwrap();
+        let expected = directory_stamp(&root).unwrap();
+        let id = uuid::Uuid::new_v4();
+        let plan = br#"{"schema":"synthetic-execution-q-plan","reserved_q":true}"#;
+        let hash = digest(plan);
+        let ledger = PurgeLedger::create_or_resume(&ledger_parent, id, plan, &hash).unwrap();
+        (
+            temp,
+            ledger_parent,
+            installation_parent,
+            root,
+            ledger,
+            InstallationLeaf::new("installation").unwrap(),
+            expected,
+            id,
+            hash,
+        )
+    }
+
+    #[test]
+    fn execution_q_create_and_complete_pair_survive_separate_parent_resume() {
+        let (temp, ledger_parent, installation_parent, root, ledger, leaf, expected, id, hash) =
+            execution_fixture();
+        let held_opath = open_at(
+            &installation_parent,
+            "installation",
+            libc::O_PATH | libc::O_DIRECTORY,
+            0,
+        )
+        .unwrap()
+        .unwrap();
+        let q = ledger
+            .create_execution_quarantine(&installation_parent, &leaf, &held_opath, &expected)
+            .unwrap();
+        assert_eq!(q.stamp.mount_id, expected.mount_id);
+        assert_eq!(q.stamp.mode, 0o700);
+        assert!(directory_stamp(q.directory()).unwrap() == q.stamp);
+        let mut wrong_mount = q.stamp.clone();
+        wrong_mount.mount_id += 1;
+        assert!(checked_execution_q(&root, &wrong_mount).is_err());
+        assert_eq!(
+            fs::read(
+                temp.path()
+                    .join("installation-parent/installation/private-canary")
+            )
+            .unwrap(),
+            b"unread-synthetic-secret"
+        );
+        let ledger_path = temp
+            .path()
+            .join("external-ledger-parent")
+            .join(directory_name(id));
+        let created: ExecutionQCreated =
+            serde_json::from_slice(&fs::read(ledger_path.join(EXECUTION_Q_CREATED)).unwrap())
+                .unwrap();
+        assert!(!created.deletion_authorized);
+        drop(q);
+        drop(ledger);
+        let (resumed, _) = PurgeLedger::open_existing(&ledger_parent, id, &hash).unwrap();
+        assert!(
+            resumed
+                .open_execution_quarantine(&installation_parent, &leaf, &root, &expected)
+                .unwrap()
+                .stamp
+                == created.execution_q
+        );
+    }
+
+    #[test]
+    fn execution_q_intent_only_crashes_refuse_manual_recovery_without_adoption() {
+        for create_unknown_q in [false, true] {
+            let (temp, ledger_parent, installation_parent, root, ledger, leaf, expected, id, hash) =
+                execution_fixture();
+            let q_path = temp
+                .path()
+                .join("installation-parent/installation")
+                .join(EXECUTION_Q_NAME);
+            assert!(ledger
+                .create_execution_quarantine_inner(
+                    &installation_parent,
+                    &leaf,
+                    &root,
+                    &expected,
+                    || {
+                        if create_unknown_q {
+                            fs::create_dir(&q_path).unwrap();
+                            fs::set_permissions(&q_path, fs::Permissions::from_mode(0o700))
+                                .unwrap();
+                            fs::write(q_path.join("retained-canary"), b"preserve").unwrap();
+                        }
+                        Err("synthetic interruption".into())
+                    },
+                )
+                .is_err());
+            assert!(temp
+                .path()
+                .join("external-ledger-parent")
+                .join(directory_name(id))
+                .join(EXECUTION_Q_INTENT)
+                .exists());
+            assert!(!temp
+                .path()
+                .join("external-ledger-parent")
+                .join(directory_name(id))
+                .join(EXECUTION_Q_CREATED)
+                .exists());
+            assert_eq!(q_path.exists(), create_unknown_q);
+            if create_unknown_q {
+                assert_eq!(
+                    fs::read(q_path.join("retained-canary")).unwrap(),
+                    b"preserve"
+                );
+            }
+            assert!(ledger
+                .create_execution_quarantine(&installation_parent, &leaf, &root, &expected)
+                .is_err());
+            drop(ledger);
+            assert!(PurgeLedger::open_existing(&ledger_parent, id, &hash).is_err());
+            assert_eq!(q_path.exists(), create_unknown_q);
+        }
+    }
+
+    #[test]
+    fn execution_q_preexisting_entries_and_mount_mismatch_never_mint_intent() {
+        for kind in ["directory", "symlink", "fifo"] {
+            let (temp, _ledger_parent, installation_parent, root, ledger, leaf, expected, id, _) =
+                execution_fixture();
+            let q_path = temp
+                .path()
+                .join("installation-parent/installation")
+                .join(EXECUTION_Q_NAME);
+            match kind {
+                "directory" => fs::create_dir(&q_path).unwrap(),
+                "symlink" => symlink("private-canary", &q_path).unwrap(),
+                "fifo" => {
+                    let c = CString::new(q_path.as_os_str().as_bytes()).unwrap();
+                    assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+                }
+                _ => unreachable!(),
+            }
+            assert!(ledger
+                .create_execution_quarantine(&installation_parent, &leaf, &root, &expected)
+                .is_err());
+            assert!(!temp
+                .path()
+                .join("external-ledger-parent")
+                .join(directory_name(id))
+                .join(EXECUTION_Q_INTENT)
+                .exists());
+        }
+        let (temp, _, installation_parent, root, ledger, leaf, mut expected, id, _) =
+            execution_fixture();
+        expected.mount_id += 1;
+        assert!(ledger
+            .create_execution_quarantine(&installation_parent, &leaf, &root, &expected)
+            .is_err());
+        assert!(!temp
+            .path()
+            .join("external-ledger-parent")
+            .join(directory_name(id))
+            .join(EXECUTION_Q_INTENT)
+            .exists());
+        assert!(InstallationLeaf::new("../installation").is_err());
+        assert!(InstallationLeaf::new("a/b").is_err());
+    }
+
+    #[test]
+    fn execution_q_orphan_and_special_records_fail_closed() {
+        for change in [
+            "missing_intent",
+            "missing_created",
+            "hardlinked_created",
+            "fifo_created",
+            "symlink_created",
+        ] {
+            let (temp, ledger_parent, installation_parent, root, ledger, leaf, expected, id, hash) =
+                execution_fixture();
+            let q = ledger
+                .create_execution_quarantine(&installation_parent, &leaf, &root, &expected)
+                .unwrap();
+            drop(q);
+            drop(ledger);
+            let ledger_path = temp
+                .path()
+                .join("external-ledger-parent")
+                .join(directory_name(id));
+            match change {
+                "missing_intent" => fs::remove_file(ledger_path.join(EXECUTION_Q_INTENT)).unwrap(),
+                "missing_created" => {
+                    fs::remove_file(ledger_path.join(EXECUTION_Q_CREATED)).unwrap()
+                }
+                "hardlinked_created" => fs::hard_link(
+                    ledger_path.join(EXECUTION_Q_CREATED),
+                    temp.path().join("linked-record"),
+                )
+                .unwrap(),
+                "fifo_created" => {
+                    fs::remove_file(ledger_path.join(EXECUTION_Q_CREATED)).unwrap();
+                    let path = ledger_path.join(EXECUTION_Q_CREATED);
+                    let c = CString::new(path.as_os_str().as_bytes()).unwrap();
+                    assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+                }
+                "symlink_created" => {
+                    fs::remove_file(ledger_path.join(EXECUTION_Q_CREATED)).unwrap();
+                    symlink(
+                        temp.path()
+                            .join("installation-parent/installation/private-canary"),
+                        ledger_path.join(EXECUTION_Q_CREATED),
+                    )
+                    .unwrap();
+                }
+                _ => unreachable!(),
+            }
+            assert!(PurgeLedger::open_existing(&ledger_parent, id, &hash).is_err());
+            assert!(temp
+                .path()
+                .join("installation-parent/installation")
+                .join(EXECUTION_Q_NAME)
+                .exists());
+        }
+    }
+
+    #[test]
+    fn execution_q_pair_refuses_changed_schema_binding_and_digest() {
+        for change in [
+            "intent_schema",
+            "created_uuid",
+            "created_plan",
+            "intent_digest",
+        ] {
+            let (temp, ledger_parent, installation_parent, root, ledger, leaf, expected, id, hash) =
+                execution_fixture();
+            ledger
+                .create_execution_quarantine(&installation_parent, &leaf, &root, &expected)
+                .unwrap();
+            drop(ledger);
+            let ledger_path = temp
+                .path()
+                .join("external-ledger-parent")
+                .join(directory_name(id));
+            let intent_path = ledger_path.join(EXECUTION_Q_INTENT);
+            let created_path = ledger_path.join(EXECUTION_Q_CREATED);
+            if change == "intent_schema" {
+                let mut intent: ExecutionQCreateIntent =
+                    serde_json::from_slice(&fs::read(&intent_path).unwrap()).unwrap();
+                intent.schema = "foreign-schema".into();
+                fs::write(&intent_path, serde_json::to_vec(&intent).unwrap()).unwrap();
+            } else {
+                let mut created: ExecutionQCreated =
+                    serde_json::from_slice(&fs::read(&created_path).unwrap()).unwrap();
+                match change {
+                    "created_uuid" => created.installation_id = uuid::Uuid::new_v4(),
+                    "created_plan" => created.plan_sha256 = digest(b"foreign-plan"),
+                    "intent_digest" => created.create_intent_sha256 = digest(b"foreign-intent"),
+                    _ => unreachable!(),
+                }
+                fs::write(&created_path, serde_json::to_vec(&created).unwrap()).unwrap();
+            }
+            assert!(PurgeLedger::open_existing(&ledger_parent, id, &hash).is_err());
+            assert!(temp
+                .path()
+                .join("installation-parent/installation")
+                .join(EXECUTION_Q_NAME)
+                .exists());
+        }
+    }
+
+    #[test]
+    fn execution_q_replaced_child_or_root_refuses_exact_custody() {
+        for replace_root in [false, true] {
+            let (temp, _ledger_parent, installation_parent, root, ledger, leaf, expected, _, _) =
+                execution_fixture();
+            let q = ledger
+                .create_execution_quarantine(&installation_parent, &leaf, &root, &expected)
+                .unwrap();
+            drop(q);
+            let installation_path = temp.path().join("installation-parent/installation");
+            let q_path = installation_path.join(EXECUTION_Q_NAME);
+            if replace_root {
+                fs::rename(
+                    &installation_path,
+                    temp.path().join("installation-parent/saved-root"),
+                )
+                .unwrap();
+                fs::create_dir(&installation_path).unwrap();
+                fs::set_permissions(&installation_path, fs::Permissions::from_mode(0o700)).unwrap();
+            } else {
+                fs::rename(&q_path, installation_path.join("saved-q")).unwrap();
+                fs::create_dir(&q_path).unwrap();
+                fs::set_permissions(&q_path, fs::Permissions::from_mode(0o700)).unwrap();
+            }
+            assert!(ledger
+                .open_execution_quarantine(&installation_parent, &leaf, &root, &expected)
+                .is_err());
+            assert!(if replace_root {
+                temp.path()
+                    .join("installation-parent/saved-root")
+                    .join(EXECUTION_Q_NAME)
+                    .exists()
+            } else {
+                installation_path.join("saved-q").exists()
+            });
+        }
+    }
+
+    #[test]
+    fn execution_q_refuses_external_ledger_custody_drift_before_intent() {
+        let (temp, _ledger_parent, installation_parent, root, ledger, leaf, expected, id, _) =
+            execution_fixture();
+        let ledger_path = temp
+            .path()
+            .join("external-ledger-parent")
+            .join(directory_name(id));
+        fs::rename(
+            ledger_path.join("quarantine"),
+            ledger_path.join("saved-external-q"),
+        )
+        .unwrap();
+        fs::create_dir(ledger_path.join("quarantine")).unwrap();
+        fs::set_permissions(
+            ledger_path.join("quarantine"),
+            fs::Permissions::from_mode(0o700),
+        )
+        .unwrap();
+        assert!(ledger
+            .create_execution_quarantine(&installation_parent, &leaf, &root, &expected)
+            .is_err());
+        assert!(!ledger_path.join(EXECUTION_Q_INTENT).exists());
+        assert!(ledger_path.join("saved-external-q").exists());
     }
 }
