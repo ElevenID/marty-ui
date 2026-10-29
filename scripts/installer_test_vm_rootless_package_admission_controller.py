@@ -24,6 +24,7 @@ from installer_candidate_controller import ControllerLease
 from installer_candidate_vm_create import _write
 import installer_release as release
 import installer_test_vm_probe as probe
+import installer_test_vm_rootless_setup as fixture_setup
 import installer_test_vm_rootless_package_admission as admission
 
 
@@ -223,13 +224,21 @@ def _status_identity(path: Path) -> tuple[int, int, int, int, int, int, int, int
 
 def observe(*, source: Path, registry: Path, runtime_parent: Path,
             stage_parent: Path, vm_id: str, observation_id: str,
-            admitted_module_sha256: str, admitted_controller_sha256: str) -> dict:
+            admitted_module_sha256: str, admitted_controller_sha256: str,
+            vm_parent: Path | None = None) -> dict:
     release.require(os.geteuid() == 0, "root VM controller required")
     probe._uuid(vm_id)
     probe._uuid(observation_id)
     release.require(all(path.is_absolute() for path in
-                        (source, registry, runtime_parent, stage_parent)),
+                        (source, registry, runtime_parent, stage_parent))
+                    and (vm_parent is None or vm_parent.is_absolute()),
                     "package admission path must be absolute")
+    def bound(lease: ControllerLease) -> dict:
+        if vm_parent is None:
+            return probe._bound_vm(source, registry, runtime_parent, vm_id, lease)
+        return fixture_setup.bound_setup_fixture(
+            source=source, registry=registry, vm_parent=vm_parent,
+            runtime_parent=runtime_parent, vm_id=vm_id, _lease=lease)
     _private_parent(stage_parent)
     module_bytes = admission.private_file(Path(admission.__file__), 1024 * 1024, uid=0)
     controller_bytes = admission.private_file(Path(__file__), 1024 * 1024, uid=0)
@@ -247,12 +256,12 @@ def observe(*, source: Path, registry: Path, runtime_parent: Path,
             except FileNotFoundError:
                 continue
             raise ValueError("package admission attempt already exists")
-        before = probe._bound_vm(source, registry, runtime_parent, vm_id, lease)
+        before = bound(lease)
         first = _guest_status(before)
         second = _guest_status(before)
         release.require(first == second and admission._installed_status(first),
                         "VM dpkg status unstable")
-        release.require(probe._bound_vm(source, registry, runtime_parent, vm_id, lease)
+        release.require(bound(lease)
                         == before, "VM package admission binding changed")
         intent = {"schema": SCHEMA, "phase": "intent", "vm_id": vm_id,
                   "observation_id": observation_id, "engine_id": before["engine_id"],
@@ -261,7 +270,9 @@ def observe(*, source: Path, registry: Path, runtime_parent: Path,
                   "dpkg_status_sha256": hashlib.sha256(first).hexdigest(),
                   "module_sha256": admitted_module_sha256,
                   "controller_sha256": admitted_controller_sha256,
-                  "purpose": "installer_only_rootless_package_admission",
+                  "purpose": ("installer_only_rootless_package_admission"
+                              if vm_parent is None else
+                              "disposable_fixture_setup_package_admission"),
                   "package_actions_authorized": False,
                   "installation_authorized": False}
         intent_bytes = _write(lease.parent, intent_name, intent)
@@ -298,7 +309,7 @@ def observe(*, source: Path, registry: Path, runtime_parent: Path,
                         == module_bytes
                         and admission.private_file(Path(__file__), 1024 * 1024, uid=0)
                         == controller_bytes, "package admission source changed")
-        release.require(probe._bound_vm(source, registry, runtime_parent, vm_id, lease)
+        release.require(bound(lease)
                         == before and _guest_status(before) == first,
                         "VM package admission source changed")
         result = {"schema": SCHEMA, "phase": "observed", "vm_id": vm_id,

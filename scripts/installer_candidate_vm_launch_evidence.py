@@ -7,6 +7,8 @@ guest readiness checks before any candidate approval or dispatch.
 from __future__ import annotations
 
 import installer_release as release
+from installer_candidate_vm_seed import (ROOTLESS_FIXTURE_PACKAGES,
+                                         ROOTLESS_FIXTURE_PROFILE)
 import re
 import uuid
 
@@ -147,6 +149,10 @@ def bind_provisioned_launch(*, creation_intent: bytes, creation_receipt: bytes,
     si, sr = records["seed_intent"], records["seed_receipt"]
     li = records["launch_intent"]
     vm_id = li["vm_id"]
+    profile = si.get("fixture_profile")
+    release.require(profile in (None, ROOTLESS_FIXTURE_PROFILE),
+                    "VM seed profile unsupported")
+    seed_fields = SEED_FIELDS | ({"fixture_profile"} if profile is not None else set())
     for record, fields, label in (
         (ci, CREATION_INTENT_FIELDS, "creation intent"),
         (cr, CREATION_RECEIPT_FIELDS, "creation receipt"),
@@ -154,8 +160,8 @@ def bind_provisioned_launch(*, creation_intent: bytes, creation_receipt: bytes,
         (rr, RUNTIME_FIELDS | {"intent_sha256", "runtime_dir_device",
                                "runtime_dir_inode", "transferred_at"},
          "runtime receipt"),
-        (si, SEED_FIELDS, "seed intent"),
-        (sr, SEED_FIELDS | SEED_RECEIPT_EXTRA, "seed receipt"),
+        (si, seed_fields, "seed intent"),
+        (sr, seed_fields | SEED_RECEIPT_EXTRA, "seed receipt"),
     ):
         release.exact(record, fields, "VM " + label)
     def inherited(intent: dict, receipt: dict) -> bool:
@@ -185,6 +191,9 @@ def bind_provisioned_launch(*, creation_intent: bytes, creation_receipt: bytes,
         and rr["intent_sha256"] == release.digest(runtime_intent)
         and si["runtime_receipt_sha256"] == release.digest(runtime_receipt)
         and sr["intent_sha256"] == release.digest(seed_intent)
+        and (profile is None or (sr["fixture_profile"] == profile
+                                 and si["packages"] == ROOTLESS_FIXTURE_PACKAGES
+                                 and li["memory_mib"] == 2048))
         and li["seed_receipt_sha256"] == release.digest(seed_receipt)
         and (cr["disk_device"], cr["disk_inode"])
         == (ri["disk_device"], ri["disk_inode"])
