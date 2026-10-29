@@ -104,7 +104,11 @@ class ContractTests(unittest.TestCase):
                 self.assertEqual((repo / item["relative"]).read_bytes(),
                                  item["package"].encode())
             cfg = config.read_text()
-            self.assertIn("file://", cfg)
+            sources = (dest / "sources.list").read_text()
+            self.assertEqual(sources.count("file://"), len(archive.POCKETS))
+            self.assertNotIn("http://", sources)
+            self.assertNotIn("https://", sources)
+            self.assertIn(str(dest / "sources.list"), cfg)
             self.assertIn('APT::Sandbox::User "root"', cfg)
             self.assertIn('Dir::State::status "/var/lib/dpkg/status"', cfg)
             self.assertNotIn("archive.ubuntu.com", cfg)
