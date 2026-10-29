@@ -23,6 +23,26 @@ RUN_ID = "124"
 POLICY = json.loads((ROOT / ".github/stack-tag-policy.json").read_text())
 
 
+def test_nightly_guide_has_one_unedited_rootless_boundary_command():
+    import shlex
+    from package_nightly_installation import nightly_trial_guide
+
+    tag = "v1.2.3-nightly.20261029.123"
+    guide = nightly_trial_guide({"tag": tag, "source_sha": SOURCE, "build_run_id": 123})
+    commands = [line for line in guide.splitlines() if line.startswith("/usr/bin/setpriv ")]
+    assert len(commands) == 1
+    command = shlex.split(commands[0])
+    assert command[:7] == ["/usr/bin/setpriv", "--no-new-privs", "--", "bash", "-o", "pipefail", "-c"]
+    assert command[7:] == [
+        f"curl -fsSL https://github.com/ElevenID/marty-ui/releases/download/{tag}/install.sh | "
+        f"sh -s -- --candidate-test {tag}"
+    ]
+    assert "Provisioning is held" in guide
+    assert "--install-dir" not in guide
+    assert "stage_selfhost_disposable_preview" not in guide
+    assert "sudo KMS" not in guide
+
+
 @pytest.fixture
 def prepared(tmp_path):
     lock_path = tmp_path / "stack-lock.json"

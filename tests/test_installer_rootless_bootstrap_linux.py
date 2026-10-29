@@ -13,6 +13,38 @@ TAG = "v1.2.3-nightly.20261027.42"
 
 
 @pytest.mark.skipif(os.name != "posix" or not Path("/proc/self/status").exists(),
+                    reason="Linux no-new-privileges pipeline")
+def test_generated_pipeline_inherits_nnp_and_propagates_fetch_failure(tmp_path, monkeypatch):
+    import shlex
+
+    if not Path("/usr/bin/setpriv").is_file():
+        pytest.skip("setpriv unavailable")
+    monkeypatch.syspath_prepend(str(SCRIPT.parent / "scripts"))
+    from package_nightly_installation import nightly_trial_guide
+
+    guide = nightly_trial_guide({"tag": TAG, "source_sha": "a" * 40, "build_run_id": 42})
+    command = shlex.split(next(line for line in guide.splitlines()
+                              if line.startswith("/usr/bin/setpriv ")))
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    evidence = tmp_path / "nnp"
+    observe = '''while read -r key value rest; do
+    case "$key" in NoNewPrivs:) printf '%s\\n' "$value" >> "$NNP_EVIDENCE" ;; esac
+done < /proc/self/status
+'''
+    (bin_dir / "curl").write_text("#!/bin/sh\n" + observe + "exit 37\n")
+    (bin_dir / "sh").write_text("#!/bin/sh\n" + observe +
+                                "while IFS= read -r line; do :; done\nexit 0\n")
+    for path in bin_dir.iterdir():
+        path.chmod(0o700)
+    result = subprocess.run(command, env={"PATH": f"{bin_dir}:/usr/bin:/bin",
+                                         "NNP_EVIDENCE": str(evidence)},
+                            capture_output=True, text=True, timeout=15)
+    assert result.returncode == 37
+    assert evidence.read_text().splitlines() == ["1", "1"]
+
+
+@pytest.mark.skipif(os.name != "posix" or not Path("/proc/self/status").exists(),
                     reason="Linux process-status boundary")
 def test_rootless_bootstrap_requires_nnp_before_external_commands(tmp_path):
     status = Path("/proc/self/status").read_text()
