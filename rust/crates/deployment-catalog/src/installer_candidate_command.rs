@@ -391,6 +391,7 @@ fn install_inner(args: &[String], build_identity: &str) -> Result<()> {
         docker_host: "unix:///var/run/docker.sock".into(),
         engine_id: o.engine.clone(),
         openbao_port: port.local_addr().map_err(|_| REFUSED)?.port(),
+        profile: crate::installer_state::RuntimeProfile::Rootful,
     };
     let observed = DockerRunner::new(
         &o.docker,

@@ -1064,6 +1064,7 @@ pub(crate) mod tests {
                 docker_host: "unix:///var/run/docker.sock".into(),
                 engine_id: "test-engine".into(),
                 openbao_port: 18200,
+                profile: crate::installer_state::RuntimeProfile::Rootful,
             },
         )
         .unwrap();

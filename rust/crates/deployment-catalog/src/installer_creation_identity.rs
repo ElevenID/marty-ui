@@ -334,6 +334,7 @@ mod tests {
                 docker_host: "unix:///var/run/docker.sock".into(),
                 engine_id: "synthetic-engine".into(),
                 openbao_port: 8200,
+                profile: crate::installer_state::RuntimeProfile::Rootful,
             },
         )
         .unwrap();

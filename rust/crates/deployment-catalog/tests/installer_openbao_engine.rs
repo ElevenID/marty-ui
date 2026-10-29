@@ -608,6 +608,7 @@ fn run_fixture(renewal: bool, generation: bool, application: bool) -> Result<()>
             docker_host: "unix:///var/run/docker.sock".into(),
             engine_id: engine.clone(),
             openbao_port: port,
+            profile: marty_deployment_catalog::installer_state::RuntimeProfile::Rootful,
         },
     )?;
     state.create_private_directory("evidence")?;
