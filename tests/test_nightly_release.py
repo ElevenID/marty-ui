@@ -66,6 +66,8 @@ def test_nightly_release_notes_advertise_single_direct_candidate_trial(prepared)
     assert guide.count(command) == 1
     assert "/absolute/disposable/path" not in guide
     assert "pipefail" in guide
+    assert "signed inventory and operator before executing the operator" in guide
+    assert "remaining payloads before runtime provisioning" in guide
     assert "rootful Docker socket" in guide
     assert "Ordinary uninstall" in guide and "purge is unsupported" in guide
     assert "reply to your inviter" in guide.lower()

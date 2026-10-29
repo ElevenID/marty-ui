@@ -24,8 +24,10 @@ Docker-enabled user, with disposable identities and data. Replace both tag
 placeholders with the same exact published nightly tag. Bash and curl are
 required by this one-line wrapper; pipefail makes a failed download nonzero.
 The bootstrap script is fetched over HTTPS and executes before its own bytes
-can be verified. Inside it, the signed inventory, operator and payloads are
-verified before the operator runs. The installer prints its private random
+can be verified. It verifies the signed inventory and operator before executing
+the operator. The operator then verifies the remaining payloads before runtime
+provisioning and Docker resource creation.
+The installer prints its private random
 installation path under your HOME; an absolute disposable path can be selected
 with `--install-dir` if needed. No source checkout or organization credentials
 are needed. If required read-only validation
