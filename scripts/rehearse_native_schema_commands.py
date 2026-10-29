@@ -31,6 +31,8 @@ STAGES = ("bootstrap-flow", "bootstrap-issuer", "install", "fence", "maintenance
 
 OPERATOR_FILES = ('scripts/rehearse_native_schema_commands.py', 'scripts/scoped_native_database.py', 'scripts/scoped_native_runtime.py', 'scripts/scoped_native_profiles.py', 'scripts/scoped_native_maintenance.py', 'scripts/scoped_passport_successor.py', 'scripts/scoped_linux_journal.py', 'scripts/scoped_signing_successor.py', 'scripts/prepare_local_official_native_build.py', 'scripts/scoped_native_build.py', 'tests/scripts/native-maintenance-metadata.js', 'tests/scripts/functional-debug-runtime.js')
 
+MIGRATION_FILES = tuple("rust/services/" + name.split("/", 1)[0] + "/migrations/" + name.split("/", 1)[1] + ".sql" for name in MIGRATIONS)
+
 
 class Rehearsal(NativeDatabasePhase):
     def __init__(self, context, inputs):
@@ -275,7 +277,7 @@ def validate_inputs(path, digest):
         bound = value["binaries"][role]
         require(bound == receipt["binaries"][ROLE_BINARIES[role]], "ACTUAL_SCHEMA_ELF_REQUIRED")
         read_ref(bound, 512 * 1024 * 1024)
-    require(set(value["migrationSources"]) == {"rust/services/" + name + ".sql" for name in MIGRATIONS}, "EXACT_RUST_MIGRATION_SOURCES_REQUIRED")
+    require(set(value["migrationSources"]) == set(MIGRATION_FILES), "EXACT_RUST_MIGRATION_SOURCES_REQUIRED")
     expected_files = set(OPERATOR_FILES) | {"scripts/sql/" + name for name in operational_sql_sources()} | set(value["migrationSources"])
     require(set(value["operatorFiles"]) == expected_files, "COMPLETE_EXECUTED_SOURCE_CLOSURE_REQUIRED")
     producer = Path(value["producerRepository"])

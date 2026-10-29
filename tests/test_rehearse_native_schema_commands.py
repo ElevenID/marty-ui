@@ -65,3 +65,9 @@ def test_rehearsal_is_not_armed_and_stages_are_exact():
     assert rehearsal.DISPATCH_ENABLED is False
     assert len(set(rehearsal.STAGES)) == len(rehearsal.STAGES) == 17
     assert "reject-flow-before-acl" in rehearsal.STAGES and "reject-admin-issuer" in rehearsal.STAGES
+
+
+def test_rehearsal_business_sql_asset_paths_exist_in_actual_source():
+    root = Path(__file__).resolve().parents[1]
+    assert len(rehearsal.MIGRATION_FILES) == 3
+    assert all((root / name).is_file() for name in rehearsal.MIGRATION_FILES)
