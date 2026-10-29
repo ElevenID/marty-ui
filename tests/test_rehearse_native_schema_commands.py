@@ -83,3 +83,43 @@ def test_closed_python_export_resolves_lazy_operational_sql_import(tmp_path):
             target.write_bytes((root / name).read_bytes())
     code = "import sys;sys.path.insert(0,sys.argv[1]);from rehearse_native_schema_commands import operational_sql_sources;assert len(operational_sql_sources())==9"
     subprocess.run([sys.executable, "-I", "-c", code, str(tmp_path / "scripts")], check=True)
+
+
+def test_cleanup_refuses_same_live_controller_before_any_command(tmp_path, monkeypatch):
+    value = fixture(tmp_path)
+    value.g["inputSha256"] = "a" * 64
+    identity = {"pid": 123, "creationFileTime": 456, "running": True}
+    monkeypatch.setattr(rehearsal, "process_identity", lambda pid: identity)
+    value.command = lambda *args: pytest.fail("Live controller must block all Docker operations")
+    with pytest.raises(ValueError, match="ORIGINAL_REHEARSAL_CONTROLLER_STILL_LIVE"):
+        value.cleanup({"inputsSha256": "a" * 64, "controllerIdentity": identity}, "22222222-2222-4222-8222-222222222222")
+
+
+def test_cleanup_effect_requires_fresh_exact_engine(tmp_path):
+    value = fixture(tmp_path)
+    calls = []
+    value.command = lambda args: calls.append(args) or b"FOREIGN_ENGINE"
+    with pytest.raises(ValueError, match="ENGINE_CHANGED"):
+        value.cleanup_effect(["docker", "rm", "owned"])
+    assert len(calls) == 1 and calls[0][1] == "info"
+
+
+def test_cleanup_refuses_foreign_network_before_container_actions(tmp_path, monkeypatch):
+    value = fixture(tmp_path)
+    value.i["databaseNetwork"] = "marty-schema-rehearsal-" + value.fixture_run
+    value.g.update(inputSha256="a" * 64, save=lambda *args: {})
+    monkeypatch.setattr(rehearsal, "process_identity", lambda pid: None)
+    calls = []
+    def command(args):
+        calls.append(args)
+        if args[1] == "info":
+            return rehearsal.ENGINE.encode()
+        if args[1:3] == ["network", "ls"]:
+            return b"a" * 64
+        if args[1:3] == ["network", "inspect"]:
+            return json.dumps([{"Name": value.i["databaseNetwork"], "Internal": True, "Labels": {"elevenid.owner": "foreign"}}]).encode()
+        pytest.fail("Foreign network must block container actions")
+    value.command = command
+    with pytest.raises(ValueError, match="OWNED_NETWORK_RECONCILIATION_REFUSED"):
+        value.cleanup({"inputsSha256": "a" * 64, "controllerIdentity": {"pid": 123, "creationFileTime": 456}, "state": {}}, "22222222-2222-4222-8222-222222222222")
+    assert not any(args[1] in ("stop", "rm", "create", "start") for args in calls)

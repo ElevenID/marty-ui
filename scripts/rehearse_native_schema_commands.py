@@ -7,6 +7,8 @@ or beta migration receipt can be produced by this operator.
 """
 from __future__ import annotations
 import argparse
+import ctypes
+from ctypes import wintypes
 import importlib.util
 from copy import deepcopy
 import json
@@ -106,6 +108,7 @@ class Rehearsal(NativeDatabasePhase):
     def create_fixture(self):
         require(self.command(["docker", "info", "--format", "{{.ID}}"]).decode().strip() == ENGINE, "ENGINE_CHANGED")
         self.baseline = set(self.command(["docker", "ps", "-aq", "--no-trunc"]).decode().split())
+        self.state["baselineContainerIds"] = sorted(self.baseline)
         names = self.command(["docker", "ps", "-a", "--format", "{{.Names}}"]).decode().splitlines()
         require(self.i["postgresName"] not in names, "FIXTURE_CONTAINER_NAME_ALREADY_EXISTS")
         networks = self.command(["docker", "network", "ls", "--format", "{{.Name}}"]).decode().splitlines()
@@ -243,6 +246,136 @@ class Rehearsal(NativeDatabasePhase):
         return self.state
 
 
+    def cleanup_effect(self, args):
+        require(self.command(["docker", "info", "--format", "{{.ID}}"]).decode().strip() == ENGINE, "ENGINE_CHANGED")
+        return self.command(args)
+
+    def cleanup(self, failure, cleanup_run_id):
+        parsed = uuid.UUID(cleanup_run_id)
+        require(parsed.version == 4 and str(parsed) == cleanup_run_id, "UUID4_CLEANUP_REQUIRED")
+        prefix = "cleanup-" + cleanup_run_id
+        self.stage = prefix
+        require(failure["inputsSha256"] == self.g["inputSha256"], "EXACT_FAILED_INPUT_REQUIRED")
+        previous = failure["controllerIdentity"]
+        current = process_identity(previous["pid"])
+        require(current is None or current["creationFileTime"] != previous["creationFileTime"] or not current["running"], "ORIGINAL_REHEARSAL_CONTROLLER_STILL_LIVE")
+        require(self.command(["docker", "info", "--format", "{{.ID}}"]).decode().strip() == ENGINE, "ENGINE_CHANGED")
+        self.g["save"]("invocation.json", {"cleanupRunId": cleanup_run_id, "failureInputsSha256": failure["inputsSha256"]})
+        self.state = {**failure["state"], "phase": "EXPLICIT_OWNED_RECONCILIATION", "cleanupRunId": cleanup_run_id}
+        self.persist()
+        networks = self.command(["docker", "network", "ls", "--filter", "name=^" + self.i["databaseNetwork"] + "$", "--format", "{{.ID}}", "--no-trunc"]).decode().split()
+        require(len(networks) <= 1, "REHEARSAL_NETWORK_IDENTITY_AMBIGUOUS")
+        if networks:
+            network = json.loads(self.command(["docker", "network", "inspect", networks[0]]))[0]
+            require(network["Name"] == self.i["databaseNetwork"] and network["Internal"]
+                    and network["Labels"].get("elevenid.owner") == OWNER and network["Labels"].get("elevenid.run") == self.fixture_run, "OWNED_NETWORK_RECONCILIATION_REFUSED")
+            self.network_id = network["Id"]
+            require(not failure.get("ownedNetworkId") or self.network_id == failure["ownedNetworkId"], "KNOWN_NETWORK_ID_CHANGED")
+        raw = self.command(["docker", "ps", "-a", "--no-trunc", "--format", "{{json .}}"]).decode()
+        rows = [json.loads(line) for line in raw.splitlines() if line.strip()]
+        owned = []
+        pg = []
+        for row in rows:
+            if row["Names"] == self.i["postgresName"]:
+                pg.append(row["ID"])
+            if row["Names"].startswith("marty-native-schema-"):
+                for stage, stage_id in self.i["stageIds"].items():
+                    if row["Names"].startswith("marty-native-schema-" + stage_id + "-"):
+                        owned.append((stage, stage_id, row["ID"]))
+        require(len(pg) <= 1, "OWNED_PG_IDENTITY_AMBIGUOUS")
+        if pg and failure.get("ownedPostgresId"):
+            require(pg[0] == failure["ownedPostgresId"], "KNOWN_PG_CID_CHANGED")
+        allowed = set(pg) | {cid for _, _, cid in owned}
+        if self.network_id:
+            require(set(network.get("Containers") or {}).issubset(allowed), "UNRELATED_REHEARSAL_NETWORK_CONSUMER")
+        helper_stages = {"bootstrap-flow", "bootstrap-issuer", "migrate-flow", "migrate-issuer", "reject-flow-before-acl", "reject-issuer-before-acl", "verify-flow", "verify-issuer", "reject-admin-issuer"}
+        for stage, stage_id, cid in owned:
+            require(stage in helper_stages, "NON_HELPER_STAGE_CONTAINER_REFUSED")
+            self.stage = prefix + "-" + stage
+            self.i["runId"] = stage_id
+            original = json.loads(self.command(["docker", "inspect", cid]))[0]
+            binary = Path(original["Config"]["Entrypoint"][0]).name
+            role = next((key for key, value in ROLE_BINARIES.items() if value == binary and key in ("flow", "issuance-native")), None)
+            command = original["Config"]["Cmd"][0]
+            expected_role = "flow" if stage.endswith("flow") or stage == "reject-flow-before-acl" else "issuance-native"
+            expected_command = "migrate" if stage.startswith(("bootstrap-", "migrate-")) else "verify-owned-schema"
+            require(role == expected_role and command == expected_command, "FROZEN_SCHEMA_STAGE_CHANGED")
+            require(role is not None and command in ("migrate", "verify-owned-schema"), "UNKNOWN_REHEARSAL_SCHEMA_HELPER")
+            url_file = Path(self.g["root"]) / (stage + "-" + role + "-" + command + ".url.private")
+            self.schema_records[cid] = {"name": "marty-native-schema-" + stage_id + "-" + role + "-" + command,
+                "binary": binary, "command": command, "url": url_file.read_text(), "bound": self.i["binaries"][role]}
+            self.validate_schema(cid, created=False, ownership_only=True)
+            self.state["pendingCleanup"] = cid
+            self.persist()
+            self.command(["docker", "logs", "--tail", "100", cid])
+            if original["State"]["Running"]:
+                self.cleanup_effect(["docker", "stop", "--signal", "SIGTERM", "--timeout", "-1", cid])
+            terminal = self.validate_schema(cid, created=False, ownership_only=True)
+            require(not terminal["State"]["Running"] and terminal["State"]["Pid"] == 0, "OWNED_HELPER_STILL_RUNNING")
+            self.cleanup_effect(["docker", "rm", cid])
+        self.stage = prefix
+        if pg:
+            cid = pg[0]
+            row = json.loads(self.command(["docker", "inspect", cid]))[0]
+            require(row["Id"] == cid and row["Name"] == "/" + self.i["postgresName"] and row["Image"] == PG_IMAGE
+                    and row["Config"]["Labels"].get("elevenid.owner") == OWNER and row["Config"]["Labels"].get("elevenid.run") == self.fixture_run
+                    and "com.docker.compose.project" not in row["Config"]["Labels"]
+                    and row["HostConfig"]["NetworkMode"] == self.i["databaseNetwork"] and not row["State"]["Paused"]
+                    and not any(m["Type"] in ("bind", "volume") for m in row["Mounts"])
+                    and row["Config"]["User"] == "postgres" and row["HostConfig"]["ReadonlyRootfs"]
+                    and not row["HostConfig"]["Privileged"] and not row["HostConfig"].get("CapAdd")
+                    and row["HostConfig"]["Memory"] == 536870912 and row["HostConfig"]["MemorySwap"] == 536870912
+                    and row["HostConfig"]["NanoCpus"] == 500000000 and not row["HostConfig"].get("PortBindings")
+                    and set(row["HostConfig"].get("Tmpfs") or {}) == {"/var/lib/postgresql/data", "/var/run/postgresql", "/tmp"}
+                    and {x.removeprefix("CAP_") for x in row["HostConfig"].get("CapDrop") or []} == {"ALL"}
+                    and row["HostConfig"].get("SecurityOpt") in (["no-new-privileges"], ["no-new-privileges:true"]), "OWNED_PG_CLEANUP_REFUSED")
+            self.g["save"]("pg-original-failure-inspect.json", row)
+            self.command(["docker", "logs", "--tail", "100", cid])
+            self.state["pendingCleanup"] = cid
+            self.persist()
+            if row["State"]["Running"]:
+                self.cleanup_effect(["docker", "stop", "--signal", "SIGINT", "--timeout", "-1", cid])
+            stopped = json.loads(self.command(["docker", "inspect", cid]))[0]
+            require(stopped["Id"] == cid and not stopped["State"]["Running"] and stopped["State"]["Pid"] == 0, "OWNED_PG_STOP_UNKNOWN")
+            self.g["save"]("pg-terminal-inspect.json", stopped)
+            self.cleanup_effect(["docker", "rm", cid])
+        if self.network_id:
+            row = json.loads(self.command(["docker", "network", "inspect", self.network_id]))[0]
+            require(not row["Containers"] and row["Labels"].get("elevenid.owner") == OWNER and row["Labels"].get("elevenid.run") == self.fixture_run, "OWNED_NETWORK_CLEANUP_REFUSED")
+            self.cleanup_effect(["docker", "network", "rm", self.network_id])
+        networks_after = self.command(["docker", "network", "ls", "--format", "{{.Name}}"]).decode().splitlines()
+        require(self.i["databaseNetwork"] not in networks_after, "OWNED_NETWORK_ABSENCE_NOT_PROVEN")
+        remaining = set(self.command(["docker", "ps", "-aq", "--no-trunc"]).decode().split())
+        baseline = failure["state"].get("baselineContainerIds")
+        require(not remaining.intersection(allowed) and (baseline is None or remaining == set(baseline)), "OWNED_RECONCILIATION_OR_BASELINE_NOT_PROVEN")
+        require(self.command(["docker", "info", "--format", "{{.ID}}"]).decode().strip() == ENGINE, "ENGINE_CHANGED")
+        self.state.update(phase="SYNTHETIC_REHEARSAL_RESOURCES_RETIRED", pendingCleanup=None,
+            betaDatabaseAccessed=False, runtimeDeployed=False, releaseQualified=False, recordingQualified=False)
+        self.persist()
+        return self.state
+
+
+def process_identity(pid):
+    require(os.name == "nt", "WINDOWS_PROCESS_IDENTITY_REQUIRED")
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel.OpenProcess.restype = wintypes.HANDLE
+    kernel.GetProcessTimes.argtypes = [wintypes.HANDLE, *([ctypes.POINTER(wintypes.FILETIME)] * 4)]
+    kernel.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    handle = kernel.OpenProcess(0x1000, False, pid)
+    if not handle:
+        require(ctypes.get_last_error() == 87, "CONTROLLER_IDENTITY_UNAVAILABLE")
+        return None
+    try:
+        times = [wintypes.FILETIME() for _ in range(4)]
+        code = wintypes.DWORD()
+        require(kernel.GetProcessTimes(handle, *[ctypes.byref(t) for t in times]) and kernel.GetExitCodeProcess(handle, ctypes.byref(code)), "CONTROLLER_IDENTITY_UNAVAILABLE")
+        return {"pid": pid, "creationFileTime": (times[0].dwHighDateTime << 32) | times[0].dwLowDateTime, "running": code.value == 259}
+    finally:
+        kernel.CloseHandle(handle)
+
+
 def load(name, bound):
     path = read_ref(bound)
     spec = importlib.util.spec_from_file_location(name, path)
@@ -344,7 +477,7 @@ def context_for(path, digest, inputs):
         for item in [*inputs["guardModules"].values(), *inputs["guardFiles"].values()]:
             read_ref(item)
     context = {"root": root, "save": save, "save_bytes": save_bytes, "ref": ref, "env": env,
-        "assert_inputs": assert_inputs, "nodeExecutable": inputs["executables"]["node"]["path"]}
+        "assert_inputs": assert_inputs, "inputSha256": digest, "nodeExecutable": inputs["executables"]["node"]["path"]}
     operator = Rehearsal(context, deepcopy(inputs))
     active["operator"] = operator
     return modules, context, operator
@@ -361,9 +494,12 @@ def capacity(context, inputs):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=("check", "run"))
+    parser.add_argument("mode", choices=("check", "run", "cleanup"))
     parser.add_argument("--inputs", type=Path, required=True)
     parser.add_argument("--inputs-sha256", required=True)
+    parser.add_argument("--failure", type=Path)
+    parser.add_argument("--failure-sha256")
+    parser.add_argument("--cleanup-run-id")
     args = parser.parse_args()
     inputs = validate_inputs(args.inputs, args.inputs_sha256)
     if args.mode == "check":
@@ -372,9 +508,17 @@ def main():
     require(DISPATCH_ENABLED, "REHEARSAL_DISPATCH_DISABLED")
     modules, context, operator = context_for(args.inputs, args.inputs_sha256, inputs)
     with modules["beta_operation_lock"].operation_lock(LOCK, "native-schema-rehearsal-" + inputs["runId"]):
+        if args.mode == "cleanup":
+            require(args.failure and args.failure_sha256 and args.cleanup_run_id, "EXACT_FAILURE_REQUIRED_FOR_CLEANUP")
+            failure = json.loads(read_ref({"path": str(args.failure), "sha256": args.failure_sha256}).read_bytes())
+            output = operator.cleanup(failure, args.cleanup_run_id)
+            result = context["save"]("explicit-cleanup-result.json", output)
+            print(json.dumps({"state": output["phase"], "result": result, "betaDatabaseAccessed": False}))
+            return
         require(not (Path(inputs["privateRoot"]) / "rehearsal-state.json").exists(), "REHEARSAL_ALREADY_CONSUMED_NO_RETRY")
         require(not (Path(inputs["privateRoot"]) / "prepare-invocation.json").exists(), "REHEARSAL_INVOCATION_ALREADY_CONSUMED")
-        context["save"]("invocation.json", {"inputsSha256": args.inputs_sha256, "ownedPid": os.getpid(), "betaDatabaseAccessed": False})
+        controller = process_identity(os.getpid())
+        context["save"]("invocation.json", {"inputsSha256": args.inputs_sha256, "controllerIdentity": controller, "betaDatabaseAccessed": False})
         try:
             capacity(context, inputs)
             output = operator.run()
@@ -382,6 +526,7 @@ def main():
             print(json.dumps({"state": output["phase"], "result": result, "betaDatabaseAccessed": False, "runtimeDeployed": False}))
         except BaseException as error:
             context["save"]("failure.json", {"errorClass": type(error).__name__, "state": operator.state,
+                "inputsSha256": args.inputs_sha256, "controllerIdentity": controller,
                 "ownedPostgresId": operator.pg_cid, "ownedNetworkId": operator.network_id,
                 "noRetry": True, "betaDatabaseAccessed": False})
             print(json.dumps({"state": "REHEARSAL_FAILED_RECONCILIATION_REQUIRED", "errorClass": type(error).__name__}))

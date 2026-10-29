@@ -312,7 +312,7 @@ class NativeDatabasePhase:
             "stdout": self.g["save_bytes"](role + "-" + command + ".stdout", result.stdout),
             "stderr": self.g["save_bytes"](role + "-" + command + ".stderr", result.stderr)}
 
-    def validate_schema(self, cid, *, created, expected_exit=0):
+    def validate_schema(self, cid, *, created, expected_exit=0, ownership_only=False):
         require(expected_exit in (0, 1), "CLOSED_SCHEMA_CONTROL_EXIT_REQUIRED")
         expected = self.schema_records[cid]
         row = json.loads(self.command(["docker", "inspect", cid]))[0]
@@ -337,14 +337,18 @@ class NativeDatabasePhase:
         require(len(mounts) == 1 and mounts[0]["Type"] == "bind" and not mounts[0]["RW"]
                 and mounts[0]["Destination"] == "/usr/local/bin/" + expected["binary"]
                 and daemon_source(mounts[0]["Source"]) == daemon_source(expected["bound"]["path"]), "SCHEMA_HELPER_MOUNT_CHANGED")
-        require(not state["Running"] and not state["Paused"] and not state["OOMKilled"]
-                and state["Status"] == ("created" if created else "exited")
-                and state["Pid"] == 0 and (created or state["ExitCode"] == expected_exit), "SCHEMA_HELPER_NOT_OWNED_TERMINAL")
-        database = self.guard()
-        network = database["NetworkSettings"]["Networks"].get(self.i["databaseNetwork"])
-        require(network is not None and network["NetworkID"] == self.i["databaseNetworkId"]
-                and "postgres" in (network.get("Aliases") or []), "SCHEMA_DATABASE_NETWORK_CHANGED")
-        self.g["save"]("schema-" + cid + ("-created" if created else "-terminal") + ".json", row)
+        if ownership_only:
+            require(not state["Paused"] and state["Status"] in ("created", "running", "exited")
+                    and (state["Pid"] > 0 if state["Running"] else state["Pid"] == 0), "SCHEMA_HELPER_STATE_UNKNOWN")
+        else:
+            require(not state["Running"] and not state["Paused"] and not state["OOMKilled"]
+                    and state["Status"] == ("created" if created else "exited")
+                    and state["Pid"] == 0 and (created or state["ExitCode"] == expected_exit), "SCHEMA_HELPER_NOT_OWNED_TERMINAL")
+            database = self.guard()
+            network = database["NetworkSettings"]["Networks"].get(self.i["databaseNetwork"])
+            require(network is not None and network["NetworkID"] == self.i["databaseNetworkId"]
+                    and "postgres" in (network.get("Aliases") or []), "SCHEMA_DATABASE_NETWORK_CHANGED")
+        self.g["save"]("schema-" + cid + ("-ownership-" + str(self.command_index) if ownership_only else "-created" if created else "-terminal") + ".json", row)
         return row
 
     def retire_schema_helper(self, cid, *, expected_exit=0):
