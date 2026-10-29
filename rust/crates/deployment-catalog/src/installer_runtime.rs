@@ -360,6 +360,14 @@ struct DockerInfo {
     architecture: String,
     server_version: String,
     security_options: Vec<String>,
+    // Older rootful journals and test fixtures do not require these fields.
+    // Rootless memory admission below requires all three positive values.
+    #[serde(default)]
+    cgroup_version: Option<String>,
+    #[serde(default)]
+    cgroup_driver: Option<String>,
+    #[serde(default)]
+    memory_limit: Option<bool>,
 }
 #[derive(Debug, Serialize)]
 pub struct DockerObservation {
@@ -422,6 +430,19 @@ fn validate_info_for_profile(
             }
         }
         .into());
+    }
+    if profile == RuntimeProfile::Rootless
+        && (info.cgroup_version.as_deref() != Some("2")
+            || info.cgroup_driver.as_deref() != Some("systemd")
+            || info.memory_limit != Some(true))
+    {
+        // Docker documents that rootless cgroup resource flags can be ignored
+        // without cgroup v2 and systemd. This is a daemon prerequisite check,
+        // not proof of a particular container's eventual kernel cgroup value.
+        return Err(
+            "rootless Docker memory limits require cgroup v2, systemd and memory-limit support"
+                .into(),
+        );
     }
     Ok(info)
 }
@@ -571,7 +592,7 @@ impl DockerRunner {
     }
     fn info(&self) -> Result<DockerInfo> {
         self.recheck_endpoint()?;
-        let output = self.runner.run(&["info", "--format", "{\"id\":{{json .ID}},\"os\":{{json .OSType}},\"architecture\":{{json .Architecture}},\"server_version\":{{json .ServerVersion}},\"security_options\":{{json .SecurityOptions}}}"], self.budget(Duration::from_secs(30))?, 65536)?;
+        let output = self.runner.run(&["info", "--format", "{\"id\":{{json .ID}},\"os\":{{json .OSType}},\"architecture\":{{json .Architecture}},\"server_version\":{{json .ServerVersion}},\"security_options\":{{json .SecurityOptions}},\"cgroup_version\":{{json .CgroupVersion}},\"cgroup_driver\":{{json .CgroupDriver}},\"memory_limit\":{{json .MemoryLimit}}}"], self.budget(Duration::from_secs(30))?, 65536)?;
         self.recheck_endpoint()?;
         validate_info_for_profile(&output, &self.expected_engine_id, self.profile)
     }
@@ -687,9 +708,12 @@ mod tests {
     fn info() -> &'static str {
         r#"{"id":"test-engine","os":"linux","architecture":"x86_64","server_version":"28.0.0","security_options":["name=seccomp,profile=builtin"]}"#
     }
+    fn rootless_info() -> String {
+        r#"{"id":"test-engine","os":"linux","architecture":"x86_64","server_version":"28.0.0","security_options":["name=rootless"],"cgroup_version":"2","cgroup_driver":"systemd","memory_limit":true}"#.into()
+    }
     #[test]
     fn selected_profile_requires_positive_daemon_mode_and_exact_engine() {
-        let rootless = info().replace("name=seccomp,profile=builtin", "name=rootless");
+        let rootless = rootless_info();
         assert!(validate_info_for_profile(info(), "test-engine", RuntimeProfile::Rootful).is_ok());
         assert!(
             validate_info_for_profile(&rootless, "test-engine", RuntimeProfile::Rootless).is_ok()
@@ -726,6 +750,46 @@ mod tests {
             RuntimeProfile::Rootless
         )
         .is_err());
+        for (field, wrong) in [
+            ("cgroup_version", serde_json::json!("1")),
+            ("cgroup_driver", serde_json::json!("none")),
+            ("cgroup_driver", serde_json::json!("cgroupfs")),
+            ("memory_limit", serde_json::json!(false)),
+            ("memory_limit", serde_json::Value::Null),
+        ] {
+            let mut changed: serde_json::Value = serde_json::from_str(&rootless).unwrap();
+            changed[field] = wrong;
+            assert!(validate_info_for_profile(
+                &changed.to_string(),
+                "test-engine",
+                RuntimeProfile::Rootless
+            )
+            .is_err());
+        }
+        for missing in ["cgroup_version", "cgroup_driver", "memory_limit"] {
+            let mut changed: serde_json::Value = serde_json::from_str(&rootless).unwrap();
+            changed.as_object_mut().unwrap().remove(missing);
+            assert!(validate_info_for_profile(
+                &changed.to_string(),
+                "test-engine",
+                RuntimeProfile::Rootless
+            )
+            .is_err());
+        }
+        let rootful_legacy: serde_json::Value = serde_json::from_str(info()).unwrap();
+        assert!(rootful_legacy.get("cgroup_version").is_none());
+        assert!(validate_info_for_profile(info(), "test-engine", RuntimeProfile::Rootful).is_ok());
+        let rootful_cgroupfs = info().replacen(
+            "\"security_options\":",
+            "\"cgroup_version\":\"1\",\"cgroup_driver\":\"cgroupfs\",\"memory_limit\":false,\"security_options\":",
+            1,
+        );
+        assert!(validate_info_for_profile(
+            &rootful_cgroupfs,
+            "test-engine",
+            RuntimeProfile::Rootful
+        )
+        .is_ok());
     }
     #[test]
     fn rootless_socket_custody_requires_private_owned_parent_and_socket_inode() {
@@ -758,12 +822,13 @@ mod tests {
         let socket = parent.path().join("docker.sock");
         let _listener = UnixListener::bind(&socket).unwrap();
         let info_path = parent.path().join("engine-info.json");
-        let rootless = info().replace("name=seccomp,profile=builtin", "name=rootless");
+        let rootless = rootless_info();
         fs::write(&info_path, &rootless).unwrap();
         let binary = script(
             parent.path(),
             r#"case "$1" in
 info) cat "${0%/*}/engine-info.json" ;;
+compose) printf c >> "${0%/*}/compose-calls"; printf '2.40.3\n' ;;
 ps) printf x >> "${0%/*}/resource-calls"; printf 'owned' ;;
 *) exit 9 ;;
 esac"#,
@@ -793,13 +858,26 @@ esac"#,
             ),
             deadline: None,
         };
+        assert!(docker.preflight().is_ok());
+        let compose_calls = fs::read(parent.path().join("compose-calls")).unwrap();
         assert_eq!(docker.run_checked(&["ps"]).unwrap(), "owned");
         let calls = fs::read(parent.path().join("resource-calls")).unwrap();
         for changed in [
             info().to_owned(),
             rootless.replace("test-engine", "other-engine"),
+            rootless.replace("\"cgroup_version\":\"2\"", "\"cgroup_version\":\"1\""),
+            rootless.replace(
+                "\"cgroup_driver\":\"systemd\"",
+                "\"cgroup_driver\":\"none\"",
+            ),
+            rootless.replace("\"memory_limit\":true", "\"memory_limit\":false"),
         ] {
             fs::write(&info_path, changed).unwrap();
+            assert!(docker.preflight().is_err());
+            assert_eq!(
+                fs::read(parent.path().join("compose-calls")).unwrap(),
+                compose_calls
+            );
             assert!(docker.run_checked(&["ps"]).is_err());
             assert_eq!(
                 fs::read(parent.path().join("resource-calls")).unwrap(),
