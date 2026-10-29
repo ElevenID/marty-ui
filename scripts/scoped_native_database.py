@@ -16,7 +16,7 @@ import threading
 import time
 import os
 from urllib.parse import parse_qs, urlencode, urlsplit, urlunsplit
-from scoped_native_runtime import daemon_source, durable_barrier, read_ref, require
+from scoped_native_runtime import daemon_source, durable_barrier, read_executable_ref, read_ref, require
 from scoped_native_maintenance import (SOURCE, CORE, ROLE_BINARIES, PROFILE,
     select_canonical_binaries, validate_compatibility)
 from scoped_linux_journal import LinuxBuildJournal
@@ -149,7 +149,7 @@ class NativeDatabasePhase:
     def result(self, args, *, input=None):
         self.g["assert_inputs"](rollback=False)
         require(args and args[0] == "docker", "EXACT_DOCKER_COMMAND_REQUIRED")
-        docker = read_ref(self.i["executables"]["docker"])
+        docker = read_executable_ref(self.i["executables"]["docker"])
         self.command_index += 1
         result = bounded_run([str(docker), "--context", "desktop-linux", *args[1:]],
             input=input, env=self.g["env"], timeout=150)
@@ -255,7 +255,7 @@ class NativeDatabasePhase:
 
     def backup(self):
         self.g["assert_inputs"](rollback=False)
-        docker = read_ref(self.i["executables"]["docker"])
+        docker = read_executable_ref(self.i["executables"]["docker"])
         path = Path(self.g["root"]) / "quiesced-database.dump"
         self.state["pendingBackup"] = str(path)
         self.persist()

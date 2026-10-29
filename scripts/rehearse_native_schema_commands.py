@@ -20,7 +20,7 @@ import sys
 import traceback
 import uuid
 from scoped_native_database import NativeDatabasePhase, schema_url, ENGINE, BUILD_RECEIPT_SHA, bounded_run
-from scoped_native_runtime import read_ref, ref, require, save_state, MIGRATIONS
+from scoped_native_runtime import read_executable_ref, read_ref, ref, require, save_state, MIGRATIONS
 from scoped_signing_successor import environment
 from scoped_native_maintenance import SOURCE, CORE, ROLE_BINARIES, operational_sql_sources
 from prepare_local_official_native_build import git
@@ -454,7 +454,7 @@ def validate_inputs(path, digest):
     for item in value["guardFiles"].values():
         read_ref(item)
     for item in value["executables"].values():
-        read_ref(item, 512 * 1024 * 1024)
+        read_executable_ref(item)
     require(set(value["sqlSources"]) == set(operational_sql_sources()), "CLOSED_OPERATIONAL_SQL_SET_REQUIRED")
     for name, expected in operational_sql_sources().items():
         require(value["sqlSources"][name]["sha256"] == expected, "FIXED_SQL_SOURCE_CHANGED")
@@ -500,7 +500,7 @@ def context_for(path, digest, inputs):
         for item in inputs["operatorFiles"].values():
             read_ref(item)
         for item in inputs["executables"].values():
-            read_ref(item, 512 * 1024 * 1024)
+            read_executable_ref(item)
         for item in [*inputs["guardModules"].values(), *inputs["guardFiles"].values()]:
             read_ref(item)
     context = {"root": root, "save": save, "save_bytes": save_bytes, "ref": ref, "env": env,
