@@ -2552,6 +2552,13 @@ async function retireCanvasCaptureSessions(state, observe = () => {}) {
       await session.addCookies(cookies.map(cookie=>({...cookie})));
       await retireCanvasSession(session,(_,value)=>state.custody.retain(role,value),
         {observe:value=>{evidence[role]=value;emit()}});
+      if(isolated) {
+        const final=await session.request.get(state.canvasOrigin+'/api/v1/users/self/profile',
+          {maxRedirects:0,timeout:15000,headers:{Accept:'application/json'}});
+        requireCondition(final.status()===401,'canvas_session_denial_unconfirmed',
+          'The original Canvas cookie has not returned the required denial.');
+        evidence[role].finalOriginalCookieStatus=401;
+      }
     }
     emit();
     } catch(error) {failures.push(error);evidence[role]={retired:false,failureType:'OWNED_SESSION_RETIREMENT_FAILED'};emit();}

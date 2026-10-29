@@ -1112,6 +1112,22 @@ test('ambiguous logout transport never repeats logout or retires custody',async 
   assert.equal(JSON.parse(fs.readFileSync(path.join(directory,run+'.custody.json'),'utf8')).state,'OPEN');
 });
 
+test('post-logout 403 cannot retire original-cookie Canvas custody',async t=>{
+  const {createCanvasCaptureCustody,retireCanvasCaptureSessions}=require('./run-canvas-oss-standard-contract');
+  const directory=fs.mkdtempSync(path.join(os.tmpdir(),'canvas-403-session-'));
+  t.after(()=>fs.rmSync(directory,{recursive:true,force:true}));
+  const run='66666666-6666-4666-8666-666666666666',custody=createCanvasCaptureCustody(run,directory);
+  custody.retain('canvasAdminSession',JSON.stringify([{name:'_csrf_token',value:'OWNED_CSRF',domain:'canvas-test.elevenidllc.com',path:'/',secure:true}]));
+  let reads=0,logouts=0;
+  const requestFactory={newContext:async()=>({get:async()=>{const status=++reads===1?200:403;return {status:()=>status};},
+    delete:async()=>{logouts++;return {status:()=>302};},dispose:async()=>{}})};
+  await assert.rejects(retireCanvasCaptureSessions({canvasOrigin:'https://canvas-test.elevenidllc.com',
+    custody,sessionRequestFactory:requestFactory}),error=>error.code==='canvas_capture_sessions_incomplete');
+  assert.equal(logouts,1);assert.equal(reads,3);
+  assert.equal(custody.hasRetained('canvasAdminSession'),true);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(directory,run+'.custody.json'),'utf8')).state,'OPEN');
+});
+
 test('isolated request keeps the original cookie across logout Set-Cookie',async t=>{
   const {createOriginalCookieSessionContext}=require('./run-canvas-oss-standard-contract');
   const {request}=require('@playwright/test');
