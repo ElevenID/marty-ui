@@ -51,8 +51,8 @@ secret values or raw credential diagnostics.
 ## Requirements and release availability
 
 Run as a regular Linux amd64 user with trusted preinstalled `setpriv`, Bash,
-curl, Docker client and Compose plugin. The daemon must already be rootless and
-accessible only through that user's `/run/user/<uid>/docker.sock`. Explicit
+curl, Docker client and Compose plugin. The daemon must already be rootless.
+The installer connects only through that user's `/run/user/<uid>/docker.sock`. Explicit
 context overrides, foreign sockets, rootful daemons and userns-remap mode are
 refused. The installer does not use sudo, install OS packages, start a daemon,
 configure subordinate IDs or change host CA trust. Any earlier runtime or host
