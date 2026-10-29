@@ -1,11 +1,22 @@
 # Installer bootstrap
 
 The GitHub-hosted bootstrap selects a release, authenticates its deployment
-operator and launches that operator. Linux amd64 is the initial supported
-platform. macOS, Windows and other architectures are not supported yet.
+operator and launches that operator. The new-install boundary requires a
+nonroot Linux amd64 process with no-new-privileges and an already-running,
+user-owned rootless Docker daemon. macOS, Windows and other architectures are
+not supported.
+
+**Provisioning is currently held.** This source can authenticate the selected
+operator and inspect the rootless prerequisite, then refuses before persistent
+installation state or Docker resource creation. It is not yet the working
+one-line stack trial for outside testers. The on-target storage canary and its
+recovery path must be connected before that trial is published.
+
+The development invocation puts the entire download-and-script pipeline under
+no-new-privileges and propagates download errors:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/ElevenID/marty-ui/main/install.sh | sh -s -- --channel nightly
+/usr/bin/setpriv --no-new-privs -- bash -o pipefail -c 'curl -fsSL https://raw.githubusercontent.com/ElevenID/marty-ui/main/install.sh | sh -s -- --channel nightly'
 ```
 
 Use `--channel stable` for stable releases, or `--version TAG` for an exact
@@ -13,35 +24,53 @@ version. These selectors are mutually exclusive. `--install-dir ABSOLUTE_PATH`
 and `--yes` are forwarded to the verified operator. `--help` works without
 Docker or platform detection.
 
-For an explicitly unqualified nightly installation trial, use the exact tag:
+The exact-tag candidate command has the same boundary. Both tag placeholders
+must name a newly published nightly containing this implementation; historical
+nightlies can contain the older rootful path:
 
 ```sh
-curl -fsSL https://github.com/ElevenID/marty-ui/releases/download/vX.Y.Z-nightly.YYYYMMDD.RUN_ID/install.sh | sh -s -- --candidate-test vX.Y.Z-nightly.YYYYMMDD.RUN_ID --install-dir /absolute/disposable/path
+/usr/bin/setpriv --no-new-privs -- bash -o pipefail -c 'curl -fsSL https://github.com/ElevenID/marty-ui/releases/download/vX.Y.Z-nightly.YYYYMMDD.RUN_ID/install.sh | sh -s -- --candidate-test vX.Y.Z-nightly.YYYYMMDD.RUN_ID'
 ```
 
-`--candidate-test` authenticates the nightly inventory, operator, and payloads
-from the same release run. It records a separate candidate-test scope and never
-creates installer admission or marks the installation Ready. Current runtime
-provisioning can return a nonzero result after creating owned resources; preserve
-the printed installation path and diagnostics for review. Use only a disposable
-Linux amd64 host and disposable identities. The normal `--version` and
-`--channel` paths continue to require signed admission.
+The initial script is fetched over HTTPS and executes before its own bytes can
+be independently verified. It authenticates the signed inventory and operator
+before executing that operator. The current storage hold stops before the
+remaining payload preparation and provisioning stages. Candidate scope grants
+neither installer admission nor Ready status. Normal `--version` and `--channel`
+paths continue to require signed admission.
+
+No source checkout, organization credentials or separate download package is
+needed for this command shape. Use disposable identities and data on a fresh
+disposable VM. Once the trial is enabled, the operator will print its private
+random installation path under HOME; `--install-dir` remains an optional absolute
+override. Send the first failing stage, exit status, OS/architecture, RAM/disk,
+Docker/Compose versions and redacted error text to the person who invited you,
+or [issue #1350](https://github.com/ElevenID/marty-ui/issues/1350). Do not share
+secret values or raw credential diagnostics.
 
 ## Requirements and release availability
 
-Run as a regular Docker-enabled Linux amd64 user. Docker Engine must be locally
-accessible through a Unix socket, with its Compose plugin available. Rootless
-Docker, user namespace remapping and remote Docker contexts are currently
-unsupported. The bootstrap checks its standard command-line prerequisites and
-downloads pinned verification tools itself; it does not require a repository
-checkout or a build toolchain.
+Run as a regular Linux amd64 user with trusted preinstalled `setpriv`, Bash,
+curl, Docker client and Compose plugin. The daemon must already be rootless.
+The installer connects only through that user's `/run/user/<uid>/docker.sock`. Explicit
+context overrides, foreign sockets, rootful daemons and userns-remap mode are
+refused. The installer does not use sudo, install OS packages, start a daemon,
+configure subordinate IDs or change host CA trust. Any earlier runtime or host
+policy setup is a separate prerequisite. It does not remove the user's unrelated
+group memberships or claim to sandbox all their existing authority.
 
-The selected version must have published signed admission metadata and an
-authenticated operator artifact. Nightly and stable channel selection also
-requires valid signed channel metadata. Missing, expired, mismatched or invalid
-metadata causes refusal before the operator executes. A completed artifact build
-alone does not establish channel availability. Artifact production and deployment
-readiness are owned by their respective release and deployment workflows.
+The bootstrap uses private temporary verification-tool and Docker-config files,
+then downloads pinned verification tools. It requires no repository checkout or
+build toolchain. Provisioning, when enabled, will create private state and owned
+Docker resources; ordinary uninstall retains recoverable data and images. The
+current rootless boundary stops before those persistent changes.
+
+Normal version/channel installation requires signed admission and an
+authenticated operator. Channel selection also requires valid signed channel
+metadata. Experimental candidate selection instead requires an exact signed
+nightly inventory and authenticated operator; it grants no admission. Invalid
+required metadata refuses execution. Artifact publication alone does not
+establish deployment readiness or channel availability.
 
 ## Platform adapters
 
@@ -62,7 +91,8 @@ adapter; this POSIX shell script does not claim Windows support.
 
 ### Applicant state ownership
 
-New installations run the applicant service as the image's UID/GID 10001.
+The applicant implementation runs the service as the image's UID/GID 10001.
+Its rootless host mapping remains subject to the storage gate above.
 The installer keeps the installation and parent state directories private to
 the host operator. It provisions only the applicant child directory for the
 service's exact nonzero supplemental group and checks that owner, group, and

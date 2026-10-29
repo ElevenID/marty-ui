@@ -24,6 +24,22 @@ def run(args=(), source=None):
     return subprocess.run(command, input=source, capture_output=True, text=True, timeout=15, env=environment)
 
 
+def simulated_process(source):
+    """Keep adapter/argument fixtures independent of the host's /proc policy."""
+    target = '    require_rootless_process\n    select_platform'
+    assert source.count(target) == 1
+    source = source.replace(target, '    seen_uid=1000 # synthetic non-root process\n    select_platform')
+    target = '        select_docker_binary\n'
+    assert source.count(target) == 1
+    source = source.replace(target, '        docker_bin=/usr/bin/docker # synthetic pinned client\n')
+    target = '''    isolated_docker() {
+        env -i PATH=/usr/bin:/bin HOME="$stage/home" DOCKER_CONFIG="$stage/config" \\
+            DOCKER_HOST="$docker_endpoint" "$docker_bin" "$@"
+    }'''
+    assert source.count(target) == 1
+    return source.replace(target, '    isolated_docker() { docker "$@"; }')
+
+
 def test_help_does_not_require_docker_or_downloads():
     result = run(["--help"])
     assert result.returncode == 0
@@ -44,7 +60,7 @@ def test_help_does_not_require_docker_or_downloads():
 def test_invalid_arguments_refused_before_host_mutation(args, reason):
     # Keep argument-policy checks independent of the test runner's actual OS.
     host = 'uname() { case "$1" in -s) echo Linux;; -m) echo x86_64;; esac; }\n'
-    result = run(args, source=host + SCRIPT.read_text())
+    result = run(args, source=simulated_process(host + SCRIPT.read_text()))
     assert result.returncode != 0
     assert reason in result.stderr
 
@@ -61,7 +77,7 @@ docker() {{ echo UNEXPECTED_DOCKER >&2; return 91; }}
 mktemp() {{ echo UNEXPECTED_STAGING >&2; return 91; }}
 curl() {{ echo UNEXPECTED_DOWNLOAD >&2; return 91; }}
 '''
-    result = run(["--version", "v1.2.3"], source=setup + SCRIPT.read_text())
+    result = run(["--version", "v1.2.3"], source=simulated_process(setup + SCRIPT.read_text()))
     assert result.returncode != 0
     assert f"Unsupported platform: {system}/{machine}" in result.stderr
     assert "UNEXPECTED" not in result.stdout + result.stderr
@@ -79,7 +95,7 @@ def test_failed_platform_detection_stops_before_host_actions(failed_option, reas
 id() {{ echo UNEXPECTED_ID >&2; return 91; }}
 curl() {{ echo UNEXPECTED_DOWNLOAD >&2; return 91; }}
 '''
-    result = run(source=setup + SCRIPT.read_text())
+    result = run(source=simulated_process(setup + SCRIPT.read_text()))
     assert result.returncode != 0 and reason in result.stderr
     assert "UNEXPECTED" not in result.stdout + result.stderr
 
@@ -96,15 +112,16 @@ id() {{
     echo 0
 }}
 docker() {{ echo UNEXPECTED_DOCKER >&2; return 91; }}
+select_docker_binary() {{ docker_bin=/usr/bin/docker; }}
 curl() {{ echo UNEXPECTED_DOWNLOAD >&2; return 91; }}
 '''
-    result = run(source=setup + SCRIPT.read_text())
+    result = run(source=simulated_process(setup + SCRIPT.read_text()))
     # Stop at the actual regular-user check after observing the selected adapter.
-    assert result.returncode != 0 and "regular Docker-enabled user" in result.stderr
+    assert result.returncode != 0 and "Rootless installer UID invalid" in result.stderr
     selected = [line.removeprefix("PROFILE:") for line in result.stderr.splitlines()
                 if line.startswith("PROFILE:")]
     assert selected == [
-        "linux/amd64", "marty-deploy-linux-amd64", "linux_preflight", "linux_digest",
+        "linux/amd64", "marty-deploy-linux-amd64", "linux_rootless_preflight", "linux_digest",
         "https://github.com/jqlang/jq/releases/download/jq-1.8.1/jq-linux-amd64",
         "020468de7539ce70ef1bceaf7cde2e8c4f2ca6c3afb84642aabc5c97d9fc2a0d", "2255816",
         "https://github.com/sigstore/cosign/releases/download/v3.1.4/cosign-linux-amd64",
@@ -174,33 +191,38 @@ def test_candidate_test_authenticates_inventory_and_operator_before_dispatch():
 
 
 @pytest.mark.parametrize("endpoint,security,reason", [
-    ("ssh://example.invalid", "name=seccomp", "remote contexts are refused"),
-    ("tcp://127.0.0.1:2375", "name=seccomp", "remote contexts are refused"),
-    ("unix:///run/user/1000/docker.sock", "name=rootless", "Rootless Docker"),
-    ("unix:///var/run/docker.sock", "name=rootless,detail=true", "Rootless Docker"),
-    ("unix:///var/run/docker.sock", "name=userns", "user namespace remapping"),
-    ("unix:///var/run/docker.sock", "name=userns,remapped=true", "user namespace remapping"),
+    ("ssh://example.invalid", "name=rootless", "Docker endpoint differs"),
+    ("tcp://127.0.0.1:2375", "name=rootless", "Docker endpoint differs"),
+    ("unix:///var/run/docker.sock", "name=rootless", "Docker endpoint differs"),
+    ("", "name=seccomp", "Exact rootless Docker mode required"),
+    ("", "name=rootless,detail=true", "Exact rootless Docker mode required"),
+    ("", "name=userns", "Exact rootless Docker mode required"),
+    ("", "name=rootless\nname=userns", "Ambiguous Docker user namespace mode"),
 ])
 def test_wrong_docker_target_refused_before_download(endpoint, security, reason):
     source = SCRIPT.read_text()
     # Override host observations only; execute the actual argument/preflight code.
     setup = f'''
 unset DOCKER_CONTEXT DOCKER_HOST
+{('DOCKER_HOST=' + shlex.quote(endpoint)) if endpoint else ':'}
 uname() {{ case "$1" in -s) echo Linux;; -m) echo x86_64;; esac; }}
 id() {{ echo 1000; }}
 docker() {{
     case "$1:${{2:-}}" in
-        context:inspect) echo '{endpoint}';;
-        info:--format) echo '{security}';;
+        context:inspect) echo UNEXPECTED_CONTEXT >&2; return 91;;
+        info:--format) printf '%s\n' {shlex.quote(security)};;
         *) return 0;;
     esac
 }}
+select_docker_binary() {{ docker_bin=/usr/bin/docker; }}
 curl() {{ echo UNEXPECTED_DOWNLOAD >&2; return 1; }}
 '''
-    source = source.replace('\nmain "$@" --bootstrap-complete', setup + '\nmain "$@" --bootstrap-complete')
+    source = simulated_process(source.replace('\nmain "$@" --bootstrap-complete',
+                                              setup + '\nmain "$@" --bootstrap-complete'))
     result = run(source=source)
     assert result.returncode != 0 and reason in result.stderr
     assert "UNEXPECTED_DOWNLOAD" not in result.stderr
+    assert "UNEXPECTED_CONTEXT" not in result.stderr
 
 
 @pytest.mark.skipif(shutil.which("jq") is None, reason="requires jq for actual bootstrap JSON policy")

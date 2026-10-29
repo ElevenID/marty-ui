@@ -1,6 +1,7 @@
 #!/bin/sh
 # GitHub-hosted bootstrap. Keep all execution inside main so incomplete piped
-# downloads cannot start installation. Payload verification precedes execution.
+# downloads cannot start installation. The signed operator is verified before
+# execution; it verifies remaining payloads before runtime provisioning.
 main() (
     set -eu
     umask 077
@@ -8,33 +9,75 @@ main() (
     usage() {
         printf '%s\n' 'Usage: install.sh [--channel nightly|stable | --version TAG | --candidate-test NIGHTLY_TAG] [--install-dir PATH] [--yes]'
     }
+    # Candidate rootless entry must not execute even platform probes with
+    # inherited root identity, capabilities, or privilege-gaining exec rights.
+    # This uses shell builtins before any external command in that path.
+    require_rootless_process() {
+        seen_uid= seen_gid= seen_nnp= seen_eff= seen_prm= seen_amb=
+        while read -r key first second third fourth extra; do
+            case "$key" in
+                Uid:)
+                    [ -z "$seen_uid" ] && [ -z "$extra" ] && [ -n "$first" ] &&
+                        [ "$first" = "$second" ] && [ "$first" = "$third" ] &&
+                        [ "$first" = "$fourth" ] && [ "$first" != 0 ] || fail 'Rootless process UID differs'
+                    seen_uid=$first ;;
+                Gid:)
+                    [ -z "$seen_gid" ] && [ -z "$extra" ] && [ -n "$first" ] &&
+                        [ "$first" = "$second" ] && [ "$first" = "$third" ] &&
+                        [ "$first" = "$fourth" ] && [ "$first" != 0 ] || fail 'Rootless process GID differs'
+                    seen_gid=$first ;;
+                NoNewPrivs:)
+                    [ -z "$seen_nnp" ] && [ "$first" = 1 ] && [ -z "$second" ] ||
+                        fail 'Rootless trial requires no-new-privileges'
+                    seen_nnp=1 ;;
+                CapEff:|CapPrm:|CapAmb:)
+                    case "$first" in 0000000000000000) ;; *) fail 'Rootless process has capabilities' ;; esac
+                    [ -z "$second" ] || fail 'Rootless capability record differs'
+                    case "$key" in
+                        CapEff:) [ -z "$seen_eff" ] || fail 'Repeated capability record'; seen_eff=1 ;;
+                        CapPrm:) [ -z "$seen_prm" ] || fail 'Repeated capability record'; seen_prm=1 ;;
+                        CapAmb:) [ -z "$seen_amb" ] || fail 'Repeated capability record'; seen_amb=1 ;;
+                    esac ;;
+            esac
+        done < /proc/self/status || fail 'Linux process privilege state unavailable'
+        [ -n "$seen_uid" ] && [ -n "$seen_gid" ] && [ "$seen_nnp" = 1 ] &&
+            [ "$seen_eff" = 1 ] && [ "$seen_prm" = 1 ] && [ "$seen_amb" = 1 ] ||
+            fail 'Rootless process privilege state incomplete'
+    }
     # Host-specific behavior stays behind the selected platform adapter.
-    linux_preflight() {
-        [ "$(id -u)" -ne 0 ] || fail 'Run as your regular Docker-enabled user; privileged provisioning is requested separately'
-        for tool in curl sha256sum mktemp tar chmod rm wc cut grep docker mkdir env; do
+    linux_rootless_preflight() {
+        for tool in curl sha256sum mktemp tar chmod rm wc cut grep docker mkdir env id; do
             command -v "$tool" >/dev/null 2>&1 || fail "Required tool is missing: $tool"
         done
-        if [ -n "${DOCKER_CONTEXT:-}" ]; then
-            docker_endpoint=$(docker context inspect "$DOCKER_CONTEXT" --format '{{.Endpoints.docker.Host}}')
-        elif [ -n "${DOCKER_HOST:-}" ]; then
-            docker_endpoint=$DOCKER_HOST
-        else
-            docker_endpoint=$(docker context inspect --format '{{.Endpoints.docker.Host}}')
-        fi
-        case "$docker_endpoint" in unix:///*) ;; *) fail 'A local Unix-socket Docker Engine is required; remote contexts are refused' ;; esac
-        unset DOCKER_CONTEXT DOCKER_TLS_VERIFY DOCKER_CERT_PATH
+        select_docker_binary
+        uid=$(id -u) || fail 'Installer UID unavailable'
+        case "$uid" in ''|0|*[!0-9]*) fail 'Rootless installer UID invalid' ;; esac
+        [ "$uid" = "$seen_uid" ] || fail 'Installer UID changed'
+        [ -z "${DOCKER_CONTEXT:-}" ] || fail 'Docker context override is refused for rootless trial'
+        docker_endpoint="unix:///run/user/$uid/docker.sock"
+        [ -z "${DOCKER_HOST:-}" ] || [ "$DOCKER_HOST" = "$docker_endpoint" ] ||
+            fail 'Docker endpoint differs from user-owned rootless socket'
+        unset DOCKER_CONTEXT DOCKER_TLS_VERIFY DOCKER_CERT_PATH DOCKER_API_VERSION
         export DOCKER_HOST="$docker_endpoint"
-        docker info >/dev/null 2>&1 || fail 'Docker Engine must be running and accessible'
-        security_options=$(docker info --format '{{range .SecurityOptions}}{{println .}}{{end}}')
-        if printf '%s\n' "$security_options" | grep -Eq '^name=rootless(,|$)'; then
-            fail 'Rootless Docker is not supported by this installer'
+        isolated_docker info >/dev/null 2>&1 || fail 'User-owned rootless Docker Engine unavailable'
+        security_options=$(isolated_docker info --format '{{range .SecurityOptions}}{{println .}}{{end}}') ||
+            fail 'Rootless Docker mode unavailable'
+        [ "$(printf '%s\n' "$security_options" | grep -cx 'name=rootless' || :)" = 1 ] ||
+            fail 'Exact rootless Docker mode required'
+        if printf '%s\n' "$security_options" | grep -Eq '^name=userns(,|$)|^name=rootless,'; then
+            fail 'Ambiguous Docker user namespace mode'
         fi
-        if printf '%s\n' "$security_options" | grep -Eq '^name=userns(,|$)'; then
-            fail 'Docker user namespace remapping is not supported by this installer'
-        fi
-        docker_engine_id=$(docker info --format '{{.ID}}')
-        [ -n "$docker_engine_id" ] || fail 'Docker Engine identity is unavailable'
-        docker compose version >/dev/null 2>&1 || fail 'Docker Compose plugin is required'
+        docker_engine_id=$(isolated_docker info --format '{{.ID}}') || fail 'Docker Engine identity unavailable'
+        [ -n "$docker_engine_id" ] || fail 'Docker Engine identity unavailable'
+        isolated_docker compose version >/dev/null 2>&1 || fail 'Docker Compose plugin is required'
+    }
+    select_docker_binary() {
+        docker_bin=$(command -v docker) || fail 'Docker client unavailable'
+        case "$docker_bin" in /*) ;; *) fail 'Docker client must have an absolute path' ;; esac
+    }
+    isolated_docker() {
+        env -i PATH=/usr/bin:/bin HOME="$stage/home" DOCKER_CONFIG="$stage/config" \
+            DOCKER_HOST="$docker_endpoint" "$docker_bin" "$@"
     }
     linux_digest() { sha256sum < "$1" | cut -d ' ' -f 1; }
     select_platform() {
@@ -48,7 +91,7 @@ main() (
             Linux:x86_64|Linux:amd64)
                 platform=linux/amd64
                 operator_asset=marty-deploy-linux-amd64
-                preflight=linux_preflight
+                preflight=linux_rootless_preflight
                 digest_adapter=linux_digest
                 jq_url=https://github.com/jqlang/jq/releases/download/jq-1.8.1/jq-linux-amd64
                 jq_sha=020468de7539ce70ef1bceaf7cde2e8c4f2ca6c3afb84642aabc5c97d9fc2a0d
@@ -91,6 +134,7 @@ main() (
     done
     [ "$complete" = true ] || fail 'Incomplete bootstrap download; retry the original command'
     case "$channel" in nightly|stable) ;; *) fail 'Channel must be nightly or stable' ;; esac
+    require_rootless_process
     select_platform
     if [ -n "$version" ]; then
         printf '%s\n' "$version" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-nightly\.20[0-9]{6}\.[1-9][0-9]*)?$' || fail 'Invalid version'
@@ -98,12 +142,19 @@ main() (
     if [ "$candidate_test" = true ]; then
         case "$version" in *-nightly.*) ;; *) fail 'Candidate testing requires an exact nightly tag' ;; esac
     fi
+    stage=
+    create_stage() {
+        stage=$(mktemp -d /tmp/marty-installer.XXXXXXXX) || fail 'Cannot create private download directory'
+        trap 'rm -rf -- "$stage"' EXIT
+        trap 'exit 130' INT
+        trap 'exit 143' TERM
+        mkdir "$stage/config" "$stage/cache" "$stage/home"
+    }
+    create_stage
+    # The first Docker observation must not read ambient context or plugin
+    # configuration. The operator uses its own isolated configuration too.
+    export DOCKER_CONFIG="$stage/config"
     "$preflight"
-    stage=$(mktemp -d /tmp/marty-installer.XXXXXXXX) || fail 'Cannot create private download directory'
-    trap 'rm -rf -- "$stage"' EXIT
-    trap 'exit 130' INT
-    trap 'exit 143' TERM
-    mkdir "$stage/config" "$stage/cache" "$stage/home"
     # Never consume or send a caller's GitHub credentials during public bootstrap.
     unset GH_TOKEN GITHUB_TOKEN GH_ENTERPRISE_TOKEN GITHUB_ENTERPRISE_TOKEN GH_DEBUG
     export GH_CONFIG_DIR="$stage/config" GH_HOST=github.com GH_PROMPT_DISABLED=1
@@ -182,7 +233,8 @@ main() (
         [ "$("$stage/marty-deploy" --build-identity)" = "$source:$version" ] || fail 'Candidate operator build identity differs'
         set -- candidate-test --version "$version" --verified-inventory "$stage/installer-inventory.json" \
             --verification-tools "$stage" --gh-bin "$gh" \
-            --docker-host "$docker_endpoint" --docker-engine-id "$docker_engine_id" --docker-bin "$(command -v docker)"
+            --docker-host "$docker_endpoint" --docker-engine-id "$docker_engine_id" --docker-bin "$docker_bin" \
+            --runtime-profile rootless
         [ -z "$destination" ] || set -- "$@" --install-dir "$destination"
         [ "$yes" = false ] || set -- "$@" --yes
         "$stage/marty-deploy" "$@"
@@ -253,7 +305,8 @@ main() (
     [ "$("$stage/marty-deploy" --build-identity)" = "$source:$version" ] || fail 'Operator build identity differs'
     set -- install --version "$version" --verified-admission "$stage/admission.json" \
         --verification-tools "$stage" --gh-bin "$gh" \
-        --docker-host "$docker_endpoint" --docker-engine-id "$docker_engine_id" --docker-bin "$(command -v docker)"
+        --docker-host "$docker_endpoint" --docker-engine-id "$docker_engine_id" --docker-bin "$docker_bin" \
+        --runtime-profile rootless
     [ -z "$destination" ] || set -- "$@" --install-dir "$destination"
     if [ -f "$stage/channel.json" ]; then
         set -- "$@" --channel "$channel" --verified-channel "$stage/channel.json"

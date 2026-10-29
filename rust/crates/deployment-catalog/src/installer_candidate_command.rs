@@ -323,7 +323,14 @@ fn fetch_published_inner(args: &[String], build_identity: &str) -> Result<()> {
 /// The controller chooses expected run/phase/nonce independently of the signed
 /// records. This entry does not prove guest origin or public acquisition itself.
 pub fn install(args: &[String], build_identity: &str) -> Result<()> {
+    // Acceptance-only execution still records a rootful Docker binding. Keep
+    // the read-only acquisition command available, but refuse this new-install
+    // entry before inspecting Docker, consuming a nonce, or creating state.
+    require_rootless_candidate_qualification()?;
     install_inner(args, build_identity).map_err(|_| REFUSED.into())
+}
+fn require_rootless_candidate_qualification() -> Result<()> {
+    Err("Acceptance-only candidate installation requires qualified rootless storage mapping".into())
 }
 fn install_inner(args: &[String], build_identity: &str) -> Result<()> {
     let o = options(args)?;
@@ -541,7 +548,7 @@ mod tests {
         assert!(options(&duplicate).is_err());
     }
     #[test]
-    fn candidate_entry_refuses_missing_duplicate_and_bypass_options() {
+    fn candidate_entry_preserves_rootless_hold_and_refuses_bypass_options() {
         for args in [
             vec![],
             vec!["--skip-verification", "true"],
@@ -551,9 +558,16 @@ mod tests {
             let args = args.into_iter().map(str::to_owned).collect::<Vec<_>>();
             assert!(options(&args).is_err());
             let error = install(&args, "not-a-build").unwrap_err();
-            assert_eq!(error, REFUSED);
+            assert_eq!(
+                error,
+                "Acceptance-only candidate installation requires qualified rootless storage mapping"
+            );
             assert!(!error.contains("sensitive-input"));
         }
+        assert_eq!(
+            install(&valid_options(), "not-a-build").unwrap_err(),
+            "Acceptance-only candidate installation requires qualified rootless storage mapping"
+        );
     }
 
     #[test]
