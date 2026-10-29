@@ -6,11 +6,11 @@ nonroot Linux amd64 process with no-new-privileges and an already-running,
 user-owned rootless Docker daemon. macOS, Windows and other architectures are
 not supported.
 
-**Provisioning is currently held.** This source can authenticate the selected
-operator and inspect the rootless prerequisite, then refuses before persistent
-installation state or Docker resource creation. It is not yet the working
-one-line stack trial for outside testers. The on-target storage canary and its
-recovery path must be connected before that trial is published.
+Normal admitted installation remains held pending separate qualification.
+An exact signed nightly `--candidate-test` attempts an experimental rootless
+storage canary and, only if that succeeds on this host, stack provisioning and
+required read-only validation. The canary has not been qualified against a live
+user-owned rootless daemon; this source is not yet a published outside trial.
 
 The development invocation puts the entire download-and-script pipeline under
 no-new-privileges and propagates download errors:
@@ -34,14 +34,19 @@ nightlies can contain the older rootful path:
 
 The initial script is fetched over HTTPS and executes before its own bytes can
 be independently verified. It authenticates the signed inventory and operator
-before executing that operator. The current storage hold stops before the
-remaining payload preparation and provisioning stages. Candidate scope grants
-neither installer admission nor Ready status. Normal `--version` and `--channel`
-paths continue to require signed admission.
+before executing that operator. The operator may write private state and
+evidence before it verifies remaining payloads; payload verification precedes
+Docker runtime provisioning. The candidate records a durable canary pull intent
+before image acquisition, verifies the image and exact helper containers, and
+tests a reversible ownership transition before generating runtime credentials.
+Failure preserves the installation and evidence without automatic purge.
+Candidate scope grants neither installer admission nor Ready status. Normal
+`--version` and `--channel` paths continue to require signed admission and
+remain held before installation state or Docker resource creation.
 
 No source checkout, organization credentials or separate download package is
 needed for this command shape. Use disposable identities and data on a fresh
-disposable VM. Once the trial is enabled, the operator will print its private
+disposable VM. The operator prints its private
 random installation path under HOME; `--install-dir` remains an optional absolute
 override. Send the first failing stage, exit status, OS/architecture, RAM/disk,
 Docker/Compose versions and redacted error text to the person who invited you,
@@ -61,9 +66,23 @@ group memberships or claim to sandbox all their existing authority.
 
 The bootstrap uses private temporary verification-tool and Docker-config files,
 then downloads pinned verification tools. It requires no repository checkout or
-build toolchain. Provisioning, when enabled, will create private state and owned
-Docker resources; ordinary uninstall retains recoverable data and images. The
-current rootless boundary stops before those persistent changes.
+build toolchain. Candidate provisioning may pull images, create a private canary
+and owned Docker resources, and retain private state; ordinary uninstall retains
+recoverable data, credentials, images and the Redis volume. There is no automatic
+purge. Use a disposable VM snapshot and reset it after collecting feedback.
+
+If the canary stops while its child is foreign-owned, preserve the installation
+and invoke the retained verified operator's **recovery-only** command under
+no-new-privileges, using its printed absolute installation path and the verified
+absolute Docker executable path (shown here as `/usr/bin/docker`):
+
+```sh
+/usr/bin/setpriv --no-new-privs -- /absolute/retained/installation/marty-deploy restore-rootless-canary --installation /absolute/retained/installation --docker-bin /usr/bin/docker
+```
+
+Recovery rechecks recorded identities and may restore host traversal or record
+an exact-ID abort; it never resumes provisioning, grants Ready or removes the
+retained installation. An interrupted one-shot retry can require manual review.
 
 Normal version/channel installation requires signed admission and an
 authenticated operator. Channel selection also requires valid signed channel
