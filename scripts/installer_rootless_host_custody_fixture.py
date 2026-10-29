@@ -33,6 +33,9 @@ IMAGE = ("ghcr.io/elevenid/marty-ui-oss/openbao-didcomm@sha256:"
          "f8832a8b325fc017d9d10baf6742bf692cd573fa9a3ec09cb6c976a2fde56c54")
 CANARY = b"marty-rootless-owned-canary\n"
 SET_PRIV = "/usr/bin/setpriv"
+USERNS_CHILD = ("import ctypes;libc=ctypes.CDLL(None,use_errno=True);"
+                "rc=libc.unshare(0x10000000);"
+                "print(str(rc)+':'+str(ctypes.get_errno() if rc else 0))")
 
 
 def require(ok, message):
@@ -401,6 +404,36 @@ def daemon_log_evidence(raw):
             "observed_log_codes": [code for marker, code in patterns if marker in observed]}
 
 
+def userns_probe():
+    require(os.getuid() == os.geteuid() != 0, "ordinary nonroot probe required")
+    flags = {}
+    for name, path in (("max_user_namespaces", "/proc/sys/user/max_user_namespaces"),
+                       ("unprivileged_userns_clone", "/proc/sys/kernel/unprivileged_userns_clone"),
+                       ("apparmor_restrict_unprivileged_userns",
+                        "/proc/sys/kernel/apparmor_restrict_unprivileged_userns")):
+        try:
+            with open(path, "rb") as stream:
+                raw = stream.read(33)
+        except FileNotFoundError:
+            flags[name] = None
+            continue
+        require(len(raw) <= 32 and raw.strip().isdigit(), "kernel userns flag differs")
+        flags[name] = int(raw.strip())
+    result = run(["/usr/bin/python3", "-c", USERNS_CHILD],
+                 {"PATH": "/usr/bin:/bin", "HOME": "/"}, timeout=5)
+    match = re.fullmatch(r"(-?\d+):(\d+)", result)
+    require(match is not None, "userns child result ambiguous")
+    rc, error = int(match.group(1)), int(match.group(2))
+    require((rc == 0 and error == 0) or (rc == -1 and 0 < error <= 4095),
+            "userns child result differs")
+    evidence = {"schema": "marty.hosted-userns-capability/v1", "uid": os.geteuid(),
+                "no_new_privileges": True, "child_unshare_rc": rc,
+                "child_errno": error, "kernel_flags": flags,
+                "docker_or_daemon_used": False, "uidmap_helper_used": False}
+    write_record(Path(os.environ["RUNNER_TEMP"]) / "marty-rootless-userns-probe.json", evidence)
+    return evidence
+
+
 def fixture(inventory, tool_dir):
     prerequisites = preflight(tool_dir=tool_dir)
     authenticated_image(inventory)
@@ -650,10 +683,13 @@ def fixture(inventory, tool_dir):
 
 
 def main():
-    require((len(sys.argv) == 3 and sys.argv[1] == "--preflight")
+    require((len(sys.argv) == 2 and sys.argv[1] == "--probe-userns")
+            or (len(sys.argv) == 3 and sys.argv[1] == "--preflight")
             or (len(sys.argv) == 4 and sys.argv[1] == "--run"),
             "fixed arguments only")
-    if sys.argv[1] == "--preflight":
+    if sys.argv[1] == "--probe-userns":
+        print(json.dumps(userns_probe(), sort_keys=True))
+    elif sys.argv[1] == "--preflight":
         print(json.dumps(preflight(record=True), sort_keys=True))
     else:
         fixture(Path(sys.argv[2]), Path(sys.argv[3]))

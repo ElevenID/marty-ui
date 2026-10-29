@@ -28,6 +28,18 @@ jobs:
           test "$(id -u)" != 0
           python3 -m py_compile scripts/installer_rootless_host_custody_fixture.py scripts/installer_rootless_tool_admission.py
           python3 -m unittest discover -s tests -p test_installer_rootless_host_custody_fixture.py -v
+      - name: Record ordinary-user user namespace capability without Docker
+        run: |
+          test "$(id -u)" != 0
+          python3 scripts/installer_rootless_host_custody_fixture.py --probe-userns
+      - name: Retain bounded user namespace capability result
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: installer-rootless-userns-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/marty-rootless-userns-probe.json
+          if-no-files-found: warn
+          retention-days: 7
 
   live-fixture:
     needs: source-tests

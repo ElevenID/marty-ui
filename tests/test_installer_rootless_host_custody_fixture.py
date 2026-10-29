@@ -3,6 +3,8 @@
 import importlib.util
 import hashlib
 import io
+import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -39,6 +41,18 @@ class RootlessHostCustodyFixtureTests(unittest.TestCase):
             self.assertNotIn(secret, str(evidence))
         with self.assertRaises(RuntimeError):
             fixture.daemon_log_evidence(b"x" * (4 * 1024 * 1024 + 1))
+
+    def test_userns_probe_records_errno_without_treating_refusal_as_success(self):
+        with tempfile.TemporaryDirectory() as temp, \
+             mock.patch.dict(os.environ, {"RUNNER_TEMP": temp}), \
+             mock.patch.object(fixture, "run", return_value="-1:1"):
+            result = fixture.userns_probe()
+            self.assertEqual((result["child_unshare_rc"], result["child_errno"]), (-1, 1))
+            self.assertFalse(result["docker_or_daemon_used"])
+            stored = json.loads((Path(temp) / "marty-rootless-userns-probe.json").read_text())
+            self.assertEqual(stored, result)
+            self.assertEqual((Path(temp) / "marty-rootless-userns-probe.json").stat().st_mode & 0o777,
+                             0o600)
 
     def test_exact_mapping_for_root_and_openbao_user(self):
         mapping = "         0       1000          1\n         1     231072      65536\n"
