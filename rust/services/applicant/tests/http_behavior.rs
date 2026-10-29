@@ -215,7 +215,10 @@ async fn claim_rejects_unsupported_options_and_malformed_json_before_mutation() 
         let value: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(value["detail"]["error"], code);
         assert!(!String::from_utf8_lossy(&body).contains("do-not-echo-this-value"));
-        assert_eq!(*service.store().read().await, before);
+        assert_eq!(
+            serde_json::to_value(&*service.store().read().await).unwrap(),
+            serde_json::to_value(&before).unwrap()
+        );
     }
 }
 
@@ -237,7 +240,10 @@ async fn claim_checks_holder_ownership_before_reporting_body_errors() {
             .await
             .unwrap();
         assert_eq!(response.status(), expected);
-        assert_eq!(*service.store().read().await, before);
+        assert_eq!(
+            serde_json::to_value(&*service.store().read().await).unwrap(),
+            serde_json::to_value(&before).unwrap()
+        );
     }
 }
 
@@ -295,7 +301,10 @@ async fn claim_reuses_the_pending_offer_and_reports_real_read_only_capabilities(
             "openid-credential-offer://canonical-existing-offer"
         );
         assert_eq!(value["claim_capabilities"], expected_capabilities);
-        assert_eq!(*service.store().read().await, before);
+        assert_eq!(
+            serde_json::to_value(&*service.store().read().await).unwrap(),
+            serde_json::to_value(&before).unwrap()
+        );
     }
     let response = app
         .oneshot(
@@ -311,7 +320,10 @@ async fn claim_reuses_the_pending_offer_and_reports_real_read_only_capabilities(
         serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap();
     assert_eq!(value["claim_capabilities"], expected_capabilities);
     assert_eq!(reads.load(Ordering::SeqCst), 3);
-    assert_eq!(*service.store().read().await, before);
+    assert_eq!(
+        serde_json::to_value(&*service.store().read().await).unwrap(),
+        serde_json::to_value(&before).unwrap()
+    );
     server.abort();
 }
 
@@ -435,7 +447,10 @@ async fn reconcile_delayed_transaction(status: &'static str, reissue: bool) {
     let value: Value =
         serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap();
     if reissue {
-        assert_eq!(*service.store().read().await, before);
+        assert_eq!(
+            serde_json::to_value(&*service.store().read().await).unwrap(),
+            serde_json::to_value(&before).unwrap()
+        );
         assert_eq!(persistence.0.load(Ordering::SeqCst), writes);
         assert_eq!(
             value["credential_offer_uri"],
@@ -556,7 +571,10 @@ async fn withdrawal_routes_preserve_authentication_authority_and_tenant_boundari
             expected,
             "{path}, user={user:?}, organization={organization:?}"
         );
-        assert_eq!(*service.store().read().await, before);
+        assert_eq!(
+            serde_json::to_value(&*service.store().read().await).unwrap(),
+            serde_json::to_value(&before).unwrap()
+        );
     }
 }
 
@@ -600,7 +618,10 @@ async fn withdrawal_routes_return_conflict_for_issuance_without_lifecycle_side_e
                 body["detail"],
                 "Issuance must be reconciled before withdrawing this application"
             );
-            assert_eq!(*service.store().read().await, before);
+            assert_eq!(
+                serde_json::to_value(&*service.store().read().await).unwrap(),
+                serde_json::to_value(&before).unwrap()
+            );
         }
     }
 }
@@ -651,7 +672,10 @@ async fn offer_retirement_requires_both_scopes_and_matching_issuer_revocation() 
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
     }
     assert_eq!(revocations.load(Ordering::SeqCst), 0);
-    assert_eq!(*service.store().read().await, before);
+    assert_eq!(
+        serde_json::to_value(&*service.store().read().await).unwrap(),
+        serde_json::to_value(&before).unwrap()
+    );
     let response = app
         .clone()
         .oneshot(
@@ -721,7 +745,10 @@ async fn offer_retirement_rejects_mismatched_revocation_without_local_mutation()
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
-    assert_eq!(*service.store().read().await, before);
+    assert_eq!(
+        serde_json::to_value(&*service.store().read().await).unwrap(),
+        serde_json::to_value(&before).unwrap()
+    );
     server.abort();
 }
 
@@ -1073,4 +1100,65 @@ async fn operational_diagnostics_identify_the_required_native_backend() {
         serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap();
     assert_eq!(body["backend"], "rust");
     assert_eq!(body["service"], "applicant-service");
+}
+
+#[tokio::test]
+async fn per_offer_lifetime_does_not_expand_issue_authority_or_tenant_scope() {
+    let before = withdrawal_store(LifecycleStatus::Approved);
+    let (app, service) = app_with_store(before.clone());
+    for (path, user, organization, permissions, expected) in [
+        (
+            "/v1/organizations/issuer-org/applicants/application-1/issue",
+            None,
+            None,
+            None,
+            StatusCode::UNAUTHORIZED,
+        ),
+        (
+            "/v1/organizations/issuer-org/applicants/application-1/issue",
+            Some("operator"),
+            Some("issuer-org"),
+            None,
+            StatusCode::FORBIDDEN,
+        ),
+        (
+            "/v1/organizations/issuer-org/applicants/application-1/issue",
+            Some("operator"),
+            Some("other-org"),
+            Some("issuance:initiate"),
+            StatusCode::FORBIDDEN,
+        ),
+        (
+            "/v1/organizations/other-org/applicants/application-1/issue",
+            Some("operator"),
+            Some("other-org"),
+            Some("issuance:initiate"),
+            StatusCode::NOT_FOUND,
+        ),
+    ] {
+        let mut request = Request::post(path).header("content-type", "application/json");
+        for (name, value) in [
+            ("x-user-id", user),
+            ("x-organization-id", organization),
+            ("x-org-permissions", permissions),
+        ] {
+            if let Some(value) = value {
+                request = request.header(name, value);
+            }
+        }
+        let response = app
+            .clone()
+            .oneshot(
+                request
+                    .body(Body::from(r#"{"offer_ttl_seconds":60}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected);
+        assert_eq!(
+            serde_json::to_value(&*service.store().read().await).unwrap(),
+            serde_json::to_value(&before).unwrap()
+        );
+    }
 }

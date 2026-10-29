@@ -32,6 +32,8 @@ def source_store(private):
     # entrypoint still checks that separately before any WSL request.
     store = object.__new__(journal.LinuxBuildJournal)
     store.private, store.run_id = private, RUN
+    # Match the real Linux constructor's explicit transport selection.
+    store.desktop_transport = None
     store.specification = {"rootProof": copy.deepcopy(PROOF), "workerSha256": "a" * 64, "sharedSha256": "b" * 64}
     return store
 
@@ -129,7 +131,7 @@ class LinuxJournalTests(unittest.TestCase):
             self.assertEqual(list(root.glob("linux-journal-request-*.json")), [])
 
     def test_legacy_passport_cannot_select_linux_backend(self):
-        with self.assertRaisesRegex(ValueError, "LINUX_JOURNAL_IS_D02_ONLY"):
+        with self.assertRaisesRegex(ValueError, "LINUX_JOURNAL_REVIEWED_PROFILE_REQUIRED"):
             build.build_journal({"journalBackend": {}}, Path("SOURCE_ONLY"))
 
 

@@ -106,6 +106,7 @@ fn options(args: &[String]) -> Result<Options> {
         docker_host: host.clone(),
         engine_id: engine.clone(),
         openbao_port: 18200,
+        profile: crate::installer_state::RuntimeProfile::Rootful,
     }
     .validate()?;
     Ok(Options {
@@ -271,15 +272,12 @@ fn install_inner(args: &[String], build_identity: &str, mode: InstallMode) -> Re
             .local_addr()
             .map_err(|_| "cannot inspect local port")?
             .port(),
+        profile: crate::installer_state::RuntimeProfile::Rootful,
     };
     let docker = o.docker.as_path();
-    let observed = crate::installer_runtime::DockerRunner::new(
-        docker,
-        &runtime.docker_host,
-        &runtime.engine_id,
-        &o.tools,
-    )?
-    .preflight()?;
+    let observed =
+        crate::installer_runtime::DockerRunner::from_binding(docker, &runtime, &o.tools)?
+            .preflight()?;
     let inventory_sha = if let Some((_, record)) = &admitted {
         record.inventory_sha256.clone()
     } else {

@@ -494,11 +494,8 @@ fn run() -> Result<(), String> {
             )?;
             let docker =
                 std::path::Path::new(args.get(4).map(String::as_str).unwrap_or("/usr/bin/docker"));
-            let runner = marty_deployment_catalog::installer_runtime::DockerRunner::new(
-                docker,
-                &runtime.docker_host,
-                &runtime.engine_id,
-                directory,
+            let runner = marty_deployment_catalog::installer_runtime::DockerRunner::from_binding(
+                docker, runtime, directory,
             )?;
             let observation = runner.preflight()?;
             let cleanup = inspection.cleanup_status()?;

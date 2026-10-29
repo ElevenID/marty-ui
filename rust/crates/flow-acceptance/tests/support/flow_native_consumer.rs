@@ -229,6 +229,7 @@ fn assert_request(observation: &Observation, instance: &FlowInstanceRecord, atte
     assert_eq!(
         observation.request,
         IssuanceInitiationRequest {
+            offer_ttl_seconds: None,
             organization_id: "org-1".into(),
             flow_instance_id: instance.id.clone(),
             credential_template_id: "template-1".into(),

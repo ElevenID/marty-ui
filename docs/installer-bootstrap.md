@@ -60,6 +60,29 @@ adapter; this POSIX shell script does not claim Windows support.
 
 ## Deployment operations
 
+### Applicant state ownership
+
+New installations run the applicant service as the image's UID/GID 10001.
+The installer keeps the installation and parent state directories private to
+the host operator. It provisions only the applicant child directory for the
+service's exact nonzero supplemental group and checks that owner, group, and
+mode again before application startup. The applicant store is written through
+a group-readable temporary file and atomic rename, so the installer can still
+read its state for backup and recovery.
+
+Do not apply the new Compose model directly to an existing installation whose
+applicant directory or JSON store was created by the former root-running
+container. The installer does not adopt an existing directory, and this change
+does not include an automatic self-host upgrade. A separate reviewed migration
+must first stop the exact owned applicant writer, prove there are no other
+volume consumers, take and verify a complete backup, reject links or unexpected
+entries, bind the original file hash and ownership, change only the exact
+applicant directory and store to the selected owner/group and bounded modes,
+then verify unchanged bytes and a real UID 10001 read/write/restart. If any
+precondition or readback fails, preserve the backup and stopped installation
+for explicit recovery. Do not recursively change the installation or state
+parent permissions.
+
 ### Inspecting removal
 
 For an installation with a fully recorded runtime, or the specifically proven

@@ -1156,3 +1156,94 @@ async fn production_authorizer_uses_the_canonical_mmf_policy() {
         Err(ProviderError::Denied(_))
     ));
 }
+
+struct LifetimeAuthority {
+    maximum: StdMutex<Option<u64>>,
+    calls: AtomicUsize,
+}
+#[async_trait]
+impl TemplateProvider for LifetimeAuthority {
+    async fn get(&self, _: &str, _: &str) -> Result<ApplicationTemplate, ProviderError> {
+        Ok(template())
+    }
+    async fn validate_offer_lifetime(
+        &self,
+        organization: &str,
+        seconds: u64,
+    ) -> Result<(), ProviderError> {
+        assert_eq!(organization, "issuer-org");
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        match *self.maximum.lock().unwrap() {
+            Some(maximum) if (60..=maximum).contains(&seconds) => Ok(()),
+            Some(_) => Err(ProviderError::InvalidOfferLifetime),
+            None => Err(ProviderError::Unavailable(
+                "issuer validation unknown".into(),
+            )),
+        }
+    }
+}
+#[tokio::test]
+async fn offer_lifetime_authority_precedes_reservation_and_corrected_request_is_recoverable() {
+    let authority = Arc::new(LifetimeAuthority {
+        maximum: StdMutex::new(Some(60)),
+        calls: AtomicUsize::new(0),
+    });
+    let flow = Arc::new(FlowMock::default());
+    let events = Arc::new(EventsMock::default());
+    let persistence = Arc::new(PersistenceMock::default());
+    let service = ApplicantService::with_persistence(
+        Arc::new(RwLock::new(StoreDocument::default())),
+        authority.clone(),
+        flow.clone(),
+        Arc::new(AuthorizerMock::default()),
+        events.clone(),
+        persistence.clone(),
+    );
+    let application = draft(&service).await;
+    let now = application.created_at;
+    service.store().write().await.applications[0].status = LifecycleStatus::Approved;
+    let before = service.store().read().await.clone();
+    let writes = persistence.0.lock().unwrap().len();
+    let events_before = events.0.lock().await.len();
+    for seconds in [59, 120] {
+        assert!(matches!(
+            service
+                .issue_with_lifetime(&application.id, now, Some(seconds))
+                .await,
+            Err(ServiceError::Provider(ProviderError::InvalidOfferLifetime))
+        ));
+        assert_eq!(*service.store().read().await, before);
+        assert_eq!(persistence.0.lock().unwrap().len(), writes);
+        assert!(flow.calls.lock().await.is_empty());
+        assert_eq!(events.0.lock().await.len(), events_before);
+    }
+    *authority.maximum.lock().unwrap() = None;
+    assert!(service
+        .issue_with_lifetime(&application.id, now, Some(60))
+        .await
+        .is_err());
+    assert_eq!(*service.store().read().await, before);
+    assert!(flow.calls.lock().await.is_empty());
+    *authority.maximum.lock().unwrap() = Some(60);
+    // A corrected value is now reserved, then a simulated uncertain Flow transport occurs.
+    assert!(service
+        .issue_with_lifetime(&application.id, now, Some(60))
+        .await
+        .is_err());
+    assert_eq!(flow.calls.lock().await.len(), 1);
+    let first = flow.calls.lock().await[0].0;
+    let validations = authority.calls.load(Ordering::SeqCst);
+    *authority.maximum.lock().unwrap() = None;
+    assert!(service
+        .issue_with_lifetime(&application.id, now, Some(120))
+        .await
+        .is_err());
+    assert_eq!(flow.calls.lock().await.len(), 1);
+    // Exact valid reservations retry without changing lifetime or requiring new policy admission.
+    service
+        .issue_with_lifetime(&application.id, now, Some(60))
+        .await
+        .unwrap();
+    assert_eq!(flow.calls.lock().await[1].0, first);
+    assert_eq!(authority.calls.load(Ordering::SeqCst), validations);
+}

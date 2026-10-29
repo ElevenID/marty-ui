@@ -75,6 +75,7 @@ def test_public_field_numbers_remain_wire_compatible():
         "idempotency_key": 11,
         "claims_json": 12,
     }
+    assert initiation["offer_ttl_seconds"] == 13
     token = fields("issuance_service.proto", "ExchangeTokenRequest")
     assert token["client_assertion_type"] == 7
     assert token["client_assertion"] == 8

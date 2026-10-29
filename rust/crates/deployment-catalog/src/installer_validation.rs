@@ -251,7 +251,7 @@ pub(crate) fn run_locked(
     let runtime = journal.runtime();
     let runner = runtime
         .ok_or_else(|| "missing recorded Docker binding".to_owned())
-        .and_then(|r| DockerRunner::new(docker, &r.docker_host, &r.engine_id, installation))
+        .and_then(|r| DockerRunner::from_binding(docker, r, installation))
         .map(|r| r.with_deadline(deadline));
     let before = runner.as_ref().ok().and_then(|d| {
         d.preflight()
@@ -396,6 +396,7 @@ mod tests {
                 docker_host: "unix:///var/run/docker.sock".into(),
                 engine_id: "test-engine".into(),
                 openbao_port: 18200,
+                profile: crate::installer_state::RuntimeProfile::Rootful,
             },
         )
         .unwrap();

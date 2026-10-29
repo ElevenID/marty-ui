@@ -3,9 +3,18 @@ set -eu
 
 # Build the single KMS-only public service binary set.
 case "${1:-}" in
-  default) shift; set -- ;;
+  default) shift ;;
   *) echo "expected default build mode" >&2; exit 2 ;;
 esac
+
+# Local source builders may request deterministic, offline compiler telemetry.
+# Reject package, feature, profile and arbitrary Cargo overrides.
+for option in "$@"; do
+  case "$option" in
+    --offline|-j1|--message-format=json) ;;
+    *) echo "unsupported default build option" >&2; exit 2 ;;
+  esac
+done
 
 exec cargo build --locked --release "$@" \
   -p marty-event-stream --bin marty-event-stream \
