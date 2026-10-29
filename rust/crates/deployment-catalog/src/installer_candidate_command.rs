@@ -489,7 +489,10 @@ fn install_inner(args: &[String], build_identity: &str) -> Result<()> {
         &prepared.bundle,
         &prepared.inventory,
         &mut state,
-        &operator_sha,
+        crate::installer_command::RuntimeInvocation {
+            operator_sha: &operator_sha,
+            completion: crate::installer_command::RuntimeCompletion::HoldIncomplete,
+        },
         port,
     );
     drop(consumed);
