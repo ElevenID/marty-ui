@@ -1,0 +1,43 @@
+name: Installer rootless offline transaction contracts
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/installer-rootless-package-install.yml
+      - scripts/installer_test_vm_rootless_package_install.py
+      - scripts/installer_test_vm_rootless_package_admission.py
+      - tests/test_installer_test_vm_rootless_package_install.py
+
+permissions:
+  contents: read
+
+jobs:
+  unprivileged-offline-contracts:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Exercise only synthetic nonroot transaction contracts
+        shell: bash
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+          test "$(id -u)" -ne 0
+          test "$(lsb_release -is)" = Ubuntu
+          test "$(lsb_release -rs)" = 24.04
+          python3 - <<'PY'
+          import unittest
+
+          suite = unittest.defaultTestLoader.discover(
+              "tests", pattern="test_installer_test_vm_rootless_package_install.py"
+          )
+          assert suite.countTestCases() == 10, suite.countTestCases()
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          assert result.wasSuccessful() and result.testsRun == 10
+          assert not result.skipped, result.skipped
+          PY
