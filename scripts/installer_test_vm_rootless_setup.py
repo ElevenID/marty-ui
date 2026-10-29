@@ -38,7 +38,9 @@ SETUP_READINESS_SCHEMA = "elevenid.installer-only-rootless-fixture-setup-readine
 INSTALLER_GUEST_SCRIPT = r'''
 import errno, grp, json, os, pwd, socket, stat
 uid=os.getuid(); gid=os.getgid(); groups=set(os.getgroups())|{gid}
-assert uid>0 and os.geteuid()==uid and pwd.getpwuid(uid).pw_name=='installer'
+identity=pwd.getpwuid(uid)
+assert uid>0 and os.geteuid()==uid and identity.pw_name=='installer'
+assert identity.pw_dir=='/home/installer'
 docker_gid=grp.getgrnam('docker').gr_gid
 sudo_gid=grp.getgrnam('sudo').gr_gid
 sock='/var/run/docker.sock'; info=os.lstat(sock)
@@ -55,8 +57,17 @@ fields={line.split(':',1)[0]:line.split(':',1)[1].strip() for line in status.spl
 assert fields.get('NoNewPrivs')=='1'
 assert all(fields.get(key)=='0000000000000000' for key in ('CapEff','CapPrm','CapAmb'))
 print(json.dumps({'schema':'elevenid.fixture-installer-account/v1','uid':uid,'gid':gid,
+ 'home':identity.pw_dir,
  'docker_group':False,'sudo_group':False,'setup_socket_denied':True,
  'no_new_privs':True,'effective_caps_zero':True},sort_keys=True,separators=(',',':')))
+'''
+ADMIN_IDENTITY_SCRIPT = r'''
+import json, os, pwd
+uid=os.getuid(); identity=pwd.getpwuid(uid)
+assert uid>0 and os.geteuid()==uid and identity.pw_name=='fixture-admin'
+assert identity.pw_dir=='/home/fixture-admin' and os.getgid()>0
+print(json.dumps({'schema':'elevenid.fixture-admin-identity/v1','uid':uid,
+ 'gid':os.getgid(),'home':identity.pw_dir},sort_keys=True,separators=(',',':')))
 '''
 SETUP_ENGINE_COMMAND = ("/usr/bin/env -i HOME=/nonexistent PATH=/usr/bin:/bin "
                         "/usr/bin/sudo -n /usr/bin/docker --host "
@@ -68,6 +79,7 @@ SETUP_CLOUD_INIT_COMMAND = "/usr/bin/cloud-init status --format json"
 def _ssh_as(binding: dict, user: str, script: str, *, limit: int = 1024,
             timeout: int = 20) -> bytes:
     release.require((user, script) in (("installer", _installer_command()),
+                                       ("fixture-admin", _admin_identity_command()),
                                        ("fixture-admin", SETUP_ENGINE_COMMAND),
                                        ("fixture-admin", SETUP_SERVICE_COMMAND),
                                        ("fixture-admin", SETUP_CLOUD_INIT_COMMAND)),
@@ -85,21 +97,41 @@ def _installer_command() -> str:
             + shlex.quote(INSTALLER_GUEST_SCRIPT))
 
 
+def _admin_identity_command() -> str:
+    return ("/usr/bin/python3 -E -I -B -c "
+            + shlex.quote(ADMIN_IDENTITY_SCRIPT))
+
+
 def _decode_installer(raw: bytes) -> dict:
     value = release.decode(raw)
-    release.exact(value, {"schema", "uid", "gid", "docker_group", "sudo_group",
+    release.exact(value, {"schema", "uid", "gid", "home", "docker_group", "sudo_group",
                           "setup_socket_denied", "no_new_privs",
                           "effective_caps_zero"}, "fixture ordinary account")
     release.require(release.encode(value) == raw
                     and value["schema"] == "elevenid.fixture-installer-account/v1"
                     and type(value["uid"]) is int and value["uid"] > 0
                     and type(value["gid"]) is int and value["gid"] > 0
+                    and value["home"] == "/home/installer"
                     and value["docker_group"] is False
                     and value["sudo_group"] is False
                     and value["setup_socket_denied"] is True
                     and value["no_new_privs"] is True
                     and value["effective_caps_zero"] is True,
                     "fixture ordinary guest account differs")
+    return value
+
+
+def _decode_admin(raw: bytes, ordinary_uid: int) -> dict:
+    value = release.decode(raw)
+    release.exact(value, {"schema", "uid", "gid", "home"},
+                  "fixture setup principal")
+    release.require(release.encode(value) == raw
+                    and value["schema"] == "elevenid.fixture-admin-identity/v1"
+                    and type(value["uid"]) is int
+                    and value["uid"] > 0 and value["uid"] != ordinary_uid
+                    and type(value["gid"]) is int and value["gid"] > 0
+                    and value["home"] == "/home/fixture-admin",
+                    "fixture setup principal differs")
     return value
 
 
@@ -115,6 +147,9 @@ def observe_setup_readiness(*, source: Path, registry: Path, vm_parent: Path,
                            runtime_parent=runtime_parent, vm_id=vm_id)
     ordinary = _decode_installer(_ssh_as(before, "installer",
                                         _installer_command(), limit=2048))
+    admin = _decode_admin(_ssh_as(before, "fixture-admin",
+                                 _admin_identity_command(), limit=512),
+                          ordinary["uid"])
     cloud_raw = _ssh_as(before, "fixture-admin", SETUP_CLOUD_INIT_COMMAND,
                         limit=4096)
     cloud = release.decode(cloud_raw)
@@ -137,6 +172,9 @@ def observe_setup_readiness(*, source: Path, registry: Path, vm_parent: Path,
                     and _decode_installer(_ssh_as(after, "installer",
                                                   _installer_command(),
                                                   limit=2048)) == ordinary
+                    and _decode_admin(_ssh_as(after, "fixture-admin",
+                                              _admin_identity_command(),
+                                              limit=512), ordinary["uid"]) == admin
                     and _ssh_as(after, "fixture-admin", SETUP_ENGINE_COMMAND,
                                 limit=256) == raw_engine,
                     "fixture setup observation changed")
@@ -149,6 +187,10 @@ def observe_setup_readiness(*, source: Path, registry: Path, vm_parent: Path,
               "setup_engine_id": engine,
               "ordinary_uid": ordinary["uid"],
               "ordinary_gid": ordinary["gid"],
+              "ordinary_home": ordinary["home"],
+              "setup_uid": admin["uid"], "setup_gid": admin["gid"],
+              "setup_home": admin["home"],
+              "setup_principal_distinct": True,
               "ordinary_no_sudo_or_docker_group": True,
               "setup_socket_denied_to_installer": True,
               "setup_engine_stopped": False,
@@ -179,6 +221,8 @@ def bound_setup_fixture(*, source: Path, registry: Path, vm_parent: Path,
     release.exact(recorded, {"schema", "phase", "vm_id", "launch_sha256",
                              "seed_sha256", "pid", "start_ticks", "boot_id",
                              "setup_engine_id", "ordinary_uid", "ordinary_gid",
+                             "ordinary_home", "setup_uid", "setup_gid",
+                             "setup_home", "setup_principal_distinct",
                              "ordinary_no_sudo_or_docker_group",
                              "setup_socket_denied_to_installer",
                              "setup_engine_stopped", "rootless_engine_observed",
@@ -197,6 +241,14 @@ def bound_setup_fixture(*, source: Path, registry: Path, vm_parent: Path,
                     and recorded["ordinary_uid"] > 0
                     and type(recorded["ordinary_gid"]) is int
                     and recorded["ordinary_gid"] > 0
+                    and recorded["ordinary_home"] == "/home/installer"
+                    and type(recorded["setup_uid"]) is int
+                    and recorded["setup_uid"] > 0
+                    and recorded["setup_uid"] != recorded["ordinary_uid"]
+                    and type(recorded["setup_gid"]) is int
+                    and recorded["setup_gid"] > 0
+                    and recorded["setup_home"] == "/home/fixture-admin"
+                    and recorded["setup_principal_distinct"] is True
                     and type(recorded["setup_engine_id"]) is str
                     and str(uuid.UUID(recorded["setup_engine_id"]))
                     == recorded["setup_engine_id"]
@@ -212,8 +264,15 @@ def bound_setup_fixture(*, source: Path, registry: Path, vm_parent: Path,
                     "fixture setup readiness evidence invalid")
     ordinary = _decode_installer(_ssh_as(before, "installer",
                                         _installer_command(), limit=2048))
+    admin = _decode_admin(_ssh_as(before, "fixture-admin",
+                                 _admin_identity_command(), limit=512),
+                          ordinary["uid"])
     release.require((ordinary["uid"], ordinary["gid"])
                     == (recorded["ordinary_uid"], recorded["ordinary_gid"])
+                    and ordinary["home"] == recorded["ordinary_home"]
+                    and (admin["uid"], admin["gid"], admin["home"])
+                    == (recorded["setup_uid"], recorded["setup_gid"],
+                        recorded["setup_home"])
                     and _ssh_as(before, "fixture-admin", SETUP_SERVICE_COMMAND,
                                 limit=64) == b"active\n"
                     and json.loads(_ssh_as(before, "fixture-admin",

@@ -206,17 +206,22 @@ def test_mixed_factory_or_records_refuse(change):
 
 def test_setup_observation_uses_fixed_read_only_guest_commands():
     compile(setup.INSTALLER_GUEST_SCRIPT, "fixture_installer_guest", "exec")
+    compile(setup.ADMIN_IDENTITY_SCRIPT, "fixture_admin_guest", "exec")
     binding = {"vm_id": "11111111-2222-4333-8444-555555555555",
                "pid": 1509, "start_ticks": "123456", "boot_id":
                "01234567-89ab-4cde-8f01-23456789abcd",
                "launch_sha256": "a" * 64, "seed_sha256": "b" * 64}
     ordinary = release.encode({"schema": "elevenid.fixture-installer-account/v1",
-                               "uid": 1000, "gid": 1001, "docker_group": False,
+                               "uid": 1000, "gid": 1001, "home": "/home/installer",
+                               "docker_group": False,
                                "sudo_group": False, "setup_socket_denied": True,
                                "no_new_privs": True,
                                "effective_caps_zero": True})
     cloud = b'{"status":"done","extended_status":"done","errors":[],"recoverable_errors":[]}\n'
     outputs = {setup._installer_command(): ordinary,
+               setup._admin_identity_command(): release.encode({
+                   "schema": "elevenid.fixture-admin-identity/v1",
+                   "uid": 1002, "gid": 1002, "home": "/home/fixture-admin"}),
                setup.SETUP_CLOUD_INIT_COMMAND: cloud,
                setup.SETUP_SERVICE_COMMAND: b"active\n",
                setup.SETUP_ENGINE_COMMAND:
@@ -243,7 +248,9 @@ def test_setup_observation_uses_fixed_read_only_guest_commands():
     assert result["setup_engine_stopped"] is False
     assert result["rootless_ready"] is False
     assert result["product_dispatch_authorized"] is False
+    assert result["setup_uid"] != result["ordinary_uid"]
     assert set(calls) == {("installer", setup._installer_command()),
+                          ("fixture-admin", setup._admin_identity_command()),
                           ("fixture-admin", setup.SETUP_CLOUD_INIT_COMMAND),
                           ("fixture-admin", setup.SETUP_SERVICE_COMMAND),
                           ("fixture-admin", setup.SETUP_ENGINE_COMMAND)}
@@ -258,13 +265,30 @@ def test_guest_command_allowlist_refuses_shell_input_before_ssh():
     command.assert_not_called()
 
 
+def test_setup_principal_must_be_distinct_with_seeded_home():
+    for uid, home in ((1000, "/home/fixture-admin"),
+                      (1002, "/home/installer")):
+        raw = release.encode({"schema": "elevenid.fixture-admin-identity/v1",
+                              "uid": uid, "gid": 1002, "home": home})
+        with pytest.raises(ValueError, match="setup principal differs"):
+            setup._decode_admin(raw, 1000)
+    with pytest.raises(ValueError, match="ordinary guest account differs"):
+        setup._decode_installer(release.encode({
+            "schema": "elevenid.fixture-installer-account/v1",
+            "uid": 1000, "gid": 1001, "home": "/home/other",
+            "docker_group": False, "sudo_group": False,
+            "setup_socket_denied": True, "no_new_privs": True,
+            "effective_caps_zero": True}))
+
+
 def test_changed_setup_engine_refuses_before_result_record():
     binding = {"vm_id": "11111111-2222-4333-8444-555555555555",
                "pid": 1509, "start_ticks": "123456", "boot_id":
                "01234567-89ab-4cde-8f01-23456789abcd",
                "launch_sha256": "a" * 64, "seed_sha256": "b" * 64}
     ordinary = release.encode({"schema": "elevenid.fixture-installer-account/v1",
-                               "uid": 1000, "gid": 1001, "docker_group": False,
+                               "uid": 1000, "gid": 1001, "home": "/home/installer",
+                               "docker_group": False,
                                "sudo_group": False, "setup_socket_denied": True,
                                "no_new_privs": True,
                                "effective_caps_zero": True})
@@ -273,6 +297,10 @@ def test_changed_setup_engine_refuses_before_result_record():
     def fixed(_binding, _user, script, **_):
         if script == setup._installer_command():
             return ordinary
+        if script == setup._admin_identity_command():
+            return release.encode({"schema": "elevenid.fixture-admin-identity/v1",
+                                   "uid": 1002, "gid": 1002,
+                                   "home": "/home/fixture-admin"})
         if script == setup.SETUP_CLOUD_INIT_COMMAND:
             return b'{"status":"done","extended_status":"done","errors":[]}\n'
         if script == setup.SETUP_SERVICE_COMMAND:
@@ -303,6 +331,10 @@ def test_package_adapter_rebinds_setup_engine_without_product_authority():
               "pid": before["pid"], "start_ticks": before["start_ticks"],
               "boot_id": before["boot_id"], "setup_engine_id": engine,
               "ordinary_uid": 1000, "ordinary_gid": 1001,
+              "ordinary_home": "/home/installer",
+              "setup_uid": 1002, "setup_gid": 1002,
+              "setup_home": "/home/fixture-admin",
+              "setup_principal_distinct": True,
               "ordinary_no_sudo_or_docker_group": True,
               "setup_socket_denied_to_installer": True,
               "setup_engine_stopped": False, "rootless_engine_observed": False,
@@ -310,7 +342,8 @@ def test_package_adapter_rebinds_setup_engine_without_product_authority():
               "product_dispatch_authorized": False, "observed_at": 1000}
     raw = release.encode(record)
     account = release.encode({"schema": "elevenid.fixture-installer-account/v1",
-                              "uid": 1000, "gid": 1001, "docker_group": False,
+                              "uid": 1000, "gid": 1001, "home": "/home/installer",
+                              "docker_group": False,
                               "sudo_group": False, "setup_socket_denied": True,
                               "no_new_privs": True, "effective_caps_zero": True})
     class Lease:
@@ -321,6 +354,10 @@ def test_package_adapter_rebinds_setup_engine_without_product_authority():
             pass
     def run(_binding, _user, script, **_):
         return (account if script == setup._installer_command() else
+                release.encode({"schema": "elevenid.fixture-admin-identity/v1",
+                                "uid": 1002, "gid": 1002,
+                                "home": "/home/fixture-admin"})
+                if script == setup._admin_identity_command() else
                 b"active\n" if script == setup.SETUP_SERVICE_COMMAND else
                 ('"' + engine + '"\n').encode())
     with mock.patch.object(setup, "bound_fixture", return_value=before), \
