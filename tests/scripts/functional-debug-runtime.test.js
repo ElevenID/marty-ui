@@ -494,18 +494,25 @@ function mdocConfigurationFixture(t){
  const authority={schema:'marty.mdoc-config-authority/v1',operation:'D03_MDOC_CONFIGURATION_SUCCESSOR',runId:run,producerRevision:R('f'),inputSha256:H('e'),operator,baseProfileSha256:base.sha256,files,journalSpecification:spec,
   publicAuthorities:['trusted','rejected'].map(name=>({organization_id:'00000000-0000-0000-0000-000000000001',issuer_did:'did:web:example.test:'+name,certificate:{issuer_contact_uri:'https://example.test',crl_distribution_uri:'https://example.test/'+name+'.crl'}}))};
  const authorityRef=f.write('config-authority.json',authority),roles={},configs={},raw={};
+ const layouts=JSON.parse(fs.readFileSync(path.join(__dirname,'../fixtures/mdoc-compose540-mount-layout.json'),'utf8')).roles;
  for(const [index,role]of ['gateway','signing-keys'].entries()){
   const beforeRole=oldBinding.roles.find(row=>row.role===role),newId=crypto.createHash('sha256').update('config-new:'+role).digest('hex');
   roles[role]={containerId:newId,hostPid:990+index,startedAt:'2026-10-27T01:00:00Z'};
   const labels={'com.docker.compose.project':'elevenid-beta','com.docker.compose.service':role,'com.docker.compose.config-hash':'old','com.docker.compose.project.config_files':'old.yml','com.docker.compose.version':'5.4.0','com.docker.compose.project.environment_file':'old.env','com.docker.compose.depends_on':'postgres'};
-  const mounts=beforeRole.binaryMounts.map(m=>({Type:m.type,Source:m.source,Destination:m.destination,Mode:'ro',RW:false,Propagation:'rprivate'}));
+  const layout=structuredClone(layouts[role]),mounts=layout.Mounts,target='/usr/local/bin/'+beforeRole.binary;
+  const binary=beforeRole.binaryMounts.find(m=>m.destination===target);assert(binary,'Source fixture binary missing');
+  mounts.find(m=>m.Destination===target).Source=binary.source;
+  const binaryApi=layout.HostConfig.Mounts.find(m=>m.Target===target);
+  if(binaryApi)binaryApi.Source=binary.source;
+  else{const index=layout.HostConfig.Binds.findIndex(value=>value.match(/^(.*):([^:]+):([^:]+)$/)?.[2]===target);assert(index>=0);const mode=layout.HostConfig.Binds[index].match(/^(.*):([^:]+):([^:]+)$/)[3];layout.HostConfig.Binds[index]=binary.source+':'+target+':'+mode;}
   const before={Id:beforeRole.containerId,Name:'/beta-'+role,Image:beforeRole.imageId,Config:{Hostname:beforeRole.containerId.slice(0,12),Labels:labels,Env:['EXISTING=unchanged'],User:'10001:10001'},
-   HostConfig:{Binds:mounts.map(m=>m.Source+':'+m.Destination+':ro'),Mounts:null,Dns:null,DnsOptions:[],DnsSearch:[],OomKillDisable:false,Privileged:false},Mounts:mounts,State:{Running:true,Status:'running',Pid:beforeRole.hostPid,StartedAt:beforeRole.startedAt}};
+   HostConfig:{...layout.HostConfig,Dns:null,DnsOptions:[],DnsSearch:[],OomKillDisable:false,Privileged:false},Mounts:mounts,State:{Running:true,Status:'running',Pid:beforeRole.hostPid,StartedAt:beforeRole.startedAt}};
   before.NetworkSettings={Networks:{beta:{NetworkID:H('8'),EndpointID:H('7'),Gateway:'172.19.0.1',IPAddress:'172.19.0.2',IPPrefixLen:16,IPv6Gateway:'',GlobalIPv6Address:'',GlobalIPv6PrefixLen:0,MacAddress:'02:00:00:00:00:01',DNSNames:['beta-'+role,before.Id.slice(0,12),role],Aliases:[role],IPAMConfig:null,Links:null,DriverOpts:null}}};
   const created=structuredClone(before);created.Id=newId;created.Config.Hostname=newId.slice(0,12);created.State={Status:'created',Running:false,Pid:0};
   Object.assign(created.NetworkSettings.Networks.beta,{NetworkID:'',EndpointID:'',Gateway:'',IPAddress:'',IPPrefixLen:0,MacAddress:'',DNSNames:['beta-'+role,newId.slice(0,12),role]});
   created.Config.Labels={...labels,'com.docker.compose.config-hash':'new','com.docker.compose.project.config_files':'old.yml,mdoc.yml','com.docker.compose.project.environment_file':'old.env','com.docker.compose.depends_on':''};
-  for(const file of files){const target='/run/secrets/'+file.name;created.Config.Env.push('SIGNING_KEYS_'+file.name.toUpperCase()+'_FILE='+target);created.Mounts.push({Type:'bind',Source:file.path,Destination:target,Mode:'ro',RW:false,Propagation:'rprivate'});created.HostConfig.Binds.push(file.path+':'+target+':ro');}
+  for(const file of files){const target='/run/secrets/'+file.name,api=structuredClone(layout.HostConfig.Mounts[0]),daemon=structuredClone(layout.Mounts.find(m=>m.Destination===api.Target));
+   created.Config.Env.push('SIGNING_KEYS_'+file.name.toUpperCase()+'_FILE='+target);created.Mounts.push({...daemon,Source:file.path,Destination:target});created.HostConfig.Mounts.push({...api,Source:file.path,Target:target});}
   if(role==='signing-keys')created.Config.Env.push('SIGNING_KEYS_MDOC_CERTIFICATE_AUTHORITIES_JSON='+JSON.stringify(authority.publicAuthorities));
   // The operator emits the same sorted ASCII JSON as the shared Python validator.
   const sort=value=>Array.isArray(value)?value.map(sort):value&&typeof value==='object'?Object.fromEntries(Object.keys(value).sort().map(k=>[k,sort(value[k])])):value;
@@ -539,13 +546,26 @@ test('mdoc configuration successor preserves all22 per-role binary lineage',t=>{
   if(!['gateway','signing-keys'].includes(row.role))for(const key of ['containerId','hostPid','startedAt'])assert.equal(row[key],old[key]);}
 });
 
-for(const fault of ['observeOnly','env','forgedConfigOnly','hostReadonly','mountReadonly','generation','nonselectedGeneration','extraNetwork','networkId','networkStatic','endpointReconnect','sourceStamp','thirdRole','knownPending','knownHash','durability'])test('mdoc configuration successor rejects '+fault,t=>{
+for(const fault of ['observeOnly','env','forgedConfigOnly','hostReadonly','mountReadonly','generation','nonselectedGeneration','extraNetwork','networkId','networkStatic','endpointReconnect','sourceStamp','thirdRole','knownPending','knownHash','durability','namedSource','namedReadonly','volumeName','volumeDriver','volumeSource','hostSource','hostType','hostOption','hostExtra','hostDuplicate','hostMissing','crossDuplicate','wrongRepresentation','daemonMode'])test('mdoc configuration successor rejects '+fault,t=>{
  const f=mdocConfigurationFixture(t),helper=require('./functional-debug-runtime');
  if(fault==='observeOnly'){assert.throws(()=>verifyFunctionalRuntime(f.profile,{observe:()=>assert.fail('No caller observations')}));return;}
  if(fault==='env')f.raw.gateway.Config.Env.push('UNEXPECTED=sensitive-must-not-print');
  if(fault==='forgedConfigOnly')f.raw.gateway.Config.Env=['EXISTING=unchanged'];
  if(fault==='nonselectedGeneration')f.otherRaw.auth.State.Pid++;
- if(fault==='hostReadonly')f.raw.gateway.HostConfig.Binds[f.raw.gateway.HostConfig.Binds.length-1]=f.raw.gateway.HostConfig.Binds.at(-1).replace(/:ro$/,':rw');
+ if(fault==='hostReadonly')f.raw.gateway.HostConfig.Mounts.at(-1).ReadOnly=false;
+ if(fault==='namedSource')f.raw.gateway.HostConfig.Binds[0]='foreign:'+f.raw.gateway.HostConfig.Binds[0].split(':').slice(1).join(':');
+ if(fault==='namedReadonly')f.raw.gateway.HostConfig.Binds[0]=f.raw.gateway.HostConfig.Binds[0].replace(/:ro$/,':rw');
+ if(fault==='volumeName')f.raw.gateway.Mounts.find(m=>m.Type==='volume').Name+='-foreign';
+ if(fault==='volumeDriver')f.raw.gateway.Mounts.find(m=>m.Type==='volume').Driver='foreign';
+ if(fault==='volumeSource')f.raw.gateway.Mounts.find(m=>m.Type==='volume').Source+='-foreign';
+ if(fault==='hostSource')f.raw.gateway.HostConfig.Mounts.at(-1).Source+='/foreign';
+ if(fault==='hostType')f.raw.gateway.HostConfig.Mounts.at(-1).Type='volume';
+ if(fault==='hostOption')f.raw.gateway.HostConfig.Mounts.at(-1).BindOptions.CreateMountpoint=true;
+ if(fault==='hostExtra')f.raw.gateway.HostConfig.Mounts.at(-1).Unreviewed=true;
+ if(fault==='hostDuplicate')f.raw.gateway.HostConfig.Mounts.push(structuredClone(f.raw.gateway.HostConfig.Mounts.at(-1)));
+ if(fault==='hostMissing')f.raw.gateway.HostConfig.Mounts.shift();
+ if(['crossDuplicate','wrongRepresentation'].includes(fault)){const row=f.raw.gateway.HostConfig.Mounts.at(-1);f.raw.gateway.HostConfig.Binds.push(row.Source+':'+row.Target+':ro');if(fault==='wrongRepresentation')f.raw.gateway.HostConfig.Mounts.pop();}
+ if(fault==='daemonMode')f.raw.gateway.Mounts.at(-1).Mode='ro';
  if(fault==='mountReadonly')f.raw.gateway.Mounts.at(-1).RW=true;
  if(fault==='generation')f.raw.gateway.State.Pid++;
  if(fault==='extraNetwork')f.raw.gateway.NetworkSettings.Networks.extra=structuredClone(f.raw.gateway.NetworkSettings.Networks.beta);

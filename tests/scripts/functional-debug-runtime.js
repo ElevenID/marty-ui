@@ -534,10 +534,30 @@ function mdocMounts(rows,key){
  for(const row of rows){assert(row&&typeof row[key]==='string'&&!result.has(row[key]),'MDOC_DUPLICATE_MOUNT');result.set(row[key],{...row,Source:mdocSource(row.Source)});}
  return result;
 }
-function mdocBinds(rows){
+function mdocNamedVolume(source,mount){
+ assert(typeof source==='string'&&/^[A-Za-z0-9]/.test(source)&&!/[^A-Za-z0-9_.-]/.test(source)&&mount.Type==='volume'&&mount.Name===source,'MDOC_NAMED_VOLUME_CHANGED');return source;
+}
+function mdocBinds(rows,mounts){
  assert(Array.isArray(rows),'MDOC_BIND_SCHEMA');const result=new Map();
- for(const value of rows){assert(typeof value==='string');const match=value.match(/^(.*):([^:]+):([^:]+)$/);assert(match&&!result.has(match[2]),'MDOC_DUPLICATE_BIND');result.set(match[2],{source:mdocSource(match[1]),mode:match[3]});}
+ for(const value of rows){assert(typeof value==='string');const match=value.match(/^(.*):([^:]+):([^:]+)$/);assert(match&&!result.has(match[2])&&mounts.has(match[2]),'MDOC_DUPLICATE_OR_UNBOUND_BIND');
+  const mount=mounts.get(match[2]),mode=match[3];assert(mode.length>0&&!/[^A-Za-z0-9_,.-]/.test(mode)&&typeof mount.RW==='boolean'&&mount.RW===!mode.split(',').includes('ro'),'MDOC_BIND_READONLY_CHANGED');
+  const source=mount.Type==='bind'?mdocSource(match[1]):mdocNamedVolume(match[1],mount);if(mount.Type==='bind')privateEqual(source,mount.Source,'MDOC_BIND_SOURCE_CHANGED');
+  result.set(match[2],{type:mount.Type,source,mode});
+ }
  return result;
+}
+function mdocHostMounts(rows,mounts){
+ assert(Array.isArray(rows),'MDOC_HOST_MOUNT_SCHEMA');const result=new Map();
+ for(const row of rows){assert(row&&typeof row.Target==='string'&&!result.has(row.Target)&&mounts.has(row.Target)&&typeof row.ReadOnly==='boolean','MDOC_DUPLICATE_OR_UNBOUND_HOST_MOUNT');
+  const mount=mounts.get(row.Target);assert(row.Type===mount.Type&&typeof mount.RW==='boolean'&&row.ReadOnly===!mount.RW,'MDOC_HOST_MOUNT_TYPE_OR_READONLY_CHANGED');
+  const source=row.Type==='bind'?mdocSource(row.Source):mdocNamedVolume(row.Source,mount);if(row.Type==='bind')privateEqual(source,mount.Source,'MDOC_HOST_MOUNT_SOURCE_CHANGED');
+  result.set(row.Target,{...row,Source:source});
+ }return result;
+}
+function mdocHostRepresentations(row){
+ const mounts=mdocMounts(row.Mounts,'Destination'),binds=mdocBinds(row.HostConfig.Binds||[],mounts),api=mdocHostMounts(row.HostConfig.Mounts||[],mounts);
+ for(const target of binds.keys())assert(!api.has(target),'MDOC_DUPLICATE_HOST_MOUNT_REPRESENTATION');
+ assert.equal(binds.size+api.size,mounts.size,'MDOC_INCOMPLETE_HOST_MOUNT_REPRESENTATIONS');return {binds,api};
 }
 // Same created/start-only fields as scoped_signing_successor.normalized_created.
 // A first started snapshot freezes those values; later reads cannot adopt a
@@ -579,14 +599,18 @@ function validateMdocConfigContainer(before,created,role,authority,provenance){
  assert.equal(labelsB['com.docker.compose.depends_on'],'');privateEqual(a,b,'MDOC_OTHER_CONFIG_CHANGED');
  const oldMounts=mdocMounts(before.Mounts,'Destination'),newMounts=mdocMounts(created.Mounts,'Destination');
  assert.equal(newMounts.size,oldMounts.size+2);for(const [target,mount]of oldMounts)privateEqual(newMounts.get(target),mount,'MDOC_EXISTING_MOUNT_CHANGED');
- const oldBinds=mdocBinds(before.HostConfig.Binds||[]),newBinds=mdocBinds(created.HostConfig.Binds||[]);assert.equal(newBinds.size,oldBinds.size+2);
- for(const [target,bind]of oldBinds)privateEqual(newBinds.get(target),bind,'MDOC_EXISTING_BIND_CHANGED');
+ const {binds:oldBinds,api:oldApi}=mdocHostRepresentations(before),{binds:newBinds,api:newApi}=mdocHostRepresentations(created);
+ privateEqual(newBinds,oldBinds,'MDOC_EXISTING_BINDS_CHANGED');assert.equal(newApi.size,oldApi.size+2);
+ for(const [target,mount]of oldApi)privateEqual(newApi.get(target),mount,'MDOC_EXISTING_HOST_MOUNT_CHANGED');
  for(const file of authority.files){const target='/run/secrets/'+file.name;assert(!oldMounts.has(target)&&!oldBinds.has(target),'MDOC_ALREADY_MOUNTED');
   const mount=newMounts.get(target);assert(mount&&Object.keys(mount).sort().join(',')==='Destination,Mode,Propagation,RW,Source,Type','MDOC_CLOSED_MOUNT_REQUIRED');
-  privateEqual(mount,{Type:'bind',Source:mdocSource(file.path),Destination:target,Mode:'ro',RW:false,Propagation:'rprivate'},'MDOC_RO_MOUNT_REQUIRED');
-  privateEqual(newBinds.get(target),{source:mdocSource(file.path),mode:'ro'},'MDOC_RO_BIND_REQUIRED');
+  privateEqual(mount,{Type:'bind',Source:mdocSource(file.path),Destination:target,Mode:'',RW:false,Propagation:'rprivate'},'MDOC_RO_MOUNT_REQUIRED');
+  assert(!oldApi.has(target),'MDOC_ALREADY_MOUNTED');
+  privateEqual(newApi.get(target),{Type:'bind',Source:mdocSource(file.path),Target:target,ReadOnly:true,BindOptions:{}},'MDOC_RO_HOST_API_MOUNT_REQUIRED');
  }
- const hA=structuredClone(before.HostConfig),hB=structuredClone(created.HostConfig);delete hA.Binds;delete hB.Binds;
+ // The reviewed create_host_path=false long syntax selects the Mount API in
+ // Compose5.4.0. Both complete representations were independently closed above.
+ const hA=structuredClone(before.HostConfig),hB=structuredClone(created.HostConfig);for(const key of ['Binds','Mounts']){delete hA[key];delete hB[key];}
  for(const name of ['Dns','DnsSearch','DnsOptions'])if((hA[name]===null||Array.isArray(hA[name])&&!hA[name].length)&&(hB[name]===null||Array.isArray(hB[name])&&!hB[name].length))hA[name]=hB[name]=[];
  if([null,false].includes(hA.OomKillDisable)&&[null,false].includes(hB.OomKillDisable))hA.OomKillDisable=hB.OomKillDisable=false;
  privateEqual(hA,hB,'MDOC_OTHER_HOST_CONFIG_CHANGED');
