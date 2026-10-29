@@ -165,7 +165,8 @@ function createSupportController({ operator, applicantPage, fixture, lane, origi
       foreign: observed.foreign?.proof || null, login: observed.loginProof };
   }
 
-  async function issue(binding, stage) {
+  async function issue(binding, stage, { offerTtlSeconds } = {}) {
+    assert(offerTtlSeconds === undefined || [60, 120].includes(offerTtlSeconds));
     assert.ok(initialHash, 'Read-only fixture preflight must complete before issuance');
     await requireNoConflictingApplications(applicantPage, binding);
     const owned = { organizationId: binding.organizationId, credentialTemplateId: binding.credentialTemplateId,
@@ -180,11 +181,15 @@ function createSupportController({ operator, applicantPage, fixture, lane, origi
       `/v1/organizations/${encodeURIComponent(owned.organizationId)}/applicants/${encodeURIComponent(owned.applicationId)}/approve`,
       { method: 'POST', body: JSON.stringify({ notes: 'Authorized synthetic D05 supporting-lane fixture' }) }), owned);
     assert.equal(approved.status, 'APPROVED');
-    return completeIssue(owned, binding);
+    return completeIssue(owned, binding, { offerTtlSeconds });
   }
 
-  async function completeIssue(owned, binding) {
-    const result = await issueOwnedApplication(operator, owned, 'Issue owned D05 membership credential');
+  async function completeIssue(owned, binding, { offerTtlSeconds } = {}) {
+    assert(offerTtlSeconds === undefined || [60, 120].includes(offerTtlSeconds));
+    const options = offerTtlSeconds === undefined ? {} : { requestIssue: endpoint => requireJson(operator,
+      endpoint, { method: 'POST', body: JSON.stringify({ offer_ttl_seconds: offerTtlSeconds }) },
+      'Issue dedicated short-lived owned D05 offer') };
+    const result = await issueOwnedApplication(operator, owned, 'Issue owned D05 membership credential', options);
     onOwned(ownedApplications);
     // The public list is a summary and omits expires_at. Read the exact scoped
     // detail for authoritative expiry and ownership, including expired offers.
@@ -322,7 +327,8 @@ async function authMe(context, origin) {
   return response.json();
 }
 
-async function present({ authPage, walletPage, authContext, operator, fixture, origin, wallet, record, waitFor, issuerDid, allowed, step }) {
+async function startLogin({authPage,operator,fixture,origin,flowHooks}) {
+  await flowHooks?.beforeStart();
   await authPage.goto(`${origin}/v1/auth/credential-login`, { waitUntil: 'domcontentloaded', timeout: 60_000 });
   const details = await authPage.evaluate(() => ({ nonce: document.body.dataset.nonce,
     href: document.querySelector('#wallet-link')?.href, dcApiRequestUrl: document.body.dataset.dcApiRequestUrl }));
@@ -330,7 +336,14 @@ async function present({ authPage, walletPage, authContext, operator, fixture, o
   const match = requestUrl.pathname.match(/^\/v1\/flows\/instances\/([0-9a-f-]{36})\/request$/i);
   assert.ok(requestUrl.origin === origin && match, 'Native login Flow request binding is required');
   const instancePath = `/v1/flows/instances/${match[1]}`;
-  const binding = loginInstanceBinding(details, await requireJson(operator, instancePath), fixture, origin);
+  const instance=await requireJson(operator, instancePath);
+  const binding = loginInstanceBinding(details, instance, fixture, origin);
+  await flowHooks?.acknowledge({binding,instance});
+  return {details,instancePath,binding};
+}
+
+async function present({ authPage, walletPage, authContext, operator, fixture, origin, wallet, record, waitFor, issuerDid, allowed, step,flowHooks }) {
+  const {details,instancePath,binding}=await startLogin({authPage,operator,fixture,origin,flowHooks});
   const browserObservation = allowed ? observeCredentialLoginBrowser(authPage, origin, details.nonce) : null;
   await step(authPage, allowed ? '4. Sign in with the trusted badge' : '2. Try the foreign issuer badge',
     'The real credential sign-in page has created a signed request. The separate wallet is the first-party Rust test client.');
@@ -607,4 +620,4 @@ if (require.main === module) main().catch((error) => {
   console.error(JSON.stringify({ failed: true, type: error.name })); process.exitCode = 1;
 });
 module.exports = { EVIDENCE_FILE, FIXTURE_FILE, createSupportController, guards, main,
-  prepareFixture, present, receive, stableConfiguration, walletInventory };
+  prepareFixture, present, receive, stableConfiguration, walletInventory,authMe,startLogin };

@@ -31,9 +31,14 @@ function requiredText(value, label) {
 }
 
 function validateExpiryPrerequisite(expiry) {
-  objectKeys(expiry, ['isolatedDeployment', 'expectedServerOfferTtlSeconds', 'maximumWaitSeconds'], 'expiry');
-  assert.equal(expiry.isolatedDeployment, true,
-    'Expired-offer lane requires an explicitly isolated short-lived deployment');
+  objectKeys(expiry, ['isolatedDeployment', 'mode', 'expectedServerOfferTtlSeconds', 'maximumWaitSeconds'], 'expiry');
+  if (expiry.mode === 'PER_OWNED_OFFER') {
+    assert.equal(expiry.isolatedDeployment, undefined, 'Per-offer lifetime does not change a deployment default');
+  } else {
+    assert.equal(expiry.mode, undefined, 'Unknown expiry mode');
+    assert.equal(expiry.isolatedDeployment, true,
+      'Expired-offer lane requires an explicitly isolated short-lived deployment');
+  }
   assert.ok(Number.isInteger(expiry.expectedServerOfferTtlSeconds)
     && expiry.expectedServerOfferTtlSeconds >= 60 && expiry.expectedServerOfferTtlSeconds <= MAX_OFFER_TTL_SECONDS
     && expiry.expectedServerOfferTtlSeconds % 60 === 0,
@@ -195,7 +200,7 @@ function expiryWindow(transaction, application, prerequisite, nowMs = Date.now()
     'Actual public transaction and application expiry timestamps are required');
   assert.equal(applicationExpiry, expires, 'Application offer expiry does not match its transaction');
   assert.ok(Math.abs((expires - created) / 1000 - prerequisite.expectedServerOfferTtlSeconds) <= 1,
-    'Actual server offer TTL differs from the declared isolated deployment; cancel the owned transaction');
+    'Actual server offer TTL differs from the declared lifetime; cancel the owned transaction');
   assert.ok(expires > nowMs && expires - nowMs + 1000 <= prerequisite.maximumWaitSeconds * 1000,
     'Actual expiry is not within the explicit bounded recording window');
   return { createdAt: transaction.created_at, expiresAt: transaction.expires_at,
