@@ -75,6 +75,13 @@ def require_build_identifiers(run_id: str, engine_id: str) -> None:
             and engine_id == seed.ENGINE, "OWNED_BUILD_IDENTIFIERS_REQUIRED")
 
 
+def require_official_journal(journal: dict) -> None:
+    require(journal.get("backend") == "DOCKER_DESKTOP_PRIVATE_JOURNAL_V1"
+            and journal.get("desktop", {}).get("engineId") == seed.ENGINE
+            and journal.get("desktop", {}).get("volumeProof") is not None,
+            "DURABLE_DESKTOP_JOURNAL_REQUIRED")
+
+
 def prepare(packet_path: Path, packet_sha: str, seed_path: Path, seed_sha: str,
             journal_path: Path, run_id: str, engine_id: str) -> None:
     packet = source_export(packet_path, packet_sha)
@@ -86,8 +93,7 @@ def prepare(packet_path: Path, packet_sha: str, seed_path: Path, seed_sha: str,
                                  Path(packet["buildTool"]["path"]).read_text())
     require_build_identifiers(run_id, engine_id)
     journal = json.loads(journal_path.read_text(encoding="utf-8"))
-    require(journal.get("backend") == "UBUNTU_PRIVATE_JOURNAL_V1",
-            "DURABLE_LINUX_JOURNAL_REQUIRED")
+    require_official_journal(journal)
     root = packet_path.parent.resolve()
     plan = {"privateDirectory": str(root), "buildProfile": PROFILE,
             "profileSourceSha256": packet["operatorFiles"]["scoped_native_profiles.py"]["sha256"],

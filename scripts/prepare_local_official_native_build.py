@@ -103,6 +103,7 @@ def stage_operator(repo: Path, revision: str, name: str, destination: Path) -> d
                      "prepare_local_official_native_build.py",
                      "seed_local_official_native_target.py",
                      "run_local_official_native_build.py",
+                     "desktop_journal_transport.py",
                      "build-rust-service-binaries.sh"), "REVIEWED_OPERATOR_NAME_REQUIRED")
     raw = git(repo, "show", revision + ":scripts/" + name)
     with destination.open("xb") as target:
@@ -163,6 +164,7 @@ def main() -> None:
                  "prepare_local_official_native_build.py",
                  "seed_local_official_native_target.py",
                  "run_local_official_native_build.py",
+                 "desktop_journal_transport.py",
                  "build-rust-service-binaries.sh"):
         source = Path(__file__).with_name(name)
         target = operator_directory / name

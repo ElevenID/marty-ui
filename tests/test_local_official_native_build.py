@@ -87,6 +87,17 @@ class OfficialNativeBuildTests(unittest.TestCase):
         self.assertEqual(build.artifact_directory("d02-signing-cas"), "debug")
         self.assertEqual(build.artifact_directory(self.profile.name), "release")
 
+    def test_official_profile_requires_explicit_desktop_journal(self):
+        for journal in ({"backend": "UBUNTU_PRIVATE_JOURNAL_V1"},
+                        {"backend": "DOCKER_DESKTOP_PRIVATE_JOURNAL_V1"},
+                        {"backend": "DOCKER_DESKTOP_PRIVATE_JOURNAL_V1",
+                         "desktop": {"engineId": "f" * 64, "volumeProof": {"Name": "x"}}}):
+            with self.assertRaisesRegex(ValueError, "DURABLE_DESKTOP_JOURNAL_REQUIRED"):
+                launcher.require_official_journal(journal)
+        launcher.require_official_journal({"backend": "DOCKER_DESKTOP_PRIVATE_JOURNAL_V1",
+            "desktop": {"engineId": "3dbbbe66-1c98-4e0c-b0a6-f927c05e7341",
+                        "volumeProof": {"Name": "marty-d02-journal-owned"}}})
+
     def test_compiler_mounts_only_distinct_target_and_read_only_source(self):
         run_id = "11111111-1111-4111-8111-111111111111"
         plan = {"buildProfile": self.profile.name, "uiRevision": self.profile.ui_revision,
