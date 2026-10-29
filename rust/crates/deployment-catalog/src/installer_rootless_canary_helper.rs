@@ -231,6 +231,51 @@ fn read_entry(parent: &File, name: &str, limit: u64) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
+fn stabilize_existing_entry(parent: &File, name: &str, expected: &[u8]) -> Result<()> {
+    let held = open_at(parent.as_raw_fd(), name, libc::O_PATH, 0)?;
+    let before = held.metadata().map_err(|_| REFUSED)?;
+    if !before.is_file() || before.nlink() != 1 || before.mode() & 0o7777 != 0o600 {
+        return Err(REFUSED.into());
+    }
+    let file = File::open(format!("/proc/self/fd/{}", held.as_raw_fd())).map_err(|_| REFUSED)?;
+    let opened = file.metadata().map_err(|_| REFUSED)?;
+    if (opened.dev(), opened.ino()) != (before.dev(), before.ino())
+        || read_entry(parent, name, 4096)? != expected
+    {
+        return Err(REFUSED.into());
+    }
+    file.sync_all()
+        .and_then(|_| parent.sync_all())
+        .map_err(|_| REFUSED)?;
+    let current = open_at(parent.as_raw_fd(), name, libc::O_PATH, 0)?;
+    let after = current.metadata().map_err(|_| REFUSED)?;
+    if (
+        after.dev(),
+        after.ino(),
+        after.uid(),
+        after.gid(),
+        after.mode(),
+        after.nlink(),
+        after.len(),
+        after.mtime(),
+        after.ctime(),
+    ) != (
+        before.dev(),
+        before.ino(),
+        before.uid(),
+        before.gid(),
+        before.mode(),
+        before.nlink(),
+        before.len(),
+        before.mtime(),
+        before.ctime(),
+    ) || read_entry(parent, name, 4096)? != expected
+    {
+        return Err(REFUSED.into());
+    }
+    Ok(())
+}
+
 fn write_entry(parent: &File, name: &str, bytes: &[u8]) -> Result<()> {
     if bytes.is_empty() || bytes.len() > 4096 {
         return Err(REFUSED.into());
@@ -250,7 +295,7 @@ fn write_entry(parent: &File, name: &str, bytes: &[u8]) -> Result<()> {
         if std::io::Error::last_os_error().raw_os_error() == Some(libc::EEXIST) {
             // A scoped restore retry may find the exact output fsynced before
             // its preceding helper was interrupted ahead of fchown.
-            if read_entry(parent, name, 4096)? == bytes {
+            if stabilize_existing_entry(parent, name, bytes).is_ok() {
                 return Ok(());
             }
         }

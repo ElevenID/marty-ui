@@ -821,6 +821,15 @@ fn restored_child(
         ],
     )?;
     exact_children(&child, &["marker"])?;
+    // An interrupted helper may have changed ownership before its own fsync.
+    // Stabilize the recovered inode before recording restored host access.
+    child
+        .sync_all()
+        .and_then(|_| parent.sync_all())
+        .map_err(|_| REFUSED)?;
+    let rebound = open_dir(parent, "child")?;
+    require(stamp(&rebound)? == observed && read_file(&rebound, "marker", 256)? == marker)?;
+    exact_children(&rebound, &["marker"])?;
     Ok(observed)
 }
 
@@ -1963,6 +1972,64 @@ mod tests {
         )
         .unwrap();
         assert!(read_file(&parent, "request.json", 256).is_err());
+    }
+
+    #[test]
+    fn recovered_owner_is_synced_and_rebound_before_restored_receipt() {
+        let temp = tempfile::tempdir().unwrap();
+        fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let root = File::open(temp.path()).unwrap();
+        let parent = mkdir(&root, "parent").unwrap();
+        let child = mkdir(&parent, "child").unwrap();
+        let canary_id = uuid::Uuid::new_v4();
+        let marker = format!("marty-rootless-canary/v1:{canary_id}\n").into_bytes();
+        write_file(&child, "marker", &marker).unwrap();
+        for name in [
+            "request.json",
+            "transition-output.json",
+            "restore-output.json",
+        ] {
+            write_file(&parent, name, b"synthetic").unwrap();
+        }
+        let child_stamp = stamp(&child).unwrap();
+        let intent = Intent {
+            schema: "elevenid.rootless-storage-canary-intent/v1".into(),
+            pull_intent_sha256: "a".repeat(64),
+            installation_id: uuid::Uuid::new_v4(),
+            canary_id,
+            source_sha: "b".repeat(40),
+            inventory_sha256: format!("sha256:{}", "c".repeat(64)),
+            engine_id: uuid::Uuid::new_v4().to_string(),
+            image: format!(
+                "ghcr.io/elevenid/marty-ui-oss/services@sha256:{}",
+                "d".repeat(64)
+            ),
+            image_id: format!("sha256:{}", "e".repeat(64)),
+            operator_sha256: "f".repeat(64),
+            root: stamp(&root).unwrap(),
+            evidence: stamp(&root).unwrap(),
+            parent_name: "parent".into(),
+            marker_sha256: sha(&marker),
+            host_uid: unsafe { libc::geteuid() },
+            host_gid: unsafe { libc::getegid() },
+        };
+        let created = Created {
+            schema: "elevenid.rootless-storage-canary-created/v1".into(),
+            intent_sha256: sha(&encoded(&intent).unwrap()),
+            parent: stamp(&parent).unwrap(),
+            child: child_stamp.clone(),
+        };
+        assert_eq!(
+            restored_child(&parent, &intent, &created, &marker).unwrap(),
+            child_stamp
+        );
+        fs::rename(
+            temp.path().join("parent/child"),
+            temp.path().join("parent/old"),
+        )
+        .unwrap();
+        mkdir(&parent, "child").unwrap();
+        assert!(restored_child(&parent, &intent, &created, &marker).is_err());
     }
 
     fn fixture_container(c: &Contract, id: &str) -> Value {
