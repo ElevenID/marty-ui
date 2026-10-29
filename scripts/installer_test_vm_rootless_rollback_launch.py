@@ -346,10 +346,7 @@ def bound_live_copy(*, source: Path, registry: Path, runtime_parent: Path,
                             == (intent["runtime_directory_device"],
                                 intent["runtime_directory_inode"]),
                             "fixture rollback live directory differs")
-            with os.scandir(held) as entries:
-                release.require({entry.name for entry in entries}
-                                == {"disk.qcow2", "seed.iso", "qmp.sock"},
-                                "fixture rollback live directory differs")
+            copy._closed_names(held, {"disk.qcow2", "seed.iso", "qmp.sock"})
             disk_fd = _held_mutable_disk(
                 held, uid=intent["runtime_uid"], gid=intent["runtime_gid"],
                 device=intent["disk_device"], inode=intent["disk_inode"])
@@ -458,6 +455,7 @@ def bound_live_copy(*, source: Path, registry: Path, runtime_parent: Path,
                     "ordinary_uid": setup_record["ordinary_uid"],
                     "setup_uid": setup_record["setup_uid"],
                     "setup_engine_id": setup_record["setup_engine_id"],
+                    "setup_readiness_sha256": release.digest(setup_raw),
                     "launch_sha256": release.digest(receipt_raw),
                     "prepared_sha256": release.digest(prepared_raw),
                     "package_install_authorized": False,
@@ -471,22 +469,87 @@ def bound_live_copy(*, source: Path, registry: Path, runtime_parent: Path,
 def observe_baseline(*, source: Path, registry: Path, runtime_parent: Path,
                      vm_id: str, copy_vm_id: str,
                      expected_engine_id: str,
-                     expected_status_sha256: str,
-                     admission_result_sha256: str) -> dict:
+                     expected_status_sha256: str) -> dict:
     """Record only fixed SSH boot baseline; caller assertions grant no authority."""
     release.require(type(expected_engine_id) is str
                     and type(expected_status_sha256) is str
-                    and type(admission_result_sha256) is str
                     and len(expected_status_sha256) == 64
-                    and len(admission_result_sha256) == 64
                     and all(c in "0123456789abcdef" for c in
-                            expected_status_sha256 + admission_result_sha256)
+                            expected_status_sha256)
                     and _canonical_uuid(expected_engine_id),
                     "fixture rollback expected baseline invalid")
     with ControllerLease(registry) as lease:
         before = bound_live_copy(source=source, registry=registry,
                                  runtime_parent=runtime_parent, vm_id=vm_id,
                                  copy_vm_id=copy_vm_id, _lease=lease)
+        admission_intent_raw, admission_intent = create._read_record(
+            lease.parent, vm_id + admission_controller.INTENT_SUFFIX)
+        admission_raw, admission = create._read_record(
+            lease.parent, vm_id + admission_controller.RESULT_SUFFIX)
+        release.exact(admission_intent, {"schema", "phase", "vm_id",
+                                         "observation_id", "engine_id",
+                                         "readiness_sha256", "pid", "start_ticks",
+                                         "dpkg_status_sha256", "module_sha256",
+                                         "controller_sha256", "purpose",
+                                         "package_actions_authorized",
+                                         "installation_authorized"},
+                      "fixture package admission intent")
+        release.exact(admission, {"schema", "phase", "vm_id",
+                                  "observation_id", "intent_sha256",
+                                  "engine_id", "readiness_sha256",
+                                  "dpkg_status_sha256", "module_sha256",
+                                  "controller_sha256", "private_stage",
+                                  "packages", "archive_releases",
+                                  "new_package_actions", "transaction_simulated",
+                                  "rootful_docker_package_simulated_change",
+                                  "package_actions_authorized",
+                                  "installation_authorized",
+                                  "account_or_subids_allocated",
+                                  "daemon_start_attempted_by_probe",
+                                  "rootless_ready", "qualified",
+                                  "application_deployment_authorized",
+                                  "observed_at"},
+                      "fixture package admission observation")
+        release.require(admission_intent["schema"]
+                        == admission["schema"] == admission_controller.SCHEMA
+                        and admission_intent["phase"] == "intent"
+                        and admission["phase"] == "observed"
+                        and admission_intent["vm_id"] == admission["vm_id"]
+                        == vm_id
+                        and admission_intent["purpose"]
+                        == "disposable_fixture_setup_package_admission"
+                        and admission_intent["observation_id"]
+                        == admission["observation_id"]
+                        and all(admission_intent[key] == admission[key] for key in
+                                ("engine_id", "readiness_sha256",
+                                 "dpkg_status_sha256", "module_sha256",
+                                 "controller_sha256"))
+                        and admission["intent_sha256"]
+                        == release.digest(admission_intent_raw)
+                        and type(admission_intent["pid"]) is int
+                        and admission_intent["pid"] > 4
+                        and type(admission_intent["start_ticks"]) is str
+                        and admission_intent["start_ticks"].isascii()
+                        and admission_intent["start_ticks"].isdecimal()
+                        and admission["engine_id"] == expected_engine_id
+                        == before["setup_engine_id"]
+                        and admission["readiness_sha256"]
+                        == before["setup_readiness_sha256"]
+                        and admission["dpkg_status_sha256"]
+                        == expected_status_sha256
+                        and admission["transaction_simulated"] is True
+                        and admission_intent["package_actions_authorized"] is False
+                        and admission_intent["installation_authorized"] is False
+                        and all(admission[key] is False for key in
+                                ("rootful_docker_package_simulated_change",
+                                 "package_actions_authorized",
+                                 "installation_authorized",
+                                 "account_or_subids_allocated",
+                                 "daemon_start_attempted_by_probe",
+                                 "rootless_ready", "qualified",
+                                 "application_deployment_authorized")),
+                        "fixture package admission observation differs")
+        admission_result_sha256 = release.digest(admission_raw)
         ordinary = setup._decode_installer(setup._ssh_as(
             before, "installer", setup._installer_command(), limit=2048))
         admin = setup._decode_admin(setup._ssh_as(
@@ -513,6 +576,12 @@ def observe_baseline(*, source: Path, registry: Path, runtime_parent: Path,
                                 runtime_parent=runtime_parent, vm_id=vm_id,
                                 copy_vm_id=copy_vm_id, _lease=lease)
         release.require(after == before
+                        and create._read_record(
+                            lease.parent, vm_id + admission_controller.INTENT_SUFFIX)[0]
+                            == admission_intent_raw
+                        and create._read_record(
+                            lease.parent, vm_id + admission_controller.RESULT_SUFFIX)[0]
+                            == admission_raw
                         and setup._decode_installer(setup._ssh_as(
                             after, "installer", setup._installer_command(),
                             limit=2048)) == ordinary

@@ -143,10 +143,7 @@ def cleanup_copy(*, source: Path, registry: Path, runtime_parent: Path,
         try:
             directory = observer.open_vm_dir(directory_path,
                                              before["runtime_uid"])
-            with os.scandir(directory) as entries:
-                release.require({entry.name for entry in entries}
-                                == {"disk.qcow2", "seed.iso"},
-                                "fixture rollback cleanup directory differs")
+            copy._closed_names(directory, {"disk.qcow2", "seed.iso"})
             disk_fd = launched._held_mutable_disk(
                 directory, uid=before["runtime_uid"],
                 gid=before["runtime_gid"],

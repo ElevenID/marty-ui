@@ -56,16 +56,26 @@ PREPARED_FIELDS = {"schema", "phase", "vm_id", "copy_vm_id",
 
 def _prelaunch_layout(directory: int) -> None:
     """A fresh copy has exactly the two producer-created files."""
-    with os.scandir(directory) as entries:
-        release.require({entry.name for entry in entries}
-                        == {"disk.qcow2", "seed.iso"},
-                        "fixture rollback directory has unexpected entries")
+    _closed_names(directory, {"disk.qcow2", "seed.iso"})
     try:
         os.stat("qmp.sock", dir_fd=directory, follow_symlinks=False)
     except FileNotFoundError:
         pass
     else:
         raise ValueError("fixture rollback monitor path exists")
+
+
+def _closed_names(directory: int, expected: set[str]) -> None:
+    """Stream a tiny fixed directory census without unbounded allocation."""
+    seen: set[str] = set()
+    with os.scandir(directory) as entries:
+        for entry in entries:
+            release.require(entry.name in expected and entry.name not in seen
+                            and len(seen) < len(expected),
+                            "fixture rollback directory has unexpected entries")
+            seen.add(entry.name)
+    release.require(seen == expected,
+                    "fixture rollback directory has unexpected entries")
 
 
 def _exact_pending(intent_raw: bytes, intent: dict,
@@ -193,9 +203,7 @@ def _snapshot(registry: Path, lease: ControllerLease, vm_id: str,
                         == (pending["snapshot_directory_device"],
                             pending["snapshot_directory_inode"]),
                         "fixture snapshot directory differs")
-        with os.scandir(held) as entries:
-            release.require({entry.name for entry in entries} == {"disk.qcow2"},
-                            "fixture snapshot directory has unexpected entries")
+        _closed_names(held, {"disk.qcow2"})
         source = _held_regular(
             held, "disk.qcow2", owner=0, group=0, mode=0o600,
             device=pending["snapshot_device"],

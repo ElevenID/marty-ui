@@ -150,7 +150,45 @@ def test_baseline_observes_only_fixed_principals_engine_and_status(tmp_path):
                "boot_id": "22222222-3333-4444-8555-666666666666",
                "ordinary_uid": 1000, "setup_uid": 1002,
                "setup_engine_id": engine, "launch_sha256": "a" * 64,
-               "prepared_sha256": "b" * 64}
+               "prepared_sha256": "b" * 64,
+               "setup_readiness_sha256": "e" * 64}
+    admission_intent = {"schema": launched.admission_controller.SCHEMA,
+                        "phase": "intent", "vm_id": VM,
+                        "observation_id": "44444444-5555-4666-8777-888888888888",
+                        "engine_id": engine,
+                        "readiness_sha256": binding["setup_readiness_sha256"],
+                        "pid": 1699, "start_ticks": "12345",
+                        "dpkg_status_sha256": launched.release.digest(status),
+                        "module_sha256": "1" * 64,
+                        "controller_sha256": "2" * 64,
+                        "purpose": "disposable_fixture_setup_package_admission",
+                        "package_actions_authorized": False,
+                        "installation_authorized": False}
+    admission_intent_raw = launched.release.encode(admission_intent)
+    admission = {"schema": launched.admission_controller.SCHEMA,
+                 "phase": "observed", "vm_id": VM,
+                 "observation_id": "44444444-5555-4666-8777-888888888888",
+                 "intent_sha256": launched.release.digest(admission_intent_raw),
+                 "engine_id": engine,
+                 "readiness_sha256": binding["setup_readiness_sha256"],
+                 "dpkg_status_sha256": launched.release.digest(status),
+                 "module_sha256": "1" * 64, "controller_sha256": "2" * 64,
+                 "private_stage": "/private/stage", "packages": [],
+                 "archive_releases": [], "new_package_actions": [],
+                 "transaction_simulated": True,
+                 "rootful_docker_package_simulated_change": False,
+                 "package_actions_authorized": False,
+                 "installation_authorized": False,
+                 "account_or_subids_allocated": False,
+                 "daemon_start_attempted_by_probe": False,
+                 "rootless_ready": False, "qualified": False,
+                 "application_deployment_authorized": False,
+                 "observed_at": 1000}
+    admission_raw = launched.release.encode(admission)
+    def records(_parent, name):
+        return ((admission_intent_raw, admission_intent)
+                if name.endswith(launched.admission_controller.INTENT_SUFFIX)
+                else (admission_raw, admission))
     ordinary = launched.release.encode({
         "schema": "elevenid.fixture-installer-account/v1",
         "uid": 1000, "gid": 1001, "home": "/home/installer",
@@ -177,25 +215,84 @@ def test_baseline_observes_only_fixed_principals_engine_and_status(tmp_path):
          mock.patch.object(launched, "bound_live_copy", return_value=binding), \
          mock.patch.object(launched.setup, "_ssh_as", side_effect=ssh), \
          mock.patch.object(launched.probe, "_ssh", return_value=status) as read, \
+         mock.patch.object(launched.create, "_read_record", side_effect=records), \
          mock.patch.object(launched.create, "_write") as write:
         result = launched.observe_baseline(
             source=tmp_path / "source", registry=registry,
             runtime_parent=tmp_path / "runtime", vm_id=VM, copy_vm_id=COPY,
             expected_engine_id=engine,
-            expected_status_sha256=launched.release.digest(status),
-            admission_result_sha256="d" * 64)
+            expected_status_sha256=launched.release.digest(status))
     assert read.call_count == 2
     assert write.call_count == 1
     assert result["dpkg_status_sha256"] == launched.release.digest(status)
+    assert result["admission_result_sha256"] == launched.release.digest(
+        admission_raw)
     assert status not in str(result).encode()
     assert result["rollback_qualified"] is False
     assert result["package_install_authorized"] is False
     assert result["product_dispatch_authorized"] is False
+    admission["package_actions_authorized"] = True
+    with mock.patch.object(launched, "ControllerLease", return_value=Lease()), \
+         mock.patch.object(launched, "bound_live_copy", return_value=binding), \
+         mock.patch.object(launched.create, "_read_record",
+                           side_effect=lambda _p, name:
+                           (admission_intent_raw, admission_intent)
+                           if name.endswith(
+                               launched.admission_controller.INTENT_SUFFIX)
+                           else (launched.release.encode(admission), admission)), \
+         mock.patch.object(launched.setup, "_ssh_as") as ssh, \
+         mock.patch.object(launched.create, "_write") as write:
+        with pytest.raises(ValueError, match="admission observation differs"):
+            launched.observe_baseline(
+                source=tmp_path / "source", registry=registry,
+                runtime_parent=tmp_path / "runtime", vm_id=VM, copy_vm_id=COPY,
+                expected_engine_id=engine,
+                expected_status_sha256=launched.release.digest(status))
+    ssh.assert_not_called()
+    write.assert_not_called()
 
 
 def test_baseline_wrong_engine_refuses_without_record(tmp_path):
     binding = {"ordinary_uid": 1000, "setup_uid": 1002,
-               "setup_engine_id": "6c3ab358-4b21-4979-b2ff-916bbd32d891"}
+               "setup_engine_id": "6c3ab358-4b21-4979-b2ff-916bbd32d891",
+               "setup_readiness_sha256": "e" * 64}
+    admission_intent = {"schema": launched.admission_controller.SCHEMA,
+                        "phase": "intent", "vm_id": VM,
+                        "observation_id": "44444444-5555-4666-8777-888888888888",
+                        "engine_id": binding["setup_engine_id"],
+                        "readiness_sha256": binding["setup_readiness_sha256"],
+                        "pid": 1699, "start_ticks": "12345",
+                        "dpkg_status_sha256": "c" * 64,
+                        "module_sha256": "1" * 64,
+                        "controller_sha256": "2" * 64,
+                        "purpose": "disposable_fixture_setup_package_admission",
+                        "package_actions_authorized": False,
+                        "installation_authorized": False}
+    admission_intent_raw = launched.release.encode(admission_intent)
+    admission = {"schema": launched.admission_controller.SCHEMA,
+                 "phase": "observed", "vm_id": VM,
+                 "observation_id": "44444444-5555-4666-8777-888888888888",
+                 "intent_sha256": launched.release.digest(admission_intent_raw),
+                 "engine_id": binding["setup_engine_id"],
+                 "readiness_sha256": binding["setup_readiness_sha256"],
+                 "dpkg_status_sha256": "c" * 64,
+                 "module_sha256": "1" * 64, "controller_sha256": "2" * 64,
+                 "private_stage": "/private/stage", "packages": [],
+                 "archive_releases": [], "new_package_actions": [],
+                 "transaction_simulated": True,
+                 "rootful_docker_package_simulated_change": False,
+                 "package_actions_authorized": False,
+                 "installation_authorized": False,
+                 "account_or_subids_allocated": False,
+                 "daemon_start_attempted_by_probe": False,
+                 "rootless_ready": False, "qualified": False,
+                 "application_deployment_authorized": False,
+                 "observed_at": 1000}
+    admission_raw = launched.release.encode(admission)
+    def records(_parent, name):
+        return ((admission_intent_raw, admission_intent)
+                if name.endswith(launched.admission_controller.INTENT_SUFFIX)
+                else (admission_raw, admission))
     ordinary = launched.release.encode({
         "schema": "elevenid.fixture-installer-account/v1",
         "uid": 1000, "gid": 1001, "home": "/home/installer",
@@ -220,6 +317,7 @@ def test_baseline_wrong_engine_refuses_without_record(tmp_path):
     with mock.patch.object(launched, "ControllerLease", return_value=Lease()), \
          mock.patch.object(launched, "bound_live_copy", return_value=binding), \
          mock.patch.object(launched.setup, "_ssh_as", side_effect=ssh), \
+         mock.patch.object(launched.create, "_read_record", side_effect=records), \
          mock.patch.object(launched.probe, "_ssh") as status, \
          mock.patch.object(launched.create, "_write") as write:
         with pytest.raises(ValueError, match="Engine differs"):
@@ -228,7 +326,6 @@ def test_baseline_wrong_engine_refuses_without_record(tmp_path):
                 runtime_parent=tmp_path / "runtime", vm_id=VM,
                 copy_vm_id=COPY,
                 expected_engine_id=binding["setup_engine_id"],
-                expected_status_sha256="c" * 64,
-                admission_result_sha256="d" * 64)
+                expected_status_sha256="c" * 64)
     status.assert_not_called()
     write.assert_not_called()
