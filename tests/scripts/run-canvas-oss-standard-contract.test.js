@@ -6,6 +6,7 @@ const test = require('node:test');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const http = require('node:http');
 
 const {
   canvasLaunchErrorSummary,
@@ -1058,6 +1059,78 @@ test('capture session cleanup distinguishes deleted learner denial from real adm
   assert.deepEqual(calls,['admin'],'Observer persistence failure cannot prevent authority retirement');
   let originalHeader;const beta={cookies:async()=>[{name:'sessionId',value:'CONTROLLED_OWNED_SESSION'}],request:{post:async()=>({status:()=>303}),get:async(_,options)=>{originalHeader=options.headers.Cookie;return {status:()=>200,json:async()=>({authenticated:false,user:null})}}}};
   assert.equal((await retireCanvasBetaSession(beta,custody)).oldCookieAuthenticated,false);assert.equal(originalHeader,'sessionId=CONTROLLED_OWNED_SESSION');
+});
+
+test('cancelled browser cannot prevent bounded original-cookie Canvas admin logout',async t=>{
+  const {createCanvasCaptureCustody,retireCanvasCaptureSessions}=require('./run-canvas-oss-standard-contract');
+  const directory=fs.mkdtempSync(path.join(os.tmpdir(),'canvas-cancelled-session-'));
+  t.after(()=>fs.rmSync(directory,{recursive:true,force:true}));
+  const custody=createCanvasCaptureCustody('33333333-3333-4333-8333-333333333333',directory);
+  const cookies=[{name:'_csrf_token',value:'OWNED_CSRF',domain:'canvas-test.elevenidllc.com',path:'/',secure:true}];
+  custody.retain('canvasAdminSession',JSON.stringify(cookies));
+  let reads=0,logouts=0,disposed=false;
+  const requestFactory={newContext:async options=>{
+    assert.deepEqual(options.storageState,{cookies:[],origins:[]});assert.equal(options.ignoreHTTPSErrors,false);
+    return {get:async(_,request)=>{assert.equal(request.headers.Cookie,'_csrf_token=OWNED_CSRF');return {status:()=>++reads>=3?401:200};},
+      delete:async(_,request)=>{assert.equal(request.headers.Cookie,'_csrf_token=OWNED_CSRF');logouts++;return {status:()=>302};},
+      dispose:async()=>{disposed=true;}};
+  }};
+  const cancelled={cookies:async()=>{throw Error('BROWSER_CONTEXT_ABORTED');}};
+  const result=await retireCanvasCaptureSessions({canvasOrigin:'https://canvas-test.elevenidllc.com',
+    adminContext:cancelled,custody,sessionRequestFactory:requestFactory});
+  assert.equal(result.canvasAdminSession.logoutStatus,302);assert.equal(result.canvasAdminSession.probes.at(-1).status,401);
+  assert.equal(logouts,1);assert.equal(disposed,true);assert.equal(custody.retire(),true);
+});
+
+test('partial setup retained session is reconciled; unknown transport keeps custody',async t=>{
+  const {createCanvasCaptureCustody,retireCanvasCaptureSessions}=require('./run-canvas-oss-standard-contract');
+  const directory=fs.mkdtempSync(path.join(os.tmpdir(),'canvas-partial-session-'));
+  t.after(()=>fs.rmSync(directory,{recursive:true,force:true}));
+  const run='44444444-4444-4444-8444-444444444444',custody=createCanvasCaptureCustody(run,directory);
+  custody.retain('canvasAdminSession',JSON.stringify([{name:'_csrf_token',value:'OWNED_CSRF',domain:'canvas-test.elevenidllc.com',path:'/',secure:true}]));
+  let logout=false;
+  const failedFactory={newContext:async()=>({get:async()=>{throw Error('UNKNOWN_TRANSPORT');},
+    delete:async()=>{logout=true;throw Error('UNEXPECTED_LOGOUT');},dispose:async()=>{}})};
+  await assert.rejects(retireCanvasCaptureSessions({canvasOrigin:'https://canvas-test.elevenidllc.com',
+    custody,sessionRequestFactory:failedFactory}),error=>error.code==='canvas_capture_sessions_incomplete');
+  assert.equal(logout,false);assert.equal(custody.hasRetained('canvasAdminSession'),true);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(directory,run+'.custody.json'),'utf8')).state,'OPEN');
+});
+
+test('ambiguous logout transport never repeats logout or retires custody',async t=>{
+  const {createCanvasCaptureCustody,retireCanvasCaptureSessions}=require('./run-canvas-oss-standard-contract');
+  const directory=fs.mkdtempSync(path.join(os.tmpdir(),'canvas-ambiguous-session-'));
+  t.after(()=>fs.rmSync(directory,{recursive:true,force:true}));
+  const run='55555555-5555-4555-8555-555555555555',custody=createCanvasCaptureCustody(run,directory);
+  custody.retain('canvasAdminSession',JSON.stringify([{name:'_csrf_token',value:'OWNED_CSRF',domain:'canvas-test.elevenidllc.com',path:'/',secure:true}]));
+  let logouts=0;
+  const requestFactory={newContext:async()=>({get:async()=>({status:()=>200}),
+    delete:async()=>{logouts++;throw Error('UNKNOWN_LOGOUT_TRANSPORT');},dispose:async()=>{}})};
+  await assert.rejects(retireCanvasCaptureSessions({canvasOrigin:'https://canvas-test.elevenidllc.com',
+    custody,sessionRequestFactory:requestFactory}),error=>error.code==='canvas_capture_sessions_incomplete');
+  assert.equal(logouts,1);assert.equal(custody.hasRetained('canvasAdminSession'),true);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(directory,run+'.custody.json'),'utf8')).state,'OPEN');
+});
+
+test('isolated request keeps the original cookie across logout Set-Cookie',async t=>{
+  const {createOriginalCookieSessionContext}=require('./run-canvas-oss-standard-contract');
+  const {request}=require('@playwright/test');
+  let valid=true;const received=[];
+  const server=http.createServer((req,res)=>{
+    received.push({method:req.method,cookie:req.headers.cookie||''});
+    if(req.method==='DELETE'){valid=false;res.writeHead(302,{Location:'/login','Set-Cookie':'session=; Max-Age=0; Path=/'});res.end();return;}
+    res.writeHead(valid?200:401,{'Content-Type':'application/json'});res.end('{}');
+  });
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  t.after(()=>new Promise(resolve=>server.close(resolve)));
+  const origin=`http://127.0.0.1:${server.address().port}`;
+  const {isolated,session}=await createOriginalCookieSessionContext(request,[{name:'session',value:'OWNED_OLD'}]);
+  try{
+    assert.equal((await session.request.get(origin+'/profile',{maxRedirects:0})).status(),200);
+    assert.equal((await session.request.delete(origin+'/logout',{maxRedirects:0})).status(),302);
+    assert.equal((await session.request.get(origin+'/profile',{maxRedirects:0})).status(),401);
+    assert.deepEqual(received.map(row=>row.cookie),['session=OWNED_OLD','session=OWNED_OLD','session=OWNED_OLD']);
+  }finally{await isolated.dispose();}
 });
 
 

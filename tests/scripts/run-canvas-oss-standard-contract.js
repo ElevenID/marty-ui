@@ -2391,6 +2391,7 @@ function createCanvasCaptureCustody(runSuffix, directory = process.env.DEMO_CANV
     const next=journal+'.next';write(next,JSON.stringify({runSuffix,state,roles:[...files]}),true);fs.renameSync(next,journal);
   };
   return {
+    hasRetained(role) {return files.has(role);},
     retain(role,value) {
       requireCondition(['canvasAdminSession','canvasLearnerSession','canvasOwnedClientSecret','betaAdminSession'].includes(role)
         && typeof value==='string' && value.length>0 && Buffer.byteLength(value)<=131072,
@@ -2406,6 +2407,16 @@ function createCanvasCaptureCustody(runSuffix, directory = process.env.DEMO_CANV
         secretFiles.set(filename,secretFiles.get(next));secretFiles.delete(next);
       } else {files.add(role);checkpoint('OPEN');write(filename,value,true,true);}
       checkpoint('OPEN');
+    },
+    readRetained(role) {
+      requireCondition(files.has(role)&&['canvasAdminSession','canvasLearnerSession'].includes(role),
+        'canvas_session_custody_missing','Owned Canvas session is not retained.');
+      const filename=path.join(directory,runSuffix+'-'+role+'.json');
+      const expected=secretFiles.get(filename),actual=fs.lstatSync(filename);
+      requireCondition(expected&&actual.isFile()&&!actual.isSymbolicLink()
+        &&actual.dev===expected.dev&&actual.ino===expected.ino&&actual.size>0&&actual.size<=131072,
+      'canvas_private_custody_changed','Owned Canvas session custody changed.');
+      return fs.readFileSync(filename,'utf8');
     },
     retire() {
       for(const [filename,expected] of secretFiles) {
@@ -2499,26 +2510,52 @@ async function retireCanvasOwnedReferences(state) {
   }
 }
 
+async function createOriginalCookieSessionContext(requestFactory,cookies) {
+  const original=cookies.map(cookie=>cookie.name+'='+cookie.value).join('; ');
+  const isolated=await requestFactory.newContext({storageState:{cookies:[],origins:[]},ignoreHTTPSErrors:false});
+  const send=(method,url,options={})=>isolated[method](url,{...options,
+    headers:{...options.headers,Cookie:original}});
+  return {isolated,session:{cookies:async()=>cookies.map(cookie=>({...cookie})),addCookies:async()=>{},
+    request:{get:(url,options)=>send('get',url,options),delete:(url,options)=>send('delete',url,options)}}};
+}
+
 async function retireCanvasCaptureSessions(state, observe = () => {}) {
   const {retireCanvasSession}=require('./audit-beta-canvas-invalid-secret');
   const evidence={},failures=[];
   const emit=()=>{try {observe(JSON.parse(JSON.stringify(evidence)));} catch(error) {failures.push(error);}};
   for(const [role,context] of [['canvasLearnerSession',state.learnerContext],['canvasAdminSession',state.adminContext]]) {
-    if(!context) continue;
+    if(!context&&!state.custody?.hasRetained?.(role)) continue;
+    let isolated;
     try {
-    const cookies=await context.cookies(state.canvasOrigin);
+    let session=context;
+    if(typeof state.custody?.readRetained==='function') {
+      requireCondition(state.canvasOrigin==='https://canvas-test.elevenidllc.com',
+        'canvas_session_origin_changed','Owned Canvas session origin changed.');
+      const cookies=JSON.parse(state.custody.readRetained(role));
+      const host=new URL(state.canvasOrigin).hostname;
+      requireCondition(Array.isArray(cookies)&&cookies.length>0&&cookies.every(cookie=>
+        cookie?.domain===host&&cookie.path==='/'&&cookie.secure===true
+        &&typeof cookie.name==='string'&&/^[A-Za-z0-9_-]{1,128}$/.test(cookie.name)
+        &&typeof cookie.value==='string'&&cookie.value.length>0&&!/[\r\n;]/.test(cookie.value))
+        &&new Set(cookies.map(cookie=>cookie.name)).size===cookies.length,
+      'canvas_session_custody_invalid','Owned Canvas session cookies are invalid.');
+      ({isolated,session}=await createOriginalCookieSessionContext(
+        state.sessionRequestFactory||require('@playwright/test').request,cookies));
+    }
+    const cookies=await session.cookies(state.canvasOrigin);
     requireCondition(cookies.length>0,'canvas_session_custody_missing','Owned Canvas session acquisition requires reconciliation.');
-    const response=await context.request.get(state.canvasOrigin+'/api/v1/users/self/profile',
+    const response=await session.request.get(state.canvasOrigin+'/api/v1/users/self/profile',
       {maxRedirects:0,timeout:15000,headers:{Accept:'application/json'}});
-    if([401,403].includes(response.status())) evidence[role]={alreadyDenied:true,status:response.status()};
+    if(response.status()===401) evidence[role]={alreadyDenied:true,status:401};
     else {
       assert.equal(response.status(),200);
-      await context.addCookies(cookies.map(cookie=>({...cookie})));
-      await retireCanvasSession(context,(_,value)=>state.custody.retain(role,value),
+      await session.addCookies(cookies.map(cookie=>({...cookie})));
+      await retireCanvasSession(session,(_,value)=>state.custody.retain(role,value),
         {observe:value=>{evidence[role]=value;emit()}});
     }
     emit();
     } catch(error) {failures.push(error);evidence[role]={retired:false,failureType:'OWNED_SESSION_RETIREMENT_FAILED'};emit();}
+    finally {if(isolated)try {await isolated.dispose();} catch(error) {failures.push(error);}}
   }
   requireCondition(failures.length===0,'canvas_capture_sessions_incomplete','Owned Canvas sessions require reconciliation.');
   return evidence;
@@ -2960,6 +2997,7 @@ module.exports = {
   retireCanvasOAuthAuthority,
   retireCanvasOwnedReferences,
   retireCanvasCaptureSessions,
+  createOriginalCookieSessionContext,
   retireCanvasBetaSession,
   retireCanvasEngineeringSetup,
   createLtiDeveloperKey,
