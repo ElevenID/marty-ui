@@ -47,6 +47,17 @@ class StoppedSnapshotEvidence:
     product_dispatch_authorized: bool = False
 
 
+def _unused_outputs(parent: int, vm_id: str) -> None:
+    """Refuse any old stop state before consuming intent or signaling QEMU."""
+    for name in (vm_id + INTENT_SUFFIX, vm_id + SNAPSHOT_SUFFIX,
+                 vm_id + PENDING_SUFFIX):
+        try:
+            os.stat(name, dir_fd=parent, follow_symlinks=False)
+        except FileNotFoundError:
+            continue
+        raise ValueError("fixture stop output already exists")
+
+
 def _qmp_powerdown(path: Path, disk: Path, *, pid: int, uid: int,
                    start_ticks: str, boot_id: str,
                    socket_device: int, socket_inode: int) -> None:
@@ -217,6 +228,7 @@ def stop_and_snapshot(*, source: Path, registry: Path, vm_parent: Path,
         release.require(restart._original_still_live(
                         before["pid"], before["start_ticks"], before["boot_id"]),
                         "fixture process not live")
+        _unused_outputs(lease.parent, vm_id)
         intent = {"schema": SCHEMA, "phase": "stop_intent", "vm_id": vm_id,
                   "setup_readiness_sha256": before["readiness_sha256"],
                   "launch_sha256": before["launch_sha256"],

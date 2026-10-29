@@ -80,6 +80,20 @@ def test_qmp_wrong_peer_refuses_before_powerdown(tmp_path):
                                        socket_inode=info.st_ino)
 
 
+@pytest.mark.parametrize("suffix", (stopped.INTENT_SUFFIX,
+                                     stopped.SNAPSHOT_SUFFIX,
+                                     stopped.PENDING_SUFFIX))
+def test_preexisting_stop_output_refuses_before_intent_or_qmp(tmp_path, suffix):
+    vm_id = "11111111-2222-4333-8444-555555555555"
+    parent = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        (tmp_path / (vm_id + suffix)).write_bytes(b"existing")
+        with pytest.raises(ValueError, match="output already exists"):
+            stopped._unused_outputs(parent, vm_id)
+    finally:
+        os.close(parent)
+
+
 def test_stop_intent_is_written_before_qmp_and_never_retried(tmp_path, monkeypatch):
     vm_id = "11111111-2222-4333-8444-555555555555"
     runtime = tmp_path / "runtime"
@@ -114,6 +128,7 @@ def test_stop_intent_is_written_before_qmp_and_never_retried(tmp_path, monkeypat
                                side_effect=_record), \
              mock.patch.object(stopped.create, "verify_source",
                                return_value={}), \
+             mock.patch.object(stopped, "_unused_outputs"), \
              mock.patch.object(stopped.restart, "_original_still_live",
                                return_value=True), \
              mock.patch.object(stopped.create, "_write", side_effect=write), \
@@ -152,6 +167,7 @@ def test_existing_stop_intent_refuses_before_qmp(tmp_path, monkeypatch):
                                side_effect=_record), \
              mock.patch.object(stopped.create, "verify_source",
                                return_value={}), \
+             mock.patch.object(stopped, "_unused_outputs"), \
              mock.patch.object(stopped.restart, "_original_still_live",
                                return_value=True), \
              mock.patch.object(stopped.create, "_write",
