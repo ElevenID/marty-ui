@@ -35,9 +35,23 @@ ORIGINS = {"ui": "https://github.com/ElevenID/marty-ui.git",
            "core": "https://github.com/ElevenID/marty-core.git"}
 
 
+def git_command(repo: Path, *args: str) -> list[str]:
+    # Explicit paths are required before repository setup: a command-line -c
+    # cannot repair a primary checkout whose core.worktree is a Linux path.
+    repo = repo.resolve(strict=True)
+    metadata = repo / ".git"
+    if metadata.is_file():
+        line = metadata.read_text(encoding="utf-8").strip()
+        require(line.startswith("gitdir: ") and "\n" not in line, "GIT_METADATA_FILE_CHANGED")
+        directory = Path(line.removeprefix("gitdir: "))
+        metadata = directory if directory.is_absolute() else repo / directory
+    require(metadata.is_dir(), "GIT_METADATA_DIRECTORY_REQUIRED")
+    return ["git", "--git-dir=" + str(metadata.resolve(strict=True)),
+            "--work-tree=" + str(repo), *args]
+
+
 def git(repo: Path, *args: str) -> bytes:
-    return subprocess.check_output(["git", "-C", str(repo),
-                                    "-c", "core.worktree=" + str(repo.resolve()), *args])
+    return subprocess.check_output(git_command(repo, *args))
 
 
 def safe_member(name: str, kind: bytes) -> Path:
@@ -121,7 +135,7 @@ def export(repo: Path, revision: str, destination: Path, previous: dict | None =
     # Git for Windows applies checkout CRLF filters to `git archive`, so an
     # archive is not necessarily byte-identical to its tracked Git blobs.
     # Stream exact objects through one cat-file process without a checkout.
-    process = subprocess.Popen(["git", "-C", str(repo), "cat-file", "--batch"],
+    process = subprocess.Popen(git_command(repo, "cat-file", "--batch"),
                                stdin=subprocess.PIPE, stdout=subprocess.PIPE)
     assert process.stdin is not None and process.stdout is not None
     rows = []

@@ -2,6 +2,7 @@
 import sys
 import os
 import hashlib
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -113,6 +114,26 @@ class LatestPreparationTests(unittest.TestCase):
             prior = {"directory": root, "files": {"script.sh": {"bytes": 10, "sha256": digest, "mode": 0o100644}}}
             self.assertFalse(prepare.reuse_timestamp(destination, "script.sh", 10, digest, prior, 0o100755))
             self.assertEqual(destination.stat().st_mtime_ns, 3_000_000_000)
+
+
+    def test_primary_linux_worktree_setting_does_not_block_git_object_reads(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repository = Path(tmp)
+            subprocess.run(["git", "init", "-q", str(repository)], check=True)
+            subprocess.run(["git", "-C", str(repository), "config", "core.autocrlf", "false"], check=True)
+            (repository / "code.rs").write_bytes(b"// source-only fixture\n")
+            subprocess.run(["git", "-C", str(repository), "add", "code.rs"], check=True)
+            tree = subprocess.check_output(["git", "-C", str(repository), "write-tree"]).decode().strip()
+            revision = subprocess.check_output(["git", "-C", str(repository),
+                "-c", "user.name=SourceTest", "-c", "user.email=source@example.invalid",
+                "-c", "commit.gpgsign=false", "commit-tree", tree, "-m", "source fixture"]).decode().strip()
+            subprocess.run(["git", "--git-dir=" + str(repository / ".git"),
+                            "--work-tree=" + str(repository), "config", "core.worktree", "/mnt/unavailable"], check=True)
+            self.assertEqual(prepare.git(repository, "config", "--get", "core.worktree").strip(), b"/mnt/unavailable")
+            result = prepare.export(repository, revision, repository / "export")
+            self.assertEqual(result["fileCount"], 1)
+            self.assertEqual((repository / "export/code.rs").read_bytes(), b"// source-only fixture\n")
+            self.assertEqual(prepare.git(repository, "config", "--get", "core.worktree").strip(), b"/mnt/unavailable")
 
 
 if __name__ == "__main__":
