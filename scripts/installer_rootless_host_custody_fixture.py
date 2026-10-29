@@ -299,6 +299,14 @@ def authenticated_image(inventory):
             "authenticated image identity differs")
 
 
+def require_exact_image_volumes(image):
+    volumes = image["Config"]["Volumes"]
+    require(IMAGE in image["RepoDigests"] and type(volumes) is dict
+            and set(volumes) == {"/openbao/file", "/openbao/logs"}
+            and all(value in ({}, None) for value in volumes.values()),
+            "pulled image digest or declared volumes differ")
+
+
 def container(docker_call, context, entry, command, image_id):
     name = entry["name"]
     cidfile = context / (name + ".cid")
@@ -309,6 +317,8 @@ def container(docker_call, context, entry, command, image_id):
             "--security-opt", "no-new-privileges:true", "--user", "0:0",
             "--mount", f"type=bind,src={context / 'output'},dst=/out",
             "--mount", f"type=bind,src={context / 'state'},dst=/bao/data",
+            "--mount", f"type=bind,src={context / 'volume_file'},dst=/openbao/file",
+            "--mount", f"type=bind,src={context / 'volume_logs'},dst=/openbao/logs",
             "--entrypoint", "/bin/sh", IMAGE, "-ec", command]
     cid = docker_call(args, timeout=60)
     require(re.fullmatch(r"[0-9a-f]{64}", cid) is not None
@@ -329,12 +339,14 @@ def container(docker_call, context, entry, command, image_id):
             and set(inspect["HostConfig"]["CapAdd"]) == {"CHOWN", "DAC_OVERRIDE"}
             and set(inspect["HostConfig"]["SecurityOpt"]) == {"no-new-privileges:true"}
             and inspect["Config"]["User"] == "0:0"
-            and len(inspect["Mounts"]) == 2,
+            and len(inspect["Mounts"]) == 4,
             "container ownership/sandbox differs")
     require(all(m["Type"] == "bind" and m["RW"] is True for m in inspect["Mounts"]),
             "container mount type/access differs")
     sources = {m["Destination"]: m["Source"] for m in inspect["Mounts"]}
-    require(sources == {"/out": str(context / "output"), "/bao/data": str(context / "state")},
+    require(sources == {"/out": str(context / "output"), "/bao/data": str(context / "state"),
+                        "/openbao/file": str(context / "volume_file"),
+                        "/openbao/logs": str(context / "volume_logs")},
             "container mount sources differ")
     return cid
 
@@ -362,6 +374,16 @@ def inspect_owner(path, uid, mode):
     return m
 
 
+def closed_names(path, limit):
+    names = []
+    with os.scandir(path) as listing:
+        for entry in listing:
+            names.append(entry.name)
+            require(len(names) <= limit, "fixture directory exceeds bound")
+    require(len(names) == len(set(names)), "fixture directory names repeat")
+    return set(names)
+
+
 def fixture(inventory, tool_dir):
     prerequisites = preflight(tool_dir=tool_dir)
     authenticated_image(inventory)
@@ -369,8 +391,16 @@ def fixture(inventory, tool_dir):
     require(base.is_dir() and not base.is_symlink(), "runner temp unavailable")
     context = Path(tempfile.mkdtemp(prefix="marty-rootless-custody-", dir=base))
     os.chmod(context, 0o700)
-    for name in ("runtime", "data", "exec", "home", "config", "output", "state"):
+    for name in ("runtime", "data", "exec", "home", "config", "output", "state",
+                 "volume_file", "volume_logs"):
         (context / name).mkdir(mode=0o700)
+    foreign_child = context / "state" / "canary-root"
+    foreign_child.mkdir(mode=0o700)
+    parent_before = (context / "state").lstat()
+    child_before = foreign_child.lstat()
+    require(closed_names(context / "state", 1) == {"canary-root"}
+            and closed_names(foreign_child, 1) == set(),
+            "initial fixed state tree differs")
     docker = prerequisites["tools"]["docker"]
     host = "unix://" + str(context / "runtime" / "docker.sock")
     env = {"PATH": str(Path(tool_dir).resolve(strict=True)) + ":/usr/bin:/bin",
@@ -445,15 +475,14 @@ def fixture(inventory, tool_dir):
                      "socket_dev": sock.st_dev, "socket_ino": sock.st_ino})
         docker_call(["pull", IMAGE], timeout=240)
         image = json.loads(docker_call(["image", "inspect", IMAGE]))[0]
-        require(IMAGE in image["RepoDigests"] and image["Config"]["Volumes"] in ({}, None),
-                "pulled image digest differs or declares unowned implicit volumes")
+        require_exact_image_volumes(image)
         first_entry = {"name": name + "-foreign", "id": None}
         owned.append(first_entry)
         first = container(docker_call, context, first_entry,
                           "umask 077; cat /proc/self/uid_map > /out/uid_map; chmod 0444 /out/uid_map; "
                           "printf 'marty-rootless-owned-canary\\n' > /out/payload; "
-                          "chmod 0444 /out/payload; printf 'marty-rootless-owned-canary\\n' > /bao/data/canary; "
-                          "chown 100:100 /bao/data/canary /bao/data", image["Id"])
+                          "chmod 0444 /out/payload; printf 'marty-rootless-owned-canary\\n' > /bao/data/canary-root/canary; "
+                          "chown 100:100 /bao/data/canary-root/canary /bao/data/canary-root", image["Id"])
         docker_call(["start", first])
         require(docker_call(["wait", first], timeout=35) == "0",
                 "foreign-owner fixture failed")
@@ -465,10 +494,17 @@ def fixture(inventory, tool_dir):
         inspect_owner(output, os.geteuid(), 0o444)
         require(output.read_bytes() == CANARY, "UID0 output bytes differ")
         state = (context / "state").lstat()
-        require(state.st_uid == mapping["uid100_host"] and stat.S_IMODE(state.st_mode) == 0o700,
-                "UID100 bind ownership differs")
+        child = foreign_child.lstat()
+        require((state.st_dev, state.st_ino, state.st_uid, stat.S_IMODE(state.st_mode)) ==
+                (parent_before.st_dev, parent_before.st_ino, os.geteuid(), 0o700)
+                and (child.st_dev, child.st_ino) == (child_before.st_dev, child_before.st_ino)
+                and child.st_uid == mapping["uid100_host"]
+                and stat.S_IMODE(child.st_mode) == 0o700,
+                "UID100 child or unchanged parent custody differs")
+        require(closed_names(context / "state", 1) == {"canary-root"},
+                "state parent acquired unknown entries")
         try:
-            (context / "state" / "canary").read_bytes()
+            (foreign_child / "canary").read_bytes()
         except PermissionError:
             pass
         else:
@@ -477,8 +513,8 @@ def fixture(inventory, tool_dir):
         owned.append(second_entry)
         second = container(docker_call, context, second_entry,
                            "cat /proc/self/uid_map > /out/restore_uid_map; chmod 0444 /out/restore_uid_map; "
-                           "cat /bao/data/canary > /out/recovered; chmod 0444 /out/recovered; "
-                           "chown 0:0 /bao/data/canary /bao/data", image["Id"])
+                           "cat /bao/data/canary-root/canary > /out/recovered; chmod 0444 /out/recovered; "
+                           "chown 0:0 /bao/data/canary-root/canary /bao/data/canary-root", image["Id"])
         docker_call(["start", second])
         require(docker_call(["wait", second], timeout=35) == "0",
                 "rootless restore fixture failed")
@@ -490,8 +526,22 @@ def fixture(inventory, tool_dir):
         inspect_owner(context / "output" / "recovered", os.geteuid(), 0o444)
         require((context / "output" / "recovered").read_bytes() == CANARY,
                 "rootless helper readback differs")
-        require((context / "state").lstat().st_uid == os.geteuid(),
-                "state ownership not restored")
+        state_after = (context / "state").lstat()
+        child_after = foreign_child.lstat()
+        require((state_after.st_dev, state_after.st_ino, state_after.st_uid,
+                 stat.S_IMODE(state_after.st_mode)) ==
+                (parent_before.st_dev, parent_before.st_ino, os.geteuid(), 0o700)
+                and (child_after.st_dev, child_after.st_ino, child_after.st_uid,
+                     stat.S_IMODE(child_after.st_mode)) ==
+                (child_before.st_dev, child_before.st_ino, os.geteuid(), 0o700),
+                "parent/child ownership not restored")
+        require(closed_names(context / "state", 1) == {"canary-root"}
+                and closed_names(foreign_child, 1) == {"canary"},
+                "restored state tree differs")
+        marker = inspect_owner(foreign_child / "canary", os.geteuid(), 0o600)
+        require(marker.st_size == len(CANARY)
+                and (foreign_child / "canary").read_bytes() == CANARY,
+                "restored canary bytes differ")
         final_info = json.loads(docker_call(["info", "--format", "{{json .}}"] ))
         require(final_info["ID"] == info["ID"]
                 and final_info["SecurityOptions"] == info["SecurityOptions"],

@@ -119,6 +119,19 @@ class RootlessHostCustodyFixtureTests(unittest.TestCase):
                              {"./usr/bin/dockerd-rootless.sh", "./usr/bin/rootlesskit"})
             self.assertEqual(result["archive_members"], 2)
 
+    def test_digest_bound_openbao_volumes_require_exact_owned_overrides(self):
+        image = {"RepoDigests": [fixture.IMAGE],
+                 "Config": {"Volumes": {"/openbao/file": {}, "/openbao/logs": {}}}}
+        fixture.require_exact_image_volumes(image)
+        for volumes in ({}, {"/openbao/file": {}, "/openbao/logs": {}, "/other": {}},
+                        {"/openbao/file": {}}):
+            with self.subTest(volumes=volumes), self.assertRaises(RuntimeError):
+                fixture.require_exact_image_volumes(
+                    {"RepoDigests": [fixture.IMAGE], "Config": {"Volumes": volumes}})
+        with self.assertRaises(RuntimeError):
+            fixture.require_exact_image_volumes(
+                {"RepoDigests": [], "Config": image["Config"]})
+
     def test_owned_daemon_group_stops_before_leader_reap(self):
         with tempfile.TemporaryDirectory() as temp:
             proc = subprocess.Popen(["/bin/sleep", "30"], start_new_session=True)
