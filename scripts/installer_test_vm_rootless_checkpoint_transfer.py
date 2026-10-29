@@ -142,6 +142,7 @@ try:
             finally: os.close(reader)
         finally: os.close(fd)
     assert stamp(stage,admin,0o700)==stage_stamp
+    target_stamp=stamp(target,0,0o700)
     assert set(os.listdir(target))==expected_root
     assert set(os.listdir(target+'/bundle'))=={r['name'] for r in rows if r['name'].endswith(('.deb','.xz','.inrelease'))}
     assert set(os.listdir(target+'/code'))=={r['name'] for r in rows if r['name'].endswith('.py')}
@@ -152,7 +153,10 @@ try:
         p=os.open(parent,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW);os.fsync(p);os.close(p)
     print(json.dumps({'schema':'elevenid.rootless-package-guest-copy/v1','vm_id':vm,
       'manifest_sha256':hashlib.sha256(manifest_raw.encode()).hexdigest(),
-      'files':len(rows),'mode':mode},sort_keys=True,separators=(',',':')))
+      'files':len(rows),'mode':mode,
+      'stage_device':stage_stamp[0],'stage_inode':stage_stamp[1],
+      'target_device':target_stamp[0],'target_inode':target_stamp[1]},
+      sort_keys=True,separators=(',',':')))
 finally: os.close(rootfd)
 '''
 
@@ -235,8 +239,14 @@ def _guest_copy(binding: dict, vm_id: str, manifest: list[dict],
     output = _ssh_admin(binding, invocation, limit=512, timeout=180)
     value = release.decode(output)
     release.exact(value, {"schema", "vm_id", "manifest_sha256",
-                          "files", "mode"}, "fixture guest transfer")
-    release.require(value == {
+                          "files", "mode", "stage_device", "stage_inode",
+                          "target_device", "target_inode"},
+                  "fixture guest transfer")
+    release.require(all(type(value[key]) is int and value[key] > 0 for key in
+                        ("stage_device", "stage_inode", "target_device",
+                         "target_inode")) and
+                    {key: value[key] for key in
+                     ("schema", "vm_id", "manifest_sha256", "files", "mode")} == {
         "schema": "elevenid.rootless-package-guest-copy/v1",
         "vm_id": vm_id, "manifest_sha256": release.digest(raw),
         "files": len(manifest), "mode": mode},
@@ -428,6 +438,9 @@ def transfer_once(*, source: Path, registry: Path, runtime_parent: Path,
                                readiness["setup_uid"])
         release.require(created["manifest_sha256"]
                         == verified["manifest_sha256"] == manifest_sha
+                        and all(created[field] == verified[field] for field in
+                                ("stage_device", "stage_inode",
+                                 "target_device", "target_inode"))
                         and resumed.bound_resumed(
                             source=source, registry=registry,
                             runtime_parent=runtime_parent, vm_id=vm_id,
@@ -443,6 +456,10 @@ def transfer_once(*, source: Path, registry: Path, runtime_parent: Path,
         result = {**transfer_intent, "phase": "copied_observed",
                   "intent_sha256": release.digest(written),
                   "guest_copy_schema": created["schema"],
+                  "guest_stage_device": created["stage_device"],
+                  "guest_stage_inode": created["stage_inode"],
+                  "guest_target_device": created["target_device"],
+                  "guest_target_inode": created["target_inode"],
                   "observed_at": int(time.time())}
         create._write(lease.parent, vm_id + RESULT_SUFFIX, result)
         return result

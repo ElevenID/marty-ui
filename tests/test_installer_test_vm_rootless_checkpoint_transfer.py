@@ -28,7 +28,9 @@ def test_guest_response_must_bind_exact_manifest(monkeypatch):
                             "schema": "elevenid.rootless-package-guest-copy/v1",
                             "vm_id": vm_id,
                             "manifest_sha256": "0" * 64,
-                            "files": 1, "mode": "create"}))
+                            "files": 1, "mode": "create",
+                            "stage_device": 1, "stage_inode": 2,
+                            "target_device": 3, "target_inode": 4}))
     with pytest.raises(ValueError, match="guest transfer differs"):
         subject._guest_copy({}, vm_id, rows, "create", 1001)
 
