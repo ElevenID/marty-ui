@@ -1,7 +1,7 @@
 use crate::{
     issuance::{
         apply_offer, mark_no_active_flow, matches_active_attempt, matches_completed_offer,
-        reconcile_transaction, reserve_attempt, IssuanceError, IssuanceOffer,
+        reconcile_transaction, reserve_attempt_with_lifetime, IssuanceError, IssuanceOffer,
     },
     store::StoreDocument,
     validate_form_data, Applicant, ApplicantError, Application, Biometric, CheckStatus, CheckType,
@@ -1326,6 +1326,15 @@ impl ApplicantService {
         application_id: &str,
         now: DateTime<Utc>,
     ) -> Result<Application, ServiceError> {
+        self.issue_with_lifetime(application_id, now, None).await
+    }
+
+    pub async fn issue_with_lifetime(
+        &self,
+        application_id: &str,
+        now: DateTime<Utc>,
+        offer_ttl_seconds: Option<u64>,
+    ) -> Result<Application, ServiceError> {
         let (application_snapshot, applicant_snapshot) = {
             let store = self.store.read().await;
             let application = store
@@ -1367,7 +1376,8 @@ impl ApplicantService {
                 .applicant(&application.applicant_id)
                 .cloned()
                 .ok_or(ServiceError::ApplicantNotFound)?;
-            let (attempt_id, reserved_claims) = reserve_attempt(&mut application, claims, now)?;
+            let (attempt_id, reserved_claims) =
+                reserve_attempt_with_lifetime(&mut application, claims, now, offer_ttl_seconds)?;
             store.applications[index] = application.clone();
             self.persistence.persist(&store)?;
             (application, applicant, attempt_id, reserved_claims)

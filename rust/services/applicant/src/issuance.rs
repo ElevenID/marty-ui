@@ -57,10 +57,26 @@ pub fn reserve_attempt(
     claims: Map<String, Value>,
     now: DateTime<Utc>,
 ) -> Result<(Uuid, Map<String, Value>), IssuanceError> {
+    reserve_attempt_with_lifetime(application, claims, now, None)
+}
+
+pub fn reserve_attempt_with_lifetime(
+    application: &mut Application,
+    claims: Map<String, Value>,
+    now: DateTime<Utc>,
+    offer_ttl_seconds: Option<u64>,
+) -> Result<(Uuid, Map<String, Value>), IssuanceError> {
     if let Some(active) = application.system_data.get(ACTIVE_ATTEMPT) {
         let active = active
             .as_object()
             .ok_or(IssuanceError::InvalidAttemptState)?;
+        let reserved_lifetime = match active.get("offer_ttl_seconds") {
+            None | Some(Value::Null) => None,
+            Some(value) => Some(value.as_u64().ok_or(IssuanceError::InvalidAttemptState)?),
+        };
+        if reserved_lifetime != offer_ttl_seconds {
+            return Err(IssuanceError::AttemptChanged);
+        }
         let id = active
             .get("id")
             .and_then(Value::as_str)
@@ -80,7 +96,8 @@ pub fn reserve_attempt(
     application.system_data.insert(
         ACTIVE_ATTEMPT.into(),
         json!({
-            "id": id.to_string(), "claims": claims, "created_at": now.to_rfc3339()
+            "id": id.to_string(), "claims": claims, "created_at": now.to_rfc3339(),
+            "offer_ttl_seconds": offer_ttl_seconds
         }),
     );
     application.updated_at = now;

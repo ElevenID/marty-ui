@@ -141,6 +141,8 @@ message InitiateIssuanceRequest {
   // Canonical JSON object for nested claim fidelity. The legacy string map is
   // read only when this field is empty.
   string claims_json = 12;
+  // Shortens this offer only; issuer enforces minimum and configured-default maximum.
+  optional uint64 offer_ttl_seconds = 13;
 }
 
 message IssuanceResponse {

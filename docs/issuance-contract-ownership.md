@@ -53,3 +53,19 @@ existing release checks, rather than an exact old Python image. Native retention
 must retain tenant-owned issuance events and qualified schema migrations; the
 old image receipt did not prove current runtime behavior. DIDCOMM-KMS-001 and
 live callback/provider qualification remain open with their existing owners.
+
+## Per-offer lifetime shortening
+
+The authorized organization application issue request accepts an optional JSON
+`offer_ttl_seconds` unsigned integer. Omission keeps the configured issuance default.
+The issuer accepts at least 60 seconds and at most that configured default, calculates
+expiry from its own clock, and rejects invalid or overflowing values. This option
+cannot extend an offer, change process configuration, or grant issue authority.
+
+Applicant keeps the chosen lifetime with the issuance attempt. The authenticated
+application event, Flow offer semantics, and issuer idempotency request all bind the
+value; a retry cannot silently change an existing offer's lifetime. The optional gRPC
+field is additive. Applicant, Flow, and issuer must all support this path before a
+short-lifetime test can qualify; an older server retaining the default is a test
+failure, never evidence of expiry. Natural-expiry tests wait for the actual server
+410 and cached-code denial, then create a fresh owned recovery offer.

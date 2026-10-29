@@ -104,7 +104,7 @@ impl FlowProvider for HttpFlowProvider {
         attempt_id: Uuid,
     ) -> Result<IssuanceOffer, ProviderError> {
         let timestamp = chrono::Utc::now();
-        let payload = json!({
+        let mut payload = json!({
             "event_type": "application.approved",
             "aggregate_id": application.id,
             "aggregate_type": "application",
@@ -125,6 +125,14 @@ impl FlowProvider for HttpFlowProvider {
                 "claims": claims,
             }
         });
+        if let Some(seconds) = application
+            .system_data
+            .get("active_issuance_attempt")
+            .and_then(|value| value.get("offer_ttl_seconds"))
+            .and_then(Value::as_u64)
+        {
+            payload["data"]["offer_ttl_seconds"] = seconds.into();
+        }
         let headers = self
             .authenticator
             .sign_new(&payload, timestamp.timestamp())
