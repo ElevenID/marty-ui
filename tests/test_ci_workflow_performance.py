@@ -4300,6 +4300,9 @@ def _assert_no_rust_executable_transfer(steps) -> None:
             "${{ runner.temp }}/marty-owned-runtime-diagnostics/*.*"
         ),
         "Upload Rust build evidence": "${{ runner.temp }}/rust-build-evidence/",
+        "Upload successful PR Rust checkout identity": (
+            "${{ runner.temp }}/pr-rust-checkout-attestation.json"
+        ),
         "Preserve fresh full-main startup attestation": "${{ runner.temp }}/canvas-startup-fresh-run.json",
         "Preserve fresh full-main REST requalification evidence": "${{ runner.temp }}/canvas-rest-fresh-run.json",
     }
