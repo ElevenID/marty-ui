@@ -728,12 +728,7 @@ pub fn start_openbao(
         )?;
     }
     let project = format!("{}-bao", journal.compose_project());
-    let docker = DockerRunner::new(
-        docker_executable,
-        &binding.docker_host,
-        &binding.engine_id,
-        installation,
-    )?;
+    let docker = DockerRunner::from_binding(docker_executable, binding, installation)?;
     docker.preflight()?;
     fresh(&docker, &project)?;
     let mut listener = Some(

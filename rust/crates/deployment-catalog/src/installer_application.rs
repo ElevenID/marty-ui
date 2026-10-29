@@ -63,12 +63,7 @@ fn prepare_inner(
         .runtime()
         .ok_or("installer runtime binding absent")?
         .clone();
-    let docker = DockerRunner::new(
-        dockerpath,
-        &binding.docker_host,
-        &binding.engine_id,
-        installation,
-    )?;
+    let docker = DockerRunner::from_binding(dockerpath, &binding, installation)?;
     installer_openbao::verify_observation(&docker, installation, bundle, state, bao)?;
     let mut reservations = Vec::new();
     let mut ports = Vec::new();
