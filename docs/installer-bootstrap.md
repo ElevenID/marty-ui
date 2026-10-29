@@ -26,7 +26,8 @@ required by this one-line wrapper; pipefail makes a failed download nonzero.
 The bootstrap script is fetched over HTTPS and executes before its own bytes
 can be verified. It verifies the signed inventory and operator before executing
 the operator. The operator then verifies the remaining payloads before runtime
-provisioning and Docker resource creation.
+provisioning and Docker resource creation; it may write private installation
+state and evidence before those payload checks complete.
 The installer prints its private random
 installation path under your HOME; an absolute disposable path can be selected
 with `--install-dir` if needed. No source checkout or organization credentials
@@ -69,12 +70,15 @@ unsupported. The bootstrap checks its standard command-line prerequisites and
 downloads pinned verification tools itself; it does not require a repository
 checkout or a build toolchain.
 
-The selected version must have published signed admission metadata and an
-authenticated operator artifact. Nightly and stable channel selection also
-requires valid signed channel metadata. Missing, expired, mismatched or invalid
-metadata causes refusal before the operator executes. A completed artifact build
-alone does not establish channel availability. Artifact production and deployment
-readiness are owned by their respective release and deployment workflows.
+Normal `--version` and `--channel` installation requires published signed
+admission metadata and an authenticated operator artifact. Nightly and stable
+channel selection also requires valid signed channel metadata. The experimental
+`--candidate-test` path instead requires an exact signed nightly inventory and
+authenticated operator; it grants no admission. Missing, expired, mismatched or
+invalid required metadata causes refusal before the operator executes. A
+completed artifact build alone does not establish channel availability.
+Artifact production and deployment readiness are owned by their respective
+release and deployment workflows.
 
 ## Platform adapters
 
