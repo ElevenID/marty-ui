@@ -123,3 +123,11 @@ def test_cleanup_refuses_foreign_network_before_container_actions(tmp_path, monk
     with pytest.raises(ValueError, match="OWNED_NETWORK_RECONCILIATION_REFUSED"):
         value.cleanup({"inputsSha256": "a" * 64, "controllerIdentity": {"pid": 123, "creationFileTime": 456}, "state": {}}, "22222222-2222-4222-8222-222222222222")
     assert not any(args[1] in ("stop", "rm", "create", "start") for args in calls)
+
+
+def test_actual_operator_arming_normalizes_only_unique_assignment():
+    raw = Path(rehearsal.__file__).read_bytes()
+    enabled = raw.replace(b"\nDISPATCH_ENABLED = False\n", b"\nDISPATCH_ENABLED = True\n", 1)
+    assert enabled != raw and rehearsal.disabled_operator_source(enabled) == raw
+    with pytest.raises(ValueError, match="ONLY_DISPATCH_FLAG_MAY_CHANGE"):
+        rehearsal.disabled_operator_source(enabled + b"\nDISPATCH_ENABLED = True\n")

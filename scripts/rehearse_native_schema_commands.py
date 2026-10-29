@@ -385,6 +385,12 @@ def load(name, bound):
     return module
 
 
+def disabled_operator_source(raw):
+    enabled = b"\nDISPATCH_ENABLED = True\n"
+    require(raw.count(enabled) == 1, "ONLY_DISPATCH_FLAG_MAY_CHANGE")
+    return raw.replace(enabled, b"\nDISPATCH_ENABLED = False\n", 1)
+
+
 def validate_inputs(path, digest):
     require(ref(path)["sha256"] == digest, "REHEARSAL_INPUT_CHANGED")
     value = json.loads(Path(path).read_bytes())
@@ -418,8 +424,7 @@ def validate_inputs(path, digest):
     for name, item in value["operatorFiles"].items():
         raw = read_ref(item).read_bytes()
         if name == "scripts/rehearse_native_schema_commands.py" and DISPATCH_ENABLED:
-            require(raw.count(b"DISPATCH_ENABLED = True") == 1, "ONLY_DISPATCH_FLAG_MAY_CHANGE")
-            raw = raw.replace(b"DISPATCH_ENABLED = True", b"DISPATCH_ENABLED = False", 1)
+            raw = disabled_operator_source(raw)
         require(raw == git(producer, "show", value["producerRevision"] + ":" + name), "REHEARSAL_OPERATOR_GIT_BLOB_CHANGED")
     require(set(value["guardModules"]) == {"beta_haip_guard", "beta_private_acl", "beta_operation_lock"}, "EXACT_EXISTING_GUARDS_REQUIRED")
     for item in value["guardModules"].values():
