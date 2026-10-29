@@ -9,7 +9,6 @@ not offer automatic rollback or qualify a rootless daemon.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
 import datetime as dt
 import hashlib
 import json
@@ -22,7 +21,7 @@ import uuid
 import installer_test_vm_rootless_package_admission as archive
 
 SCHEMA = "elevenid.installer-only-rootless-offline-install/v1"
-CHECKPOINT_SCHEMA = "elevenid.installer-only-vm-stopped-disk-checkpoint/v1"
+CHECKPOINT_SCHEMA = "elevenid.installer-only-vm-stopped-disk-checkpoint/v2"
 CONFIRMATION_SCHEMA = "elevenid.installer-only-rootless-install-confirmation/v1"
 CONFIRM_LITERAL = "INSTALL_UIDMAP_ROOTLESSKIT_IN_DISPOSABLE_VM"
 STATUS = Path("/var/lib/dpkg/status")
@@ -37,33 +36,6 @@ HEX = re.compile(r"[0-9a-f]{64}\Z")
 
 class Refused(ValueError):
     """Fixed, nonsensitive refusal. An intent-only state needs manual recovery."""
-
-
-@dataclass(frozen=True)
-class VerifiedAdmission:
-    """Future controller's validated #1680 intent/result/source/stage chain.
-
-    This type has no minting function here. It is a local API contract, not a
-    cryptographic proof; only trusted root-private controller code may supply
-    it after authenticating the complete prior observation and transfer.
-    """
-    vm_id: str
-    result_sha256: str
-    intent_sha256: str
-    module_sha256: str
-    controller_sha256: str
-    engine_id: str
-    status_sha256: str
-
-
-@dataclass(frozen=True)
-class VerifiedStoppedCheckpoint:
-    """Future controller's independently verified stop/snapshot/restore proof."""
-    vm_id: str
-    record_sha256: str
-    disk_sha256: str
-    snapshot_sha256: str
-    rollback_test_sha256: str
 
 
 def require(ok: bool, reason: str) -> None:
@@ -158,13 +130,22 @@ def _digest(value: str) -> str:
 
 
 def _checkpoint(raw: bytes, record: dict, vm_id: str) -> str:
-    require(set(record) == {"schema", "vm_id", "controller_boot_id",
+    require(set(record) == {"schema", "phase", "vm_id", "copy_vm_id",
+                            "controller_boot_id",
                             "stopped_pid", "stopped_start_ticks", "disk_device",
                             "disk_inode", "disk_sha256", "snapshot_sha256",
                             "snapshot_bytes", "rollback_test_sha256",
-                            "created_at", "stopped"}
+                            "admission_result_sha256", "stage_recheck_sha256",
+                            "source_module_sha256", "source_controller_sha256",
+                            "created_at", "stopped",
+                            "package_install_authorized",
+                            "product_dispatch_authorized"}
             and record["schema"] == CHECKPOINT_SCHEMA
+            and record["phase"] == "historical_rollback_observed"
             and record["vm_id"] == vm_id and record["stopped"] is True
+            and record["copy_vm_id"] != vm_id
+            and record["package_install_authorized"] is False
+            and record["product_dispatch_authorized"] is False
             and type(record["stopped_pid"]) is int and record["stopped_pid"] > 0
             and type(record["stopped_start_ticks"]) is str
             and record["stopped_start_ticks"].isdigit()
@@ -175,7 +156,10 @@ def _checkpoint(raw: bytes, record: dict, vm_id: str) -> str:
             and type(record["created_at"]) is int and record["created_at"] > 0,
             "external disk checkpoint evidence invalid")
     _id(record["controller_boot_id"])
-    for key in ("disk_sha256", "snapshot_sha256", "rollback_test_sha256"):
+    _id(record["copy_vm_id"])
+    for key in ("disk_sha256", "snapshot_sha256", "rollback_test_sha256",
+                "admission_result_sha256", "stage_recheck_sha256",
+                "source_module_sha256", "source_controller_sha256"):
         _digest(record[key])
     return archive.sha(raw)
 
@@ -501,41 +485,57 @@ def _recheck_repo(repo: Path, bundle_dir: Path, package_files: list[dict],
             "offline APT configuration changed")
 
 
-def install_once(*, vm_id: str, root_dir: Path,
-                 verified_admission: VerifiedAdmission,
-                 verified_checkpoint: VerifiedStoppedCheckpoint) -> dict:
+def install_once(*, vm_id: str, root_dir: Path) -> dict:
     """Run at most one package mutation after external checkpoint admission.
 
-    The external controller must prove VM stopped/checkpoint provenance and
-    restore viability, current guest identity, root-private code custody and
-    exact confirmation. This primitive refuses if any prior intent exists.
+    The external controller must transfer exact admitted root-private records,
+    prove stop/rollback provenance and restore viability, current guest identity,
+    source custody and exact confirmation. This primitive refuses prior intent.
     It never retries, invokes rollback, or starts a daemon.
     """
     require(os.geteuid() == 0 and os.getegid() == 0,
             "root guest transaction identity required")
     _id(vm_id)
-    require(type(verified_admission) is VerifiedAdmission
-            and type(verified_checkpoint) is VerifiedStoppedCheckpoint
-            and verified_admission.vm_id == verified_checkpoint.vm_id == vm_id,
-            "externally verified capabilities missing")
     _root_custody(root_dir, vm_id)
     bundle_dir = root_dir / "bundle"
+    admission_intent_path = root_dir / "admission-intent.json"
     admission_result_path = root_dir / "admission.json"
     checkpoint_path = root_dir / "checkpoint.json"
     confirmation_path = root_dir / "confirmation.json"
     private_dir = root_dir / "transaction"
     private_root(private_dir)
     require(not any(private_dir.iterdir()), "transaction directory already used")
+    admission_intent_raw, admission_intent = private_record(admission_intent_path)
     admission_raw, admission = private_record(admission_result_path)
     checkpoint_raw, checkpoint = private_record(checkpoint_path)
     checkpoint_sha = _checkpoint(checkpoint_raw, checkpoint, vm_id)
-    require(archive.sha(admission_raw) == verified_admission.result_sha256
-            and checkpoint_sha == verified_checkpoint.record_sha256
-            and checkpoint["disk_sha256"] == verified_checkpoint.disk_sha256
-            and checkpoint["snapshot_sha256"] == verified_checkpoint.snapshot_sha256
-            and checkpoint["rollback_test_sha256"] ==
-                verified_checkpoint.rollback_test_sha256,
-            "externally verified evidence differs")
+    require(checkpoint["admission_result_sha256"] == archive.sha(admission_raw)
+            and checkpoint["source_module_sha256"]
+            == admission.get("module_sha256")
+            and checkpoint["source_controller_sha256"]
+            == admission.get("controller_sha256"),
+            "transferred checkpoint or admission differs")
+    require(set(admission_intent) ==
+            {"schema", "phase", "vm_id", "observation_id", "engine_id",
+             "readiness_sha256", "pid", "start_ticks", "dpkg_status_sha256",
+             "module_sha256", "controller_sha256", "purpose",
+             "package_actions_authorized", "installation_authorized"}
+            and admission_intent["schema"] ==
+                "elevenid.installer-only-vm-rootless-package-admission/v1"
+            and admission_intent["phase"] == "intent"
+            and admission_intent["vm_id"] == vm_id
+            and admission_intent["purpose"]
+                == "disposable_fixture_setup_package_admission"
+            and admission_intent["package_actions_authorized"] is False
+            and admission_intent["installation_authorized"] is False
+            and admission.get("intent_sha256")
+                == archive.sha(admission_intent_raw)
+            and admission.get("observation_id")
+                == admission_intent["observation_id"]
+            and all(admission.get(key) == admission_intent[key] for key in
+                    ("engine_id", "readiness_sha256", "dpkg_status_sha256",
+                     "module_sha256", "controller_sha256")),
+            "transferred admission intent/result differs")
     require(admission.get("schema") ==
             "elevenid.installer-only-vm-rootless-package-admission/v1"
             and admission.get("phase") == "observed"
@@ -544,13 +544,13 @@ def install_once(*, vm_id: str, root_dir: Path,
             and admission.get("rootful_docker_package_simulated_change") is False
             and admission.get("package_actions_authorized") is False
             and admission.get("installation_authorized") is False
-            and admission.get("intent_sha256") == verified_admission.intent_sha256
-            and admission.get("module_sha256") == verified_admission.module_sha256
-            and admission.get("controller_sha256") ==
-                verified_admission.controller_sha256
-            and admission.get("engine_id") == verified_admission.engine_id
-            and admission.get("dpkg_status_sha256") ==
-                verified_admission.status_sha256,
+            and admission.get("module_sha256")
+                == checkpoint["source_module_sha256"]
+            and admission.get("controller_sha256")
+                == checkpoint["source_controller_sha256"]
+            and admission.get("engine_id") == admission_intent["engine_id"]
+            and admission.get("dpkg_status_sha256")
+                == admission_intent["dpkg_status_sha256"],
             "prior package admission record invalid")
     engine_id = _engine_id()
     require(engine_id == admission.get("engine_id"),
