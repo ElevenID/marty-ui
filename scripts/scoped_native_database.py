@@ -130,6 +130,8 @@ def schema_url(raw, command):
 
 
 class NativeDatabasePhase:
+    SCHEMA_BINARIES = {role: ROLE_BINARIES[role] for role in SCHEMA_ROLES}
+
     """Reuse the frozen host command/save/guard and original private journal."""
     def __init__(self, context, inputs, store):
         require(type(store) is LinuxBuildJournal, "ORIGINAL_LINUX_JOURNAL_REQUIRED")
@@ -282,8 +284,8 @@ class NativeDatabasePhase:
 
     def schema(self, role, command):
         require(schema_input_contract(self.i) == self.selection, "SCHEMA_SELECTION_CHANGED")
-        require(role in SCHEMA_ROLES and command in ("migrate", "verify-owned-schema"), "CLOSED_SCHEMA_COMMAND_REQUIRED")
-        binary = ROLE_BINARIES[role]
+        require(role in self.SCHEMA_BINARIES and command in ("migrate", "verify-owned-schema"), "CLOSED_SCHEMA_COMMAND_REQUIRED")
+        binary = self.SCHEMA_BINARIES[role]
         bound = self.selection["binaries"][role]
         path = read_ref(bound, 512 * 1024 * 1024)
         url = self.database_url(command)

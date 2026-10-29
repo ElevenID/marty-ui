@@ -22,23 +22,38 @@ import uuid
 from scoped_native_database import NativeDatabasePhase, schema_url, ENGINE, BUILD_RECEIPT_SHA, bounded_run, schema_input_contract
 from scoped_native_runtime import read_executable_ref, read_ref, ref, require, save_state, MIGRATIONS
 from scoped_signing_successor import environment
-from scoped_native_maintenance import SOURCE, CORE, ROLE_BINARIES, operational_sql_sources
+from scoped_native_maintenance import SOURCE, CORE, operational_sql_sources
 from prepare_local_official_native_build import git
+from qualify_selfhost_migrations import NATIVE_BINARIES as FRESH_ISSUER_BOOTSTRAP_BINARIES
 
 DISPATCH_ENABLED = False
 PG_IMAGE = "sha256:fceb6f86328c36f2438fae3b851b0cc57c4a7e69a58c866d9ce24281f2cf0c9c"
 OWNER = "native-schema-rehearsal"
 LOCK = Path("C:/Users/maree/OneDrive/Glthub/marty-workspace/marty-demo-recorder/artifacts/.recording.lock")
 SCHEMA = "marty.synthetic-native-schema-rehearsal/v1"
-STAGES = ("bootstrap-flow", "bootstrap-issuer", "install", "fence", "maintenance", "migrate-flow", "migrate-issuer",
-    "reject-flow-before-acl", "reject-issuer-before-acl", "acl", "verify-flow", "verify-issuer", "reject-admin-issuer", "attest", "login", "owner", "owner-verify")
+# Reuse the existing production fresh-baseline order, never a beta catalog rollout.
+BOOTSTRAP_ROLES = tuple("issuance-native" if binary == "marty-issuance-service" else binary.removeprefix("marty-")
+                       for binary in FRESH_ISSUER_BOOTSTRAP_BINARIES)
+SYNTHETIC_SCHEMA_BINARIES = {"flow": "marty-flow", **dict(zip(BOOTSTRAP_ROLES, FRESH_ISSUER_BOOTSTRAP_BINARIES, strict=True))}
+SCHEMA_STAGE_OPERATIONS = {"bootstrap-flow": ("flow", "migrate"),
+    **{"bootstrap-" + role: (role, "migrate") for role in BOOTSTRAP_ROLES},
+    "migrate-flow": ("flow", "migrate"), "migrate-issuer": ("issuance-native", "migrate"),
+    "reject-flow-before-acl": ("flow", "verify-owned-schema"), "reject-issuer-before-acl": ("issuance-native", "verify-owned-schema"),
+    "verify-flow": ("flow", "verify-owned-schema"), "verify-issuer": ("issuance-native", "verify-owned-schema"),
+    "reject-admin-issuer": ("issuance-native", "verify-owned-schema")}
+STAGES = ("bootstrap-flow", *("bootstrap-" + role for role in BOOTSTRAP_ROLES), "install", "fence", "maintenance",
+    "migrate-flow", "migrate-issuer", "reject-flow-before-acl", "reject-issuer-before-acl", "acl",
+    "verify-flow", "verify-issuer", "reject-admin-issuer", "attest", "login", "owner", "owner-verify")
 
-OPERATOR_FILES = ('scripts/rehearse_native_schema_commands.py', 'scripts/scoped_native_database.py', 'scripts/scoped_native_runtime.py', 'scripts/scoped_native_profiles.py', 'scripts/scoped_native_maintenance.py', 'scripts/scoped_beta_binary_overlay.py', 'scripts/scoped_passport_successor.py', 'scripts/scoped_linux_journal.py', 'scripts/scoped_signing_successor.py', 'scripts/prepare_local_official_native_build.py', 'scripts/scoped_native_build.py', 'tests/scripts/native-maintenance-metadata.js', 'tests/scripts/functional-debug-runtime.js')
+
+OPERATOR_FILES = ('scripts/qualify_selfhost_migrations.py', 'scripts/sql/kms-private-key-schema.sql', 'scripts/sql/kms-private-key-content.sql', 'scripts/rehearse_native_schema_commands.py', 'scripts/scoped_native_database.py', 'scripts/scoped_native_runtime.py', 'scripts/scoped_native_profiles.py', 'scripts/scoped_native_maintenance.py', 'scripts/scoped_beta_binary_overlay.py', 'scripts/scoped_passport_successor.py', 'scripts/scoped_linux_journal.py', 'scripts/scoped_signing_successor.py', 'scripts/prepare_local_official_native_build.py', 'scripts/scoped_native_build.py', 'tests/scripts/native-maintenance-metadata.js', 'tests/scripts/functional-debug-runtime.js')
 
 MIGRATION_FILES = tuple("rust/services/" + name.split("/", 1)[0] + "/migrations/" + name.split("/", 1)[1] + ".sql" for name in MIGRATIONS)
 
 
 class Rehearsal(NativeDatabasePhase):
+    SCHEMA_BINARIES = SYNTHETIC_SCHEMA_BINARIES
+
     def __init__(self, context, inputs):
         self.g, self.i = context, inputs
         self.fixture_run = inputs["runId"]
@@ -204,7 +219,8 @@ class Rehearsal(NativeDatabasePhase):
     def run(self):
         self.create_fixture()
         self.schema_stage("bootstrap-flow", "flow", "migrate", bootstrap=True)
-        self.schema_stage("bootstrap-issuer", "issuance-native", "migrate", bootstrap=True)
+        for role in BOOTSTRAP_ROLES:
+            self.schema_stage("bootstrap-" + role, role, "migrate", bootstrap=True)
         self.sql_stage("install", "passport-beta-fence-install.sql")
         row = self.sql_stage("fence", "passport-beta-fence-verify.sql")
         self.epoch = self.node("json", stdout=row["stdout"], schema="marty.passport-beta-fence-verification/v1")["epoch"]
@@ -224,7 +240,7 @@ class Rehearsal(NativeDatabasePhase):
         txid = self.node("json", stdout=row["stdout"], schema="marty.passport-beta-rust-owner-transition/v1")["transition_txid"]
         self.sql_stage("owner-verify", "passport-beta-rust-owner-verify.sql", transition=txid)
         require(self.rejections == ["reject-flow-before-acl", "reject-issuer-before-acl", "reject-admin-issuer"]
-                and len(self.positive) == 6 and len(set(self.helpers)) == 9, "EXACT_SCHEMA_REHEARSAL_ASSERTIONS_REQUIRED")
+                and len(self.positive) == 9 and len(set(self.helpers)) == 12, "EXACT_SCHEMA_REHEARSAL_ASSERTIONS_REQUIRED")
         self.guard()
         self.state.update(phase="STOP_OWNED_FIXTURE", pendingResource="STOP_OWNED_POSTGRES")
         self.persist()
@@ -306,7 +322,7 @@ class Rehearsal(NativeDatabasePhase):
         allowed = set(pg) | {cid for _, _, cid in owned}
         if self.network_id:
             require(set(network.get("Containers") or {}).issubset(allowed), "UNRELATED_REHEARSAL_NETWORK_CONSUMER")
-        helper_stages = {"bootstrap-flow", "bootstrap-issuer", "migrate-flow", "migrate-issuer", "reject-flow-before-acl", "reject-issuer-before-acl", "verify-flow", "verify-issuer", "reject-admin-issuer"}
+        helper_stages = set(SCHEMA_STAGE_OPERATIONS)
         for stage, stage_id, cid in owned:
             require(stage in helper_stages, "NON_HELPER_STAGE_CONTAINER_REFUSED")
             self.cleanup_generation(stage, cid, failure)
@@ -314,10 +330,9 @@ class Rehearsal(NativeDatabasePhase):
             self.i["runId"] = stage_id
             original = json.loads(self.command(["docker", "inspect", cid]))[0]
             binary = Path(original["Config"]["Entrypoint"][0]).name
-            role = next((key for key, value in ROLE_BINARIES.items() if value == binary and key in ("flow", "issuance-native")), None)
+            role = next((key for key, value in self.SCHEMA_BINARIES.items() if value == binary), None)
             command = original["Config"]["Cmd"][0]
-            expected_role = "flow" if stage.endswith("flow") or stage == "reject-flow-before-acl" else "issuance-native"
-            expected_command = "migrate" if stage.startswith(("bootstrap-", "migrate-")) else "verify-owned-schema"
+            expected_role, expected_command = SCHEMA_STAGE_OPERATIONS[stage]
             require(role == expected_role and command == expected_command, "FROZEN_SCHEMA_STAGE_CHANGED")
             require(role is not None and command in ("migrate", "verify-owned-schema"), "UNKNOWN_REHEARSAL_SCHEMA_HELPER")
             url_file = Path(self.g["root"]) / (stage + "-" + role + "-" + command + ".url.private")
@@ -452,9 +467,10 @@ def validate_inputs(path, digest):
     receipt = json.loads(read_ref(value["buildReceipt"]).read_bytes())
     require(receipt["state"] == "PASSED" and receipt["source"] == SOURCE and receipt["coreRevision"] == CORE,
             "ACTUAL_BFAD_SOURCE_REQUIRED")
-    for role in ("flow", "issuance-native"):
+    require(set(value["binaries"]) == set(SYNTHETIC_SCHEMA_BINARIES), "EXACT_SYNTHETIC_PREREQUISITE_ELFS_REQUIRED")
+    for role, binary in SYNTHETIC_SCHEMA_BINARIES.items():
         bound = value["binaries"][role]
-        require(bound == receipt["binaries"][ROLE_BINARIES[role]], "ACTUAL_SCHEMA_ELF_REQUIRED")
+        require(bound == receipt["binaries"][binary], "ACTUAL_SCHEMA_ELF_REQUIRED")
         read_ref(bound, 512 * 1024 * 1024)
     require(schema_input_contract(value) == expected_synthetic_selection(value), "EXACT_BUILD_BOUND_SYNTHETIC_SELECTION_REQUIRED")
     require(set(value["migrationSources"]) == set(MIGRATION_FILES), "EXACT_RUST_MIGRATION_SOURCES_REQUIRED")

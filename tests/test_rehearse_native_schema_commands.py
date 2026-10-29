@@ -67,7 +67,7 @@ def test_expected_negative_requires_actual_acl_reason_not_generic_exit1(tmp_path
 
 def test_rehearsal_is_not_armed_and_stages_are_exact():
     assert rehearsal.DISPATCH_ENABLED is False
-    assert len(set(rehearsal.STAGES)) == len(rehearsal.STAGES) == 17
+    assert len(set(rehearsal.STAGES)) == len(rehearsal.STAGES) == 20
     assert "reject-flow-before-acl" in rehearsal.STAGES and "reject-admin-issuer" in rehearsal.STAGES
 
 
@@ -81,10 +81,9 @@ def test_closed_python_export_resolves_lazy_operational_sql_import(tmp_path):
     import subprocess
     root = Path(__file__).resolve().parents[1]
     for name in rehearsal.OPERATOR_FILES:
-        if name.endswith(".py"):
-            target = tmp_path / name
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes((root / name).read_bytes())
+        target = tmp_path / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes((root / name).read_bytes())
     code = "import sys;sys.path.insert(0,sys.argv[1]);from rehearse_native_schema_commands import operational_sql_sources;assert len(operational_sql_sources())==9"
     subprocess.run([sys.executable, "-I", "-c", code, str(tmp_path / "scripts")], check=True)
 
@@ -297,3 +296,34 @@ def test_real_inherited_schema_boundary_returns_build_bound_selection(tmp_path):
     assert row["sourceRevision"] == rehearsal.SOURCE and row["coreRevision"] == rehearsal.CORE
     assert row["containerId"] == cid and row["exitCode"] == 0
     assert any(args[1] == "create" for args in calls)
+
+
+def test_fresh_fixture_reuses_production_bootstrap_order_and_closed_cleanup_inventory():
+    from qualify_selfhost_migrations import NATIVE_BINARIES
+    from scoped_native_database import NativeDatabasePhase
+    assert tuple(rehearsal.SYNTHETIC_SCHEMA_BINARIES[role] for role in rehearsal.BOOTSTRAP_ROLES) == NATIVE_BINARIES
+    assert NATIVE_BINARIES == ("marty-organization", "marty-credential-template", "marty-device-registration", "marty-issuance-service")
+    assert set(NativeDatabasePhase.SCHEMA_BINARIES) == {"flow", "issuance-native"}
+    bootstrap = [stage for stage in rehearsal.STAGES if stage.startswith("bootstrap-")]
+    assert bootstrap == ["bootstrap-flow", *("bootstrap-" + role for role in rehearsal.BOOTSTRAP_ROLES)]
+    assert len(rehearsal.SCHEMA_STAGE_OPERATIONS) == 12
+    assert all(rehearsal.SCHEMA_STAGE_OPERATIONS[stage][1] == "migrate" for stage in bootstrap)
+    assert rehearsal.STAGES.index("bootstrap-organization") < rehearsal.STAGES.index("bootstrap-credential-template") < rehearsal.STAGES.index("bootstrap-issuance-native") < rehearsal.STAGES.index("install")
+
+
+def test_real_rehearsal_dispatches_canonical_prerequisites_before_fence(tmp_path):
+    from qualify_selfhost_migrations import NATIVE_BINARIES
+    value = fixture(tmp_path)
+    value.create_fixture = lambda: None
+    observed = []
+    value.schema_stage = lambda stage, role, command, **kw: observed.append((stage, role, command, kw))
+    class StopBeforeFirstSql(Exception):
+        pass
+    def first_sql(stage, name, **kwargs):
+        assert stage == "install"
+        raise StopBeforeFirstSql
+    value.sql_stage = first_sql
+    with pytest.raises(StopBeforeFirstSql):
+        value.run()
+    assert [value.SCHEMA_BINARIES[role] for _, role, _, _ in observed] == ["marty-flow", *NATIVE_BINARIES]
+    assert all(command == "migrate" and kw == {"bootstrap": True} for _, _, command, kw in observed)
