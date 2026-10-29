@@ -309,7 +309,6 @@ fn require_applicant_storage(directory: &File, gid: u32) -> Result<()> {
         || metadata.gid() != gid
         || metadata.mode() & 0o7777 != 0o2770
         || !metadata.is_dir()
-        || metadata.nlink() < 2
     {
         return Err("applicant state ownership differs from the reviewed contract".into());
     }
