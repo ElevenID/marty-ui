@@ -2,7 +2,7 @@
 //! uncertain container. Durable intent, ID and outputs survive every failure.
 #![cfg(target_os = "linux")]
 use crate::{
-    installer_ingress_outputs,
+    installer_helper_output, installer_ingress_outputs,
     installer_openbao::{self, OpenBaoInventory},
     installer_runtime::DockerRunner,
     installer_state::{InstallerState, Phase},
@@ -300,6 +300,7 @@ pub fn provision(
         &output_directory,
         &secrets,
         &contract.owner,
+        installer_helper_output::expected_host_uid(&binding)?,
     )?;
     state.write_evidence("installer-ingress.json", &validated.metadata_bytes)?;
     let mut receipt = IngressReceipt {

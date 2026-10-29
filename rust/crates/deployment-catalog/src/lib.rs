@@ -29,6 +29,7 @@ pub mod installer_fetch;
 pub mod installer_generation;
 pub mod installer_generation_binding;
 pub mod installer_generation_host;
+mod installer_helper_output;
 #[cfg(target_os = "linux")]
 mod installer_host_fs;
 #[cfg(target_os = "linux")]
