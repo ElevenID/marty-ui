@@ -31,6 +31,23 @@ RECORD_SUFFIX = ".rootless-fixture-preparation-intent.json"
 RESULT_SUFFIX = ".rootless-fixture-prepared.json"
 
 
+def _fresh_uuid(parent: int, vm_parent: int, runtime_parent: int,
+                vm_id: str) -> None:
+    """Refuse any existing record or directory for this exact VM UUID."""
+    with os.scandir(parent) as entries:
+        for count, entry in enumerate(entries, start=1):
+            release.require(count <= 4096, "fixture registry census oversized")
+            release.require(entry.name != vm_id
+                            and not entry.name.startswith(vm_id + "."),
+                            "fixture UUID already has registry history")
+    for held in (vm_parent, runtime_parent):
+        try:
+            os.stat(vm_id, dir_fd=held, follow_symlinks=False)
+        except FileNotFoundError:
+            continue
+        raise ValueError("fixture UUID already has a VM directory")
+
+
 def _uuid4(value: str) -> None:
     release.require(type(value) is str and str(uuid.UUID(value)) == value
                     and uuid.UUID(value).version == 4, "fixture UUID invalid")
@@ -63,6 +80,7 @@ def prepare_fixture(*, source: Path, registry: Path, vm_parent: Path,
                 create._rebind_directory(vm_parent, parent)
                 runtime._same_path(runtime_parent, runtime_fd,
                                    runtime._runtime_parent)
+                _fresh_uuid(lease.parent, parent, runtime_fd, vm_id)
                 intent = {"schema": SCHEMA, "phase": "intent", "vm_id": vm_id,
                           "source_image_sha256": provenance["image_sha256"],
                           "source_manifest_sha256": provenance["manifest_sha256"],

@@ -91,6 +91,54 @@ class FixtureTests(unittest.TestCase):
             source.assert_not_called()
             disk.assert_not_called()
 
+    def test_existing_vm_history_or_directory_refuses_before_intent(self):
+        for existing in ("creation-record", "vm-directory", "runtime-directory",
+                         "unknown-record"):
+            with self.subTest(existing=existing), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                registry, vm_parent, runtime_parent = (root / name for name in
+                                                       ("registry", "vm", "runtime"))
+                for path in (registry, vm_parent, runtime_parent):
+                    path.mkdir()
+                if existing == "creation-record":
+                    (registry / (self.VM_ID + ".creation-intent.json")).touch()
+                elif existing == "unknown-record":
+                    (registry / (self.VM_ID + ".unrecognized.json")).touch()
+                else:
+                    ((vm_parent if existing == "vm-directory" else runtime_parent)
+                     / self.VM_ID).mkdir()
+                class Lease:
+                    def __enter__(self):
+                        self.parent = os.open(registry, os.O_RDONLY)
+                        return self
+                    def __exit__(self, *_):
+                        os.close(self.parent)
+                provenance = {key: "a" * 64 for key in
+                              ("image_sha256", "manifest_sha256", "signature_sha256",
+                               "keyring_sha256")}
+                with mock.patch.object(fixture.os, "geteuid", return_value=0), \
+                     mock.patch.object(fixture, "ControllerLease", return_value=Lease()), \
+                     mock.patch.object(fixture, "_directory",
+                                       side_effect=lambda p: os.open(p, os.O_RDONLY)), \
+                     mock.patch.object(fixture.runtime, "_runtime_parent",
+                                       side_effect=lambda p: os.open(p, os.O_RDONLY)), \
+                     mock.patch.object(fixture.create, "verify_source",
+                                       return_value=provenance), \
+                     mock.patch.object(fixture.create, "_rebind_directory"), \
+                     mock.patch.object(fixture.runtime, "_same_path"), \
+                     mock.patch.object(fixture.create, "_write") as write, \
+                     mock.patch.object(fixture.create, "create_overlay") as disk:
+                    with self.assertRaises(ValueError):
+                        fixture.prepare_fixture(source=root / "source", registry=registry,
+                                                vm_parent=vm_parent,
+                                                runtime_parent=runtime_parent,
+                                                vm_id=self.VM_ID, runtime_uid=994,
+                                                runtime_gid=987, ssh_port=22024)
+                    write.assert_not_called()
+                    disk.assert_not_called()
+                    self.assertFalse((registry / (self.VM_ID +
+                                                fixture.RECORD_SUFFIX)).exists())
+
     def test_durable_intent_precedes_disk_and_failure_never_starts_seed(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
