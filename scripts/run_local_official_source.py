@@ -15,6 +15,7 @@ import re
 import subprocess
 import sys
 import tomllib
+import types
 from pathlib import Path, PurePosixPath
 
 
@@ -25,7 +26,7 @@ BASELINE_IMAGE_SOURCE = "4edd631c8c908d74f82330cc3232bcc08b6b453f"
 AUDITED_DRIVER_SHA256 = "b62c65918cf3cd37df8c7dd44664822cbc5f70494986ade5870b0d47bde67a84"
 NATIVE_HELPER_SHA256 = "28f472694efec4e5fa994e96877c76b73bc51ac4f77d44ef372bd5af7ddaaa34"
 UI_HELPER_SHA256 = "b641ec7a03100f9e4d5cf66009d2e07fb876239f7bd6d6fb75445a83b3d8a3c6"
-EUDI_HELPER_SHA256 = "3182b7bb10bb6a77bb924f0122a84dfe0f4137a77a54a2d813dd56e309008c0f"
+EUDI_HELPER_SHA256 = "6a7ca855431ba747a7f9c13254ed7ac802e9807d343fffda5fa8dc9337d00fbf"
 CORE_CRATES = ("marty-crypto", "marty-didcomm", "marty-oid4vci", "marty-verification")
 
 
@@ -54,6 +55,20 @@ def exact_file(path: Path, expected: str) -> None:
         fail(f"missing or invalid pinned file: {path}")
     if sha256(path) != expected:
         fail(f"pinned file changed: {path}")
+
+
+
+def eudi_compiled_source(plan: dict, artifact: dict, harness_revision: str) -> str:
+    """Use the same pinned module-input contract as the actual Linux overlay."""
+    helper = Path(plan["nativeEudiHelper"]).resolve(strict=True)
+    if plan["nativeEudiHelperSha256"] != EUDI_HELPER_SHA256:
+        fail("reviewed EUDI helper pin changed")
+    exact_file(helper, EUDI_HELPER_SHA256)
+    module = types.ModuleType("pinned_local_eudi_overlay")
+    module.__file__ = str(helper)
+    exec(compile(helper.read_bytes(), str(helper), "exec"), module.__dict__)
+    inputs = module.compilation_inputs(Path(plan["harnessRepository"]), harness_revision)
+    return module.validate_compilation_inputs(artifact, inputs)
 
 
 def source_proof(plan: dict, *, require_tip: bool) -> dict:
@@ -202,14 +217,13 @@ def check(plan: dict) -> dict:
             or ui.get("imagesBuilt") is not False or ui.get("releaseQualified") is not False
             or ui.get("linuxReadbackMatched") is not True):
         fail("static UI receipt is not built from selected product source")
+    compiled_eudi_source = None
     if eudi_path:
         eudi_build = load(eudi_path)
-        if (eudi_build.get("source") != harness_sha or eudi_build.get("state") != "PASSED"
-                or eudi_build.get("exitCode") != 0
-                or eudi_build.get("sourceReadbackMatched") is not True
-                or not isinstance(eudi_build.get("distFiles"), dict)
+        if (not isinstance(eudi_build.get("distFiles"), dict)
                 or "bin/eudi-wallet-harness" not in eudi_build["distFiles"]):
-            fail("EUDI facade is not source-built from the selected unmodified harness")
+            fail("compiled EUDI facade distribution receipt is incomplete")
+        compiled_eudi_source = eudi_compiled_source(plan, eudi_build, harness_sha)
 
     driver = Path(plan["auditedLaneDriver"]).resolve(strict=True)
     helper = Path(plan["nativeServicesHelper"]).resolve(strict=True)
@@ -234,7 +248,8 @@ def check(plan: dict) -> dict:
             "w3cSuiteRevision": w3c_source["commit"],
             "eudiVerifierRevision": plan["eudiVerifierRevision"],
             "baselineImageSource": BASELINE_IMAGE_SOURCE, "nativeBinaryCount": len(actual_bins),
-            "imagesBuilt": False, "releaseQualified": False}
+            "imagesBuilt": False, "releaseQualified": False,
+            **({"eudiCompiledSource": compiled_eudi_source} if eudi_path else {})}
 
 
 def dispatch(plan: dict) -> int:
