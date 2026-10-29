@@ -82,7 +82,8 @@ case "$1:$2" in
             *ID*) printf 'test-engine\\n' ;;
             *) exit 91 ;;
         esac ;;
-    info:|compose:version) exit 0 ;;
+    info:) exit 0 ;;
+    compose:*) echo EARLY_COMPOSE_PROBE >&2; exit 93 ;;
     *) exit 91 ;;
 esac
 ''')
@@ -100,6 +101,7 @@ esac
                             text=True, timeout=15)
     assert result.returncode != 0
     assert "SYNTHETIC_DOWNLOAD_REFUSED" in result.stderr
+    assert "EARLY_COMPOSE_PROBE" not in result.stderr
     assert f"OBS_HOST=unix:///run/user/{os.getuid()}/docker.sock" in result.stderr
     assert "OBS_CONFIG=/tmp/marty-installer." in result.stderr
     assert "OBS_UNTRUSTED=absent" in result.stderr
