@@ -6,6 +6,7 @@ on:
     paths:
       - .github/workflows/installer-rootless-host-custody.yml
       - scripts/installer_rootless_host_custody_fixture.py
+      - scripts/installer_rootless_tool_admission.py
       - scripts/verify_installer_provenance.py
       - tests/test_installer_rootless_host_custody_fixture.py
 
@@ -25,6 +26,7 @@ jobs:
       - name: Ordinary-user bounded fixture tests
         run: |
           test "$(id -u)" != 0
+          python3 -m py_compile scripts/installer_rootless_host_custody_fixture.py scripts/installer_rootless_tool_admission.py
           python3 -m unittest discover -s tests -p test_installer_rootless_host_custody_fixture.py -v
 
   live-fixture:
@@ -91,11 +93,17 @@ jobs:
               source_sha='0aae5d6c03df0ccb2aa757d61fb022a24a962d14',
               run_id=40597188642, run_attempt=1)
           PY
+      - name: Admit exact signed Docker rootless extras without installation
+        run: |
+          test "$(id -u)" != 0
+          python3 scripts/installer_rootless_tool_admission.py \
+            "$RUNNER_TEMP/marty-rootless-preflight.json" "$RUNNER_TEMP/marty-rootless-tools"
       - name: Observe exact isolated rootless canary
         run: |
           test "$(id -u)" != 0
           python3 scripts/installer_rootless_host_custody_fixture.py --run \
-            "$RUNNER_TEMP/marty-rootless-assets/installer-inventory.json"
+            "$RUNNER_TEMP/marty-rootless-assets/installer-inventory.json" \
+            "$RUNNER_TEMP/marty-rootless-tools"
       - name: Retain bounded sanitized qualification records
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -103,6 +111,7 @@ jobs:
           name: installer-rootless-host-custody-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             ${{ runner.temp }}/marty-rootless-preflight.json
+            ${{ runner.temp }}/marty-rootless-admission.json
             ${{ runner.temp }}/marty-rootless-custody-result.json
           if-no-files-found: warn
           retention-days: 7

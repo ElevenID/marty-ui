@@ -54,8 +54,9 @@ def write_record(path, value):
         os.close(parent)
 
 
-def run(argv, env, *, timeout=40):
+def run(argv, env, *, timeout=40, output_limit=65536, binary=False):
     require(type(argv) is list and all(type(a) is str for a in argv), "invalid command")
+    require(0 < output_limit <= 64 * 1024 * 1024, "invalid command output bound")
     for parent in (Path("/usr"), Path("/usr/bin")):
         ancestor = parent.lstat()
         require(stat.S_ISDIR(ancestor.st_mode) and ancestor.st_uid == 0
@@ -90,7 +91,8 @@ def run(argv, env, *, timeout=40):
                     selector.unregister(key.fileobj)
                     continue
                 buffer = chunks[key.data]
-                require(len(buffer) + len(data) <= 65536, "bounded command output exceeded")
+                limit = output_limit if key.data == "out" else 65536
+                require(len(buffer) + len(data) <= limit, "bounded command output exceeded")
                 buffer.extend(data)
         while True:
             state = os.waitid(os.P_PID, proc.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
@@ -112,7 +114,7 @@ def run(argv, env, *, timeout=40):
     out, err = bytes(chunks["out"]), bytes(chunks["err"])
     require(proc.returncode == 0, "command refused: " + str(argv[:3]) + " stderr=" +
             err.decode("utf-8", "replace")[-300:])
-    return out.decode("utf-8", "strict").strip()
+    return out if binary else out.decode("utf-8", "strict").strip()
 
 
 def proc_stamp(pid):
@@ -193,11 +195,13 @@ def mapped(uid_map, guest):
     return matches[0]
 
 
-def preflight(*, record=False):
+def preflight(*, record=False, tool_dir=None):
     uid = os.geteuid()
     require(uid != 0 and os.getuid() == uid, "ordinary nonroot runner required")
-    names = ("docker", "dockerd-rootless.sh", "rootlesskit", "newuidmap", "newgidmap", "setpriv")
-    missing = [name for name in names if not shutil.which(name)]
+    required = ("docker", "dockerd", "newuidmap", "newgidmap", "setpriv", "gpg", "gpgv", "dpkg-deb")
+    extras = ("dockerd-rootless.sh", "rootlesskit")
+    names = (*required, *extras)
+    missing = [name for name in required if not shutil.which(name)]
     user = pwd.getpwuid(uid).pw_name
     ranges = {}
     for file in ("/etc/subuid", "/etc/subgid"):
@@ -206,16 +210,60 @@ def preflight(*, record=False):
     allowed = all(any(len(parts := line.split(":")) == 3 and parts[2].isdecimal()
                       and int(parts[2]) >= 65536 for line in ranges[file]) for file in ranges)
     report = {"schema": "marty.rootless-fixture-preflight/v1", "uid": uid,
-              "tool_presence": {n: n not in missing for n in names},
+              "tool_presence": {n: shutil.which(n) is not None for n in names},
               "subordinate_ranges_present": allowed,
               "userns_max": Path("/proc/sys/user/max_user_namespaces").read_text().strip(),
               "daemon_started": False, "installer_executed": False}
+    if not missing:
+        clean = {"PATH": "/usr/bin:/bin", "HOME": str(Path.home())}
+        report["docker_version"] = run([shutil.which("docker"), "--version"], clean)
+        report["dockerd_version"] = run([shutil.which("dockerd"), "--version"], clean)
     if record:
         write_record(Path(os.environ["RUNNER_TEMP"]) / "marty-rootless-preflight.json", report)
     require(not missing and shutil.which("setpriv") == SET_PRIV,
             "missing preinstalled rootless tools: " + ",".join(missing))
     require(allowed, "no preconfigured >=65536 subordinate UID/GID range")
-    return {"uid": uid, "tools": {n: shutil.which(n) for n in names},
+    tools = {n: shutil.which(n) for n in names}
+    if tool_dir is not None:
+        raw_directory = Path(tool_dir)
+        require(raw_directory == Path(os.environ["RUNNER_TEMP"]) / "marty-rootless-tools",
+                "rootless tool location differs")
+        directory = raw_directory.resolve(strict=True)
+        metadata = directory.lstat()
+        require(directory == raw_directory and directory.is_dir() and metadata.st_uid == uid
+                and stat.S_IMODE(metadata.st_mode) == 0o700,
+                "private rootless tool directory differs")
+        admission_path = Path(os.environ["RUNNER_TEMP"]) / "marty-rootless-admission.json"
+        admission_meta = admission_path.lstat()
+        require(stat.S_ISREG(admission_meta.st_mode) and admission_meta.st_uid == uid
+                and stat.S_IMODE(admission_meta.st_mode) == 0o600
+                and admission_meta.st_size <= 8192,
+                "rootless admission record custody differs")
+        admission = json.loads(admission_path.read_bytes())
+        require(admission["schema"] == "marty.rootless-tool-admission/v1"
+                and admission["uid"] == uid
+                and admission["docker_version"] == report["dockerd_version"]
+                and admission["system_install"] is False,
+                "rootless tool admission differs")
+        for member in extras:
+            path = directory / member
+            m = path.lstat()
+            require(stat.S_ISREG(m.st_mode) and m.st_uid == uid
+                    and stat.S_IMODE(m.st_mode) == 0o500 and m.st_nlink == 1
+                    and 0 < m.st_size <= 16 * 1024 * 1024,
+                    "admitted rootless tool custody differs")
+            with path.open("rb") as stream:
+                data = stream.read(m.st_size + 1)
+            after = path.lstat()
+            require(len(data) == m.st_size
+                    and (after.st_dev, after.st_ino, after.st_uid, after.st_mode, after.st_size) ==
+                    (m.st_dev, m.st_ino, m.st_uid, m.st_mode, m.st_size),
+                    "admitted rootless tool changed")
+            digest = hashlib.sha256(data).hexdigest()
+            require(digest == admission["member_sha256"]["./usr/bin/" + member],
+                    "admitted rootless tool bytes differ")
+            tools[member] = str(path)
+    return {"uid": uid, "tools": tools,
             "subordinate_ranges_present": True,
             "userns_max": report["userns_max"]}
 
@@ -296,8 +344,8 @@ def inspect_owner(path, uid, mode):
     return m
 
 
-def fixture(inventory):
-    prerequisites = preflight()
+def fixture(inventory, tool_dir):
+    prerequisites = preflight(tool_dir=tool_dir)
     authenticated_image(inventory)
     base = Path(os.environ["RUNNER_TEMP"]).resolve(strict=True)
     require(base.is_dir() and not base.is_symlink(), "runner temp unavailable")
@@ -307,7 +355,8 @@ def fixture(inventory):
         (context / name).mkdir(mode=0o700)
     docker = prerequisites["tools"]["docker"]
     host = "unix://" + str(context / "runtime" / "docker.sock")
-    env = {"PATH": "/usr/local/bin:/usr/bin:/bin", "HOME": str(context / "home"),
+    env = {"PATH": str(Path(tool_dir).resolve(strict=True)) + ":/usr/bin:/bin",
+           "HOME": str(context / "home"),
            "USER": pwd.getpwuid(os.geteuid()).pw_name,
            "XDG_RUNTIME_DIR": str(context / "runtime"),
            "XDG_CONFIG_HOME": str(context / "config"),
@@ -491,11 +540,13 @@ def fixture(inventory):
 
 
 def main():
-    require(len(sys.argv) == 3 and sys.argv[1] in ("--preflight", "--run"), "fixed arguments only")
+    require((len(sys.argv) == 3 and sys.argv[1] == "--preflight")
+            or (len(sys.argv) == 4 and sys.argv[1] == "--run"),
+            "fixed arguments only")
     if sys.argv[1] == "--preflight":
         print(json.dumps(preflight(record=True), sort_keys=True))
     else:
-        fixture(Path(sys.argv[2]))
+        fixture(Path(sys.argv[2]), Path(sys.argv[3]))
 
 
 if __name__ == "__main__":
