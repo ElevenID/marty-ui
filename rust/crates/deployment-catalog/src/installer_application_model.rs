@@ -1229,6 +1229,11 @@ mod tests {
     fn applicant_requires_image_user_and_exact_nonroot_state_group() {
         let (model, images, p) = fixture();
         assert!(prepare(&model, &images, &p).is_ok());
+        let mut rootless_model = model.clone();
+        let mut rootless_parameters = fixture().2;
+        rootless_parameters.applicant_state_gid = 1000;
+        rootless_model["services"]["applicant"]["group_add"] = json!(["1000"]);
+        assert!(prepare(&rootless_model, &images, &rootless_parameters).is_ok());
         let mut root_user = model.clone();
         root_user["services"]["applicant"]["user"] = json!("0:0");
         assert!(prepare(&root_user, &images, &p).is_err());
