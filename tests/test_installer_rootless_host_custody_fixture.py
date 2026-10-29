@@ -2,6 +2,7 @@
 
 import importlib.util
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
 
@@ -53,6 +54,13 @@ class RootlessHostCustodyFixtureTests(unittest.TestCase):
     def test_client_timeout_kills_only_its_process_group(self):
         with self.assertRaisesRegex(RuntimeError, "bounded command timeout"):
             fixture.run(["/bin/sh", "-c", "sleep 3"], {"PATH": "/usr/bin:/bin"}, timeout=0.1)
+
+    def test_owned_daemon_group_stops_before_leader_reap(self):
+        with tempfile.TemporaryDirectory() as temp:
+            proc = subprocess.Popen(["/bin/sleep", "30"], start_new_session=True)
+            fixture.stop_daemon(proc, fixture.proc_stamp(proc.pid),
+                                Path(temp) / "missing.sock", None, Path(temp))
+            self.assertIsNotNone(proc.returncode)
 
 
 if __name__ == "__main__":

@@ -7,6 +7,7 @@ package installation, existing Docker context, or pre-existing state is used.
 """
 
 import ctypes
+import errno
 import hashlib
 import json
 import os
@@ -14,6 +15,7 @@ from pathlib import Path
 import pwd
 import re
 import selectors
+import socket
 import shutil
 import signal
 import stat
@@ -106,6 +108,62 @@ def run(argv, env, *, timeout=40, nnp=True):
 def proc_stamp(pid):
     raw = Path(f"/proc/{pid}/stat").read_text()
     return int(raw.rsplit(") ", 1)[1].split()[19])
+
+
+def leader_exited(pid):
+    return os.waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT) is not None
+
+
+def owned_context_processes(context):
+    found = []
+    needle = os.fsencode(str(context))
+    for count, entry in enumerate(Path("/proc").iterdir(), start=1):
+        require(count <= 8192, "process census exceeds bound")
+        if not entry.name.isdecimal():
+            continue
+        try:
+            if entry.stat().st_uid != os.geteuid():
+                continue
+            with (entry / "cmdline").open("rb") as stream:
+                raw = stream.read(16385)
+            require(len(raw) <= 16384, "owned process command exceeds bound")
+        except FileNotFoundError:
+            continue
+        if needle in raw:
+            found.append(int(entry.name))
+    return found
+
+
+def stop_daemon(daemon, stamp, socket_path, socket_identity, context):
+    require(proc_stamp(daemon.pid) == stamp and os.getpgid(daemon.pid) == daemon.pid,
+            "owned daemon changed; preserve fixture")
+    try:
+        os.killpg(daemon.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    deadline = time.monotonic() + 10
+    while not leader_exited(daemon.pid) and time.monotonic() < deadline:
+        time.sleep(0.1)
+    # The zombie leader still reserves its PID, so the group cannot be reused.
+    try:
+        os.killpg(daemon.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    deadline = time.monotonic() + 5
+    while not leader_exited(daemon.pid) and time.monotonic() < deadline:
+        time.sleep(0.1)
+    require(leader_exited(daemon.pid), "rootlesskit leader did not stop")
+    if socket_path.exists():
+        named = socket_path.lstat()
+        require((named.st_dev, named.st_ino, named.st_uid) == socket_identity,
+                "rootless socket changed during daemon stop")
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as probe:
+            outcome = probe.connect_ex(str(socket_path))
+        require(outcome in (errno.ENOENT, errno.ECONNREFUSED),
+                "rootless daemon socket still serves or cannot be classified")
+    daemon.wait(timeout=5)
+    require(not owned_context_processes(context),
+            "owned rootless daemon descendant remains")
 
 
 def mapped(uid_map, guest):
@@ -390,11 +448,10 @@ def fixture(inventory):
                 cleanup_errors.append("exact container cleanup refused: " + str(error))
         if daemon is not None:
             try:
-                require(stamp is not None and proc_stamp(daemon.pid) == stamp
-                        and os.getpgid(daemon.pid) == daemon.pid,
-                        "owned daemon changed; preserve fixture")
-                os.killpg(daemon.pid, signal.SIGKILL)
-                daemon.wait(timeout=10)
+                require(stamp is not None, "daemon PID was not stamped")
+                stop_daemon(daemon, stamp, context / "runtime" / "docker.sock",
+                            (sock.st_dev, sock.st_ino, sock.st_uid) if held_socket is not None else None,
+                            context)
             except (RuntimeError, OSError, subprocess.TimeoutExpired) as error:
                 cleanup_errors.append("exact daemon cleanup refused: " + str(error))
         if log_reader is not None:
