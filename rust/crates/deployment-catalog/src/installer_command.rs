@@ -1,15 +1,18 @@
-//! Native install entry point. Runtime completion is deliberately fail-closed
-//! until every application/TLS/readiness stage is implemented and qualified.
+//! Native install entry point. Admitted runtime completion remains fail-closed;
+//! exact nightly candidate testing can report an observational trial outcome.
 #![cfg(target_os = "linux")]
 
 use crate::{
     installer_release as release,
-    installer_state::{CandidateTestScope, Identity, InstallerState, Phase, RuntimeBinding},
+    installer_state::{
+        CandidateTestScope, ExecutionScope, Identity, InstallerState, Phase, RuntimeBinding,
+    },
     installer_verify::{self, VerificationTools},
 };
 use std::{
     collections::BTreeMap,
     io::{BufRead, Read, Write},
+    os::unix::ffi::OsStrExt,
     path::{Path, PathBuf},
 };
 
@@ -30,6 +33,15 @@ struct Options {
 enum InstallMode {
     Admitted,
     CandidateTest,
+}
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RuntimeCompletion {
+    HoldIncomplete,
+    CandidateTrialObserved,
+}
+pub(crate) struct RuntimeInvocation<'a> {
+    pub(crate) operator_sha: &'a str,
+    pub(crate) completion: RuntimeCompletion,
 }
 fn options(args: &[String]) -> Result<Options> {
     let mut values = BTreeMap::new();
@@ -150,8 +162,8 @@ fn confirm(directory: &Path) -> Result<()> {
         .map_err(|_| "installation confirmation requires a terminal; use --yes to accept the documented defaults")?;
     writeln!(
         tty,
-        "Create an isolated Marty installation at {}? [y/N]",
-        directory.display()
+        "Continue with the disclosed host changes at {:?}? [y/N]",
+        directory
     )
     .map_err(|_| "cannot request confirmation")?;
     tty.flush().map_err(|_| "cannot request confirmation")?;
@@ -164,6 +176,10 @@ fn confirm(directory: &Path) -> Result<()> {
         return Err("installation declined".into());
     }
     Ok(())
+}
+fn report_host_impact() {
+    eprintln!("Marty host impact: this installation uses the local rootful Docker socket with Docker administrator authority. It may pull images; create containers, a network and a Redis volume; bind a loopback port; and write private credentials and retained state under the selected installation path. Ordinary uninstall retains data, credentials, images and the Redis volume; purge is unsupported. Use a disposable VM snapshot for experimental testing.");
+    eprintln!("Marty trial feedback: retain the printed path and first failing stage; reply to your inviter with redacted facts, or comment at https://github.com/ElevenID/marty-ui/issues/1350. The retained operator supports read-only status, doctor, trust-info and uninstall plan where its recorded state permits them.");
 }
 fn persist_signed(
     state: &mut InstallerState,
@@ -254,11 +270,15 @@ fn install_inner(args: &[String], build_identity: &str, mode: InstallMode) -> Re
         PathBuf::from(std::env::var_os("HOME").unwrap_or_default())
             .join(format!(".marty-install-{}", uuid::Uuid::new_v4().simple()))
     });
-    if !directory.is_absolute() || directory.starts_with(&o.tools) {
+    if !directory.is_absolute()
+        || directory.as_os_str().as_bytes().len() > 4096
+        || directory.starts_with(&o.tools)
+    {
         return Err(
             "installation must use persistent absolute storage outside bootstrap staging".into(),
         );
     }
+    report_host_impact();
     if !o.yes {
         confirm(&directory)?;
     }
@@ -304,7 +324,7 @@ fn install_inner(args: &[String], build_identity: &str, mode: InstallMode) -> Re
     } else {
         InstallerState::create_with_runtime(&directory, identity, runtime)?
     };
-    eprintln!("Marty installation state: {}", directory.display());
+    eprintln!("Marty installation state: {:?}", directory);
     state.create_private_directory("evidence")?;
     state.create_private_directory("downloads")?;
     if testing.is_none() {
@@ -394,7 +414,14 @@ fn install_inner(args: &[String], build_identity: &str, mode: InstallMode) -> Re
         &prepared.bundle,
         &prepared.inventory,
         &mut state,
-        &operator_sha,
+        RuntimeInvocation {
+            operator_sha: &operator_sha,
+            completion: if mode == InstallMode::CandidateTest {
+                RuntimeCompletion::CandidateTrialObserved
+            } else {
+                RuntimeCompletion::HoldIncomplete
+            },
+        },
         port_reservation,
     )
 }
@@ -411,16 +438,18 @@ pub(crate) fn provision_runtime(
     bundle: &Path,
     inventory: &release::Inventory,
     state: &mut InstallerState,
-    operator_sha: &str,
+    invocation: RuntimeInvocation<'_>,
     port_reservation: std::net::TcpListener,
 ) -> Result<()> {
     state.require_live_phase(Phase::Verified)?;
+    eprintln!("Marty runtime stage: packaged realm");
     let realm_path = bundle.join("config/keycloak/11id-realm.json");
     let realm: serde_json::Value = serde_json::from_slice(
         &std::fs::read(realm_path).map_err(|_| "packaged Keycloak realm unavailable")?,
     )
     .map_err(|_| "packaged Keycloak realm invalid")?;
     state.advance(Phase::Provisioning)?;
+    eprintln!("Marty runtime stage: local credentials");
     state.generate_local_credentials(&realm)?;
     state.persist_credential_creation_receipt(installation)?;
     drop(port_reservation);
@@ -428,19 +457,21 @@ pub(crate) fn provision_runtime(
         .images
         .get("openbao_didcomm_image")
         .ok_or("admitted OpenBao image missing")?;
+    eprintln!("Marty runtime stage: OpenBao");
     let infrastructure =
         crate::installer_openbao::start_openbao(docker, installation, bundle, state, plugin)?;
     state.write_evidence(
         "openbao-observation.json",
         &serde_json::to_vec(&infrastructure).map_err(|_| "cannot encode OpenBao observation")?,
     )?;
+    eprintln!("Marty runtime stage: Keycloak");
     let keycloak = crate::installer_keycloak::provision(
         docker,
         installation,
         bundle,
         state,
         &infrastructure,
-        operator_sha,
+        invocation.operator_sha,
     )?;
     state.write_evidence(
         "keycloak-observation.json",
@@ -455,6 +486,7 @@ pub(crate) fn provision_runtime(
             "TLS bootstrap requires identical admitted gateway and signing-keys images".into(),
         );
     }
+    eprintln!("Marty runtime stage: workload TLS");
     let tls = crate::installer_tls::provision(
         docker,
         installation,
@@ -462,12 +494,13 @@ pub(crate) fn provision_runtime(
         state,
         &infrastructure,
         services_image,
-        operator_sha,
+        invocation.operator_sha,
     )?;
     state.write_evidence(
         "tls-observation.json",
         &serde_json::to_vec(&tls).map_err(|_| "cannot encode TLS observation")?,
     )?;
+    eprintln!("Marty runtime stage: ingress");
     let ingress = crate::installer_ingress::provision(
         docker,
         installation,
@@ -475,12 +508,13 @@ pub(crate) fn provision_runtime(
         state,
         &infrastructure,
         services_image,
-        operator_sha,
+        invocation.operator_sha,
     )?;
     state.write_evidence(
         "ingress-observation.json",
         &serde_json::to_vec(&ingress).map_err(|_| "cannot encode ingress observation")?,
     )?;
+    eprintln!("Marty runtime stage: renewal");
     let renewal = crate::installer_renewal::provision(
         docker,
         installation,
@@ -488,12 +522,13 @@ pub(crate) fn provision_runtime(
         state,
         &infrastructure,
         services_image,
-        operator_sha,
+        invocation.operator_sha,
     )?;
     state.write_evidence(
         "renewal-observation.json",
         &serde_json::to_vec(&renewal).map_err(|_| "cannot encode renewal observation")?,
     )?;
+    eprintln!("Marty runtime stage: generation");
     let generation = crate::installer_generation_host::provision(
         docker,
         installation,
@@ -501,12 +536,13 @@ pub(crate) fn provision_runtime(
         state,
         &infrastructure,
         services_image,
-        operator_sha,
+        invocation.operator_sha,
     )?;
     state.write_evidence(
         "generation-observation.json",
         &serde_json::to_vec(&generation).map_err(|_| "cannot encode generation observation")?,
     )?;
+    eprintln!("Marty runtime stage: application preparation");
     let application = crate::installer_application::prepare_with_generation(
         docker,
         installation,
@@ -515,6 +551,7 @@ pub(crate) fn provision_runtime(
         &infrastructure,
         &inventory.images,
     )?;
+    eprintln!("Marty runtime stage: application startup");
     crate::installer_application_start::start(
         docker,
         installation,
@@ -523,15 +560,101 @@ pub(crate) fn provision_runtime(
         &infrastructure,
         application,
     )?;
+    eprintln!("Marty runtime stage: read-only deployment validation");
     state.with_inspection(|inspection| {
         crate::installer_validation::run_locked(installation, docker, inspection, false)
     })?;
-    Err("Owned application startup observations recorded. Explicit local CA trust onboarding and installed journey qualification remain incomplete; preserve the reported state for recovery. Installation is not ready.".into())
+    completion_after_validation(state, invocation.completion, installation)
+}
+
+fn completion_after_validation(
+    state: &InstallerState,
+    completion: RuntimeCompletion,
+    installation: &Path,
+) -> Result<()> {
+    state.require_live_phase(Phase::Provisioning)?;
+    if completion == RuntimeCompletion::CandidateTrialObserved {
+        if !matches!(
+            state.journal().execution_scope(),
+            ExecutionScope::CandidateTest(_)
+        ) {
+            return Err("candidate trial completion requires candidate-test scope".into());
+        }
+        eprintln!("CANDIDATE TRIAL OBSERVED: application startup and required read-only validation passed. This experimental stack is not production ready; the journal remains Provisioning, installation_ready is false, and installed-journey qualification was not performed.");
+        eprintln!("Retained Marty trial state: {:?}", installation);
+        eprintln!("Report feedback and the first failing stage to https://github.com/ElevenID/marty-ui/issues/1350");
+        Ok(())
+    } else {
+        Err("Owned application startup observations recorded. Explicit local CA trust onboarding and installed journey qualification remain incomplete; preserve the reported state for recovery. Installation is not ready.".into())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn candidate_completion_keeps_provisioning_and_cannot_claim_ready() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let directory = root.path().join("trial");
+        let mut state = InstallerState::create_test_with_runtime(
+            &directory,
+            Identity {
+                source_sha: "a".repeat(40),
+                release_tag: "v1.1.263-nightly.20261027.42".into(),
+                inventory_sha256: format!("sha256:{}", "b".repeat(64)),
+            },
+            RuntimeBinding {
+                docker_host: "unix:///var/run/docker.sock".into(),
+                engine_id: "01234567-89ab-cdef".into(),
+                openbao_port: 18200,
+            },
+            CandidateTestScope {
+                inventory_sha256: "b".repeat(64),
+                build_run_id: 42,
+                build_run_attempt: 1,
+            },
+        )
+        .unwrap();
+        state.advance(Phase::Verified).unwrap();
+        state.advance(Phase::Provisioning).unwrap();
+        let before = std::fs::read(directory.join("installation.json")).unwrap();
+        assert!(completion_after_validation(
+            &state,
+            RuntimeCompletion::CandidateTrialObserved,
+            &directory
+        )
+        .is_ok());
+        assert_eq!(state.journal().phase(), Phase::Provisioning);
+        assert_eq!(
+            std::fs::read(directory.join("installation.json")).unwrap(),
+            before
+        );
+        assert!(
+            completion_after_validation(&state, RuntimeCompletion::HoldIncomplete, &directory)
+                .is_err()
+        );
+        assert!(state.advance(Phase::Ready).is_err());
+        let admitted_path = root.path().join("admitted");
+        let mut admitted = InstallerState::create(
+            &admitted_path,
+            Identity {
+                source_sha: "a".repeat(40),
+                release_tag: "v1.1.263-nightly.20261027.42".into(),
+                inventory_sha256: format!("sha256:{}", "b".repeat(64)),
+            },
+        )
+        .unwrap();
+        admitted.advance(Phase::Verified).unwrap();
+        admitted.advance(Phase::Provisioning).unwrap();
+        assert!(completion_after_validation(
+            &admitted,
+            RuntimeCompletion::CandidateTrialObserved,
+            &admitted_path,
+        )
+        .is_err());
+    }
     #[test]
     fn shared_runtime_refuses_unverified_state_before_reading_bundle_or_running_docker() {
         use std::os::unix::fs::PermissionsExt;
@@ -560,7 +683,10 @@ mod tests {
             &directory.join("nonexistent-bundle"),
             &inventory,
             &mut state,
-            &"a".repeat(64),
+            RuntimeInvocation {
+                operator_sha: &"a".repeat(64),
+                completion: RuntimeCompletion::HoldIncomplete,
+            },
             std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap(),
         );
         assert!(result.is_err());

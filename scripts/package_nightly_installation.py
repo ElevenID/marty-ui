@@ -21,6 +21,41 @@ def write(path: Path, value: dict) -> None:
         stream.write(json.dumps(value, indent=2, sort_keys=True) + "\n")
 
 
+def nightly_trial_guide(candidate: dict) -> str:
+    """Public release notes for the direct, exact-tag candidate trial."""
+    return (
+        f"# Marty {candidate['tag']} installation-test nightly\n\n"
+        "Try this exact-tag nightly bootstrap on a fresh disposable Linux amd64 VM snapshot,\n"
+        "as an ordinary Docker-enabled user with disposable identities and data:\n\n"
+        f"bash -o pipefail -c 'curl -fsSL https://github.com/ElevenID/marty-ui/releases/download/{candidate['tag']}/install.sh | "
+        f"sh -s -- --candidate-test {candidate['tag']}'\n\n"
+        "The installer prints its private random path under your HOME. No edits, source\n"
+        "checkout or organization credentials are needed. Bootstrap uses private\n"
+        "temporary verification-tool files.\n"
+        "The script is fetched over HTTPS and runs before its own bytes can be verified.\n"
+        "The script verifies signed inventory and operator before executing the operator;\n"
+        "the operator then verifies remaining payloads before runtime provisioning and\n"
+        "Docker resource creation; private state/evidence may be written first. Bash and\n"
+        "curl are required for this one-line wrapper.\n"
+        "The local rootful Docker socket grants Docker administrator authority; the\n"
+        "trial may pull images, create containers, a network and Redis volume,\n"
+        "bind a loopback port, and retain private credentials and state. Ordinary uninstall\n"
+        "retains data, credentials, images and the volume; purge is unsupported.\n"
+        "The direct trial uses your existing Docker Engine and Compose plugin; it does\n"
+        "not install OS packages or alter host CA trust. Reset the disposable VM snapshot\n"
+        "after collecting feedback. --yes skips only the prompt.\n\n"
+        "Exit 0 after required read-only validation means an experimental trial was observed,\n"
+        "not production readiness: the journal remains Provisioning, installation_ready\n"
+        "is false, and installed-journey qualification is not assessed. A failure may occur\n"
+        "after resources are created. Preserve the printed path and first failing stage.\n"
+        "Reply to your inviter with the exit status, time, OS/arch, RAM/disk, Docker and\n"
+        "Compose versions, prompts/host changes and redacted error output; optionally\n"
+        "comment on https://github.com/ElevenID/marty-ui/issues/1350. Do not share\n"
+        "secret values, raw credential diagnostics or production data.\n\n"
+        f"Source: {candidate['source_sha']}\nProducer run: {candidate['build_run_id']}\n\n"
+    )
+
+
 def package(source: Path, candidate_path: Path, packager: Path, output: Path,
             compose_executable: Path | None = None) -> None:
     source = source.resolve(strict=True)
@@ -53,26 +88,8 @@ def package(source: Path, candidate_path: Path, packager: Path, output: Path,
     receipt = output / "prepared-selfhost-bundle.json"
     write(receipt, record(archive, lock_path, transaction, candidate["source_sha"], candidate["build_run_id"]))
     write(output / "prepared-selfhost-product-descriptor.json", produce(archive, lock_path, transaction, receipt))
-    guide = (
-        f"# Marty {candidate['tag']} installation-test nightly\n\n"
-        "This experimental Linux amd64 bundle is for disposable installation testing.\n"
-        "The nightly runtime happy path and artifact checks do not establish a supported\n"
-        "self-host installation or production readiness. Use disposable identities and data.\n\n"
-        f"Source: {candidate['source_sha']}\nProducer run: {candidate['build_run_id']}\n\n"
-        "To attempt the signed, unqualified candidate through the installer on a\n"
-        "disposable Linux amd64 host, run:\n\n"
-        f"curl -fsSL https://github.com/ElevenID/marty-ui/releases/download/{candidate['tag']}/install.sh | "
-        f"sh -s -- --candidate-test {candidate['tag']} --install-dir /absolute/disposable/path\n\n"
-        "This test path does not grant admission or Ready status. Preserve its\n"
-        "installation path and redacted diagnostics if it exits nonzero.\n\n"
-        "Verify the signed release inventory, then SHA256SUMS before extraction.\n"
-        "Use this exact source revision and its docs/selfhost-disposable-qualification-runbook.md.\n"
-        "The six preparation assets and SHA256SUMS can be passed unchanged to\n"
-        "scripts/stage_selfhost_disposable_preview.py --with-operator-password.\n"
-        "Install the matching signed marty-deploy operator before the sudo KMS steps.\n"
-        "Record failures and redacted diagnostics; keep credential files private.\n"
-    )
-    (output / "SELFHOST-PREVIEW-README.md").write_text(guide, encoding="utf-8")
+    (output / "SELFHOST-PREVIEW-README.md").write_text(
+        nightly_trial_guide(candidate), encoding="utf-8")
     with (output / "SHA256SUMS").open("x", encoding="ascii") as stream:
         for name in sorted(ASSETS):
             stream.write(hashlib.sha256((output / name).read_bytes()).hexdigest() + "  " + name + "\n")

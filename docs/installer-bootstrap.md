@@ -16,16 +16,50 @@ Docker or platform detection.
 For an explicitly unqualified nightly installation trial, use the exact tag:
 
 ```sh
-curl -fsSL https://github.com/ElevenID/marty-ui/releases/download/vX.Y.Z-nightly.YYYYMMDD.RUN_ID/install.sh | sh -s -- --candidate-test vX.Y.Z-nightly.YYYYMMDD.RUN_ID --install-dir /absolute/disposable/path
+bash -o pipefail -c 'curl -fsSL https://github.com/ElevenID/marty-ui/releases/download/vX.Y.Z-nightly.YYYYMMDD.RUN_ID/install.sh | sh -s -- --candidate-test vX.Y.Z-nightly.YYYYMMDD.RUN_ID'
 ```
 
-`--candidate-test` authenticates the nightly inventory, operator, and payloads
-from the same release run. It records a separate candidate-test scope and never
-creates installer admission or marks the installation Ready. Current runtime
-provisioning can return a nonzero result after creating owned resources; preserve
-the printed installation path and diagnostics for review. Use only a disposable
-Linux amd64 host and disposable identities. The normal `--version` and
-`--channel` paths continue to require signed admission.
+Run that one line on a fresh, disposable Linux amd64 VM snapshot as an ordinary
+Docker-enabled user, with disposable identities and data. Replace both tag
+placeholders with the same exact published nightly tag. Bash and curl are
+required by this one-line wrapper; pipefail makes a failed download nonzero.
+The bootstrap script is fetched over HTTPS and executes before its own bytes
+can be verified. It verifies the signed inventory and operator before executing
+the operator. The operator then verifies the remaining payloads before runtime
+provisioning and Docker resource creation; it may write private installation
+state and evidence before those payload checks complete.
+The installer prints its private random
+installation path under your HOME; an absolute disposable path can be selected
+with `--install-dir` if needed. No source checkout or organization credentials
+are needed. If required read-only validation
+passes after startup, exit 0 means **experimental trial observed**. The journal
+remains Provisioning, `installation_ready` remains false, installed-journey
+qualification is not assessed, and no installer admission or Ready status is
+granted. A failure may occur after host resources and credentials have been
+created. The normal `--version` and `--channel` paths continue to require signed
+admission and retain their completion gate.
+
+The bootstrap first uses private temporary files for its pinned verification
+tools. Before persistent installation or Docker mutation, the operator prints
+a fixed host-impact summary.
+The local rootful Docker socket grants Docker administrator authority; the trial
+may pull images, create containers, a network and Redis volume, bind a loopback
+port, and write private credentials and retained state. `--yes` skips the
+interactive acceptance prompt but still prints this summary. Ordinary uninstall
+retains data, credentials, images and the Redis volume; purge is unsupported.
+This direct trial uses the existing Docker Engine and Compose plugin; it does
+not install OS packages or alter host CA trust.
+Keep the failed state for diagnosis and reset the disposable VM snapshot after
+collecting feedback. Do not use production data or paste secret values or raw
+credential diagnostics into a report.
+
+Report the first failing stage and exit status to the person who invited you;
+optionally comment on [issue #1350](https://github.com/ElevenID/marty-ui/issues/1350).
+Include the time, OS/architecture, RAM/disk, Docker Engine and Compose versions,
+any prompt or observed host change, the printed installation path, and redacted
+error output. The retained operator supports read-only `status`, `doctor`,
+`trust-info` and `uninstall plan` where its recorded state permits them. Do not
+automatically clean a failed trial.
 
 ## Requirements and release availability
 
@@ -36,12 +70,15 @@ unsupported. The bootstrap checks its standard command-line prerequisites and
 downloads pinned verification tools itself; it does not require a repository
 checkout or a build toolchain.
 
-The selected version must have published signed admission metadata and an
-authenticated operator artifact. Nightly and stable channel selection also
-requires valid signed channel metadata. Missing, expired, mismatched or invalid
-metadata causes refusal before the operator executes. A completed artifact build
-alone does not establish channel availability. Artifact production and deployment
-readiness are owned by their respective release and deployment workflows.
+Normal `--version` and `--channel` installation requires published signed
+admission metadata and an authenticated operator artifact. Nightly and stable
+channel selection also requires valid signed channel metadata. The experimental
+`--candidate-test` path instead requires an exact signed nightly inventory and
+authenticated operator; it grants no admission. Missing, expired, mismatched or
+invalid required metadata causes refusal before the operator executes. A
+completed artifact build alone does not establish channel availability.
+Artifact production and deployment readiness are owned by their respective
+release and deployment workflows.
 
 ## Platform adapters
 
@@ -144,5 +181,7 @@ A passing report means the listed read-only deployment checks passed at that
 time; it is not an atomic snapshot or a release qualification. The current
 operator still reports `installation_ready: false` and retains its existing
 trust-onboarding and installed-journey completion gate, including when these
-checks pass. Automatic validation does not turn an incomplete installation into
-a successful installation. The bootstrap propagates the operator's exit status.
+checks pass. For the candidate-test path only, passing required read-only
+validation returns the experimental trial outcome described above. All other
+incomplete installation paths retain their completion gate. The bootstrap
+propagates the operator's exit status.

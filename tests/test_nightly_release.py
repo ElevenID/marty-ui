@@ -54,6 +54,27 @@ def candidate(prepared):
     return nightly.record(claim, lock, images, RUN_ID)
 
 
+def test_nightly_release_notes_advertise_single_direct_candidate_trial(prepared):
+    import package_nightly_installation as packaging
+
+    value = candidate(prepared)
+    guide = packaging.nightly_trial_guide(value)
+    command = (
+        f"bash -o pipefail -c 'curl -fsSL https://github.com/ElevenID/marty-ui/releases/download/{value['tag']}/install.sh | "
+        f"sh -s -- --candidate-test {value['tag']}'"
+    )
+    assert guide.count(command) == 1
+    assert "/absolute/disposable/path" not in guide
+    assert "pipefail" in guide
+    assert "signed inventory and operator before executing the operator" in guide
+    assert "remaining payloads before runtime provisioning" in guide
+    assert "rootful Docker socket" in guide
+    assert "Ordinary uninstall" in guide and "purge is unsupported" in guide
+    assert "reply to your inviter" in guide.lower()
+    assert "stage_selfhost_disposable_preview" not in guide
+    assert "sudo KMS" not in guide
+
+
 @pytest.mark.skipif(not os.environ.get("NIGHTLY_TEST_PACKAGER"),
                     reason="explicit local Docker/compiled-packager qualification")
 def test_actual_source_bundle_receipt_and_descriptor(prepared, tmp_path, monkeypatch):
