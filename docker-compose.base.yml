@@ -22,6 +22,7 @@ services:
   # Infrastructure
   # ==========================================================================
   postgres:
+    mem_limit: ${MARTY_POSTGRES_MEMORY_LIMIT:-1g}
     image: postgres:15-alpine
     ports:
       - "127.0.0.1:5433:5432"
@@ -47,12 +48,13 @@ services:
       resources:
         limits:
           cpus: '2.0'
-          memory: 1G
+          memory: ${MARTY_POSTGRES_MEMORY_LIMIT:-1g}
         reservations:
           cpus: '0.5'
           memory: 256M
 
   redis:
+    mem_limit: ${MARTY_REDIS_MEMORY_LIMIT:-256m}
     image: redis:7-alpine
     ports:
       - "127.0.0.1:6379:6379"
@@ -71,12 +73,13 @@ services:
       resources:
         limits:
           cpus: '1.0'
-          memory: 256M
+          memory: ${MARTY_REDIS_MEMORY_LIMIT:-256m}
         reservations:
           cpus: '0.25'
           memory: 64M
 
   keycloak:
+    mem_limit: ${MARTY_KEYCLOAK_MEMORY_LIMIT:-2g}
     image: ghcr.io/elevenid/marty-ui-oss/keycloak@${KEYCLOAK_KMS_IMAGE_DIGEST:?KEYCLOAK_KMS_IMAGE_DIGEST must pin the remote-key Keycloak image}
     command:
       - start-dev
@@ -85,6 +88,8 @@ services:
     ports:
       - "127.0.0.1:8180:8080"
     environment:
+      # Leave room for metaspace, native buffers, threads and the remote-key provider.
+      JAVA_OPTS_KC_HEAP: "-XX:InitialRAMPercentage=20 -XX:MaxRAMPercentage=65"
       KEYCLOAK_ADMIN: admin
       KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
       KC_DB: postgres
@@ -143,7 +148,7 @@ services:
       resources:
         limits:
           cpus: '2.0'
-          memory: 1G
+          memory: ${MARTY_KEYCLOAK_MEMORY_LIMIT:-2g}
         reservations:
           cpus: '0.5'
           memory: 512M
@@ -153,6 +158,7 @@ services:
   # that cannot be embedded in the realm JSON. Idempotent — safe to run on
   # every 'docker compose up'.
   keycloak-configurator:
+    mem_limit: ${MARTY_KEYCLOAK_CONFIGURATOR_MEMORY_LIMIT:-512m}
     image: ghcr.io/elevenid/marty-ui-oss/keycloak@${KEYCLOAK_KMS_IMAGE_DIGEST:?KEYCLOAK_KMS_IMAGE_DIGEST must pin the remote-key Keycloak image}
     entrypoint: ["/bin/bash", "/scripts/setup-keycloak.sh"]
     environment:
@@ -192,6 +198,7 @@ services:
       - marty-network
 
   mailpit:
+    mem_limit: ${MARTY_MAILPIT_MEMORY_LIMIT:-512m}
     image: axllent/mailpit:v1.21
     ports:
       - "127.0.0.1:9025:8025"
@@ -205,6 +212,7 @@ services:
       - marty-network
 
   openbao:
+    mem_limit: ${MARTY_OPENBAO_MEMORY_LIMIT:-512m}
     <<: *openbao_plugin_image
     cap_add:
       - IPC_LOCK
@@ -230,12 +238,13 @@ services:
       resources:
         limits:
           cpus: '1.0'
-          memory: 512M
+          memory: ${MARTY_OPENBAO_MEMORY_LIMIT:-512m}
         reservations:
           cpus: '0.25'
           memory: 128M
 
   openbao-tls-init:
+    mem_limit: ${MARTY_OPENBAO_TLS_INIT_MEMORY_LIMIT:-512m}
     <<: *openbao_plugin_image
     entrypoint: ["/usr/local/bin/selfhost-tls-init"]
     volumes:
@@ -244,6 +253,7 @@ services:
     restart: "no"
 
   openbao-init:
+    mem_limit: ${MARTY_OPENBAO_INIT_MEMORY_LIMIT:-512m}
     <<: *openbao_plugin_image
     user: "0:0"
     entrypoint: ["/bin/sh", "/scripts/openbao-selfhost-init.sh"]
@@ -317,6 +327,7 @@ services:
   # idempotent migrator before the remaining shared Alembic graph because the
   # credential-template history reads the revocation profile table.
   revocation-profile-migrate:
+    mem_limit: ${MARTY_REVOCATION_PROFILE_MIGRATE_MEMORY_LIMIT:-1g}
     build:
       context: .
       dockerfile: services/Dockerfile
@@ -340,6 +351,7 @@ services:
       - marty-network
 
   db-migrate:
+    mem_limit: ${MARTY_DB_MIGRATE_MEMORY_LIMIT:-1g}
     build:
       context: .
       dockerfile: services/Dockerfile.migrations
@@ -385,6 +397,7 @@ services:
 
   # Run the native issuance migrator from the same Rust build as the API.
   issuance-migrations:
+    mem_limit: ${MARTY_ISSUANCE_MIGRATIONS_MEMORY_LIMIT:-1g}
     build:
       context: .
       dockerfile: services/Dockerfile
@@ -411,6 +424,7 @@ services:
   # The canonical verification image owns the released compatibility schema.
   # Use the same Rust artifact for migration and runtime so they cannot drift.
   verification-migrations:
+    mem_limit: ${MARTY_VERIFICATION_MIGRATIONS_MEMORY_LIMIT:-1g}
     build:
       context: .
       dockerfile: rust/services/Dockerfile.ci
@@ -434,6 +448,7 @@ services:
   # Application Services
   # ==========================================================================
   gateway:
+    mem_limit: ${MARTY_GATEWAY_MEMORY_LIMIT:-512m}
     build:
       context: .
       dockerfile: services/Dockerfile
@@ -544,6 +559,7 @@ services:
     restart: unless-stopped
 
   auth:
+    mem_limit: ${MARTY_AUTH_MEMORY_LIMIT:-512m}
     build:
       context: .
       dockerfile: services/Dockerfile
@@ -614,6 +630,7 @@ services:
     restart: unless-stopped
 
   organization:
+    mem_limit: ${MARTY_ORGANIZATION_MEMORY_LIMIT:-512m}
     build:
       context: .
       dockerfile: services/Dockerfile
@@ -648,6 +665,7 @@ services:
     restart: unless-stopped
 
   credential-template:
+    mem_limit: ${MARTY_CREDENTIAL_TEMPLATE_MEMORY_LIMIT:-512m}
     build:
       context: .
       dockerfile: services/Dockerfile
@@ -685,6 +703,7 @@ services:
     restart: unless-stopped
 
   trust-profile:
+    mem_limit: ${MARTY_TRUST_PROFILE_MEMORY_LIMIT:-512m}
     build:
       context: .
       dockerfile: services/Dockerfile
@@ -720,6 +739,7 @@ services:
     restart: unless-stopped
 
   applicant:
+    mem_limit: ${MARTY_APPLICANT_MEMORY_LIMIT:-512m}
     build:
       context: .
       dockerfile: services/Dockerfile
@@ -756,6 +776,7 @@ services:
     restart: unless-stopped
 
   notification:
+    mem_limit: ${MARTY_NOTIFICATION_MEMORY_LIMIT:-512m}
     build:
       context: .
       dockerfile: services/Dockerfile
@@ -798,6 +819,7 @@ services:
     restart: unless-stopped
 
   compliance-profile:
+    mem_limit: ${MARTY_COMPLIANCE_PROFILE_MEMORY_LIMIT:-512m}
     build:
       context: .
       dockerfile: rust/services/Dockerfile.ci
@@ -827,6 +849,7 @@ services:
     restart: unless-stopped
 
   presentation-policy:
+    mem_limit: ${MARTY_PRESENTATION_POLICY_MEMORY_LIMIT:-512m}
     build:
       context: .
       dockerfile: services/Dockerfile
@@ -868,6 +891,7 @@ services:
     restart: unless-stopped
 
   deployment-profile:
+    mem_limit: ${MARTY_DEPLOYMENT_PROFILE_MEMORY_LIMIT:-512m}
     build:
       context: .
       dockerfile: rust/services/Dockerfile.ci
@@ -897,6 +921,7 @@ services:
     restart: unless-stopped
 
   signing-keys:
+    mem_limit: ${MARTY_SIGNING_KEYS_MEMORY_LIMIT:-512m}
     build:
       context: .
       dockerfile: services/Dockerfile
@@ -950,6 +975,7 @@ services:
     restart: unless-stopped
 
   flow:
+    mem_limit: ${MARTY_FLOW_MEMORY_LIMIT:-512m}
     build:
       context: .
       dockerfile: services/Dockerfile
@@ -1040,6 +1066,7 @@ services:
     restart: unless-stopped
 
   issuance:
+    mem_limit: ${MARTY_ISSUANCE_MEMORY_LIMIT:-512m}
     build:
       context: .
       dockerfile: services/Dockerfile
@@ -1177,6 +1204,7 @@ services:
 
   # Rust owner for native routes; the issuance alias runs the same binary.
   issuance-native:
+    mem_limit: ${MARTY_ISSUANCE_NATIVE_MEMORY_LIMIT:-512m}
     extends:
       file: docker-compose.profile.issuance-native.yml
       service: issuance-native
@@ -1184,6 +1212,7 @@ services:
   # Portable Canvas synchronization runs out-of-process. The worker leases
   # PostgreSQL jobs and records a database heartbeat consumed by readiness.
   canvas-sync-worker:
+    mem_limit: ${MARTY_CANVAS_SYNC_WORKER_MEMORY_LIMIT:-512m}
     build:
       context: .
       dockerfile: services/Dockerfile
@@ -1249,6 +1278,7 @@ services:
 
   # ── Revocation Profile Service ────────────────────────────────────
   revocation-profile:
+    mem_limit: ${MARTY_REVOCATION_PROFILE_MEMORY_LIMIT:-512m}
     build:
       context: .
       dockerfile: services/Dockerfile
@@ -1289,6 +1319,7 @@ services:
 
   # ── Device Registration Service ─────────────────────────────────
   device-registration:
+    mem_limit: ${MARTY_DEVICE_REGISTRATION_MEMORY_LIMIT:-512m}
     build:
       context: .
       dockerfile: rust/services/Dockerfile.ci
@@ -1324,6 +1355,7 @@ services:
 
   # ── Event Stream Service (gRPC event bus) ─────────────────────────
   event-stream:
+    mem_limit: ${MARTY_EVENT_STREAM_MEMORY_LIMIT:-512m}
     build:
       context: .
       dockerfile: services/Dockerfile
@@ -1350,6 +1382,7 @@ services:
 
   # ── Verification Service ─────────────────────────────────────────
   verification:
+    mem_limit: ${MARTY_VERIFICATION_MEMORY_LIMIT:-512m}
     build:
       context: .
       dockerfile: rust/services/Dockerfile.ci
@@ -1399,6 +1432,7 @@ services:
 
   # ── Envoy gRPC Proxy ─────────────────────────────────────────────
   envoy:
+    mem_limit: ${MARTY_ENVOY_MEMORY_LIMIT:-512m}
     build:
       context: ./config/envoy
       dockerfile: Dockerfile
@@ -1445,6 +1479,7 @@ services:
   # Shares Envoy's loopback namespace. Only this Rust process holds the scoped
   # OpenBao token; it presents a remote-held client key to Issuance mTLS.
   envoy-issuance-bridge:
+    mem_limit: ${MARTY_ENVOY_ISSUANCE_BRIDGE_MEMORY_LIMIT:-512m}
     build:
       context: .
       dockerfile: services/Dockerfile
