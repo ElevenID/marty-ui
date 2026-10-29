@@ -50,7 +50,7 @@ test('receipt readback rejects wrong transaction, template, organization, duplic
 
 function harness({ scenario = 'external-evidence-to-credential', fail = '' } = {}) {
   const state = { grade: 95, issued: false, approved: false, reserved: false, revision: 0, jobs: 0, mutations: [], checkpoints: [],
-    claimObserved: false, claimClicked: false, walletReceipts: 0 };
+    claimObserved: false, claimClicked: false, walletReceipts: 0, rosterCalls: [] };
   const report = { behaviorAssertions: {} };
   const record = { ...scope, id: 'credential', flow_execution_id: 'tx', status: 'ACTIVE', issuer_did: 'did:web:issuer.test' };
   const review = { id: 'review', application_id: APP, credential_id: 'credential', status: 'open' };
@@ -154,8 +154,25 @@ function harness({ scenario = 'external-evidence-to-credential', fail = '' } = {
   };
   const operations = { ...stock,
     async waitForCanvasCourseCompletion() { return { requirement_count: 1, requirement_completed_count: 1 }; },
-    async validateAndActivateBinding() { return { activation: { ready: true } }; },
-    async waitForLatestRosterJob() { return { result: { pending_claim: 1 } }; },
+    async rosterJobBaseline(client, organizationId, bindingId) {
+      assert.equal(client, marty); assert.equal(organizationId, 'org'); assert.equal(bindingId, 'binding');
+      state.rosterCalls.push('baseline'); return new Set(['previous-roster-job']);
+    },
+    async validateAndActivateBinding(client, bindingId) {
+      assert.equal(client, marty); assert.equal(bindingId, 'binding');
+      state.rosterCalls.push('activate'); return { activation: { ready: true, config_version: 7 } };
+    },
+    async activatedRosterJobTimestamp(client, organizationId, platformId, bindingId, configVersion) {
+      assert.equal(client, marty); assert.equal(organizationId, 'org'); assert.equal(platformId, 'platform');
+      assert.equal(bindingId, 'binding'); assert.equal(configVersion, 7);
+      state.rosterCalls.push('server-timestamp'); return '2026-10-29T12:00:00.123456Z';
+    },
+    async waitForLatestRosterJob(client, organizationId, bindingId, baseline, activatedAt) {
+      assert.equal(client, marty); assert.equal(organizationId, 'org'); assert.equal(bindingId, 'binding');
+      assert.deepEqual([...baseline], ['previous-roster-job']);
+      assert.equal(activatedAt, '2026-10-29T12:00:00.123456Z');
+      state.rosterCalls.push('completed-job'); return { result: { pending_claim: 1 } };
+    },
     async waitForCandidate() { return { status: 'pending_claim' }; },
     async launchLearnerResource() { return { page, bootstrap: { application_id: APP,
       organization_id: fail === 'foreign-bootstrap' ? 'foreign' : 'org', application_template_id: 'application-template',
@@ -214,6 +231,7 @@ test('D08 current operations bind one launch, approval, receipt, verifier and re
 
 test('D07 runs fresh pre-issuance denial/recovery and retired-ingest operation without inheriting D08', async () => {
   const h = harness({ scenario: 'canvas-learning-achievement' }); await h.run();
+  assert.deepEqual(h.state.rosterCalls, ['baseline', 'activate', 'server-timestamp', 'completed-job']);
   assert.deepEqual(h.state.mutations, [40, 95]);
   assert.equal(h.report.correctionReview, undefined);
   assert.equal(h.report.behaviorAssertions.invalid_evidence_provenance_denied, true);
