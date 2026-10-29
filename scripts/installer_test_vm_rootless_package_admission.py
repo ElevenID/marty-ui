@@ -768,3 +768,67 @@ def child_main(arguments: list[str]) -> dict:
             "archive_releases": archive["archive_releases"], **simulation,
             "package_actions_authorized": False,
             "installation_authorized": False}
+
+
+def verify_staged_bundle(bundle: Path, status_path: Path, keyring: Path,
+                         expected: dict) -> dict:
+    """Unprivileged, offline recheck of a previously signed fixed bundle."""
+    require(os.geteuid() == 65534 and keyring == KEYRING
+            and bundle.is_absolute() and status_path.is_absolute()
+            and bundle.name == "bundle" and status_path.name == "status"
+            and bundle.parent == status_path.parent
+            and type(expected) is dict
+            and set(expected) == {"packages", "archive_releases",
+                                  "dpkg_status_sha256"},
+            "staged archive request invalid")
+    _private_directory(bundle)
+    status = private_file(status_path, MAX_STATUS, uid=65534)
+    require(sha(status) == expected["dpkg_status_sha256"]
+            and type(expected["archive_releases"]) is list
+            and len(expected["archive_releases"]) == len(POCKETS)
+            and type(expected["packages"]) is list
+            and len(expected["packages"]) == len(TARGETS),
+            "staged archive manifest invalid")
+    release_by_pocket = {}
+    now = dt.datetime.now(dt.timezone.utc)
+    for pocket in POCKETS:
+        release, hashes = verify_inrelease(
+            bundle / f"{pocket}.inrelease", keyring, pocket, now)
+        release_by_pocket[pocket] = (release, hashes)
+    index_rows = {}
+    for pocket in POCKETS:
+        for component in COMPONENTS:
+            index_rows[(pocket, component)] = verify_index(
+                bundle / f"{pocket}.{component}.packages.xz",
+                release_by_pocket[pocket][1], component)
+    require({row["pocket"]: row for row in expected["archive_releases"]
+             if type(row) is dict and row.get("pocket") in POCKETS}
+            == {pocket: item[0] for pocket, item in release_by_pocket.items()},
+            "staged signed release differs")
+    admitted = {}
+    for row in expected["packages"]:
+        require(type(row) is dict
+                and set(row) == {"package", "version", "sha256", "size",
+                                 "pocket", "component"}
+                and row["package"] in TARGETS
+                and row["version"] == EXPECTED_VERSIONS[row["package"]]
+                and row["pocket"] in POCKETS
+                and row["component"] in COMPONENTS
+                and row["package"] not in admitted,
+                "staged package row invalid")
+        pocket, component = row["pocket"], row["component"]
+        selected = select_package(index_rows[(pocket, component)],
+                                  row["package"], row["version"])
+        require(verify_deb(bundle / f'{row["package"]}.deb', selected)
+                == {key: row[key] for key in
+                    ("package", "version", "sha256", "size")},
+                "staged package bytes differ")
+        admitted[row["package"]] = row
+    require(set(admitted) == set(TARGETS), "staged package set differs")
+    return {"schema": "elevenid.installer-only-package-stage-recheck/v1",
+            "packages": [admitted[name] for name in TARGETS],
+            "archive_releases": [release_by_pocket[name][0]
+                                 for name in POCKETS],
+            "dpkg_status_sha256": sha(status),
+            "package_actions_authorized": False,
+            "installation_authorized": False}

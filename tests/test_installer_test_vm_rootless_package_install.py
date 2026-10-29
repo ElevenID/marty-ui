@@ -21,6 +21,7 @@ import installer_test_vm_rootless_package_install as install  # noqa: E402
 VM = "70573b98-a002-468c-a932-f27c1ca20440"
 ENGINE = "6c3ab358-4b21-4979-b2ff-916bbd32d891"
 BOOT = "376c3c9f-f782-4e8d-9703-2697d80c7b5c"
+COPY = "33333333-4444-4555-8666-777777777777"
 
 
 def status(*packages):
@@ -62,18 +63,28 @@ class ContractTests(unittest.TestCase):
                                  "a" * 64, "b" * 64)
 
     def test_external_checkpoint_is_strict_stopped_identity_only(self):
-        record = {"schema": install.CHECKPOINT_SCHEMA, "vm_id": VM,
+        record = {"schema": install.CHECKPOINT_SCHEMA,
+                  "phase": "historical_rollback_observed",
+                  "vm_id": VM, "copy_vm_id": COPY,
                   "controller_boot_id": BOOT, "stopped_pid": 1135,
                   "stopped_start_ticks": "91460346", "disk_device": 2128,
                   "disk_inode": 111, "disk_sha256": "a" * 64,
                   "snapshot_sha256": "b" * 64, "snapshot_bytes": 1024,
                   "rollback_test_sha256": "c" * 64,
-                  "created_at": 1793200000, "stopped": True}
+                  "admission_result_sha256": "d" * 64,
+                  "stage_recheck_sha256": "e" * 64,
+                  "source_module_sha256": "f" * 64,
+                  "source_controller_sha256": "0" * 64,
+                  "created_at": 1793200000, "stopped": True,
+                  "package_install_authorized": False,
+                  "product_dispatch_authorized": False}
         raw = install.canonical(record)
         self.assertEqual(install._checkpoint(raw, record, VM), archive.sha(raw))
         for change in ({"stopped": False}, {"disk_inode": 0},
                        {"vm_id": str(uuid.uuid4())},
-                       {"snapshot_sha256": "bad"}, {"extra": 1}):
+                       {"snapshot_sha256": "bad"},
+                       {"package_install_authorized": True},
+                       {"copy_vm_id": VM}, {"extra": 1}):
             with self.subTest(change=change), self.assertRaises(install.Refused):
                 install._checkpoint(raw, {**record, **change}, VM)
 
@@ -144,26 +155,48 @@ class OneShotTests(unittest.TestCase):
                                       for pocket in archive.POCKETS], "indexes": []}
         for name in self.rows:
             (self.bundle / f"{name}.deb").write_bytes(name.encode())
+        self.admission_intent = {
+            "schema": "elevenid.installer-only-vm-rootless-package-admission/v1",
+            "phase": "intent", "vm_id": VM, "observation_id": COPY,
+            "engine_id": ENGINE, "readiness_sha256": "a" * 64,
+            "pid": 1135, "start_ticks": "91460346",
+            "dpkg_status_sha256": archive.sha(self.before),
+            "module_sha256": "e" * 64, "controller_sha256": "f" * 64,
+            "purpose": "disposable_fixture_setup_package_admission",
+            "package_actions_authorized": False,
+            "installation_authorized": False}
         self.admission = {"schema": "elevenid.installer-only-vm-rootless-package-admission/v1",
                           "phase": "observed", "vm_id": VM, "engine_id": ENGINE,
+                          "observation_id": COPY,
+                          "readiness_sha256": "a" * 64,
                           "dpkg_status_sha256": archive.sha(self.before),
                           "transaction_simulated": True,
                           "rootful_docker_package_simulated_change": False,
                           "package_actions_authorized": False,
                           "installation_authorized": False,
-                          "intent_sha256": "d" * 64,
+                          "intent_sha256": archive.sha(install.canonical(
+                              self.admission_intent)),
                           "module_sha256": "e" * 64,
                           "controller_sha256": "f" * 64,
                           "packages": list(self.rows.values()),
                           "archive_releases": [],
                           "new_package_actions": self.actions}
-        self.checkpoint = {"schema": install.CHECKPOINT_SCHEMA, "vm_id": VM,
+        self.checkpoint = {"schema": install.CHECKPOINT_SCHEMA,
+                           "phase": "historical_rollback_observed",
+                           "vm_id": VM, "copy_vm_id": COPY,
                            "controller_boot_id": BOOT, "stopped_pid": 1135,
                            "stopped_start_ticks": "91460346", "disk_device": 2128,
                            "disk_inode": 111, "disk_sha256": "a" * 64,
                            "snapshot_sha256": "b" * 64, "snapshot_bytes": 1024,
                            "rollback_test_sha256": "c" * 64,
-                           "created_at": 1793200000, "stopped": True}
+                           "admission_result_sha256": archive.sha(install.canonical(
+                               self.admission)),
+                           "stage_recheck_sha256": "0" * 64,
+                           "source_module_sha256": "e" * 64,
+                           "source_controller_sha256": "f" * 64,
+                           "created_at": 1793200000, "stopped": True,
+                           "package_install_authorized": False,
+                           "product_dispatch_authorized": False}
         checkpoint_raw = install.canonical(self.checkpoint)
         plan = install.plan_bytes(vm_id=VM, engine_id=ENGINE,
                                   checkpoint_sha256=archive.sha(checkpoint_raw),
@@ -178,16 +211,12 @@ class OneShotTests(unittest.TestCase):
                              "plan_sha256": archive.sha(plan),
                              "nonce": "ca5d5ac8-a47e-4709-a1b5-58878086db11",
                              "phrase": install.CONFIRM_LITERAL}
+        self.admission_intent_path = self.root / "admission-intent.json"
         self.admission_path = self.root / "admission.json"
         self.checkpoint_path = self.root / "checkpoint.json"
         self.confirmation_path = self.root / "confirmation.json"
         self.manifest_path = self.root / "bundle-manifest.json"
         self._records()
-        self.verified_admission = install.VerifiedAdmission(
-            VM, archive.sha(install.canonical(self.admission)), "d" * 64,
-            "e" * 64, "f" * 64, ENGINE, archive.sha(self.before))
-        self.verified_checkpoint = install.VerifiedStoppedCheckpoint(
-            VM, archive.sha(checkpoint_raw), "a" * 64, "b" * 64, "c" * 64)
         self.patches = [
             mock.patch.object(install.os, "geteuid", return_value=0),
             mock.patch.object(install.os, "getegid", return_value=0),
@@ -210,7 +239,8 @@ class OneShotTests(unittest.TestCase):
             self.addCleanup(patch.stop)
 
     def _records(self):
-        for path, value in ((self.admission_path, self.admission),
+        for path, value in ((self.admission_intent_path, self.admission_intent),
+                            (self.admission_path, self.admission),
                             (self.checkpoint_path, self.checkpoint),
                             (self.confirmation_path, self.confirmation),
                             (self.manifest_path, {"packages": list(self.rows.values())})):
@@ -218,10 +248,7 @@ class OneShotTests(unittest.TestCase):
 
     def run_install(self, apt):
         with mock.patch.object(install, "_apt", side_effect=apt) as calls:
-            result = install.install_once(
-                vm_id=VM, root_dir=self.root,
-                verified_admission=self.verified_admission,
-                verified_checkpoint=self.verified_checkpoint)
+            result = install.install_once(vm_id=VM, root_dir=self.root)
         return result, calls
 
     def test_exact_confirmation_refusal_before_intent_or_apt(self):
@@ -229,22 +256,16 @@ class OneShotTests(unittest.TestCase):
         self._records()
         with mock.patch.object(install, "_apt") as apt:
             with self.assertRaises(install.Refused):
-                install.install_once(vm_id=VM, root_dir=self.root,
-                    verified_admission=self.verified_admission,
-                    verified_checkpoint=self.verified_checkpoint)
+                install.install_once(vm_id=VM, root_dir=self.root)
         apt.assert_not_called()
         self.assertEqual(list(self.private.iterdir()), [])
 
-    def test_unverified_or_mismatched_capability_refuses_before_intent(self):
-        original = self.verified_admission
-        self.verified_admission = install.VerifiedAdmission(
-            VM, "0" * 64, original.intent_sha256, original.module_sha256,
-            original.controller_sha256, ENGINE, original.status_sha256)
+    def test_mismatched_transferred_admission_refuses_before_intent(self):
+        self.admission_intent["readiness_sha256"] = "0" * 64
+        self._records()
         with mock.patch.object(install, "_apt") as apt:
             with self.assertRaises(install.Refused):
-                install.install_once(vm_id=VM, root_dir=self.root,
-                    verified_admission=self.verified_admission,
-                    verified_checkpoint=self.verified_checkpoint)
+                install.install_once(vm_id=VM, root_dir=self.root)
         apt.assert_not_called()
         self.assertEqual(list(self.private.iterdir()), [])
 

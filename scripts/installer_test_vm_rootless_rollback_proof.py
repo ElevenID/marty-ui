@@ -6,6 +6,7 @@ does not mint the package executor's caller-constructible checkpoint type.
 """
 from __future__ import annotations
 
+from contextlib import nullcontext
 import os
 from pathlib import Path
 import socket
@@ -334,7 +335,8 @@ def _named_snapshot(directory: int, held_file: int) -> None:
 
 
 def inspect_proof(*, source: Path, registry: Path, runtime_parent: Path,
-                  vm_id: str, copy_vm_id: str) -> dict:
+                  vm_id: str, copy_vm_id: str,
+                  _lease: ControllerLease | None = None) -> dict:
     """Return private historical evidence only after exact current rechecks."""
     copy.fixture._uuid4(vm_id)
     copy.fixture._uuid4(copy_vm_id)
@@ -342,7 +344,8 @@ def inspect_proof(*, source: Path, registry: Path, runtime_parent: Path,
                     and all(path.is_absolute() for path in
                             (source, registry, runtime_parent)),
                     "fixture rollback proof request invalid")
-    with ControllerLease(registry) as lease:
+    with (ControllerLease(registry) if _lease is None
+          else nullcontext(_lease)) as lease:
         provenance = create.verify_source(source)
         before = _records(lease.parent, vm_id, copy_vm_id)
         _exact_chain(before, vm_id, copy_vm_id)
