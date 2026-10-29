@@ -1,0 +1,130 @@
+name: Installer rootless host custody fixture
+
+on:
+  pull_request:
+    types: [opened, synchronize, labeled]
+    paths:
+      - .github/workflows/installer-rootless-host-custody.yml
+      - scripts/installer_rootless_host_custody_fixture.py
+      - scripts/installer_rootless_tool_admission.py
+      - scripts/verify_installer_provenance.py
+      - tests/test_installer_rootless_host_custody_fixture.py
+
+permissions:
+  contents: read
+  attestations: read
+
+jobs:
+  source-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Ordinary-user bounded fixture tests
+        run: |
+          test "$(id -u)" != 0
+          python3 -m py_compile scripts/installer_rootless_host_custody_fixture.py scripts/installer_rootless_tool_admission.py
+          python3 -m unittest discover -s tests -p test_installer_rootless_host_custody_fixture.py -v
+      - name: Record ordinary-user user namespace capability without Docker
+        run: |
+          test "$(id -u)" != 0
+          python3 scripts/installer_rootless_host_custody_fixture.py --probe-userns
+      - name: Retain bounded user namespace capability result
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: installer-rootless-userns-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/marty-rootless-userns-probe.json
+          if-no-files-found: warn
+          retention-days: 7
+
+  live-fixture:
+    needs: source-tests
+    if: >-
+      github.repository == 'ElevenID/marty-ui' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.action == 'labeled' &&
+      github.event.label.name == 'installer-rootless-fixture-approved'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Check ordinary-user prerequisites without starting Docker
+        run: |
+          test "$(id -u)" != 0
+          python3 scripts/installer_rootless_host_custody_fixture.py --preflight unused
+      - name: Acquire exact published inventory and pinned verifiers
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          assets="$RUNNER_TEMP/marty-rootless-assets"
+          mkdir -m 700 "$assets"
+          base=https://github.com/ElevenID/marty-ui/releases/download/v1.1.263-nightly.20261027.40597099479
+          for name in installer-inventory.json installer-inventory.json.provenance.jsonl installer-inventory.json.sigstore.json; do
+            curl --fail --location --silent --show-error --proto '=https' --proto-redir '=https' \
+              --connect-timeout 20 --max-time 90 --max-filesize 65536 "$base/$name" --output "$assets/$name"
+          done
+          test "$(stat -c %s "$assets/installer-inventory.json")" = 5024
+          printf '%s  %s\n' 54b593a48bbf139838e6c0a79441e9eb1ebbe79faf7d2347cb775ff2140a9676 \
+            "$assets/installer-inventory.json" | sha256sum --check --strict
+          curl --fail --location --silent --show-error --proto '=https' --proto-redir '=https' \
+            --connect-timeout 20 --max-time 180 --max-filesize 145688404 \
+            https://github.com/sigstore/cosign/releases/download/v3.1.4/cosign-linux-amd64 --output "$assets/cosign"
+          test "$(stat -c %s "$assets/cosign")" = 145688404
+          printf '%s  %s\n' 424e2c97d0b45fd7a6b608a87f090f35633f4c23ece5f092d48bba11aaf4bbfa \
+            "$assets/cosign" | sha256sum --check --strict
+          curl --fail --location --silent --show-error --proto '=https' --proto-redir '=https' \
+            --connect-timeout 20 --max-time 120 --max-filesize 15031001 \
+            https://github.com/cli/cli/releases/download/v2.103.2/gh_2.103.2_linux_amd64.tar.gz --output "$assets/gh.tar.gz"
+          test "$(stat -c %s "$assets/gh.tar.gz")" = 15031001
+          printf '%s  %s\n' 62ccf747115ddc61237efffdde66a3c8f70ba249433dc64f70801089b59c59c8 \
+            "$assets/gh.tar.gz" | sha256sum --check --strict
+          tar -xzf "$assets/gh.tar.gz" --no-same-owner --no-same-permissions -C "$assets" gh_2.103.2_linux_amd64/bin/gh
+          chmod 700 "$assets/cosign" "$assets/gh_2.103.2_linux_amd64/bin/gh"
+      - name: Authenticate signed nightly inventory before image use
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import sys
+          from pathlib import Path
+          sys.path.insert(0, 'scripts')
+          from verify_installer_provenance import verify_subject
+          a = Path(__import__('os').environ['RUNNER_TEMP']) / 'marty-rootless-assets'
+          verify_subject(a/'installer-inventory.json', a/'installer-inventory.json.provenance.jsonl',
+              gh=a/'gh_2.103.2_linux_amd64/bin/gh', cosign=a/'cosign',
+              signature_bundle=a/'installer-inventory.json.sigstore.json',
+              workflow='.github/workflows/nightly-release.yml',
+              source_sha='0aae5d6c03df0ccb2aa757d61fb022a24a962d14',
+              run_id=40597188642, run_attempt=1)
+          PY
+      - name: Admit exact signed Docker rootless extras without installation
+        run: |
+          test "$(id -u)" != 0
+          python3 scripts/installer_rootless_tool_admission.py \
+            "$RUNNER_TEMP/marty-rootless-preflight.json" "$RUNNER_TEMP/marty-rootless-tools"
+      - name: Observe exact isolated rootless canary
+        run: |
+          test "$(id -u)" != 0
+          python3 scripts/installer_rootless_host_custody_fixture.py --run \
+            "$RUNNER_TEMP/marty-rootless-assets/installer-inventory.json" \
+            "$RUNNER_TEMP/marty-rootless-tools"
+      - name: Retain bounded sanitized qualification records
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: installer-rootless-host-custody-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/marty-rootless-preflight.json
+            ${{ runner.temp }}/marty-rootless-admission.json
+            ${{ runner.temp }}/marty-rootless-startup-diagnostic.json
+            ${{ runner.temp }}/marty-rootless-custody-result.json
+          if-no-files-found: warn
+          retention-days: 7
