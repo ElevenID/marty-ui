@@ -1,6 +1,7 @@
 //! Accept outputs only after the caller authenticates and stops its owned helper.
 //! Local validation does not replace the helper's remote custody and ACL proof.
 #![cfg(target_os = "linux")]
+use crate::installer_helper_output::HelperOutputOwner;
 use crate::installer_ingress_provision::{certificate, check_certificates, resource_name, OUTPUTS};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -184,10 +185,11 @@ fn token(bytes: &[u8]) -> Result<()> {
 }
 /// The caller holds the installation lock and proves the helper has stopped.
 /// All validation precedes exclusive transfers; failures preserve partial files.
-pub fn validate_and_transfer(
+pub(crate) fn validate_and_transfer(
     output: &File,
     secrets: &File,
     installation_id: &str,
+    expected_host_uid: HelperOutputOwner,
 ) -> Result<ValidatedIngressOutputs> {
     directory(output)?;
     preflight(secrets)?;
@@ -204,7 +206,7 @@ pub fn validate_and_transfer(
     require(names == OUTPUTS.iter().map(|s| s.to_string()).collect())?;
     let bytes = OUTPUTS
         .iter()
-        .map(|name| read(output, name, 0))
+        .map(|name| read(output, name, expected_host_uid.uid()))
         .collect::<Result<Vec<_>>>()?;
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -297,10 +299,12 @@ mod tests {
         let (temp, dir) = private();
         preflight(&dir).unwrap();
         write(&dir, OUTPUTS[0], b"public certificate bytes").unwrap();
+        let uid = unsafe { libc::geteuid() };
         assert_eq!(
-            read(&dir, OUTPUTS[0], unsafe { libc::geteuid() }).unwrap(),
+            read(&dir, OUTPUTS[0], uid).unwrap(),
             b"public certificate bytes"
         );
+        assert!(read(&dir, OUTPUTS[0], uid.wrapping_add(1)).is_err());
         assert!(write(&dir, OUTPUTS[0], b"replacement").is_err());
         assert!(preflight(&dir).is_err());
         std::fs::hard_link(temp.path().join(OUTPUTS[0]), temp.path().join("linked")).unwrap();
@@ -323,7 +327,19 @@ mod tests {
         }
         let (_out, output) = private();
         let (_sec, secrets) = private();
-        assert!(validate_and_transfer(&output, &secrets, ID).is_err());
+        let binding = crate::installer_state::RuntimeBinding {
+            docker_host: "unix:///var/run/docker.sock".into(),
+            engine_id: "engine-identity-123".into(),
+            openbao_port: 8200,
+            profile: crate::installer_state::RuntimeProfile::Rootful,
+        };
+        assert!(validate_and_transfer(
+            &output,
+            &secrets,
+            ID,
+            crate::installer_helper_output::expected_host_uid(&binding).unwrap(),
+        )
+        .is_err());
         assert!(
             std::fs::read_dir(format!("/proc/self/fd/{}", secrets.as_raw_fd()))
                 .unwrap()

@@ -2,6 +2,7 @@
 //! uncertain container. Durable intent, ID and outputs survive every failure.
 #![cfg(target_os = "linux")]
 use crate::{
+    installer_helper_output,
     installer_keycloak_bridge::OUTPUTS,
     installer_openbao::{self, OpenBaoInventory},
     installer_runtime::DockerRunner,
@@ -224,10 +225,22 @@ fn read_outputs(directory: &File, owner: u32) -> Result<BTreeMap<String, Vec<u8>
                 && m.len() <= 65536,
         )?;
         let mut bytes = Vec::new();
-        file.take(65537)
+        (&file)
+            .take(65537)
             .read_to_end(&mut bytes)
             .map_err(|_| REFUSAL)?;
         require(bytes.len() as u64 == m.len())?;
+        let after = file.metadata().map_err(|_| REFUSAL)?;
+        require(
+            after.dev() == m.dev()
+                && after.ino() == m.ino()
+                && after.uid() == owner
+                && after.nlink() == m.nlink()
+                && after.mode() == m.mode()
+                && after.len() == m.len()
+                && after.mtime() == m.mtime()
+                && after.mtime_nsec() == m.mtime_nsec(),
+        )?;
         let value = std::str::from_utf8(&bytes).map_err(|_| REFUSAL)?;
         require(value.is_ascii() && !value.contains("PRIVATE KEY"))?;
         if name.ends_with("_token") {
@@ -380,7 +393,10 @@ pub fn provision(
     )?;
     validate_observation(&inspect(&docker, container)?, container, &contract, true)?;
     installer_openbao::verify_observation(&docker, installation, bundle, state, bao)?;
-    let outputs = read_outputs(&output_directory, 0)?;
+    let outputs = read_outputs(
+        &output_directory,
+        installer_helper_output::expected_host_uid(&binding)?.uid(),
+    )?;
     transfer(&secrets, &outputs)?;
     let mut receipt = KeycloakReceipt {
         schema: "elevenid.installer-keycloak/v1",
@@ -599,6 +615,27 @@ mod tests {
                 0o444
             );
         }
+    }
+    #[test]
+    fn rootless_profile_accepts_only_its_expected_host_owner() {
+        let uid = unsafe { libc::geteuid() };
+        let binding = crate::installer_state::RuntimeBinding {
+            docker_host: format!("unix:///run/user/{uid}/docker.sock"),
+            engine_id: "engine-identity-123".into(),
+            openbao_port: 8200,
+            profile: crate::installer_state::RuntimeProfile::Rootless,
+        };
+        if uid == 0 {
+            assert!(installer_helper_output::expected_host_uid(&binding).is_err());
+            return;
+        }
+        let source = private();
+        write_outputs(source.path());
+        let owner = installer_helper_output::expected_host_uid(&binding)
+            .unwrap()
+            .uid();
+        assert!(read_outputs(&directory(source.path()).unwrap(), owner).is_ok());
+        assert!(read_outputs(&directory(source.path()).unwrap(), owner.wrapping_add(1)).is_err());
     }
     #[test]
     fn output_inventory_refuses_links_wrong_owner_modes_and_extra_files() {
