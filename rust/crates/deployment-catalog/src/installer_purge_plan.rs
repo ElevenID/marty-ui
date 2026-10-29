@@ -560,6 +560,7 @@ mod tests {
                 inventory_sha256: format!("sha256:{}", "b".repeat(64)),
             },
             RuntimeBinding {
+                profile: crate::installer_state::RuntimeProfile::Rootful,
                 docker_host: "unix:///var/run/docker.sock".into(),
                 engine_id: "synthetic-engine".into(),
                 openbao_port: 8200,
@@ -810,6 +811,7 @@ mod tests {
                 inventory_sha256: format!("sha256:{}", "b".repeat(64)),
             },
             RuntimeBinding {
+                profile: crate::installer_state::RuntimeProfile::Rootful,
                 docker_host: "unix:///var/run/docker.sock".into(),
                 engine_id: "synthetic-engine".into(),
                 openbao_port: 8200,
