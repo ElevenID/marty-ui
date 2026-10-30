@@ -29,6 +29,8 @@ const PULL_INTENT: &str = "rootless-canary-pull-intent.json";
 const INTENT: &str = "rootless-canary-intent.json";
 const CREATED: &str = "rootless-canary-created.json";
 const TRANSITION_CONTAINER: &str = "rootless-canary-transition-container.json";
+const TRANSITION_CREATED_UNVALIDATED: &str = "rootless-canary-transition-created-unvalidated.json";
+const RESTORE_CREATED_UNVALIDATED: &str = "rootless-canary-restore-created-unvalidated.json";
 const RESTORE_CONTAINER: &str = "rootless-canary-restore-container.json";
 const START_INTENT: &str = "rootless-canary-start-intent.json";
 const FOREIGN: &str = "rootless-canary-foreign-observed.json";
@@ -459,14 +461,26 @@ fn inspect(docker: &DockerRunner, id: &str) -> Result<Value> {
     crate::installer_container::inspect(docker, id, REFUSED)
 }
 fn capabilities(value: &Value) -> bool {
-    value.as_array().is_some_and(|items| {
-        items.len() == 2
-            && items
-                .iter()
-                .filter_map(Value::as_str)
-                .collect::<BTreeSet<_>>()
-                == BTreeSet::from(["CHOWN", "DAC_OVERRIDE"])
-    })
+    let Some(items) = value.as_array() else {
+        return false;
+    };
+    if items.len() != 2 {
+        return false;
+    }
+    let mut observed = BTreeSet::new();
+    for item in items {
+        let Some(raw) = item.as_str() else {
+            return false;
+        };
+        // Docker Engine inspect can return the CAP_ form even when the CLI
+        // accepted bare names. Strip exactly one prefix, never canonicalize
+        // arbitrary capability names or silently accept duplicates.
+        let name = raw.strip_prefix("CAP_").unwrap_or(raw);
+        if !matches!(name, "CHOWN" | "DAC_OVERRIDE") || !observed.insert(name) {
+            return false;
+        }
+    }
+    observed == BTreeSet::from(["CHOWN", "DAC_OVERRIDE"])
 }
 fn container_config(docker: &DockerRunner, id: &str, c: &Contract) -> Result<Value> {
     let value = inspect(docker, id)?;
@@ -489,10 +503,16 @@ fn validate_container_value(value: &Value, id: &str, c: &Contract) -> Result<()>
         },
         REFUSED,
     )?;
+    // A malformed inspect field can contain arbitrary data. Keep this
+    // diagnostic static rather than serializing any observed values.
+    if !capabilities(&value["HostConfig"]["CapAdd"]) {
+        return Err(format!(
+            "{REFUSED}: HostConfig.CapAdd must contain exactly CHOWN and DAC_OVERRIDE (at most one CAP_ prefix per name)"
+        ));
+    }
     require(
         value["Config"]["Labels"]["com.elevenid.installer.canary"] == c.canary_id.to_string()
             && value["Config"]["Labels"]["com.elevenid.installer.canary-role"] == c.role
-            && capabilities(&value["HostConfig"]["CapAdd"])
             && crate::installer_container::empty_or_null(&value["HostConfig"]["Tmpfs"])
             && crate::installer_container::environment_map(&value["Config"]["Env"], REFUSED)?
                 == c.environment,
@@ -530,7 +550,12 @@ fn validate_container(docker: &DockerRunner, id: &str, c: &Contract, terminal: b
     let value = container_config(docker, id, c)?;
     crate::installer_container::validate_stopped_state(&value, terminal, REFUSED)
 }
-fn create_container(docker: &DockerRunner, c: &Contract) -> Result<String> {
+fn create_container(
+    docker: &DockerRunner,
+    c: &Contract,
+    state: &mut InstallerState,
+    intent: &Intent,
+) -> Result<String> {
     require(
         docker
             .run_checked(&[
@@ -546,6 +571,28 @@ fn create_container(docker: &DockerRunner, c: &Contract) -> Result<String> {
     let id_value = run(docker, &command(c)?)?;
     let id_value = id_value.trim();
     require(id(id_value))?;
+    // Docker create is a mutation. Persist the returned ID before any inspect
+    // validation can fail. This record is deliberately NOT a validated receipt
+    // and must never authorize start, cleanup, adoption or recovery.
+    let unvalidated = json!({
+        "schema": "elevenid.rootless-canary-created-unvalidated/v1",
+        "intent_sha256": sha(&encoded(intent)?),
+        "role": c.role,
+        "name": c.name,
+        "id": id_value,
+        "validated": false,
+        "cleanup_authorized": false,
+        "installation_ready": false
+    });
+    persist(
+        state,
+        if c.role == "transition" {
+            TRANSITION_CREATED_UNVALIDATED
+        } else {
+            RESTORE_CREATED_UNVALIDATED
+        },
+        &encoded(&unvalidated)?,
+    )?;
     validate_container(docker, id_value, c, false)?;
     Ok(id_value.into())
 }
@@ -1529,7 +1576,7 @@ pub(crate) fn qualify_candidate(
             parent: parent_path.clone(),
             operator: operator.clone(),
         };
-        let id = create_container(&docker, &contract)?;
+        let id = create_container(&docker, &contract, state, &intent)?;
         let record = receipt(&intent, role, contract.name, id);
         let bytes = encoded(&record)?;
         persist(
@@ -2061,9 +2108,8 @@ mod tests {
         })
     }
 
-    #[test]
-    fn container_contract_rejects_extra_mount_cap_network_and_identity_drift() {
-        let c = Contract {
+    fn fixture_contract() -> Contract {
+        Contract {
             role: "transition",
             name: "marty-canary-test-transition".into(),
             owner: uuid::Uuid::new_v4().to_string(),
@@ -2076,10 +2122,202 @@ mod tests {
             environment: BTreeMap::new(),
             parent: PathBuf::from("/owned/parent"),
             operator: PathBuf::from("/owned/marty-deploy"),
-        };
+        }
+    }
+
+    fn accepted_capability_sets() -> [Value; 8] {
+        [
+            json!(["CHOWN", "DAC_OVERRIDE"]),
+            json!(["DAC_OVERRIDE", "CHOWN"]),
+            json!(["CAP_CHOWN", "CAP_DAC_OVERRIDE"]),
+            json!(["CAP_DAC_OVERRIDE", "CAP_CHOWN"]),
+            json!(["CHOWN", "CAP_DAC_OVERRIDE"]),
+            json!(["CAP_DAC_OVERRIDE", "CHOWN"]),
+            json!(["CAP_CHOWN", "DAC_OVERRIDE"]),
+            json!(["DAC_OVERRIDE", "CAP_CHOWN"]),
+        ]
+    }
+
+    #[test]
+    fn aws_rootless_capability_names_admit_one_optional_prefix_only() {
+        for accepted in accepted_capability_sets() {
+            assert!(capabilities(&accepted), "should accept {accepted}");
+        }
+        for rejected in [
+            json!(null),
+            json!(false),
+            json!("CHOWN,DAC_OVERRIDE"),
+            json!({"unexpected": "object"}),
+            json!([]),
+            json!(["CHOWN"]),
+            json!(["DAC_OVERRIDE"]),
+            json!(["CHOWN", "DAC_OVERRIDE", "SYS_ADMIN"]),
+            json!(["CHOWN", "SYS_ADMIN"]),
+            json!(["CAP_SYS_ADMIN", "CAP_DAC_OVERRIDE"]),
+            json!(["CHOWN", "CHOWN"]),
+            json!(["DAC_OVERRIDE", "DAC_OVERRIDE"]),
+            json!(["CHOWN", "CAP_CHOWN"]),
+            json!(["CAP_DAC_OVERRIDE", "DAC_OVERRIDE"]),
+            json!(["CAP_CHOWN", "CAP_CHOWN"]),
+            json!(["CAP_DAC_OVERRIDE", "CAP_DAC_OVERRIDE"]),
+            json!(["CAP_CAP_CHOWN", "CAP_DAC_OVERRIDE"]),
+            json!(["CAP_CHOWN", "CAP_CAP_DAC_OVERRIDE"]),
+            json!(["cap_chown", "DAC_OVERRIDE"]),
+            json!(["CHOWN", "cap_dac_override"]),
+            json!(["chown", "DAC_OVERRIDE"]),
+            json!(["CHOWN", "dac_override"]),
+            json!([" CHOWN", "DAC_OVERRIDE"]),
+            json!(["CHOWN", "DAC_OVERRIDE "]),
+            json!(["CHOWN", "DAC_OVERRIDE\n"]),
+            json!(["CAP_", "DAC_OVERRIDE"]),
+            json!(["", "DAC_OVERRIDE"]),
+            json!(["CHOWN", 7]),
+            json!(["CHOWN", false]),
+            json!(["CHOWN", null]),
+            json!(["CHOWN", {"unexpected": "object"}]),
+            json!(["CHOWN", ["DAC_OVERRIDE"]]),
+        ] {
+            assert!(!capabilities(&rejected), "should refuse {rejected}");
+        }
+    }
+
+    #[test]
+    fn capability_diagnostics_never_echo_untrusted_inspect_values() {
+        let c = fixture_contract();
+        let id = "c".repeat(64);
+        let secret = "CAPADD_SECRET_SENTINEL_TEST_ONLY";
+        let unknown = "UNKNOWN_CAPABILITY_SENTINEL_TEST_ONLY";
+        let environment = "ENV_SECRET_SENTINEL_TEST_ONLY";
+        let long = format!("{secret}{}", "X".repeat(16 * 1024));
+        for rejected in [
+            json!([unknown, "DAC_OVERRIDE"]),
+            json!([secret, "DAC_OVERRIDE"]),
+            json!({"unexpected": secret}),
+            json!(["CHOWN", {"unexpected": secret}]),
+            json!([long, "DAC_OVERRIDE"]),
+            json!(null),
+        ] {
+            let mut observed = fixture_container(&c, &id);
+            observed["HostConfig"]["CapAdd"] = rejected;
+            observed["Config"]["Env"] = json!([format!("UNRELATED_SECRET={environment}")]);
+            let error = validate_container_value(&observed, &id, &c).unwrap_err();
+            assert!(error.contains("HostConfig.CapAdd"));
+            assert!(
+                error.len() < 256,
+                "capability diagnostic exceeded its bound"
+            );
+            for marker in [secret, unknown, environment] {
+                assert!(
+                    !error.contains(marker),
+                    "capability diagnostic echoed untrusted inspect data"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn accepted_capabilities_preserve_container_identity_and_security_checks() {
+        let c = fixture_contract();
+        let id = "c".repeat(64);
+        for accepted in accepted_capability_sets() {
+            let mut baseline = fixture_container(&c, &id);
+            baseline["HostConfig"]["CapAdd"] = accepted;
+            validate_container_value(&baseline, &id, &c).unwrap();
+            for (pointer, wrong) in [
+                ("/Id", json!("d".repeat(64))),
+                ("/Image", json!(format!("sha256:{}", "d".repeat(64)))),
+                ("/Name", json!("/other-container")),
+                ("/Config/Image", json!("other-image")),
+                ("/Config/User", json!("1000:1000")),
+                ("/Config/Entrypoint", json!(["/other/operator"])),
+                (
+                    "/Config/Cmd",
+                    json!(["installer-rootless-canary-helper", "restore"]),
+                ),
+                (
+                    "/Config/Labels/com.elevenid.installer.id",
+                    json!("other-owner"),
+                ),
+                (
+                    "/Config/Labels/com.elevenid.installer.stage",
+                    json!("other-stage"),
+                ),
+                (
+                    "/Config/Labels/com.elevenid.installer.canary",
+                    json!(uuid::Uuid::new_v4()),
+                ),
+                (
+                    "/Config/Labels/com.elevenid.installer.canary-role",
+                    json!("restore"),
+                ),
+                ("/Config/Env", json!(["UNEXPECTED=value"])),
+                ("/HostConfig/ReadonlyRootfs", json!(false)),
+                ("/HostConfig/Privileged", json!(true)),
+                ("/HostConfig/CapDrop", json!([])),
+                ("/HostConfig/SecurityOpt", json!([])),
+                ("/HostConfig/NetworkMode", json!("bridge")),
+                ("/HostConfig/AutoRemove", json!(true)),
+                ("/HostConfig/RestartPolicy/Name", json!("always")),
+                ("/HostConfig/PidMode", json!("host")),
+                ("/HostConfig/UsernsMode", json!("host")),
+                ("/HostConfig/IpcMode", json!("host")),
+                (
+                    "/HostConfig/PortBindings",
+                    json!({"443/tcp": [{"HostPort": "443"}]}),
+                ),
+                (
+                    "/HostConfig/Devices",
+                    json!([{"PathOnHost": "/dev/test-only"}]),
+                ),
+                (
+                    "/HostConfig/DeviceRequests",
+                    json!([{"Driver": "test-only"}]),
+                ),
+                ("/HostConfig/Binds", json!(["/other/parent:/marty-canary"])),
+                ("/HostConfig/Tmpfs", json!({"/tmp": "rw"})),
+                ("/Mounts/0/Type", json!("volume")),
+                ("/Mounts/0/Source", json!("/other/operator")),
+                ("/Mounts/0/Destination", json!("/input/other")),
+                ("/Mounts/0/RW", json!(true)),
+                ("/Mounts/1/Source", json!("/other/parent")),
+                ("/Mounts/1/Destination", json!("/input/marty-deploy")),
+                ("/Mounts/1/RW", json!(false)),
+                ("/NetworkSettings/Networks", json!({"bridge": {}})),
+            ] {
+                let mut changed = baseline.clone();
+                *changed.pointer_mut(pointer).unwrap() = wrong;
+                assert!(
+                    validate_container_value(&changed, &id, &c).is_err(),
+                    "accepted capabilities weakened {pointer}"
+                );
+            }
+            let mut duplicate = baseline.clone();
+            let mount = duplicate["Mounts"][0].clone();
+            duplicate["Mounts"].as_array_mut().unwrap().push(mount);
+            assert!(validate_container_value(&duplicate, &id, &c).is_err());
+            let mut extra = baseline;
+            extra["Mounts"].as_array_mut().unwrap().push(json!({
+                "Type": "volume", "Destination": "/unowned", "Source": "anonymous", "RW": true
+            }));
+            assert!(validate_container_value(&extra, &id, &c).is_err());
+        }
+    }
+
+    #[test]
+    fn container_contract_rejects_extra_mount_cap_network_and_identity_drift() {
+        let c = fixture_contract();
         let id = "c".repeat(64);
         let baseline = fixture_container(&c, &id);
         validate_container_value(&baseline, &id, &c).unwrap();
+        // The AWS Docker 29.9.2 inspection reported both capabilities with
+        // CAP_ prefixes; all unrelated container invariants stay unchanged.
+        let mut aws_observed = baseline.clone();
+        aws_observed["HostConfig"]["CapAdd"] = json!(["CAP_CHOWN", "CAP_DAC_OVERRIDE"]);
+        validate_container_value(&aws_observed, &id, &c).unwrap();
+        aws_observed["HostConfig"]["CapAdd"] = json!(["CAP_CHOWN", "CAP_SYS_ADMIN"]);
+        assert!(validate_container_value(&aws_observed, &id, &c)
+            .unwrap_err()
+            .contains("HostConfig.CapAdd"));
         for (pointer, wrong) in [
             (
                 "/Config/Labels/com.elevenid.installer.canary",
@@ -2115,3 +2353,7 @@ mod tests {
         assert!(validate_container_value(&extra, &id, &c).is_err());
     }
 }
+
+#[cfg(test)]
+#[path = "installer_rootless_storage_canary_development_tests.rs"]
+mod development_tests;
