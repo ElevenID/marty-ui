@@ -731,7 +731,7 @@ const DEVELOPMENT_RUNTIME_FIXTURE_SOURCE: &str = "225818494f4ba716e75df7225d6c43
 const DEVELOPMENT_RUNTIME_FIXTURE_INVENTORY_SHA: &str =
     "972cf706ba3c98a5d8e76eb8df1cc29d6e48631895b1115302791399c284b319";
 const DEVELOPMENT_RUNTIME_HELPER_SHA: &str =
-    "7e74dcb23412982e856e80a174ed81d979e16dd9c26807e9189d0258817c5b27";
+    "596ff413d059527b131a54a7faee74566f991c6da30de3253ba167c4c7ea6b0e";
 const DEVELOPMENT_RUNTIME_EXPECTED_HOLD: &str = "Owned application startup observations recorded. Explicit local CA trust onboarding and installed journey qualification remain incomplete; preserve the reported state for recovery. Installation is not ready.";
 
 /// Exercise real installer orchestration with independently authenticated,
@@ -892,7 +892,7 @@ fn development_rootless_runtime_from_verified_payloads() {
                 &encoded(&json!({
                     "schema":"elevenid.unsigned-development-runtime-scope/v1",
                     "classification":"UNSIGNED DEVELOPMENT ONLY",
-                    "host_source":"53261460d5d3f7eada4254170c0f9a0dcffaaf22 plus ignored development test",
+                    "host_source":"8566e77ce06556153a38b788fff8b594a5f75415 plus reviewed TLS, renewal, and generation host-owner fixes and development helper pin",
                     "helper_sha256":DEVELOPMENT_RUNTIME_HELPER_SHA,
                     "helper_build_identity":"unknown:unreleased",
                     "helper_release_authenticated":false,
