@@ -295,16 +295,14 @@ fn check_dependencies(
     containers: &BTreeMap<String, String>,
     role: &str,
 ) -> Result<()> {
-    if let Some(deps) = plan.model["services"][role]["depends_on"].as_object() {
-        for dependency in deps.keys() {
-            require(observed_role(
-                docker,
-                plan,
-                images,
-                dependency,
-                containers.get(dependency).ok_or(REFUSED)?,
-            )?)?;
-        }
+    for dependency in graph::required_dependencies(&plan.model, role)? {
+        require(observed_role(
+            docker,
+            plan,
+            images,
+            &dependency,
+            containers.get(&dependency).ok_or(REFUSED)?,
+        )?)?;
     }
     Ok(())
 }

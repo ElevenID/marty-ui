@@ -1,5 +1,6 @@
 //! Startup ordering for the already admitted application model. The explicit
-//! KMS initialization barrier is stronger than the ordinary Compose graph.
+//! KMS initialization barrier and eager workload prerequisites are stronger
+//! than the ordinary Compose graph. The admitted model remains unchanged.
 #![cfg(target_os = "linux")]
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
@@ -63,6 +64,42 @@ pub fn completion(model: &Value, role: &str) -> Result<Completion> {
     Ok(Completion::Healthy)
 }
 
+/// Dependencies checked both when ordering starts and immediately before each
+/// start. The published compliance-profile service connects to organization
+/// before exposing its health listener, although the older signed Compose
+/// model declares only its database dependency. Serial installer startup must
+/// establish that prerequisite without changing the authenticated model.
+pub(crate) fn required_dependencies(model: &Value, role: &str) -> Result<BTreeSet<String>> {
+    let service = model["services"]
+        .get(role)
+        .filter(|s| s.is_object())
+        .ok_or(REFUSED)?;
+    let mut dependencies = BTreeSet::new();
+    if let Some(value) = service.get("depends_on") {
+        for (peer, spec) in value.as_object().ok_or(REFUSED)? {
+            if spec["required"] == false {
+                return Err(format!("{REFUSED}: dependency {role} -> {peer}"));
+            }
+            let condition = match completion(model, peer)? {
+                Completion::Healthy => "service_healthy",
+                Completion::ExitedZero => "service_completed_successfully",
+                Completion::Running => return Err(REFUSED.into()),
+            };
+            if spec["condition"] != condition {
+                return Err(REFUSED.into());
+            }
+            dependencies.insert(peer.clone());
+        }
+    }
+    if role == "compliance-profile" {
+        if completion(model, "organization")? != Completion::Healthy {
+            return Err(REFUSED.into());
+        }
+        dependencies.insert("organization".into());
+    }
+    Ok(dependencies)
+}
+
 pub fn startup_order(model: &Value, selected: &[String]) -> Result<Vec<String>> {
     let services = model["services"].as_object().ok_or(REFUSED)?;
     let chosen: BTreeSet<&str> = selected.iter().map(String::as_str).collect();
@@ -87,21 +124,10 @@ pub fn startup_order(model: &Value, selected: &[String]) -> Result<Vec<String>> 
     let mut graph = BTreeMap::<String, BTreeSet<String>>::new();
     for role in &all {
         completion(model, role).map_err(|e| format!("{e}: completion for {role}"))?;
-        let mut deps = BTreeSet::new();
-        if let Some(value) = services[*role].get("depends_on") {
-            for (peer, spec) in value.as_object().ok_or(REFUSED)? {
-                if !all.contains(peer.as_str()) || spec["required"] == false {
-                    return Err(format!("{REFUSED}: dependency {role} -> {peer}"));
-                }
-                let condition = match completion(model, peer)? {
-                    Completion::Healthy => "service_healthy",
-                    Completion::ExitedZero => "service_completed_successfully",
-                    Completion::Running => return Err(REFUSED.into()),
-                };
-                if spec["condition"] != condition {
-                    return Err(REFUSED.into());
-                }
-                deps.insert(peer.clone());
+        let deps = required_dependencies(model, role)?;
+        for peer in &deps {
+            if !all.contains(peer.as_str()) {
+                return Err(format!("{REFUSED}: dependency {role} -> {peer}"));
             }
         }
         graph.insert((*role).to_owned(), deps);
@@ -137,4 +163,126 @@ pub fn startup_order(model: &Value, selected: &[String]) -> Result<Vec<String>> 
         order.push(next);
     }
     Ok(order)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn model() -> (Value, Vec<String>) {
+        let mut services = serde_json::Map::new();
+        for role in INITIALIZERS
+            .iter()
+            .copied()
+            .chain(["postgres", "redis", "organization", "compliance-profile"])
+            .map(str::to_owned)
+            .chain((0..21).map(|index| format!("fixture-{index:02}")))
+        {
+            services.insert(role.clone(), json!({
+                "restart": if INITIALIZERS.contains(&role.as_str()) { "no" } else { "unless-stopped" },
+                "healthcheck": {"test": ["CMD", "true"]},
+                "depends_on": {}
+            }));
+        }
+        let mut model = json!({"services": services});
+        for role in ["db-migrate", "revocation-profile-migrate"] {
+            model["services"][role]["depends_on"] =
+                json!({"postgres": {"condition": "service_healthy"}});
+        }
+        model["services"]["kms-initialize"]["depends_on"] = json!({
+            "db-migrate": {"condition": "service_completed_successfully"},
+            "revocation-profile-migrate": {"condition": "service_completed_successfully"},
+            "redis": {"condition": "service_healthy"}
+        });
+        model["services"]["organization"]["depends_on"] = json!({
+            "db-migrate": {"condition": "service_completed_successfully"},
+            "redis": {"condition": "service_healthy"}
+        });
+        model["services"]["compliance-profile"]["depends_on"] =
+            json!({"db-migrate": {"condition": "service_completed_successfully"}});
+        let selected = model["services"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .filter(|role| role.as_str() != "kms-initialize")
+            .cloned()
+            .collect();
+        (model, selected)
+    }
+
+    #[test]
+    fn compliance_prerequisite_orders_and_checks_organization_without_changing_model() {
+        let (model, selected) = model();
+        let before = model.clone();
+        assert_eq!(
+            required_dependencies(&model, "compliance-profile").unwrap(),
+            BTreeSet::from(["db-migrate".into(), "organization".into()])
+        );
+        assert!(required_dependencies(&model, "fixture-00")
+            .unwrap()
+            .is_empty());
+        let order = startup_order(&model, &selected).unwrap();
+        assert_eq!(order.len(), 30);
+        assert_eq!(order[4], "kms-initialize");
+        assert_eq!(
+            order[..4]
+                .iter()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>(),
+            MIGRATIONS.into_iter().collect::<BTreeSet<_>>()
+        );
+        let position = |role| order.iter().position(|value| value == role).unwrap();
+        assert!(position("kms-initialize") < position("organization"));
+        assert!(position("organization") < position("compliance-profile"));
+        assert_eq!(model, before);
+        assert!(model["services"]["compliance-profile"]["depends_on"]
+            .get("organization")
+            .is_none());
+    }
+
+    #[test]
+    fn compliance_prerequisite_requires_health_and_preserves_declared_dependency_checks() {
+        let (model, selected) = model();
+        for invalid in [
+            json!({"condition": "service_started"}),
+            json!({"condition": "service_healthy", "required": false}),
+        ] {
+            let mut changed = model.clone();
+            changed["services"]["compliance-profile"]["depends_on"]["organization"] = invalid;
+            assert!(required_dependencies(&changed, "compliance-profile").is_err());
+            assert!(startup_order(&changed, &selected).is_err());
+        }
+        let mut changed = model.clone();
+        changed["services"]["organization"]["healthcheck"]["disable"] = json!(true);
+        assert!(required_dependencies(&changed, "compliance-profile").is_err());
+        assert!(startup_order(&changed, &selected).is_err());
+        let mut changed = model;
+        let organization = changed["services"]
+            .as_object_mut()
+            .unwrap()
+            .remove("organization")
+            .unwrap();
+        changed["services"]["replacement"] = organization;
+        let selected: Vec<_> = selected
+            .into_iter()
+            .map(|role| {
+                if role == "organization" {
+                    "replacement".into()
+                } else {
+                    role
+                }
+            })
+            .collect();
+        assert!(required_dependencies(&changed, "compliance-profile").is_err());
+        assert!(startup_order(&changed, &selected).is_err());
+    }
+
+    #[test]
+    fn compliance_prerequisite_refuses_dependency_cycle() {
+        let (mut model, selected) = model();
+        model["services"]["organization"]["depends_on"]["compliance-profile"] =
+            json!({"condition": "service_healthy"});
+        assert!(startup_order(&model, &selected).is_err());
+    }
 }

@@ -227,6 +227,17 @@ fn actual_source_compose_matches_installer_application_contract() {
     .unwrap();
     assert_eq!(order.len(), 30);
     assert_eq!(order[4], "kms-initialize");
+    assert!(
+        order
+            .iter()
+            .position(|role| role == "organization")
+            .unwrap()
+            < order
+                .iter()
+                .position(|role| role == "compliance-profile")
+                .unwrap(),
+        "eager organization prerequisite must precede compliance readiness"
+    );
     assert_eq!(
         order[..4]
             .iter()
