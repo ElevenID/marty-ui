@@ -262,6 +262,19 @@ fn actual_source_compose_matches_installer_application_contract() {
             "eager prerequisite {peer} must precede {role}"
         );
     }
+    assert!(
+        position("signing-keys") < position("canvas-sync-worker"),
+        "eager integration-secret KMS proof must precede worker process observation"
+    );
+    assert_eq!(
+        marty_deployment_catalog::installer_application_graph::completion(
+            &plan.model,
+            "canvas-sync-worker",
+        )
+        .unwrap(),
+        marty_deployment_catalog::installer_application_graph::Completion::Running,
+        "the headless worker remains process-observed, not health-qualified"
+    );
     assert_eq!(
         order[..4]
             .iter()

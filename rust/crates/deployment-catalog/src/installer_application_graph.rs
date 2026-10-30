@@ -66,7 +66,8 @@ pub fn completion(model: &Value, role: &str) -> Result<Completion> {
 
 /// Dependencies checked both when ordering starts and immediately before each
 /// start. Published services establish eager connections and HTTP health checks
-/// before exposing their listeners, although the older signed Compose model omits these
+/// before exposing listeners or entering worker loops, although the older signed
+/// Compose model omits these
 /// prerequisites. Serial installer startup must establish them without changing
 /// the authenticated model.
 pub(crate) fn required_dependencies(model: &Value, role: &str) -> Result<BTreeSet<String>> {
@@ -100,6 +101,7 @@ pub(crate) fn required_dependencies(model: &Value, role: &str) -> Result<BTreeSe
         "credential-template" => &["organization", "revocation-profile"],
         "flow" => &["deployment-profile", "signing-keys", "trust-profile"],
         "auth" => &["applicant", "event-stream"],
+        "canvas-sync-worker" => &["signing-keys"],
         _ => &[],
     };
     for &peer in eager {
@@ -201,9 +203,10 @@ mod tests {
                 "auth",
                 "applicant",
                 "event-stream",
+                "canvas-sync-worker",
             ])
             .map(str::to_owned)
-            .chain((0..11).map(|index| format!("fixture-{index:02}")))
+            .chain((0..10).map(|index| format!("fixture-{index:02}")))
         {
             services.insert(role.clone(), json!({
                 "restart": if INITIALIZERS.contains(&role.as_str()) { "no" } else { "unless-stopped" },
@@ -254,6 +257,11 @@ mod tests {
             "redis": {"condition": "service_healthy"},
             "flow": {"condition": "service_healthy"},
             "keycloak-configurator": {"condition": "service_completed_successfully"}
+        });
+        model["services"]["canvas-sync-worker"]["healthcheck"] = json!({"disable": true});
+        model["services"]["canvas-sync-worker"]["depends_on"] = json!({
+            "db-migrate": {"condition": "service_completed_successfully"},
+            "issuance-migrations": {"condition": "service_completed_successfully"}
         });
         let selected = model["services"]
             .as_object()
@@ -643,5 +651,98 @@ mod tests {
             changed["services"][peer]["depends_on"][role] = json!({"condition": "service_healthy"});
             assert!(startup_order(&changed, &selected).is_err());
         }
+    }
+
+    #[test]
+    fn canvas_worker_prerequisite_orders_kms_before_running_observation_without_changing_model() {
+        let (model, selected) = model();
+        let before = model.clone();
+        assert_eq!(
+            completion(&model, "canvas-sync-worker").unwrap(),
+            Completion::Running
+        );
+        assert_eq!(
+            required_dependencies(&model, "canvas-sync-worker").unwrap(),
+            BTreeSet::from([
+                "db-migrate".into(),
+                "issuance-migrations".into(),
+                "signing-keys".into(),
+            ])
+        );
+        let order = startup_order(&model, &selected).unwrap();
+        assert_eq!(order.len(), 30);
+        assert_eq!(order[4], "kms-initialize");
+        assert_eq!(
+            order[..4]
+                .iter()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>(),
+            MIGRATIONS.into_iter().collect::<BTreeSet<_>>()
+        );
+        let position = |role| order.iter().position(|value| value == role).unwrap();
+        for peer in ["db-migrate", "issuance-migrations", "signing-keys"] {
+            assert!(position(peer) < position("canvas-sync-worker"));
+        }
+        assert_eq!(
+            completion(&model, "canvas-sync-worker").unwrap(),
+            Completion::Running
+        );
+        assert_eq!(model, before);
+    }
+
+    #[test]
+    fn canvas_worker_prerequisite_preserves_health_and_declared_condition_checks() {
+        let (model, selected) = model();
+        for invalid in [
+            json!({"condition": "service_started"}),
+            json!({"condition": "service_healthy", "required": false}),
+            json!({"condition": "service_completed_successfully"}),
+        ] {
+            let mut changed = model.clone();
+            changed["services"]["canvas-sync-worker"]["depends_on"]["signing-keys"] = invalid;
+            assert!(required_dependencies(&changed, "canvas-sync-worker").is_err());
+            assert!(startup_order(&changed, &selected).is_err());
+        }
+        let mut changed = model.clone();
+        changed["services"]["signing-keys"]["healthcheck"]["disable"] = json!(true);
+        assert!(required_dependencies(&changed, "canvas-sync-worker").is_err());
+        assert!(startup_order(&changed, &selected).is_err());
+        let mut changed = model.clone();
+        let removed = changed["services"]
+            .as_object_mut()
+            .unwrap()
+            .remove("signing-keys")
+            .unwrap();
+        changed["services"]["replacement"] = removed;
+        let selected: Vec<_> = selected
+            .iter()
+            .map(|role| {
+                if role == "signing-keys" {
+                    "replacement".into()
+                } else {
+                    role.clone()
+                }
+            })
+            .collect();
+        assert!(required_dependencies(&changed, "canvas-sync-worker").is_err());
+        assert!(startup_order(&changed, &selected).is_err());
+    }
+
+    #[test]
+    fn canvas_worker_prerequisite_refuses_running_dependencies_and_reverse_cycles() {
+        let (model, selected) = model();
+        let mut reverse = model.clone();
+        reverse["services"]["signing-keys"]["depends_on"]["canvas-sync-worker"] =
+            json!({"condition": "service_started"});
+        assert!(required_dependencies(&reverse, "signing-keys").is_err());
+        assert!(startup_order(&reverse, &selected).is_err());
+        // A healthy worker variant makes the reverse edge individually valid;
+        // the resulting cycle must still be rejected by the ordering gate.
+        reverse["services"]["canvas-sync-worker"]["healthcheck"] = json!({"test": ["CMD", "true"]});
+        reverse["services"]["signing-keys"]["depends_on"]["canvas-sync-worker"] =
+            json!({"condition": "service_healthy"});
+        assert!(required_dependencies(&reverse, "canvas-sync-worker").is_ok());
+        assert!(required_dependencies(&reverse, "signing-keys").is_ok());
+        assert!(startup_order(&reverse, &selected).is_err());
     }
 }
