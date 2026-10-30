@@ -725,3 +725,296 @@ fn development_rootless_canary_transition_restore() {
         );
     }
 }
+
+const DEVELOPMENT_RUNTIME_FIXTURE_TAG: &str = "v1.1.263-nightly.20261029.40946723707";
+const DEVELOPMENT_RUNTIME_FIXTURE_SOURCE: &str = "225818494f4ba716e75df7225d6c43d71b038879";
+const DEVELOPMENT_RUNTIME_FIXTURE_INVENTORY_SHA: &str =
+    "972cf706ba3c98a5d8e76eb8df1cc29d6e48631895b1115302791399c284b319";
+const DEVELOPMENT_RUNTIME_HELPER_SHA: &str =
+    "7e74dcb23412982e856e80a174ed81d979e16dd9c26807e9189d0258817c5b27";
+const DEVELOPMENT_RUNTIME_EXPECTED_HOLD: &str = "Owned application startup observations recorded. Explicit local CA trust onboarding and installed journey qualification remain incomplete; preserve the reported state for recovery. Installation is not ready.";
+
+/// Exercise real installer orchestration with independently authenticated,
+/// immutable published TEST INPUTS and the reviewed unsigned local helper.
+/// This is not an alternative release entry point. No production verifier,
+/// source/operator binding, admission, helper contract or limit is changed.
+/// The signed inventory is preserved verbatim; it does NOT authenticate the
+/// local helper or host test executable. Journal identity is synthetic.
+///
+/// Failure retains every created resource and evidence file. This harness
+/// neither retries nor authorizes recovery or cleanup from provisional IDs.
+#[test]
+#[ignore = "explicit opt-in only: UNSIGNED DEVELOPMENT full rootless runtime with signed test inputs"]
+fn development_rootless_runtime_from_verified_payloads() {
+    let run = || -> Result<()> {
+        use crate::{
+            installer_artifacts, installer_bundle,
+            installer_command::{provision_runtime, RuntimeCompletion, RuntimeInvocation},
+            installer_release as release, installer_verify,
+        };
+
+        require(
+            development_env("MARTY_DEV_RUNTIME_OPT_IN")? == "I_ACCEPT_UNSIGNED_DEVELOPMENT_RUNTIME",
+        )?;
+        crate::installer_command::require_rootless_process()?;
+        require(std::env::consts::ARCH == "x86_64")?;
+        let parent = PathBuf::from(development_env("MARTY_DEV_RUNTIME_PARENT")?);
+        let fixtures = PathBuf::from(development_env("MARTY_DEV_RUNTIME_FIXTURES")?);
+        let tools_dir = PathBuf::from(development_env("MARTY_DEV_RUNTIME_TOOLS")?);
+        let gh = PathBuf::from(development_env("MARTY_DEV_RUNTIME_GH")?);
+        let dockerpath = PathBuf::from(development_env("MARTY_DEV_RUNTIME_DOCKER")?);
+        let helper = PathBuf::from(development_env("MARTY_DEV_RUNTIME_STATIC_HELPER")?);
+        for path in [&parent, &fixtures, &tools_dir] {
+            development_parent(path)?;
+        }
+        require(installer_verify::operator_digest(&helper)? == DEVELOPMENT_RUNTIME_HELPER_SHA)?;
+        development_static_amd64(&helper)?;
+        let helper_identity = std::process::Command::new(&helper)
+            .arg("--build-identity")
+            .output()
+            .map_err(|_| "DEVELOPMENT helper identity unavailable")?;
+        require(
+            helper_identity.status.success()
+                && helper_identity.stdout == b"unknown:unreleased\n"
+                && helper_identity.stderr.is_empty(),
+        )?;
+        require(installer_verify::operator_digest(&helper)? == DEVELOPMENT_RUNTIME_HELPER_SHA)?;
+
+        // All three subjects and both sidecars use the existing production
+        // trust anchors and exact workflow/source/run verification. No Docker
+        // state mutation has occurred. Inputs remain ordinary private files.
+        let inventory_path = fixtures.join("installer-inventory.json");
+        let inventory_bytes = installer_verify::read_private_record(&inventory_path)?;
+        require(sha(&inventory_bytes) == DEVELOPMENT_RUNTIME_FIXTURE_INVENTORY_SHA)?;
+        let inventory = release::parse_inventory(&inventory_bytes)?;
+        require(
+            inventory.release_tag == DEVELOPMENT_RUNTIME_FIXTURE_TAG
+                && inventory.source_sha == DEVELOPMENT_RUNTIME_FIXTURE_SOURCE,
+        )?;
+        // The tag suffix is a claim-run identity, not the producer build run.
+        // Bind the actual run/attempt from the exact hash-pinned inventory in
+        // the unchanged signature/provenance verifier below.
+        let tools = installer_verify::VerificationTools::new(&tools_dir, &gh)?;
+        let workflow = release::build_workflow(&inventory.release_tag)?;
+        let mut sidecars = Vec::new();
+        for name in [
+            "installer-inventory.json",
+            "prepared-selfhost-images.json",
+            "prepared-selfhost-bundle.zip",
+        ] {
+            let subject = fixtures.join(name);
+            let expected_sha = if name == "installer-inventory.json" {
+                DEVELOPMENT_RUNTIME_FIXTURE_INVENTORY_SHA
+            } else {
+                let artifact = inventory.artifact(name)?;
+                installer_verify::check_private_asset(&subject, &artifact.sha256, artifact.size)?;
+                &artifact.sha256
+            };
+            let mut observed = Vec::new();
+            for suffix in [".sigstore.json", ".provenance.jsonl"] {
+                let entry = format!("{name}{suffix}");
+                let bytes = installer_verify::read_private_bytes(&fixtures.join(&entry), 1048576)?;
+                observed.push((entry, bytes));
+            }
+            require(
+                tools.verify(
+                    &subject,
+                    workflow,
+                    &inventory.source_sha,
+                    inventory.build_run_id,
+                    inventory.build_run_attempt,
+                )? == expected_sha,
+            )?;
+            for (entry, bytes) in observed {
+                require(
+                    installer_verify::read_private_bytes(&fixtures.join(&entry), 1048576)? == bytes,
+                )?;
+                sidecars.push((entry, bytes));
+            }
+        }
+        require(installer_verify::read_private_record(&inventory_path)? == inventory_bytes)?;
+        let lock_bytes =
+            installer_verify::read_private_record(&fixtures.join("prepared-selfhost-images.json"))?;
+        let archive = fixtures.join("prepared-selfhost-bundle.zip");
+        let archive_sha = &inventory.artifact("prepared-selfhost-bundle.zip")?.sha256;
+
+        let reservation = std::net::TcpListener::bind(("127.0.0.1", 0))
+            .map_err(|_| "DEVELOPMENT OpenBao port reservation unavailable")?;
+        let binding = RuntimeBinding {
+            docker_host: format!("unix:///run/user/{}/docker.sock", unsafe {
+                libc::geteuid()
+            }),
+            engine_id: development_env("MARTY_DEV_RUNTIME_ENGINE_ID")?,
+            openbao_port: reservation
+                .local_addr()
+                .map_err(|_| "DEVELOPMENT reserved port unavailable")?
+                .port(),
+            profile: RuntimeProfile::Rootless,
+        };
+        let observer = DockerRunner::from_binding(&dockerpath, &binding, &parent)?;
+        let observation = observer.preflight()?;
+        let before = development_container_ids(&observer)?;
+        let installation = parent.join(format!(
+            "marty-development-runtime-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        eprintln!(
+            "UNSIGNED DEVELOPMENT runtime evidence: {}",
+            installation.display()
+        );
+        let mut state = InstallerState::create_test_with_runtime(
+            &installation,
+            Identity {
+                source_sha: "0".repeat(40),
+                release_tag: "v0.0.0".into(),
+                inventory_sha256: format!("sha256:{DEVELOPMENT_RUNTIME_FIXTURE_INVENTORY_SHA}"),
+            },
+            binding,
+            CandidateTestScope {
+                inventory_sha256: DEVELOPMENT_RUNTIME_FIXTURE_INVENTORY_SHA.into(),
+                build_run_id: inventory.build_run_id,
+                build_run_attempt: inventory.build_run_attempt,
+            },
+        )?;
+        let held_root =
+            File::open(&installation).map_err(|_| "DEVELOPMENT evidence root unavailable")?;
+        let started = Instant::now();
+        let mut stage = "verified input staging";
+        let mut canary_attempted = false;
+        let mut canary_restored = false;
+        let mut runtime_attempted = false;
+        let attempt = (|| -> Result<()> {
+            state.create_private_directory("evidence")?;
+            state.create_private_directory("downloads")?;
+            persist(
+                &mut state,
+                "development-scope.json",
+                &encoded(&json!({
+                    "schema":"elevenid.unsigned-development-runtime-scope/v1",
+                    "classification":"UNSIGNED DEVELOPMENT ONLY",
+                    "host_source":"53261460d5d3f7eada4254170c0f9a0dcffaaf22 plus ignored development test",
+                    "helper_sha256":DEVELOPMENT_RUNTIME_HELPER_SHA,
+                    "helper_build_identity":"unknown:unreleased",
+                    "helper_release_authenticated":false,
+                    "fixture_release":inventory.release_tag,
+                    "fixture_source":inventory.source_sha,
+                    "fixture_inventory_sha256":DEVELOPMENT_RUNTIME_FIXTURE_INVENTORY_SHA,
+                    "fixture_build_run_id":inventory.build_run_id,
+                    "fixture_build_run_attempt":inventory.build_run_attempt,
+                    "fixture_provenance_verified":true,
+                    "fixture_inventory_authenticates_local_operator":false,
+                    "fixture_images":inventory.images,
+                    "synthetic_journal_identity":true,
+                    "release_admission":false,"installation_ready":false,
+                    "runtime_provisioning_authorized":true,
+                    "automatic_failure_cleanup":false,"recovery_attempted":false
+                }))?,
+            )?;
+            persist(
+                &mut state,
+                "candidate-test-inventory.json",
+                &inventory_bytes,
+            )?;
+            persist(&mut state, "installer-inventory.json", &inventory_bytes)?;
+            persist(&mut state, "prepared-selfhost-images.json", &lock_bytes)?;
+            for (name, bytes) in &sidecars {
+                persist(&mut state, name, bytes)?;
+            }
+            persist(&mut state, "docker-preflight.json", &encoded(&observation)?)?;
+            persist(
+                &mut state,
+                "development-existing-container-ids.json",
+                &encoded(&before)?,
+            )?;
+            state.persist_operator(&helper, DEVELOPMENT_RUNTIME_HELPER_SHA)?;
+            let bundle = installer_artifacts::extract_bundle(
+                &archive,
+                &installation.join("downloads/extracted"),
+                archive_sha,
+            )?;
+            let report = installer_bundle::validate_bundle(&bundle, &inventory, &lock_bytes)?;
+            persist(&mut state, "bundle-validation.json", &encoded(&report)?)?;
+            state.advance(Phase::Verified)?;
+            stage = "rootless storage canary";
+            eprintln!("UNSIGNED DEVELOPMENT runtime stage: {stage}");
+            canary_attempted = true;
+            qualify_candidate(
+                &dockerpath,
+                &installation,
+                &mut state,
+                &inventory,
+                DEVELOPMENT_RUNTIME_HELPER_SHA,
+            )?;
+            state.with_inspection(|view| {
+                let complete = view.diagnostic_record(COMPLETE, true)?.ok_or(REFUSED)?;
+                let intent = view.diagnostic_record(INTENT, true)?.ok_or(REFUSED)?;
+                require(complete == completion_bytes(&intent)?)?;
+                let result = view.diagnostic_record(RESULT, true)?.ok_or(REFUSED)?;
+                let result: Value = serde_json::from_slice(&result).map_err(|_| REFUSED)?;
+                require(
+                    result["host_traversal_restored"] == true
+                        && result["deletion_authorized"] == false
+                        && result["installation_ready"] == false,
+                )
+            })?;
+            canary_restored = true;
+            state.require_live_phase(Phase::Verified)?;
+            stage = "shared real runtime; see first failing stage in private stderr";
+            runtime_attempted = true;
+            let result = provision_runtime(
+                &dockerpath,
+                &installation,
+                &bundle,
+                &inventory,
+                &mut state,
+                RuntimeInvocation {
+                    operator_sha: DEVELOPMENT_RUNTIME_HELPER_SHA,
+                    completion: RuntimeCompletion::HoldIncomplete,
+                },
+                reservation,
+            );
+            match result {
+                Err(error) if error == DEVELOPMENT_RUNTIME_EXPECTED_HOLD => {
+                    state.require_live_phase(Phase::Provisioning)?;
+                    stage =
+                        "required read-only deployment validation passed; expected readiness hold";
+                    Ok(())
+                }
+                Err(error) => Err(error),
+                Ok(()) => Err("DEVELOPMENT expected readiness hold was absent".into()),
+            }
+        })();
+        let after = development_container_ids(&observer);
+        let baseline_retained = after.as_ref().is_ok_and(|ids| before.is_subset(ids));
+        write_file(
+            &held_root,
+            "development-outcome.json",
+            &encoded(&json!({
+                "schema":"elevenid.unsigned-development-runtime-outcome/v1",
+                "classification":"UNSIGNED DEVELOPMENT ONLY",
+                "orchestration_and_required_validation_passed":attempt.is_ok(),
+                "last_harness_stage":stage,
+                "canary_attempted":canary_attempted,
+                "canary_completed_and_host_traversal_restored":canary_restored,
+                "runtime_attempted":runtime_attempted,
+                "error_excerpt":attempt.as_ref().err().map(|error| error.chars().take(256).collect::<String>()),
+                "full_error_and_resource_ids":"retained in private runner and independent monitor evidence",
+                "elapsed_milliseconds":started.elapsed().as_millis(),
+                "existing_container_ids_retained":baseline_retained,
+                "container_observation_succeeded":after.is_ok(),
+                "containers_before":before.len(),
+                "containers_after":after.as_ref().ok().map(BTreeSet::len),
+                "new_container_count":after.as_ref().ok().map(|ids| ids.difference(&before).count()),
+                "automatic_failure_cleanup":false,"recovery_attempted":false,
+                "published_signed_release_qualified":false,"installation_ready":false
+            }))?,
+        )?;
+        attempt?;
+        require(baseline_retained)?;
+        eprintln!("UNSIGNED DEVELOPMENT runtime and required validation passed; readiness held; all evidence and runtime resources retained");
+        Ok(())
+    };
+    if let Err(error) = run() {
+        panic!("UNSIGNED DEVELOPMENT runtime stopped: {error}; preserve printed evidence and all resources; no retry, recovery or cleanup attempted");
+    }
+}
