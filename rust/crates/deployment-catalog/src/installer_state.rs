@@ -12,7 +12,6 @@ use crate::installer_openbao_owner_transition::{self, Evidence as OpenBaoOwnerEv
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::{BTreeMap, BTreeSet},
     ffi::CString,
     fs::File,
     io::{Read, Write},
@@ -897,9 +896,6 @@ impl LockedMaintenance {
         }
         self.require_unchanged()?;
         Ok(Some(bytes))
-    }
-    pub(crate) fn read_record(&self, entry: &str) -> Result<Option<Vec<u8>>> {
-        self.read_optional(&self.inspection.directory, entry)
     }
     pub(crate) fn read_evidence(&self, entry: &str) -> Result<Option<Vec<u8>>> {
         self.read_optional(&self.evidence()?, entry)
@@ -2191,7 +2187,6 @@ mod tests {
         drop(view);
         let maintenance = LockedMaintenance::open(&path).unwrap();
         assert!(maintenance.read_evidence("uninstall-plan.json").is_err());
-        assert!(maintenance.read_record("root-record.json").is_err());
         drop(maintenance);
         std::fs::remove_file(path.join(JOURNAL)).unwrap();
         fifo(&path.join(JOURNAL));
@@ -2698,23 +2693,24 @@ mod tests {
         state.create_private_directory("evidence").unwrap();
         drop(state);
         let maintenance = LockedMaintenance::open(&path).unwrap();
-        assert!(maintenance.read_record("absent.json").unwrap().is_none());
-        assert!(maintenance.read_record("../outside").is_err());
-        symlink("absent.json", path.join("linked.json")).unwrap();
-        assert!(maintenance.read_record("linked.json").is_err());
-        let record = path.join("record.json");
+        assert!(maintenance.read_evidence("absent.json").unwrap().is_none());
+        assert!(maintenance.read_evidence("../outside").is_err());
+        let evidence = path.join("evidence");
+        symlink("absent.json", evidence.join("linked.json")).unwrap();
+        assert!(maintenance.read_evidence("linked.json").is_err());
+        let record = evidence.join("record.json");
         std::fs::write(&record, b"{}").unwrap();
         std::fs::set_permissions(&record, std::fs::Permissions::from_mode(0o644)).unwrap();
-        assert!(maintenance.read_record("record.json").is_err());
+        assert!(maintenance.read_evidence("record.json").is_err());
         std::fs::set_permissions(&record, std::fs::Permissions::from_mode(0o600)).unwrap();
         assert_eq!(
-            maintenance.read_record("record.json").unwrap().unwrap(),
+            maintenance.read_evidence("record.json").unwrap().unwrap(),
             b"{}"
         );
-        std::fs::hard_link(&record, path.join("hard.json")).unwrap();
-        assert!(maintenance.read_record("record.json").is_err());
+        std::fs::hard_link(&record, evidence.join("hard.json")).unwrap();
+        assert!(maintenance.read_evidence("record.json").is_err());
         std::fs::write(path.join(JOURNAL), b"{}").unwrap();
-        assert!(maintenance.read_record("absent.json").is_err());
+        assert!(maintenance.read_evidence("absent.json").is_err());
     }
     #[test]
     fn diagnostic_credentials_are_bounded_nofollow_and_protected() {

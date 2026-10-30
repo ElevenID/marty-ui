@@ -612,28 +612,6 @@ impl DockerRunner {
             None => Ok(limit),
         }
     }
-    /// Bounded application diagnostics for an already validated exact container.
-    /// Callers must scrub both streams and re-observe ownership before output.
-    pub(crate) fn capture_logs(&self, container: &str, tail: u16) -> Result<(String, String)> {
-        if container.len() != 64
-            || !container
-                .bytes()
-                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-            || !(1..=1000).contains(&tail)
-        {
-            return Err("invalid bounded log request".into());
-        }
-        self.info()?;
-        let (stdout, stderr) = self.runner.capture(
-            &["logs", "--tail", &tail.to_string(), container],
-            Duration::from_secs(30),
-            MAX_OUTPUT,
-        )?;
-        let stdout = String::from_utf8(stdout).map_err(|_| "non-UTF8 application logs refused")?;
-        let stderr = String::from_utf8(stderr).map_err(|_| "non-UTF8 application logs refused")?;
-        self.info()?;
-        Ok((stdout, stderr))
-    }
     pub fn new(
         docker_executable: &Path,
         docker_host: &str,
@@ -1015,34 +993,6 @@ esac"#,
         );
         drop(docker);
         assert_eq!(unsafe { libc::fcntl(held_fd, libc::F_GETFD) }, -1);
-    }
-    #[test]
-    fn diagnostic_capture_bounds_arguments_and_keeps_both_streams_private() {
-        let parent = private_temp();
-        let binary = script(parent.path(), &format!(
-            "if [ \"$1\" = info ]; then printf '%s' '{}'; else printf 'stdout-secret'; printf 'stderr-secret' >&2; fi", info()));
-        let docker = DockerRunner::new(
-            &binary,
-            "unix:///var/run/docker.sock",
-            "test-engine",
-            parent.path(),
-        )
-        .unwrap();
-        let id = "a".repeat(64);
-        assert_eq!(
-            docker.capture_logs(&id, 10).unwrap(),
-            ("stdout-secret".into(), "stderr-secret".into())
-        );
-        for tail in [0, 1001] {
-            assert!(docker.capture_logs(&id, tail).is_err());
-        }
-        for bad in ["--follow", "name", "../../foreign"] {
-            assert!(docker.capture_logs(bad, 10).is_err());
-        }
-        script(parent.path(), &format!(
-            "if [ \"$1\" = info ]; then printf '%s' '{}'; else printf 'stdout-secret'; printf 'stderr-secret' >&2; exit 9; fi", info()));
-        let error = docker.capture_logs(&id, 10).unwrap_err();
-        assert!(!error.contains("secret"));
     }
     #[test]
     fn refuses_replaceable_executable_and_private_staging_ancestors() {

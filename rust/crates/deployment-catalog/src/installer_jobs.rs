@@ -126,6 +126,10 @@ fn image_policy(image: &Value, service: &Value, keycloak: bool, tls: bool) -> Re
     Ok(())
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Keep independently bound provisioning inputs explicit at this boundary."
+)]
 pub(crate) fn run(
     dockerpath: &Path,
     installation: &Path,

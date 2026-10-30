@@ -1515,6 +1515,7 @@ fn require_verified_scope(view: &LockedInspection, operator_sha: &str) -> Result
 }
 /// Compatibility for the private candidate test harness; this selects the same
 /// implementation, with an additional candidate-scope check, never another engine.
+#[cfg(test)]
 pub(crate) fn qualify_candidate(
     dockerpath: &Path,
     installation: &Path,

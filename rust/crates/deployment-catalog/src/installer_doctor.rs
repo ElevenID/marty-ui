@@ -15,6 +15,7 @@ use std::{
 };
 
 type Result<T> = std::result::Result<T, String>;
+type SessionRecords = Vec<(&'static str, Vec<u8>)>;
 const REFUSED: &str = "Installer service inspection refused; preserve the bound Compose inputs and operation evidence";
 pub(crate) const SESSION_RECORD: &str = "compose-session.json";
 pub(crate) const FAILED_RUNTIME_SESSION_SCHEMA: &str =
@@ -180,7 +181,7 @@ pub(crate) fn load_session(state: &LockedInspection, installation: &Path) -> Res
 fn failed_runtime_session(
     state: &LockedInspection,
     installation: &Path,
-) -> Result<(SavedSession, Vec<(&'static str, Vec<u8>)>)> {
+) -> Result<(SavedSession, SessionRecords)> {
     let plan_bytes = state.read_evidence(installer_compose::RUNTIME_CLEANUP_PLAN)?;
     let result_bytes = state.read_evidence("compose-application-up-result.json")?;
     let intent_bytes = state.read_evidence("compose-application-up-intent.json")?;

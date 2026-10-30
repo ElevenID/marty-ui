@@ -57,23 +57,6 @@ pub(crate) fn validate_identity_and_security(
         refusal,
     )
 }
-pub(crate) fn validate_network(
-    c: &Value,
-    name: &str,
-    id: &str,
-    terminal: bool,
-    refusal: &str,
-) -> Result<()> {
-    let networks = c["NetworkSettings"]["Networks"]
-        .as_object()
-        .ok_or(refusal)?;
-    require(networks.len() == 1 && networks.contains_key(name), refusal)?;
-    let network_id = &networks[name]["NetworkID"];
-    require(
-        network_id == &json!(id) || (!terminal && network_id == ""),
-        refusal,
-    )
-}
 pub(crate) fn validate_stopped_state(c: &Value, terminal: bool, refusal: &str) -> Result<()> {
     require(c["State"]["Running"] == false, refusal)?;
     if terminal {

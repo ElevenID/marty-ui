@@ -258,6 +258,10 @@ fn validate_delivery(
     Ok(result)
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Keep independently bound provisioning inputs explicit at this boundary."
+)]
 pub fn provision(
     dockerpath: &Path,
     installation: &Path,

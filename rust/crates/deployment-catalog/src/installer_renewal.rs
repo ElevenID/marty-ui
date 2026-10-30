@@ -212,6 +212,10 @@ fn validate_delivered(delivered: &File, owner: &str) -> Result<Vec<String>> {
     Ok(IDENTITY_FILES.map(String::from).to_vec())
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Keep independently bound provisioning inputs explicit at this boundary."
+)]
 pub fn provision(
     dockerpath: &Path,
     installation: &Path,

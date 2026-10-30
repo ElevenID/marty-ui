@@ -169,6 +169,10 @@ pub(crate) fn job_inputs(
     inputs
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Keep independently bound provisioning inputs explicit at this boundary."
+)]
 pub fn start(
     docker_path: &Path,
     installation: &Path,

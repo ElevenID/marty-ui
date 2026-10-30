@@ -150,6 +150,10 @@ fn transfer(secrets: &File, outputs: &BTreeMap<String, Vec<u8>>) -> Result<()> {
     Ok(())
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Keep independently bound provisioning inputs explicit at this boundary."
+)]
 pub fn provision(
     dockerpath: &Path,
     installation: &Path,

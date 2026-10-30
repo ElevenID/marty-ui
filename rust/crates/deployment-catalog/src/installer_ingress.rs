@@ -40,6 +40,10 @@ fn directory(path: &Path) -> Result<File> {
     crate::installer_host_fs::directory(path, REFUSAL)
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Keep independently bound provisioning inputs explicit at this boundary."
+)]
 pub fn provision(
     dockerpath: &Path,
     installation: &Path,

@@ -1,11 +1,12 @@
 # Compose installer
 
 **Development status:** this is the integrated replacement for the single-host
-Compose installer. The last confirmed build, `native008`, passed formatting,
+Compose installer. The recovered `native009` build passed formatting,
 compilation, and 176 focused and native-parser tests across 25 test invocations.
 Complete-tree maintenance counts are recorded below. Full synthetic lifecycle
 acceptance and actual pinned Marty runtime qualification remain **PENDING**.
-The later `native009` build was launched, but its result has not been observed.
+Its exact source snapshot is verified. Subsequent lint and frozen-contract
+fixture corrections are separate changes covered by the required PR CI gate.
 An unsigned development run does not qualify a signed release; this replacement
 is not yet ready to merge on the recorded evidence.
 
@@ -22,10 +23,14 @@ Both failed attempts received separately guarded fixture-only stop/down,
 retaining data and diagnostics and leaving the 214-container baseline and 178
 original evidence files unchanged. The second recovery retained both fixture
 data volumes and did not rerun setup. These recoveries are not acceptance passes.
-Collection of the `native009` result was interrupted by loss of the existing
-browser connection. No result is established for `native009`, a third synthetic
-attempt, or actual Marty component execution. Final VM shutdown has not been
-verified in the recorded evidence.
+The `native009` result was recovered after the browser connection resumed.
+All 35 non-documentation files in the first submitted commit matched the
+compiled source snapshot and its provenance; all four artifact hashes and 25
+test results were rechecked. The protected 214-container and 178-file baselines
+were verified again before an ordinary VM stop. AWS confirmed the instance
+stopped with its disk retained on 2026-10-30 at 19:35 UTC. The existing six-hour
+automatic stop was unchanged. A third synthetic attempt and actual Marty
+component execution were not launched after the recovery-margin cutoff.
 
 ## Deployment model
 
@@ -71,7 +76,7 @@ The version check permits its distribution build suffix but rejects a different
 semantic version, including a newer patch, until qualified. The baseline uses
 long-form dependency conditions, profiles, anchors, `!reset`/`!override`, native
 configuration hashes, `up --wait`, and explicit setup-job exit status. The
-`native008` build passed the real Compose baseline parser fixture. Parsing does
+`native009` build passed the real Compose baseline parser fixture. Parsing does
 not establish daemon execution or full application qualification.
 
 Private inputs remain in the installation's owned directories. File-backed
@@ -203,9 +208,17 @@ Synthetic services establish orchestration behavior only. Resource capacity or a
 correctly invoked component failure is an external blocker, not a passed test.
 Published signed-release qualification follows merge and release publication.
 
-The recorded results below describe the `native008` development build, completed
-2026-10-30 at 18:54:47 UTC on the toolchain above. Its artifact receipt SHA-256 is
-`f3c0b16bf51c81a0f2bdfebc21c47ecef0aa1c8cdbde252905d5bdf5109f5e24`.
+The recorded results below describe the `native009` development build, completed
+2026-10-30 at 19:03:33 UTC on the toolchain above. Its artifact receipt SHA-256 is
+`a043b5f7dde5f24f650d284c956cd1aeb4a693bad9189c1fbef7b20715f576e9`.
+The recovered inspection SHA-256 is
+`7a6c78c200077bc5ebe6f78a14a9db870bfbc41c4bcbe5504829f37c4638595a`.
+This build binds the first submitted source commit
+`25f3cdbf1ce32ee512a421d1429fbec4d2de6c6f`, excluding documentation differences.
+Later CI corrections remove unused legacy helpers, retain live evidence-reader
+regressions, document intentional provisioning argument boundaries, and update
+the frozen selfhost asset list. They are newer than the VM build; canonical
+repository CI must validate each subsequent PR head separately.
 Replace each remaining **PENDING** entry only after recording its exact build,
 engine, result, and preserved-evidence bindings. The successful build left all
 214 previously recorded containers and all 178 files in the original
@@ -214,8 +227,8 @@ removed normally.
 
 | Gate | Required observation | Recorded result |
 | --- | --- | --- |
-| Focused installer, verification, packaging, and development-harness tests | The affected operator and test targets compile; selected policy, receipt, lifecycle, packaging, and development-isolation regressions pass. | **PASS** — `native008`: 176 tests across 25 invocations; 169 tests in 22 unit groups, one development-layer integrity test, five packaging tests, and the native baseline parser fixture below; zero failures. |
-| Native parser: selected Compose feature baseline | The real Compose executable resolves profiles, complete bind overrides, `!reset`, native dependencies, literal interpolation values, and runtime setup exclusion in the controlled fixture. | **PASS** — included in the 176-test `native008` result; no daemon mutation. |
+| Focused installer, verification, packaging, and development-harness tests | The affected operator and test targets compile; selected policy, receipt, lifecycle, packaging, and development-isolation regressions pass. | **PASS** — `native009`: 176 tests across 25 invocations; 169 tests in 22 unit groups, one development-layer integrity test, five packaging tests, and the native baseline parser fixture below; zero failures. |
+| Native parser: selected Compose feature baseline | The real Compose executable resolves profiles, complete bind overrides, `!reset`, native dependencies, literal interpolation values, and runtime setup exclusion in the controlled fixture. | **PASS** — included in the 176-test `native009` result; no daemon mutation. |
 | Synthetic: `actual_native_health_jobs_restart_and_neighbor_preservation` | Native health/completion ordering, two stop/start cycles through the production Compose driver with unchanged setup executions, retained data, and an unchanged neighboring project. | **PENDING** — attempts `synthetic001` and `synthetic002` failed as described above; corrections are present, but a passing rerun is not established. |
 | Synthetic: `actual_failed_dependency_and_uncertain_intent_do_not_run_dependents_or_repeat` | Failed prerequisite blocks its dependent; an uncertain setup intent prevents repeat execution; failure evidence remains retained. | **PENDING** |
 | Synthetic: `actual_finite_runtime_failure_allows_only_bound_data_preserving_cleanup` | A finite runtime health failure admits only scoped stop/down; pull, setup, up, and start remain refused; data and neighbor are preserved. | **PENDING** |
@@ -314,31 +327,31 @@ and safe shutdown.
 
 The final submitted-source inventory compares base commit
 `5c5e1fe88a8053df9a79a8fc596867844b136f7b`, whose tree is
-`85eb1ff3bc11d095c34980b39fef82e0098c5c51`, with the exact 46-path publication
+`85eb1ff3bc11d095c34980b39fef82e0098c5c51`, with the exact 49-path publication
 delta. The local recount used the complete pinned Git-tree inventory and
 independently verified every required base blob against its Git object ID.
 The report records the counter and per-file SHA-256 values; its SHA-256 is
-`2c9441117cf673441db236cec2be8326e010355119d5e7de41dce426358a2dda`.
+`f734fb5172e30821c7692de206a65ddcedc2094e0c5bbdada15686b472db2c4a`.
 Both call-site inventories have zero unresolved entries and
 `callsite_review_complete: true`.
 
-This is a complete source inventory, not a `native009` VM result. The source
-`011` synthetic-test correction is counted exactly as submitted; its subsequent
-formatting/build outcome remains unobserved. Documentation updates are outside
-the counted inventory and do not alter these totals.
+This complete source inventory includes the subsequent CI corrections. It is
+separate from the recovered `native009` build result. Documentation and the
+frozen CLI fixture JSON are outside the Rust/YAML inventory and do not alter
+these totals; their changed paths remain explicitly accounted for.
 
 | Counted scope | Before | Replacement | Change |
 | --- | ---: | ---: | ---: |
 | Complete installer Rust inventory, files | 61 | 58 | -3 |
-| Complete installer Rust inventory, production lines | 26,172 | 22,594 | -3,578 |
-| Complete installer Rust inventory, test lines | 17,287 | 14,615 | -2,672 |
-| Complete installer Rust inventory, total lines | 43,459 | 37,209 | -6,250 |
+| Complete installer Rust inventory, production lines | 26,172 | 22,556 | -3,616 |
+| Complete installer Rust inventory, test lines | 17,287 | 14,601 | -2,686 |
+| Complete installer Rust inventory, total lines | 43,459 | 37,157 | -6,302 |
 | Orchestration subset, files | 22 | 18 | -4 |
-| Orchestration subset, production Rust lines | 10,727 | 7,395 | -3,332 |
-| Orchestration subset, test lines | 6,357 | 3,084 | -3,273 |
-| Orchestration subset, total Rust lines | 17,084 | 10,479 | -6,605 |
+| Orchestration subset, production Rust lines | 10,727 | 7,402 | -3,325 |
+| Orchestration subset, test lines | 6,357 | 3,056 | -3,301 |
+| Orchestration subset, total Rust lines | 17,084 | 10,458 | -6,626 |
 | Installer Compose configuration | 0 files / 0 lines | 3 files / 636 lines | +636 lines |
-| Production orchestration Rust plus installer YAML | 10,727 lines | 8,031 lines | -2,696 lines / -25.1% |
+| Production orchestration Rust plus installer YAML | 10,727 lines | 8,038 lines | -2,689 lines / -25.1% |
 | Reviewed direct Docker lifecycle invocation sites | 41 | 9 | -32 |
 
 The complete Rust inventory includes every tracked `installer_*` module in
@@ -368,7 +381,8 @@ volume-removal caller. Each report entry retains its path, line, invocation,
 and indirect-call review basis. Missing Git objects or working files abort the
 report rather than counting as zero.
 
-CLI registration, bundle metadata, development/build scripts, and documentation
+CLI registration, bundle metadata, frozen CLI expectations, development/build
+scripts, and documentation
 are reviewed separately outside this line-count inventory. The replacement does
 not move the old scheduler into these files. Test-line reductions describe
 removed implementation-specific tests, not a measured increase in coverage.
