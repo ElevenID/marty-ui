@@ -731,7 +731,7 @@ const DEVELOPMENT_RUNTIME_FIXTURE_SOURCE: &str = "225818494f4ba716e75df7225d6c43
 const DEVELOPMENT_RUNTIME_FIXTURE_INVENTORY_SHA: &str =
     "972cf706ba3c98a5d8e76eb8df1cc29d6e48631895b1115302791399c284b319";
 const DEVELOPMENT_RUNTIME_HELPER_SHA: &str =
-    "292ec569d5de8504aa885514f82da4442e87b4fa7ca2e39e0eb6de48de42910a";
+    "2e9cfafabed94e5efc7fba360f5282683f314bc8c988b261640fcfc8f2561c7b";
 const DEVELOPMENT_RUNTIME_EXPECTED_HOLD: &str = "Owned application startup observations recorded. Explicit local CA trust onboarding and installed journey qualification remain incomplete; preserve the reported state for recovery. Installation is not ready.";
 
 /// Exercise real installer orchestration with independently authenticated,
@@ -892,7 +892,7 @@ fn development_rootless_runtime_from_verified_payloads() {
                 &encoded(&json!({
                     "schema":"elevenid.unsigned-development-runtime-scope/v1",
                     "classification":"UNSIGNED DEVELOPMENT ONLY",
-                    "host_source":"67b0628c66c3851cc6330102bc146ccc706acc96 plus reviewed credential-template and revocation startup prerequisites and development helper pin",
+                    "host_source":"2d7eaf6d32d9f991f7b5d0058217995a992d59ec plus reviewed deployment/device startup prerequisites and installer-ingress uninstall inventory fix with development helper pin",
                     "helper_sha256":DEVELOPMENT_RUNTIME_HELPER_SHA,
                     "helper_build_identity":"unknown:unreleased",
                     "helper_release_authenticated":false,
