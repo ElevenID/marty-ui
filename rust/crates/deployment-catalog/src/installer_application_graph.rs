@@ -92,7 +92,10 @@ pub(crate) fn required_dependencies(model: &Value, role: &str) -> Result<BTreeSe
         }
     }
     let eager: &[&str] = match role {
-        "compliance-profile" | "revocation-profile" => &["organization"],
+        "compliance-profile"
+        | "deployment-profile"
+        | "device-registration"
+        | "revocation-profile" => &["organization"],
         "credential-template" => &["organization", "revocation-profile"],
         _ => &[],
     };
@@ -185,11 +188,13 @@ mod tests {
                 "redis",
                 "organization",
                 "compliance-profile",
+                "deployment-profile",
+                "device-registration",
                 "credential-template",
                 "revocation-profile",
             ])
             .map(str::to_owned)
-            .chain((0..19).map(|index| format!("fixture-{index:02}")))
+            .chain((0..17).map(|index| format!("fixture-{index:02}")))
         {
             services.insert(role.clone(), json!({
                 "restart": if INITIALIZERS.contains(&role.as_str()) { "no" } else { "unless-stopped" },
@@ -213,6 +218,12 @@ mod tests {
         });
         model["services"]["compliance-profile"]["depends_on"] =
             json!({"db-migrate": {"condition": "service_completed_successfully"}});
+        model["services"]["deployment-profile"]["depends_on"] =
+            json!({"db-migrate": {"condition": "service_completed_successfully"}});
+        model["services"]["device-registration"]["depends_on"] = json!({
+            "db-migrate": {"condition": "service_completed_successfully"},
+            "redis": {"condition": "service_healthy"}
+        });
         model["services"]["credential-template"]["depends_on"] =
             json!({"db-migrate": {"condition": "service_completed_successfully"}});
         model["services"]["revocation-profile"]["depends_on"] = json!({
@@ -402,6 +413,100 @@ mod tests {
         ] {
             let mut changed = model.clone();
             changed["services"][role]["depends_on"][peer] = json!({"condition": "service_healthy"});
+            assert!(startup_order(&changed, &selected).is_err());
+        }
+    }
+
+    #[test]
+    fn deployment_and_device_prerequisites_order_organization_without_changing_model() {
+        let (model, selected) = model();
+        let before = model.clone();
+        assert_eq!(
+            required_dependencies(&model, "deployment-profile").unwrap(),
+            BTreeSet::from(["db-migrate".into(), "organization".into()])
+        );
+        assert_eq!(
+            required_dependencies(&model, "device-registration").unwrap(),
+            BTreeSet::from(["db-migrate".into(), "organization".into(), "redis".into()])
+        );
+        let order = startup_order(&model, &selected).unwrap();
+        assert_eq!(order.len(), 30);
+        assert_eq!(order[4], "kms-initialize");
+        assert_eq!(
+            order[..4]
+                .iter()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>(),
+            MIGRATIONS.into_iter().collect::<BTreeSet<_>>()
+        );
+        let position = |role| order.iter().position(|value| value == role).unwrap();
+        assert!(position("kms-initialize") < position("organization"));
+        assert!(position("organization") < position("deployment-profile"));
+        assert!(position("organization") < position("device-registration"));
+        assert!(required_dependencies(&model, "fixture-00")
+            .unwrap()
+            .is_empty());
+        assert_eq!(model, before);
+        assert_eq!(
+            model["services"]["deployment-profile"]["depends_on"],
+            json!({"db-migrate": {"condition": "service_completed_successfully"}})
+        );
+        assert_eq!(
+            model["services"]["device-registration"]["depends_on"],
+            json!({
+                "db-migrate": {"condition": "service_completed_successfully"},
+                "redis": {"condition": "service_healthy"}
+            })
+        );
+    }
+
+    #[test]
+    fn deployment_and_device_prerequisites_preserve_health_and_declared_condition_checks() {
+        let (model, selected) = model();
+        for role in ["deployment-profile", "device-registration"] {
+            for invalid in [
+                json!({"condition": "service_started"}),
+                json!({"condition": "service_healthy", "required": false}),
+                json!({"condition": "service_completed_successfully"}),
+            ] {
+                let mut changed = model.clone();
+                changed["services"][role]["depends_on"]["organization"] = invalid;
+                assert!(required_dependencies(&changed, role).is_err());
+                assert!(startup_order(&changed, &selected).is_err());
+            }
+            let mut changed = model.clone();
+            changed["services"]["organization"]["healthcheck"]["disable"] = json!(true);
+            assert!(required_dependencies(&changed, role).is_err());
+            assert!(startup_order(&changed, &selected).is_err());
+            let mut changed = model.clone();
+            let organization = changed["services"]
+                .as_object_mut()
+                .unwrap()
+                .remove("organization")
+                .unwrap();
+            changed["services"]["replacement"] = organization;
+            let selected: Vec<_> = selected
+                .iter()
+                .map(|value| {
+                    if value == "organization" {
+                        "replacement".into()
+                    } else {
+                        value.clone()
+                    }
+                })
+                .collect();
+            assert!(required_dependencies(&changed, role).is_err());
+            assert!(startup_order(&changed, &selected).is_err());
+        }
+    }
+
+    #[test]
+    fn deployment_and_device_prerequisites_refuse_reverse_dependency_cycles() {
+        let (model, selected) = model();
+        for peer in ["deployment-profile", "device-registration"] {
+            let mut changed = model.clone();
+            changed["services"]["organization"]["depends_on"][peer] =
+                json!({"condition": "service_healthy"});
             assert!(startup_order(&changed, &selected).is_err());
         }
     }

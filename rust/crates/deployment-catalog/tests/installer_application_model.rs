@@ -237,6 +237,14 @@ fn actual_source_compose_matches_installer_application_contract() {
         "eager organization prerequisite must precede revocation-profile readiness"
     );
     assert!(
+        position("organization") < position("deployment-profile"),
+        "eager organization prerequisite must precede deployment-profile readiness"
+    );
+    assert!(
+        position("organization") < position("device-registration"),
+        "eager organization prerequisite must precede device-registration readiness"
+    );
+    assert!(
         position("organization") < position("credential-template")
             && position("revocation-profile") < position("credential-template"),
         "both eager control-plane prerequisites must precede credential-template readiness"
