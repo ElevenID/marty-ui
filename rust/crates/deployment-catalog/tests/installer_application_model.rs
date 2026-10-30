@@ -104,9 +104,18 @@ fn actual_source_compose_matches_installer_application_contract() {
         })
         .map(|line| format!("{line}\n"))
         .collect::<String>();
+    let applicant_group = marty_deployment_catalog::installer_state::applicant_container_group(
+        &marty_deployment_catalog::installer_state::RuntimeBinding {
+            docker_host: "unix:///var/run/docker.sock".into(),
+            engine_id: "compose-fixture-engine".into(),
+            openbao_port: 18200,
+            profile: marty_deployment_catalog::installer_state::RuntimeProfile::Rootful,
+        },
+    )
+    .unwrap();
     let parameters = ApplicationParameters {
         installation: installation.clone(),
-        applicant_state_gid: 10001,
+        applicant_container_group: applicant_group,
         version: "v1.2.3".into(),
         origin: "https://localhost:18443".into(),
         gateway_port: 18000,
@@ -142,7 +151,7 @@ fn actual_source_compose_matches_installer_application_contract() {
         &images,
         &ApplicationModelParameters {
             installation: installation.clone(),
-            applicant_state_gid: 10001,
+            applicant_container_group: applicant_group,
             bundle: bundle.clone(),
             compose_project: project.clone(),
             openbao_network_name: format!("{project}-bao_default"),

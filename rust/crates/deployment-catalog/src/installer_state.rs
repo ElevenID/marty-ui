@@ -311,9 +311,9 @@ fn private(file: &File, directory: bool) -> Result<()> {
     Ok(())
 }
 
-/// The applicant image runs as 10001:10001. A rootless installer shares only
-/// its nonzero effective group with that service; a root installer provisions
-/// the dedicated image group instead of granting the container group zero.
+/// Host ownership for the applicant directory. A nonroot installer shares its
+/// nonzero effective host group; a root installer provisions image group 10001.
+/// Container supplemental groups must use the runtime projection below.
 pub fn applicant_state_gid() -> Result<u32> {
     let uid = unsafe { libc::geteuid() };
     let gid = if uid == 0 {
@@ -327,7 +327,42 @@ pub fn applicant_state_gid() -> Result<u32> {
     Ok(gid)
 }
 
-fn require_applicant_storage(directory: &File, gid: u32) -> Result<()> {
+/// A validated namespace projection, not an arbitrary numeric group override.
+/// Host ownership and the container's supplemental group are distinct values.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ApplicantContainerGroup {
+    host_gid: u32,
+    container_gid: u32,
+}
+
+impl ApplicantContainerGroup {
+    pub fn host_gid(self) -> u32 {
+        self.host_gid
+    }
+
+    pub fn container_gid(self) -> u32 {
+        self.container_gid
+    }
+}
+
+/// Project the reviewed host group into a previously observed local runtime.
+/// Rootless qualification proves namespace group zero maps to the ordinary
+/// installer group. The image retains its nonroot user and primary group;
+/// supplemental group zero here is not host group zero. Rootful behavior keeps
+/// the existing host group, including ordinary callers of a rootful daemon.
+pub fn applicant_container_group(binding: &RuntimeBinding) -> Result<ApplicantContainerGroup> {
+    binding.validate()?;
+    let host_gid = applicant_state_gid()?;
+    Ok(ApplicantContainerGroup {
+        host_gid,
+        container_gid: match binding.profile {
+            RuntimeProfile::Rootful => host_gid,
+            RuntimeProfile::Rootless => 0,
+        },
+    })
+}
+
+pub(crate) fn require_applicant_storage(directory: &File, gid: u32) -> Result<()> {
     let metadata = directory
         .metadata()
         .map_err(|_| "inspect applicant state ownership")?;
@@ -3599,6 +3634,41 @@ mod tests {
         assert!(state.prepare_application_storage().is_err());
         assert!(state.advance(Phase::Provisioned).is_err());
     }
+    #[test]
+    fn applicant_container_group_projects_only_a_validated_runtime() {
+        let host_gid = applicant_state_gid().unwrap();
+        let mut binding = RuntimeBinding {
+            docker_host: "unix:///var/run/docker.sock".into(),
+            engine_id: "fixture-engine".into(),
+            openbao_port: 18200,
+            profile: RuntimeProfile::Rootful,
+        };
+        let rootful = applicant_container_group(&binding).unwrap();
+        assert_eq!(rootful.host_gid(), host_gid);
+        assert_eq!(rootful.container_gid(), host_gid);
+        assert_ne!(rootful.container_gid(), 0);
+        if unsafe { libc::geteuid() } == 0 {
+            assert_eq!(rootful.container_gid(), 10001);
+        }
+        binding.profile = RuntimeProfile::Rootless;
+        binding.docker_host = format!("unix:///run/user/{}/docker.sock", unsafe {
+            libc::geteuid()
+        });
+        if unsafe { libc::geteuid() } == 0 {
+            assert!(applicant_container_group(&binding).is_err());
+        } else {
+            let rootless = applicant_container_group(&binding).unwrap();
+            assert_eq!(rootless.host_gid(), host_gid);
+            assert_ne!(rootless.host_gid(), 0);
+            assert_eq!(rootless.container_gid(), 0);
+        }
+        binding.docker_host = "unix:///var/run/docker.sock".into();
+        assert!(applicant_container_group(&binding).is_err());
+        binding.profile = RuntimeProfile::Rootful;
+        binding.engine_id = "bad".into();
+        assert!(applicant_container_group(&binding).is_err());
+    }
+
     #[test]
     fn applicant_state_group_is_nonroot_and_legacy_directory_is_not_adopted() {
         let expected = if unsafe { libc::geteuid() } == 0 {

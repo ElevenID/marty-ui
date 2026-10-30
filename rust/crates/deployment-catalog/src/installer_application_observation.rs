@@ -3,6 +3,7 @@
 //! lock. These predicates never create resources or infer ownership from names.
 #![cfg(target_os = "linux")]
 use crate::installer_application_model::ApplicationModelPlan;
+use crate::installer_state::ApplicantContainerGroup;
 use serde_json::{json, Value};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -275,14 +276,16 @@ pub fn validate_inputs(
     plan: &ApplicationModelPlan,
     installation: &Path,
     bundle: &Path,
+    applicant_group: ApplicantContainerGroup,
 ) -> Result<()> {
-    validate_inputs_with_generation(plan, installation, bundle, None)
+    validate_inputs_with_generation(plan, installation, bundle, applicant_group, None)
 }
 
 pub fn validate_inputs_with_generation(
     plan: &ApplicationModelPlan,
     installation: &Path,
     bundle: &Path,
+    applicant_group: ApplicantContainerGroup,
     generation: Option<&crate::installer_generation_binding::GenerationBinding>,
 ) -> Result<()> {
     let generation_dir = if let Some(binding) = generation {
@@ -300,8 +303,11 @@ pub fn validate_inputs_with_generation(
         .map(String::as_str)
         .chain(["kms-initialize"])
     {
-        for (_, m) in expected_mounts(plan, role)? {
+        for (target, m) in expected_mounts(plan, role)? {
             if m.kind == "bind" {
+                if Path::new(&m.source) == installation.join("state/applicant") {
+                    require(role == "applicant" && target == "/app/data" && !m.readonly)?;
+                }
                 let readonly = paths.entry(m.source).or_insert(true);
                 *readonly &= m.readonly;
             }
@@ -344,7 +350,29 @@ pub fn validate_inputs_with_generation(
             let file = unsafe { <std::fs::File as std::os::fd::FromRawFd>::from_raw_fd(fd) };
             let m = file.metadata().map_err(|_| REFUSED)?;
             require(m.uid() == unsafe { libc::geteuid() } || m.uid() == 0)?;
-            require(m.mode() & 0o7022 == 0)?;
+            if last && path == installation.join("state/applicant") {
+                // Only this reviewed writable leaf uses the setgid/shared-group
+                // contract established by prepare_application_storage. Bind it
+                // to the authenticated applicant mount and exact host-group
+                // policy; all other inodes retain the generic permission check.
+                let gid = applicant_group.host_gid();
+                require(
+                    gid == crate::installer_state::applicant_state_gid()?
+                        && !readonly
+                        && plan.model["services"]["applicant"].get("user").is_none()
+                        && plan.model["services"]["applicant"]["group_add"]
+                            == json!([applicant_group.container_gid().to_string()])
+                        && expected_mounts(plan, "applicant")?.get("/app/data")
+                            == Some(&Mount {
+                                source: source.clone(),
+                                kind: "bind".into(),
+                                readonly: false,
+                            }),
+                )?;
+                crate::installer_state::require_applicant_storage(&file, gid)?;
+            } else {
+                require(m.mode() & 0o7022 == 0)?;
+            }
             if last {
                 require(m.is_file() || m.is_dir())?;
                 if m.is_file() {
@@ -742,6 +770,16 @@ pub fn validate_volume(v: &Value, plan: &ApplicationModelPlan) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn rootful_applicant_group() -> crate::installer_state::ApplicantContainerGroup {
+        use crate::installer_state::{applicant_container_group, RuntimeBinding, RuntimeProfile};
+        applicant_container_group(&RuntimeBinding {
+            docker_host: "unix:///var/run/docker.sock".into(),
+            engine_id: "fixture-engine".into(),
+            openbao_port: 18200,
+            profile: RuntimeProfile::Rootful,
+        })
+        .unwrap()
+    }
     use std::os::unix::fs::{symlink, PermissionsExt};
     #[test]
     fn retained_postgres_digest_accepts_only_hub_default_aliases() {
@@ -1114,11 +1152,278 @@ mod tests {
         let (mut plan, _, _) = fixture();
         plan.model["secrets"]["token"]["file"] = json!(path.to_str().unwrap().replace('$', "$$"));
         plan.model["services"]["kms-initialize"] = json!({"profiles":["kms-init"],"restart":"no","environment":{"MARTY_KMS_BOOTSTRAP_ENABLED":"true","BAO_TOKEN_FILE":"/run/secrets/openbao_bootstrap_token"}});
-        validate_inputs(&plan, root.path(), &root.path().join("bundle")).unwrap();
+        validate_inputs(
+            &plan,
+            root.path(),
+            &root.path().join("bundle"),
+            rootful_applicant_group(),
+        )
+        .unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
-        assert!(validate_inputs(&plan, root.path(), &root.path().join("bundle")).is_err());
+        assert!(validate_inputs(
+            &plan,
+            root.path(),
+            &root.path().join("bundle"),
+            rootful_applicant_group()
+        )
+        .is_err());
         std::fs::remove_file(&path).unwrap();
         symlink("missing", &path).unwrap();
-        assert!(validate_inputs(&plan, root.path(), &root.path().join("bundle")).is_err());
+        assert!(validate_inputs(
+            &plan,
+            root.path(),
+            &root.path().join("bundle"),
+            rootful_applicant_group()
+        )
+        .is_err());
+    }
+
+    fn applicant_input_fixture() -> (tempfile::TempDir, ApplicationModelPlan) {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        for name in ["bundle", "state", "state/applicant"] {
+            let path = root.path().join(name);
+            std::fs::create_dir(&path).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let path = root.path().join("state/applicant");
+        let gid = crate::installer_state::applicant_state_gid().unwrap();
+        set_applicant_fixture_metadata(&path, gid);
+        let plan = ApplicationModelPlan {
+            model: json!({"services":{
+                "applicant":{"group_add":[gid.to_string()],"volumes":[{
+                    "type":"bind","source":path.to_str().unwrap().replace('$',"$$"),
+                    "target":"/app/data","read_only":false}]},
+                "kms-initialize":{"profiles":["kms-init"],"restart":"no","environment":{
+                    "MARTY_KMS_BOOTSTRAP_ENABLED":"true",
+                    "BAO_TOKEN_FILE":"/run/secrets/openbao_bootstrap_token"}}
+            }}),
+            selected_services: vec!["applicant".into()],
+            expected_network_id: "c".repeat(64),
+            installation_ready: false,
+        };
+        (root, plan)
+    }
+
+    fn set_applicant_fixture_metadata(path: &Path, gid: u32) {
+        use std::os::fd::AsRawFd;
+        let held = std::fs::File::open(path).unwrap();
+        if held.metadata().unwrap().gid() != gid {
+            assert_eq!(unsafe { libc::fchown(held.as_raw_fd(), !0, gid) }, 0);
+        }
+        held.set_permissions(std::fs::Permissions::from_mode(0o2770))
+            .unwrap();
+    }
+
+    fn copy_applicant_input_plan(plan: &ApplicationModelPlan) -> ApplicationModelPlan {
+        ApplicationModelPlan {
+            model: plan.model.clone(),
+            selected_services: plan.selected_services.clone(),
+            expected_network_id: plan.expected_network_id.clone(),
+            installation_ready: plan.installation_ready,
+        }
+    }
+
+    #[test]
+    fn applicant_input_accepts_only_the_exact_owned_directory_and_model() {
+        let (root, plan) = applicant_input_fixture();
+        let path = root.path().join("state/applicant");
+        let bundle = root.path().join("bundle");
+        let sentinel = path.join("retained-test-data");
+        std::fs::write(&sentinel, b"disposable applicant fixture").unwrap();
+        let before = std::fs::metadata(&path).unwrap();
+        validate_inputs(&plan, root.path(), &bundle, rootful_applicant_group()).unwrap();
+        let after = std::fs::metadata(&path).unwrap();
+        assert_eq!(
+            (
+                before.dev(),
+                before.ino(),
+                before.uid(),
+                before.gid(),
+                before.mode()
+            ),
+            (
+                after.dev(),
+                after.ino(),
+                after.uid(),
+                after.gid(),
+                after.mode()
+            )
+        );
+        assert_eq!(
+            std::fs::read(sentinel).unwrap(),
+            b"disposable applicant fixture"
+        );
+
+        // An ordinary user cannot chown a fixture to an arbitrary group. Check
+        // the same real held inode against a different required GID instead.
+        let held = std::fs::File::open(&path).unwrap();
+        let gid = crate::installer_state::applicant_state_gid().unwrap();
+        let wrong_gid = if gid == 1 { 2 } else { 1 };
+        assert!(crate::installer_state::require_applicant_storage(&held, wrong_gid).is_err());
+        for group in [
+            Value::Null,
+            json!([]),
+            json!(["0"]),
+            json!([wrong_gid.to_string()]),
+            json!([format!("0{gid}")]),
+            json!([gid]),
+            json!([gid.to_string(), gid.to_string()]),
+        ] {
+            let mut changed = copy_applicant_input_plan(&plan);
+            changed.model["services"]["applicant"]["group_add"] = group;
+            assert!(
+                validate_inputs(&changed, root.path(), &bundle, rootful_applicant_group()).is_err()
+            );
+        }
+        for field in ["user", "read_only", "target", "selected_role"] {
+            let mut changed = copy_applicant_input_plan(&plan);
+            match field {
+                "user" => changed.model["services"]["applicant"]["user"] = json!("0:0"),
+                "read_only" => {
+                    changed.model["services"]["applicant"]["volumes"][0]["read_only"] = json!(true);
+                }
+                "target" => {
+                    changed.model["services"]["applicant"]["volumes"][0]["target"] =
+                        json!("/other");
+                }
+                "selected_role" => {
+                    let service = changed.model["services"]["applicant"].clone();
+                    changed.model["services"]["other"] = service;
+                    changed.selected_services = vec!["other".into()];
+                }
+                _ => unreachable!(),
+            }
+            assert!(
+                validate_inputs(&changed, root.path(), &bundle, rootful_applicant_group()).is_err(),
+                "{field}"
+            );
+        }
+        for readonly in [false, true] {
+            let mut changed = copy_applicant_input_plan(&plan);
+            changed.model["services"]["other"] = json!({"volumes":[{
+                "type":"bind","source":path.to_str().unwrap().replace('$',"$$"),
+                "target":"/foreign","read_only":readonly}]});
+            changed.selected_services.push("other".into());
+            assert!(
+                validate_inputs(&changed, root.path(), &bundle, rootful_applicant_group()).is_err()
+            );
+        }
+        validate_inputs(&plan, root.path(), &bundle, rootful_applicant_group()).unwrap();
+    }
+
+    #[test]
+    fn applicant_input_exception_does_not_relax_modes_ancestors_or_other_inputs() {
+        let (root, plan) = applicant_input_fixture();
+        let applicant = root.path().join("state/applicant");
+        let bundle = root.path().join("bundle");
+        for mode in [0o700, 0o770, 0o2777, 0o4770, 0o6770] {
+            std::fs::set_permissions(&applicant, std::fs::Permissions::from_mode(mode)).unwrap();
+            assert!(
+                validate_inputs(&plan, root.path(), &bundle, rootful_applicant_group()).is_err(),
+                "{mode:o}"
+            );
+        }
+        std::fs::set_permissions(&applicant, std::fs::Permissions::from_mode(0o2770)).unwrap();
+        let state = root.path().join("state");
+        for mode in [0o770, 0o2770] {
+            std::fs::set_permissions(&state, std::fs::Permissions::from_mode(mode)).unwrap();
+            assert!(
+                validate_inputs(&plan, root.path(), &bundle, rootful_applicant_group()).is_err()
+            );
+        }
+        std::fs::set_permissions(&state, std::fs::Permissions::from_mode(0o700)).unwrap();
+        for (name, readonly) in [("state/other", false), ("bundle/other", true)] {
+            let path = root.path().join(name);
+            std::fs::create_dir(&path).unwrap();
+            let mut changed = copy_applicant_input_plan(&plan);
+            changed.model["services"]["other"] = json!({"volumes":[{
+                "type":"bind","source":path.to_str().unwrap().replace('$',"$$"),
+                "target":"/other","read_only":readonly}]});
+            changed.selected_services.push("other".into());
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+            validate_inputs(&changed, root.path(), &bundle, rootful_applicant_group()).unwrap();
+            for mode in [0o770, 0o2770] {
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
+                assert!(
+                    validate_inputs(&changed, root.path(), &bundle, rootful_applicant_group())
+                        .is_err()
+                );
+            }
+        }
+        // The applicant directory is exempt only as a leaf, never as an ancestor.
+        let child = applicant.join("child");
+        std::fs::create_dir(&child).unwrap();
+        let mut changed = copy_applicant_input_plan(&plan);
+        changed.model["services"]["other"] = json!({"volumes":[{
+            "type":"bind","source":child.to_str().unwrap().replace('$',"$$"),
+            "target":"/other","read_only":false}]});
+        changed.selected_services.push("other".into());
+        assert!(
+            validate_inputs(&changed, root.path(), &bundle, rootful_applicant_group()).is_err()
+        );
+        validate_inputs(&plan, root.path(), &bundle, rootful_applicant_group()).unwrap();
+    }
+
+    #[test]
+    fn applicant_input_keeps_host_ownership_for_the_rootless_container_group() {
+        use crate::installer_state::{applicant_container_group, RuntimeBinding, RuntimeProfile};
+        let binding = RuntimeBinding {
+            docker_host: format!("unix:///run/user/{}/docker.sock", unsafe {
+                libc::geteuid()
+            }),
+            engine_id: "fixture-engine".into(),
+            openbao_port: 18200,
+            profile: RuntimeProfile::Rootless,
+        };
+        if unsafe { libc::geteuid() } == 0 {
+            assert!(applicant_container_group(&binding).is_err());
+            return;
+        }
+        let group = applicant_container_group(&binding).unwrap();
+        let (root, mut plan) = applicant_input_fixture();
+        let path = root.path().join("state/applicant");
+        let bundle = root.path().join("bundle");
+        let before = std::fs::metadata(&path).unwrap();
+        assert_eq!(before.gid(), group.host_gid());
+        assert_ne!(group.host_gid(), group.container_gid());
+        plan.model["services"]["applicant"]["group_add"] = json!(["0"]);
+        validate_inputs(&plan, root.path(), &bundle, group).unwrap();
+        assert!(validate_inputs(&plan, root.path(), &bundle, rootful_applicant_group()).is_err());
+        plan.model["services"]["applicant"]["group_add"] = json!([group.host_gid().to_string()]);
+        assert!(validate_inputs(&plan, root.path(), &bundle, group).is_err());
+        let after = std::fs::metadata(&path).unwrap();
+        assert_eq!(
+            (before.uid(), before.gid(), before.mode()),
+            (after.uid(), after.gid(), after.mode())
+        );
+    }
+
+    #[test]
+    fn applicant_input_refuses_files_and_links_at_the_leaf_or_an_ancestor() {
+        let (root, plan) = applicant_input_fixture();
+        let path = root.path().join("state/applicant");
+        let retained = root.path().join("state/retained-applicant");
+        let bundle = root.path().join("bundle");
+        std::fs::rename(&path, &retained).unwrap();
+        std::fs::write(&path, b"not a directory").unwrap();
+        set_applicant_fixture_metadata(
+            &path,
+            crate::installer_state::applicant_state_gid().unwrap(),
+        );
+        assert!(validate_inputs(&plan, root.path(), &bundle, rootful_applicant_group()).is_err());
+        std::fs::remove_file(&path).unwrap();
+        symlink(&retained, &path).unwrap();
+        assert!(validate_inputs(&plan, root.path(), &bundle, rootful_applicant_group()).is_err());
+        std::fs::remove_file(&path).unwrap();
+        std::fs::rename(&retained, &path).unwrap();
+        let state = root.path().join("state");
+        let retained_state = root.path().join("retained-state");
+        std::fs::rename(&state, &retained_state).unwrap();
+        symlink(&retained_state, &state).unwrap();
+        assert!(validate_inputs(&plan, root.path(), &bundle, rootful_applicant_group()).is_err());
+        std::fs::remove_file(&state).unwrap();
+        std::fs::rename(&retained_state, &state).unwrap();
+        validate_inputs(&plan, root.path(), &bundle, rootful_applicant_group()).unwrap();
     }
 }
